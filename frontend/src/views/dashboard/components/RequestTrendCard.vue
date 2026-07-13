@@ -39,31 +39,27 @@ const hasSamples = computed(() =>
   ),
 )
 
+const activeRequestBucketCount = computed(
+  () => props.points.filter((point) => Number(point.requestsValue) > 0).length,
+)
+const isSparseTrend = computed(
+  () => activeRequestBucketCount.value > 0 && activeRequestBucketCount.value <= 3,
+)
+
 const chartOption = computed<EChartsOption>(() => {
-  const times = props.points.map((p) => `${p.time}:00`)
+  const times = props.points.map((p) => p.time)
   const series = getSeries()
+  const coordinate = getCoordinateSystem(times)
+
   return {
-    grid: { left: 4, right: 0, top: 8, bottom: 24 },
-    xAxis: {
-      type: 'category',
-      data: times,
-      axisLabel: {
-        color: themeColor('--cp-text-muted', '#94A3B8'),
-        fontSize: 10,
-        fontFamily: 'JetBrains Mono Variable, JetBrains Mono',
-      },
-      axisLine: { show: false },
-      axisTick: { show: false },
-    },
-    yAxis: [
-      {
-        type: 'value',
-        splitLine: { lineStyle: { color: themeColor('--cp-bg-muted', '#F1F5F9') } },
-        axisLabel: { show: false },
-      },
-      { type: 'value', min: 0, max: 100, splitLine: { show: false }, axisLabel: { show: false } },
-    ],
+    ...coordinate,
     series,
+    axisPointer:
+      activeKind.value === 'usage'
+        ? {
+            link: [{ xAxisIndex: [0, 1, 2] }],
+          }
+        : undefined,
     tooltip: {
       trigger: 'axis',
       backgroundColor: themeColor('--cp-bg-surface', '#fff'),
@@ -86,6 +82,98 @@ const chartOption = computed<EChartsOption>(() => {
   }
 })
 
+function getCoordinateSystem(times: string[]) {
+  const muted = themeColor('--cp-text-muted', '#94A3B8')
+  const gridLine = themeColor('--cp-bg-muted', '#F1F5F9')
+  const timeLabels = {
+    color: muted,
+    fontSize: 10,
+    fontFamily: 'JetBrains Mono Variable, JetBrains Mono',
+    hideOverlap: true,
+    interval: showTwoHourLabel,
+  }
+
+  if (activeKind.value === 'usage') {
+    return getUsageCoordinateSystem(times, timeLabels, gridLine)
+  }
+
+  const xAxis = {
+    type: 'category' as const,
+    data: times,
+    axisLine: { show: false },
+    axisTick: { show: false },
+  }
+  const yAxis = {
+    type: 'value' as const,
+    min: 0,
+    splitNumber: 2,
+    axisLabel: { show: false },
+    axisLine: { show: false },
+    axisTick: { show: false },
+    splitLine: { lineStyle: { color: gridLine } },
+  }
+
+  return {
+    grid: { left: 4, right: 0, top: 8, bottom: 24 },
+    xAxis: {
+      ...xAxis,
+      boundaryGap: activeKind.value !== 'latency',
+      axisLabel: timeLabels,
+    },
+    yAxis: [
+      yAxis,
+      {
+        type: 'value' as const,
+        min: 0,
+        max: 100,
+        splitLine: { show: false },
+        axisLabel: { show: false },
+      },
+    ],
+  }
+}
+
+function getUsageCoordinateSystem(times: string[], timeLabels: any, gridLine: string) {
+  const xAxis = (gridIndex: number, showLabels = false) => ({
+    type: 'category' as const,
+    data: times,
+    gridIndex,
+    boundaryGap: false,
+    axisLine: {
+      show: true,
+      lineStyle: { color: gridLine },
+    },
+    axisTick: { show: false },
+    axisLabel: showLabels ? timeLabels : { show: false },
+    axisPointer: { show: true },
+  })
+  const yAxis = (gridIndex: number) => ({
+    type: 'value' as const,
+    gridIndex,
+    min: 0,
+    max: (range: any) => (range.max > 0 ? range.max * 1.12 : 1),
+    axisLabel: { show: false },
+    axisLine: { show: false },
+    axisTick: { show: false },
+    splitLine: { show: false },
+  })
+
+  return {
+    grid: [
+      { left: 4, right: 0, top: 0, height: 76 },
+      { left: 4, right: 0, top: 91, height: 66 },
+      { left: 4, right: 0, top: 172, bottom: 18 },
+    ],
+    xAxis: [xAxis(0), xAxis(1), xAxis(2, true)],
+    yAxis: [yAxis(0), yAxis(1), yAxis(2)],
+  }
+}
+
+function showTwoHourLabel(_index: number, value: string) {
+  const [hour, minute] = value.split(':').map(Number)
+  return minute === 0 && hour % 2 === 0
+}
+
 function themeColor(name: string, fallback: string) {
   themeRevision.value
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
@@ -95,6 +183,24 @@ function formatTooltip(params: unknown) {
   const rows = Array.isArray(params) ? params : [params]
   const title = tooltipValue(rows[0], 'axisValueLabel')
   const point = props.points[tooltipIndex(rows[0])]
+
+  if (activeKind.value === 'usage') {
+    return [
+      title,
+      tooltipItem('输入', point?.inputTokens, trendColor('输入', '--cp-info', '#2563EB')),
+      tooltipItem('输出', point?.outputTokens, trendColor('输出', '--cp-success', '#10B981')),
+      tooltipItem('缓存', point?.cachedTokens, trendColor('缓存', '--cp-text-tertiary', '#94A3B8')),
+      tooltipItem(
+        '缓存命中',
+        point?.cacheHitRate,
+        trendColor('缓存', '--cp-text-tertiary', '#94A3B8'),
+      ),
+      tooltipItem('请求', point?.requests, themeColor('--cp-text-secondary', '#64748B')),
+    ]
+      .filter(Boolean)
+      .join('<br/>')
+  }
+
   const lines = rows.map((row) => {
     const name = tooltipValue(row, 'seriesName')
     const value = tooltipValue(row, 'value')
@@ -103,6 +209,12 @@ function formatTooltip(params: unknown) {
     return `${marker}${name}: ${unitValue}`
   })
   return [title, ...lines].filter(Boolean).join('<br/>')
+}
+
+function tooltipItem(label: string, value: string | undefined, color: string) {
+  if (!value) return ''
+  const marker = `<span style="display:inline-block;width:7px;height:7px;margin-right:6px;border-radius:999px;background:${color}"></span>`
+  return `${marker}${label}: ${value}`
 }
 
 function tooltipDisplayValue(point: any, name: string, value: string): string {
@@ -139,73 +251,182 @@ function getSeries() {
     return [
       lineSeries(
         '输入',
-        props.points.map((p) => p.inputTokensValue),
-        themeColor('--cp-info', '#2563EB'),
-        true,
+        activeSeriesValues('inputTokensValue'),
+        trendColor('输入', '--cp-info', '#2563EB'),
+        {
+          area: true,
+          smooth: 0.22,
+          width: 2,
+          xAxisIndex: 0,
+          yAxisIndex: 0,
+        },
       ),
       lineSeries(
         '输出',
-        props.points.map((p) => p.outputTokensValue),
-        themeColor('--cp-success', '#10B981'),
+        activeSeriesValues('outputTokensValue'),
+        trendColor('输出', '--cp-success', '#10B981'),
+        {
+          area: true,
+          smooth: 0.22,
+          width: 1.9,
+          xAxisIndex: 1,
+          yAxisIndex: 1,
+        },
       ),
       lineSeries(
         '缓存',
-        props.points.map((p) => p.cachedTokensValue),
-        themeColor('--cp-text-tertiary', '#94A3B8'),
+        activeSeriesValues('cachedTokensValue'),
+        trendColor('缓存', '--cp-text-tertiary', '#94A3B8'),
+        {
+          area: true,
+          smooth: 0.22,
+          width: 1.8,
+          xAxisIndex: 2,
+          yAxisIndex: 2,
+        },
       ),
     ]
   }
+
+  if (isSparseTrend.value) return getSparseSeries()
+
   if (activeKind.value === 'latency') {
     return [
       lineSeries(
         '平均',
-        props.points.map((p) => p.latencyValue),
-        themeColor('--cp-normal', '#0F9F9A'),
-        true,
+        seriesValues('latencyValue'),
+        trendColor('平均', '--cp-normal', '#0F9F9A'),
+        {
+          area: true,
+          width: 2.6,
+        },
       ),
       lineSeries(
         '最高',
-        props.points.map((p) => p.maxLatencyValue),
-        themeColor('--cp-warning', '#F59E0B'),
+        seriesValues('maxLatencyValue'),
+        trendColor('最高', '--cp-warning', '#F59E0B'),
+        {
+          lineType: 'dashed',
+          width: 1.8,
+        },
       ),
       lineSeries(
         '最低',
-        props.points.map((p) => p.minLatencyValue),
-        themeColor('--cp-success', '#10B981'),
+        seriesValues('minLatencyValue'),
+        trendColor('最低', '--cp-success', '#10B981'),
+        {
+          lineType: 'dotted',
+          width: 1.8,
+        },
       ),
     ]
   }
   return [
-    lineSeries(
-      '错误数',
-      props.points.map((p) => p.errorsValue),
-      themeColor('--cp-danger', '#EF4444'),
-      true,
-    ),
+    barSeries('错误数', seriesValues('errorsValue'), trendColor('错误', '--cp-danger', '#EF4444')),
     lineSeries(
       '成功率',
-      props.points.map((p) => p.successRateValue),
-      themeColor('--cp-success', '#10B981'),
-      true,
-      1,
+      seriesValues('successRateValue'),
+      trendColor('成功', '--cp-success', '#10B981'),
+      {
+        width: 2.4,
+        yAxisIndex: 1,
+      },
     ),
     lineSeries(
       '总请求',
-      props.points.map((p) => p.requestsValue),
-      themeColor('--cp-info', '#2563EB'),
+      seriesValues('requestsValue'),
+      trendColor('请求', '--cp-info', '#2563EB'),
+      {
+        lineType: 'dashed',
+        width: 1.8,
+      },
     ),
   ]
 }
 
-function lineSeries(name: string, data: number[], color: string, area = true, yAxisIndex = 0) {
+function getSparseSeries() {
+  if (activeKind.value === 'latency') {
+    return [
+      barSeries(
+        '平均',
+        activeSeriesValues('latencyValue'),
+        trendColor('平均', '--cp-normal', '#0F9F9A'),
+        {
+          maxWidth: 9,
+          opacity: 0.78,
+        },
+      ),
+      barSeries(
+        '最高',
+        activeSeriesValues('maxLatencyValue'),
+        trendColor('最高', '--cp-warning', '#F59E0B'),
+        { maxWidth: 9, opacity: 0.58 },
+      ),
+      barSeries(
+        '最低',
+        activeSeriesValues('minLatencyValue'),
+        trendColor('最低', '--cp-success', '#10B981'),
+        { maxWidth: 9, opacity: 0.58 },
+      ),
+    ]
+  }
+
+  return [
+    barSeries(
+      '错误数',
+      activeSeriesValues('errorsValue'),
+      trendColor('错误', '--cp-danger', '#EF4444'),
+      {
+        maxWidth: 10,
+        opacity: 0.72,
+      },
+    ),
+    pulseSeries(
+      '成功率',
+      activeSeriesValues('successRateValue'),
+      trendColor('成功', '--cp-success', '#10B981'),
+      { yAxisIndex: 1 },
+    ),
+    barSeries(
+      '总请求',
+      activeSeriesValues('requestsValue'),
+      trendColor('请求', '--cp-info', '#2563EB'),
+      {
+        maxWidth: 10,
+        opacity: 0.5,
+      },
+    ),
+  ]
+}
+
+function seriesValues(key: string) {
+  return props.points.map((point) => point[key] ?? null)
+}
+
+function activeSeriesValues(key: string) {
+  return props.points.map((point) =>
+    Number(point.requestsValue) > 0 ? (point[key] ?? null) : null,
+  )
+}
+
+function lineSeries(name: string, data: (number | null)[], color: string, options: any = {}) {
+  const area = options.area ?? false
+
   return {
     name,
     type: 'line' as const,
     data,
-    smooth: true,
-    symbol: 'none',
-    yAxisIndex,
-    lineStyle: { color, width: 2.5 },
+    connectNulls: false,
+    smooth: options.smooth ?? true,
+    symbol: options.symbol ?? 'none',
+    symbolSize: options.symbolSize ?? 5,
+    xAxisIndex: options.xAxisIndex ?? 0,
+    yAxisIndex: options.yAxisIndex ?? 0,
+    lineStyle: {
+      color,
+      type: options.lineType ?? 'solid',
+      width: options.width ?? 2.2,
+    },
     itemStyle: { color },
     areaStyle: area
       ? {
@@ -225,8 +446,46 @@ function lineSeries(name: string, data: number[], color: string, area = true, yA
   }
 }
 
+function pulseSeries(name: string, data: (number | null)[], color: string, options: any = {}) {
+  return {
+    name,
+    type: 'line' as const,
+    data,
+    connectNulls: false,
+    smooth: false,
+    symbol: 'roundRect',
+    symbolSize: [5, 16],
+    yAxisIndex: options.yAxisIndex ?? 0,
+    lineStyle: { opacity: 0 },
+    itemStyle: { color },
+  }
+}
+
+function barSeries(name: string, data: (number | null)[], color: string, options: any = {}) {
+  return {
+    name,
+    type: 'bar' as const,
+    data,
+    barMaxWidth: options.maxWidth ?? 16,
+    xAxisIndex: options.xAxisIndex ?? 0,
+    yAxisIndex: options.yAxisIndex ?? 0,
+    silent: options.silent ?? false,
+    z: options.z ?? 2,
+    itemStyle: {
+      color,
+      opacity: options.opacity ?? 0.72,
+      borderRadius: options.borderRadius ?? [3, 3, 0, 0],
+    },
+  }
+}
+
 function summaryMarkerStyle(item: any) {
   return item.colorVar ? { backgroundColor: `var(${item.colorVar})` } : undefined
+}
+
+function trendColor(label: string, fallbackVar: string, fallback: string) {
+  const colorVar = props.summary.find((item) => String(item.label).includes(label))?.colorVar
+  return themeColor(colorVar || fallbackVar, fallback)
 }
 
 function handleTrendChange(value: string) {
@@ -247,10 +506,10 @@ function handleTrendChange(value: string) {
 
     <template #body>
       <div
-        class="mt-4.75 grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(150px,180px)] lg:gap-7.5"
+        class="mt-4.75 grid grid-cols-1 gap-5 lg:h-70 lg:grid-cols-[minmax(0,1fr)_minmax(150px,180px)] lg:gap-7.5"
       >
-        <div class="relative h-67 w-full overflow-hidden">
-          <BaseChart v-if="hasSamples" :option="chartOption" :height="268" />
+        <div class="relative h-70 w-full overflow-hidden lg:h-full">
+          <BaseChart v-if="hasSamples" :option="chartOption" :height="280" />
           <BaseEmpty
             v-if="!hasSamples"
             compact
@@ -260,7 +519,9 @@ function handleTrendChange(value: string) {
           />
         </div>
 
-        <aside class="grid h-67 w-full grid-rows-3 rounded-2xl bg-(--cp-bg-subtle) px-5 py-4.5">
+        <aside
+          class="grid h-70 w-full grid-rows-3 rounded-2xl bg-(--cp-bg-subtle) px-5 py-4.5 lg:h-full"
+        >
           <div
             v-for="item in props.summary"
             :key="item.label"

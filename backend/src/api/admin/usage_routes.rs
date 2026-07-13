@@ -1,4 +1,4 @@
-//! 使用记录 HTTP 处理器。
+//! 使用统计与请求记录 HTTP 处理器。
 
 use std::collections::HashMap;
 
@@ -26,6 +26,7 @@ use crate::{
         time::china_datetime,
     },
     telemetry::{
+        usage::insights::{UsageDiagnosticsDimension, default_time_range},
         usage::query::{
             UsageQueryError, UsageQueryFilter, UsageRecordBreakdown, UsageRecordModelSource,
             UsageRecordSummary, UsageRecordTrendPoint, usage_record_billing,
@@ -62,6 +63,21 @@ pub(crate) struct UsageRecordDistributionQuery {
     #[serde(flatten)]
     records: UsageRecordsQuery,
     source: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UsageInsightsQuery {
+    start_time: Option<String>,
+    end_time: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UsageDiagnosticsQuery {
+    #[serde(flatten)]
+    range: UsageInsightsQuery,
+    dimension: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -304,6 +320,39 @@ pub(crate) async fn usage_records_latency_trend(
     usage_records_trend_response(state, query).await
 }
 
+/// `GET /api/admin/usage/records/insights/overview`
+pub(crate) async fn usage_records_insights_overview(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Query(query): Query<UsageInsightsQuery>,
+) -> Result<impl IntoResponse, AdminError> {
+    let (start, end) = insights_time_range(query)?;
+    state
+        .services
+        .usage_records
+        .insights_overview(start, end)
+        .await
+        .map(|insights| AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(insights)))
+        .map_err(|error| log_error(&error))
+}
+
+/// `GET /api/admin/usage/records/insights/diagnostics`
+pub(crate) async fn usage_records_insights_diagnostics(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Query(query): Query<UsageDiagnosticsQuery>,
+) -> Result<impl IntoResponse, AdminError> {
+    let dimension = diagnostics_dimension(query.dimension)?;
+    let (start, end) = insights_time_range(query.range)?;
+    state
+        .services
+        .usage_records
+        .insights_diagnostics(start, end, dimension)
+        .await
+        .map(|insights| AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(insights)))
+        .map_err(|error| log_error(&error))
+}
+
 async fn usage_records_trend_response(
     state: AppState,
     query: UsageRecordsQuery,
@@ -403,6 +452,25 @@ fn optional_datetime(
     chrono::DateTime::parse_from_rfc3339(&value)
         .map(|value| Some(value.with_timezone(&chrono::Utc)))
         .map_err(|_| AdminError::invalid_time_range("Invalid time range"))
+}
+
+fn insights_time_range(
+    query: UsageInsightsQuery,
+) -> Result<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>), AdminError> {
+    let end = optional_datetime(query.end_time)?.unwrap_or_else(chrono::Utc::now);
+    let start = optional_datetime(query.start_time)?.unwrap_or_else(|| default_time_range(end).0);
+    if start >= end {
+        return Err(AdminError::invalid_time_range(
+            "Start time must be earlier than end time",
+        ));
+    }
+    Ok((start, end))
+}
+
+fn diagnostics_dimension(value: Option<String>) -> Result<UsageDiagnosticsDimension, AdminError> {
+    let value = non_empty(value).unwrap_or_else(|| "model".to_string());
+    UsageDiagnosticsDimension::parse(&value)
+        .ok_or_else(|| AdminError::bad_request("Invalid diagnostics dimension"))
 }
 
 fn log_error(error: &UsageQueryError) -> AdminError {
@@ -616,9 +684,9 @@ fn usage_record_breakdown_items(items: Vec<UsageRecordBreakdown>) -> Vec<UsageRe
 
 impl From<UsageRecordTrendPoint> for UsageRecordTrendPointData {
     fn from(point: UsageRecordTrendPoint) -> Self {
-        let prompt_tokens = point.input_tokens.saturating_add(point.cached_tokens);
-        let cache_hit_rate_value = if prompt_tokens > 0 {
-            (point.cached_tokens as f64 / prompt_tokens as f64 * 100.0).round()
+        let cache_hit_rate_value = if point.input_tokens > 0 {
+            (point.cached_tokens.min(point.input_tokens) as f64 / point.input_tokens as f64 * 100.0)
+                .round()
         } else {
             0.0
         };

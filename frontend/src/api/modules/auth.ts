@@ -1,6 +1,6 @@
-import request, { type ApiPayload } from '../request'
+import request from '../request'
 
-export function login(data: ApiPayload) {
+export function login(data: any) {
   return request({
     url: '/api/admin/login',
     method: 'POST',

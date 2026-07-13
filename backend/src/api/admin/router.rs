@@ -30,7 +30,8 @@ use super::{
     },
     usage_routes::{
         clear_usage_records, usage_record_detail, usage_records,
-        usage_records_endpoint_distribution, usage_records_latency_trend,
+        usage_records_endpoint_distribution, usage_records_insights_diagnostics,
+        usage_records_insights_overview, usage_records_latency_trend,
         usage_records_model_distribution, usage_records_summary, usage_records_token_trend,
     },
 };
@@ -100,6 +101,14 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/admin/usage/records/insights/latency-trend",
             get(usage_records_latency_trend),
+        )
+        .route(
+            "/api/admin/usage/records/insights/overview",
+            get(usage_records_insights_overview),
+        )
+        .route(
+            "/api/admin/usage/records/insights/diagnostics",
+            get(usage_records_insights_diagnostics),
         )
         .route("/api/admin/usage/records/delete", post(clear_usage_records))
         .route("/api/admin/usage/records/detail", get(usage_record_detail))

@@ -116,7 +116,74 @@ async fn usage_summary_and_trend_expose_only_real_success_metrics() {
 
     let trend = admin_get(&app, "/api/admin/usage/records/insights/token-trend").await;
     assert_eq!(trend["data"][0]["inputTokensValue"], 100);
+    assert_eq!(trend["data"][0]["cacheHitRateValue"], 30.0);
     assert!(trend["data"][0].get("cacheCreationTokens").is_none());
+}
+
+#[tokio::test]
+async fn usage_insights_should_collapse_retry_errors_to_terminal_requests() {
+    let (app, usage, ops, _guard) = monitoring_test_app("monitoring-insights", true).await;
+    let now = chrono::Utc::now();
+
+    let mut success = success_record("eventually succeeded");
+    success.id = "usage_insights_success".to_string();
+    success.request_id = Some("req_retried".to_string());
+    success.input_tokens = Some(100);
+    success.output_tokens = Some(20);
+    success.cached_tokens = Some(20);
+    success.latency_ms = Some(800);
+    success.first_token_ms = Some(200);
+    success.created_at = now;
+    usage.append(&success).await.unwrap();
+
+    let mut retried_error = OpsErrorLog::new("upstream", "retryable");
+    retried_error.id = "ops_insights_retried".to_string();
+    retried_error.request_id = Some("req_retried".to_string());
+    retried_error.failure_class = Some("rate_limited".to_string());
+    retried_error.created_at = now - chrono::Duration::seconds(2);
+    ops.append(&retried_error).await.unwrap();
+
+    for (id, failure_class, seconds) in [
+        ("ops_insights_failed_older", "upstream", 2),
+        ("ops_insights_failed_latest", "response_failed", 1),
+    ] {
+        let mut error = OpsErrorLog::new("upstream", failure_class);
+        error.id = id.to_string();
+        error.request_id = Some("req_failed".to_string());
+        error.failure_class = Some(failure_class.to_string());
+        error.created_at = now - chrono::Duration::seconds(seconds);
+        ops.append(&error).await.unwrap();
+    }
+
+    let overview = admin_get(&app, "/api/admin/usage/records/insights/overview").await;
+    assert_eq!(overview["data"]["health"]["totalRequests"], 2);
+    assert_eq!(overview["data"]["health"]["successRequests"], 1);
+    assert_eq!(overview["data"]["health"]["failedRequests"], 1);
+    assert_eq!(overview["data"]["health"]["successRate"], 0.5);
+    assert_eq!(overview["data"]["granularity"], "1h");
+    assert_eq!(overview["data"]["cost"]["cachedTokenRate"], 0.2);
+    assert_eq!(overview["data"]["cost"]["cacheHitRequestRate"], 1.0);
+
+    let diagnostics = admin_get(
+        &app,
+        "/api/admin/usage/records/insights/diagnostics?dimension=failureClass",
+    )
+    .await;
+    assert_eq!(diagnostics["data"]["items"].as_array().unwrap().len(), 1);
+    assert_eq!(diagnostics["data"]["items"][0]["name"], "response_failed");
+    assert_eq!(diagnostics["data"]["items"][0]["requestShare"], 0.5);
+
+    let model_diagnostics = admin_get(
+        &app,
+        "/api/admin/usage/records/insights/diagnostics?dimension=model",
+    )
+    .await;
+    assert!(
+        !model_diagnostics["data"]["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]

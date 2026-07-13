@@ -3,7 +3,6 @@ import { clamp } from 'es-toolkit'
 import { onMounted, ref, type Ref } from 'vue'
 
 import { createApiKey, deleteApiKeys, getApiKeys, updateApiKey } from '@/api'
-import type { ClientApiKey } from '@/api/modules/api-keys'
 import { toast } from '@/components/base/BaseToast'
 import type { BaseTableSort } from '@/components/base/BaseTable/columns'
 import { useAsyncAction } from '@/composables/useAsyncAction'
@@ -19,14 +18,14 @@ export function useApiKeyMutations(options: {
 }) {
   const { copy } = useClipboard()
   const loading = ref(true)
-  const apiKeys = ref<ClientApiKey[]>([])
+  const apiKeys = ref<any[]>([])
   const showCreateModal = ref(false)
   const showDeleteModal = ref(false)
   const showSingleDeleteModal = ref(false)
   const showKeyModal = ref(false)
   const createdKey = ref('')
   const createdKeyName = ref('')
-  const pendingDeleteKey = ref<ClientApiKey | null>(null)
+  const pendingDeleteKey = ref<any>(null)
   const creatingKeyAction = useAsyncAction()
   const deletingKeyAction = useAsyncAction()
   const batchDeletingAction = useAsyncAction()
@@ -94,7 +93,7 @@ export function useApiKeyMutations(options: {
     )
   }
 
-  function requestDeleteKey(key: ClientApiKey) {
+  function requestDeleteKey(key: any) {
     pendingDeleteKey.value = key
     showSingleDeleteModal.value = true
   }
@@ -134,7 +133,7 @@ export function useApiKeyMutations(options: {
     )
   }
 
-  async function handleToggleStatus(key: ClientApiKey) {
+  async function handleToggleStatus(key: any) {
     await updatingStatusKeys.run(key.id, async () => {
       try {
         await updateApiKey({ id: key.id, status: key.enabled ? 'disabled' : 'active' })

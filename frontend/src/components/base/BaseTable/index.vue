@@ -31,6 +31,7 @@ const props = withDefaults(
     rowKey?: RowKey
     selectedRowKeys?: Array<string | number>
     stripe?: boolean
+    compact?: boolean
     loading?: boolean
     emptyText?: string
     maxHeight?: string
@@ -44,6 +45,7 @@ const props = withDefaults(
     selectedRowKeys: () => [],
     expandedRowKeys: () => [],
     stripe: true,
+    compact: false,
     loading: false,
     emptyText: '暂无数据',
     maxHeight: undefined,
@@ -58,12 +60,19 @@ const emit = defineEmits<{
 }>()
 const slots = useSlots()
 
-const headerRowClass = 'h-10 text-[12px] font-bold text-(--cp-text-muted)'
-const bodyRowClass = 'h-13'
-const headerCellClass =
-  'min-w-0 bg-(--cp-bg-subtle) px-4 first:pl-3 shadow-[0_10px_16px_-18px_#0e172638]'
-const bodyCellClass =
-  'min-w-0 px-4 first:pl-3 text-[13px] text-(--cp-text-primary) first:rounded-l-lg'
+const headerRowClass = computed(() => [
+  props.compact ? 'h-8 text-[11px]' : 'h-10 text-[12px]',
+  'font-bold text-(--cp-text-muted)',
+])
+const bodyRowClass = computed(() => (props.compact ? 'h-10' : 'h-13'))
+const headerCellClass = computed(() => [
+  'min-w-0 bg-(--cp-bg-subtle) first:pl-3 shadow-[0_10px_16px_-18px_#0e172638]',
+  props.compact ? 'px-3' : 'px-4',
+])
+const bodyCellClass = computed(() => [
+  'min-w-0 first:pl-3 text-(--cp-text-primary) first:rounded-l-lg',
+  props.compact ? 'px-3 text-[12px]' : 'px-4 text-[13px]',
+])
 
 const computedColumns = computed(() => resolveColumns(props.columns, props.minWidth))
 const tableViewStyle = computed(() => resolveTableStyle(props.minWidth))
@@ -149,7 +158,7 @@ function isRowExpanded(row: TableRow, index: number) {
 
 function rowClass(row: TableRow, index: number) {
   return [
-    bodyRowClass,
+    bodyRowClass.value,
     'hover:[&>td]:bg-(--cp-default-bg-hover)',
     props.stripe && index % 2 === 1 ? 'bg-(--cp-bg-subtle)' : undefined,
     isRowSelected(row, index) ? 'bg-(--cp-bg-tertiary)' : undefined,
@@ -208,7 +217,8 @@ function sortButtonLabel(column: BaseTableColumn) {
       <div class="flex min-h-0 max-w-full flex-1 flex-col overflow-hidden">
         <div ref="headerWrap" class="max-w-full overflow-hidden">
           <table
-            class="w-full shrink-0 table-fixed border-separate border-spacing-y-1 text-left"
+            class="w-full shrink-0 table-fixed border-separate text-left"
+            :class="compact ? 'border-spacing-y-0.5' : 'border-spacing-y-1'"
             :style="tableViewStyle"
             role="table"
           >
@@ -256,7 +266,7 @@ function sortButtonLabel(column: BaseTableColumn) {
                         aria-hidden="true"
                       >
                         <Triangle
-                          class="size-[5px] fill-current"
+                          class="size-1.25 fill-current"
                           :class="
                             columnSortDirection(column) === 'asc'
                               ? 'text-(--cp-info)'
@@ -265,7 +275,7 @@ function sortButtonLabel(column: BaseTableColumn) {
                           :stroke-width="0"
                         />
                         <Triangle
-                          class="size-[5px] rotate-180 fill-current"
+                          class="size-1.25 rotate-180 fill-current"
                           :class="
                             columnSortDirection(column) === 'desc'
                               ? 'text-(--cp-info)'
@@ -296,7 +306,8 @@ function sortButtonLabel(column: BaseTableColumn) {
         >
           <table
             ref="tableView"
-            class="w-full table-fixed border-separate border-spacing-y-2 text-left"
+            class="w-full table-fixed border-separate text-left"
+            :class="compact ? 'border-spacing-y-1' : 'border-spacing-y-2'"
             :style="tableViewStyle"
             role="table"
           >

@@ -17,12 +17,8 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div
-    class="flex w-full flex-col gap-3 md:flex-row md:flex-wrap md:items-center"
-    role="group"
-    aria-label="使用记录筛选与操作"
-  >
-    <div class="min-w-0 w-full md:w-96 md:flex-none">
+  <div class="flex w-full items-center gap-3" role="group" aria-label="使用记录筛选与操作">
+    <div class="min-w-0 flex-1 sm:w-96 sm:flex-none">
       <BaseInput v-model="search" placeholder="搜索请求 ID、端点、模型或消息" class="w-full">
         <template #prefix>
           <Search class="size-4.5 text-(--cp-text-tertiary)" />
@@ -30,7 +26,7 @@ const emit = defineEmits<{
       </BaseInput>
     </div>
 
-    <div class="flex shrink-0 self-end items-center justify-end gap-2 md:ml-auto">
+    <div class="ml-auto flex shrink-0 items-center justify-end">
       <BaseButton
         icon-only
         variant="ghost"

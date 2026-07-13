@@ -19,7 +19,6 @@ import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import { toast } from '@/components/base/BaseToast'
 import { useSystemUpdate, type SystemUpdateLogLevel } from '@/composables/useSystemUpdate'
 import { renderMarkdown } from '@/utils/markdown'
-import type { SystemUpdateInfo } from '@/api'
 
 const open = defineModel<boolean>({ default: false })
 
@@ -48,7 +47,7 @@ const {
 
 const updateLogScrollbar = useTemplateRef<InstanceType<typeof BaseScrollbar>>('updateLogScrollbar')
 const updateConfirmOpen = shallowRef(false)
-const updateConfirmInfo = shallowRef<SystemUpdateInfo | null>(null)
+const updateConfirmInfo = shallowRef<any>(null)
 const updateConfirmPreviousTarget = shallowRef('')
 const preparingUpdate = shallowRef(false)
 

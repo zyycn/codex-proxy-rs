@@ -1,6 +1,6 @@
 //! 管理端用量计费规则。
 
-const LONG_CONTEXT_THRESHOLD: u64 = 272_000;
+pub(crate) const LONG_CONTEXT_THRESHOLD: u64 = 272_000;
 
 #[derive(Debug, Clone, Copy)]
 struct ModelPricing {
@@ -226,6 +226,24 @@ fn calculate_billing_with_pricing(
 ) -> BillingBreakdown {
     let is_long = input_tokens > LONG_CONTEXT_THRESHOLD;
 
+    calculate_billing_with_pricing_for_context(
+        input_tokens,
+        output_tokens,
+        cached_tokens,
+        pricing,
+        service_tier,
+        is_long,
+    )
+}
+
+fn calculate_billing_with_pricing_for_context(
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_tokens: u64,
+    pricing: ModelPricing,
+    service_tier: Option<&str>,
+    is_long: bool,
+) -> BillingBreakdown {
     let mut input_price = pricing.input_price_per_mtoken;
     let mut output_price = pricing.output_price_per_mtoken;
     let mut cache_read_price = pricing.cache_read_price_per_mtoken;
@@ -284,6 +302,36 @@ fn calculate_billing_with_pricing(
     }
 }
 
+/// 按模型、档位和已确定的上下文长度档位计算聚合用量费用。
+///
+/// 聚合查询必须显式传入 `is_long`，避免许多短请求相加后被误判为单次长上下文请求。
+pub(crate) fn calculate_aggregate_billing(
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_tokens: u64,
+    model: &str,
+    service_tier: Option<&str>,
+    is_long: bool,
+) -> BillingBreakdown {
+    let pricing = model_pricing(model).unwrap_or_else(|| {
+        highest_pricing_for_context(
+            input_tokens,
+            output_tokens,
+            cached_tokens,
+            service_tier,
+            is_long,
+        )
+    });
+    calculate_billing_with_pricing_for_context(
+        input_tokens,
+        output_tokens,
+        cached_tokens,
+        pricing,
+        service_tier,
+        is_long,
+    )
+}
+
 /// 按已登记的官方价格计算美元计费金额，未知模型按最高费率计算。
 pub(crate) fn calculate_billing_amount(
     input_tokens: u64,
@@ -336,6 +384,42 @@ fn highest_pricing_for_request(
                 cached_tokens,
                 rule.pricing,
                 service_tier,
+            )
+            .total_amount;
+            if candidate_amount >= highest_amount {
+                rule.pricing
+            } else {
+                highest
+            }
+        })
+}
+
+fn highest_pricing_for_context(
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_tokens: u64,
+    service_tier: Option<&str>,
+    is_long: bool,
+) -> ModelPricing {
+    MODEL_PRICING_RULES
+        .iter()
+        .fold(ModelPricing::new(0.0, 0.0), |highest, rule| {
+            let highest_amount = calculate_billing_with_pricing_for_context(
+                input_tokens,
+                output_tokens,
+                cached_tokens,
+                highest,
+                service_tier,
+                is_long,
+            )
+            .total_amount;
+            let candidate_amount = calculate_billing_with_pricing_for_context(
+                input_tokens,
+                output_tokens,
+                cached_tokens,
+                rule.pricing,
+                service_tier,
+                is_long,
             )
             .total_amount;
             if candidate_amount >= highest_amount {

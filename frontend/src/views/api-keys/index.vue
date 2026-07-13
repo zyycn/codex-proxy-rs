@@ -2,7 +2,6 @@
 import { computed, ref, shallowRef } from 'vue'
 
 import { API_BASE_URL } from '@/api/constants'
-import type { ClientApiKey } from '@/api/modules/api-keys'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
@@ -23,7 +22,7 @@ import ApiKeyUseModal from './components/ApiKeyUseModal.vue'
 const selectedIds = ref<Set<string>>(new Set())
 const totalApiKeys = ref(0)
 const showUseKeyModal = shallowRef(false)
-const selectedUseKey = shallowRef<ClientApiKey | null>(null)
+const selectedUseKey = shallowRef<any>(null)
 
 const {
   page,
@@ -100,12 +99,12 @@ function importCreatedKeyToCcs() {
   })
 }
 
-function openUseKeyModal(apiKey: ClientApiKey) {
+function openUseKeyModal(apiKey: any) {
   selectedUseKey.value = apiKey
   showUseKeyModal.value = true
 }
 
-function importToCcs(apiKey: ClientApiKey) {
+function importToCcs(apiKey: any) {
   if (!apiKey.key) return
 
   window.location.href = buildCodexCcSwitchImportDeeplink({
