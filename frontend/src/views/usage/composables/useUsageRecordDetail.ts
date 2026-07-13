@@ -1,11 +1,11 @@
-import { ref, type Ref } from 'vue'
+import { shallowRef } from 'vue'
 
 import { getUsageRecordDetail } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 
-export function useUsageRecordDetail(options?: { timeRangeParams?: Ref<Record<string, string>> }) {
-  const showDetailModal = ref(false)
-  const selectedUsageRecord = ref<any>(null)
+export function useUsageRecordDetail(options: any = {}) {
+  const showDetailModal = shallowRef(false)
+  const selectedUsageRecord = shallowRef<any>(null)
 
   async function handleViewDetail(record: any) {
     try {

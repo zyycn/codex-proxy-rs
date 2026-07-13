@@ -1,15 +1,15 @@
 import { watchDebounced } from '@vueuse/core'
 import { clamp } from 'es-toolkit'
-import { computed, onMounted, ref, shallowRef, watch, type Ref } from 'vue'
+import { computed, onMounted, shallowRef, watch } from 'vue'
 
 import { getOpsErrors } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { withMinimumDuration } from '@/utils/async'
 
-export function useOpsErrorsTable(timeRangeParams: Ref<Record<string, string>>) {
+export function useOpsErrorsTable(timeRangeParams: any) {
   const loading = shallowRef(true)
   const refreshing = shallowRef(false)
-  const records = ref<any[]>([])
+  const records = shallowRef<any[]>([])
   const page = shallowRef(1)
   const pageSize = shallowRef(10)
   const total = shallowRef(0)

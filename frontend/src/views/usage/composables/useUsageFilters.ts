@@ -1,11 +1,11 @@
 import { watchDebounced } from '@vueuse/core'
-import { computed, ref, type Ref } from 'vue'
+import { computed, shallowRef } from 'vue'
 
-export function useUsageFilters(totalRecords: Ref<number>) {
-  const page = ref(1)
-  const pageSize = ref(10)
-  const searchQuery = ref('')
-  let loadUsageRecords: ((scope?: 'all' | 'table') => Promise<void> | void) | undefined
+export function useUsageFilters(totalRecords: any) {
+  const page = shallowRef(1)
+  const pageSize = shallowRef(10)
+  const searchQuery = shallowRef('')
+  let loadUsageRecords: any
 
   const usagePagination = computed(() => ({
     page: page.value,
@@ -14,11 +14,11 @@ export function useUsageFilters(totalRecords: Ref<number>) {
     pageSizes: [10, 20, 50, 100],
   }))
 
-  function bindUsageRecordLoader(loader: (scope?: 'all' | 'table') => Promise<void> | void) {
+  function bindUsageRecordLoader(loader: any) {
     loadUsageRecords = loader
   }
 
-  function requestLoad(scope: 'all' | 'table' = 'table') {
+  function requestLoad(scope = 'table') {
     if (loadUsageRecords) {
       void loadUsageRecords(scope)
     }

@@ -1,11 +1,6 @@
 import { computed, ref, type Ref } from 'vue'
 
-import type { ClientApiKey } from '@/api/modules/api-keys'
-
-export function useApiKeysTable(
-  pageKeys: Ref<ClientApiKey[]>,
-  selectedIds = ref<Set<string>>(new Set()),
-) {
+export function useApiKeysTable(pageKeys: Ref<any[]>, selectedIds = ref<Set<string>>(new Set())) {
   const allSelected = computed(
     () => pageKeys.value.length > 0 && pageKeys.value.every((key) => selectedIds.value.has(key.id)),
   )

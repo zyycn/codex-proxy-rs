@@ -6,7 +6,7 @@ use chrono::{Duration, Utc};
 use codex_proxy_rs::{
     api::AppState,
     bootstrap::services::Services,
-    infra::time::{china_datetime, china_day_start, china_hour},
+    infra::time::{china_datetime, china_day_start, china_quarter_hour_start},
     telemetry::{usage::store::PgUsageRecordStore, usage::types::UsageRecord},
     upstream::openai::fingerprint::Fingerprint,
 };
@@ -176,20 +176,15 @@ async fn dashboard_summary_should_keep_trend_after_usage_records_are_cleared() {
 }
 
 #[tokio::test]
-async fn dashboard_trend_should_bucket_usage_by_china_hour() {
+async fn dashboard_trend_should_bucket_usage_by_china_quarter_hour() {
     let (app, store, _pool, _dir) = dashboard_test_app(
-        "dashboard-trend-china-hour",
+        "dashboard-trend-china-quarter-hour",
         crate::support::fingerprint::test_fingerprint(),
     )
     .await;
-    let now = Utc::now();
+    let record_at = Utc::now();
     store
-        .append(&usage_record_with_token_parts(
-            now - Duration::seconds(1),
-            40,
-            60,
-            10,
-        ))
+        .append(&usage_record_with_token_parts(record_at, 40, 60, 10))
         .await
         .unwrap();
 
@@ -201,7 +196,8 @@ async fn dashboard_trend_should_bucket_usage_by_china_hour() {
         .find(|point| point["requestsValue"] == 1)
         .expect("trend should include the inserted usage bucket");
 
-    assert_eq!(point["time"], format!("{:02}", china_hour(&now)));
+    let slot_display = china_datetime(&china_quarter_hour_start(record_at));
+    assert_eq!(point["time"], &slot_display[11..16]);
     assert_eq!(point["tokensValue"], 100);
     assert_eq!(point["cachedTokensValue"], 10);
     assert_f64_eq(point["cacheHitRateValue"].as_f64().unwrap(), 0.25);
@@ -235,7 +231,7 @@ async fn dashboard_trend_should_only_include_china_today() {
         .map(|point| point["tokensValue"].as_u64().unwrap())
         .sum::<u64>();
 
-    assert_eq!(points.first().unwrap()["time"], "00");
+    assert_eq!(points.first().unwrap()["time"], "00:00");
     assert_eq!(token_total, 7);
 }
 
@@ -277,6 +273,73 @@ async fn dashboard_latency_trend_should_use_first_token_latency() {
     assert_eq!(summary[0]["value"], "300 ms");
     assert_eq!(summary[1]["value"], "500 ms");
     assert_eq!(summary[2]["value"], "100 ms");
+}
+
+#[tokio::test]
+async fn dashboard_latency_trend_should_serialize_missing_samples_as_null() {
+    let (app, _store, _pool, _dir) = dashboard_test_app(
+        "dashboard-trend-empty-latency",
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .await;
+
+    let body = dashboard_trend(app, "latency").await;
+    let point = &body["data"]["points"][0];
+    let summary_values = body["data"]["summary"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["value"].as_str().unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        (
+            point["latencyValue"].clone(),
+            point["maxLatencyValue"].clone(),
+            point["minLatencyValue"].clone(),
+            point["latency"].clone(),
+            summary_values,
+        ),
+        (
+            Value::Null,
+            Value::Null,
+            Value::Null,
+            Value::from("—"),
+            vec!["—", "—", "—"],
+        )
+    );
+}
+
+#[tokio::test]
+async fn dashboard_error_trend_should_serialize_missing_success_rate_as_null() {
+    let (app, _store, _pool, _dir) = dashboard_test_app(
+        "dashboard-trend-empty-success-rate",
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .await;
+
+    let body = dashboard_trend(app, "errors").await;
+    let point = &body["data"]["points"][0];
+    let success_summary = &body["data"]["summary"][1];
+
+    assert_eq!(
+        (
+            point["requestsValue"].clone(),
+            point["errorsValue"].clone(),
+            point["successRateValue"].clone(),
+            point["successRate"].clone(),
+            success_summary["value"].clone(),
+            success_summary["ratio"].clone(),
+        ),
+        (
+            Value::from(0),
+            Value::from(0),
+            Value::Null,
+            Value::from("—"),
+            Value::from("—"),
+            Value::Null,
+        )
+    );
 }
 
 #[tokio::test]

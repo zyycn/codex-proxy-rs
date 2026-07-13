@@ -185,7 +185,7 @@ export function useDashboard(): any {
 
   function metricCards(summary: any) {
     const { accounts, traffic, tokens, cache } = summary.cards
-    const points = summary.trend.points as any[]
+    const points = recentTrendWindow(summary.trend.points as any[])
     return [
       {
         title: '账号',
@@ -281,6 +281,16 @@ export function useDashboard(): any {
     return values.some((value) => value > 0) ? { values, tone } : undefined
   }
 
+  function recentTrendWindow(points: any[]) {
+    let lastActiveIndex = points.length - 1
+    while (lastActiveIndex >= 0 && Number(points[lastActiveIndex]?.requestsValue) <= 0) {
+      lastActiveIndex -= 1
+    }
+    if (lastActiveIndex < 0) return []
+
+    return points.slice(Math.max(0, lastActiveIndex - 8), lastActiveIndex + 1)
+  }
+
   function formatDashboardCompactNumber(value: number) {
     const normalized = Math.max(0, Math.round(value))
 
@@ -313,7 +323,14 @@ export function useDashboard(): any {
   }
 
   function applyTrend(trend: any) {
-    trendPoints.value = trend.points
+    const points = trend.kind === 'usage' ? aggregateUsageTrend(trend.points) : trend.points
+    trendPoints.value = points
+
+    if (trend.kind === 'usage') {
+      trendSummary.value = usageTrendSummary(points)
+      return
+    }
+
     trendSummary.value = (trend.summary as any[]).map((item) => {
       if (trend.kind === 'latency') {
         return {
@@ -338,6 +355,77 @@ export function useDashboard(): any {
         colorVar: trendSummaryColorVar(trend.kind, item.label),
       }
     })
+  }
+
+  function aggregateUsageTrend(points: any[]) {
+    return Array.from({ length: Math.ceil(points.length / 2) }, (_, groupIndex) => {
+      const group = points.slice(groupIndex * 2, groupIndex * 2 + 2)
+      const first = group[0]
+      const sum = (key: string) =>
+        group.reduce((total, point) => total + Number(point[key] ?? 0), 0)
+      const requestsValue = sum('requestsValue')
+      const errorsValue = sum('errorsValue')
+      const inputTokensValue = sum('inputTokensValue')
+      const outputTokensValue = sum('outputTokensValue')
+      const cachedTokensValue = Math.min(inputTokensValue, sum('cachedTokensValue'))
+      const uncachedInputTokensValue = inputTokensValue - cachedTokensValue
+      const effectiveTokensValue = uncachedInputTokensValue + outputTokensValue
+      const cacheHitRateValue = inputTokensValue ? cachedTokensValue / inputTokensValue : null
+      const successRateValue = requestsValue
+        ? ((requestsValue - errorsValue) / requestsValue) * 100
+        : null
+
+      return {
+        ...first,
+        requests: formatDashboardCompactNumber(requestsValue),
+        requestsValue,
+        inputTokens: formatDashboardCompactNumber(inputTokensValue),
+        inputTokensValue,
+        outputTokens: formatDashboardCompactNumber(outputTokensValue),
+        outputTokensValue,
+        cachedTokens: formatDashboardCompactNumber(cachedTokensValue),
+        cachedTokensValue,
+        uncachedInputTokens: formatDashboardCompactNumber(uncachedInputTokensValue),
+        uncachedInputTokensValue,
+        effectiveTokens: formatDashboardCompactNumber(effectiveTokensValue),
+        effectiveTokensValue: effectiveTokensValue > 0 ? effectiveTokensValue : null,
+        cacheHitRate: cacheHitRateValue === null ? '—' : formatDashboardRate(cacheHitRateValue),
+        cacheHitRateValue,
+        tokensValue: inputTokensValue + outputTokensValue,
+        errors: formatDashboardCompactNumber(errorsValue),
+        errorsValue,
+        successRate: successRateValue === null ? '—' : `${successRateValue.toFixed(1)}%`,
+        successRateValue,
+      }
+    })
+  }
+
+  function usageTrendSummary(points: any[]) {
+    const total = (key: string) => points.reduce((sum, point) => sum + Number(point[key] ?? 0), 0)
+    const inputTokens = total('inputTokensValue')
+    const outputTokens = total('outputTokensValue')
+    const cachedTokens = Math.min(inputTokens, total('cachedTokensValue'))
+
+    return [
+      {
+        label: '输入',
+        value: formatDashboardCompactNumber(inputTokens),
+        tone: 'info',
+        colorVar: '--cp-info',
+      },
+      {
+        label: '输出',
+        value: formatDashboardCompactNumber(outputTokens),
+        tone: 'success',
+        colorVar: '--cp-success',
+      },
+      {
+        label: '缓存',
+        value: formatDashboardCompactNumber(cachedTokens),
+        tone: 'normal',
+        colorVar: '--cp-text-tertiary',
+      },
+    ]
   }
 
   function accountUsageItem(item: any) {

@@ -7,8 +7,6 @@ import axios, {
 
 import { API_BASE_URL, API_TIMEOUT_MS } from './constants'
 
-export type ApiPayload = Record<string, unknown>
-
 interface ApiEnvelope<T = unknown> {
   code: number
   message: string

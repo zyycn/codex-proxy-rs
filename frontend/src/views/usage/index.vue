@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { CalendarDays, Eye, Minimize2 } from '@lucide/vue'
 import dayjs from 'dayjs'
-import { computed, ref, shallowRef, watch } from 'vue'
+import { computed, shallowRef, watch } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -30,14 +30,14 @@ import UsageReasoningEffortCell from './components/UsageReasoningEffortCell.vue'
 import UsageSummaryCards from './components/UsageSummaryCards.vue'
 import UsageTokenCell from './components/UsageTokenCell.vue'
 
-const totalRecords = ref(0)
-const timeRange = ref('7d')
+const totalRecords = shallowRef(0)
+const timeRange = shallowRef('today')
 const recordView = shallowRef('success')
 const recordViewOptions = [
   { label: '成功记录', value: 'success' },
   { label: '错误排查', value: 'errors' },
 ]
-const timeRangeParams = computed<Record<string, string>>(() => {
+const timeRangeParams = computed(() => {
   const now = dayjs()
 
   if (timeRange.value === 'today') {
@@ -77,7 +77,8 @@ const {
   summary,
   insights,
   refreshingList,
-  modelDistributionSource,
+  diagnosticDimension,
+  diagnosticLoading,
   loadUsageRecords,
   refreshUsageRecords,
 } = useUsageRecordsTable({
@@ -105,7 +106,7 @@ watch(timeRange, () => {
     <header class="flex min-h-17 shrink-0 items-start justify-between gap-4">
       <div>
         <h1 class="mt-0 mb-0 text-[34px] leading-[1.15] font-extrabold text-(--cp-text-primary)">
-          使用记录
+          使用统计
         </h1>
         <p class="mt-2.5 mb-0 text-[15px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
           查看请求用量、性能趋势与调用错误记录
@@ -119,9 +120,11 @@ watch(timeRange, () => {
 
     <UsageSummaryCards :summary="summary" />
     <UsageInsightsGrid
-      v-model:model-source="modelDistributionSource"
-      :insights="insights"
+      v-model:diagnostic-dimension="diagnosticDimension"
+      :overview="insights.overview"
+      :diagnostics="insights.diagnostics"
       :loading="analyticsLoading"
+      :diagnostic-loading="diagnosticLoading"
     />
 
     <BaseCard
@@ -147,7 +150,7 @@ watch(timeRange, () => {
       <template #body>
         <div
           v-show="recordView === 'success'"
-          class="grid min-h-[520px] flex-1 grid-rows-[auto_minmax(0,1fr)] gap-3"
+          class="grid min-h-130 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-3"
         >
           <UsageFilters
             v-model:search="searchQuery"
@@ -234,7 +237,7 @@ watch(timeRange, () => {
           </BaseTable>
         </div>
 
-        <div v-show="recordView === 'errors'" class="min-h-[520px] flex-1">
+        <div v-show="recordView === 'errors'" class="min-h-130 flex-1">
           <OpsErrorPanel :time-range-params="timeRangeParams" />
         </div>
       </template>

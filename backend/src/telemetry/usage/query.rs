@@ -1,4 +1,4 @@
-//! 管理端使用记录服务。
+//! 管理端使用统计与请求记录查询服务。
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -10,6 +10,10 @@ use crate::{
     infra::{format::optional_nonnegative_i64_to_u64, json::NumberedPage},
     telemetry::{
         billing,
+        usage::insights::{
+            UsageDiagnosticsDimension, UsageDiagnosticsInsights, UsageInsightsOverview,
+            diagnostics, overview,
+        },
         usage::store::{
             PgUsageRecordStore, PgUsageRecordStoreResult, UsageRecordFilter, push_filter,
         },
@@ -114,14 +118,14 @@ pub enum UsageQueryError {
     Accounts,
 }
 
-/// 管理端使用记录服务。
+/// 管理端使用统计与请求记录查询服务。
 #[derive(Clone)]
 pub struct UsageQueryService {
     store: PgUsageRecordStore,
 }
 
 impl UsageQueryService {
-    /// 构造管理端使用记录服务。
+    /// 构造管理端使用统计与请求记录查询服务。
     pub fn new(store: PgUsageRecordStore) -> Self {
         Self { store }
     }
@@ -220,6 +224,29 @@ impl UsageQueryService {
     ) -> Result<Vec<UsageRecordTrendPoint>, UsageQueryError> {
         self.store
             .trend(filter.into())
+            .await
+            .map_err(|_| UsageQueryError::List)
+    }
+
+    /// 读取请求健康、性能与成本观测概览。
+    pub async fn insights_overview(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<UsageInsightsOverview, UsageQueryError> {
+        overview(self.store.pool(), start, end)
+            .await
+            .map_err(|_| UsageQueryError::List)
+    }
+
+    /// 按维度读取请求热点诊断。
+    pub async fn insights_diagnostics(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        dimension: UsageDiagnosticsDimension,
+    ) -> Result<UsageDiagnosticsInsights, UsageQueryError> {
+        diagnostics(self.store.pool(), start, end, dimension)
             .await
             .map_err(|_| UsageQueryError::List)
     }

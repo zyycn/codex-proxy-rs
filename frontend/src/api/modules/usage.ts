@@ -32,33 +32,17 @@ export function getUsageRecordSummary(params?: any) {
   })
 }
 
-export function getUsageRecordModelDistribution(params?: any) {
+export function getUsageRecordInsightsOverview(params?: any) {
   return request({
-    url: '/api/admin/usage/records/insights/models',
+    url: '/api/admin/usage/records/insights/overview',
     method: 'GET',
     params,
   })
 }
 
-export function getUsageRecordEndpointDistribution(params?: any) {
+export function getUsageRecordInsightsDiagnostics(params: any) {
   return request({
-    url: '/api/admin/usage/records/insights/endpoints',
-    method: 'GET',
-    params,
-  })
-}
-
-export function getUsageRecordTokenTrend(params?: any) {
-  return request({
-    url: '/api/admin/usage/records/insights/token-trend',
-    method: 'GET',
-    params,
-  })
-}
-
-export function getUsageRecordLatencyTrend(params?: any) {
-  return request({
-    url: '/api/admin/usage/records/insights/latency-trend',
+    url: '/api/admin/usage/records/insights/diagnostics',
     method: 'GET',
     params,
   })

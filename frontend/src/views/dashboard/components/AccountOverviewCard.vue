@@ -74,7 +74,7 @@ const statusRows = computed(() => {
     },
     {
       label: '额度受限',
-      description: '已触发或接近额度阈值',
+      description: '已触发额度阈值',
       value: String(quota),
       tone: 'warning',
       icon: TriangleAlert,

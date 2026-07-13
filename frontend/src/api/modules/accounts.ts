@@ -1,4 +1,4 @@
-import request, { type ApiPayload } from '../request'
+import request from '../request'
 
 const ACCOUNT_EXPORT_CONFIRMATION = 'export_sensitive_accounts'
 
@@ -10,7 +10,7 @@ export function getAccounts(params?: any) {
   })
 }
 
-export function importAccounts(data: ApiPayload) {
+export function importAccounts(data: any) {
   return request({
     url: '/api/admin/accounts/import',
     method: 'POST',
@@ -29,7 +29,7 @@ export function exportAccounts(params?: any) {
   })
 }
 
-export function authorizeAccountOAuth(data: ApiPayload = {}) {
+export function authorizeAccountOAuth(data = {}) {
   return request({
     url: '/api/admin/accounts/oauth/authorize',
     method: 'POST',
@@ -37,7 +37,7 @@ export function authorizeAccountOAuth(data: ApiPayload = {}) {
   })
 }
 
-export function exchangeAccountOAuth(data: ApiPayload) {
+export function exchangeAccountOAuth(data: any) {
   return request({
     url: '/api/admin/accounts/oauth/exchange',
     method: 'POST',
@@ -45,7 +45,7 @@ export function exchangeAccountOAuth(data: ApiPayload) {
   })
 }
 
-export function deleteAccounts(data: ApiPayload) {
+export function deleteAccounts(data: any) {
   return request({
     url: '/api/admin/accounts/delete',
     method: 'POST',
@@ -53,7 +53,7 @@ export function deleteAccounts(data: ApiPayload) {
   })
 }
 
-export function refreshAccount(data: ApiPayload) {
+export function refreshAccount(data: any) {
   return request({
     url: '/api/admin/accounts/refresh',
     method: 'POST',
@@ -61,7 +61,7 @@ export function refreshAccount(data: ApiPayload) {
   })
 }
 
-export function updateAccount(data: ApiPayload) {
+export function updateAccount(data: any) {
   return request({
     url: '/api/admin/accounts/update',
     method: 'POST',
@@ -77,7 +77,7 @@ export function getAccountQuota(params: any) {
   })
 }
 
-export function getAccountModels(data: { id: string | number }) {
+export function getAccountModels(data: any) {
   return request({
     url: '/api/admin/accounts/models',
     method: 'GET',

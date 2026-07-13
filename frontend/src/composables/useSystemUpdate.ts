@@ -6,8 +6,6 @@ import {
   getSystemUpdateDetail,
   performSystemUpdate,
   restartSystem,
-  type SystemUpdateInfo,
-  type SystemVersion,
 } from '@/api'
 import { ApiError } from '@/api/request'
 
@@ -23,8 +21,8 @@ export interface SystemUpdateLog {
   at: string
 }
 
-const version = shallowRef<SystemVersion | null>(null)
-const updateInfo = shallowRef<SystemUpdateInfo | null>(null)
+const version = shallowRef<any>(null)
+const updateInfo = shallowRef<any>(null)
 const loading = shallowRef(false)
 const checking = shallowRef(false)
 const updating = shallowRef(false)
@@ -39,7 +37,7 @@ const updateStreamError = shallowRef('')
 const updateEventSource = shallowRef<EventSource | null>(null)
 const restartTargetVersion = shallowRef('')
 
-let loadVersionPromise: Promise<SystemVersion> | undefined
+let loadVersionPromise: Promise<any> | undefined
 let loadSystemPromise: Promise<void> | undefined
 const maxUpdateLogs = 200
 const restartReadyTimeoutMs = 60_000

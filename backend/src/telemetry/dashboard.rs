@@ -8,7 +8,7 @@ use crate::infra::{
         format_billing_amount, format_compact_number, format_duration_ms, format_percent,
         format_rate, format_tokens, nonnegative_i64_to_u64,
     },
-    time::{china_day_start, china_hour, china_hour_start, china_quarter_hour_start},
+    time::{china_day_start, china_quarter_hour_start},
 };
 
 use super::account_usage::query::{AccountUsageSummary, AccountUsageTimeBucket};
@@ -16,6 +16,7 @@ use super::account_usage::query::{AccountUsageSummary, AccountUsageTimeBucket};
 const HEALTH_TIMELINE_SLOT_MINUTES: i64 = 15;
 const HEALTH_TIMELINE_SLOTS: i64 = 24 * 4;
 const HEALTH_TIMELINE_STABLE_SUCCESS_THRESHOLD: u64 = 3;
+const TREND_SLOT_MINUTES: i64 = 15;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DashboardAccountCounts {
@@ -117,13 +118,13 @@ struct DashboardTrendPointData {
     errors: String,
     errors_value: u64,
     latency: String,
-    latency_value: u64,
+    latency_value: Option<u64>,
     max_latency: String,
-    max_latency_value: u64,
+    max_latency_value: Option<u64>,
     min_latency: String,
-    min_latency_value: u64,
+    min_latency_value: Option<u64>,
     success_rate: String,
-    success_rate_value: f64,
+    success_rate_value: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -240,41 +241,51 @@ pub fn dashboard_trend_data_at(
     kind: DashboardTrendKind,
     now: DateTime<Utc>,
 ) -> DashboardTrendData {
-    let current_hour = china_hour_start(now);
+    let current_slot = china_quarter_hour_start(now);
     let start = china_day_start(now);
-    let elapsed_hours = current_hour.signed_duration_since(start).num_hours();
-    let mut buckets = (0..=elapsed_hours)
-        .map(|index| (start + Duration::hours(index), UsageWindow::default()))
+    let elapsed_slots =
+        current_slot.signed_duration_since(start).num_minutes() / TREND_SLOT_MINUTES;
+    let mut buckets = (0..=elapsed_slots)
+        .map(|index| {
+            (
+                start + Duration::minutes(TREND_SLOT_MINUTES * index),
+                UsageWindow::default(),
+            )
+        })
         .collect::<Vec<_>>();
 
     for record in records {
         if record.bucket_start < start || record.bucket_start > now {
             continue;
         }
-        let record_hour = china_hour_start(record.bucket_start);
-        if let Some((_, bucket)) = buckets
-            .iter_mut()
-            .find(|(bucket_start, _)| *bucket_start == record_hour)
-        {
-            apply_bucket(bucket, record);
-        }
+        let record_slot = china_quarter_hour_start(record.bucket_start);
+        let slot_index =
+            record_slot.signed_duration_since(start).num_minutes() / TREND_SLOT_MINUTES;
+        let Ok(slot_index) = usize::try_from(slot_index) else {
+            continue;
+        };
+        let Some((_, bucket)) = buckets.get_mut(slot_index) else {
+            continue;
+        };
+        apply_bucket(bucket, record);
     }
 
     let points = buckets
         .iter()
         .map(|(bucket_start, bucket)| {
-            let latency = bucket.avg_first_token_latency().unwrap_or(0);
-            let max_latency = bucket.max_first_token_bucket_latency().unwrap_or(0);
-            let min_latency = bucket.min_first_token_bucket_latency().unwrap_or(0);
+            let latency = bucket.avg_first_token_latency();
+            let max_latency = bucket.max_first_token_bucket_latency();
+            let min_latency = bucket.min_first_token_bucket_latency();
             let cache_hit_rate = bucket.cache_hit_rate().unwrap_or(0.0);
-            let success_rate = if bucket.requests > 0 {
-                ((bucket.requests - bucket.errors) as f64 / bucket.requests as f64 * 1000.0).round()
+            let success_rate = (bucket.requests > 0).then(|| {
+                (bucket.requests.saturating_sub(bucket.errors) as f64 / bucket.requests as f64
+                    * 1000.0)
+                    .round()
                     / 10.0
-            } else {
-                0.0
-            };
+            });
+            let elapsed_minutes = bucket_start.signed_duration_since(start).num_minutes();
             DashboardTrendPointData {
-                time: format!("{:02}", china_hour(bucket_start)),
+                time: format!("{:02}:{:02}", elapsed_minutes / 60, elapsed_minutes % 60),
                 requests: format_compact_number(bucket.requests),
                 requests_value: bucket.requests,
                 input_tokens: format_tokens(bucket.input_tokens),
@@ -287,13 +298,15 @@ pub fn dashboard_trend_data_at(
                 tokens_value: bucket.tokens(),
                 errors: format_compact_number(bucket.errors),
                 errors_value: bucket.errors,
-                latency: format_optional_duration_ms(Some(latency)),
+                latency: format_optional_duration_ms(latency),
                 latency_value: latency,
-                max_latency: format_optional_duration_ms(Some(max_latency)),
+                max_latency: format_optional_duration_ms(max_latency),
                 max_latency_value: max_latency,
-                min_latency: format_optional_duration_ms(Some(min_latency)),
+                min_latency: format_optional_duration_ms(min_latency),
                 min_latency_value: min_latency,
-                success_rate: format_percent(success_rate),
+                success_rate: success_rate
+                    .map(format_percent)
+                    .unwrap_or_else(|| "—".to_string()),
                 success_rate_value: success_rate,
             }
         })
@@ -379,52 +392,48 @@ fn trend_summary(
             trend_summary_item(
                 kind,
                 "输入",
-                points.iter().map(|p| p.input_tokens_value).sum(),
+                Some(points.iter().map(|p| p.input_tokens_value).sum()),
                 None,
             ),
             trend_summary_item(
                 kind,
                 "输出",
-                points.iter().map(|p| p.output_tokens_value).sum(),
+                Some(points.iter().map(|p| p.output_tokens_value).sum()),
                 None,
             ),
             trend_summary_item(
                 kind,
                 "缓存",
-                points.iter().map(|p| p.cached_tokens_value).sum(),
+                Some(points.iter().map(|p| p.cached_tokens_value).sum()),
                 None,
             ),
         ],
         DashboardTrendKind::Latency => {
-            let samples = points
+            let (latency_sum, latency_count) = points
                 .iter()
-                .filter(|point| point.latency_value > 0)
-                .collect::<Vec<_>>();
-            let average = if samples.is_empty() {
-                0
-            } else {
-                samples.iter().map(|point| point.latency_value).sum::<u64>() / samples.len() as u64
-            };
+                .filter_map(|point| point.latency_value)
+                .fold((0_u64, 0_u64), |(sum, count), latency| {
+                    (sum + latency, count + 1)
+                });
+            let average = (latency_count > 0).then(|| latency_sum / latency_count);
             vec![
                 trend_summary_item(kind, "平均", average, None),
                 trend_summary_item(
                     kind,
                     "最高",
-                    samples
+                    points
                         .iter()
-                        .map(|p| p.max_latency_value)
-                        .max()
-                        .unwrap_or(0),
+                        .filter_map(|point| point.max_latency_value)
+                        .max(),
                     None,
                 ),
                 trend_summary_item(
                     kind,
                     "最低",
-                    samples
+                    points
                         .iter()
-                        .filter_map(|p| (p.min_latency_value > 0).then_some(p.min_latency_value))
-                        .min()
-                        .unwrap_or(0),
+                        .filter_map(|point| point.min_latency_value)
+                        .min(),
                     None,
                 ),
             ]
@@ -432,12 +441,13 @@ fn trend_summary(
         DashboardTrendKind::Errors => {
             let errors = points.iter().map(|point| point.errors_value).sum::<u64>();
             let requests = points.iter().map(|point| point.requests_value).sum::<u64>();
-            let success_rate = (requests > 0)
-                .then(|| ((requests - errors) as f64 / requests as f64 * 1000.0).round() / 10.0);
+            let success_rate = (requests > 0).then(|| {
+                (requests.saturating_sub(errors) as f64 / requests as f64 * 1000.0).round() / 10.0
+            });
             vec![
-                trend_summary_item(kind, "错误数", errors, None),
-                trend_summary_item(kind, "成功率", 0, success_rate),
-                trend_summary_item(kind, "总请求", requests, None),
+                trend_summary_item(kind, "错误数", Some(errors), None),
+                trend_summary_item(kind, "成功率", None, success_rate),
+                trend_summary_item(kind, "总请求", Some(requests), None),
             ]
         }
     }
@@ -446,16 +456,18 @@ fn trend_summary(
 fn trend_summary_item(
     kind: DashboardTrendKind,
     label: &str,
-    value: u64,
+    value: Option<u64>,
     ratio: Option<f64>,
 ) -> DashboardTrendSummaryData {
     DashboardTrendSummaryData {
         label: label.to_string(),
-        value: match kind {
-            DashboardTrendKind::Usage => format_tokens(value),
-            DashboardTrendKind::Latency => format_optional_duration_ms(Some(value)),
-            DashboardTrendKind::Errors => format_compact_number(value),
-        },
+        value: value
+            .map(|value| match kind {
+                DashboardTrendKind::Usage => format_tokens(value),
+                DashboardTrendKind::Latency => format_optional_duration_ms(Some(value)),
+                DashboardTrendKind::Errors => format_compact_number(value),
+            })
+            .unwrap_or_else(|| "—".to_string()),
         ratio: ratio.map(format_percent),
     }
 }
