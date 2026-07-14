@@ -33,6 +33,76 @@
 - `telemetry` 继续保存已经确定的事实，不参与调度决策。
 - controller 不成为运行时任意安装、任意排序的插件系统；顺序是静态架构契约。
 
+## v1/* 适用范围与单功能不越界原则
+
+洋葱模型只应用于代理业务接口 `v1/*`，包括 HTTP/SSE Responses、Responses WebSocket 和 review 变体。管理端 `/api/admin/*`、`/healthz`、静态资源和连接排空继续使用现有 API 层与 Tower/Axum middleware，不挂入这套业务洋葱。
+
+本架构确立一条强制原则：
+
+> 单功能单归属：一个功能的业务语义只能由一个 controller 拥有。其他层只能传递事实、执行通用控制流、适配协议或持久化数据，不得再次识别、推断或决定该功能。
+
+以 `cyber_policy` 为例，阈值、适用请求、session key、失败状态机、短路条件、CAS 清理和状态转换全部属于 `controllers/cyber_policy/`。它可以暴露 Request、Attempt、Stream、Finalize 四类窄 hook，但不应把同一规则复制到 API、transport、pipeline 或 store。
+
+边界必须满足以下规则：
+
+- `controller` 唯一拥有功能规则、状态机、优先级、阈值、typed facts、decision 和 scope；不能选择下一个账号、编码 HTTP/SSE/WebSocket 或直接调用其他 controller。
+- `lifecycle` 只拥有固定顺序、enter/leave、短路、逆序 unwind、retry 循环、commit 边界和 exactly-once finalize；不得出现 `if cyber_policy` 或功能阈值。
+- `adapter` / `upstream` 只把原始 HTTP、SSE、WebSocket 输入规范化为通用事实，例如状态码、错误码、terminal、usage；不得解释事实的业务后果。
+- `api` 只解析请求并把 `DispatchStart`、`ClientFailure` 编码成对应 transport；不得重新识别 cyber、quota、history 等功能。
+- `store` 只提供原子读写、CAS、TTL 和数据映射；业务专用 store trait 可以由 controller 定义，基础设施实现不能拥有业务阈值和状态转换。
+- controller 之间不得横向调用；共享内容只能是没有业务含义的协议事实和值对象，不能把共享业务规则藏进 `utils`、`common` 或 helper。
+
+允许的唯一挂载点是 composition root / static registry：它负责构造 controller、注入依赖并注册一次。之后 pipeline 自动把所有阶段 hook 分发给该 controller，业务代码不在各个主循环中手工挂载。
+
+## 目标目录
+
+洋葱重构完成后的 `dispatch` 目标目录如下。现有文件会按纵向切片逐步迁移，下面是目标边界，不代表当前工作树已经具备全部目录。
+
+```text
+backend/src/dispatch/
+├── lifecycle/
+│   ├── mod.rs                 洋葱组合入口
+│   ├── pipeline.rs            固定顺序、短路和逆序退出
+│   ├── registry.rs            controller 静态注册
+│   ├── context.rs             Request/Attempt/Stream 窄 context
+│   ├── outcome.rs             DispatchStart、AttemptOutcome、FinalOutcome
+│   ├── request.rs             Request enter/leave
+│   ├── attempt.rs             AttemptRunner
+│   └── stream.rs              StreamRuntime 与 exactly-once finalizer
+├── controllers/
+│   ├── mod.rs
+│   ├── cyber_policy/
+│   │   ├── mod.rs
+│   │   ├── controller.rs      规则、状态机和四类 hook
+│   │   ├── scope.rs            单请求状态
+│   │   ├── facts.rs            typed observation
+│   │   ├── decision.rs         typed decision
+│   │   └── store.rs            CyberPolicyStore port
+│   ├── history/
+│   ├── quota/
+│   ├── account_failure/
+│   ├── affinity/
+│   ├── usage/
+│   └── telemetry/
+├── adapters/
+│   ├── attempt_observation.rs  上游错误/首帧规范化
+│   └── canonical_stream.rs     SSE/WS 单次解码和事件封装
+├── ports/                      dispatch 对 fleet/upstream/storage 的窄接口
+├── errors.rs                   通用 DispatchFailure 与 ClientFailure
+└── service.rs                  v1/* 对外的唯一 dispatch facade
+```
+
+目录规则是：功能代码向 `controllers/<feature>/` 收敛；生命周期代码只能位于 `lifecycle/`；协议事实只能位于 `adapters/`；跨领域依赖只能通过 `ports/`；API 不得反向进入 controller 的内部实现。
+
+## 不越界验收
+
+- 修改功能阈值、状态转换或 session 规则时，只修改该 controller 目录及其测试。
+- 新增功能只允许新增一个 controller、静态 registry 注册项和本模块测试，不修改 request/attempt/stream 主循环的业务判断。
+- `pipeline` contract test 只验证顺序和控制流；controller test 只验证功能语义；adapter test 只验证事实规范化；API test 只验证统一 outcome 编码。
+- 用 `rg` 检查功能关键词：除 controller、自有 store/schema、测试和文档外，生产代码不得出现功能专用判断。
+- 删除 controller 后，工程只能因 registry 或类型引用失败；pipeline、API、adapter 和 store 中不能残留该功能的决策逻辑。
+- 以下情况直接判定越界：功能名出现在 pipeline 条件分支、API 重判错误、store 根据业务阈值决策、多个 controller 互相调用、同一原始事件被多次解析。
+
 ## 三层生命周期
 
 ```text
