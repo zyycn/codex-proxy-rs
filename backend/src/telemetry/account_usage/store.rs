@@ -129,22 +129,6 @@ select
 from account_usage au
 left join accounts a on a.id = au.account_id";
 
-const USAGE_SUMMARY_SQL: &str = r"
-select
-  count(*) as account_count,
-  coalesce(sum(request_count), 0)::bigint as request_count,
-  coalesce(sum(empty_response_count), 0)::bigint as empty_response_count,
-  coalesce(sum(input_tokens), 0)::bigint as input_tokens,
-  coalesce(sum(output_tokens), 0)::bigint as output_tokens,
-  coalesce(sum(cached_tokens), 0)::bigint as cached_tokens,
-  coalesce(sum(reasoning_tokens), 0)::bigint as reasoning_tokens,
-  coalesce(sum(total_tokens), 0)::bigint as total_tokens,
-  coalesce(sum(image_input_tokens), 0)::bigint as image_input_tokens,
-  coalesce(sum(image_output_tokens), 0)::bigint as image_output_tokens,
-  coalesce(sum(image_request_count), 0)::bigint as image_request_count,
-  coalesce(sum(image_request_failed_count), 0)::bigint as image_request_failed_count
-from account_usage";
-
 /// PostgreSQL 用量存储错误。
 #[derive(Debug, Error)]
 pub enum PgAccountUsageStoreError {
@@ -312,35 +296,6 @@ pub struct UsageListRecord {
     pub last_used_at: Option<DateTime<Utc>>,
 }
 
-/// 账号用量汇总。
-#[derive(Debug, Clone)]
-pub struct UsageSummary {
-    /// 账号数。
-    pub account_count: i64,
-    /// 总请求数。
-    pub request_count: i64,
-    /// 总空响应数。
-    pub empty_response_count: i64,
-    /// 总输入 token。
-    pub input_tokens: i64,
-    /// 总输出 token。
-    pub output_tokens: i64,
-    /// 总缓存 token。
-    pub cached_tokens: i64,
-    /// 总 reasoning token。
-    pub reasoning_tokens: i64,
-    /// 总 token。
-    pub total_tokens: i64,
-    /// 总图片输入 token。
-    pub image_input_tokens: i64,
-    /// 总图片输出 token。
-    pub image_output_tokens: i64,
-    /// 总图片请求成功数。
-    pub image_request_count: i64,
-    /// 总图片请求失败数。
-    pub image_request_failed_count: i64,
-}
-
 /// PostgreSQL 用量存储。
 #[derive(Clone)]
 pub struct PgAccountUsageStore {
@@ -491,25 +446,6 @@ where account_id in (",
 
         let rows = builder.build().fetch_all(&self.pool).await?;
         rows.iter().map(usage_list_from_row).collect()
-    }
-
-    /// 汇总账号用量。
-    pub async fn usage_summary(&self) -> PgAccountUsageStoreResult<UsageSummary> {
-        let row = sqlx::query(USAGE_SUMMARY_SQL).fetch_one(&self.pool).await?;
-        Ok(UsageSummary {
-            account_count: row.get("account_count"),
-            request_count: row.get("request_count"),
-            empty_response_count: row.get("empty_response_count"),
-            input_tokens: row.get("input_tokens"),
-            output_tokens: row.get("output_tokens"),
-            cached_tokens: row.get("cached_tokens"),
-            reasoning_tokens: row.get("reasoning_tokens"),
-            total_tokens: row.get("total_tokens"),
-            image_input_tokens: row.get("image_input_tokens"),
-            image_output_tokens: row.get("image_output_tokens"),
-            image_request_count: row.get("image_request_count"),
-            image_request_failed_count: row.get("image_request_failed_count"),
-        })
     }
 }
 

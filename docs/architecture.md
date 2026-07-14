@@ -277,7 +277,7 @@ Pool key 为 `(base_url, account_id, local_conversation_id)`，slot 状态为：
 
 每条连接记录最新 completed response ID。Exact continuation 只有 ID 完全匹配时才能租用；socket 缺失、busy、失活或 ID 不匹配时不新建连接碰运气，由 HistoryController 决定 full replay 或失败。
 
-池化 socket 默认 25 秒 ping、5 秒探活、55 分钟最大寿命；后台 pump 处理 ping/pong、EOF、close 和 liveness，复用前只读取连接状态。
+池化 socket 默认每 25 秒发送带唯一序列的 Ping，匹配 Pong 的 deadline 为 5 秒，最大寿命为 55 分钟。任意业务入站帧同样证明链路存活；下游背压导致 pump 无法读取 socket 时暂停主动探活。后台 pump 统一处理 ping/pong、EOF、close 和 liveness，复用前只读取原子连接状态，不增加网络往返。
 
 ### Origin breaker
 

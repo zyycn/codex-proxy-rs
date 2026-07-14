@@ -61,9 +61,9 @@ const avatarClass = computed(() => {
     >
       {{ initial }}
     </span>
-    <div class="min-w-0">
+    <div class="min-w-0 flex-1">
       <div class="flex min-w-0 items-center gap-2">
-        <span class="truncate text-[14px] font-[760] text-(--cp-text-primary)">
+        <span class="min-w-0 flex-1 truncate text-[14px] font-[760] text-(--cp-text-primary)">
           {{ displayTitle }}
         </span>
         <AccountPlanBadge v-if="showPlan" :plan-type="account.planType" size="sm" />

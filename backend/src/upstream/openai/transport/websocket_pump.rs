@@ -2,7 +2,7 @@
 //!
 //! 每条上游 WebSocket 连接都由一个后台 pump 任务独占：
 //!   - 持续读取 socket：一旦观察到 `Close` / EOF / 传输错误，立即把连接标记为 `closed`。
-//!   - 自动回应上游 `Ping`（保活），并按 `ping_interval` 主动 `Ping`（穿透 NAT/中间盒空闲计时器）。
+//!   - 自动回应上游 `Ping`，并按 `ping_interval` 主动 `Ping`；匹配的 `Pong` 必须在 deadline 内返回。
 //!   - 可选 `liveness_timeout`：长时间无任何入站活动时判定连接失活并退出。
 //!
 //! 因此空闲连接的“死没死”在后台被实时感知；复用方只需零成本读取 [`PumpedWebSocket::is_closed`]，
@@ -11,7 +11,7 @@
 //! 收发都通过 channel 与 pump 任务交互：
 //!   - 发送：`send` 走 command channel，等待 pump 回执。
 //!   - 接收：`next` 从 message channel 取出 pump 转发的入站帧（`Ping`/`Pong` 已被 pump 吞掉）。
-//!   - 入站缓冲满时暂停读取 socket，并继续处理关闭命令与保活；消费恢复后按原顺序继续转发。
+//!   - 入站缓冲满时暂停读取 socket 和主动探活，仅继续处理发送/关闭命令；消费恢复后按原顺序继续转发。
 
 use std::sync::{
     Arc, Mutex,
@@ -39,6 +39,8 @@ const PUMP_COMMAND_BUFFER: usize = 32;
 pub(crate) struct PumpKeepalive {
     /// 主动 `Ping` 间隔；`None` 表示 pump 不主动 ping（仅被动读取 + 回应上游 ping）。
     pub(crate) ping_interval: Option<Duration>,
+    /// 主动 `Ping` 发出后等待匹配 `Pong` 的 deadline；`None` 表示不校验响应。
+    pub(crate) ping_timeout: Option<Duration>,
     /// 无入站活动多久后判定失活；`None` 表示只靠显式 close/传输错误发现死亡。
     pub(crate) liveness_timeout: Option<Duration>,
 }
@@ -48,6 +50,7 @@ impl PumpKeepalive {
     pub(crate) fn disabled() -> Self {
         Self {
             ping_interval: None,
+            ping_timeout: None,
             liveness_timeout: None,
         }
     }
@@ -70,6 +73,7 @@ pub(crate) enum PumpExitReason {
     UpstreamCloseFrame { frame: Option<String> },
     UpstreamEof,
     InboundTransportError { message: String },
+    PongTimeout { timeout: Duration },
     LivenessTimeout { timeout: Duration },
     KeepaliveTransportError { message: String },
     MessageReceiverClosed,
@@ -84,6 +88,7 @@ impl PumpExitReason {
             Self::UpstreamCloseFrame { .. } => "upstream_close_frame",
             Self::UpstreamEof => "upstream_eof",
             Self::InboundTransportError { .. } => "inbound_transport_error",
+            Self::PongTimeout { .. } => "pong_timeout",
             Self::LivenessTimeout { .. } => "liveness_timeout",
             Self::KeepaliveTransportError { .. } => "keepalive_transport_error",
             Self::MessageReceiverClosed => "message_receiver_closed",
@@ -96,7 +101,9 @@ impl PumpExitReason {
             | Self::InboundTransportError { message }
             | Self::KeepaliveTransportError { message } => Some(message.clone()),
             Self::UpstreamCloseFrame { frame } => frame.clone(),
-            Self::LivenessTimeout { timeout } => Some(format!("{timeout:?}")),
+            Self::PongTimeout { timeout } | Self::LivenessTimeout { timeout } => {
+                Some(format!("{timeout:?}"))
+            }
             Self::CommandChannelClosed
             | Self::LocalClose
             | Self::UpstreamEof
@@ -110,6 +117,7 @@ impl PumpExitReason {
             Self::OutboundTransportError { .. }
                 | Self::UpstreamEof
                 | Self::InboundTransportError { .. }
+                | Self::PongTimeout { .. }
                 | Self::LivenessTimeout { .. }
                 | Self::KeepaliveTransportError { .. }
         )
@@ -120,6 +128,7 @@ impl PumpExitReason {
             self,
             Self::CommandChannelClosed
                 | Self::UpstreamCloseFrame { .. }
+                | Self::PongTimeout { .. }
                 | Self::LivenessTimeout { .. }
                 | Self::MessageReceiverClosed
         )
@@ -129,6 +138,12 @@ impl PumpExitReason {
 struct PendingInbound {
     item: Result<Message, tungstenite::Error>,
     exit_reason: Option<PumpExitReason>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingPing {
+    payload: [u8; 8],
+    deadline: Instant,
 }
 
 /// 由后台 pump 任务托管的 WebSocket 连接句柄。
@@ -248,16 +263,9 @@ async fn pump_loop(
 ) {
     let mut last_activity = Instant::now();
     let ping_interval = keepalive.ping_interval.filter(|d| !d.is_zero());
+    let ping_timeout = keepalive.ping_timeout.filter(|d| !d.is_zero());
     let liveness_timeout = keepalive.liveness_timeout.filter(|d| !d.is_zero());
-    // ticker 由 ping 间隔或 liveness 检查间隔中较小者驱动：即使不主动 ping，
-    // 也要周期性醒来检查 liveness。两者都未配置时不启动 ticker。
-    let tick_interval = match (ping_interval, liveness_timeout) {
-        (Some(ping), Some(live)) => Some(ping.min(live)),
-        (Some(ping), None) => Some(ping),
-        (None, Some(live)) => Some(live),
-        (None, None) => None,
-    };
-    let mut ticker = tick_interval.map(|d| {
+    let mut ping_ticker = ping_interval.map(|d| {
         // 首个 tick 推迟一整个间隔：tokio::time::interval 默认会让首个 tick 立即就绪，
         // 否则连接一建立就会立刻发一帧 Ping，与首个请求 Text 抢跑、打乱帧序。
         let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + d, d);
@@ -266,6 +274,8 @@ async fn pump_loop(
     });
 
     let mut pending_inbound: Option<PendingInbound> = None;
+    let mut pending_ping: Option<PendingPing> = None;
+    let mut ping_sequence = 0_u64;
     let mut backpressure_events = 0_u64;
 
     let reason = 'pump: loop {
@@ -282,6 +292,8 @@ async fn pump_loop(
                     if let Some(reason) = pending.exit_reason {
                         break 'pump reason;
                     }
+                    // 背压期间无法读取 socket，不能把这段本地下游阻塞误算成上游静默。
+                    last_activity = Instant::now();
                 }
                 command = rx_command.recv() => {
                     let Some(command) = command else {
@@ -291,21 +303,12 @@ async fn pump_loop(
                         break 'pump reason;
                     }
                 }
-                _ = tick(&mut ticker) => {
-                    if let Some(reason) = handle_tick(
-                        &mut inner,
-                        last_activity,
-                        ping_interval,
-                        liveness_timeout,
-                        false,
-                    ).await {
-                        break 'pump reason;
-                    }
-                }
             }
             continue;
         }
 
+        let pong_deadline = pending_ping.map(|ping| ping.deadline);
+        let liveness_deadline = liveness_timeout.map(|timeout| last_activity + timeout);
         tokio::select! {
             command = rx_command.recv() => {
                 let Some(command) = command else {
@@ -318,36 +321,38 @@ async fn pump_loop(
             message = inner.next() => {
                 match message {
                     None => break 'pump PumpExitReason::UpstreamEof,
-                    Some(Ok(Message::Ping(payload))) => {
-                        last_activity = Instant::now();
-                        if let Err(error) = inner.send(Message::Pong(payload)).await {
-                            break 'pump PumpExitReason::KeepaliveTransportError {
-                                message: error.to_string(),
-                            };
-                        }
-                    }
-                    Some(Ok(Message::Pong(_))) => {
-                        last_activity = Instant::now();
-                    }
                     Some(Ok(message)) => {
                         last_activity = Instant::now();
-                        let terminal_reason = match &message {
-                            Message::Close(frame) => Some(PumpExitReason::UpstreamCloseFrame {
-                                frame: frame.as_ref().map(|frame| format!("{frame:?}")),
-                            }),
-                            _ => None,
-                        };
-                        if let Some(reason) = enqueue_inbound(
-                            &tx_message,
-                            &mut pending_inbound,
-                            connection_id,
-                            &mut backpressure_events,
-                            PendingInbound {
-                                item: Ok(message),
-                                exit_reason: terminal_reason,
-                            },
-                        ) {
-                            break 'pump reason;
+                        observe_inbound(connection_id, &mut pending_ping, &message);
+                        match message {
+                            Message::Ping(payload) => {
+                                if let Err(error) = inner.send(Message::Pong(payload)).await {
+                                    break 'pump PumpExitReason::KeepaliveTransportError {
+                                        message: error.to_string(),
+                                    };
+                                }
+                            }
+                            Message::Pong(_) => {}
+                            message => {
+                                let terminal_reason = match &message {
+                                    Message::Close(frame) => Some(PumpExitReason::UpstreamCloseFrame {
+                                        frame: frame.as_ref().map(|frame| format!("{frame:?}")),
+                                    }),
+                                    _ => None,
+                                };
+                                if let Some(reason) = enqueue_inbound(
+                                    &tx_message,
+                                    &mut pending_inbound,
+                                    connection_id,
+                                    &mut backpressure_events,
+                                    PendingInbound {
+                                        item: Ok(message),
+                                        exit_reason: terminal_reason,
+                                    },
+                                ) {
+                                    break 'pump reason;
+                                }
+                            }
                         }
                     }
                     Some(Err(err)) => {
@@ -369,16 +374,27 @@ async fn pump_loop(
                     }
                 }
             }
-            _ = tick(&mut ticker) => {
-                if let Some(reason) = handle_tick(
-                    &mut inner,
-                    last_activity,
-                    ping_interval,
-                    liveness_timeout,
-                    true,
-                ).await {
-                    break 'pump reason;
+            _ = tick(&mut ping_ticker) => {
+                if pending_ping.is_none() {
+                    match send_keepalive_ping(
+                        &mut inner,
+                        &mut ping_sequence,
+                        ping_timeout,
+                    ).await {
+                        Ok(pending) => pending_ping = pending,
+                        Err(reason) => break 'pump reason,
+                    }
                 }
+            }
+            _ = wait_until(pong_deadline) => {
+                break 'pump PumpExitReason::PongTimeout {
+                    timeout: ping_timeout.expect("pending ping must have a timeout"),
+                };
+            }
+            _ = wait_until(liveness_deadline) => {
+                break 'pump PumpExitReason::LivenessTimeout {
+                    timeout: liveness_timeout.expect("liveness deadline must have a timeout"),
+                };
             }
         }
     };
@@ -433,27 +449,39 @@ async fn handle_command(inner: &mut RawWsStream, command: PumpCommand) -> Option
     }
 }
 
-async fn handle_tick(
+fn observe_inbound(connection_id: Uuid, pending_ping: &mut Option<PendingPing>, message: &Message) {
+    let Some(pending) = pending_ping else {
+        return;
+    };
+    if let Message::Pong(payload) = message
+        && payload.as_ref() != pending.payload
+    {
+        tracing::debug!(
+            websocket_connection_id = %connection_id,
+            "Responses WebSocket pump received a non-matching Pong"
+        );
+    }
+    // 匹配 Pong 是探针的直接回执；其他入站帧同样证明上游链路仍可达。
+    *pending_ping = None;
+}
+
+async fn send_keepalive_ping(
     inner: &mut RawWsStream,
-    last_activity: Instant,
-    ping_interval: Option<Duration>,
-    liveness_timeout: Option<Duration>,
-    check_liveness: bool,
-) -> Option<PumpExitReason> {
-    if check_liveness
-        && let Some(timeout) = liveness_timeout
-        && last_activity.elapsed() >= timeout
-    {
-        return Some(PumpExitReason::LivenessTimeout { timeout });
-    }
-    if ping_interval.is_some()
-        && let Err(error) = inner.send(Message::Ping(Vec::new().into())).await
-    {
-        return Some(PumpExitReason::KeepaliveTransportError {
+    sequence: &mut u64,
+    ping_timeout: Option<Duration>,
+) -> Result<Option<PendingPing>, PumpExitReason> {
+    let payload = sequence.to_be_bytes();
+    *sequence = sequence.wrapping_add(1);
+    inner
+        .send(Message::Ping(payload.to_vec().into()))
+        .await
+        .map_err(|error| PumpExitReason::KeepaliveTransportError {
             message: error.to_string(),
-        });
-    }
-    None
+        })?;
+    Ok(ping_timeout.map(|timeout| PendingPing {
+        payload,
+        deadline: Instant::now() + timeout,
+    }))
 }
 
 fn log_pump_exit(connection_id: Uuid, reason: &PumpExitReason, backpressure_events: u64) {
@@ -491,6 +519,14 @@ async fn tick(ticker: &mut Option<tokio::time::Interval>) {
         Some(ticker) => {
             ticker.tick().await;
         }
+        None => std::future::pending::<()>().await,
+    }
+}
+
+/// 等待可选 deadline；`None` 时永远挂起，让 `select!` 分支实际禁用。
+async fn wait_until(deadline: Option<Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
         None => std::future::pending::<()>().await,
     }
 }

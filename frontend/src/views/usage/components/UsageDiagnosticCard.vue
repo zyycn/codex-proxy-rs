@@ -80,7 +80,7 @@ const tableRows = computed(() => (isStale.value ? [] : displayItems.value))
 
 function diagnosticNameDisplay(name: string) {
   const full = name.trim() || '未知'
-  if (dimension.value !== 'model') {
+  if (dimension.value !== 'model' && dimension.value !== 'account') {
     return { primary: full, secondary: '', full }
   }
 

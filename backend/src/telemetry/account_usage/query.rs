@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use crate::infra::format::nonnegative_i64_to_u64;
 use crate::telemetry::{
-    account_usage::store::{PgAccountUsageStore, UsageListRecord, UsageSummary},
+    account_usage::store::{PgAccountUsageStore, UsageListRecord},
     billing,
     buckets::query::{
         ModelBucketUsage, ModelUsageWindow, PgRequestBucketQuery, UsageBucketTotals,
@@ -42,13 +42,12 @@ impl AccountUsageQueryService {
             .map_err(|_| AccountUsageQueryError::List)
     }
 
-    /// 汇总账号用量。
-    pub async fn summary(&self) -> Result<AccountUsageSummary, AccountUsageQueryError> {
-        self.store
-            .usage_summary()
+    /// 汇总请求时间桶保留期内的全局用量。
+    pub async fn retained_totals(&self) -> Result<UsageBucketTotals, AccountUsageQueryError> {
+        self.buckets
+            .retained_totals()
             .await
-            .map(AccountUsageSummary::from)
-            .map_err(|_| AccountUsageQueryError::Summary)
+            .map_err(|_| AccountUsageQueryError::RetainedTotals)
     }
 
     /// 列出指定时间范围内的聚合时间桶。
@@ -95,8 +94,8 @@ impl AccountUsageQueryService {
 pub enum AccountUsageQueryError {
     #[error("failed to list account usage")]
     List,
-    #[error("failed to summarize account usage")]
-    Summary,
+    #[error("failed to summarize retained usage")]
+    RetainedTotals,
     #[error("failed to list usage time buckets")]
     TimeBuckets,
 }
@@ -129,23 +128,6 @@ pub struct AccountUsageRecord {
     pub last_used_at: Option<DateTime<Utc>>,
 }
 
-/// 管理端账号用量汇总。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct AccountUsageSummary {
-    pub account_count: i64,
-    pub request_count: i64,
-    pub empty_response_count: i64,
-    pub input_tokens: i64,
-    pub output_tokens: i64,
-    pub cached_tokens: i64,
-    pub reasoning_tokens: i64,
-    pub total_tokens: i64,
-    pub image_input_tokens: i64,
-    pub image_output_tokens: i64,
-    pub image_request_count: i64,
-    pub image_request_failed_count: i64,
-}
-
 /// 管理端时间桶用量记录。
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountUsageTimeBucket {
@@ -164,25 +146,6 @@ pub struct AccountUsageTimeBucket {
     pub max_latency_ms: i64,
     pub min_latency_ms: i64,
     pub billing_amount_usd: Option<f64>,
-}
-
-impl From<UsageSummary> for AccountUsageSummary {
-    fn from(s: UsageSummary) -> Self {
-        Self {
-            account_count: s.account_count,
-            request_count: s.request_count,
-            empty_response_count: s.empty_response_count,
-            input_tokens: s.input_tokens,
-            output_tokens: s.output_tokens,
-            cached_tokens: s.cached_tokens,
-            reasoning_tokens: s.reasoning_tokens,
-            total_tokens: s.total_tokens,
-            image_input_tokens: s.image_input_tokens,
-            image_output_tokens: s.image_output_tokens,
-            image_request_count: s.image_request_count,
-            image_request_failed_count: s.image_request_failed_count,
-        }
-    }
 }
 
 impl From<UsageTimeBucketRecord> for AccountUsageTimeBucket {

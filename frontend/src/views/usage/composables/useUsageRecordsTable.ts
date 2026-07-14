@@ -1,5 +1,6 @@
 import { clamp } from 'es-toolkit'
 import { onMounted, shallowRef, watch } from 'vue'
+import type { Ref } from 'vue'
 
 import {
   getUsageRecordInsightsDiagnostics,
@@ -10,7 +11,20 @@ import {
 import { toast } from '@/components/base/BaseToast'
 import { withMinimumDuration } from '@/utils/async'
 
-export function useUsageRecordsTable(options: any) {
+import type { UsageTimeRangeParams } from './useUsageTimeRange'
+
+interface UseUsageRecordsTableOptions {
+  page: Ref<number>
+  pageSize: Ref<number>
+  searchQuery: Ref<string>
+  timeRangeParams: Readonly<Ref<UsageTimeRangeParams>>
+  totalRecords: Ref<number>
+  refreshTimeRangeEnd: () => void
+}
+
+type UsageLoadScope = 'all' | 'table'
+
+export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   const loading = shallowRef(true)
   const analyticsLoading = shallowRef(true)
   const records = shallowRef<any[]>([])
@@ -26,7 +40,7 @@ export function useUsageRecordsTable(options: any) {
     search: options.searchQuery.value || undefined,
   })
 
-  async function loadUsageRecords(scope = 'all') {
+  async function loadUsageRecords(scope: UsageLoadScope = 'all') {
     const requestId = ++loadRequestId
     try {
       loading.value = true
@@ -135,7 +149,8 @@ export function useUsageRecordsTable(options: any) {
     if (refreshingList.value || loading.value) return
     refreshingList.value = true
     try {
-      await withMinimumDuration(() => loadUsageRecords('table'))
+      options.refreshTimeRangeEnd()
+      await withMinimumDuration(() => loadUsageRecords('all'))
     } finally {
       refreshingList.value = false
     }

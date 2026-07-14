@@ -117,7 +117,7 @@ async fn dashboard_summary_should_calculate_today_traffic_and_average_first_toke
         .append(&usage_record_with_tokens(yesterday_record_at, 30))
         .await
         .unwrap();
-    seed_lifetime_usage_summary(&pool, 7, 400, 500, 100).await;
+    seed_retained_usage_bucket(&pool, today_start - Duration::days(8), 4, 340, 500, 100).await;
 
     let body = dashboard_summary(app).await;
 
@@ -439,23 +439,6 @@ async fn dashboard_summary_should_match_versioned_model_names_for_billing() {
     .await;
 
     assert_eq!(billing_amount, "$1.75");
-}
-
-#[tokio::test]
-async fn dashboard_summary_should_not_price_usage_summary_without_model_dimension() {
-    let (app, _store, pool, _dir) = dashboard_test_app(
-        "dashboard-billing-summary-fallback",
-        crate::support::fingerprint::test_fingerprint(),
-    )
-    .await;
-    seed_usage_summary(&pool, 100_000, 100_000).await;
-
-    let body = dashboard_summary(app).await;
-
-    assert_eq!(
-        body["data"]["cards"]["tokens"]["todayBillingAmountUsd"],
-        "$0.00"
-    );
 }
 
 #[tokio::test]
@@ -812,62 +795,30 @@ async fn dashboard_trend(app: axum::Router, kind: &str) -> Value {
     response_json(response).await
 }
 
-async fn seed_usage_summary(pool: &PgPool, input_tokens: u64, output_tokens: u64) {
-    seed_usage_summary_with_last_used(pool, input_tokens, output_tokens, "2026-06-18T00:00:00Z")
-        .await;
-}
-
-async fn seed_lifetime_usage_summary(
+async fn seed_retained_usage_bucket(
     pool: &PgPool,
+    bucket_start: chrono::DateTime<Utc>,
     request_count: u64,
     input_tokens: u64,
     output_tokens: u64,
     cached_tokens: u64,
 ) {
-    seed_dashboard_account(pool, "acct_lifetime", "lifetime@example.com").await;
     sqlx::query(
-        "insert into account_usage
-         (account_id, request_count, input_tokens, output_tokens, cached_tokens, total_tokens)
-         values ($1, $2, $3, $4, $5, $6)",
+        "insert into request_time_buckets
+         (bucket_start, provider, account_id, model, service_tier, success_count,
+          input_tokens, output_tokens, cached_tokens, updated_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
     )
-    .bind("acct_lifetime")
+    .bind(china_quarter_hour_start(bucket_start))
+    .bind("openai")
+    .bind("acct_retained")
+    .bind("gpt-5.5")
+    .bind("__unknown__")
     .bind(request_count as i64)
     .bind(input_tokens as i64)
     .bind(output_tokens as i64)
     .bind(cached_tokens as i64)
-    .bind((input_tokens + output_tokens) as i64)
-    .execute(pool)
-    .await
-    .unwrap();
-}
-
-async fn seed_usage_summary_with_last_used(
-    pool: &PgPool,
-    input_tokens: u64,
-    output_tokens: u64,
-    last_used_at: &str,
-) {
-    sqlx::query(
-        "insert into accounts (id, email, access_token, status, added_at, updated_at) values ($1, $2, $3, $4, $5, $6)",
-    )
-    .bind("acct_usage")
-    .bind("acct-usage@example.com")
-    .bind("cipher")
-    .bind("active")
-    .bind(crate::support::storage::timestamp("2026-06-18T00:00:00Z"))
-    .bind(crate::support::storage::timestamp("2026-06-18T00:00:00Z"))
-    .execute(pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "insert into account_usage (account_id, request_count, input_tokens, output_tokens, total_tokens, last_used_at) values ($1, $2, $3, $4, $5, $6)",
-    )
-    .bind("acct_usage")
-    .bind(1_i64)
-    .bind(input_tokens as i64)
-    .bind(output_tokens as i64)
-    .bind((input_tokens + output_tokens) as i64)
-    .bind(crate::support::storage::timestamp(last_used_at))
+    .bind(Utc::now())
     .execute(pool)
     .await
     .unwrap();
