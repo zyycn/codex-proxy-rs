@@ -28,6 +28,7 @@ pub(in crate::dispatch) struct UpstreamFailureFacts {
     pub kind: UpstreamFailureKind,
     pub status_code: Option<u16>,
     pub code: Option<String>,
+    pub error_type: Option<String>,
     pub message: String,
     pub body: String,
     pub retry_after_seconds: Option<u64>,
@@ -47,6 +48,7 @@ pub(in crate::dispatch) fn upstream_failure_facts(
             },
             status_code: error.status().map(|status| status.as_u16()),
             code: None,
+            error_type: None,
             message: error.to_string(),
             body: error.to_string(),
             retry_after_seconds: None,
@@ -57,11 +59,12 @@ pub(in crate::dispatch) fn upstream_failure_facts(
             retry_after_seconds,
             ..
         } => {
-            let (code, message) = error_fields(body);
+            let (code, error_type, message) = error_fields(body);
             UpstreamFailureFacts {
                 kind: UpstreamFailureKind::HttpStatus,
                 status_code: Some(status.as_u16()),
                 code,
+                error_type,
                 message: message.unwrap_or_else(|| body.clone()),
                 body: body.clone(),
                 retry_after_seconds: *retry_after_seconds,
@@ -71,17 +74,16 @@ pub(in crate::dispatch) fn upstream_failure_facts(
             simple_facts(UpstreamFailureKind::StreamIdle, error)
         }
         CodexClientError::WebSocket(CodexWebSocketExchangeError::Upstream(upstream)) => {
+            let (body_code, body_type, body_message) = error_fields(&upstream.body);
             UpstreamFailureFacts {
                 kind: UpstreamFailureKind::WebSocketUpstream,
                 status_code: Some(upstream.status_code),
-                code: upstream
-                    .code
-                    .clone()
-                    .or_else(|| error_fields(&upstream.body).0),
+                code: upstream.code.clone().or(body_code),
+                error_type: upstream.error_type.clone().or(body_type),
                 message: upstream
                     .message
                     .clone()
-                    .or_else(|| error_fields(&upstream.body).1)
+                    .or(body_message)
                     .unwrap_or_else(|| upstream.body.clone()),
                 body: upstream.body.clone(),
                 retry_after_seconds: upstream.retry_after_seconds,
@@ -123,15 +125,16 @@ fn simple_facts(kind: UpstreamFailureKind, error: &CodexClientError) -> Upstream
         kind,
         status_code: None,
         code: None,
+        error_type: None,
         body: message.clone(),
         message,
         retry_after_seconds: None,
     }
 }
 
-fn error_fields(body: &str) -> (Option<String>, Option<String>) {
+fn error_fields(body: &str) -> (Option<String>, Option<String>, Option<String>) {
     let Ok(value) = serde_json::from_str::<Value>(body) else {
-        return (None, None);
+        return (None, None, None);
     };
     let error = value
         .pointer("/response/error")
@@ -141,6 +144,11 @@ fn error_fields(body: &str) -> (Option<String>, Option<String>) {
         error
             .get("code")
             .or_else(|| value.get("code"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        error
+            .get("type")
+            .or_else(|| value.get("type"))
             .and_then(Value::as_str)
             .map(ToString::to_string),
         error

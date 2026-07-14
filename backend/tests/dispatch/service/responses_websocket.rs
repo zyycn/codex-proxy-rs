@@ -1286,10 +1286,9 @@ async fn responses_websocket_should_prefer_conversation_account_without_previous
     let (_reused, first_payload, second_payload) = upstream.await.unwrap();
 
     assert!(body.contains("\"id\":\"resp_conversation_affinity\""));
-    assert!(
-        first_payload["prompt_cache_key"]
-            .as_str()
-            .is_some_and(|value| value.starts_with("wi_"))
+    assert_eq!(
+        first_payload["prompt_cache_key"],
+        "conv_conversation_affinity"
     );
     assert_eq!(
         second_payload["prompt_cache_key"],
@@ -1646,7 +1645,7 @@ async fn responses_websocket_response_failed_rate_limit_should_preserve_cooldown
                     "status": "failed",
                     "error": {
                         "type": "rate_limit_error",
-                        "code": "rate_limit_exceeded",
+                        "code": "workspace_owner_usage_limit_reached",
                         "message": "Rate limit reached. Please try again in 11.054s."
                     }
                 }
@@ -1715,7 +1714,7 @@ async fn responses_websocket_response_failed_quota_should_retry_fallback_account
                 "response": {
                     "id": "resp_ws_quota_failed",
                     "error": {
-                        "code": "insufficient_quota",
+                        "code": "workspace_owner_credits_depleted",
                         "message": "quota exhausted"
                     }
                 }

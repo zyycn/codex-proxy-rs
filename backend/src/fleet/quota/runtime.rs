@@ -176,7 +176,6 @@ impl QuotaRefreshService {
                     installation_id: Some(&installation_id),
                     session_id: None,
                     thread_id: None,
-                    prompt_cache_key: None,
                     client_request_id: None,
                     turn_id: None,
                 })

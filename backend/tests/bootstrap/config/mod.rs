@@ -134,6 +134,19 @@ fn config_loader_should_reject_unknown_fields() {
 }
 
 #[test]
+fn config_loader_should_reject_removed_tls_section() {
+    let yaml = complete_config().replace(
+        "  ws_pool:",
+        "  tls:\n    force_http11: false\n\n  ws_pool:",
+    );
+    let directory = write_config(&yaml);
+
+    let error = BootstrapConfig::load_from_path(directory.path().join("config.yaml")).unwrap_err();
+
+    assert!(matches!(error, ConfigError::InvalidDocument { .. }));
+}
+
+#[test]
 fn config_loader_should_reject_missing_explicit_fields() {
     let yaml = complete_config().replace("    enabled: true\n\n\n# Compose", "\n\n# Compose");
     let directory = write_config(&yaml);

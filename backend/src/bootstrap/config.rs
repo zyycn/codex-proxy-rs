@@ -105,7 +105,6 @@ impl BootstrapConfig {
             redis,
             runtime,
             quota,
-            tls,
             ws_pool,
             fingerprint,
             admin,
@@ -122,7 +121,6 @@ impl BootstrapConfig {
             database: DatabaseConfig { url: database.url },
             redis: RedisConfig { url: redis.url },
             runtime,
-            tls,
             ws_pool,
             fingerprint,
             admin: AdminConfig {
@@ -241,8 +239,6 @@ pub struct AppConfig {
     pub redis: RedisConfig,
     /// 本地持久运行目录。
     pub runtime: RuntimePathsConfig,
-    /// TLS 偏好配置。
-    pub tls: TlsConfig,
     /// WebSocket 连接池启动设置。
     pub ws_pool: WebSocketPoolSettings,
     /// 上游请求指纹默认配置。
@@ -342,14 +338,6 @@ pub struct RedisConfig {
 pub struct RuntimePathsConfig {
     /// 持久身份密钥与更新状态目录。
     pub data_directory: PathBuf,
-}
-
-/// TLS/HTTP 协议偏好配置。
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct TlsConfig {
-    /// 是否强制 HTTP/1.1。
-    pub force_http11: bool,
 }
 
 /// WebSocket 连接池启动设置。
@@ -464,7 +452,6 @@ struct FileAppConfig {
     redis: FileRedisConfig,
     runtime: RuntimePathsConfig,
     quota: QuotaConfig,
-    tls: TlsConfig,
     ws_pool: WebSocketPoolSettings,
     fingerprint: FingerprintConfig,
     admin: FileAdminConfig,

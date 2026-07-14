@@ -545,6 +545,57 @@ async fn responses_should_mark_expired_after_401_and_fallback() {
 }
 
 #[tokio::test]
+async fn responses_should_disable_identity_verification_account_and_fallback() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-primary"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": {
+                "code": "identity_verification_required",
+                "message": "Identity verification is required before using this account"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-secondary"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(RESPONSES_AFTER_403_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (app, api_key, pool, _dir) = test_app_with_two_accounts(server.uri()).await;
+
+    let response = app
+        .oneshot(responses_json_request(
+            &api_key,
+            &json!({
+                "model": "gpt-5.5",
+                "input": [{"role": "user", "content": "Say hello"}],
+                "stream": false,
+                "use_websocket": false
+            }),
+        ))
+        .await
+        .unwrap();
+    let body = response_json(response).await;
+    let account_status: String = sqlx::query_scalar("select status from accounts where id = $1")
+        .bind("acct_primary")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(body["id"], "resp_after_403");
+    assert_eq!(account_status, "disabled");
+}
+
+#[tokio::test]
 async fn responses_should_recover_auth_failure_from_sse_failed_event() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -1168,12 +1219,12 @@ async fn responses_should_disable_account_after_three_cloudflare_path_block_404s
 }
 
 #[tokio::test]
-async fn responses_should_fallback_after_http_model_unsupported() {
+async fn responses_should_fallback_after_http_404_model_unsupported() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
         .and(header("authorization", "Bearer access-primary"))
-        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({
             "error": {
                 "code": "model_not_supported",
                 "message": "Model gpt-5.5 is not supported on this account plan"
@@ -2399,6 +2450,274 @@ async fn responses_should_rotate_account_after_5xx_without_same_account_retry() 
     assert_eq!(body["id"], "resp_after_5xx_retry");
     assert_eq!(primary_requests, 1, "requests: {authorizations:?}");
     assert_eq!(secondary_requests, 1, "requests: {authorizations:?}");
+}
+
+#[tokio::test]
+async fn responses_failover_should_replace_account_identity_and_preserve_session_semantics() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-primary"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": {
+                "type": "authentication_error",
+                "code": "token_invalidated",
+                "message": "token is no longer valid"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-secondary"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(RESPONSES_AFTER_5XX_RETRY_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (app, api_key, pool, _dir) = test_app_with_two_accounts(server.uri()).await;
+    let cookie_store = PgCookieStore::new(pool);
+    cookie_store
+        .capture_set_cookie(
+            "acct_primary",
+            "cf_clearance=primary; Domain=.chatgpt.com; Path=/codex",
+        )
+        .await
+        .unwrap();
+    cookie_store
+        .capture_set_cookie(
+            "acct_secondary",
+            "cf_clearance=secondary; Domain=.chatgpt.com; Path=/codex",
+        )
+        .await
+        .unwrap();
+    let turn_metadata = json!({
+        "installation_id": "installation-client",
+        "session_id": "session-client",
+        "thread_id": "thread-client",
+        "turn_id": "turn-client",
+        "window_id": "window-client",
+        "forked_from_thread_id": "forked-client",
+        "parent_thread_id": "parent-client",
+        "request_kind": "turn",
+        "workspace_kind": "local"
+    })
+    .to_string();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [{"role": "user", "content": "Replay without identity pollution"}],
+                        "stream": false,
+                        "use_websocket": false,
+                        "prompt_cache_key": "cache-client",
+                        "conversation_id": "conversation-client",
+                        "session_id": "session-client",
+                        "thread_id": "thread-client",
+                        "turn_id": "turn-client",
+                        "x-client-request-id": "request-client",
+                        "x-codex-window-id": "window-client",
+                        "x-codex-parent-thread-id": "parent-client",
+                        "x-codex-installation-id": "installation-client",
+                        "turnState": "turn-state-primary",
+                        "turnMetadata": turn_metadata,
+                        "codexWindowId": "window-client",
+                        "parentThreadId": "parent-client",
+                        "client_metadata": {
+                            "safe": "preserved",
+                            "conversation_id": "conversation-client",
+                            "session_id": "session-client",
+                            "thread_id": "thread-client",
+                            "turn_id": "turn-client",
+                            "x-client-request-id": "request-client",
+                            "x-codex-window-id": "window-client",
+                            "x-codex-parent-thread-id": "parent-client",
+                            "x-codex-installation-id": "installation-client",
+                            "x-codex-turn-state": "turn-state-primary",
+                            "x-codex-turn-metadata": turn_metadata
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = server.received_requests().await.unwrap();
+    let responses_requests = requests
+        .iter()
+        .filter(|request| request.url.path() == "/codex/responses")
+        .collect::<Vec<_>>();
+    let primary = responses_requests
+        .iter()
+        .copied()
+        .find(|request| {
+            request
+                .headers
+                .get("authorization")
+                .is_some_and(|value| value == "Bearer access-primary")
+        })
+        .unwrap();
+    let secondary = responses_requests
+        .iter()
+        .copied()
+        .find(|request| {
+            request
+                .headers
+                .get("authorization")
+                .is_some_and(|value| value == "Bearer access-secondary")
+        })
+        .unwrap();
+    let primary_body: Value = serde_json::from_slice(&primary.body).unwrap();
+    let secondary_body: Value = serde_json::from_slice(&secondary.body).unwrap();
+    let primary_metadata = &primary_body["client_metadata"];
+    let secondary_metadata = &secondary_body["client_metadata"];
+
+    assert_eq!(responses_requests.len(), 2);
+    assert_eq!(primary.headers["chatgpt-account-id"], "chatgpt-primary");
+    assert_eq!(secondary.headers["chatgpt-account-id"], "chatgpt-secondary");
+    assert_eq!(primary.headers["cookie"], "cf_clearance=primary");
+    assert_eq!(secondary.headers["cookie"], "cf_clearance=secondary");
+    assert_ne!(
+        primary_metadata["x-codex-installation-id"],
+        secondary_metadata["x-codex-installation-id"]
+    );
+    for key in [
+        "session_id",
+        "thread_id",
+        "turn_id",
+        "x-client-request-id",
+        "x-codex-window-id",
+        "x-codex-parent-thread-id",
+    ] {
+        assert_eq!(primary_metadata[key], secondary_metadata[key], "key: {key}");
+    }
+    assert_ne!(
+        primary_body["x-codex-installation-id"],
+        secondary_body["x-codex-installation-id"]
+    );
+    for key in [
+        "prompt_cache_key",
+        "conversation_id",
+        "session_id",
+        "thread_id",
+        "turn_id",
+        "x-client-request-id",
+        "x-codex-window-id",
+        "x-codex-parent-thread-id",
+        "codexWindowId",
+        "parentThreadId",
+    ] {
+        assert_eq!(primary_body[key], secondary_body[key], "key: {key}");
+    }
+    let primary_turn_metadata: Value =
+        serde_json::from_str(primary_metadata["x-codex-turn-metadata"].as_str().unwrap()).unwrap();
+    let secondary_turn_metadata: Value = serde_json::from_str(
+        secondary_metadata["x-codex-turn-metadata"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_ne!(
+        primary_turn_metadata["installation_id"],
+        secondary_turn_metadata["installation_id"]
+    );
+    for key in [
+        "session_id",
+        "thread_id",
+        "turn_id",
+        "window_id",
+        "forked_from_thread_id",
+        "parent_thread_id",
+    ] {
+        assert_eq!(
+            primary_turn_metadata[key], secondary_turn_metadata[key],
+            "turn metadata key: {key}"
+        );
+    }
+    for (request, body, metadata, turn_metadata) in [
+        (
+            primary,
+            &primary_body,
+            primary_metadata,
+            &primary_turn_metadata,
+        ),
+        (
+            secondary,
+            &secondary_body,
+            secondary_metadata,
+            &secondary_turn_metadata,
+        ),
+    ] {
+        for (header_key, body_key, metadata_key, turn_metadata_key) in [
+            (
+                "x-codex-installation-id",
+                "x-codex-installation-id",
+                "x-codex-installation-id",
+                "installation_id",
+            ),
+            ("session-id", "session_id", "session_id", "session_id"),
+            ("thread-id", "thread_id", "thread_id", "thread_id"),
+            ("x-codex-turn-id", "turn_id", "turn_id", "turn_id"),
+            (
+                "x-codex-window-id",
+                "x-codex-window-id",
+                "x-codex-window-id",
+                "window_id",
+            ),
+            (
+                "x-codex-parent-thread-id",
+                "x-codex-parent-thread-id",
+                "x-codex-parent-thread-id",
+                "parent_thread_id",
+            ),
+        ] {
+            let header_value = request.headers[header_key].to_str().unwrap();
+            assert_eq!(body[body_key].as_str(), Some(header_value));
+            assert_eq!(metadata[metadata_key].as_str(), Some(header_value));
+            assert_eq!(
+                turn_metadata[turn_metadata_key].as_str(),
+                Some(header_value)
+            );
+        }
+        assert_eq!(
+            body["x-client-request-id"].as_str(),
+            request.headers["x-client-request-id"].to_str().ok()
+        );
+        assert_eq!(
+            metadata["x-client-request-id"].as_str(),
+            request.headers["x-client-request-id"].to_str().ok()
+        );
+        assert_eq!(
+            body["turnMetadata"].as_str(),
+            metadata["x-codex-turn-metadata"].as_str()
+        );
+        assert_eq!(
+            request.headers["x-codex-turn-metadata"].to_str().ok(),
+            metadata["x-codex-turn-metadata"].as_str()
+        );
+    }
+    assert_eq!(primary_body["turnState"], "turn-state-primary");
+    assert_eq!(primary_metadata["x-codex-turn-state"], "turn-state-primary");
+    assert!(secondary_body.get("turnState").is_none());
+    assert!(secondary_metadata.get("x-codex-turn-state").is_none());
+    assert!(secondary.headers.get("x-codex-turn-state").is_none());
+    assert_eq!(secondary_metadata["safe"], "preserved");
+    assert_eq!(secondary_body["input"], primary_body["input"]);
+    assert!(secondary_body.get("previous_response_id").is_none());
 }
 
 #[tokio::test]

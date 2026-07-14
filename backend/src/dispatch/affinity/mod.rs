@@ -6,7 +6,8 @@ pub mod service;
 pub mod store;
 pub mod types;
 
-pub use identity::{AccountIdentityService, AccountScopedIdentity};
+pub use identity::AccountIdentityService;
+pub(in crate::dispatch) use identity::{AccountIdentityScope, AccountScopedRequest};
 pub use resolve::*;
 pub use service::*;
 pub use store::*;

@@ -457,18 +457,25 @@ previous response 按历史来源处理：
 
 Responses 协议没有按事件序号续传未完成 response 的请求字段。官方 Codex 在 turn 层持有完整会话历史和工具执行状态，收到可重试的断流后会建立新请求重新采样。代理保留这一责任边界：新请求仍进入账号池调度和会话恢复，但不会伪造同一个 response 的续传。
 
-## 账号作用域身份
+## 账号身份、安装身份与会话语义
 
-`identity_hmac_secret` 是实例级 256-bit 持久密钥。服务端用它对以下值做 HMAC 派生：
+账号切换不能把所有带 `id` 的字段都一起改写。官方 Codex `5bed644` 将 `session_id`、`thread_id`、`turn_id`、`window_id`、parent/forked thread 共同建模为客户端 turn metadata；默认 `prompt_cache_key` 直接取 `session_id`，HTTP/WS 的 `x-client-request-id` 也使用 thread ID。它们表达客户端会话拓扑，不表达登录账号。盲目按账号 HMAC 会让一次换号在上游变成另一条会话，并破坏 prompt cache、父子线程和增量 WebSocket 语义。
 
-- prompt cache key
-- session、thread、turn、window 和 parent thread ID
-- client request ID
-- installation ID
+官方客户端把 `installation_id` 持久化在 Codex home 中，登录账号切换时不会自动变化。号池与单客户端不同：多个互不相关的上游账号共享一个代理 installation ID 会形成横向关联。因此工程有意采用更严格的隔离策略，用实例级 `identity_hmac_secret` 和账号 ID 稳定派生 UUID 形态的 installation ID。该偏离是号池风险隔离策略，不是对官方字段语义的误判。
 
-派生输入包含字段域和账号 ID。同一客户端标识在不同账号上得到不同值；同一账号、同一输入在密钥不变时保持稳定。installation ID 只由账号 ID 和持久密钥派生，因此每个账号有一个稳定值，不在每次请求时随机生成。
+| 字段或状态 | 语义 | 换号规则 |
+| --- | --- | --- |
+| access token、`chatgpt-account-id`、Cookie | 选中账号的认证身份 | 每个 attempt 必须从当前账号重建，禁止客户端值或上一账号值进入下个 attempt |
+| `x-codex-installation-id`、turn metadata 的 `installation_id` | 安装/设备指纹 | 使用当前账号的稳定派生值；header、body、`client_metadata` 和嵌套 turn metadata 中已有投影必须一致 |
+| `x-codex-turn-state` | 上游在同一 turn 内签发的 opaque sticky-routing 状态 | 同账号重试可复用；切换账号必须删除，不能伪造新值 |
+| `previous_response_id` | 上游历史状态句柄 | 只在拥有该状态的账号上原样使用；代理持有完整 transcript 时可删除 ID 后全量重放，否则禁止跨账号尝试 |
+| `session_id`、`thread_id`/`conversation_id`、`turn_id`、window、parent/forked thread | 客户端逻辑会话拓扑 | 原样透传，不做 HMAC、不按账号改写；transport 只可把同一原值投影到协议要求的 header |
+| `prompt_cache_key`、`x-client-request-id` | 会话缓存命名空间和客户端请求关联 | 客户端提供时原样透传；缺失的 `x-client-request-id` 才回退代理 request ID |
+| response/item `id`、`encrypted_content`、工具 `call_id` | 上游输出引用和工具配对语义 | 跨账号全量重放时删除上游 item `id` 与 `encrypted_content`，保留工具配对所需 `call_id` |
 
-镜像更新或容器重建时必须保留数据目录中的 `identity_hmac_secret`。丢失该文件会为所有账号生成新的身份集合，已有会话亲和也失去连续性。
+`AccountScopedIdentity` 类型只包含 installation ID；会话字段不进入该类型。`AccountScopedRequest` 只有在当前账号 token/account/Cookie、installation ID 和 opaque turn state 边界处理完成后才能交给 transport。这样“账号身份要替换”和“会话语义要透传”不是依赖注释约定，而是由类型边界分开。
+
+镜像更新或容器重建时必须保留数据目录中的 `identity_hmac_secret`。丢失该文件会为所有账号生成新的 installation ID，也会改变只在代理内部使用的本地 conversation HMAC 索引；客户端会话 ID 本身不受影响。
 
 ## 数据存储
 

@@ -240,11 +240,12 @@ fn controller_exit_order_should_be_static_and_effect_only() {
     assert_appears_in_order(
         stream_exit,
         &[
+            "self.apply_stream_account_state",
             "CloudflareController::leave_stream",
             "UsageController::leave_stream",
             "AffinityController::leave_stream",
             "TelemetryController::leave_stream",
-            "self.apply_stream_failure",
+            "self.apply_stream_policy_failure",
         ],
     );
 }

@@ -9,7 +9,8 @@ use crate::{
         affinity::AccountIdentityService,
         controllers::{
             AttemptAccountPreparation, AttemptAccountPreparationContext, AttemptRoutePreparation,
-            AttemptUpstreamErrorContext, ControllerRequestScope, ControllerSet,
+            AttemptRoutePreparationContext, AttemptUpstreamErrorContext, ControllerRequestScope,
+            ControllerSet,
         },
         errors::{ClientFailure, ResponseDispatchError},
         failure::exhaustion::AccountExhaustionTracker,
@@ -218,10 +219,13 @@ impl<'a> AttemptRunner<'a> {
         let acquired = prepared_account.lease;
         let cookie_header = prepared_account.cookie_header;
 
-        let attempt_request = match self.dependencies.controllers.prepare_attempt_route(
+        let account_scoped_request = match self.dependencies.controllers.prepare_attempt_route(
             controller_scope,
             request,
-            &account.id,
+            AttemptRoutePreparationContext {
+                account_identity: self.dependencies.account_identity,
+                account_id: &account.id,
+            },
         ) {
             AttemptRoutePreparation::Ready(request) => *request,
             AttemptRoutePreparation::Unavailable { message } => {
@@ -242,7 +246,6 @@ impl<'a> AttemptRunner<'a> {
             .start_attempt(&account.id);
         let upstream_context = AccountUpstreamContext {
             codex: self.dependencies.codex,
-            account_identity: self.dependencies.account_identity,
             request_id: self.dependencies.request_id,
             account: &account,
             cookie_header: cookie_header.as_deref(),
@@ -253,9 +256,13 @@ impl<'a> AttemptRunner<'a> {
                 started_at,
                 tuple_schema,
             } => {
-                let result =
-                    create_response_with_account(upstream_context, &attempt_request, *started_at)
-                        .await;
+                let result = create_response_with_account(
+                    upstream_context,
+                    &account_scoped_request,
+                    *started_at,
+                )
+                .await;
+                let attempt_request = account_scoped_request.into_request();
                 acquired.complete().await;
                 self.pending = Some(match result {
                     Ok(response) => {
@@ -317,7 +324,9 @@ impl<'a> AttemptRunner<'a> {
             }
             AttemptMode::Stream { tuple_schema } => {
                 let result =
-                    create_response_stream_with_account(upstream_context, &attempt_request).await;
+                    create_response_stream_with_account(upstream_context, &account_scoped_request)
+                        .await;
+                let attempt_request = account_scoped_request.into_request();
                 self.pending = Some(match result {
                     Err(error) => {
                         acquired.complete().await;

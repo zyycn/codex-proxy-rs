@@ -520,7 +520,14 @@ fn retry_after_seconds_from_rate_limit_message(error: &Value) -> Option<u64> {
         .get("code")
         .or_else(|| error.get("type"))
         .and_then(Value::as_str)?;
-    if code != "rate_limit_exceeded" {
+    if !matches!(
+        code,
+        "rate_limit_exceeded"
+            | "rate_limit_reached"
+            | "usage_limit_reached"
+            | "workspace_owner_usage_limit_reached"
+            | "workspace_member_usage_limit_reached"
+    ) {
         return None;
     }
     let message = error.get("message").and_then(Value::as_str)?;

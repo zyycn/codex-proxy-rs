@@ -212,7 +212,7 @@ impl Services {
             let websocket_initial_event_timeout = (config.ws_pool.initial_event_timeout_ms > 0)
                 .then(|| std::time::Duration::from_millis(config.ws_pool.initial_event_timeout_ms));
             let client = CodexBackendClient::new(
-                build_reqwest_client(config.tls.force_http11)?,
+                build_reqwest_client()?,
                 config.api.base_url.clone(),
                 fingerprint.clone(),
             )

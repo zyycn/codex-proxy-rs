@@ -1690,7 +1690,6 @@ async fn codex_backend_client_should_use_websocket_when_previous_response_id_is_
                 installation_id: None,
                 session_id: None,
                 thread_id: None,
-                prompt_cache_key: None,
                 client_request_id: None,
                 turn_id: None,
             },

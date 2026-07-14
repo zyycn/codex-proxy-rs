@@ -178,7 +178,6 @@ pub(crate) fn request_context<'a>(
         installation_id: None,
         session_id: None,
         thread_id: None,
-        prompt_cache_key: None,
         client_request_id: None,
         turn_id: None,
     }

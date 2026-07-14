@@ -39,6 +39,7 @@ impl ResponseDispatchService {
         let controllers = ControllerSet::new(
             Arc::clone(&self.session_affinity),
             Arc::clone(&self.account_pool),
+            Arc::clone(&self.codex),
             self.cloudflare.clone(),
             Arc::clone(&self.recorder),
         );

@@ -33,7 +33,10 @@ use crate::upstream::openai::protocol::events::{
 pub use crate::fleet::scheduler::RotationStrategy;
 
 mod filters;
+mod persistence;
 mod state;
+
+use persistence::AccountStatePersistence;
 
 pub use filters::*;
 pub use state::*;
@@ -71,6 +74,7 @@ pub struct AccountPoolService {
     usage_store: Arc<dyn AccountUsageStore>,
     request_interval: Arc<std::sync::RwLock<StdDuration>>,
     candidate_changed: Arc<tokio::sync::Notify>,
+    state_persistence: AccountStatePersistence,
 }
 
 /// 一次请求对账号池 slot 的唯一所有权凭据。
@@ -191,6 +195,7 @@ impl AccountPoolService {
         options: AccountPoolOptions,
         request_interval_ms: u64,
     ) -> Self {
+        let state_persistence = AccountStatePersistence::new(Arc::clone(&store));
         Self {
             pool: Arc::new(tokio::sync::Mutex::new(AccountPool::with_options(options))),
             store,
@@ -199,6 +204,7 @@ impl AccountPoolService {
                 request_interval_ms,
             ))),
             candidate_changed: Arc::new(tokio::sync::Notify::new()),
+            state_persistence,
         }
     }
 
@@ -340,7 +346,24 @@ impl AccountPoolService {
             }
         };
         let in_memory = self.pool.lock().await.set_status(account_id, status);
+        if in_memory {
+            self.candidate_changed.notify_waiters();
+        }
         persisted || in_memory
+    }
+
+    /// 先在线性化的内存池中更新账号状态，再将持久化写入后台队列。
+    pub async fn set_status_immediately(&self, account_id: &str, status: AccountStatus) -> bool {
+        let in_memory = {
+            let mut pool = self.pool.lock().await;
+            let in_memory = pool.set_status(account_id, status);
+            self.state_persistence.set_status(account_id, status);
+            in_memory
+        };
+        if in_memory {
+            self.candidate_changed.notify_waiters();
+        }
+        in_memory
     }
 
     /// 标记账号 quota 冷却状态。
@@ -361,7 +384,29 @@ impl AccountPoolService {
             .lock()
             .await
             .mark_quota_limited_until(account_id, until);
+        if in_memory {
+            self.candidate_changed.notify_waiters();
+        }
         persisted || in_memory
+    }
+
+    /// 先在线性化的内存池中标记配额冷却，再将持久化写入后台队列。
+    pub async fn mark_quota_limited_until_immediately(
+        &self,
+        account_id: &str,
+        until: DateTime<Utc>,
+    ) -> bool {
+        let in_memory = {
+            let mut pool = self.pool.lock().await;
+            let in_memory = pool.mark_quota_limited_until(account_id, until);
+            self.state_persistence
+                .mark_quota_limited_until(account_id, until);
+            in_memory
+        };
+        if in_memory {
+            self.candidate_changed.notify_waiters();
+        }
+        in_memory
     }
 
     /// 按请求上下文获取可用账号。

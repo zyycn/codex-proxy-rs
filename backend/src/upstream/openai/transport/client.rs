@@ -57,12 +57,12 @@ const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const UPSTREAM_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
     "x-codex-ws-stream-request-start-ms";
-type ReqwestClientCacheKey = (bool, Option<String>);
+type ReqwestClientCacheKey = Option<String>;
 type ReqwestClientCache = Mutex<HashMap<ReqwestClientCacheKey, Client>>;
 
-/// 构建带缓存的 reqwest Client。若 `force_http11` 为 true 则强制 HTTP/1.1。
-pub fn build_reqwest_client(force_http11: bool) -> Result<Client, CustomCaError> {
-    let cache_key = (force_http11, custom_ca_env_cache_key());
+/// 构建带缓存、自动协商 HTTP/2 的 reqwest Client。
+pub fn build_reqwest_client() -> Result<Client, CustomCaError> {
+    let cache_key = custom_ca_env_cache_key();
     static CLIENTS: OnceLock<ReqwestClientCache> = OnceLock::new();
     let cache = CLIENTS.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(client) = cache
@@ -83,11 +83,6 @@ pub fn build_reqwest_client(force_http11: bool) -> Result<Client, CustomCaError>
         .brotli(true)
         .zstd(true)
         .deflate(true);
-    let builder = if force_http11 {
-        builder.http1_only()
-    } else {
-        builder
-    };
     let client = build_reqwest_client_with_custom_ca(builder)?;
     let mut clients = cache
         .lock()
@@ -232,11 +227,11 @@ pub struct CodexRequestContext<'a> {
     pub access_token: &'a str,
     /// ChatGPT account id。
     pub account_id: Option<&'a str>,
-    /// 请求 ID。
+    /// 代理请求 ID。
     pub request_id: &'a str,
-    /// x-codex-turn-state。
+    /// 当前账号同一 turn 内的 opaque sticky-routing 状态。
     pub turn_state: Option<&'a str>,
-    /// x-codex-turn-metadata。
+    /// 客户端 turn metadata；其中 installation ID 已按当前账号处理。
     pub turn_metadata: Option<&'a str>,
     /// x-codex-beta-features。
     pub beta_features: Option<&'a str>,
@@ -244,23 +239,21 @@ pub struct CodexRequestContext<'a> {
     pub include_timing_metrics: Option<&'a str>,
     /// version。
     pub version: Option<&'a str>,
-    /// x-codex-window-id。
+    /// 客户端 window ID。
     pub codex_window_id: Option<&'a str>,
-    /// x-codex-parent-thread-id。
+    /// 客户端 parent thread ID。
     pub parent_thread_id: Option<&'a str>,
     /// cookie 头。
     pub cookie_header: Option<&'a str>,
-    /// x-codex-installation-id。
+    /// 当前账号稳定派生的 installation ID。
     pub installation_id: Option<&'a str>,
-    /// session_id。
+    /// 客户端 session ID。
     pub session_id: Option<&'a str>,
-    /// thread_id。
+    /// 客户端 thread ID。
     pub thread_id: Option<&'a str>,
-    /// 账号作用域 prompt cache key。
-    pub prompt_cache_key: Option<&'a str>,
-    /// 账号作用域 client request ID。
+    /// 客户端逻辑 request ID；缺失时使用代理请求 ID。
     pub client_request_id: Option<&'a str>,
-    /// 账号作用域 turn ID。
+    /// 客户端 turn ID。
     pub turn_id: Option<&'a str>,
 }
 
@@ -391,7 +384,6 @@ impl CodexModelCatalogClient for CodexBackendClient {
             installation_id: request.installation_id,
             session_id: None,
             thread_id: None,
-            prompt_cache_key: None,
             client_request_id: None,
             turn_id: None,
         })
@@ -517,29 +509,6 @@ fn is_model_entry(value: &Value) -> bool {
 // Request helpers
 // ---------------------------------------------------------------------------
 
-fn response_upstream_request(
-    request: &CodexResponsesRequest,
-    context: CodexRequestContext<'_>,
-) -> CodexResponsesRequest {
-    let mut upstream = request.clone();
-    if request.prompt_cache_key().is_some() {
-        upstream.set_prompt_cache_key(context.prompt_cache_key.map(ToString::to_string));
-    }
-    for (key, value) in [
-        ("session_id", context.session_id),
-        ("thread_id", context.thread_id),
-        ("turn_id", context.turn_id),
-        ("x-client-request-id", context.client_request_id),
-        ("x-codex-window-id", context.codex_window_id),
-        ("x-codex-parent-thread-id", context.parent_thread_id),
-        ("x-codex-installation-id", context.installation_id),
-    ] {
-        upstream.replace_existing_identity_field(key, value);
-    }
-    upstream.set_client_metadata(response_client_metadata(request.client_metadata(), context));
-    upstream
-}
-
 fn websocket_upstream_request(request: &CodexResponsesRequest) -> CodexResponsesRequest {
     let mut request = request.clone();
     stamp_ws_stream_request_start_ms(&mut request);
@@ -564,66 +533,6 @@ fn now_unix_timestamp_millis() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or_default()
-}
-
-fn response_client_metadata(
-    client_metadata: Option<&Value>,
-    context: CodexRequestContext<'_>,
-) -> Option<Value> {
-    // 以客户端原始 client_metadata 为基础（保留 number/bool/object 等所有值类型），
-    // 在其上追加代理自身的上下文字段。
-    let mut metadata = match client_metadata? {
-        Value::Object(input) => input.clone(),
-        value => return Some(value.clone()),
-    };
-
-    replace_metadata_string(
-        &mut metadata,
-        "x-codex-installation-id",
-        context.installation_id,
-    );
-    replace_metadata_string(&mut metadata, "session_id", context.session_id);
-    replace_metadata_string(&mut metadata, "thread_id", context.thread_id);
-    replace_metadata_string(
-        &mut metadata,
-        "x-client-request-id",
-        context.client_request_id,
-    );
-    replace_metadata_string(&mut metadata, "turn_id", context.turn_id);
-    replace_metadata_string(&mut metadata, "x-codex-window-id", context.codex_window_id);
-    insert_metadata_string(
-        &mut metadata,
-        "x-codex-turn-metadata",
-        context.turn_metadata,
-    );
-    replace_metadata_string(
-        &mut metadata,
-        "x-codex-parent-thread-id",
-        context.parent_thread_id,
-    );
-
-    if metadata.is_empty() {
-        None
-    } else {
-        Some(Value::Object(metadata))
-    }
-}
-
-fn insert_metadata_string(metadata: &mut Map<String, Value>, key: &str, value: Option<&str>) {
-    if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
-        metadata.insert(key.to_string(), Value::String(value.to_string()));
-    }
-}
-
-fn replace_metadata_string(metadata: &mut Map<String, Value>, key: &str, value: Option<&str>) {
-    match value.filter(|value| !value.trim().is_empty()) {
-        Some(value) => {
-            metadata.insert(key.to_string(), Value::String(value.to_string()));
-        }
-        None => {
-            metadata.remove(key);
-        }
-    }
 }
 
 fn openai_subagent_from_metadata(client_metadata: Option<&Value>) -> Option<String> {

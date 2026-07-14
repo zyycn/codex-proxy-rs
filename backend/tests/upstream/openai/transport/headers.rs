@@ -223,7 +223,7 @@ async fn websocket_execute_response_create_request_should_capture_handshake_head
 }
 
 #[tokio::test]
-async fn codex_backend_client_websocket_should_forward_security_chain_headers_and_payload_fields() {
+async fn codex_backend_client_websocket_should_forward_headers_and_preserve_payload_fields() {
     let received_headers = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -304,7 +304,6 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
                 installation_id: Some("install-123"),
                 session_id: Some("cp_derived"),
                 thread_id: None,
-                prompt_cache_key: Some("cp_derived"),
                 client_request_id: None,
                 turn_id: None,
             },
@@ -327,20 +326,14 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
     );
     let mut stable_metadata = metadata.clone();
     stable_metadata.remove("x-codex-ws-stream-request-start-ms");
-    assert_eq!(payload["prompt_cache_key"], "cp_derived");
-    // 透明代理：客户端 client_metadata 的非字符串值（ignored_non_string: 42）原样保留，
-    // 代理字段只做追加式合并，不再过滤用户字段。
+    assert_eq!(payload["prompt_cache_key"], "client-thread");
+    // transport 只生成请求头，不把 context 中的身份或会话字段回填进 payload。
     assert_eq!(
         Value::Object(stable_metadata),
         json!({
             "safe": "yes",
             "x-openai-subagent": "review",
-            "ignored_non_string": 42,
-            "x-codex-installation-id": "install-123",
-            "session_id": "cp_derived",
-            "x-codex-window-id": "cw_derived",
-            "x-codex-turn-metadata": "{\"thread_source\":\"subagent\"}",
-            "x-codex-parent-thread-id": "parent-456"
+            "ignored_non_string": 42
         })
     );
 
@@ -468,7 +461,6 @@ async fn codex_backend_client_should_send_desktop_headers_and_capture_response_m
                 installation_id: None,
                 session_id: None,
                 thread_id: None,
-                prompt_cache_key: None,
                 client_request_id: None,
                 turn_id: None,
             },
@@ -541,7 +533,6 @@ async fn codex_backend_client_should_use_latest_runtime_fingerprint_for_new_requ
         installation_id: None,
         session_id: None,
         thread_id: None,
-        prompt_cache_key: None,
         client_request_id: None,
         turn_id: None,
     };
@@ -620,7 +611,6 @@ async fn codex_backend_client_usage_should_use_wham_usage_headers() {
             installation_id: Some("install-1"),
             session_id: Some("session-1"),
             thread_id: None,
-            prompt_cache_key: None,
             client_request_id: None,
             turn_id: None,
         })
@@ -789,7 +779,6 @@ async fn codex_backend_client_should_send_http_sse_headers_in_fingerprint_order(
                 installation_id: Some("install-1"),
                 session_id: Some("session-1"),
                 thread_id: None,
-                prompt_cache_key: None,
                 client_request_id: None,
                 turn_id: None,
             },

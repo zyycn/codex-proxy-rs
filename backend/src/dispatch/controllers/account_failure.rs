@@ -2,7 +2,10 @@
 
 use crate::{
     dispatch::{
-        controllers::ControllerFailureFact,
+        controllers::{
+            ControllerFailureFact,
+            account_state::{AccountStateEffect, AccountStateEffects},
+        },
         errors::ClientFailure,
         failure::exhaustion::{AccountExhaustionRecord, ExhaustedAccountKind},
         lifecycle::contract::{
@@ -11,19 +14,14 @@ use crate::{
         transport::observation::{UpstreamFailureFacts, UpstreamFailureKind},
     },
     fleet::{account::AccountStatus, pool::AccountPoolService},
-    upstream::openai::protocol::responses::ResponsesSseFailure,
+    upstream::openai::{protocol::responses::ResponsesSseFailure, transport::CodexBackendClient},
 };
 
 pub(super) struct AccountFailureController;
 
 pub(super) struct ClassifiedFailure {
     exhaustion: AccountExhaustionRecord,
-    effect: AccountEffect,
-}
-
-enum AccountEffect {
-    None,
-    SetStatus(AccountStatus),
+    effect: Option<AccountStateEffect>,
 }
 
 impl AccountFailureController {
@@ -41,16 +39,14 @@ impl AccountFailureController {
 
     pub(super) async fn apply_effect(
         account_pool: &AccountPoolService,
+        codex: &CodexBackendClient,
         classified: &ClassifiedFailure,
     ) {
         let Some(account_id) = classified.exhaustion.account_id.as_deref() else {
             return;
         };
-        match &classified.effect {
-            AccountEffect::None => {}
-            AccountEffect::SetStatus(status) => {
-                account_pool.set_status(account_id, *status).await;
-            }
+        if let Some(effect) = &classified.effect {
+            AccountStateEffects::apply(account_pool, codex, account_id, effect).await;
         }
     }
 
@@ -114,6 +110,11 @@ impl AccountFailureController {
             .as_deref()
             .unwrap_or_default()
             .to_ascii_lowercase();
+        let error_type = failure
+            .upstream_type
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
         let message = failure.message.to_ascii_lowercase();
         if is_model_unsupported(&code)
             || is_model_unsupported(&message)
@@ -125,10 +126,11 @@ impl AccountFailureController {
         {
             return Some(ClientFailure::new(failure.clone(), 400, false));
         }
-        if is_auth_failure(&code, &message) {
+        if is_auth_failure(&code, &error_type, &message) {
             return Some(ClientFailure::new(failure.clone(), 401, false));
         }
-        if code.contains("forbidden") || code.contains("banned") {
+        if code.contains("forbidden") || code.contains("banned") || error_type == "permission_error"
+        {
             return Some(ClientFailure::new(failure.clone(), 403, false));
         }
         if code.contains("server_overloaded") {
@@ -147,7 +149,7 @@ fn classify(observation: &AttemptObservation, account_id: &str) -> Option<Classi
                     ExhaustedAccountKind::UpstreamUnavailable,
                     "upstream response did not include visible output",
                 ),
-                effect: AccountEffect::None,
+                effect: None,
             })
         }
         _ => ControllerFailureFact::from_attempt(observation)
@@ -168,108 +170,151 @@ fn classify_failure(
 fn classify_upstream(account_id: &str, facts: &UpstreamFailureFacts) -> Option<ClassifiedFailure> {
     let status = facts.status_code;
     let body = facts.body.as_str();
-    let lower = body.to_ascii_lowercase();
-    let (kind, effect, message, status_code) = if (status == Some(403) && !is_html(body))
-        || (status == Some(402) && is_deactivated_workspace(body))
-    {
-        (
-            ExhaustedAccountKind::Banned,
-            AccountEffect::SetStatus(AccountStatus::Banned),
-            body.to_string(),
+    let code = facts.code.as_deref().unwrap_or_default();
+    let error_type = facts.error_type.as_deref().unwrap_or_default();
+    let message = facts.message.as_str();
+
+    if is_model_unsupported(code) || is_model_unsupported(message) || is_model_unsupported(body) {
+        return Some(model_unsupported_failure(account_id, body));
+    }
+    if let Some(account_status) = explicit_account_status(code, error_type, body) {
+        return Some(account_status_failure(
+            account_id,
+            account_status,
+            body,
             status,
-        )
-    } else if status == Some(401) {
-        let account_status = if lower.contains("banned") || lower.contains("deactivated") {
-            AccountStatus::Banned
-        } else {
-            AccountStatus::Expired
-        };
-        (
-            if account_status == AccountStatus::Banned {
-                ExhaustedAccountKind::Banned
-            } else {
-                ExhaustedAccountKind::Expired
-            },
-            AccountEffect::SetStatus(account_status),
-            body.to_string(),
+        ));
+    }
+    if status == Some(403) && !is_html(body) {
+        return Some(account_status_failure(
+            account_id,
+            AccountStatus::Banned,
+            body,
             status,
-        )
-    } else if status.is_some_and(|status| {
-        (400..=499).contains(&status) && !matches!(status, 401 | 402 | 403 | 404 | 429)
-    }) && is_model_unsupported(body)
-    {
-        (
+        ));
+    }
+    if status == Some(401) {
+        return Some(account_status_failure(
+            account_id,
+            AccountStatus::Expired,
+            body,
+            status,
+        ));
+    }
+    None
+}
+
+fn classify_sse(account_id: &str, failure: &ResponsesSseFailure) -> Option<ClassifiedFailure> {
+    let code = failure.upstream_code.as_deref().unwrap_or_default();
+    let error_type = failure.upstream_type.as_deref().unwrap_or_default();
+    if is_model_unsupported(code) || is_model_unsupported(&failure.message) {
+        return Some(model_unsupported_failure(
+            account_id,
+            &crate::dispatch::failure::sse::sse_failure_error_body(failure),
+        ));
+    }
+    let account_status =
+        explicit_account_status(code, error_type, &failure.message).or_else(|| {
+            (code.eq_ignore_ascii_case("forbidden") || error_type == "permission_error")
+                .then_some(AccountStatus::Banned)
+        })?;
+    Some(account_status_failure(
+        account_id,
+        account_status,
+        &crate::dispatch::failure::sse::sse_failure_error_body(failure),
+        failure.explicit_status_code,
+    ))
+}
+
+fn model_unsupported_failure(account_id: &str, message: &str) -> ClassifiedFailure {
+    ClassifiedFailure {
+        exhaustion: AccountExhaustionRecord::new(
+            account_id,
             ExhaustedAccountKind::ModelUnsupported,
-            AccountEffect::None,
-            body.to_string(),
-            None,
-        )
-    } else {
-        return None;
+            message,
+        ),
+        effect: None,
+    }
+}
+
+fn account_status_failure(
+    account_id: &str,
+    status: AccountStatus,
+    message: &str,
+    status_code: Option<u16>,
+) -> ClassifiedFailure {
+    let kind = match status {
+        AccountStatus::Expired => ExhaustedAccountKind::Expired,
+        AccountStatus::Disabled => ExhaustedAccountKind::Disabled,
+        AccountStatus::Banned => ExhaustedAccountKind::Banned,
+        AccountStatus::Active | AccountStatus::QuotaExhausted => {
+            unreachable!("account failure controller only invalidates unavailable statuses")
+        }
     };
     let mut exhaustion = AccountExhaustionRecord::new(account_id, kind, message);
     if let Some(status_code) = status_code {
         exhaustion = exhaustion.with_status_code(status_code);
     }
-    Some(ClassifiedFailure { exhaustion, effect })
-}
-
-fn classify_sse(account_id: &str, failure: &ResponsesSseFailure) -> Option<ClassifiedFailure> {
-    let code = failure.upstream_code.as_deref().unwrap_or_default();
-    let lower_message = failure.message.to_ascii_lowercase();
-    let (kind, effect, status) = if is_model_unsupported(code)
-        || is_model_unsupported(&failure.message)
-    {
-        (
-            ExhaustedAccountKind::ModelUnsupported,
-            AccountEffect::None,
-            None,
-        )
-    } else if is_auth_failure(code, &lower_message) {
-        let account_status = if lower_message.contains("banned") || code == "account_deactivated" {
-            AccountStatus::Banned
-        } else {
-            AccountStatus::Expired
-        };
-        (
-            if account_status == AccountStatus::Banned {
-                ExhaustedAccountKind::Banned
-            } else {
-                ExhaustedAccountKind::Expired
-            },
-            AccountEffect::SetStatus(account_status),
-            Some(if account_status == AccountStatus::Banned {
-                403
-            } else {
-                401
-            }),
-        )
-    } else {
-        return None;
-    };
-    let mut exhaustion = AccountExhaustionRecord::new(
-        account_id,
-        kind,
-        crate::dispatch::failure::sse::sse_failure_error_body(failure),
-    );
-    if let Some(status) = status {
-        exhaustion = exhaustion.with_status_code(status);
+    ClassifiedFailure {
+        exhaustion,
+        effect: Some(AccountStateEffect::SetStatus(status)),
     }
-    Some(ClassifiedFailure { exhaustion, effect })
 }
 
-fn is_auth_failure(code: &str, message: &str) -> bool {
+fn explicit_account_status(code: &str, error_type: &str, message: &str) -> Option<AccountStatus> {
+    let code = code.trim().to_ascii_lowercase();
+    let error_type = error_type.trim().to_ascii_lowercase();
+    let message = message.to_ascii_lowercase();
+    if matches!(
+        code.as_str(),
+        "identity_verification_required" | "verification_required"
+    ) || message.contains("identity verification is required")
+    {
+        return Some(AccountStatus::Disabled);
+    }
+    if matches!(
+        code.as_str(),
+        "account_banned"
+            | "account_deactivated"
+            | "account_disabled"
+            | "account_suspended"
+            | "deactivated_workspace"
+            | "organization_disabled"
+            | "workspace_deactivated"
+    ) || message.contains("account is banned")
+        || message.contains("account has been banned")
+        || message.contains("account deactivated")
+        || message.contains("account has been deactivated")
+        || message.contains("account disabled")
+        || message.contains("account has been disabled")
+        || message.contains("account suspended")
+        || message.contains("organization has been disabled")
+        || message.contains("workspace has been deactivated")
+        || message.contains("deactivated_workspace")
+    {
+        return Some(AccountStatus::Banned);
+    }
+    is_auth_failure(&code, &error_type, &message).then_some(AccountStatus::Expired)
+}
+
+fn is_auth_failure(code: &str, error_type: &str, message: &str) -> bool {
     matches!(
         code,
         "token_invalid"
+            | "token_invalidated"
             | "token_expired"
             | "token_revoked"
-            | "account_deactivated"
+            | "refresh_token_invalidated"
             | "unauthorized"
             | "invalid_api_key"
-    ) || message.contains("token revoked")
+            | "authentication_error"
+    ) || error_type == "authentication_error"
+        || message.contains("token revoked")
+        || message.contains("token invalidated")
         || message.contains("token invalid")
         || message.contains("token expired")
+        || message.contains("unauthorized")
+        || message.contains("invalid api key")
 }
 
 fn is_model_unsupported(value: &str) -> bool {
@@ -286,13 +331,4 @@ fn is_model_unsupported(value: &str) -> bool {
 fn is_html(value: &str) -> bool {
     let value = value.trim_start().to_ascii_lowercase();
     value.starts_with("<!doctype") || value.starts_with("<html") || value.contains("<html")
-}
-
-fn is_deactivated_workspace(value: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(value).is_ok_and(|value| {
-        value
-            .pointer("/detail/code")
-            .and_then(serde_json::Value::as_str)
-            == Some("deactivated_workspace")
-    })
 }

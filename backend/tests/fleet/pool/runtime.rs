@@ -1,11 +1,15 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use codex_proxy_rs::fleet::{
+    account::{Account, AccountStatus},
     pool::{AccountAcquireRequest, AccountPoolOptions, AccountPoolService, RotationStrategy},
-    store::{AccountStore, PgAccountStore},
+    store::{AccountStore, AccountStoreResult, PgAccountStore},
 };
-use codex_proxy_rs::telemetry::account_usage::store::PgAccountUsageStore;
+use codex_proxy_rs::telemetry::account_usage::store::{
+    AccountUsageDelta, AccountUsageSnapshot, AccountUsageStore, AccountUsageStoreError,
+    AccountUsageWindow, PgAccountUsageStore,
+};
 
 use crate::support::storage::init_test_db;
 
@@ -79,6 +83,73 @@ async fn runtime_account_pool_should_restore_accounts_by_added_at_and_id() {
         .expect("active account should be acquired");
 
     assert_eq!(acquired.account.id, "acct_a");
+}
+
+#[tokio::test]
+async fn upstream_status_should_exclude_account_before_database_write_completes() {
+    let store = Arc::new(BlockingAccountStore::new());
+    let service = AccountPoolService::new(
+        Arc::clone(&store) as Arc<dyn AccountStore>,
+        Arc::new(NoopAccountUsageStore),
+        AccountPoolOptions::default(),
+        0,
+    );
+    service.restore_from_store().await.unwrap();
+
+    let updated = tokio::time::timeout(
+        std::time::Duration::from_millis(250),
+        service.set_status_immediately("acct_primary", AccountStatus::Banned),
+    )
+    .await
+    .expect("runtime invalidation must not wait for PostgreSQL");
+    store.wait_until_write_started().await;
+    let acquired = service
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", Utc::now()))
+        .await
+        .expect("secondary account should remain available");
+
+    assert!(updated);
+    assert_eq!(acquired.account.id, "acct_secondary");
+
+    acquired.release_without_usage().await;
+    store.release_write();
+    store
+        .wait_for_write(PersistedAccountState::Status(AccountStatus::Banned))
+        .await;
+}
+
+#[tokio::test]
+async fn upstream_quota_should_exclude_account_before_database_write_completes() {
+    let store = Arc::new(BlockingAccountStore::new());
+    let service = AccountPoolService::new(
+        Arc::clone(&store) as Arc<dyn AccountStore>,
+        Arc::new(NoopAccountUsageStore),
+        AccountPoolOptions::default(),
+        0,
+    );
+    service.restore_from_store().await.unwrap();
+    let cooldown_until = Utc::now() + chrono::Duration::minutes(5);
+
+    let updated = tokio::time::timeout(
+        std::time::Duration::from_millis(250),
+        service.mark_quota_limited_until_immediately("acct_primary", cooldown_until),
+    )
+    .await
+    .expect("runtime quota invalidation must not wait for PostgreSQL");
+    store.wait_until_write_started().await;
+    let acquired = service
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", Utc::now()))
+        .await
+        .expect("secondary account should remain available");
+
+    assert!(updated);
+    assert_eq!(acquired.account.id, "acct_secondary");
+
+    acquired.release_without_usage().await;
+    store.release_write();
+    store
+        .wait_for_write(PersistedAccountState::QuotaLimitedUntil(cooldown_until))
+        .await;
 }
 
 #[tokio::test]
@@ -223,4 +294,158 @@ async fn insert_account(pool: &sqlx::PgPool, id: &str) {
     .execute(pool)
     .await
     .expect("account should be inserted");
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PersistedAccountState {
+    Status(AccountStatus),
+    QuotaLimitedUntil(DateTime<Utc>),
+}
+
+struct BlockingAccountStore {
+    accounts: Vec<Account>,
+    write_started: tokio::sync::Semaphore,
+    release_write: tokio::sync::Semaphore,
+    persisted: tokio::sync::Mutex<Vec<PersistedAccountState>>,
+}
+
+impl BlockingAccountStore {
+    fn new() -> Self {
+        Self {
+            accounts: vec![
+                crate::support::accounts::test_account("acct_primary", AccountStatus::Active),
+                crate::support::accounts::test_account("acct_secondary", AccountStatus::Active),
+            ],
+            write_started: tokio::sync::Semaphore::new(0),
+            release_write: tokio::sync::Semaphore::new(0),
+            persisted: tokio::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    async fn persist(&self, state: PersistedAccountState) {
+        self.write_started.add_permits(1);
+        self.release_write
+            .acquire()
+            .await
+            .expect("test persistence gate should remain open")
+            .forget();
+        self.persisted.lock().await.push(state);
+    }
+
+    async fn wait_until_write_started(&self) {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            self.write_started.acquire(),
+        )
+        .await
+        .expect("deferred persistence should start")
+        .expect("test persistence gate should remain open")
+        .forget();
+    }
+
+    fn release_write(&self) {
+        self.release_write.add_permits(1);
+    }
+
+    async fn wait_for_write(&self, expected: PersistedAccountState) {
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if self.persisted.lock().await.contains(&expected) {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("deferred account state should be persisted");
+    }
+}
+
+#[async_trait::async_trait]
+impl AccountStore for BlockingAccountStore {
+    async fn list_pool_accounts(&self) -> AccountStoreResult<Vec<Account>> {
+        Ok(self.accounts.clone())
+    }
+
+    async fn mark_quota_limited_until(
+        &self,
+        _account_id: &str,
+        cooldown_until: DateTime<Utc>,
+    ) -> AccountStoreResult<bool> {
+        self.persist(PersistedAccountState::QuotaLimitedUntil(cooldown_until))
+            .await;
+        Ok(true)
+    }
+
+    async fn set_cloudflare_cooldown_until(
+        &self,
+        _account_id: &str,
+        _cooldown_until: DateTime<Utc>,
+    ) -> AccountStoreResult<bool> {
+        Ok(false)
+    }
+
+    async fn set_status(
+        &self,
+        _account_id: &str,
+        status: AccountStatus,
+    ) -> AccountStoreResult<bool> {
+        self.persist(PersistedAccountState::Status(status)).await;
+        Ok(true)
+    }
+
+    async fn get_quota_json(&self, _account_id: &str) -> AccountStoreResult<Option<String>> {
+        Ok(None)
+    }
+
+    async fn apply_quota_snapshot(
+        &self,
+        _account_id: &str,
+        _quota_json: &str,
+        _limit_reached: bool,
+        _cooldown_until: Option<DateTime<Utc>>,
+    ) -> AccountStoreResult<bool> {
+        Ok(false)
+    }
+
+    async fn sync_runtime_account_state(&self, _account: &Account) -> AccountStoreResult<bool> {
+        Ok(false)
+    }
+}
+
+struct NoopAccountUsageStore;
+
+#[async_trait::async_trait]
+impl AccountUsageStore for NoopAccountUsageStore {
+    async fn snapshots(
+        &self,
+        _account_ids: &[String],
+    ) -> Result<HashMap<String, AccountUsageSnapshot>, AccountUsageStoreError> {
+        Ok(HashMap::new())
+    }
+
+    async fn record_usage_delta(
+        &self,
+        _account_id: &str,
+        _usage: AccountUsageDelta,
+    ) -> Result<(), AccountUsageStoreError> {
+        Ok(())
+    }
+
+    async fn sync_runtime_window(
+        &self,
+        _account_id: &str,
+        _window: AccountUsageWindow,
+    ) -> Result<(), AccountUsageStoreError> {
+        Ok(())
+    }
+
+    async fn sync_rate_limit_window(
+        &self,
+        _account_id: &str,
+        _reset_at: DateTime<Utc>,
+        _limit_window_seconds: Option<u64>,
+    ) -> Result<(), AccountUsageStoreError> {
+        Ok(())
+    }
 }
