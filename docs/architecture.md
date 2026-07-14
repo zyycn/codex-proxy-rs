@@ -389,7 +389,7 @@ bootstrap/
 9. 在结果尚未提交给客户端时，账号级失败可继续尝试候选账本中的下一个账号。
 10. 完成后更新账号用量、会话亲和、调度反馈和遥测事实，并释放账号槽位。
 
-当前实现是由 `service.rs`、`stream/lifecycle.rs` 和 `stream/live.rs` 手工连接各阶段的 phase orchestration，还不是统一的生命周期控制器模型。工程审计确认可以收敛为 Request、Attempt、Stream 三层嵌套洋葱；详细的现状证据、目标类型、顺序、迁移步骤和验收条件见 [Responses 请求生命周期控制器设计](request-lifecycle-controller-design.md)。该设计限定在 `dispatch` 内部，不新增顶层 `application` 层，也不替代鉴权、请求 ID、连接排空等 Tower/Axum 中间件。
+当前实现是由 `service.rs`、`stream/lifecycle.rs` 和 `stream/live.rs` 手工连接各阶段的 phase orchestration，还不是统一的生命周期控制器模型。工程审计确认可以收敛为只服务 `v1/*` 的 Request、Attempt、Stream 三层嵌套洋葱；详细的现状证据、单功能不越界原则、目标目录、顺序、迁移步骤和验收条件见 [Responses 请求生命周期控制器设计](request-lifecycle-controller-design.md)。该设计限定在 `dispatch` 内部，不新增顶层 `application` 层，也不替代鉴权、请求 ID、连接排空等 Tower/Axum 中间件。
 
 会话压缩不使用独立端点。Codex 通过 `/v1/responses` 请求中的 `compaction_trigger` 和 `request_kind=compaction` 表达压缩语义；代理沿用同一条调度链路，并在遥测元数据中记录 `compact`、`requestKind` 和 `subagentKind`。
 
