@@ -8,16 +8,18 @@ mod response_meta;
 pub mod tls;
 pub mod usage;
 pub mod websocket;
+pub mod websocket_breaker;
 pub mod websocket_pool;
 pub(crate) mod websocket_pump;
 
+pub(crate) use self::client::PreparedResponseTransport;
 pub use self::{
     client::{
         CodexBackendClient, CodexBackendResponse, CodexBackendSseStream,
         CodexBackendStreamingResponse, CodexBackendTransport, CodexClientError, CodexClientResult,
         CodexModelCatalogClient, CodexModelCatalogClientError, CodexModelCatalogRequest,
         CodexRateLimitHeaderUpdates, CodexRequestContext, CodexResponseMetadata,
-        CodexTurnStateUpdate, backend_transport_for_response_request, build_reqwest_client,
+        CodexTransportDecision, CodexTransportMetrics, CodexTurnStateUpdate, build_reqwest_client,
         is_banned_auth_signal, is_banned_upstream_error, is_deactivated_workspace_error_body,
     },
     diagnostics::CodexUpstreamDiagnostics,

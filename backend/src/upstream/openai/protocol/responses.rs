@@ -75,6 +75,8 @@ pub struct CodexResponsesRequest {
     pub previous_response_scope: Option<PreviousResponseScope>,
     /// 当前下游 WebSocket 持有的完整历史前缀，仅用于连接内换号恢复。
     pub local_replay_input: Option<Arc<Vec<Value>>>,
+    /// 当前下游连接能否在本轮完成后形成完整 canonical replay snapshot。
+    pub local_replay_available: bool,
     /// 流式响应在交给下游前的本地提交策略。
     pub stream_commit_policy: StreamCommitPolicy,
 }
@@ -85,6 +87,8 @@ pub struct CodexResponsesRequest {
 pub enum PreviousResponseScope {
     Persisted,
     ConnectionLocal,
+    ReplayRequired,
+    Unavailable,
     ExternalUnknown,
 }
 
@@ -118,40 +122,77 @@ impl Serialize for CodexResponsesRequest {
     }
 }
 
-/// Codex Responses 请求的上游传输决策。
+/// Codex Responses 请求对上游传输的显式要求。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CodexTransport {
-    /// HTTP SSE。
-    HttpSse,
-    /// 优先 WebSocket，失败后可按条件回退 HTTP SSE。
-    WebSocketPreferred,
-    /// 必须使用 WebSocket。
-    WebSocketRequired,
+pub enum TransportRequirement {
+    /// 客户端显式要求 HTTP。
+    HttpRequired,
+    /// `generate=false + store=false` 预热必须保留在同一条 WebSocket。
+    ExplicitWebSocketWarmup,
+    /// 只能使用持有指定 connection-local response 的精确 WebSocket。
+    ExactWebSocketContinuation,
+    /// previous response 已持久化，允许 WebSocket 或 HTTP/2。
+    PersistedContinuation,
+    /// previous response 的所有权未知，只允许当前选定账号原样尝试。
+    ExternalUnknown,
+    /// 没有 previous response 的普通新链。
+    NewChain,
 }
 
-/// 判断 Responses 请求应使用哪种上游传输。
-pub fn transport_for_request(request: &CodexResponsesRequest) -> CodexTransport {
+impl TransportRequirement {
+    /// 是否必须使用 WebSocket，且禁止 HTTP fallback。
+    pub fn requires_websocket(self) -> bool {
+        matches!(
+            self,
+            Self::ExplicitWebSocketWarmup | Self::ExactWebSocketContinuation
+        )
+    }
+
+    /// WebSocket 尚未发送 payload 时失败，是否允许切到同账号 HTTP/2。
+    pub fn allows_pre_send_http_fallback(self) -> bool {
+        matches!(
+            self,
+            Self::PersistedContinuation | Self::ExternalUnknown | Self::NewChain
+        )
+    }
+
+    /// 用于审计与遥测的稳定名称。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::HttpRequired => "http_required",
+            Self::ExplicitWebSocketWarmup => "explicit_websocket_warmup",
+            Self::ExactWebSocketContinuation => "exact_websocket_continuation",
+            Self::PersistedContinuation => "persisted_continuation",
+            Self::ExternalUnknown => "external_unknown",
+            Self::NewChain => "new_chain",
+        }
+    }
+}
+
+/// 将已完成 history preparation 的请求规范化为唯一 transport requirement。
+pub fn transport_requirement(request: &CodexResponsesRequest) -> TransportRequirement {
+    if !request.generate() && !request.store() {
+        return TransportRequirement::ExplicitWebSocketWarmup;
+    }
     if request.force_http_sse {
-        return CodexTransport::HttpSse;
+        return TransportRequirement::HttpRequired;
     }
-
-    if request.previous_response_id().is_some() {
-        return CodexTransport::WebSocketRequired;
+    match request.previous_response_id() {
+        Some(_) => match request.previous_response_scope {
+            Some(PreviousResponseScope::Persisted) => TransportRequirement::PersistedContinuation,
+            Some(PreviousResponseScope::ConnectionLocal) => {
+                TransportRequirement::ExactWebSocketContinuation
+            }
+            Some(PreviousResponseScope::ExternalUnknown) | None => {
+                TransportRequirement::ExternalUnknown
+            }
+            Some(PreviousResponseScope::ReplayRequired | PreviousResponseScope::Unavailable) => {
+                TransportRequirement::ExactWebSocketContinuation
+            }
+        },
+        None if request.use_websocket => TransportRequirement::NewChain,
+        None => TransportRequirement::HttpRequired,
     }
-
-    if request.use_websocket {
-        return CodexTransport::WebSocketPreferred;
-    }
-
-    CodexTransport::HttpSse
-}
-
-/// 判断请求在 WebSocket 失败后是否允许 HTTP SSE 回退。
-pub fn http_sse_fallback_allowed(request: &CodexResponsesRequest) -> bool {
-    !matches!(
-        transport_for_request(request),
-        CodexTransport::WebSocketRequired
-    )
 }
 
 /// 判断已收到的 Responses SSE 内容是否包含首个完整的真实输出事件。
@@ -503,6 +544,7 @@ impl CodexResponsesRequest {
             parent_thread_id: None,
             previous_response_scope: None,
             local_replay_input: None,
+            local_replay_available: false,
             stream_commit_policy: StreamCommitPolicy::FirstForwardableEvent,
         }
     }
@@ -584,6 +626,14 @@ impl CodexResponsesRequest {
             .get("store")
             .and_then(Value::as_bool)
             .unwrap_or(false)
+    }
+
+    /// 是否实际生成模型响应；官方预热请求会显式传入 `false`。
+    pub fn generate(&self) -> bool {
+        self.body
+            .get("generate")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
     }
 
     /// 设置上游存储标志。

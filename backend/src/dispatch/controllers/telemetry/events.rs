@@ -257,6 +257,14 @@ fn ensure_stream_metadata_flag(metadata: &mut Value) {
         .or_insert(Value::Bool(true));
 }
 
+fn insert_optional_i64(object: &mut serde_json::Map<String, Value>, key: &str, value: Option<i64>) {
+    if let Some(value) = value {
+        object
+            .entry(key.to_string())
+            .or_insert_with(|| Value::Number(value.into()));
+    }
+}
+
 fn enrich_live_response_stream_metadata(
     context: &StreamContext<'_>,
     rate_limit_headers: &[(String, String)],
@@ -279,6 +287,36 @@ fn enrich_live_response_stream_metadata(
         object
             .entry("websocketPool".to_string())
             .or_insert_with(|| decision.metadata_value());
+    }
+    if let Some(decision) = context.transport_metrics.decision {
+        object
+            .entry("transportDecision".to_string())
+            .or_insert_with(|| Value::String(decision.as_str().to_string()));
+    }
+    insert_optional_i64(
+        object,
+        "wsConnectMs",
+        context.transport_metrics.ws_connect_ms,
+    );
+    insert_optional_i64(
+        object,
+        "transportDecisionWaitMs",
+        context.transport_metrics.transport_decision_wait_ms,
+    );
+    insert_optional_i64(
+        object,
+        "upstreamHeadersMs",
+        context.transport_metrics.upstream_headers_ms,
+    );
+    insert_optional_i64(
+        object,
+        "firstEventMs",
+        context.transport_metrics.first_event_ms,
+    );
+    if let Some(http_version) = context.transport_metrics.http_version.as_deref() {
+        object
+            .entry("httpVersion".to_string())
+            .or_insert_with(|| Value::String(http_version.to_string()));
     }
     insert_response_status_metadata_object(
         object,
@@ -575,9 +613,6 @@ fn log_live_response_stream_finalized(
     let websocket_pool_kind = context
         .websocket_pool_decision
         .map(WebSocketPoolDecision::kind);
-    let websocket_pool_reason = context
-        .websocket_pool_decision
-        .and_then(WebSocketPoolDecision::reason);
     let completed = metadata.get("completed").and_then(Value::as_bool);
     let failed = metadata.get("failed").and_then(Value::as_bool);
     let upstream_code = metadata_string_field(metadata, "upstreamCode");
@@ -598,7 +633,6 @@ fn log_live_response_stream_finalized(
                 event_message = %message,
                 transport = %backend_transport_name(context.transport),
                 websocket_pool_kind = ?websocket_pool_kind,
-                websocket_pool_reason = ?websocket_pool_reason,
                 response_id = response_id.as_deref().unwrap_or(""),
                 first_token_ms = ?first_token_ms,
                 latency_ms = elapsed_millis_i64(context.started_at),

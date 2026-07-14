@@ -14,7 +14,10 @@ use codex_proxy_rs::upstream::openai::{
         execute_response_create_request, responses_websocket_endpoint,
     },
     transport::websocket_pool::{CodexWebSocketPool, CodexWebSocketPoolConfig},
-    transport::{CodexBackendClient, CodexClientError, CodexRequestContext},
+    transport::{
+        CodexBackendClient, CodexBackendTransport, CodexClientError, CodexRequestContext,
+        CodexTransportDecision,
+    },
 };
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
@@ -41,6 +44,7 @@ pub(crate) mod client;
 pub(crate) mod diagnostics;
 pub(crate) mod headers;
 pub(crate) mod http_client;
+pub(crate) mod latency;
 pub(crate) mod websocket;
 pub(crate) mod websocket_pool;
 

@@ -116,6 +116,7 @@ fn codex_websocket_audit_artifact_should_record_transport_opening_and_payload() 
     );
     request.force_http_sse = false;
     request.set_previous_response_id(Some("resp_secret".to_string()));
+    request.previous_response_scope = Some(PreviousResponseScope::ConnectionLocal);
     let opening = OpeningAuditSnapshot {
         request_line: "GET /backend-api/codex/responses HTTP/1.1".to_string(),
         header_order: vec!["Host".to_string(), "authorization".to_string()],
@@ -134,7 +135,7 @@ fn codex_websocket_audit_artifact_should_record_transport_opening_and_payload() 
 
     let artifact = websocket_audit_artifact_from_attempt(&request, opening.clone(), payload);
 
-    assert_eq!(artifact.transport_mode, "websocket_required");
+    assert_eq!(artifact.transport_mode, "exact_websocket_continuation");
     assert!(!artifact.fallback_allowed);
     assert_eq!(artifact.opening, Some(opening));
     assert_eq!(

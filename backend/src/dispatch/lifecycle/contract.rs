@@ -179,6 +179,7 @@ pub(in crate::dispatch) struct EstablishedStream {
     pub response: CodexBackendStreamingResponse,
     pub decoder: CanonicalStreamDecoder,
     pub initial_batch: CanonicalStreamBatch,
+    pub first_event_ms: i64,
 }
 
 pub(in crate::dispatch) enum EstablishedResponse {
@@ -240,6 +241,7 @@ pub(super) struct PendingStreamResponse {
     pub decoder: CanonicalStreamDecoder,
     pub initial_batch: CanonicalStreamBatch,
     pub first_failure: Option<ResponsesSseFailure>,
+    pub first_event_ms: i64,
 }
 
 pub(super) struct PendingCompleteResponse {

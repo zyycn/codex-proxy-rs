@@ -37,8 +37,8 @@ use crate::{
     upstream::openai::{
         protocol::responses::{CodexResponsesRequest, ResponsesSseFailure},
         transport::{
-            CodexBackendTransport, CodexResponseMetadata, CodexUpstreamDiagnostics,
-            WebSocketPoolDecision,
+            CodexBackendTransport, CodexResponseMetadata, CodexTransportMetrics,
+            CodexUpstreamDiagnostics, WebSocketPoolDecision,
         },
     },
 };
@@ -57,6 +57,7 @@ pub(super) struct StreamContext<'a> {
     pub websocket_pool_decision: Option<WebSocketPoolDecision>,
     pub diagnostics: &'a CodexUpstreamDiagnostics,
     pub response_metadata: &'a CodexResponseMetadata,
+    pub transport_metrics: &'a CodexTransportMetrics,
     pub attempt: &'a ResponseDispatchAttempt,
     pub attempts: &'a [ResponseDispatchAttempt],
     pub started_at: std::time::Instant,
@@ -159,6 +160,12 @@ impl TelemetryController {
             "effectiveModel": effective_model,
             "modelsEtag": exit.response.response_metadata.models_etag.as_deref(),
             "reasoningIncluded": exit.response.response_metadata.reasoning_included,
+            "transportDecision": exit.response.transport_metrics.decision.map(|decision| decision.as_str()),
+            "wsConnectMs": exit.response.transport_metrics.ws_connect_ms,
+            "transportDecisionWaitMs": exit.response.transport_metrics.transport_decision_wait_ms,
+            "upstreamHeadersMs": exit.response.transport_metrics.upstream_headers_ms,
+            "firstEventMs": exit.response.transport_metrics.first_event_ms,
+            "httpVersion": exit.response.transport_metrics.http_version.as_deref(),
         });
         insert_response_status_metadata(
             &mut metadata,
@@ -238,6 +245,7 @@ impl TelemetryController {
                     "cancelled": true,
                     "terminal": terminal.name(),
                     "responseId": summary.last_response_id,
+                    "firstEventMs": summary.first_event_ms,
                     "usage": summary.usage,
                 });
                 insert_first_token_ms(&mut metadata, summary.first_token_ms);
@@ -278,6 +286,7 @@ async fn record_success(
             "completed": completed,
             "incomplete": !completed,
             "responseId": response.get("id").and_then(Value::as_str),
+            "firstEventMs": summary.first_event_ms,
             "firstTokenMs": summary.first_token_ms,
             "usage": summary.usage,
         }),
@@ -319,8 +328,8 @@ async fn record_failure(
         response_id = summary.last_response_id.as_deref().unwrap_or(""),
         transport = %backend_transport_name(context.transport),
         websocket_pool_kind = ?context.websocket_pool_decision.map(WebSocketPoolDecision::kind),
-        websocket_pool_reason = ?context.websocket_pool_decision.and_then(WebSocketPoolDecision::reason),
         first_token_ms = ?summary.first_token_ms,
+        first_event_ms = summary.first_event_ms,
         latency_ms = elapsed_millis_i64(context.started_at),
         event = %failure.event,
         code = ?failure.upstream_code.as_deref(),
@@ -336,6 +345,7 @@ async fn record_failure(
             Value::String(response_id.clone())
         });
     insert_first_token_ms(&mut metadata, summary.first_token_ms);
+    metadata["firstEventMs"] = Value::Number(summary.first_event_ms.into());
     record_live_response_stream_event(
         context,
         status_code,

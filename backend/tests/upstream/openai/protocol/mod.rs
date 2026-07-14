@@ -5,8 +5,8 @@ use codex_proxy_rs::upstream::openai::protocol::events::{
     parse_rate_limits_event, rate_limit_quota, retry_after_seconds_from_body,
 };
 use codex_proxy_rs::upstream::openai::protocol::responses::{
-    CodexResponsesRequest, CodexTransport, http_sse_fallback_allowed,
-    response_body_has_first_output, response_sse_event_is_terminal, transport_for_request,
+    CodexResponsesRequest, PreviousResponseScope, TransportRequirement,
+    response_body_has_first_output, response_sse_event_is_terminal, transport_requirement,
 };
 use codex_proxy_rs::upstream::openai::protocol::sse::{
     SseEventDecoder, parse_sse_events, response_failed_sse_event,

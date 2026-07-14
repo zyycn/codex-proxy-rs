@@ -24,7 +24,7 @@ use tokio_tungstenite::tungstenite::handshake::client::generate_key;
 use crate::upstream::openai::fingerprint::{Fingerprint, RuntimeFingerprint};
 use crate::upstream::openai::protocol::events::{extract_sse_usage, retry_after_seconds_from_body};
 use crate::upstream::openai::protocol::responses::{
-    CodexResponsesRequest, CodexTransport, http_sse_fallback_allowed, transport_for_request,
+    CodexResponsesRequest, TransportRequirement, transport_requirement,
 };
 use crate::upstream::openai::protocol::sse::SseError;
 use crate::upstream::openai::protocol::websocket::{
@@ -41,9 +41,12 @@ use super::response_meta;
 use super::tls::{CustomCaError, build_reqwest_client_with_custom_ca, custom_ca_env_cache_key};
 use super::websocket::{
     CodexWebSocketConnection, CodexWebSocketExchangeError, CodexWebSocketRateLimitHeaderUpdates,
-    CodexWebSocketTurnStateUpdate, execute_response_create_request_stream_with_pool,
-    execute_response_create_request_with_pool, write_websocket_audit_artifact_from_env,
+    CodexWebSocketRequest, CodexWebSocketTurnStateUpdate, PreparedWebSocket,
+    WEBSOCKET_FAST_PATH_BUDGET, execute_prepared_response_create_request,
+    execute_prepared_response_create_request_stream, post_send_ambiguous,
+    prepare_response_create_request_with_pool, write_websocket_audit_artifact_from_env,
 };
+use super::websocket_breaker::WebSocketOriginBreaker;
 use super::websocket_pool::{
     CodexWebSocketPool, CodexWebSocketPoolKey, DEFAULT_INITIAL_EVENT_TIMEOUT, WebSocketPoolDecision,
 };
@@ -77,8 +80,12 @@ pub fn build_reqwest_client() -> Result<Client, CustomCaError> {
         .use_rustls_tls()
         .no_proxy()
         .pool_max_idle_per_host(4)
+        .pool_idle_timeout(None::<Duration>)
         .connect_timeout(UPSTREAM_CONNECT_TIMEOUT)
         .tcp_keepalive(Duration::from_secs(30))
+        .http2_keep_alive_interval(Duration::from_secs(30))
+        .http2_keep_alive_timeout(Duration::from_secs(5))
+        .http2_keep_alive_while_idle(true)
         .gzip(true)
         .brotli(true)
         .zstd(true)
@@ -137,7 +144,26 @@ pub enum CodexClientError {
         diagnostics: CodexUpstreamDiagnostics,
         /// 上游透传的 `set-cookie` 列表。
         set_cookie_headers: Vec<String>,
+        /// 实际收到该上游响应的 transport。
+        transport: CodexBackendTransport,
     },
+}
+
+impl CodexClientError {
+    /// 返回错误实际发生的 transport；请求编码等本地错误没有 transport。
+    pub fn transport(&self) -> Option<CodexBackendTransport> {
+        match self {
+            Self::Http(_) | Self::StreamIdleTimeout { .. } | Self::InvalidSse(_) => {
+                Some(CodexBackendTransport::HttpSse)
+            }
+            Self::WebSocket(_) => Some(CodexBackendTransport::WebSocket),
+            Self::Upstream { transport, .. } => Some(*transport),
+            Self::CustomCa(_)
+            | Self::InvalidHeaderName(_)
+            | Self::InvalidHeaderValue(_)
+            | Self::WebSocketEncode(_) => None,
+        }
+    }
 }
 
 /// 判断上游错误正文是否表示账号已封禁或停用。
@@ -293,6 +319,10 @@ pub struct CodexBackendResponse {
     pub diagnostics: CodexUpstreamDiagnostics,
     /// 安全响应元数据。
     pub response_metadata: CodexResponseMetadata,
+    /// 传输选择与低延迟阶段耗时。
+    pub transport_metrics: CodexTransportMetrics,
+    /// 当前响应是否由池中 WebSocket 保留 connection-local continuation。
+    pub connection_local_continuation: bool,
 }
 
 /// Codex Responses 实际使用的上游传输。
@@ -304,16 +334,45 @@ pub enum CodexBackendTransport {
     WebSocket,
 }
 
-/// Map a Codex Responses request to the concrete backend transport.
-pub fn backend_transport_for_response_request(
-    request: &CodexResponsesRequest,
-) -> CodexBackendTransport {
-    match transport_for_request(request) {
-        CodexTransport::HttpSse => CodexBackendTransport::HttpSse,
-        CodexTransport::WebSocketPreferred | CodexTransport::WebSocketRequired => {
-            CodexBackendTransport::WebSocket
+/// transport owner 最终做出的稳定决策。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodexTransportDecision {
+    HttpRequired,
+    ReusedWebSocket,
+    ConnectedWebSocket,
+    ExactWebSocket,
+    RequiredWebSocket,
+    Http2WebSocketSlow,
+    Http2BreakerOpen,
+    Http2PoolUnavailable,
+    Http2PreSendFailure,
+}
+
+impl CodexTransportDecision {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::HttpRequired => "http_required",
+            Self::ReusedWebSocket => "ws_reused",
+            Self::ConnectedWebSocket => "ws_connected_fast",
+            Self::ExactWebSocket => "ws_exact_required",
+            Self::RequiredWebSocket => "ws_required",
+            Self::Http2WebSocketSlow => "http2_ws_slow",
+            Self::Http2BreakerOpen => "http2_breaker_open",
+            Self::Http2PoolUnavailable => "http2_pool_unavailable",
+            Self::Http2PreSendFailure => "http2_ws_pre_send_failure",
         }
     }
+}
+
+/// transport 决策与握手阶段观测值。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CodexTransportMetrics {
+    pub decision: Option<CodexTransportDecision>,
+    pub ws_connect_ms: Option<i64>,
+    pub transport_decision_wait_ms: Option<i64>,
+    pub upstream_headers_ms: Option<i64>,
+    pub first_event_ms: Option<i64>,
+    pub http_version: Option<String>,
 }
 
 /// Live stream rate-limit updates captured after the response headers.
@@ -344,6 +403,10 @@ pub struct CodexBackendStreamingResponse {
     pub diagnostics: CodexUpstreamDiagnostics,
     /// 安全响应元数据。
     pub response_metadata: CodexResponseMetadata,
+    /// 传输选择与低延迟阶段耗时。
+    pub transport_metrics: CodexTransportMetrics,
+    /// terminal completed 后是否由池中 WebSocket 保留 connection-local continuation。
+    pub connection_local_continuation: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -358,6 +421,26 @@ pub struct CodexBackendClient {
     fingerprint: RuntimeFingerprint,
     websocket_pool: Option<Arc<CodexWebSocketPool>>,
     websocket_initial_event_timeout: Option<Duration>,
+    websocket_fast_path_budget: Duration,
+    websocket_origin_breaker: WebSocketOriginBreaker,
+    websocket_origin_key: String,
+}
+
+/// 已完成账号级 opening 准备、但尚未发送 payload 的 transport。
+pub(crate) struct PreparedResponseTransport {
+    requirement: TransportRequirement,
+    route: PreparedResponseRoute,
+    metrics: CodexTransportMetrics,
+}
+
+enum PreparedResponseRoute {
+    Http,
+    WebSocket(Box<PreparedWebSocketRoute>),
+}
+
+struct PreparedWebSocketRoute {
+    request: CodexWebSocketRequest,
+    prepared: PreparedWebSocket,
 }
 
 #[path = "client_sse.rs"]
@@ -408,28 +491,15 @@ fn log_websocket_pool_decision(
         return;
     };
     let rid_short = request_id.chars().take(8).collect::<String>();
-    if let Some(reason) = decision.reason() {
-        tracing::info!(
-            request_id = %request_id,
-            rid = %rid_short,
-            account_id = account_id.unwrap_or_default(),
-            ws_pool = decision.kind(),
-            ws_pool_reason = reason,
-            conversation_id_hash = pool_context.map_or("", |context| context.conversation_id_hash.as_str()),
-            ws_pool_key_hash = pool_context.map_or("", |context| context.pool_key_hash.as_str()),
-            "WebSocket pool decision"
-        );
-    } else {
-        tracing::info!(
-            request_id = %request_id,
-            rid = %rid_short,
-            account_id = account_id.unwrap_or_default(),
-            ws_pool = decision.kind(),
-            conversation_id_hash = pool_context.map_or("", |context| context.conversation_id_hash.as_str()),
-            ws_pool_key_hash = pool_context.map_or("", |context| context.pool_key_hash.as_str()),
-            "WebSocket pool decision"
-        );
-    }
+    tracing::info!(
+        request_id = %request_id,
+        rid = %rid_short,
+        account_id = account_id.unwrap_or_default(),
+        ws_pool = decision.kind(),
+        conversation_id_hash = pool_context.map_or("", |context| context.conversation_id_hash.as_str()),
+        ws_pool_key_hash = pool_context.map_or("", |context| context.pool_key_hash.as_str()),
+        "WebSocket pool decision"
+    );
 }
 
 #[derive(Debug, Clone)]
@@ -568,12 +638,83 @@ fn websocket_exchange_error_to_client_error(
                 retry_after_seconds: upstream.retry_after_seconds,
                 diagnostics: upstream.diagnostics,
                 set_cookie_headers: upstream.set_cookie_headers,
+                transport: CodexBackendTransport::WebSocket,
             }
         }
         error => CodexClientError::WebSocket(error),
     }
 }
 
-fn websocket_error_allows_http_fallback(error: &CodexClientError) -> bool {
-    !matches!(error, CodexClientError::Upstream { .. })
+fn websocket_success_decision(
+    requirement: TransportRequirement,
+    prepared: &PreparedWebSocket,
+) -> CodexTransportDecision {
+    match requirement {
+        TransportRequirement::ExactWebSocketContinuation => CodexTransportDecision::ExactWebSocket,
+        TransportRequirement::ExplicitWebSocketWarmup => CodexTransportDecision::RequiredWebSocket,
+        _ if prepared.reused() => CodexTransportDecision::ReusedWebSocket,
+        _ => CodexTransportDecision::ConnectedWebSocket,
+    }
+}
+
+fn http_fallback_decision(error: &CodexWebSocketExchangeError) -> CodexTransportDecision {
+    match error {
+        CodexWebSocketExchangeError::FastPathTimeout { .. } => {
+            CodexTransportDecision::Http2WebSocketSlow
+        }
+        CodexWebSocketExchangeError::OriginCircuitOpen
+        | CodexWebSocketExchangeError::OriginHalfOpenBusy => {
+            CodexTransportDecision::Http2BreakerOpen
+        }
+        CodexWebSocketExchangeError::ContinuationUnavailable { .. }
+        | CodexWebSocketExchangeError::SharedConnectFailed => {
+            CodexTransportDecision::Http2PoolUnavailable
+        }
+        _ => CodexTransportDecision::Http2PreSendFailure,
+    }
+}
+
+fn merge_preparation_metrics(
+    response: &mut CodexTransportMetrics,
+    preparation: CodexTransportMetrics,
+) {
+    response.decision = preparation.decision;
+    response.ws_connect_ms = preparation.ws_connect_ms;
+    response.transport_decision_wait_ms = preparation.transport_decision_wait_ms;
+}
+
+fn elapsed_duration_millis(duration: Duration) -> i64 {
+    i64::try_from(duration.as_millis())
+        .unwrap_or(i64::MAX)
+        .max(1)
+}
+
+fn http_version_name(version: reqwest::Version) -> &'static str {
+    match version {
+        reqwest::Version::HTTP_09 => "HTTP/0.9",
+        reqwest::Version::HTTP_10 => "HTTP/1.0",
+        reqwest::Version::HTTP_11 => "HTTP/1.1",
+        reqwest::Version::HTTP_2 => "HTTP/2",
+        reqwest::Version::HTTP_3 => "HTTP/3",
+        _ => "unknown",
+    }
+}
+
+fn websocket_origin_key(base_url: &str) -> String {
+    let origin = reqwest::Url::parse(base_url)
+        .ok()
+        .and_then(|url| {
+            let host = url.host_str()?;
+            Some(format!(
+                "{}://{}:{}",
+                url.scheme(),
+                host,
+                url.port_or_known_default().unwrap_or_default()
+            ))
+        })
+        .unwrap_or_else(|| base_url.trim_end_matches('/').to_string());
+    match custom_ca_env_cache_key() {
+        Some(tls_profile) => format!("{origin}\0{tls_profile}"),
+        None => origin,
+    }
 }

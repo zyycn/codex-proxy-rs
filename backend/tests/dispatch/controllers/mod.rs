@@ -203,6 +203,48 @@ fn history_policy_should_not_escape_to_generic_routing() {
 }
 
 #[test]
+fn continuation_scope_should_be_owned_by_history_and_use_actual_transport() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let history = read(&manifest.join("src/dispatch/controllers/history.rs"));
+    let affinity = read(&manifest.join("src/dispatch/controllers/affinity.rs"));
+    let composition = read(&manifest.join("src/dispatch/controllers/mod.rs"));
+
+    for fact in [
+        "request.store()",
+        "transport == CodexBackendTransport::WebSocket",
+        "connection_local_continuation",
+        "request.local_replay_available",
+        "PreviousResponseScope::ReplayRequired",
+        "PreviousResponseScope::Unavailable",
+    ] {
+        assert!(
+            history.contains(fact),
+            "history owner must derive continuation scope from {fact}"
+        );
+    }
+    assert!(composition.contains("HistoryController::continuation_scope("));
+    assert!(!affinity.contains("request.store()"));
+    assert!(!affinity.contains("CodexBackendTransport"));
+}
+
+#[test]
+fn websocket_preparation_and_send_should_have_one_way_boundary() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let attempt = read(&manifest.join("src/dispatch/lifecycle/attempt.rs"));
+    let websocket = read(&manifest.join("src/upstream/openai/transport/websocket.rs"));
+    let client = read(&manifest.join("src/upstream/openai/transport/client_sse.rs"));
+
+    assert!(attempt.contains("tokio::join!("));
+    assert!(attempt.contains("wait_for_request_interval(&acquired)"));
+    assert!(attempt.contains("prepare_response_transport_with_account("));
+    assert!(websocket.contains("struct PreparedWebSocket"));
+    assert!(websocket.contains("execute_prepared_response_create_request("));
+    assert!(websocket.contains("post_send_ambiguous("));
+    assert!(client.contains("allows_pre_send_http_fallback()"));
+    assert!(!websocket.contains("retry_after_stale_reuse"));
+}
+
+#[test]
 fn canonical_failure_parser_should_extract_facts_without_business_code_mapping() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let parser = read(&manifest.join("src/upstream/openai/protocol/responses.rs"));

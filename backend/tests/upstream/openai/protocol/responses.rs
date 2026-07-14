@@ -16,8 +16,10 @@ fn codex_responses_transport_should_use_http_sse_by_default_without_history() {
     let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", vec![json!({})]);
     request.force_http_sse = false;
 
-    assert_eq!(transport_for_request(&request), CodexTransport::HttpSse);
-    assert!(http_sse_fallback_allowed(&request));
+    assert_eq!(
+        transport_requirement(&request),
+        TransportRequirement::HttpRequired
+    );
 }
 
 #[test]
@@ -26,23 +28,23 @@ fn codex_responses_transport_should_prefer_websocket_when_requested_without_hist
     request.use_websocket = true;
 
     assert_eq!(
-        transport_for_request(&request),
-        CodexTransport::WebSocketPreferred
+        transport_requirement(&request),
+        TransportRequirement::NewChain
     );
-    assert!(http_sse_fallback_allowed(&request));
+    assert!(transport_requirement(&request).allows_pre_send_http_fallback());
 }
 
 #[test]
-fn codex_responses_transport_should_require_websocket_for_previous_response_id() {
+fn codex_responses_transport_should_mark_unknown_previous_response_as_external() {
     let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", vec![json!({})]);
     request.force_http_sse = false;
     request.set_previous_response_id(Some("resp_previous".to_string()));
 
     assert_eq!(
-        transport_for_request(&request),
-        CodexTransport::WebSocketRequired
+        transport_requirement(&request),
+        TransportRequirement::ExternalUnknown
     );
-    assert!(!http_sse_fallback_allowed(&request));
+    assert!(transport_requirement(&request).allows_pre_send_http_fallback());
 }
 
 #[test]
@@ -52,8 +54,38 @@ fn codex_responses_transport_should_allow_forced_http_sse() {
     request.use_websocket = true;
     request.force_http_sse = true;
 
-    assert_eq!(transport_for_request(&request), CodexTransport::HttpSse);
-    assert!(http_sse_fallback_allowed(&request));
+    assert_eq!(
+        transport_requirement(&request),
+        TransportRequirement::HttpRequired
+    );
+}
+
+#[test]
+fn codex_responses_transport_should_require_websocket_for_connection_local_previous_response() {
+    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", vec![]);
+    request.set_previous_response_id(Some("resp_previous".to_string()));
+    request.previous_response_scope = Some(PreviousResponseScope::ConnectionLocal);
+
+    assert_eq!(
+        transport_requirement(&request),
+        TransportRequirement::ExactWebSocketContinuation
+    );
+    assert!(transport_requirement(&request).requires_websocket());
+}
+
+#[test]
+fn codex_responses_transport_should_require_websocket_for_store_false_warmup() {
+    let mut body = serde_json::Map::new();
+    body.insert("generate".to_string(), json!(false));
+    body.insert("store".to_string(), json!(false));
+    let mut request = CodexResponsesRequest::from_body(body);
+    request.force_http_sse = true;
+
+    assert_eq!(
+        transport_requirement(&request),
+        TransportRequirement::ExplicitWebSocketWarmup
+    );
+    assert!(transport_requirement(&request).requires_websocket());
 }
 
 #[test]
@@ -523,7 +555,7 @@ fn developer_multi_agent_mode(mode: &str) -> Value {
 }
 
 #[test]
-fn openai_streaming_response_with_previous_response_should_require_websocket() {
+fn openai_streaming_response_with_unknown_previous_response_should_be_external() {
     let body = json!({
         "model": "gpt-5.5",
         "input": "hello",
@@ -537,7 +569,7 @@ fn openai_streaming_response_with_previous_response_should_require_websocket() {
     assert!(codex.stream());
     assert!(!codex.force_http_sse);
     assert_eq!(
-        transport_for_request(&codex),
-        CodexTransport::WebSocketRequired
+        transport_requirement(&codex),
+        TransportRequirement::ExternalUnknown
     );
 }

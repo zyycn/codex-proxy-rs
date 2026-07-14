@@ -1060,6 +1060,27 @@ async fn accept_cyber_policy_websocket_response_with_authorization(
     payload
 }
 
+async fn accept_cyber_policy_http_response_with_authorization(
+    listener: &TcpListener,
+    expected_authorization: &str,
+) {
+    let (mut stream, _) = listener.accept().await.unwrap();
+    let request = read_http_upgrade_request(&mut stream).await;
+    assert!(request.starts_with("POST /codex/responses HTTP/1.1"));
+    assert!(
+        request.to_ascii_lowercase().contains(&format!(
+            "authorization: {}",
+            expected_authorization.to_ascii_lowercase()
+        )),
+        "unexpected HTTP authorization header in request:\n{request}"
+    );
+    write_http_sse_response(
+        &mut stream,
+        include_str!("../fixtures/responses/http_sse/failed_cyber_policy.sse"),
+    )
+    .await;
+}
+
 pub(crate) async fn accept_websocket_with_authorization(
     stream: TcpStream,
     expected_authorization: &'static str,

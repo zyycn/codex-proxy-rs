@@ -28,6 +28,7 @@ pub(in crate::dispatch) struct StreamSummary {
     pub body: Vec<u8>,
     pub terminal_chunks: Vec<CanonicalResponseChunk>,
     pub first_token_ms: Option<i64>,
+    pub first_event_ms: i64,
     pub usage: Option<TokenUsage>,
     pub last_response_id: Option<String>,
 }
