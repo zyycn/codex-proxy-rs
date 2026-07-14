@@ -42,7 +42,8 @@ const dashboardUsageRecordColumns = usageRecordColumns.filter((column) => column
         >
           <template #accountEmail="{ row }">
             <span
-              class="whitespace-nowrap font-mono text-[12px] leading-none font-[720] text-(--cp-text-primary)"
+              class="block max-w-full truncate font-mono text-[12px] leading-none font-[720] text-(--cp-text-primary)"
+              :title="usageAccountText(row)"
             >
               {{ usageAccountText(row) }}
             </span>

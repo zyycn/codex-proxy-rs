@@ -67,7 +67,7 @@ const rootClasses = computed(() => [
   props.maxHeight || props.height ? undefined : 'h-full',
 ])
 const wrapClasses = computed(() => [
-  'min-h-0 overflow-auto max-h-[inherit] [-ms-overflow-style:none] scrollbar-none [&::-webkit-scrollbar]:h-0 [&::-webkit-scrollbar]:w-0 [&::-webkit-scrollbar]:bg-transparent',
+  'base-scrollbar-wrap min-h-0 max-h-[inherit] overflow-auto',
   props.maxHeight ? undefined : 'h-full',
 ])
 const verticalTrackClass = computed(() =>
@@ -436,3 +436,15 @@ defineExpose({
     </div>
   </div>
 </template>
+
+<style scoped>
+.base-scrollbar-wrap {
+  scrollbar-width: none;
+}
+
+.base-scrollbar-wrap::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+</style>
