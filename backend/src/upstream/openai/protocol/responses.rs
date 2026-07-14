@@ -724,9 +724,9 @@ impl CodexResponsesRequest {
         }
     }
 
-    /// 仅在客户端原本提供字符串字段时替换其账号作用域 wire 值。
+    /// 替换客户端原本提供的账号身份字段；无法安全重建时删除该字段。
     pub(crate) fn replace_existing_identity_field(&mut self, key: &str, value: Option<&str>) {
-        if !self.body.get(key).is_some_and(Value::is_string) {
+        if !self.body.contains_key(key) {
             return;
         }
         match value.filter(|value| !value.trim().is_empty()) {

@@ -6,7 +6,10 @@ use serde_json::Value;
 use crate::{
     dispatch::{
         affinity::AccountIdentityService,
-        controllers::ControllerFailureFact,
+        controllers::{
+            ControllerFailureFact,
+            account_state::{AccountStateEffect, AccountStateEffects},
+        },
         errors::ClientFailure,
         failure::exhaustion::{AccountExhaustionRecord, ExhaustedAccountKind},
         lifecycle::contract::{
@@ -55,9 +58,7 @@ impl QuotaController {
         }
 
         let account_id = acquired.account.id.clone();
-        let identity = context
-            .account_identity
-            .scope_auxiliary(&account_id, context.request_id);
+        let identity = context.account_identity.scope_auxiliary(&account_id);
         let usage = context
             .codex
             .fetch_usage(CodexRequestContext {
@@ -75,8 +76,7 @@ impl QuotaController {
                 installation_id: Some(&identity.installation_id),
                 session_id: None,
                 thread_id: None,
-                prompt_cache_key: None,
-                client_request_id: Some(&identity.client_request_id),
+                client_request_id: None,
                 turn_id: None,
             })
             .await;
@@ -132,7 +132,7 @@ impl QuotaController {
                         ExhaustedAccountKind::RateLimited,
                         LIMIT_REACHED_MESSAGE,
                     ),
-                    effect: QuotaEffect::None,
+                    effect: None,
                 });
         }
         classify(observation)
@@ -160,26 +160,14 @@ impl QuotaController {
 
     pub(super) async fn apply_effect(
         account_pool: &AccountPoolService,
+        codex: &CodexBackendClient,
         classified: &ClassifiedQuotaFailure,
     ) {
         let Some(account_id) = classified.exhaustion.account_id.as_deref() else {
             return;
         };
-        match classified.effect {
-            QuotaEffect::None => {}
-            QuotaEffect::SetExhausted => {
-                account_pool
-                    .set_status(
-                        account_id,
-                        crate::fleet::account::AccountStatus::QuotaExhausted,
-                    )
-                    .await;
-            }
-            QuotaEffect::MarkLimitedUntil(until) => {
-                account_pool
-                    .mark_quota_limited_until(account_id, until)
-                    .await;
-            }
+        if let Some(effect) = &classified.effect {
+            AccountStateEffects::apply(account_pool, codex, account_id, effect).await;
         }
     }
 
@@ -188,15 +176,9 @@ impl QuotaController {
     }
 }
 
-enum QuotaEffect {
-    None,
-    SetExhausted,
-    MarkLimitedUntil(chrono::DateTime<Utc>),
-}
-
 pub(super) struct ClassifiedQuotaFailure {
     exhaustion: AccountExhaustionRecord,
-    effect: QuotaEffect,
+    effect: Option<AccountStateEffect>,
 }
 
 fn classify(observation: &AttemptObservation) -> Option<ClassifiedQuotaFailure> {
@@ -219,29 +201,37 @@ fn classify_upstream(
     account_id: &str,
     facts: &UpstreamFailureFacts,
 ) -> Option<ClassifiedQuotaFailure> {
-    if facts.status_code == Some(429) {
-        return Some(rate_limited_failure(
+    let signaled_kind = facts
+        .code
+        .as_deref()
+        .and_then(classify_quota_signal)
+        .or_else(|| facts.error_type.as_deref().and_then(classify_quota_signal))
+        .or_else(|| classify_quota_message(&facts.message));
+    match signaled_kind.or(match facts.status_code {
+        Some(429) => Some(StreamQuotaKind::RateLimited),
+        Some(402) => Some(StreamQuotaKind::QuotaExhausted),
+        _ => None,
+    })? {
+        StreamQuotaKind::RateLimited => Some(rate_limited_failure(
             account_id,
             facts.body.clone(),
             facts.retry_after_seconds,
-        ));
+        )),
+        StreamQuotaKind::QuotaExhausted => {
+            Some(quota_exhausted_failure(account_id, facts.body.clone()))
+        }
     }
-    if facts.status_code == Some(402) {
-        return Some(quota_exhausted_failure(account_id, facts.body.clone()));
-    }
-    None
 }
 
 fn classify_stream(
     account_id: &str,
     failure: &ResponsesSseFailure,
 ) -> Option<ClassifiedQuotaFailure> {
-    let kind = match failure.explicit_status_code {
-        Some(429) => StreamQuotaKind::RateLimited,
-        Some(402) => StreamQuotaKind::QuotaExhausted,
-        Some(_) => return None,
-        None => classify_stream_signal(failure)?,
-    };
+    let kind = classify_stream_signal(failure).or(match failure.explicit_status_code {
+        Some(429) => Some(StreamQuotaKind::RateLimited),
+        Some(402) => Some(StreamQuotaKind::QuotaExhausted),
+        _ => None,
+    })?;
     let body = crate::dispatch::failure::sse::sse_failure_error_body(failure);
     Some(match kind {
         StreamQuotaKind::RateLimited => {
@@ -277,10 +267,15 @@ fn classify_quota_signal(signal: &str) -> Option<StreamQuotaKind> {
         "usage_limit_reached"
         | "rate_limit_exceeded"
         | "rate_limit_reached"
-        | "rate_limit_error" => Some(StreamQuotaKind::RateLimited),
-        "quota_exhausted" | "quota_exceeded" | "payment_required" | "insufficient_quota" => {
-            Some(StreamQuotaKind::QuotaExhausted)
-        }
+        | "rate_limit_error"
+        | "workspace_owner_usage_limit_reached"
+        | "workspace_member_usage_limit_reached" => Some(StreamQuotaKind::RateLimited),
+        "quota_exhausted"
+        | "quota_exceeded"
+        | "payment_required"
+        | "insufficient_quota"
+        | "workspace_owner_credits_depleted"
+        | "workspace_member_credits_depleted" => Some(StreamQuotaKind::QuotaExhausted),
         signal if signal.starts_with("billing_limit") => Some(StreamQuotaKind::QuotaExhausted),
         _ => None,
     }
@@ -314,7 +309,9 @@ fn rate_limited_failure(
             ExhaustedAccountKind::RateLimited,
             message,
         ),
-        effect: QuotaEffect::MarkLimitedUntil(Utc::now() + Duration::seconds(seconds)),
+        effect: Some(AccountStateEffect::MarkQuotaLimitedUntil(
+            Utc::now() + Duration::seconds(seconds),
+        )),
     }
 }
 
@@ -325,7 +322,9 @@ fn quota_exhausted_failure(account_id: &str, message: String) -> ClassifiedQuota
             ExhaustedAccountKind::QuotaExhausted,
             message,
         ),
-        effect: QuotaEffect::SetExhausted,
+        effect: Some(AccountStateEffect::SetStatus(
+            crate::fleet::account::AccountStatus::QuotaExhausted,
+        )),
     }
 }
 

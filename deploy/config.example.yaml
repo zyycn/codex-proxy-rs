@@ -40,9 +40,6 @@ x-cpr:
     refresh_interval_minutes: 5
     skip_exhausted: true
 
-  tls:
-    force_http11: false
-
   ws_pool:
     enabled: true
     max_age_ms: 3300000

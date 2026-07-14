@@ -167,7 +167,7 @@ impl CodexBackendClient {
         pool_account_id: Option<&str>,
         started_at: Instant,
     ) -> CodexClientResult<CodexBackendResponse> {
-        let upstream_request = response_upstream_request(request, context);
+        let upstream_request = request.clone();
         match transport_for_request(&upstream_request) {
             CodexTransport::HttpSse => {
                 self.create_response_http_sse(&upstream_request, context, started_at)
@@ -222,7 +222,7 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
         pool_account_id: Option<&str>,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
-        let upstream_request = response_upstream_request(request, context);
+        let upstream_request = request.clone();
         match transport_for_request(&upstream_request) {
             CodexTransport::HttpSse => {
                 self.create_response_stream_http_sse(&upstream_request, context)

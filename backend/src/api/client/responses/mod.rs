@@ -103,36 +103,36 @@ pub fn build_codex_request(
         None => {}
     }
     apply_context_header_fields(&mut request, headers);
-    apply_identity_fields(&mut request, headers);
+    apply_session_fields(&mut request, headers);
     request.client_user_agent = user_agent_from_headers(headers);
     request
 }
 
-fn apply_identity_fields(request: &mut CodexResponsesRequest, headers: &HeaderMap) {
-    request.client_conversation_id = identity_context_string(request.body(), "conversation_id")
+fn apply_session_fields(request: &mut CodexResponsesRequest, headers: &HeaderMap) {
+    request.client_conversation_id = session_context_string(request.body(), "conversation_id")
         .or_else(|| header_string(headers, "conversation-id"))
         .or_else(|| header_string(headers, "conversation_id"))
         .or_else(|| request.prompt_cache_key().map(ToString::to_string));
-    request.client_session_id = identity_context_string(request.body(), "session_id")
+    request.client_session_id = session_context_string(request.body(), "session_id")
         .or_else(|| header_string(headers, "session-id"))
         .or_else(|| header_string(headers, "session_id"));
-    request.client_thread_id = identity_context_string(request.body(), "thread_id")
+    request.client_thread_id = session_context_string(request.body(), "thread_id")
         .or_else(|| header_string(headers, "thread-id"));
-    request.client_request_id = identity_context_string(request.body(), "x-client-request-id")
+    request.client_request_id = session_context_string(request.body(), "x-client-request-id")
         .or_else(|| header_string(headers, "x-client-request-id"));
-    request.client_turn_id = identity_context_string(request.body(), "turn_id")
+    request.client_turn_id = session_context_string(request.body(), "turn_id")
         .or_else(|| header_string(headers, "x-codex-turn-id"));
     request.codex_window_id = request.codex_window_id.take().or_else(|| {
-        identity_context_string(request.body(), "x-codex-window-id")
+        session_context_string(request.body(), "x-codex-window-id")
             .or_else(|| header_string(headers, "x-codex-window-id"))
     });
     request.parent_thread_id = request.parent_thread_id.take().or_else(|| {
-        identity_context_string(request.body(), "x-codex-parent-thread-id")
+        session_context_string(request.body(), "x-codex-parent-thread-id")
             .or_else(|| header_string(headers, "x-codex-parent-thread-id"))
     });
 }
 
-fn identity_context_string(body: &Map<String, Value>, key: &str) -> Option<String> {
+fn session_context_string(body: &Map<String, Value>, key: &str) -> Option<String> {
     body_context_string(body, key).or_else(|| {
         body.get("client_metadata")
             .and_then(Value::as_object)

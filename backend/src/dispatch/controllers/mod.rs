@@ -15,7 +15,10 @@ use tokio::time::timeout;
 
 use crate::{
     dispatch::{
-        affinity::{AccountIdentityService, SessionAffinityService},
+        affinity::{
+            AccountIdentityScope, AccountIdentityService, AccountScopedRequest,
+            SessionAffinityService,
+        },
         errors::{ClientFailure, ResponseDispatchError, upstream_error_set_cookie_headers},
         lifecycle::trace::{ResponseDispatchAttempt, ResponseDispatchTrace},
     },
@@ -53,6 +56,7 @@ use crate::{
 };
 
 mod account_failure;
+mod account_state;
 mod affinity;
 pub(crate) mod cloudflare;
 pub(crate) mod cyber_policy;
@@ -243,6 +247,7 @@ pub(in crate::dispatch) struct ControllerSet {
     cyber_policy: CyberPolicyController,
     session_affinity: Arc<SessionAffinityService>,
     account_pool: Arc<AccountPoolService>,
+    codex: Arc<CodexBackendClient>,
     cloudflare: CloudflareRecovery,
     recorder: Arc<Recorder>,
 }
@@ -251,6 +256,7 @@ pub(in crate::dispatch) struct ControllerSet {
 pub(in crate::dispatch) struct ControllerRequestScope {
     cyber_policy: CyberPolicyScope,
     history: HistoryState,
+    identity: AccountIdentityScope,
     usage: usage::UsageScope,
 }
 
@@ -277,8 +283,13 @@ pub(in crate::dispatch) enum AttemptAccountPreparation {
     Rejected,
 }
 
+pub(in crate::dispatch) struct AttemptRoutePreparationContext<'a> {
+    pub account_identity: &'a AccountIdentityService,
+    pub account_id: &'a str,
+}
+
 pub(in crate::dispatch) enum AttemptRoutePreparation {
-    Ready(Box<CodexResponsesRequest>),
+    Ready(Box<AccountScopedRequest>),
     Unavailable { message: String },
 }
 
@@ -323,12 +334,21 @@ impl ControllerSet {
         &self,
         scope: &mut ControllerRequestScope,
         request: &CodexResponsesRequest,
-        account_id: &str,
+        context: AttemptRoutePreparationContext<'_>,
     ) -> AttemptRoutePreparation {
-        match HistoryController::prepare_attempt(&mut scope.history, request, account_id) {
-            Ok(request) => AttemptRoutePreparation::Ready(Box::new(request)),
-            Err(message) => AttemptRoutePreparation::Unavailable { message },
-        }
+        let request = match HistoryController::prepare_attempt(
+            &mut scope.history,
+            request,
+            context.account_id,
+        ) {
+            Ok(request) => request,
+            Err(message) => return AttemptRoutePreparation::Unavailable { message },
+        };
+        AttemptRoutePreparation::Ready(Box::new(context.account_identity.scope_request(
+            &mut scope.identity,
+            request,
+            context.account_id,
+        )))
     }
 
     pub(in crate::dispatch) fn prepare_same_account_retry(
@@ -473,6 +493,7 @@ impl ControllerSet {
     pub(in crate::dispatch) fn new(
         session_affinity: Arc<crate::dispatch::affinity::SessionAffinityService>,
         account_pool: Arc<AccountPoolService>,
+        codex: Arc<CodexBackendClient>,
         cloudflare: CloudflareRecovery,
         recorder: Arc<Recorder>,
     ) -> Self {
@@ -480,6 +501,7 @@ impl ControllerSet {
             cyber_policy: CyberPolicyController::new(Arc::clone(&session_affinity)),
             session_affinity,
             account_pool,
+            codex,
             cloudflare,
             recorder,
         }
@@ -508,6 +530,7 @@ impl ControllerSet {
             scope: ControllerRequestScope {
                 cyber_policy,
                 history,
+                identity: AccountIdentityScope::new(preferred_account_id.clone()),
                 usage,
             },
             preferred_account_id,
@@ -553,33 +576,32 @@ impl ControllerSet {
         }
     }
 
-    async fn apply_stream_failure(
+    async fn apply_stream_account_state(&self, classification: &StreamFailureClassification<'_>) {
+        match classification.owner.as_ref() {
+            Some(SharedFailureClassification::AccountFailure(classified)) => {
+                AccountFailureController::apply_effect(&self.account_pool, &self.codex, classified)
+                    .await;
+            }
+            Some(SharedFailureClassification::Quota(classified)) => {
+                QuotaController::apply_effect(&self.account_pool, &self.codex, classified).await;
+            }
+            Some(SharedFailureClassification::CyberPolicy(_)) | None => {}
+        }
+    }
+
+    async fn apply_stream_policy_failure(
         &self,
         scope: &ControllerRequestScope,
         account_id: &str,
         classification: &StreamFailureClassification<'_>,
     ) {
-        match classification.owner.as_ref() {
-            Some(SharedFailureClassification::CyberPolicy(_)) => {
-                self.cyber_policy
-                    .exclude_account(&scope.cyber_policy, account_id)
-                    .await;
-            }
-            Some(SharedFailureClassification::AccountFailure(classified)) => {
-                let _ = best_effort_controller_io(
-                    "account_failure.stream",
-                    AccountFailureController::apply_effect(&self.account_pool, classified),
-                )
+        if matches!(
+            classification.owner,
+            Some(SharedFailureClassification::CyberPolicy(_))
+        ) {
+            self.cyber_policy
+                .exclude_account(&scope.cyber_policy, account_id)
                 .await;
-            }
-            Some(SharedFailureClassification::Quota(classified)) => {
-                let _ = best_effort_controller_io(
-                    "quota.stream",
-                    QuotaController::apply_effect(&self.account_pool, classified),
-                )
-                .await;
-            }
-            None => {}
         }
     }
 
@@ -611,6 +633,11 @@ impl ControllerSet {
             StreamTerminal::Cancelled | StreamTerminal::DownstreamClosed => FinalOutcome::Cancelled,
             StreamTerminal::Shutdown => FinalOutcome::Shutdown,
         };
+        if !matches!(outcome, FinalOutcome::Cancelled | FinalOutcome::Shutdown)
+            && let Some(classification) = stream_failure.as_ref()
+        {
+            self.apply_stream_account_state(classification).await;
+        }
         let _ = best_effort_controller_io(
             "cloudflare",
             cloudflare::CloudflareController::leave_stream(cloudflare::StreamExit {
@@ -684,7 +711,7 @@ impl ControllerSet {
 
         if !matches!(outcome, FinalOutcome::Cancelled | FinalOutcome::Shutdown) {
             if let Some(classification) = stream_failure.as_ref() {
-                self.apply_stream_failure(&scope, &context.account_id, classification)
+                self.apply_stream_policy_failure(&scope, &context.account_id, classification)
                     .await;
             } else {
                 self.finalize_stream_success(&scope, &summary.terminal)
@@ -730,18 +757,16 @@ impl ControllerSet {
                     }
                 }
                 SharedFailureClassification::AccountFailure(classified) => {
-                    let _ = best_effort_controller_io(
-                        "account_failure.attempt",
-                        AccountFailureController::apply_effect(&self.account_pool, classified),
+                    AccountFailureController::apply_effect(
+                        &self.account_pool,
+                        &self.codex,
+                        classified,
                     )
                     .await;
                 }
                 SharedFailureClassification::Quota(classified) => {
-                    let _ = best_effort_controller_io(
-                        "quota.attempt",
-                        QuotaController::apply_effect(&self.account_pool, classified),
-                    )
-                    .await;
+                    QuotaController::apply_effect(&self.account_pool, &self.codex, classified)
+                        .await;
                 }
             },
             AttemptClassification::Cloudflare(failure) => {

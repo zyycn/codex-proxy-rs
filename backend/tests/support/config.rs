@@ -1,7 +1,7 @@
 use codex_proxy_rs::bootstrap::config::{
     AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, FileLoggingConfig,
     LoggingConfig, QuotaConfig, RedisConfig, RuntimePathsConfig, ServerConfig, TelemetryConfig,
-    TlsConfig, WebSocketPoolSettings,
+    WebSocketPoolSettings,
 };
 
 pub(crate) fn test_config(database_url: String) -> AppConfig {
@@ -35,9 +35,6 @@ pub(crate) fn test_config(database_url: String) -> AppConfig {
         },
         runtime: RuntimePathsConfig {
             data_directory: std::path::PathBuf::from(".runtime/test-data"),
-        },
-        tls: TlsConfig {
-            force_http11: false,
         },
         ws_pool: WebSocketPoolSettings {
             enabled: true,

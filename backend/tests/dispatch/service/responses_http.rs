@@ -677,10 +677,7 @@ async fn responses_should_forward_parity_fields_context_headers_and_account_scop
     assert_eq!(upstream_body["service_tier"], "priority");
     assert_eq!(upstream_body["reasoning"], json!({"effort": "high"}));
     assert!(upstream_body.get("include").is_none());
-    let prompt_cache_key = upstream_body["prompt_cache_key"]
-        .as_str()
-        .expect("prompt cache key should be account scoped");
-    assert_ne!(prompt_cache_key, "pcache");
+    assert_eq!(upstream_body["prompt_cache_key"], "pcache");
     assert_eq!(upstream_body["client_metadata"]["safe"], "yes");
     assert_eq!(upstream_body["client_metadata"]["drop"], 42);
     assert_eq!(
@@ -695,16 +692,16 @@ async fn responses_should_forward_parity_fields_context_headers_and_account_scop
     assert!(upstream_body["client_metadata"].get("thread_id").is_none());
     let window_id = upstream_body["client_metadata"]["x-codex-window-id"]
         .as_str()
-        .expect("window id should be account scoped");
-    assert_ne!(window_id, "window-metadata");
+        .expect("window id should be preserved");
+    assert_eq!(window_id, "window-metadata");
     assert_eq!(
         upstream_body["client_metadata"]["x-codex-turn-metadata"],
         "meta-metadata"
     );
     let parent_thread_id = upstream_body["client_metadata"]["x-codex-parent-thread-id"]
         .as_str()
-        .expect("parent thread id should be account scoped");
-    assert_ne!(parent_thread_id, "parent-metadata");
+        .expect("parent thread id should be preserved");
+    assert_eq!(parent_thread_id, "parent-metadata");
     assert_eq!(upstream_header("session-id"), None);
     assert_eq!(upstream_header("thread-id"), None);
     assert_eq!(upstream_header("session_id"), None);

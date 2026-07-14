@@ -208,7 +208,6 @@ impl AccountManageService {
             installation_id: installation_id.as_deref(),
             session_id: None,
             thread_id: None,
-            prompt_cache_key: None,
             client_request_id: None,
             turn_id: None,
         };
