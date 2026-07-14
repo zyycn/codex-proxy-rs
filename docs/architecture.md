@@ -218,7 +218,7 @@ fleet/
 
 `v1/*` 使用 Request、Attempt、Stream 三层洋葱生命周期。核心代码位于 `lifecycle/`、`controllers/`、`routing/`、`transport/` 和 `failure/`；`service.rs` 与 `stream/lifecycle.rs` 只是 complete/stream 入口适配器，`stream/live.rs` 是响应提交后的流执行器，不承载功能策略。
 
-架构硬规则是“单功能单归属”：功能阈值、状态机、优先级和 decision 只能由对应 controller 拥有；`lifecycle` 只管固定顺序、retry、commit、逆序退出和 exactly-once finalize。迁移不保留 compatibility re-export、feature flag 切换或新旧双路径，新路径接管后必须在同一次变更中删除旧入口和重复判断。
+架构硬规则是“单功能单归属”：功能阈值、状态机和 decision 只能由对应 controller 拥有；`ControllerSet` 只声明 controller 的固定优先级并分发其 typed classification、effect 与 decision，不能替 owner 构造功能专用 decision；`lifecycle` 只管 retry、commit、逆序退出和 exactly-once finalize。complete、prefetch 与 committed stream 必须共用一份 feature failure owner 顺序。迁移不保留 compatibility re-export、feature flag 切换或新旧双路径，新路径接管后必须在同一次变更中删除旧入口和重复判断。
 
 ```text
 dispatch/
