@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { CalendarDays, Eye, Minimize2 } from '@lucide/vue'
-import dayjs from 'dayjs'
-import { computed, shallowRef, watch } from 'vue'
+import { shallowRef, watch } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -19,6 +18,7 @@ import {
 import { useUsageRecordDetail } from './composables/useUsageRecordDetail'
 import { useUsageFilters } from './composables/useUsageFilters'
 import { useUsageRecordsTable } from './composables/useUsageRecordsTable'
+import { useUsageTimeRange } from './composables/useUsageTimeRange'
 import UsageClientIpCell from './components/UsageClientIpCell.vue'
 import UsageBillingCell from './components/UsageBillingCell.vue'
 import UsageFilters from './components/UsageFilters.vue'
@@ -31,34 +31,12 @@ import UsageSummaryCards from './components/UsageSummaryCards.vue'
 import UsageTokenCell from './components/UsageTokenCell.vue'
 
 const totalRecords = shallowRef(0)
-const timeRange = shallowRef('today')
 const recordView = shallowRef('success')
 const recordViewOptions = [
   { label: '成功记录', value: 'success' },
   { label: '错误排查', value: 'errors' },
 ]
-const timeRangeParams = computed(() => {
-  const now = dayjs()
-
-  if (timeRange.value === 'today') {
-    return {
-      startTime: now.startOf('day').toISOString(),
-      endTime: now.toISOString(),
-    }
-  }
-
-  if (timeRange.value === '30d') {
-    return {
-      startTime: now.subtract(29, 'day').startOf('day').toISOString(),
-      endTime: now.toISOString(),
-    }
-  }
-
-  return {
-    startTime: now.subtract(6, 'day').startOf('day').toISOString(),
-    endTime: now.toISOString(),
-  }
-})
+const { timeRange, timeRangeParams, refreshTimeRangeEnd } = useUsageTimeRange()
 
 const {
   page,
@@ -87,6 +65,7 @@ const {
   searchQuery,
   timeRangeParams,
   totalRecords,
+  refreshTimeRangeEnd,
 })
 
 const { showDetailModal, selectedUsageRecord, handleViewDetail } = useUsageRecordDetail({
@@ -96,6 +75,7 @@ const { showDetailModal, selectedUsageRecord, handleViewDetail } = useUsageRecor
 bindUsageRecordLoader(loadUsageRecords)
 
 watch(timeRange, () => {
+  refreshTimeRangeEnd()
   page.value = 1
   void loadUsageRecords('all')
 })

@@ -205,12 +205,12 @@ pub(crate) async fn dashboard_summary(
     let capacity = state.services.account_pool.capacity_summary_now().await;
     let now = Utc::now();
     let today_filter = today_usage_record_filter(now);
-    let lifetime_usage = state
+    let retained_usage = state
         .services
         .usage
-        .summary()
+        .retained_totals()
         .await
-        .map_err(|error| dashboard_data_error("account usage summary", &error))?;
+        .map_err(|error| dashboard_data_error("retained usage summary", &error))?;
     let account_usage_records = state
         .services
         .usage_records
@@ -256,7 +256,7 @@ pub(crate) async fn dashboard_summary(
             cards: dashboard_cards(
                 dashboard_account_counts(&accounts),
                 &time_buckets,
-                &lifetime_usage,
+                &retained_usage,
             ),
             trend,
             health_timeline: dashboard_health_timeline_data(&time_buckets),

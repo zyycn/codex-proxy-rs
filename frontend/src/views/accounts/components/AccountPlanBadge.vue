@@ -23,8 +23,8 @@ const label = computed(() => props.planType?.trim() || 'Free')
 
 const sizeClass = computed(() =>
   props.size === 'sm'
-    ? 'h-5 max-w-24 rounded-full px-1.75 text-[11px] font-[720]'
-    : 'h-5.5 max-w-full rounded-full px-2 text-[11px] font-[760]',
+    ? 'h-5 rounded-full px-1.75 text-[11px] font-[720]'
+    : 'h-5.5 rounded-full px-2 text-[11px] font-[760]',
 )
 
 const paletteClass = computed(() => {
@@ -39,9 +39,9 @@ const paletteClass = computed(() => {
 
 <template>
   <span
-    class="inline-flex min-w-0 items-center justify-center leading-none capitalize"
+    class="inline-flex shrink-0 items-center justify-center whitespace-nowrap leading-none capitalize"
     :class="[sizeClass, paletteClass]"
   >
-    <span class="min-w-0 truncate">{{ label }}</span>
+    <span>{{ label }}</span>
   </span>
 </template>

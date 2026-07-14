@@ -29,6 +29,14 @@ where bucket_start >= $1 and bucket_start <= $2
 group by bucket_start, model, service_tier
 order by bucket_start asc, model asc, service_tier asc";
 
+const RETAINED_USAGE_TOTALS_SQL: &str = r"
+select
+  coalesce(sum(success_count + error_count), 0)::bigint as request_count,
+  coalesce(sum(input_tokens), 0)::bigint as input_tokens,
+  coalesce(sum(output_tokens), 0)::bigint as output_tokens,
+  coalesce(sum(cached_tokens), 0)::bigint as cached_tokens
+from request_time_buckets";
+
 /// 请求时间桶查询错误。
 #[derive(Debug, Error)]
 pub enum PgRequestBucketQueryError {
@@ -125,6 +133,19 @@ impl PgRequestBucketQuery {
             .fetch_all(&self.pool)
             .await?;
         Ok(rows.iter().map(usage_time_bucket_from_row).collect())
+    }
+
+    /// 汇总请求时间桶保留期内的全局用量，不受当前账号集合影响。
+    pub async fn retained_totals(&self) -> Result<UsageBucketTotals, PgRequestBucketQueryError> {
+        let row = sqlx::query(RETAINED_USAGE_TOTALS_SQL)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(UsageBucketTotals {
+            request_count: row.get("request_count"),
+            input_tokens: row.get("input_tokens"),
+            output_tokens: row.get("output_tokens"),
+            cached_tokens: row.get("cached_tokens"),
+        })
     }
 
     pub async fn usage_by_windows(

@@ -162,12 +162,27 @@ impl UsageDiagnosticsDimension {
 
     fn expression(self) -> &'static str {
         match self {
-            Self::Model => "model_name",
-            Self::Account => "coalesce(nullif(account_id, ''), '未知账号')",
-            Self::ApiKey => "coalesce(nullif(client_api_key_id, ''), '未知 API Key')",
-            Self::Provider => "coalesce(nullif(provider, ''), '未知 Provider')",
-            Self::Transport => "coalesce(nullif(transport, ''), '未知传输')",
-            Self::FailureClass => "failure_class",
+            Self::Model => "terminal_requests.model_name",
+            Self::Account => {
+                "coalesce(nullif(concat_ws(' → ', nullif(diagnostic_accounts.email, ''), nullif(terminal_requests.account_id, '')), ''), '未知账号')"
+            }
+            Self::ApiKey => {
+                "coalesce(nullif(terminal_requests.client_api_key_id, ''), '未知 API Key')"
+            }
+            Self::Provider => "coalesce(nullif(terminal_requests.provider, ''), '未知 Provider')",
+            Self::Transport => "coalesce(nullif(terminal_requests.transport, ''), '未知传输')",
+            Self::FailureClass => "terminal_requests.failure_class",
+        }
+    }
+
+    fn source(self) -> &'static str {
+        match self {
+            Self::Account => {
+                "terminal_requests left join accounts diagnostic_accounts on diagnostic_accounts.id = terminal_requests.account_id"
+            }
+            Self::Model | Self::ApiKey | Self::Provider | Self::Transport | Self::FailureClass => {
+                "terminal_requests"
+            }
         }
     }
 }
@@ -307,8 +322,9 @@ pub async fn diagnostics(
     dimension: UsageDiagnosticsDimension,
 ) -> PgUsageRecordStoreResult<UsageDiagnosticsInsights> {
     let expression = dimension.expression();
+    let source = dimension.source();
     let failure_filter = if dimension == UsageDiagnosticsDimension::FailureClass {
-        "where not is_success"
+        "where not terminal_requests.is_success"
     } else {
         ""
     };
@@ -321,7 +337,7 @@ pub async fn diagnostics(
            percentile_cont(0.95) within group (order by latency_ms)\n\
              filter (where is_success and latency_ms is not null) as latency_p95_ms,\n\
            (select count(*) from terminal_requests)::bigint as total_requests\n\
-         from terminal_requests {failure_filter}\n\
+         from {source} {failure_filter}\n\
          group by name\n\
          order by request_count desc, name asc\n\
          limit 8"
@@ -610,6 +626,7 @@ async fn load_diagnostic_costs(
     dimension: UsageDiagnosticsDimension,
 ) -> PgUsageRecordStoreResult<HashMap<String, f64>> {
     let expression = dimension.expression();
+    let source = dimension.source();
     let sql = format!(
         "with {TERMINAL_REQUESTS_CTE}\n\
          select {expression} as name, billing_model, service_tier,\n\
@@ -622,8 +639,8 @@ async fn load_diagnostic_costs(
            coalesce(sum(input_tokens), 0)::bigint as input_tokens,\n\
            coalesce(sum(output_tokens), 0)::bigint as output_tokens,\n\
            coalesce(sum(least(coalesce(cached_tokens, 0), coalesce(input_tokens, 0))), 0)::bigint as cached_tokens\n\
-         from terminal_requests\n\
-         where is_success\n\
+         from {source}\n\
+         where terminal_requests.is_success\n\
          group by name, billing_model, service_tier, is_long"
     );
     // SAFETY: the grouping expression comes from the closed diagnostics dimension enum.

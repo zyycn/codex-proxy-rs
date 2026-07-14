@@ -1327,21 +1327,33 @@ async fn codex_backend_client_stream_should_preserve_burst_during_downstream_bac
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let (terminal_drained_tx, terminal_drained_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut websocket = accept_codex_test_websocket(stream).await;
         let _message = websocket.next().await.unwrap().unwrap();
-        websocket
-            .send(Message::Text(
-                json!({
-                    "type": "response.output_text.delta",
-                    "delta": "initial;"
-                })
-                .to_string()
-                .into(),
-            ))
-            .await
-            .unwrap();
+        let (mut sink, mut source) = websocket.split();
+        // 服务端持续读取控制帧，让 tungstenite 正常回 Pong。若客户端在本地入站背压
+        // 期间仍执行 Pong deadline，它仍会因为暂时读不到已返回的 Pong 而误杀连接。
+        let control_frames = tokio::spawn(async move {
+            while let Some(message) = source.next().await {
+                match message.unwrap() {
+                    Message::Ping(_) | Message::Pong(_) => {}
+                    Message::Close(_) => break,
+                    other => panic!("unexpected client frame during response: {other:?}"),
+                }
+            }
+        });
+        sink.send(Message::Text(
+            json!({
+                "type": "response.output_text.delta",
+                "delta": "initial;"
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
 
         for index in 0..BURST_FRAMES {
             let frame = json!({
@@ -1349,22 +1361,34 @@ async fn codex_backend_client_stream_should_preserve_burst_during_downstream_bac
                 "delta": format!("chunk-{index};")
             })
             .to_string();
-            if websocket.send(Message::Text(frame.into())).await.is_err() {
+            if sink.send(Message::Text(frame.into())).await.is_err() {
+                control_frames.abort();
                 return;
             }
         }
-        let _ = websocket
+        let _ = sink
             .send(Message::Text(
                 completed_websocket_response("resp_backpressure", 3, 257).into(),
             ))
             .await;
-        let _ = websocket.close(None).await;
+        terminal_drained_rx
+            .await
+            .expect("client should drain the terminal response before server close");
+        let _ = sink.send(Message::Close(None)).await;
+        control_frames.abort();
     });
+    let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
+        ping_interval: Some(Duration::from_millis(5)),
+        ping_timeout: Duration::from_millis(20),
+        liveness_timeout: None,
+        ..websocket_pool_config_for_tests(None, None, None)
+    }));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
         crate::support::fingerprint::runtime_test_fingerprint(),
-    );
+    )
+    .with_websocket_pool(pool);
     let request = pooled_websocket_request("conversation-backpressure");
 
     let mut response = backend
@@ -1386,6 +1410,7 @@ async fn codex_backend_client_stream_should_preserve_burst_during_downstream_bac
     })
     .await
     .expect("backpressured websocket stream should finish");
+    terminal_drained_tx.send(()).unwrap();
     server.await.unwrap();
 
     assert_eq!(

@@ -84,7 +84,7 @@ pub struct CodexWebSocketPoolConfig {
     pub maintenance_interval: Option<Duration>,
     /// idle socket 探活 ping 间隔；`None` 表示维护时只做过期清理。
     pub ping_interval: Option<Duration>,
-    /// 发送 ping 后等待上游响应的超时时间。
+    /// 发送 ping 后等待上游响应的超时时间；零值表示不校验 Pong deadline。
     pub ping_timeout: Duration,
     /// idle socket 无活动多久后视为失活。
     pub liveness_timeout: Option<Duration>,
@@ -110,10 +110,11 @@ impl Default for CodexWebSocketPoolConfig {
 }
 
 impl CodexWebSocketPoolConfig {
-    /// pump 后台任务的保活策略：从连接池配置派生出 ping 间隔与 liveness 超时。
+    /// pump 后台任务的保活策略：从连接池配置派生出 ping/pong 与 liveness 策略。
     pub(crate) fn keepalive(&self) -> PumpKeepalive {
         PumpKeepalive {
             ping_interval: self.ping_interval,
+            ping_timeout: (!self.ping_timeout.is_zero()).then_some(self.ping_timeout),
             liveness_timeout: self.liveness_timeout,
         }
     }

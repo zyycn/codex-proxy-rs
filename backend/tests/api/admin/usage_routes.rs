@@ -124,6 +124,20 @@ async fn usage_summary_and_trend_expose_only_real_success_metrics() {
 async fn usage_insights_should_collapse_retry_errors_to_terminal_requests() {
     let (app, usage, ops, _guard) = monitoring_test_app("monitoring-insights", true).await;
     let now = chrono::Utc::now();
+    sqlx::query(
+        "insert into accounts
+         (id, email, access_token, status, added_at, updated_at)
+         values ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind("acct_usage")
+    .bind("usage-account@example.com")
+    .bind("cipher")
+    .bind("active")
+    .bind(now)
+    .bind(now)
+    .execute(usage.pool())
+    .await
+    .unwrap();
 
     let mut success = success_record("eventually succeeded");
     success.id = "usage_insights_success".to_string();
@@ -183,6 +197,19 @@ async fn usage_insights_should_collapse_retry_errors_to_terminal_requests() {
             .as_array()
             .unwrap()
             .is_empty()
+    );
+
+    let account_diagnostics = admin_get(
+        &app,
+        "/api/admin/usage/records/insights/diagnostics?dimension=account",
+    )
+    .await;
+    assert!(
+        account_diagnostics["data"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["name"] == "usage-account@example.com → acct_usage")
     );
 }
 

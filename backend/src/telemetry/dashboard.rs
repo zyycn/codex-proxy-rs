@@ -11,7 +11,7 @@ use crate::infra::{
     time::{china_day_start, china_quarter_hour_start},
 };
 
-use super::account_usage::query::{AccountUsageSummary, AccountUsageTimeBucket};
+use super::{account_usage::query::AccountUsageTimeBucket, buckets::query::UsageBucketTotals};
 
 const HEALTH_TIMELINE_SLOT_MINUTES: i64 = 15;
 const HEALTH_TIMELINE_SLOTS: i64 = 24 * 4;
@@ -174,15 +174,15 @@ impl UsageWindow {
 pub fn dashboard_cards(
     accounts: DashboardAccountCounts,
     buckets: &[AccountUsageTimeBucket],
-    lifetime_usage: &AccountUsageSummary,
+    retained_usage: &UsageBucketTotals,
 ) -> DashboardCardsData {
-    dashboard_cards_at(accounts, buckets, lifetime_usage, Utc::now())
+    dashboard_cards_at(accounts, buckets, retained_usage, Utc::now())
 }
 
 pub fn dashboard_cards_at(
     accounts: DashboardAccountCounts,
     buckets: &[AccountUsageTimeBucket],
-    lifetime_usage: &AccountUsageSummary,
+    retained_usage: &UsageBucketTotals,
     now: DateTime<Utc>,
 ) -> DashboardCardsData {
     let today_start = china_day_start(now);
@@ -190,9 +190,10 @@ pub fn dashboard_cards_at(
     let today = usage_window(buckets, today_start, now);
     let yesterday = usage_window(buckets, yesterday_start, today_start);
     let today_billing_amount = billing_window(buckets, today_start, now).unwrap_or(0.0);
-    let total_requests = nonnegative_i64_to_u64(lifetime_usage.request_count);
-    let total_tokens = nonnegative_i64_to_u64(lifetime_usage.total_tokens);
-    let total_cached_tokens = nonnegative_i64_to_u64(lifetime_usage.cached_tokens);
+    let total_requests = nonnegative_i64_to_u64(retained_usage.request_count);
+    let total_tokens = nonnegative_i64_to_u64(retained_usage.input_tokens)
+        .saturating_add(nonnegative_i64_to_u64(retained_usage.output_tokens));
+    let total_cached_tokens = nonnegative_i64_to_u64(retained_usage.cached_tokens);
 
     DashboardCardsData {
         accounts: DashboardAccountsCardData {
@@ -220,7 +221,7 @@ pub fn dashboard_cards_at(
             today_hit_rate: format_rate(today.cache_hit_rate()),
             today_hit_rate_value: today.cache_hit_rate(),
             yesterday_hit_rate_value: yesterday.cache_hit_rate(),
-            total_hit_rate: format_rate(summary_cache_hit_rate(lifetime_usage)),
+            total_hit_rate: format_rate(summary_cache_hit_rate(retained_usage)),
             total_cached_tokens: format_tokens(total_cached_tokens),
             average_first_token_latency_ms: format_optional_duration_ms(
                 today.avg_first_token_latency(),
@@ -540,7 +541,7 @@ fn health_tone(bucket: UsageWindow, success_rate: f64, is_future: bool) -> char 
     }
 }
 
-fn summary_cache_hit_rate(summary: &AccountUsageSummary) -> Option<f64> {
+fn summary_cache_hit_rate(summary: &UsageBucketTotals) -> Option<f64> {
     let input_tokens = nonnegative_i64_to_u64(summary.input_tokens);
     (input_tokens > 0)
         .then(|| nonnegative_i64_to_u64(summary.cached_tokens) as f64 / input_tokens as f64)

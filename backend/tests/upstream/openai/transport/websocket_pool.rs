@@ -714,29 +714,48 @@ async fn websocket_pool_should_use_http_for_new_keys_after_account_cap() {
 }
 
 #[tokio::test]
-async fn websocket_pool_should_evict_idle_connection_when_liveness_lapses_despite_pings() {
-    // 不变量：pump 自己发出的 keepalive ping 不算“入站活动”，因此一个只收 ping、
-    // 从不回 pong / 从不发帧的静默连接，仍会被 liveness watchdog 判定失活并驱逐；
-    // 复用前 acquire 读到 is_closed 即开新连接。
+async fn websocket_pool_should_replace_idle_connection_after_pong_deadline() {
+    // 服务端读取 Ping 后暂不继续 poll，避免 tungstenite 自动回 Pong；pump 必须在独立
+    // deadline 到期时主动关闭连接，acquire 随后只读 closed 状态并直接新建连接。
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let accepted_connections = Arc::new(AtomicUsize::new(0));
     let accepted_connections_for_server = Arc::clone(&accepted_connections);
-    let (release_first_tx, release_first_rx) = tokio::sync::oneshot::channel();
+    let (ping_seen_tx, ping_seen_rx) = tokio::sync::oneshot::channel();
+    let (inspect_close_tx, inspect_close_rx) = tokio::sync::oneshot::channel();
+    let (pong_timeout_closed_tx, pong_timeout_closed_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (first_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-        let first_connection = tokio::spawn(async move {
-            let mut first_websocket = accept_codex_test_websocket(first_stream).await;
-            let _first_message = first_websocket.next().await.unwrap().unwrap();
-            first_websocket
-                .send(Message::Text(
-                    completed_websocket_response("resp_no_pong_first", 2, 1).into(),
-                ))
-                .await
-                .unwrap();
-            let _ = release_first_rx.await;
-        });
+        let mut first_websocket = accept_codex_test_websocket(first_stream).await;
+        let _first_message = first_websocket.next().await.unwrap().unwrap();
+        first_websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_no_pong_first", 2, 1).into(),
+            ))
+            .await
+            .unwrap();
+        let ping = timeout(Duration::from_secs(1), first_websocket.next())
+            .await
+            .expect("pump should send a keepalive ping")
+            .expect("keepalive ping should be present")
+            .expect("keepalive ping should be valid");
+        let Message::Ping(payload) = ping else {
+            panic!("expected keepalive ping, got {ping:?}");
+        };
+        assert_eq!(payload.len(), 8);
+        ping_seen_tx.send(()).unwrap();
+
+        inspect_close_rx
+            .await
+            .expect("test should release the server after the Pong deadline");
+        let close = timeout(Duration::from_secs(1), first_websocket.next())
+            .await
+            .expect("Pong deadline should close the idle websocket")
+            .expect("Pong deadline should send a close frame")
+            .expect("close frame should be valid");
+        std::assert_matches!(close, Message::Close(_));
+        pong_timeout_closed_tx.send(()).unwrap();
 
         let (second_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
@@ -749,11 +768,11 @@ async fn websocket_pool_should_evict_idle_connection_when_liveness_lapses_despit
             .await
             .unwrap();
         second_websocket.close(None).await.unwrap();
-        first_connection.await.unwrap();
     });
     let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
-        ping_interval: Some(Duration::from_millis(1)),
-        liveness_timeout: Some(Duration::from_millis(20)),
+        ping_interval: Some(Duration::from_millis(10)),
+        ping_timeout: Duration::from_millis(30),
+        liveness_timeout: None,
         maintenance_interval: None,
         ..websocket_pool_config_for_tests(None, None, None)
     }));
@@ -772,12 +791,16 @@ async fn websocket_pool_should_evict_idle_connection_when_liveness_lapses_despit
         )
         .await
         .expect("first websocket response should succeed");
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_millis(25)).await;
-    tokio::task::yield_now().await;
-    // 只加速首条 idle 连接的失活窗口；恢复实时时钟，避免新连接在发送
-    // response.create 前被测试时钟自动推进到下一次 liveness timeout。
-    tokio::time::resume();
+    timeout(Duration::from_secs(1), ping_seen_rx)
+        .await
+        .expect("server should observe the keepalive ping")
+        .expect("server should report the keepalive ping");
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    inspect_close_tx.send(()).unwrap();
+    timeout(Duration::from_secs(1), pong_timeout_closed_rx)
+        .await
+        .expect("server should observe the Pong-timeout close")
+        .expect("server should report the Pong-timeout close");
     let second = backend
         .create_response(
             &request,
@@ -785,7 +808,6 @@ async fn websocket_pool_should_evict_idle_connection_when_liveness_lapses_despit
         )
         .await
         .expect("second websocket response should use a fresh connection");
-    release_first_tx.send(()).unwrap();
     server.await.unwrap();
 
     assert!(first.body.contains("resp_no_pong_first"));
@@ -901,6 +923,7 @@ async fn codex_backend_client_should_keep_idle_pooled_websocket_alive_across_rep
 
         // pump 会在 idle 期间反复发送 keepalive ping；服务端计数并回 pong，
         // 直到下一个业务请求（response.create）到达为止。
+        let mut previous_ping = None;
         loop {
             let message = timeout(Duration::from_secs(1), websocket.next())
                 .await
@@ -909,6 +932,11 @@ async fn codex_backend_client_should_keep_idle_pooled_websocket_alive_across_rep
                 .expect("frame should be valid");
             match message {
                 Message::Ping(payload) => {
+                    assert_eq!(payload.len(), 8);
+                    if let Some(previous) = &previous_ping {
+                        assert_ne!(previous, &payload, "keepalive ping sequence must be unique");
+                    }
+                    previous_ping = Some(payload.clone());
                     ping_count_for_server.fetch_add(1, Ordering::SeqCst);
                     websocket.send(Message::Pong(payload)).await.unwrap();
                 }
@@ -978,7 +1006,66 @@ async fn codex_backend_client_should_keep_idle_pooled_websocket_alive_across_rep
 
     assert!(first.body.contains("resp_pool_background_first"));
     assert!(second.body.contains("resp_pool_background_second"));
-    assert!(ping_count.load(Ordering::SeqCst) >= 1);
+    assert!(ping_count.load(Ordering::SeqCst) >= 2);
+}
+
+#[tokio::test]
+async fn codex_backend_client_should_treat_active_business_frames_as_ping_liveness() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let _request = websocket.next().await.unwrap().unwrap();
+
+        for index in 0..8 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            websocket
+                .send(Message::Text(
+                    json!({
+                        "type": "response.output_text.delta",
+                        "delta": format!("active-{index};")
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+        }
+        websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_active_without_pong", 3, 8).into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+    });
+    let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
+        ping_interval: Some(Duration::from_millis(10)),
+        ping_timeout: Duration::from_millis(60),
+        liveness_timeout: None,
+        ..websocket_pool_config_for_tests(None, None, None)
+    }));
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        crate::support::fingerprint::runtime_test_fingerprint(),
+    )
+    .with_websocket_pool(Arc::clone(&pool));
+    let request = pooled_websocket_request("conversation-active-without-pong");
+
+    let response = backend
+        .create_response(
+            &request,
+            request_context("req_active_without_pong", Some("chatgpt-account")),
+        )
+        .await
+        .expect("active business frames should satisfy the Ping liveness probe");
+    server.await.unwrap();
+
+    assert!(response.body.contains("active-0;"));
+    assert!(response.body.contains("active-7;"));
+    assert!(response.body.contains("resp_active_without_pong"));
 }
 
 #[tokio::test]
