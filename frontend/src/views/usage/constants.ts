@@ -3,7 +3,7 @@ export const usageRecordColumns = [
     key: 'accountEmail',
     label: '账号',
     width: '250px',
-    ellipsis: false,
+    ellipsis: true,
   },
   {
     key: 'model',
