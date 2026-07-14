@@ -1,6 +1,7 @@
-use std::{net::SocketAddr, time::Duration};
+use std::{fs, net::SocketAddr, path::Path, time::Duration};
 
 use axum::Router;
+use codex_proxy_rs::fleet::account::AccountStatus;
 use futures::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::{net::TcpListener, task::JoinHandle, time::timeout};
@@ -13,7 +14,9 @@ use tokio_tungstenite::{
     },
 };
 
-use crate::dispatch::service::accept_async as accept_upstream_websocket;
+use crate::dispatch::service::{
+    accept_async as accept_upstream_websocket, accept_websocket_with_authorization,
+};
 
 struct TestServer {
     address: SocketAddr,
@@ -24,6 +27,57 @@ impl Drop for TestServer {
     fn drop(&mut self) {
         self.task.abort();
     }
+}
+
+#[test]
+fn responses_websocket_replay_policy_should_be_owned_by_history_controller() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let api = fs::read_to_string(manifest.join("src/api/client/responses/websocket.rs")).unwrap();
+    let service = fs::read_to_string(manifest.join("src/dispatch/service.rs")).unwrap();
+    let history = fs::read_to_string(manifest.join("src/dispatch/controllers/history.rs")).unwrap();
+    let protocol =
+        fs::read_to_string(manifest.join("src/upstream/openai/protocol/responses.rs")).unwrap();
+
+    assert!(api.contains(".prepare_connection_replay("));
+    assert!(api.contains(".commit_connection_replay("));
+    for forbidden in [
+        "ConnectionReplayState",
+        "PendingReplayUpdate",
+        "sanitize_replay_items",
+        ".previous_response_id()",
+        "dispatch::controllers",
+    ] {
+        assert!(
+            !api.contains(forbidden),
+            "Responses WebSocket API must not own replay policy {forbidden}"
+        );
+    }
+    for owned in [
+        "enum ConnectionReplayUpdate",
+        "ConnectionReplayUpdate::Replace",
+        "ConnectionReplayUpdate::Append",
+        "ConnectionReplayUpdate::Unavailable",
+        "sanitize_replay_items",
+        "snapshot.last_response_id.as_deref() == Some(previous_response_id)",
+    ] {
+        assert!(
+            history.contains(owned),
+            "HistoryController owner must contain {owned}"
+        );
+    }
+    for boundary in [
+        "pub(crate) struct ConnectionReplaySnapshot",
+        "pub(crate) struct ConnectionReplayPlan",
+        "pub(crate) struct ConnectionTranscriptFacts",
+        "fn prepare_connection_replay(",
+        "fn commit_connection_replay(",
+    ] {
+        assert!(
+            service.contains(boundary),
+            "ResponseDispatchService must expose narrow replay boundary {boundary}"
+        );
+    }
+    assert!(!protocol.contains("sanitize_replay_items"));
 }
 
 #[tokio::test]
@@ -59,6 +113,56 @@ async fn responses_websocket_should_return_official_error_frame_when_accounts_ar
     assert_eq!(
         events.last().unwrap()["error"]["code"],
         "no_available_accounts"
+    );
+}
+
+#[tokio::test]
+async fn responses_websocket_should_preserve_upstream_client_failure() {
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_base_url = format!("http://{}", upstream_listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        let (stream, _) = upstream_listener.accept().await.unwrap();
+        let mut websocket = accept_upstream_websocket(stream).await.unwrap();
+        let _request = receive_upstream_request(&mut websocket).await;
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.failed",
+                    "response": {
+                        "id": "resp_server_overloaded",
+                        "status": "failed",
+                        "error": {
+                            "code": "server_overloaded",
+                            "message": "upstream is temporarily overloaded",
+                        },
+                    },
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+    });
+    let (app, api_key, _dir) =
+        crate::dispatch::service::test_app_with_account(upstream_base_url).await;
+    let server = spawn_app(app).await;
+    let mut websocket = connect_responses_websocket(server.address, &api_key).await;
+
+    websocket
+        .send(Message::Text(response_create_payload("overload").into()))
+        .await
+        .unwrap();
+    let events = receive_response(&mut websocket).await;
+    upstream.await.unwrap();
+    let failure = events.last().unwrap();
+
+    assert_eq!(failure["type"], "error");
+    assert_eq!(failure["status"], 503);
+    assert_eq!(failure["error"]["code"], "server_overloaded");
+    assert_eq!(
+        failure["error"]["message"],
+        "upstream is temporarily overloaded"
     );
 }
 
@@ -119,6 +223,91 @@ async fn responses_websocket_should_forward_multiple_response_create_requests_on
     assert_eq!(upstream_requests.len(), 2);
     assert_eq!(upstream_requests[0]["type"], "response.create");
     assert_eq!(upstream_requests[1]["type"], "response.create");
+}
+
+#[tokio::test]
+async fn responses_websocket_cyber_terminal_should_change_the_immediate_next_request() {
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_base_url = format!("http://{}", upstream_listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        let (primary_stream, _) = upstream_listener.accept().await.unwrap();
+        let mut primary =
+            accept_websocket_with_authorization(primary_stream, "Bearer access-primary").await;
+        let primary_request = receive_upstream_request(&mut primary).await;
+        for event in [
+            json!({
+                "type": "response.created",
+                "response": {"id": "resp_downstream_ws_cyber", "status": "in_progress"},
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "delta": "partial downstream WebSocket output",
+            }),
+            json!({
+                "type": "response.failed",
+                "response": {
+                    "id": "resp_downstream_ws_cyber",
+                    "status": "failed",
+                    "error": {
+                        "code": "cyber_policy",
+                        "message": "This request has been flagged for possible cybersecurity risk.",
+                    },
+                },
+            }),
+        ] {
+            primary
+                .send(Message::Text(event.to_string().into()))
+                .await
+                .unwrap();
+        }
+        primary.close(None).await.unwrap();
+
+        let (secondary_stream, _) = upstream_listener.accept().await.unwrap();
+        let mut secondary =
+            accept_websocket_with_authorization(secondary_stream, "Bearer access-secondary").await;
+        let secondary_request = receive_upstream_request(&mut secondary).await;
+        send_upstream_response(&mut secondary, "resp_downstream_ws_rotated", "rotated").await;
+        (primary_request, secondary_request)
+    });
+    let (app, state, api_key, _pool, _dir) =
+        crate::dispatch::service::test_app_with_two_accounts_and_state(upstream_base_url).await;
+    assert!(
+        state
+            .services
+            .account_pool
+            .set_status("acct_secondary", AccountStatus::Disabled)
+            .await
+    );
+    let server = spawn_app(app).await;
+    let mut websocket = connect_responses_websocket(server.address, &api_key).await;
+
+    websocket
+        .send(Message::Text(response_create_payload("first").into()))
+        .await
+        .unwrap();
+    let first = receive_response(&mut websocket).await;
+    assert_eq!(first.last().unwrap()["type"], "response.failed");
+
+    assert!(
+        state
+            .services
+            .account_pool
+            .set_status("acct_secondary", AccountStatus::Active)
+            .await
+    );
+    websocket
+        .send(Message::Text(response_create_payload("second").into()))
+        .await
+        .unwrap();
+    let second = receive_response(&mut websocket).await;
+    let (primary_request, secondary_request) = upstream.await.unwrap();
+
+    assert_eq!(
+        second.last().unwrap()["response"]["id"],
+        "resp_downstream_ws_rotated"
+    );
+    assert_eq!(primary_request["input"][0]["content"], "first");
+    assert_eq!(secondary_request["input"][0]["content"], "second");
 }
 
 #[tokio::test]
@@ -195,6 +384,97 @@ async fn responses_websocket_should_replay_connection_history_after_previous_res
     assert!(!replayed_json.contains("client_input_id"));
     assert!(!replayed_json.contains("client_secret"));
     assert!(!replayed_json.contains("assistant_output_resp_first"));
+}
+
+#[tokio::test]
+async fn responses_websocket_history_retry_should_not_fallback_when_owner_account_becomes_unavailable()
+ {
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_base_url = format!("http://{}", upstream_listener.local_addr().unwrap());
+    let (continued_tx, continued_rx) = tokio::sync::oneshot::channel();
+    let (release_failure_tx, release_failure_rx) = tokio::sync::oneshot::channel();
+    let upstream = tokio::spawn(async move {
+        let (owner_stream, _) = upstream_listener.accept().await.unwrap();
+        let mut owner = accept_upstream_websocket(owner_stream).await.unwrap();
+        let initial = receive_upstream_request(&mut owner).await;
+        send_upstream_response(&mut owner, "resp_owner", "first answer").await;
+
+        let continued = receive_upstream_request(&mut owner).await;
+        continued_tx.send(()).unwrap();
+        release_failure_rx.await.unwrap();
+        owner
+            .send(Message::Text(
+                json!({
+                    "type": "response.failed",
+                    "response": {
+                        "id": "resp_owner_missing",
+                        "status": "failed",
+                        "error": {
+                            "code": "previous_response_not_found",
+                            "message": "Previous response with id resp_owner was not found",
+                        },
+                    },
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        owner.close(None).await.unwrap();
+
+        let fallback = match timeout(Duration::from_millis(700), upstream_listener.accept()).await {
+            Ok(Ok((fallback_stream, _))) => {
+                let mut fallback = accept_upstream_websocket(fallback_stream).await.unwrap();
+                let request = receive_upstream_request(&mut fallback).await;
+                send_upstream_response(&mut fallback, "resp_wrong_fallback", "wrong account").await;
+                Some(request)
+            }
+            Ok(Err(error)) => panic!("fallback listener failed: {error}"),
+            Err(_) => None,
+        };
+        (initial, continued, fallback)
+    });
+    let (app, state, api_key, _pool, _dir) =
+        crate::dispatch::service::test_app_with_two_accounts_and_state(upstream_base_url).await;
+    let server = spawn_app(app).await;
+    let mut websocket = connect_responses_websocket(server.address, &api_key).await;
+
+    websocket
+        .send(Message::Text(response_create_payload("first").into()))
+        .await
+        .unwrap();
+    let first = receive_response(&mut websocket).await;
+    let mut continued_payload: Value =
+        serde_json::from_str(&response_create_payload("second")).unwrap();
+    continued_payload["previous_response_id"] = json!("resp_owner");
+    websocket
+        .send(Message::Text(continued_payload.to_string().into()))
+        .await
+        .unwrap();
+    continued_rx.await.unwrap();
+    assert!(
+        state
+            .services
+            .account_pool
+            .set_status("acct_primary", AccountStatus::Expired)
+            .await
+    );
+    release_failure_tx.send(()).unwrap();
+    let second = receive_response(&mut websocket).await;
+    let (initial, continued, fallback) = upstream.await.unwrap();
+
+    assert_eq!(first.last().unwrap()["response"]["id"], "resp_owner");
+    assert_eq!(initial["input"][0]["content"], "first");
+    assert_eq!(continued["previous_response_id"], "resp_owner");
+    assert_eq!(second.last().unwrap()["type"], "error");
+    assert_eq!(
+        second.last().unwrap()["error"]["code"],
+        "previous_response_unavailable"
+    );
+    assert!(
+        fallback.is_none(),
+        "same-account retry must not fall back to another candidate: {fallback:?}"
+    );
 }
 
 #[tokio::test]

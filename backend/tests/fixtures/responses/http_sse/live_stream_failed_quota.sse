@@ -1,0 +1,2 @@
+event: response.failed
+data: {"response":{"id":"resp_live_quota_failed","object":"response","status":"failed","error":{"code":"quota_exceeded","message":"live quota exhausted"}}}

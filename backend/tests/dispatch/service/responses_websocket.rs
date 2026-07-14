@@ -242,46 +242,41 @@ async fn responses_websocket_cyber_policy_should_change_account_on_next_request(
 }
 
 #[tokio::test]
-async fn responses_websocket_cyber_policy_should_stop_after_three_accounts() {
+async fn responses_websocket_cyber_policy_should_continue_after_three_accounts() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
-    let (three_attempts_tx, three_attempts_rx) = oneshot::channel();
-    let (verify_no_fourth_tx, verify_no_fourth_rx) = oneshot::channel();
     let upstream = tokio::spawn(async move {
         let mut payloads = Vec::new();
-        for (index, authorization) in ["Bearer access-0", "Bearer access-1", "Bearer access-2"]
-            .into_iter()
-            .enumerate()
+        for (index, authorization) in [
+            "Bearer access-0",
+            "Bearer access-1",
+            "Bearer access-2",
+            "Bearer access-3",
+        ]
+        .into_iter()
+        .enumerate()
         {
             payloads.push(
                 accept_cyber_policy_websocket_response_with_authorization(
                     &listener,
                     authorization,
-                    &format!("resp_cyber_cap_{index}"),
+                    &format!("resp_cyber_rotation_{index}"),
                 )
                 .await,
             );
         }
-        three_attempts_tx.send(()).unwrap();
-        verify_no_fourth_rx.await.unwrap();
-        assert!(
-            timeout(StdDuration::from_millis(100), listener.accept())
-                .await
-                .is_err(),
-            "a fourth upstream account must not be contacted"
-        );
         payloads
     });
     let (app, api_key, _dir) = test_app_with_ranked_accounts(base_url, 4).await;
     let request_body = json!({
         "model": "gpt-5.5",
-        "prompt_cache_key": "conv_cyber_three_account_cap",
+        "prompt_cache_key": "conv_cyber_unbounded_rotation",
         "input": [{"role": "user", "content": "Security assessment"}],
         "stream": true,
         "use_websocket": true
     });
 
-    for _ in 0..3 {
+    for _ in 0..4 {
         let response = app
             .clone()
             .oneshot(responses_json_request(&api_key, &request_body))
@@ -290,21 +285,265 @@ async fn responses_websocket_cyber_policy_should_stop_after_three_accounts() {
         assert_eq!(response.status(), StatusCode::OK);
         assert!(response_text(response).await.contains("cyber_policy"));
     }
-    three_attempts_rx.await.unwrap();
+    assert_eq!(upstream.await.unwrap().len(), 4);
+}
 
-    let fourth_response = app
+#[tokio::test]
+async fn responses_websocket_stale_success_must_not_clear_newer_cyber_failure() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let (stale_accepted_tx, stale_accepted_rx) = oneshot::channel();
+    let (release_stale_tx, release_stale_rx) = oneshot::channel();
+    let (probe_started_tx, probe_started_rx) = oneshot::channel();
+    let upstream = tokio::spawn(async move {
+        accept_cyber_policy_websocket_response_with_authorization(
+            &listener,
+            "Bearer access-0",
+            "resp_cyber_cas_initial",
+        )
+        .await;
+
+        let (stale_stream, _) = listener.accept().await.unwrap();
+        let mut stale_websocket =
+            accept_websocket_with_authorization(stale_stream, "Bearer access-1").await;
+        let stale_payload = stale_websocket.next().await.unwrap().unwrap();
+        let stale_payload = serde_json::from_str::<Value>(&stale_payload.into_text().unwrap())
+            .expect("stale request payload should be json");
+        stale_accepted_tx.send(()).unwrap();
+
+        accept_cyber_policy_websocket_response_with_authorization(
+            &listener,
+            "Bearer access-1",
+            "resp_cyber_cas_newer",
+        )
+        .await;
+
+        release_stale_rx.await.unwrap();
+        stale_websocket
+            .send(Message::Text(
+                websocket_completed_response("resp_cyber_cas_stale_success", 3, 1).into(),
+            ))
+            .await
+            .unwrap();
+        stale_websocket.close(None).await.unwrap();
+
+        probe_started_rx.await.unwrap();
+        let unexpected_upstream =
+            match timeout(StdDuration::from_millis(500), listener.accept()).await {
+                Ok(Ok((stream, _))) => {
+                    let mut websocket =
+                        accept_websocket_with_authorization(stream, "Bearer access-0").await;
+                    let _ = send_websocket_response_and_capture_payload(
+                        &mut websocket,
+                        websocket_completed_response("resp_cyber_cas_was_cleared", 3, 1),
+                    )
+                    .await;
+                    websocket.close(None).await.unwrap();
+                    true
+                }
+                Ok(Err(error)) => panic!("accept probe connection: {error}"),
+                Err(_) => false,
+            };
+        (stale_payload, unexpected_upstream)
+    });
+    let (app, api_key, _dir) = test_app_with_ranked_accounts(base_url, 2).await;
+    let request_body = json!({
+        "model": "gpt-5.5",
+        "prompt_cache_key": "conv_cyber_revision_cas",
+        "input": [{"role": "user", "content": "Security assessment"}],
+        "stream": true,
+        "use_websocket": true
+    });
+
+    let initial = app
+        .clone()
         .oneshot(responses_json_request(&api_key, &request_body))
         .await
         .unwrap();
-    assert_eq!(fourth_response.status(), StatusCode::BAD_REQUEST);
-    let fourth_body = response_json(fourth_response).await;
-    assert_eq!(fourth_body["error"]["code"], "cyber_policy");
-    assert_eq!(
-        fourth_body["error"]["message"],
-        "This request has been flagged for possible cybersecurity risk."
+    assert!(response_text(initial).await.contains("cyber_policy"));
+
+    let stale_app = app.clone();
+    let stale_api_key = api_key.clone();
+    let stale_request_body = request_body.clone();
+    let stale_request = tokio::spawn(async move {
+        stale_app
+            .oneshot(responses_json_request(&stale_api_key, &stale_request_body))
+            .await
+            .unwrap()
+    });
+    stale_accepted_rx.await.unwrap();
+
+    let newer_failure = app
+        .clone()
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    assert!(response_text(newer_failure).await.contains("cyber_policy"));
+    release_stale_tx.send(()).unwrap();
+
+    let stale_response = stale_request.await.unwrap();
+    assert!(
+        response_text(stale_response)
+            .await
+            .contains("resp_cyber_cas_stale_success")
     );
-    verify_no_fourth_tx.send(()).unwrap();
-    assert_eq!(upstream.await.unwrap().len(), 3);
+
+    probe_started_tx.send(()).unwrap();
+    let probe = app
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    let probe_status = probe.status();
+    let probe_body = response_text(probe).await;
+    let (stale_payload, unexpected_upstream) = upstream.await.unwrap();
+    assert_eq!(stale_payload["type"], "response.create");
+    assert!(
+        !unexpected_upstream,
+        "a stale success cleared the newer cyber failure revision: {probe_body}"
+    );
+    assert_eq!(probe_status, StatusCode::OK);
+    assert!(probe_body.contains("no_available_accounts"));
+}
+
+#[tokio::test]
+async fn responses_websocket_recreated_cyber_state_must_get_a_new_revision() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let (stale_accepted_tx, stale_accepted_rx) = oneshot::channel();
+    let (release_stale_tx, release_stale_rx) = oneshot::channel();
+    let upstream = tokio::spawn(async move {
+        accept_cyber_policy_websocket_response_with_authorization(
+            &listener,
+            "Bearer access-0",
+            "resp_cyber_aba_initial",
+        )
+        .await;
+
+        let (stale_stream, _) = listener.accept().await.unwrap();
+        let mut stale_websocket =
+            accept_websocket_with_authorization(stale_stream, "Bearer access-1").await;
+        let stale_payload = stale_websocket.next().await.unwrap().unwrap();
+        let stale_payload = serde_json::from_str::<Value>(&stale_payload.into_text().unwrap())
+            .expect("stale request payload should be json");
+        stale_accepted_tx.send(()).unwrap();
+
+        accept_websocket_response_with_authorization_and_message(
+            &listener,
+            "Bearer access-1",
+            websocket_completed_response("resp_cyber_aba_clear", 3, 1),
+        )
+        .await;
+        accept_cyber_policy_websocket_response_with_authorization(
+            &listener,
+            "Bearer access-0",
+            "resp_cyber_aba_recreated",
+        )
+        .await;
+
+        release_stale_rx.await.unwrap();
+        stale_websocket
+            .send(Message::Text(
+                websocket_completed_response("resp_cyber_aba_stale_success", 3, 1).into(),
+            ))
+            .await
+            .unwrap();
+        stale_websocket.close(None).await.unwrap();
+
+        let probe_payload = accept_websocket_response_with_authorization_and_message(
+            &listener,
+            "Bearer access-1",
+            websocket_completed_response("resp_cyber_aba_probe", 3, 1),
+        )
+        .await;
+        (stale_payload, probe_payload)
+    });
+    let (app, state, api_key, _dir) =
+        test_app_with_ranked_accounts_and_state_config(base_url, 2, |config| {
+            config.ws_pool.enabled = false;
+        })
+        .await;
+    let request_body = json!({
+        "model": "gpt-5.5",
+        "prompt_cache_key": "conv_cyber_revision_aba",
+        "input": [{"role": "user", "content": "Security assessment"}],
+        "stream": true,
+        "use_websocket": true
+    });
+
+    let initial = app
+        .clone()
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    assert!(response_text(initial).await.contains("cyber_policy"));
+
+    let stale_app = app.clone();
+    let stale_api_key = api_key.clone();
+    let stale_request_body = request_body.clone();
+    let stale_request = tokio::spawn(async move {
+        stale_app
+            .oneshot(responses_json_request(&stale_api_key, &stale_request_body))
+            .await
+            .unwrap()
+    });
+    stale_accepted_rx.await.unwrap();
+
+    let clearing_success = app
+        .clone()
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    assert!(
+        response_text(clearing_success)
+            .await
+            .contains("resp_cyber_aba_clear")
+    );
+    assert!(
+        state
+            .services
+            .session_affinity
+            .forget("resp_cyber_aba_clear")
+            .await
+    );
+
+    let recreated_failure = app
+        .clone()
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    assert!(
+        response_text(recreated_failure)
+            .await
+            .contains("cyber_policy")
+    );
+    release_stale_tx.send(()).unwrap();
+
+    let stale_response = stale_request.await.unwrap();
+    assert!(
+        response_text(stale_response)
+            .await
+            .contains("resp_cyber_aba_stale_success")
+    );
+    assert!(
+        state
+            .services
+            .session_affinity
+            .forget("resp_cyber_aba_stale_success")
+            .await
+    );
+
+    let probe = app
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    let probe_body = response_text(probe).await;
+    assert!(
+        probe_body.contains("resp_cyber_aba_probe"),
+        "unexpected ABA probe response: {probe_body}"
+    );
+    let (stale_payload, probe_payload) = upstream.await.unwrap();
+    assert_eq!(stale_payload["type"], "response.create");
+    assert_eq!(probe_payload["type"], "response.create");
 }
 
 #[tokio::test]
@@ -474,6 +713,7 @@ async fn responses_websocket_stream_first_error_429_should_retry_fallback_accoun
         (first_payload, second_payload)
     });
     let (app, api_key, pool, _dir) = test_app_with_two_accounts(base_url).await;
+    let request_started_at = Utc::now();
 
     let response = app
         .oneshot(responses_json_request(
@@ -522,7 +762,11 @@ async fn responses_websocket_stream_first_error_429_should_retry_fallback_accoun
     assert_eq!(first_payload["type"], "response.create");
     assert_eq!(second_payload["type"], "response.create");
     assert!(primary_quota_state.0);
-    assert!(primary_quota_state.1.is_some());
+    let cooldown_until = primary_quota_state
+        .1
+        .expect("explicit retry delay should persist a quota cooldown");
+    assert!(cooldown_until >= request_started_at + chrono::Duration::seconds(70));
+    assert!(cooldown_until <= Utc::now() + chrono::Duration::seconds(80));
     assert_eq!(primary_usage.0, 1);
     assert_eq!(secondary_usage.0, 1);
 }
@@ -1330,6 +1574,130 @@ async fn responses_websocket_without_history_should_return_rate_limit_stream_err
     );
     assert_eq!(primary_usage.0, 1);
     assert_eq!(secondary_usage.0, 1);
+}
+
+#[tokio::test]
+async fn responses_websocket_response_failed_server_overloaded_should_match_http_external_error() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket =
+            accept_websocket_with_authorization(stream, "Bearer access-secret").await;
+        let _payload = send_websocket_response_and_capture_payload(
+            &mut websocket,
+            json!({
+                "type": "response.failed",
+                "response": {
+                    "id": "resp_ws_server_overloaded",
+                    "status": "failed",
+                    "error": {
+                        "type": "server_error",
+                        "code": "server_overloaded",
+                        "message": "upstream is temporarily overloaded"
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .await;
+        websocket.close(None).await.unwrap();
+    });
+    let (app, api_key, _pool, _dir) = test_app_with_account_and_pool(base_url).await;
+
+    let response = app
+        .oneshot(responses_json_request(
+            &api_key,
+            &json!({
+                "model": "gpt-5.5",
+                "input": [],
+                "stream": false,
+                "use_websocket": true
+            }),
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    upstream.await.unwrap();
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error"]["code"], "server_overloaded");
+    assert_eq!(
+        body["error"]["message"],
+        "upstream is temporarily overloaded"
+    );
+}
+
+#[tokio::test]
+async fn responses_websocket_response_failed_rate_limit_should_preserve_cooldown_and_fallback() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        let (first_stream, _) = listener.accept().await.unwrap();
+        let mut first_websocket =
+            accept_websocket_with_authorization(first_stream, "Bearer access-primary").await;
+        let _first_payload = send_websocket_response_and_capture_payload(
+            &mut first_websocket,
+            json!({
+                "type": "response.failed",
+                "response": {
+                    "id": "resp_ws_rate_limited",
+                    "status": "failed",
+                    "error": {
+                        "type": "rate_limit_error",
+                        "code": "rate_limit_exceeded",
+                        "message": "Rate limit reached. Please try again in 11.054s."
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .await;
+        first_websocket.close(None).await.unwrap();
+
+        let (second_stream, _) = listener.accept().await.unwrap();
+        let mut second_websocket =
+            accept_websocket_with_authorization(second_stream, "Bearer access-secondary").await;
+        send_websocket_response_and_capture_payload(
+            &mut second_websocket,
+            websocket_completed_response("resp_after_ws_rate_limit", 3, 1),
+        )
+        .await;
+        second_websocket.close(None).await.unwrap();
+    });
+    let (app, api_key, pool, _dir) = test_app_with_two_accounts(base_url).await;
+    let request_started_at = Utc::now();
+
+    let response = app
+        .oneshot(responses_json_request(
+            &api_key,
+            &json!({
+                "model": "gpt-5.5",
+                "input": [],
+                "stream": false,
+                "use_websocket": true
+            }),
+        ))
+        .await
+        .unwrap();
+    let body = response_json(response).await;
+    upstream.await.unwrap();
+    let primary_quota_state: (bool, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
+        "select quota_limit_reached, quota_cooldown_until from accounts where id = $1",
+    )
+    .bind("acct_primary")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(body["id"], "resp_after_ws_rate_limit");
+    assert!(primary_quota_state.0);
+    let cooldown_until = primary_quota_state
+        .1
+        .expect("rate-limit failure should persist a quota cooldown");
+    assert!(cooldown_until >= request_started_at + chrono::Duration::seconds(8));
+    assert!(cooldown_until <= Utc::now() + chrono::Duration::seconds(20));
 }
 
 #[tokio::test]

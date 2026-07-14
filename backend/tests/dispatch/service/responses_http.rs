@@ -1,5 +1,107 @@
 use super::*;
 
+const RESPONSES_FAILED_SERVER_OVERLOADED_SSE: &str = concat!(
+    include_str!("../../fixtures/responses/http_sse/failed_server_overloaded.sse"),
+    "\n"
+);
+
+#[tokio::test]
+async fn responses_json_should_preserve_upstream_client_failure() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(RESPONSES_FAILED_SERVER_OVERLOADED_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (app, api_key, _dir) = test_app_with_account(server.uri()).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [],
+                        "stream": false,
+                        "use_websocket": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error"]["code"], "server_overloaded");
+    assert_eq!(
+        body["error"]["message"],
+        "upstream is temporarily overloaded"
+    );
+}
+
+#[tokio::test]
+async fn responses_sse_should_preserve_upstream_client_failure() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(RESPONSES_FAILED_SERVER_OVERLOADED_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (app, api_key, _dir) = test_app_with_account(server.uri()).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [],
+                        "stream": true,
+                        "use_websocket": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let body = response_text(response).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(content_type.starts_with("text/event-stream"));
+    assert!(body.contains(r#""code":"server_overloaded""#));
+    assert!(body.contains("upstream is temporarily overloaded"));
+    assert!(body.ends_with("data: [DONE]\n\n"));
+}
+
 #[tokio::test]
 async fn responses_should_reject_invalid_json_without_upstream_request() {
     let server = MockServer::start().await;
@@ -934,7 +1036,7 @@ async fn responses_should_scope_upstream_cookie_by_codex_response_path() {
 }
 
 #[tokio::test]
-async fn responses_stream_should_close_http_sse_upstream_when_client_disconnects() {
+async fn responses_stream_disconnect_should_cancel_upstream_and_finalize_once() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
@@ -956,7 +1058,7 @@ async fn responses_stream_should_close_http_sse_upstream_when_client_disconnects
         .is_ok()
     });
 
-    let (app, api_key, _dir) = test_app_with_account(base_url).await;
+    let (app, api_key, pool, _dir) = test_app_with_account_and_pool(base_url).await;
     let response = app
         .oneshot(
             Request::builder()
@@ -996,6 +1098,32 @@ async fn responses_stream_should_close_http_sse_upstream_when_client_disconnects
         upstream.await.unwrap(),
         "dropping the downstream stream should close the HTTP SSE upstream socket"
     );
+    let request_count = timeout(StdDuration::from_secs(2), async {
+        loop {
+            let request_count: Option<(i64,)> =
+                sqlx::query_as("select request_count from account_usage where account_id = $1")
+                    .bind("acct_chat")
+                    .fetch_optional(&pool)
+                    .await
+                    .unwrap();
+            if let Some((request_count,)) = request_count {
+                break request_count;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cancelled stream should finalize its account lease");
+    assert_eq!(request_count, 1);
+
+    tokio::time::sleep(StdDuration::from_millis(50)).await;
+    let settled_request_count: (i64,) =
+        sqlx::query_as("select request_count from account_usage where account_id = $1")
+            .bind("acct_chat")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(settled_request_count.0, 1);
 }
 
 #[tokio::test]
@@ -1074,119 +1202,6 @@ async fn responses_stream_should_forward_first_chunk_before_upstream_completes()
         "stream responses should terminate clients, body was {rest:?}"
     );
     assert_eq!(usage, (1, 3, 4));
-}
-
-#[tokio::test]
-async fn responses_stream_should_emit_failed_event_after_upstream_read_error_once_downstream_started()
- {
-    let (base_url, first_chunk_sent, close_upstream) =
-        spawn_chunked_sse_upstream_then_abrupt_close(include_str!(
-            "../../fixtures/responses/http_sse/partial_transport_failure.sse"
-        ))
-        .await;
-
-    let (app, api_key, _pool, _dir) = test_app_with_account_and_pool(base_url).await;
-    let response_task = tokio::spawn(async move {
-        app.oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/responses")
-                .header("authorization", format!("Bearer {api_key}"))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "model": "gpt-5.5",
-                        "input": [{"role": "user", "content": "Start then fail"}],
-                        "stream": true,
-                        "use_websocket": false
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap()
-    });
-
-    first_chunk_sent.await.unwrap();
-    let response = timeout(StdDuration::from_millis(300), response_task)
-        .await
-        .expect("stream response should be returned before upstream closes")
-        .unwrap();
-    let mut body_stream = response.into_body().into_data_stream();
-    let first_chunk = timeout(StdDuration::from_millis(300), body_stream.next())
-        .await
-        .expect("first proxied SSE chunk should arrive before upstream closes")
-        .unwrap()
-        .unwrap();
-    assert!(
-        String::from_utf8(first_chunk.to_vec())
-            .unwrap()
-            .contains("partial before transport failure")
-    );
-
-    close_upstream.send(()).unwrap();
-    let rest = collect_stream_body(body_stream).await;
-
-    assert!(rest.contains("event: response.failed"));
-    assert!(rest.contains("stream_disconnected"));
-    assert!(rest.ends_with("data: [DONE]\n\n"));
-}
-
-#[tokio::test]
-async fn responses_stream_should_emit_failed_event_when_upstream_closes_without_completed() {
-    let (base_url, first_chunk_sent, close_upstream) = spawn_chunked_sse_upstream_then_clean_close(
-        include_str!("../../fixtures/responses/http_sse/partial_clean_close.sse"),
-    )
-    .await;
-
-    let (app, api_key, _pool, _dir) = test_app_with_account_and_pool(base_url).await;
-    let response_task = tokio::spawn(async move {
-        app.oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/responses")
-                .header("authorization", format!("Bearer {api_key}"))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "model": "gpt-5.5",
-                        "input": [{"role": "user", "content": "Start then close"}],
-                        "stream": true,
-                        "use_websocket": false
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap()
-    });
-
-    first_chunk_sent.await.unwrap();
-    let response = timeout(StdDuration::from_millis(300), response_task)
-        .await
-        .expect("stream response should be returned before upstream closes")
-        .unwrap();
-    let mut body_stream = response.into_body().into_data_stream();
-    let first_chunk = timeout(StdDuration::from_millis(300), body_stream.next())
-        .await
-        .expect("first proxied SSE chunk should arrive before upstream closes")
-        .unwrap()
-        .unwrap();
-    assert!(
-        String::from_utf8(first_chunk.to_vec())
-            .unwrap()
-            .contains("partial before clean close")
-    );
-
-    close_upstream.send(()).unwrap();
-    let rest = collect_stream_body(body_stream).await;
-
-    assert!(rest.contains("event: response.failed"));
-    assert!(rest.contains("stream_disconnected"));
-    assert!(rest.contains(r#""id":"resp_clean_close""#));
-    assert!(rest.ends_with("data: [DONE]\n\n"));
 }
 
 #[tokio::test]

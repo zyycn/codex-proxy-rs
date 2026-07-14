@@ -127,20 +127,26 @@ pub fn extract_sse_usage(body: &str) -> Result<Option<TokenUsage>, SseError> {
 /// `try again in 11.054s` / `try again in 28ms` 文本。
 pub fn retry_after_seconds_from_body(body: &str) -> Option<u64> {
     let value = serde_json::from_str::<Value>(body).ok()?;
+    retry_after_seconds_from_value(&value)
+}
+
+/// 从已解析的上游错误事件中提取重试秒数，不做业务错误分类。
+pub(crate) fn retry_after_seconds_from_value(value: &Value) -> Option<u64> {
     let error = value
         .pointer("/response/error")
         .or_else(|| value.get("error"))
-        .unwrap_or(&value);
-    if let Some(seconds) = error
-        .get("resets_in_seconds")
-        .and_then(Value::as_u64)
-        .filter(|seconds| *seconds > 0)
-    {
-        return Some(seconds);
-    }
-    retry_after_seconds_from_resets_at(error)
+        .unwrap_or(value);
+    retry_after_seconds_field(error)
+        .or_else(|| {
+            error
+                .get("resets_in_seconds")
+                .and_then(Value::as_u64)
+                .filter(|seconds| *seconds > 0)
+        })
+        .or_else(|| retry_after_seconds_from_resets_at(error))
+        .or_else(|| retry_after_seconds_field(value))
+        .or_else(|| retry_after_seconds_header(value))
         .or_else(|| retry_after_seconds_from_rate_limit_message(error))
-        .or_else(|| retry_after_seconds_field(&value))
 }
 
 fn retry_after_seconds_field(value: &Value) -> Option<u64> {
@@ -153,6 +159,31 @@ fn retry_after_seconds_field(value: &Value) -> Option<u64> {
                 .or_else(|| value.as_str().and_then(|value| value.parse::<u64>().ok()))
         })
         .filter(|seconds| *seconds > 0)
+}
+
+fn retry_after_seconds_header(value: &Value) -> Option<u64> {
+    value
+        .get("headers")
+        .and_then(Value::as_object)
+        .and_then(|headers| {
+            headers.iter().find_map(|(name, value)| {
+                if name.eq_ignore_ascii_case("retry-after") {
+                    json_value_as_positive_u64(value)
+                } else {
+                    None
+                }
+            })
+        })
+}
+
+fn json_value_as_positive_u64(value: &Value) -> Option<u64> {
+    let seconds = match value {
+        Value::Number(value) => value.as_u64()?,
+        Value::String(value) => value.trim().parse::<u64>().ok()?,
+        Value::Array(values) => values.first().and_then(json_value_as_positive_u64)?,
+        Value::Null | Value::Bool(_) | Value::Object(_) => return None,
+    };
+    (seconds > 0).then_some(seconds)
 }
 
 /// 标准化的单个限流窗口。

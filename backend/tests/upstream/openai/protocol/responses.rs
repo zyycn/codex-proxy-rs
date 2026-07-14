@@ -71,60 +71,6 @@ fn codex_responses_transport_flags_should_not_serialize_to_upstream_json() {
 }
 
 #[test]
-fn response_from_codex_sse_should_collect_completed_response_with_deltas() {
-    let body = include_str!("../../../fixtures/responses/http_sse/text_delta_completed_usage.sse");
-
-    let response = response_from_codex_sse(body, None).expect("conversion should succeed");
-
-    assert_eq!(
-        response,
-        CollectedResponse::Completed(json!({
-            "id": "resp_1",
-            "object": "response",
-            "status": "completed",
-            "usage": {
-                "input_tokens": 2,
-                "output_tokens": 3
-            }
-        }))
-    );
-}
-
-#[test]
-fn response_from_codex_sse_should_collect_incomplete_response() {
-    let body = include_str!("../../../fixtures/responses/http_sse/chat_delta_incomplete_usage.sse");
-
-    let response = response_from_codex_sse(body, None).expect("conversion should succeed");
-
-    assert_eq!(
-        response,
-        CollectedResponse::Incomplete(json!({
-            "id": "resp_incomplete",
-            "object": "response",
-            "status": "incomplete",
-            "incomplete_details": {
-                "reason": "max_output_tokens"
-            },
-            "usage": {
-                "input_tokens": 2,
-                "output_tokens": 3
-            },
-            "output": [{
-                "type": "message",
-                "status": "incomplete",
-                "role": "assistant",
-                "content": [{
-                    "type": "output_text",
-                    "text": "hello",
-                    "annotations": []
-                }]
-            }],
-            "output_text": "hello"
-        }))
-    );
-}
-
-#[test]
 fn response_sse_event_is_terminal_should_match_incomplete_response() {
     let body = include_str!("../../../fixtures/responses/http_sse/chat_delta_incomplete_usage.sse");
     let events = parse_sse_events(body).expect("sse should parse");

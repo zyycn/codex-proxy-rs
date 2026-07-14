@@ -1,0 +1,8 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_http_output_then_missing","status":"in_progress"}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","response_id":"resp_http_output_then_missing","output_index":0,"content_index":0,"delta":"visible HTTP SSE output"}
+
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_http_output_then_missing","status":"failed","error":{"code":"previous_response_not_found","message":"Previous response was not found"}}}

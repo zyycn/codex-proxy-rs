@@ -95,7 +95,7 @@ async fn responses_should_classify_sse_cyber_policy_failure_as_bad_request() {
 }
 
 #[tokio::test]
-async fn responses_http_cyber_policy_should_keep_account_active_and_change_next_request() {
+async fn responses_http_cyber_policy_should_keep_account_active_and_retry_next_account() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -123,9 +123,59 @@ async fn responses_http_cyber_policy_should_keep_account_active_and_change_next_
     let (app, api_key, pool, _dir) = test_app_with_two_accounts(server.uri()).await;
     let request_body = json!({
         "model": "gpt-5.5",
-        "prompt_cache_key": "conv_http_cyber_next_request",
+        "prompt_cache_key": "conv_http_cyber_retry_next_account",
         "input": [{"role": "user", "content": "Security assessment"}],
         "stream": false,
+        "use_websocket": false
+    });
+
+    let response = app
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response_json(response).await["id"], "resp_after_402");
+    let account_status: (String,) = sqlx::query_as("select status from accounts where id = $1")
+        .bind("acct_primary")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(account_status.0, "active");
+}
+
+#[tokio::test]
+async fn responses_http_sse_cyber_terminal_should_change_the_immediate_next_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-primary"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(include_str!(
+                    "../../fixtures/responses/http_sse/output_then_cyber_policy.sse"
+                )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-secondary"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(RESPONSES_STREAM_AFTER_402_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (app, api_key, pool, _dir) = test_app_with_two_accounts(server.uri()).await;
+    let request_body = json!({
+        "model": "gpt-5.5",
+        "prompt_cache_key": "conv_http_sse_cyber_immediate_next",
+        "input": [{"role": "user", "content": "Security assessment"}],
+        "stream": true,
         "use_websocket": false
     });
 
@@ -134,9 +184,13 @@ async fn responses_http_cyber_policy_should_keep_account_active_and_change_next_
         .oneshot(responses_json_request(&api_key, &request_body))
         .await
         .unwrap();
-    assert_eq!(first_response.status(), StatusCode::FORBIDDEN);
-    let first_body = response_json(first_response).await;
-    assert_eq!(first_body["error"]["code"], "cyber_policy");
+    let first_status = first_response.status();
+    let first_body = response_text(first_response).await;
+
+    assert_eq!(first_status, StatusCode::OK);
+    assert!(first_body.contains("partial output before HTTP SSE policy failure"));
+    assert!(first_body.contains("cyber_policy"));
+
     let account_status: (String,) = sqlx::query_as("select status from accounts where id = $1")
         .bind("acct_primary")
         .fetch_one(&pool)
@@ -148,12 +202,12 @@ async fn responses_http_cyber_policy_should_keep_account_active_and_change_next_
         .oneshot(responses_json_request(&api_key, &request_body))
         .await
         .unwrap();
-    let second_body = response_json(second_response).await;
-    assert_eq!(second_body["id"], "resp_after_402");
+    let second_body = response_text(second_response).await;
+    assert!(second_body.contains("resp_stream_after_402"));
 }
 
 #[tokio::test]
-async fn responses_http_rate_limited_cyber_policy_should_not_retry_in_same_request() {
+async fn responses_http_rate_limited_cyber_policy_should_retry_next_account() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -181,22 +235,18 @@ async fn responses_http_rate_limited_cyber_policy_should_not_retry_in_same_reque
     let (app, api_key, pool, _dir) = test_app_with_two_accounts(server.uri()).await;
     let request_body = json!({
         "model": "gpt-5.5",
-        "prompt_cache_key": "conv_http_429_cyber_next_request",
+        "prompt_cache_key": "conv_http_429_cyber_retry_next_account",
         "input": [],
         "stream": false,
         "use_websocket": false
     });
 
-    let first_response = app
-        .clone()
+    let response = app
         .oneshot(responses_json_request(&api_key, &request_body))
         .await
         .unwrap();
-    assert_eq!(first_response.status(), StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(
-        response_json(first_response).await["error"]["code"],
-        "cyber_policy"
-    );
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response_json(response).await["id"], "resp_after_402");
     let account_status: (String, Option<chrono::DateTime<Utc>>) =
         sqlx::query_as("select status, quota_cooldown_until from accounts where id = $1")
             .bind("acct_primary")
@@ -204,12 +254,6 @@ async fn responses_http_rate_limited_cyber_policy_should_not_retry_in_same_reque
             .await
             .unwrap();
     assert_eq!(account_status, ("active".to_string(), None));
-
-    let second_response = app
-        .oneshot(responses_json_request(&api_key, &request_body))
-        .await
-        .unwrap();
-    assert_eq!(response_json(second_response).await["id"], "resp_after_402");
 }
 
 #[tokio::test]
@@ -242,26 +286,16 @@ async fn responses_cyber_rotation_should_return_current_quota_error_when_candida
         "use_websocket": false
     });
 
-    let first_response = app
-        .clone()
+    let response = app
         .oneshot(responses_json_request(&api_key, &request_body))
         .await
         .unwrap();
-    assert_eq!(first_response.status(), StatusCode::FORBIDDEN);
-    let second_response = app
-        .oneshot(responses_json_request(&api_key, &request_body))
-        .await
-        .unwrap();
-    assert_eq!(second_response.status(), StatusCode::TOO_MANY_REQUESTS);
-    let second_body = response_json(second_response).await;
-    assert_eq!(second_body["error"]["code"], "insufficient_quota");
-    assert!(
-        second_body["error"]["message"]
-            .as_str()
-            .is_some_and(|message| {
-                message.contains("quota exhausted") && !message.contains("cyber blocked")
-            })
-    );
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body = response_json(response).await;
+    assert_eq!(body["error"]["code"], "insufficient_quota");
+    assert!(body["error"]["message"].as_str().is_some_and(|message| {
+        message.contains("quota exhausted") && !message.contains("cyber blocked")
+    }));
     let account_status: (String,) = sqlx::query_as("select status from accounts where id = $1")
         .bind("acct_secondary")
         .fetch_one(&pool)
@@ -1696,6 +1730,100 @@ async fn responses_stream_structural_events_should_not_commit_before_history_fai
     assert!(!body.contains("response.created"));
     assert_eq!(captured.payload["previous_response_id"], "resp_stale");
     assert!(!captured.retry_attempted);
+}
+
+#[tokio::test]
+async fn responses_http_sse_structural_events_should_not_commit_before_history_failure() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(include_str!(
+                    "../../fixtures/responses/http_sse/structural_then_previous_response_not_found.sse"
+                )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (app, api_key, _pool, _dir) =
+        test_app_with_account_pool_and_affinity(server.uri(), "resp_stale").await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "previous_response_id": "resp_stale",
+                        "turnState": "turn-stale",
+                        "input": [{"role": "user", "content": "Continue"}],
+                        "stream": true,
+                        "use_websocket": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_text(response).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("previous_response_unavailable"));
+    assert!(!body.contains("response.created"));
+}
+
+#[tokio::test]
+async fn responses_http_sse_should_commit_before_history_failure_after_real_output() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(include_str!(
+                    "../../fixtures/responses/http_sse/output_then_previous_response_not_found.sse"
+                )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (app, api_key, _pool, _dir) =
+        test_app_with_account_pool_and_affinity(server.uri(), "resp_stale").await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "previous_response_id": "resp_stale",
+                        "turnState": "turn-stale",
+                        "input": [{"role": "user", "content": "Continue"}],
+                        "stream": true,
+                        "use_websocket": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_text(response).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("visible HTTP SSE output"));
+    assert!(body.contains("response.failed"));
 }
 
 #[tokio::test]

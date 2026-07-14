@@ -22,6 +22,16 @@ pub const MAX_SSE_EVENT_BUFFER_BYTES: usize = 64 * 1024 * 1024;
 /// SSE 流结束标记帧。
 pub const DONE_SSE_FRAME: &str = "data: [DONE]\n\n";
 
+/// 判断一个完整 SSE frame 是否为传输层 `[DONE]` 控制帧。
+pub(crate) fn sse_frame_is_done(frame: &str) -> bool {
+    let mut data = frame.lines().filter_map(|raw_line| {
+        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+        let (field, value) = split_sse_field(line);
+        (field == "data").then_some(value)
+    });
+    matches!((data.next(), data.next()), (Some("[DONE]"), None))
+}
+
 /// 用于处理任意分块边界的增量 SSE 解码器。
 #[derive(Debug, Default)]
 pub struct SseEventDecoder {
@@ -78,6 +88,17 @@ pub fn response_failed_sse_event_with_id(
     code: &str,
     message: &str,
 ) -> String {
+    let data = response_failed_sse_data_with_id(response_id, error_type, code, message);
+    encode_sse_event("response.failed", &data.to_string())
+}
+
+/// 构造 OpenAI Responses `response.failed` 的 JSON 数据。
+pub fn response_failed_sse_data_with_id(
+    response_id: Option<&str>,
+    error_type: &str,
+    code: &str,
+    message: &str,
+) -> serde_json::Value {
     let error = json!({
         "type": error_type,
         "code": code,
@@ -89,7 +110,7 @@ pub fn response_failed_sse_event_with_id(
             || format!("resp_proxy_{}", uuid::Uuid::new_v4().simple()),
             ToString::to_string,
         );
-    let data = json!({
+    json!({
         "type": "response.failed",
         "response": {
             "id": response_id,
@@ -97,8 +118,7 @@ pub fn response_failed_sse_event_with_id(
             "error": error,
         },
         "error": error,
-    });
-    encode_sse_event("response.failed", &data.to_string())
+    })
 }
 
 /// 判断 SSE 文本是否已经包含结束标记。

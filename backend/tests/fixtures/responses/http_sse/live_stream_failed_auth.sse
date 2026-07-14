@@ -1,0 +1,2 @@
+event: response.failed
+data: {"response":{"id":"resp_live_auth_failed","object":"response","status":"failed","error":{"code":"token_invalid","message":"live token expired"}}}

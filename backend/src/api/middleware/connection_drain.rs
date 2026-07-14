@@ -28,6 +28,11 @@ impl Default for ConnectionDrain {
 }
 
 impl ConnectionDrain {
+    /// 为下层长生命周期执行器提供与连接排空一致的取消信号。
+    pub(crate) fn cancellation_token(&self) -> CancellationToken {
+        self.cancellation.clone()
+    }
+
     /// 注册需要随进程关闭而终止的长连接任务。
     pub fn spawn(&self, future: impl Future<Output = ()> + Send + 'static) {
         let cancellation = self.cancellation.clone();

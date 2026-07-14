@@ -1,8 +1,6 @@
 //! 账号耗尽状态聚合。
 
-use crate::fleet::account::AccountStatus;
-
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ExhaustedAccountKind {
     QuotaExhausted,
     RateLimited,
@@ -13,6 +11,35 @@ pub(crate) enum ExhaustedAccountKind {
     CloudflarePathBlocked,
     ModelUnsupported,
     UpstreamUnavailable,
+}
+
+/// Controller 交给 attempt runner 聚合的单账号耗尽事实。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::dispatch) struct AccountExhaustionRecord {
+    pub account_id: Option<String>,
+    pub kind: ExhaustedAccountKind,
+    pub upstream_error: String,
+    pub status_code: Option<u16>,
+}
+
+impl AccountExhaustionRecord {
+    pub(in crate::dispatch) fn new(
+        account_id: impl Into<String>,
+        kind: ExhaustedAccountKind,
+        upstream_error: impl Into<String>,
+    ) -> Self {
+        Self {
+            account_id: Some(account_id.into()),
+            kind,
+            upstream_error: upstream_error.into(),
+            status_code: None,
+        }
+    }
+
+    pub(in crate::dispatch) fn with_status_code(mut self, status_code: u16) -> Self {
+        self.status_code = Some(status_code);
+        self
+    }
 }
 
 impl ExhaustedAccountKind {
@@ -31,7 +58,7 @@ impl ExhaustedAccountKind {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ExhaustedAccount {
     pub kind: ExhaustedAccountKind,
     pub count: usize,
@@ -69,100 +96,12 @@ struct ExhaustedCounter {
 }
 
 impl AccountExhaustionTracker {
-    pub(crate) fn last_account_id(&self) -> Option<&str> {
-        self.last_account_id.as_deref()
-    }
-
-    pub(crate) fn record_rate_limited(
-        &mut self,
-        account_id: Option<&str>,
-        upstream_error: impl Into<String>,
-    ) {
+    pub(in crate::dispatch) fn record_exhaustion(&mut self, record: AccountExhaustionRecord) {
         self.record(
-            account_id,
-            ExhaustedAccountKind::RateLimited,
-            upstream_error,
-            None,
-        );
-    }
-
-    pub(crate) fn record_quota_exhausted(
-        &mut self,
-        account_id: Option<&str>,
-        upstream_error: impl Into<String>,
-    ) {
-        self.record(
-            account_id,
-            ExhaustedAccountKind::QuotaExhausted,
-            upstream_error,
-            None,
-        );
-    }
-
-    pub(crate) fn record_auth_failure(
-        &mut self,
-        account_id: Option<&str>,
-        account_status: AccountStatus,
-        upstream_error: impl Into<String>,
-        status_code: Option<u16>,
-    ) {
-        let kind = match account_status {
-            AccountStatus::Disabled => ExhaustedAccountKind::Disabled,
-            AccountStatus::Banned => ExhaustedAccountKind::Banned,
-            _ => ExhaustedAccountKind::Expired,
-        };
-        self.record(account_id, kind, upstream_error, status_code);
-    }
-
-    pub(crate) fn record_cloudflare_challenge(
-        &mut self,
-        account_id: Option<&str>,
-        upstream_error: impl Into<String>,
-    ) {
-        self.record(
-            account_id,
-            ExhaustedAccountKind::CloudflareChallenge,
-            upstream_error,
-            None,
-        );
-    }
-
-    pub(crate) fn record_cloudflare_path_blocked(
-        &mut self,
-        account_id: Option<&str>,
-        upstream_error: impl Into<String>,
-    ) {
-        self.record(
-            account_id,
-            ExhaustedAccountKind::CloudflarePathBlocked,
-            upstream_error,
-            None,
-        );
-    }
-
-    pub(crate) fn record_model_unsupported(
-        &mut self,
-        account_id: Option<&str>,
-        upstream_error: impl Into<String>,
-    ) {
-        self.record(
-            account_id,
-            ExhaustedAccountKind::ModelUnsupported,
-            upstream_error,
-            None,
-        );
-    }
-
-    pub(crate) fn record_upstream_unavailable(
-        &mut self,
-        account_id: Option<&str>,
-        upstream_error: impl Into<String>,
-    ) {
-        self.record(
-            account_id,
-            ExhaustedAccountKind::UpstreamUnavailable,
-            upstream_error,
-            None,
+            record.account_id.as_deref(),
+            record.kind,
+            record.upstream_error,
+            record.status_code,
         );
     }
 
@@ -175,6 +114,10 @@ impl AccountExhaustionTracker {
             upstream_error: counter.upstream_error.clone().unwrap_or_default(),
             status_code: counter.status_code,
         })
+    }
+
+    pub(crate) fn last_account_id(&self) -> Option<&str> {
+        self.last_account_id.as_deref()
     }
 
     fn record(

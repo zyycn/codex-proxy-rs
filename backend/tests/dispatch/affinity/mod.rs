@@ -1,7 +1,6 @@
 use chrono::{Duration, Utc};
 use codex_proxy_rs::dispatch::affinity::{
-    CyberPolicyFailureSnapshot, MAX_CONVERSATION_AFFINITIES, RedisSessionAffinityStore,
-    SessionAffinityEntry,
+    MAX_CONVERSATION_AFFINITIES, RedisSessionAffinityStore, SessionAffinityEntry,
 };
 use redis::AsyncCommands;
 
@@ -245,85 +244,6 @@ async fn redis_affinity_store_rejects_oversized_metadata() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("metadata is too large"));
-}
-
-#[tokio::test]
-async fn redis_affinity_store_caps_cyber_policy_failures_atomically() {
-    let store = RedisSessionAffinityStore::new(create_test_redis("affinity-cyber-cap").await);
-    for index in 1..=4 {
-        let failure = CyberPolicyFailureSnapshot {
-            account_id: format!("acct_{index}"),
-            event: "error".to_string(),
-            message: format!("blocked by account {index}"),
-            upstream_code: Some("cyber_policy".to_string()),
-        };
-        store
-            .record_cyber_policy_failure("session-hash", &failure, 3, Duration::hours(1))
-            .await
-            .unwrap();
-    }
-
-    let state = store
-        .cyber_policy_state("session-hash")
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(state.failed_account_ids, vec!["acct_1", "acct_2", "acct_3"]);
-    let last_failure = state.last_failure.unwrap();
-    assert_eq!(last_failure.account_id, "acct_3");
-    assert_eq!(last_failure.message, "blocked by account 3");
-}
-
-#[tokio::test]
-async fn redis_affinity_store_should_not_clear_recreated_cyber_policy_state_with_stale_revision() {
-    let store = RedisSessionAffinityStore::new(create_test_redis("affinity-cyber-cas").await);
-    let first = store
-        .record_cyber_policy_failure(
-            "session-hash",
-            &CyberPolicyFailureSnapshot {
-                account_id: "acct_1".to_string(),
-                event: "error".to_string(),
-                message: "first failure".to_string(),
-                upstream_code: Some("cyber_policy".to_string()),
-            },
-            3,
-            Duration::hours(1),
-        )
-        .await
-        .unwrap();
-    assert!(
-        store
-            .clear_cyber_policy_state("session-hash", &first.revision)
-            .await
-            .unwrap()
-    );
-    let newer = store
-        .record_cyber_policy_failure(
-            "session-hash",
-            &CyberPolicyFailureSnapshot {
-                account_id: "acct_2".to_string(),
-                event: "error".to_string(),
-                message: "newer failure".to_string(),
-                upstream_code: Some("cyber_policy".to_string()),
-            },
-            3,
-            Duration::hours(1),
-        )
-        .await
-        .unwrap();
-
-    assert!(
-        !store
-            .clear_cyber_policy_state("session-hash", &first.revision)
-            .await
-            .unwrap()
-    );
-    assert!(
-        store
-            .clear_cyber_policy_state("session-hash", &newer.revision)
-            .await
-            .unwrap()
-    );
 }
 
 fn affinity(

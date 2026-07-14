@@ -297,8 +297,10 @@ impl Services {
         let session_affinity =
             Arc::new(SessionAffinityService::new(stores.session_affinity.clone()));
 
-        let cloudflare_recovery =
-            crate::dispatch::recovery::cloudflare::CloudflareRecovery::new(stores.cookies.clone());
+        let connection_drain = crate::api::middleware::connection_drain::ConnectionDrain::default();
+        let cloudflare_recovery = crate::dispatch::controllers::cloudflare::CloudflareRecovery::new(
+            stores.cookies.clone(),
+        );
         let responses = Arc::new(ResponseDispatchService::new(ResponseDispatchServiceParts {
             account_pool: account_pool.clone(),
             models: models.clone(),
@@ -307,9 +309,9 @@ impl Services {
             recorder,
             account_identity,
             cloudflare: cloudflare_recovery,
+            shutdown: connection_drain.cancellation_token(),
         }));
         let system_update = Arc::new(SystemUpdateService::from_env());
-        let connection_drain = crate::api::middleware::connection_drain::ConnectionDrain::default();
 
         Ok(Self {
             database,
