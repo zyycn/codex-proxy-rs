@@ -7,7 +7,7 @@ use crate::{
     fleet::account::Account,
     upstream::openai::transport::{
         CodexBackendClient, CodexBackendResponse, CodexBackendStreamingResponse, CodexClientError,
-        CodexRequestContext,
+        CodexRequestContext, PreparedResponseTransport,
     },
 };
 
@@ -22,15 +22,30 @@ pub(in crate::dispatch) struct AccountUpstreamContext<'a> {
 pub(in crate::dispatch) async fn create_response_with_account(
     context: AccountUpstreamContext<'_>,
     request: &AccountScopedRequest,
+    prepared: PreparedResponseTransport,
     started_at: Instant,
 ) -> Result<CodexBackendResponse, CodexClientError> {
     context
         .codex
-        .create_response_with_pool_account_started_at(
+        .create_response_with_prepared(
+            request.request(),
+            codex_request_context(context, request),
+            prepared,
+            started_at,
+        )
+        .await
+}
+
+pub(in crate::dispatch) async fn prepare_response_transport_with_account(
+    context: AccountUpstreamContext<'_>,
+    request: &AccountScopedRequest,
+) -> Result<PreparedResponseTransport, CodexClientError> {
+    context
+        .codex
+        .prepare_response_transport_with_pool_account(
             request.request(),
             codex_request_context(context, request),
             Some(&context.account.id),
-            started_at,
         )
         .await
 }
@@ -38,13 +53,14 @@ pub(in crate::dispatch) async fn create_response_with_account(
 pub(in crate::dispatch) async fn create_response_stream_with_account(
     context: AccountUpstreamContext<'_>,
     request: &AccountScopedRequest,
+    prepared: PreparedResponseTransport,
 ) -> Result<CodexBackendStreamingResponse, CodexClientError> {
     context
         .codex
-        .create_response_stream_with_pool_account(
+        .create_response_stream_with_prepared(
             request.request(),
             codex_request_context(context, request),
-            Some(&context.account.id),
+            prepared,
         )
         .await
 }

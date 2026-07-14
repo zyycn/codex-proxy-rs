@@ -18,7 +18,7 @@ use crate::{
         transport::{
             account::{
                 AccountUpstreamContext, create_response_stream_with_account,
-                create_response_with_account,
+                create_response_with_account, prepare_response_transport_with_account,
             },
             canonical::{CanonicalStreamDecoder, normalize_complete_response},
             observation::upstream_failure_facts,
@@ -30,11 +30,10 @@ use crate::{
         pool::{AccountCandidateLease, AccountPoolService},
     },
     upstream::openai::{
-        protocol::responses::{CodexResponsesRequest, CollectedResponse},
-        transport::{
-            CodexBackendClient, CodexBackendStreamingResponse,
-            backend_transport_for_response_request,
+        protocol::responses::{
+            CodexResponsesRequest, CollectedResponse, TransportRequirement, transport_requirement,
         },
+        transport::{CodexBackendClient, CodexBackendStreamingResponse, CodexBackendTransport},
     },
 };
 
@@ -235,10 +234,6 @@ impl<'a> AttemptRunner<'a> {
             }
         };
 
-        self.dependencies
-            .account_pool
-            .wait_for_request_interval(&acquired)
-            .await;
         let attempt = self
             .trace
             .as_mut()
@@ -250,6 +245,47 @@ impl<'a> AttemptRunner<'a> {
             account: &account,
             cookie_header: cookie_header.as_deref(),
         };
+        let ((), prepared_transport) = tokio::join!(
+            self.dependencies
+                .account_pool
+                .wait_for_request_interval(&acquired),
+            prepare_response_transport_with_account(upstream_context, &account_scoped_request),
+        );
+        let prepared_transport = match prepared_transport {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let attempt_request = account_scoped_request.into_request();
+                acquired.complete().await;
+                let transport = error
+                    .transport()
+                    .unwrap_or_else(|| intended_transport(&attempt_request));
+                observe_upstream_error(
+                    self.dependencies.controllers,
+                    AttemptUpstreamErrorContext {
+                        request_id: self.dependencies.request_id,
+                        account: &account,
+                        route: self.dependencies.route,
+                        model: self.dependencies.requested_model,
+                        started_at: self.dependencies.started_at,
+                        stream: matches!(self.mode, AttemptMode::Stream { .. }),
+                        transport,
+                        request: &attempt_request,
+                        error: &error,
+                        trace: self.trace.as_ref().ok_or(AttemptContractError::Terminal)?,
+                        attempt: &attempt,
+                    },
+                )
+                .await;
+                self.pending = Some(PendingAttempt::UpstreamFailure {
+                    account,
+                    attempt_request,
+                    attempt,
+                    transport,
+                    error,
+                });
+                return self.step();
+            }
+        };
 
         match &self.mode {
             AttemptMode::Complete {
@@ -259,6 +295,7 @@ impl<'a> AttemptRunner<'a> {
                 let result = create_response_with_account(
                     upstream_context,
                     &account_scoped_request,
+                    prepared_transport,
                     *started_at,
                 )
                 .await;
@@ -294,7 +331,9 @@ impl<'a> AttemptRunner<'a> {
                         }
                     }
                     Err(error) => {
-                        let transport = backend_transport_for_response_request(request);
+                        let transport = error
+                            .transport()
+                            .unwrap_or_else(|| intended_transport(request));
                         observe_upstream_error(
                             self.dependencies.controllers,
                             AttemptUpstreamErrorContext {
@@ -323,14 +362,19 @@ impl<'a> AttemptRunner<'a> {
                 });
             }
             AttemptMode::Stream { tuple_schema } => {
-                let result =
-                    create_response_stream_with_account(upstream_context, &account_scoped_request)
-                        .await;
+                let result = create_response_stream_with_account(
+                    upstream_context,
+                    &account_scoped_request,
+                    prepared_transport,
+                )
+                .await;
                 let attempt_request = account_scoped_request.into_request();
                 self.pending = Some(match result {
                     Err(error) => {
                         acquired.complete().await;
-                        let transport = backend_transport_for_response_request(request);
+                        let transport = error
+                            .transport()
+                            .unwrap_or_else(|| intended_transport(request));
                         observe_upstream_error(
                             self.dependencies.controllers,
                             AttemptUpstreamErrorContext {
@@ -368,12 +412,15 @@ impl<'a> AttemptRunner<'a> {
                             websocket_pool_decision,
                             diagnostics,
                             response_metadata,
+                            transport_metrics,
+                            connection_local_continuation,
                         } = response;
                         let mut decoder = CanonicalStreamDecoder::new(tuple_schema.clone());
                         match prefetch_until_commit(
                             body,
                             &mut decoder,
                             attempt_request.stream_commit_policy,
+                            self.dependencies.started_at,
                         )
                         .await
                         {
@@ -441,6 +488,7 @@ impl<'a> AttemptRunner<'a> {
                                 bytes: prefetched,
                                 initial_batch,
                                 body,
+                                first_event_ms,
                             }) => {
                                 let first_failure = initial_batch.first_failure();
                                 PendingAttempt::StreamResponse(Box::new(PendingStreamResponse {
@@ -459,11 +507,14 @@ impl<'a> AttemptRunner<'a> {
                                         websocket_pool_decision,
                                         diagnostics,
                                         response_metadata,
+                                        transport_metrics,
+                                        connection_local_continuation,
                                     },
                                     prefetched,
                                     decoder,
                                     initial_batch,
                                     first_failure,
+                                    first_event_ms,
                                 }))
                             }
                         }
@@ -570,8 +621,7 @@ impl<'a> AttemptRunner<'a> {
         Ok(AttemptObservation {
             account: account.map(AttemptAccountFacts::from),
             attempt: pending_attempt(pending).cloned(),
-            transport: pending_transport(pending)
-                .unwrap_or_else(|| backend_transport_for_response_request(request)),
+            transport: pending_transport(pending).unwrap_or_else(|| intended_transport(request)),
             routing: self
                 .dependencies
                 .controllers
@@ -613,6 +663,7 @@ impl<'a> AttemptRunner<'a> {
                     response,
                     decoder,
                     initial_batch,
+                    first_event_ms,
                     ..
                 } = *stream;
                 EstablishedResponse::Stream(Box::new(EstablishedStream {
@@ -621,6 +672,7 @@ impl<'a> AttemptRunner<'a> {
                     response,
                     decoder,
                     initial_batch,
+                    first_event_ms,
                 }))
             }
             other => return Err(invalid("establish", &other)),
@@ -644,8 +696,7 @@ impl<'a> AttemptRunner<'a> {
             .request
             .as_ref()
             .ok_or(AttemptContractError::Terminal)?;
-        let transport = pending_transport(&pending)
-            .unwrap_or_else(|| backend_transport_for_response_request(request));
+        let transport = pending_transport(&pending).unwrap_or_else(|| intended_transport(request));
         let stream_failure = match &pending {
             PendingAttempt::StreamResponse(stream) => {
                 stream.first_failure.as_ref().map(|failure| {
@@ -908,6 +959,17 @@ fn pending_transport(
         | PendingAttempt::PinnedCandidateUnavailable { .. }
         | PendingAttempt::CandidatePreparationRejected { .. }
         | PendingAttempt::RoutePreparationRejected { .. } => None,
+    }
+}
+
+fn intended_transport(request: &CodexResponsesRequest) -> CodexBackendTransport {
+    match transport_requirement(request) {
+        TransportRequirement::HttpRequired => CodexBackendTransport::HttpSse,
+        TransportRequirement::ExplicitWebSocketWarmup
+        | TransportRequirement::ExactWebSocketContinuation
+        | TransportRequirement::PersistedContinuation
+        | TransportRequirement::ExternalUnknown
+        | TransportRequirement::NewChain => CodexBackendTransport::WebSocket,
     }
 }
 

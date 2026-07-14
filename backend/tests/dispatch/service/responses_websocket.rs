@@ -311,12 +311,7 @@ async fn responses_websocket_stale_success_must_not_clear_newer_cyber_failure() 
             .expect("stale request payload should be json");
         stale_accepted_tx.send(()).unwrap();
 
-        accept_cyber_policy_websocket_response_with_authorization(
-            &listener,
-            "Bearer access-1",
-            "resp_cyber_cas_newer",
-        )
-        .await;
+        accept_cyber_policy_http_response_with_authorization(&listener, "Bearer access-1").await;
 
         release_stale_rx.await.unwrap();
         stale_websocket
@@ -2075,4 +2070,46 @@ async fn responses_stream_with_previous_response_id_should_record_websocket_audi
         quota["snapshots"][0]["primary"]["used_percent"].as_f64(),
         Some(44.0)
     );
+}
+
+#[tokio::test]
+async fn responses_post_send_ambiguous_failure_should_not_retry_another_account() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_async(stream).await.unwrap();
+        let payload = websocket.next().await.unwrap().unwrap();
+        std::assert_matches!(payload, Message::Text(_));
+        websocket.close(None).await.unwrap();
+
+        assert!(
+            timeout(StdDuration::from_millis(200), listener.accept())
+                .await
+                .is_err(),
+            "payload-sent ambiguity must not replay on the second account"
+        );
+    });
+    let (app, api_key, _pool, _dir) = test_app_with_two_accounts(base_url).await;
+
+    let response = app
+        .oneshot(responses_json_request(
+            &api_key,
+            &json!({
+                "model": "gpt-5.5",
+                "prompt_cache_key": "conversation-post-send-no-retry",
+                "input": [{"role": "user", "content": "run once"}],
+                "stream": false,
+                "use_websocket": true
+            }),
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_text(response).await;
+    upstream.await.unwrap();
+
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    let body: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["error"]["code"], "upstream_error");
 }

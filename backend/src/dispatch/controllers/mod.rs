@@ -109,6 +109,8 @@ pub(in crate::dispatch) struct StreamControllerContext {
     pub turn_state: Option<String>,
     pub diagnostics: CodexUpstreamDiagnostics,
     pub response_metadata: CodexResponseMetadata,
+    pub transport_metrics: crate::upstream::openai::transport::CodexTransportMetrics,
+    pub connection_local_continuation: bool,
     pub attempt: ResponseDispatchAttempt,
     pub attempts: Vec<ResponseDispatchAttempt>,
     pub started_at: Instant,
@@ -465,17 +467,23 @@ impl ControllerSet {
         }
         if exit.completed {
             let conversation_id = HistoryController::conversation_id(&scope.history, exit.request);
+            let continuation_scope = HistoryController::continuation_scope(
+                exit.request,
+                exit.response.transport,
+                exit.response.connection_local_continuation,
+            );
             let _ = best_effort_controller_io(
                 "affinity.complete",
-                affinity::AffinityController::leave_complete(
-                    &self.session_affinity,
+                affinity::AffinityController::leave_complete(affinity::ResponseExit {
+                    affinity: &self.session_affinity,
                     conversation_id,
-                    exit.request,
-                    exit.account_id,
-                    exit.body,
-                    exit.turn_state.clone(),
-                    exit.usage,
-                ),
+                    request: exit.request,
+                    account_id: exit.account_id,
+                    body: exit.body,
+                    turn_state: exit.turn_state.clone(),
+                    usage: exit.usage,
+                    continuation_scope,
+                }),
             )
             .await;
         }
@@ -670,14 +678,22 @@ impl ControllerSet {
         .unwrap_or(fallback);
 
         let conversation_id = HistoryController::conversation_id(&scope.history, &context.request);
+        let continuation_scope = HistoryController::continuation_scope(
+            &context.request,
+            context.transport,
+            context.connection_local_continuation,
+        );
         affinity::AffinityController::leave_stream(affinity::StreamExit {
-            affinity: &self.session_affinity,
-            conversation_id,
-            request: &context.request,
-            account_id: &context.account_id,
-            body,
-            turn_state: usage_exit.turn_state.take(),
-            usage: summary.usage,
+            response: affinity::ResponseExit {
+                affinity: &self.session_affinity,
+                conversation_id,
+                request: &context.request,
+                account_id: &context.account_id,
+                body,
+                turn_state: usage_exit.turn_state.take(),
+                usage: summary.usage,
+                continuation_scope,
+            },
             completed: matches!(summary.terminal, StreamTerminal::Completed { .. }),
         })
         .await;
@@ -697,6 +713,7 @@ impl ControllerSet {
                     websocket_pool_decision: context.websocket_pool_decision,
                     diagnostics: &context.diagnostics,
                     response_metadata: &context.response_metadata,
+                    transport_metrics: &context.transport_metrics,
                     attempt: &context.attempt,
                     attempts: &context.attempts,
                     started_at: context.started_at,

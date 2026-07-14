@@ -17,8 +17,12 @@ pub struct CodexWebSocketExchange {
     pub rate_limit_headers: Vec<(String, String)>,
     /// 首个有效上游 WebSocket 事件到达代理的耗时。
     pub first_token_ms: Option<i64>,
+    /// 首个上游协议事件到达代理的耗时。
+    pub first_event_ms: Option<i64>,
     /// WebSocket 连接池决策。
     pub pool_decision: Option<WebSocketPoolDecision>,
+    /// terminal completed 后该 socket 是否会保留 connection-local continuation。
+    pub connection_local_continuation: bool,
     /// 上游诊断元数据。
     pub diagnostics: CodexUpstreamDiagnostics,
     /// 安全响应元数据。
@@ -43,6 +47,8 @@ pub struct CodexWebSocketStreamingExchange {
     pub turn_state_update: CodexWebSocketTurnStateUpdate,
     /// WebSocket 连接池决策。
     pub pool_decision: Option<WebSocketPoolDecision>,
+    /// terminal completed 后该 socket 是否会保留 connection-local continuation。
+    pub connection_local_continuation: bool,
     /// 上游诊断元数据。
     pub diagnostics: CodexUpstreamDiagnostics,
     /// 安全响应元数据。
@@ -73,11 +79,35 @@ pub enum CodexWebSocketExchangeError {
     /// WebSocket 传输失败。
     #[error("websocket transport error: {0}")]
     Transport(#[from] tungstenite::Error),
+    /// DNS、TCP、TLS 或 opening handshake 在发送 payload 前失败。
+    #[error("websocket connect failed before payload send: {0}")]
+    Connect(#[source] tungstenite::Error),
     /// DNS、TCP、TLS 或 WebSocket upgrade 未在限定时间内完成。
     #[error("websocket connect timed out after {timeout:?}")]
     ConnectTimeout {
         /// 建连超时时长。
         timeout: Duration,
+    },
+    /// 普通请求的 WebSocket 快路径预算耗尽，payload 尚未发送。
+    #[error("websocket fast-path connect budget exhausted after {timeout:?}")]
+    FastPathTimeout {
+        /// 快路径等待时长。
+        timeout: Duration,
+    },
+    /// origin WebSocket 冷建连熔断中。
+    #[error("websocket origin circuit is open")]
+    OriginCircuitOpen,
+    /// origin WebSocket 熔断器正在执行唯一 half-open 探针。
+    #[error("websocket origin circuit half-open probe is already running")]
+    OriginHalfOpenBusy,
+    /// 同一精确会话的单飞建连失败。
+    #[error("shared websocket connection attempt failed before payload send")]
+    SharedConnectFailed,
+    /// payload 已可能送达上游，禁止自动重放到其他 transport 或账号。
+    #[error("websocket failed after payload send; replay outcome is ambiguous: {message}")]
+    PostSendAmbiguous {
+        /// 原始失败说明。
+        message: String,
     },
     /// 请求帧未在限定时间内写入上游连接。
     #[error("websocket request send timed out after {timeout:?}")]
@@ -184,13 +214,38 @@ impl CodexWebSocketExchangeError {
             diagnostics,
         }))
     }
+
+    /// opening 阶段只有明确的 transport 可用性失败才能切到同账号 HTTP。
+    pub(in crate::upstream::openai::transport) fn allows_pre_send_http_fallback(&self) -> bool {
+        matches!(
+            self,
+            Self::Connect(_)
+                | Self::ConnectTimeout { .. }
+                | Self::FastPathTimeout { .. }
+                | Self::OriginCircuitOpen
+                | Self::OriginHalfOpenBusy
+                | Self::SharedConnectFailed
+                | Self::ContinuationUnavailable { .. }
+        )
+    }
 }
 
 /// 执行一次 prepared Responses WebSocket 请求并聚合为 SSE。
 pub async fn execute_response_create_request(
     request: &CodexWebSocketRequest,
 ) -> Result<CodexWebSocketExchange, CodexWebSocketExchangeError> {
-    execute_response_create_request_with_pool(request, None, Instant::now(), None).await
+    let breaker = WebSocketOriginBreaker::default();
+    let prepared = prepare_response_create_request_with_pool(
+        request,
+        None,
+        &breaker,
+        request.connection().endpoint(),
+        None,
+        false,
+        None,
+    )
+    .await?;
+    execute_prepared_response_create_request(request, prepared, Instant::now()).await
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +272,7 @@ pub(super) async fn collect_websocket_response(
     let mut body = String::new();
     let mut saw_upstream_activity = false;
     let mut first_token_ms = None;
+    let mut first_event_ms = None;
 
     loop {
         let receive_timeout = receive_idle_timeout(saw_upstream_activity, initial_event_timeout);
@@ -240,6 +296,9 @@ pub(super) async fn collect_websocket_response(
         let text = match message {
             Message::Text(text) => {
                 saw_upstream_activity = true;
+                first_event_ms.get_or_insert_with(|| {
+                    crate::infra::time::elapsed_millis_i64(started_at).max(1)
+                });
                 text
             }
             Message::Binary(_) => return Err(CodexWebSocketExchangeError::UnexpectedBinaryEvent),
@@ -303,7 +362,9 @@ pub(super) async fn collect_websocket_response(
                 set_cookie_headers: metadata.set_cookie_headers.clone(),
                 rate_limit_headers: metadata.rate_limit_headers.clone(),
                 first_token_ms,
+                first_event_ms,
                 pool_decision: None,
+                connection_local_continuation: false,
                 diagnostics: metadata.diagnostics.clone(),
                 response_metadata: metadata.response_metadata.clone(),
             };
@@ -441,6 +502,7 @@ pub(super) fn stream_websocket_response(
         rate_limit_header_updates,
         turn_state_update,
         pool_decision: None,
+        connection_local_continuation: false,
         diagnostics: response_metadata.diagnostics,
         response_metadata: response_metadata.response_metadata,
     }

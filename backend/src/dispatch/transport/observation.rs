@@ -18,6 +18,7 @@ pub(in crate::dispatch) enum UpstreamFailureKind {
     WebSocketTransport,
     WebSocketTimeout,
     WebSocketProtocol,
+    PostSendAmbiguous,
     ContinuationUnavailable(PreviousResponseUnavailableReason),
     RequestEncoding,
     Protocol,
@@ -57,11 +58,19 @@ pub(in crate::dispatch) fn upstream_failure_facts(
             status,
             body,
             retry_after_seconds,
+            transport,
             ..
         } => {
             let (code, error_type, message) = error_fields(body);
             UpstreamFailureFacts {
-                kind: UpstreamFailureKind::HttpStatus,
+                kind: match transport {
+                    crate::upstream::openai::transport::CodexBackendTransport::HttpSse => {
+                        UpstreamFailureKind::HttpStatus
+                    }
+                    crate::upstream::openai::transport::CodexBackendTransport::WebSocket => {
+                        UpstreamFailureKind::WebSocketUpstream
+                    }
+                },
                 status_code: Some(status.as_u16()),
                 code,
                 error_type,
@@ -94,15 +103,23 @@ pub(in crate::dispatch) fn upstream_failure_facts(
         }) => simple_facts(UpstreamFailureKind::ContinuationUnavailable(*reason), error),
         CodexClientError::WebSocket(
             CodexWebSocketExchangeError::ConnectTimeout { .. }
+            | CodexWebSocketExchangeError::FastPathTimeout { .. }
             | CodexWebSocketExchangeError::SendTimeout { .. }
             | CodexWebSocketExchangeError::ReceiveIdleTimeout { .. }
             | CodexWebSocketExchangeError::InitialEventTimeout { .. },
         ) => simple_facts(UpstreamFailureKind::WebSocketTimeout, error),
         CodexClientError::WebSocket(
             CodexWebSocketExchangeError::Transport(_)
+            | CodexWebSocketExchangeError::Connect(_)
+            | CodexWebSocketExchangeError::OriginCircuitOpen
+            | CodexWebSocketExchangeError::OriginHalfOpenBusy
+            | CodexWebSocketExchangeError::SharedConnectFailed
             | CodexWebSocketExchangeError::ClosedBeforeTerminal
             | CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstOutput { .. },
         ) => simple_facts(UpstreamFailureKind::WebSocketTransport, error),
+        CodexClientError::WebSocket(CodexWebSocketExchangeError::PostSendAmbiguous { .. }) => {
+            simple_facts(UpstreamFailureKind::PostSendAmbiguous, error)
+        }
         CodexClientError::WebSocket(
             CodexWebSocketExchangeError::InvalidSse(_)
             | CodexWebSocketExchangeError::InvalidCompletedResponse { .. }

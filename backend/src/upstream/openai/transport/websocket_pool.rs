@@ -4,7 +4,10 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio::{sync::Mutex, time::Instant};
+use tokio::{
+    sync::{Mutex, watch},
+    time::Instant,
+};
 use uuid::Uuid;
 
 use super::websocket_pump::{PumpKeepalive, PumpedWebSocket};
@@ -160,6 +163,11 @@ impl CodexWebSocketPool {
                 Some(WebSocketPoolSlot::Busy(_)) => {
                     return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Busy);
                 }
+                Some(WebSocketPoolSlot::Connecting(connecting)) => {
+                    return WebSocketPoolAcquire::Wait(WebSocketPoolConnectWaiter {
+                        receiver: connecting.outcome.subscribe(),
+                    });
+                }
                 Some(WebSocketPoolSlot::Idle(_)) => {
                     let Some(WebSocketPoolSlot::Idle(connection)) = state.slots.remove(key) else {
                         return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Busy);
@@ -185,11 +193,16 @@ impl CodexWebSocketPool {
             {
                 WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Cap)
             } else {
-                let lease = WebSocketPoolLease::reserve(self.clone(), key.clone());
-                state
-                    .slots
-                    .insert(key.clone(), WebSocketPoolSlot::Busy(lease.reservation));
-                WebSocketPoolAcquire::FreshReserved(lease)
+                let lease = WebSocketPoolConnectLease::reserve(self.clone(), key.clone());
+                state.slots.insert(
+                    key.clone(),
+                    WebSocketPoolSlot::Connecting(WebSocketPoolConnecting {
+                        id: lease.id,
+                        started_at: Instant::now(),
+                        outcome: lease.outcome.clone(),
+                    }),
+                );
+                WebSocketPoolAcquire::Connect(lease)
             };
             drop(state);
             acquire
@@ -242,6 +255,44 @@ impl CodexWebSocketPool {
         }
     }
 
+    async fn finish_connect(
+        &self,
+        key: &CodexWebSocketPoolKey,
+        connect_id: Uuid,
+        connection: PooledWebSocketConnection,
+    ) -> Result<WebSocketPoolConnected, Box<PooledWebSocketConnection>> {
+        let mut state = self.inner.lock().await;
+        let owns_connect = matches!(
+            state.slots.get(key),
+            Some(WebSocketPoolSlot::Connecting(connecting)) if connecting.id == connect_id
+        );
+        if owns_connect && !state.shutting_down && self.config.enabled {
+            let lease = WebSocketPoolLease::reserve(self.clone(), key.clone());
+            state
+                .slots
+                .insert(key.clone(), WebSocketPoolSlot::Busy(lease.reservation));
+            Ok(WebSocketPoolConnected {
+                connection: Box::new(connection),
+                lease,
+            })
+        } else {
+            if owns_connect {
+                state.slots.remove(key);
+            }
+            Err(Box::new(connection))
+        }
+    }
+
+    async fn fail_connect(&self, key: &CodexWebSocketPoolKey, connect_id: Uuid) {
+        let mut state = self.inner.lock().await;
+        if matches!(
+            state.slots.get(key),
+            Some(WebSocketPoolSlot::Connecting(connecting)) if connecting.id == connect_id
+        ) {
+            state.slots.remove(key);
+        }
+    }
+
     /// 驱逐指定账号的 idle 连接，并阻止已占用 slot 回收到池中。
     pub async fn evict_account(&self, account_id: &str) {
         let mut idle_connections = Vec::new();
@@ -254,8 +305,16 @@ impl CodexWebSocketPool {
                 .cloned()
                 .collect::<Vec<_>>();
             for key in keys {
-                if let Some(WebSocketPoolSlot::Idle(connection)) = state.slots.remove(&key) {
-                    idle_connections.push(*connection);
+                match state.slots.remove(&key) {
+                    Some(WebSocketPoolSlot::Idle(connection)) => {
+                        idle_connections.push(*connection);
+                    }
+                    Some(WebSocketPoolSlot::Connecting(connecting)) => {
+                        connecting
+                            .outcome
+                            .send_replace(WebSocketPoolConnectOutcome::Failed);
+                    }
+                    Some(WebSocketPoolSlot::Busy(_)) | None => {}
                 }
             }
         }
@@ -272,6 +331,12 @@ impl CodexWebSocketPool {
                 .drain()
                 .filter_map(|(_, slot)| match slot {
                     WebSocketPoolSlot::Idle(connection) => Some(*connection),
+                    WebSocketPoolSlot::Connecting(connecting) => {
+                        connecting
+                            .outcome
+                            .send_replace(WebSocketPoolConnectOutcome::Failed);
+                        None
+                    }
                     WebSocketPoolSlot::Busy(_) => None,
                 })
                 .collect::<Vec<_>>()
@@ -340,7 +405,14 @@ impl CodexWebSocketPool {
                 {
                     Some(key.clone())
                 }
-                WebSocketPoolSlot::Idle(_) | WebSocketPoolSlot::Busy(_) => None,
+                WebSocketPoolSlot::Connecting(connecting)
+                    if now.duration_since(connecting.started_at) >= self.config.max_age =>
+                {
+                    Some(key.clone())
+                }
+                WebSocketPoolSlot::Idle(_)
+                | WebSocketPoolSlot::Busy(_)
+                | WebSocketPoolSlot::Connecting(_) => None,
             })
             .collect::<Vec<_>>();
         for key in keys {
@@ -352,6 +424,17 @@ impl CodexWebSocketPool {
                         conversation_id_hash = key.conversation_id_hash(),
                         reservation_id = %reservation.id,
                         "Removed stale WebSocket pool reservation"
+                    );
+                }
+                Some(WebSocketPoolSlot::Connecting(connecting)) => {
+                    connecting
+                        .outcome
+                        .send_replace(WebSocketPoolConnectOutcome::Failed);
+                    tracing::warn!(
+                        account_id = key.account_id(),
+                        conversation_id_hash = key.conversation_id_hash(),
+                        connect_id = %connecting.id,
+                        "Removed stale WebSocket pool connection attempt"
                     );
                 }
                 None => {}
@@ -402,6 +485,7 @@ impl WebSocketContinuationState {
 enum WebSocketPoolSlot {
     Idle(Box<PooledWebSocketConnection>),
     Busy(WebSocketPoolReservation),
+    Connecting(WebSocketPoolConnecting),
 }
 
 pub(crate) enum WebSocketPoolAcquire {
@@ -409,8 +493,110 @@ pub(crate) enum WebSocketPoolAcquire {
         connection: Box<PooledWebSocketConnection>,
         lease: WebSocketPoolLease,
     },
-    FreshReserved(WebSocketPoolLease),
+    Connect(WebSocketPoolConnectLease),
+    Wait(WebSocketPoolConnectWaiter),
     Bypass(WebSocketPoolBypassReason),
+}
+
+struct WebSocketPoolConnecting {
+    id: Uuid,
+    started_at: Instant,
+    outcome: watch::Sender<WebSocketPoolConnectOutcome>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WebSocketPoolConnectOutcome {
+    Pending,
+    Ready,
+    Failed,
+}
+
+pub(crate) struct WebSocketPoolConnectWaiter {
+    receiver: watch::Receiver<WebSocketPoolConnectOutcome>,
+}
+
+impl WebSocketPoolConnectWaiter {
+    pub(crate) async fn wait(mut self) -> WebSocketPoolConnectOutcome {
+        loop {
+            let outcome = *self.receiver.borrow_and_update();
+            if outcome != WebSocketPoolConnectOutcome::Pending {
+                return outcome;
+            }
+            if self.receiver.changed().await.is_err() {
+                return WebSocketPoolConnectOutcome::Failed;
+            }
+        }
+    }
+}
+
+pub(crate) struct WebSocketPoolConnectLease {
+    pool: CodexWebSocketPool,
+    key: CodexWebSocketPoolKey,
+    id: Uuid,
+    outcome: watch::Sender<WebSocketPoolConnectOutcome>,
+    armed: bool,
+}
+
+pub(crate) struct WebSocketPoolConnected {
+    pub(crate) connection: Box<PooledWebSocketConnection>,
+    pub(crate) lease: WebSocketPoolLease,
+}
+
+impl WebSocketPoolConnectLease {
+    fn reserve(pool: CodexWebSocketPool, key: CodexWebSocketPoolKey) -> Self {
+        let (outcome, _) = watch::channel(WebSocketPoolConnectOutcome::Pending);
+        Self {
+            pool,
+            key,
+            id: Uuid::new_v4(),
+            outcome,
+            armed: true,
+        }
+    }
+
+    pub(crate) async fn connected(
+        mut self,
+        connection: PooledWebSocketConnection,
+    ) -> Result<WebSocketPoolConnected, Box<PooledWebSocketConnection>> {
+        let result = self
+            .pool
+            .finish_connect(&self.key, self.id, connection)
+            .await;
+        let outcome = if result.is_ok() {
+            WebSocketPoolConnectOutcome::Ready
+        } else {
+            WebSocketPoolConnectOutcome::Failed
+        };
+        self.outcome.send_replace(outcome);
+        self.armed = false;
+        result
+    }
+
+    pub(crate) async fn failed(mut self) {
+        self.pool.fail_connect(&self.key, self.id).await;
+        self.outcome
+            .send_replace(WebSocketPoolConnectOutcome::Failed);
+        self.armed = false;
+    }
+}
+
+impl Drop for WebSocketPoolConnectLease {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.outcome
+            .send_replace(WebSocketPoolConnectOutcome::Failed);
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let pool = self.pool.clone();
+        let key = self.key.clone();
+        let connect_id = self.id;
+        runtime.spawn(async move {
+            pool.fail_connect(&key, connect_id).await;
+        });
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -478,48 +664,21 @@ pub enum WebSocketPoolBypassReason {
     Cap,
 }
 
-impl WebSocketPoolBypassReason {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Disabled => "disabled",
-            Self::Busy => "busy",
-            Self::Cap => "cap",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WebSocketPoolDecision {
     kind: WebSocketPoolDecisionKind,
-    reason: Option<WebSocketPoolBypassReason>,
 }
 
 impl WebSocketPoolDecision {
     pub fn new() -> Self {
         Self {
             kind: WebSocketPoolDecisionKind::New,
-            reason: None,
         }
     }
 
     pub fn reuse() -> Self {
         Self {
             kind: WebSocketPoolDecisionKind::Reuse,
-            reason: None,
-        }
-    }
-
-    pub fn bypass(reason: WebSocketPoolBypassReason) -> Self {
-        Self {
-            kind: WebSocketPoolDecisionKind::Bypass,
-            reason: Some(reason),
-        }
-    }
-
-    pub fn retry_after_stale_reuse() -> Self {
-        Self {
-            kind: WebSocketPoolDecisionKind::RetryAfterStaleReuse,
-            reason: None,
         }
     }
 
@@ -527,16 +686,8 @@ impl WebSocketPoolDecision {
         self.kind.as_str()
     }
 
-    pub fn reason(self) -> Option<&'static str> {
-        self.reason.map(WebSocketPoolBypassReason::as_str)
-    }
-
     pub fn metadata_value(self) -> Value {
-        let mut value = json!({ "kind": self.kind() });
-        if let (Some(object), Some(reason)) = (value.as_object_mut(), self.reason()) {
-            object.insert("reason".to_string(), Value::String(reason.to_string()));
-        }
-        value
+        json!({ "kind": self.kind() })
     }
 }
 
@@ -550,8 +701,6 @@ impl Default for WebSocketPoolDecision {
 enum WebSocketPoolDecisionKind {
     New,
     Reuse,
-    Bypass,
-    RetryAfterStaleReuse,
 }
 
 impl WebSocketPoolDecisionKind {
@@ -559,8 +708,6 @@ impl WebSocketPoolDecisionKind {
         match self {
             Self::New => "new",
             Self::Reuse => "reuse",
-            Self::Bypass => "bypass",
-            Self::RetryAfterStaleReuse => "retry_after_stale_reuse",
         }
     }
 }

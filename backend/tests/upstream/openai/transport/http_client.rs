@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn reqwest_client_should_keep_http2_fallback_hot_while_idle() {
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/upstream/openai/transport/client.rs"),
+    )
+    .expect("transport client source");
+
+    for setting in [
+        ".pool_idle_timeout(None::<Duration>)",
+        ".http2_keep_alive_interval(Duration::from_secs(30))",
+        ".http2_keep_alive_timeout(Duration::from_secs(5))",
+        ".http2_keep_alive_while_idle(true)",
+    ] {
+        assert!(source.contains(setting), "missing HTTP/2 setting {setting}");
+    }
+    assert!(!source.contains(".http1_only()"));
+}
+
+#[test]
 fn endpoints_should_join_backend_paths() {
     assert_eq!(
         codex_proxy_rs::upstream::openai::transport::endpoint_url(

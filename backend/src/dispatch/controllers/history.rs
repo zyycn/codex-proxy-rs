@@ -16,7 +16,8 @@ use crate::{
         transport::observation::{UpstreamFailureFacts, UpstreamFailureKind},
     },
     upstream::openai::{
-        protocol::responses::{CodexResponsesRequest, StreamCommitPolicy},
+        protocol::responses::{CodexResponsesRequest, PreviousResponseScope, StreamCommitPolicy},
+        transport::CodexBackendTransport,
         transport::websocket::PreviousResponseUnavailableReason,
     },
 };
@@ -97,6 +98,7 @@ impl HistoryController {
                 ConnectionReplayUpdate::Unavailable
             }
         };
+        request.local_replay_available = !matches!(update, ConnectionReplayUpdate::Unavailable);
         ConnectionReplayPlan { update }
     }
 
@@ -188,29 +190,7 @@ impl HistoryController {
                 .local_replay_input
                 .as_deref()
                 .map(|replay_input| full_replay_request(request, replay_input)),
-            HistorySource::Managed => {
-                let entry = state.managed_entry.as_ref();
-                match entry {
-                    Some(entry)
-                        if entry.account_id == account_id && !state.replay_owner_account =>
-                    {
-                        let mut prepared = request.clone();
-                        prepared.local_conversation_id = Some(entry.conversation_id.clone());
-                        prepared.stream_commit_policy = StreamCommitPolicy::UntilOutputOrTerminal;
-                        prepared.previous_response_scope = Some(entry.continuation_scope);
-                        if prepared.turn_state.as_deref().is_none_or(str::is_empty) {
-                            prepared.turn_state.clone_from(&entry.turn_state);
-                        }
-                        Some(prepared)
-                    }
-                    Some(entry) => state.local_replay_input.as_deref().map(|replay_input| {
-                        let mut prepared = full_replay_request(request, replay_input);
-                        prepared.local_conversation_id = Some(entry.conversation_id.clone());
-                        prepared
-                    }),
-                    None => None,
-                }
-            }
+            HistorySource::Managed => prepare_managed_attempt(state, request, account_id),
         };
         prepared.ok_or_else(|| CROSS_ACCOUNT_HISTORY_UNAVAILABLE_MESSAGE.to_string())
     }
@@ -293,6 +273,22 @@ impl HistoryController {
         ))
     }
 
+    pub(in crate::dispatch) fn continuation_scope(
+        request: &CodexResponsesRequest,
+        transport: CodexBackendTransport,
+        connection_local_continuation: bool,
+    ) -> PreviousResponseScope {
+        if request.store() {
+            PreviousResponseScope::Persisted
+        } else if transport == CodexBackendTransport::WebSocket && connection_local_continuation {
+            PreviousResponseScope::ConnectionLocal
+        } else if request.local_replay_available {
+            PreviousResponseScope::ReplayRequired
+        } else {
+            PreviousResponseScope::Unavailable
+        }
+    }
+
     fn can_retry_same_account(state: &HistoryState, account_id: &str) -> bool {
         let Some(entry) = state.managed_entry.as_ref() else {
             return false;
@@ -301,6 +297,48 @@ impl HistoryController {
             && state.local_replay_input.is_some()
             && !state.replay_owner_account
     }
+}
+
+fn prepare_managed_attempt(
+    state: &HistoryState,
+    request: &CodexResponsesRequest,
+    account_id: &str,
+) -> Option<CodexResponsesRequest> {
+    let entry = state.managed_entry.as_ref()?;
+    if entry.account_id != account_id || state.replay_owner_account {
+        return replay_for_conversation(state, request, &entry.conversation_id);
+    }
+
+    match entry.continuation_scope {
+        PreviousResponseScope::Persisted
+        | PreviousResponseScope::ConnectionLocal
+        | PreviousResponseScope::ExternalUnknown => {
+            let mut prepared = request.clone();
+            prepared.local_conversation_id = Some(entry.conversation_id.clone());
+            prepared.stream_commit_policy = StreamCommitPolicy::UntilOutputOrTerminal;
+            prepared.previous_response_scope = Some(entry.continuation_scope);
+            if prepared.turn_state.as_deref().is_none_or(str::is_empty) {
+                prepared.turn_state.clone_from(&entry.turn_state);
+            }
+            Some(prepared)
+        }
+        PreviousResponseScope::ReplayRequired => {
+            replay_for_conversation(state, request, &entry.conversation_id)
+        }
+        PreviousResponseScope::Unavailable => None,
+    }
+}
+
+fn replay_for_conversation(
+    state: &HistoryState,
+    request: &CodexResponsesRequest,
+    conversation_id: &str,
+) -> Option<CodexResponsesRequest> {
+    state.local_replay_input.as_deref().map(|replay_input| {
+        let mut prepared = full_replay_request(request, replay_input);
+        prepared.local_conversation_id = Some(conversation_id.to_string());
+        prepared
+    })
 }
 
 impl HistoryState {

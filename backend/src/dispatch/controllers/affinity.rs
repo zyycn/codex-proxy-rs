@@ -10,14 +10,14 @@ use crate::dispatch::affinity::{
 };
 use crate::upstream::openai::protocol::{
     events::TokenUsage,
-    responses::{CodexResponsesRequest, completed_response_metadata},
+    responses::{CodexResponsesRequest, PreviousResponseScope, completed_response_metadata},
 };
 
 const REDIS_BEST_EFFORT_TIMEOUT: Duration = Duration::from_millis(100);
 
 pub(super) struct AffinityController;
 
-pub(super) struct StreamExit<'a> {
+pub(super) struct ResponseExit<'a> {
     pub affinity: &'a SessionAffinityService,
     pub conversation_id: Option<&'a str>,
     pub request: &'a CodexResponsesRequest,
@@ -25,6 +25,11 @@ pub(super) struct StreamExit<'a> {
     pub body: &'a str,
     pub turn_state: Option<String>,
     pub usage: Option<TokenUsage>,
+    pub continuation_scope: PreviousResponseScope,
+}
+
+pub(super) struct StreamExit<'a> {
+    pub response: ResponseExit<'a>,
     pub completed: bool,
 }
 
@@ -66,53 +71,29 @@ impl AffinityController {
         }
     }
 
-    pub(super) async fn leave_complete(
-        affinity: &SessionAffinityService,
-        conversation_id: Option<&str>,
-        request: &CodexResponsesRequest,
-        account_id: &str,
-        body: &str,
-        turn_state: Option<String>,
-        usage: Option<TokenUsage>,
-    ) {
-        record_response_affinity(
-            affinity,
-            conversation_id,
-            request,
-            account_id,
-            body,
-            turn_state,
-            usage,
-        )
-        .await;
+    pub(super) async fn leave_complete(exit: ResponseExit<'_>) {
+        record_response_affinity(exit).await;
     }
 
     pub(super) async fn leave_stream(exit: StreamExit<'_>) {
         if !exit.completed {
             return;
         }
-        record_response_affinity(
-            exit.affinity,
-            exit.conversation_id,
-            exit.request,
-            exit.account_id,
-            exit.body,
-            exit.turn_state,
-            exit.usage,
-        )
-        .await;
+        record_response_affinity(exit.response).await;
     }
 }
 
-async fn record_response_affinity(
-    affinity: &SessionAffinityService,
-    conversation_id: Option<&str>,
-    request: &CodexResponsesRequest,
-    account_id: &str,
-    body: &str,
-    turn_state: Option<String>,
-    usage: Option<TokenUsage>,
-) {
+async fn record_response_affinity(exit: ResponseExit<'_>) {
+    let ResponseExit {
+        affinity,
+        conversation_id,
+        request,
+        account_id,
+        body,
+        turn_state,
+        usage,
+        continuation_scope,
+    } = exit;
     let metadata = match completed_response_metadata(body) {
         Ok(Some(metadata)) => metadata,
         Ok(None) => return,
@@ -131,11 +112,7 @@ async fn record_response_affinity(
         input_tokens: usage.map(|usage| usage.input_tokens),
         function_call_ids: metadata.function_call_ids,
         variant_hash: Some(compute_variant_hash(request)),
-        continuation_scope: if request.store() {
-            crate::upstream::openai::protocol::responses::PreviousResponseScope::Persisted
-        } else {
-            crate::upstream::openai::protocol::responses::PreviousResponseScope::ConnectionLocal
-        },
+        continuation_scope,
         created_at: Utc::now(),
     };
     match timeout(

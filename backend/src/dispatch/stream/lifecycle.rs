@@ -145,6 +145,7 @@ impl ResponseDispatchService {
             response,
             decoder,
             initial_batch,
+            first_event_ms,
         } = established;
         let EstablishedAttemptContext {
             request,
@@ -178,6 +179,8 @@ impl ResponseDispatchService {
                 turn_state: response.turn_state,
                 diagnostics: response.diagnostics,
                 response_metadata: response.response_metadata,
+                transport_metrics: response.transport_metrics,
+                connection_local_continuation: response.connection_local_continuation,
                 attempt,
                 attempts,
                 started_at,
@@ -188,6 +191,7 @@ impl ResponseDispatchService {
             finalizer,
             decoder,
             initial_batch,
+            first_event_ms,
             response.body,
             self.shutdown.clone(),
         ))

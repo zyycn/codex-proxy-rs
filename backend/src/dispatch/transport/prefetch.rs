@@ -1,6 +1,8 @@
 //! 上游 SSE 提交边界前的规范事件预取。
 
 use bytes::Bytes;
+use std::time::Instant;
+
 use futures::StreamExt;
 
 use crate::{
@@ -29,15 +31,18 @@ pub(in crate::dispatch) struct PrefetchedStream {
     pub bytes: Bytes,
     pub initial_batch: CanonicalStreamBatch,
     pub body: CodexBackendSseStream,
+    pub first_event_ms: i64,
 }
 
 pub(in crate::dispatch) async fn prefetch_until_commit(
     mut body: CodexBackendSseStream,
     decoder: &mut CanonicalStreamDecoder,
     policy: StreamCommitPolicy,
+    started_at: Instant,
 ) -> Result<PrefetchedStream, StreamPrefetchError> {
     let mut prefetched = Vec::new();
     let mut initial_batch = CanonicalStreamBatch { chunks: Vec::new() };
+    let mut first_event_ms = None;
     while !decoder.commit_boundary_reached(policy) {
         let Some(next) = body.next().await else {
             if prefetched.is_empty() {
@@ -50,6 +55,8 @@ pub(in crate::dispatch) async fn prefetch_until_commit(
             return Err(StreamPrefetchError::NoCommitBoundary);
         };
         let chunk = next?;
+        first_event_ms
+            .get_or_insert_with(|| crate::infra::time::elapsed_millis_i64(started_at).max(1));
         prefetched.extend_from_slice(&chunk);
         let batch = decoder.push(chunk)?;
         initial_batch.append(batch);
@@ -68,5 +75,6 @@ pub(in crate::dispatch) async fn prefetch_until_commit(
         bytes: Bytes::from(prefetched),
         initial_batch,
         body,
+        first_event_ms: first_event_ms.ok_or(StreamPrefetchError::Empty)?,
     })
 }

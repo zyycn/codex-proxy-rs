@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::upstream::openai::protocol::responses::{
-    CodexResponsesRequest, CodexTransport, http_sse_fallback_allowed, transport_for_request,
-};
+use crate::upstream::openai::protocol::responses::{CodexResponsesRequest, transport_requirement};
 use crate::upstream::openai::protocol::sse::encode_sse_event;
 
 const REDACTED_PAYLOAD_VALUE: &str = "<redacted>";
@@ -205,18 +203,10 @@ pub fn websocket_audit_artifact_from_attempt(
     payload: PayloadAuditSnapshot,
 ) -> WebSocketAuditArtifact {
     WebSocketAuditArtifact {
-        transport_mode: websocket_transport_mode_name(request).to_string(),
-        fallback_allowed: http_sse_fallback_allowed(request),
+        transport_mode: transport_requirement(request).as_str().to_string(),
+        fallback_allowed: transport_requirement(request).allows_pre_send_http_fallback(),
         opening: Some(opening),
         payload: Some(payload),
-    }
-}
-
-fn websocket_transport_mode_name(request: &CodexResponsesRequest) -> &'static str {
-    match transport_for_request(request) {
-        CodexTransport::HttpSse => "http_sse",
-        CodexTransport::WebSocketPreferred => "websocket_preferred",
-        CodexTransport::WebSocketRequired => "websocket_required",
     }
 }
 

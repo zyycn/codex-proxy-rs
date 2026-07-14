@@ -341,51 +341,18 @@ async fn codex_backend_client_stream_should_keep_reused_socket_after_structural_
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
 }
 
-#[tokio::test(start_paused = true)]
-async fn codex_backend_client_stream_should_keep_bypass_socket_after_structural_activity() {
+#[tokio::test]
+async fn codex_backend_client_stream_should_use_http_when_pool_is_at_cap() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let accepted_connections = Arc::new(AtomicUsize::new(0));
     let accepted_connections_for_server = Arc::clone(&accepted_connections);
     let server = tokio::spawn(async move {
-        let (first_stream, _) = listener.accept().await.unwrap();
+        let (mut first_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-        let mut first_websocket = accept_codex_test_websocket(first_stream).await;
-        let _first_message = first_websocket.next().await.unwrap().unwrap();
-        first_websocket
-            .send(Message::Text(
-                json!({
-                    "type": "response.created",
-                    "response": {
-                        "id": "resp_bypass_first_token_stalled",
-                        "object": "response"
-                    }
-                })
-                .to_string()
-                .into(),
-            ))
-            .await
-            .unwrap();
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        first_websocket
-            .send(Message::Text(
-                json!({
-                    "type": "response.output_text.delta",
-                    "delta": "bypass delayed output"
-                })
-                .to_string()
-                .into(),
-            ))
-            .await
-            .unwrap();
-        first_websocket
-            .send(Message::Text(
-                completed_websocket_response("resp_bypass_delayed", 3, 1).into(),
-            ))
-            .await
-            .unwrap();
-        first_websocket.close(None).await.unwrap();
+        let request = read_http_request(&mut first_stream).await;
+        assert!(request.starts_with("POST /codex/responses HTTP/1.1"));
+        write_completed_sse_response(&mut first_stream).await;
     });
     let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
         max_per_account: 0,
@@ -406,22 +373,22 @@ async fn codex_backend_client_stream_should_keep_bypass_socket_after_structural_
             request_context("req_structural_bypass", Some("chatgpt-account")),
         )
         .await
-        .expect("structural activity should keep the bypass websocket open");
-    let decision = response.websocket_pool_decision;
+        .expect("pool cap should select HTTP before sending payload");
+    assert_eq!(response.transport, CodexBackendTransport::HttpSse);
+    assert_eq!(
+        response.transport_metrics.decision,
+        Some(CodexTransportDecision::Http2PoolUnavailable)
+    );
+    assert!(response.websocket_pool_decision.is_none());
     let mut stream = response.body;
     let mut body = String::new();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.expect("delayed bypass stream chunk should be valid");
+        let chunk = chunk.expect("HTTP fallback stream chunk should be valid");
         body.push_str(std::str::from_utf8(&chunk).unwrap());
     }
     server.await.unwrap();
 
-    assert!(body.contains("resp_bypass_first_token_stalled"));
-    assert!(body.contains("bypass delayed output"));
-    assert!(body.contains("resp_bypass_delayed"));
-    let decision = decision.expect("bypass decision");
-    assert_eq!(decision.kind(), "bypass");
-    assert_eq!(decision.reason(), Some("cap"));
+    assert!(body.contains("response.completed"));
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
 }
 
@@ -489,7 +456,7 @@ async fn codex_backend_client_should_not_reuse_pooled_websocket_across_local_acc
 }
 
 #[tokio::test]
-async fn websocket_pool_should_bypass_busy_key_with_one_shot_connections() {
+async fn websocket_pool_should_use_http_while_exact_key_is_busy() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (release_first_tx, release_first_rx) = tokio::sync::oneshot::channel();
@@ -509,27 +476,12 @@ async fn websocket_pool_should_bypass_busy_key_with_one_shot_connections() {
             .await
             .unwrap();
 
-        let (second_stream, _) = listener.accept().await.unwrap();
-        let mut second_websocket = accept_codex_test_websocket(second_stream).await;
-        let _second_message = second_websocket.next().await.unwrap().unwrap();
-        second_websocket
-            .send(Message::Text(
-                completed_websocket_response("resp_busy_second", 2, 1).into(),
-            ))
-            .await
-            .unwrap();
-        second_websocket.close(None).await.unwrap();
-
-        let (third_stream, _) = listener.accept().await.unwrap();
-        let mut third_websocket = accept_codex_test_websocket(third_stream).await;
-        let _third_message = third_websocket.next().await.unwrap().unwrap();
-        third_websocket
-            .send(Message::Text(
-                completed_websocket_response("resp_busy_third", 2, 1).into(),
-            ))
-            .await
-            .unwrap();
-        third_websocket.close(None).await.unwrap();
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_http_request(&mut stream).await;
+            assert!(request.starts_with("POST /codex/responses HTTP/1.1"));
+            write_completed_sse_response(&mut stream).await;
+        }
 
         release_first_rx.await.unwrap();
         first_websocket
@@ -571,30 +523,30 @@ async fn websocket_pool_should_bypass_busy_key_with_one_shot_connections() {
             request_context("req_busy_second", Some("chatgpt-account")),
         )
         .await
-        .expect("busy key should bypass with a one-shot second connection");
+        .expect("busy key should fall back to HTTP before payload send");
     let third = backend
         .create_response(
             &request,
             request_context("req_busy_third", Some("chatgpt-account")),
         )
         .await
-        .expect("busy key should bypass with a one-shot third connection");
+        .expect("busy key should keep using HTTP while the socket is occupied");
 
     release_first_tx.send(()).unwrap();
     while first.next().await.transpose().unwrap().is_some() {}
     server.await.unwrap();
 
-    assert!(second.body.contains("resp_busy_second"));
-    assert!(third.body.contains("resp_busy_third"));
-    assert_eq!(second.websocket_pool_decision.unwrap().kind(), "bypass");
+    assert!(second.body.contains("response.completed"));
+    assert!(third.body.contains("response.completed"));
+    assert_eq!(second.transport, CodexBackendTransport::HttpSse);
+    assert_eq!(third.transport, CodexBackendTransport::HttpSse);
     assert_eq!(
-        second.websocket_pool_decision.unwrap().reason(),
-        Some("busy")
+        second.transport_metrics.decision,
+        Some(CodexTransportDecision::Http2PoolUnavailable)
     );
-    assert_eq!(third.websocket_pool_decision.unwrap().kind(), "bypass");
     assert_eq!(
-        third.websocket_pool_decision.unwrap().reason(),
-        Some("busy")
+        third.transport_metrics.decision,
+        Some(CodexTransportDecision::Http2PoolUnavailable)
     );
 }
 
@@ -687,7 +639,7 @@ async fn websocket_pool_should_release_slot_when_client_drops_stream() {
 }
 
 #[tokio::test]
-async fn websocket_pool_should_bypass_new_keys_after_account_cap() {
+async fn websocket_pool_should_use_http_for_new_keys_after_account_cap() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let accepted_connections = Arc::new(AtomicUsize::new(0));
@@ -704,18 +656,12 @@ async fn websocket_pool_should_bypass_new_keys_after_account_cap() {
             .await
             .unwrap();
 
-        for response_id in ["resp_cap_second", "resp_cap_third"] {
-            let (stream, _) = listener.accept().await.unwrap();
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().await.unwrap();
             accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-            let mut websocket = accept_codex_test_websocket(stream).await;
-            let _message = websocket.next().await.unwrap().unwrap();
-            websocket
-                .send(Message::Text(
-                    completed_websocket_response(response_id, 2, 1).into(),
-                ))
-                .await
-                .unwrap();
-            websocket.close(None).await.unwrap();
+            let request = read_http_request(&mut stream).await;
+            assert!(request.starts_with("POST /codex/responses HTTP/1.1"));
+            write_completed_sse_response(&mut stream).await;
         }
         drop(first_websocket);
     });
@@ -742,27 +688,28 @@ async fn websocket_pool_should_bypass_new_keys_after_account_cap() {
             request_context("req_cap_second", Some("chatgpt-account")),
         )
         .await
-        .expect("new key over account cap should use one-shot connection");
+        .expect("new key over account cap should use HTTP");
     let third = backend
         .create_response(
             &second_request,
             request_context("req_cap_third", Some("chatgpt-account")),
         )
         .await
-        .expect("capped key should keep bypassing instead of entering the pool");
+        .expect("capped key should keep using HTTP instead of opening one-shot sockets");
     server.await.unwrap();
 
     assert!(first.body.contains("resp_cap_first"));
-    assert!(second.body.contains("resp_cap_second"));
-    assert!(third.body.contains("resp_cap_third"));
+    assert!(second.body.contains("response.completed"));
+    assert!(third.body.contains("response.completed"));
     assert_eq!(first.websocket_pool_decision.unwrap().kind(), "new");
-    assert_eq!(second.websocket_pool_decision.unwrap().kind(), "bypass");
     assert_eq!(
-        second.websocket_pool_decision.unwrap().reason(),
-        Some("cap")
+        second.transport_metrics.decision,
+        Some(CodexTransportDecision::Http2PoolUnavailable)
     );
-    assert_eq!(third.websocket_pool_decision.unwrap().kind(), "bypass");
-    assert_eq!(third.websocket_pool_decision.unwrap().reason(), Some("cap"));
+    assert_eq!(
+        third.transport_metrics.decision,
+        Some(CodexTransportDecision::Http2PoolUnavailable)
+    );
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 3);
 }
 
@@ -828,6 +775,9 @@ async fn websocket_pool_should_evict_idle_connection_when_liveness_lapses_despit
     tokio::time::pause();
     tokio::time::advance(Duration::from_millis(25)).await;
     tokio::task::yield_now().await;
+    // 只加速首条 idle 连接的失活窗口；恢复实时时钟，避免新连接在发送
+    // response.create 前被测试时钟自动推进到下一次 liveness timeout。
+    tokio::time::resume();
     let second = backend
         .create_response(
             &request,
@@ -1174,31 +1124,11 @@ async fn codex_backend_client_should_stop_reusing_pooled_websockets_after_shutdo
             .expect("close frame should be valid");
         std::assert_matches!(close, Message::Close(_));
 
-        let (second_stream, _) = listener.accept().await.unwrap();
+        let (mut second_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-        let mut second_websocket = accept_codex_test_websocket(second_stream).await;
-        let _second_message = second_websocket.next().await.unwrap().unwrap();
-        second_websocket
-            .send(Message::Text(
-                json!({
-                    "type": "response.completed",
-                    "response": {
-                        "id": "resp_pool_shutdown_second",
-                        "object": "response",
-                        "output": [],
-                        "usage": {
-                            "input_tokens": 4,
-                            "output_tokens": 1,
-                            "total_tokens": 5
-                        }
-                    }
-                })
-                .to_string()
-                .into(),
-            ))
-            .await
-            .unwrap();
-        second_websocket.close(None).await.unwrap();
+        let request = read_http_request(&mut second_stream).await;
+        assert!(request.starts_with("POST /codex/responses HTTP/1.1"));
+        write_completed_sse_response(&mut second_stream).await;
     });
     let pool = Arc::new(CodexWebSocketPool::with_config(
         websocket_pool_config_for_tests(None, None, None),
@@ -1233,11 +1163,16 @@ async fn codex_backend_client_should_stop_reusing_pooled_websockets_after_shutdo
             request_context("req_pool_shutdown_second", Some("chatgpt-account")),
         )
         .await
-        .expect("second websocket response should bypass the shut down pool");
+        .expect("shut down pool should select HTTP without opening another websocket");
     server.await.unwrap();
 
     assert!(first.body.contains("resp_pool_shutdown_first"));
-    assert!(second.body.contains("resp_pool_shutdown_second"));
+    assert!(second.body.contains("response.completed"));
+    assert_eq!(second.transport, CodexBackendTransport::HttpSse);
+    assert_eq!(
+        second.transport_metrics.decision,
+        Some(CodexTransportDecision::Http2PoolUnavailable)
+    );
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
 }
 

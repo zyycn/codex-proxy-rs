@@ -53,6 +53,7 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
     finalizer: StreamFinalizer,
     decoder: CanonicalStreamDecoder,
     initial_batch: CanonicalStreamBatch,
+    first_event_ms: i64,
     body: CodexBackendSseStream,
     shutdown: CancellationToken,
 ) -> ResponseDispatchStream {
@@ -67,6 +68,7 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
             &event_sender,
             LiveRunInputs {
                 initial_batch,
+                first_event_ms,
                 body,
                 cancel: cancel_receiver,
                 decoder,
@@ -90,6 +92,7 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
 
 struct LiveRunInputs {
     initial_batch: CanonicalStreamBatch,
+    first_event_ms: i64,
     body: CodexBackendSseStream,
     cancel: oneshot::Receiver<()>,
     decoder: CanonicalStreamDecoder,
@@ -104,6 +107,7 @@ async fn run_live_response_stream(
 ) -> StreamSummary {
     let LiveRunInputs {
         initial_batch,
+        first_event_ms,
         mut body,
         mut cancel,
         mut decoder,
@@ -131,6 +135,7 @@ async fn run_live_response_stream(
             body_bytes,
             terminal_chunks,
             first_token_ms,
+            first_event_ms,
             &decoder,
         );
     }
@@ -197,6 +202,7 @@ async fn run_live_response_stream(
         body_bytes,
         terminal_chunks,
         first_token_ms,
+        first_event_ms,
         &decoder,
     )
 }
@@ -308,6 +314,7 @@ fn stream_summary(
     body: Vec<u8>,
     terminal_chunks: Vec<CanonicalResponseChunk>,
     first_token_ms: Option<i64>,
+    first_event_ms: i64,
     decoder: &CanonicalStreamDecoder,
 ) -> StreamSummary {
     StreamSummary {
@@ -315,6 +322,7 @@ fn stream_summary(
         body,
         terminal_chunks,
         first_token_ms,
+        first_event_ms,
         usage: decoder.usage(),
         last_response_id: decoder.last_response_id().map(ToString::to_string),
     }

@@ -355,6 +355,7 @@ async fn responses_should_use_websocket_upstream_by_default_while_serving_sse() 
                 .uri("/v1/responses")
                 .header("authorization", format!("Bearer {api_key}"))
                 .header("content-type", "application/json")
+                .header("conversation-id", "conversation-ws-default-warmup")
                 .body(Body::from(
                     json!({
                         "model": "gpt-5.5",
@@ -411,6 +412,7 @@ async fn responses_non_stream_should_record_websocket_transport_metadata() {
                 .uri("/v1/responses")
                 .header("authorization", format!("Bearer {api_key}"))
                 .header("content-type", "application/json")
+                .header("conversation-id", "conversation-ws-non-stream-warmup")
                 .body(Body::from(
                     json!({
                         "model": "gpt-5.5",
@@ -434,7 +436,24 @@ async fn responses_non_stream_should_record_websocket_transport_metadata() {
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(metadata["stream"], false);
     assert_eq!(event.transport.as_deref(), Some("websocket"));
-    assert!(metadata.get("websocketPool").is_none());
+    assert_eq!(metadata["websocketPool"]["kind"], "new");
+    assert_eq!(metadata["transportDecision"], "ws_required");
+    assert!(
+        metadata["wsConnectMs"]
+            .as_i64()
+            .is_some_and(|value| value > 0)
+    );
+    assert!(
+        metadata["transportDecisionWaitMs"]
+            .as_i64()
+            .is_some_and(|value| value > 0)
+    );
+    assert!(
+        metadata["firstEventMs"]
+            .as_i64()
+            .is_some_and(|value| value > 0)
+    );
+    assert_eq!(metadata["httpVersion"], "HTTP/1.1");
 }
 
 #[tokio::test]

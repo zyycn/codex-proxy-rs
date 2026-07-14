@@ -36,6 +36,7 @@ impl CodexBackendClient {
                     body,
                     diagnostics,
                     set_cookie_headers: Vec::new(),
+                    transport: super::client::CodexBackendTransport::HttpSse,
                 });
             }
 
@@ -55,6 +56,7 @@ impl CodexBackendClient {
             ),
             diagnostics: CodexUpstreamDiagnostics::with_status(StatusCode::BAD_GATEWAY.as_u16()),
             set_cookie_headers: Vec::new(),
+            transport: super::client::CodexBackendTransport::HttpSse,
         })
     }
 }

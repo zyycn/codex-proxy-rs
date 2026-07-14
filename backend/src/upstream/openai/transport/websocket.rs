@@ -26,7 +26,8 @@ use tungstenite::{
 use crate::infra::time::china_filename_timestamp_millis;
 use crate::upstream::openai::protocol::events::{self, TokenUsage};
 use crate::upstream::openai::protocol::responses::{
-    CodexResponsesRequest, PreviousResponseScope, response_body_has_first_output,
+    CodexResponsesRequest, TransportRequirement, response_body_has_first_output,
+    transport_requirement,
 };
 use crate::upstream::openai::protocol::sse::SseError;
 use crate::upstream::openai::protocol::websocket::{
@@ -36,10 +37,14 @@ use crate::upstream::openai::protocol::websocket::{
     websocket_response_create_payload_text,
 };
 
+use super::websocket_breaker::{
+    WebSocketOriginBreaker, WebSocketOriginBreakerDecision, WebSocketOriginBreakerPermit,
+};
 use super::websocket_pool::{
     CodexWebSocketConnectionMetadata, CodexWebSocketPool, CodexWebSocketPoolKey,
     PooledWebSocketConnection, WebSocketContinuationState, WebSocketPoolAcquire,
-    WebSocketPoolDecision, WebSocketPoolLease,
+    WebSocketPoolBypassReason, WebSocketPoolConnectOutcome, WebSocketPoolDecision,
+    WebSocketPoolLease,
 };
 use super::websocket_pump::{PumpExitReason, PumpKeepalive, PumpedWebSocket, RawWsStream};
 use super::{client::CodexResponseMetadata, diagnostics::CodexUpstreamDiagnostics, response_meta};
@@ -51,6 +56,7 @@ const WEBSOCKET_EXTENSIONS: &str = "permessage-deflate; client_max_window_bits";
 const WEBSOCKET_RECEIVE_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
 const WEBSOCKET_ACTIVE_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const WEBSOCKET_FAST_PATH_BUDGET: Duration = Duration::from_millis(800);
 const WEBSOCKET_SEND_TIMEOUT: Duration = WEBSOCKET_ACTIVE_STREAM_IDLE_TIMEOUT;
 const WEBSOCKET_STREAM_BUFFER: usize = 16;
 /// WebSocket audit artifact 输出目录环境变量。
@@ -119,27 +125,18 @@ pub enum WebSocketContinuationRequirement {
 
 impl WebSocketContinuationRequirement {
     fn from_request(request: &CodexResponsesRequest) -> Self {
-        match request.previous_response_id() {
-            None => Self::NewChain,
-            Some(response_id)
-                if request.previous_response_scope == Some(PreviousResponseScope::Persisted)
-                    || (request.previous_response_scope.is_none() && request.store()) =>
-            {
-                Self::Persisted {
-                    response_id: response_id.to_string(),
-                }
+        let response_id = request.previous_response_id().map(ToString::to_string);
+        match (transport_requirement(request), response_id) {
+            (TransportRequirement::ExactWebSocketContinuation, Some(response_id)) => {
+                Self::ConnectionLocal { response_id }
             }
-            Some(response_id)
-                if request.previous_response_scope
-                    == Some(PreviousResponseScope::ExternalUnknown) =>
-            {
-                Self::ExternalUnknown {
-                    response_id: response_id.to_string(),
-                }
+            (TransportRequirement::PersistedContinuation, Some(response_id)) => {
+                Self::Persisted { response_id }
             }
-            Some(response_id) => Self::ConnectionLocal {
-                response_id: response_id.to_string(),
-            },
+            (TransportRequirement::ExternalUnknown, Some(response_id)) => {
+                Self::ExternalUnknown { response_id }
+            }
+            _ => Self::NewChain,
         }
     }
 
@@ -315,7 +312,11 @@ async fn connect_websocket(
 ) -> Result<(RawWsStream, WsResponse<Option<Vec<u8>>>), CodexWebSocketExchangeError> {
     let request = websocket_handshake_request(connection)?;
     let connector = super::tls::maybe_build_rustls_client_config_with_custom_ca()
-        .map_err(|error| tungstenite::Error::Io(std::io::Error::other(error)))?
+        .map_err(|error| {
+            CodexWebSocketExchangeError::Connect(tungstenite::Error::Io(std::io::Error::other(
+                error,
+            )))
+        })?
         .map(Connector::Rustls);
     let result = timeout(
         WEBSOCKET_CONNECT_TIMEOUT,
@@ -328,7 +329,7 @@ async fn connect_websocket(
     match result {
         Ok((websocket, response)) => Ok((websocket, response)),
         Err(tungstenite::Error::Http(response)) => Err(websocket_opening_error(response.as_ref())),
-        Err(error) => Err(error.into()),
+        Err(error) => Err(CodexWebSocketExchangeError::Connect(error)),
     }
 }
 
@@ -423,70 +424,62 @@ fn request_line_for_endpoint(endpoint: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Fresh request execution
+// Prepare-before-send transport boundary
 // ---------------------------------------------------------------------------
 
-async fn execute_fresh_response_create_request(
-    request: &CodexWebSocketRequest,
-    started_at: Instant,
+/// 尚未发送 `response.create` 的 WebSocket。只有该类型可以安全切换到 HTTP。
+pub(crate) struct PreparedWebSocket {
+    connection: PooledWebSocketConnection,
+    lease: Option<WebSocketPoolLease>,
+    reused: bool,
+    pool_decision: Option<WebSocketPoolDecision>,
+    connect_elapsed: Option<Duration>,
+    decision_wait_elapsed: Duration,
     initial_event_timeout: Option<Duration>,
-) -> Result<CodexWebSocketExchange, CodexWebSocketExchangeError> {
-    let (websocket, response) =
-        connect_pumped_websocket(request.connection(), PumpKeepalive::disabled()).await?;
-    send_websocket_request(&websocket, request.payload_text()).await?;
-
-    let metadata = websocket_connection_metadata(&response);
-    let (exchange, websocket, _metadata, _continuation, _terminal) = collect_websocket_response(
-        websocket,
-        metadata,
-        WebSocketContinuationState::default(),
-        false,
-        started_at,
-        initial_event_timeout,
-    )
-    .await?;
-    websocket.close().await;
-    Ok(exchange)
 }
 
-async fn execute_fresh_response_create_request_stream(
-    request: &CodexWebSocketRequest,
-    initial_event_timeout: Option<Duration>,
-) -> Result<CodexWebSocketStreamingExchange, CodexWebSocketExchangeError> {
-    let (websocket, response) =
-        connect_pumped_websocket(request.connection(), PumpKeepalive::disabled()).await?;
-    send_websocket_request(&websocket, request.payload_text()).await?;
+impl PreparedWebSocket {
+    pub(crate) fn pool_decision(&self) -> Option<WebSocketPoolDecision> {
+        self.pool_decision
+    }
 
-    let metadata = websocket_connection_metadata(&response);
-    Ok(stream_websocket_response(
-        websocket,
-        metadata,
-        None,
-        false,
-        initial_event_timeout,
-    ))
+    pub(crate) fn reused(&self) -> bool {
+        self.reused
+    }
+
+    pub(crate) fn connect_elapsed(&self) -> Option<Duration> {
+        self.connect_elapsed
+    }
+
+    pub(crate) fn decision_wait_elapsed(&self) -> Duration {
+        self.decision_wait_elapsed
+    }
 }
 
-// ---------------------------------------------------------------------------
-// Pool-aware execution
-// ---------------------------------------------------------------------------
-
-pub(crate) async fn execute_response_create_request_with_pool(
+/// 只建立或租用 WebSocket，不发送 payload。
+pub(crate) async fn prepare_response_create_request_with_pool(
     request: &CodexWebSocketRequest,
     pool: Option<(&CodexWebSocketPool, CodexWebSocketPoolKey)>,
-    started_at: Instant,
+    breaker: &WebSocketOriginBreaker,
+    origin_key: &str,
+    fast_path_budget: Option<Duration>,
+    require_pool: bool,
     fallback_initial_event_timeout: Option<Duration>,
-) -> Result<CodexWebSocketExchange, CodexWebSocketExchangeError> {
+) -> Result<PreparedWebSocket, CodexWebSocketExchangeError> {
+    let decision_started_at = Instant::now();
     let Some((pool, key)) = pool else {
-        if !request.continuation().permits_fresh_connection() {
+        if require_pool || !request.continuation().permits_fresh_connection() {
             return Err(continuation_unavailable(
                 PreviousResponseUnavailableReason::PoolUnavailable,
             ));
         }
-        return execute_fresh_response_create_request(
+        return prepare_unpooled_websocket(
             request,
-            started_at,
+            breaker,
+            origin_key,
+            fast_path_budget,
             fallback_initial_event_timeout,
+            decision_started_at,
         )
         .await;
     };
@@ -502,167 +495,214 @@ pub(crate) async fn execute_response_create_request_with_pool(
                     PreviousResponseUnavailableReason::LatestResponseMismatch,
                 ));
             }
-            let result = execute_pooled_response_create_request(
-                request,
-                pool,
-                lease,
-                *connection,
-                started_at,
-            )
-            .await;
-            match result {
-                Err(CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstOutput {
-                    ..
-                })
-                | Err(CodexWebSocketExchangeError::InitialEventTimeout { .. }) => {
-                    if !request.continuation().permits_fresh_connection() {
-                        return Err(continuation_unavailable(
-                            PreviousResponseUnavailableReason::ReusedConnectionLost,
-                        ));
-                    }
-                    let mut exchange = execute_fresh_response_create_request(
-                        request,
-                        started_at,
-                        pool.initial_event_timeout(),
-                    )
-                    .await?;
-                    exchange.pool_decision = Some(WebSocketPoolDecision::retry_after_stale_reuse());
-                    Ok(exchange)
-                }
-                Ok(mut exchange) => {
-                    exchange.pool_decision = Some(WebSocketPoolDecision::reuse());
-                    Ok(exchange)
-                }
-                Err(error) => Err(error),
-            }
+            Ok(PreparedWebSocket {
+                connection: *connection,
+                lease: Some(lease),
+                reused: true,
+                pool_decision: Some(WebSocketPoolDecision::reuse()),
+                connect_elapsed: None,
+                decision_wait_elapsed: decision_started_at.elapsed(),
+                initial_event_timeout: pool.initial_event_timeout(),
+            })
         }
-        WebSocketPoolAcquire::FreshReserved(lease) => {
+        WebSocketPoolAcquire::Connect(connect_lease) => {
             if !request.continuation().permits_fresh_connection() {
-                lease.discard().await;
+                connect_lease.failed().await;
                 return Err(continuation_unavailable(
                     PreviousResponseUnavailableReason::FreshConnectionRequired,
                 ));
             }
-            let result =
-                execute_fresh_pooled_response_create_request(request, pool, lease, started_at)
-                    .await;
-            result.map(|mut exchange| {
-                exchange.pool_decision = Some(WebSocketPoolDecision::new());
-                exchange
-            })
+            prepare_pooled_websocket(
+                request,
+                pool,
+                connect_lease,
+                breaker,
+                origin_key,
+                fast_path_budget,
+                decision_started_at,
+            )
+            .await
+        }
+        WebSocketPoolAcquire::Wait(waiter) => {
+            if require_pool || !request.continuation().permits_fresh_connection() {
+                return Err(continuation_unavailable(
+                    PreviousResponseUnavailableReason::ConnectionBusy,
+                ));
+            }
+            let outcome =
+                wait_for_shared_connect(waiter, fast_path_budget, decision_started_at).await?;
+            match outcome {
+                WebSocketPoolConnectOutcome::Ready => Err(continuation_unavailable(
+                    PreviousResponseUnavailableReason::ConnectionBusy,
+                )),
+                WebSocketPoolConnectOutcome::Failed | WebSocketPoolConnectOutcome::Pending => {
+                    Err(CodexWebSocketExchangeError::SharedConnectFailed)
+                }
+            }
         }
         WebSocketPoolAcquire::Bypass(reason) => {
-            if !request.continuation().permits_fresh_connection() {
-                return Err(continuation_unavailable(match reason {
-                    super::websocket_pool::WebSocketPoolBypassReason::Busy => {
-                        PreviousResponseUnavailableReason::ConnectionBusy
-                    }
-                    super::websocket_pool::WebSocketPoolBypassReason::Disabled
-                    | super::websocket_pool::WebSocketPoolBypassReason::Cap => {
-                        PreviousResponseUnavailableReason::PoolUnavailable
-                    }
-                }));
-            }
-            let mut exchange = execute_fresh_response_create_request(
-                request,
-                started_at,
-                pool.initial_event_timeout(),
-            )
-            .await?;
-            exchange.pool_decision = Some(WebSocketPoolDecision::bypass(reason));
-            Ok(exchange)
+            Err(continuation_unavailable(bypass_unavailable_reason(reason)))
         }
     }
 }
 
-pub(crate) async fn execute_response_create_request_stream_with_pool(
+async fn prepare_unpooled_websocket(
     request: &CodexWebSocketRequest,
-    pool: Option<(&CodexWebSocketPool, CodexWebSocketPoolKey)>,
-    fallback_initial_event_timeout: Option<Duration>,
-) -> Result<CodexWebSocketStreamingExchange, CodexWebSocketExchangeError> {
-    let Some((pool, key)) = pool else {
-        if !request.continuation().permits_fresh_connection() {
+    breaker: &WebSocketOriginBreaker,
+    origin_key: &str,
+    fast_path_budget: Option<Duration>,
+    initial_event_timeout: Option<Duration>,
+    decision_started_at: Instant,
+) -> Result<PreparedWebSocket, CodexWebSocketExchangeError> {
+    let permit = acquire_breaker_permit(breaker, origin_key)?;
+    let connected = connect_with_budget(
+        request.connection(),
+        PumpKeepalive::disabled(),
+        fast_path_budget,
+    )
+    .await;
+    let (connection, connect_elapsed) = finish_breaker_attempt(permit, connected)?;
+    Ok(PreparedWebSocket {
+        connection,
+        lease: None,
+        reused: false,
+        pool_decision: None,
+        connect_elapsed: Some(connect_elapsed),
+        decision_wait_elapsed: decision_started_at.elapsed(),
+        initial_event_timeout,
+    })
+}
+
+async fn prepare_pooled_websocket(
+    request: &CodexWebSocketRequest,
+    pool: &CodexWebSocketPool,
+    connect_lease: super::websocket_pool::WebSocketPoolConnectLease,
+    breaker: &WebSocketOriginBreaker,
+    origin_key: &str,
+    fast_path_budget: Option<Duration>,
+    decision_started_at: Instant,
+) -> Result<PreparedWebSocket, CodexWebSocketExchangeError> {
+    let permit = match acquire_breaker_permit(breaker, origin_key) {
+        Ok(permit) => permit,
+        Err(error) => {
+            connect_lease.failed().await;
+            return Err(error);
+        }
+    };
+    let connected =
+        connect_with_budget(request.connection(), pool.keepalive(), fast_path_budget).await;
+    let (connection, connect_elapsed) = match finish_breaker_attempt(permit, connected) {
+        Ok(connected) => connected,
+        Err(error) => {
+            connect_lease.failed().await;
+            return Err(error);
+        }
+    };
+    let connected = match connect_lease.connected(connection).await {
+        Ok(connected) => connected,
+        Err(connection) => {
+            connection.websocket.close().await;
             return Err(continuation_unavailable(
                 PreviousResponseUnavailableReason::PoolUnavailable,
             ));
         }
-        return execute_fresh_response_create_request_stream(
-            request,
-            fallback_initial_event_timeout,
-        )
-        .await;
     };
+    Ok(PreparedWebSocket {
+        connection: *connected.connection,
+        lease: Some(connected.lease),
+        reused: false,
+        pool_decision: Some(WebSocketPoolDecision::new()),
+        connect_elapsed: Some(connect_elapsed),
+        decision_wait_elapsed: decision_started_at.elapsed(),
+        initial_event_timeout: pool.initial_event_timeout(),
+    })
+}
 
-    match pool.acquire(&key).await {
-        WebSocketPoolAcquire::Reused { connection, lease } => {
-            if let WebSocketContinuationRequirement::ConnectionLocal { response_id } =
-                request.continuation()
-                && connection.continuation.latest_response_id() != Some(response_id.as_str())
-            {
-                lease.put(*connection).await;
-                return Err(continuation_unavailable(
-                    PreviousResponseUnavailableReason::LatestResponseMismatch,
-                ));
-            }
-            let result =
-                execute_pooled_response_create_request_stream(request, pool, lease, *connection)
-                    .await;
-            match result {
-                Err(CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstOutput {
-                    ..
-                })
-                | Err(CodexWebSocketExchangeError::InitialEventTimeout { .. }) => {
-                    if !request.continuation().permits_fresh_connection() {
-                        return Err(continuation_unavailable(
-                            PreviousResponseUnavailableReason::ReusedConnectionLost,
-                        ));
-                    }
-                    let mut exchange = execute_fresh_response_create_request_stream(
-                        request,
-                        pool.initial_event_timeout(),
-                    )
-                    .await?;
-                    exchange.pool_decision = Some(WebSocketPoolDecision::retry_after_stale_reuse());
-                    Ok(exchange)
-                }
-                Ok(mut exchange) => {
-                    exchange.pool_decision = Some(WebSocketPoolDecision::reuse());
-                    Ok(exchange)
-                }
-                Err(error) => Err(error),
-            }
+async fn connect_with_budget(
+    connection: &CodexWebSocketConnection,
+    keepalive: PumpKeepalive,
+    fast_path_budget: Option<Duration>,
+) -> Result<(PooledWebSocketConnection, Duration), CodexWebSocketExchangeError> {
+    let started_at = Instant::now();
+    let connected = match fast_path_budget {
+        Some(budget) => timeout(budget, connect_pumped_websocket(connection, keepalive))
+            .await
+            .map_err(|_| CodexWebSocketExchangeError::FastPathTimeout { timeout: budget })?,
+        None => connect_pumped_websocket(connection, keepalive).await,
+    }?;
+    let (websocket, response) = connected;
+    Ok((
+        PooledWebSocketConnection {
+            websocket,
+            metadata: websocket_connection_metadata(&response),
+            continuation: WebSocketContinuationState::default(),
+            created_at: tokio::time::Instant::now(),
+        },
+        started_at.elapsed(),
+    ))
+}
+
+fn acquire_breaker_permit(
+    breaker: &WebSocketOriginBreaker,
+    origin_key: &str,
+) -> Result<WebSocketOriginBreakerPermit, CodexWebSocketExchangeError> {
+    match breaker.try_acquire(origin_key) {
+        WebSocketOriginBreakerDecision::Allowed(permit) => Ok(permit),
+        WebSocketOriginBreakerDecision::Open => Err(CodexWebSocketExchangeError::OriginCircuitOpen),
+        WebSocketOriginBreakerDecision::HalfOpenBusy => {
+            Err(CodexWebSocketExchangeError::OriginHalfOpenBusy)
         }
-        WebSocketPoolAcquire::FreshReserved(lease) => {
-            if !request.continuation().permits_fresh_connection() {
-                lease.discard().await;
-                return Err(continuation_unavailable(
-                    PreviousResponseUnavailableReason::FreshConnectionRequired,
-                ));
-            }
-            let result =
-                execute_fresh_pooled_response_create_request_stream(request, pool, lease).await;
-            result.map(|mut exchange| {
-                exchange.pool_decision = Some(WebSocketPoolDecision::new());
-                exchange
-            })
+    }
+}
+
+fn finish_breaker_attempt(
+    permit: WebSocketOriginBreakerPermit,
+    connected: Result<(PooledWebSocketConnection, Duration), CodexWebSocketExchangeError>,
+) -> Result<(PooledWebSocketConnection, Duration), CodexWebSocketExchangeError> {
+    match connected {
+        Ok(connection) => {
+            permit.succeed();
+            Ok(connection)
         }
-        WebSocketPoolAcquire::Bypass(reason) => {
-            if !request.continuation().permits_fresh_connection() {
-                return Err(continuation_unavailable(match reason {
-                    super::websocket_pool::WebSocketPoolBypassReason::Busy => {
-                        PreviousResponseUnavailableReason::ConnectionBusy
-                    }
-                    super::websocket_pool::WebSocketPoolBypassReason::Disabled
-                    | super::websocket_pool::WebSocketPoolBypassReason::Cap => {
-                        PreviousResponseUnavailableReason::PoolUnavailable
-                    }
-                }));
-            }
-            let mut exchange =
-                execute_fresh_response_create_request_stream(request, pool.initial_event_timeout())
-                    .await?;
-            exchange.pool_decision = Some(WebSocketPoolDecision::bypass(reason));
-            Ok(exchange)
+        Err(error @ CodexWebSocketExchangeError::FastPathTimeout { .. }) => {
+            permit.fast_timeout();
+            Err(error)
+        }
+        Err(CodexWebSocketExchangeError::Upstream(upstream)) if upstream.status_code < 500 => {
+            // 账号或请求级 opening 响应证明 origin 可达，不得污染 transport 熔断器。
+            permit.succeed();
+            Err(CodexWebSocketExchangeError::Upstream(upstream))
+        }
+        Err(error) => {
+            permit.fail();
+            Err(error)
+        }
+    }
+}
+
+async fn wait_for_shared_connect(
+    waiter: super::websocket_pool::WebSocketPoolConnectWaiter,
+    fast_path_budget: Option<Duration>,
+    decision_started_at: Instant,
+) -> Result<WebSocketPoolConnectOutcome, CodexWebSocketExchangeError> {
+    match fast_path_budget {
+        Some(budget) => {
+            let remaining = budget.saturating_sub(decision_started_at.elapsed());
+            timeout(remaining, waiter.wait())
+                .await
+                .map_err(|_| CodexWebSocketExchangeError::FastPathTimeout { timeout: budget })
+        }
+        None => Ok(waiter.wait().await),
+    }
+}
+
+fn bypass_unavailable_reason(
+    reason: WebSocketPoolBypassReason,
+) -> PreviousResponseUnavailableReason {
+    match reason {
+        WebSocketPoolBypassReason::Busy => PreviousResponseUnavailableReason::ConnectionBusy,
+        WebSocketPoolBypassReason::Disabled | WebSocketPoolBypassReason::Cap => {
+            PreviousResponseUnavailableReason::PoolUnavailable
         }
     }
 }
@@ -673,177 +713,126 @@ fn continuation_unavailable(
     CodexWebSocketExchangeError::ContinuationUnavailable { reason }
 }
 
-async fn execute_fresh_pooled_response_create_request(
+/// 发送 payload 后只等待该次 exchange；此边界之后不允许 transport fallback。
+pub(crate) async fn execute_prepared_response_create_request(
     request: &CodexWebSocketRequest,
-    pool: &CodexWebSocketPool,
-    lease: WebSocketPoolLease,
+    prepared: PreparedWebSocket,
     started_at: Instant,
 ) -> Result<CodexWebSocketExchange, CodexWebSocketExchangeError> {
-    let (websocket, response) =
-        match connect_pumped_websocket(request.connection(), pool.keepalive()).await {
-            Ok(connected) => connected,
-            Err(error) => {
-                lease.discard().await;
-                return Err(error);
-            }
-        };
-    if let Err(error) = send_websocket_request(&websocket, request.payload_text()).await {
-        lease.discard().await;
-        return Err(error);
-    }
-
-    let now = tokio::time::Instant::now();
-    let metadata = websocket_connection_metadata(&response);
-    let (exchange, websocket, metadata, continuation, terminal) = match collect_websocket_response(
+    let PreparedWebSocket {
+        connection,
+        lease,
+        reused,
+        pool_decision,
+        initial_event_timeout,
+        ..
+    } = prepared;
+    let PooledWebSocketConnection {
         websocket,
         metadata,
-        WebSocketContinuationState::default(),
-        false,
+        continuation,
+        created_at,
+    } = connection;
+    if let Err(error) = send_websocket_request(&websocket, request.payload_text()).await {
+        discard_after_send(websocket, lease).await;
+        return Err(post_send_ambiguous(error));
+    }
+    let connection_local_available = lease.is_some();
+    let collected = collect_websocket_response(
+        websocket,
+        metadata,
+        continuation,
+        reused,
         started_at,
-        pool.initial_event_timeout(),
+        initial_event_timeout,
     )
-    .await
-    {
-        Ok(exchange) => exchange,
+    .await;
+    let (mut exchange, websocket, metadata, continuation, terminal) = match collected {
+        Ok(collected) => collected,
         Err(error) => {
-            lease.discard().await;
-            return Err(error);
+            if let Some(lease) = lease {
+                lease.discard().await;
+            }
+            return Err(post_send_ambiguous(error));
         }
     };
-    match terminal {
-        WebSocketTerminalKind::Completed => {
+    exchange.pool_decision = pool_decision;
+    exchange.connection_local_continuation = connection_local_available;
+    match (terminal, lease) {
+        (WebSocketTerminalKind::Completed, Some(lease)) => {
             lease
                 .put(PooledWebSocketConnection {
                     websocket,
                     metadata: reusable_websocket_metadata(metadata),
                     continuation,
-                    created_at: now,
+                    created_at,
                 })
                 .await;
         }
-        WebSocketTerminalKind::Incomplete | WebSocketTerminalKind::Failed => {
+        (_, Some(lease)) => {
             lease.discard().await;
             websocket.close().await;
         }
+        (_, None) => websocket.close().await,
     }
     Ok(exchange)
 }
 
-async fn execute_fresh_pooled_response_create_request_stream(
+pub(crate) async fn execute_prepared_response_create_request_stream(
     request: &CodexWebSocketRequest,
-    pool: &CodexWebSocketPool,
-    lease: WebSocketPoolLease,
+    prepared: PreparedWebSocket,
 ) -> Result<CodexWebSocketStreamingExchange, CodexWebSocketExchangeError> {
-    let (websocket, response) =
-        match connect_pumped_websocket(request.connection(), pool.keepalive()).await {
-            Ok(connected) => connected,
-            Err(error) => {
-                lease.discard().await;
-                return Err(error);
-            }
-        };
-    if let Err(error) = send_websocket_request(&websocket, request.payload_text()).await {
-        lease.discard().await;
-        return Err(error);
-    }
-
-    let now = tokio::time::Instant::now();
-    let metadata = websocket_connection_metadata(&response);
-    Ok(stream_websocket_response(
+    let PreparedWebSocket {
+        connection,
+        lease,
+        reused,
+        pool_decision,
+        initial_event_timeout,
+        ..
+    } = prepared;
+    let PooledWebSocketConnection {
         websocket,
         metadata,
-        Some(WebSocketStreamPoolReturn {
-            lease,
-            created_at: now,
-            continuation: WebSocketContinuationState::default(),
-        }),
-        false,
-        pool.initial_event_timeout(),
-    ))
-}
-
-async fn execute_pooled_response_create_request(
-    request: &CodexWebSocketRequest,
-    pool: &CodexWebSocketPool,
-    lease: WebSocketPoolLease,
-    connection: PooledWebSocketConnection,
-    started_at: Instant,
-) -> Result<CodexWebSocketExchange, CodexWebSocketExchangeError> {
-    if let Err(error) = send_websocket_request(&connection.websocket, request.payload_text()).await
-    {
-        lease.discard().await;
-        return Err(
-            CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstOutput {
-                message: error.to_string(),
-            },
-        );
-    }
-
-    let created_at = connection.created_at;
-    match collect_websocket_response(
-        connection.websocket,
-        reusable_websocket_metadata(connection.metadata),
-        connection.continuation,
-        true,
-        started_at,
-        pool.initial_event_timeout(),
-    )
-    .await
-    {
-        Ok((exchange, websocket, metadata, continuation, terminal)) => {
-            match terminal {
-                WebSocketTerminalKind::Completed => {
-                    lease
-                        .put(PooledWebSocketConnection {
-                            websocket,
-                            metadata: reusable_websocket_metadata(metadata),
-                            continuation,
-                            created_at,
-                        })
-                        .await;
-                }
-                WebSocketTerminalKind::Incomplete | WebSocketTerminalKind::Failed => {
-                    lease.discard().await;
-                    websocket.close().await;
-                }
-            }
-            Ok(exchange)
-        }
-        Err(error) => {
-            lease.discard().await;
-            Err(error)
-        }
-    }
-}
-
-async fn execute_pooled_response_create_request_stream(
-    request: &CodexWebSocketRequest,
-    pool: &CodexWebSocketPool,
-    lease: WebSocketPoolLease,
-    connection: PooledWebSocketConnection,
-) -> Result<CodexWebSocketStreamingExchange, CodexWebSocketExchangeError> {
-    let websocket = connection.websocket;
-    let metadata = reusable_websocket_metadata(connection.metadata);
-    let created_at = connection.created_at;
-    let continuation = connection.continuation;
+        continuation,
+        created_at,
+    } = connection;
     if let Err(error) = send_websocket_request(&websocket, request.payload_text()).await {
-        lease.discard().await;
-        return Err(
-            CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstOutput {
-                message: error.to_string(),
-            },
-        );
+        discard_after_send(websocket, lease).await;
+        return Err(post_send_ambiguous(error));
     }
-
-    Ok(stream_websocket_response(
+    let connection_local_available = lease.is_some();
+    let pool_return = lease.map(|lease| WebSocketStreamPoolReturn {
+        lease,
+        created_at,
+        continuation,
+    });
+    let mut exchange = stream_websocket_response(
         websocket,
         metadata,
-        Some(WebSocketStreamPoolReturn {
-            lease,
-            created_at,
-            continuation,
-        }),
-        true,
-        pool.initial_event_timeout(),
-    ))
+        pool_return,
+        reused,
+        initial_event_timeout,
+    );
+    exchange.pool_decision = pool_decision;
+    exchange.connection_local_continuation = connection_local_available;
+    Ok(exchange)
+}
+
+async fn discard_after_send(websocket: PumpedWebSocket, lease: Option<WebSocketPoolLease>) {
+    if let Some(lease) = lease {
+        lease.discard().await;
+    }
+    websocket.close().await;
+}
+
+pub(crate) fn post_send_ambiguous(
+    error: CodexWebSocketExchangeError,
+) -> CodexWebSocketExchangeError {
+    match error {
+        error @ CodexWebSocketExchangeError::Upstream(_)
+        | error @ CodexWebSocketExchangeError::PostSendAmbiguous { .. } => error,
+        error => CodexWebSocketExchangeError::PostSendAmbiguous {
+            message: error.to_string(),
+        },
+    }
 }
