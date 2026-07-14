@@ -32,7 +32,9 @@ use crate::{
 use crate::{
     dispatch::{
         controllers::cloudflare::CloudflareRecovery,
-        controllers::cyber_policy::{CyberPolicyController, CyberPolicyScope},
+        controllers::cyber_policy::{
+            ClassifiedCyberPolicyFailure, CyberPolicyController, CyberPolicyScope,
+        },
         controllers::{
             account_failure::AccountFailureController, history::HistoryController,
             history::HistoryState, quota::QuotaController,
@@ -168,6 +170,30 @@ enum ControllerFailureFact<'a> {
     Response(&'a ResponsesSseFailure),
 }
 
+#[derive(Clone, Copy)]
+enum FailureObservation<'a> {
+    Attempt(&'a AttemptObservation),
+    Stream {
+        account_id: &'a str,
+        failure: &'a ResponsesSseFailure,
+    },
+}
+
+impl<'a> FailureObservation<'a> {
+    fn fact(self) -> Option<ControllerFailureFact<'a>> {
+        match self {
+            Self::Attempt(observation) => ControllerFailureFact::from_attempt(observation),
+            Self::Stream { failure, .. } => Some(ControllerFailureFact::Response(failure)),
+        }
+    }
+}
+
+enum SharedFailureClassification<'a> {
+    CyberPolicy(ClassifiedCyberPolicyFailure<'a>),
+    AccountFailure(account_failure::ClassifiedFailure),
+    Quota(quota::ClassifiedQuotaFailure),
+}
+
 impl<'a> ControllerFailureFact<'a> {
     fn from_attempt(observation: &'a AttemptObservation) -> Option<Self> {
         match &observation.kind {
@@ -183,40 +209,30 @@ impl<'a> ControllerFailureFact<'a> {
 
 /// 单次 attempt 的唯一分类结果；副作用与 decision 必须共同消费这个值。
 enum AttemptClassification<'a> {
-    CyberPolicy(ControllerFailureFact<'a>),
+    Shared(SharedFailureClassification<'a>),
     Cloudflare(cloudflare::CloudflareFailure),
     History(AttemptDecision),
-    AccountFailure(account_failure::ClassifiedFailure),
-    Quota(quota::ClassifiedQuotaFailure),
     Default(AttemptDecision),
 }
 
-enum StreamFailureClassification {
-    CyberPolicy(ClientFailure),
-    AccountFailure {
-        classified: account_failure::ClassifiedFailure,
-        client_failure: ClientFailure,
-    },
-    Quota {
-        classified: quota::ClassifiedQuotaFailure,
-        client_failure: ClientFailure,
-    },
-    Default(ClientFailure),
+struct StreamFailureClassification<'a> {
+    failure: &'a ResponsesSseFailure,
+    owner: Option<SharedFailureClassification<'a>>,
 }
 
-impl StreamFailureClassification {
-    fn client_failure(&self) -> &ClientFailure {
-        match self {
-            Self::CyberPolicy(failure)
-            | Self::AccountFailure {
-                client_failure: failure,
-                ..
+impl StreamFailureClassification<'_> {
+    fn client_failure(&self) -> ClientFailure {
+        match &self.owner {
+            Some(SharedFailureClassification::CyberPolicy(classified)) => {
+                CyberPolicyController::client_failure(classified)
             }
-            | Self::Quota {
-                client_failure: failure,
-                ..
+            Some(SharedFailureClassification::AccountFailure(classified)) => {
+                AccountFailureController::client_failure(classified, self.failure)
             }
-            | Self::Default(failure) => failure,
+            Some(SharedFailureClassification::Quota(_)) => {
+                QuotaController::client_failure(self.failure)
+            }
+            None => default_response_client_failure(self.failure),
         }
     }
 }
@@ -523,60 +539,47 @@ impl ControllerSet {
         }
     }
 
-    fn classify_stream_failure(
+    fn classify_stream_failure<'a>(
         &self,
-        account_id: &str,
-        failure: &ResponsesSseFailure,
-    ) -> StreamFailureClassification {
-        let fact = ControllerFailureFact::Response(failure);
-        if self.cyber_policy.owns_failure(fact) {
-            return StreamFailureClassification::CyberPolicy(
-                CyberPolicyController::client_failure(failure.clone()),
-            );
+        account_id: &'a str,
+        failure: &'a ResponsesSseFailure,
+    ) -> StreamFailureClassification<'a> {
+        StreamFailureClassification {
+            failure,
+            owner: Self::classify_shared_failure(FailureObservation::Stream {
+                account_id,
+                failure,
+            }),
         }
-        if let Some(classified) = AccountFailureController::classify_failure(account_id, fact) {
-            let client_failure = AccountFailureController::client_failure(&classified, failure);
-            return StreamFailureClassification::AccountFailure {
-                classified,
-                client_failure,
-            };
-        }
-        if let Some(classified) = QuotaController::classify_failure(account_id, fact) {
-            return StreamFailureClassification::Quota {
-                classified,
-                client_failure: QuotaController::client_failure(failure),
-            };
-        }
-        StreamFailureClassification::Default(default_response_client_failure(failure))
     }
 
     async fn apply_stream_failure(
         &self,
         scope: &ControllerRequestScope,
         account_id: &str,
-        classification: &StreamFailureClassification,
+        classification: &StreamFailureClassification<'_>,
     ) {
-        match classification {
-            StreamFailureClassification::CyberPolicy(_) => {
+        match classification.owner.as_ref() {
+            Some(SharedFailureClassification::CyberPolicy(_)) => {
                 self.cyber_policy
                     .exclude_account(&scope.cyber_policy, account_id)
                     .await;
             }
-            StreamFailureClassification::AccountFailure { classified, .. } => {
+            Some(SharedFailureClassification::AccountFailure(classified)) => {
                 let _ = best_effort_controller_io(
                     "account_failure.stream",
                     AccountFailureController::apply_effect(&self.account_pool, classified),
                 )
                 .await;
             }
-            StreamFailureClassification::Quota { classified, .. } => {
+            Some(SharedFailureClassification::Quota(classified)) => {
                 let _ = best_effort_controller_io(
                     "quota.stream",
                     QuotaController::apply_effect(&self.account_pool, classified),
                 )
                 .await;
             }
-            StreamFailureClassification::Default(_) => {}
+            None => {}
         }
     }
 
@@ -714,17 +717,33 @@ impl ControllerSet {
         }
 
         match &classification {
-            AttemptClassification::CyberPolicy(_) => {
-                if let Some(account_id) = observation
-                    .account
-                    .as_ref()
-                    .map(|account| account.id.as_str())
-                {
-                    self.cyber_policy
-                        .exclude_account(&scope.cyber_policy, account_id)
-                        .await;
+            AttemptClassification::Shared(shared) => match shared {
+                SharedFailureClassification::CyberPolicy(_) => {
+                    if let Some(account_id) = observation
+                        .account
+                        .as_ref()
+                        .map(|account| account.id.as_str())
+                    {
+                        self.cyber_policy
+                            .exclude_account(&scope.cyber_policy, account_id)
+                            .await;
+                    }
                 }
-            }
+                SharedFailureClassification::AccountFailure(classified) => {
+                    let _ = best_effort_controller_io(
+                        "account_failure.attempt",
+                        AccountFailureController::apply_effect(&self.account_pool, classified),
+                    )
+                    .await;
+                }
+                SharedFailureClassification::Quota(classified) => {
+                    let _ = best_effort_controller_io(
+                        "quota.attempt",
+                        QuotaController::apply_effect(&self.account_pool, classified),
+                    )
+                    .await;
+                }
+            },
             AttemptClassification::Cloudflare(failure) => {
                 let _ = best_effort_controller_io(
                     "cloudflare.attempt",
@@ -733,20 +752,6 @@ impl ControllerSet {
                         &self.account_pool,
                         failure,
                     ),
-                )
-                .await;
-            }
-            AttemptClassification::AccountFailure(classified) => {
-                let _ = best_effort_controller_io(
-                    "account_failure.attempt",
-                    AccountFailureController::apply_effect(&self.account_pool, classified),
-                )
-                .await;
-            }
-            AttemptClassification::Quota(classified) => {
-                let _ = best_effort_controller_io(
-                    "quota.attempt",
-                    QuotaController::apply_effect(&self.account_pool, classified),
                 )
                 .await;
             }
@@ -760,25 +765,53 @@ impl ControllerSet {
         &self,
         observation: &'a AttemptObservation,
     ) -> AttemptClassification<'a> {
-        let failure = ControllerFailureFact::from_attempt(observation);
-        if let Some(failure) = failure
-            && self.cyber_policy.owns_failure(failure)
-        {
-            return AttemptClassification::CyberPolicy(failure);
-        }
+        let shared = Self::classify_shared_failure(FailureObservation::Attempt(observation));
+        let shared = match shared {
+            Some(shared @ SharedFailureClassification::CyberPolicy(_)) => {
+                return AttemptClassification::Shared(shared);
+            }
+            shared => shared,
+        };
         if let Some(classified) = cloudflare::CloudflareController::classify(observation) {
             return AttemptClassification::Cloudflare(classified);
         }
         if let Some(decision) = HistoryController::decide(observation) {
             return AttemptClassification::History(decision);
         }
-        if let Some(classified) = AccountFailureController::classify(observation) {
-            return AttemptClassification::AccountFailure(classified);
-        }
-        if let Some(classified) = QuotaController::classify(observation) {
-            return AttemptClassification::Quota(classified);
+        if let Some(shared) = shared {
+            return AttemptClassification::Shared(shared);
         }
         AttemptClassification::Default(Self::default_attempt_decision(observation))
+    }
+
+    /// complete、prefetch 与 committed stream 共用这一份 feature owner 优先级。
+    fn classify_shared_failure<'a>(
+        observation: FailureObservation<'a>,
+    ) -> Option<SharedFailureClassification<'a>> {
+        let fact = observation.fact();
+        if let Some(classified) = fact.and_then(CyberPolicyController::classify) {
+            return Some(SharedFailureClassification::CyberPolicy(classified));
+        }
+
+        let account_failure = match observation {
+            FailureObservation::Attempt(observation) => {
+                AccountFailureController::classify(observation)
+            }
+            FailureObservation::Stream { account_id, .. } => {
+                fact.and_then(|fact| AccountFailureController::classify_failure(account_id, fact))
+            }
+        };
+        if let Some(classified) = account_failure {
+            return Some(SharedFailureClassification::AccountFailure(classified));
+        }
+
+        let quota = match observation {
+            FailureObservation::Attempt(observation) => QuotaController::classify(observation),
+            FailureObservation::Stream { account_id, .. } => {
+                fact.and_then(|fact| QuotaController::classify_failure(account_id, fact))
+            }
+        };
+        quota.map(SharedFailureClassification::Quota)
     }
 
     fn attempt_decision(
@@ -787,17 +820,28 @@ impl ControllerSet {
         classification: AttemptClassification<'_>,
     ) -> AttemptDecision {
         match classification {
-            AttemptClassification::CyberPolicy(failure) => {
-                let client_failure = CyberPolicyController::attempt_client_failure(failure);
-                if observation.routing.can_retry_next_candidate {
-                    AttemptDecision::RetryNextCandidate {
-                        exhaustion: None,
-                        on_exhaustion: Some(client_failure),
-                    }
-                } else {
-                    AttemptDecision::Return(AttemptReturnKind::Failed(client_failure))
+            AttemptClassification::Shared(shared) => match shared {
+                SharedFailureClassification::CyberPolicy(classified) => {
+                    CyberPolicyController::decision(observation, classified)
                 }
-            }
+                SharedFailureClassification::AccountFailure(classified) => {
+                    let client_failure = response_failure(observation).map(|failure| {
+                        AccountFailureController::client_failure(&classified, failure)
+                    });
+                    with_response_client_failure(
+                        AccountFailureController::decision(observation, classified),
+                        client_failure,
+                    )
+                }
+                SharedFailureClassification::Quota(classified) => {
+                    let client_failure =
+                        response_failure(observation).map(QuotaController::client_failure);
+                    with_response_client_failure(
+                        QuotaController::decision(observation, classified),
+                        client_failure,
+                    )
+                }
+            },
             AttemptClassification::Cloudflare(classified) => {
                 cloudflare::CloudflareController::decision(observation, classified)
             }
@@ -807,22 +851,6 @@ impl ControllerSet {
                     .map(|failure| ClientFailure::new(failure.clone(), 400, false)),
             ),
             AttemptClassification::Default(decision) => decision,
-            AttemptClassification::AccountFailure(classified) => {
-                let client_failure = response_failure(observation)
-                    .map(|failure| AccountFailureController::client_failure(&classified, failure));
-                with_response_client_failure(
-                    AccountFailureController::decision(observation, classified),
-                    client_failure,
-                )
-            }
-            AttemptClassification::Quota(classified) => {
-                let client_failure =
-                    response_failure(observation).map(QuotaController::client_failure);
-                with_response_client_failure(
-                    QuotaController::decision(observation, classified),
-                    client_failure,
-                )
-            }
         }
     }
 

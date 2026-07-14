@@ -11,8 +11,11 @@ mod types;
 
 use crate::{
     dispatch::{
-        affinity::SessionAffinityService, controllers::ControllerFailureFact,
-        errors::ClientFailure, transport::observation::UpstreamFailureFacts,
+        affinity::SessionAffinityService,
+        controllers::ControllerFailureFact,
+        errors::ClientFailure,
+        lifecycle::contract::{AttemptDecision, AttemptObservation, AttemptReturnKind},
+        transport::observation::UpstreamFailureFacts,
     },
     upstream::openai::protocol::responses::{CodexResponsesRequest, ResponsesSseFailure},
 };
@@ -48,6 +51,11 @@ pub(in crate::dispatch) struct CyberPolicyController {
     store: Store,
 }
 
+/// 已由 Cyber owner 认领的失败；调用方只能请求 owner 产生 effect 或 decision。
+pub(super) struct ClassifiedCyberPolicyFailure<'a> {
+    fact: ControllerFailureFact<'a>,
+}
+
 impl CyberPolicyController {
     pub(in crate::dispatch) fn new(session_affinity: Arc<SessionAffinityService>) -> Self {
         Self {
@@ -55,18 +63,46 @@ impl CyberPolicyController {
         }
     }
 
-    pub(super) fn client_failure(failure: ResponsesSseFailure) -> ClientFailure {
-        ClientFailure::new(failure, 400, true)
+    pub(super) fn classify(
+        fact: ControllerFailureFact<'_>,
+    ) -> Option<ClassifiedCyberPolicyFailure<'_>> {
+        let owned = match fact {
+            ControllerFailureFact::Upstream(facts) => {
+                facts
+                    .status_code
+                    .is_some_and(|status| (400..=499).contains(&status))
+                    && is_cyber_policy_code(facts.code.as_deref())
+            }
+            ControllerFailureFact::Response(failure) => is_cyber_policy_failure(failure),
+        };
+        owned.then_some(ClassifiedCyberPolicyFailure { fact })
     }
 
-    pub(super) fn attempt_client_failure(failure: ControllerFailureFact<'_>) -> ClientFailure {
-        match failure {
+    pub(super) fn client_failure(classified: &ClassifiedCyberPolicyFailure<'_>) -> ClientFailure {
+        match classified.fact {
             ControllerFailureFact::Upstream(facts) => ClientFailure::new(
                 failure_from_upstream_facts(facts),
                 facts.status_code.unwrap_or(400),
                 true,
             ),
-            ControllerFailureFact::Response(failure) => Self::client_failure(failure.clone()),
+            ControllerFailureFact::Response(failure) => {
+                ClientFailure::new(failure.clone(), 400, true)
+            }
+        }
+    }
+
+    pub(super) fn decision(
+        observation: &AttemptObservation,
+        classified: ClassifiedCyberPolicyFailure<'_>,
+    ) -> AttemptDecision {
+        let client_failure = Self::client_failure(&classified);
+        if observation.routing.can_retry_next_candidate {
+            AttemptDecision::RetryNextCandidate {
+                exhaustion: None,
+                on_exhaustion: Some(client_failure),
+            }
+        } else {
+            AttemptDecision::Return(AttemptReturnKind::Failed(client_failure))
         }
     }
 
@@ -119,18 +155,6 @@ impl CyberPolicyController {
                 "Failed to record cyber policy session state"
             ),
             Err(_) => tracing::warn!(account_id, "Timed out recording cyber policy session state"),
-        }
-    }
-
-    pub(super) fn owns_failure(&self, failure: ControllerFailureFact<'_>) -> bool {
-        match failure {
-            ControllerFailureFact::Upstream(facts) => {
-                facts
-                    .status_code
-                    .is_some_and(|status| (400..=499).contains(&status))
-                    && is_cyber_policy_code(facts.code.as_deref())
-            }
-            ControllerFailureFact::Response(failure) => is_cyber_policy_failure(failure),
         }
     }
 

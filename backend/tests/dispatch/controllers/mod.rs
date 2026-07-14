@@ -43,6 +43,51 @@ fn cyber_policy_semantics_must_stay_inside_its_owner() {
 }
 
 #[test]
+fn cyber_policy_owner_should_construct_its_own_attempt_decision() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let composition = read(&manifest.join("src/dispatch/controllers/mod.rs"));
+    let cyber_policy = read(&manifest.join("src/dispatch/controllers/cyber_policy/mod.rs"));
+    let decision = between(
+        &composition,
+        "fn attempt_decision(",
+        "fn default_attempt_decision(",
+    );
+
+    assert!(cyber_policy.contains("pub(super) fn decision("));
+    assert!(cyber_policy.contains("AttemptDecision::RetryNextCandidate"));
+    assert!(decision.contains("CyberPolicyController::decision(observation, classified)"));
+    assert!(!decision.contains("can_retry_next_candidate"));
+    assert!(!decision.contains("AttemptDecision::RetryNextCandidate"));
+}
+
+#[test]
+fn attempt_and_stream_should_share_one_feature_failure_owner_order() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let composition = read(&manifest.join("src/dispatch/controllers/mod.rs"));
+    let shared = between(
+        &composition,
+        "fn classify_shared_failure",
+        "fn attempt_decision(",
+    );
+
+    assert_eq!(composition.matches("fn classify_shared_failure").count(), 1);
+    assert!(
+        composition
+            .contains("Self::classify_shared_failure(FailureObservation::Attempt(observation))")
+    );
+    assert!(composition.contains("Self::classify_shared_failure(FailureObservation::Stream {"));
+    assert_appears_in_order(
+        shared,
+        &[
+            "fact.and_then(CyberPolicyController::classify)",
+            "AccountFailureController::classify(observation)",
+            "QuotaController::classify(observation)",
+        ],
+    );
+    assert!(!composition.contains("self.cyber_policy.owns_failure"));
+}
+
+#[test]
 fn request_enter_io_should_be_parallel_and_bounded() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/dispatch/controllers");
     let composition = read(&root.join("mod.rs"));
@@ -269,6 +314,25 @@ fn collect_live_executor_dependencies(root: &Path, path: &Path, violations: &mut
                     .to_string(),
             );
         }
+    }
+}
+
+fn between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+    let start = source
+        .find(start)
+        .expect("source start marker should exist");
+    let tail = &source[start..];
+    let end = tail.find(end).expect("source end marker should exist");
+    &tail[..end]
+}
+
+fn assert_appears_in_order(source: &str, required: &[&str]) {
+    let mut cursor = 0;
+    for marker in required {
+        let offset = source[cursor..]
+            .find(marker)
+            .unwrap_or_else(|| panic!("ordered source marker should exist: {marker}"));
+        cursor += offset + marker.len();
     }
 }
 
