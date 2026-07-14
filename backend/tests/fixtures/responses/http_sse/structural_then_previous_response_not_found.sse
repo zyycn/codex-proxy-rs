@@ -1,0 +1,8 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_http_previous_missing","status":"in_progress"}}
+
+event: response.content_part.added
+data: {"type":"response.content_part.added","part":{"type":"output_text","text":""}}
+
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_http_previous_missing","status":"failed","error":{"code":"previous_response_not_found","message":"Previous response was not found"}}}

@@ -177,6 +177,32 @@ fn retry_after_seconds_from_body_should_read_structured_retry_delay() {
 }
 
 #[test]
+fn retry_after_seconds_from_body_should_read_nested_error_retry_delay() {
+    let body = json!({
+        "type": "error",
+        "error": {
+            "retry_after_seconds": 19
+        }
+    })
+    .to_string();
+
+    assert_eq!(retry_after_seconds_from_body(&body), Some(19));
+}
+
+#[test]
+fn retry_after_seconds_from_body_should_read_case_insensitive_header_array() {
+    let body = json!({
+        "type": "error",
+        "headers": {
+            "Retry-After": ["37"]
+        }
+    })
+    .to_string();
+
+    assert_eq!(retry_after_seconds_from_body(&body), Some(37));
+}
+
+#[test]
 fn retry_after_seconds_from_body_should_parse_rate_limit_message_seconds() {
     let body = json!({
         "response": {

@@ -8,11 +8,11 @@ use axum::{
 use serde_json::{Value, json};
 
 use crate::{
-    dispatch::{
-        errors::{DispatchFailureClass, ResponseDispatchError},
-        recovery::cyber_policy::is_cyber_policy_failure,
+    dispatch::errors::{DispatchFailureClass, ResponseDispatchError},
+    upstream::openai::protocol::{
+        responses::ResponsesSseFailure,
+        sse::response_failed_sse_event as encode_response_failed_sse_event,
     },
-    upstream::openai::protocol::sse::response_failed_sse_event as encode_response_failed_sse_event,
     upstream::openai::transport::CodexClientError,
 };
 
@@ -48,6 +48,13 @@ struct OpenAiErrorDetails {
 struct OpenAiErrorKind {
     error_type: &'static str,
     code: &'static str,
+}
+
+struct EncodedClientFailure<'a> {
+    status: StatusCode,
+    kind: OpenAiErrorKind,
+    code: &'a str,
+    message: &'a str,
 }
 
 const NO_AVAILABLE_ACCOUNTS_ERROR: OpenAiErrorKind = OpenAiErrorKind {
@@ -126,16 +133,12 @@ pub fn responses_dispatch_error_response_ref(error: &ResponseDispatchError) -> R
         return (*status, Json(body)).into_response();
     }
 
-    if let ResponseDispatchError::Failed(failure) = error
-        && is_cyber_policy_failure(failure)
-    {
-        let status = status_from_u16(error.client_http_status_code(), StatusCode::BAD_GATEWAY);
-        let kind = responses_error_kind_for_status(status);
+    if let Some(failure) = response_dispatch_client_failure(error) {
         return openai_error_response(
-            status,
-            &failure.message,
-            kind.error_type,
-            failure.upstream_code.as_deref().unwrap_or(kind.code),
+            failure.status,
+            failure.message,
+            failure.kind.error_type,
+            failure.code,
         )
         .into_response();
     }
@@ -149,15 +152,11 @@ pub fn responses_dispatch_error_response_ref(error: &ResponseDispatchError) -> R
 }
 
 pub fn responses_stream_dispatch_failed_sse_event(error: &ResponseDispatchError) -> String {
-    if let ResponseDispatchError::Failed(failure) = error
-        && is_cyber_policy_failure(failure)
-    {
-        let status = status_from_u16(error.client_http_status_code(), StatusCode::BAD_GATEWAY);
-        let kind = responses_error_kind_for_status(status);
+    if let Some(failure) = response_dispatch_client_failure(error) {
         return encode_response_failed_sse_event(
-            kind.error_type,
-            failure.upstream_code.as_deref().unwrap_or(kind.code),
-            &failure.message,
+            failure.kind.error_type,
+            failure.code,
+            failure.message,
         );
     }
     let http_error =
@@ -170,16 +169,12 @@ pub(super) fn responses_websocket_dispatch_error_event(
     error: &ResponseDispatchError,
     request_id: &str,
 ) -> String {
-    if let ResponseDispatchError::Failed(failure) = error
-        && is_cyber_policy_failure(failure)
-    {
-        let status = status_from_u16(error.client_http_status_code(), StatusCode::BAD_GATEWAY);
-        let kind = responses_error_kind_for_status(status);
+    if let Some(failure) = response_dispatch_client_failure(error) {
         return responses_websocket_error_event(
-            status,
-            kind.error_type,
-            failure.upstream_code.as_deref().unwrap_or(kind.code),
-            &failure.message,
+            failure.status,
+            failure.kind.error_type,
+            failure.code,
+            failure.message,
             request_id,
         );
     }
@@ -351,6 +346,33 @@ fn responses_error_kind_for_status(status: StatusCode) -> OpenAiErrorKind {
         CODEX_CLIENT_ERROR
     } else {
         CODEX_API_ERROR
+    }
+}
+
+fn response_dispatch_client_failure(
+    error: &ResponseDispatchError,
+) -> Option<EncodedClientFailure<'_>> {
+    let client_failure = match error {
+        ResponseDispatchError::Failed(failure) => failure,
+        _ => return None,
+    };
+    let failure = client_failure.exposed_upstream()?;
+    Some(encoded_client_failure(
+        failure,
+        status_from_u16(client_failure.status_code(), StatusCode::BAD_GATEWAY),
+    ))
+}
+
+fn encoded_client_failure(
+    failure: &ResponsesSseFailure,
+    status: StatusCode,
+) -> EncodedClientFailure<'_> {
+    let kind = responses_error_kind_for_status(status);
+    EncodedClientFailure {
+        status,
+        kind,
+        code: failure.upstream_code.as_deref().unwrap_or(kind.code),
+        message: &failure.message,
     }
 }
 

@@ -1,10 +1,11 @@
 //! 请求调度模块（账号选择、回退、恢复、会话亲和性）。
 
 pub mod affinity;
-mod attempts;
+pub(crate) mod controllers;
 pub mod errors;
-mod recording;
-pub mod recovery;
+pub(crate) mod failure;
+pub(crate) mod lifecycle;
+pub(crate) mod routing;
 pub(crate) mod service;
 pub(crate) mod stream;
-pub mod upstream_call;
+pub(crate) mod transport;

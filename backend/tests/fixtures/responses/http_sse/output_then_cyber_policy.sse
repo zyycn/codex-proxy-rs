@@ -1,0 +1,8 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_http_cyber_policy","status":"in_progress"}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","response_id":"resp_http_cyber_policy","output_index":0,"content_index":0,"delta":"partial output before HTTP SSE policy failure"}
+
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_http_cyber_policy","status":"failed","error":{"code":"cyber_policy","message":"This request has been flagged for possible cybersecurity risk."}}}

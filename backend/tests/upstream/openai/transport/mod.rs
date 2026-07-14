@@ -8,7 +8,7 @@ use std::{
 };
 
 use codex_proxy_rs::upstream::openai::{
-    protocol::responses::{PreviousResponseScope, StreamCommitPolicy},
+    protocol::responses::PreviousResponseScope,
     transport::websocket::{
         CodexWebSocketConnection, CodexWebSocketExchangeError, CodexWebSocketRequest,
         execute_response_create_request, responses_websocket_endpoint,

@@ -1,7 +1,5 @@
 //! 官方 Responses WebSocket 入站协议。
 
-use std::sync::Arc;
-
 use axum::{
     body::Body,
     extract::{Request, State},
@@ -24,11 +22,11 @@ use tokio_tungstenite::{
 
 use crate::{
     api::{AppState, middleware::request_id::RequestId},
-    dispatch::{recovery::history::sanitize_replay_items, service::ResponseDispatchStream},
-    upstream::openai::protocol::{
-        sse::{SseEvent, SseEventDecoder},
-        websocket::{is_terminal_websocket_event, websocket_event_type},
+    dispatch::{
+        service::{ConnectionTranscriptFacts, ResponseDispatchStream},
+        transport::canonical::CanonicalResponseEvent,
     },
+    upstream::openai::protocol::websocket::is_terminal_websocket_event,
 };
 
 use super::{PreparedResponsesRequest, ResponsesRequestValidationError, prepare_responses_request};
@@ -133,129 +131,42 @@ struct ResponsesWebSocketSession {
     connection_id: String,
 }
 
-struct ConnectionReplayState {
-    last_response_id: Option<String>,
-    input: Option<Arc<Vec<Value>>>,
-}
-
-enum PendingReplayUpdate {
-    Replace(Vec<Value>),
-    Append(Vec<Value>),
-    Unavailable,
-}
-
-struct CompletedTurn {
-    response_id: String,
-    output: Vec<Value>,
-}
-
 #[derive(Default)]
-struct CompletedTurnCollector {
+struct ConnectionTranscriptCollector {
     completed_items: Vec<Value>,
-    completed: Option<CompletedTurn>,
+    completed: Option<ConnectionTranscriptFacts>,
 }
 
 enum ForwardDispatchOutcome {
-    Continue(Option<CompletedTurn>),
+    Continue(Option<ConnectionTranscriptFacts>),
     Disconnect,
 }
 
-impl ConnectionReplayState {
-    fn new() -> Self {
-        Self {
-            last_response_id: None,
-            input: None,
-        }
-    }
-
-    fn prepare(
-        &self,
-        request: &mut crate::upstream::openai::protocol::responses::CodexResponsesRequest,
-    ) -> PendingReplayUpdate {
-        let turn_input = request.input().to_vec();
-        match request.previous_response_id() {
-            None => {
-                request.local_replay_input = None;
-                PendingReplayUpdate::Replace(turn_input)
-            }
-            Some(previous_response_id)
-                if self.last_response_id.as_deref() == Some(previous_response_id)
-                    && self.input.is_some() =>
-            {
-                request.local_replay_input.clone_from(&self.input);
-                PendingReplayUpdate::Append(turn_input)
-            }
-            Some(_) => {
-                request.local_replay_input = None;
-                PendingReplayUpdate::Unavailable
-            }
-        }
-    }
-
-    fn commit(&mut self, pending: PendingReplayUpdate, completed: CompletedTurn) {
-        self.last_response_id = Some(completed.response_id);
-        match pending {
-            PendingReplayUpdate::Replace(input) => self.replace(input, completed.output),
-            PendingReplayUpdate::Append(input) => self.append(input, completed.output),
-            PendingReplayUpdate::Unavailable => self.clear_input(),
-        }
-    }
-
-    fn replace(&mut self, mut input: Vec<Value>, mut output: Vec<Value>) {
-        sanitize_replay_items(&mut input);
-        sanitize_replay_items(&mut output);
-        input.append(&mut output);
-        self.input = Some(Arc::new(input));
-    }
-
-    fn append(&mut self, mut input: Vec<Value>, mut output: Vec<Value>) {
-        sanitize_replay_items(&mut input);
-        sanitize_replay_items(&mut output);
-        input.append(&mut output);
-        let Some(history) = self.input.as_mut() else {
-            return;
-        };
-        Arc::make_mut(history).append(&mut input);
-    }
-
-    fn clear_input(&mut self) {
-        self.input = None;
-    }
-}
-
-impl CompletedTurnCollector {
-    fn observe(&mut self, event: &SseEvent) {
-        let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
-            return;
-        };
-        let event_type = event
-            .event
-            .as_deref()
-            .or_else(|| value.get("type").and_then(Value::as_str));
-        match event_type {
+impl ConnectionTranscriptCollector {
+    fn observe(&mut self, event: &CanonicalResponseEvent) {
+        match event.event_type() {
             Some("response.output_item.done") => {
-                if let Some(item) = value.get("item") {
+                if let Some(item) = event.data().get("item") {
                     self.completed_items.push(item.clone());
                 }
             }
             Some("response.completed") => {
-                let Some(response_id) = value
+                let Some(response_id) = event
+                    .data()
                     .pointer("/response/id")
                     .and_then(Value::as_str)
                     .map(ToString::to_string)
                 else {
                     return;
                 };
-                let output = value
+                let output = event
+                    .data()
                     .pointer("/response/output")
                     .and_then(Value::as_array)
                     .filter(|output| !output.is_empty())
                     .cloned()
                     .unwrap_or_else(|| self.completed_items.clone());
-                self.completed = Some(CompletedTurn {
-                    response_id,
-                    output,
-                });
+                self.completed = Some(ConnectionTranscriptFacts::new(response_id, output));
             }
             _ => {}
         }
@@ -271,7 +182,11 @@ async fn serve_responses_websocket(
         "Responses WebSocket connected"
     );
     let mut request_count = 0u64;
-    let mut replay_state = ConnectionReplayState::new();
+    let mut replay_snapshot = session
+        .state
+        .services
+        .responses
+        .connection_replay_snapshot();
 
     while let Some(message) = socket.next().await {
         let payload = match message {
@@ -361,11 +276,19 @@ async fn serve_responses_websocket(
                 continue;
             }
         };
-        let pending_replay = replay_state.prepare(&mut prepared.request);
+        let replay_plan = session
+            .state
+            .services
+            .responses
+            .prepare_connection_replay(&replay_snapshot, &mut prepared.request);
 
         match dispatch_response_create(&mut socket, &session, request_id, prepared).await {
-            ForwardDispatchOutcome::Continue(Some(completed)) => {
-                replay_state.commit(pending_replay, completed);
+            ForwardDispatchOutcome::Continue(Some(transcript)) => {
+                session.state.services.responses.commit_connection_replay(
+                    &mut replay_snapshot,
+                    replay_plan,
+                    transcript,
+                );
             }
             ForwardDispatchOutcome::Continue(None) => {}
             ForwardDispatchOutcome::Disconnect => break,
@@ -424,6 +347,7 @@ async fn forward_dispatch_stream(
 ) -> ForwardDispatchOutcome {
     let ResponseDispatchStream {
         body,
+        mut canonical_events,
         response_headers,
     } = stream;
     if !send_text(
@@ -436,9 +360,8 @@ async fn forward_dispatch_stream(
     }
 
     let mut body = body;
-    let mut decoder = SseEventDecoder::default();
     let mut terminal_sent = false;
-    let mut completed = CompletedTurnCollector::default();
+    let mut completed = ConnectionTranscriptCollector::default();
     loop {
         let next = if terminal_sent {
             ActiveResponseInput::Upstream(body.next().await)
@@ -450,28 +373,15 @@ async fn forward_dispatch_stream(
         };
         match next {
             ActiveResponseInput::Upstream(Some(Ok(chunk))) => {
-                let events = match decoder.push(&chunk) {
-                    Ok(events) => events,
-                    Err(error) => {
-                        tracing::warn!(request_id, error = %error, "Failed to decode Responses SSE for WebSocket forwarding");
-                        let sent = send_error(
-                            socket,
-                            StatusCode::BAD_GATEWAY,
-                            "server_error",
-                            "invalid_upstream_response",
-                            INVALID_UPSTREAM_EVENT_MESSAGE,
-                            request_id,
-                        )
-                        .await;
-                        drop(body);
-                        return if sent {
-                            ForwardDispatchOutcome::Continue(None)
-                        } else {
-                            ForwardDispatchOutcome::Disconnect
-                        };
-                    }
+                let Some(events) = canonical_events.recv().await else {
+                    tracing::warn!(
+                        request_id,
+                        "Canonical Responses event stream closed before body stream"
+                    );
+                    return ForwardDispatchOutcome::Disconnect;
                 };
-                if !forward_sse_events(
+                drop(chunk);
+                if !forward_canonical_events(
                     socket,
                     events,
                     request_id,
@@ -504,37 +414,6 @@ async fn forward_dispatch_stream(
                 };
             }
             ActiveResponseInput::Upstream(None) => {
-                let events = match decoder.finish() {
-                    Ok(events) => events,
-                    Err(error) => {
-                        tracing::warn!(request_id, error = %error, "Failed to finish Responses SSE decoding");
-                        return if send_error(
-                            socket,
-                            StatusCode::BAD_GATEWAY,
-                            "server_error",
-                            "invalid_upstream_response",
-                            INVALID_UPSTREAM_EVENT_MESSAGE,
-                            request_id,
-                        )
-                        .await
-                        {
-                            ForwardDispatchOutcome::Continue(None)
-                        } else {
-                            ForwardDispatchOutcome::Disconnect
-                        };
-                    }
-                };
-                if !forward_sse_events(
-                    socket,
-                    events,
-                    request_id,
-                    &mut terminal_sent,
-                    &mut completed,
-                )
-                .await
-                {
-                    return ForwardDispatchOutcome::Disconnect;
-                }
                 if terminal_sent {
                     return ForwardDispatchOutcome::Continue(completed.completed);
                 }
@@ -580,15 +459,15 @@ enum ActiveResponseInput {
     Downstream(Option<Result<Message, WebSocketError>>),
 }
 
-async fn forward_sse_events(
+async fn forward_canonical_events(
     socket: &mut ResponsesWebSocket,
-    events: Vec<SseEvent>,
+    events: Vec<CanonicalResponseEvent>,
     request_id: &str,
     terminal_sent: &mut bool,
-    completed: &mut CompletedTurnCollector,
+    completed: &mut ConnectionTranscriptCollector,
 ) -> bool {
     for event in events {
-        let Some(event_type) = websocket_event_type(&event.data) else {
+        let Some(event_type) = event.event_type() else {
             tracing::warn!(
                 request_id,
                 "Responses SSE event does not contain a valid JSON type"
@@ -605,10 +484,10 @@ async fn forward_sse_events(
             return false;
         };
         completed.observe(&event);
-        if !send_text(socket, event.data).await {
+        if !send_text(socket, event.data().to_string()).await {
             return false;
         }
-        *terminal_sent |= is_terminal_websocket_event(&event_type);
+        *terminal_sent |= is_terminal_websocket_event(event_type);
     }
     true
 }

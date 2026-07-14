@@ -27,16 +27,15 @@ use crate::{
     },
 };
 
-use super::{
+use crate::dispatch::{
     errors::{
         ResponseDispatchError, dispatch_error_metadata, enrich_response_dispatch_error_metadata,
     },
-    stream::{
-        live::{LiveResponseStreamContext, latest_response_id},
-        sse_failure::{status_code_for_stream_failure, stream_failure_metadata},
-        trace::{ResponseDispatchAttempt, ResponseDispatchTrace},
-    },
+    failure::sse::stream_failure_metadata,
+    lifecycle::trace::{ResponseDispatchAttempt, ResponseDispatchTrace},
 };
+
+use super::StreamContext;
 
 pub(super) struct ResponseUpstreamErrorEventRecord<'a> {
     pub(super) recorder: &'a Recorder,
@@ -65,6 +64,7 @@ pub(super) struct ResponseStreamFailureEventRecord<'a> {
     pub(super) transport: CodexBackendTransport,
     pub(super) request: &'a CodexResponsesRequest,
     pub(super) failure: &'a ResponsesSseFailure,
+    pub(super) status_code: i64,
     pub(super) diagnostics: &'a CodexUpstreamDiagnostics,
     pub(super) rate_limit_headers: &'a [(String, String)],
     pub(super) prefetched: &'a [u8],
@@ -84,14 +84,6 @@ pub(super) struct ResponseDispatchErrorEventRecord<'a> {
     pub(super) compact: bool,
     pub(super) transport: Option<&'a str>,
     pub(super) error: &'a ResponseDispatchError,
-}
-
-pub(super) struct ResponseDispatchErrorDetails<'a> {
-    pub(super) client_api_key_id: Option<&'a str>,
-    pub(super) account_id: Option<&'a str>,
-    pub(super) stream: bool,
-    pub(super) compact: bool,
-    pub(super) transport: Option<&'a str>,
 }
 
 pub(super) async fn record_response_dispatch_error_event(
@@ -188,7 +180,7 @@ pub(super) async fn record_response_upstream_error_event(
 pub(super) async fn record_prefetched_response_stream_failure_event(
     record: ResponseStreamFailureEventRecord<'_>,
 ) {
-    let event_status_code = status_code_for_stream_failure(record.failure);
+    let event_status_code = record.status_code;
     let mut metadata = stream_failure_metadata(record.failure, None);
     if let Some(object) = metadata.as_object_mut() {
         if record.transport == CodexBackendTransport::WebSocket {
@@ -266,7 +258,7 @@ fn ensure_stream_metadata_flag(metadata: &mut Value) {
 }
 
 fn enrich_live_response_stream_metadata(
-    context: &LiveResponseStreamContext,
+    context: &StreamContext<'_>,
     rate_limit_headers: &[(String, String)],
     metadata: &mut Value,
     status_code: i64,
@@ -292,11 +284,11 @@ fn enrich_live_response_stream_metadata(
         object,
         status_code,
         200,
-        diagnostics_status_code(&context.diagnostics),
+        diagnostics_status_code(context.diagnostics),
     );
-    insert_response_request_summary_object(object, &context.request, context.transport);
-    insert_upstream_diagnostics_metadata(object, &context.diagnostics);
-    insert_response_trace_metadata_object(object, &context.attempts, Some(&context.attempt));
+    insert_response_request_summary_object(object, context.request, context.transport);
+    insert_upstream_diagnostics_metadata(object, context.diagnostics);
+    insert_response_trace_metadata_object(object, context.attempts, Some(context.attempt));
     if context.recorder.captures_body() {
         object
             .entry("requestBody".to_string())
@@ -476,7 +468,7 @@ fn upstream_failure_client_status_code(upstream_status: i64) -> i64 {
 }
 
 pub(super) async fn record_live_response_stream_event(
-    context: &LiveResponseStreamContext,
+    context: &StreamContext<'_>,
     status_code: i64,
     level: UsageRecordLevel,
     message: &str,
@@ -488,7 +480,7 @@ pub(super) async fn record_live_response_stream_event(
         .response_metadata
         .effective_model
         .as_deref()
-        .unwrap_or(&context.display_model);
+        .unwrap_or(context.display_model);
     ensure_stream_metadata_flag(&mut metadata);
     if let Some(object) = metadata.as_object_mut() {
         object.insert(
@@ -508,7 +500,7 @@ pub(super) async fn record_live_response_stream_event(
             Value::Bool(context.response_metadata.reasoning_included),
         );
     }
-    enrich_event_route_metadata(&mut metadata, &context.route);
+    enrich_event_route_metadata(&mut metadata, context.route);
     enrich_live_response_stream_metadata(
         context,
         rate_limit_headers,
@@ -516,31 +508,31 @@ pub(super) async fn record_live_response_stream_event(
         status_code,
         body,
     );
-    log_live_response_stream_finalized(context, status_code, level, message, &metadata, body);
+    log_live_response_stream_finalized(context, status_code, level, message, &metadata);
     enrich_usage_record_identity(
         &mut metadata,
-        Some(&context.requested_model),
+        Some(context.requested_model),
         effective_model,
-        context.client_ip.as_deref(),
+        context.request.client_ip.as_deref(),
         context.request.client_user_agent.as_deref(),
-        reasoning_effort_from_request(&context.request),
+        reasoning_effort_from_request(context.request),
         context.request.service_tier(),
     );
-    enrich_response_request_semantics(&mut metadata, &context.request);
+    enrich_response_request_semantics(&mut metadata, context.request);
 
     if is_success_usage_event(level, status_code) {
         crate::telemetry::recorder::record_response_event(
             crate::telemetry::usage::types::ResponseUsageRecord {
-                recorder: &context.recorder,
-                request_id: &context.request_id,
+                recorder: context.recorder,
+                request_id: context.request_id,
                 client_api_key_id: context.request.client_api_key_id.as_deref(),
-                account_id: &context.account_id,
-                route: &context.route,
+                account_id: context.account_id,
+                route: context.route,
                 model: effective_model,
-                requested_model: Some(&context.requested_model),
-                client_ip: context.client_ip.as_deref(),
+                requested_model: Some(context.requested_model),
+                client_ip: context.request.client_ip.as_deref(),
                 client_user_agent: context.request.client_user_agent.as_deref(),
-                reasoning_effort: reasoning_effort_from_request(&context.request),
+                reasoning_effort: reasoning_effort_from_request(context.request),
                 service_tier: context.request.service_tier(),
                 started_at: context.started_at,
                 status_code,
@@ -551,12 +543,12 @@ pub(super) async fn record_live_response_stream_event(
         )
         .await;
     } else {
-        let mut event = OpsErrorLog::new(response_event_kind(&context.route), message);
-        event.request_id = Some(context.request_id.clone());
+        let mut event = OpsErrorLog::new(response_event_kind(context.route), message);
+        event.request_id = Some(context.request_id.to_string());
         event.client_api_key_id = context.request.client_api_key_id.clone();
         event.provider = Some("openai".to_string());
-        event.account_id = Some(context.account_id.clone());
-        event.route = Some(context.route.clone());
+        event.account_id = Some(context.account_id.to_string());
+        event.route = Some(context.route.to_string());
         event.model = Some(effective_model.to_string());
         event.status_code = Some(status_code);
         event.latency_ms = Some(elapsed_millis_i64(context.started_at));
@@ -572,16 +564,13 @@ fn is_success_usage_event(level: UsageRecordLevel, status_code: i64) -> bool {
 }
 
 fn log_live_response_stream_finalized(
-    context: &LiveResponseStreamContext,
+    context: &StreamContext<'_>,
     status_code: i64,
     level: UsageRecordLevel,
     message: &str,
     metadata: &Value,
-    body: &str,
 ) {
-    let response_id = metadata_string_field(metadata, "responseId")
-        .map(ToString::to_string)
-        .or_else(|| latest_response_id(body));
+    let response_id = metadata_string_field(metadata, "responseId").map(ToString::to_string);
     let first_token_ms = metadata.get("firstTokenMs").and_then(Value::as_i64);
     let websocket_pool_kind = context
         .websocket_pool_decision
@@ -642,25 +631,6 @@ fn log_live_response_stream_finalized(
 
 fn metadata_string_field<'a>(metadata: &'a Value, field: &str) -> Option<&'a str> {
     metadata.get(field).and_then(Value::as_str)
-}
-
-pub(super) async fn live_response_rate_limit_headers(
-    context: &LiveResponseStreamContext,
-) -> Vec<(String, String)> {
-    let mut headers = context.rate_limit_headers.clone();
-    if let Some(updates) = &context.rate_limit_header_updates {
-        headers.extend(updates.lock().await.iter().cloned());
-    }
-    headers
-}
-
-pub(super) async fn live_response_turn_state(
-    context: &LiveResponseStreamContext,
-) -> Option<String> {
-    if let Some(update) = &context.turn_state_update {
-        return update.lock().await.clone();
-    }
-    context.turn_state.clone()
 }
 
 pub(super) fn insert_first_token_ms(metadata: &mut Value, first_token_ms: Option<i64>) {

@@ -1,7 +1,6 @@
 //! Codex WebSocket 连接建立（关键函数）。
 
 use std::{
-    collections::VecDeque,
     fmt, io,
     path::{Path, PathBuf},
     pin::Pin,
@@ -27,16 +26,14 @@ use tungstenite::{
 use crate::infra::time::china_filename_timestamp_millis;
 use crate::upstream::openai::protocol::events::{self, TokenUsage};
 use crate::upstream::openai::protocol::responses::{
-    CodexResponsesRequest, PreviousResponseScope, StreamCommitPolicy,
-    response_body_has_first_output,
+    CodexResponsesRequest, PreviousResponseScope, response_body_has_first_output,
 };
 use crate::upstream::openai::protocol::sse::SseError;
 use crate::upstream::openai::protocol::websocket::{
-    ClassifiedWebSocketError, OpeningAuditHeader, OpeningAuditSnapshot, WebSocketAuditArtifact,
-    classify_websocket_error_frame, is_terminal_websocket_event,
-    retry_after_seconds_from_wrapped_error_headers, websocket_event_to_sse_frame,
-    websocket_event_type, websocket_metadata_headers, websocket_metadata_turn_state,
-    websocket_response_completed_id, websocket_response_create_payload_text,
+    OpeningAuditHeader, OpeningAuditSnapshot, WebSocketAuditArtifact, is_terminal_websocket_event,
+    websocket_event_to_sse_frame, websocket_event_type, websocket_metadata_headers,
+    websocket_metadata_turn_state, websocket_response_completed_id,
+    websocket_response_create_payload_text,
 };
 
 use super::websocket_pool::{
@@ -105,7 +102,6 @@ pub struct CodexWebSocketRequest {
     pub(super) connection: CodexWebSocketConnection,
     pub(super) payload_text: String,
     pub(super) continuation: WebSocketContinuationRequirement,
-    pub(super) stream_commit_policy: StreamCommitPolicy,
 }
 
 /// 当前 WebSocket 请求对 previous response 状态的要求。
@@ -189,8 +185,7 @@ pub use frames::{
 };
 use frames::{
     WebSocketStreamPoolReturn, WebSocketTerminalKind, audit_header_value,
-    collect_websocket_response, prefetch_stream_frames_until_output_or_terminal,
-    reusable_websocket_metadata, reused_stream_prefetch_error, stream_websocket_response,
+    collect_websocket_response, reusable_websocket_metadata, stream_websocket_response,
     websocket_audit_file_name, websocket_connection_metadata,
 };
 
@@ -208,10 +203,6 @@ impl CodexWebSocketRequest {
     /// 返回连接续接要求。
     pub fn continuation(&self) -> &WebSocketContinuationRequirement {
         &self.continuation
-    }
-
-    pub fn stream_commit_policy(&self) -> StreamCommitPolicy {
-        self.stream_commit_policy
     }
 }
 
@@ -260,7 +251,6 @@ impl CodexWebSocketConnection {
             connection: Self::responses(base_url, websocket_key, business_headers),
             payload_text: websocket_response_create_payload_text(request)?,
             continuation: WebSocketContinuationRequirement::from_request(request),
-            stream_commit_policy: request.stream_commit_policy,
         })
     }
 
@@ -463,33 +453,16 @@ async fn execute_fresh_response_create_request_stream(
     request: &CodexWebSocketRequest,
     initial_event_timeout: Option<Duration>,
 ) -> Result<CodexWebSocketStreamingExchange, CodexWebSocketExchangeError> {
-    let (mut websocket, response) =
+    let (websocket, response) =
         connect_pumped_websocket(request.connection(), PumpKeepalive::disabled()).await?;
     send_websocket_request(&websocket, request.payload_text()).await?;
 
-    let mut metadata = websocket_connection_metadata(&response);
-    let prefetched_frames = if should_prefetch_until_output_or_terminal(request) {
-        match prefetch_stream_frames_until_output_or_terminal(
-            &mut websocket,
-            &mut metadata,
-            initial_event_timeout,
-        )
-        .await
-        {
-            Ok(prefetched_frames) => prefetched_frames,
-            Err(error) => {
-                websocket.close().await;
-                return Err(error);
-            }
-        }
-    } else {
-        Vec::new()
-    };
+    let metadata = websocket_connection_metadata(&response);
     Ok(stream_websocket_response(
         websocket,
         metadata,
         None,
-        prefetched_frames,
+        false,
         initial_event_timeout,
     ))
 }
@@ -761,7 +734,7 @@ async fn execute_fresh_pooled_response_create_request_stream(
     pool: &CodexWebSocketPool,
     lease: WebSocketPoolLease,
 ) -> Result<CodexWebSocketStreamingExchange, CodexWebSocketExchangeError> {
-    let (mut websocket, response) =
+    let (websocket, response) =
         match connect_pumped_websocket(request.connection(), pool.keepalive()).await {
             Ok(connected) => connected,
             Err(error) => {
@@ -775,25 +748,7 @@ async fn execute_fresh_pooled_response_create_request_stream(
     }
 
     let now = tokio::time::Instant::now();
-    let mut metadata = websocket_connection_metadata(&response);
-    let prefetched_frames = if should_prefetch_until_output_or_terminal(request) {
-        match prefetch_stream_frames_until_output_or_terminal(
-            &mut websocket,
-            &mut metadata,
-            pool.initial_event_timeout(),
-        )
-        .await
-        {
-            Ok(prefetched_frames) => prefetched_frames,
-            Err(error) => {
-                websocket.close().await;
-                lease.discard().await;
-                return Err(error);
-            }
-        }
-    } else {
-        Vec::new()
-    };
+    let metadata = websocket_connection_metadata(&response);
     Ok(stream_websocket_response(
         websocket,
         metadata,
@@ -802,7 +757,7 @@ async fn execute_fresh_pooled_response_create_request_stream(
             created_at: now,
             continuation: WebSocketContinuationState::default(),
         }),
-        prefetched_frames,
+        false,
         pool.initial_event_timeout(),
     ))
 }
@@ -867,8 +822,8 @@ async fn execute_pooled_response_create_request_stream(
     lease: WebSocketPoolLease,
     connection: PooledWebSocketConnection,
 ) -> Result<CodexWebSocketStreamingExchange, CodexWebSocketExchangeError> {
-    let mut websocket = connection.websocket;
-    let mut metadata = reusable_websocket_metadata(connection.metadata);
+    let websocket = connection.websocket;
+    let metadata = reusable_websocket_metadata(connection.metadata);
     let created_at = connection.created_at;
     let continuation = connection.continuation;
     if let Err(error) = send_websocket_request(&websocket, request.payload_text()).await {
@@ -880,25 +835,6 @@ async fn execute_pooled_response_create_request_stream(
         );
     }
 
-    let prefetched_frames = if should_prefetch_until_output_or_terminal(request) {
-        match prefetch_stream_frames_until_output_or_terminal(
-            &mut websocket,
-            &mut metadata,
-            pool.initial_event_timeout(),
-        )
-        .await
-        {
-            Ok(prefetched_frames) => prefetched_frames,
-            Err(error) => {
-                lease.discard().await;
-                websocket.close().await;
-                return Err(reused_stream_prefetch_error(error));
-            }
-        }
-    } else {
-        Vec::new()
-    };
-
     Ok(stream_websocket_response(
         websocket,
         metadata,
@@ -907,14 +843,7 @@ async fn execute_pooled_response_create_request_stream(
             created_at,
             continuation,
         }),
-        prefetched_frames,
+        true,
         pool.initial_event_timeout(),
     ))
-}
-
-fn should_prefetch_until_output_or_terminal(request: &CodexWebSocketRequest) -> bool {
-    matches!(
-        request.stream_commit_policy(),
-        StreamCommitPolicy::UntilOutputOrTerminal
-    )
 }

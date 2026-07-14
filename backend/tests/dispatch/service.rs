@@ -274,7 +274,7 @@ pub(crate) async fn test_app_with_account(
     (router::router().with_state(state), api_key, dir)
 }
 
-async fn test_app_with_account_and_pool(
+pub(crate) async fn test_app_with_account_and_pool(
     base_url: String,
 ) -> (
     axum::Router,
@@ -495,7 +495,7 @@ async fn test_app_with_two_accounts_and_telemetry(
     (app, api_key, pool, dir)
 }
 
-async fn test_app_with_two_accounts_and_state(
+pub(crate) async fn test_app_with_two_accounts_and_state(
     base_url: String,
 ) -> (
     axum::Router,
@@ -553,6 +553,33 @@ async fn test_app_with_ranked_accounts(
     String,
     crate::support::storage::TestDatabaseGuard,
 ) {
+    let (app, _state, api_key, dir) =
+        test_app_with_ranked_accounts_and_state(base_url, account_count).await;
+    (app, api_key, dir)
+}
+
+async fn test_app_with_ranked_accounts_and_state(
+    base_url: String,
+    account_count: usize,
+) -> (
+    axum::Router,
+    AppState,
+    String,
+    crate::support::storage::TestDatabaseGuard,
+) {
+    test_app_with_ranked_accounts_and_state_config(base_url, account_count, |_| {}).await
+}
+
+async fn test_app_with_ranked_accounts_and_state_config(
+    base_url: String,
+    account_count: usize,
+    configure: impl FnOnce(&mut AppConfig),
+) -> (
+    axum::Router,
+    AppState,
+    String,
+    crate::support::storage::TestDatabaseGuard,
+) {
     let (pool, dir) = init_test_db("openai-responses-full-candidate-ledger").await;
     let api_key = insert_client_api_key(&pool).await;
     for index in 0..account_count {
@@ -575,6 +602,7 @@ async fn test_app_with_ranked_accounts(
     }
     let mut config = test_config(test_database_url(), base_url);
     config.auth.rotation_strategy = "quota_reset_priority".to_string();
+    configure(&mut config);
     let state = test_app_state_with_pool(&config, pool).await;
     state
         .services
@@ -582,7 +610,12 @@ async fn test_app_with_ranked_accounts(
         .restore_from_store()
         .await
         .expect("account pool should restore");
-    (router::router().with_state(state), api_key, dir)
+    (
+        router::router().with_state(state.clone()),
+        state,
+        api_key,
+        dir,
+    )
 }
 
 async fn seed_openai_admin_key(pool: &PgPool, key: &str) {
@@ -1027,7 +1060,7 @@ async fn accept_cyber_policy_websocket_response_with_authorization(
     payload
 }
 
-async fn accept_websocket_with_authorization(
+pub(crate) async fn accept_websocket_with_authorization(
     stream: TcpStream,
     expected_authorization: &'static str,
 ) -> tokio_tungstenite::WebSocketStream<TcpStream> {
@@ -1469,9 +1502,20 @@ fn assert_rate_limit_header(metadata: &Value, name: &str, value: &str) {
     );
 }
 
-async fn spawn_chunked_sse_upstream(
+pub(crate) async fn spawn_chunked_sse_upstream(
     first_frame: &'static str,
     final_frame: &'static str,
+) -> (String, oneshot::Receiver<()>, oneshot::Sender<()>) {
+    spawn_chunked_sse_upstream_bytes(
+        first_frame.as_bytes().to_vec(),
+        final_frame.as_bytes().to_vec(),
+    )
+    .await
+}
+
+pub(crate) async fn spawn_chunked_sse_upstream_bytes(
+    first_frame: Vec<u8>,
+    final_frame: Vec<u8>,
 ) -> (String, oneshot::Receiver<()>, oneshot::Sender<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
@@ -1487,11 +1531,11 @@ async fn spawn_chunked_sse_upstream(
             )
             .await
             .unwrap();
-        write_http_chunk(&mut socket, first_frame.as_bytes()).await;
+        write_http_chunk(&mut socket, &first_frame).await;
         socket.flush().await.unwrap();
         let _ = first_chunk_sent_tx.send(());
         let _ = finish_rx.await;
-        write_http_chunk(&mut socket, final_frame.as_bytes()).await;
+        write_http_chunk(&mut socket, &final_frame).await;
         socket.write_all(b"0\r\n\r\n").await.unwrap();
         socket.flush().await.unwrap();
     });
@@ -1499,13 +1543,13 @@ async fn spawn_chunked_sse_upstream(
     (base_url, first_chunk_sent_rx, finish_tx)
 }
 
-async fn spawn_chunked_sse_upstream_then_abrupt_close(
+pub(crate) async fn spawn_chunked_sse_upstream_then_abrupt_close(
     first_frame: &'static str,
 ) -> (String, oneshot::Receiver<()>, oneshot::Sender<()>) {
     spawn_chunked_sse_upstream_then_close(first_frame, ChunkedSseCloseMode::Abrupt).await
 }
 
-async fn spawn_chunked_sse_upstream_then_clean_close(
+pub(crate) async fn spawn_chunked_sse_upstream_then_clean_close(
     first_frame: &'static str,
 ) -> (String, oneshot::Receiver<()>, oneshot::Sender<()>) {
     spawn_chunked_sse_upstream_then_close(first_frame, ChunkedSseCloseMode::Clean).await
@@ -1572,7 +1616,7 @@ async fn spawn_chunked_sse_upstream_then_close_with_headers(
     (base_url, first_chunk_sent_rx, close_tx)
 }
 
-async fn collect_stream_body<S, E>(mut body_stream: S) -> String
+pub(crate) async fn collect_stream_body<S, E>(mut body_stream: S) -> String
 where
     S: futures::Stream<Item = Result<Bytes, E>> + Unpin,
     E: std::fmt::Debug,

@@ -299,7 +299,7 @@ async fn websocket_execute_response_create_request_should_collect_completed_sse(
 }
 
 #[tokio::test]
-async fn websocket_execute_response_create_request_should_surface_response_failed_as_upstream_error()
+async fn websocket_execute_response_create_request_should_return_business_coded_response_failed_as_terminal_sse_fact()
  {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -342,21 +342,23 @@ async fn websocket_execute_response_create_request_should_surface_response_faile
     )
     .expect("payload should serialize");
 
-    let error = execute_response_create_request(&prepared)
+    let response = execute_response_create_request(&prepared)
         .await
-        .expect_err("response.failed should be surfaced as upstream error");
+        .expect("response.failed should remain a terminal SSE fact");
     server.await.unwrap();
 
-    let CodexWebSocketExchangeError::Upstream(error) = error else {
-        panic!("expected upstream websocket error");
-    };
-    assert_eq!(error.status_code, 429);
-    assert_eq!(error.retry_after_seconds, Some(12));
-    assert!(error.body.contains("rate_limit_exceeded"));
+    assert!(response.body.contains("event: response.failed"));
+    assert!(response.body.contains("\"code\":\"rate_limit_exceeded\""));
+    assert!(
+        response
+            .body
+            .contains("Rate limit reached. Please try again in 11.054s.")
+    );
 }
 
 #[tokio::test]
-async fn websocket_execute_response_create_request_should_pass_through_unmapped_response_failed() {
+async fn websocket_execute_response_create_request_should_return_unknown_response_failed_as_terminal_sse_fact()
+ {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -387,7 +389,7 @@ async fn websocket_execute_response_create_request_should_pass_through_unmapped_
 
     let response = execute_response_create_request(&prepared)
         .await
-        .expect("unmapped response.failed should remain a terminal SSE frame");
+        .expect("unknown response.failed should remain a terminal SSE fact");
     server.await.unwrap();
 
     assert!(response.body.contains("event: response.failed"));
@@ -457,7 +459,7 @@ async fn websocket_execute_response_create_request_should_reject_binary_event() 
 }
 
 #[tokio::test]
-async fn websocket_execute_response_create_request_should_surface_wrapped_error_status_and_retry_after()
+async fn websocket_execute_response_create_request_should_return_wrapped_error_as_terminal_sse_fact()
  {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -487,21 +489,20 @@ async fn websocket_execute_response_create_request_should_surface_wrapped_error_
     });
     let prepared = prepared_websocket_request(&format!("http://{addr}"));
 
-    let error = execute_response_create_request(&prepared)
+    let response = execute_response_create_request(&prepared)
         .await
-        .expect_err("wrapped error should surface as upstream error");
+        .expect("wrapped error should remain a terminal SSE fact");
     server.await.unwrap();
 
-    let CodexWebSocketExchangeError::Upstream(error) = error else {
-        panic!("expected wrapped upstream error");
-    };
-    assert_eq!(error.status_code, 409);
-    assert_eq!(error.retry_after_seconds, Some(17));
-    assert!(error.body.contains("wrapped conflict"));
+    assert!(response.body.contains("event: error"));
+    assert!(response.body.contains("\"status\":409"));
+    assert!(response.body.contains("\"retry-after\":[\"17\"]"));
+    assert!(response.body.contains("wrapped conflict"));
 }
 
 #[tokio::test]
-async fn websocket_execute_response_create_request_should_surface_connection_limit_as_503() {
+async fn websocket_execute_response_create_request_should_return_connection_limit_as_terminal_sse_fact()
+ {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -529,16 +530,13 @@ async fn websocket_execute_response_create_request_should_surface_connection_lim
     });
     let prepared = prepared_websocket_request(&format!("http://{addr}"));
 
-    let error = execute_response_create_request(&prepared)
+    let response = execute_response_create_request(&prepared)
         .await
-        .expect_err("connection limit should surface as upstream error");
+        .expect("connection limit should remain a terminal SSE fact");
     server.await.unwrap();
 
-    let CodexWebSocketExchangeError::Upstream(error) = error else {
-        panic!("expected connection limit upstream error");
-    };
-    assert_eq!(error.status_code, 503);
-    assert!(error.body.contains("websocket_connection_limit_reached"));
+    assert!(response.body.contains("event: response.failed"));
+    assert!(response.body.contains("websocket_connection_limit_reached"));
 }
 
 #[tokio::test]
@@ -915,8 +913,7 @@ async fn websocket_execute_response_create_request_should_reject_completed_witho
 }
 
 #[tokio::test]
-async fn websocket_execute_response_create_request_should_pass_through_unclassified_error_terminal()
-{
+async fn websocket_execute_response_create_request_should_return_error_terminal_as_sse_fact() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -959,7 +956,7 @@ async fn websocket_execute_response_create_request_should_pass_through_unclassif
 
     let response = execute_response_create_request(&prepared)
         .await
-        .expect("unclassified error frame should pass through as terminal SSE");
+        .expect("error frame should remain a terminal SSE fact");
     server.await.unwrap();
 
     assert!(response.body.contains("event: error"));

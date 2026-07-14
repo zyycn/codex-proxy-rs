@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 use crate::{
     infra::time::elapsed_millis_i64,
     upstream::openai::protocol::{
+        events,
         schema::reconvert_tuple_values,
         sse::{SseError, SseEvent, parse_sse_events},
     },
@@ -250,6 +251,12 @@ pub struct ResponsesSseFailure {
     pub message: String,
     /// 上游错误码。
     pub upstream_code: Option<String>,
+    /// 上游显式错误类型；不从业务码推导。
+    pub upstream_type: Option<String>,
+    /// 上游显式状态码；不从业务码或错误类型推导。
+    pub explicit_status_code: Option<u16>,
+    /// 上游显式重试间隔，或从官方限流消息中解析出的重试间隔。
+    pub retry_after_seconds: Option<u64>,
 }
 
 impl ResponsesSseFailure {
@@ -258,6 +265,9 @@ impl ResponsesSseFailure {
             event: event.to_string(),
             message: failure_message(value).unwrap_or_else(|| "Codex upstream SSE failed".into()),
             upstream_code: failure_code(value),
+            upstream_type: failure_type(value),
+            explicit_status_code: failure_explicit_status_code(value),
+            retry_after_seconds: events::retry_after_seconds_from_value(value),
         }
     }
 }
@@ -271,66 +281,6 @@ pub struct CompletedResponseMetadata {
     pub function_call_ids: Vec<String>,
     /// 完成响应的完整 output items。
     pub output: Vec<Value>,
-}
-
-/// 将 Codex Responses SSE 完成响应收集为非流式 Responses JSON。
-pub fn response_from_codex_sse(
-    body: &str,
-    tuple_schema: Option<&Value>,
-) -> Result<CollectedResponse, SseError> {
-    let events = parse_sse_events(body)?;
-    let mut output_text = String::new();
-    let mut output_items = Vec::new();
-    let mut terminal_response = None;
-    let mut terminal_incomplete = false;
-    let mut failed_response = None;
-
-    for event in events {
-        let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
-            continue;
-        };
-        match event.event.as_deref() {
-            Some("response.output_text.delta") => {
-                if let Some(delta) = value.get("delta").and_then(Value::as_str) {
-                    output_text.push_str(delta);
-                }
-            }
-            Some("response.output_item.done") => {
-                if let Some(item) = value.get("item") {
-                    output_items.push(item.clone());
-                }
-            }
-            Some("response.completed") => {
-                terminal_response = value.get("response").cloned();
-                terminal_incomplete = false;
-            }
-            Some("response.incomplete") => {
-                terminal_response = value.get("response").cloned();
-                terminal_incomplete = true;
-            }
-            Some(event_name @ ("error" | "response.failed")) if failed_response.is_none() => {
-                failed_response = Some(ResponsesSseFailure::from_event(event_name, &value));
-            }
-            _ => {}
-        }
-    }
-
-    if let Some(failure) = failed_response {
-        return Ok(CollectedResponse::Failed(failure));
-    }
-    let Some(mut response) = terminal_response else {
-        return Ok(CollectedResponse::MissingCompleted);
-    };
-    if terminal_incomplete {
-        reconvert_completed_response_tuple_values(&mut response, tuple_schema);
-        return Ok(CollectedResponse::Incomplete(response));
-    }
-    if is_empty_response(&response, &output_text, &output_items) {
-        return Ok(CollectedResponse::Empty);
-    }
-
-    reconvert_completed_response_tuple_values(&mut response, tuple_schema);
-    Ok(CollectedResponse::Completed(response))
 }
 
 /// 从 Codex Responses SSE 中提取完成响应元数据。
@@ -437,21 +387,6 @@ fn reconvert_output_text_delta_tuple_values(data: &mut Value, tuple_schema: &Val
     data["delta"] = Value::String(reconverted.to_string());
 }
 
-fn is_empty_response(response: &Value, output_text: &str, output_items: &[Value]) -> bool {
-    if !output_text.trim().is_empty() || !output_items.is_empty() {
-        return false;
-    }
-    if response.get("status").and_then(Value::as_str) == Some("incomplete") {
-        return false;
-    }
-
-    response
-        .pointer("/usage/output_tokens")
-        .and_then(Value::as_u64)
-        .unwrap_or_default()
-        == 0
-}
-
 fn reconvert_completed_response_tuple_values(response: &mut Value, tuple_schema: Option<&Value>) {
     let Some(tuple_schema) = tuple_schema else {
         return;
@@ -513,6 +448,28 @@ fn failure_code(value: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|code| !code.trim().is_empty())
         .map(ToString::to_string)
+}
+
+fn failure_type(value: &Value) -> Option<String> {
+    failure_error(value)
+        .and_then(|error| error.get("type"))
+        .and_then(Value::as_str)
+        .filter(|error_type| !error_type.trim().is_empty())
+        .map(ToString::to_string)
+}
+
+fn failure_explicit_status_code(value: &Value) -> Option<u16> {
+    value
+        .get("status")
+        .or_else(|| value.get("status_code"))
+        .and_then(Value::as_u64)
+        .and_then(|status| u16::try_from(status).ok())
+}
+
+fn failure_error(value: &Value) -> Option<&Value> {
+    value
+        .pointer("/response/error")
+        .or_else(|| value.get("error"))
 }
 
 impl CodexResponsesRequest {

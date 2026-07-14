@@ -599,69 +599,6 @@ async fn websocket_pool_should_bypass_busy_key_with_one_shot_connections() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn websocket_pool_should_release_fresh_reservation_when_prefetch_is_cancelled() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let (first_request_received_tx, first_request_received_rx) = tokio::sync::oneshot::channel();
-    let server = tokio::spawn(async move {
-        let (first_stream, _) = listener.accept().await.unwrap();
-        let mut first_websocket = accept_codex_test_websocket(first_stream).await;
-        let _first_message = first_websocket.next().await.unwrap().unwrap();
-        first_request_received_tx.send(()).unwrap();
-
-        let (second_stream, _) = listener.accept().await.unwrap();
-        let mut second_websocket = accept_codex_test_websocket(second_stream).await;
-        let _second_message = second_websocket.next().await.unwrap().unwrap();
-        second_websocket
-            .send(Message::Text(
-                completed_websocket_response("resp_after_cancelled_prefetch", 2, 1).into(),
-            ))
-            .await
-            .unwrap();
-        second_websocket.close(None).await.unwrap();
-        drop(first_websocket);
-    });
-    let pool = Arc::new(CodexWebSocketPool::default());
-    let backend = CodexBackendClient::new(
-        reqwest::Client::builder().no_proxy().build().unwrap(),
-        format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
-    )
-    .with_websocket_pool(pool);
-    let mut request = pooled_websocket_request("conversation-cancelled-prefetch");
-    request.stream_commit_policy = StreamCommitPolicy::UntilOutputOrTerminal;
-
-    {
-        let first_request = backend.create_response_stream(
-            &request,
-            request_context("req_cancelled_prefetch", Some("chatgpt-account")),
-        );
-        tokio::pin!(first_request);
-        tokio::select! {
-            _ = &mut first_request => {
-                panic!("prefetch request unexpectedly completed");
-            }
-            result = first_request_received_rx => {
-                result.expect("server should observe the first request");
-            }
-        }
-    }
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let second = backend
-        .create_response(
-            &request,
-            request_context("req_after_cancelled_prefetch", Some("chatgpt-account")),
-        )
-        .await
-        .expect("request after cancelled prefetch should succeed");
-    server.await.unwrap();
-
-    assert!(second.body.contains("resp_after_cancelled_prefetch"));
-    assert_eq!(second.websocket_pool_decision.unwrap().kind(), "new");
-}
-
-#[tokio::test(start_paused = true)]
 async fn websocket_pool_should_release_slot_when_client_drops_stream() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -1415,7 +1352,7 @@ async fn codex_backend_client_should_close_idle_pooled_websocket_after_liveness_
 }
 
 #[tokio::test]
-async fn codex_backend_client_should_discard_pooled_websocket_after_upstream_error() {
+async fn codex_backend_client_should_discard_pooled_websocket_after_error_terminal() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let accepted_connections = Arc::new(AtomicUsize::new(0));
@@ -1428,13 +1365,10 @@ async fn codex_backend_client_should_discard_pooled_websocket_after_upstream_err
         first_websocket
             .send(Message::Text(
                 json!({
-                    "type": "response.failed",
-                    "response": {
-                        "id": "resp_pool_rate_limit",
-                        "error": {
-                            "code": "rate_limit_exceeded",
-                            "message": "Rate limit reached. Please try again in 1s."
-                        }
+                    "type": "error",
+                    "error": {
+                        "code": "rate_limit_exceeded",
+                        "message": "Rate limit reached. Please try again in 1s."
                     }
                 })
                 .to_string()
@@ -1487,13 +1421,13 @@ async fn codex_backend_client_should_discard_pooled_websocket_after_upstream_err
     request.previous_response_scope = Some(PreviousResponseScope::Persisted);
     request.set_prompt_cache_key(Some("conversation-pool".to_string()));
 
-    let first_error = backend
+    let first = backend
         .create_response(
             &request,
             request_context("req_pool_error", Some("chatgpt-account")),
         )
         .await
-        .expect_err("first pooled websocket response should surface upstream error");
+        .expect("error should be returned as a terminal SSE fact");
     let second = backend
         .create_response(
             &request,
@@ -1503,17 +1437,15 @@ async fn codex_backend_client_should_discard_pooled_websocket_after_upstream_err
         .expect("second pooled websocket response should use a fresh connection");
     server.await.unwrap();
 
-    let CodexClientError::Upstream { status, body, .. } = first_error else {
-        panic!("expected upstream error from first pooled websocket response");
-    };
-    assert_eq!(status, reqwest::StatusCode::TOO_MANY_REQUESTS);
-    assert!(body.contains("rate_limit_exceeded"));
+    assert!(first.body.contains("event: error"));
+    assert!(first.body.contains("\"code\":\"rate_limit_exceeded\""));
     assert!(second.body.contains("resp_pool_after_error"));
+    assert_eq!(second.websocket_pool_decision.unwrap().kind(), "new");
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
-async fn codex_backend_client_should_discard_pooled_websocket_after_unmapped_response_failed() {
+async fn codex_backend_client_should_discard_pooled_websocket_after_unknown_response_failed() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let accepted_connections = Arc::new(AtomicUsize::new(0));
@@ -1548,7 +1480,7 @@ async fn codex_backend_client_should_discard_pooled_websocket_after_unmapped_res
         let _second_message = second_websocket.next().await.unwrap().unwrap();
         second_websocket
             .send(Message::Text(
-                completed_websocket_response("resp_pool_after_unmapped_failed", 5, 2).into(),
+                completed_websocket_response("resp_pool_after_unknown_failed", 5, 2).into(),
             ))
             .await
             .unwrap();
@@ -1561,26 +1493,27 @@ async fn codex_backend_client_should_discard_pooled_websocket_after_unmapped_res
         crate::support::fingerprint::runtime_test_fingerprint(),
     )
     .with_websocket_pool(pool);
-    let request = pooled_websocket_request("conversation-pool-unmapped-failed");
+    let request = pooled_websocket_request("conversation-pool-unknown-failed");
 
     let first = backend
         .create_response(
             &request,
-            request_context("req_pool_unmapped_failed", Some("chatgpt-account")),
+            request_context("req_pool_unknown_failed", Some("chatgpt-account")),
         )
         .await
-        .expect("unmapped response.failed should be returned as terminal SSE");
+        .expect("unknown response.failed should be returned as a terminal SSE fact");
     let second = backend
         .create_response(
             &request,
-            request_context("req_pool_after_unmapped_failed", Some("chatgpt-account")),
+            request_context("req_pool_after_unknown_failed", Some("chatgpt-account")),
         )
         .await
-        .expect("terminal failed websocket should be replaced");
+        .expect("failed websocket should be replaced");
     server.await.unwrap();
 
+    assert!(first.body.contains("event: response.failed"));
     assert!(first.body.contains("resp_pool_model_refusal"));
-    assert!(second.body.contains("resp_pool_after_unmapped_failed"));
+    assert!(second.body.contains("resp_pool_after_unknown_failed"));
     assert_eq!(second.websocket_pool_decision.unwrap().kind(), "new");
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
 }

@@ -1,4 +1,4 @@
-//! Request-level trace state for Responses dispatch.
+//! Responses 请求级账号尝试轨迹。
 
 #[derive(Debug, Default)]
 pub(in crate::dispatch) struct ResponseDispatchTrace {

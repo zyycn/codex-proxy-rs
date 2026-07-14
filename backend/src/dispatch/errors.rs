@@ -1,22 +1,53 @@
 //! Shared upstream error classification for dispatch routes.
 
-use chrono::{DateTime, Duration, Utc};
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
 use crate::{
-    dispatch::{
-        recovery::exhaustion::{ExhaustedAccount, ExhaustedAccountKind, ExhaustedAccountRef},
-        stream::sse_failure::{sse_failure_error_body, stream_failure_http_status},
+    dispatch::failure::{
+        exhaustion::{ExhaustedAccount, ExhaustedAccountKind, ExhaustedAccountRef},
+        sse::sse_failure_error_body,
     },
     upstream::openai::{
         protocol::{responses::ResponsesSseFailure, sse::SseError},
-        transport::{
-            CodexBackendTransport, CodexClientError, CodexUpstreamDiagnostics,
-            is_banned_upstream_error, is_cyber_policy_upstream_error,
-        },
+        transport::{CodexBackendTransport, CodexClientError, CodexUpstreamDiagnostics},
     },
 };
+
+/// controller 已经完成分类、可直接交给 API 编码的客户端失败事实。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClientFailure {
+    failure: ResponsesSseFailure,
+    status_code: u16,
+    expose_upstream: bool,
+}
+
+impl ClientFailure {
+    pub(in crate::dispatch) fn new(
+        failure: ResponsesSseFailure,
+        status_code: u16,
+        expose_upstream: bool,
+    ) -> Self {
+        Self {
+            failure,
+            status_code,
+            expose_upstream,
+        }
+    }
+
+    pub(crate) fn failure(&self) -> &ResponsesSseFailure {
+        &self.failure
+    }
+
+    pub(crate) fn status_code(&self) -> u16 {
+        self.status_code
+    }
+
+    /// 只有 controller 明确允许时，API 才透传上游 code/message。
+    pub(crate) fn exposed_upstream(&self) -> Option<&ResponsesSseFailure> {
+        self.expose_upstream.then_some(&self.failure)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct DispatchErrorMetadata {
@@ -191,90 +222,7 @@ pub(crate) fn upstream_error_diagnostics(
     }
 }
 
-pub(crate) fn is_rate_limit_upstream_error(error: &CodexClientError) -> bool {
-    if is_cyber_policy_upstream_error(error) {
-        return false;
-    }
-    matches!(
-        error,
-        CodexClientError::Upstream { status, .. } if status_code_is_rate_limited(status.as_u16())
-    )
-}
-
-pub(crate) fn is_retryable_upstream_5xx_error(error: &CodexClientError) -> bool {
-    if is_cyber_policy_upstream_error(error) {
-        return false;
-    }
-    matches!(
-        error,
-        CodexClientError::Upstream { status, .. }
-            if status_code_is_transient_upstream(status.as_u16())
-    )
-}
-
-pub(crate) fn is_retryable_account_transport_error(error: &CodexClientError) -> bool {
-    match error {
-        CodexClientError::Http(error) => error.is_connect() || error.is_timeout(),
-        CodexClientError::StreamIdleTimeout { .. } => true,
-        CodexClientError::WebSocket(
-            crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::Transport(_)
-            | crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::ConnectTimeout { .. }
-            | crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::SendTimeout { .. }
-            | crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::ClosedBeforeTerminal
-            | crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::ReceiveIdleTimeout { .. }
-            | crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstOutput { .. }
-            | crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::InitialEventTimeout { .. },
-        ) => true,
-        _ => is_retryable_upstream_5xx_error(error),
-    }
-}
-
-pub(crate) fn is_quota_exhausted_upstream_error(error: &CodexClientError) -> bool {
-    matches!(
-        error,
-        CodexClientError::Upstream { status, .. }
-            if status_code_is_quota_exhausted(status.as_u16())
-                && !is_banned_upstream_error(error)
-                && !is_cyber_policy_upstream_error(error)
-    )
-}
-
-pub(crate) fn is_model_unsupported_upstream_error(error: &CodexClientError) -> bool {
-    matches!(
-        error,
-        CodexClientError::Upstream { status, body, .. }
-            if status.is_client_error()
-                && !matches!(status.as_u16(), 401 | 402 | 403 | 404 | 429)
-                && !is_cyber_policy_upstream_error(error)
-                && is_model_unsupported_signal(body)
-    )
-}
-
-pub(crate) fn is_history_recovery_upstream_error(error: &CodexClientError) -> bool {
-    upstream_error_code(error).is_some_and(|code| is_history_recovery_code(&code))
-        || matches!(
-            error,
-            CodexClientError::WebSocket(
-                crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::ContinuationUnavailable { reason }
-            ) if !matches!(
-                reason,
-                crate::upstream::openai::transport::websocket::PreviousResponseUnavailableReason::ConnectionBusy
-            )
-        )
-}
-
-pub(crate) fn is_continuation_busy_error(error: &CodexClientError) -> bool {
-    matches!(
-        error,
-        CodexClientError::WebSocket(
-            crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::ContinuationUnavailable {
-                reason: crate::upstream::openai::transport::websocket::PreviousResponseUnavailableReason::ConnectionBusy,
-            }
-        )
-    )
-}
-
-pub(crate) fn upstream_error_body(error: &CodexClientError) -> String {
+fn upstream_error_body(error: &CodexClientError) -> String {
     match error {
         CodexClientError::Upstream { body, .. } => body.clone(),
         error => error.to_string(),
@@ -288,54 +236,6 @@ pub(crate) fn upstream_error_set_cookie_headers(error: &CodexClientError) -> &[S
         } => set_cookie_headers,
         _ => &[],
     }
-}
-
-pub(crate) fn is_model_unsupported_signal(value: &str) -> bool {
-    let value = value.to_ascii_lowercase();
-    value.contains("model_not_supported")
-        || value.contains("model_not_available")
-        || (value.contains("model")
-            && (value.contains("not supported")
-                || value.contains("not available")
-                || value.contains("not_supported")
-                || value.contains("not_available")))
-}
-
-pub(crate) fn is_history_recovery_code(code: &str) -> bool {
-    matches!(
-        code,
-        "previous_response_not_found"
-            | "invalid_encrypted_content"
-            | "missing_tool_output"
-            | "no_tool_output"
-    )
-}
-
-pub(crate) fn upstream_error_code(error: &CodexClientError) -> Option<String> {
-    let CodexClientError::Upstream { body, .. } = error else {
-        return None;
-    };
-    let value = serde_json::from_str::<Value>(body).ok()?;
-    value
-        .pointer("/response/error/code")
-        .or_else(|| value.pointer("/error/code"))
-        .or_else(|| value.get("code"))
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-}
-
-pub(crate) fn rate_limit_cooldown_until(
-    error: &CodexClientError,
-    now: DateTime<Utc>,
-) -> DateTime<Utc> {
-    let retry_after_seconds = match error {
-        CodexClientError::Upstream {
-            retry_after_seconds,
-            ..
-        } => retry_after_seconds.unwrap_or(60),
-        _ => 60,
-    };
-    now + Duration::seconds(retry_after_seconds.min(i64::MAX as u64) as i64)
 }
 
 pub(crate) fn upstream_error_http_status(error: &CodexClientError) -> u16 {
@@ -352,17 +252,6 @@ pub(crate) fn backend_transport_name(transport: CodexBackendTransport) -> &'stat
     }
 }
 
-fn status_code_is_rate_limited(status_code: u16) -> bool {
-    status_code == 429
-}
-
-fn status_code_is_quota_exhausted(status_code: u16) -> bool {
-    status_code == 402
-}
-
-fn status_code_is_transient_upstream(status_code: u16) -> bool {
-    matches!(status_code, 500..=599)
-}
 /// Responses 调度错误。
 #[derive(Debug, Error)]
 pub enum ResponseDispatchError {
@@ -427,7 +316,7 @@ pub enum ResponseDispatchError {
     #[error("upstream response did not include visible output")]
     EmptyUpstreamResponse,
     #[error("upstream response failed: {0:?}")]
-    Failed(ResponsesSseFailure),
+    Failed(ClientFailure),
 }
 
 impl ResponseDispatchError {
@@ -487,7 +376,7 @@ impl ResponseDispatchError {
             | Self::EmptyUpstreamResponse => 502,
             Self::UpstreamUnavailable { .. } => 503,
             Self::ContinuationBusy => 503,
-            Self::Failed(failure) => stream_failure_http_status(failure),
+            Self::Failed(failure) => failure.status_code(),
             Self::ModelUnsupported { .. } | Self::HistoryUnavailable { .. } => 400,
             Self::Upstream(error) => upstream_error_http_status(error),
         }
@@ -583,7 +472,7 @@ impl ResponseDispatchError {
             Self::Failed(failure) => DispatchErrorMetadata {
                 failure_class: DispatchFailureClass::ResponseFailed,
                 exhausted_count: None,
-                upstream_error: Some(sse_failure_error_body(failure)),
+                upstream_error: Some(sse_failure_error_body(failure.failure())),
                 upstream_status: None,
                 diagnostics: None,
             },
