@@ -160,7 +160,7 @@ fn config_loader_should_reject_missing_explicit_fields() {
 
 #[test]
 fn config_loader_should_reject_unsupported_schema_version() {
-    let yaml = complete_config().replace("schema_version: 2", "schema_version: 1");
+    let yaml = complete_config().replace("schema_version: 1", "schema_version: 0");
     let directory = write_config(&yaml);
 
     let error = BootstrapConfig::load_from_path(directory.path().join("config.yaml")).unwrap_err();

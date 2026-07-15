@@ -30,7 +30,13 @@ const dimensionOptions = [
 ]
 
 const diagnosticColumns = [
-  { key: 'nameDisplay', label: '维度', width: '220px', ellipsis: false },
+  {
+    key: 'nameDisplay',
+    label: '维度',
+    width: '180px',
+    fixed: false as const,
+    ellipsis: false,
+  },
   {
     key: 'requestCount',
     label: '请求 / 占比',
@@ -57,11 +63,14 @@ const diagnosticColumns = [
   },
 ]
 
-const dimensionLabel = computed(
+const selectedDimensionLabel = computed(
   () => dimensionOptions.find((option) => option.value === dimension.value)?.label ?? '维度',
 )
 
-const isStale = computed(() => props.diagnostics.dimension !== dimension.value)
+const resultDimension = computed(() => props.diagnostics.dimension || dimension.value)
+const resultDimensionLabel = computed(
+  () => dimensionOptions.find((option) => option.value === resultDimension.value)?.label ?? '维度',
+)
 
 const sortedItems = computed(() =>
   [...props.diagnostics.items].sort(
@@ -76,13 +85,11 @@ const displayItems = computed(() =>
   })),
 )
 
-const tableRows = computed(() => (isStale.value ? [] : displayItems.value))
-
 function diagnosticNameDisplay(name: string) {
   const raw = name.trim() || '未知'
   const full =
-    dimension.value === 'transport' ? ({ websocket: 'WS', http_sse: 'SSE' }[raw] ?? raw) : raw
-  if (dimension.value !== 'model' && dimension.value !== 'account') {
+    resultDimension.value === 'transport' ? ({ websocket: 'WS', http_sse: 'SSE' }[raw] ?? raw) : raw
+  if (resultDimension.value !== 'model' && resultDimension.value !== 'account') {
     return { primary: full, secondary: '', full }
   }
 
@@ -100,7 +107,7 @@ function diagnosticNameDisplay(name: string) {
     as="article"
     :padded="false"
     title="热点诊断"
-    :description="`按${dimensionLabel}定位错误、慢请求与费用热点`"
+    :description="`按${selectedDimensionLabel}定位错误、慢请求与费用热点`"
     header-collapse-at="lg"
     header-class="px-5 pt-4"
     body-class="min-h-0 min-w-0 px-5 pt-3"
@@ -110,18 +117,17 @@ function diagnosticNameDisplay(name: string) {
       <BaseSegmented
         v-model="dimension"
         :options="dimensionOptions"
-        :disabled="loading"
         class="w-full min-w-0 lg:w-80"
       />
     </template>
 
     <template #body>
       <BaseTable
-        :key="dimension"
+        :key="resultDimension"
         class="min-h-0 w-full"
         :columns="diagnosticColumns"
-        :rows="tableRows"
-        :loading="loading || isStale"
+        :rows="displayItems"
+        :loading="loading"
         compact
         row-key="name"
         empty-text="暂无诊断数据"
@@ -129,7 +135,7 @@ function diagnosticNameDisplay(name: string) {
         min-width="640px"
       >
         <template #header-nameDisplay>
-          {{ dimensionLabel }}
+          {{ resultDimensionLabel }}
         </template>
 
         <template #nameDisplay="{ row }">
@@ -144,7 +150,7 @@ function diagnosticNameDisplay(name: string) {
               class="flex min-w-0 items-center gap-1.25 text-(--cp-text-secondary)"
             >
               <CornerDownRight
-                v-if="dimension !== 'account'"
+                v-if="resultDimension !== 'account'"
                 class="size-3.25 shrink-0 text-(--cp-info)"
                 stroke-width="2.4"
               />

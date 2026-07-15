@@ -10,6 +10,8 @@ import { formatDateTime } from '@/utils/date'
 
 type DashboardTrendKind = 'usage' | 'latency' | 'errors'
 
+const METRIC_SPARKLINE_BUCKETS = 12
+
 export function useDashboard(): any {
   const activeTrendKind = ref<DashboardTrendKind>('usage')
   const metrics = ref<any[]>(metricCards(emptyDashboardSummary()))
@@ -148,9 +150,14 @@ export function useDashboard(): any {
       },
       healthTimeline: {
         title: '请求健康时间线',
-        description: '请求可靠性',
+        description: '有效请求可用性',
         reliabilityDisplay: '-',
-        points: '',
+        status: 'no_data',
+        successRequests: 0,
+        failedRequests: 0,
+        cancelledRequests: 0,
+        callerErrorRequests: 0,
+        points: [],
       },
       accountUsage: [],
       wireProfile: null,
@@ -279,7 +286,10 @@ export function useDashboard(): any {
     }
     if (lastActiveIndex < 0) return []
 
-    return points.slice(Math.max(0, lastActiveIndex - 8), lastActiveIndex + 1)
+    return points.slice(
+      Math.max(0, lastActiveIndex - (METRIC_SPARKLINE_BUCKETS - 1)),
+      lastActiveIndex + 1,
+    )
   }
 
   function formatDashboardCompactNumber(value: number) {

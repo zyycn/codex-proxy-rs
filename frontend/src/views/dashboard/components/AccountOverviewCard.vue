@@ -3,9 +3,9 @@ import { clamp } from 'es-toolkit'
 import { computed } from 'vue'
 import { CircleCheck, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
 
-import BaseCard from '../../../components/base/BaseCard.vue'
-import BaseEmpty from '../../../components/base/BaseEmpty.vue'
-import AccountIdentityCell from '../../accounts/components/AccountIdentityCell.vue'
+import BaseCard from '@/components/base/BaseCard.vue'
+import BaseEmpty from '@/components/base/BaseEmpty.vue'
+import AccountIdentityCell from '@/views/accounts/components/AccountIdentityCell.vue'
 
 const props = defineProps<{
   accounts: any[]

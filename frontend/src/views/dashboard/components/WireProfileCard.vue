@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Binary, Box, CheckCircle2, Monitor, RefreshCw, TriangleAlert } from '@lucide/vue'
+import { Box, CheckCircle2, Monitor, RefreshCw, Terminal, TriangleAlert } from '@lucide/vue'
 import { computed } from 'vue'
 
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -62,52 +62,62 @@ const checkedAt = computed(() =>
 </script>
 
 <template>
-  <BaseCard as="article" variant="dashboard" title="上游请求身份" class="min-h-95 w-full">
+  <BaseCard
+    as="article"
+    variant="dashboard"
+    title="上游请求身份"
+    body-class="flex min-h-0 flex-1 flex-col"
+    class="flex min-h-95 w-full flex-col"
+  >
     <template #actions>
       <span
         class="inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[12px] leading-none font-[720]"
         :class="releaseStatus.tone"
         :title="releaseStatus.title"
       >
-        <component :is="releaseStatus.icon" class="size-3.5" />
+        <component :is="releaseStatus.icon" aria-hidden="true" class="size-3.5" />
         {{ releaseStatus.label }}
       </span>
     </template>
 
     <template #body>
-      <BaseEmpty v-if="!profile" compact title="暂无请求身份" class="h-67 place-content-center" />
+      <BaseEmpty
+        v-if="!profile"
+        compact
+        title="暂无请求身份"
+        class="mt-5 min-h-[287px] flex-1 place-content-center"
+      />
 
-      <div
-        v-else
-        class="mt-5 grid gap-3 max-[767px]:pl-5 sm:h-[287px] sm:grid-rows-[minmax(0,1fr)_24px]"
-      >
+      <div v-else class="mt-5 grid flex-1 gap-3 sm:grid-rows-[minmax(0,1fr)_24px]">
         <section
           aria-label="请求身份组成"
           class="grid min-w-0 content-between gap-6 rounded-[14px] bg-(--cp-bg-subtle) px-5 py-5.5 sm:h-full sm:grid-rows-[auto_minmax(0,1fr)_auto] sm:px-6 sm:py-5"
         >
-          <div class="flex min-w-0 items-center justify-between gap-4">
-            <div class="flex min-w-0 items-center gap-2 text-(--cp-success-text)">
+          <div class="flex min-w-0 items-center">
+            <div class="flex min-w-0 items-center gap-2 text-(--cp-text-primary)">
               <span
-                class="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-(--cp-success-bg)"
+                class="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-(--cp-bg-muted)"
               >
-                <Box class="size-3.75 text-(--cp-success)" />
+                <Box aria-hidden="true" class="size-3.75 text-(--cp-text-secondary)" />
               </span>
               <span class="truncate text-[11px] leading-none font-[760]">Codex Desktop</span>
             </div>
-            <span
-              class="shrink-0 font-mono text-[10px] leading-none font-[650] tabular-nums text-(--cp-text-muted)"
-            >
-              Build {{ profile.desktopBuild }}
-            </span>
           </div>
 
           <div class="grid min-h-0 content-center">
-            <strong
-              class="block max-w-full wrap-break-word font-mono text-[27px] leading-[1.05] font-[790] tabular-nums text-(--cp-text-primary)"
-              :title="profile.desktopVersion"
-            >
-              {{ profile.desktopVersion }}
-            </strong>
+            <div class="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1.5">
+              <strong
+                class="block max-w-full wrap-break-word font-mono text-[27px] leading-[1.05] font-[790] tabular-nums text-(--cp-text-primary)"
+                :title="profile.desktopVersion"
+              >
+                {{ profile.desktopVersion }}
+              </strong>
+              <span
+                class="shrink-0 font-mono text-[10px] leading-none font-[650] tabular-nums text-(--cp-text-muted)"
+              >
+                Build {{ profile.desktopBuild }}
+              </span>
+            </div>
           </div>
 
           <dl class="m-0 grid min-w-0 gap-5 sm:grid-cols-[0.72fr_1.28fr] sm:gap-7">
@@ -115,7 +125,7 @@ const checkedAt = computed(() =>
               <dt
                 class="flex items-center gap-1.5 text-[10px] leading-none font-[720] text-(--cp-text-muted)"
               >
-                <Binary class="size-3.25 text-(--cp-info)" />
+                <Terminal aria-hidden="true" class="size-3.25 text-(--cp-info)" />
                 Codex Core
               </dt>
               <dd
@@ -130,7 +140,7 @@ const checkedAt = computed(() =>
               <dt
                 class="flex items-center gap-1.5 text-[10px] leading-none font-[720] text-(--cp-text-muted)"
               >
-                <Monitor class="size-3.25 text-(--cp-normal)" />
+                <Monitor aria-hidden="true" class="size-3.25 text-(--cp-normal)" />
                 模拟运行环境
               </dt>
               <dd

@@ -666,8 +666,8 @@ fn start_pooled_websocket_connect(
             biased;
             _ = cancellation.cancelled() => {
                 permit.cancel();
-                connect_lease.failed().await;
                 let _ = sender.send(Err(CodexWebSocketExchangeError::SharedConnectFailed));
+                connect_lease.failed().await;
                 tracing::info!(
                     account_id = task_key.account_id(),
                     conversation_id_hash = task_key.conversation_id_hash(),
@@ -710,8 +710,9 @@ fn start_pooled_websocket_connect(
             }
             Err(error) => {
                 let error_message = error.to_string();
-                connect_lease.failed().await;
+                // 先交付 opening 原始错误，避免连接池清理侵占前台 fast-path 预算。
                 let foreground_waiting = sender.send(Err(error)).is_ok();
+                connect_lease.failed().await;
                 tracing::warn!(
                     account_id = task_key.account_id(),
                     conversation_id_hash = task_key.conversation_id_hash(),
