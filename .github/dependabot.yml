@@ -34,6 +34,8 @@ updates:
       day: monday
       time: '09:20'
       timezone: Asia/Shanghai
+    cooldown:
+      default-days: 1
     groups:
       minor-and-patch:
         update-types:
