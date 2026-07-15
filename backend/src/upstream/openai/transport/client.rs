@@ -309,7 +309,7 @@ pub enum CodexTransportDecision {
     ConnectedWebSocket,
     ExactWebSocket,
     RequiredWebSocket,
-    Http2WebSocketSlow,
+    Http2WebSocketBudgetExhausted,
     Http2BreakerOpen,
     Http2PoolUnavailable,
     Http2PreSendFailure,
@@ -323,7 +323,7 @@ impl CodexTransportDecision {
             Self::ConnectedWebSocket => "ws_connected_fast",
             Self::ExactWebSocket => "ws_exact_required",
             Self::RequiredWebSocket => "ws_required",
-            Self::Http2WebSocketSlow => "http2_ws_slow",
+            Self::Http2WebSocketBudgetExhausted => "http2_ws_budget_exhausted",
             Self::Http2BreakerOpen => "http2_breaker_open",
             Self::Http2PoolUnavailable => "http2_pool_unavailable",
             Self::Http2PreSendFailure => "http2_ws_pre_send_failure",
@@ -627,7 +627,7 @@ fn websocket_success_decision(
 fn http_fallback_decision(error: &CodexWebSocketExchangeError) -> CodexTransportDecision {
     match error {
         CodexWebSocketExchangeError::FastPathTimeout { .. } => {
-            CodexTransportDecision::Http2WebSocketSlow
+            CodexTransportDecision::Http2WebSocketBudgetExhausted
         }
         CodexWebSocketExchangeError::OriginCircuitOpen
         | CodexWebSocketExchangeError::OriginHalfOpenBusy => {
