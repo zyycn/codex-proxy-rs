@@ -17,10 +17,15 @@ export function useUsageTimeRange(initialRange: UsageTimeRange = 'today') {
     rangeEnd.value = dayjs()
   }
 
+  function latestTimeRangeParams() {
+    return buildTimeRange(timeRange.value, dayjs())
+  }
+
   return {
     timeRange,
     timeRangeParams,
     refreshTimeRangeEnd,
+    latestTimeRangeParams,
   }
 }
 

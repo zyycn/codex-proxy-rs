@@ -36,7 +36,8 @@ const recordViewOptions = [
   { label: '成功记录', value: 'success' },
   { label: '错误排查', value: 'errors' },
 ]
-const { timeRange, timeRangeParams, refreshTimeRangeEnd } = useUsageTimeRange()
+const { timeRange, timeRangeParams, refreshTimeRangeEnd, latestTimeRangeParams } =
+  useUsageTimeRange()
 
 const {
   page,
@@ -65,7 +66,7 @@ const {
   searchQuery,
   timeRangeParams,
   totalRecords,
-  refreshTimeRangeEnd,
+  latestTimeRangeParams,
 })
 
 const { showDetailModal, selectedUsageRecord, handleViewDetail } = useUsageRecordDetail({
