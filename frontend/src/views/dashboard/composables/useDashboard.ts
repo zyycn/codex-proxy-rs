@@ -2,22 +2,15 @@ import { useIntervalFn } from '@vueuse/core'
 import { clamp } from 'es-toolkit'
 import { onMounted, ref } from 'vue'
 
-import {
-  Activity,
-  CloudCheck,
-  FileText,
-  Gauge,
-  MonitorCheck,
-  RefreshCw,
-  Timer,
-  Users,
-} from '@lucide/vue'
+import { Activity, FileText, Timer, Users } from '@lucide/vue'
 
 import { getDashboardSummary, getDashboardTrend } from '@/api'
 import { withMinimumDuration } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
 
 type DashboardTrendKind = 'usage' | 'latency' | 'errors'
+
+const METRIC_SPARKLINE_BUCKETS = 12
 
 export function useDashboard(): any {
   const activeTrendKind = ref<DashboardTrendKind>('usage')
@@ -26,7 +19,7 @@ export function useDashboard(): any {
   const trendSummary = ref<any[]>([])
   const healthTimeline = ref<any>(emptyDashboardSummary().healthTimeline)
   const accountUsage = ref<any[]>([])
-  const serviceStatuses = ref<any[]>([])
+  const wireProfile = ref<any>(null)
   const usageRecords = ref<any[]>([])
   const poolSummary = ref<any>(null)
   const capacityInfo = ref<any>(null)
@@ -109,7 +102,7 @@ export function useDashboard(): any {
     metrics.value = metricCards(summary)
     healthTimeline.value = summary.healthTimeline
     accountUsage.value = summary.accountUsage.map(accountUsageItem)
-    serviceStatuses.value = summary.serviceStatuses.map(serviceStatusItem)
+    wireProfile.value = summary.wireProfile ?? null
     usageRecords.value = summary.usageRecords
     poolSummary.value = summary.poolSummary
     capacityInfo.value = summary.capacityInfo
@@ -157,12 +150,17 @@ export function useDashboard(): any {
       },
       healthTimeline: {
         title: '请求健康时间线',
-        description: '请求可靠性',
+        description: '有效请求可用性',
         reliabilityDisplay: '-',
-        points: '',
+        status: 'no_data',
+        successRequests: 0,
+        failedRequests: 0,
+        cancelledRequests: 0,
+        callerErrorRequests: 0,
+        points: [],
       },
       accountUsage: [],
-      serviceStatuses: [],
+      wireProfile: null,
       usageRecords: [],
       poolSummary: {
         total: 0,
@@ -288,7 +286,10 @@ export function useDashboard(): any {
     }
     if (lastActiveIndex < 0) return []
 
-    return points.slice(Math.max(0, lastActiveIndex - 8), lastActiveIndex + 1)
+    return points.slice(
+      Math.max(0, lastActiveIndex - (METRIC_SPARKLINE_BUCKETS - 1)),
+      lastActiveIndex + 1,
+    )
   }
 
   function formatDashboardCompactNumber(value: number) {
@@ -453,17 +454,6 @@ export function useDashboard(): any {
     return 'normal'
   }
 
-  function serviceStatusItem(item: any, index: number) {
-    const icons = [MonitorCheck, MonitorCheck, CloudCheck, RefreshCw, Gauge]
-    return {
-      label: item.label,
-      value: item.value || '-',
-      detail: item.detail || '-',
-      tone: item.tone,
-      icon: icons[index] ?? MonitorCheck,
-    }
-  }
-
   function trendState(current: number, previous: number, fallbackTone: string) {
     if (current > previous) return { direction: 'up', tone: 'success' }
     if (current < previous) return { direction: 'down', tone: 'danger' }
@@ -524,7 +514,7 @@ export function useDashboard(): any {
     trendSummary,
     healthTimeline,
     accountUsage,
-    serviceStatuses,
+    wireProfile,
     usageRecords,
     poolSummary,
     capacityInfo,

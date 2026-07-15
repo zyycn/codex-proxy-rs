@@ -69,14 +69,17 @@ impl StreamFinalizer {
         controllers
             .leave_stream(controller_scope, controller_context, &summary, &body)
             .await;
-        if timeout(LEASE_FINALIZE_TIMEOUT, account_lease.complete())
+        let mut lease_completion = Box::pin(account_lease.complete());
+        if timeout(LEASE_FINALIZE_TIMEOUT, lease_completion.as_mut())
             .await
             .is_err()
         {
             tracing::warn!(
                 timeout_ms = LEASE_FINALIZE_TIMEOUT.as_millis(),
-                "Timed out finalizing response account lease"
+                "Response account lease is continuing finalization in the background"
             );
+            // 超时只约束客户端收尾，不取消已经开始的 slot 释放与请求用量持久化。
+            drop(tokio::spawn(lease_completion));
         }
         finish_client_stream(sender, event_sender, &mut summary).await;
     }

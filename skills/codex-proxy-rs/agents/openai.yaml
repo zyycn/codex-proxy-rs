@@ -1,4 +1,4 @@
 interface:
   display_name: "Codex Proxy RS"
-  short_description: "按当前架构开发和维护 Rust/Vue/PostgreSQL/Redis 代理服务"
-  default_prompt: "使用 $codex-proxy-rs 按当前源码和架构开发、验证或维护 Codex Proxy RS。"
+  short_description: "按当前架构维护 Rust/Vue 多账号 Responses 网关"
+  default_prompt: "使用 $codex-proxy-rs 按当前源码与架构完成开发、验证或发布。"

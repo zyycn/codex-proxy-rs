@@ -19,7 +19,7 @@ interface UseUsageRecordsTableOptions {
   searchQuery: Ref<string>
   timeRangeParams: Readonly<Ref<UsageTimeRangeParams>>
   totalRecords: Ref<number>
-  refreshTimeRangeEnd: () => void
+  latestTimeRangeParams: () => UsageTimeRangeParams
 }
 
 type UsageLoadScope = 'all' | 'table'
@@ -30,9 +30,11 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   const records = shallowRef<any[]>([])
   const summary = shallowRef(emptySummary())
   const insights = shallowRef(emptyInsights())
+  const tableTimeRangeParams = shallowRef<UsageTimeRangeParams>({
+    ...options.timeRangeParams.value,
+  })
   const refreshingList = shallowRef(false)
   const diagnosticDimension = shallowRef('model')
-  const diagnosticLoading = shallowRef(false)
   let loadRequestId = 0
   let diagnosticRequestId = 0
   const scopedParams = () => ({ ...options.timeRangeParams.value })
@@ -47,12 +49,14 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
       if (scope === 'all') {
         analyticsLoading.value = true
         diagnosticRequestId += 1
-        diagnosticLoading.value = false
       }
 
       const globalParams = scopedParams()
+      if (scope === 'all') {
+        tableTimeRangeParams.value = { ...globalParams }
+      }
       const tableParams = {
-        ...globalParams,
+        ...tableTimeRangeParams.value,
         ...filterParams(),
       }
       const resultPromise = getUsageRecords({
@@ -126,7 +130,6 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     const dimension = diagnosticDimension.value
     const params = scopedParams()
     try {
-      diagnosticLoading.value = true
       const diagnostics = await getUsageRecordInsightsDiagnostics({
         ...params,
         dimension,
@@ -138,10 +141,6 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
       }
     } catch (error: any) {
       toast.error(error.message || '加载失败')
-    } finally {
-      if (requestId === diagnosticRequestId) {
-        diagnosticLoading.value = false
-      }
     }
   }
 
@@ -149,8 +148,8 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     if (refreshingList.value || loading.value) return
     refreshingList.value = true
     try {
-      options.refreshTimeRangeEnd()
-      await withMinimumDuration(() => loadUsageRecords('all'))
+      tableTimeRangeParams.value = options.latestTimeRangeParams()
+      await withMinimumDuration(() => loadUsageRecords('table'))
     } finally {
       refreshingList.value = false
     }
@@ -172,7 +171,6 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     insights,
     refreshingList,
     diagnosticDimension,
-    diagnosticLoading,
     loadUsageRecords,
     refreshUsageRecords,
   }

@@ -2,7 +2,10 @@
 
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -73,8 +76,8 @@ impl WebSocketOriginBreaker {
             .or_insert_with(CircuitState::closed);
 
         match state {
-            CircuitState::Closed { fast_timeouts } => {
-                retain_window(fast_timeouts, now, self.config.failure_window);
+            CircuitState::Closed { failures } => {
+                retain_window(failures, now, self.config.failure_window);
                 WebSocketOriginBreakerDecision::Allowed(WebSocketOriginBreakerPermit::new(
                     self.clone(),
                     origin_key.to_string(),
@@ -105,7 +108,7 @@ impl WebSocketOriginBreaker {
         }
     }
 
-    fn record_fast_timeout(&self, origin_key: &str, probe_id: Option<Uuid>) {
+    fn record_failure(&self, origin_key: &str, probe_id: Option<Uuid>) {
         let now = Instant::now();
         let mut circuits = self
             .inner
@@ -127,33 +130,15 @@ impl WebSocketOriginBreaker {
         let state = circuits
             .entry(origin_key.to_string())
             .or_insert_with(CircuitState::closed);
-        let CircuitState::Closed { fast_timeouts } = state else {
+        let CircuitState::Closed { failures } = state else {
             return;
         };
-        retain_window(fast_timeouts, now, self.config.failure_window);
-        fast_timeouts.push_back(now);
-        if fast_timeouts.len() >= self.config.failure_threshold {
+        retain_window(failures, now, self.config.failure_window);
+        failures.push_back(now);
+        if failures.len() >= self.config.failure_threshold {
             *state = CircuitState::Open {
                 until: now + self.config.open_duration,
             };
-        }
-    }
-
-    fn record_failure(&self, origin_key: &str, probe_id: Option<Uuid>) {
-        let Some(probe_id) = probe_id else {
-            return;
-        };
-        let mut circuits = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if permit_still_owns_state(circuits.get(origin_key), Some(probe_id)) {
-            circuits.insert(
-                origin_key.to_string(),
-                CircuitState::Open {
-                    until: Instant::now() + self.config.open_duration,
-                },
-            );
         }
     }
 }
@@ -163,6 +148,7 @@ pub struct WebSocketOriginBreakerPermit {
     breaker: WebSocketOriginBreaker,
     origin_key: String,
     probe_id: Option<Uuid>,
+    degradation_recorded: Arc<AtomicBool>,
     armed: bool,
 }
 
@@ -172,6 +158,7 @@ impl WebSocketOriginBreakerPermit {
             breaker,
             origin_key,
             probe_id,
+            degradation_recorded: Arc::new(AtomicBool::new(false)),
             armed: true,
         }
     }
@@ -180,33 +167,71 @@ impl WebSocketOriginBreakerPermit {
         self.probe_id.is_some()
     }
 
+    /// 创建可跨前台预算与后台 opening 生命周期共享的快路径观察器。
+    pub(crate) fn fast_path_reporter(&self) -> WebSocketOriginFastPathReporter {
+        WebSocketOriginFastPathReporter {
+            breaker: self.breaker.clone(),
+            origin_key: self.origin_key.clone(),
+            probe_id: self.probe_id,
+            degradation_recorded: Arc::clone(&self.degradation_recorded),
+        }
+    }
+
     pub fn succeed(mut self) {
-        self.breaker.record_success(&self.origin_key, self.probe_id);
+        if !self.degradation_recorded.load(Ordering::Acquire) {
+            self.breaker.record_success(&self.origin_key, self.probe_id);
+        }
         self.armed = false;
     }
 
     pub fn fast_timeout(mut self) {
-        self.breaker
-            .record_fast_timeout(&self.origin_key, self.probe_id);
+        self.fast_path_reporter().missed();
         self.armed = false;
     }
 
     pub fn fail(mut self) {
-        self.breaker.record_failure(&self.origin_key, self.probe_id);
+        self.record_failure_once();
         self.armed = false;
+    }
+
+    /// opening 因账号驱逐或服务关闭而取消，不污染 origin 可用性。
+    pub(crate) fn cancel(mut self) {
+        self.armed = false;
+    }
+
+    fn record_failure_once(&self) {
+        if !self.degradation_recorded.swap(true, Ordering::AcqRel) {
+            self.breaker.record_failure(&self.origin_key, self.probe_id);
+        }
     }
 }
 
 impl Drop for WebSocketOriginBreakerPermit {
     fn drop(&mut self) {
         if self.armed {
+            self.record_failure_once();
+        }
+    }
+}
+
+/// 前台等待结束后仍可报告同一次后台 opening 错过快路径预算。
+pub(crate) struct WebSocketOriginFastPathReporter {
+    breaker: WebSocketOriginBreaker,
+    origin_key: String,
+    probe_id: Option<Uuid>,
+    degradation_recorded: Arc<AtomicBool>,
+}
+
+impl WebSocketOriginFastPathReporter {
+    pub(crate) fn missed(&self) {
+        if !self.degradation_recorded.swap(true, Ordering::AcqRel) {
             self.breaker.record_failure(&self.origin_key, self.probe_id);
         }
     }
 }
 
 enum CircuitState {
-    Closed { fast_timeouts: VecDeque<Instant> },
+    Closed { failures: VecDeque<Instant> },
     Open { until: Instant },
     HalfOpen { probe_id: Uuid },
 }
@@ -214,7 +239,7 @@ enum CircuitState {
 impl CircuitState {
     fn closed() -> Self {
         Self::Closed {
-            fast_timeouts: VecDeque::new(),
+            failures: VecDeque::new(),
         }
     }
 }

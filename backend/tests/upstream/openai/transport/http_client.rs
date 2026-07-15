@@ -126,7 +126,7 @@ async fn codex_backend_client_should_cap_non_success_error_body_at_one_mib() {
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         server.uri(),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     );
     let mut request =
         codex_proxy_rs::upstream::openai::protocol::responses::CodexResponsesRequest::new_http_sse(
@@ -183,7 +183,7 @@ async fn codex_backend_client_should_parse_retry_after_from_rate_limit_error_bod
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         server.uri(),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     );
     let mut request =
         codex_proxy_rs::upstream::openai::protocol::responses::CodexResponsesRequest::new_http_sse(
@@ -247,7 +247,7 @@ async fn codex_backend_http_sse_should_fail_after_five_minutes_without_stream_da
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         base_url,
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     );
     let mut request =
         codex_proxy_rs::upstream::openai::protocol::responses::CodexResponsesRequest::new_http_sse(
@@ -298,7 +298,7 @@ async fn codex_backend_client_should_capture_only_safe_response_metadata() {
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         server.uri(),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     );
     let mut request =
         codex_proxy_rs::upstream::openai::protocol::responses::CodexResponsesRequest::new_http_sse(

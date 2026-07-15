@@ -12,7 +12,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use futures::Stream;
 use thiserror::Error;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::{sync::Mutex, time::timeout};
 use tokio_tungstenite::{Connector, connect_async_tls_with_config};
 use tungstenite::{
@@ -39,12 +39,13 @@ use crate::upstream::openai::protocol::websocket::{
 
 use super::websocket_breaker::{
     WebSocketOriginBreaker, WebSocketOriginBreakerDecision, WebSocketOriginBreakerPermit,
+    WebSocketOriginFastPathReporter,
 };
 use super::websocket_pool::{
     CodexWebSocketConnectionMetadata, CodexWebSocketPool, CodexWebSocketPoolKey,
     PooledWebSocketConnection, WebSocketContinuationState, WebSocketPoolAcquire,
-    WebSocketPoolBypassReason, WebSocketPoolConnectOutcome, WebSocketPoolDecision,
-    WebSocketPoolLease,
+    WebSocketPoolBypassReason, WebSocketPoolConnectLease, WebSocketPoolConnectOutcome,
+    WebSocketPoolDecision, WebSocketPoolLease,
 };
 use super::websocket_pump::{PumpExitReason, PumpKeepalive, PumpedWebSocket, RawWsStream};
 use super::{client::CodexResponseMetadata, diagnostics::CodexUpstreamDiagnostics, response_meta};
@@ -576,7 +577,7 @@ async fn prepare_unpooled_websocket(
 async fn prepare_pooled_websocket(
     request: &CodexWebSocketRequest,
     pool: &CodexWebSocketPool,
-    connect_lease: super::websocket_pool::WebSocketPoolConnectLease,
+    connect_lease: WebSocketPoolConnectLease,
     breaker: &WebSocketOriginBreaker,
     origin_key: &str,
     fast_path_budget: Option<Duration>,
@@ -589,33 +590,153 @@ async fn prepare_pooled_websocket(
             return Err(error);
         }
     };
-    let connected =
-        connect_with_budget(request.connection(), pool.keepalive(), fast_path_budget).await;
-    let (connection, connect_elapsed) = match finish_breaker_attempt(permit, connected) {
-        Ok(connected) => connected,
-        Err(error) => {
-            connect_lease.failed().await;
-            return Err(error);
-        }
-    };
-    let connected = match connect_lease.connected(connection).await {
-        Ok(connected) => connected,
-        Err(connection) => {
-            connection.websocket.close().await;
-            return Err(continuation_unavailable(
-                PreviousResponseUnavailableReason::PoolUnavailable,
-            ));
-        }
+    let mut waiter = start_pooled_websocket_connect(
+        request.connection().clone(),
+        pool.clone(),
+        connect_lease,
+        permit,
+    );
+    let connect_elapsed = waiter.wait(fast_path_budget).await?;
+    let Some((connection, lease)) = pool.take_idle(waiter.key()).await else {
+        return Err(continuation_unavailable(
+            PreviousResponseUnavailableReason::PoolUnavailable,
+        ));
     };
     Ok(PreparedWebSocket {
-        connection: *connected.connection,
-        lease: Some(connected.lease),
+        connection: *connection,
+        lease: Some(lease),
         reused: false,
         pool_decision: Some(WebSocketPoolDecision::new()),
         connect_elapsed: Some(connect_elapsed),
         decision_wait_elapsed: decision_started_at.elapsed(),
         initial_event_timeout: pool.initial_event_timeout(),
     })
+}
+
+struct PooledWebSocketConnectWaiter {
+    key: CodexWebSocketPoolKey,
+    started_at: tokio::time::Instant,
+    receiver: oneshot::Receiver<Result<Duration, CodexWebSocketExchangeError>>,
+    fast_path_reporter: WebSocketOriginFastPathReporter,
+}
+
+impl PooledWebSocketConnectWaiter {
+    fn key(&self) -> &CodexWebSocketPoolKey {
+        &self.key
+    }
+
+    async fn wait(
+        &mut self,
+        fast_path_budget: Option<Duration>,
+    ) -> Result<Duration, CodexWebSocketExchangeError> {
+        let received = match fast_path_budget {
+            Some(budget) => {
+                let remaining = budget.saturating_sub(self.started_at.elapsed());
+                match timeout(remaining, &mut self.receiver).await {
+                    Ok(received) => received,
+                    Err(_) => {
+                        self.fast_path_reporter.missed();
+                        return Err(CodexWebSocketExchangeError::FastPathTimeout {
+                            timeout: budget,
+                        });
+                    }
+                }
+            }
+            None => (&mut self.receiver).await,
+        };
+        received.map_err(|_| CodexWebSocketExchangeError::SharedConnectFailed)?
+    }
+}
+
+fn start_pooled_websocket_connect(
+    connection: CodexWebSocketConnection,
+    pool: CodexWebSocketPool,
+    connect_lease: WebSocketPoolConnectLease,
+    permit: WebSocketOriginBreakerPermit,
+) -> PooledWebSocketConnectWaiter {
+    let key = connect_lease.key().clone();
+    let started_at = connect_lease.started_at();
+    let cancellation = connect_lease.cancellation_token();
+    let fast_path_reporter = permit.fast_path_reporter();
+    let keepalive = pool.keepalive();
+    let task_key = key.clone();
+    let (sender, receiver) = oneshot::channel();
+    pool.spawn_connect_task(async move {
+        let connected = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => {
+                permit.cancel();
+                let _ = sender.send(Err(CodexWebSocketExchangeError::SharedConnectFailed));
+                connect_lease.failed().await;
+                tracing::info!(
+                    account_id = task_key.account_id(),
+                    conversation_id_hash = task_key.conversation_id_hash(),
+                    ws_preconnect_duration_ms = duration_millis_u64(started_at.elapsed()),
+                    ws_preconnect_outcome = "cancelled",
+                    "WebSocket pool connect finished"
+                );
+                return;
+            }
+            result = connect_with_budget(&connection, keepalive, None) => result,
+        };
+        match finish_breaker_attempt(permit, connected) {
+            Ok((connection, connect_elapsed)) => {
+                match connect_lease.connected_idle(connection).await {
+                    Ok(()) => {
+                        let foreground_waiting = sender.send(Ok(connect_elapsed)).is_ok();
+                        tracing::info!(
+                            account_id = task_key.account_id(),
+                            conversation_id_hash = task_key.conversation_id_hash(),
+                            ws_preconnect_duration_ms = duration_millis_u64(connect_elapsed),
+                            foreground_waiting,
+                            ws_preconnect_outcome = "ready",
+                            "WebSocket pool connect finished"
+                        );
+                    }
+                    Err(connection) => {
+                        connection.websocket.close().await;
+                        let _ = sender.send(Err(continuation_unavailable(
+                            PreviousResponseUnavailableReason::PoolUnavailable,
+                        )));
+                        tracing::info!(
+                            account_id = task_key.account_id(),
+                            conversation_id_hash = task_key.conversation_id_hash(),
+                            ws_preconnect_duration_ms = duration_millis_u64(connect_elapsed),
+                            ws_preconnect_outcome = "rejected",
+                            "WebSocket pool connect finished"
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                let error_message = error.to_string();
+                // 先交付 opening 原始错误，避免连接池清理侵占前台 fast-path 预算。
+                let foreground_waiting = sender.send(Err(error)).is_ok();
+                connect_lease.failed().await;
+                tracing::warn!(
+                    account_id = task_key.account_id(),
+                    conversation_id_hash = task_key.conversation_id_hash(),
+                    ws_preconnect_duration_ms = duration_millis_u64(started_at.elapsed()),
+                    foreground_waiting,
+                    error = %error_message,
+                    ws_preconnect_outcome = "failed",
+                    "WebSocket pool connect finished"
+                );
+            }
+        }
+    });
+    PooledWebSocketConnectWaiter {
+        key,
+        started_at,
+        receiver,
+        fast_path_reporter,
+    }
+}
+
+fn duration_millis_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis())
+        .unwrap_or(u64::MAX)
+        .max(1)
 }
 
 async fn connect_with_budget(
@@ -683,11 +804,11 @@ fn finish_breaker_attempt(
 async fn wait_for_shared_connect(
     waiter: super::websocket_pool::WebSocketPoolConnectWaiter,
     fast_path_budget: Option<Duration>,
-    decision_started_at: Instant,
+    _decision_started_at: Instant,
 ) -> Result<WebSocketPoolConnectOutcome, CodexWebSocketExchangeError> {
     match fast_path_budget {
         Some(budget) => {
-            let remaining = budget.saturating_sub(decision_started_at.elapsed());
+            let remaining = waiter.remaining_budget(budget);
             timeout(remaining, waiter.wait())
                 .await
                 .map_err(|_| CodexWebSocketExchangeError::FastPathTimeout { timeout: budget })
