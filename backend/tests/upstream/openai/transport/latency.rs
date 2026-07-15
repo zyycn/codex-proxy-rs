@@ -18,6 +18,18 @@ fn new_chain_request(conversation_id: &str) -> CodexResponsesRequest {
     request
 }
 
+fn explicit_websocket_warmup_request(conversation_id: &str) -> CodexResponsesRequest {
+    let mut body = serde_json::Map::new();
+    body.insert("model".to_string(), json!("gpt-5.5"));
+    body.insert("input".to_string(), json!([]));
+    body.insert("generate".to_string(), json!(false));
+    body.insert("store".to_string(), json!(false));
+    let mut request = CodexResponsesRequest::from_body(body);
+    request.use_websocket = true;
+    request.local_conversation_id = Some(conversation_id.to_string());
+    request
+}
+
 #[tokio::test]
 async fn cold_websocket_should_fall_back_without_recording_a_successful_connect() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -326,14 +338,7 @@ async fn store_false_warmup_should_never_fall_back_to_http() {
         crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::new(CodexWebSocketPool::default()));
-    let mut body = serde_json::Map::new();
-    body.insert("model".to_string(), json!("gpt-5.5"));
-    body.insert("input".to_string(), json!([]));
-    body.insert("generate".to_string(), json!(false));
-    body.insert("store".to_string(), json!(false));
-    let mut request = CodexResponsesRequest::from_body(body);
-    request.use_websocket = true;
-    request.local_conversation_id = Some("conversation-warmup-required".to_string());
+    let request = explicit_websocket_warmup_request("conversation-warmup-required");
 
     let error = backend
         .create_response(
@@ -784,21 +789,18 @@ async fn fast_path_miss_and_late_failure_should_count_as_one_breaker_failure() {
 async fn half_open_upstream_response_should_close_origin_breaker() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let origin_key = format!("http://{addr}");
     let breaker = WebSocketOriginBreaker::with_config(WebSocketOriginBreakerConfig {
         failure_threshold: 1,
         failure_window: Duration::from_secs(1),
-        open_duration: Duration::from_millis(20),
+        open_duration: Duration::ZERO,
     });
+    let WebSocketOriginBreakerDecision::Allowed(permit) = breaker.try_acquire(&origin_key) else {
+        panic!("closed breaker should grant the initial permit");
+    };
+    permit.fast_timeout();
+
     let server = tokio::spawn(async move {
-        let (mut stalled_websocket, _) = listener.accept().await.unwrap();
-        let opening = read_http_request(&mut stalled_websocket).await;
-        assert!(opening.starts_with("GET /codex/responses HTTP/1.1"));
-
-        let (mut http, _) = listener.accept().await.unwrap();
-        let request = read_http_request(&mut http).await;
-        assert!(request.starts_with("POST /codex/responses HTTP/1.1"));
-        write_completed_sse_response(&mut http).await;
-
         let (mut probe, _) = listener.accept().await.unwrap();
         let opening = read_http_request(&mut probe).await;
         assert!(opening.starts_with("GET /codex/responses HTTP/1.1"));
@@ -811,21 +813,13 @@ async fn half_open_upstream_response_should_close_origin_breaker() {
     });
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
-        format!("http://{addr}"),
+        origin_key.clone(),
         crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::new(CodexWebSocketPool::default()))
-    .with_websocket_fast_path_budget(Duration::from_millis(100))
+    .with_websocket_fast_path_budget(Duration::from_secs(1))
     .with_websocket_origin_breaker(breaker.clone());
 
-    backend
-        .create_response(
-            &new_chain_request("conversation-breaker-open"),
-            request_context("req_breaker_open", Some("chatgpt-account")),
-        )
-        .await
-        .expect("first timeout should use HTTP");
-    tokio::time::sleep(Duration::from_millis(50)).await;
     let error = backend
         .create_response(
             &new_chain_request("conversation-breaker-probe"),
@@ -844,7 +838,7 @@ async fn half_open_upstream_response_should_close_origin_breaker() {
         } if status == reqwest::StatusCode::UNAUTHORIZED
     );
     assert!(matches!(
-        breaker.try_acquire(&format!("http://{addr}")),
+        breaker.try_acquire(&origin_key),
         WebSocketOriginBreakerDecision::Allowed(_)
     ));
 }

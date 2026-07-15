@@ -657,9 +657,10 @@ impl WebSocketPoolConnectLease {
 
     pub(crate) async fn failed(mut self) {
         self.cancellation.cancel();
-        self.pool.fail_connect(&self.key, self.id).await;
+        // 先唤醒共享等待者，pool mutex 清理不得延迟前台 transport 决策。
         self.outcome
             .send_replace(WebSocketPoolConnectOutcome::Failed);
+        self.pool.fail_connect(&self.key, self.id).await;
         self.armed = false;
     }
 }
