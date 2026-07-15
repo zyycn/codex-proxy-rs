@@ -314,11 +314,7 @@ impl CodexBackendClient {
                     route: PreparedResponseRoute::Http,
                     metrics: CodexTransportMetrics {
                         decision: Some(decision),
-                        ws_connect_ms: matches!(
-                            error,
-                            CodexWebSocketExchangeError::FastPathTimeout { .. }
-                        )
-                        .then_some(wait_ms),
+                        ws_connect_ms: None,
                         transport_decision_wait_ms: Some(wait_ms),
                         ..CodexTransportMetrics::default()
                     },

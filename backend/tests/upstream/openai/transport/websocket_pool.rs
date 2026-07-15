@@ -162,7 +162,7 @@ async fn codex_backend_client_should_open_fresh_socket_when_idle_pooled_websocke
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn codex_backend_client_stream_should_keep_fresh_socket_after_structural_activity() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -550,7 +550,7 @@ async fn websocket_pool_should_use_http_while_exact_key_is_busy() {
     );
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn websocket_pool_should_release_slot_when_client_drops_stream() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -816,7 +816,7 @@ async fn websocket_pool_should_replace_idle_connection_after_pong_deadline() {
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn websocket_pool_should_gc_expired_idle_connections() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -890,7 +890,7 @@ async fn websocket_pool_should_gc_expired_idle_connections() {
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn codex_backend_client_should_keep_idle_pooled_websocket_alive_across_repeated_pings() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
