@@ -9,11 +9,9 @@ withDefaults(
     overview: any
     diagnostics: any
     loading?: boolean
-    diagnosticLoading?: boolean
   }>(),
   {
     loading: false,
-    diagnosticLoading: false,
   },
 )
 
@@ -34,7 +32,7 @@ const diagnosticDimension = defineModel('diagnosticDimension', {
     <UsageDiagnosticCard
       v-model:dimension="diagnosticDimension"
       :diagnostics="diagnostics"
-      :loading="loading || diagnosticLoading"
+      :loading="loading"
     />
 
     <UsagePerformanceCard :performance="overview.performance" :loading="loading" />

@@ -8,7 +8,7 @@
 # 三个密码建议分别执行 `openssl rand -hex 24` 生成。
 
 x-cpr:
-  schema_version: 2
+  schema_version: 1
 
   server:
     # 本地 cargo run 使用；Docker 内由 compose.yaml 固定覆盖为 0.0.0.0:8080。

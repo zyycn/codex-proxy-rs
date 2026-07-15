@@ -57,7 +57,6 @@ const {
   insights,
   refreshingList,
   diagnosticDimension,
-  diagnosticLoading,
   loadUsageRecords,
   refreshUsageRecords,
 } = useUsageRecordsTable({
@@ -105,7 +104,6 @@ watch(timeRange, () => {
       :overview="insights.overview"
       :diagnostics="insights.diagnostics"
       :loading="analyticsLoading"
-      :diagnostic-loading="diagnosticLoading"
     />
 
     <BaseCard

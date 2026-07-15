@@ -1,1 +1,2 @@
+mod insights;
 mod store;

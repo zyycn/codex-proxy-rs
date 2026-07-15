@@ -10,7 +10,7 @@ use serde::{Deserialize, de::IgnoredAny};
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
-const CONFIG_SCHEMA_VERSION: u32 = 2;
+const CONFIG_SCHEMA_VERSION: u32 = 1;
 const CONFIG_RELATIVE_PATH: &str = "deploy/config.yaml";
 const SERVER_HOST_ENV: &str = "CPR_SERVER_HOST";
 const SERVER_PORT_ENV: &str = "CPR_SERVER_PORT";
@@ -683,7 +683,7 @@ pub enum ConfigError {
         path: PathBuf,
     },
     /// 配置格式版本不受支持。
-    #[error("x-cpr.schema_version must be 2")]
+    #[error("x-cpr.schema_version must be 1")]
     UnsupportedSchemaVersion,
     /// 字段值非法。
     #[error("configuration field `{0}` is invalid")]

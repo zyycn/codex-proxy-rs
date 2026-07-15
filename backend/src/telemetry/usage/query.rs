@@ -11,8 +11,8 @@ use crate::{
     telemetry::{
         billing,
         usage::insights::{
-            UsageDiagnosticsDimension, UsageDiagnosticsInsights, UsageInsightsOverview,
-            diagnostics, overview,
+            RequestHealthTimeBucket, UsageDiagnosticsDimension, UsageDiagnosticsInsights,
+            UsageInsightsOverview, diagnostics, health_timeline, overview,
         },
         usage::store::{
             PgUsageRecordStore, PgUsageRecordStoreResult, UsageRecordFilter, push_filter,
@@ -235,6 +235,17 @@ impl UsageQueryService {
         end: DateTime<Utc>,
     ) -> Result<UsageInsightsOverview, UsageQueryError> {
         overview(self.store.pool(), start, end)
+            .await
+            .map_err(|_| UsageQueryError::List)
+    }
+
+    /// 读取按最终请求终态去重的 15 分钟健康时间桶。
+    pub async fn health_timeline(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<RequestHealthTimeBucket>, UsageQueryError> {
+        health_timeline(self.store.pool(), start, end)
             .await
             .map_err(|_| UsageQueryError::List)
     }

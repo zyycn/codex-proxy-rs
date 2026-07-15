@@ -54,14 +54,13 @@ const chartOption = computed<EChartsOption>(() => {
   return {
     ...coordinate,
     series,
-    axisPointer:
-      activeKind.value === 'usage'
-        ? {
-            link: [{ xAxisIndex: [0, 1, 2] }],
-          }
-        : undefined,
+    animationDuration: 420,
+    animationDurationUpdate: 220,
+    animationEasing: 'cubicOut',
+    animationEasingUpdate: 'cubicOut',
     tooltip: {
       trigger: 'axis',
+      confine: true,
       backgroundColor: themeColor('--cp-bg-surface', '#fff'),
       borderColor: 'transparent',
       borderWidth: 0,
@@ -84,7 +83,8 @@ const chartOption = computed<EChartsOption>(() => {
 
 function getCoordinateSystem(times: string[]) {
   const muted = themeColor('--cp-text-muted', '#94A3B8')
-  const gridLine = themeColor('--cp-bg-muted', '#F1F5F9')
+  const gridLine = themeColor('--cp-divider-subtle', '#E2E8F0')
+  const axisLine = themeColor('--cp-default-border', '#E2E8F0')
   const timeLabels = {
     color: muted,
     fontSize: 10,
@@ -93,80 +93,85 @@ function getCoordinateSystem(times: string[]) {
     interval: showTwoHourLabel,
   }
 
-  if (activeKind.value === 'usage') {
-    return getUsageCoordinateSystem(times, timeLabels, gridLine)
-  }
-
-  const xAxis = {
-    type: 'category' as const,
-    data: times,
-    axisLine: { show: false },
-    axisTick: { show: false },
-  }
-  const yAxis = {
-    type: 'value' as const,
-    min: 0,
-    splitNumber: 2,
-    axisLabel: { show: false },
-    axisLine: { show: false },
-    axisTick: { show: false },
-    splitLine: { lineStyle: { color: gridLine } },
-  }
-
   return {
-    grid: { left: 4, right: 0, top: 8, bottom: 24 },
+    grid: {
+      left: 8,
+      right: activeKind.value === 'latency' ? 8 : 10,
+      top: 10,
+      bottom: 2,
+      containLabel: true,
+    },
     xAxis: {
-      ...xAxis,
-      boundaryGap: activeKind.value !== 'latency',
+      type: 'category' as const,
+      data: times,
+      boundaryGap: activeKind.value === 'errors',
+      axisLine: { show: true, lineStyle: { color: axisLine } },
+      axisTick: { show: false },
       axisLabel: timeLabels,
     },
     yAxis: [
-      yAxis,
       {
         type: 'value' as const,
         min: 0,
-        max: 100,
+        splitNumber: 3,
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: {
+          color: muted,
+          fontSize: 9,
+          fontFamily: 'JetBrains Mono Variable, JetBrains Mono',
+          formatter: formatPrimaryAxisValue,
+        },
+        splitLine: {
+          show: true,
+          lineStyle: { color: gridLine, type: 'dashed' as const, opacity: 0.72 },
+        },
+      },
+      {
+        type: 'value' as const,
+        min: 0,
+        max: activeKind.value === 'errors' ? 100 : undefined,
+        splitNumber: 3,
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: {
+          show: activeKind.value !== 'latency',
+          color:
+            activeKind.value === 'usage'
+              ? trendColor('输出', '--cp-success', '#10B981')
+              : trendColor('成功', '--cp-success', '#10B981'),
+          fontSize: 9,
+          fontFamily: 'JetBrains Mono Variable, JetBrains Mono',
+          formatter: formatSecondaryAxisValue,
+        },
         splitLine: { show: false },
-        axisLabel: { show: false },
       },
     ],
   }
 }
 
-function getUsageCoordinateSystem(times: string[], timeLabels: any, gridLine: string) {
-  const xAxis = (gridIndex: number, showLabels = false) => ({
-    type: 'category' as const,
-    data: times,
-    gridIndex,
-    boundaryGap: false,
-    axisLine: {
-      show: true,
-      lineStyle: { color: gridLine },
-    },
-    axisTick: { show: false },
-    axisLabel: showLabels ? timeLabels : { show: false },
-    axisPointer: { show: true },
-  })
-  const yAxis = (gridIndex: number) => ({
-    type: 'value' as const,
-    gridIndex,
-    min: 0,
-    max: (range: any) => (range.max > 0 ? range.max * 1.12 : 1),
-    axisLabel: { show: false },
-    axisLine: { show: false },
-    axisTick: { show: false },
-    splitLine: { show: false },
-  })
-
-  return {
-    grid: [
-      { left: 4, right: 0, top: 0, height: 76 },
-      { left: 4, right: 0, top: 91, height: 66 },
-      { left: 4, right: 0, top: 172, bottom: 18 },
-    ],
-    xAxis: [xAxis(0), xAxis(1), xAxis(2, true)],
-    yAxis: [yAxis(0), yAxis(1), yAxis(2)],
+function formatPrimaryAxisValue(value: number) {
+  if (activeKind.value === 'latency') {
+    return value >= 1000 ? `${formatAxisNumber(value / 1000)}s` : `${Math.round(value)}ms`
   }
+  return formatAxisCompact(value)
+}
+
+function formatSecondaryAxisValue(value: number) {
+  if (activeKind.value === 'errors') return `${Math.round(value)}%`
+  return formatAxisCompact(value)
+}
+
+function formatAxisCompact(value: number) {
+  const normalized = Math.abs(value)
+  if (normalized >= 1_000_000_000) return `${formatAxisNumber(value / 1_000_000_000)}B`
+  if (normalized >= 1_000_000) return `${formatAxisNumber(value / 1_000_000)}M`
+  if (normalized >= 1_000) return `${formatAxisNumber(value / 1_000)}K`
+  return `${Math.round(value)}`
+}
+
+function formatAxisNumber(value: number) {
+  return value >= 10 ? value.toFixed(0) : value.toFixed(1).replace(/\.0$/, '')
 }
 
 function showTwoHourLabel(_index: number, value: string) {
@@ -248,77 +253,67 @@ function tooltipIndex(source: unknown) {
 
 function getSeries() {
   if (activeKind.value === 'usage') {
+    const cacheColor = trendColor('缓存', '--cp-text-tertiary', '#94A3B8')
+    const inputColor = trendColor('输入', '--cp-info', '#2563EB')
+    const outputColor = trendColor('输出', '--cp-success', '#10B981')
+
     return [
-      lineSeries(
-        '输入',
-        activeSeriesValues('inputTokensValue'),
-        trendColor('输入', '--cp-info', '#2563EB'),
-        {
-          area: true,
-          smooth: 0.22,
-          width: 2,
-          xAxisIndex: 0,
-          yAxisIndex: 0,
-        },
-      ),
-      lineSeries(
-        '输出',
-        activeSeriesValues('outputTokensValue'),
-        trendColor('输出', '--cp-success', '#10B981'),
-        {
-          area: true,
-          smooth: 0.22,
-          width: 1.9,
-          xAxisIndex: 1,
-          yAxisIndex: 1,
-        },
-      ),
-      lineSeries(
-        '缓存',
-        activeSeriesValues('cachedTokensValue'),
-        trendColor('缓存', '--cp-text-tertiary', '#94A3B8'),
-        {
-          area: true,
-          smooth: 0.22,
-          width: 1.8,
-          xAxisIndex: 2,
-          yAxisIndex: 2,
-        },
-      ),
+      lineSeries('缓存', activeSeriesValues('cachedTokensValue'), cacheColor, {
+        area: true,
+        areaStartAlpha: '30',
+        areaEndAlpha: '08',
+        lineType: 'dashed',
+        smooth: 0.26,
+        stack: 'input-composition',
+        width: 1.25,
+        z: 1,
+      }),
+      lineSeries('输入', activeSeriesValues('uncachedInputTokensValue'), inputColor, {
+        area: true,
+        areaStartAlpha: '2A',
+        areaEndAlpha: '05',
+        smooth: 0.26,
+        stack: 'input-composition',
+        width: 2.3,
+        z: 3,
+      }),
+      lineSeries('输出', activeSeriesValues('outputTokensValue'), outputColor, {
+        smooth: 0.24,
+        width: 2.1,
+        yAxisIndex: 1,
+        z: 4,
+      }),
     ]
   }
 
-  if (isSparseTrend.value) return getSparseSeries()
-
   if (activeKind.value === 'latency') {
+    const averageColor = trendColor('平均', '--cp-normal', '#0F9F9A')
+    const maximumColor = trendColor('最高', '--cp-warning', '#F59E0B')
+    const minimumColor = trendColor('最低', '--cp-success', '#10B981')
+
     return [
-      lineSeries(
-        '平均',
-        seriesValues('latencyValue'),
-        trendColor('平均', '--cp-normal', '#0F9F9A'),
-        {
-          area: true,
-          width: 2.6,
-        },
-      ),
-      lineSeries(
-        '最高',
-        seriesValues('maxLatencyValue'),
-        trendColor('最高', '--cp-warning', '#F59E0B'),
-        {
-          lineType: 'dashed',
-          width: 1.8,
-        },
-      ),
-      lineSeries(
-        '最低',
-        seriesValues('minLatencyValue'),
-        trendColor('最低', '--cp-success', '#10B981'),
-        {
-          lineType: 'dotted',
-          width: 1.8,
-        },
-      ),
+      lineSeries('最低', activeSeriesValues('minLatencyValue'), minimumColor, {
+        lineType: 'dotted',
+        smooth: 0.2,
+        stack: 'latency-range',
+        width: 1.2,
+        z: 1,
+      }),
+      lineSeries('最高', latencyRangeValues(), maximumColor, {
+        area: true,
+        areaStartAlpha: '26',
+        areaEndAlpha: '10',
+        lineType: 'dashed',
+        smooth: 0.2,
+        stack: 'latency-range',
+        width: 1.2,
+        z: 1,
+      }),
+      lineSeries('平均', activeSeriesValues('latencyValue'), averageColor, {
+        smooth: 0.24,
+        width: 2.5,
+        z: 4,
+      }),
     ]
   }
   return [
@@ -344,61 +339,6 @@ function getSeries() {
   ]
 }
 
-function getSparseSeries() {
-  if (activeKind.value === 'latency') {
-    return [
-      barSeries(
-        '平均',
-        activeSeriesValues('latencyValue'),
-        trendColor('平均', '--cp-normal', '#0F9F9A'),
-        {
-          maxWidth: 9,
-          opacity: 0.78,
-        },
-      ),
-      barSeries(
-        '最高',
-        activeSeriesValues('maxLatencyValue'),
-        trendColor('最高', '--cp-warning', '#F59E0B'),
-        { maxWidth: 9, opacity: 0.58 },
-      ),
-      barSeries(
-        '最低',
-        activeSeriesValues('minLatencyValue'),
-        trendColor('最低', '--cp-success', '#10B981'),
-        { maxWidth: 9, opacity: 0.58 },
-      ),
-    ]
-  }
-
-  return [
-    barSeries(
-      '错误数',
-      activeSeriesValues('errorsValue'),
-      trendColor('错误', '--cp-danger', '#EF4444'),
-      {
-        maxWidth: 10,
-        opacity: 0.72,
-      },
-    ),
-    pulseSeries(
-      '成功率',
-      activeSeriesValues('successRateValue'),
-      trendColor('成功', '--cp-success', '#10B981'),
-      { yAxisIndex: 1 },
-    ),
-    barSeries(
-      '总请求',
-      activeSeriesValues('requestsValue'),
-      trendColor('请求', '--cp-info', '#2563EB'),
-      {
-        maxWidth: 10,
-        opacity: 0.5,
-      },
-    ),
-  ]
-}
-
 function seriesValues(key: string) {
   return props.points.map((point) => point[key] ?? null)
 }
@@ -407,6 +347,18 @@ function activeSeriesValues(key: string) {
   return props.points.map((point) =>
     Number(point.requestsValue) > 0 ? (point[key] ?? null) : null,
   )
+}
+
+function latencyRangeValues() {
+  return props.points.map((point) => {
+    if (Number(point.requestsValue) <= 0) return null
+    if (point.minLatencyValue === null || point.maxLatencyValue === null) return null
+    if (point.minLatencyValue === undefined || point.maxLatencyValue === undefined) return null
+    const minimum = Number(point.minLatencyValue)
+    const maximum = Number(point.maxLatencyValue)
+    if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) return null
+    return Math.max(0, maximum - minimum)
+  })
 }
 
 function lineSeries(name: string, data: (number | null)[], color: string, options: any = {}) {
@@ -418,10 +370,13 @@ function lineSeries(name: string, data: (number | null)[], color: string, option
     data,
     connectNulls: false,
     smooth: options.smooth ?? true,
-    symbol: options.symbol ?? 'none',
+    symbol: options.symbol ?? (isSparseTrend.value ? 'circle' : 'none'),
     symbolSize: options.symbolSize ?? 5,
+    showSymbol: options.showSymbol ?? isSparseTrend.value,
+    stack: options.stack,
     xAxisIndex: options.xAxisIndex ?? 0,
     yAxisIndex: options.yAxisIndex ?? 0,
+    z: options.z ?? 2,
     lineStyle: {
       color,
       type: options.lineType ?? 'solid',
@@ -437,27 +392,12 @@ function lineSeries(name: string, data: (number | null)[], color: string, option
             x2: 0,
             y2: 1,
             colorStops: [
-              { offset: 0, color: `${color}18` },
-              { offset: 1, color: `${color}02` },
+              { offset: 0, color: `${color}${options.areaStartAlpha ?? '18'}` },
+              { offset: 1, color: `${color}${options.areaEndAlpha ?? '02'}` },
             ],
           },
         }
       : undefined,
-  }
-}
-
-function pulseSeries(name: string, data: (number | null)[], color: string, options: any = {}) {
-  return {
-    name,
-    type: 'line' as const,
-    data,
-    connectNulls: false,
-    smooth: false,
-    symbol: 'roundRect',
-    symbolSize: [5, 16],
-    yAxisIndex: options.yAxisIndex ?? 0,
-    lineStyle: { opacity: 0 },
-    itemStyle: { color },
   }
 }
 
@@ -505,39 +445,17 @@ function handleTrendChange(value: string) {
     </template>
 
     <template #body>
-      <div
-        class="mt-4.75 grid grid-cols-1 gap-5 lg:h-70 lg:grid-cols-[minmax(0,1fr)_minmax(150px,180px)] lg:gap-7.5"
-      >
-        <div class="relative h-70 w-full overflow-hidden lg:h-full">
-          <BaseChart v-if="hasSamples" :option="chartOption" :height="280" />
-          <BaseEmpty
-            v-if="!hasSamples"
-            compact
-            title="暂无趋势数据"
-            description="当日暂无请求日志"
-            class="h-full place-content-center bg-transparent"
-          />
-        </div>
-
-        <aside
-          class="grid h-70 w-full grid-rows-3 rounded-2xl bg-(--cp-bg-subtle) px-5 py-4.5 lg:h-full"
+      <div class="mt-4.5 grid gap-3.5">
+        <div
+          class="grid h-14.25 min-w-0 grid-cols-3 gap-1.5 rounded-xl bg-(--cp-bg-subtle)/45 p-1.5"
         >
           <div
             v-for="item in props.summary"
             :key="item.label"
-            class="grid grid-cols-[minmax(0,1fr)_8px] items-center gap-x-3 py-2"
+            class="grid min-w-0 grid-cols-[8px_minmax(0,1fr)] items-center gap-x-2 rounded-lg px-2.5 py-2"
           >
-            <span class="grid gap-1.75">
-              <span class="text-xs leading-[1.15] font-bold text-(--cp-text-secondary)">{{
-                item.label
-              }}</span>
-              <strong
-                class="font-mono text-2xl leading-[1.15] font-[760] tabular-nums text-(--cp-text-primary)"
-                >{{ item.value }}</strong
-              >
-            </span>
             <i
-              class="size-2 justify-self-end rounded-full"
+              class="size-2 rounded-full"
               :style="summaryMarkerStyle(item)"
               :class="{
                 'bg-(--cp-info)': item.tone === 'info',
@@ -547,8 +465,30 @@ function handleTrendChange(value: string) {
                 'bg-(--cp-normal)': item.tone === 'normal',
               }"
             />
+            <span class="grid min-w-0 gap-1">
+              <span class="truncate text-[10px] leading-none font-[680] text-(--cp-text-secondary)">
+                {{ item.label }}
+              </span>
+              <strong
+                class="truncate font-mono text-[15px] leading-none font-[760] tabular-nums text-(--cp-text-primary)"
+                :title="item.value"
+              >
+                {{ item.value }}
+              </strong>
+            </span>
           </div>
-        </aside>
+        </div>
+
+        <div class="relative h-55 w-full overflow-hidden">
+          <BaseChart v-if="hasSamples" :option="chartOption" :height="220" />
+          <BaseEmpty
+            v-if="!hasSamples"
+            compact
+            title="暂无趋势数据"
+            description="当日暂无请求日志"
+            class="h-full place-content-center bg-transparent"
+          />
+        </div>
       </div>
     </template>
   </BaseCard>

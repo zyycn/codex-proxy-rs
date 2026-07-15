@@ -650,12 +650,21 @@ async fn dashboard_summary_should_return_today_health_timeline() {
         .unwrap();
 
     let body = dashboard_summary(app).await;
-    let points = body["data"]["healthTimeline"]["points"].as_str().unwrap();
+    let points = body["data"]["healthTimeline"]["points"].as_array().unwrap();
 
     assert_eq!(body["data"]["healthTimeline"]["title"], "请求健康时间线");
-    assert_eq!(body["data"]["healthTimeline"]["description"], "请求可靠性");
+    assert_eq!(
+        body["data"]["healthTimeline"]["description"],
+        "有效请求可用性"
+    );
     assert_eq!(points.len(), 96);
-    assert_eq!(points.matches('4').count(), 1);
+    assert_eq!(
+        points
+            .iter()
+            .filter(|point| point["status"] == "low_sample")
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
