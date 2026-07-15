@@ -6,13 +6,11 @@ use crate::{
     dispatch::{
         errors::{ClientFailure, ResponseDispatchError},
         failure::exhaustion::{AccountExhaustionRecord, ExhaustedAccount},
-        transport::{
-            canonical::{CanonicalStreamBatch, CanonicalStreamDecoder},
-            observation::UpstreamFailureFacts,
-        },
+        transport::canonical::{CanonicalStreamBatch, CanonicalStreamDecoder},
     },
     fleet::{account::Account, pool::AccountLease},
     upstream::openai::{
+        failure::UpstreamFailureFacts,
         protocol::{
             responses::{CodexResponsesRequest, CollectedResponse, ResponsesSseFailure},
             sse::SseError,

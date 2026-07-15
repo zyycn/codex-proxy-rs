@@ -195,3 +195,60 @@ async fn admin_account_quota_should_send_usage_cookie() {
         "2K"
     );
 }
+
+#[tokio::test]
+async fn admin_account_quota_should_ban_deactivated_workspace() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/usage"))
+        .respond_with(
+            ResponseTemplate::new(402)
+                .set_body_json(json!({ "detail": { "code": "deactivated_workspace" } })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_api_base_url(
+        "admin-account-quota-deactivated",
+        89,
+        format!("{}/backend-api", server.uri()),
+    )
+    .await;
+    seed_account(
+        &pool,
+        NewAccount {
+            id: "acct_quota_deactivated".to_string(),
+            email: Some("quota-deactivated@example.com".to_string()),
+            account_id: Some("chatgpt-quota-deactivated".to_string()),
+            user_id: None,
+            label: None,
+            plan_type: Some("plus".to_string()),
+            access_token: SecretString::new("access-quota-deactivated".to_string().into()),
+            refresh_token: None,
+            access_token_expires_at: None,
+            status: AccountStatus::Active,
+            added_at: None,
+        },
+    )
+    .await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/accounts/quota?id=acct_quota_deactivated")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status: String = sqlx::query_scalar("select status from accounts where id = $1")
+        .bind("acct_quota_deactivated")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(status, "banned");
+}

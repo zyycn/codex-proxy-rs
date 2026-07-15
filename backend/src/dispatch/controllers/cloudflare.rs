@@ -9,13 +9,13 @@ use crate::{
             AttemptDecision, AttemptObservation, AttemptObservationKind, AttemptReturnKind,
         },
         lifecycle::stream::StreamTerminal,
-        transport::observation::UpstreamFailureFacts,
     },
     fleet::{
         account::AccountStatus,
         cookies::{CloudflareChallengeCooldownTracker, CloudflarePathBlockTracker, PgCookieStore},
         pool::AccountPoolService,
     },
+    upstream::openai::failure::UpstreamFailureFacts,
 };
 
 pub(super) struct CloudflareController;

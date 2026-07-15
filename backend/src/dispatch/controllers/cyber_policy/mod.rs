@@ -15,9 +15,11 @@ use crate::{
         controllers::ControllerFailureFact,
         errors::ClientFailure,
         lifecycle::contract::{AttemptDecision, AttemptObservation, AttemptReturnKind},
-        transport::observation::UpstreamFailureFacts,
     },
-    upstream::openai::protocol::responses::{CodexResponsesRequest, ResponsesSseFailure},
+    upstream::openai::{
+        failure::UpstreamFailureFacts,
+        protocol::responses::{CodexResponsesRequest, ResponsesSseFailure},
+    },
 };
 
 use self::{store::Store, types::SessionState};

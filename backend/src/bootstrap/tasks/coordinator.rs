@@ -82,6 +82,7 @@ impl TaskCoordinator {
                 stores.accounts.clone(),
                 stores.account_usage.clone(),
                 services.codex.clone(),
+                services.account_pool.clone(),
                 services.account_pseudonymizer.clone(),
                 config
                     .quota
@@ -91,7 +92,6 @@ impl TaskCoordinator {
                 30 * 60,
             )
             .with_cookie_store(stores.cookies.clone())
-            .with_account_pool(services.account_pool.clone())
             .start(),
         );
         coordinator.push("fingerprint_update", {

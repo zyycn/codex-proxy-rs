@@ -1,6 +1,7 @@
 use secrecy::ExposeSecret;
 
 use super::{AccountManageService, types::AccountManageError};
+use crate::fleet::account_failure::apply_client_failure_effect;
 
 impl AccountManageService {
     async fn usage_cookie_header(&self, account_id: &str) -> Option<String> {
@@ -53,11 +54,14 @@ impl AccountManageService {
             client_request_id: None,
             turn_id: None,
         };
-        let raw = self
-            .codex
-            .fetch_usage(context)
-            .await
-            .map_err(|e| AccountManageError::FetchQuota(e.to_string()))?;
+        let raw = match self.codex.fetch_usage(context).await {
+            Ok(raw) => raw,
+            Err(error) => {
+                apply_client_failure_effect(&self.account_pool, &self.codex, account_id, &error)
+                    .await;
+                return Err(AccountManageError::FetchQuota(error.to_string()));
+            }
+        };
         let normalized = crate::fleet::quota::quota_from_usage(&raw);
         self.account_pool
             .apply_quota_snapshot(account_id, &normalized)

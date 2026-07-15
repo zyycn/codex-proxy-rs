@@ -79,7 +79,9 @@ const displayItems = computed(() =>
 const tableRows = computed(() => (isStale.value ? [] : displayItems.value))
 
 function diagnosticNameDisplay(name: string) {
-  const full = name.trim() || '未知'
+  const raw = name.trim() || '未知'
+  const full =
+    dimension.value === 'transport' ? ({ websocket: 'WS', http_sse: 'SSE' }[raw] ?? raw) : raw
   if (dimension.value !== 'model' && dimension.value !== 'account') {
     return { primary: full, secondary: '', full }
   }
@@ -141,7 +143,11 @@ function diagnosticNameDisplay(name: string) {
               v-if="row.nameDisplay.secondary"
               class="flex min-w-0 items-center gap-1.25 text-(--cp-text-secondary)"
             >
-              <CornerDownRight class="size-3.25 shrink-0 text-(--cp-info)" stroke-width="2.4" />
+              <CornerDownRight
+                v-if="dimension !== 'account'"
+                class="size-3.25 shrink-0 text-(--cp-info)"
+                stroke-width="2.4"
+              />
               <code class="block truncate font-mono text-[11px] leading-none font-bold">
                 {{ row.nameDisplay.secondary }}
               </code>

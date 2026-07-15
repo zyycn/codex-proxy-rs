@@ -1,0 +1,317 @@
+//! 上游失败到账号状态 effect 的唯一领域分类。
+
+use chrono::{Duration, Utc};
+
+use crate::{
+    fleet::{account::AccountStatus, pool::AccountPoolService},
+    upstream::openai::{
+        failure::{UpstreamFailureFacts, upstream_failure_facts},
+        protocol::responses::ResponsesSseFailure,
+        transport::{CodexBackendClient, CodexClientError},
+    },
+};
+
+const DEFAULT_RATE_LIMIT_RETRY_SECONDS: u64 = 60;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountFailureKind {
+    ModelUnsupported,
+    Expired,
+    Disabled,
+    Banned,
+    QuotaExhausted,
+    RateLimited,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountStateEffect {
+    SetStatus(AccountStatus),
+    MarkQuotaLimitedUntil(chrono::DateTime<Utc>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassifiedAccountFailure {
+    pub kind: AccountFailureKind,
+    pub effect: Option<AccountStateEffect>,
+}
+
+impl ClassifiedAccountFailure {
+    pub fn account_status(&self) -> Option<AccountStatus> {
+        match self.effect.as_ref()? {
+            AccountStateEffect::SetStatus(status) => Some(*status),
+            AccountStateEffect::MarkQuotaLimitedUntil(_) => None,
+        }
+    }
+}
+
+pub fn classify_client_failure(error: &CodexClientError) -> Option<ClassifiedAccountFailure> {
+    classify_upstream_failure(&upstream_failure_facts(error))
+}
+
+pub fn classify_upstream_failure(facts: &UpstreamFailureFacts) -> Option<ClassifiedAccountFailure> {
+    classify_failure(FailureFields {
+        status_code: facts.status_code,
+        code: facts.code.as_deref(),
+        error_type: facts.error_type.as_deref(),
+        message: &facts.message,
+        body: &facts.body,
+        retry_after_seconds: facts.retry_after_seconds,
+    })
+}
+
+pub fn classify_response_failure(
+    failure: &ResponsesSseFailure,
+) -> Option<ClassifiedAccountFailure> {
+    classify_failure(FailureFields {
+        status_code: failure.explicit_status_code,
+        code: failure.upstream_code.as_deref(),
+        error_type: failure.upstream_type.as_deref(),
+        message: &failure.message,
+        body: &failure.message,
+        retry_after_seconds: failure.retry_after_seconds,
+    })
+}
+
+pub async fn apply_account_state_effect_immediately(
+    account_pool: &AccountPoolService,
+    codex: &CodexBackendClient,
+    account_id: &str,
+    effect: &AccountStateEffect,
+) {
+    match effect {
+        AccountStateEffect::SetStatus(status) => {
+            account_pool
+                .set_status_immediately(account_id, *status)
+                .await;
+        }
+        AccountStateEffect::MarkQuotaLimitedUntil(until) => {
+            account_pool
+                .mark_quota_limited_until_immediately(account_id, *until)
+                .await;
+        }
+    }
+    codex.evict_websocket_account(account_id).await;
+}
+
+pub async fn apply_account_state_effect(
+    account_pool: &AccountPoolService,
+    codex: &CodexBackendClient,
+    account_id: &str,
+    effect: &AccountStateEffect,
+) -> bool {
+    let updated = match effect {
+        AccountStateEffect::SetStatus(status) => account_pool.set_status(account_id, *status).await,
+        AccountStateEffect::MarkQuotaLimitedUntil(until) => {
+            account_pool
+                .mark_quota_limited_until(account_id, *until)
+                .await
+        }
+    };
+    codex.evict_websocket_account(account_id).await;
+    updated
+}
+
+pub async fn apply_client_failure_effect(
+    account_pool: &AccountPoolService,
+    codex: &CodexBackendClient,
+    account_id: &str,
+    error: &CodexClientError,
+) -> Option<ClassifiedAccountFailure> {
+    let classified = classify_client_failure(error)?;
+    if let Some(effect) = &classified.effect {
+        apply_account_state_effect(account_pool, codex, account_id, effect).await;
+    }
+    Some(classified)
+}
+
+struct FailureFields<'a> {
+    status_code: Option<u16>,
+    code: Option<&'a str>,
+    error_type: Option<&'a str>,
+    message: &'a str,
+    body: &'a str,
+    retry_after_seconds: Option<u64>,
+}
+
+fn classify_failure(fields: FailureFields<'_>) -> Option<ClassifiedAccountFailure> {
+    let code = fields.code.unwrap_or_default();
+    let error_type = fields.error_type.unwrap_or_default();
+
+    if [code, fields.message, fields.body]
+        .into_iter()
+        .any(is_model_unsupported)
+    {
+        return Some(classified(AccountFailureKind::ModelUnsupported, None));
+    }
+    if let Some(status) = explicit_account_status(code, error_type, fields.message)
+        .or_else(|| explicit_account_status(code, error_type, fields.body))
+    {
+        return Some(status_failure(status));
+    }
+    if fields.status_code == Some(403) && !is_html(fields.body) {
+        return Some(status_failure(AccountStatus::Banned));
+    }
+    if fields.status_code == Some(401) {
+        return Some(status_failure(AccountStatus::Expired));
+    }
+
+    let quota_kind = [code, error_type]
+        .into_iter()
+        .find_map(classify_quota_signal)
+        .or_else(|| classify_quota_message(fields.message))
+        .or_else(|| classify_quota_message(fields.body))
+        .or(match fields.status_code {
+            Some(429) => Some(AccountFailureKind::RateLimited),
+            Some(402) => Some(AccountFailureKind::QuotaExhausted),
+            _ => None,
+        })?;
+    Some(match quota_kind {
+        AccountFailureKind::RateLimited => {
+            let seconds = fields
+                .retry_after_seconds
+                .unwrap_or(DEFAULT_RATE_LIMIT_RETRY_SECONDS)
+                .min(i64::MAX as u64) as i64;
+            classified(
+                AccountFailureKind::RateLimited,
+                Some(AccountStateEffect::MarkQuotaLimitedUntil(
+                    Utc::now() + Duration::seconds(seconds),
+                )),
+            )
+        }
+        AccountFailureKind::QuotaExhausted => classified(
+            AccountFailureKind::QuotaExhausted,
+            Some(AccountStateEffect::SetStatus(AccountStatus::QuotaExhausted)),
+        ),
+        AccountFailureKind::ModelUnsupported
+        | AccountFailureKind::Expired
+        | AccountFailureKind::Disabled
+        | AccountFailureKind::Banned => unreachable!("quota classifier returned account status"),
+    })
+}
+
+fn status_failure(status: AccountStatus) -> ClassifiedAccountFailure {
+    let kind = match status {
+        AccountStatus::Expired => AccountFailureKind::Expired,
+        AccountStatus::Disabled => AccountFailureKind::Disabled,
+        AccountStatus::Banned => AccountFailureKind::Banned,
+        AccountStatus::Active | AccountStatus::QuotaExhausted => {
+            unreachable!("explicit account failure must make the account unavailable")
+        }
+    };
+    classified(kind, Some(AccountStateEffect::SetStatus(status)))
+}
+
+fn classified(
+    kind: AccountFailureKind,
+    effect: Option<AccountStateEffect>,
+) -> ClassifiedAccountFailure {
+    ClassifiedAccountFailure { kind, effect }
+}
+
+fn explicit_account_status(code: &str, error_type: &str, message: &str) -> Option<AccountStatus> {
+    let code = code.trim().to_ascii_lowercase();
+    let error_type = error_type.trim().to_ascii_lowercase();
+    let message = message.to_ascii_lowercase();
+    if matches!(
+        code.as_str(),
+        "identity_verification_required" | "verification_required"
+    ) || message.contains("identity verification is required")
+    {
+        return Some(AccountStatus::Disabled);
+    }
+    if matches!(
+        code.as_str(),
+        "account_banned"
+            | "account_deactivated"
+            | "account_disabled"
+            | "account_suspended"
+            | "deactivated_workspace"
+            | "organization_disabled"
+            | "workspace_deactivated"
+    ) || message.contains("account is banned")
+        || message.contains("account has been banned")
+        || message.contains("account deactivated")
+        || message.contains("account has been deactivated")
+        || message.contains("account disabled")
+        || message.contains("account has been disabled")
+        || message.contains("account suspended")
+        || message.contains("organization has been disabled")
+        || message.contains("workspace has been deactivated")
+        || message.contains("deactivated_workspace")
+        || code == "forbidden"
+        || error_type == "permission_error"
+    {
+        return Some(AccountStatus::Banned);
+    }
+    is_auth_failure(&code, &error_type, &message).then_some(AccountStatus::Expired)
+}
+
+fn is_auth_failure(code: &str, error_type: &str, message: &str) -> bool {
+    matches!(
+        code,
+        "token_invalid"
+            | "token_invalidated"
+            | "token_expired"
+            | "token_revoked"
+            | "refresh_token_invalidated"
+            | "unauthorized"
+            | "invalid_api_key"
+            | "authentication_error"
+    ) || error_type == "authentication_error"
+        || message.contains("token revoked")
+        || message.contains("token invalidated")
+        || message.contains("token invalid")
+        || message.contains("token expired")
+        || message.contains("unauthorized")
+        || message.contains("invalid api key")
+}
+
+fn classify_quota_signal(signal: &str) -> Option<AccountFailureKind> {
+    let signal = signal.trim().to_ascii_lowercase();
+    match signal.as_str() {
+        "usage_limit_reached"
+        | "rate_limit_exceeded"
+        | "rate_limit_reached"
+        | "rate_limit_error"
+        | "workspace_owner_usage_limit_reached"
+        | "workspace_member_usage_limit_reached" => Some(AccountFailureKind::RateLimited),
+        "quota_exhausted"
+        | "quota_exceeded"
+        | "payment_required"
+        | "insufficient_quota"
+        | "workspace_owner_credits_depleted"
+        | "workspace_member_credits_depleted" => Some(AccountFailureKind::QuotaExhausted),
+        signal if signal.starts_with("billing_limit") => Some(AccountFailureKind::QuotaExhausted),
+        _ => None,
+    }
+}
+
+fn classify_quota_message(message: &str) -> Option<AccountFailureKind> {
+    let message = message.to_ascii_lowercase();
+    if message.contains("rate limit") || message.contains("usage limit") {
+        return Some(AccountFailureKind::RateLimited);
+    }
+    if message.contains("quota")
+        || message.contains("payment required")
+        || message.contains("billing limit")
+    {
+        return Some(AccountFailureKind::QuotaExhausted);
+    }
+    None
+}
+
+fn is_model_unsupported(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.contains("model_not_supported")
+        || value.contains("model_not_available")
+        || (value.contains("model")
+            && (value.contains("not supported")
+                || value.contains("not available")
+                || value.contains("not_supported")
+                || value.contains("not_available")))
+}
+
+fn is_html(value: &str) -> bool {
+    let value = value.trim_start().to_ascii_lowercase();
+    value.starts_with("<!doctype") || value.starts_with("<html") || value.contains("<html")
+}

@@ -35,6 +35,7 @@ impl QuotaRefreshTask {
         store: PgAccountStore,
         usage_store: PgAccountUsageStore,
         codex: Arc<CodexBackendClient>,
+        account_pool: Arc<AccountPoolService>,
         account_pseudonymizer: Arc<AccountPseudonymizer>,
         interval_secs: u64,
         min_refresh_interval_secs: u64,
@@ -44,6 +45,7 @@ impl QuotaRefreshTask {
                 store,
                 usage_store,
                 codex,
+                account_pool,
                 account_pseudonymizer,
                 min_refresh_interval_secs,
             ),
@@ -55,12 +57,6 @@ impl QuotaRefreshTask {
     /// 设置 usage 请求可复用的账号 Cookie 存储。
     pub fn with_cookie_store(mut self, cookie_store: PgCookieStore) -> Self {
         self.service = self.service.with_cookie_store(cookie_store);
-        self
-    }
-
-    /// 设置运行时账号池，用于刷新后同步内存调度状态。
-    pub fn with_account_pool(mut self, account_pool: Arc<AccountPoolService>) -> Self {
-        self.service = self.service.with_account_pool(account_pool);
         self
     }
 

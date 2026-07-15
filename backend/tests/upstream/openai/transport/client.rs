@@ -5,26 +5,10 @@ use std::sync::{
 
 use super::{accept_codex_test_websocket, completed_websocket_response, request_context};
 use codex_proxy_rs::upstream::openai::protocol::responses::CodexResponsesRequest;
-use codex_proxy_rs::upstream::openai::transport::{
-    CodexBackendClient, CodexWebSocketPool, is_deactivated_workspace_error_body,
-};
+use codex_proxy_rs::upstream::openai::transport::{CodexBackendClient, CodexWebSocketPool};
 use futures::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
-
-#[test]
-fn deactivated_workspace_error_body_should_match_detail_code() {
-    let body = r#"{"detail":{"code":"deactivated_workspace"}}"#;
-
-    assert!(is_deactivated_workspace_error_body(body));
-}
-
-#[test]
-fn deactivated_workspace_error_body_should_not_match_other_json_paths() {
-    let body = r#"{"error":{"code":"deactivated_workspace"}}"#;
-
-    assert!(!is_deactivated_workspace_error_body(body));
-}
 
 #[tokio::test]
 async fn codex_backend_client_should_apply_configured_websocket_pool() {

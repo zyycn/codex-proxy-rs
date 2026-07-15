@@ -166,39 +166,6 @@ impl CodexClientError {
     }
 }
 
-/// 判断上游错误正文是否表示账号已封禁或停用。
-pub fn is_banned_auth_signal(value: &str) -> bool {
-    let value = value.to_ascii_lowercase();
-    value.contains("account_deactivated")
-        || value.contains("account deactivated")
-        || value.contains("account has been deactivated")
-        || value.contains("deactivated")
-        || value.contains("banned")
-}
-
-/// 判断 402 错误正文是否带有 OpenAI 工作区停用标记。
-pub fn is_deactivated_workspace_error_body(value: &str) -> bool {
-    serde_json::from_str::<Value>(value).is_ok_and(|value| {
-        value.pointer("/detail/code").and_then(Value::as_str) == Some("deactivated_workspace")
-    })
-}
-
-/// 判断 Codex 上游错误是否表示账号已封禁或停用。
-pub fn is_banned_upstream_error(error: &CodexClientError) -> bool {
-    matches!(
-        error,
-        CodexClientError::Upstream { status, body, .. }
-            if (status.as_u16() == 403
-                && !is_html_error_body(body))
-                || (status.as_u16() == 402 && is_deactivated_workspace_error_body(body))
-    )
-}
-
-fn is_html_error_body(value: &str) -> bool {
-    let value = value.trim_start().to_ascii_lowercase();
-    value.starts_with("<!doctype") || value.starts_with("<html") || value.contains("<html")
-}
-
 /// Codex 客户端结果类型。
 pub type CodexClientResult<T> = Result<T, CodexClientError>;
 
