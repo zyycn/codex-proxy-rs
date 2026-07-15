@@ -21,7 +21,6 @@ use crate::{
                 create_response_with_account, prepare_response_transport_with_account,
             },
             canonical::{CanonicalStreamDecoder, normalize_complete_response},
-            observation::upstream_failure_facts,
             prefetch::{PrefetchedStream, StreamPrefetchError, prefetch_until_commit},
         },
     },
@@ -30,6 +29,7 @@ use crate::{
         pool::{AccountCandidateLease, AccountPoolService},
     },
     upstream::openai::{
+        failure::upstream_failure_facts,
         protocol::responses::{
             CodexResponsesRequest, CollectedResponse, TransportRequirement, transport_requirement,
         },

@@ -1,23 +1,22 @@
 //! 请求前配额验证规则 owner。
 
-use chrono::{Duration, Utc};
 use serde_json::Value;
 
 use crate::{
     dispatch::{
         affinity::AccountIdentityService,
-        controllers::{
-            ControllerFailureFact,
-            account_state::{AccountStateEffect, AccountStateEffects},
-        },
+        controllers::ControllerFailureFact,
         errors::ClientFailure,
         failure::exhaustion::{AccountExhaustionRecord, ExhaustedAccountKind},
         lifecycle::contract::{
             AttemptDecision, AttemptObservation, AttemptObservationKind, AttemptReturnKind,
         },
-        transport::observation::UpstreamFailureFacts,
     },
     fleet::{
+        account_failure::{
+            AccountFailureKind, AccountStateEffect, apply_account_state_effect_immediately,
+            classify_response_failure, classify_upstream_failure,
+        },
         pool::{AccountLease, AccountPoolService},
         quota::{
             quota_from_usage, quota_snapshot_limit_reached, quota_snapshot_limit_window_seconds,
@@ -25,13 +24,13 @@ use crate::{
         },
     },
     upstream::openai::{
+        failure::UpstreamFailureFacts,
         protocol::responses::ResponsesSseFailure,
         transport::{CodexBackendClient, CodexRequestContext},
     },
 };
 
 const LIMIT_REACHED_MESSAGE: &str = "Upstream usage quota still reports limit_reached";
-const DEFAULT_RATE_LIMIT_RETRY_SECONDS: u64 = 60;
 
 pub(super) enum QuotaEnterOutcome {
     Ready(Box<AccountLease>),
@@ -167,7 +166,7 @@ impl QuotaController {
             return;
         };
         if let Some(effect) = &classified.effect {
-            AccountStateEffects::apply(account_pool, codex, account_id, effect).await;
+            apply_account_state_effect_immediately(account_pool, codex, account_id, effect).await;
         }
     }
 
@@ -201,131 +200,34 @@ fn classify_upstream(
     account_id: &str,
     facts: &UpstreamFailureFacts,
 ) -> Option<ClassifiedQuotaFailure> {
-    let signaled_kind = facts
-        .code
-        .as_deref()
-        .and_then(classify_quota_signal)
-        .or_else(|| facts.error_type.as_deref().and_then(classify_quota_signal))
-        .or_else(|| classify_quota_message(&facts.message));
-    match signaled_kind.or(match facts.status_code {
-        Some(429) => Some(StreamQuotaKind::RateLimited),
-        Some(402) => Some(StreamQuotaKind::QuotaExhausted),
-        _ => None,
-    })? {
-        StreamQuotaKind::RateLimited => Some(rate_limited_failure(
-            account_id,
-            facts.body.clone(),
-            facts.retry_after_seconds,
-        )),
-        StreamQuotaKind::QuotaExhausted => {
-            Some(quota_exhausted_failure(account_id, facts.body.clone()))
-        }
-    }
+    classified_quota_failure(account_id, &facts.body, classify_upstream_failure(facts)?)
 }
 
 fn classify_stream(
     account_id: &str,
     failure: &ResponsesSseFailure,
 ) -> Option<ClassifiedQuotaFailure> {
-    let kind = classify_stream_signal(failure).or(match failure.explicit_status_code {
-        Some(429) => Some(StreamQuotaKind::RateLimited),
-        Some(402) => Some(StreamQuotaKind::QuotaExhausted),
-        _ => None,
-    })?;
     let body = crate::dispatch::failure::sse::sse_failure_error_body(failure);
-    Some(match kind {
-        StreamQuotaKind::RateLimited => {
-            rate_limited_failure(account_id, body, failure.retry_after_seconds)
-        }
-        StreamQuotaKind::QuotaExhausted => quota_exhausted_failure(account_id, body),
-    })
+    classified_quota_failure(account_id, &body, classify_response_failure(failure)?)
 }
 
-#[derive(Clone, Copy)]
-enum StreamQuotaKind {
-    RateLimited,
-    QuotaExhausted,
-}
-
-fn classify_stream_signal(failure: &ResponsesSseFailure) -> Option<StreamQuotaKind> {
-    failure
-        .upstream_code
-        .as_deref()
-        .and_then(classify_quota_signal)
-        .or_else(|| {
-            failure
-                .upstream_type
-                .as_deref()
-                .and_then(classify_quota_signal)
-        })
-        .or_else(|| classify_quota_message(&failure.message))
-}
-
-fn classify_quota_signal(signal: &str) -> Option<StreamQuotaKind> {
-    let signal = signal.trim().to_ascii_lowercase();
-    match signal.as_str() {
-        "usage_limit_reached"
-        | "rate_limit_exceeded"
-        | "rate_limit_reached"
-        | "rate_limit_error"
-        | "workspace_owner_usage_limit_reached"
-        | "workspace_member_usage_limit_reached" => Some(StreamQuotaKind::RateLimited),
-        "quota_exhausted"
-        | "quota_exceeded"
-        | "payment_required"
-        | "insufficient_quota"
-        | "workspace_owner_credits_depleted"
-        | "workspace_member_credits_depleted" => Some(StreamQuotaKind::QuotaExhausted),
-        signal if signal.starts_with("billing_limit") => Some(StreamQuotaKind::QuotaExhausted),
-        _ => None,
-    }
-}
-
-fn classify_quota_message(message: &str) -> Option<StreamQuotaKind> {
-    let message = message.to_ascii_lowercase();
-    if message.contains("rate limit") || message.contains("usage limit") {
-        return Some(StreamQuotaKind::RateLimited);
-    }
-    if message.contains("quota")
-        || message.contains("payment required")
-        || message.contains("billing limit")
-    {
-        return Some(StreamQuotaKind::QuotaExhausted);
-    }
-    None
-}
-
-fn rate_limited_failure(
+fn classified_quota_failure(
     account_id: &str,
-    message: String,
-    retry_after_seconds: Option<u64>,
-) -> ClassifiedQuotaFailure {
-    let seconds = retry_after_seconds
-        .unwrap_or(DEFAULT_RATE_LIMIT_RETRY_SECONDS)
-        .min(i64::MAX as u64) as i64;
-    ClassifiedQuotaFailure {
-        exhaustion: AccountExhaustionRecord::new(
-            account_id,
-            ExhaustedAccountKind::RateLimited,
-            message,
-        ),
-        effect: Some(AccountStateEffect::MarkQuotaLimitedUntil(
-            Utc::now() + Duration::seconds(seconds),
-        )),
-    }
-}
-
-fn quota_exhausted_failure(account_id: &str, message: String) -> ClassifiedQuotaFailure {
-    ClassifiedQuotaFailure {
-        exhaustion: AccountExhaustionRecord::new(
-            account_id,
-            ExhaustedAccountKind::QuotaExhausted,
-            message,
-        ),
-        effect: Some(AccountStateEffect::SetStatus(
-            crate::fleet::account::AccountStatus::QuotaExhausted,
-        )),
-    }
+    message: &str,
+    classified: crate::fleet::account_failure::ClassifiedAccountFailure,
+) -> Option<ClassifiedQuotaFailure> {
+    let kind = match classified.kind {
+        AccountFailureKind::RateLimited => ExhaustedAccountKind::RateLimited,
+        AccountFailureKind::QuotaExhausted => ExhaustedAccountKind::QuotaExhausted,
+        AccountFailureKind::ModelUnsupported
+        | AccountFailureKind::Expired
+        | AccountFailureKind::Disabled
+        | AccountFailureKind::Banned => return None,
+    };
+    Some(ClassifiedQuotaFailure {
+        exhaustion: AccountExhaustionRecord::new(account_id, kind, message),
+        effect: classified.effect,
+    })
 }
 
 fn acquired_with_verified_quota(mut acquired: AccountLease, quota: &Value) -> AccountLease {

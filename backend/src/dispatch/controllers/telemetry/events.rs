@@ -546,6 +546,9 @@ pub(super) async fn record_live_response_stream_event(
         status_code,
         body,
     );
+    if !is_success_usage_event(level, status_code) {
+        ensure_stream_failure_class(&mut metadata);
+    }
     log_live_response_stream_finalized(context, status_code, level, message, &metadata);
     enrich_usage_record_identity(
         &mut metadata,
@@ -599,6 +602,19 @@ pub(super) async fn record_live_response_stream_event(
 
 fn is_success_usage_event(level: UsageRecordLevel, status_code: i64) -> bool {
     level != UsageRecordLevel::Error && status_code < 400
+}
+
+fn ensure_stream_failure_class(metadata: &mut Value) {
+    let failure_class = ["failureClass", "upstreamCode", "terminal"]
+        .into_iter()
+        .find_map(|field| metadata_string_field(metadata, field))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let (Some(failure_class), Some(object)) = (failure_class, metadata.as_object_mut()) else {
+        return;
+    };
+    object.insert("failureClass".to_string(), Value::String(failure_class));
 }
 
 fn log_live_response_stream_finalized(

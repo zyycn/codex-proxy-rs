@@ -7,16 +7,18 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use crate::{
-    fleet::{account::AccountStatus, store::StoredAccount},
+    fleet::{
+        account::AccountStatus,
+        account_failure::{classify_client_failure, classify_response_failure},
+        store::StoredAccount,
+    },
     models::{service::ModelRefreshPlanAccount, types::CodexModelInfo},
     upstream::openai::{
         protocol::{
             responses::{CodexResponsesRequest, ResponsesSseFailure},
             sse::{SseEvent, encode_sse_event, parse_sse_events},
         },
-        transport::{
-            CodexClientError, CodexRequestContext, is_banned_auth_signal, is_banned_upstream_error,
-        },
+        transport::{CodexClientError, CodexRequestContext},
     },
 };
 
@@ -366,54 +368,11 @@ async fn process_sse_event(
 }
 
 fn account_status_from_client_error(error: &CodexClientError) -> Option<AccountStatus> {
-    if is_banned_upstream_error(error) {
-        Some(AccountStatus::Banned)
-    } else {
-        match error {
-            CodexClientError::Upstream { status, .. } if status.as_u16() == 402 => {
-                Some(AccountStatus::QuotaExhausted)
-            }
-            CodexClientError::Upstream { status, body, .. } if status.as_u16() == 401 => {
-                Some(if is_banned_auth_signal(body) {
-                    AccountStatus::Banned
-                } else {
-                    AccountStatus::Expired
-                })
-            }
-            _ => None,
-        }
-    }
+    classify_client_failure(error)?.account_status()
 }
 
 fn sse_failure_account_status(failure: &ResponsesSseFailure) -> Option<AccountStatus> {
-    let code = failure
-        .upstream_code
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let message = failure.message.to_ascii_lowercase();
-    if matches!(code.as_str(), "quota_exceeded" | "insufficient_quota") || message.contains("quota")
-    {
-        return Some(AccountStatus::QuotaExhausted);
-    }
-    let authentication_failed = matches!(
-        code.as_str(),
-        "token_invalid"
-            | "token_expired"
-            | "token_revoked"
-            | "account_deactivated"
-            | "unauthorized"
-            | "invalid_api_key"
-    ) || message.contains("token revoked")
-        || message.contains("token invalid")
-        || message.contains("token expired");
-    authentication_failed.then(|| {
-        if is_banned_auth_signal(&failure.message) {
-            AccountStatus::Banned
-        } else {
-            AccountStatus::Expired
-        }
-    })
+    classify_response_failure(failure)?.account_status()
 }
 
 fn take_sse_frame(buffer: &mut String) -> Option<String> {

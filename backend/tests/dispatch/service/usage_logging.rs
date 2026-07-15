@@ -796,6 +796,7 @@ async fn responses_stream_should_record_usage_record_after_late_disconnect() {
     assert_eq!(metadata["stream"], true);
     assert_eq!(metadata["failed"], true);
     assert_eq!(metadata["upstreamCode"], "stream_disconnected");
+    assert_eq!(event.failure_class.as_deref(), Some("stream_disconnected"));
     assert_eq!(metadata["failureSource"], "proxy");
     assert_eq!(metadata["synthetic"], true);
     assert_rate_limit_header(&metadata, "retry-after", "11");

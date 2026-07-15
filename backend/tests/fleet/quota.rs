@@ -1,13 +1,16 @@
 use std::{collections::HashMap, sync::Arc, time::Duration as StdDuration};
 
 use chrono::{Duration, Utc};
-use codex_proxy_rs::fleet::account::AccountStatus;
-use codex_proxy_rs::fleet::cookies::PgCookieStore;
-use codex_proxy_rs::fleet::quota::{
-    QuotaRefreshService, quota_from_usage, quota_snapshot_limit_reached,
-    quota_snapshot_limit_window_seconds, quota_snapshot_reset_at,
+use codex_proxy_rs::fleet::{
+    account::AccountStatus,
+    cookies::PgCookieStore,
+    pool::{AccountPoolOptions, AccountPoolService},
+    quota::{
+        QuotaRefreshService, quota_from_usage, quota_snapshot_limit_reached,
+        quota_snapshot_limit_window_seconds, quota_snapshot_reset_at,
+    },
+    store::{AccountStore, NewAccount, PgAccountStore},
 };
-use codex_proxy_rs::fleet::store::{NewAccount, PgAccountStore};
 use codex_proxy_rs::infra::identity::AccountPseudonymizer;
 use codex_proxy_rs::telemetry::account_usage::store::PgAccountUsageStore;
 use codex_proxy_rs::upstream::openai::transport::CodexBackendClient;
@@ -22,6 +25,15 @@ use crate::support::storage::init_test_db;
 
 fn test_account_pseudonymizer() -> Arc<AccountPseudonymizer> {
     Arc::new(AccountPseudonymizer::new([7; 32]))
+}
+
+fn test_account_pool(pool: &sqlx::PgPool) -> Arc<AccountPoolService> {
+    Arc::new(AccountPoolService::new(
+        Arc::new(PgAccountStore::new(pool.clone())) as Arc<dyn AccountStore>,
+        Arc::new(PgAccountUsageStore::new(pool.clone())),
+        AccountPoolOptions::default(),
+        0,
+    ))
 }
 
 #[test]
@@ -321,6 +333,7 @@ async fn quota_refresh_service_should_send_usage_cookie_when_cookie_store_is_con
         store,
         PgAccountUsageStore::new(pool.clone()),
         Arc::new(codex),
+        test_account_pool(&pool),
         test_account_pseudonymizer(),
     )
     .with_cookie_store(cookies);
@@ -403,6 +416,7 @@ async fn quota_refresh_service_should_fetch_usage_for_quota_locked_accounts_and_
         store.clone(),
         PgAccountUsageStore::new(pool.clone()),
         Arc::new(codex),
+        test_account_pool(&pool),
         test_account_pseudonymizer(),
     );
 
@@ -433,6 +447,49 @@ async fn quota_refresh_service_should_fetch_usage_for_quota_locked_accounts_and_
         ),
         (1, Some(false), Some(28), Some(false))
     );
+}
+
+#[tokio::test]
+async fn quota_refresh_service_should_ban_deactivated_workspace() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(
+            ResponseTemplate::new(402)
+                .set_body_json(json!({ "detail": { "code": "deactivated_workspace" } })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (pool, _guard) = init_test_db("quota-refresh-deactivated-workspace").await;
+    let store = PgAccountStore::new(pool.clone());
+    insert_quota_locked_account(&store, &pool, "acct-deactivated", "access-token").await;
+    let codex = Arc::new(CodexBackendClient::new(
+        reqwest::Client::new(),
+        server.uri(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
+    ));
+    let service = QuotaRefreshService::new(
+        store,
+        PgAccountUsageStore::new(pool.clone()),
+        codex,
+        test_account_pool(&pool),
+        test_account_pseudonymizer(),
+    );
+
+    let summary = service
+        .refresh_locked_accounts(&mut HashMap::new())
+        .await
+        .expect("quota refresh should complete");
+    let status: String = sqlx::query_scalar("select status from accounts where id = $1")
+        .bind("acct-deactivated")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(summary.failed, 1);
+    assert_eq!(status, "banned");
 }
 
 #[tokio::test]
@@ -479,6 +536,7 @@ async fn quota_refresh_service_should_refresh_quota_exhausted_accounts() {
         store,
         PgAccountUsageStore::new(pool.clone()),
         Arc::new(codex),
+        test_account_pool(&pool),
         test_account_pseudonymizer(),
     );
 
@@ -515,6 +573,7 @@ async fn quota_refresh_service_should_skip_recent_locked_account_before_cooldown
         store,
         PgAccountUsageStore::new(pool.clone()),
         Arc::new(codex),
+        test_account_pool(&pool),
         test_account_pseudonymizer(),
         1_800,
     );
@@ -555,6 +614,7 @@ async fn quota_refresh_service_should_skip_recent_locked_account_inside_cooldown
         store,
         PgAccountUsageStore::new(pool.clone()),
         Arc::new(codex),
+        test_account_pool(&pool),
         test_account_pseudonymizer(),
         1_800,
     );
@@ -612,6 +672,7 @@ async fn quota_refresh_service_should_bypass_recent_skip_after_cooldown_grace() 
         store,
         PgAccountUsageStore::new(pool.clone()),
         Arc::new(codex),
+        test_account_pool(&pool),
         test_account_pseudonymizer(),
         1_800,
     );
@@ -667,6 +728,7 @@ async fn quota_refresh_service_should_stagger_multiple_locked_account_requests()
         store,
         PgAccountUsageStore::new(pool.clone()),
         Arc::new(codex),
+        test_account_pool(&pool),
         test_account_pseudonymizer(),
     )
     .with_request_spacing(StdDuration::from_millis(200));

@@ -13,9 +13,9 @@ use crate::{
             AttemptDecision, AttemptObservation, AttemptObservationKind, AttemptReturnKind,
             AttemptRoutingFacts, CompleteResponseFacts, PinnedCandidateAcquireFailureKind,
         },
-        transport::observation::{UpstreamFailureFacts, UpstreamFailureKind},
     },
     upstream::openai::{
+        failure::{UpstreamFailureFacts, UpstreamFailureKind},
         protocol::responses::{CodexResponsesRequest, PreviousResponseScope, StreamCommitPolicy},
         transport::CodexBackendTransport,
         transport::websocket::PreviousResponseUnavailableReason,

@@ -1,4 +1,4 @@
-//! 上游原始错误到 attempt 通用事实的单次规范化。
+//! Codex 上游原始错误到稳定失败事实的规范化。
 
 use serde_json::Value;
 
@@ -8,7 +8,7 @@ use crate::upstream::openai::transport::{
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::dispatch) enum UpstreamFailureKind {
+pub enum UpstreamFailureKind {
     HttpStatus,
     HttpConnect,
     HttpTimeout,
@@ -25,7 +25,7 @@ pub(in crate::dispatch) enum UpstreamFailureKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::dispatch) struct UpstreamFailureFacts {
+pub struct UpstreamFailureFacts {
     pub kind: UpstreamFailureKind,
     pub status_code: Option<u16>,
     pub code: Option<String>,
@@ -35,9 +35,7 @@ pub(in crate::dispatch) struct UpstreamFailureFacts {
     pub retry_after_seconds: Option<u64>,
 }
 
-pub(in crate::dispatch) fn upstream_failure_facts(
-    error: &CodexClientError,
-) -> UpstreamFailureFacts {
+pub fn upstream_failure_facts(error: &CodexClientError) -> UpstreamFailureFacts {
     match error {
         CodexClientError::Http(error) => UpstreamFailureFacts {
             kind: if error.is_connect() {
@@ -156,6 +154,7 @@ fn error_fields(body: &str) -> (Option<String>, Option<String>, Option<String>) 
     let error = value
         .pointer("/response/error")
         .or_else(|| value.get("error"))
+        .or_else(|| value.get("detail"))
         .unwrap_or(&value);
     (
         error

@@ -20,7 +20,6 @@ pub use self::{
         CodexModelCatalogClient, CodexModelCatalogClientError, CodexModelCatalogRequest,
         CodexRateLimitHeaderUpdates, CodexRequestContext, CodexResponseMetadata,
         CodexTransportDecision, CodexTransportMetrics, CodexTurnStateUpdate, build_reqwest_client,
-        is_banned_auth_signal, is_banned_upstream_error, is_deactivated_workspace_error_body,
     },
     diagnostics::CodexUpstreamDiagnostics,
     endpoints::{

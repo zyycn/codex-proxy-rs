@@ -49,14 +49,15 @@ use crate::{
             },
             stream::StreamTerminal,
         },
-        transport::observation::UpstreamFailureFacts,
     },
     fleet::pool::AccountPoolService,
-    upstream::openai::protocol::responses::{CodexResponsesRequest, ResponsesSseFailure},
+    upstream::openai::{
+        failure::UpstreamFailureFacts,
+        protocol::responses::{CodexResponsesRequest, ResponsesSseFailure},
+    },
 };
 
 mod account_failure;
-mod account_state;
 mod affinity;
 pub(crate) mod cloudflare;
 pub(crate) mod cyber_policy;

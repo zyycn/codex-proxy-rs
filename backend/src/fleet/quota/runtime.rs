@@ -13,6 +13,7 @@ use tracing::warn;
 
 use crate::fleet::{
     account::{Account, AccountStatus},
+    account_failure::apply_client_failure_effect,
     pool::AccountPoolService,
     quota::{
         quota_from_usage, quota_snapshot_limit_reached, quota_snapshot_limit_window_seconds,
@@ -41,7 +42,7 @@ pub struct QuotaRefreshService {
     request_spacing: Duration,
     account_pseudonymizer: Arc<crate::infra::identity::AccountPseudonymizer>,
     cookie_store: Option<PgCookieStore>,
-    account_pool: Option<Arc<AccountPoolService>>,
+    account_pool: Arc<AccountPoolService>,
 }
 
 impl QuotaRefreshService {
@@ -50,6 +51,7 @@ impl QuotaRefreshService {
         store: PgAccountStore,
         usage_store: PgAccountUsageStore,
         codex: Arc<CodexBackendClient>,
+        account_pool: Arc<AccountPoolService>,
         account_pseudonymizer: Arc<crate::infra::identity::AccountPseudonymizer>,
     ) -> Self {
         Self {
@@ -60,7 +62,7 @@ impl QuotaRefreshService {
             request_spacing: Self::default_request_spacing(),
             account_pseudonymizer,
             cookie_store: None,
-            account_pool: None,
+            account_pool,
         }
     }
 
@@ -73,6 +75,7 @@ impl QuotaRefreshService {
         store: PgAccountStore,
         usage_store: PgAccountUsageStore,
         codex: Arc<CodexBackendClient>,
+        account_pool: Arc<AccountPoolService>,
         account_pseudonymizer: Arc<crate::infra::identity::AccountPseudonymizer>,
         min_refresh_interval_secs: u64,
     ) -> Self {
@@ -84,7 +87,7 @@ impl QuotaRefreshService {
             request_spacing: Self::default_request_spacing(),
             account_pseudonymizer,
             cookie_store: None,
-            account_pool: None,
+            account_pool,
         }
     }
 
@@ -97,12 +100,6 @@ impl QuotaRefreshService {
     /// 设置 usage 请求可复用的账号 Cookie 存储。
     pub fn with_cookie_store(mut self, cookie_store: PgCookieStore) -> Self {
         self.cookie_store = Some(cookie_store);
-        self
-    }
-
-    /// 设置运行时账号池，用于刷新后同步内存调度状态。
-    pub fn with_account_pool(mut self, account_pool: Arc<AccountPoolService>) -> Self {
-        self.account_pool = Some(account_pool);
         self
     }
 
@@ -211,6 +208,13 @@ impl QuotaRefreshService {
                     self.sync_runtime_pool_account(&account.id).await;
                 }
                 Err(error) => {
+                    apply_client_failure_effect(
+                        &self.account_pool,
+                        &self.codex,
+                        &account.id,
+                        &error,
+                    )
+                    .await;
                     warn!(
                         account_id = %account.id,
                         error = %error,
@@ -238,10 +242,7 @@ impl QuotaRefreshService {
     }
 
     async fn sync_runtime_pool_account(&self, account_id: &str) {
-        let Some(account_pool) = &self.account_pool else {
-            return;
-        };
-        if let Err(error) = account_pool.sync_account_from_store(account_id).await {
+        if let Err(error) = self.account_pool.sync_account_from_store(account_id).await {
             warn!(
                 account_id = %account_id,
                 error = %error,

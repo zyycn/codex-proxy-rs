@@ -3,7 +3,7 @@ use std::{env, sync::OnceLock, thread};
 use chrono::{DateTime, Utc};
 use codex_proxy_rs::{
     auth::store::{PgAdminUserStore, RedisAdminSessionStore},
-    bootstrap::services::BackgroundTaskStores,
+    bootstrap::{config::BootstrapConfig, services::BackgroundTaskStores},
     dispatch::affinity::RedisSessionAffinityStore,
     fleet::{cookies::PgCookieStore, refresh::RedisRefreshLeaseStore, store::PgAccountStore},
     infra::{database::migrate, redis::RedisConnection},
@@ -24,6 +24,7 @@ const DEFAULT_TEST_REDIS_URL: &str = "redis://127.0.0.1:6379";
 static DATABASE_INIT_LIMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 static REDIS_TEST_CLEANUP: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
 static REDIS_TEST_RUN_ID: OnceLock<String> = OnceLock::new();
+static LOCAL_BOOTSTRAP_CONFIG: OnceLock<Option<BootstrapConfig>> = OnceLock::new();
 
 pub(crate) struct TestDatabaseGuard {
     database_name: Option<String>,
@@ -186,11 +187,34 @@ pub(crate) fn background_task_stores(pool: PgPool, redis: RedisConnection) -> Ba
 }
 
 pub(crate) fn test_database_url() -> String {
-    env::var("CPR_TEST_DATABASE_URL").unwrap_or_else(|_| DEFAULT_TEST_DATABASE_URL.to_string())
+    // 显式测试拓扑优先；本地开发默认跟随 Compose 配置；无本地配置的 CI 使用固定测试值。
+    env::var("CPR_TEST_DATABASE_URL")
+        .ok()
+        .or_else(|| local_bootstrap_config().map(|config| config.database_url().to_string()))
+        .unwrap_or_else(|| DEFAULT_TEST_DATABASE_URL.to_string())
 }
 
 pub(crate) fn test_redis_url() -> String {
-    env::var("CPR_TEST_REDIS_URL").unwrap_or_else(|_| DEFAULT_TEST_REDIS_URL.to_string())
+    env::var("CPR_TEST_REDIS_URL")
+        .ok()
+        .or_else(|| local_bootstrap_config().map(|config| config.redis_url().to_string()))
+        .unwrap_or_else(|| DEFAULT_TEST_REDIS_URL.to_string())
+}
+
+fn local_bootstrap_config() -> Option<&'static BootstrapConfig> {
+    LOCAL_BOOTSTRAP_CONFIG
+        .get_or_init(|| {
+            let path =
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/config.yaml");
+            if !path.is_file() {
+                return None;
+            }
+            Some(
+                BootstrapConfig::load_from_path(path)
+                    .unwrap_or_else(|error| panic!("load local test service config: {error}")),
+            )
+        })
+        .as_ref()
 }
 
 pub(crate) fn timestamp(value: &str) -> DateTime<Utc> {

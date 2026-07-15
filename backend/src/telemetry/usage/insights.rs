@@ -49,7 +49,13 @@ error_terminals as (
       case when request_id is null then 'event:' || id else 'request:' || request_id end as request_key,
       id, request_id, created_at as terminal_at, client_api_key_id, provider,
       account_id, transport, coalesce(nullif(model, ''), '未知模型') as model_name,
-      coalesce(nullif(failure_class, ''), '未分类错误') as failure_class,
+      coalesce(
+        nullif(failure_class, ''),
+        nullif(metadata_json->>'failureClass', ''),
+        nullif(metadata_json->>'upstreamCode', ''),
+        nullif(metadata_json->>'terminal', ''),
+        '未分类错误'
+      ) as failure_class,
       latency_ms
     from ops_error_logs
     where created_at >= $1 and created_at < $2
@@ -166,9 +172,7 @@ impl UsageDiagnosticsDimension {
             Self::Account => {
                 "coalesce(nullif(concat_ws(' → ', nullif(diagnostic_accounts.email, ''), nullif(terminal_requests.account_id, '')), ''), '未知账号')"
             }
-            Self::ApiKey => {
-                "coalesce(nullif(terminal_requests.client_api_key_id, ''), '未知 API Key')"
-            }
+            Self::ApiKey => "coalesce(nullif(diagnostic_api_keys.name, ''), '未知密钥')",
             Self::Provider => "coalesce(nullif(terminal_requests.provider, ''), '未知 Provider')",
             Self::Transport => "coalesce(nullif(terminal_requests.transport, ''), '未知传输')",
             Self::FailureClass => "terminal_requests.failure_class",
@@ -180,7 +184,10 @@ impl UsageDiagnosticsDimension {
             Self::Account => {
                 "terminal_requests left join accounts diagnostic_accounts on diagnostic_accounts.id = terminal_requests.account_id"
             }
-            Self::Model | Self::ApiKey | Self::Provider | Self::Transport | Self::FailureClass => {
+            Self::ApiKey => {
+                "terminal_requests left join client_api_keys diagnostic_api_keys on diagnostic_api_keys.id = terminal_requests.client_api_key_id"
+            }
+            Self::Model | Self::Provider | Self::Transport | Self::FailureClass => {
                 "terminal_requests"
             }
         }

@@ -138,10 +138,24 @@ async fn usage_insights_should_collapse_retry_errors_to_terminal_requests() {
     .execute(usage.pool())
     .await
     .unwrap();
+    sqlx::query(
+        "insert into client_api_keys
+         (id, name, prefix, key, enabled, created_at, last_used_at)
+         values ($1, $2, $3, $4, true, $5, null)",
+    )
+    .bind("key_diagnostic")
+    .bind("生产密钥")
+    .bind("sk-diagnostic")
+    .bind("sk-diagnostic-secret")
+    .bind(now)
+    .execute(usage.pool())
+    .await
+    .unwrap();
 
     let mut success = success_record("eventually succeeded");
     success.id = "usage_insights_success".to_string();
     success.request_id = Some("req_retried".to_string());
+    success.client_api_key_id = Some("key_diagnostic".to_string());
     success.input_tokens = Some(100);
     success.output_tokens = Some(20);
     success.cached_tokens = Some(20);
@@ -157,14 +171,18 @@ async fn usage_insights_should_collapse_retry_errors_to_terminal_requests() {
     retried_error.created_at = now - chrono::Duration::seconds(2);
     ops.append(&retried_error).await.unwrap();
 
-    for (id, failure_class, seconds) in [
-        ("ops_insights_failed_older", "upstream", 2),
-        ("ops_insights_failed_latest", "response_failed", 1),
+    for (id, failure_class, seconds, persist_class) in [
+        ("ops_insights_failed_older", "upstream", 2, true),
+        ("ops_insights_failed_latest", "response_failed", 1, false),
     ] {
         let mut error = OpsErrorLog::new("upstream", failure_class);
         error.id = id.to_string();
         error.request_id = Some("req_failed".to_string());
-        error.failure_class = Some(failure_class.to_string());
+        if persist_class {
+            error.failure_class = Some(failure_class.to_string());
+        } else {
+            error.metadata = json!({ "upstreamCode": failure_class });
+        }
         error.created_at = now - chrono::Duration::seconds(seconds);
         ops.append(&error).await.unwrap();
     }
@@ -210,6 +228,19 @@ async fn usage_insights_should_collapse_retry_errors_to_terminal_requests() {
             .unwrap()
             .iter()
             .any(|item| item["name"] == "usage-account@example.com → acct_usage")
+    );
+
+    let api_key_diagnostics = admin_get(
+        &app,
+        "/api/admin/usage/records/insights/diagnostics?dimension=apiKey",
+    )
+    .await;
+    assert!(
+        api_key_diagnostics["data"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["name"] == "生产密钥")
     );
 }
 

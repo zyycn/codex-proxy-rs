@@ -7,6 +7,7 @@ use thiserror::Error;
 use crate::{
     fleet::{
         account::{AccountStatus, AccountStatus as AcctStatus},
+        account_failure::classify_client_failure,
         store::StoredAccountMetadata,
     },
     upstream::openai::{token_client::RefreshFailure, transport::CodexClientError},
@@ -323,11 +324,9 @@ fn normalized_plan_type(value: &str) -> Option<String> {
 }
 
 pub(super) fn import_status_from_usage_error(error: &CodexClientError) -> Option<AccountStatus> {
-    if crate::upstream::openai::transport::is_banned_upstream_error(error) {
-        Some(AccountStatus::Banned)
-    } else {
-        None
-    }
+    classify_client_failure(error)?
+        .account_status()
+        .filter(|status| *status == AccountStatus::Banned)
 }
 
 pub(super) fn parse_account_status(status: &str) -> Result<AcctStatus, AccountManageError> {
