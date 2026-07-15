@@ -553,7 +553,7 @@ async fn responses_should_record_empty_response_attempt() {
 }
 
 #[tokio::test]
-async fn responses_stream_should_proxy_sse_and_record_usage() {
+async fn responses_stream_should_proxy_sse_and_finish_slow_usage_persistence() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -568,6 +568,27 @@ async fn responses_stream_should_proxy_sse_and_record_usage() {
         .await;
 
     let (app, api_key, pool, _dir) = test_app_with_account_and_pool(server.uri()).await;
+    // 强制请求计数持久化越过 stream finalizer 的 100ms 客户端收尾上限，
+    // 验证超时后原 future 会继续完成，而不是被取消并永久丢失计数。
+    sqlx::raw_sql(
+        r#"
+        create function delay_request_count_update() returns trigger as $$
+        begin
+          if new.request_count > old.request_count then
+            perform pg_sleep(0.2);
+          end if;
+          return new;
+        end;
+        $$ language plpgsql;
+
+        create trigger delay_request_count_update
+        before update of request_count on account_usage
+        for each row execute function delay_request_count_update();
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let response = app
         .oneshot(
             Request::builder()
@@ -596,13 +617,7 @@ async fn responses_stream_should_proxy_sse_and_record_usage() {
         .unwrap_or_default()
         .to_string();
     let body = response_text(response).await;
-    let usage: (i64, i64, i64) = sqlx::query_as(
-        "select request_count, input_tokens, output_tokens from account_usage where account_id = $1",
-    )
-    .bind("acct_chat")
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let usage = wait_for_account_usage(&pool, "acct_chat", (1, 3, 5)).await;
 
     assert_eq!(status, StatusCode::OK);
     assert!(content_type.starts_with("text/event-stream"));

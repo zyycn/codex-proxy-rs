@@ -143,7 +143,8 @@ fn controller_best_effort_io_should_share_one_bounded_owner() {
             "controller I/O {operation} must use the shared best-effort timeout"
         );
     }
-    assert!(finalizer.contains("timeout(LEASE_FINALIZE_TIMEOUT, account_lease.complete())"));
+    assert!(finalizer.contains("timeout(LEASE_FINALIZE_TIMEOUT, lease_completion.as_mut())"));
+    assert!(finalizer.contains("tokio::spawn(lease_completion)"));
 }
 
 #[test]

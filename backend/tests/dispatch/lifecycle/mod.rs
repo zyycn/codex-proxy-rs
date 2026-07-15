@@ -181,8 +181,10 @@ fn live_stream_exit_paths_should_share_one_consuming_finalizer() {
         .find(".leave_stream(")
         .expect("controllers should leave from the finalizer");
     let lease = finalizer
-        .find("timeout(LEASE_FINALIZE_TIMEOUT, account_lease.complete())")
+        .find("let mut lease_completion = Box::pin(account_lease.complete())")
         .expect("the account lease should finalize");
+    assert!(finalizer.contains("timeout(LEASE_FINALIZE_TIMEOUT, lease_completion.as_mut())"));
+    assert!(finalizer.contains("tokio::spawn(lease_completion)"));
     let client = finalizer
         .find("finish_client_stream(")
         .expect("client termination should run after internal finalization");
