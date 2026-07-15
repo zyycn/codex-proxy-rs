@@ -42,12 +42,25 @@ impl AccountUsageQueryService {
             .map_err(|_| AccountUsageQueryError::List)
     }
 
-    /// 汇总请求时间桶保留期内的全局用量。
-    pub async fn retained_totals(&self) -> Result<UsageBucketTotals, AccountUsageQueryError> {
-        self.buckets
-            .retained_totals()
+    /// 汇总请求时间桶保留期内的全局用量与计费。
+    pub async fn retained_summary(&self) -> Result<RetainedUsageSummary, AccountUsageQueryError> {
+        let buckets = self
+            .buckets
+            .retained_usage_buckets()
             .await
-            .map_err(|_| AccountUsageQueryError::RetainedTotals)
+            .map_err(|_| AccountUsageQueryError::RetainedSummary)?;
+        let mut summary = RetainedUsageSummary::default();
+        for bucket in buckets {
+            summary.billing_amount_usd += billing::calculate_billing_amount(
+                nonnegative_i64_to_u64(bucket.totals.input_tokens),
+                nonnegative_i64_to_u64(bucket.totals.output_tokens),
+                nonnegative_i64_to_u64(bucket.totals.cached_tokens),
+                &bucket.model,
+                bucket.service_tier.as_deref(),
+            );
+            summary.totals.add(bucket.totals);
+        }
+        Ok(summary)
     }
 
     /// 列出指定时间范围内的聚合时间桶。
@@ -95,9 +108,16 @@ pub enum AccountUsageQueryError {
     #[error("failed to list account usage")]
     List,
     #[error("failed to summarize retained usage")]
-    RetainedTotals,
+    RetainedSummary,
     #[error("failed to list usage time buckets")]
     TimeBuckets,
+}
+
+/// 请求时间桶保留期内的全局用量与计费汇总。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RetainedUsageSummary {
+    pub totals: UsageBucketTotals,
+    pub billing_amount_usd: f64,
 }
 
 /// 管理端账号用量记录。
@@ -145,12 +165,10 @@ pub struct AccountUsageTimeBucket {
     pub latency_count: i64,
     pub max_latency_ms: i64,
     pub min_latency_ms: i64,
-    pub billing_amount_usd: Option<f64>,
 }
 
 impl From<UsageTimeBucketRecord> for AccountUsageTimeBucket {
     fn from(record: UsageTimeBucketRecord) -> Self {
-        let billing_amount_usd = time_bucket_billing_amount_usd(&record);
         Self {
             bucket_start: record.bucket_start,
             model: record.model,
@@ -166,31 +184,8 @@ impl From<UsageTimeBucketRecord> for AccountUsageTimeBucket {
             latency_count: record.latency_count,
             max_latency_ms: record.max_latency_ms,
             min_latency_ms: record.min_latency_ms,
-            billing_amount_usd,
         }
     }
-}
-
-fn time_bucket_billing_amount_usd(record: &UsageTimeBucketRecord) -> Option<f64> {
-    let input_tokens = nonnegative_i64_to_u64(record.input_tokens);
-    let output_tokens = nonnegative_i64_to_u64(record.output_tokens);
-    let cached_tokens = nonnegative_i64_to_u64(record.cached_tokens);
-    if input_tokens == 0 && output_tokens == 0 && cached_tokens == 0 {
-        return None;
-    }
-
-    let model = record.model.trim();
-    if model.is_empty() {
-        return None;
-    }
-
-    Some(billing::calculate_billing_amount(
-        input_tokens,
-        output_tokens,
-        cached_tokens,
-        model,
-        record.service_tier.as_deref(),
-    ))
 }
 
 impl From<UsageListRecord> for AccountUsageRecord {

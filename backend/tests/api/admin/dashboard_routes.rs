@@ -370,7 +370,7 @@ async fn dashboard_summary_should_return_requested_trend_kind() {
 
 #[tokio::test]
 async fn dashboard_summary_should_calculate_priority_billing_from_event_service_tier() {
-    let billing_amount = dashboard_summary_today_billing_for_usage_record(
+    let billing_amount = dashboard_summary_total_billing_for_usage_record(
         "dashboard-billing-priority",
         "gpt-5.5",
         json!({
@@ -389,7 +389,7 @@ async fn dashboard_summary_should_calculate_priority_billing_from_event_service_
 
 #[tokio::test]
 async fn dashboard_summary_should_charge_cached_input_at_cache_read_price() {
-    let billing_amount = dashboard_summary_today_billing_for_usage_record(
+    let billing_amount = dashboard_summary_total_billing_for_usage_record(
         "dashboard-billing-cached",
         "gpt-5.5",
         json!({
@@ -407,7 +407,7 @@ async fn dashboard_summary_should_charge_cached_input_at_cache_read_price() {
 
 #[tokio::test]
 async fn dashboard_summary_should_apply_long_context_prices() {
-    let billing_amount = dashboard_summary_today_billing_for_usage_record(
+    let billing_amount = dashboard_summary_total_billing_for_usage_record(
         "dashboard-billing-long-context",
         "gpt-5.5",
         json!({
@@ -425,7 +425,7 @@ async fn dashboard_summary_should_apply_long_context_prices() {
 
 #[tokio::test]
 async fn dashboard_summary_should_match_versioned_model_names_for_billing() {
-    let billing_amount = dashboard_summary_today_billing_for_usage_record(
+    let billing_amount = dashboard_summary_total_billing_for_usage_record(
         "dashboard-billing-codex-model",
         "gpt-5.6-terra-2026-07-01",
         json!({
@@ -689,7 +689,44 @@ async fn dashboard_summary_should_return_today_health_timeline() {
     assert_eq!(points.matches('4').count(), 1);
 }
 
-async fn dashboard_summary_today_billing_for_usage_record(
+#[tokio::test]
+async fn dashboard_summary_should_include_retained_history_in_total_billing() {
+    let (app, store, _pool, _dir) = dashboard_test_app(
+        "dashboard-total-billing-retained-history",
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .await;
+    let metadata = json!({
+        "usage": {
+            "inputTokens": 100_000u64,
+            "outputTokens": 100_000u64,
+            "cachedTokens": 0u64
+        },
+        "serviceTier": "priority"
+    });
+    for created_at in [Utc::now(), Utc::now() - Duration::days(8)] {
+        let mut record = usage_record(created_at, "gpt-5.5", metadata.clone());
+        record.input_tokens = Some(100_000);
+        record.output_tokens = Some(100_000);
+        record.cached_tokens = Some(0);
+        record.service_tier = Some("priority".to_string());
+        store.append(&record).await.unwrap();
+    }
+
+    let body = dashboard_summary(app).await;
+
+    assert_eq!(
+        body["data"]["cards"]["tokens"]["totalBillingAmountUsd"],
+        "$17.50"
+    );
+    assert!(
+        body["data"]["cards"]["tokens"]
+            .get("todayBillingAmountUsd")
+            .is_none()
+    );
+}
+
+async fn dashboard_summary_total_billing_for_usage_record(
     db_name: &str,
     model: &str,
     metadata: Value,
@@ -716,7 +753,7 @@ async fn dashboard_summary_today_billing_for_usage_record(
     store.append(&record).await.unwrap();
 
     let body = dashboard_summary(app).await;
-    body["data"]["cards"]["tokens"]["todayBillingAmountUsd"]
+    body["data"]["cards"]["tokens"]["totalBillingAmountUsd"]
         .as_str()
         .unwrap()
         .to_string()

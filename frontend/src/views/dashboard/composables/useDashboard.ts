@@ -139,7 +139,7 @@ export function useDashboard(): any {
           todayTokensValue: 0,
           yesterdayTokensValue: 0,
           totalTokens: '0',
-          todayBillingAmountUsd: '—',
+          totalBillingAmountUsd: '—',
         },
         cache: {
           todayHitRate: '—',
@@ -222,7 +222,7 @@ export function useDashboard(): any {
         details: [
           { label: '总请求', value: traffic.totalRequests, tone: 'info' },
           {
-            label: '首字延迟',
+            label: '今日首字',
             value: cache.averageFirstTokenLatencyMs,
             tone: 'info',
           },
@@ -243,8 +243,8 @@ export function useDashboard(): any {
         details: [
           { label: '总 Token', value: tokens.totalTokens, tone: 'success' },
           {
-            label: '计费',
-            value: tokens.todayBillingAmountUsd,
+            label: '总计费',
+            value: tokens.totalBillingAmountUsd,
             tone: 'success',
           },
         ],
@@ -266,9 +266,9 @@ export function useDashboard(): any {
           'warning',
         ),
         details: [
-          { label: '平均缓存命中', value: cache.totalHitRate, tone: 'warning' },
+          { label: '总缓存命中', value: cache.totalHitRate, tone: 'warning' },
           {
-            label: '缓存',
+            label: '总缓存',
             value: cache.totalCachedTokens,
             tone: 'warning',
           },

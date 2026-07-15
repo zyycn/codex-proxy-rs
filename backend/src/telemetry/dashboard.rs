@@ -11,7 +11,7 @@ use crate::infra::{
     time::{china_day_start, china_quarter_hour_start},
 };
 
-use super::{account_usage::query::AccountUsageTimeBucket, buckets::query::UsageBucketTotals};
+use super::account_usage::query::{AccountUsageTimeBucket, RetainedUsageSummary};
 
 const HEALTH_TIMELINE_SLOT_MINUTES: i64 = 15;
 const HEALTH_TIMELINE_SLOTS: i64 = 24 * 4;
@@ -79,7 +79,7 @@ struct DashboardTokenCardData {
     today_tokens_value: u64,
     yesterday_tokens_value: u64,
     total_tokens: String,
-    today_billing_amount_usd: String,
+    total_billing_amount_usd: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -174,7 +174,7 @@ impl UsageWindow {
 pub fn dashboard_cards(
     accounts: DashboardAccountCounts,
     buckets: &[AccountUsageTimeBucket],
-    retained_usage: &UsageBucketTotals,
+    retained_usage: &RetainedUsageSummary,
 ) -> DashboardCardsData {
     dashboard_cards_at(accounts, buckets, retained_usage, Utc::now())
 }
@@ -182,18 +182,17 @@ pub fn dashboard_cards(
 pub fn dashboard_cards_at(
     accounts: DashboardAccountCounts,
     buckets: &[AccountUsageTimeBucket],
-    retained_usage: &UsageBucketTotals,
+    retained_usage: &RetainedUsageSummary,
     now: DateTime<Utc>,
 ) -> DashboardCardsData {
     let today_start = china_day_start(now);
     let yesterday_start = today_start - Duration::days(1);
     let today = usage_window(buckets, today_start, now);
     let yesterday = usage_window(buckets, yesterday_start, today_start);
-    let today_billing_amount = billing_window(buckets, today_start, now).unwrap_or(0.0);
-    let total_requests = nonnegative_i64_to_u64(retained_usage.request_count);
-    let total_tokens = nonnegative_i64_to_u64(retained_usage.input_tokens)
-        .saturating_add(nonnegative_i64_to_u64(retained_usage.output_tokens));
-    let total_cached_tokens = nonnegative_i64_to_u64(retained_usage.cached_tokens);
+    let total_requests = nonnegative_i64_to_u64(retained_usage.totals.request_count);
+    let total_tokens = nonnegative_i64_to_u64(retained_usage.totals.input_tokens)
+        .saturating_add(nonnegative_i64_to_u64(retained_usage.totals.output_tokens));
+    let total_cached_tokens = nonnegative_i64_to_u64(retained_usage.totals.cached_tokens);
 
     DashboardCardsData {
         accounts: DashboardAccountsCardData {
@@ -215,7 +214,7 @@ pub fn dashboard_cards_at(
             today_tokens_value: today.tokens(),
             yesterday_tokens_value: yesterday.tokens(),
             total_tokens: format_tokens(total_tokens),
-            today_billing_amount_usd: format_billing_amount(today_billing_amount),
+            total_billing_amount_usd: format_billing_amount(retained_usage.billing_amount_usd),
         },
         cache: DashboardCacheCardData {
             today_hit_rate: format_rate(today.cache_hit_rate()),
@@ -487,19 +486,6 @@ fn usage_window(
         })
 }
 
-fn billing_window(
-    records: &[AccountUsageTimeBucket],
-    start: DateTime<Utc>,
-    end: DateTime<Utc>,
-) -> Option<f64> {
-    let billing_amounts = records
-        .iter()
-        .filter(|record| record.bucket_start >= start && record.bucket_start < end)
-        .filter_map(|record| record.billing_amount_usd)
-        .collect::<Vec<_>>();
-    (!billing_amounts.is_empty()).then(|| billing_amounts.into_iter().sum())
-}
-
 fn apply_bucket(window: &mut UsageWindow, record: &AccountUsageTimeBucket) {
     window.requests += nonnegative_i64_to_u64(record.request_count);
     window.input_tokens += nonnegative_i64_to_u64(record.input_tokens);
@@ -541,10 +527,10 @@ fn health_tone(bucket: UsageWindow, success_rate: f64, is_future: bool) -> char 
     }
 }
 
-fn summary_cache_hit_rate(summary: &UsageBucketTotals) -> Option<f64> {
-    let input_tokens = nonnegative_i64_to_u64(summary.input_tokens);
+fn summary_cache_hit_rate(summary: &RetainedUsageSummary) -> Option<f64> {
+    let input_tokens = nonnegative_i64_to_u64(summary.totals.input_tokens);
     (input_tokens > 0)
-        .then(|| nonnegative_i64_to_u64(summary.cached_tokens) as f64 / input_tokens as f64)
+        .then(|| nonnegative_i64_to_u64(summary.totals.cached_tokens) as f64 / input_tokens as f64)
 }
 
 fn format_optional_duration_ms(value: Option<u64>) -> String {
