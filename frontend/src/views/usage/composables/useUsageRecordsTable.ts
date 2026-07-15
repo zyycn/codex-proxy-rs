@@ -35,7 +35,6 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   })
   const refreshingList = shallowRef(false)
   const diagnosticDimension = shallowRef('model')
-  const diagnosticLoading = shallowRef(false)
   let loadRequestId = 0
   let diagnosticRequestId = 0
   const scopedParams = () => ({ ...options.timeRangeParams.value })
@@ -50,7 +49,6 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
       if (scope === 'all') {
         analyticsLoading.value = true
         diagnosticRequestId += 1
-        diagnosticLoading.value = false
       }
 
       const globalParams = scopedParams()
@@ -132,7 +130,6 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     const dimension = diagnosticDimension.value
     const params = scopedParams()
     try {
-      diagnosticLoading.value = true
       const diagnostics = await getUsageRecordInsightsDiagnostics({
         ...params,
         dimension,
@@ -144,10 +141,6 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
       }
     } catch (error: any) {
       toast.error(error.message || '加载失败')
-    } finally {
-      if (requestId === diagnosticRequestId) {
-        diagnosticLoading.value = false
-      }
     }
   }
 
@@ -178,7 +171,6 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     insights,
     refreshingList,
     diagnosticDimension,
-    diagnosticLoading,
     loadUsageRecords,
     refreshUsageRecords,
   }

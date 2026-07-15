@@ -12,10 +12,13 @@ use crate::infra::{
 };
 
 use super::account_usage::query::{AccountUsageTimeBucket, RetainedUsageSummary};
+use super::usage::insights::RequestHealthTimeBucket;
 
 const HEALTH_TIMELINE_SLOT_MINUTES: i64 = 15;
 const HEALTH_TIMELINE_SLOTS: i64 = 24 * 4;
-const HEALTH_TIMELINE_STABLE_SUCCESS_THRESHOLD: u64 = 3;
+const HEALTH_TIMELINE_MIN_SAMPLE_SIZE: u64 = 10;
+const HEALTH_TIMELINE_UNAVAILABLE_FAILURE_THRESHOLD: u64 = 3;
+const HEALTH_TIMELINE_STABLE_RELIABILITY: f64 = 99.0;
 const TREND_SLOT_MINUTES: i64 = 15;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -40,7 +43,35 @@ pub struct DashboardHealthTimelineData {
     title: String,
     description: String,
     reliability_display: String,
-    points: String,
+    status: DashboardHealthTimelineStatus,
+    success_requests: u64,
+    failed_requests: u64,
+    cancelled_requests: u64,
+    caller_error_requests: u64,
+    points: Vec<DashboardHealthTimelinePointData>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardHealthTimelinePointData {
+    time: String,
+    status: DashboardHealthTimelineStatus,
+    reliability_display: String,
+    success_requests: u64,
+    failed_requests: u64,
+    cancelled_requests: u64,
+    caller_error_requests: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DashboardHealthTimelineStatus {
+    Future,
+    NoData,
+    Unavailable,
+    Unstable,
+    LowSample,
+    Stable,
 }
 
 #[derive(Debug, Serialize)]
@@ -146,6 +177,14 @@ struct UsageWindow {
     first_token_latency_count: u64,
     max_first_token_bucket_latency: u64,
     min_first_token_bucket_latency: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct HealthWindow {
+    success_requests: u64,
+    failed_requests: u64,
+    cancelled_requests: u64,
+    caller_error_requests: u64,
 }
 
 impl UsageWindow {
@@ -320,13 +359,13 @@ pub fn dashboard_trend_data_at(
 }
 
 pub fn dashboard_health_timeline_data(
-    buckets: &[AccountUsageTimeBucket],
+    buckets: &[RequestHealthTimeBucket],
 ) -> DashboardHealthTimelineData {
     dashboard_health_timeline_data_at(buckets, Utc::now())
 }
 
 pub fn dashboard_health_timeline_data_at(
-    records: &[AccountUsageTimeBucket],
+    records: &[RequestHealthTimeBucket],
     now: DateTime<Utc>,
 ) -> DashboardHealthTimelineData {
     let current_slot = china_quarter_hour_start(now);
@@ -335,7 +374,7 @@ pub fn dashboard_health_timeline_data_at(
         .map(|index| {
             (
                 start + Duration::minutes(HEALTH_TIMELINE_SLOT_MINUTES * index),
-                UsageWindow::default(),
+                HealthWindow::default(),
             )
         })
         .collect::<Vec<_>>();
@@ -348,36 +387,62 @@ pub fn dashboard_health_timeline_data_at(
             .iter_mut()
             .find(|(bucket_start, _)| *bucket_start == record_slot)
         {
-            apply_bucket(bucket, record);
+            bucket.success_requests = bucket
+                .success_requests
+                .saturating_add(record.success_requests);
+            bucket.failed_requests = bucket
+                .failed_requests
+                .saturating_add(record.failed_requests);
+            bucket.cancelled_requests = bucket
+                .cancelled_requests
+                .saturating_add(record.cancelled_requests);
+            bucket.caller_error_requests = bucket
+                .caller_error_requests
+                .saturating_add(record.caller_error_requests);
         }
     }
 
-    let (requests, errors) = buckets
+    let totals = buckets
         .iter()
         .filter(|(bucket_start, _)| *bucket_start <= current_slot)
-        .fold((0, 0), |(requests, errors), (_, bucket)| {
-            (requests + bucket.requests, errors + bucket.errors)
+        .fold(HealthWindow::default(), |mut totals, (_, bucket)| {
+            totals.success_requests = totals
+                .success_requests
+                .saturating_add(bucket.success_requests);
+            totals.failed_requests = totals
+                .failed_requests
+                .saturating_add(bucket.failed_requests);
+            totals.cancelled_requests = totals
+                .cancelled_requests
+                .saturating_add(bucket.cancelled_requests);
+            totals.caller_error_requests = totals
+                .caller_error_requests
+                .saturating_add(bucket.caller_error_requests);
+            totals
         });
-    let reliability = (requests > 0)
-        .then(|| ((requests - errors) as f64 / requests as f64 * 1000.0).round() / 10.0);
     DashboardHealthTimelineData {
         title: "请求健康时间线".to_string(),
-        description: "请求可靠性".to_string(),
-        reliability_display: reliability
-            .map(|value| format!("{value:.1}%"))
-            .unwrap_or_else(|| "-".to_string()),
+        description: "有效请求可用性".to_string(),
+        reliability_display: format_health_reliability(totals),
+        status: health_status(totals, false),
+        success_requests: totals.success_requests,
+        failed_requests: totals.failed_requests,
+        cancelled_requests: totals.cancelled_requests,
+        caller_error_requests: totals.caller_error_requests,
         points: buckets
             .into_iter()
-            .map(|(bucket_start, bucket)| {
-                let success_rate = if bucket.requests > 0 {
-                    (bucket.requests.saturating_sub(bucket.errors) as f64 / bucket.requests as f64
-                        * 1000.0)
-                        .round()
-                        / 10.0
-                } else {
-                    0.0
-                };
-                health_tone(bucket, success_rate, bucket_start > current_slot)
+            .enumerate()
+            .map(|(index, (bucket_start, bucket))| {
+                let elapsed_minutes = index as i64 * HEALTH_TIMELINE_SLOT_MINUTES;
+                DashboardHealthTimelinePointData {
+                    time: format!("{:02}:{:02}", elapsed_minutes / 60, elapsed_minutes % 60),
+                    status: health_status(bucket, bucket_start > current_slot),
+                    reliability_display: format_health_reliability(bucket),
+                    success_requests: bucket.success_requests,
+                    failed_requests: bucket.failed_requests,
+                    cancelled_requests: bucket.cancelled_requests,
+                    caller_error_requests: bucket.caller_error_requests,
+                }
             })
             .collect(),
     }
@@ -510,21 +575,41 @@ fn first_token_bucket_latency(record: &AccountUsageTimeBucket) -> Option<u64> {
         .filter(|latency| *latency > 0)
 }
 
-fn health_tone(bucket: UsageWindow, success_rate: f64, is_future: bool) -> char {
-    let successes = bucket.requests.saturating_sub(bucket.errors);
+fn health_status(bucket: HealthWindow, is_future: bool) -> DashboardHealthTimelineStatus {
+    let eligible_requests = bucket
+        .success_requests
+        .saturating_add(bucket.failed_requests);
     if is_future {
-        '0'
-    } else if bucket.requests == 0 {
-        '1'
-    } else if successes == 0 {
-        '2'
-    } else if success_rate < 90.0 {
-        '3'
-    } else if successes < HEALTH_TIMELINE_STABLE_SUCCESS_THRESHOLD {
-        '4'
+        DashboardHealthTimelineStatus::Future
+    } else if eligible_requests == 0 {
+        DashboardHealthTimelineStatus::NoData
+    } else if bucket.success_requests == 0
+        && bucket.failed_requests >= HEALTH_TIMELINE_UNAVAILABLE_FAILURE_THRESHOLD
+    {
+        DashboardHealthTimelineStatus::Unavailable
+    } else if eligible_requests < HEALTH_TIMELINE_MIN_SAMPLE_SIZE {
+        DashboardHealthTimelineStatus::LowSample
+    } else if health_reliability(bucket)
+        .is_some_and(|reliability| reliability < HEALTH_TIMELINE_STABLE_RELIABILITY)
+    {
+        DashboardHealthTimelineStatus::Unstable
     } else {
-        '5'
+        DashboardHealthTimelineStatus::Stable
     }
+}
+
+fn health_reliability(bucket: HealthWindow) -> Option<f64> {
+    let eligible_requests = bucket
+        .success_requests
+        .saturating_add(bucket.failed_requests);
+    (eligible_requests > 0)
+        .then(|| bucket.success_requests as f64 / eligible_requests as f64 * 100.0)
+}
+
+fn format_health_reliability(bucket: HealthWindow) -> String {
+    health_reliability(bucket)
+        .map(|value| format!("{value:.1}%"))
+        .unwrap_or_else(|| "-".to_string())
 }
 
 fn summary_cache_hit_rate(summary: &RetainedUsageSummary) -> Option<f64> {

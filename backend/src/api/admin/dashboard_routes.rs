@@ -38,6 +38,7 @@ use crate::{
             dashboard_health_timeline_data, dashboard_trend_data,
         },
         usage::{
+            insights::RequestHealthTimeBucket,
             query::{UsageQueryFilter, UsageRecordAccountUsage},
             types::{UsageRecord, metadata_string},
         },
@@ -230,7 +231,10 @@ pub(crate) async fn dashboard_summary(
         .await
         .map_err(|error| dashboard_data_error("recent usage records", &error))?;
 
-    let time_buckets = dashboard_time_buckets(&state, now).await?;
+    let (time_buckets, health_buckets) = tokio::try_join!(
+        dashboard_time_buckets(&state, now),
+        dashboard_health_buckets(&state, now),
+    )?;
     let account_ids = accounts
         .iter()
         .map(|account| account.id.clone())
@@ -265,7 +269,7 @@ pub(crate) async fn dashboard_summary(
                 &retained_usage,
             ),
             trend,
-            health_timeline: dashboard_health_timeline_data(&time_buckets),
+            health_timeline: dashboard_health_timeline_data(&health_buckets),
             account_usage: account_usage_data(
                 &accounts,
                 &account_usage_records,
@@ -319,6 +323,18 @@ async fn dashboard_time_buckets(
         .time_buckets(start, now)
         .await
         .map_err(|error| dashboard_data_error("time buckets", &error))
+}
+
+async fn dashboard_health_buckets(
+    state: &AppState,
+    now: DateTime<Utc>,
+) -> Result<Vec<RequestHealthTimeBucket>, AdminError> {
+    state
+        .services
+        .usage_records
+        .health_timeline(china_day_start(now), now)
+        .await
+        .map_err(|error| dashboard_data_error("health timeline", &error))
 }
 
 fn dashboard_account_counts(accounts: &[Account]) -> DashboardAccountCounts {

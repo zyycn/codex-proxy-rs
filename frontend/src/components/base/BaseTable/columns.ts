@@ -10,6 +10,7 @@ export interface BaseTableColumn {
   minWidth?: number | string
   maxWidth?: number | string
   flex?: number
+  fixed?: 'left' | 'right' | false
   align?: 'left' | 'right' | 'center'
   ellipsis?: boolean
   emptyText?: string
@@ -24,7 +25,7 @@ export interface BaseTableSort {
   direction: BaseTableSortDirection
 }
 
-export type ResolvedTableColumn = BaseTableColumn & {
+export type ResolvedTableColumn = Omit<BaseTableColumn, 'fixed'> & {
   fixed?: 'left' | 'right'
   resolvedWidth: string
   resolvedMinWidth?: string
@@ -51,6 +52,8 @@ export function resolveColumns(
 
   return columns.map((column, index) => {
     const flex = column.flex ?? 1
+    const automaticallyFixed =
+      index === fixedColumnIndex ? (actionColumnIndex >= 0 ? 'right' : 'left') : undefined
     const width =
       column.width === undefined
         ? minWidthPixels > 0 && fixedPercentTotal === 0
@@ -64,7 +67,7 @@ export function resolveColumns(
 
     return {
       ...column,
-      fixed: index === fixedColumnIndex ? (actionColumnIndex >= 0 ? 'right' : 'left') : undefined,
+      fixed: column.fixed === false ? undefined : (column.fixed ?? automaticallyFixed),
       resolvedWidth: width,
       resolvedMinWidth: column.minWidth === undefined ? undefined : normalizeWidth(column.minWidth),
       resolvedMaxWidth: column.maxWidth === undefined ? undefined : normalizeWidth(column.maxWidth),

@@ -19,7 +19,8 @@ success_terminals as (
   select distinct on (request_key)
     request_key, id, request_id, terminal_at, true as is_success,
     client_api_key_id, provider, account_id, transport, model_name,
-    null::text as failure_class, latency_ms, first_token_ms, billing_model,
+    null::text as failure_class, false as is_client_cancelled,
+    false as is_caller_error, latency_ms, first_token_ms, billing_model,
     service_tier, input_tokens, output_tokens, cached_tokens
   from (
     select
@@ -40,7 +41,8 @@ error_terminals as (
   select distinct on (request_key)
     request_key, id, request_id, terminal_at, false as is_success,
     client_api_key_id, provider, account_id, transport, model_name,
-    failure_class, latency_ms, null::bigint as first_token_ms,
+    failure_class, is_client_cancelled, is_caller_error,
+    latency_ms, null::bigint as first_token_ms,
     null::text as billing_model, null::text as service_tier,
     null::bigint as input_tokens, null::bigint as output_tokens,
     null::bigint as cached_tokens
@@ -56,6 +58,23 @@ error_terminals as (
         nullif(metadata_json->>'terminal', ''),
         '未分类错误'
       ) as failure_class,
+      coalesce((
+        coalesce(
+          nullif(failure_class, ''),
+          nullif(metadata_json->>'failureClass', ''),
+          nullif(metadata_json->>'upstreamCode', ''),
+          nullif(metadata_json->>'terminal', ''),
+          ''
+        ) in ('cancelled', 'downstream_closed', 'client_cancelled', 'consumer_dropped')
+        or (
+          (status_code = 499 or client_status_code = 499)
+          and (
+            metadata_json->>'cancelled' = 'true'
+            or message = 'v1 responses stream cancelled'
+          )
+        )
+      ), false) as is_client_cancelled,
+      coalesce(metadata_json->>'failureSource' = 'client', false) as is_caller_error,
       latency_ms
     from ops_error_logs
     where created_at >= $1 and created_at < $2
@@ -209,6 +228,8 @@ struct UsageHealthInsights {
     total_requests: u64,
     success_requests: u64,
     failed_requests: u64,
+    cancelled_requests: u64,
+    caller_error_requests: u64,
     success_rate: f64,
     request_change_rate: Option<f64>,
     success_rate_change: Option<f64>,
@@ -222,7 +243,19 @@ struct UsageHealthPoint {
     label: String,
     success_requests: u64,
     failed_requests: u64,
+    cancelled_requests: u64,
+    caller_error_requests: u64,
     error_rate: f64,
+}
+
+/// Dashboard 请求健康时间桶，仅统计每个请求的最终终态。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestHealthTimeBucket {
+    pub bucket_start: DateTime<Utc>,
+    pub success_requests: u64,
+    pub failed_requests: u64,
+    pub cancelled_requests: u64,
+    pub caller_error_requests: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -387,6 +420,47 @@ pub async fn diagnostics(
     })
 }
 
+/// 按 15 分钟聚合最终请求终态；客户端取消与调用方错误保持独立，不污染可用性。
+pub async fn health_timeline(
+    pool: &PgPool,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> PgUsageRecordStoreResult<Vec<RequestHealthTimeBucket>> {
+    let bucket = InsightsGranularity::QuarterHour.bucket_expression("terminal_at");
+    let sql = format!(
+        "with {TERMINAL_REQUESTS_CTE}\n\
+         select {bucket} as bucket_start,\n\
+           count(*) filter (where is_success)::bigint as success_requests,\n\
+           count(*) filter (\n\
+             where not is_success and not is_client_cancelled and not is_caller_error\n\
+           )::bigint as failed_requests,\n\
+           count(*) filter (where is_client_cancelled)::bigint as cancelled_requests,\n\
+           count(*) filter (\n\
+             where is_caller_error and not is_client_cancelled\n\
+           )::bigint as caller_error_requests\n\
+         from terminal_requests\n\
+         group by bucket_start\n\
+         order by bucket_start"
+    );
+    // SAFETY: 时间桶表达式与 CTE 都是模块内固定 SQL，时间范围仍使用绑定参数。
+    let rows = sqlx::query(AssertSqlSafe(sql))
+        .bind(start)
+        .bind(end)
+        .fetch_all(pool)
+        .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| RequestHealthTimeBucket {
+            bucket_start: row.get("bucket_start"),
+            success_requests: nonnegative(row.get("success_requests")),
+            failed_requests: nonnegative(row.get("failed_requests")),
+            cancelled_requests: nonnegative(row.get("cancelled_requests")),
+            caller_error_requests: nonnegative(row.get("caller_error_requests")),
+        })
+        .collect())
+}
+
 async fn load_health(
     pool: &PgPool,
     start: DateTime<Utc>,
@@ -401,7 +475,13 @@ async fn load_health(
          select case when terminal_at >= $3 then 'current' else 'previous' end as period,\n\
            {bucket} as bucket_start,\n\
            count(*) filter (where is_success)::bigint as success_requests,\n\
-           count(*) filter (where not is_success)::bigint as failed_requests\n\
+           count(*) filter (\n\
+             where not is_success and not is_client_cancelled and not is_caller_error\n\
+           )::bigint as failed_requests,\n\
+           count(*) filter (where is_client_cancelled)::bigint as cancelled_requests,\n\
+           count(*) filter (\n\
+             where is_caller_error and not is_client_cancelled\n\
+           )::bigint as caller_error_requests\n\
          from terminal_requests\n\
          group by period, bucket_start\n\
          order by bucket_start"
@@ -417,17 +497,23 @@ async fn load_health(
     let mut current = HashMap::new();
     let mut current_success = 0_u64;
     let mut current_failed = 0_u64;
+    let mut current_cancelled = 0_u64;
+    let mut current_caller_error = 0_u64;
     let mut previous_success = 0_u64;
     let mut previous_failed = 0_u64;
     for row in rows {
         let success = nonnegative(row.get("success_requests"));
         let failed = nonnegative(row.get("failed_requests"));
+        let cancelled = nonnegative(row.get("cancelled_requests"));
+        let caller_error = nonnegative(row.get("caller_error_requests"));
         if row.get::<String, _>("period") == "current" {
             current_success = current_success.saturating_add(success);
             current_failed = current_failed.saturating_add(failed);
+            current_cancelled = current_cancelled.saturating_add(cancelled);
+            current_caller_error = current_caller_error.saturating_add(caller_error);
             current.insert(
                 row.get::<DateTime<Utc>, _>("bucket_start"),
-                (success, failed),
+                (success, failed, cancelled, caller_error),
             );
         } else {
             previous_success = previous_success.saturating_add(success);
@@ -441,7 +527,7 @@ async fn load_health(
     let points = bucket_starts(start, end, granularity)
         .into_iter()
         .map(|bucket| {
-            let (success_requests, failed_requests) =
+            let (success_requests, failed_requests, cancelled_requests, caller_error_requests) =
                 current.get(&bucket).copied().unwrap_or_default();
             let point_total = success_requests.saturating_add(failed_requests);
             UsageHealthPoint {
@@ -449,6 +535,8 @@ async fn load_health(
                 label: bucket_label(bucket, granularity),
                 success_requests,
                 failed_requests,
+                cancelled_requests,
+                caller_error_requests,
                 error_rate: rate(failed_requests, point_total),
             }
         })
@@ -457,6 +545,8 @@ async fn load_health(
         total_requests: total,
         success_requests: current_success,
         failed_requests: current_failed,
+        cancelled_requests: current_cancelled,
+        caller_error_requests: current_caller_error,
         success_rate,
         request_change_rate: relative_change(total, previous_total),
         success_rate_change: (previous_total > 0).then_some(success_rate - previous_success_rate),
