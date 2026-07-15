@@ -3,6 +3,7 @@ import { Copy, KeyRound, Trash2 } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
+import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
 
 interface AdminApiKeyStatus {
   exists: boolean
@@ -62,11 +63,12 @@ const emit = defineEmits<{
         class="flex min-h-16 items-center justify-between gap-4 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-4 py-3"
       >
         <div class="flex min-w-0 items-center gap-3">
-          <span
+          <BaseMotionIcon
+            aria-hidden="true"
             class="inline-flex size-9 shrink-0 items-center justify-center rounded-(--cp-icon-button-radius) bg-(--cp-bg-surface) text-(--cp-normal) shadow-(--cp-shadow-control)"
           >
             <KeyRound class="size-4" />
-          </span>
+          </BaseMotionIcon>
           <div class="min-w-0">
             <p class="m-0 text-[13px] leading-[1.15] font-[720] text-(--cp-text-primary)">
               {{ status.exists ? '已启用' : '未生成' }}

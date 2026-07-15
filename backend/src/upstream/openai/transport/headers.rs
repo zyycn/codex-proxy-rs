@@ -1,102 +1,49 @@
-use indexmap::IndexMap;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 
-use crate::upstream::openai::fingerprint::Fingerprint;
+use crate::upstream::openai::profile::CodexWireProfile;
 
 use super::client::CodexClientResult;
 
-/// 构造标准 Codex 请求头。
+/// 构造 Codex Core 为模型请求设置的稳定身份请求头。
 pub fn build_codex_base_headers(
-    fingerprint: &Fingerprint,
+    profile: &CodexWireProfile,
     access_token: &str,
     account_id: Option<&str>,
-) -> IndexMap<String, String> {
-    let mut headers = IndexMap::new();
+) -> CodexClientResult<HeaderMap> {
+    let mut headers = HeaderMap::new();
     headers.insert(
-        "authorization".to_string(),
-        format!("Bearer {access_token}"),
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {access_token}"))?,
     );
-    if let Some(account_id) = account_id {
-        headers.insert("chatgpt-account-id".to_string(), account_id.to_string());
-    }
-    headers.insert("originator".to_string(), fingerprint.originator.clone());
-    headers.insert("user-agent".to_string(), fingerprint.user_agent());
-    headers.insert("sec-ch-ua".to_string(), fingerprint.sec_ch_ua());
-    for (key, value) in &fingerprint.default_headers {
-        let key_lower = key.to_ascii_lowercase();
-        if !headers.contains_key(&key_lower) {
-            headers.insert(key_lower, value.clone());
-        }
-    }
-    headers
+    insert_optional_header(&mut headers, "chatgpt-account-id", account_id)?;
+    headers.insert(
+        HeaderName::from_static("originator"),
+        HeaderValue::from_str(&profile.originator)?,
+    );
+    headers.insert(USER_AGENT, HeaderValue::from_str(&profile.user_agent())?);
+    Ok(headers)
 }
 
-/// 构造包含标准请求头和额外请求头值的完整请求头集合。
+/// 构造含通用请求上下文的 Codex 模型请求头。
 pub fn build_codex_headers(
-    fingerprint: &Fingerprint,
+    profile: &CodexWireProfile,
     access_token: &str,
     account_id: Option<&str>,
     turn_state: Option<&str>,
     request_id: &str,
-) -> IndexMap<String, String> {
-    let mut headers = build_codex_base_headers(fingerprint, access_token, account_id);
+) -> CodexClientResult<HeaderMap> {
+    let mut headers = build_codex_base_headers(profile, access_token, account_id)?;
     headers.insert(
-        "x-openai-internal-codex-residency".to_string(),
-        "us".to_string(),
+        HeaderName::from_static("x-openai-internal-codex-residency"),
+        HeaderValue::from_static("us"),
     );
-    headers.insert("x-client-request-id".to_string(), request_id.to_string());
-    if let Some(turn_state) = turn_state {
-        headers.insert("x-codex-turn-state".to_string(), turn_state.to_string());
-    }
-    headers.insert("accept".to_string(), "text/event-stream".to_string());
-    headers
-}
-
-/// 按给定顺序重排请求头。
-pub fn order_headers(
-    headers: IndexMap<String, String>,
-    order: &[String],
-) -> IndexMap<String, String> {
-    let mut ordered = IndexMap::new();
-    for key in order {
-        if let Some(value) = headers.get(key) {
-            ordered.insert(key.clone(), value.clone());
-        }
-    }
-    for (key, value) in headers {
-        if !ordered.contains_key(&key) {
-            ordered.insert(key, value);
-        }
-    }
-    ordered
-}
-
-/// 构造并按指纹顺序重排完整请求头。
-pub fn build_ordered_codex_headers(
-    fingerprint: &Fingerprint,
-    access_token: &str,
-    account_id: Option<&str>,
-    turn_state: Option<&str>,
-    request_id: &str,
-) -> IndexMap<String, String> {
-    let headers = build_codex_headers(
-        fingerprint,
-        access_token,
-        account_id,
-        turn_state,
-        request_id,
+    headers.insert(
+        HeaderName::from_static("x-client-request-id"),
+        HeaderValue::from_str(request_id)?,
     );
-    order_headers(headers, &fingerprint.header_order)
-}
-
-/// 构造并按指纹顺序重排基础请求头（不含请求 ID 和 turn state）。
-pub fn build_ordered_codex_base_headers(
-    fingerprint: &Fingerprint,
-    access_token: &str,
-    account_id: Option<&str>,
-) -> IndexMap<String, String> {
-    let headers = build_codex_base_headers(fingerprint, access_token, account_id);
-    order_headers(headers, &fingerprint.header_order)
+    insert_optional_header(&mut headers, "x-codex-turn-state", turn_state)?;
+    headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
+    Ok(headers)
 }
 
 pub(super) fn insert_optional_header(
@@ -108,19 +55,6 @@ pub(super) fn insert_optional_header(
         return Ok(());
     };
     headers.insert(HeaderName::from_static(name), HeaderValue::from_str(value)?);
-    Ok(())
-}
-
-pub(super) fn insert_ordered_headers(
-    headers: &mut HeaderMap,
-    ordered_headers: &IndexMap<String, String>,
-) -> CodexClientResult<()> {
-    for (name, value) in ordered_headers {
-        headers.insert(
-            HeaderName::from_bytes(name.as_bytes())?,
-            HeaderValue::from_str(value)?,
-        );
-    }
     Ok(())
 }
 

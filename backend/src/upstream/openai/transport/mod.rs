@@ -26,10 +26,7 @@ pub use self::{
         CODEX_RESPONSES_PATH, CODEX_USAGE_API_PATH, CODEX_USAGE_PATH, WHAM_USAGE_PATH,
         endpoint_request_path, endpoint_url, usage_endpoint_urls,
     },
-    headers::{
-        build_codex_base_headers, build_codex_headers, build_ordered_codex_base_headers,
-        build_ordered_codex_headers, order_headers,
-    },
+    headers::{build_codex_base_headers, build_codex_headers},
     websocket_pool::{
         CodexWebSocketPool, CodexWebSocketPoolConfig, CodexWebSocketPoolKey, WebSocketPoolDecision,
     },

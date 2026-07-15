@@ -42,7 +42,7 @@ pub(crate) fn test_config(database_url: String) -> AppConfig {
             max_per_account: 8,
             initial_event_timeout_ms: 20_000,
         },
-        fingerprint: crate::support::fingerprint::test_fingerprint_config(),
+        wire_profile: crate::support::wire_profile::test_wire_profile_config(),
         admin: AdminConfig {
             session_ttl_minutes: 1440,
             default_username: "admin".to_string(),

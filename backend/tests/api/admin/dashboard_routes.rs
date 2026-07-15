@@ -8,7 +8,7 @@ use codex_proxy_rs::{
     bootstrap::services::Services,
     infra::time::{china_datetime, china_day_start, china_quarter_hour_start},
     telemetry::{usage::store::PgUsageRecordStore, usage::types::UsageRecord},
-    upstream::openai::fingerprint::Fingerprint,
+    upstream::openai::profile::CodexWireProfile,
 };
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -16,49 +16,54 @@ use tower::util::ServiceExt;
 
 use crate::support::{
     admin::seed_admin_session,
-    fingerprint::runtime_fingerprint,
     http::response_json,
     storage::{background_task_stores, create_test_redis, init_test_db, test_database_url},
+    wire_profile::test_wire_profile,
 };
 
 #[tokio::test]
-async fn dashboard_summary_should_render_fingerprint_updated_at_as_beijing_time() {
-    let (app, _store, _pool, _dir) = dashboard_test_app(
-        "dashboard-fingerprint-updated",
-        crate::support::fingerprint::test_fingerprint_with_updated_at(Some(
-            "2026-06-23T11:36:46.965574590+00:00",
-        )),
-    )
-    .await;
+async fn dashboard_summary_should_expose_effective_wire_profile() {
+    let (app, _store, _pool, _dir) =
+        dashboard_test_app("dashboard-wire-profile", test_wire_profile()).await;
 
     let body = dashboard_summary(app).await;
 
     assert_eq!(
-        service_status_value(&body, "更新时间"),
-        "2026-06-23 19:36:46"
+        body["data"]["wireProfile"]["userAgent"],
+        "Codex Desktop/0.144.2 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.707.72221)"
+    );
+    assert_eq!(body["data"]["wireProfile"]["codexVersion"], "0.144.2");
+    assert_eq!(
+        body["data"]["wireProfile"]["desktopVersion"],
+        "26.707.72221"
+    );
+    assert_eq!(body["data"]["wireProfile"]["desktopBuild"], "5307");
+    assert_eq!(body["data"]["wireProfile"]["target"]["osType"], "Mac OS");
+    assert_eq!(body["data"]["wireProfile"]["target"]["arch"], "arm64");
+    assert_eq!(
+        body["data"]["wireProfile"]["verifiedAt"],
+        "2026-07-14T18:25:50Z"
     );
 }
 
 #[tokio::test]
-async fn dashboard_summary_should_render_dash_when_fingerprint_updated_at_is_missing() {
-    let (app, _store, _pool, _dir) = dashboard_test_app(
-        "dashboard-fingerprint-missing",
-        crate::support::fingerprint::test_fingerprint(),
-    )
-    .await;
+async fn dashboard_summary_should_keep_release_observation_separate_from_wire_profile() {
+    let (app, _store, _pool, _dir) =
+        dashboard_test_app("dashboard-release-unchecked", test_wire_profile()).await;
 
     let body = dashboard_summary(app).await;
 
-    assert_eq!(service_status_value(&body, "更新时间"), "-");
+    assert_eq!(
+        body["data"]["wireProfile"]["release"]["status"],
+        "unchecked"
+    );
+    assert!(body["data"].get("serviceStatuses").is_none());
 }
 
 #[tokio::test]
 async fn dashboard_summary_should_report_database_failure() {
-    let (app, _store, pool, _dir) = dashboard_test_app(
-        "dashboard-summary-database-failure",
-        crate::support::fingerprint::test_fingerprint(),
-    )
-    .await;
+    let (app, _store, pool, _dir) =
+        dashboard_test_app("dashboard-summary-database-failure", test_wire_profile()).await;
     pool.close().await;
 
     let response = dashboard_response(app, "/api/admin/dashboard/summary").await;
@@ -72,11 +77,8 @@ async fn dashboard_summary_should_report_database_failure() {
 
 #[tokio::test]
 async fn dashboard_trend_should_report_database_failure() {
-    let (app, _store, pool, _dir) = dashboard_test_app(
-        "dashboard-trend-database-failure",
-        crate::support::fingerprint::test_fingerprint(),
-    )
-    .await;
+    let (app, _store, pool, _dir) =
+        dashboard_test_app("dashboard-trend-database-failure", test_wire_profile()).await;
     pool.close().await;
 
     let response = dashboard_response(app, "/api/admin/dashboard/trend?kind=usage").await;
@@ -91,11 +93,8 @@ async fn dashboard_trend_should_report_database_failure() {
 #[tokio::test]
 async fn dashboard_summary_should_calculate_today_traffic_and_average_first_token_latency_from_time_buckets()
  {
-    let (app, store, pool, _dir) = dashboard_test_app(
-        "dashboard-traffic-latency",
-        crate::support::fingerprint::test_fingerprint(),
-    )
-    .await;
+    let (app, store, pool, _dir) =
+        dashboard_test_app("dashboard-traffic-latency", test_wire_profile()).await;
     let now = Utc::now();
     let today_start = china_day_start(now);
     let today_record_at = if now - today_start > Duration::minutes(1) {
@@ -151,7 +150,7 @@ async fn dashboard_summary_should_calculate_today_traffic_and_average_first_toke
 async fn dashboard_summary_should_keep_trend_after_usage_records_are_cleared() {
     let (app, store, _pool, _dir) = dashboard_test_app(
         "dashboard-time-buckets-survive-usage-record-clear",
-        crate::support::fingerprint::test_fingerprint(),
+        test_wire_profile(),
     )
     .await;
     let mut record = usage_record_with_tokens(Utc::now(), 12);
@@ -177,11 +176,8 @@ async fn dashboard_summary_should_keep_trend_after_usage_records_are_cleared() {
 
 #[tokio::test]
 async fn dashboard_trend_should_bucket_usage_by_china_quarter_hour() {
-    let (app, store, _pool, _dir) = dashboard_test_app(
-        "dashboard-trend-china-quarter-hour",
-        crate::support::fingerprint::test_fingerprint(),
-    )
-    .await;
+    let (app, store, _pool, _dir) =
+        dashboard_test_app("dashboard-trend-china-quarter-hour", test_wire_profile()).await;
     let record_at = Utc::now();
     store
         .append(&usage_record_with_token_parts(record_at, 40, 60, 10))
@@ -205,11 +201,8 @@ async fn dashboard_trend_should_bucket_usage_by_china_quarter_hour() {
 
 #[tokio::test]
 async fn dashboard_trend_should_only_include_china_today() {
-    let (app, store, _pool, _dir) = dashboard_test_app(
-        "dashboard-trend-china-today",
-        crate::support::fingerprint::test_fingerprint(),
-    )
-    .await;
+    let (app, store, _pool, _dir) =
+        dashboard_test_app("dashboard-trend-china-today", test_wire_profile()).await;
     let now = Utc::now();
     let today_start = china_day_start(now);
     store
@@ -237,11 +230,8 @@ async fn dashboard_trend_should_only_include_china_today() {
 
 #[tokio::test]
 async fn dashboard_latency_trend_should_use_first_token_latency() {
-    let (app, store, _pool, _dir) = dashboard_test_app(
-        "dashboard-trend-first-token-latency",
-        crate::support::fingerprint::test_fingerprint(),
-    )
-    .await;
+    let (app, store, _pool, _dir) =
+        dashboard_test_app("dashboard-trend-first-token-latency", test_wire_profile()).await;
     let now = Utc::now();
     let mut slow_completion = usage_record_with_tokens(now, 10);
     slow_completion.latency_ms = Some(10_000);
@@ -277,11 +267,8 @@ async fn dashboard_latency_trend_should_use_first_token_latency() {
 
 #[tokio::test]
 async fn dashboard_latency_trend_should_serialize_missing_samples_as_null() {
-    let (app, _store, _pool, _dir) = dashboard_test_app(
-        "dashboard-trend-empty-latency",
-        crate::support::fingerprint::test_fingerprint(),
-    )
-    .await;
+    let (app, _store, _pool, _dir) =
+        dashboard_test_app("dashboard-trend-empty-latency", test_wire_profile()).await;
 
     let body = dashboard_trend(app, "latency").await;
     let point = &body["data"]["points"][0];
@@ -312,11 +299,8 @@ async fn dashboard_latency_trend_should_serialize_missing_samples_as_null() {
 
 #[tokio::test]
 async fn dashboard_error_trend_should_serialize_missing_success_rate_as_null() {
-    let (app, _store, _pool, _dir) = dashboard_test_app(
-        "dashboard-trend-empty-success-rate",
-        crate::support::fingerprint::test_fingerprint(),
-    )
-    .await;
+    let (app, _store, _pool, _dir) =
+        dashboard_test_app("dashboard-trend-empty-success-rate", test_wire_profile()).await;
 
     let body = dashboard_trend(app, "errors").await;
     let point = &body["data"]["points"][0];
@@ -346,7 +330,7 @@ async fn dashboard_error_trend_should_serialize_missing_success_rate_as_null() {
 async fn dashboard_summary_should_return_requested_trend_kind() {
     let (app, store, _pool, _dir) = dashboard_test_app(
         "dashboard-summary-requested-trend-kind",
-        crate::support::fingerprint::test_fingerprint(),
+        test_wire_profile(),
     )
     .await;
     let now = Utc::now();
@@ -443,11 +427,8 @@ async fn dashboard_summary_should_match_versioned_model_names_for_billing() {
 
 #[tokio::test]
 async fn dashboard_summary_should_return_backend_formatted_time_fields() {
-    let (app, store, _pool, _dir) = dashboard_test_app(
-        "dashboard-backend-formatted-time",
-        crate::support::fingerprint::test_fingerprint(),
-    )
-    .await;
+    let (app, store, _pool, _dir) =
+        dashboard_test_app("dashboard-backend-formatted-time", test_wire_profile()).await;
     let record_at = Utc::now() - Duration::seconds(1);
     let mut record = usage_record_with_tokens(record_at, 10);
     record.metadata = json!({
@@ -470,11 +451,8 @@ async fn dashboard_summary_should_return_backend_formatted_time_fields() {
 
 #[tokio::test]
 async fn dashboard_summary_should_only_return_today_account_usage_and_usage_records() {
-    let (app, store, pool, _dir) = dashboard_test_app(
-        "dashboard-summary-today-records",
-        crate::support::fingerprint::test_fingerprint(),
-    )
-    .await;
+    let (app, store, pool, _dir) =
+        dashboard_test_app("dashboard-summary-today-records", test_wire_profile()).await;
     seed_dashboard_account(&pool, "acct_today", "today@example.com").await;
     seed_dashboard_account(&pool, "acct_yesterday", "yesterday@example.com").await;
     let now = Utc::now();
@@ -519,11 +497,8 @@ async fn dashboard_summary_should_only_return_today_account_usage_and_usage_reco
 
 #[tokio::test]
 async fn dashboard_summary_should_order_account_usage_by_recent_usage() {
-    let (app, store, pool, _dir) = dashboard_test_app(
-        "dashboard-account-usage-recent-order",
-        crate::support::fingerprint::test_fingerprint(),
-    )
-    .await;
+    let (app, store, pool, _dir) =
+        dashboard_test_app("dashboard-account-usage-recent-order", test_wire_profile()).await;
     seed_dashboard_account(&pool, "acct_old_heavy", "old-heavy@example.com").await;
     seed_dashboard_account(&pool, "acct_recent_light", "recent-light@example.com").await;
     let now = Utc::now();
@@ -563,7 +538,7 @@ async fn dashboard_summary_should_order_account_usage_by_recent_usage() {
 async fn dashboard_summary_should_use_five_hour_quota_window_for_account_usage() {
     let (app, store, pool, _dir) = dashboard_test_app(
         "dashboard-account-usage-five-hour-quota",
-        crate::support::fingerprint::test_fingerprint(),
+        test_wire_profile(),
     )
     .await;
     seed_dashboard_account(&pool, "acct_quota_five_hour", "quota-five-hour@example.com").await;
@@ -612,11 +587,8 @@ async fn dashboard_summary_should_use_five_hour_quota_window_for_account_usage()
 
 #[tokio::test]
 async fn dashboard_summary_should_fall_back_to_weekly_quota_window_when_five_hour_missing() {
-    let (app, store, pool, _dir) = dashboard_test_app(
-        "dashboard-account-usage-weekly-quota",
-        crate::support::fingerprint::test_fingerprint(),
-    )
-    .await;
+    let (app, store, pool, _dir) =
+        dashboard_test_app("dashboard-account-usage-weekly-quota", test_wire_profile()).await;
     seed_dashboard_account(&pool, "acct_quota_weekly", "quota-weekly@example.com").await;
     store
         .append(&usage_record_with_account_tokens(
@@ -663,11 +635,8 @@ async fn dashboard_summary_should_fall_back_to_weekly_quota_window_when_five_hou
 
 #[tokio::test]
 async fn dashboard_summary_should_return_today_health_timeline() {
-    let (app, store, _pool, _dir) = dashboard_test_app(
-        "dashboard-health-timeline",
-        crate::support::fingerprint::test_fingerprint(),
-    )
-    .await;
+    let (app, store, _pool, _dir) =
+        dashboard_test_app("dashboard-health-timeline", test_wire_profile()).await;
     store
         .append(&usage_record_with_tokens(Utc::now(), 10))
         .await
@@ -681,19 +650,28 @@ async fn dashboard_summary_should_return_today_health_timeline() {
         .unwrap();
 
     let body = dashboard_summary(app).await;
-    let points = body["data"]["healthTimeline"]["points"].as_str().unwrap();
+    let points = body["data"]["healthTimeline"]["points"].as_array().unwrap();
 
     assert_eq!(body["data"]["healthTimeline"]["title"], "请求健康时间线");
-    assert_eq!(body["data"]["healthTimeline"]["description"], "请求可靠性");
+    assert_eq!(
+        body["data"]["healthTimeline"]["description"],
+        "有效请求可用性"
+    );
     assert_eq!(points.len(), 96);
-    assert_eq!(points.matches('4').count(), 1);
+    assert_eq!(
+        points
+            .iter()
+            .filter(|point| point["status"] == "low_sample")
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
 async fn dashboard_summary_should_include_retained_history_in_total_billing() {
     let (app, store, _pool, _dir) = dashboard_test_app(
         "dashboard-total-billing-retained-history",
-        crate::support::fingerprint::test_fingerprint(),
+        test_wire_profile(),
     )
     .await;
     let metadata = json!({
@@ -731,8 +709,7 @@ async fn dashboard_summary_total_billing_for_usage_record(
     model: &str,
     metadata: Value,
 ) -> String {
-    let (app, store, _pool, _dir) =
-        dashboard_test_app(db_name, crate::support::fingerprint::test_fingerprint()).await;
+    let (app, store, _pool, _dir) = dashboard_test_app(db_name, test_wire_profile()).await;
     let mut record = usage_record(Utc::now(), model, metadata.clone());
     record.input_tokens = metadata
         .pointer("/usage/inputTokens")
@@ -761,7 +738,7 @@ async fn dashboard_summary_total_billing_for_usage_record(
 
 async fn dashboard_test_app(
     db_name: &str,
-    fingerprint: Fingerprint,
+    wire_profile: std::sync::Arc<CodexWireProfile>,
 ) -> (
     axum::Router,
     PgUsageRecordStore,
@@ -773,11 +750,7 @@ async fn dashboard_test_app(
     seed_admin_session(&pool, &redis, "session_1").await;
     let config = crate::support::config::test_config(test_database_url());
     let stores = background_task_stores(pool.clone(), redis);
-    let services = std::sync::Arc::new(Services::new(
-        &config,
-        stores,
-        runtime_fingerprint(fingerprint),
-    ));
+    let services = std::sync::Arc::new(Services::new(&config, stores, wire_profile));
     let state = AppState::from(services.as_ref());
     (
         codex_proxy_rs::api::router::router().with_state(state),
@@ -886,16 +859,6 @@ async fn set_account_quota_json(pool: &PgPool, account_id: &str, quota_json: Val
         .execute(pool)
         .await
         .unwrap();
-}
-
-fn service_status_value<'a>(body: &'a Value, label: &str) -> &'a str {
-    body["data"]["serviceStatuses"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|status| status["label"] == label)
-        .and_then(|status| status["value"].as_str())
-        .unwrap()
 }
 
 fn usage_record_with_tokens(created_at: chrono::DateTime<Utc>, total_tokens: u64) -> UsageRecord {

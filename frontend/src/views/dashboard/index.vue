@@ -4,11 +4,12 @@ import { RefreshCw } from '@lucide/vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 
 import AccountOverviewCard from './components/AccountOverviewCard.vue'
+import DashboardHeartbeat from './components/DashboardHeartbeat.vue'
 import UsageRecordCard from './components/UsageRecordCard.vue'
 import MetricCard from './components/MetricCard.vue'
 import RequestHealthTimelineCard from './components/RequestHealthTimelineCard.vue'
 import RequestTrendCard from './components/RequestTrendCard.vue'
-import ServiceStatusCard from './components/ServiceStatusCard.vue'
+import WireProfileCard from './components/WireProfileCard.vue'
 import { useDashboard } from './composables/useDashboard'
 
 const {
@@ -21,11 +22,12 @@ const {
   trendSummary,
   healthTimeline,
   accountUsage,
-  serviceStatuses,
+  wireProfile,
   usageRecords,
   poolSummary,
   capacityInfo,
   rotationStrategy,
+  lastRefreshedAt,
   refresh,
   loadTrend,
 } = useDashboard()
@@ -38,8 +40,11 @@ const {
         <h1 class="mt-0 text-[34px] leading-[1.15] font-extrabold mb-0 text-(--cp-text-primary)">
           系统概览
         </h1>
-        <p class="mt-2.5 text-[15px] leading-[1.15] font-semibold mb-0 text-(--cp-text-secondary)">
-          当日统计 · 自动刷新 30s
+        <p
+          class="mt-2.5 mb-0 flex items-center gap-2 text-[15px] leading-[1.15] font-semibold text-(--cp-text-secondary)"
+        >
+          <span>当日统计</span>
+          <DashboardHeartbeat :updated-at="lastRefreshedAt" />
         </p>
       </div>
 
@@ -72,7 +77,7 @@ const {
         :loading="trendLoading"
         @trend-change="loadTrend"
       />
-      <ServiceStatusCard :items="serviceStatuses" />
+      <WireProfileCard :profile="wireProfile" />
     </section>
 
     <AccountOverviewCard

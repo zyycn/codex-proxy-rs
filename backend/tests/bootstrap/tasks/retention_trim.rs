@@ -6,7 +6,6 @@ use codex_proxy_rs::{
         ops::{store::PgOpsErrorLogStore, types::OpsErrorLog},
         usage::{store::PgUsageRecordStore, types::UsageRecord},
     },
-    upstream::openai::fingerprint::PgFingerprintStore,
 };
 
 use crate::support::storage::init_test_db;
@@ -28,11 +27,6 @@ async fn retention_trim_task_should_trim_all_growth_tables_in_one_run() {
     let usage_store = PgUsageRecordStore::new(pool.clone());
     let ops_store = PgOpsErrorLogStore::new(pool.clone());
     let bucket_store = PgRequestBucketStore::new(pool.clone());
-    let fingerprint_store = PgFingerprintStore::new(pool.clone());
-    fingerprint_store
-        .ensure_current_seed(&crate::support::fingerprint::test_fingerprint())
-        .await
-        .unwrap();
 
     let now = Utc::now();
     let mut old_usage = UsageRecord::new("request", "old", "acct", "gpt-old", 200);
@@ -55,19 +49,7 @@ async fn retention_trim_task_should_trim_all_growth_tables_in_one_run() {
     current_error.created_at = now;
     ops_store.append(&current_error).await.unwrap();
 
-    sqlx::query(
-        "insert into fingerprint_update_history (
-           id, current_fingerprint_id, app_version, build_number, source, created_at
-         )
-         select 'history_' || value, 'current', '1.0.' || value, value::text, 'test',
-                now() + value * interval '1 microsecond'
-         from generate_series(1, 101) as value",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    RetentionTrimTask::new(usage_store, ops_store, bucket_store, fingerprint_store)
+    RetentionTrimTask::new(usage_store, ops_store, bucket_store)
         .run_once()
         .await;
 
@@ -85,13 +67,7 @@ async fn retention_trim_task_should_trim_all_growth_tables_in_one_run() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    let history_count: i64 = sqlx::query_scalar("select count(*) from fingerprint_update_history")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
     assert_eq!(usage_ids, vec!["usage_current".to_string()]);
     assert_eq!(ops_ids, vec!["ops_current".to_string()]);
     assert_eq!(old_buckets, 0);
-    assert_eq!(history_count, 100);
 }

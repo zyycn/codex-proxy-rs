@@ -39,7 +39,7 @@ async fn codex_backend_client_should_reuse_pooled_websocket_for_same_account_and
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let mut request =
@@ -121,7 +121,7 @@ async fn codex_backend_client_should_open_fresh_socket_when_idle_pooled_websocke
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let mut request =
@@ -162,7 +162,7 @@ async fn codex_backend_client_should_open_fresh_socket_when_idle_pooled_websocke
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn codex_backend_client_stream_should_keep_fresh_socket_after_structural_activity() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -215,7 +215,7 @@ async fn codex_backend_client_stream_should_keep_fresh_socket_after_structural_a
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let request = pooled_websocket_request("conversation-structural-fresh");
@@ -304,7 +304,7 @@ async fn codex_backend_client_stream_should_keep_reused_socket_after_structural_
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let request = pooled_websocket_request("conversation-structural-reuse");
@@ -362,7 +362,7 @@ async fn codex_backend_client_stream_should_use_http_when_pool_is_at_cap() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let request = pooled_websocket_request("conversation-structural-bypass");
@@ -417,7 +417,7 @@ async fn codex_backend_client_should_not_reuse_pooled_websocket_across_local_acc
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let mut request =
@@ -496,7 +496,7 @@ async fn websocket_pool_should_use_http_while_exact_key_is_busy() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(pool);
     let request = pooled_websocket_request("conversation-busy");
@@ -550,7 +550,7 @@ async fn websocket_pool_should_use_http_while_exact_key_is_busy() {
     );
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn websocket_pool_should_release_slot_when_client_drops_stream() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -589,7 +589,7 @@ async fn websocket_pool_should_release_slot_when_client_drops_stream() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(pool);
     let request = pooled_websocket_request("conversation-drop");
@@ -669,7 +669,7 @@ async fn websocket_pool_should_use_http_for_new_keys_after_account_cap() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(pool);
     let first_request = pooled_websocket_request("conversation-cap-one");
@@ -715,6 +715,9 @@ async fn websocket_pool_should_use_http_for_new_keys_after_account_cap() {
 
 #[tokio::test]
 async fn websocket_pool_should_replace_idle_connection_after_pong_deadline() {
+    const PING_INTERVAL: Duration = Duration::from_secs(30);
+    const PONG_TIMEOUT: Duration = Duration::from_secs(30);
+
     // 服务端读取 Ping 后暂不继续 poll，避免 tungstenite 自动回 Pong；pump 必须在独立
     // deadline 到期时主动关闭连接，acquire 随后只读 closed 状态并直接新建连接。
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -735,7 +738,7 @@ async fn websocket_pool_should_replace_idle_connection_after_pong_deadline() {
             ))
             .await
             .unwrap();
-        let ping = timeout(Duration::from_secs(1), first_websocket.next())
+        let ping = timeout(Duration::from_secs(120), first_websocket.next())
             .await
             .expect("pump should send a keepalive ping")
             .expect("keepalive ping should be present")
@@ -749,7 +752,7 @@ async fn websocket_pool_should_replace_idle_connection_after_pong_deadline() {
         inspect_close_rx
             .await
             .expect("test should release the server after the Pong deadline");
-        let close = timeout(Duration::from_secs(1), first_websocket.next())
+        let close = timeout(Duration::from_secs(120), first_websocket.next())
             .await
             .expect("Pong deadline should close the idle websocket")
             .expect("Pong deadline should send a close frame")
@@ -770,8 +773,8 @@ async fn websocket_pool_should_replace_idle_connection_after_pong_deadline() {
         second_websocket.close(None).await.unwrap();
     });
     let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
-        ping_interval: Some(Duration::from_millis(10)),
-        ping_timeout: Duration::from_millis(30),
+        ping_interval: Some(PING_INTERVAL),
+        ping_timeout: PONG_TIMEOUT,
         liveness_timeout: None,
         maintenance_interval: None,
         ..websocket_pool_config_for_tests(None, None, None)
@@ -779,7 +782,7 @@ async fn websocket_pool_should_replace_idle_connection_after_pong_deadline() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let request = pooled_websocket_request("conversation-no-pong");
@@ -791,16 +794,20 @@ async fn websocket_pool_should_replace_idle_connection_after_pong_deadline() {
         )
         .await
         .expect("first websocket response should succeed");
-    timeout(Duration::from_secs(1), ping_seen_rx)
+    tokio::time::pause();
+    tokio::time::advance(PING_INTERVAL).await;
+    tokio::task::yield_now().await;
+    ping_seen_rx
         .await
-        .expect("server should observe the keepalive ping")
         .expect("server should report the keepalive ping");
-    tokio::time::sleep(Duration::from_millis(80)).await;
+    tokio::time::advance(PONG_TIMEOUT + Duration::from_secs(1)).await;
+    tokio::task::yield_now().await;
+    tokio::task::yield_now().await;
     inspect_close_tx.send(()).unwrap();
-    timeout(Duration::from_secs(1), pong_timeout_closed_rx)
+    pong_timeout_closed_rx
         .await
-        .expect("server should observe the Pong-timeout close")
         .expect("server should report the Pong-timeout close");
+    tokio::time::resume();
     let second = backend
         .create_response(
             &request,
@@ -816,8 +823,10 @@ async fn websocket_pool_should_replace_idle_connection_after_pong_deadline() {
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn websocket_pool_should_gc_expired_idle_connections() {
+    const MAX_AGE: Duration = Duration::from_secs(30);
+
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let accepted_connections = Arc::new(AtomicUsize::new(0));
@@ -833,7 +842,7 @@ async fn websocket_pool_should_gc_expired_idle_connections() {
             ))
             .await
             .unwrap();
-        let close = timeout(Duration::from_secs(1), first_websocket.next())
+        let close = timeout(Duration::from_secs(60), first_websocket.next())
             .await
             .expect("gc sweep should close the expired idle websocket")
             .expect("gc sweep should send a close frame")
@@ -853,7 +862,7 @@ async fn websocket_pool_should_gc_expired_idle_connections() {
         second_websocket.close(None).await.unwrap();
     });
     let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
-        max_age: Duration::from_millis(5),
+        max_age: MAX_AGE,
         maintenance_interval: None,
         ping_interval: None,
         liveness_timeout: None,
@@ -862,7 +871,7 @@ async fn websocket_pool_should_gc_expired_idle_connections() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let request = pooled_websocket_request("conversation-gc");
@@ -874,8 +883,10 @@ async fn websocket_pool_should_gc_expired_idle_connections() {
         )
         .await
         .expect("first websocket response should succeed");
-    tokio::time::sleep(Duration::from_millis(15)).await;
+    tokio::time::pause();
+    tokio::time::advance(MAX_AGE).await;
     pool.maintain_idle_connections().await;
+    tokio::time::resume();
     let second = backend
         .create_response(
             &request,
@@ -890,12 +901,13 @@ async fn websocket_pool_should_gc_expired_idle_connections() {
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn codex_backend_client_should_keep_idle_pooled_websocket_alive_across_repeated_pings() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let ping_count = Arc::new(AtomicUsize::new(0));
     let ping_count_for_server = Arc::clone(&ping_count);
+    let (pings_observed_tx, pings_observed_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut websocket = accept_codex_test_websocket(stream).await;
@@ -924,6 +936,7 @@ async fn codex_backend_client_should_keep_idle_pooled_websocket_alive_across_rep
         // pump 会在 idle 期间反复发送 keepalive ping；服务端计数并回 pong，
         // 直到下一个业务请求（response.create）到达为止。
         let mut previous_ping = None;
+        let mut pings_observed_tx = Some(pings_observed_tx);
         loop {
             let message = timeout(Duration::from_secs(1), websocket.next())
                 .await
@@ -937,7 +950,12 @@ async fn codex_backend_client_should_keep_idle_pooled_websocket_alive_across_rep
                         assert_ne!(previous, &payload, "keepalive ping sequence must be unique");
                     }
                     previous_ping = Some(payload.clone());
-                    ping_count_for_server.fetch_add(1, Ordering::SeqCst);
+                    let ping_count = ping_count_for_server.fetch_add(1, Ordering::SeqCst) + 1;
+                    if ping_count == 2
+                        && let Some(pings_observed_tx) = pings_observed_tx.take()
+                    {
+                        pings_observed_tx.send(()).unwrap();
+                    }
                     websocket.send(Message::Pong(payload)).await.unwrap();
                 }
                 Message::Text(_) => break,
@@ -972,7 +990,7 @@ async fn codex_backend_client_should_keep_idle_pooled_websocket_alive_across_rep
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let mut request =
@@ -992,8 +1010,10 @@ async fn codex_backend_client_should_keep_idle_pooled_websocket_alive_across_rep
         )
         .await
         .expect("first pooled websocket response should succeed");
-    // 让 pump 有时间发出多轮 keepalive ping。
-    tokio::time::sleep(Duration::from_millis(80)).await;
+    timeout(Duration::from_secs(2), pings_observed_rx)
+        .await
+        .expect("pump should emit repeated keepalive pings")
+        .expect("server should observe repeated keepalive pings");
     let second = backend
         .create_response(
             &request,
@@ -1049,7 +1069,7 @@ async fn codex_backend_client_should_treat_active_business_frames_as_ping_livene
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let request = pooled_websocket_request("conversation-active-without-pong");
@@ -1138,7 +1158,7 @@ async fn codex_backend_client_should_close_idle_pooled_websocket_when_account_is
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let mut request =
@@ -1223,7 +1243,7 @@ async fn codex_backend_client_should_stop_reusing_pooled_websockets_after_shutdo
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let mut request =
@@ -1265,6 +1285,8 @@ async fn codex_backend_client_should_stop_reusing_pooled_websockets_after_shutdo
 
 #[tokio::test]
 async fn codex_backend_client_should_close_idle_pooled_websocket_after_liveness_timeout() {
+    const LIVENESS_TIMEOUT: Duration = Duration::from_secs(30);
+
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let accepted_connections = Arc::new(AtomicUsize::new(0));
@@ -1295,7 +1317,7 @@ async fn codex_backend_client_should_close_idle_pooled_websocket_after_liveness_
             ))
             .await
             .unwrap();
-        let close = timeout(Duration::from_secs(1), first_websocket.next())
+        let close = timeout(Duration::from_secs(60), first_websocket.next())
             .await
             .expect("liveness timeout should close the idle websocket")
             .expect("liveness timeout should send a close frame")
@@ -1330,12 +1352,12 @@ async fn codex_backend_client_should_close_idle_pooled_websocket_after_liveness_
         second_websocket.close(None).await.unwrap();
     });
     let pool = Arc::new(CodexWebSocketPool::with_config(
-        websocket_pool_config_for_tests(None, None, Some(Duration::from_millis(1))),
+        websocket_pool_config_for_tests(None, None, Some(LIVENESS_TIMEOUT)),
     ));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let mut request =
@@ -1355,10 +1377,14 @@ async fn codex_backend_client_should_close_idle_pooled_websocket_after_liveness_
         )
         .await
         .expect("first pooled websocket response should succeed");
+    tokio::time::pause();
+    tokio::time::advance(LIVENESS_TIMEOUT).await;
+    tokio::task::yield_now().await;
     liveness_closed_rx
         .await
         .expect("liveness watchdog should close the idle connection");
     pool.maintain_idle_connections().await;
+    tokio::time::resume();
     let second = backend
         .create_response(
             &request,
@@ -1430,7 +1456,7 @@ async fn codex_backend_client_should_discard_pooled_websocket_after_error_termin
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(pool);
     let mut request =
@@ -1512,7 +1538,7 @@ async fn codex_backend_client_should_discard_pooled_websocket_after_unknown_resp
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(pool);
     let request = pooled_websocket_request("conversation-pool-unknown-failed");
