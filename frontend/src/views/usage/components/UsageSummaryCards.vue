@@ -2,6 +2,8 @@
 import { Activity, Database, FileText, Timer } from '@lucide/vue'
 import { computed } from 'vue'
 
+import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
+
 const props = defineProps<{
   summary: any
 }>()
@@ -52,12 +54,13 @@ const items = computed(() => [
       :key="item.key"
       class="grid min-h-23 grid-cols-[36px_minmax(0,1fr)] items-stretch gap-3 rounded-(--cp-card-radius) bg-(--cp-bg-surface) px-4 py-3 shadow-(--cp-shadow-card)"
     >
-      <span
+      <BaseMotionIcon
+        aria-hidden="true"
         class="inline-flex size-9 shrink-0 items-center justify-center rounded-(--cp-input-radius-base)"
         :class="item.tone"
       >
         <component :is="item.icon" class="size-4.5" />
-      </span>
+      </BaseMotionIcon>
       <div class="flex min-w-0 flex-col justify-between py-0.5">
         <span class="block text-[12px] leading-none font-bold text-(--cp-text-muted)">
           {{ item.label }}

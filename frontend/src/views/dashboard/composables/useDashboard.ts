@@ -10,6 +10,8 @@ import { formatDateTime } from '@/utils/date'
 
 type DashboardTrendKind = 'usage' | 'latency' | 'errors'
 
+const METRIC_SPARKLINE_BUCKETS = 12
+
 export function useDashboard(): any {
   const activeTrendKind = ref<DashboardTrendKind>('usage')
   const metrics = ref<any[]>(metricCards(emptyDashboardSummary()))
@@ -284,7 +286,10 @@ export function useDashboard(): any {
     }
     if (lastActiveIndex < 0) return []
 
-    return points.slice(Math.max(0, lastActiveIndex - 8), lastActiveIndex + 1)
+    return points.slice(
+      Math.max(0, lastActiveIndex - (METRIC_SPARKLINE_BUCKETS - 1)),
+      lastActiveIndex + 1,
+    )
   }
 
   function formatDashboardCompactNumber(value: number) {
