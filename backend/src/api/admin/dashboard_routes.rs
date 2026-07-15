@@ -208,7 +208,7 @@ pub(crate) async fn dashboard_summary(
     let retained_usage = state
         .services
         .usage
-        .retained_totals()
+        .retained_summary()
         .await
         .map_err(|error| dashboard_data_error("retained usage summary", &error))?;
     let account_usage_records = state

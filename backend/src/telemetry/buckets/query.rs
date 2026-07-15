@@ -29,13 +29,16 @@ where bucket_start >= $1 and bucket_start <= $2
 group by bucket_start, model, service_tier
 order by bucket_start asc, model asc, service_tier asc";
 
-const RETAINED_USAGE_TOTALS_SQL: &str = r"
+const RETAINED_USAGE_BUCKETS_SQL: &str = r"
 select
+  model,
+  nullif(service_tier, '__unknown__') as service_tier,
   coalesce(sum(success_count + error_count), 0)::bigint as request_count,
   coalesce(sum(input_tokens), 0)::bigint as input_tokens,
   coalesce(sum(output_tokens), 0)::bigint as output_tokens,
   coalesce(sum(cached_tokens), 0)::bigint as cached_tokens
-from request_time_buckets";
+from request_time_buckets
+group by bucket_start, model, service_tier";
 
 /// 请求时间桶查询错误。
 #[derive(Debug, Error)]
@@ -80,8 +83,16 @@ pub struct UsageBucketTotals {
     pub cached_tokens: i64,
 }
 
+/// 保留期内单个计费桶的用量事实。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetainedUsageBucket {
+    pub model: String,
+    pub service_tier: Option<String>,
+    pub totals: UsageBucketTotals,
+}
+
 impl UsageBucketTotals {
-    fn add(&mut self, other: Self) {
+    pub(crate) fn add(&mut self, other: Self) {
         self.request_count = self.request_count.saturating_add(other.request_count);
         self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
@@ -135,17 +146,26 @@ impl PgRequestBucketQuery {
         Ok(rows.iter().map(usage_time_bucket_from_row).collect())
     }
 
-    /// 汇总请求时间桶保留期内的全局用量，不受当前账号集合影响。
-    pub async fn retained_totals(&self) -> Result<UsageBucketTotals, PgRequestBucketQueryError> {
-        let row = sqlx::query(RETAINED_USAGE_TOTALS_SQL)
-            .fetch_one(&self.pool)
+    /// 列出请求时间桶保留期内的全局计费桶，不受当前账号集合影响。
+    pub async fn retained_usage_buckets(
+        &self,
+    ) -> Result<Vec<RetainedUsageBucket>, PgRequestBucketQueryError> {
+        let rows = sqlx::query(RETAINED_USAGE_BUCKETS_SQL)
+            .fetch_all(&self.pool)
             .await?;
-        Ok(UsageBucketTotals {
-            request_count: row.get("request_count"),
-            input_tokens: row.get("input_tokens"),
-            output_tokens: row.get("output_tokens"),
-            cached_tokens: row.get("cached_tokens"),
-        })
+        Ok(rows
+            .iter()
+            .map(|row| RetainedUsageBucket {
+                model: row.get("model"),
+                service_tier: row.get("service_tier"),
+                totals: UsageBucketTotals {
+                    request_count: row.get("request_count"),
+                    input_tokens: row.get("input_tokens"),
+                    output_tokens: row.get("output_tokens"),
+                    cached_tokens: row.get("cached_tokens"),
+                },
+            })
+            .collect())
     }
 
     pub async fn usage_by_windows(
