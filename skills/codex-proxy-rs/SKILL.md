@@ -1,51 +1,58 @@
 ---
 name: codex-proxy-rs
-description: Codex Proxy RS 仓库开发指南。Use when working on its Rust/Axum backend, Vue frontend, PostgreSQL/Redis storage, account-pool scheduling, Responses proxy and recovery, telemetry, Docker deployment, CI/release, configuration, debugging, or documentation.
+description: Codex Proxy RS 仓库开发指南。Use when changing or auditing its Rust backend, Vue frontend, PostgreSQL/Redis state, account scheduling, Responses transport and recovery, telemetry, Docker deployment, CI, release, configuration, or project documentation.
 ---
 
 # Codex Proxy RS
 
-使用此 skill 处理 Codex Proxy RS 的开发、审计、验证和发布工作。
+## 事实来源
 
-## 开始前
+1. 以当前源码、配置和测试为准。
+2. 非简单改动读取 `references/repo-guide.md`。
+3. 涉及目录、生命周期、存储或后台任务时读取 `docs/architecture.md`。
+4. skill 或文档与实现冲突时，在同一改动中修正。
 
-1. 确认当前仓库根目录是 `codex-proxy-rs`。
-2. 存在 `.codegraph/` 时，优先用 CodeGraph 定位调用链，再回到源码和测试验证。
-3. 非简单改动先阅读 `references/repo-guide.md`。
-4. 涉及目录边界、请求链路、存储归属或后台任务时，同时阅读 `docs/architecture.md`。
-5. 始终以当前源码、配置和测试为准；发现 skill 与代码不一致时，在同一改动中修正 skill。
-6. 保持改动紧贴用户请求，不擅自改变目录、部署或发布契约。
+存在 `.codegraph/` 时可先定位调用链；结论必须回到源码和测试验证。
 
-## 任务分流
+## 边界
 
-- 后端：遵循 `backend/src` 当前领域边界；测试统一放在 `backend/tests`，禁止写入 `backend/src`。
-- 存储：PostgreSQL 是权威持久化，Redis 保存运行态数据，本地数据目录保存身份密钥和更新状态。
-- 前端：使用 Vue 3 `<script setup>`、TypeScript、Tailwind v4、已有组件和主题 token。
-- Docker / 发布：保留非 root runtime、YAML 凭据桥接、`.runtime` 绑定目录、GitHub Release、GHCR 和在线更新契约。
-- 文档：README 面向部署者和使用者；`docs/architecture.md` 面向开发者。不要新增过程型审计或迁移文档。
+- `v1/*` 使用 Request → Attempt → Stream 生命周期。功能规则只能留在唯一 owner 内。
+- `api` 解析和编码；`dispatch` 编排；`fleet` 管账号；`upstream` 管协议与传输；`telemetry` 保存确定事实。
+- transport 不选择账号，不解释账号状态，不在 payload 发送后重放。
+- PostgreSQL 是持久化权威；Redis 保存会话、租约、模型快照和短期状态。
+- 测试只放 `backend/tests/`。禁止在 `backend/src/` 写 test-only 代码。
+- Vue 使用 `<script setup lang="ts">`、现有基础组件和主题 token。
+- README 面向使用者，保持简短；长期架构只写入 `docs/architecture.md`。
+- 不添加兼容 shim、重复状态机、第二套配置或补丁式旁路。
+
+## 工作流
+
+1. 检查工作树，区分用户改动与当前任务。
+2. 追踪入口、owner、状态变化和输出，再决定修改点。
+3. 在最小所有权边界内实现；行为变化用外置集成测试固定。
+4. 同步受影响的架构、配置或 skill。
+5. 按风险运行验证，最后检查 staged 与 unstaged 范围。
 
 ## 验证
 
-按改动范围选择足以证明行为的命令。跨领域改动执行完整门禁：
+从仓库根目录执行：
 
 ```bash
-cd backend
-cargo fmt --check
-cargo clippy --all-targets --all-features --locked
-cargo test --test main --locked
+cargo +1.97.0 fmt --manifest-path backend/Cargo.toml -- --check
+cargo +1.97.0 clippy --manifest-path backend/Cargo.toml --all-targets --all-features --locked -- -D warnings
+cargo +1.97.0 test --manifest-path backend/Cargo.toml --locked
 pnpm --dir frontend format:check
 pnpm --dir frontend build
 docker compose -f deploy/compose.yaml config --quiet
 ```
 
-后端集成测试需要可用的 PostgreSQL 和 Redis；通过 `CPR_TEST_DATABASE_URL`、`CPR_TEST_REDIS_URL` 指定测试连接。使用部署 Compose 时，连接密码必须与 `deploy/config.yaml` 一致。
+后端完整测试需要 PostgreSQL、Redis，以及与 `deploy/config.yaml` 一致的
+`CPR_TEST_DATABASE_URL`、`CPR_TEST_REDIS_URL`。
 
-涉及在线更新时，至少运行 `api::admin::system_routes` 相关测试。涉及发布或镜像时，按 `references/repo-guide.md` 核对版本元数据、Release asset 和镜像 tag。
+## Git 与发布
 
-## Git
-
-沿用仓库历史：使用简短的 Conventional Commit subject，并带署名：
-
-```text
-Co-authored-by: Codex <noreply@openai.com>
-```
+- 使用简短 Conventional Commit subject。
+- 提交前检查 `git status --short`、cached/unstaged diff 和 `git diff --check`。
+- 提交带 `Co-authored-by: Codex <noreply@openai.com>`。
+- 发布以 `release/version.yaml` 和带注释的 `vX.Y.Z` tag 为准。
+- 发布完成后核对远端 `main`、tag、Actions、Release asset 与 GHCR。

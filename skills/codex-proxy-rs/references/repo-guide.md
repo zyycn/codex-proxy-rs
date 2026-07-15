@@ -1,232 +1,118 @@
 # Codex Proxy RS 项目指南
 
-## 目录
+## 权威来源
 
-- [Codex Proxy RS 项目指南](#codex-proxy-rs-项目指南)
-  - [目录](#目录)
-  - [事实来源](#事实来源)
-  - [仓库结构](#仓库结构)
-  - [后端边界](#后端边界)
-  - [存储边界](#存储边界)
-  - [前端规范](#前端规范)
-  - [Docker 和运行时](#docker-和运行时)
-  - [发布和在线更新](#发布和在线更新)
-  - [文档边界](#文档边界)
-  - [验证矩阵](#验证矩阵)
-  - [项目约束](#项目约束)
+- 行为：当前源码、配置和测试。
+- 架构：`docs/architecture.md`。
+- 部署：`deploy/config.example.yaml`、`deploy/compose.yaml`、`deploy/README.md`。
+- 发布：`release/version.yaml`、`release/platforms.yaml`、`.github/workflows/release.yml`。
 
-## 事实来源
+本文件只记录高频开发入口，不复制完整架构。
 
-1. 当前源码、配置和测试是行为事实。
-2. `docs/architecture.md` 是目录、依赖方向、请求链路和存储归属的权威说明。
-3. 本文件记录开发流程和高频约束，不复制完整架构。
-4. 文档与代码冲突时先核对实现，再在同一提交中修正文档。
+## 结构
 
-## 仓库结构
+| 路径                          | 责任                                          |
+| ----------------------------- | --------------------------------------------- |
+| `backend/src/api`             | HTTP/WebSocket 契约、鉴权、响应编码、静态资源 |
+| `backend/src/dispatch`        | `v1/*` Request → Attempt → Stream 编排        |
+| `backend/src/fleet`           | 账号、调度、quota、token、Cookie、管理操作    |
+| `backend/src/upstream/openai` | Codex 协议、HTTP/2、WebSocket、指纹           |
+| `backend/src/telemetry`       | usage、错误事实、聚合和查询                   |
+| `backend/src/infra`           | PostgreSQL、Redis、日志、路径、身份           |
+| `backend/src/bootstrap`       | 配置、装配、后台任务、关闭                    |
+| `backend/tests`               | 集成、契约、fixture；生产源码内禁止测试       |
+| `frontend`                    | Vue 管理端                                    |
+| `deploy`                      | 唯一 Compose 与配置模板                       |
+| `docs/architecture.md`        | 唯一长期架构文档                              |
+| `release`                     | 版本与平台元数据                              |
 
-- `backend/src/`：Rust 1.97 / Axum 后端生产代码。
-- `backend/tests/`：后端集成测试和 fixtures。测试代码禁止放进 `backend/src/`。
-- `backend/build.rs`：把版本、Git SHA、构建时间和构建类型写入编译期环境变量。
-- `frontend/`：Vue 3、Vite 8、Tailwind v4、Pinia、Vue Router、Axios、Lucide 和 ECharts 管理端。
-- `deploy/`：Dockerfile、唯一的 `compose.yaml` 和 `config.example.yaml`。
-- `docs/architecture.md`：唯一长期架构文档。
-- `release/`：版本、目标平台和发布脚本。
-- `skills/`：项目本地 Codex skills。
+仓库根目录没有 Cargo manifest。后端命令使用
+`--manifest-path backend/Cargo.toml`，或先进入 `backend/`。
 
-仓库根目录没有 Cargo workspace manifest。Rust 命令必须显式使用 `backend/Cargo.toml`。
+## 后端所有权
 
-## 后端边界
+- `api` 只做入站/出站适配，不写业务规则。
+- `dispatch/lifecycle` 只编排顺序、retry、commit 和 finalize。
+- `dispatch/controllers` 中每个功能只能有一个 owner，controller 不互调。
+- `fleet/account_failure.rs` 统一解释跨入口账号失败和状态 effect。
+- `upstream/openai/failure.rs` 只生成 typed failure facts。
+- `upstream/openai/transport` 只建立连接、收发协议和产出 transport metrics。
+- `telemetry` 保存已经确定的事实，不参与调度。
+- `bootstrap` 是 composition root，不解释业务错误。
 
-项目没有 `application` 层。`bootstrap` 是装配根，业务规则留在各领域模块。
+提交边界后不得自动换 transport、账号或重放 payload。账号身份按 attempt 重建；客户端
+session/thread/turn 等拓扑字段原样透传。
 
-| 目录 | 职责 |
-| --- | --- |
-| `backend/src/api` | 入站 HTTP、鉴权提取、响应映射和静态资源 |
-| `backend/src/bootstrap` | 配置加载、服务装配、启动关闭和后台任务 |
-| `backend/src/dispatch` | Responses 编排、账号失败处理、流生命周期和会话恢复 |
-| `backend/src/fleet` | 账号、账号池、调度、quota、刷新、Cookie 和管理操作 |
-| `backend/src/upstream/openai` | OpenAI/Codex 协议、HTTP/WebSocket 传输、token 和指纹 |
-| `backend/src/telemetry` | 成功/失败事实、聚合桶、账号用量和 Dashboard 查询 |
-| `backend/src/keys` | 客户端 API Key |
-| `backend/src/auth` | 管理员用户和登录会话 |
-| `backend/src/settings` | PostgreSQL 运行时设置和 watch 广播 |
-| `backend/src/models` | 模型目录和 Redis 快照 |
-| `backend/src/update` | Release 查询、下载、替换、回滚和更新状态 |
-| `backend/src/infra` | PostgreSQL、Redis、日志、身份和通用工具 |
+## Responses 传输
 
-关键入口：
+- 热 WS 立即复用。
+- 冷 WS 前台预算为 800ms；超时后当前请求使用同账号 HTTP/2。
+- 未完成的 WS 只在后台继续握手，不发送原 payload；成功后进入 Idle。
+- `Connecting` 按 key 单飞并沿用原绝对 deadline。
+- 账号驱逐和 shutdown 取消 opening；迟到连接不能重新入池。
+- warmup 与 connection-local continuation 必须使用精确 WS。
+- breaker 按 origin/TLS profile 统计退化 opening，同一次 opening 只计一次。
 
-- 总路由：`backend/src/api/router.rs`
-- 客户端路由：`backend/src/api/client/router.rs`
-- 管理端路由：`backend/src/api/admin/router.rs`
-- 服务装配：`backend/src/bootstrap/services.rs`
-- 非流式调度：`backend/src/dispatch/service.rs`
-- 流式调度：`backend/src/dispatch/stream/lifecycle.rs`
-- 账号调度：`backend/src/fleet/scheduler/mod.rs`
+完整 typestate、pool、breaker 和指标契约见 `docs/architecture.md`。
 
-对应测试：
+## 存储
 
-- 系统更新：`backend/tests/api/admin/system_routes/mod.rs`
-- 代理调度：`backend/tests/dispatch/service.rs` 及其子目录
-- 静态资源和健康检查：`backend/tests/api/assets.rs`
+| 位置            | 数据                                                   |
+| --------------- | ------------------------------------------------------ |
+| PostgreSQL      | 管理员、Key、账号、quota、设置、Cookie、指纹、遥测事实 |
+| Redis           | 管理会话、刷新租约、模型快照、响应归属、短期会话状态   |
+| `.runtime/data` | 身份 HMAC secret、更新状态和锁                         |
+| `.runtime/logs` | 结构化轮转日志                                         |
 
-启动服务：
+规则：
 
-```bash
-cd backend
-cargo run -- serve
-```
+- migration 只能新增；禁止修改已应用 SQL。
+- Redis 业务键使用 `cpr:` 前缀和明确 TTL。
+- `identity_hmac_secret` 必须随部署保留。
+- 遥测或 affinity 写入失败不能改变已取得的代理响应。
+- 账号明确失效先更新内存并驱逐 WS，再异步持久化。
 
-`main.rs` 还提供内部维护命令 `rebuild-buckets`，用于从保留期内的请求事实重建聚合桶。
+## 前端
 
-## 存储边界
+- Vue 3 Composition API、`<script setup lang="ts">`。
+- API：`frontend/src/api/modules`。
+- 基础组件：`frontend/src/components/base`。
+- 页面状态和副作用：对应 `views/*/composables`。
+- 使用现有主题 token、Tailwind utilities 和 Lucide。
+- 独立功能使用独立 loading；旧请求不得覆盖较新响应。
+- 保持紧凑、低噪声的运维界面。
 
-| 存储 | 数据 |
-| --- | --- |
-| PostgreSQL | 管理员、客户端 Key、运行时设置、账号、quota、累计用量、请求事实、错误事实、聚合桶、Cookie 和指纹 |
-| Redis | 管理会话、token 刷新租约、模型计划快照、会话亲和与 replay |
-| 本地数据目录 | `identity_hmac_secret`、更新状态、锁和临时文件 |
-| 文件日志目录 | 轮转后的结构化日志 |
+## 运行与部署
 
-约束：
+- 配置入口只有 `deploy/config.yaml`；项目不使用 `.env`。
+- Compose 运行 PostgreSQL、Redis 和非 root 应用容器 `10001:10001`。
+- 持久状态全部位于 `.runtime/`。
+- 应用默认绑定 `127.0.0.1:8080`；公网使用 HTTPS 反向代理。
+- Docker runtime 只包含后端二进制、前端产物和运行依赖。
 
-- PostgreSQL migration 必须新增版本，禁止修改已应用 SQL；启动会校验版本顺序、名称和 checksum。
-- Redis 业务键统一使用 `cpr:` 前缀；会话、租约和 affinity 依赖 TTL。
-- `identity_hmac_secret` 决定账号作用域身份和 installation ID，换镜像时必须保留。
-- 模型别名、调度策略、并发、请求间隔和刷新参数保存到 PostgreSQL，不放回 YAML。
-- 遥测和 affinity 写入失败不能改变已经取得的代理响应语义。
+不要输出 `docker compose config`、`docker inspect` 或真实连接 URL 中的密码。
 
-## 前端规范
-
-- 使用 Vue 3 Composition API 和 `<script setup lang="ts">`。
-- API 客户端位于 `frontend/src/api/modules`。
-- 基础 UI 位于 `frontend/src/components/base`。
-- 页面私有组件和 composables 放在对应 `frontend/src/views/*` 下。
-- 优先使用 Tailwind v4 utilities；需要 CSS 时复用 `frontend/src/styles/tokens.css`。
-- 保持亮色和暗色主题一致，有 token 时不硬编码一次性颜色。
-- 按钮和紧凑操作优先使用 Lucide 图标。
-- 弹窗工作流沿用现有 modal/component 模式，不为一次性操作增加路由。
-
-## Docker 和运行时
-
-- Runtime 基于 `debian:bookworm-slim`，只安装 `ca-certificates` 和健康检查所需的 `curl`。
-- 镜像包含单个后端二进制和 `web/dist`，以非 root 用户 `10001:10001` 运行。
-- Builder 使用 Node 24 和 Rust 1.97，构建工具不得进入 runtime。
-- 默认应用镜像是 `ghcr.io/zyycn/codex-proxy-rs:latest`。
-
-`deploy/config.example.yaml` 是完整启动配置模板。真实配置复制为被 Git 忽略的
-`deploy/config.yaml`，其中同时保存应用行为、管理员初始化密码、PostgreSQL 密码和 Redis 密码。
-服务密码通过 YAML anchor 与 Compose `extends` 传给内置服务，不使用 `.env` 配置文件。
-
-首次部署：
+## 验证
 
 ```bash
-mkdir -p .runtime/data .runtime/logs
-install -d -m 0750 .runtime/postgres .runtime/redis
-cp deploy/config.example.yaml deploy/config.yaml
-sudo chown "$(id -u):10001" deploy/config.yaml
-chmod 0640 deploy/config.yaml
-# 设置 deploy/config.yaml 中的三个密码后执行
-docker compose -f deploy/compose.yaml config --quiet
-docker compose -f deploy/compose.yaml up -d
-```
-
-挂载和卷：
-
-- `deploy/config.yaml` -> `/app/deploy/config.yaml`，Compose config、只读（宿主 mode `0640`）
-- `.runtime/data` -> `/app/.runtime/data`
-- `.runtime/logs` -> `/app/.runtime/logs`
-- `.runtime/postgres` -> PostgreSQL 权威数据
-- `.runtime/redis` -> Redis AOF
-
-普通 `docker compose down` 不删除绑定目录；删除 `.runtime` 才会清除本地状态。
-
-## 发布和在线更新
-
-发布契约：
-
-- 发布入口：`release/publish <version>`
-- 产品版本：`release/version.yaml`
-- 目标平台：`release/platforms.yaml`
-- Release workflow：`.github/workflows/release.yml`
-- `v*` tag 触发 Release
-- Docker 平台：`linux/amd64`、`linux/arm64`
-
-Release asset：
-
-```text
-codex-proxy-rs_<version>_linux_amd64.tar.gz
-codex-proxy-rs_<version>_linux_arm64.tar.gz
-codex-proxy-rs_<version>_darwin_arm64.tar.gz
-codex-proxy-rs_<version>_windows_amd64.zip
-checksums.txt
-```
-
-GHCR 发布 `<version>` 和 `sha-<git-sha>` tag；只有稳定版本更新 `latest`，预发布版本不得覆盖 `latest`。
-
-在线更新接口位于 `/api/admin/system/*`，前端入口是
-`frontend/src/layout/components/SystemUpdateModal.vue`。Docker 环境使用：
-
-- `CPR_DEPLOYMENT_MODE=docker`
-- `CPR_UPDATE_REPOSITORY=zyycn/codex-proxy-rs`
-- `CPR_UPDATE_CHANNEL=stable`
-- `CPR_UPDATE_TEMP_DIR=/app/.runtime/data/update-tmp`
-- `CPR_UPDATE_STATE_FILE=/app/.runtime/data/update-state.json`
-- `CPR_UPDATE_LOCK_FILE=/app/.runtime/data/update.lock`
-- `CPR_WEB_DIST_DIR=/app/web/dist`
-- `CPR_ENABLE_SELF_RESTART=true`
-
-更新会校验 checksum，替换二进制和 `web/dist`，再触发进程重启。文件替换必须保留跨文件系统的 copy-and-remove fallback。
-
-## 文档边界
-
-- 根 `README.md` 面向部署者和 API 使用者，只写当前产品能力、部署、配置、持久化、升级和排障。
-- README 不写内部发布脚本、CI 门禁、审计过程或内测迁移流程。
-- `docs/` 只保留 `architecture.md`，用于说明当前目录、依赖、请求链路、调度恢复、存储和后台任务。
-- 维护者专用流程写入本 skill，不新增过程型 Markdown 文档。
-
-## 验证矩阵
-
-Rust：
-
-```bash
-cd backend
-cargo fmt --check
-cargo clippy --all-targets --all-features --locked
-cargo test --test main --locked
-```
-
-完整测试需要 PostgreSQL 和 Redis。通过以下变量提供连接：
-
-```text
-CPR_TEST_DATABASE_URL
-CPR_TEST_REDIS_URL
-```
-
-使用部署 Compose 时，测试 URL 的密码必须与 `deploy/config.yaml` 一致并正确进行 URL 编码。不要在日志或提交中输出真实密码。
-
-前端：
-
-```bash
+cargo +1.97.0 fmt --manifest-path backend/Cargo.toml -- --check
+cargo +1.97.0 clippy --manifest-path backend/Cargo.toml --all-targets --all-features --locked -- -D warnings
+cargo +1.97.0 test --manifest-path backend/Cargo.toml --locked
 pnpm --dir frontend format:check
 pnpm --dir frontend build
-```
-
-Compose：
-
-```bash
 docker compose -f deploy/compose.yaml config --quiet
 ```
 
-聚焦测试应使用现有集成测试模块过滤；只有跨模块契约、存储或用户流程变化时才扩大到完整门禁。发布与镜像改动还需核对 `.github/workflows/_quality.yml`、`.github/workflows/_container.yml` 和 `.github/workflows/release.yml`。
+聚焦改动先运行对应模块。跨领域、存储、生命周期或发布改动执行完整门禁。
 
-## 项目约束
+## 发布
 
-- 新代码和重构不保留兼容别名、临时 shim、重复旧 API 或补丁式旁路。
-- 不把测试写入 `backend/src`。
-- 不为 Cargo `target` 添加仓库级重定向；运行时数据和日志放在 `.runtime`。
-- 已确认且属于当前范围的问题应先修复，再继续后续测试。
-- README、架构、skill、workflow、Dockerfile 和真实命令必须一致。
-- UI 保持安静、紧凑的运维控制台风格，避免营销式布局、卡片套卡片和重复说明。
-- 不创建冗余 Docker 配置、第二套版本源或重复存储路径。
-- CodeGraph 用于定位；只有后续判断依赖已修改的索引且工具需要手动刷新时才同步索引。
+1. 更新 `release/version.yaml`。
+2. 提交版本变更。
+3. 创建同版本带注释 `vX.Y.Z` tag。
+4. 原子推送 `main` 与 tag。
+5. 等待 Release workflow 完成。
+6. 核对远端 `main`、tag target、GitHub Release、assets 和 GHCR tags。
+
+Release 包含 Linux amd64/arm64、macOS arm64、Windows amd64；稳定版本更新 GHCR
+`latest`。在线更新必须验证 checksum，并保留跨文件系统 copy-and-remove fallback。
