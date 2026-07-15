@@ -19,7 +19,7 @@ interface UseUsageRecordsTableOptions {
   searchQuery: Ref<string>
   timeRangeParams: Readonly<Ref<UsageTimeRangeParams>>
   totalRecords: Ref<number>
-  refreshTimeRangeEnd: () => void
+  latestTimeRangeParams: () => UsageTimeRangeParams
 }
 
 type UsageLoadScope = 'all' | 'table'
@@ -30,6 +30,9 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   const records = shallowRef<any[]>([])
   const summary = shallowRef(emptySummary())
   const insights = shallowRef(emptyInsights())
+  const tableTimeRangeParams = shallowRef<UsageTimeRangeParams>({
+    ...options.timeRangeParams.value,
+  })
   const refreshingList = shallowRef(false)
   const diagnosticDimension = shallowRef('model')
   const diagnosticLoading = shallowRef(false)
@@ -51,8 +54,11 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
       }
 
       const globalParams = scopedParams()
+      if (scope === 'all') {
+        tableTimeRangeParams.value = { ...globalParams }
+      }
       const tableParams = {
-        ...globalParams,
+        ...tableTimeRangeParams.value,
         ...filterParams(),
       }
       const resultPromise = getUsageRecords({
@@ -149,8 +155,8 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     if (refreshingList.value || loading.value) return
     refreshingList.value = true
     try {
-      options.refreshTimeRangeEnd()
-      await withMinimumDuration(() => loadUsageRecords('all'))
+      tableTimeRangeParams.value = options.latestTimeRangeParams()
+      await withMinimumDuration(() => loadUsageRecords('table'))
     } finally {
       refreshingList.value = false
     }
