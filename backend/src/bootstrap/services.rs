@@ -50,7 +50,8 @@ use crate::{
     },
     update::service::SystemUpdateService,
     upstream::openai::{
-        fingerprint::{Fingerprint, PgFingerprintStore, RuntimeFingerprint},
+        desktop_release::DesktopReleaseStatus,
+        profile::CodexWireProfile,
         token_client::{OpenAiTokenClient, TokenClientConfig, default_openai_token_client},
         transport::{
             CodexBackendClient, CodexModelCatalogClient, CodexWebSocketPool,
@@ -80,7 +81,6 @@ pub struct BackgroundTaskStores {
     pub admin_users: PgAdminUserStore,
     pub admin_sessions: RedisAdminSessionStore,
     pub cookies: PgCookieStore,
-    pub fingerprints: PgFingerprintStore,
     pub session_affinity: RedisSessionAffinityStore,
     pub refresh_leases: RedisRefreshLeaseStore,
     pub model_snapshots: RedisModelSnapshotStore,
@@ -117,7 +117,8 @@ pub struct Services {
     pub session_affinity: Arc<SessionAffinityService>,
     pub codex: Arc<CodexBackendClient>,
     pub websocket_pool: Option<Arc<CodexWebSocketPool>>,
-    pub fingerprint: RuntimeFingerprint,
+    pub wire_profile: Arc<CodexWireProfile>,
+    pub desktop_release: DesktopReleaseStatus,
     pub account_pseudonymizer: Arc<AccountPseudonymizer>,
     pub system_update: Arc<SystemUpdateService>,
     pub connection_drain: crate::api::middleware::connection_drain::ConnectionDrain,
@@ -145,21 +146,21 @@ impl Services {
     pub fn new(
         config: &AppConfig,
         stores: BackgroundTaskStores,
-        fingerprint: RuntimeFingerprint,
+        wire_profile: Arc<CodexWireProfile>,
     ) -> Self {
-        Self::try_new(config, stores, fingerprint)
+        Self::try_new(config, stores, wire_profile)
             .expect("failed to build runtime services with configured TLS transport")
     }
 
     pub fn try_new(
         config: &AppConfig,
         stores: BackgroundTaskStores,
-        fingerprint: RuntimeFingerprint,
+        wire_profile: Arc<CodexWireProfile>,
     ) -> Result<Self, CustomCaError> {
         Self::try_with_usage_record_options(
             config,
             stores,
-            fingerprint,
+            wire_profile,
             UsageRecordOptions::from_config(config),
         )
     }
@@ -167,7 +168,7 @@ impl Services {
     pub fn try_with_usage_record_options(
         config: &AppConfig,
         stores: BackgroundTaskStores,
-        fingerprint: RuntimeFingerprint,
+        wire_profile: Arc<CodexWireProfile>,
         usage_record_options: UsageRecordOptions,
     ) -> Result<Self, CustomCaError> {
         let mut identity_secret = [0u8; 32];
@@ -175,7 +176,7 @@ impl Services {
         Self::try_with_identity_secret_and_usage_record_options(
             config,
             stores,
-            fingerprint,
+            wire_profile,
             identity_secret,
             usage_record_options,
         )
@@ -184,7 +185,7 @@ impl Services {
     fn try_with_identity_secret_and_usage_record_options(
         config: &AppConfig,
         stores: BackgroundTaskStores,
-        fingerprint: RuntimeFingerprint,
+        wire_profile: Arc<CodexWireProfile>,
         identity_secret: [u8; 32],
         usage_record_options: UsageRecordOptions,
     ) -> Result<Self, CustomCaError> {
@@ -214,7 +215,7 @@ impl Services {
             let client = CodexBackendClient::new(
                 build_reqwest_client()?,
                 config.api.base_url.clone(),
-                fingerprint.clone(),
+                wire_profile.clone(),
             )
             .with_websocket_initial_event_timeout(websocket_initial_event_timeout);
             if let Some(pool) = &websocket_pool {
@@ -313,6 +314,8 @@ impl Services {
         }));
         let system_update = Arc::new(SystemUpdateService::from_env());
 
+        let desktop_release = DesktopReleaseStatus::default();
+
         Ok(Self {
             database,
             redis,
@@ -333,7 +336,8 @@ impl Services {
             session_affinity,
             codex,
             websocket_pool,
-            fingerprint,
+            wire_profile,
+            desktop_release,
             account_pseudonymizer,
             system_update,
             connection_drain,
@@ -370,7 +374,8 @@ impl From<&Services> for crate::api::router::ApiServices {
             token_refresh: services.token_refresh.clone(),
             responses: services.responses.clone(),
             session_affinity: services.session_affinity.clone(),
-            fingerprint: services.fingerprint.clone(),
+            wire_profile: services.wire_profile.clone(),
+            desktop_release: services.desktop_release.clone(),
             process_control: Arc::new(crate::bootstrap::shutdown::RuntimeProcessControl),
             system_update: services.system_update.clone(),
             connection_drain: services.connection_drain.clone(),
@@ -419,24 +424,19 @@ pub fn apply_settings_to_config(config: &mut AppConfig, settings: &SettingsSnaps
     config.auth.rotation_strategy = settings.rotation_strategy.clone();
 }
 
-pub fn fingerprint_from_config(
-    config: &crate::bootstrap::config::FingerprintConfig,
-) -> Fingerprint {
-    Fingerprint {
+pub fn wire_profile_from_config(
+    config: &crate::bootstrap::config::WireProfileConfig,
+) -> CodexWireProfile {
+    CodexWireProfile {
         originator: config.originator.clone(),
-        app_version: config.app_version.clone(),
-        build_number: config.build_number.clone(),
-        platform: config.platform.clone(),
+        codex_version: config.codex_version.clone(),
+        desktop_version: config.desktop_version.clone(),
+        desktop_build: config.desktop_build.clone(),
+        os_type: config.os_type.clone(),
+        os_version: config.os_version.clone(),
         arch: config.arch.clone(),
-        chromium_version: config.chromium_version.clone(),
-        user_agent_template: config.user_agent_template.clone(),
-        default_headers: config
-            .default_headers
-            .iter()
-            .map(|header| (header.name.clone(), header.value.clone()))
-            .collect(),
-        header_order: config.header_order.clone(),
-        updated_at: None,
+        terminal: config.terminal.clone(),
+        verified_at: config.verified_at,
     }
 }
 
@@ -560,14 +560,12 @@ async fn build_router(
         SettingsService::load_or_initialize(settings_snapshot_from_config(&config), &pool).await?;
     apply_settings_to_config(&mut config, &settings);
 
-    let fingerprint_store = PgFingerprintStore::new(pool.clone());
     let stores = BackgroundTaskStores {
         redis: redis.clone(),
         accounts: PgAccountStore::new(pool.clone()),
         admin_users: PgAdminUserStore::new(pool.clone()),
         admin_sessions: RedisAdminSessionStore::new(redis.clone()),
         cookies: PgCookieStore::new(pool.clone()),
-        fingerprints: fingerprint_store.clone(),
         session_affinity: RedisSessionAffinityStore::new(redis.clone()),
         refresh_leases: RedisRefreshLeaseStore::new(redis.clone()),
         model_snapshots: RedisModelSnapshotStore::new(redis.clone()),
@@ -580,16 +578,12 @@ async fn build_router(
 
     let data_dir = ensure_data_dir(&config.runtime.data_directory)?;
     let identity_secret = load_or_create_identity_secret(&data_dir)?;
-    let default_fingerprint = fingerprint_from_config(&config.fingerprint);
-    let runtime_fingerprint = fingerprint_store
-        .ensure_current_seed(&default_fingerprint)
-        .await?;
-    let runtime_fingerprint = RuntimeFingerprint::new(runtime_fingerprint);
+    let wire_profile = Arc::new(wire_profile_from_config(&config.wire_profile));
     let runtime_config = crate::bootstrap::state::RuntimeConfig::from(&config);
     let services = Services::try_with_identity_secret_and_usage_record_options(
         &config,
         stores,
-        runtime_fingerprint,
+        wire_profile,
         identity_secret,
         UsageRecordOptions::from_config(&config),
     )?;

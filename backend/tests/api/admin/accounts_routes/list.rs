@@ -15,12 +15,8 @@ async fn admin_accounts_list_should_not_expose_account_tokens() {
         .execute(&pool).await.unwrap();
     let config = test_config(test_database_url());
     let stores = background_task_stores(pool.clone(), redis);
-    let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = Arc::new(Services::new(
-        &config,
-        stores,
-        runtime_fingerprint(fingerprint),
-    ));
+    let profile = crate::support::wire_profile::test_wire_profile_value();
+    let services = Arc::new(Services::new(&config, stores, wire_profile(profile)));
     let state = AppState::from(services.as_ref());
     let app = codex_proxy_rs::api::router::router().with_state(state);
 

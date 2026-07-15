@@ -25,9 +25,9 @@ use tower::util::ServiceExt;
 use crate::support::{
     admin::seed_admin_session,
     config::test_config as base_test_config,
-    fingerprint::runtime_fingerprint,
     http::response_json,
     storage::{background_task_stores, create_test_redis, init_test_db, test_database_url},
+    wire_profile::wire_profile,
 };
 
 #[tokio::test]
@@ -261,8 +261,8 @@ async fn admin_settings_update_should_persist_runtime_settings_to_database() {
     let config = test_config(test_database_url());
     seed_admin_session(&pool, &redis, "session_1").await;
     let stores = background_task_stores(pool.clone(), redis);
-    let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = Services::new(&config, stores, runtime_fingerprint(fingerprint));
+    let profile = crate::support::wire_profile::test_wire_profile_value();
+    let services = Services::new(&config, stores, wire_profile(profile));
     let services = std::sync::Arc::new(services);
     let state = AppState::from(services.as_ref());
     let app = codex_proxy_rs::api::router::router().with_state(state);
@@ -356,12 +356,8 @@ async fn admin_settings_update_should_apply_runtime_services() {
     seed_schedulable_account(&pool, "acct_runtime_a").await;
     seed_schedulable_account(&pool, "acct_runtime_b").await;
     let stores = background_task_stores(pool.clone(), redis);
-    let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = std::sync::Arc::new(Services::new(
-        &config,
-        stores,
-        runtime_fingerprint(fingerprint),
-    ));
+    let profile = crate::support::wire_profile::test_wire_profile_value();
+    let services = std::sync::Arc::new(Services::new(&config, stores, wire_profile(profile)));
     let settings_tasks = TaskCoordinator::start_settings_subscriptions(&services);
     services.account_pool.restore_from_store().await.unwrap();
     let state = AppState::from(services.as_ref());
@@ -466,12 +462,8 @@ async fn admin_settings_update_should_reject_unsupported_or_invalid_fields() {
     let config = test_config(test_database_url());
     seed_admin_session(&pool, &redis, "session_1").await;
     let stores = background_task_stores(pool.clone(), redis);
-    let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = std::sync::Arc::new(Services::new(
-        &config,
-        stores,
-        runtime_fingerprint(fingerprint),
-    ));
+    let profile = crate::support::wire_profile::test_wire_profile_value();
+    let services = std::sync::Arc::new(Services::new(&config, stores, wire_profile(profile)));
     let state = AppState::from(services.as_ref());
     let app = codex_proxy_rs::api::router::router().with_state(state);
 
@@ -501,12 +493,8 @@ async fn admin_settings_test_app(
     seed_admin_session(&pool, &redis, "session_1").await;
     let config = test_config(test_database_url());
     let stores = background_task_stores(pool.clone(), redis);
-    let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = std::sync::Arc::new(Services::new(
-        &config,
-        stores,
-        runtime_fingerprint(fingerprint),
-    ));
+    let profile = crate::support::wire_profile::test_wire_profile_value();
+    let services = std::sync::Arc::new(Services::new(&config, stores, wire_profile(profile)));
     let state = AppState::from(services.as_ref());
     (codex_proxy_rs::api::router::router().with_state(state), dir)
 }

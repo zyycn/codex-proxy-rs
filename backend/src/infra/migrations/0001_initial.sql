@@ -231,35 +231,3 @@ create index idx_account_cookies_account_domain
   on account_cookies(account_id, domain);
 create index idx_account_cookies_expires
   on account_cookies(expires_at) where expires_at is not null;
-
-create table fingerprints (
-  id text primary key,
-  originator text not null,
-  app_version text not null,
-  build_number text not null,
-  platform text not null,
-  arch text not null,
-  chromium_version text not null,
-  user_agent_template text not null,
-  default_headers_json jsonb not null,
-  header_order_json jsonb not null,
-  source text not null,
-  created_at timestamptz not null,
-  updated_at timestamptz not null
-);
-
-create table fingerprint_update_history (
-  id text primary key,
-  current_fingerprint_id text not null references fingerprints(id) on delete cascade,
-  app_version text not null,
-  build_number text not null,
-  chromium_version text,
-  source text not null,
-  manifest_json jsonb,
-  created_at timestamptz not null
-);
-
-create index idx_fingerprint_update_history_created_id
-  on fingerprint_update_history(created_at desc, id desc);
-create index idx_fingerprint_update_history_fingerprint
-  on fingerprint_update_history(current_fingerprint_id);

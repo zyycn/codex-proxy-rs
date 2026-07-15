@@ -36,7 +36,7 @@ async fn cold_websocket_should_fall_back_without_recording_a_successful_connect(
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool))
     .with_websocket_fast_path_budget(Duration::from_millis(30));
@@ -91,7 +91,7 @@ async fn timed_out_websocket_should_finish_in_background_and_serve_the_next_requ
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool))
     .with_websocket_fast_path_budget(Duration::from_millis(30));
@@ -146,7 +146,7 @@ async fn shared_websocket_opening_should_keep_the_original_fast_path_deadline() 
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool))
     .with_websocket_fast_path_budget(Duration::from_millis(200));
@@ -215,7 +215,7 @@ async fn account_eviction_should_cancel_a_background_websocket_opening() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool))
     .with_websocket_fast_path_budget(Duration::from_millis(30));
@@ -280,7 +280,7 @@ async fn pool_shutdown_should_cancel_and_join_a_background_websocket_opening() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool))
     .with_websocket_fast_path_budget(Duration::from_millis(30));
@@ -323,7 +323,7 @@ async fn store_false_warmup_should_never_fall_back_to_http() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::new(CodexWebSocketPool::default()));
     let mut body = serde_json::Map::new();
@@ -380,7 +380,7 @@ async fn websocket_opening_upstream_error_should_not_fall_back_to_http() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::new(CodexWebSocketPool::default()));
 
@@ -438,7 +438,7 @@ async fn connection_local_continuation_should_use_the_exact_socket() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::new(CodexWebSocketPool::default()));
     let first_request = new_chain_request("conversation-exact");
@@ -478,7 +478,7 @@ async fn missing_exact_socket_should_fail_without_opening_a_connection() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::new(CodexWebSocketPool::default()));
     let mut request = new_chain_request("conversation-exact-missing");
@@ -532,7 +532,7 @@ async fn concurrent_same_key_should_singleflight_websocket_opening() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::new(CodexWebSocketPool::default()))
     .with_websocket_fast_path_budget(Duration::from_millis(200));
@@ -584,7 +584,7 @@ async fn payload_send_failure_should_not_open_http_fallback() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::new(CodexWebSocketPool::default()));
 
@@ -731,7 +731,7 @@ async fn fast_path_miss_and_late_failure_should_count_as_one_breaker_failure() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool))
     .with_websocket_fast_path_budget(Duration::from_millis(30))
@@ -812,7 +812,7 @@ async fn half_open_upstream_response_should_close_origin_breaker() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(Arc::new(CodexWebSocketPool::default()))
     .with_websocket_fast_path_budget(Duration::from_millis(100))

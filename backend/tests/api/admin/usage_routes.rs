@@ -16,9 +16,9 @@ use tower::util::ServiceExt;
 use crate::support::{
     admin::seed_admin_session,
     config::test_config,
-    fingerprint::runtime_fingerprint,
     http::response_json,
     storage::{background_task_stores, create_test_redis, init_test_db, test_database_url},
+    wire_profile::wire_profile,
 };
 
 #[tokio::test]
@@ -365,7 +365,7 @@ async fn monitoring_test_app(
     let services = Services::new(
         &config,
         stores,
-        runtime_fingerprint(crate::support::fingerprint::test_fingerprint()),
+        wire_profile(crate::support::wire_profile::test_wire_profile_value()),
     );
     let app = codex_proxy_rs::api::router::router().with_state(AppState::from(&services));
     (

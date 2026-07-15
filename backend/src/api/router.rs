@@ -27,7 +27,10 @@ use crate::{
         usage::query::UsageQueryService,
     },
     update::service::SystemUpdateService,
-    upstream::openai::{fingerprint::RuntimeFingerprint, token_client::OpenAiTokenClient},
+    upstream::openai::{
+        desktop_release::DesktopReleaseStatus, profile::CodexWireProfile,
+        token_client::OpenAiTokenClient,
+    },
 };
 
 /// HTTP API 所需的领域服务集合。
@@ -48,7 +51,8 @@ pub struct ApiServices {
     pub token_refresh: Arc<TokenRefreshService<OpenAiTokenClient>>,
     pub responses: Arc<ResponseDispatchService>,
     pub session_affinity: Arc<SessionAffinityService>,
-    pub fingerprint: RuntimeFingerprint,
+    pub wire_profile: Arc<CodexWireProfile>,
+    pub desktop_release: DesktopReleaseStatus,
     pub process_control: Arc<dyn ProcessControl>,
     pub system_update: Arc<SystemUpdateService>,
     pub connection_drain: crate::api::middleware::connection_drain::ConnectionDrain,

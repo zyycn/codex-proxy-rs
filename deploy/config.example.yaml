@@ -8,7 +8,7 @@
 # 三个密码建议分别执行 `openssl rand -hex 24` 生成。
 
 x-cpr:
-  schema_version: 1
+  schema_version: 2
 
   server:
     # 本地 cargo run 使用；Docker 内由 compose.yaml 固定覆盖为 0.0.0.0:8080。
@@ -47,53 +47,19 @@ x-cpr:
     # 首个真实输出的绝对超时，单位毫秒；0 表示禁用。
     initial_event_timeout_ms: 20000
 
-  fingerprint:
-    # PostgreSQL 中不存在当前指纹时，使用这里的数据初始化。
+  wire_profile:
+    # 该画像来自 Desktop 制品与 bundled Codex Core 的联合审计。
+    # appcast 只报告新 Desktop 制品，不会自动改写这里的请求身份。
     originator: 'Codex Desktop'
-    app_version: '26.707.51957'
-    build_number: '5175'
-    platform: 'darwin'
+    codex_version: '0.144.2'
+    desktop_version: '26.707.72221'
+    desktop_build: '5307'
+    # 固定参考主机画像；必须在重新抓包核验后再修改。
+    os_type: 'Mac OS'
+    os_version: '15.7.1'
     arch: 'arm64'
-    chromium_version: '146'
-    user_agent_template: 'Codex Desktop/{version} ({platform}; {arch})'
-
-    default_headers:
-      - name: 'Accept-Encoding'
-        value: 'gzip, deflate, br, zstd'
-      - name: 'Accept-Language'
-        value: 'en-US,en;q=0.9'
-      - name: 'sec-ch-ua-mobile'
-        value: '?0'
-      - name: 'sec-ch-ua-platform'
-        value: '"macOS"'
-      - name: 'sec-fetch-site'
-        value: 'same-origin'
-      - name: 'sec-fetch-mode'
-        value: 'cors'
-      - name: 'sec-fetch-dest'
-        value: 'empty'
-
-    header_order:
-      - authorization
-      - chatgpt-account-id
-      - originator
-      - x-openai-internal-codex-residency
-      - x-client-request-id
-      - x-codex-installation-id
-      - x-codex-turn-state
-      - openai-beta
-      - user-agent
-      - sec-ch-ua
-      - sec-ch-ua-mobile
-      - sec-ch-ua-platform
-      - accept-encoding
-      - accept-language
-      - sec-fetch-site
-      - sec-fetch-mode
-      - sec-fetch-dest
-      - content-type
-      - accept
-      - cookie
+    terminal: 'unknown'
+    verified_at: '2026-07-15T02:25:50+08:00'
 
   admin:
     session_ttl_minutes: 1440

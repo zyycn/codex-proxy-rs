@@ -28,8 +28,8 @@ use wiremock::{
 use crate::support::{
     admin::seed_admin_session,
     config::test_config,
-    fingerprint::{runtime_fingerprint, test_fingerprint},
     http::response_json,
+    wire_profile::{test_wire_profile_value, wire_profile},
 };
 
 const VERSION_OLD: &str = "0.1.0";
@@ -1269,7 +1269,7 @@ async fn admin_system_test_app_with_process_control(
     let services = Arc::new(Services::new(
         &config,
         stores,
-        runtime_fingerprint(test_fingerprint()),
+        wire_profile(test_wire_profile_value()),
     ));
     let mut state = AppState::from(services.as_ref());
     state.services.system_update = Arc::new(SystemUpdateService::new(update_config));

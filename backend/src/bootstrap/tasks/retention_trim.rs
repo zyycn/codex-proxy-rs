@@ -3,12 +3,9 @@
 use chrono::Utc;
 use tracing::{info, warn};
 
-use crate::{
-    telemetry::{
-        buckets::store::PgRequestBucketStore, ops::store::PgOpsErrorLogStore,
-        usage::store::PgUsageRecordStore,
-    },
-    upstream::openai::fingerprint::PgFingerprintStore,
+use crate::telemetry::{
+    buckets::store::PgRequestBucketStore, ops::store::PgOpsErrorLogStore,
+    usage::store::PgUsageRecordStore,
 };
 
 use super::{
@@ -17,13 +14,11 @@ use super::{
 };
 
 const RETENTION_TRIM_INTERVAL_SECS: u64 = 60 * 60;
-const FINGERPRINT_HISTORY_LIMIT: std::num::NonZeroU32 = std::num::NonZeroU32::new(100).unwrap();
 
 pub struct RetentionTrimTask {
     usage_records: PgUsageRecordStore,
     ops_errors: PgOpsErrorLogStore,
     buckets: PgRequestBucketStore,
-    fingerprints: PgFingerprintStore,
 }
 
 impl RetentionTrimTask {
@@ -31,13 +26,11 @@ impl RetentionTrimTask {
         usage_records: PgUsageRecordStore,
         ops_errors: PgOpsErrorLogStore,
         buckets: PgRequestBucketStore,
-        fingerprints: PgFingerprintStore,
     ) -> Self {
         Self {
             usage_records,
             ops_errors,
             buckets,
-            fingerprints,
         }
     }
 
@@ -69,17 +62,6 @@ impl RetentionTrimTask {
             Ok(deleted) if deleted > 0 => info!(deleted, "已清理过期请求时间桶"),
             Ok(_) => {}
             Err(error) => warn!(error = %error, "清理请求时间桶失败"),
-        }
-        match self
-            .fingerprints
-            .trim_update_history_to_limit(FINGERPRINT_HISTORY_LIMIT)
-            .await
-        {
-            Ok(deleted) if deleted > 0 => {
-                info!(deleted, "已清理超限指纹更新历史")
-            }
-            Ok(_) => {}
-            Err(error) => warn!(error = %error, "清理超限指纹更新历史失败"),
         }
     }
 }

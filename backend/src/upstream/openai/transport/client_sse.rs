@@ -5,14 +5,14 @@ impl CodexBackendClient {
     pub fn new(
         client: Client,
         base_url: impl Into<String>,
-        fingerprint: RuntimeFingerprint,
+        profile: Arc<CodexWireProfile>,
     ) -> Self {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         Self {
             client,
             websocket_origin_key: websocket_origin_key(&base_url),
             base_url,
-            fingerprint,
+            profile,
             websocket_pool: None,
             websocket_initial_event_timeout: Some(DEFAULT_INITIAL_EVENT_TIMEOUT),
             websocket_fast_path_budget: WEBSOCKET_FAST_PATH_BUDGET,
@@ -500,13 +500,12 @@ impl CodexBackendClient {
         &self,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<Vec<Value>> {
-        let fingerprint = self.fingerprint.current();
         let endpoint = endpoint_url(&self.base_url, "codex/models");
-        let headers = self.auxiliary_request_headers(&fingerprint, context)?;
+        let headers = self.auxiliary_request_headers(context)?;
         let response = self
             .client
             .get(endpoint)
-            .query(&[("client_version", fingerprint.app_version.as_str())])
+            .query(&[("client_version", self.profile.codex_version.as_str())])
             .headers(headers)
             .send()
             .await?;
@@ -571,16 +570,9 @@ impl CodexBackendClient {
     }
 
     fn request_headers(&self, context: CodexRequestContext<'_>) -> CodexClientResult<HeaderMap> {
-        let fingerprint = self.fingerprint.current();
         let request_id = context.client_request_id.unwrap_or(context.request_id);
-        let ordered_headers = build_ordered_codex_base_headers(
-            &fingerprint,
-            context.access_token,
-            context.account_id,
-        );
-
-        let mut headers = HeaderMap::new();
-        insert_ordered_headers(&mut headers, &ordered_headers)?;
+        let mut headers =
+            build_codex_base_headers(&self.profile, context.access_token, context.account_id)?;
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         insert_optional_header(&mut headers, "cookie", context.cookie_header)?;
         headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
@@ -625,19 +617,14 @@ impl CodexBackendClient {
 
     fn auxiliary_request_headers(
         &self,
-        fingerprint: &Fingerprint,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<HeaderMap> {
-        let ordered_headers =
-            build_ordered_codex_base_headers(fingerprint, context.access_token, context.account_id);
-
-        let mut headers = HeaderMap::new();
-        insert_ordered_headers(&mut headers, &ordered_headers)?;
+        let mut headers =
+            build_codex_base_headers(&self.profile, context.access_token, context.account_id)?;
         if let Some(cookie_header) = context.cookie_header {
             headers.insert(COOKIE, HeaderValue::from_str(cookie_header)?);
         }
         headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
-        headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("gzip, deflate"));
         insert_optional_header(
             &mut headers,
             "x-codex-installation-id",
@@ -650,11 +637,10 @@ impl CodexBackendClient {
         &self,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<HeaderMap> {
-        let fingerprint = self.fingerprint.current();
         let mut headers = HeaderMap::new();
         headers.insert(
             USER_AGENT,
-            HeaderValue::from_str(&fingerprint.user_agent())?,
+            HeaderValue::from_str(&self.profile.user_agent())?,
         );
         headers.insert(
             AUTHORIZATION,
@@ -662,7 +648,7 @@ impl CodexBackendClient {
         );
         headers.insert(
             HeaderName::from_static("originator"),
-            HeaderValue::from_str(&fingerprint.originator)?,
+            HeaderValue::from_str(&self.profile.originator)?,
         );
         insert_optional_header(&mut headers, "chatgpt-account-id", context.account_id)?;
         insert_optional_header(&mut headers, "cookie", context.cookie_header)?;

@@ -1,19 +1,13 @@
 //! 后台任务协调器。
 
-use std::{future::Future, path::PathBuf, sync::Arc, time::Duration};
+use std::{future::Future, sync::Arc, time::Duration};
 
 use tokio::task::JoinHandle;
 
 use super::{
-    cookie_cleanup::CookieCleanupTask,
-    fingerprint_update::{
-        CODEX_DESKTOP_APPCAST_URL, DEFAULT_EXTRACTED_FINGERPRINT_PATH,
-        start_fingerprint_update_task,
-    },
-    model_refresh::ModelRefreshTask,
-    quota_refresh::QuotaRefreshTask,
-    retention_trim::RetentionTrimTask,
-    token_refresh::TokenRefreshTask,
+    cookie_cleanup::CookieCleanupTask, desktop_release_update::start_desktop_release_update_task,
+    model_refresh::ModelRefreshTask, quota_refresh::QuotaRefreshTask,
+    retention_trim::RetentionTrimTask, token_refresh::TokenRefreshTask,
 };
 
 /// 后台任务协调器。
@@ -46,7 +40,6 @@ impl TaskCoordinator {
                 stores.usage_records.clone(),
                 stores.ops_errors.clone(),
                 stores.request_buckets.clone(),
-                stores.fingerprints.clone(),
             )
             .start(),
         );
@@ -94,17 +87,13 @@ impl TaskCoordinator {
             .with_cookie_store(stores.cookies.clone())
             .start(),
         );
-        coordinator.push("fingerprint_update", {
-            let fingerprint = services.fingerprint.snapshot();
-            start_fingerprint_update_task(
-                stores.fingerprints.clone(),
-                services.fingerprint.clone(),
-                CODEX_DESKTOP_APPCAST_URL.to_string(),
-                PathBuf::from(DEFAULT_EXTRACTED_FINGERPRINT_PATH),
-                fingerprint.app_version,
-                fingerprint.build_number,
-            )
-        });
+        coordinator.push(
+            "desktop_release_update",
+            start_desktop_release_update_task(
+                services.desktop_release.clone(),
+                crate::upstream::openai::desktop_release::CODEX_DESKTOP_APPCAST_URL.to_string(),
+            ),
+        );
         if let Some(pool) = &services.websocket_pool {
             coordinator.push(
                 "websocket_pool",

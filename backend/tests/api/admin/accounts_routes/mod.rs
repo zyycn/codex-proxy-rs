@@ -23,9 +23,9 @@ use crate::support::jwt::unsigned_jwt;
 use crate::support::{
     admin::seed_admin_session,
     config::test_config,
-    fingerprint::runtime_fingerprint,
     http::response_json,
     storage::{background_task_stores, create_test_redis, init_test_db, test_database_url},
+    wire_profile::wire_profile,
 };
 
 mod export_routes;
@@ -196,12 +196,8 @@ async fn admin_accounts_test_app_with_overrides(
         config.auth.oauth_token_endpoint = oauth_token_endpoint;
     }
     let stores = background_task_stores(pool.clone(), redis.clone());
-    let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = Arc::new(Services::new(
-        &config,
-        stores,
-        runtime_fingerprint(fingerprint),
-    ));
+    let profile = crate::support::wire_profile::test_wire_profile_value();
+    let services = Arc::new(Services::new(&config, stores, wire_profile(profile)));
     let state = AppState::from(services.as_ref());
     let app = codex_proxy_rs::api::router::router().with_state(state.clone());
     (

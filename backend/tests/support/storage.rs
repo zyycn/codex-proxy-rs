@@ -13,7 +13,6 @@ use codex_proxy_rs::{
         account_usage::store::PgAccountUsageStore, buckets::store::PgRequestBucketStore,
         ops::store::PgOpsErrorLogStore, usage::store::PgUsageRecordStore,
     },
-    upstream::openai::fingerprint::PgFingerprintStore,
 };
 use sqlx::{Connection, PgConnection, PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
@@ -174,7 +173,6 @@ pub(crate) fn background_task_stores(pool: PgPool, redis: RedisConnection) -> Ba
         admin_users: PgAdminUserStore::new(pool.clone()),
         admin_sessions: RedisAdminSessionStore::new(redis.clone()),
         cookies: PgCookieStore::new(pool.clone()),
-        fingerprints: PgFingerprintStore::new(pool.clone()),
         session_affinity: RedisSessionAffinityStore::new(redis.clone()),
         refresh_leases: RedisRefreshLeaseStore::new(redis.clone()),
         model_snapshots: RedisModelSnapshotStore::new(redis),

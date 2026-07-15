@@ -9,9 +9,9 @@ use tower::util::ServiceExt;
 
 use crate::support::{
     config::test_config,
-    fingerprint::runtime_fingerprint,
     http::response_json,
     storage::{background_task_stores, create_test_redis, init_test_db, test_database_url},
+    wire_profile::wire_profile,
 };
 
 #[tokio::test]
@@ -237,11 +237,11 @@ async fn admin_login_test_app(
     seed_admin_user(&pool, password).await;
     let config = test_config(test_database_url());
     let stores = background_task_stores(pool.clone(), redis);
-    let fingerprint = crate::support::fingerprint::test_fingerprint();
+    let profile = crate::support::wire_profile::test_wire_profile_value();
     let services = std::sync::Arc::new(codex_proxy_rs::bootstrap::services::Services::new(
         &config,
         stores,
-        runtime_fingerprint(fingerprint),
+        wire_profile(profile),
     ));
     let state = codex_proxy_rs::api::AppState::from(services.as_ref());
     (
