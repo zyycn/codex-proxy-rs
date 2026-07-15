@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { usePreferredReducedMotion } from '@vueuse/core'
 import type { EChartsOption } from 'echarts'
 import { storeToRefs } from 'pinia'
-import BaseCard from '../../../components/base/BaseCard.vue'
-import BaseChart from '../../../components/charts/BaseChart.vue'
-import BaseEmpty from '../../../components/base/BaseEmpty.vue'
-import BaseSegmented from '../../../components/base/BaseSegmented.vue'
-import { useUiStore } from '../../../stores/modules/ui'
+import { computed, shallowRef, watch } from 'vue'
+import BaseCard from '@/components/base/BaseCard.vue'
+import BaseEmpty from '@/components/base/BaseEmpty.vue'
+import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import BaseChart from '@/components/charts/BaseChart.vue'
+import { useUiStore } from '@/stores/modules/ui'
 
 type TrendKind = 'usage' | 'latency' | 'errors'
 
@@ -27,6 +28,10 @@ const tabs = [
 ]
 const activeKind = defineModel<TrendKind>('kind', { required: true })
 const { themeRevision } = storeToRefs(useUiStore())
+const preferredMotion = usePreferredReducedMotion()
+const hoveredSummaryLabel = shallowRef<string>()
+const pinnedSummaryLabel = shallowRef<string>()
+const activeSummaryLabel = computed(() => hoveredSummaryLabel.value ?? pinnedSummaryLabel.value)
 
 const hasSamples = computed(() =>
   props.points.some(
@@ -54,8 +59,8 @@ const chartOption = computed<EChartsOption>(() => {
   return {
     ...coordinate,
     series,
-    animationDuration: 420,
-    animationDurationUpdate: 220,
+    animationDuration: preferredMotion.value === 'reduce' ? 0 : 420,
+    animationDurationUpdate: preferredMotion.value === 'reduce' ? 0 : 220,
     animationEasing: 'cubicOut',
     animationEasingUpdate: 'cubicOut',
     tooltip: {
@@ -363,6 +368,7 @@ function latencyRangeValues() {
 
 function lineSeries(name: string, data: (number | null)[], color: string, options: any = {}) {
   const area = options.area ?? false
+  const muted = isSeriesMuted(name)
 
   return {
     name,
@@ -381,10 +387,18 @@ function lineSeries(name: string, data: (number | null)[], color: string, option
       color,
       type: options.lineType ?? 'solid',
       width: options.width ?? 2.2,
+      opacity: muted ? 0.18 : 1,
     },
-    itemStyle: { color },
+    itemStyle: { color, opacity: muted ? 0.18 : 1 },
+    emphasis: { focus: 'series' as const },
+    blur: {
+      lineStyle: { opacity: 0.2 },
+      itemStyle: { opacity: 0.2 },
+      areaStyle: { opacity: 0.05 },
+    },
     areaStyle: area
       ? {
+          opacity: muted ? 0.12 : 1,
           color: {
             type: 'linear' as const,
             x: 0,
@@ -402,6 +416,8 @@ function lineSeries(name: string, data: (number | null)[], color: string, option
 }
 
 function barSeries(name: string, data: (number | null)[], color: string, options: any = {}) {
+  const muted = isSeriesMuted(name)
+
   return {
     name,
     type: 'bar' as const,
@@ -413,9 +429,11 @@ function barSeries(name: string, data: (number | null)[], color: string, options
     z: options.z ?? 2,
     itemStyle: {
       color,
-      opacity: options.opacity ?? 0.72,
+      opacity: muted ? 0.14 : (options.opacity ?? 0.72),
       borderRadius: options.borderRadius ?? [3, 3, 0, 0],
     },
+    emphasis: { focus: 'series' as const },
+    blur: { itemStyle: { opacity: 0.18 } },
   }
 }
 
@@ -431,6 +449,31 @@ function trendColor(label: string, fallbackVar: string, fallback: string) {
 function handleTrendChange(value: string) {
   emit('trendChange', value as TrendKind)
 }
+
+function focusSummarySeries(label: string) {
+  hoveredSummaryLabel.value = label
+}
+
+function blurSummarySeries() {
+  hoveredSummaryLabel.value = undefined
+}
+
+function toggleSummarySeries(label: string) {
+  pinnedSummaryLabel.value = pinnedSummaryLabel.value === label ? undefined : label
+}
+
+function isSeriesMuted(name: string) {
+  return Boolean(activeSummaryLabel.value && activeSummaryLabel.value !== name)
+}
+
+function isSummarySeriesActive(label: string) {
+  return activeSummaryLabel.value === label
+}
+
+watch(activeKind, () => {
+  hoveredSummaryLabel.value = undefined
+  pinnedSummaryLabel.value = undefined
+})
 </script>
 
 <template>
@@ -449,21 +492,33 @@ function handleTrendChange(value: string) {
         <div
           class="grid h-14.25 min-w-0 grid-cols-3 gap-1.5 rounded-xl bg-(--cp-bg-subtle)/45 p-1.5"
         >
-          <div
+          <button
             v-for="item in props.summary"
             :key="item.label"
-            class="grid min-w-0 grid-cols-[8px_minmax(0,1fr)] items-center gap-x-2 rounded-lg px-2.5 py-2"
+            type="button"
+            :aria-label="`突出显示${item.label}曲线`"
+            :aria-pressed="pinnedSummaryLabel === item.label"
+            class="group grid min-w-0 grid-cols-[8px_minmax(0,1fr)] items-center gap-x-2 rounded-lg border-0 bg-transparent px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border)"
+            @mouseenter="focusSummarySeries(item.label)"
+            @mouseleave="blurSummarySeries"
+            @focus="focusSummarySeries(item.label)"
+            @blur="blurSummarySeries"
+            @click="toggleSummarySeries(item.label)"
           >
             <i
-              class="size-2 rounded-full"
+              aria-hidden="true"
+              class="size-2 rounded-full transition-transform duration-200 ease-out group-hover:scale-125 motion-reduce:transition-none"
               :style="summaryMarkerStyle(item)"
-              :class="{
-                'bg-(--cp-info)': item.tone === 'info',
-                'bg-(--cp-success)': item.tone === 'success',
-                'bg-(--cp-warning)': item.tone === 'warning',
-                'bg-(--cp-danger)': item.tone === 'danger',
-                'bg-(--cp-normal)': item.tone === 'normal',
-              }"
+              :class="[
+                isSummarySeriesActive(item.label) ? 'scale-125' : undefined,
+                {
+                  'bg-(--cp-info)': item.tone === 'info',
+                  'bg-(--cp-success)': item.tone === 'success',
+                  'bg-(--cp-warning)': item.tone === 'warning',
+                  'bg-(--cp-danger)': item.tone === 'danger',
+                  'bg-(--cp-normal)': item.tone === 'normal',
+                },
+              ]"
             />
             <span class="grid min-w-0 gap-1">
               <span class="truncate text-[10px] leading-none font-[680] text-(--cp-text-secondary)">
@@ -476,7 +531,7 @@ function handleTrendChange(value: string) {
                 {{ item.value }}
               </strong>
             </span>
-          </div>
+          </button>
         </div>
 
         <div class="relative h-55 w-full overflow-hidden">

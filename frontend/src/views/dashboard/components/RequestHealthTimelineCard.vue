@@ -3,8 +3,8 @@ import { usePreferredReducedMotion } from '@vueuse/core'
 import { gsap } from 'gsap'
 import { computed, onBeforeUnmount, shallowRef, useTemplateRef, watch } from 'vue'
 
-import BaseCard from '../../../components/base/BaseCard.vue'
-import BasePopover from '../../../components/base/BasePopover.vue'
+import BaseCard from '@/components/base/BaseCard.vue'
+import BasePopover from '@/components/base/BasePopover.vue'
 import HealthTimelinePointPopover from './HealthTimelinePointPopover.vue'
 import {
   formatHealthCount,
