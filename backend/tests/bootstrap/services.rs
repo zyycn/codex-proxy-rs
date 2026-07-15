@@ -21,7 +21,7 @@ async fn services_try_new_should_use_configured_tls_transport_builder() {
         let Err(error) = Services::try_new(
             &config,
             stores,
-            crate::support::fingerprint::runtime_test_fingerprint(),
+            crate::support::wire_profile::test_wire_profile(),
         ) else {
             panic!("invalid custom CA should fail service transport construction");
         };
@@ -59,7 +59,7 @@ async fn services_try_new_should_expose_websocket_pool_when_enabled() {
     let services = Services::try_new(
         &config,
         background_task_stores(pool, redis),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .expect("services should build");
 
@@ -75,7 +75,7 @@ async fn services_try_new_should_not_expose_websocket_pool_when_disabled() {
     let services = Services::try_new(
         &config,
         background_task_stores(pool, redis),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .expect("services should build");
 

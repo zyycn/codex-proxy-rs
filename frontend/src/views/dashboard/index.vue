@@ -8,7 +8,7 @@ import UsageRecordCard from './components/UsageRecordCard.vue'
 import MetricCard from './components/MetricCard.vue'
 import RequestHealthTimelineCard from './components/RequestHealthTimelineCard.vue'
 import RequestTrendCard from './components/RequestTrendCard.vue'
-import ServiceStatusCard from './components/ServiceStatusCard.vue'
+import WireProfileCard from './components/WireProfileCard.vue'
 import { useDashboard } from './composables/useDashboard'
 
 const {
@@ -21,7 +21,7 @@ const {
   trendSummary,
   healthTimeline,
   accountUsage,
-  serviceStatuses,
+  wireProfile,
   usageRecords,
   poolSummary,
   capacityInfo,
@@ -72,7 +72,7 @@ const {
         :loading="trendLoading"
         @trend-change="loadTrend"
       />
-      <ServiceStatusCard :items="serviceStatuses" />
+      <WireProfileCard :profile="wireProfile" />
     </section>
 
     <AccountOverviewCard

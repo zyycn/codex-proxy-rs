@@ -8,9 +8,9 @@ use tower::util::ServiceExt;
 use crate::support::{
     client_keys::insert_client_api_key,
     config::test_config,
-    fingerprint::runtime_fingerprint,
     http::response_json,
     storage::{background_task_stores, create_test_redis, init_test_db, test_database_url},
+    wire_profile::wire_profile,
 };
 
 mod websocket;
@@ -165,12 +165,8 @@ pub(super) async fn test_app_with_client_api_key() -> (
     insert_model_snapshot(&redis).await;
     let config = test_config(test_database_url());
     let stores = background_task_stores(pool.clone(), redis);
-    let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = std::sync::Arc::new(Services::new(
-        &config,
-        stores,
-        runtime_fingerprint(fingerprint),
-    ));
+    let profile = crate::support::wire_profile::test_wire_profile_value();
+    let services = std::sync::Arc::new(Services::new(&config, stores, wire_profile(profile)));
     services
         .initialize_hot_path_state()
         .await

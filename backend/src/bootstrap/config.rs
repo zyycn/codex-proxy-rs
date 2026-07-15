@@ -1,16 +1,16 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::BTreeMap,
     env,
     path::{Path, PathBuf},
 };
 
-use axum::http::HeaderName;
+use chrono::{DateTime, Utc};
 use secrecy::{ExposeSecret, SecretBox};
 use serde::{Deserialize, de::IgnoredAny};
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
-const CONFIG_SCHEMA_VERSION: u32 = 1;
+const CONFIG_SCHEMA_VERSION: u32 = 2;
 const CONFIG_RELATIVE_PATH: &str = "deploy/config.yaml";
 const SERVER_HOST_ENV: &str = "CPR_SERVER_HOST";
 const SERVER_PORT_ENV: &str = "CPR_SERVER_PORT";
@@ -106,7 +106,7 @@ impl BootstrapConfig {
             runtime,
             quota,
             ws_pool,
-            fingerprint,
+            wire_profile,
             admin,
             logging,
             telemetry,
@@ -122,7 +122,7 @@ impl BootstrapConfig {
             redis: RedisConfig { url: redis.url },
             runtime,
             ws_pool,
-            fingerprint,
+            wire_profile,
             admin: AdminConfig {
                 session_ttl_minutes: admin.session_ttl_minutes,
                 default_username: admin.default_username,
@@ -241,8 +241,8 @@ pub struct AppConfig {
     pub runtime: RuntimePathsConfig,
     /// WebSocket 连接池启动设置。
     pub ws_pool: WebSocketPoolSettings,
-    /// 上游请求指纹默认配置。
-    pub fingerprint: FingerprintConfig,
+    /// 经审计固定的 Codex Desktop 上游请求画像。
+    pub wire_profile: WireProfileConfig,
     /// 管理员初始化配置，不包含密码。
     pub admin: AdminConfig,
     /// 日志配置。
@@ -354,38 +354,28 @@ pub struct WebSocketPoolSettings {
     pub initial_event_timeout_ms: u64,
 }
 
-/// 上游请求指纹默认配置。
+/// 经审计固定的 Codex Desktop 上游请求画像配置。
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct FingerprintConfig {
-    /// 客户端来源名。
+pub struct WireProfileConfig {
+    /// `originator` 请求头及 User-Agent 产品名。
     pub originator: String,
-    /// 应用版本。
-    pub app_version: String,
-    /// 构建号。
-    pub build_number: String,
-    /// 平台名。
-    pub platform: String,
-    /// 架构名。
+    /// bundled Codex Core 版本。
+    pub codex_version: String,
+    /// Desktop 应用版本。
+    pub desktop_version: String,
+    /// Desktop 制品构建号。
+    pub desktop_build: String,
+    /// Codex Core UA 中的目标操作系统类型。
+    pub os_type: String,
+    /// Codex Core UA 中的目标操作系统版本。
+    pub os_version: String,
+    /// Codex Core UA 中的目标架构。
     pub arch: String,
-    /// Chromium 主版本。
-    pub chromium_version: String,
-    /// User-Agent 模板。
-    pub user_agent_template: String,
-    /// 默认请求头。
-    pub default_headers: Vec<FingerprintHeaderConfig>,
-    /// 请求头排序优先级。
-    pub header_order: Vec<String>,
-}
-
-/// 指纹默认请求头配置项。
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct FingerprintHeaderConfig {
-    /// 请求头名称。
-    pub name: String,
-    /// 请求头值。
-    pub value: String,
+    /// Codex Core UA 中的终端标记。
+    pub terminal: String,
+    /// 此画像最后一次经制品与源码核验的时间。
+    pub verified_at: DateTime<Utc>,
 }
 
 /// 管理员初始化与会话配置，不包含初始化密码。
@@ -453,7 +443,7 @@ struct FileAppConfig {
     runtime: RuntimePathsConfig,
     quota: QuotaConfig,
     ws_pool: WebSocketPoolSettings,
-    fingerprint: FingerprintConfig,
+    wire_profile: WireProfileConfig,
     admin: FileAdminConfig,
     logging: LoggingConfig,
     telemetry: TelemetryConfig,
@@ -549,7 +539,7 @@ fn validate_file_config(config: &FileAppConfig) -> Result<(), ConfigError> {
     if config.ws_pool.max_per_account == 0 {
         return Err(ConfigError::InvalidField("ws_pool.max_per_account"));
     }
-    validate_fingerprint(&config.fingerprint)?;
+    validate_wire_profile(&config.wire_profile)?;
     validate_logging(&config.logging)?;
     Ok(())
 }
@@ -594,52 +584,46 @@ fn validate_admin_password(password: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
-fn validate_fingerprint(config: &FingerprintConfig) -> Result<(), ConfigError> {
+fn validate_wire_profile(config: &WireProfileConfig) -> Result<(), ConfigError> {
     for (field, value) in [
-        ("fingerprint.originator", config.originator.as_str()),
-        ("fingerprint.app_version", config.app_version.as_str()),
-        ("fingerprint.build_number", config.build_number.as_str()),
-        ("fingerprint.platform", config.platform.as_str()),
-        ("fingerprint.arch", config.arch.as_str()),
+        ("wire_profile.originator", config.originator.as_str()),
+        ("wire_profile.codex_version", config.codex_version.as_str()),
         (
-            "fingerprint.chromium_version",
-            config.chromium_version.as_str(),
+            "wire_profile.desktop_version",
+            config.desktop_version.as_str(),
         ),
-        (
-            "fingerprint.user_agent_template",
-            config.user_agent_template.as_str(),
-        ),
+        ("wire_profile.desktop_build", config.desktop_build.as_str()),
+        ("wire_profile.os_type", config.os_type.as_str()),
+        ("wire_profile.os_version", config.os_version.as_str()),
+        ("wire_profile.arch", config.arch.as_str()),
+        ("wire_profile.terminal", config.terminal.as_str()),
     ] {
         validate_nonempty(field, value)?;
     }
 
-    if config.default_headers.is_empty() || config.header_order.is_empty() {
-        return Err(ConfigError::InvalidField("fingerprint"));
+    if semver::Version::parse(&config.codex_version).is_err() {
+        return Err(ConfigError::InvalidField("wire_profile.codex_version"));
     }
-
-    let mut header_names = HashSet::new();
-    for header in &config.default_headers {
-        let name = header.name.trim().to_ascii_lowercase();
-        if name.is_empty()
-            || header.value.is_empty()
-            || HeaderName::from_bytes(name.as_bytes()).is_err()
-            || !header_names.insert(name)
-        {
-            return Err(ConfigError::InvalidField("fingerprint.default_headers"));
-        }
+    if !is_numeric_dotted_version(&config.desktop_version) {
+        return Err(ConfigError::InvalidField("wire_profile.desktop_version"));
     }
-
-    let mut ordered_headers = HashSet::new();
-    for header in &config.header_order {
-        let header = header.trim().to_ascii_lowercase();
-        if header.is_empty()
-            || HeaderName::from_bytes(header.as_bytes()).is_err()
-            || !ordered_headers.insert(header)
-        {
-            return Err(ConfigError::InvalidField("fingerprint.header_order"));
-        }
+    if !config
+        .desktop_build
+        .bytes()
+        .all(|byte| byte.is_ascii_digit())
+    {
+        return Err(ConfigError::InvalidField("wire_profile.desktop_build"));
     }
     Ok(())
+}
+
+fn is_numeric_dotted_version(value: &str) -> bool {
+    let mut parts = value.split('.');
+    let valid_parts = parts
+        .by_ref()
+        .filter(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+        .count();
+    valid_parts >= 2 && valid_parts == value.split('.').count()
 }
 
 fn validate_logging(config: &LoggingConfig) -> Result<(), ConfigError> {
@@ -699,7 +683,7 @@ pub enum ConfigError {
         path: PathBuf,
     },
     /// 配置格式版本不受支持。
-    #[error("x-cpr.schema_version must be 1")]
+    #[error("x-cpr.schema_version must be 2")]
     UnsupportedSchemaVersion,
     /// 字段值非法。
     #[error("configuration field `{0}` is invalid")]

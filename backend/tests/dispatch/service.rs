@@ -243,7 +243,7 @@ async fn test_app_state_with_storage(
     let services = Services::try_with_usage_record_options(
         &config,
         stores,
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
         usage_record_options,
     )
     .expect("failed to build runtime services with configured TLS transport");

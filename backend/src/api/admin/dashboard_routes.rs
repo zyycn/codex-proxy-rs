@@ -28,10 +28,7 @@ use crate::{
     },
     infra::{
         format::{format_duration_ms, format_tokens},
-        time::{
-            china_datetime, china_datetime_rfc3339_str, china_day_start, china_quarter_hour_start,
-            china_relative_time,
-        },
+        time::{china_datetime, china_day_start, china_quarter_hour_start, china_relative_time},
     },
     telemetry::{
         account_usage::query::AccountUsageTimeBucket,
@@ -45,7 +42,6 @@ use crate::{
             types::{UsageRecord, metadata_string},
         },
     },
-    upstream::openai::fingerprint::Fingerprint,
 };
 
 const DASHBOARD_ACCOUNT_USAGE_LIMIT: u32 = 4;
@@ -69,7 +65,7 @@ struct DashboardSummaryData {
     trend: DashboardTrendData,
     health_timeline: DashboardHealthTimelineData,
     account_usage: Vec<DashboardAccountUsageData>,
-    service_statuses: Vec<DashboardServiceStatusData>,
+    wire_profile: DashboardWireProfileData,
     usage_records: Vec<DashboardUsageRecordData>,
     pool_summary: AccountPoolDiagnostics,
     capacity_info: AccountCapacityDiagnostics,
@@ -114,11 +110,50 @@ struct DashboardUsageRecordData {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DashboardServiceStatusData {
-    label: String,
-    value: String,
-    detail: String,
-    tone: String,
+struct DashboardWireProfileData {
+    originator: String,
+    codex_version: String,
+    desktop_version: String,
+    desktop_build: String,
+    target: DashboardWireTargetData,
+    user_agent: String,
+    verified_at: DateTime<Utc>,
+    release: DashboardDesktopReleaseData,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardWireTargetData {
+    os_type: String,
+    os_version: String,
+    arch: String,
+    terminal: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardDesktopReleaseData {
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checked_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest_build: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    published_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    minimum_system_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hardware_requirements: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    download_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    download_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signature_present: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -140,35 +175,6 @@ struct AccountCapacityDiagnostics {
     total_slots: usize,
     used_slots: usize,
     available_slots: usize,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FingerprintDiagnostics {
-    source: &'static str,
-    originator: String,
-    app_version: String,
-    build_number: String,
-    platform: String,
-    arch: String,
-    chromium_version: String,
-    user_agent: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    updated_at: Option<String>,
-}
-
-fn fingerprint_diagnostics(fingerprint: &Fingerprint) -> FingerprintDiagnostics {
-    FingerprintDiagnostics {
-        source: "runtime",
-        originator: fingerprint.originator.clone(),
-        app_version: fingerprint.app_version.clone(),
-        build_number: fingerprint.build_number.clone(),
-        platform: fingerprint.platform.clone(),
-        arch: fingerprint.arch.clone(),
-        chromium_version: fingerprint.chromium_version.clone(),
-        user_agent: fingerprint.user_agent(),
-        updated_at: fingerprint.updated_at.clone(),
-    }
 }
 
 impl From<AccountCapacitySummary> for AccountCapacityDiagnostics {
@@ -266,7 +272,7 @@ pub(crate) async fn dashboard_summary(
                 &quota_used_by_account,
                 now,
             ),
-            service_statuses: service_status_data(&state),
+            wire_profile: wire_profile_data(&state),
             usage_records: dashboard_usage_records,
             pool_summary,
             capacity_info: AccountCapacityDiagnostics::from(capacity),
@@ -554,66 +560,53 @@ fn dashboard_usage_record_data(
     }
 }
 
-fn service_status_data(state: &AppState) -> Vec<DashboardServiceStatusData> {
-    let current_fingerprint = state.services.fingerprint.snapshot();
-    let fingerprint = fingerprint_diagnostics(&current_fingerprint);
-    vec![
-        DashboardServiceStatusData {
-            label: "客户端版本".to_string(),
-            value: empty_dash(fingerprint.app_version),
-            detail: if fingerprint.build_number.trim().is_empty() {
-                "-".to_string()
-            } else {
-                format!("Build {}", fingerprint.build_number)
-            },
-            tone: "info".to_string(),
-        },
-        DashboardServiceStatusData {
-            label: "平台架构".to_string(),
-            value: empty_dash(fingerprint.platform),
-            detail: empty_dash(fingerprint.arch),
-            tone: "info".to_string(),
-        },
-        DashboardServiceStatusData {
-            label: "Chromium".to_string(),
-            value: if fingerprint.chromium_version.trim().is_empty() {
-                "-".to_string()
-            } else {
-                format!("v{}", fingerprint.chromium_version)
-            },
-            detail: empty_dash(fingerprint.originator),
-            tone: "normal".to_string(),
-        },
-        DashboardServiceStatusData {
-            label: "更新时间".to_string(),
-            value: format_fingerprint_updated_at(fingerprint.updated_at),
-            detail: String::new(),
-            tone: "normal".to_string(),
-        },
-        DashboardServiceStatusData {
-            label: "User Agent".to_string(),
-            value: fingerprint.user_agent,
-            detail: String::new(),
-            tone: "normal".to_string(),
-        },
-    ]
-}
-
-fn empty_dash(value: String) -> String {
-    if value.trim().is_empty() {
-        "-".to_string()
+fn wire_profile_data(state: &AppState) -> DashboardWireProfileData {
+    let profile = &state.services.wire_profile;
+    let release_snapshot = state.services.desktop_release.snapshot();
+    let release_status = if release_snapshot.last_error.is_some() {
+        "check_failed"
+    } else if let Some(latest) = &release_snapshot.latest {
+        if latest.version == profile.desktop_version && latest.build == profile.desktop_build {
+            "aligned"
+        } else {
+            "review_required"
+        }
     } else {
-        value
-    }
-}
-
-fn format_fingerprint_updated_at(value: Option<String>) -> String {
-    let Some(value) = value else {
-        return "-".to_string();
+        "unchecked"
     };
-    let value = value.trim();
-    if value.is_empty() {
-        return "-".to_string();
+    let latest = release_snapshot.latest;
+
+    DashboardWireProfileData {
+        originator: profile.originator.clone(),
+        codex_version: profile.codex_version.clone(),
+        desktop_version: profile.desktop_version.clone(),
+        desktop_build: profile.desktop_build.clone(),
+        target: DashboardWireTargetData {
+            os_type: profile.os_type.clone(),
+            os_version: profile.os_version.clone(),
+            arch: profile.arch.clone(),
+            terminal: profile.terminal.clone(),
+        },
+        user_agent: profile.user_agent(),
+        verified_at: profile.verified_at,
+        release: DashboardDesktopReleaseData {
+            status: release_status,
+            checked_at: release_snapshot.checked_at,
+            latest_version: latest.as_ref().map(|release| release.version.clone()),
+            latest_build: latest.as_ref().map(|release| release.build.clone()),
+            published_at: latest.as_ref().and_then(|release| release.published_at),
+            minimum_system_version: latest
+                .as_ref()
+                .and_then(|release| release.minimum_system_version.clone()),
+            hardware_requirements: latest
+                .as_ref()
+                .and_then(|release| release.hardware_requirements.clone()),
+            download_url: latest
+                .as_ref()
+                .and_then(|release| release.download_url.clone()),
+            download_size: latest.as_ref().and_then(|release| release.download_size),
+            signature_present: latest.as_ref().map(|release| release.signature_present),
+            error: release_snapshot.last_error,
+        },
     }
-    china_datetime_rfc3339_str(value)
 }

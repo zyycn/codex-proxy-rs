@@ -25,8 +25,6 @@ async fn postgres_schema_is_terminal_v1_without_unused_storage() {
                 "accounts",
                 "admin_users",
                 "client_api_keys",
-                "fingerprint_update_history",
-                "fingerprints",
                 "ops_error_logs",
                 "request_time_buckets",
                 "runtime_settings",
