@@ -1,13 +1,7 @@
 <script setup lang="ts">
-import {
-  onClickOutside,
-  onKeyStroke,
-  useEventListener,
-  useThrottleFn,
-  whenever,
-} from '@vueuse/core'
+import { onClickOutside, useEventListener, useThrottleFn, whenever } from '@vueuse/core'
 import { clamp } from 'es-toolkit'
-import { computed, nextTick, onBeforeUnmount, ref, shallowRef, useAttrs } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef, useAttrs, watch } from 'vue'
 import type { CSSProperties } from 'vue'
 
 type PopoverPlacement =
@@ -36,6 +30,9 @@ const props = withDefaults(
     width?: number | string
     disabled?: boolean
     panelClass?: string
+    triggerClass?: string
+    anchorElement?: HTMLElement | null
+    animatePosition?: boolean
   }>(),
   {
     placement: 'bottom-end',
@@ -43,6 +40,9 @@ const props = withDefaults(
     offset: 6,
     disabled: false,
     panelClass: '',
+    triggerClass: '',
+    anchorElement: null,
+    animatePosition: false,
   },
 )
 
@@ -55,9 +55,13 @@ const popoverRef = ref<HTMLElement | null>(null)
 const popoverStyle = ref<CSSProperties>({})
 const popoverArrowStyle = ref<CSSProperties>({})
 const hoverCloseTimer = shallowRef<number>()
+const viewportTarget = computed(() => (open.value && typeof window !== 'undefined' ? window : null))
 
 const popoverClasses = computed(() => [
   'fixed z-50 overflow-visible rounded-(--cp-popover-radius) border-0 bg-(--cp-bg-surface) p-1.5 text-left shadow-(--cp-shadow-popover)',
+  props.animatePosition
+    ? 'transition-[left,top] duration-150 ease-out motion-reduce:transition-none'
+    : undefined,
   props.panelClass,
 ])
 
@@ -76,10 +80,11 @@ function toCssLength(value?: number | string) {
 }
 
 function updatePopoverPosition() {
-  if (!open.value || !triggerRef.value) return
+  const anchorElement = props.anchorElement ?? triggerRef.value
+  if (!open.value || !anchorElement) return
 
   const viewportPadding = 8
-  const triggerRect = triggerRef.value.getBoundingClientRect()
+  const triggerRect = anchorElement.getBoundingClientRect()
   const panelRect = popoverRef.value?.getBoundingClientRect()
   const panelWidth = Math.max(
     panelRect?.width ?? 0,
@@ -314,15 +319,23 @@ whenever(open, async () => {
   await nextTick()
   updatePopoverPosition()
 })
+watch(
+  () => props.anchorElement,
+  async () => {
+    if (!open.value) return
+    await nextTick()
+    updatePopoverPosition()
+  },
+)
 
 onClickOutside(rootRef, closePopover, { ignore: [popoverRef] })
-onKeyStroke('Escape', () => {
-  if (open.value) {
+useEventListener(viewportTarget, 'keydown', (event) => {
+  if (event instanceof KeyboardEvent && event.key === 'Escape') {
     closePopover()
   }
 })
-useEventListener(window, 'resize', updatePopoverPositionThrottled)
-useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: true })
+useEventListener(viewportTarget, 'resize', updatePopoverPositionThrottled)
+useEventListener(viewportTarget, 'scroll', updatePopoverPositionThrottled, { capture: true })
 onBeforeUnmount(clearHoverCloseTimer)
 </script>
 
@@ -331,6 +344,7 @@ onBeforeUnmount(clearHoverCloseTimer)
     <div
       ref="triggerRef"
       class="inline-flex"
+      :class="props.triggerClass"
       @click.stop="togglePopover"
       @keydown="handleTriggerKeydown"
       @mouseenter="handleHoverEnter"
@@ -341,10 +355,10 @@ onBeforeUnmount(clearHoverCloseTimer)
 
     <Teleport to="body">
       <Transition
-        enter-active-class="transition-[opacity,transform] duration-150 ease-out"
+        enter-active-class="transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none"
         enter-from-class="-translate-y-1 opacity-0"
         enter-to-class="translate-y-0 opacity-100"
-        leave-active-class="transition-opacity duration-150 ease-in"
+        leave-active-class="transition-opacity duration-150 ease-in motion-reduce:transition-none"
         leave-from-class="opacity-100"
         leave-to-class="opacity-0"
       >
@@ -358,6 +372,11 @@ onBeforeUnmount(clearHoverCloseTimer)
         >
           <span
             class="pointer-events-none absolute size-2 rotate-45 bg-inherit"
+            :class="
+              props.animatePosition
+                ? 'transition-[left,top] duration-150 ease-out motion-reduce:transition-none'
+                : undefined
+            "
             :style="popoverArrowStyle"
           />
           <slot :open="open" :close="closePopover" :toggle="togglePopover" />

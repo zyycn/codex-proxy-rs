@@ -22,8 +22,9 @@ fn config_loader_should_load_complete_example() {
             config.server.host.as_str(),
             config.server.port,
             config.api.base_url.as_str(),
-            config.fingerprint.app_version.as_str(),
-            config.fingerprint.build_number.as_str(),
+            config.wire_profile.codex_version.as_str(),
+            config.wire_profile.desktop_version.as_str(),
+            config.wire_profile.desktop_build.as_str(),
             config.quota.refresh_interval_minutes,
             config.ws_pool.initial_event_timeout_ms,
             config.admin.default_username.as_str(),
@@ -33,8 +34,9 @@ fn config_loader_should_load_complete_example() {
             "127.0.0.1",
             8080,
             "https://chatgpt.com/backend-api",
-            "26.707.51957",
-            "5175",
+            "0.144.2",
+            "26.707.72221",
+            "5307",
             5,
             20_000,
             "admin@cpr.local",
@@ -158,7 +160,7 @@ fn config_loader_should_reject_missing_explicit_fields() {
 
 #[test]
 fn config_loader_should_reject_unsupported_schema_version() {
-    let yaml = complete_config().replace("schema_version: 1", "schema_version: 2");
+    let yaml = complete_config().replace("schema_version: 1", "schema_version: 0");
     let directory = write_config(&yaml);
 
     let error = BootstrapConfig::load_from_path(directory.path().join("config.yaml")).unwrap_err();
@@ -223,18 +225,25 @@ fn config_loader_should_reject_admin_password_with_compose_interpolation() {
 }
 
 #[test]
-fn config_loader_should_reject_duplicate_fingerprint_headers() {
-    let yaml = complete_config().replace(
-        "      - name: 'Accept-Language'",
-        "      - name: 'Accept-Encoding'",
-    );
+fn config_loader_should_reject_legacy_fingerprint_section() {
+    let yaml = complete_config().replace("  wire_profile:", "  fingerprint:");
+    let directory = write_config(&yaml);
+
+    let error = BootstrapConfig::load_from_path(directory.path().join("config.yaml")).unwrap_err();
+
+    assert!(matches!(error, ConfigError::InvalidDocument { .. }));
+}
+
+#[test]
+fn config_loader_should_reject_invalid_codex_core_version() {
+    let yaml = complete_config().replace("codex_version: '0.144.2'", "codex_version: 'Desktop'");
     let directory = write_config(&yaml);
 
     let error = BootstrapConfig::load_from_path(directory.path().join("config.yaml")).unwrap_err();
 
     assert_eq!(
         error,
-        ConfigError::InvalidField("fingerprint.default_headers")
+        ConfigError::InvalidField("wire_profile.codex_version")
     );
 }
 

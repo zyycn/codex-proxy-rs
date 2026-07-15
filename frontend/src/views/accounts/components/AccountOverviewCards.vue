@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { AlertTriangle, Gauge, ShieldCheck, Users } from '@lucide/vue'
 
 import BaseCard from '@/components/base/BaseCard.vue'
+import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
 
 const props = defineProps<{
   summary: any
@@ -80,12 +81,13 @@ function overviewIconClass(tone: string) {
             {{ item.caption }}
           </p>
         </div>
-        <span
+        <BaseMotionIcon
+          aria-hidden="true"
           class="inline-flex size-9 shrink-0 items-center justify-center self-start rounded-lg"
           :class="overviewIconClass(item.tone)"
         >
           <component :is="item.icon" class="size-4.5" />
-        </span>
+        </BaseMotionIcon>
       </div>
     </BaseCard>
   </div>

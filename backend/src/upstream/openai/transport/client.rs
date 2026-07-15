@@ -13,15 +13,15 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use reqwest::{
     Client, Response as ReqwestResponse, StatusCode,
     header::{
-        ACCEPT, ACCEPT_ENCODING, AUTHORIZATION, CONTENT_TYPE, COOKIE, HeaderMap, HeaderName,
-        HeaderValue, RETRY_AFTER, USER_AGENT,
+        ACCEPT, AUTHORIZATION, CONTENT_TYPE, COOKIE, HeaderMap, HeaderName, HeaderValue,
+        RETRY_AFTER, USER_AGENT,
     },
 };
 use serde_json::{Value, map::Map};
 use thiserror::Error;
 use tokio_tungstenite::tungstenite::handshake::client::generate_key;
 
-use crate::upstream::openai::fingerprint::{Fingerprint, RuntimeFingerprint};
+use crate::upstream::openai::profile::CodexWireProfile;
 use crate::upstream::openai::protocol::events::{extract_sse_usage, retry_after_seconds_from_body};
 use crate::upstream::openai::protocol::responses::{
     CodexResponsesRequest, TransportRequirement, transport_requirement,
@@ -33,10 +33,7 @@ use crate::upstream::openai::protocol::websocket::{
 
 use super::diagnostics::CodexUpstreamDiagnostics;
 use super::endpoints::{CODEX_RESPONSES_PATH, endpoint_url};
-use super::headers::{
-    build_ordered_codex_base_headers, insert_optional_header, insert_ordered_headers,
-    websocket_header_pairs,
-};
+use super::headers::{build_codex_base_headers, insert_optional_header, websocket_header_pairs};
 use super::response_meta;
 use super::tls::{CustomCaError, build_reqwest_client_with_custom_ca, custom_ca_env_cache_key};
 use super::websocket::{
@@ -309,7 +306,7 @@ pub enum CodexTransportDecision {
     ConnectedWebSocket,
     ExactWebSocket,
     RequiredWebSocket,
-    Http2WebSocketSlow,
+    Http2WebSocketBudgetExhausted,
     Http2BreakerOpen,
     Http2PoolUnavailable,
     Http2PreSendFailure,
@@ -323,7 +320,7 @@ impl CodexTransportDecision {
             Self::ConnectedWebSocket => "ws_connected_fast",
             Self::ExactWebSocket => "ws_exact_required",
             Self::RequiredWebSocket => "ws_required",
-            Self::Http2WebSocketSlow => "http2_ws_slow",
+            Self::Http2WebSocketBudgetExhausted => "http2_ws_budget_exhausted",
             Self::Http2BreakerOpen => "http2_breaker_open",
             Self::Http2PoolUnavailable => "http2_pool_unavailable",
             Self::Http2PreSendFailure => "http2_ws_pre_send_failure",
@@ -385,7 +382,7 @@ pub struct CodexBackendStreamingResponse {
 pub struct CodexBackendClient {
     pub(super) client: Client,
     pub(super) base_url: String,
-    fingerprint: RuntimeFingerprint,
+    profile: Arc<CodexWireProfile>,
     websocket_pool: Option<Arc<CodexWebSocketPool>>,
     websocket_initial_event_timeout: Option<Duration>,
     websocket_fast_path_budget: Duration,
@@ -627,7 +624,7 @@ fn websocket_success_decision(
 fn http_fallback_decision(error: &CodexWebSocketExchangeError) -> CodexTransportDecision {
     match error {
         CodexWebSocketExchangeError::FastPathTimeout { .. } => {
-            CodexTransportDecision::Http2WebSocketSlow
+            CodexTransportDecision::Http2WebSocketBudgetExhausted
         }
         CodexWebSocketExchangeError::OriginCircuitOpen
         | CodexWebSocketExchangeError::OriginHalfOpenBusy => {

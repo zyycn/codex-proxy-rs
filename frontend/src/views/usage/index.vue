@@ -36,7 +36,8 @@ const recordViewOptions = [
   { label: '成功记录', value: 'success' },
   { label: '错误排查', value: 'errors' },
 ]
-const { timeRange, timeRangeParams, refreshTimeRangeEnd } = useUsageTimeRange()
+const { timeRange, timeRangeParams, refreshTimeRangeEnd, latestTimeRangeParams } =
+  useUsageTimeRange()
 
 const {
   page,
@@ -56,7 +57,6 @@ const {
   insights,
   refreshingList,
   diagnosticDimension,
-  diagnosticLoading,
   loadUsageRecords,
   refreshUsageRecords,
 } = useUsageRecordsTable({
@@ -65,7 +65,7 @@ const {
   searchQuery,
   timeRangeParams,
   totalRecords,
-  refreshTimeRangeEnd,
+  latestTimeRangeParams,
 })
 
 const { showDetailModal, selectedUsageRecord, handleViewDetail } = useUsageRecordDetail({
@@ -104,7 +104,6 @@ watch(timeRange, () => {
       :overview="insights.overview"
       :diagnostics="insights.diagnostics"
       :loading="analyticsLoading"
-      :diagnostic-loading="diagnosticLoading"
     />
 
     <BaseCard

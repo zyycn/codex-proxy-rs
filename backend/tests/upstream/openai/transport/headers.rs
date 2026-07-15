@@ -1,28 +1,46 @@
 use super::*;
-use codex_proxy_rs::upstream::openai::fingerprint::RuntimeFingerprint;
-use codex_proxy_rs::upstream::openai::transport::build_ordered_codex_headers;
+use codex_proxy_rs::upstream::openai::transport::build_codex_headers;
 use codex_proxy_rs::upstream::openai::transport::websocket::CodexWebSocketConnection;
 use serde_json::Value;
 
 #[test]
-fn ordered_codex_headers_should_preserve_fingerprint_priority_and_request_fields() {
-    let fingerprint = crate::support::fingerprint::test_fingerprint();
+fn codex_headers_should_use_wire_profile_without_browser_metadata() {
+    let profile = crate::support::wire_profile::test_wire_profile_value();
 
-    let headers = build_ordered_codex_headers(
-        &fingerprint,
+    let headers = build_codex_headers(
+        &profile,
         "access-token",
         Some("acct-1"),
         Some("turn-1"),
         "req-1",
-    );
-    let keys = headers.keys().cloned().collect::<Vec<_>>();
+    )
+    .expect("valid profile headers");
 
-    assert_eq!(headers["authorization"], "Bearer access-token");
-    assert_eq!(headers["chatgpt-account-id"], "acct-1");
-    assert_eq!(headers["x-client-request-id"], "req-1");
-    assert_eq!(headers["x-codex-turn-state"], "turn-1");
-    assert_eq!(headers["accept"], "text/event-stream");
-    assert_eq!(keys.first().map(String::as_str), Some("authorization"));
+    let value = |name: &str| headers.get(name).and_then(|value| value.to_str().ok());
+    assert_eq!(value("authorization"), Some("Bearer access-token"));
+    assert_eq!(value("chatgpt-account-id"), Some("acct-1"));
+    assert_eq!(value("originator"), Some("Codex Desktop"));
+    assert_eq!(
+        value("user-agent"),
+        Some("Codex Desktop/0.144.2 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.707.72221)")
+    );
+    assert_eq!(value("x-client-request-id"), Some("req-1"));
+    assert_eq!(value("x-codex-turn-state"), Some("turn-1"));
+    assert_eq!(value("accept"), Some("text/event-stream"));
+    for browser_header in [
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-site",
+        "sec-fetch-mode",
+        "sec-fetch-dest",
+        "accept-language",
+    ] {
+        assert!(
+            headers.get(browser_header).is_none(),
+            "sent {browser_header}"
+        );
+    }
 }
 
 #[test]
@@ -282,7 +300,7 @@ async fn codex_backend_client_websocket_should_forward_headers_and_preserve_payl
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     )
     .with_websocket_pool(pool);
 
@@ -433,7 +451,7 @@ async fn codex_backend_client_should_send_desktop_headers_and_capture_response_m
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         server.uri(),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     );
     let mut request =
         codex_proxy_rs::upstream::openai::protocol::responses::CodexResponsesRequest::new_http_sse(
@@ -490,7 +508,7 @@ async fn codex_backend_client_should_send_desktop_headers_and_capture_response_m
 }
 
 #[tokio::test]
-async fn codex_backend_client_should_use_latest_runtime_fingerprint_for_new_requests() {
+async fn codex_backend_client_should_send_effective_wire_profile_user_agent() {
     let server = wiremock::MockServer::start().await;
     let sse_body = include_str!("../../../fixtures/responses/http_sse/completed_usage_basic.sse");
     wiremock::Mock::given(wiremock::matchers::method("POST"))
@@ -503,13 +521,12 @@ async fn codex_backend_client_should_use_latest_runtime_fingerprint_for_new_requ
         .mount(&server)
         .await;
 
-    let mut initial = crate::support::fingerprint::test_fingerprint();
-    initial.app_version = "26.800.1".to_string();
-    let runtime_fingerprint = RuntimeFingerprint::new(initial);
+    let profile = crate::support::wire_profile::test_wire_profile();
+    let expected_user_agent = profile.user_agent();
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         server.uri(),
-        runtime_fingerprint.clone(),
+        profile,
     );
     let mut request =
         codex_proxy_rs::upstream::openai::protocol::responses::CodexResponsesRequest::new_http_sse(
@@ -538,19 +555,9 @@ async fn codex_backend_client_should_use_latest_runtime_fingerprint_for_new_requ
     };
 
     client
-        .create_response(&request, request_context("req_fingerprint_1"))
+        .create_response(&request, request_context("req_profile"))
         .await
-        .expect("first response should succeed");
-
-    let mut updated = runtime_fingerprint.snapshot();
-    updated.app_version = "26.900.1".to_string();
-    updated.build_number = "7001".to_string();
-    runtime_fingerprint.replace(updated);
-
-    client
-        .create_response(&request, request_context("req_fingerprint_2"))
-        .await
-        .expect("second response should succeed");
+        .expect("response should succeed");
 
     let user_agents = server
         .received_requests()
@@ -568,13 +575,7 @@ async fn codex_backend_client_should_use_latest_runtime_fingerprint_for_new_requ
         })
         .collect::<Vec<_>>();
 
-    assert_eq!(
-        user_agents,
-        vec![
-            "Codex Desktop/26.800.1 (darwin; arm64)".to_string(),
-            "Codex Desktop/26.900.1 (darwin; arm64)".to_string(),
-        ]
-    );
+    assert_eq!(user_agents, vec![expected_user_agent]);
 }
 
 #[tokio::test]
@@ -592,7 +593,7 @@ async fn codex_backend_client_usage_should_use_wham_usage_headers() {
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         server.uri(),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     );
 
     let usage = client
@@ -636,7 +637,7 @@ async fn codex_backend_client_usage_should_use_wham_usage_headers() {
         headers
             .get("user-agent")
             .and_then(|value| value.to_str().ok()),
-        Some("Codex Desktop/26.707.51957 (darwin; arm64)")
+        Some("Codex Desktop/0.144.2 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.707.72221)")
     );
     assert_eq!(
         headers.get("accept").and_then(|value| value.to_str().ok()),
@@ -679,12 +680,12 @@ async fn codex_backend_client_models_should_use_original_auxiliary_headers() {
         })))
         .mount(&server)
         .await;
-    let fingerprint = crate::support::fingerprint::runtime_test_fingerprint();
-    let client_version = fingerprint.current().app_version.clone();
+    let profile = crate::support::wire_profile::test_wire_profile();
+    let client_version = profile.codex_version.clone();
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         server.uri(),
-        fingerprint,
+        profile,
     );
 
     let models = client
@@ -732,7 +733,7 @@ async fn codex_backend_client_models_should_use_original_auxiliary_headers() {
 }
 
 #[tokio::test]
-async fn codex_backend_client_should_send_http_sse_headers_in_fingerprint_order() {
+async fn codex_backend_client_should_send_codex_context_without_browser_headers() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -758,7 +759,7 @@ async fn codex_backend_client_should_send_http_sse_headers_in_fingerprint_order(
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
     );
 
     client
@@ -788,36 +789,38 @@ async fn codex_backend_client_should_send_http_sse_headers_in_fingerprint_order(
 
     let raw_request = server.await.unwrap();
     let header_names = read_header_names(&raw_request);
-    assert_header_subsequence(
-        &header_names,
-        &[
-            "authorization",
-            "chatgpt-account-id",
-            "originator",
-            "user-agent",
-            "sec-ch-ua",
-            "sec-ch-ua-mobile",
-            "sec-ch-ua-platform",
-            "accept-encoding",
-            "accept-language",
-            "sec-fetch-site",
-            "sec-fetch-mode",
-            "sec-fetch-dest",
-            "content-type",
-            "cookie",
-            "accept",
-            "openai-beta",
-            "x-openai-internal-codex-residency",
-            "x-client-request-id",
-            "x-codex-installation-id",
-            "session-id",
-            "x-codex-window-id",
-            "x-codex-turn-state",
-            "x-codex-turn-metadata",
-            "x-codex-beta-features",
-            "x-responsesapi-include-timing-metrics",
-            "version",
-            "x-codex-parent-thread-id",
-        ],
-    );
+    for required_header in [
+        "authorization",
+        "chatgpt-account-id",
+        "originator",
+        "user-agent",
+        "content-type",
+        "cookie",
+        "accept",
+        "openai-beta",
+        "x-openai-internal-codex-residency",
+        "x-client-request-id",
+        "x-codex-installation-id",
+        "session-id",
+        "x-codex-window-id",
+        "x-codex-turn-state",
+        "x-codex-turn-metadata",
+        "x-codex-beta-features",
+        "x-responsesapi-include-timing-metrics",
+        "version",
+        "x-codex-parent-thread-id",
+    ] {
+        assert!(header_names.iter().any(|name| name == required_header));
+    }
+    for browser_header in [
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "accept-language",
+        "sec-fetch-site",
+        "sec-fetch-mode",
+        "sec-fetch-dest",
+    ] {
+        assert!(!header_names.iter().any(|name| name == browser_header));
+    }
 }

@@ -37,7 +37,7 @@ function showDetail(record: any) {
 </script>
 
 <template>
-  <div class="grid min-h-[520px] flex-1 grid-rows-[auto_minmax(0,1fr)] gap-3">
+  <div class="grid min-h-130 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-3">
     <div
       class="flex w-full flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center"
       role="group"

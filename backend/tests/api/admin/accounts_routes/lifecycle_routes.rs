@@ -11,12 +11,8 @@ async fn admin_accounts_lifecycle_should_update_and_delete_accounts() {
     seed_account_related_rows(&pool, "acct_lifecycle").await;
     let config = test_config(test_database_url());
     let stores = background_task_stores(pool.clone(), redis.clone());
-    let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = Arc::new(Services::new(
-        &config,
-        stores,
-        runtime_fingerprint(fingerprint),
-    ));
+    let profile = crate::support::wire_profile::test_wire_profile_value();
+    let services = Arc::new(Services::new(&config, stores, wire_profile(profile)));
     let state = AppState::from(services.as_ref());
     let session_affinity =
         codex_proxy_rs::dispatch::affinity::RedisSessionAffinityStore::new(redis);
@@ -873,12 +869,8 @@ async fn admin_account_create_should_derive_claims_and_store_plain_tokens() {
     );
     let config = test_config(test_database_url());
     let stores = background_task_stores(pool.clone(), redis);
-    let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = Arc::new(Services::new(
-        &config,
-        stores,
-        runtime_fingerprint(fingerprint),
-    ));
+    let profile = crate::support::wire_profile::test_wire_profile_value();
+    let services = Arc::new(Services::new(&config, stores, wire_profile(profile)));
     let state = AppState::from(services.as_ref());
     let app = codex_proxy_rs::api::router::router().with_state(state.clone());
 
@@ -907,12 +899,8 @@ async fn admin_account_manual_create_should_reject_missing_invalid_expired_or_un
     seed_admin_session(&pool, &redis, "session_1").await;
     let config = test_config(test_database_url());
     let stores = background_task_stores(pool.clone(), redis);
-    let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = Arc::new(Services::new(
-        &config,
-        stores,
-        runtime_fingerprint(fingerprint),
-    ));
+    let profile = crate::support::wire_profile::test_wire_profile_value();
+    let services = Arc::new(Services::new(&config, stores, wire_profile(profile)));
     let state = AppState::from(services.as_ref());
     let app = codex_proxy_rs::api::router::router().with_state(state);
 

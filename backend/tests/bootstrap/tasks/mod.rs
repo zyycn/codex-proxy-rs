@@ -11,7 +11,9 @@ use codex_proxy_rs::telemetry::account_usage::store::{
     AccountUsageDelta, AccountUsageSnapshot, AccountUsageStore, AccountUsageStoreError,
     AccountUsageWindow,
 };
-use codex_proxy_rs::upstream::openai::fingerprint::{PgFingerprintStore, RuntimeFingerprint};
+use codex_proxy_rs::upstream::openai::desktop_release::{
+    DesktopReleaseSnapshot, DesktopReleaseStatus,
+};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
@@ -21,7 +23,7 @@ use crate::support::storage::init_test_db;
 
 mod cleanup;
 mod coordinator;
-mod fingerprint_update;
+mod desktop_release_update;
 mod model_refresh;
 mod retention_trim;
 
@@ -124,35 +126,27 @@ async fn mount_appcast(server: &MockServer, body: &str) {
         .await;
 }
 
-async fn wait_for_current_fingerprint_version(
-    repo: &PgFingerprintStore,
-) -> codex_proxy_rs::upstream::openai::fingerprint::Fingerprint {
+async fn wait_for_latest_desktop_release(
+    status: &DesktopReleaseStatus,
+    expected_version: &str,
+) -> DesktopReleaseSnapshot {
     let deadline = tokio::time::Instant::now() + StdDuration::from_secs(2);
     loop {
-        if let Some(stored) = repo
-            .load_current()
-            .await
-            .expect("current fingerprint should load")
-            .filter(|stored| stored.app_version == "26.900.1")
+        let snapshot = status.snapshot();
+        if snapshot
+            .latest
+            .as_ref()
+            .is_some_and(|release| release.version == expected_version)
         {
-            return stored;
+            return snapshot;
         }
 
         assert!(
             tokio::time::Instant::now() < deadline,
-            "fingerprint update task did not persist auto update before timeout"
+            "Desktop release task did not refresh appcast state before timeout"
         );
         tokio::time::sleep(StdDuration::from_millis(25)).await;
     }
-}
-
-async fn runtime_fingerprint_from_repo(repo: &PgFingerprintStore) -> RuntimeFingerprint {
-    RuntimeFingerprint::new(
-        repo.load_current()
-            .await
-            .expect("current fingerprint should load")
-            .expect("current fingerprint should exist"),
-    )
 }
 
 async fn wait_for_appcast_requests(server: &MockServer, expected_count: usize) {
@@ -171,7 +165,7 @@ async fn wait_for_appcast_requests(server: &MockServer, expected_count: usize) {
 
         assert!(
             tokio::time::Instant::now() < deadline,
-            "fingerprint update task did not request appcast before timeout"
+            "Desktop release task did not request appcast before timeout"
         );
         tokio::time::sleep(StdDuration::from_millis(25)).await;
     }

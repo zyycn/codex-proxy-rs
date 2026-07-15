@@ -5,6 +5,7 @@ import { computed, shallowRef } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
 
 type ThemeName = 'light' | 'dark'
 type PasswordInputType = 'password' | 'text'
@@ -56,9 +57,9 @@ function togglePasswordVisible(): void {
 
     <header class="flex min-w-0 items-center justify-between gap-4.5 max-[560px]:gap-3.5">
       <div class="flex min-w-0 items-center gap-3">
-        <span class="login-logo">
+        <BaseMotionIcon aria-hidden="true" variant="brand" class="login-logo">
           <Cat :size="20" :stroke-width="2.1" />
-        </span>
+        </BaseMotionIcon>
         <span class="grid min-w-0 gap-1">
           <strong
             class="text-[17px] leading-[1.12] font-semibold text-(--login-brand-title) max-[560px]:text-[15px]"

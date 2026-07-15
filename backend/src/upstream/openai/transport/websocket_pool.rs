@@ -1,12 +1,16 @@
 //! Codex WebSocket 连接池。
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::{
     sync::{Mutex, watch},
     time::Instant,
+};
+use tokio_util::{
+    sync::CancellationToken,
+    task::{TaskTracker, task_tracker::TaskTrackerToken},
 };
 use uuid::Uuid;
 
@@ -63,6 +67,8 @@ impl CodexWebSocketPoolKey {
 pub struct CodexWebSocketPool {
     inner: Arc<Mutex<WebSocketPoolState>>,
     config: CodexWebSocketPoolConfig,
+    tasks: TaskTracker,
+    shutdown: CancellationToken,
 }
 
 impl Default for CodexWebSocketPool {
@@ -138,6 +144,8 @@ impl CodexWebSocketPool {
         let pool = Self {
             inner: Arc::new(Mutex::new(WebSocketPoolState::default())),
             config,
+            tasks: TaskTracker::new(),
+            shutdown: CancellationToken::new(),
         };
         pool.spawn_maintenance_task();
         pool
@@ -151,6 +159,11 @@ impl CodexWebSocketPool {
     /// 建连并发送后首个上游事件到达前的超时；`None` 表示禁用。
     pub(crate) fn initial_event_timeout(&self) -> Option<Duration> {
         self.config.initial_event_timeout
+    }
+
+    /// 注册由连接池生命周期托管的 opening 任务。
+    pub(crate) fn spawn_connect_task(&self, future: impl Future<Output = ()> + Send + 'static) {
+        drop(self.tasks.spawn(future));
     }
 
     pub(crate) async fn acquire(&self, key: &CodexWebSocketPoolKey) -> WebSocketPoolAcquire {
@@ -167,6 +180,7 @@ impl CodexWebSocketPool {
                 Some(WebSocketPoolSlot::Connecting(connecting)) => {
                     return WebSocketPoolAcquire::Wait(WebSocketPoolConnectWaiter {
                         receiver: connecting.outcome.subscribe(),
+                        started_at: connecting.started_at,
                     });
                 }
                 Some(WebSocketPoolSlot::Idle(_)) => {
@@ -199,8 +213,9 @@ impl CodexWebSocketPool {
                     key.clone(),
                     WebSocketPoolSlot::Connecting(WebSocketPoolConnecting {
                         id: lease.id,
-                        started_at: Instant::now(),
+                        started_at: lease.started_at,
                         outcome: lease.outcome.clone(),
+                        cancellation: lease.cancellation.clone(),
                     }),
                 );
                 WebSocketPoolAcquire::Connect(lease)
@@ -214,6 +229,39 @@ impl CodexWebSocketPool {
         }
 
         acquire
+    }
+
+    /// 只租用已经处于 Idle 的连接，不创建新的 Connecting slot。
+    pub(crate) async fn take_idle(
+        &self,
+        key: &CodexWebSocketPoolKey,
+    ) -> Option<(Box<PooledWebSocketConnection>, WebSocketPoolLease)> {
+        let mut expired_connection = None;
+        let acquired = {
+            let mut state = self.inner.lock().await;
+            if !self.config.enabled || state.shutting_down {
+                return None;
+            }
+            let Some(WebSocketPoolSlot::Idle(connection)) = state.slots.remove(key) else {
+                return None;
+            };
+            if connection.created_at.elapsed() < self.config.max_age
+                && !connection.websocket.is_closed()
+            {
+                let lease = WebSocketPoolLease::reserve(self.clone(), key.clone());
+                state
+                    .slots
+                    .insert(key.clone(), WebSocketPoolSlot::Busy(lease.reservation));
+                Some((connection, lease))
+            } else {
+                expired_connection = Some(*connection);
+                None
+            }
+        };
+        if let Some(connection) = expired_connection {
+            close_pooled_connection(connection).await;
+        }
+        acquired
     }
 
     async fn put_reserved(
@@ -256,26 +304,22 @@ impl CodexWebSocketPool {
         }
     }
 
-    async fn finish_connect(
+    async fn finish_connect_idle(
         &self,
         key: &CodexWebSocketPoolKey,
         connect_id: Uuid,
         connection: PooledWebSocketConnection,
-    ) -> Result<WebSocketPoolConnected, Box<PooledWebSocketConnection>> {
+    ) -> Result<(), Box<PooledWebSocketConnection>> {
         let mut state = self.inner.lock().await;
         let owns_connect = matches!(
             state.slots.get(key),
             Some(WebSocketPoolSlot::Connecting(connecting)) if connecting.id == connect_id
         );
         if owns_connect && !state.shutting_down && self.config.enabled {
-            let lease = WebSocketPoolLease::reserve(self.clone(), key.clone());
             state
                 .slots
-                .insert(key.clone(), WebSocketPoolSlot::Busy(lease.reservation));
-            Ok(WebSocketPoolConnected {
-                connection: Box::new(connection),
-                lease,
-            })
+                .insert(key.clone(), WebSocketPoolSlot::Idle(Box::new(connection)));
+            Ok(())
         } else {
             if owns_connect {
                 state.slots.remove(key);
@@ -294,7 +338,7 @@ impl CodexWebSocketPool {
         }
     }
 
-    /// 驱逐指定账号的 idle 连接，并阻止已占用 slot 回收到池中。
+    /// 驱逐指定账号的全部 slot，取消 opening，并阻止 busy 连接回收到池中。
     pub async fn evict_account(&self, account_id: &str) {
         let mut idle_connections = Vec::new();
         {
@@ -311,6 +355,7 @@ impl CodexWebSocketPool {
                         idle_connections.push(*connection);
                     }
                     Some(WebSocketPoolSlot::Connecting(connecting)) => {
+                        connecting.cancellation.cancel();
                         connecting
                             .outcome
                             .send_replace(WebSocketPoolConnectOutcome::Failed);
@@ -322,8 +367,10 @@ impl CodexWebSocketPool {
         close_pooled_connections(idle_connections).await;
     }
 
-    /// 关闭连接池，关闭所有 idle 连接，并让后续 acquire 直接绕过池。
+    /// 关闭连接池，取消受管任务、关闭 idle 连接，并让后续 acquire 直接绕过池。
     pub async fn shutdown(&self) {
+        self.tasks.close();
+        self.shutdown.cancel();
         let idle_connections = {
             let mut state = self.inner.lock().await;
             state.shutting_down = true;
@@ -333,6 +380,7 @@ impl CodexWebSocketPool {
                 .filter_map(|(_, slot)| match slot {
                     WebSocketPoolSlot::Idle(connection) => Some(*connection),
                     WebSocketPoolSlot::Connecting(connecting) => {
+                        connecting.cancellation.cancel();
                         connecting
                             .outcome
                             .send_replace(WebSocketPoolConnectOutcome::Failed);
@@ -343,6 +391,7 @@ impl CodexWebSocketPool {
                 .collect::<Vec<_>>()
         };
         close_pooled_connections(idle_connections).await;
+        self.tasks.wait().await;
     }
 
     /// 维护池 slot：清扫已死亡或超龄的 idle 连接，以及异常残留的 Busy reservation。
@@ -364,20 +413,30 @@ impl CodexWebSocketPool {
         };
         let inner = Arc::downgrade(&self.inner);
         let config = self.config;
-        tokio::spawn(async move {
+        let tasks = self.tasks.clone();
+        let shutdown = self.shutdown.clone();
+        drop(self.tasks.spawn(async move {
             let mut interval = tokio::time::interval(interval_duration);
             loop {
-                interval.tick().await;
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    _ = interval.tick() => {}
+                }
                 let Some(inner) = inner.upgrade() else {
                     break;
                 };
-                let pool = CodexWebSocketPool { inner, config };
+                let pool = CodexWebSocketPool {
+                    inner,
+                    config,
+                    tasks: tasks.clone(),
+                    shutdown: shutdown.clone(),
+                };
                 if pool.is_shutdown().await {
                     break;
                 }
                 pool.maintain_idle_connections().await;
             }
-        });
+        }));
     }
 
     /// 返回连接池是否已进入关闭状态。
@@ -428,6 +487,7 @@ impl CodexWebSocketPool {
                     );
                 }
                 Some(WebSocketPoolSlot::Connecting(connecting)) => {
+                    connecting.cancellation.cancel();
                     connecting
                         .outcome
                         .send_replace(WebSocketPoolConnectOutcome::Failed);
@@ -503,6 +563,7 @@ struct WebSocketPoolConnecting {
     id: Uuid,
     started_at: Instant,
     outcome: watch::Sender<WebSocketPoolConnectOutcome>,
+    cancellation: CancellationToken,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -514,9 +575,14 @@ pub(crate) enum WebSocketPoolConnectOutcome {
 
 pub(crate) struct WebSocketPoolConnectWaiter {
     receiver: watch::Receiver<WebSocketPoolConnectOutcome>,
+    started_at: Instant,
 }
 
 impl WebSocketPoolConnectWaiter {
+    pub(crate) fn remaining_budget(&self, budget: Duration) -> Duration {
+        budget.saturating_sub(self.started_at.elapsed())
+    }
+
     pub(crate) async fn wait(mut self) -> WebSocketPoolConnectOutcome {
         loop {
             let outcome = *self.receiver.borrow_and_update();
@@ -534,34 +600,50 @@ pub(crate) struct WebSocketPoolConnectLease {
     pool: CodexWebSocketPool,
     key: CodexWebSocketPoolKey,
     id: Uuid,
+    started_at: Instant,
     outcome: watch::Sender<WebSocketPoolConnectOutcome>,
+    cancellation: CancellationToken,
+    // slot 分配时即注册，封闭 acquire 与后台 task spawn 之间的 shutdown 竞态。
+    _task_registration: TaskTrackerToken,
     armed: bool,
-}
-
-pub(crate) struct WebSocketPoolConnected {
-    pub(crate) connection: Box<PooledWebSocketConnection>,
-    pub(crate) lease: WebSocketPoolLease,
 }
 
 impl WebSocketPoolConnectLease {
     fn reserve(pool: CodexWebSocketPool, key: CodexWebSocketPoolKey) -> Self {
         let (outcome, _) = watch::channel(WebSocketPoolConnectOutcome::Pending);
+        let cancellation = pool.shutdown.child_token();
+        let task_registration = pool.tasks.token();
         Self {
             pool,
             key,
             id: Uuid::new_v4(),
+            started_at: Instant::now(),
             outcome,
+            cancellation,
+            _task_registration: task_registration,
             armed: true,
         }
     }
 
-    pub(crate) async fn connected(
+    pub(crate) fn started_at(&self) -> Instant {
+        self.started_at
+    }
+
+    pub(crate) fn key(&self) -> &CodexWebSocketPoolKey {
+        &self.key
+    }
+
+    pub(crate) fn cancellation_token(&self) -> CancellationToken {
+        self.cancellation.clone()
+    }
+
+    pub(crate) async fn connected_idle(
         mut self,
         connection: PooledWebSocketConnection,
-    ) -> Result<WebSocketPoolConnected, Box<PooledWebSocketConnection>> {
+    ) -> Result<(), Box<PooledWebSocketConnection>> {
         let result = self
             .pool
-            .finish_connect(&self.key, self.id, connection)
+            .finish_connect_idle(&self.key, self.id, connection)
             .await;
         let outcome = if result.is_ok() {
             WebSocketPoolConnectOutcome::Ready
@@ -574,6 +656,7 @@ impl WebSocketPoolConnectLease {
     }
 
     pub(crate) async fn failed(mut self) {
+        self.cancellation.cancel();
         self.pool.fail_connect(&self.key, self.id).await;
         self.outcome
             .send_replace(WebSocketPoolConnectOutcome::Failed);
@@ -586,6 +669,7 @@ impl Drop for WebSocketPoolConnectLease {
         if !self.armed {
             return;
         }
+        self.cancellation.cancel();
         self.outcome
             .send_replace(WebSocketPoolConnectOutcome::Failed);
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {

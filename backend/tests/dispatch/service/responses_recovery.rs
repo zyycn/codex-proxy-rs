@@ -2010,20 +2010,8 @@ async fn responses_stream_should_fallback_to_next_account_after_rate_limit() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    let primary_usage: (i64, i64, i64) = sqlx::query_as(
-        "select request_count, input_tokens, output_tokens from account_usage where account_id = $1",
-    )
-    .bind("acct_primary")
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    let secondary_usage: (i64, i64, i64) = sqlx::query_as(
-        "select request_count, input_tokens, output_tokens from account_usage where account_id = $1",
-    )
-    .bind("acct_secondary")
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let primary_usage = wait_for_account_usage(&pool, "acct_primary", (1, 0, 0)).await;
+    let secondary_usage = wait_for_account_usage(&pool, "acct_secondary", (1, 4, 1)).await;
 
     assert_eq!(status, StatusCode::OK);
     assert!(content_type.starts_with("text/event-stream"));

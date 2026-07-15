@@ -1,7 +1,16 @@
 <script setup lang="ts">
-import { usePreferredReducedMotion } from '@vueuse/core'
+import { usePreferredReducedMotion, useTimeoutFn } from '@vueuse/core'
 import { gsap } from 'gsap'
-import { computed, nextTick, onMounted, ref, shallowRef, watch } from 'vue'
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  shallowRef,
+  useTemplateRef,
+  watch,
+} from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import {
@@ -21,6 +30,7 @@ import {
 } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
 import { useAuthStore } from '@/stores/modules/auth'
 import { useUiStore } from '@/stores/modules/ui'
@@ -67,7 +77,30 @@ const isActive = (path: string) => {
   return route.path.startsWith(path)
 }
 
+const activeNavIndex = computed(() => {
+  const index = navItems.findIndex((item) => isActive(item.path))
+  return Math.max(0, index)
+})
+const activeNavIndicatorStyle = computed(() => ({
+  transform: `translate3d(0, ${activeNavIndex.value * 58}px, 0)`,
+}))
+const navFeedbackMuted = shallowRef(false)
+const { start: restoreNavFeedback, stop: stopNavFeedbackRestore } = useTimeoutFn(
+  () => {
+    navFeedbackMuted.value = false
+  },
+  300,
+  { immediate: false },
+)
+
+function muteNavFeedbackDuringMove() {
+  navFeedbackMuted.value = true
+  stopNavFeedbackRestore()
+  restoreNavFeedback()
+}
+
 function navigate(path: string) {
+  muteNavFeedbackDuringMove()
   void router.push(path)
   emit('navigate')
 }
@@ -98,6 +131,7 @@ async function handleLogout() {
 
 const sidebarEl = ref<HTMLElement | null>(null)
 const brandLabelEl = ref<HTMLElement | null>(null)
+const navSignalEl = useTemplateRef<HTMLElement>('navSignal')
 const systemUpdateOpen = shallowRef(false)
 const aboutOpen = shallowRef(false)
 const isCollapsed = computed(() => !props.mobile && Boolean(props.collapsed))
@@ -217,6 +251,29 @@ function animateSidebarWidth(collapsed: boolean) {
   })
 }
 
+function animateNavSignal() {
+  const signal = navSignalEl.value
+  if (!signal) return
+
+  gsap.killTweensOf(signal)
+  if (prefersReducedMotion()) {
+    gsap.set(signal, { opacity: 0, xPercent: -70 })
+    return
+  }
+
+  gsap.fromTo(
+    signal,
+    { opacity: 0.48, xPercent: -70 },
+    {
+      opacity: 0,
+      xPercent: 120,
+      duration: 0.52,
+      ease: 'power2.out',
+      overwrite: true,
+    },
+  )
+}
+
 onMounted(() => {
   gsap.set(sidebarEl.value, {
     width: sidebarWidth.value,
@@ -231,6 +288,7 @@ onMounted(() => {
     })
   }
   animateSidebarLabels(isCollapsed.value)
+  gsap.set(navSignalEl.value, { opacity: 0, xPercent: -70 })
   void loadVersion().catch(() => undefined)
 })
 
@@ -251,6 +309,30 @@ watch(
     animateSidebarLabels(Boolean(collapsed))
   },
 )
+
+watch(
+  () => route.path,
+  async (path, previousPath) => {
+    if (path === previousPath) return
+    muteNavFeedbackDuringMove()
+    await nextTick()
+    animateNavSignal()
+  },
+  { flush: 'post' },
+)
+
+onBeforeUnmount(() => {
+  stopNavFeedbackRestore()
+  const targets = [sidebarEl.value, brandLabelEl.value, navSignalEl.value].filter(
+    (target): target is HTMLElement => Boolean(target),
+  )
+  gsap.killTweensOf(targets)
+
+  const labels = sidebarEl.value?.querySelectorAll<HTMLElement>('.sidebar-label')
+  if (labels?.length) {
+    gsap.killTweensOf(labels)
+  }
+})
 </script>
 
 <template>
@@ -266,11 +348,13 @@ watch(
       class="mt-6 grid h-12 grid-cols-[44px_minmax(0,1fr)] items-center"
       :class="isCollapsed ? 'w-11 justify-start' : 'w-full gap-3'"
     >
-      <span
+      <BaseMotionIcon
+        aria-hidden="true"
+        variant="brand"
         class="inline-flex size-11 items-center justify-center relative -top-0.5 rounded-(--cp-icon-button-radius) bg-(--cp-bg-muted) text-(--cp-text-primary)"
       >
         <Cat :size="27" stroke-width="2" />
-      </span>
+      </BaseMotionIcon>
       <span
         v-show="brandLabelVisible"
         ref="brandLabelEl"
@@ -304,17 +388,32 @@ watch(
       </span>
     </div>
 
-    <nav class="mt-7 grid gap-3" :class="isCollapsed ? '' : 'w-full'" aria-label="主导航">
+    <nav
+      class="relative mt-7 grid gap-3"
+      :class="isCollapsed ? 'w-11.5' : 'w-full'"
+      aria-label="主导航"
+    >
+      <span
+        aria-hidden="true"
+        class="pointer-events-none absolute inset-x-0 top-0 h-11.5 overflow-hidden rounded-(--cp-icon-button-radius) bg-(--cp-bg-nav-active) transition-transform duration-260 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+        :style="activeNavIndicatorStyle"
+      >
+        <span ref="navSignal" class="sidebar-active-signal absolute inset-y-0 left-0 w-2/3" />
+      </span>
       <button
         v-for="item in navItems"
         :key="item.label"
         type="button"
-        class="inline-flex h-11.5 cursor-pointer items-center rounded-(--cp-icon-button-radius) border-0 text-sm leading-[1.15] transition-colors duration-200 outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)"
+        class="relative z-10 inline-flex h-11.5 cursor-pointer items-center rounded-(--cp-icon-button-radius) border-0 text-sm leading-[1.15] outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)"
         :class="[
           isCollapsed ? 'w-11.5 justify-center' : 'w-full gap-3 px-4',
           isActive(item.path)
-            ? 'bg-(--cp-bg-nav-active) font-bold text-(--cp-text-primary)'
-            : 'bg-transparent font-semibold text-(--cp-text-secondary) hover:bg-(--cp-bg-subtle) hover:text-(--cp-text-primary)',
+            ? navFeedbackMuted
+              ? 'bg-transparent font-bold text-(--cp-text-primary) transition-none'
+              : 'bg-transparent font-bold text-(--cp-text-primary) transition-colors duration-200'
+            : navFeedbackMuted
+              ? 'bg-transparent font-semibold text-(--cp-text-secondary) transition-none'
+              : 'bg-transparent font-semibold text-(--cp-text-secondary) transition-colors duration-200 hover:bg-(--cp-bg-subtle) hover:text-(--cp-text-primary)',
         ]"
         @click="navigate(item.path)"
       >
@@ -420,3 +519,14 @@ watch(
   <AppAboutModal v-model="aboutOpen" />
   <SystemUpdateModal v-model="systemUpdateOpen" />
 </template>
+
+<style scoped>
+.sidebar-active-signal {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--cp-info) 9%, transparent),
+    transparent
+  );
+}
+</style>

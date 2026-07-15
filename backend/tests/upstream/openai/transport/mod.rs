@@ -113,19 +113,6 @@ pub(crate) fn read_header_names(request: &str) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn assert_header_subsequence(actual: &[String], expected: &[&str]) {
-    let mut offset = 0;
-    for expected_name in expected {
-        let Some(position) = actual[offset..]
-            .iter()
-            .position(|actual_name| actual_name == expected_name)
-        else {
-            panic!("missing header {expected_name}; actual order: {actual:?}");
-        };
-        offset += position + 1;
-    }
-}
-
 pub(crate) async fn read_http_request(stream: &mut TcpStream) -> String {
     let mut request = Vec::new();
     let mut buffer = [0u8; 1024];

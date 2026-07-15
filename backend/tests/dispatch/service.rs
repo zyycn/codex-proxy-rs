@@ -243,7 +243,7 @@ async fn test_app_state_with_storage(
     let services = Services::try_with_usage_record_options(
         &config,
         stores,
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        crate::support::wire_profile::test_wire_profile(),
         usage_record_options,
     )
     .expect("failed to build runtime services with configured TLS transport");
@@ -1499,6 +1499,32 @@ async fn response_usage_record_count(pool: &PgPool) -> i64 {
         .await
         .unwrap();
     count
+}
+
+async fn wait_for_account_usage(
+    pool: &PgPool,
+    account_id: &str,
+    expected: (i64, i64, i64),
+) -> (i64, i64, i64) {
+    let deadline = tokio::time::Instant::now() + StdDuration::from_secs(5);
+    loop {
+        let usage: Option<(i64, i64, i64)> = sqlx::query_as(
+            "select request_count, input_tokens, output_tokens from account_usage where account_id = $1",
+        )
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap();
+        let usage = usage.unwrap_or_default();
+        if usage == expected {
+            return usage;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "account usage for {account_id} did not settle: expected {expected:?}, got {usage:?}"
+        );
+        tokio::time::sleep(StdDuration::from_millis(10)).await;
+    }
 }
 
 fn assert_rate_limit_header(metadata: &Value, name: &str, value: &str) {
