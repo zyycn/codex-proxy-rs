@@ -1,3 +1,5 @@
+use crate::upstream::openai::{profile::CodexWireProfile, protocol::sse::SseEventDecoder};
+
 use super::*;
 
 impl CodexBackendClient {
@@ -5,7 +7,7 @@ impl CodexBackendClient {
     pub fn new(
         client: Client,
         base_url: impl Into<String>,
-        profile: Arc<CodexWireProfile>,
+        profile: CodexWireProfileState,
     ) -> Self {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         Self {
@@ -90,12 +92,22 @@ impl CodexBackendClient {
 
         let mut body_bytes = Vec::new();
         let mut first_token_ms = None;
+        let mut first_reasoning_ms = None;
+        let mut first_text_ms = None;
         let mut first_event_ms = None;
+        let mut output_decoder = SseEventDecoder::default();
         let mut stream = http_sse_stream(response);
         while let Some(chunk) = stream.try_next().await? {
             first_event_ms.get_or_insert_with(|| elapsed_duration_millis(started_at.elapsed()));
             body_bytes.extend_from_slice(&chunk);
-            response_meta::update_first_token_ms(started_at, &body_bytes, &mut first_token_ms);
+            response_meta::update_response_timing_ms(
+                started_at,
+                &mut output_decoder,
+                &chunk,
+                &mut first_token_ms,
+                &mut first_reasoning_ms,
+                &mut first_text_ms,
+            );
         }
         let body = String::from_utf8_lossy(&body_bytes).into_owned();
         let usage = extract_sse_usage(&body).map_err(CodexClientError::InvalidSse)?;
@@ -107,6 +119,8 @@ impl CodexBackendClient {
             set_cookie_headers,
             rate_limit_headers,
             first_token_ms,
+            first_reasoning_ms,
+            first_text_ms,
             websocket_pool_decision: None,
             diagnostics,
             response_metadata,
@@ -391,6 +405,8 @@ impl CodexBackendClient {
                         set_cookie_headers: exchange.set_cookie_headers,
                         rate_limit_headers: exchange.rate_limit_headers,
                         first_token_ms: exchange.first_token_ms,
+                        first_reasoning_ms: exchange.first_reasoning_ms,
+                        first_text_ms: exchange.first_text_ms,
                         websocket_pool_decision: exchange.pool_decision,
                         diagnostics: exchange.diagnostics,
                         response_metadata: exchange.response_metadata,
@@ -501,11 +517,12 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<Vec<Value>> {
         let endpoint = endpoint_url(&self.base_url, "codex/models");
-        let headers = self.auxiliary_request_headers(context)?;
+        let profile = self.profile.snapshot();
+        let headers = self.auxiliary_request_headers(&profile, context)?;
         let response = self
             .client
             .get(endpoint)
-            .query(&[("client_version", self.profile.codex_version.as_str())])
+            .query(&[("client_version", profile.codex_version.as_str())])
             .headers(headers)
             .send()
             .await?;
@@ -559,7 +576,8 @@ impl CodexBackendClient {
         request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<HeaderMap> {
-        let mut headers = self.request_headers(context)?;
+        let profile = self.profile.snapshot();
+        let mut headers = self.request_headers(&profile, context)?;
         if let Some(subagent) = openai_subagent_from_metadata(request.client_metadata()) {
             headers.insert(
                 HeaderName::from_static("x-openai-subagent"),
@@ -569,10 +587,14 @@ impl CodexBackendClient {
         Ok(headers)
     }
 
-    fn request_headers(&self, context: CodexRequestContext<'_>) -> CodexClientResult<HeaderMap> {
+    fn request_headers(
+        &self,
+        profile: &CodexWireProfile,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<HeaderMap> {
         let request_id = context.client_request_id.unwrap_or(context.request_id);
         let mut headers =
-            build_codex_base_headers(&self.profile, context.access_token, context.account_id)?;
+            build_codex_base_headers(profile, context.access_token, context.account_id)?;
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         insert_optional_header(&mut headers, "cookie", context.cookie_header)?;
         headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
@@ -617,10 +639,11 @@ impl CodexBackendClient {
 
     fn auxiliary_request_headers(
         &self,
+        profile: &CodexWireProfile,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<HeaderMap> {
         let mut headers =
-            build_codex_base_headers(&self.profile, context.access_token, context.account_id)?;
+            build_codex_base_headers(profile, context.access_token, context.account_id)?;
         if let Some(cookie_header) = context.cookie_header {
             headers.insert(COOKIE, HeaderValue::from_str(cookie_header)?);
         }
@@ -637,18 +660,16 @@ impl CodexBackendClient {
         &self,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<HeaderMap> {
+        let profile = self.profile.snapshot();
         let mut headers = HeaderMap::new();
-        headers.insert(
-            USER_AGENT,
-            HeaderValue::from_str(&self.profile.user_agent())?,
-        );
+        headers.insert(USER_AGENT, HeaderValue::from_str(&profile.user_agent())?);
         headers.insert(
             AUTHORIZATION,
             HeaderValue::from_str(&format!("Bearer {}", context.access_token))?,
         );
         headers.insert(
             HeaderName::from_static("originator"),
-            HeaderValue::from_str(&self.profile.originator)?,
+            HeaderValue::from_str(&profile.originator)?,
         );
         insert_optional_header(&mut headers, "chatgpt-account-id", context.account_id)?;
         insert_optional_header(&mut headers, "cookie", context.cookie_header)?;

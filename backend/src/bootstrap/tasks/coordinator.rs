@@ -91,6 +91,7 @@ impl TaskCoordinator {
             "desktop_release_update",
             start_desktop_release_update_task(
                 services.desktop_release.clone(),
+                services.wire_profile.clone(),
                 crate::upstream::openai::desktop_release::CODEX_DESKTOP_APPCAST_URL.to_string(),
             ),
         );

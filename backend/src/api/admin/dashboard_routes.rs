@@ -40,7 +40,7 @@ use crate::{
         usage::{
             insights::RequestHealthTimeBucket,
             query::{UsageQueryFilter, UsageRecordAccountUsage},
-            types::{UsageRecord, metadata_string},
+            types::{UsageRecord, metadata_i64, metadata_string},
         },
     },
 };
@@ -105,8 +105,23 @@ struct DashboardUsageRecordData {
     subagent_kind: Option<String>,
     token_details: UsageRecordTokenDetailsData,
     billing: Option<UsageRecordBillingData>,
+    first_token_latency_ms: Option<i64>,
+    latency_ms: Option<i64>,
+    latency_details: DashboardUsageLatencyDetailsData,
     first_token_latency_ms_display: String,
     latency_ms_display: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardUsageLatencyDetailsData {
+    first_reasoning_ms: Option<i64>,
+    first_text_ms: Option<i64>,
+    transport_decision_wait_ms: Option<i64>,
+    ws_connect_ms: Option<i64>,
+    upstream_headers_ms: Option<i64>,
+    first_event_ms: Option<i64>,
+    openai_processing_ms: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -551,6 +566,7 @@ fn dashboard_usage_record_data(
     let token_details = usage_token_details(&record);
     let billing = usage_billing(&record, upstream_model.as_deref(), &token_details);
     let first_token_latency_ms = record.first_token_ms;
+    let latency_details = dashboard_usage_latency_details(&record.metadata);
 
     DashboardUsageRecordData {
         id: record.id,
@@ -571,13 +587,32 @@ fn dashboard_usage_record_data(
         subagent_kind,
         token_details,
         billing,
+        first_token_latency_ms,
+        latency_ms: record.latency_ms,
+        latency_details,
         first_token_latency_ms_display: format_duration_ms(first_token_latency_ms),
         latency_ms_display: format_duration_ms(record.latency_ms),
     }
 }
 
+fn dashboard_usage_latency_details(metadata: &Value) -> DashboardUsageLatencyDetailsData {
+    DashboardUsageLatencyDetailsData {
+        first_reasoning_ms: metadata_duration_ms(metadata, "firstReasoningMs"),
+        first_text_ms: metadata_duration_ms(metadata, "firstTextMs"),
+        transport_decision_wait_ms: metadata_duration_ms(metadata, "transportDecisionWaitMs"),
+        ws_connect_ms: metadata_duration_ms(metadata, "wsConnectMs"),
+        upstream_headers_ms: metadata_duration_ms(metadata, "upstreamHeadersMs"),
+        first_event_ms: metadata_duration_ms(metadata, "firstEventMs"),
+        openai_processing_ms: metadata_duration_ms(metadata, "openaiProcessingMs"),
+    }
+}
+
+fn metadata_duration_ms(metadata: &Value, key: &str) -> Option<i64> {
+    metadata_i64(metadata, &[key]).filter(|value| *value >= 0)
+}
+
 fn wire_profile_data(state: &AppState) -> DashboardWireProfileData {
-    let profile = &state.services.wire_profile;
+    let profile = state.services.wire_profile.snapshot();
     let release_snapshot = state.services.desktop_release.snapshot();
     let release_status = if release_snapshot.last_error.is_some() {
         "check_failed"

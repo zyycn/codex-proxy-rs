@@ -51,7 +51,7 @@ use crate::{
     update::service::SystemUpdateService,
     upstream::openai::{
         desktop_release::DesktopReleaseStatus,
-        profile::CodexWireProfile,
+        profile::{CodexWireProfile, CodexWireProfileState},
         token_client::{OpenAiTokenClient, TokenClientConfig, default_openai_token_client},
         transport::{
             CodexBackendClient, CodexModelCatalogClient, CodexWebSocketPool,
@@ -117,7 +117,7 @@ pub struct Services {
     pub session_affinity: Arc<SessionAffinityService>,
     pub codex: Arc<CodexBackendClient>,
     pub websocket_pool: Option<Arc<CodexWebSocketPool>>,
-    pub wire_profile: Arc<CodexWireProfile>,
+    pub wire_profile: CodexWireProfileState,
     pub desktop_release: DesktopReleaseStatus,
     pub account_pseudonymizer: Arc<AccountPseudonymizer>,
     pub system_update: Arc<SystemUpdateService>,
@@ -146,7 +146,7 @@ impl Services {
     pub fn new(
         config: &AppConfig,
         stores: BackgroundTaskStores,
-        wire_profile: Arc<CodexWireProfile>,
+        wire_profile: CodexWireProfileState,
     ) -> Self {
         Self::try_new(config, stores, wire_profile)
             .expect("failed to build runtime services with configured TLS transport")
@@ -155,7 +155,7 @@ impl Services {
     pub fn try_new(
         config: &AppConfig,
         stores: BackgroundTaskStores,
-        wire_profile: Arc<CodexWireProfile>,
+        wire_profile: CodexWireProfileState,
     ) -> Result<Self, CustomCaError> {
         Self::try_with_usage_record_options(
             config,
@@ -168,7 +168,7 @@ impl Services {
     pub fn try_with_usage_record_options(
         config: &AppConfig,
         stores: BackgroundTaskStores,
-        wire_profile: Arc<CodexWireProfile>,
+        wire_profile: CodexWireProfileState,
         usage_record_options: UsageRecordOptions,
     ) -> Result<Self, CustomCaError> {
         let mut identity_secret = [0u8; 32];
@@ -185,7 +185,7 @@ impl Services {
     fn try_with_identity_secret_and_usage_record_options(
         config: &AppConfig,
         stores: BackgroundTaskStores,
-        wire_profile: Arc<CodexWireProfile>,
+        wire_profile: CodexWireProfileState,
         identity_secret: [u8; 32],
         usage_record_options: UsageRecordOptions,
     ) -> Result<Self, CustomCaError> {
@@ -578,7 +578,7 @@ async fn build_router(
 
     let data_dir = ensure_data_dir(&config.runtime.data_directory)?;
     let identity_secret = load_or_create_identity_secret(&data_dir)?;
-    let wire_profile = Arc::new(wire_profile_from_config(&config.wire_profile));
+    let wire_profile = CodexWireProfileState::new(wire_profile_from_config(&config.wire_profile));
     let runtime_config = crate::bootstrap::state::RuntimeConfig::from(&config);
     let services = Services::try_with_identity_secret_and_usage_record_options(
         &config,

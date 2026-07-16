@@ -1,3 +1,5 @@
+import { formatDuration } from './utils/format'
+
 export const usageRecordColumns = [
   {
     key: 'accountEmail',
@@ -47,20 +49,11 @@ export const usageRecordColumns = [
     ellipsis: false,
   },
   {
-    key: 'firstTokenLatencyMsDisplay',
-    label: '首字',
-    width: '104px',
+    key: 'latency',
+    label: '延迟',
+    width: '156px',
     align: 'right' as const,
     ellipsis: false,
-    cellClass: 'font-mono text-[12px] font-[650] tabular-nums text-(--cp-text-secondary)',
-  },
-  {
-    key: 'latencyMsDisplay',
-    label: '耗时',
-    width: '96px',
-    align: 'right' as const,
-    ellipsis: false,
-    cellClass: 'font-mono text-[12px] font-[650] tabular-nums text-(--cp-text-secondary)',
   },
   {
     key: 'createdAtDisplay',
@@ -301,6 +294,52 @@ export function usageTokenDetails(record: any) {
   }
 }
 
+export function usageLatencyDetails(record: any) {
+  const latencyDetails = record?.latencyDetails || record?.metadata || {}
+  const firstTokenMs = durationValue(record?.firstTokenLatencyMs ?? latencyDetails.firstTokenMs)
+  const totalMs = durationValue(record?.latencyMs)
+  const firstReasoningMs = durationValue(latencyDetails.firstReasoningMs)
+  const firstTextMs = durationValue(latencyDetails.firstTextMs)
+  const breakdownItems = []
+
+  if (firstTokenMs !== null && totalMs !== null && firstTokenMs <= totalMs) {
+    breakdownItems.push({ label: '首字等待', value: formatDuration(firstTokenMs) })
+
+    if (firstTextMs !== null && firstTextMs >= firstTokenMs && firstTextMs <= totalMs) {
+      const beforeTextMs = firstTextMs - firstTokenMs
+      if (beforeTextMs > 0) {
+        breakdownItems.push({
+          label: firstReasoningMs === firstTokenMs ? '推理到正文' : '首个输出到正文',
+          value: formatDuration(beforeTextMs),
+        })
+      }
+      breakdownItems.push({ label: '正文生成', value: formatDuration(totalMs - firstTextMs) })
+    } else {
+      breakdownItems.push({
+        label: '首个输出后完成',
+        value: formatDuration(totalMs - firstTokenMs),
+      })
+    }
+  }
+
+  const transportItems = [
+    { label: '传输决策等待', value: durationValue(latencyDetails.transportDecisionWaitMs) },
+    { label: 'WebSocket 连接', value: durationValue(latencyDetails.wsConnectMs) },
+    { label: '上游响应头', value: durationValue(latencyDetails.upstreamHeadersMs) },
+    { label: '首个上游事件', value: durationValue(latencyDetails.firstEventMs) },
+    { label: '上游处理', value: durationValue(latencyDetails.openaiProcessingMs) },
+  ]
+    .filter((item) => item.value !== null)
+    .map((item) => ({ ...item, value: formatDuration(item.value) }))
+
+  return {
+    firstTokenDisplay: formatDuration(firstTokenMs),
+    totalDisplay: formatDuration(totalMs),
+    breakdownItems,
+    transportItems,
+  }
+}
+
 export function usageBilling(record: any) {
   return record?.billing || null
 }
@@ -340,6 +379,10 @@ export function visibleResponseText(record: any) {
 
 function numberValue(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function durationValue(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
 }
 
 function extractInputText(body: any) {

@@ -60,6 +60,8 @@ fn response_event_signals_should_count_text_inside_completed_output_item() {
     );
 
     assert!(signals.semantic_output);
+    assert!(signals.text_output);
+    assert!(!signals.reasoning_output);
 }
 
 #[test]
@@ -70,6 +72,8 @@ fn response_event_signals_should_count_reasoning_as_semantic_output() {
     );
 
     assert!(signals.semantic_output);
+    assert!(signals.reasoning_output);
+    assert!(!signals.text_output);
 }
 
 #[test]

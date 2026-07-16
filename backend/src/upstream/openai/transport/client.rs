@@ -21,7 +21,7 @@ use serde_json::{Value, map::Map};
 use thiserror::Error;
 use tokio_tungstenite::tungstenite::handshake::client::generate_key;
 
-use crate::upstream::openai::profile::CodexWireProfile;
+use crate::upstream::openai::profile::CodexWireProfileState;
 use crate::upstream::openai::protocol::events::{extract_sse_usage, retry_after_seconds_from_body};
 use crate::upstream::openai::protocol::responses::{
     CodexResponsesRequest, TransportRequirement, transport_requirement,
@@ -277,6 +277,10 @@ pub struct CodexBackendResponse {
     pub rate_limit_headers: Vec<(String, String)>,
     /// 首个有效上游 SSE/WebSocket 事件到达代理的耗时。
     pub first_token_ms: Option<i64>,
+    /// 首个 reasoning 输出事件到达代理的耗时。
+    pub first_reasoning_ms: Option<i64>,
+    /// 首个正文输出事件到达代理的耗时。
+    pub first_text_ms: Option<i64>,
     /// WebSocket 连接池决策。
     pub websocket_pool_decision: Option<WebSocketPoolDecision>,
     /// 上游诊断元数据。
@@ -382,7 +386,7 @@ pub struct CodexBackendStreamingResponse {
 pub struct CodexBackendClient {
     pub(super) client: Client,
     pub(super) base_url: String,
-    profile: Arc<CodexWireProfile>,
+    profile: CodexWireProfileState,
     websocket_pool: Option<Arc<CodexWebSocketPool>>,
     websocket_initial_event_timeout: Option<Duration>,
     websocket_fast_path_budget: Duration,

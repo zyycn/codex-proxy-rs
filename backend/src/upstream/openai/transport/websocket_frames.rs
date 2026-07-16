@@ -1,5 +1,7 @@
 //! WebSocket 帧交换、流转发与错误类型。
 
+use crate::upstream::openai::protocol::sse::SseEventDecoder;
+
 use super::*;
 
 /// Responses WebSocket exchange result.
@@ -17,6 +19,10 @@ pub struct CodexWebSocketExchange {
     pub rate_limit_headers: Vec<(String, String)>,
     /// 首个有效上游 WebSocket 事件到达代理的耗时。
     pub first_token_ms: Option<i64>,
+    /// 首个 reasoning 输出事件到达代理的耗时。
+    pub first_reasoning_ms: Option<i64>,
+    /// 首个正文输出事件到达代理的耗时。
+    pub first_text_ms: Option<i64>,
     /// 首个上游协议事件到达代理的耗时。
     pub first_event_ms: Option<i64>,
     /// WebSocket 连接池决策。
@@ -272,7 +278,10 @@ pub(super) async fn collect_websocket_response(
     let mut body = String::new();
     let mut saw_upstream_activity = false;
     let mut first_token_ms = None;
+    let mut first_reasoning_ms = None;
+    let mut first_text_ms = None;
     let mut first_event_ms = None;
+    let mut output_decoder = SseEventDecoder::default();
 
     loop {
         let receive_timeout = receive_idle_timeout(saw_upstream_activity, initial_event_timeout);
@@ -340,15 +349,15 @@ pub(super) async fn collect_websocket_response(
             _ => None,
         };
         let forwarded = if let Some(frame) = websocket_event_to_sse_frame(&raw) {
-            let has_semantic_output = response_body_has_semantic_output(frame.as_bytes());
             body.push_str(&frame);
-            if has_semantic_output {
-                response_meta::update_first_token_ms(
-                    started_at,
-                    body.as_bytes(),
-                    &mut first_token_ms,
-                );
-            }
+            response_meta::update_response_timing_ms(
+                started_at,
+                &mut output_decoder,
+                frame.as_bytes(),
+                &mut first_token_ms,
+                &mut first_reasoning_ms,
+                &mut first_text_ms,
+            );
             true
         } else {
             false
@@ -362,6 +371,8 @@ pub(super) async fn collect_websocket_response(
                 set_cookie_headers: metadata.set_cookie_headers.clone(),
                 rate_limit_headers: metadata.rate_limit_headers.clone(),
                 first_token_ms,
+                first_reasoning_ms,
+                first_text_ms,
                 first_event_ms,
                 pool_decision: None,
                 connection_local_continuation: false,

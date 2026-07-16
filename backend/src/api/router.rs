@@ -28,7 +28,7 @@ use crate::{
     },
     update::service::SystemUpdateService,
     upstream::openai::{
-        desktop_release::DesktopReleaseStatus, profile::CodexWireProfile,
+        desktop_release::DesktopReleaseStatus, profile::CodexWireProfileState,
         token_client::OpenAiTokenClient,
     },
 };
@@ -51,7 +51,7 @@ pub struct ApiServices {
     pub token_refresh: Arc<TokenRefreshService<OpenAiTokenClient>>,
     pub responses: Arc<ResponseDispatchService>,
     pub session_affinity: Arc<SessionAffinityService>,
-    pub wire_profile: Arc<CodexWireProfile>,
+    pub wire_profile: CodexWireProfileState,
     pub desktop_release: DesktopReleaseStatus,
     pub process_control: Arc<dyn ProcessControl>,
     pub system_update: Arc<SystemUpdateService>,

@@ -117,6 +117,8 @@ async fn run_live_response_stream(
     let mut body_bytes = Vec::new();
     let mut terminal_chunks = Vec::new();
     let mut first_token_ms = None;
+    let mut first_reasoning_ms = None;
+    let mut first_text_ms = None;
 
     let decoded_terminal = take_stream_terminal(&mut decoder);
     let terminal = if decoded_terminal.is_some() {
@@ -128,13 +130,19 @@ async fn run_live_response_stream(
             .await
             .err()
     };
-    update_first_token_ms(&decoder, started_at, &mut first_token_ms);
+    update_output_timing_ms(
+        &decoder,
+        started_at,
+        &mut first_token_ms,
+        &mut first_reasoning_ms,
+        &mut first_text_ms,
+    );
     if let Some(terminal) = terminal {
         return stream_summary(
             terminal,
             body_bytes,
             terminal_chunks,
-            first_token_ms,
+            (first_token_ms, first_reasoning_ms, first_text_ms),
             first_event_ms,
             &decoder,
         );
@@ -150,7 +158,13 @@ async fn run_live_response_stream(
         match next {
             Some(Ok(chunk)) => match decoder.push(chunk) {
                 Ok(batch) => {
-                    update_first_token_ms(&decoder, started_at, &mut first_token_ms);
+                    update_output_timing_ms(
+                        &decoder,
+                        started_at,
+                        &mut first_token_ms,
+                        &mut first_reasoning_ms,
+                        &mut first_text_ms,
+                    );
                     if let Some(terminal) = take_stream_terminal(&mut decoder) {
                         match stage_terminal_batch(&mut body_bytes, &mut terminal_chunks, batch) {
                             Ok(()) => break terminal,
@@ -196,12 +210,18 @@ async fn run_live_response_stream(
         }
     };
 
-    update_first_token_ms(&decoder, started_at, &mut first_token_ms);
+    update_output_timing_ms(
+        &decoder,
+        started_at,
+        &mut first_token_ms,
+        &mut first_reasoning_ms,
+        &mut first_text_ms,
+    );
     stream_summary(
         terminal,
         body_bytes,
         terminal_chunks,
-        first_token_ms,
+        (first_token_ms, first_reasoning_ms, first_text_ms),
         first_event_ms,
         &decoder,
     )
@@ -299,13 +319,29 @@ fn ensure_capture_capacity(
     Ok(())
 }
 
-fn update_first_token_ms(
+fn update_output_timing_ms(
     decoder: &CanonicalStreamDecoder,
     started_at: Instant,
     first_token_ms: &mut Option<i64>,
+    first_reasoning_ms: &mut Option<i64>,
+    first_text_ms: &mut Option<i64>,
 ) {
-    if first_token_ms.is_none() && decoder.first_semantic_output_seen() {
-        *first_token_ms = Some(elapsed_millis_i64(started_at).max(1));
+    let first_token_missing = first_token_ms.is_none() && decoder.first_semantic_output_seen();
+    let first_reasoning_missing =
+        first_reasoning_ms.is_none() && decoder.first_reasoning_output_seen();
+    let first_text_missing = first_text_ms.is_none() && decoder.first_text_output_seen();
+    if !(first_token_missing || first_reasoning_missing || first_text_missing) {
+        return;
+    }
+    let elapsed_ms = elapsed_millis_i64(started_at).max(1);
+    if first_token_missing {
+        *first_token_ms = Some(elapsed_ms);
+    }
+    if first_reasoning_missing {
+        *first_reasoning_ms = Some(elapsed_ms);
+    }
+    if first_text_missing {
+        *first_text_ms = Some(elapsed_ms);
     }
 }
 
@@ -313,15 +349,18 @@ fn stream_summary(
     terminal: StreamTerminal,
     body: Vec<u8>,
     terminal_chunks: Vec<CanonicalResponseChunk>,
-    first_token_ms: Option<i64>,
+    output_timing: (Option<i64>, Option<i64>, Option<i64>),
     first_event_ms: i64,
     decoder: &CanonicalStreamDecoder,
 ) -> StreamSummary {
+    let (first_token_ms, first_reasoning_ms, first_text_ms) = output_timing;
     StreamSummary {
         terminal,
         body,
         terminal_chunks,
         first_token_ms,
+        first_reasoning_ms,
+        first_text_ms,
         first_event_ms,
         usage: decoder.usage(),
         last_response_id: decoder.last_response_id().map(ToString::to_string),

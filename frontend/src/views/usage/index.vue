@@ -23,6 +23,7 @@ import UsageClientIpCell from './components/UsageClientIpCell.vue'
 import UsageBillingCell from './components/UsageBillingCell.vue'
 import UsageFilters from './components/UsageFilters.vue'
 import UsageInsightsGrid from './components/UsageInsightsGrid.vue'
+import UsageLatencyCell from './components/UsageLatencyCell.vue'
 import UsageModelCell from './components/UsageModelCell.vue'
 import OpsErrorPanel from './components/OpsErrorPanel.vue'
 import UsageRecordDetailModal from './components/UsageRecordDetailModal.vue'
@@ -199,6 +200,10 @@ watch(timeRange, () => {
 
             <template #billing="{ row }">
               <UsageBillingCell :record="row" />
+            </template>
+
+            <template #latency="{ row }">
+              <UsageLatencyCell :record="row" />
             </template>
 
             <template #actions="{ row }">

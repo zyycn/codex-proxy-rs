@@ -150,7 +150,7 @@ fn config_loader_should_reject_removed_tls_section() {
 
 #[test]
 fn config_loader_should_reject_missing_explicit_fields() {
-    let yaml = complete_config().replace("    enabled: true\n\n\n# Compose", "\n\n# Compose");
+    let yaml = complete_config().replacen("  telemetry:\n    enabled: true\n", "", 1);
     let directory = write_config(&yaml);
 
     let error = BootstrapConfig::load_from_path(directory.path().join("config.yaml")).unwrap_err();

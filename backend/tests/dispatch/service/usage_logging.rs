@@ -119,6 +119,7 @@ async fn responses_should_use_imported_account_record_usage_cookie_and_usage_rec
                     "set-cookie",
                     "cf_clearance=new; Domain=.chatgpt.com; Path=/",
                 )
+                .insert_header("openai-processing-ms", "42")
                 .set_body_string(RESPONSES_COMPLETED_USAGE_SSE),
         )
         .expect(1)
@@ -188,6 +189,9 @@ async fn responses_should_use_imported_account_record_usage_cookie_and_usage_rec
     assert_eq!(metadata["stream"], false);
     assert_eq!(metadata["reasoningEffort"], "max");
     assert_eq!(metadata["reasoningPreset"], "ultra");
+    assert_eq!(metadata["firstTextMs"], event.first_token_ms.unwrap());
+    assert!(metadata.get("firstReasoningMs").is_none());
+    assert_eq!(metadata["openaiProcessingMs"], 42);
     assert_eq!(event.input_tokens, Some(7));
 }
 
@@ -689,6 +693,8 @@ async fn responses_stream_should_record_usage_record_after_completed_stream() {
         event.first_token_ms.is_some_and(|value| value > 0),
         "stream usage metadata should include first-token latency: {metadata:?}",
     );
+    assert_eq!(metadata["firstTextMs"], event.first_token_ms.unwrap());
+    assert!(metadata.get("firstReasoningMs").is_none());
     let first_token_bucket: (i64, i64) = sqlx::query_as(
         "select first_token_latency_sum, first_token_latency_count from request_time_buckets limit 1",
     )
