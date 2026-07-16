@@ -220,7 +220,7 @@ export function useDashboard(): any {
         details: [
           { label: '总请求', value: traffic.totalRequests, tone: 'info' },
           {
-            label: '今日首字',
+            label: '首字均值',
             value: cache.averageFirstTokenLatencyMs,
             tone: 'info',
           },

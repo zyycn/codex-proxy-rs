@@ -1,7 +1,7 @@
-//! 账号运行时反馈:错误率与 TTFT 的 EWMA 统计。
+//! 账号运行时 feedback：首字前失败率、首字后中断率与 TTFT 的 EWMA 统计。
 //!
-//! 每个账号维护两个指数加权移动平均(EWMA):错误率与首个有效输出事件延迟(TTFT，
-//! 毫秒)。请求结束后经 [`FeedbackStats::report`] 回灌，直接进 [`super::score`]
+//! 每个账号维护三个指数加权移动平均(EWMA)。每个已启动 attempt 结束后经
+//! [`FeedbackStats::report_attempt`] 回灌，直接进 [`super::score`]
 //! 打分并可驱动 sticky escape。统计以 `AtomicU64`(存 `f64` 位模式)+ CAS 无锁更新,
 //! 对齐 sub2api 的设计,避免选择热路径上的锁与 DB 往返。
 
@@ -12,13 +12,32 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// EWMA 平滑系数(新样本权重)。与 sub2api 一致取 0.2。
 const EWMA_ALPHA: f64 = 0.2;
 
+/// 单个上游 attempt 对账号调度器的反馈。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttemptFeedback {
+    Completed { first_token_ms: Option<u64> },
+    Incomplete { first_token_ms: Option<u64> },
+    FailedBeforeFirstToken,
+    FailedAfterFirstToken { first_token_ms: u64 },
+    Cancelled,
+    Shutdown,
+}
+
+impl AttemptFeedback {
+    fn affects_account_health(self) -> bool {
+        !matches!(self, Self::Cancelled | Self::Shutdown)
+    }
+}
+
 /// 单账号的运行时 EWMA 统计。
 ///
 /// `*_bits` 存 `f64` 的位模式;`NaN`(全 1 的哨兵)表示"尚无样本"。
 #[derive(Debug)]
 struct AccountFeedback {
-    /// 错误率 EWMA，范围 `[0, 1]`。
-    error_rate_bits: AtomicU64,
+    /// 首字前失败率 EWMA，范围 `[0, 1]`。
+    pre_token_failure_rate_bits: AtomicU64,
+    /// 首字后中断率 EWMA，范围 `[0, 1]`。
+    post_token_abort_rate_bits: AtomicU64,
     /// TTFT EWMA，单位毫秒。
     ttft_ms_bits: AtomicU64,
 }
@@ -29,16 +48,22 @@ const EMPTY_BITS: u64 = f64::NAN.to_bits();
 impl Default for AccountFeedback {
     fn default() -> Self {
         Self {
-            error_rate_bits: AtomicU64::new(EMPTY_BITS),
+            pre_token_failure_rate_bits: AtomicU64::new(EMPTY_BITS),
+            post_token_abort_rate_bits: AtomicU64::new(EMPTY_BITS),
             ttft_ms_bits: AtomicU64::new(EMPTY_BITS),
         }
     }
 }
 
 impl AccountFeedback {
-    /// 读取当前错误率 EWMA;无样本时返回 `None`。
-    fn error_rate(&self) -> Option<f64> {
-        load_sample(&self.error_rate_bits)
+    /// 读取当前首字前失败率 EWMA;无样本时返回 `None`。
+    fn pre_token_failure_rate(&self) -> Option<f64> {
+        load_sample(&self.pre_token_failure_rate_bits)
+    }
+
+    /// 读取当前首字后中断率 EWMA;无样本时返回 `None`。
+    fn post_token_abort_rate(&self) -> Option<f64> {
+        load_sample(&self.post_token_abort_rate_bits)
     }
 
     /// 读取当前 TTFT EWMA(毫秒);无样本时返回 `None`。
@@ -46,12 +71,26 @@ impl AccountFeedback {
         load_sample(&self.ttft_ms_bits)
     }
 
-    /// 回灌一次请求结果。
-    fn report(&self, success: bool, first_token_ms: Option<u64>) {
-        let error_sample = if success { 0.0 } else { 1.0 };
-        update_ewma(&self.error_rate_bits, error_sample);
-        if let Some(ms) = first_token_ms {
-            update_ewma(&self.ttft_ms_bits, ms as f64);
+    /// 回灌一次已经开始的 attempt。
+    fn report_attempt(&self, feedback: AttemptFeedback) {
+        match feedback {
+            AttemptFeedback::Completed { first_token_ms }
+            | AttemptFeedback::Incomplete { first_token_ms } => {
+                update_ewma(&self.pre_token_failure_rate_bits, 0.0);
+                update_ewma(&self.post_token_abort_rate_bits, 0.0);
+                if let Some(ms) = first_token_ms {
+                    update_ewma(&self.ttft_ms_bits, ms as f64);
+                }
+            }
+            AttemptFeedback::FailedBeforeFirstToken => {
+                update_ewma(&self.pre_token_failure_rate_bits, 1.0);
+            }
+            AttemptFeedback::FailedAfterFirstToken { first_token_ms } => {
+                update_ewma(&self.pre_token_failure_rate_bits, 0.0);
+                update_ewma(&self.post_token_abort_rate_bits, 1.0);
+                update_ewma(&self.ttft_ms_bits, first_token_ms as f64);
+            }
+            AttemptFeedback::Cancelled | AttemptFeedback::Shutdown => {}
         }
     }
 }
@@ -87,8 +126,10 @@ fn update_ewma(bits: &AtomicU64, sample: f64) {
 /// 账号 EWMA 反馈的读数快照,供打分使用。
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct FeedbackSample {
-    /// 错误率 EWMA，范围 `[0, 1]`;无样本时为 `None`。
-    pub error_rate: Option<f64>,
+    /// 首字前失败率 EWMA，范围 `[0, 1]`;无样本时为 `None`。
+    pub pre_token_failure_rate: Option<f64>,
+    /// 首字后中断率 EWMA，范围 `[0, 1]`;无样本时为 `None`。
+    pub post_token_abort_rate: Option<f64>,
     /// TTFT EWMA(毫秒);无样本时为 `None`。
     pub ttft_ms: Option<f64>,
 }
@@ -116,23 +157,27 @@ impl FeedbackStats {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         match accounts.get(account_id) {
             Some(feedback) => FeedbackSample {
-                error_rate: feedback.error_rate(),
+                pre_token_failure_rate: feedback.pre_token_failure_rate(),
+                post_token_abort_rate: feedback.post_token_abort_rate(),
                 ttft_ms: feedback.ttft_ms(),
             },
             None => FeedbackSample::default(),
         }
     }
 
-    /// 回灌一次请求结果:成功/失败 + 首个有效输出事件延迟(毫秒)。
-    pub fn report(&self, account_id: &str, success: bool, first_token_ms: Option<u64>) {
+    /// 回灌一个已启动上游 attempt 的结果。
+    pub fn report_attempt(&self, account_id: &str, sample: AttemptFeedback) {
+        if !sample.affects_account_health() {
+            return;
+        }
         // 快路径:账号已存在时只需读锁 + 原子更新。
         {
             let accounts = self
                 .accounts
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(feedback) = accounts.get(account_id) {
-                feedback.report(success, first_token_ms);
+            if let Some(account_feedback) = accounts.get(account_id) {
+                account_feedback.report_attempt(sample);
                 return;
             }
         }
@@ -144,7 +189,7 @@ impl FeedbackStats {
         accounts
             .entry(account_id.to_string())
             .or_default()
-            .report(success, first_token_ms);
+            .report_attempt(sample);
     }
 
     /// 移除指定账号的反馈记录(账号被删除时调用)。

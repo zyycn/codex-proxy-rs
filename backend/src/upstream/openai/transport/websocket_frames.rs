@@ -146,7 +146,7 @@ pub enum CodexWebSocketExchangeError {
     UnexpectedBinaryEvent,
     /// 复用的池连接在收到首个上游事件前失效。
     #[error("reused websocket connection died before first upstream event: {message}")]
-    ReusedConnectionDiedBeforeFirstOutput {
+    ReusedConnectionDiedBeforeFirstToken {
         /// 底层失效原因。
         message: String,
     },
@@ -282,7 +282,7 @@ pub(super) async fn collect_websocket_response(
                 if !saw_upstream_activity =>
             {
                 if reused_connection {
-                    return Err(reused_connection_died_before_first_output(
+                    return Err(reused_connection_died_before_first_token(
                         &CodexWebSocketExchangeError::InitialEventTimeout { timeout },
                     ));
                 }
@@ -304,7 +304,7 @@ pub(super) async fn collect_websocket_response(
             Message::Binary(_) => return Err(CodexWebSocketExchangeError::UnexpectedBinaryEvent),
             Message::Close(_) if reused_connection && !saw_upstream_activity => {
                 return Err(
-                    CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstOutput {
+                    CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstToken {
                         message: "websocket closed".to_string(),
                     },
                 );
@@ -340,9 +340,9 @@ pub(super) async fn collect_websocket_response(
             _ => None,
         };
         let forwarded = if let Some(frame) = websocket_event_to_sse_frame(&raw) {
-            let has_first_output = response_body_has_first_output(frame.as_bytes());
+            let has_semantic_output = response_body_has_semantic_output(frame.as_bytes());
             body.push_str(&frame);
-            if has_first_output {
+            if has_semantic_output {
                 response_meta::update_first_token_ms(
                     started_at,
                     body.as_bytes(),
@@ -374,7 +374,7 @@ pub(super) async fn collect_websocket_response(
 
     if reused_connection && !saw_upstream_activity {
         return Err(
-            CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstOutput {
+            CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstToken {
                 message: "websocket closed before terminal event".to_string(),
             },
         );
@@ -388,16 +388,16 @@ fn reused_stream_receive_error(error: CodexWebSocketExchangeError) -> CodexWebSo
         CodexWebSocketExchangeError::ClosedBeforeTerminal
         | CodexWebSocketExchangeError::ReceiveIdleTimeout { .. }
         | CodexWebSocketExchangeError::Transport(_) => {
-            reused_connection_died_before_first_output(&error)
+            reused_connection_died_before_first_token(&error)
         }
         error => error,
     }
 }
 
-fn reused_connection_died_before_first_output(
+fn reused_connection_died_before_first_token(
     error: &CodexWebSocketExchangeError,
 ) -> CodexWebSocketExchangeError {
-    CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstOutput {
+    CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstToken {
         message: error.to_string(),
     }
 }

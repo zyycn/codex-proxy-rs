@@ -1,4 +1,4 @@
-use std::{env, sync::OnceLock, thread};
+use std::{collections::BTreeMap, env, sync::OnceLock, thread};
 
 use chrono::{DateTime, Utc};
 use codex_proxy_rs::{
@@ -20,9 +20,13 @@ use uuid::Uuid;
 const DEFAULT_TEST_DATABASE_URL: &str =
     "postgres://codex_proxy:codex_proxy@127.0.0.1:5432/codex_proxy";
 const DEFAULT_TEST_REDIS_URL: &str = "redis://127.0.0.1:6379";
+const REDIS_TEST_PREFIX: &str = "cpr:test:";
+const REDIS_TEST_RUN_MARKER_PREFIX: &str = "cpr:test:run:";
+const REDIS_TEST_RUN_TTL_SECONDS: u64 = 60 * 60;
 static DATABASE_INIT_LIMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 static REDIS_TEST_CLEANUP: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
 static REDIS_TEST_RUN_ID: OnceLock<String> = OnceLock::new();
+static REDIS_TEST_RUN_REGISTRATION: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
 static LOCAL_BOOTSTRAP_CONFIG: OnceLock<Option<BootstrapConfig>> = OnceLock::new();
 
 pub(crate) struct TestDatabaseGuard {
@@ -125,6 +129,11 @@ async fn drop_test_database(base_url: &str, database_name: &str) -> Result<(), s
 
 pub(crate) async fn create_test_redis(label: &str) -> RedisConnection {
     let redis_url = test_redis_url();
+    let run_id = REDIS_TEST_RUN_ID.get_or_init(|| Uuid::new_v4().simple().to_string());
+    REDIS_TEST_RUN_REGISTRATION
+        .get_or_try_init(|| register_test_redis_run(&redis_url, run_id))
+        .await
+        .unwrap_or_else(|error| panic!("register CPR test Redis run: {error}"));
     REDIS_TEST_CLEANUP
         .get_or_init(|| async {
             cleanup_stale_test_redis_keys(&redis_url)
@@ -133,37 +142,89 @@ pub(crate) async fn create_test_redis(label: &str) -> RedisConnection {
         })
         .await;
     let label = sanitize_label(label);
-    let run_id = REDIS_TEST_RUN_ID.get_or_init(|| Uuid::new_v4().simple().to_string());
-    let prefix = format!("cpr:test:{run_id}:{label}:{}", Uuid::new_v4().simple());
+    let prefix = format!(
+        "{REDIS_TEST_PREFIX}{run_id}:{label}:{}",
+        Uuid::new_v4().simple()
+    );
     RedisConnection::connect(&redis_url, prefix)
         .await
         .unwrap_or_else(|error| panic!("connect CPR_TEST_REDIS_URL: {error}"))
 }
 
+async fn register_test_redis_run(redis_url: &str, run_id: &str) -> redis::RedisResult<()> {
+    let client = redis::Client::open(redis_url)?;
+    let mut connection = client.get_connection_manager().await?;
+    let _: () = redis::cmd("SET")
+        .arg(test_redis_run_marker_key(run_id))
+        .arg("1")
+        .arg("EX")
+        .arg(REDIS_TEST_RUN_TTL_SECONDS)
+        .query_async(&mut connection)
+        .await?;
+    Ok(())
+}
+
 async fn cleanup_stale_test_redis_keys(redis_url: &str) -> redis::RedisResult<()> {
     let client = redis::Client::open(redis_url)?;
     let mut connection = client.get_connection_manager().await?;
+    let mut keys_by_run = BTreeMap::<String, Vec<String>>::new();
     let mut cursor = 0u64;
     loop {
         let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
             .arg(cursor)
             .arg("MATCH")
-            .arg("cpr:test:*")
+            .arg(format!("{REDIS_TEST_PREFIX}*"))
             .arg("COUNT")
             .arg(500)
             .query_async(&mut connection)
             .await?;
-        if !keys.is_empty() {
-            let _: usize = redis::cmd("UNLINK")
-                .arg(keys)
-                .query_async(&mut connection)
-                .await?;
+        for key in keys {
+            if let Some(run_id) = test_redis_run_id_from_key(&key) {
+                keys_by_run.entry(run_id.to_string()).or_default().push(key);
+            }
         }
         if next_cursor == 0 {
-            return Ok(());
+            break;
         }
         cursor = next_cursor;
     }
+
+    for (run_id, keys) in keys_by_run {
+        let active: i64 = redis::cmd("EXISTS")
+            .arg(test_redis_run_marker_key(&run_id))
+            .query_async(&mut connection)
+            .await?;
+        if active > 0 {
+            continue;
+        }
+        unlink_test_redis_keys(&mut connection, &keys).await?;
+    }
+
+    Ok(())
+}
+
+fn test_redis_run_marker_key(run_id: &str) -> String {
+    format!("{REDIS_TEST_RUN_MARKER_PREFIX}{run_id}")
+}
+
+fn test_redis_run_id_from_key(key: &str) -> Option<&str> {
+    let suffix = key.strip_prefix(REDIS_TEST_PREFIX)?;
+    let (run_id, _) = suffix.split_once(':')?;
+    (run_id != "run" && !run_id.is_empty()).then_some(run_id)
+}
+
+async fn unlink_test_redis_keys(
+    connection: &mut redis::aio::ConnectionManager,
+    keys: &[String],
+) -> redis::RedisResult<()> {
+    for keys in keys.chunks(500) {
+        let mut command = redis::cmd("UNLINK");
+        for key in keys {
+            command.arg(key);
+        }
+        let _: usize = command.query_async(connection).await?;
+    }
+    Ok(())
 }
 
 pub(crate) fn background_task_stores(pool: PgPool, redis: RedisConnection) -> BackgroundTaskStores {
@@ -229,6 +290,16 @@ fn test_database_name(label: &str) -> String {
         label.chars().take(24).collect::<String>(),
         &suffix[..12]
     )
+}
+
+#[test]
+fn redis_test_run_id_from_key_ignores_markers_and_invalid_keys() {
+    assert_eq!(
+        test_redis_run_id_from_key("cpr:test:active-run:affinity:key"),
+        Some("active-run")
+    );
+    assert_eq!(test_redis_run_id_from_key("cpr:test:run:active-run"), None);
+    assert_eq!(test_redis_run_id_from_key("cpr:other:active-run:key"), None);
 }
 
 fn sanitize_label(label: &str) -> String {

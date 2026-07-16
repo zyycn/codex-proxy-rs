@@ -113,7 +113,7 @@ pub fn upstream_failure_facts(error: &CodexClientError) -> UpstreamFailureFacts 
             | CodexWebSocketExchangeError::OriginHalfOpenBusy
             | CodexWebSocketExchangeError::SharedConnectFailed
             | CodexWebSocketExchangeError::ClosedBeforeTerminal
-            | CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstOutput { .. },
+            | CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstToken { .. },
         ) => simple_facts(UpstreamFailureKind::WebSocketTransport, error),
         CodexClientError::WebSocket(CodexWebSocketExchangeError::PostSendAmbiguous { .. }) => {
             simple_facts(UpstreamFailureKind::PostSendAmbiguous, error)

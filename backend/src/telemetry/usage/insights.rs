@@ -264,11 +264,11 @@ struct UsagePerformanceInsights {
     latency_p50_ms: Option<f64>,
     latency_p95_ms: Option<f64>,
     latency_p99_ms: Option<f64>,
-    ttft_p50_ms: Option<f64>,
-    ttft_p95_ms: Option<f64>,
-    ttft_p99_ms: Option<f64>,
+    first_token_p50_ms: Option<f64>,
+    first_token_p95_ms: Option<f64>,
+    first_token_p99_ms: Option<f64>,
     latency_coverage: f64,
-    ttft_coverage: f64,
+    first_token_coverage: f64,
     points: Vec<UsagePerformancePoint>,
 }
 
@@ -280,9 +280,9 @@ struct UsagePerformancePoint {
     latency_p50_ms: Option<f64>,
     latency_p95_ms: Option<f64>,
     latency_p99_ms: Option<f64>,
-    ttft_p50_ms: Option<f64>,
-    ttft_p95_ms: Option<f64>,
-    ttft_p99_ms: Option<f64>,
+    first_token_p50_ms: Option<f64>,
+    first_token_p95_ms: Option<f64>,
+    first_token_p99_ms: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -565,13 +565,13 @@ async fn load_performance(
 select
   count(*)::bigint as request_count,
   count(latency_ms)::bigint as latency_count,
-  count(first_token_ms)::bigint as ttft_count,
+  count(first_token_ms)::bigint as first_token_count,
   percentile_cont(0.50) within group (order by latency_ms) as latency_p50_ms,
   percentile_cont(0.95) within group (order by latency_ms) as latency_p95_ms,
   percentile_cont(0.99) within group (order by latency_ms) as latency_p99_ms,
-  percentile_cont(0.50) within group (order by first_token_ms) as ttft_p50_ms,
-  percentile_cont(0.95) within group (order by first_token_ms) as ttft_p95_ms,
-  percentile_cont(0.99) within group (order by first_token_ms) as ttft_p99_ms
+  percentile_cont(0.50) within group (order by first_token_ms) as first_token_p50_ms,
+  percentile_cont(0.95) within group (order by first_token_ms) as first_token_p95_ms,
+  percentile_cont(0.99) within group (order by first_token_ms) as first_token_p99_ms
 from usage_records
 where created_at >= $1 and created_at < $2
 "#,
@@ -586,9 +586,9 @@ where created_at >= $1 and created_at < $2
            percentile_cont(0.50) within group (order by latency_ms) as latency_p50_ms,\n\
            percentile_cont(0.95) within group (order by latency_ms) as latency_p95_ms,\n\
            percentile_cont(0.99) within group (order by latency_ms) as latency_p99_ms,\n\
-           percentile_cont(0.50) within group (order by first_token_ms) as ttft_p50_ms,\n\
-           percentile_cont(0.95) within group (order by first_token_ms) as ttft_p95_ms,\n\
-           percentile_cont(0.99) within group (order by first_token_ms) as ttft_p99_ms\n\
+           percentile_cont(0.50) within group (order by first_token_ms) as first_token_p50_ms,\n\
+           percentile_cont(0.95) within group (order by first_token_ms) as first_token_p95_ms,\n\
+           percentile_cont(0.99) within group (order by first_token_ms) as first_token_p99_ms\n\
          from usage_records\n\
          where created_at >= $1 and created_at < $2\n\
          group by bucket_start order by bucket_start"
@@ -610,9 +610,9 @@ where created_at >= $1 and created_at < $2
                 latency_p50_ms: row.get("latency_p50_ms"),
                 latency_p95_ms: row.get("latency_p95_ms"),
                 latency_p99_ms: row.get("latency_p99_ms"),
-                ttft_p50_ms: row.get("ttft_p50_ms"),
-                ttft_p95_ms: row.get("ttft_p95_ms"),
-                ttft_p99_ms: row.get("ttft_p99_ms"),
+                first_token_p50_ms: row.get("first_token_p50_ms"),
+                first_token_p95_ms: row.get("first_token_p95_ms"),
+                first_token_p99_ms: row.get("first_token_p99_ms"),
             },
         );
     }
@@ -633,11 +633,11 @@ where created_at >= $1 and created_at < $2
         latency_p50_ms: summary.get("latency_p50_ms"),
         latency_p95_ms: summary.get("latency_p95_ms"),
         latency_p99_ms: summary.get("latency_p99_ms"),
-        ttft_p50_ms: summary.get("ttft_p50_ms"),
-        ttft_p95_ms: summary.get("ttft_p95_ms"),
-        ttft_p99_ms: summary.get("ttft_p99_ms"),
+        first_token_p50_ms: summary.get("first_token_p50_ms"),
+        first_token_p95_ms: summary.get("first_token_p95_ms"),
+        first_token_p99_ms: summary.get("first_token_p99_ms"),
         latency_coverage: rate(nonnegative(summary.get("latency_count")), request_count),
-        ttft_coverage: rate(nonnegative(summary.get("ttft_count")), request_count),
+        first_token_coverage: rate(nonnegative(summary.get("first_token_count")), request_count),
         points,
     })
 }

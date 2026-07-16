@@ -206,10 +206,13 @@ impl AccountPool {
         self.options = options;
     }
 
-    /// 回灌一次请求结果到调度器的运行时反馈（供 Smart 打分）。
-    pub fn report_feedback(&self, account_id: &str, success: bool, first_token_ms: Option<u64>) {
-        self.scheduler
-            .report_feedback(account_id, success, first_token_ms);
+    /// 回灌一个已启动上游 attempt 的运行时反馈（供 Smart 打分）。
+    pub fn report_attempt(
+        &self,
+        account_id: &str,
+        feedback: crate::fleet::scheduler::AttemptFeedback,
+    ) {
+        self.scheduler.report_attempt(account_id, feedback);
     }
 
     /// 更新账号状态。

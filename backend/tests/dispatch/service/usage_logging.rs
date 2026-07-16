@@ -687,7 +687,7 @@ async fn responses_stream_should_record_usage_record_after_completed_stream() {
     assert_eq!(event.output_tokens, Some(5));
     assert!(
         event.first_token_ms.is_some_and(|value| value > 0),
-        "stream usage metadata should include first output event latency: {metadata:?}",
+        "stream usage metadata should include first-token latency: {metadata:?}",
     );
     let first_token_bucket: (i64, i64) = sqlx::query_as(
         "select first_token_latency_sum, first_token_latency_count from request_time_buckets limit 1",

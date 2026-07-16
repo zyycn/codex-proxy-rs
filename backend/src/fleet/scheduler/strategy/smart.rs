@@ -284,7 +284,7 @@ fn score_account(
         );
 
     // 错误率 EWMA：本身即 [0,1]，越低越健康。无样本时视为 0（满分健康）。
-    let error_rate = 1.0 - sample.error_rate.unwrap_or(0.0).clamp(0.0, 1.0);
+    let error_rate = 1.0 - sample.pre_token_failure_rate.unwrap_or(0.0).clamp(0.0, 1.0);
 
     // TTFT：延迟越低越好。无样本的账号视为中性满分，避免冷启动被压。
     let ttft = match sample.ttft_ms {
