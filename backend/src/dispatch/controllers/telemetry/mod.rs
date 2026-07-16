@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::{
     dispatch::{
         controllers::telemetry::events::{
-            ResponseUpstreamErrorEventRecord, insert_first_token_ms,
+            ResponseUpstreamErrorEventRecord, insert_openai_processing_ms, insert_output_timing_ms,
             insert_response_status_metadata, insert_response_trace_metadata,
             insert_response_upstream_diagnostics, insert_websocket_pool_decision,
             record_live_response_stream_event, record_response_upstream_error_event,
@@ -151,10 +151,20 @@ impl TelemetryController {
             .effective_model
             .as_deref()
             .unwrap_or(exit.display_model);
-        let first_token_ms = request_first_token_ms(
+        let first_token_ms = request_timing_ms(
             exit.started_at,
             exit.attempt.started_at(),
             exit.response.first_token_ms,
+        );
+        let first_reasoning_ms = request_timing_ms(
+            exit.started_at,
+            exit.attempt.started_at(),
+            exit.response.first_reasoning_ms,
+        );
+        let first_text_ms = request_timing_ms(
+            exit.started_at,
+            exit.attempt.started_at(),
+            exit.response.first_text_ms,
         );
         let mut metadata = serde_json::json!({
             "responseId": exit.response_id,
@@ -162,7 +172,6 @@ impl TelemetryController {
             "completed": exit.completed,
             "incomplete": !exit.completed,
             "transport": backend_transport_name(exit.response.transport),
-            "firstTokenMs": first_token_ms,
             "usage": exit.response.usage,
             "effectiveModel": effective_model,
             "modelsEtag": exit.response.response_metadata.models_etag.as_deref(),
@@ -174,6 +183,13 @@ impl TelemetryController {
             "firstEventMs": exit.response.transport_metrics.first_event_ms,
             "httpVersion": exit.response.transport_metrics.http_version.as_deref(),
         });
+        insert_output_timing_ms(
+            &mut metadata,
+            first_token_ms,
+            first_reasoning_ms,
+            first_text_ms,
+        );
+        insert_openai_processing_ms(&mut metadata, &exit.response.response_metadata);
         insert_response_status_metadata(
             &mut metadata,
             200,
@@ -255,7 +271,12 @@ impl TelemetryController {
                     "firstEventMs": summary.first_event_ms,
                     "usage": summary.usage,
                 });
-                insert_first_token_ms(&mut metadata, summary.first_token_ms);
+                insert_output_timing_ms(
+                    &mut metadata,
+                    summary.first_token_ms,
+                    summary.first_reasoning_ms,
+                    summary.first_text_ms,
+                );
                 record_live_response_stream_event(
                     context,
                     status_code,
@@ -271,7 +292,7 @@ impl TelemetryController {
     }
 }
 
-fn request_first_token_ms(
+fn request_timing_ms(
     request_started_at: Instant,
     attempt_started_at: Instant,
     attempt_first_token_ms: Option<i64>,
@@ -295,6 +316,20 @@ async fn record_success(
     rate_limit_headers: &[(String, String)],
     body: &str,
 ) {
+    let mut metadata = serde_json::json!({
+        "stream": true,
+        "completed": completed,
+        "incomplete": !completed,
+        "responseId": response.get("id").and_then(Value::as_str),
+        "firstEventMs": summary.first_event_ms,
+        "usage": summary.usage,
+    });
+    insert_output_timing_ms(
+        &mut metadata,
+        summary.first_token_ms,
+        summary.first_reasoning_ms,
+        summary.first_text_ms,
+    );
     record_live_response_stream_event(
         context,
         200,
@@ -304,15 +339,7 @@ async fn record_success(
         } else {
             "v1 responses stream incomplete"
         },
-        serde_json::json!({
-            "stream": true,
-            "completed": completed,
-            "incomplete": !completed,
-            "responseId": response.get("id").and_then(Value::as_str),
-            "firstEventMs": summary.first_event_ms,
-            "firstTokenMs": summary.first_token_ms,
-            "usage": summary.usage,
-        }),
+        metadata,
         rate_limit_headers,
         body,
     )
@@ -367,7 +394,12 @@ async fn record_failure(
         .map_or(Value::Null, |response_id| {
             Value::String(response_id.clone())
         });
-    insert_first_token_ms(&mut metadata, summary.first_token_ms);
+    insert_output_timing_ms(
+        &mut metadata,
+        summary.first_token_ms,
+        summary.first_reasoning_ms,
+        summary.first_text_ms,
+    );
     metadata["firstEventMs"] = Value::Number(summary.first_event_ms.into());
     record_live_response_stream_event(
         context,

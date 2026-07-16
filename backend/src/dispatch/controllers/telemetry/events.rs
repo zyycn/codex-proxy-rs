@@ -21,8 +21,8 @@ use crate::{
     upstream::openai::{
         protocol::responses::{CodexResponsesRequest, ResponsesSseFailure},
         transport::{
-            CodexBackendTransport, CodexClientError, CodexUpstreamDiagnostics,
-            WebSocketPoolDecision,
+            CodexBackendTransport, CodexClientError, CodexResponseMetadata,
+            CodexUpstreamDiagnostics, WebSocketPoolDecision,
         },
     },
 };
@@ -312,6 +312,11 @@ fn enrich_live_response_stream_metadata(
         object,
         "firstEventMs",
         context.transport_metrics.first_event_ms,
+    );
+    insert_optional_i64(
+        object,
+        "openaiProcessingMs",
+        openai_processing_ms(context.response_metadata),
     );
     if let Some(http_version) = context.transport_metrics.http_version.as_deref() {
         object
@@ -683,16 +688,40 @@ fn metadata_string_field<'a>(metadata: &'a Value, field: &str) -> Option<&'a str
     metadata.get(field).and_then(Value::as_str)
 }
 
-pub(super) fn insert_first_token_ms(metadata: &mut Value, first_token_ms: Option<i64>) {
-    let Some(first_token_ms) = first_token_ms else {
+pub(super) fn insert_output_timing_ms(
+    metadata: &mut Value,
+    first_token_ms: Option<i64>,
+    first_reasoning_ms: Option<i64>,
+    first_text_ms: Option<i64>,
+) {
+    if let Some(object) = metadata.as_object_mut() {
+        insert_optional_i64(object, "firstTokenMs", first_token_ms);
+        insert_optional_i64(object, "firstReasoningMs", first_reasoning_ms);
+        insert_optional_i64(object, "firstTextMs", first_text_ms);
+    }
+}
+
+pub(super) fn insert_openai_processing_ms(
+    metadata: &mut Value,
+    response_metadata: &CodexResponseMetadata,
+) {
+    let Some(object) = metadata.as_object_mut() else {
         return;
     };
-    if let Some(object) = metadata.as_object_mut() {
-        object.insert(
-            "firstTokenMs".to_string(),
-            Value::Number(first_token_ms.into()),
-        );
-    }
+    insert_optional_i64(
+        object,
+        "openaiProcessingMs",
+        openai_processing_ms(response_metadata),
+    );
+}
+
+fn openai_processing_ms(response_metadata: &CodexResponseMetadata) -> Option<i64> {
+    response_metadata
+        .client_headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("openai-processing-ms"))
+        .and_then(|(_, value)| value.parse::<i64>().ok())
+        .filter(|value| *value >= 0)
 }
 
 pub(super) fn insert_websocket_pool_decision(

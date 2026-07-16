@@ -5,6 +5,7 @@ use tracing::{info, warn};
 use crate::upstream::openai::desktop_release::{
     APPCAST_POLL_INTERVAL, DesktopReleaseChecker, DesktopReleaseStatus,
 };
+use crate::upstream::openai::profile::CodexWireProfileState;
 
 use super::{
     coordinator::SchedulerHandle,
@@ -14,9 +15,15 @@ use super::{
 /// 启动 Desktop 官方发布检查后台任务。
 pub fn start_desktop_release_update_task(
     status: DesktopReleaseStatus,
+    wire_profile: CodexWireProfileState,
     appcast_url: String,
 ) -> SchedulerHandle {
-    let checker = DesktopReleaseChecker::with_client(reqwest::Client::new(), appcast_url, status);
+    let checker = DesktopReleaseChecker::with_client(
+        reqwest::Client::new(),
+        appcast_url,
+        status,
+        wire_profile,
+    );
     spawn_periodic_task(
         DesktopReleaseUpdateTask {
             checker,
@@ -43,7 +50,7 @@ impl PeriodicTaskRunner for DesktopReleaseUpdateTask {
                 Ok(release) => info!(
                     version = %release.version,
                     build = %release.build,
-                    "Codex Desktop 最新发布信息已刷新"
+                    "Codex Desktop 最新发布信息已刷新并已同步请求身份"
                 ),
                 Err(error) if first_tick => {
                     warn!(error = %error, "Codex Desktop 首次发布检查失败");

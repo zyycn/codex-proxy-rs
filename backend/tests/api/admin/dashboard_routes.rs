@@ -8,7 +8,7 @@ use codex_proxy_rs::{
     bootstrap::services::Services,
     infra::time::{china_datetime, china_day_start, china_quarter_hour_start},
     telemetry::{usage::store::PgUsageRecordStore, usage::types::UsageRecord},
-    upstream::openai::profile::CodexWireProfile,
+    upstream::openai::profile::CodexWireProfileState,
 };
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -426,15 +426,23 @@ async fn dashboard_summary_should_match_versioned_model_names_for_billing() {
 }
 
 #[tokio::test]
-async fn dashboard_summary_should_return_backend_formatted_time_fields() {
+async fn dashboard_summary_should_return_backend_formatted_and_latency_time_fields() {
     let (app, store, _pool, _dir) =
         dashboard_test_app("dashboard-backend-formatted-time", test_wire_profile()).await;
     let record_at = Utc::now() - Duration::seconds(1);
     let mut record = usage_record_with_tokens(record_at, 10);
     record.metadata = json!({
         "reasoningEffort": "max",
-        "reasoningPreset": "ultra"
+        "reasoningPreset": "ultra",
+        "firstReasoningMs": 5020,
+        "firstTextMs": 9620,
+        "transportDecisionWaitMs": 90,
+        "upstreamHeadersMs": 460,
+        "firstEventMs": 520,
+        "openaiProcessingMs": 24600
     });
+    record.first_token_ms = Some(5020);
+    record.latency_ms = Some(27_600);
     store.append(&record).await.unwrap();
 
     let body = dashboard_summary(app).await;
@@ -447,6 +455,20 @@ async fn dashboard_summary_should_return_backend_formatted_time_fields() {
     assert_eq!(body["data"]["usageRecords"][0]["reasoningPreset"], "ultra");
     assert!(body["data"]["usageRecords"][0]["subagentKind"].is_null());
     assert!(body["data"]["usageRecords"][0].get("metadata").is_none());
+    assert_eq!(body["data"]["usageRecords"][0]["firstTokenLatencyMs"], 5020);
+    assert_eq!(body["data"]["usageRecords"][0]["latencyMs"], 27_600);
+    assert_eq!(
+        body["data"]["usageRecords"][0]["latencyDetails"]["firstReasoningMs"],
+        5020
+    );
+    assert_eq!(
+        body["data"]["usageRecords"][0]["latencyDetails"]["firstTextMs"],
+        9620
+    );
+    assert_eq!(
+        body["data"]["usageRecords"][0]["latencyDetails"]["openaiProcessingMs"],
+        24600
+    );
 }
 
 #[tokio::test]
@@ -738,7 +760,7 @@ async fn dashboard_summary_total_billing_for_usage_record(
 
 async fn dashboard_test_app(
     db_name: &str,
-    wire_profile: std::sync::Arc<CodexWireProfile>,
+    wire_profile: CodexWireProfileState,
 ) -> (
     axum::Router,
     PgUsageRecordStore,

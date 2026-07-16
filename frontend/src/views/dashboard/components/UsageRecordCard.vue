@@ -12,6 +12,7 @@ import {
 } from '@/views/usage/constants'
 import UsageClientIpCell from '@/views/usage/components/UsageClientIpCell.vue'
 import UsageBillingCell from '@/views/usage/components/UsageBillingCell.vue'
+import UsageLatencyCell from '@/views/usage/components/UsageLatencyCell.vue'
 import UsageModelCell from '@/views/usage/components/UsageModelCell.vue'
 import UsageReasoningEffortCell from '@/views/usage/components/UsageReasoningEffortCell.vue'
 import UsageTokenCell from '@/views/usage/components/UsageTokenCell.vue'
@@ -90,6 +91,10 @@ const dashboardUsageRecordColumns = usageRecordColumns.filter((column) => column
 
           <template #billing="{ row }">
             <UsageBillingCell :record="row" />
+          </template>
+
+          <template #latency="{ row }">
+            <UsageLatencyCell :record="row" />
           </template>
         </BaseTable>
       </div>

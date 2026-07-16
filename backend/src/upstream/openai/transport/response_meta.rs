@@ -5,7 +5,7 @@ use std::time::Instant;
 use reqwest::header::{HeaderMap, SET_COOKIE};
 
 use crate::upstream::openai::protocol::{
-    events::is_rate_limit_header_name, responses::update_first_response_semantic_output_ms,
+    events::is_rate_limit_header_name, responses::response_event_signals, sse::SseEventDecoder,
 };
 
 use super::{client::CodexResponseMetadata, diagnostics::CodexUpstreamDiagnostics};
@@ -106,10 +106,40 @@ fn upsert_client_header(headers: &mut Vec<(String, String)>, header: (String, St
     }
 }
 
-pub(super) fn update_first_token_ms(
+pub(super) fn update_response_timing_ms(
     started_at: Instant,
-    body_bytes: &[u8],
+    decoder: &mut SseEventDecoder,
+    chunk: &[u8],
     first_token_ms: &mut Option<i64>,
+    first_reasoning_ms: &mut Option<i64>,
+    first_text_ms: &mut Option<i64>,
 ) {
-    update_first_response_semantic_output_ms(started_at, body_bytes, first_token_ms);
+    let Ok(events) = decoder.push(chunk) else {
+        return;
+    };
+    for event in events {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&event.data) else {
+            continue;
+        };
+        let event_type = event.event.as_deref().or_else(|| {
+            value
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+        });
+        let signals = response_event_signals(event_type, &value);
+        if !signals.semantic_output {
+            continue;
+        }
+        let elapsed_ms = crate::infra::time::elapsed_millis_i64(started_at).max(1);
+        if first_token_ms.is_none() {
+            *first_token_ms = Some(elapsed_ms);
+        }
+        if signals.reasoning_output && first_reasoning_ms.is_none() {
+            *first_reasoning_ms = Some(elapsed_ms);
+        }
+        if signals.text_output && first_text_ms.is_none() {
+            *first_text_ms = Some(elapsed_ms);
+        }
+    }
 }

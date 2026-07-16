@@ -1,8 +1,6 @@
-use std::sync::Arc;
-
 use codex_proxy_rs::{
     bootstrap::{config::WireProfileConfig, services::wire_profile_from_config},
-    upstream::openai::profile::CodexWireProfile,
+    upstream::openai::profile::{CodexWireProfile, CodexWireProfileState},
 };
 
 use crate::support::storage::timestamp;
@@ -25,10 +23,10 @@ pub(crate) fn test_wire_profile_value() -> CodexWireProfile {
     wire_profile_from_config(&test_wire_profile_config())
 }
 
-pub(crate) fn test_wire_profile() -> Arc<CodexWireProfile> {
-    Arc::new(test_wire_profile_value())
+pub(crate) fn test_wire_profile() -> CodexWireProfileState {
+    CodexWireProfileState::new(test_wire_profile_value())
 }
 
-pub(crate) fn wire_profile(profile: CodexWireProfile) -> Arc<CodexWireProfile> {
-    Arc::new(profile)
+pub(crate) fn wire_profile(profile: CodexWireProfile) -> CodexWireProfileState {
+    CodexWireProfileState::new(profile)
 }

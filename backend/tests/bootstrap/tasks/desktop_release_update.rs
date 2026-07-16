@@ -6,6 +6,7 @@ async fn desktop_release_update_task_should_start_background_checker() {
     let handle =
         codex_proxy_rs::bootstrap::tasks::desktop_release_update::start_desktop_release_update_task(
             status,
+            crate::support::wire_profile::test_wire_profile(),
             "https://example.invalid/appcast.xml".to_string(),
         );
 
@@ -36,9 +37,11 @@ async fn desktop_release_update_task_should_record_initial_appcast_observation()
     .await;
 
     let status = DesktopReleaseStatus::default();
+    let wire_profile = crate::support::wire_profile::test_wire_profile();
     let handle =
         codex_proxy_rs::bootstrap::tasks::desktop_release_update::start_desktop_release_update_task(
             status.clone(),
+            wire_profile.clone(),
             format!("{}/appcast.xml", server.uri()),
         );
 
@@ -53,6 +56,9 @@ async fn desktop_release_update_task_should_record_initial_appcast_observation()
     assert!(release.signature_present);
     assert!(snapshot.checked_at.is_some());
     assert!(snapshot.last_error.is_none());
+    let profile = wire_profile.snapshot();
+    assert_eq!(profile.desktop_version, "26.900.1");
+    assert_eq!(profile.desktop_build, "7001");
 }
 
 #[tokio::test]
@@ -65,11 +71,12 @@ async fn desktop_release_update_task_should_record_fetch_failure_without_mutatin
         .await;
 
     let profile = crate::support::wire_profile::test_wire_profile();
-    let original_user_agent = profile.user_agent();
+    let original_profile = profile.snapshot();
     let status = DesktopReleaseStatus::default();
     let handle =
         codex_proxy_rs::bootstrap::tasks::desktop_release_update::start_desktop_release_update_task(
             status.clone(),
+            profile.clone(),
             format!("{}/appcast.xml", server.uri()),
         );
 
@@ -81,6 +88,6 @@ async fn desktop_release_update_task_should_record_fetch_failure_without_mutatin
     }
     handle.shutdown().await;
 
-    assert_eq!(profile.user_agent(), original_user_agent);
+    assert_eq!(profile.snapshot(), original_profile);
     assert!(status.snapshot().latest.is_none());
 }

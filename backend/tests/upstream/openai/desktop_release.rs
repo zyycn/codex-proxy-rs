@@ -64,8 +64,33 @@ fn appcast_parser_should_reject_release_without_codex_desktop_version() {
     assert!(error.to_string().contains("shortVersionString"));
 }
 
+#[test]
+fn appcast_parser_should_reject_non_numeric_desktop_version() {
+    let error = parse_latest_desktop_release(&APPCAST.replace("26.707.72221", "26.707.beta"))
+        .expect_err("non-numeric version should fail");
+
+    assert_eq!(
+        error.to_string(),
+        "Codex Desktop appcast field `shortVersionString` is invalid"
+    );
+}
+
+#[test]
+fn appcast_parser_should_reject_non_numeric_desktop_build() {
+    let error = parse_latest_desktop_release(&APPCAST.replace(
+        "<sparkle:version>5307</sparkle:version>",
+        "<sparkle:version>build</sparkle:version>",
+    ))
+    .expect_err("non-numeric build should fail");
+
+    assert_eq!(
+        error.to_string(),
+        "Codex Desktop appcast field `version` is invalid"
+    );
+}
+
 #[tokio::test]
-async fn desktop_release_checker_should_update_observation_only() {
+async fn desktop_release_checker_should_sync_latest_release_to_wire_profile() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/appcast.xml"))
@@ -73,10 +98,12 @@ async fn desktop_release_checker_should_update_observation_only() {
         .mount(&server)
         .await;
     let status = DesktopReleaseStatus::default();
+    let wire_profile = crate::support::wire_profile::test_wire_profile();
     let checker = DesktopReleaseChecker::with_client(
         reqwest::Client::new(),
         format!("{}/appcast.xml", server.uri()),
         status.clone(),
+        wire_profile.clone(),
     );
 
     checker.check_and_record().await.expect("check appcast");
@@ -91,4 +118,7 @@ async fn desktop_release_checker_should_update_observation_only() {
     );
     assert!(snapshot.checked_at.is_some());
     assert!(snapshot.last_error.is_none());
+    let profile = wire_profile.snapshot();
+    assert_eq!(profile.desktop_version, "26.707.72221");
+    assert_eq!(profile.desktop_build, "5307");
 }

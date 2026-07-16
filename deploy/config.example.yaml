@@ -49,7 +49,7 @@ x-cpr:
 
   wire_profile:
     # 该画像来自 Desktop 制品与 bundled Codex Core 的联合审计。
-    # appcast 只报告新 Desktop 制品，不会自动改写这里的请求身份。
+    # appcast 成功检查后会自动同步 Desktop 版本和 Build；其余字段保持此处配置。
     originator: 'Codex Desktop'
     codex_version: '0.144.2'
     desktop_version: '26.707.72221'
@@ -80,7 +80,6 @@ x-cpr:
 
   telemetry:
     enabled: true
-
 
 # Compose 凭据桥接区。通常不需要修改。
 services:

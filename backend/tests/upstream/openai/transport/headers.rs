@@ -508,7 +508,7 @@ async fn codex_backend_client_should_send_desktop_headers_and_capture_response_m
 }
 
 #[tokio::test]
-async fn codex_backend_client_should_send_effective_wire_profile_user_agent() {
+async fn codex_backend_client_should_send_latest_wire_profile_user_agent() {
     let server = wiremock::MockServer::start().await;
     let sse_body = include_str!("../../../fixtures/responses/http_sse/completed_usage_basic.sse");
     wiremock::Mock::given(wiremock::matchers::method("POST"))
@@ -522,12 +522,13 @@ async fn codex_backend_client_should_send_effective_wire_profile_user_agent() {
         .await;
 
     let profile = crate::support::wire_profile::test_wire_profile();
-    let expected_user_agent = profile.user_agent();
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         server.uri(),
-        profile,
+        profile.clone(),
     );
+    profile.update_desktop_release("26.900.1", "7001");
+    let expected_user_agent = profile.snapshot().user_agent();
     let mut request =
         codex_proxy_rs::upstream::openai::protocol::responses::CodexResponsesRequest::new_http_sse(
             "gpt-5.5",
@@ -681,7 +682,7 @@ async fn codex_backend_client_models_should_use_original_auxiliary_headers() {
         .mount(&server)
         .await;
     let profile = crate::support::wire_profile::test_wire_profile();
-    let client_version = profile.codex_version.clone();
+    let client_version = profile.snapshot().codex_version;
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         server.uri(),

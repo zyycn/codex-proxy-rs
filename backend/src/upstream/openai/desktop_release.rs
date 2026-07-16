@@ -8,6 +8,8 @@ use std::{
 use chrono::{DateTime, Utc};
 use roxmltree::{Document, Node};
 
+use super::profile::CodexWireProfileState;
+
 const APPCAST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Codex Desktop 官方 appcast 地址。
@@ -72,12 +74,13 @@ impl DesktopReleaseStatus {
     }
 }
 
-/// 读取官方 appcast 并更新发布观测状态。
+/// 读取官方 appcast，同步运行时请求画像并更新发布观测状态。
 #[derive(Clone)]
 pub struct DesktopReleaseChecker {
     client: reqwest::Client,
     appcast_url: String,
     status: DesktopReleaseStatus,
+    wire_profile: CodexWireProfileState,
 }
 
 impl DesktopReleaseChecker {
@@ -85,11 +88,13 @@ impl DesktopReleaseChecker {
         client: reqwest::Client,
         appcast_url: impl Into<String>,
         status: DesktopReleaseStatus,
+        wire_profile: CodexWireProfileState,
     ) -> Self {
         Self {
             client,
             appcast_url: appcast_url.into(),
             status,
+            wire_profile,
         }
     }
 
@@ -98,6 +103,8 @@ impl DesktopReleaseChecker {
         let result = self.fetch_latest().await;
         match result {
             Ok(release) => {
+                self.wire_profile
+                    .update_desktop_release(&release.version, &release.build);
                 self.status.record_success(checked_at, release.clone());
                 Ok(release)
             }
@@ -138,9 +145,15 @@ pub fn parse_latest_desktop_release(xml: &str) -> Result<DesktopRelease, Desktop
     let version = child_text(item, "shortVersionString")
         .or_else(|| local_attribute(enclosure, "shortVersionString"))
         .ok_or(DesktopReleaseError::MissingField("shortVersionString"))?;
+    if !is_numeric_dotted_version(&version) {
+        return Err(DesktopReleaseError::InvalidField("shortVersionString"));
+    }
     let build = child_text(item, "version")
         .or_else(|| local_attribute(enclosure, "version"))
         .ok_or(DesktopReleaseError::MissingField("version"))?;
+    if !build.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(DesktopReleaseError::InvalidField("version"));
+    }
     let published_at = child_text(item, "pubDate")
         .map(|value| {
             DateTime::parse_from_rfc2822(&value)
@@ -185,6 +198,15 @@ fn local_attribute(node: Option<Node<'_, '_>>, local_name: &str) -> Option<Strin
         .map(|attribute| attribute.value().trim())
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
+}
+
+fn is_numeric_dotted_version(value: &str) -> bool {
+    let mut parts = value.split('.');
+    let valid_parts = parts
+        .by_ref()
+        .filter(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+        .count();
+    valid_parts >= 2 && valid_parts == value.split('.').count()
 }
 
 #[derive(Debug, thiserror::Error)]

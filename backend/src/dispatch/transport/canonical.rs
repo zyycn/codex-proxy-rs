@@ -225,6 +225,8 @@ pub(in crate::dispatch) struct CanonicalStreamDecoder {
     pending: Vec<u8>,
     forwardable_frame_seen: bool,
     first_semantic_output_seen: bool,
+    first_reasoning_output_seen: bool,
+    first_text_output_seen: bool,
     terminal: Option<CanonicalStreamTerminal>,
     transport_done_seen: bool,
     completed_usage: Option<TokenUsage>,
@@ -239,6 +241,8 @@ impl CanonicalStreamDecoder {
             pending: Vec::new(),
             forwardable_frame_seen: false,
             first_semantic_output_seen: false,
+            first_reasoning_output_seen: false,
+            first_text_output_seen: false,
             terminal: None,
             transport_done_seen: false,
             completed_usage: None,
@@ -309,6 +313,14 @@ impl CanonicalStreamDecoder {
 
     pub(in crate::dispatch) fn first_semantic_output_seen(&self) -> bool {
         self.first_semantic_output_seen
+    }
+
+    pub(in crate::dispatch) fn first_reasoning_output_seen(&self) -> bool {
+        self.first_reasoning_output_seen
+    }
+
+    pub(in crate::dispatch) fn first_text_output_seen(&self) -> bool {
+        self.first_text_output_seen
     }
 
     pub(in crate::dispatch) fn commit_boundary_reached(&self, policy: StreamCommitPolicy) -> bool {
@@ -382,6 +394,8 @@ impl CanonicalStreamDecoder {
     fn observe(&mut self, event: &CanonicalResponseEvent) {
         let signals = event.signals();
         self.first_semantic_output_seen |= signals.semantic_output;
+        self.first_reasoning_output_seen |= signals.reasoning_output;
+        self.first_text_output_seen |= signals.text_output;
         if let Some(response_id) = event.response_id() {
             self.last_response_id = Some(response_id.to_string());
         }
