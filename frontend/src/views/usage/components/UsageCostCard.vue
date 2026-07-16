@@ -60,7 +60,7 @@ const chartOption = computed<EChartsOption>(() => {
 
   return {
     animationDuration: 240,
-    grid: { left: 52, right: 12, top: 40, bottom: 28 },
+    grid: { left: 0, right: 0, top: 40, bottom: 0, containLabel: true },
     legend: {
       top: 0,
       right: 4,

@@ -72,7 +72,7 @@ export const usageRecordColumns = [
   {
     key: 'userAgent',
     label: 'User-Agent',
-    width: '300px',
+    width: '340px',
     ellipsis: false,
     cellClass:
       'whitespace-normal break-words text-[12px] leading-[1.45] font-[650] text-(--cp-text-secondary)',
