@@ -27,6 +27,8 @@ pub(in crate::dispatch) struct StreamFinalizer {
     controllers: ControllerSet,
     controller_scope: ControllerRequestScope,
     controller_context: StreamControllerContext,
+    request_input: Vec<serde_json::Value>,
+    continued_from_previous_response: bool,
     account_lease: AccountLease,
 }
 
@@ -35,12 +37,16 @@ impl StreamFinalizer {
         controllers: ControllerSet,
         controller_scope: ControllerRequestScope,
         controller_context: StreamControllerContext,
+        request_input: Vec<serde_json::Value>,
+        continued_from_previous_response: bool,
         account_lease: AccountLease,
     ) -> Self {
         Self {
             controllers,
             controller_scope,
             controller_context,
+            request_input,
+            continued_from_previous_response,
             account_lease,
         }
     }
@@ -58,14 +64,11 @@ impl StreamFinalizer {
     }
 
     pub(in crate::dispatch) fn request_input(&self) -> &[serde_json::Value] {
-        self.controller_context.request.input()
+        &self.request_input
     }
 
     pub(in crate::dispatch) fn continued_from_previous_response(&self) -> bool {
-        self.controller_context
-            .request
-            .previous_response_id()
-            .is_some()
+        self.continued_from_previous_response
     }
 
     pub(in crate::dispatch) async fn finalize(
@@ -79,6 +82,7 @@ impl StreamFinalizer {
             controller_scope,
             controller_context,
             account_lease,
+            ..
         } = self;
         let body = String::from_utf8_lossy(&summary.body).into_owned();
         controllers

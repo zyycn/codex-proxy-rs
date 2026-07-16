@@ -45,7 +45,7 @@ fn responses_websocket_replay_policy_should_be_owned_by_history_controller() {
     for forbidden in [
         "ConnectionReplayState",
         "PendingReplayUpdate",
-        "sanitize_cross_account_output",
+        "sanitize_cross_account_item",
         ".previous_response_id()",
         "dispatch::controllers",
     ] {
@@ -61,7 +61,7 @@ fn responses_websocket_replay_policy_should_be_owned_by_history_controller() {
         "ConnectionReplayUpdate::Unavailable",
         "struct CrossAccountReplay",
         "LocalReplayItem::ClientInput",
-        "sanitize_cross_account_output",
+        "sanitize_cross_account_item",
         "project_transcript_to_account",
         "snapshot.last_response_id.as_deref() == Some(previous_response_id)",
     ] {
@@ -83,7 +83,7 @@ fn responses_websocket_replay_policy_should_be_owned_by_history_controller() {
         );
     }
     assert!(protocol.contains("enum LocalReplayItem"));
-    assert!(!protocol.contains("sanitize_cross_account_output"));
+    assert!(!protocol.contains("sanitize_cross_account_item"));
 }
 
 #[tokio::test]
@@ -553,6 +553,15 @@ async fn responses_websocket_cross_account_replay_should_isolate_account_bound_s
             "text": "client replayed summary A"
         }]
     }));
+    first_payload["input"].as_array_mut().unwrap().push(json!({
+        "type": "future_output_item",
+        "id": "future_output_id_a",
+        "encrypted_content": "future_output_encrypted_a",
+        "payload": {
+            "id": "future_nested_id",
+            "encrypted_content": "future_nested_secret"
+        }
+    }));
     first_payload["turnState"] = json!("turn_state_account_a");
     first_payload["x-codex-installation-id"] = json!("client_installation_a");
     first_payload["client_metadata"] = json!({
@@ -749,12 +758,9 @@ async fn responses_websocket_cross_account_replay_should_isolate_account_bound_s
     }
 
     let replay_input = cross_account_replay["input"].as_array().unwrap();
-    assert_eq!(replay_input.len(), 6);
-    assert_eq!(replay_input[0]["id"], "client_input_id");
-    assert_eq!(
-        replay_input[0]["encrypted_content"],
-        "client_semantic_secret"
-    );
+    assert_eq!(replay_input.len(), 7);
+    assert!(replay_input[0].get("id").is_none());
+    assert!(replay_input[0].get("encrypted_content").is_none());
     assert_eq!(
         replay_input[0]["tool_arguments"]["id"],
         "client_tool_argument_id"
@@ -767,18 +773,26 @@ async fn responses_websocket_cross_account_replay_should_isolate_account_bound_s
     );
     assert!(replay_input[2].get("id").is_none());
     assert!(replay_input[2].get("encrypted_content").is_none());
-    assert_eq!(replay_input[2]["content"][0]["id"], "nested_content_id_a");
+    assert_eq!(replay_input[2]["type"], "future_output_item");
+    assert_eq!(replay_input[2]["payload"]["id"], "future_nested_id");
+    assert_eq!(
+        replay_input[2]["payload"]["encrypted_content"],
+        "future_nested_secret"
+    );
     assert!(replay_input[3].get("id").is_none());
     assert!(replay_input[3].get("encrypted_content").is_none());
-    assert_eq!(replay_input[3]["summary"][0]["id"], "nested_summary_id_a");
+    assert_eq!(replay_input[3]["content"][0]["id"], "nested_content_id_a");
     assert!(replay_input[4].get("id").is_none());
-    assert_eq!(replay_input[4]["call_id"], "call_account_a");
-    assert_eq!(replay_input[4]["caller"], "client");
+    assert!(replay_input[4].get("encrypted_content").is_none());
+    assert_eq!(replay_input[4]["summary"][0]["id"], "nested_summary_id_a");
+    assert!(replay_input[5].get("id").is_none());
+    assert_eq!(replay_input[5]["call_id"], "call_account_a");
+    assert_eq!(replay_input[5]["caller"], "client");
     assert_eq!(
-        replay_input[4]["arguments"],
+        replay_input[5]["arguments"],
         "{\"id\":\"tool_argument_id_a\"}"
     );
-    assert_eq!(replay_input[5]["content"], "second");
+    assert_eq!(replay_input[6]["content"], "second");
     let cross_account_json = cross_account_replay.to_string();
     for forbidden in [
         "msg_account_a",
@@ -790,6 +804,8 @@ async fn responses_websocket_cross_account_replay_should_isolate_account_bound_s
         "encrypted_compaction_a",
         "client_replayed_reasoning_id_a",
         "client_replayed_reasoning_encrypted_a",
+        "future_output_id_a",
+        "future_output_encrypted_a",
     ] {
         assert!(
             !cross_account_json.contains(forbidden),
@@ -804,9 +820,15 @@ async fn responses_websocket_cross_account_replay_should_isolate_account_bound_s
     assert_eq!(continued_secondary["input"][0]["content"], "third");
     assert!(same_account_replay.get("previous_response_id").is_none());
     let same_account_json = same_account_replay.to_string();
+    assert!(!same_account_json.contains("client_input_id"));
+    assert!(!same_account_json.contains("client_semantic_secret"));
     assert!(!same_account_json.contains("encrypted_message_a"));
     assert!(!same_account_json.contains("encrypted_reasoning_a"));
     assert!(!same_account_json.contains("client_replayed_reasoning_encrypted_a"));
+    assert!(!same_account_json.contains("future_output_id_a"));
+    assert!(!same_account_json.contains("future_output_encrypted_a"));
+    assert!(same_account_json.contains("future_nested_id"));
+    assert!(same_account_json.contains("future_nested_secret"));
     assert!(same_account_json.contains("encrypted_message_b"));
     assert!(same_account_json.contains("encrypted_reasoning_b"));
     assert!(!same_account_json.contains("msg_account_b"));

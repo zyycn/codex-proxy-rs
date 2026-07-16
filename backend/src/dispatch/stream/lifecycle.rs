@@ -141,6 +141,7 @@ impl ResponseDispatchService {
 
         let EstablishedStream {
             context,
+            attempt_request,
             lease,
             response,
             decoder,
@@ -159,6 +160,8 @@ impl ResponseDispatchService {
             .observe_models_etag(response.response_metadata.models_etag.as_deref());
         let attempts = trace.attempts().to_vec();
         let transport = response.transport;
+        let request_input = attempt_request.input().to_vec();
+        let continued_from_previous_response = attempt_request.previous_response_id().is_some();
         let finalizer = StreamFinalizer::new(
             controllers,
             controller_scope,
@@ -185,6 +188,8 @@ impl ResponseDispatchService {
                 attempts,
                 started_at,
             },
+            request_input,
+            continued_from_previous_response,
             lease,
         );
         Ok(spawn_live_response_stream(

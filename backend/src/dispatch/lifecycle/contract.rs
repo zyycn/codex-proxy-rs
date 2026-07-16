@@ -173,6 +173,7 @@ impl TryFrom<CollectedResponse> for EstablishedCompleteBody {
 
 pub(in crate::dispatch) struct EstablishedStream {
     pub context: EstablishedAttemptContext,
+    pub attempt_request: CodexResponsesRequest,
     pub lease: AccountLease,
     pub response: CodexBackendStreamingResponse,
     pub decoder: CanonicalStreamDecoder,

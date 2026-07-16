@@ -650,6 +650,7 @@ impl<'a> AttemptRunner<'a> {
             PendingAttempt::StreamResponse(stream) => {
                 let PendingStreamResponse {
                     account,
+                    attempt_request,
                     attempt,
                     lease,
                     response,
@@ -660,6 +661,7 @@ impl<'a> AttemptRunner<'a> {
                 } = *stream;
                 EstablishedResponse::Stream(Box::new(EstablishedStream {
                     context: self.take_established_context(account, attempt)?,
+                    attempt_request,
                     lease,
                     response,
                     decoder,
