@@ -14,7 +14,8 @@ use super::{
     accounts_routes::{
         account_models, account_quota, accounts, batch_delete_accounts, create_account,
         export_accounts, health_check_accounts, import_accounts, oauth_authorize_account,
-        oauth_exchange_account, refresh_account, test_account_connection, update_account,
+        oauth_exchange_account, refresh_account, refresh_account_models, test_account_connection,
+        update_account,
     },
     auth_routes::{login, logout, session_status},
     dashboard_routes::{dashboard_summary, dashboard_trend},
@@ -72,7 +73,10 @@ pub fn router() -> Router<AppState> {
             post(oauth_exchange_account),
         )
         .route("/api/admin/accounts/test", get(test_account_connection))
-        .route("/api/admin/accounts/models", get(account_models))
+        .route(
+            "/api/admin/accounts/models",
+            get(account_models).post(refresh_account_models),
+        )
         .route("/api/admin/accounts/delete", post(batch_delete_accounts))
         .route("/api/admin/accounts/update", post(update_account))
         .route("/api/admin/accounts/refresh", post(refresh_account))

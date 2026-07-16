@@ -84,8 +84,9 @@ impl CodexBackendClient {
                 retry_after_seconds: retry_after_seconds
                     .or_else(|| retry_after_seconds_from_body(&body)),
                 body,
-                diagnostics,
+                diagnostics: Box::new(diagnostics),
                 set_cookie_headers,
+                rate_limit_headers,
                 transport: CodexBackendTransport::HttpSse,
             });
         }
@@ -166,8 +167,9 @@ impl CodexBackendClient {
                 retry_after_seconds: retry_after_seconds
                     .or_else(|| retry_after_seconds_from_body(&body)),
                 body,
-                diagnostics,
+                diagnostics: Box::new(diagnostics),
                 set_cookie_headers,
+                rate_limit_headers,
                 transport: CodexBackendTransport::HttpSse,
             });
         }
@@ -539,8 +541,9 @@ impl CodexBackendClient {
                 retry_after_seconds: retry_after_seconds
                     .or_else(|| retry_after_seconds_from_body(&body)),
                 body,
-                diagnostics,
+                diagnostics: Box::new(diagnostics),
                 set_cookie_headers,
+                rate_limit_headers: Vec::new(),
                 transport: CodexBackendTransport::HttpSse,
             });
         }
@@ -552,10 +555,11 @@ impl CodexBackendClient {
                     "model catalog response is not valid JSON: {error}; body: {}",
                     truncate_for_error(&body)
                 ),
-                diagnostics: CodexUpstreamDiagnostics::with_status(
+                diagnostics: Box::new(CodexUpstreamDiagnostics::with_status(
                     StatusCode::BAD_GATEWAY.as_u16(),
-                ),
+                )),
                 set_cookie_headers,
+                rate_limit_headers: Vec::new(),
                 transport: CodexBackendTransport::HttpSse,
             })?;
         let models = extract_model_entries(&parsed);
@@ -567,8 +571,11 @@ impl CodexBackendClient {
             status: StatusCode::BAD_GATEWAY,
             retry_after_seconds: None,
             body: "model catalog response contains no models".to_string(),
-            diagnostics: CodexUpstreamDiagnostics::with_status(StatusCode::BAD_GATEWAY.as_u16()),
+            diagnostics: Box::new(CodexUpstreamDiagnostics::with_status(
+                StatusCode::BAD_GATEWAY.as_u16(),
+            )),
             set_cookie_headers: Vec::new(),
+            rate_limit_headers: Vec::new(),
             transport: CodexBackendTransport::HttpSse,
         })
     }

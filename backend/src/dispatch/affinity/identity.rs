@@ -191,12 +191,6 @@ impl AccountIdentityService {
         AccountScopedRequest { request, identity }
     }
 
-    pub(in crate::dispatch) fn scope_auxiliary(&self, account_id: &str) -> AccountScopedIdentity {
-        AccountScopedIdentity {
-            installation_id: self.pseudonymizer.installation_id(account_id),
-        }
-    }
-
     fn scope_turn_metadata(
         raw: &str,
         identity: &AccountScopedIdentity,

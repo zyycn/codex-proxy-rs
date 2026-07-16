@@ -86,6 +86,8 @@ pub enum AccountManageError {
     FetchQuota(String),
     #[error("no available models returned")]
     NoModels,
+    #[error("failed to refresh account models: {0}")]
+    RefreshModels(String),
     #[error("invalid status: {0}")]
     InvalidStatus(String),
     #[error("label must be 64 characters or fewer")]

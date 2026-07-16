@@ -30,6 +30,8 @@ pub struct UpstreamFailureFacts {
     pub status_code: Option<u16>,
     pub code: Option<String>,
     pub error_type: Option<String>,
+    pub identity_authorization_error: Option<String>,
+    pub identity_error_code: Option<String>,
     pub message: String,
     pub body: String,
     pub retry_after_seconds: Option<u64>,
@@ -48,6 +50,8 @@ pub fn upstream_failure_facts(error: &CodexClientError) -> UpstreamFailureFacts 
             status_code: error.status().map(|status| status.as_u16()),
             code: None,
             error_type: None,
+            identity_authorization_error: None,
+            identity_error_code: None,
             message: error.to_string(),
             body: error.to_string(),
             retry_after_seconds: None,
@@ -57,6 +61,7 @@ pub fn upstream_failure_facts(error: &CodexClientError) -> UpstreamFailureFacts 
             body,
             retry_after_seconds,
             transport,
+            diagnostics,
             ..
         } => {
             let (code, error_type, message) = error_fields(body);
@@ -72,6 +77,8 @@ pub fn upstream_failure_facts(error: &CodexClientError) -> UpstreamFailureFacts 
                 status_code: Some(status.as_u16()),
                 code,
                 error_type,
+                identity_authorization_error: diagnostics.identity_authorization_error.clone(),
+                identity_error_code: diagnostics.identity_error_code.clone(),
                 message: message.unwrap_or_else(|| body.clone()),
                 body: body.clone(),
                 retry_after_seconds: *retry_after_seconds,
@@ -87,6 +94,11 @@ pub fn upstream_failure_facts(error: &CodexClientError) -> UpstreamFailureFacts 
                 status_code: Some(upstream.status_code),
                 code: upstream.code.clone().or(body_code),
                 error_type: upstream.error_type.clone().or(body_type),
+                identity_authorization_error: upstream
+                    .diagnostics
+                    .identity_authorization_error
+                    .clone(),
+                identity_error_code: upstream.diagnostics.identity_error_code.clone(),
                 message: upstream
                     .message
                     .clone()
@@ -141,6 +153,8 @@ fn simple_facts(kind: UpstreamFailureKind, error: &CodexClientError) -> Upstream
         status_code: None,
         code: None,
         error_type: None,
+        identity_authorization_error: None,
+        identity_error_code: None,
         body: message.clone(),
         message,
         retry_after_seconds: None,

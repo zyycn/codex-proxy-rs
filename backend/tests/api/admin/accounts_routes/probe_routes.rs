@@ -85,27 +85,94 @@ async fn account_models_should_return_redis_snapshot_models() {
 }
 
 #[tokio::test]
-async fn account_models_should_fetch_missing_plan_snapshot_with_account_token() {
+async fn refresh_account_models_should_fetch_persist_and_preserve_other_plans() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/codex/models"))
+        .and(header("authorization", "Bearer access-test"))
+        .and(header("chatgpt-account-id", "chatgpt-test"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "models": [{
+                "slug": "gpt-plus-refreshed",
+                "display_name": "GPT Plus Refreshed"
+            }]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (app, state, pool, _dir) = admin_accounts_test_app_with_api_base_url(
+        "admin-account-models-refresh",
+        92,
+        format!("{}/backend-api", server.uri()),
+    )
+    .await;
+    seed_test_account(&pool).await;
+    let model_snapshots =
+        codex_proxy_rs::models::store::RedisModelSnapshotStore::new(state.redis.clone());
+    model_snapshots
+        .replace_plan_snapshots(&[
+            ModelPlanSnapshot::from_backend_entries(
+                "plus",
+                vec![BackendModelEntry {
+                    id: Some("gpt-plus-old".to_string()),
+                    name: Some("GPT Plus Old".to_string()),
+                    ..BackendModelEntry::default()
+                }],
+            ),
+            ModelPlanSnapshot::from_backend_entries(
+                "team",
+                vec![BackendModelEntry {
+                    id: Some("gpt-team-existing".to_string()),
+                    name: Some("GPT Team Existing".to_string()),
+                    ..BackendModelEntry::default()
+                }],
+            ),
+        ])
+        .await
+        .unwrap();
+    state
+        .services
+        .models
+        .reload_from_store()
+        .await
+        .expect("model catalog should reload from seeded snapshots");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/models")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "id": "acct_test" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["models"][0]["id"], "gpt-plus-refreshed");
+    let stored = model_snapshots.list_plan_snapshots().await.unwrap();
+    assert!(stored.iter().any(|snapshot| {
+        snapshot.plan_type == "plus"
+            && snapshot
+                .models
+                .iter()
+                .any(|model| model.id == "gpt-plus-refreshed")
+    }));
+    assert!(stored.iter().any(|snapshot| snapshot.plan_type == "team"));
+}
+
+#[tokio::test]
+async fn account_models_should_not_fetch_missing_plan_snapshot() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/backend-api/codex/models"))
         .and(header("authorization", "Bearer access-plan-b"))
         .and(header("chatgpt-account-id", "chatgpt-plan-b"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "models": [
-                {
-                    "slug": "gpt-plan-b-live",
-                    "display_name": "GPT Plan B Live",
-                    "description": "Live model",
-                    "is_default": true,
-                    "supported_reasoning_efforts": [{"reasoning_effort": "medium", "description": "medium"}],
-                    "default_reasoning_effort": "medium",
-                    "input_modalities": ["text"],
-                    "output_modalities": ["text"],
-                    "supports_personality": false
-                }
-            ]
-        })))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
         .mount(&server)
         .await;
     let (app, state, pool, _dir) = admin_accounts_test_app_with_api_base_url(
@@ -153,15 +220,12 @@ async fn account_models_should_fetch_missing_plan_snapshot_with_account_token() 
         .unwrap();
     let requests = server.received_requests().await.unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(requests.len(), 1, "missing plan should be fetched upstream");
-    let body = response_json(response).await;
-    assert_eq!(body["data"]["models"][0]["id"], "gpt-plan-b-live");
-    assert_eq!(body["data"]["models"][0]["label"], "GPT Plan B Live");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(requests.is_empty(), "model snapshot lookup must stay local");
     let model_snapshots =
         codex_proxy_rs::models::store::RedisModelSnapshotStore::new(state.redis.clone());
     let stored = model_snapshots.list_plan_snapshots().await.unwrap();
-    assert!(stored.iter().any(|snapshot| snapshot.plan_type == "plan-b"));
+    assert!(!stored.iter().any(|snapshot| snapshot.plan_type == "plan-b"));
 }
 
 #[tokio::test]

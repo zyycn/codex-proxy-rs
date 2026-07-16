@@ -93,7 +93,6 @@ pub(in crate::dispatch) enum AttemptObservationKind {
         ledger: CandidateLedgerFacts,
         last_exhausted: Option<ExhaustedAccount>,
     },
-    CandidatePreparationRejected,
     RoutePreparationRejected {
         message: String,
     },
@@ -256,9 +255,6 @@ pub(super) enum PendingAttempt {
     PinnedCandidateUnavailable {
         account_id: String,
         kind: PinnedCandidateAcquireFailureKind,
-    },
-    CandidatePreparationRejected {
-        account: Account,
     },
     RoutePreparationRejected {
         account: Account,

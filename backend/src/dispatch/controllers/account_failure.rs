@@ -119,13 +119,19 @@ impl AccountFailureController {
         if code.contains("invalid_request")
             || code.contains("not_found")
             || code.contains("context_window")
+            || code == "context_length_exceeded"
             || code.contains("invalid_prompt")
             || code.contains("bad_request")
         {
             return Some(ClientFailure::new(failure.clone(), 400, false));
         }
-        if code.contains("server_overloaded") {
+        if matches!(code.as_str(), "server_is_overloaded" | "slow_down")
+            || code.contains("server_overloaded")
+        {
             return Some(ClientFailure::new(failure.clone(), 503, true));
+        }
+        if code == "usage_not_included" {
+            return Some(ClientFailure::new(failure.clone(), 403, false));
         }
         classify_response_failure(failure).map(|classified| {
             let status = match classified.kind {

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { RefreshCw } from '@lucide/vue'
+
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
@@ -16,6 +18,7 @@ defineProps<{
   finishedAt: string
   durationMs: number | null
   loadingModels: boolean
+  refreshingModels: boolean
   modelOptions: any[]
   statusView: any
 }>()
@@ -25,6 +28,7 @@ const selectedModel = defineModel<string>('selectedModel', { required: true })
 
 const emit = defineEmits<{
   test: []
+  refreshModels: []
 }>()
 
 function connectionLogClass(tone: string) {
@@ -53,11 +57,26 @@ function connectionLogClass(tone: string) {
 
       <section class="rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3">
         <div class="grid gap-2">
-          <label class="text-[12px] font-[760] text-(--cp-text-muted)">测试模型</label>
+          <div class="flex min-h-8 items-center justify-between gap-3">
+            <label class="text-[12px] font-[760] text-(--cp-text-muted)">测试模型</label>
+            <BaseButton
+              variant="ghost"
+              size="sm"
+              icon-only
+              label="刷新上游模型"
+              :loading="refreshingModels"
+              :disabled="status === 'running' || loadingModels"
+              @click="emit('refreshModels')"
+            >
+              <template #icon>
+                <RefreshCw class="size-3.5" />
+              </template>
+            </BaseButton>
+          </div>
           <BaseSelect
             v-model="selectedModel"
             :options="modelOptions"
-            :disabled="status === 'running' || loadingModels"
+            :disabled="status === 'running' || loadingModels || refreshingModels"
             :placeholder="loadingModels ? '加载模型中...' : '选择上游模型'"
             empty-text="上游没有返回模型"
           />
@@ -175,7 +194,7 @@ function connectionLogClass(tone: string) {
       <BaseButton
         variant="primary"
         :loading="status === 'running'"
-        :disabled="!account || loadingModels || !selectedModel"
+        :disabled="!account || loadingModels || refreshingModels || !selectedModel"
         @click="emit('test')"
       >
         {{ logs.length > 0 || error ? '重新测试' : '开始测试' }}

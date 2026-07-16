@@ -190,6 +190,26 @@ impl ModelService {
         plan_accounts: &[ModelRefreshPlanAccount],
         request_id: &str,
     ) -> Result<ModelRefreshResult, ModelServiceError> {
+        self.refresh_backend_models_inner(plan_accounts, request_id, false)
+            .await
+    }
+
+    /// 刷新指定计划，并保留未参与本次刷新的计划快照。
+    pub async fn refresh_selected_plan_models(
+        &self,
+        plan_accounts: &[ModelRefreshPlanAccount],
+        request_id: &str,
+    ) -> Result<ModelRefreshResult, ModelServiceError> {
+        self.refresh_backend_models_inner(plan_accounts, request_id, true)
+            .await
+    }
+
+    async fn refresh_backend_models_inner(
+        &self,
+        plan_accounts: &[ModelRefreshPlanAccount],
+        request_id: &str,
+        preserve_other_plans: bool,
+    ) -> Result<ModelRefreshResult, ModelServiceError> {
         let _refresh_guard = self.refresh_lock.lock().await;
         let store = self
             .store
@@ -211,7 +231,11 @@ impl ModelService {
             .into_iter()
             .map(|snapshot| (snapshot.plan_type.clone(), snapshot))
             .collect::<BTreeMap<_, _>>();
-        let mut next_snapshots = BTreeMap::new();
+        let mut next_snapshots = if preserve_other_plans {
+            previous_snapshots.clone()
+        } else {
+            BTreeMap::new()
+        };
 
         let mut result = ModelRefreshResult {
             refreshed_plans: 0,

@@ -12,7 +12,10 @@ use crate::{
         account_failure::{classify_client_failure, classify_response_failure},
         store::StoredAccount,
     },
-    models::{service::ModelRefreshPlanAccount, types::CodexModelInfo},
+    models::{
+        service::{ModelRefreshPlanAccount, ModelRefreshResult},
+        types::CodexModelInfo,
+    },
     upstream::openai::{
         protocol::{
             responses::{CodexResponsesRequest, ResponsesSseFailure},
@@ -76,11 +79,7 @@ impl AccountManageService {
             .map_err(|_| AccountManageError::Inspect)?
             .ok_or(AccountManageError::NotFound)?;
         let plan_type = account_plan_type(&account);
-        let mut models = self.models.catalog().await.models_for_plan(&plan_type);
-        if models.is_empty() {
-            self.refresh_account_plan_models(&account, &plan_type).await;
-            models = self.models.catalog().await.models_for_plan(&plan_type);
-        }
+        let models = self.models.catalog().await.models_for_plan(&plan_type);
         let models = models.iter().map(account_model_option).collect::<Vec<_>>();
         if models.is_empty() {
             return Err(AccountManageError::NoModels);
@@ -88,7 +87,32 @@ impl AccountManageService {
         Ok(models)
     }
 
-    async fn refresh_account_plan_models(&self, account: &StoredAccount, plan_type: &str) {
+    pub async fn refresh_account_models(
+        &self,
+        account_id: &str,
+    ) -> Result<Vec<AccountModelOption>, AccountManageError> {
+        let account = self
+            .store
+            .get(account_id)
+            .await
+            .map_err(|_| AccountManageError::Inspect)?
+            .ok_or(AccountManageError::NotFound)?;
+        let plan_type = account_plan_type(&account);
+        self.refresh_account_plan_models(&account, &plan_type)
+            .await?;
+        let models = self.models.catalog().await.models_for_plan(&plan_type);
+        let models = models.iter().map(account_model_option).collect::<Vec<_>>();
+        if models.is_empty() {
+            return Err(AccountManageError::NoModels);
+        }
+        Ok(models)
+    }
+
+    async fn refresh_account_plan_models(
+        &self,
+        account: &StoredAccount,
+        plan_type: &str,
+    ) -> Result<ModelRefreshResult, AccountManageError> {
         let request_id = uuid::Uuid::new_v4().to_string();
         let plan_account = ModelRefreshPlanAccount {
             plan_type: plan_type.to_string(),
@@ -96,18 +120,20 @@ impl AccountManageService {
             account_id: account.account_id.clone(),
             installation_id: self.account_pseudonymizer.installation_id(&account.id),
         };
-        if let Err(error) = self
+        let result = self
             .models
-            .refresh_backend_models(&[plan_account], &request_id)
+            .refresh_selected_plan_models(&[plan_account], &request_id)
             .await
-        {
-            tracing::warn!(
-                account_id = %account.id,
-                plan_type,
-                error = %error,
-                "Failed to refresh account plan models"
-            );
-        }
+            .map_err(|error| AccountManageError::RefreshModels(error.to_string()))?;
+        let routing = self
+            .models
+            .model_plan_routing()
+            .await
+            .map_err(|error| AccountManageError::RefreshModels(error.to_string()))?;
+        self.account_pool
+            .apply_model_plan_routing(routing.allowlist, routing.fetched_plan_types)
+            .await;
+        Ok(result)
     }
 
     pub async fn test_connection_stream(

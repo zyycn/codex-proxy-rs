@@ -53,6 +53,8 @@ pub fn classify_upstream_failure(facts: &UpstreamFailureFacts) -> Option<Classif
         status_code: facts.status_code,
         code: facts.code.as_deref(),
         error_type: facts.error_type.as_deref(),
+        identity_authorization_error: facts.identity_authorization_error.as_deref(),
+        identity_error_code: facts.identity_error_code.as_deref(),
         message: &facts.message,
         body: &facts.body,
         retry_after_seconds: facts.retry_after_seconds,
@@ -66,6 +68,8 @@ pub fn classify_response_failure(
         status_code: failure.explicit_status_code,
         code: failure.upstream_code.as_deref(),
         error_type: failure.upstream_type.as_deref(),
+        identity_authorization_error: None,
+        identity_error_code: None,
         message: &failure.message,
         body: &failure.message,
         retry_after_seconds: failure.retry_after_seconds,
@@ -128,6 +132,8 @@ struct FailureFields<'a> {
     status_code: Option<u16>,
     code: Option<&'a str>,
     error_type: Option<&'a str>,
+    identity_authorization_error: Option<&'a str>,
+    identity_error_code: Option<&'a str>,
     message: &'a str,
     body: &'a str,
     retry_after_seconds: Option<u64>,
@@ -136,6 +142,8 @@ struct FailureFields<'a> {
 fn classify_failure(fields: FailureFields<'_>) -> Option<ClassifiedAccountFailure> {
     let code = fields.code.unwrap_or_default();
     let error_type = fields.error_type.unwrap_or_default();
+    let identity_error_code = fields.identity_error_code.unwrap_or_default();
+    let identity_authorization_error = fields.identity_authorization_error.unwrap_or_default();
 
     if [code, fields.message, fields.body]
         .into_iter()
@@ -143,13 +151,12 @@ fn classify_failure(fields: FailureFields<'_>) -> Option<ClassifiedAccountFailur
     {
         return Some(classified(AccountFailureKind::ModelUnsupported, None));
     }
-    if let Some(status) = explicit_account_status(code, error_type, fields.message)
-        .or_else(|| explicit_account_status(code, error_type, fields.body))
+    if let Some(status) =
+        explicit_account_status(identity_error_code, "", identity_authorization_error)
+            .or_else(|| explicit_account_status(code, error_type, fields.message))
+            .or_else(|| explicit_account_status(code, error_type, fields.body))
     {
         return Some(status_failure(status));
-    }
-    if fields.status_code == Some(403) && !is_html(fields.body) {
-        return Some(status_failure(AccountStatus::Banned));
     }
     if fields.status_code == Some(401) {
         return Some(status_failure(AccountStatus::Expired));
@@ -238,8 +245,6 @@ fn explicit_account_status(code: &str, error_type: &str, message: &str) -> Optio
         || message.contains("organization has been disabled")
         || message.contains("workspace has been deactivated")
         || message.contains("deactivated_workspace")
-        || code == "forbidden"
-        || error_type == "permission_error"
     {
         return Some(AccountStatus::Banned);
     }
@@ -309,9 +314,4 @@ fn is_model_unsupported(value: &str) -> bool {
                 || value.contains("not available")
                 || value.contains("not_supported")
                 || value.contains("not_available")))
-}
-
-fn is_html(value: &str) -> bool {
-    let value = value.trim_start().to_ascii_lowercase();
-    value.starts_with("<!doctype") || value.starts_with("<html") || value.contains("<html")
 }
