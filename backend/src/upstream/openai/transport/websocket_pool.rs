@@ -29,6 +29,7 @@ pub struct CodexWebSocketPoolKey {
     base_url: String,
     account_id: String,
     conversation_id: String,
+    connection_profile: String,
 }
 
 impl CodexWebSocketPoolKey {
@@ -42,7 +43,14 @@ impl CodexWebSocketPoolKey {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             account_id: account_id.into(),
             conversation_id: conversation_id.into(),
+            connection_profile: String::new(),
         }
+    }
+
+    /// 区分实际 WebSocket opening 画像，防止复用旧 UA 或不同握手语义的连接。
+    pub(crate) fn with_connection_profile(mut self, connection_profile: impl Into<String>) -> Self {
+        self.connection_profile = connection_profile.into();
+        self
     }
 
     pub(crate) fn account_id(&self) -> &str {
@@ -58,7 +66,14 @@ impl CodexWebSocketPoolKey {
             self.base_url.as_str(),
             self.account_id.as_str(),
             self.conversation_id.as_str(),
+            self.connection_profile.as_str(),
         ])
+    }
+
+    fn same_logical_connection(&self, other: &Self) -> bool {
+        self.base_url == other.base_url
+            && self.account_id == other.account_id
+            && self.conversation_id == other.conversation_id
     }
 }
 
@@ -166,14 +181,28 @@ impl CodexWebSocketPool {
         drop(self.tasks.spawn(future));
     }
 
-    pub(crate) async fn acquire(&self, key: &CodexWebSocketPoolKey) -> WebSocketPoolAcquire {
+    pub(crate) async fn acquire(
+        &self,
+        key: &CodexWebSocketPoolKey,
+        allow_profile_mismatch: bool,
+    ) -> WebSocketPoolAcquire {
         let mut expired_connection = None;
         let acquire = {
             let mut state = self.inner.lock().await;
             if !self.config.enabled || state.shutting_down {
                 return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Disabled);
             }
-            match state.slots.get(key) {
+            let key = if allow_profile_mismatch && !state.slots.contains_key(key) {
+                state
+                    .slots
+                    .keys()
+                    .find(|candidate| candidate.same_logical_connection(key))
+                    .cloned()
+                    .unwrap_or_else(|| key.clone())
+            } else {
+                key.clone()
+            };
+            match state.slots.get(&key) {
                 Some(WebSocketPoolSlot::Busy(_)) => {
                     return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Busy);
                 }
@@ -184,7 +213,7 @@ impl CodexWebSocketPool {
                     });
                 }
                 Some(WebSocketPoolSlot::Idle(_)) => {
-                    let Some(WebSocketPoolSlot::Idle(connection)) = state.slots.remove(key) else {
+                    let Some(WebSocketPoolSlot::Idle(connection)) = state.slots.remove(&key) else {
                         return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Busy);
                     };
                     // 零成本探活：后台 pump 已实时感知连接死亡（RST/Close/EOF/失活），
@@ -210,7 +239,7 @@ impl CodexWebSocketPool {
             } else {
                 let lease = WebSocketPoolConnectLease::reserve(self.clone(), key.clone());
                 state.slots.insert(
-                    key.clone(),
+                    key,
                     WebSocketPoolSlot::Connecting(WebSocketPoolConnecting {
                         id: lease.id,
                         started_at: lease.started_at,

@@ -484,7 +484,11 @@ pub(crate) async fn prepare_response_create_request_with_pool(
         .await;
     };
 
-    match pool.acquire(&key).await {
+    let allow_profile_mismatch = matches!(
+        request.continuation(),
+        WebSocketContinuationRequirement::ConnectionLocal { .. }
+    );
+    match pool.acquire(&key, allow_profile_mismatch).await {
         WebSocketPoolAcquire::Reused { connection, lease } => {
             if let WebSocketContinuationRequirement::ConnectionLocal { response_id } =
                 request.continuation()

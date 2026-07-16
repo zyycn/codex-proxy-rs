@@ -18,6 +18,7 @@ select
   coalesce(sum(input_tokens), 0)::bigint as input_tokens,
   coalesce(sum(output_tokens), 0)::bigint as output_tokens,
   coalesce(sum(cached_tokens), 0)::bigint as cached_tokens,
+  coalesce(sum(cache_write_tokens), 0)::bigint as cache_write_tokens,
   coalesce(sum(first_token_latency_sum), 0)::bigint as first_token_latency_sum,
   coalesce(sum(first_token_latency_count), 0)::bigint as first_token_latency_count,
   coalesce(sum(latency_sum), 0)::bigint as latency_sum,
@@ -36,7 +37,8 @@ select
   coalesce(sum(success_count + error_count), 0)::bigint as request_count,
   coalesce(sum(input_tokens), 0)::bigint as input_tokens,
   coalesce(sum(output_tokens), 0)::bigint as output_tokens,
-  coalesce(sum(cached_tokens), 0)::bigint as cached_tokens
+  coalesce(sum(cached_tokens), 0)::bigint as cached_tokens,
+  coalesce(sum(cache_write_tokens), 0)::bigint as cache_write_tokens
 from request_time_buckets
 group by bucket_start, model, service_tier";
 
@@ -59,6 +61,7 @@ pub struct UsageTimeBucketRecord {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
+    pub cache_write_tokens: i64,
     pub first_token_latency_sum: i64,
     pub first_token_latency_count: i64,
     pub latency_sum: i64,
@@ -81,6 +84,7 @@ pub struct UsageBucketTotals {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
+    pub cache_write_tokens: i64,
 }
 
 /// 保留期内单个计费桶的用量事实。
@@ -97,6 +101,9 @@ impl UsageBucketTotals {
         self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
         self.cached_tokens = self.cached_tokens.saturating_add(other.cached_tokens);
+        self.cache_write_tokens = self
+            .cache_write_tokens
+            .saturating_add(other.cache_write_tokens);
     }
 }
 
@@ -117,6 +124,7 @@ pub struct ModelBucketUsage {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
+    pub cache_write_tokens: i64,
     pub last_used_at: Option<DateTime<Utc>>,
 }
 
@@ -163,6 +171,7 @@ impl PgRequestBucketQuery {
                     input_tokens: row.get("input_tokens"),
                     output_tokens: row.get("output_tokens"),
                     cached_tokens: row.get("cached_tokens"),
+                    cache_write_tokens: row.get("cache_write_tokens"),
                 },
             })
             .collect())
@@ -198,7 +207,8 @@ impl PgRequestBucketQuery {
               coalesce(sum(success_count + error_count), 0)::bigint as request_count,
               coalesce(sum(input_tokens), 0)::bigint as input_tokens,
               coalesce(sum(output_tokens), 0)::bigint as output_tokens,
-              coalesce(sum(cached_tokens), 0)::bigint as cached_tokens
+              coalesce(sum(cached_tokens), 0)::bigint as cached_tokens,
+              coalesce(sum(cache_write_tokens), 0)::bigint as cache_write_tokens
             from request_time_buckets
             where account_id in (",
         );
@@ -223,6 +233,7 @@ impl PgRequestBucketQuery {
                 input_tokens: row.get("input_tokens"),
                 output_tokens: row.get("output_tokens"),
                 cached_tokens: row.get("cached_tokens"),
+                cache_write_tokens: row.get("cache_write_tokens"),
             };
             let Some(account_windows) = windows_by_account.get(account_id.as_str()) else {
                 continue;
@@ -258,6 +269,7 @@ impl PgRequestBucketQuery {
               coalesce(sum(input_tokens), 0)::bigint as input_tokens,
               coalesce(sum(output_tokens), 0)::bigint as output_tokens,
               coalesce(sum(cached_tokens), 0)::bigint as cached_tokens,
+              coalesce(sum(cache_write_tokens), 0)::bigint as cache_write_tokens,
               max(bucket_start) as last_used_at
             from request_time_buckets
             where model != '__unknown__' and (",
@@ -290,6 +302,7 @@ impl PgRequestBucketQuery {
                     input_tokens: row.get("input_tokens"),
                     output_tokens: row.get("output_tokens"),
                     cached_tokens: row.get("cached_tokens"),
+                    cache_write_tokens: row.get("cache_write_tokens"),
                     last_used_at: row.get("last_used_at"),
                 }
             })
@@ -307,6 +320,7 @@ fn usage_time_bucket_from_row(row: &sqlx::postgres::PgRow) -> UsageTimeBucketRec
         input_tokens: row.get("input_tokens"),
         output_tokens: row.get("output_tokens"),
         cached_tokens: row.get("cached_tokens"),
+        cache_write_tokens: row.get("cache_write_tokens"),
         first_token_latency_sum: row.get("first_token_latency_sum"),
         first_token_latency_count: row.get("first_token_latency_count"),
         latency_sum: row.get("latency_sum"),

@@ -76,6 +76,8 @@ struct ResponseCompletedUsage {
 struct ResponseCompletedInputTokensDetails {
     #[serde(rename = "cached_tokens")]
     _cached_tokens: i64,
+    #[serde(default, rename = "cache_write_tokens")]
+    _cache_write_tokens: i64,
 }
 
 #[derive(Debug, Deserialize)]

@@ -5,7 +5,7 @@ use codex_proxy_rs::infra::database::migrate;
 use crate::support::storage::init_test_db;
 
 #[tokio::test]
-async fn postgres_schema_is_terminal_v1_without_unused_storage() {
+async fn postgres_schema_applies_versioned_migrations_without_unused_storage() {
     let (pool, _guard) = init_test_db("schema-terminal-v1").await;
     let tables = sqlx::query_scalar::<_, String>(
         "select table_name
@@ -41,9 +41,11 @@ async fn postgres_schema_is_terminal_v1_without_unused_storage() {
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert_eq!(versions.len(), 1);
+    assert_eq!(versions.len(), 2);
     assert_eq!(versions[0].0, 1);
     assert_eq!(versions[0].1, "initial");
+    assert_eq!(versions[1].0, 2);
+    assert_eq!(versions[1].1, "cache_write_tokens");
     assert!(versions.iter().all(|migration| migration.2.len() == 64));
 }
 
@@ -69,7 +71,7 @@ async fn postgres_migrate_should_skip_existing_migration_table() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(migration_count, 1);
+    assert_eq!(migration_count, 2);
 }
 
 #[tokio::test]
@@ -110,12 +112,16 @@ async fn postgres_schema_separates_success_and_error_facts() {
         "input_tokens",
         "output_tokens",
         "cached_tokens",
+        "cache_write_tokens",
         "reasoning_tokens",
     ] {
         assert!(usage_columns.contains(column), "missing {column}");
     }
     assert!(!usage_columns.contains("level"));
     assert!(!usage_columns.contains("failure_class"));
+
+    let bucket_columns = columns(&pool, "request_time_buckets").await;
+    assert!(bucket_columns.contains("cache_write_tokens"));
 
     let error_columns = columns(&pool, "ops_error_logs").await;
     for column in [

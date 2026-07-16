@@ -171,6 +171,51 @@ fn build_codex_request_should_pass_through_input_and_preserve_context_fields() {
 }
 
 #[test]
+fn build_codex_request_should_preserve_lite_and_memgen_transport_semantics() {
+    let body = json!({
+        "model": "gpt-5.6-sol",
+        "input": [],
+        "client_metadata": {
+            "ws_request_header_x_openai_internal_codex_responses_lite": "true"
+        }
+    });
+    let mut headers = HeaderMap::new();
+    headers.insert("x-openai-memgen-request", "true".parse().unwrap());
+
+    let request = build_codex_request(body.as_object().unwrap().clone(), &headers, None);
+
+    assert_eq!(request.responses_lite.as_deref(), Some("true"));
+    assert_eq!(request.memgen_request.as_deref(), Some("true"));
+    assert_eq!(
+        request.client_metadata().and_then(
+            |metadata| metadata.get("ws_request_header_x_openai_internal_codex_responses_lite")
+        ),
+        Some(&json!("true"))
+    );
+}
+
+#[test]
+fn build_codex_request_should_prefer_http_lite_header_without_rewriting_metadata() {
+    let body = json!({
+        "model": "gpt-5.6-sol",
+        "input": [],
+        "client_metadata": {
+            "ws_request_header_x_openai_internal_codex_responses_lite": "metadata-value"
+        }
+    });
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-openai-internal-codex-responses-lite",
+        "header-value".parse().unwrap(),
+    );
+
+    let request = build_codex_request(body.as_object().unwrap().clone(), &headers, None);
+
+    assert_eq!(request.responses_lite.as_deref(), Some("header-value"));
+    assert_eq!(request.body(), body.as_object().unwrap());
+}
+
+#[test]
 fn build_codex_request_should_pass_through_array_input_items_verbatim() {
     let input = json!([
         {

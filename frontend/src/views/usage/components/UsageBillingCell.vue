@@ -20,6 +20,8 @@ const amountItems = computed(() => {
     { label: '输入单价', value: value.inputPriceDisplay, accent: true },
     { label: '输出单价', value: value.outputPriceDisplay, accent: true },
     { label: '缓存读取费用', value: value.cacheReadAmountDisplay, accent: false },
+    { label: '缓存写入费用', value: value.cacheWriteAmountDisplay, accent: false },
+    { label: '缓存写入单价', value: value.cacheWritePriceDisplay, accent: true },
   ]
 })
 const billingItems = computed(() => {

@@ -232,6 +232,36 @@ async fn responses_websocket_should_forward_multiple_response_create_requests_on
 }
 
 #[tokio::test]
+async fn responses_websocket_should_accept_omitted_stream_without_injecting_it() {
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_base_url = format!("http://{}", upstream_listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        let (stream, _) = upstream_listener.accept().await.unwrap();
+        let mut websocket = accept_upstream_websocket(stream).await.unwrap();
+        let request = websocket.next().await.unwrap().unwrap();
+        let request = serde_json::from_str::<Value>(&request.into_text().unwrap()).unwrap();
+        send_upstream_response(&mut websocket, "resp_omitted_stream", "ok").await;
+        request
+    });
+    let (app, api_key, _dir) =
+        crate::dispatch::service::test_app_with_account(upstream_base_url).await;
+    let server = spawn_app(app).await;
+    let mut websocket = connect_responses_websocket(server.address, &api_key).await;
+    let mut payload: Value = serde_json::from_str(&response_create_payload("hello")).unwrap();
+    payload.as_object_mut().unwrap().remove("stream");
+
+    websocket
+        .send(Message::Text(payload.to_string().into()))
+        .await
+        .unwrap();
+    let response = receive_response(&mut websocket).await;
+    let upstream_request = upstream.await.unwrap();
+
+    assert_eq!(response.last().unwrap()["type"], "response.completed");
+    assert!(upstream_request.get("stream").is_none());
+}
+
+#[tokio::test]
 async fn responses_websocket_cyber_terminal_should_change_the_immediate_next_request() {
     let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_base_url = format!("http://{}", upstream_listener.local_addr().unwrap());
@@ -918,7 +948,7 @@ async fn responses_websocket_history_retry_should_not_fallback_when_owner_accoun
     assert_eq!(second.last().unwrap()["type"], "error");
     assert_eq!(
         second.last().unwrap()["error"]["code"],
-        "previous_response_unavailable"
+        "previous_response_not_found"
     );
     assert!(
         fallback.is_none(),

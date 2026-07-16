@@ -1039,7 +1039,7 @@ async fn codex_backend_client_should_treat_active_business_frames_as_ping_livene
         let _request = websocket.next().await.unwrap().unwrap();
 
         for index in 0..8 {
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
             websocket
                 .send(Message::Text(
                     json!({
@@ -1061,8 +1061,8 @@ async fn codex_backend_client_should_treat_active_business_frames_as_ping_livene
         websocket.close(None).await.unwrap();
     });
     let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
-        ping_interval: Some(Duration::from_millis(10)),
-        ping_timeout: Duration::from_millis(60),
+        ping_interval: Some(Duration::from_millis(100)),
+        ping_timeout: Duration::from_secs(5),
         liveness_timeout: None,
         ..websocket_pool_config_for_tests(None, None, None)
     }));

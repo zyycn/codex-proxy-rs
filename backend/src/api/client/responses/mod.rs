@@ -19,7 +19,13 @@ use crate::{
     api::AppState,
     api::middleware::request_id::{ClientIp, RequestId},
     dispatch::{errors::ResponseDispatchError, service::ResponseDispatchStream},
-    upstream::openai::protocol::{responses::CodexResponsesRequest, sse::sse_body_has_done},
+    upstream::openai::protocol::{
+        responses::{
+            CodexResponsesRequest, WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY,
+            X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER, X_OPENAI_MEMGEN_REQUEST_HEADER,
+        },
+        sse::sse_body_has_done,
+    },
 };
 
 use self::sse::{done_sse_frame, event_stream_response as sse_event_stream_response};
@@ -103,9 +109,27 @@ pub fn build_codex_request(
         None => {}
     }
     apply_context_header_fields(&mut request, headers);
+    apply_request_semantic_headers(&mut request, headers);
     apply_session_fields(&mut request, headers);
     request.client_user_agent = user_agent_from_headers(headers);
     request
+}
+
+fn apply_request_semantic_headers(request: &mut CodexResponsesRequest, headers: &HeaderMap) {
+    request.responses_lite = header_string(headers, X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER)
+        .or_else(|| {
+            request
+                .client_metadata()
+                .and_then(Value::as_object)
+                .and_then(|metadata| {
+                    metadata.get(WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY)
+                })
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+        });
+    request.memgen_request = header_string(headers, X_OPENAI_MEMGEN_REQUEST_HEADER);
 }
 
 fn apply_session_fields(request: &mut CodexResponsesRequest, headers: &HeaderMap) {

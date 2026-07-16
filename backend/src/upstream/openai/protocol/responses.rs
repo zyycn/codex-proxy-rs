@@ -13,6 +13,15 @@ const MULTI_AGENT_MODE_OPEN_TAG: &str = "<multi_agent_mode>";
 const MULTI_AGENT_MODE_CLOSE_TAG: &str = "</multi_agent_mode>";
 const PROACTIVE_MULTI_AGENT_MODE_PREFIX: &str = "Proactive multi-agent delegation is active.";
 
+/// Codex Responses Lite 的 HTTP 兼容头。
+pub const X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER: &str =
+    "x-openai-internal-codex-responses-lite";
+/// Codex Responses Lite 在 WebSocket `client_metadata` 中的官方投影键。
+pub const WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY: &str =
+    "ws_request_header_x_openai_internal_codex_responses_lite";
+/// Codex memory consolidation 请求标记。
+pub const X_OPENAI_MEMGEN_REQUEST_HEADER: &str = "x-openai-memgen-request";
+
 /// Codex Responses 上游请求体。
 ///
 /// 发往上游的 Responses 请求。`body` 持有客户端原始 JSON object，逐字段（含顺序、
@@ -64,6 +73,10 @@ pub struct CodexResponsesRequest {
     pub version: Option<String>,
     /// timing metrics 透传头。
     pub include_timing_metrics: Option<String>,
+    /// Responses Lite 请求语义；HTTP 使用 header，WebSocket 使用 client metadata 投影。
+    pub responses_lite: Option<String>,
+    /// Memory consolidation 请求语义；HTTP 与 WebSocket opening 均使用 header。
+    pub memgen_request: Option<String>,
     /// codex window id。
     pub codex_window_id: Option<String>,
     /// 父线程 ID。
@@ -261,6 +274,14 @@ pub fn response_event_signals(event_type: Option<&str>, value: &Value) -> Respon
             signals.text_output = non_empty_string(value.get("text"));
             signals.semantic_output = signals.text_output;
         }
+        Some("response.refusal.delta") => {
+            signals.text_output = non_empty_string(value.get("delta"));
+            signals.semantic_output = signals.text_output;
+        }
+        Some("response.refusal.done") => {
+            signals.text_output = non_empty_string(value.get("refusal"));
+            signals.semantic_output = signals.text_output;
+        }
         Some("response.reasoning_summary_text.delta" | "response.reasoning_text.delta") => {
             signals.reasoning_output = non_empty_string(value.get("delta"));
             signals.semantic_output = signals.reasoning_output;
@@ -294,6 +315,26 @@ pub fn response_event_signals(event_type: Option<&str>, value: &Value) -> Respon
             if let Some(items) = value.pointer("/response/output").and_then(Value::as_array) {
                 merge_output_signals(&mut signals, output_items_signals(items));
             }
+        }
+        Some(event_type) if event_type.ends_with(".delta") => {
+            signals.semantic_output = non_empty_semantic_value(value.get("delta"));
+        }
+        Some(event_type) if event_type.ends_with(".done") => {
+            signals.semantic_output = [
+                "text",
+                "refusal",
+                "arguments",
+                "input",
+                "transcript",
+                "data",
+                "output",
+                "result",
+            ]
+            .into_iter()
+            .any(|field| non_empty_semantic_value(value.get(field)));
+        }
+        Some(event_type) if is_tool_execution_event(event_type) => {
+            signals.semantic_output = true;
         }
         _ => {}
     }
@@ -358,19 +399,18 @@ fn output_item_signals(item: &Value) -> ResponseEventSignals {
             signals.semantic_output = signals.text_output;
         }
         Some("reasoning") => {
-            signals.reasoning_output =
-                non_empty_string(item.get("text")) || non_empty_string(item.get("summary"));
+            signals.reasoning_output = non_empty_semantic_value(item.get("text"))
+                || non_empty_semantic_value(item.get("summary"));
             signals.semantic_output = signals.reasoning_output;
         }
-        Some("function_call") => {
-            signals.semantic_output = non_empty_string(item.get("arguments"));
+        Some("refusal") => {
+            signals.text_output =
+                non_empty_string(item.get("refusal")) || non_empty_string(item.get("text"));
+            signals.semantic_output = signals.text_output;
         }
-        Some("custom_tool_call") => {
-            signals.semantic_output = non_empty_string(item.get("input"));
-        }
-        Some("image_generation_call") => {
-            signals.semantic_output =
-                non_empty_string(item.get("result")) || non_empty_string(item.get("image_base64"));
+        Some(item_type) if item_type.ends_with("_call") => {
+            // done 的工具调用本身已进入不可安全重试的语义边界；不依赖每种工具的字段表。
+            signals.semantic_output = true;
         }
         _ => {
             if let Some(items) = item.get("content").and_then(Value::as_array) {
@@ -385,6 +425,30 @@ fn non_empty_string(value: Option<&Value>) -> bool {
     value
         .and_then(Value::as_str)
         .is_some_and(|value| !value.is_empty())
+}
+
+fn non_empty_semantic_value(value: Option<&Value>) -> bool {
+    match value {
+        Some(Value::String(value)) => !value.is_empty(),
+        Some(Value::Array(value)) => !value.is_empty(),
+        Some(Value::Object(value)) => !value.is_empty(),
+        Some(Value::Number(_) | Value::Bool(_)) => true,
+        Some(Value::Null) | None => false,
+    }
+}
+
+fn is_tool_execution_event(event_type: &str) -> bool {
+    let Some((call_type, phase)) = event_type
+        .strip_prefix("response.")
+        .and_then(|event| event.rsplit_once('.'))
+    else {
+        return false;
+    };
+    call_type.ends_with("_call")
+        && matches!(
+            phase,
+            "in_progress" | "searching" | "interpreting" | "completed" | "failed"
+        )
 }
 
 fn complete_sse_body_prefix(body: &str) -> Option<&str> {
@@ -669,6 +733,8 @@ impl CodexResponsesRequest {
             beta_features: None,
             version: None,
             include_timing_metrics: None,
+            responses_lite: None,
+            memgen_request: None,
             codex_window_id: None,
             parent_thread_id: None,
             previous_response_scope: None,

@@ -65,6 +65,8 @@ pub struct UsageRecord {
     pub output_tokens: Option<i64>,
     /// 缓存 token。
     pub cached_tokens: Option<i64>,
+    /// 缓存写入 token。
+    pub cache_write_tokens: Option<i64>,
     /// reasoning token。
     pub reasoning_tokens: Option<i64>,
     /// 展示消息。
@@ -107,6 +109,7 @@ impl UsageRecord {
             input_tokens: None,
             output_tokens: None,
             cached_tokens: None,
+            cache_write_tokens: None,
             reasoning_tokens: None,
             message: message.into(),
             metadata: Value::Object(Map::default()),

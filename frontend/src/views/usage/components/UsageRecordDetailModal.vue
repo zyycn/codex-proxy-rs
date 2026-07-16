@@ -103,10 +103,12 @@ const billingItems = computed(() => {
     { label: '输入', value: value.inputAmountDisplay, mono: true },
     { label: '输出', value: value.outputAmountDisplay, mono: true },
     { label: '缓存读取', value: value.cacheReadAmountDisplay, mono: true },
+    { label: '缓存写入', value: value.cacheWriteAmountDisplay, mono: true },
     { label: '标准费用', value: value.standardAmountDisplay, mono: true },
     { label: '输入单价', value: value.inputPriceDisplay, mono: true },
     { label: '输出单价', value: value.outputPriceDisplay, mono: true },
     { label: '缓存单价', value: value.cacheReadPriceDisplay, mono: true },
+    { label: '缓存写入单价', value: value.cacheWritePriceDisplay, mono: true },
     { label: '服务层级', value: value.serviceTierDisplay },
     { label: '倍率', value: value.multiplierDisplay, mono: true },
   ]
@@ -130,6 +132,12 @@ const tokenChartItems = computed(() => [
     value: Number(tokenDetails.value.cachedTokens || 0),
     display: tokenDetails.value.cachedTokensDisplay,
     color: themeColor('--cp-warning', '#D97706'),
+  },
+  {
+    label: '缓存写入',
+    value: Number(tokenDetails.value.cacheWriteTokens || 0),
+    display: tokenDetails.value.cacheWriteTokensDisplay,
+    color: themeColor('--cp-danger', '#DC2626'),
   },
   {
     label: '推理',

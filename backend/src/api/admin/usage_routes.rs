@@ -121,11 +121,13 @@ pub(crate) struct UsageRecordTokenDetailsData {
     input_tokens: u64,
     output_tokens: u64,
     cached_tokens: u64,
+    cache_write_tokens: u64,
     reasoning_tokens: u64,
     total_tokens: u64,
     input_tokens_display: String,
     output_tokens_display: String,
     cached_tokens_display: String,
+    cache_write_tokens_display: String,
     reasoning_tokens_display: String,
     total_tokens_display: String,
 }
@@ -136,22 +138,26 @@ pub(crate) struct UsageRecordBillingData {
     input_amount: f64,
     output_amount: f64,
     cache_read_amount: f64,
+    cache_write_amount: f64,
     standard_amount: f64,
     total_amount: f64,
     input_price_per_mtoken: f64,
     output_price_per_mtoken: f64,
     cache_read_price_per_mtoken: f64,
+    cache_write_price_per_mtoken: f64,
     service_tier: Option<String>,
     service_tier_display: String,
     multiplier: f64,
     input_amount_display: String,
     output_amount_display: String,
     cache_read_amount_display: String,
+    cache_write_amount_display: String,
     standard_amount_display: String,
     total_amount_display: String,
     input_price_display: String,
     output_price_display: String,
     cache_read_price_display: String,
+    cache_write_price_display: String,
     multiplier_display: String,
 }
 
@@ -162,6 +168,7 @@ struct UsageRecordSummaryData {
     input_tokens: String,
     output_tokens: String,
     cached_tokens: String,
+    cache_write_tokens: String,
     total_tokens: String,
     average_latency_ms: String,
 }
@@ -175,6 +182,7 @@ struct UsageRecordBreakdownData {
     input_tokens: String,
     output_tokens: String,
     cached_tokens: String,
+    cache_write_tokens: String,
     total_tokens: String,
     total_tokens_value: u64,
     total_tokens_total: String,
@@ -195,6 +203,8 @@ struct UsageRecordTrendPointData {
     output_tokens_value: u64,
     cached_tokens: String,
     cached_tokens_value: u64,
+    cache_write_tokens: String,
+    cache_write_tokens_value: u64,
     total_tokens: String,
     total_tokens_value: u64,
     cache_hit_rate: String,
@@ -574,6 +584,10 @@ pub(crate) fn usage_token_details(record: &UsageRecord) -> UsageRecordTokenDetai
         .cached_tokens
         .and_then(|value| value.try_into().ok())
         .unwrap_or(0);
+    let cache_write_tokens: u64 = record
+        .cache_write_tokens
+        .and_then(|value| value.try_into().ok())
+        .unwrap_or(0);
     let reasoning_tokens: u64 = record
         .reasoning_tokens
         .and_then(|value| value.try_into().ok())
@@ -584,11 +598,13 @@ pub(crate) fn usage_token_details(record: &UsageRecord) -> UsageRecordTokenDetai
         input_tokens,
         output_tokens,
         cached_tokens,
+        cache_write_tokens,
         reasoning_tokens,
         total_tokens,
         input_tokens_display: format_number(input_tokens),
         output_tokens_display: format_number(output_tokens),
         cached_tokens_display: format_compact_number(cached_tokens),
+        cache_write_tokens_display: format_compact_number(cache_write_tokens),
         reasoning_tokens_display: format_number(reasoning_tokens),
         total_tokens_display: format_number(total_tokens),
     }
@@ -605,28 +621,33 @@ pub(crate) fn usage_billing(
         tokens.input_tokens,
         tokens.output_tokens,
         tokens.cached_tokens,
+        tokens.cache_write_tokens,
     )?;
 
     Some(UsageRecordBillingData {
         input_amount: billing.input_amount,
         output_amount: billing.output_amount,
         cache_read_amount: billing.cache_read_amount,
+        cache_write_amount: billing.cache_write_amount,
         standard_amount: billing.standard_amount,
         total_amount: billing.total_amount,
         input_price_per_mtoken: billing.input_price_per_mtoken,
         output_price_per_mtoken: billing.output_price_per_mtoken,
         cache_read_price_per_mtoken: billing.cache_read_price_per_mtoken,
+        cache_write_price_per_mtoken: billing.cache_write_price_per_mtoken,
         service_tier: billing.service_tier,
         service_tier_display: billing.service_tier_display,
         multiplier: billing.multiplier,
         input_amount_display: format_billing_amount(billing.input_amount),
         output_amount_display: format_billing_amount(billing.output_amount),
         cache_read_amount_display: format_billing_amount(billing.cache_read_amount),
+        cache_write_amount_display: format_billing_amount(billing.cache_write_amount),
         standard_amount_display: format_billing_amount(billing.standard_amount),
         total_amount_display: format_billing_amount(billing.total_amount),
         input_price_display: format_token_price(billing.input_price_per_mtoken),
         output_price_display: format_token_price(billing.output_price_per_mtoken),
         cache_read_price_display: format_token_price(billing.cache_read_price_per_mtoken),
+        cache_write_price_display: format_token_price(billing.cache_write_price_per_mtoken),
         multiplier_display: format_multiplier(billing.multiplier),
     })
 }
@@ -638,6 +659,7 @@ impl From<UsageRecordSummary> for UsageRecordSummaryData {
             input_tokens: format_tokens(summary.input_tokens),
             output_tokens: format_tokens(summary.output_tokens),
             cached_tokens: format_tokens(summary.cached_tokens),
+            cache_write_tokens: format_tokens(summary.cache_write_tokens),
             total_tokens: format_tokens(summary.total_tokens),
             average_latency_ms: format_duration_ms_f64(summary.average_latency_ms),
         }
@@ -659,6 +681,7 @@ impl UsageRecordBreakdownData {
             input_tokens: format_tokens(item.input_tokens),
             output_tokens: format_tokens(item.output_tokens),
             cached_tokens: format_tokens(item.cached_tokens),
+            cache_write_tokens: format_tokens(item.cache_write_tokens),
             total_tokens: format_tokens(item.total_tokens),
             total_tokens_value: item.total_tokens,
             total_tokens_total: format_tokens(total_tokens_total),
@@ -698,6 +721,8 @@ impl From<UsageRecordTrendPoint> for UsageRecordTrendPointData {
             output_tokens_value: point.output_tokens,
             cached_tokens: format_tokens(point.cached_tokens),
             cached_tokens_value: point.cached_tokens,
+            cache_write_tokens: format_tokens(point.cache_write_tokens),
+            cache_write_tokens_value: point.cache_write_tokens,
             total_tokens: format_tokens(point.total_tokens),
             total_tokens_value: point.total_tokens,
             cache_hit_rate: format_percent(cache_hit_rate_value),

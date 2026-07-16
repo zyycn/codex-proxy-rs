@@ -277,6 +277,7 @@ export function usageTokenDetails(record: any) {
   const inputTokens = numberValue(usage.inputTokens)
   const outputTokens = numberValue(usage.outputTokens)
   const cachedTokens = numberValue(usage.cachedTokens)
+  const cacheWriteTokens = numberValue(usage.cacheWriteTokens)
   const reasoningTokens = numberValue(usage.reasoningTokens)
   const totalTokens = numberValue(usage.totalTokens) || inputTokens + outputTokens
 
@@ -284,11 +285,13 @@ export function usageTokenDetails(record: any) {
     inputTokens,
     outputTokens,
     cachedTokens,
+    cacheWriteTokens,
     reasoningTokens,
     totalTokens,
     inputTokensDisplay: formatTokenCount(inputTokens),
     outputTokensDisplay: formatTokenCount(outputTokens),
     cachedTokensDisplay: formatCompactTokenCount(cachedTokens),
+    cacheWriteTokensDisplay: formatCompactTokenCount(cacheWriteTokens),
     reasoningTokensDisplay: formatTokenCount(reasoningTokens),
     totalTokensDisplay: formatTokenCount(totalTokens),
   }

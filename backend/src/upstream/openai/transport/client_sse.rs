@@ -268,7 +268,7 @@ impl CodexBackendClient {
         }
 
         let websocket_request = websocket_upstream_request(request);
-        let headers = self.request_headers_for_http_response(&websocket_request, context)?;
+        let headers = self.request_headers_for_websocket_response(&websocket_request, context)?;
         let websocket_create = CodexWebSocketConnection::responses_create_request(
             &self.base_url,
             &generate_key(),
@@ -284,7 +284,9 @@ impl CodexBackendClient {
         if let Err(error) = write_websocket_audit_artifact_from_env(&artifact).await {
             tracing::warn!(error = %error, "Failed to write Codex WebSocket audit artifact");
         }
-        let pool_key = self.websocket_pool_key(request, context, pool_account_id);
+        let connection_profile = websocket_connection_profile(&headers);
+        let pool_key =
+            self.websocket_pool_key(request, context, pool_account_id, &connection_profile);
         let pool_log_context = pool_key.as_ref().map(WebSocketPoolLogContext::from_key);
         let pool = self.websocket_pool.as_deref().zip(pool_key);
         let fast_path_budget = match requirement {
@@ -498,17 +500,17 @@ impl CodexBackendClient {
         request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
         pool_account_id: Option<&str>,
+        connection_profile: &str,
     ) -> Option<CodexWebSocketPoolKey> {
         let account_id = pool_account_id.or(context.account_id)?;
         let conversation_id = request
             .local_conversation_id
             .as_deref()
             .or(request.previous_response_id())?;
-        Some(CodexWebSocketPoolKey::new(
-            &self.base_url,
-            account_id,
-            conversation_id,
-        ))
+        Some(
+            CodexWebSocketPoolKey::new(&self.base_url, account_id, conversation_id)
+                .with_connection_profile(connection_profile),
+        )
     }
 
     /// 获取后端模型目录条目。
@@ -584,6 +586,28 @@ impl CodexBackendClient {
                 HeaderValue::from_str(&subagent)?,
             );
         }
+        insert_optional_header(
+            &mut headers,
+            crate::upstream::openai::protocol::responses::X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER,
+            request.responses_lite.as_deref(),
+        )?;
+        insert_optional_header(
+            &mut headers,
+            crate::upstream::openai::protocol::responses::X_OPENAI_MEMGEN_REQUEST_HEADER,
+            request.memgen_request.as_deref(),
+        )?;
+        Ok(headers)
+    }
+
+    fn request_headers_for_websocket_response(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<HeaderMap> {
+        let mut headers = self.request_headers_for_http_response(request, context)?;
+        headers.remove(
+            crate::upstream::openai::protocol::responses::X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER,
+        );
         Ok(headers)
     }
 
@@ -676,6 +700,21 @@ impl CodexBackendClient {
         headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
         Ok(headers)
     }
+}
+
+fn websocket_connection_profile(headers: &HeaderMap) -> String {
+    [
+        "originator",
+        "user-agent",
+        crate::upstream::openai::protocol::responses::X_OPENAI_MEMGEN_REQUEST_HEADER,
+    ]
+    .map(|name| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+    })
+    .join("\0")
 }
 
 fn http_sse_stream(response: ReqwestResponse) -> CodexBackendSseStream {

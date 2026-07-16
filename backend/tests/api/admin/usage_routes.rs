@@ -105,18 +105,21 @@ async fn usage_summary_and_trend_expose_only_real_success_metrics() {
     record.input_tokens = Some(100);
     record.output_tokens = Some(20);
     record.cached_tokens = Some(30);
+    record.cache_write_tokens = Some(10);
     record.latency_ms = Some(10);
     usage.append(&record).await.unwrap();
 
     let summary = admin_get(&app, "/api/admin/usage/records/summary").await;
     assert_eq!(summary["data"]["totalRequests"], "1");
     assert_eq!(summary["data"]["totalTokens"], "120");
+    assert_eq!(summary["data"]["cacheWriteTokens"], "10");
     assert!(summary["data"].get("errorRequests").is_none());
     assert!(summary["data"].get("errorRate").is_none());
 
     let trend = admin_get(&app, "/api/admin/usage/records/insights/token-trend").await;
     assert_eq!(trend["data"][0]["inputTokensValue"], 100);
     assert_eq!(trend["data"][0]["cacheHitRateValue"], 30.0);
+    assert_eq!(trend["data"][0]["cacheWriteTokensValue"], 10);
     assert!(trend["data"][0].get("cacheCreationTokens").is_none());
 }
 
@@ -252,6 +255,7 @@ async fn usage_route_applies_official_gpt_5_6_sol_pricing() {
     record.model = "gpt-5.6-sol-2026-07-01".to_string();
     record.input_tokens = Some(1_000_000);
     record.cached_tokens = Some(200_000);
+    record.cache_write_tokens = Some(100_000);
     record.output_tokens = Some(1_000_000);
     usage.append(&record).await.unwrap();
 
@@ -260,8 +264,14 @@ async fn usage_route_applies_official_gpt_5_6_sol_pricing() {
 
     assert_eq!(billing["inputPricePerMtoken"], 5.0);
     assert_eq!(billing["cacheReadPricePerMtoken"], 0.5);
+    assert_eq!(billing["cacheWritePricePerMtoken"], 6.25);
+    assert_eq!(billing["cacheWriteAmount"], 0.625);
     assert_eq!(billing["outputPricePerMtoken"], 30.0);
-    assert_eq!(billing["totalAmount"], 34.1);
+    assert_eq!(billing["totalAmount"], 34.225);
+    assert_eq!(
+        body["data"]["items"][0]["tokenDetails"]["cacheWriteTokens"],
+        100_000
+    );
 }
 
 #[tokio::test]

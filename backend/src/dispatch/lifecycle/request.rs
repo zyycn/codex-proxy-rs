@@ -60,7 +60,7 @@ pub(in crate::dispatch) async fn enter_request(
     let catalog = dependencies.models.catalog().await;
     let display_model = catalog.resolve_model_id(requested_model);
     request.set_model(display_model.clone());
-    request.set_stream(mode.stream());
+    debug_assert_eq!(request.stream(), mode.stream());
 
     let compact = request.semantics().compact;
     let tuple_schema = request.tuple_schema.clone();

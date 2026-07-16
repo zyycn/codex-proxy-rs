@@ -24,7 +24,8 @@ select
   id, request_id, client_api_key_id, kind, route, provider, account_id, model,
   requested_model, upstream_model, service_tier, status_code, transport, attempt_index,
   response_id, upstream_request_id, latency_ms, first_token_ms, input_tokens,
-  output_tokens, cached_tokens, reasoning_tokens, message, metadata_json, created_at
+  output_tokens, cached_tokens, cache_write_tokens, reasoning_tokens, message, metadata_json,
+  created_at
 from usage_records";
 
 #[derive(Debug, Error)]
@@ -82,10 +83,11 @@ insert into usage_records (
   id, request_id, client_api_key_id, kind, route, provider, account_id, model,
   requested_model, upstream_model, service_tier, status_code, transport, attempt_index,
   response_id, upstream_request_id, latency_ms, first_token_ms, input_tokens,
-  output_tokens, cached_tokens, reasoning_tokens, message, metadata_json, created_at
+  output_tokens, cached_tokens, cache_write_tokens, reasoning_tokens, message, metadata_json,
+  created_at
 ) values (
   $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-  $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
+  $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26
 )",
         )
         .bind(&event.id)
@@ -109,6 +111,7 @@ insert into usage_records (
         .bind(event.input_tokens)
         .bind(event.output_tokens)
         .bind(event.cached_tokens)
+        .bind(event.cache_write_tokens)
         .bind(event.reasoning_tokens)
         .bind(&event.message)
         .bind(sqlx::types::Json(&event.metadata))

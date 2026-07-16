@@ -53,15 +53,16 @@ impl PgRequestBucketStore {
             r"
 insert into request_time_buckets (
   bucket_start, provider, account_id, model, service_tier, success_count,
-  input_tokens, output_tokens, cached_tokens, first_token_latency_sum,
+  input_tokens, output_tokens, cached_tokens, cache_write_tokens, first_token_latency_sum,
   first_token_latency_count, latency_sum, latency_count, max_latency_ms,
   min_latency_ms, updated_at
-) values ($1, $2, $3, $4, $5, 1, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+) values ($1, $2, $3, $4, $5, 1, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 on conflict (bucket_start, provider, account_id, model, service_tier) do update set
   success_count = request_time_buckets.success_count + 1,
   input_tokens = request_time_buckets.input_tokens + excluded.input_tokens,
   output_tokens = request_time_buckets.output_tokens + excluded.output_tokens,
   cached_tokens = request_time_buckets.cached_tokens + excluded.cached_tokens,
+  cache_write_tokens = request_time_buckets.cache_write_tokens + excluded.cache_write_tokens,
   first_token_latency_sum = request_time_buckets.first_token_latency_sum + excluded.first_token_latency_sum,
   first_token_latency_count = request_time_buckets.first_token_latency_count + excluded.first_token_latency_count,
   latency_sum = request_time_buckets.latency_sum + excluded.latency_sum,
@@ -82,6 +83,7 @@ on conflict (bucket_start, provider, account_id, model, service_tier) do update 
         .bind(event.input_tokens.unwrap_or(0))
         .bind(event.output_tokens.unwrap_or(0))
         .bind(event.cached_tokens.unwrap_or(0))
+        .bind(event.cache_write_tokens.unwrap_or(0))
         .bind(first_token.unwrap_or(0))
         .bind(i64::from(first_token.is_some()))
         .bind(latency.unwrap_or(0))
@@ -188,6 +190,7 @@ with facts as (
     coalesce(input_tokens, 0)::bigint as input_tokens,
     coalesce(output_tokens, 0)::bigint as output_tokens,
     coalesce(cached_tokens, 0)::bigint as cached_tokens,
+    coalesce(cache_write_tokens, 0)::bigint as cache_write_tokens,
     coalesce(first_token_ms, 0)::bigint as first_token_latency_sum,
     (first_token_ms is not null)::integer::bigint as first_token_latency_count,
     coalesce(latency_ms, 0)::bigint as latency_sum,
@@ -215,6 +218,7 @@ with facts as (
     0::bigint,
     0::bigint,
     0::bigint,
+    0::bigint,
     null::bigint
   from ops_error_logs
   where created_at >= $1
@@ -226,6 +230,7 @@ with facts as (
     sum(input_tokens) as input_tokens,
     sum(output_tokens) as output_tokens,
     sum(cached_tokens) as cached_tokens,
+    sum(cache_write_tokens) as cache_write_tokens,
     sum(first_token_latency_sum) as first_token_latency_sum,
     sum(first_token_latency_count) as first_token_latency_count,
     sum(latency_sum) as latency_sum,
@@ -237,13 +242,13 @@ with facts as (
 )
 insert into request_time_buckets (
   bucket_start, provider, account_id, model, service_tier,
-  success_count, error_count, input_tokens, output_tokens, cached_tokens,
+  success_count, error_count, input_tokens, output_tokens, cached_tokens, cache_write_tokens,
   first_token_latency_sum, first_token_latency_count, latency_sum, latency_count,
   max_latency_ms, min_latency_ms, updated_at
 )
 select
   bucket_start, provider, account_id, model, service_tier,
-  success_count, error_count, input_tokens, output_tokens, cached_tokens,
+  success_count, error_count, input_tokens, output_tokens, cached_tokens, cache_write_tokens,
   first_token_latency_sum, first_token_latency_count, latency_sum, latency_count,
   max_latency_ms, min_latency_ms, now()
 from aggregated",

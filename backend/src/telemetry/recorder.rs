@@ -321,6 +321,7 @@ fn lift_success_fact_fields(event: &mut UsageRecord, metadata: &mut Value) {
         event.input_tokens = value_nonnegative_i64(usage, "inputTokens");
         event.output_tokens = value_nonnegative_i64(usage, "outputTokens");
         event.cached_tokens = value_nonnegative_i64(usage, "cachedTokens");
+        event.cache_write_tokens = value_nonnegative_i64(usage, "cacheWriteTokens");
         event.reasoning_tokens = value_nonnegative_i64(usage, "reasoningTokens");
     }
 

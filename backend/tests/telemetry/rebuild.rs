@@ -20,6 +20,7 @@ async fn rebuild_buckets_should_replace_only_fully_reconstructible_range() {
     success.input_tokens = Some(12);
     success.output_tokens = Some(5);
     success.cached_tokens = Some(3);
+    success.cache_write_tokens = Some(2);
     PgUsageRecordStore::new(pool.clone())
         .append(&success)
         .await
@@ -60,15 +61,16 @@ async fn rebuild_buckets_should_replace_only_fully_reconstructible_range() {
 
     assert_eq!(report.deleted_rows, 1);
     assert_eq!(report.rebuilt_rows, 1);
-    let rebuilt: (i64, i64, i64, i64, i64, i64, i64, Option<i64>) = sqlx::query_as(
+    let rebuilt: (i64, i64, i64, i64, i64, i64, i64, i64, Option<i64>) = sqlx::query_as(
         "select success_count, error_count, input_tokens, output_tokens, cached_tokens,
+                cache_write_tokens,
                 first_token_latency_count, latency_count, min_latency_ms
          from request_time_buckets where account_id = 'acct-1'",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(rebuilt, (1, 1, 12, 5, 3, 1, 1, Some(0)));
+    assert_eq!(rebuilt, (1, 1, 12, 5, 3, 2, 1, 1, Some(0)));
 
     let preserved: (i64, i64) = sqlx::query_as(
         "select success_count, error_count

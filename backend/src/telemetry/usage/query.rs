@@ -91,11 +91,13 @@ pub(crate) struct UsageRecordBilling {
     pub input_amount: f64,
     pub output_amount: f64,
     pub cache_read_amount: f64,
+    pub cache_write_amount: f64,
     pub standard_amount: f64,
     pub total_amount: f64,
     pub input_price_per_mtoken: f64,
     pub output_price_per_mtoken: f64,
     pub cache_read_price_per_mtoken: f64,
+    pub cache_write_price_per_mtoken: f64,
     pub service_tier: Option<String>,
     pub service_tier_display: String,
     pub multiplier: f64,
@@ -278,8 +280,9 @@ pub(crate) fn usage_record_billing(
     input_tokens: u64,
     output_tokens: u64,
     cached_tokens: u64,
+    cache_write_tokens: u64,
 ) -> Option<UsageRecordBilling> {
-    if input_tokens == 0 && output_tokens == 0 && cached_tokens == 0 {
+    if input_tokens == 0 && output_tokens == 0 && cached_tokens == 0 && cache_write_tokens == 0 {
         return None;
     }
 
@@ -293,6 +296,7 @@ pub(crate) fn usage_record_billing(
         input_tokens,
         output_tokens,
         cached_tokens,
+        cache_write_tokens,
         model,
         service_tier,
     );
@@ -301,11 +305,13 @@ pub(crate) fn usage_record_billing(
         input_amount: breakdown.input_amount,
         output_amount: breakdown.output_amount,
         cache_read_amount: breakdown.cache_read_amount,
+        cache_write_amount: breakdown.cache_write_amount,
         standard_amount: breakdown.standard_amount,
         total_amount: breakdown.total_amount,
         input_price_per_mtoken: breakdown.input_price_per_mtoken,
         output_price_per_mtoken: breakdown.output_price_per_mtoken,
         cache_read_price_per_mtoken: breakdown.cache_read_price_per_mtoken,
+        cache_write_price_per_mtoken: breakdown.cache_write_price_per_mtoken,
         service_tier: breakdown.service_tier.clone(),
         service_tier_display: breakdown
             .service_tier
@@ -346,6 +352,7 @@ select
   coalesce(sum(input_tokens), 0)::bigint as input_tokens,
   coalesce(sum(output_tokens), 0)::bigint as output_tokens,
   coalesce(sum(cached_tokens), 0)::bigint as cached_tokens,
+  coalesce(sum(cache_write_tokens), 0)::bigint as cache_write_tokens,
   avg(latency_ms::double precision) as average_latency_ms
 from usage_records",
     );
@@ -354,11 +361,13 @@ from usage_records",
     let input_tokens = nonnegative(row.get("input_tokens"));
     let output_tokens = nonnegative(row.get("output_tokens"));
     let cached_tokens = nonnegative(row.get("cached_tokens"));
+    let cache_write_tokens = nonnegative(row.get("cache_write_tokens"));
     Ok(UsageRecordSummary {
         total_requests: nonnegative(row.get("total_requests")),
         input_tokens,
         output_tokens,
         cached_tokens,
+        cache_write_tokens,
         total_tokens: input_tokens + output_tokens,
         average_latency_ms: row.get("average_latency_ms"),
     })
@@ -448,6 +457,7 @@ pub(super) async fn usage_breakdown(
   coalesce(sum(input_tokens), 0)::bigint as input_tokens,
   coalesce(sum(output_tokens), 0)::bigint as output_tokens,
   coalesce(sum(cached_tokens), 0)::bigint as cached_tokens,
+  coalesce(sum(cache_write_tokens), 0)::bigint as cache_write_tokens,
   coalesce(sum(latency_ms), 0)::bigint as latency_sum,
   count(latency_ms) as latency_count
 from usage_records",
@@ -462,6 +472,7 @@ from usage_records",
         let input_tokens = nonnegative(row.get("input_tokens"));
         let output_tokens = nonnegative(row.get("output_tokens"));
         let cached_tokens = nonnegative(row.get("cached_tokens"));
+        let cache_write_tokens = nonnegative(row.get("cache_write_tokens"));
         let request_count = nonnegative(row.get("request_count"));
         let latency_sum = nonnegative(row.get("latency_sum"));
         let latency_count = nonnegative(row.get("latency_count"));
@@ -469,6 +480,7 @@ from usage_records",
             input_tokens,
             output_tokens,
             cached_tokens,
+            cache_write_tokens,
             &row.get::<String, _>("billing_model"),
             row.get::<Option<String>, _>("service_tier").as_deref(),
         );
@@ -480,6 +492,7 @@ from usage_records",
                 input_tokens,
                 output_tokens,
                 cached_tokens,
+                cache_write_tokens,
                 billing_amount,
                 latency_sum,
                 latency_count,
@@ -512,6 +525,7 @@ select
   coalesce(sum(input_tokens), 0)::bigint as input_tokens,
   coalesce(sum(output_tokens), 0)::bigint as output_tokens,
   coalesce(sum(cached_tokens), 0)::bigint as cached_tokens,
+  coalesce(sum(cache_write_tokens), 0)::bigint as cache_write_tokens,
   coalesce(sum(latency_ms), 0)::bigint as latency_sum,
   count(latency_ms) as latency_count
 from usage_records",
@@ -525,23 +539,26 @@ from usage_records",
         let input_tokens = nonnegative(row.get("input_tokens"));
         let output_tokens = nonnegative(row.get("output_tokens"));
         let cached_tokens = nonnegative(row.get("cached_tokens"));
+        let cache_write_tokens = nonnegative(row.get("cache_write_tokens"));
         let billing_amount = usage_breakdown_billing_amount(
             input_tokens,
             output_tokens,
             cached_tokens,
+            cache_write_tokens,
             &row.get::<String, _>("billing_model"),
             row.get::<Option<String>, _>("service_tier").as_deref(),
         );
         days.entry(date.clone())
             .or_insert_with(|| UsageTrendAccumulator::new(date))
-            .push(
+            .push(UsageTrendSample {
                 input_tokens,
                 output_tokens,
                 cached_tokens,
+                cache_write_tokens,
                 billing_amount,
-                nonnegative(row.get("latency_sum")),
-                nonnegative(row.get("latency_count")),
-            );
+                latency_sum: nonnegative(row.get("latency_sum")),
+                latency_count: nonnegative(row.get("latency_count")),
+            });
     }
     let mut points = days
         .into_values()
@@ -576,6 +593,7 @@ pub(super) fn usage_record_from_row(row: &sqlx::postgres::PgRow) -> UsageRecord 
         input_tokens: row.get("input_tokens"),
         output_tokens: row.get("output_tokens"),
         cached_tokens: row.get("cached_tokens"),
+        cache_write_tokens: row.get("cache_write_tokens"),
         reasoning_tokens: row.get("reasoning_tokens"),
         message: row.get("message"),
         metadata: row
@@ -593,6 +611,7 @@ fn usage_breakdown_billing_amount(
     input_tokens: u64,
     output_tokens: u64,
     cached_tokens: u64,
+    cache_write_tokens: u64,
     model: &str,
     service_tier: Option<&str>,
 ) -> f64 {
@@ -600,6 +619,7 @@ fn usage_breakdown_billing_amount(
         input_tokens,
         output_tokens,
         cached_tokens,
+        cache_write_tokens,
         model,
         service_tier,
     )
@@ -616,6 +636,7 @@ struct BreakdownSample {
     input_tokens: u64,
     output_tokens: u64,
     cached_tokens: u64,
+    cache_write_tokens: u64,
     billing_amount: f64,
     latency_sum: u64,
     latency_count: u64,
@@ -638,6 +659,7 @@ impl BreakdownAccumulator {
         self.item.input_tokens += sample.input_tokens;
         self.item.output_tokens += sample.output_tokens;
         self.item.cached_tokens += sample.cached_tokens;
+        self.item.cache_write_tokens += sample.cache_write_tokens;
         self.item.total_tokens += sample.input_tokens + sample.output_tokens;
         self.item.standard_billing_amount += sample.billing_amount;
         self.item.actual_billing_amount += sample.billing_amount;
@@ -659,6 +681,16 @@ struct UsageTrendAccumulator {
     latency_count: u64,
 }
 
+struct UsageTrendSample {
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_tokens: u64,
+    cache_write_tokens: u64,
+    billing_amount: f64,
+    latency_sum: u64,
+    latency_count: u64,
+}
+
 impl UsageTrendAccumulator {
     fn new(date: String) -> Self {
         Self {
@@ -671,23 +703,16 @@ impl UsageTrendAccumulator {
         }
     }
 
-    fn push(
-        &mut self,
-        input: u64,
-        output: u64,
-        cached: u64,
-        billing_amount: f64,
-        latency_sum: u64,
-        latency_count: u64,
-    ) {
-        self.point.input_tokens += input;
-        self.point.output_tokens += output;
-        self.point.cached_tokens += cached;
-        self.point.total_tokens += input + output;
-        self.point.standard_billing_amount += billing_amount;
-        self.point.actual_billing_amount += billing_amount;
-        self.latency_sum += latency_sum;
-        self.latency_count += latency_count;
+    fn push(&mut self, sample: UsageTrendSample) {
+        self.point.input_tokens += sample.input_tokens;
+        self.point.output_tokens += sample.output_tokens;
+        self.point.cached_tokens += sample.cached_tokens;
+        self.point.cache_write_tokens += sample.cache_write_tokens;
+        self.point.total_tokens += sample.input_tokens + sample.output_tokens;
+        self.point.standard_billing_amount += sample.billing_amount;
+        self.point.actual_billing_amount += sample.billing_amount;
+        self.latency_sum += sample.latency_sum;
+        self.latency_count += sample.latency_count;
     }
 
     fn finish(mut self) -> UsageRecordTrendPoint {
@@ -703,6 +728,7 @@ pub struct UsageRecordSummary {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cached_tokens: u64,
+    pub cache_write_tokens: u64,
     pub total_tokens: u64,
     pub average_latency_ms: Option<f64>,
 }
@@ -730,6 +756,7 @@ pub struct UsageRecordBreakdown {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cached_tokens: u64,
+    pub cache_write_tokens: u64,
     pub total_tokens: u64,
     pub standard_billing_amount: f64,
     pub actual_billing_amount: f64,
@@ -743,6 +770,7 @@ pub struct UsageRecordTrendPoint {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cached_tokens: u64,
+    pub cache_write_tokens: u64,
     pub total_tokens: u64,
     pub standard_billing_amount: f64,
     pub actual_billing_amount: f64,

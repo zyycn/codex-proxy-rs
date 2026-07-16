@@ -10,6 +10,7 @@ struct ModelPricing {
     output_price_per_mtoken_priority: f64,
     cache_read_price_per_mtoken: f64,
     cache_read_price_per_mtoken_priority: f64,
+    cache_write_multiplier: f64,
     long_input_price_per_mtoken: f64,
     long_input_price_per_mtoken_priority: f64,
     long_output_price_per_mtoken: f64,
@@ -27,6 +28,7 @@ impl ModelPricing {
             output_price_per_mtoken_priority: 0.0,
             cache_read_price_per_mtoken: 0.0,
             cache_read_price_per_mtoken_priority: 0.0,
+            cache_write_multiplier: 0.0,
             long_input_price_per_mtoken: 0.0,
             long_input_price_per_mtoken_priority: 0.0,
             long_output_price_per_mtoken: 0.0,
@@ -38,6 +40,11 @@ impl ModelPricing {
 
     const fn with_cache(mut self, cache_read: f64) -> Self {
         self.cache_read_price_per_mtoken = cache_read;
+        self
+    }
+
+    const fn with_cache_write(mut self, multiplier: f64) -> Self {
+        self.cache_write_multiplier = multiplier;
         self
     }
 
@@ -78,24 +85,28 @@ const MODEL_PRICING_RULES: &[ModelPricingRule] = &[
         model: "gpt-5.6-sol",
         pricing: ModelPricing::new(5.0, 30.0)
             .with_cache(0.5)
+            .with_cache_write(1.25)
             .with_priority(10.0, 60.0, 1.0),
     },
     ModelPricingRule {
         model: "gpt-5.6-terra",
         pricing: ModelPricing::new(2.5, 15.0)
             .with_cache(0.25)
+            .with_cache_write(1.25)
             .with_priority(5.0, 30.0, 0.5),
     },
     ModelPricingRule {
         model: "gpt-5.6-luna",
         pricing: ModelPricing::new(1.0, 6.0)
             .with_cache(0.1)
+            .with_cache_write(1.25)
             .with_priority(2.0, 12.0, 0.2),
     },
     ModelPricingRule {
         model: "gpt-5.6",
         pricing: ModelPricing::new(5.0, 30.0)
             .with_cache(0.5)
+            .with_cache_write(1.25)
             .with_priority(10.0, 60.0, 1.0),
     },
     ModelPricingRule {
@@ -181,6 +192,8 @@ pub(crate) struct BillingBreakdown {
     pub output_amount: f64,
     /// 缓存读取金额。
     pub cache_read_amount: f64,
+    /// 缓存写入金额。
+    pub cache_write_amount: f64,
     /// 应用服务档位倍率前的标准金额。
     pub standard_amount: f64,
     /// 最终计费金额。
@@ -191,6 +204,8 @@ pub(crate) struct BillingBreakdown {
     pub output_price_per_mtoken: f64,
     /// 缓存读取单价，美元 / 1M token。
     pub cache_read_price_per_mtoken: f64,
+    /// 缓存写入单价，美元 / 1M token。
+    pub cache_write_price_per_mtoken: f64,
     /// 服务档位。
     pub service_tier: Option<String>,
     /// 服务档位倍率。
@@ -202,16 +217,24 @@ pub(crate) fn calculate_billing(
     input_tokens: u64,
     output_tokens: u64,
     cached_tokens: u64,
+    cache_write_tokens: u64,
     model: &str,
     service_tier: Option<&str>,
 ) -> BillingBreakdown {
     let pricing = model_pricing(model).unwrap_or_else(|| {
-        highest_pricing_for_request(input_tokens, output_tokens, cached_tokens, service_tier)
+        highest_pricing_for_request(
+            input_tokens,
+            output_tokens,
+            cached_tokens,
+            cache_write_tokens,
+            service_tier,
+        )
     });
     calculate_billing_with_pricing(
         input_tokens,
         output_tokens,
         cached_tokens,
+        cache_write_tokens,
         pricing,
         service_tier,
     )
@@ -221,6 +244,7 @@ fn calculate_billing_with_pricing(
     input_tokens: u64,
     output_tokens: u64,
     cached_tokens: u64,
+    cache_write_tokens: u64,
     pricing: ModelPricing,
     service_tier: Option<&str>,
 ) -> BillingBreakdown {
@@ -230,6 +254,7 @@ fn calculate_billing_with_pricing(
         input_tokens,
         output_tokens,
         cached_tokens,
+        cache_write_tokens,
         pricing,
         service_tier,
         is_long,
@@ -240,6 +265,7 @@ fn calculate_billing_with_pricing_for_context(
     input_tokens: u64,
     output_tokens: u64,
     cached_tokens: u64,
+    cache_write_tokens: u64,
     pricing: ModelPricing,
     service_tier: Option<&str>,
     is_long: bool,
@@ -277,26 +303,38 @@ fn calculate_billing_with_pricing_for_context(
     }
 
     let cached_tokens = cached_tokens.min(input_tokens);
-    let uncached_input_tokens = if cache_read_price > 0.0 {
-        input_tokens - cached_tokens
+    let billed_cache_read_tokens = if cache_read_price > 0.0 {
+        cached_tokens
     } else {
-        input_tokens
+        0
     };
+    let cache_write_price = input_price * pricing.cache_write_multiplier;
+    let billed_cache_write_tokens = if cache_write_price > 0.0 {
+        cache_write_tokens.min(input_tokens - billed_cache_read_tokens)
+    } else {
+        0
+    };
+    let uncached_input_tokens = input_tokens
+        .saturating_sub(billed_cache_read_tokens)
+        .saturating_sub(billed_cache_write_tokens);
     let input_amount = uncached_input_tokens as f64 / 1_000_000.0 * input_price;
-    let cache_read_amount = cached_tokens as f64 / 1_000_000.0 * cache_read_price;
+    let cache_read_amount = billed_cache_read_tokens as f64 / 1_000_000.0 * cache_read_price;
+    let cache_write_amount = billed_cache_write_tokens as f64 / 1_000_000.0 * cache_write_price;
     let output_amount = output_tokens as f64 / 1_000_000.0 * output_price;
-    let standard_amount = input_amount + cache_read_amount + output_amount;
+    let standard_amount = input_amount + cache_read_amount + cache_write_amount + output_amount;
     let total_amount = standard_amount * tier_multiplier;
 
     BillingBreakdown {
         input_amount,
         output_amount,
         cache_read_amount,
+        cache_write_amount,
         standard_amount,
         total_amount,
         input_price_per_mtoken: input_price,
         output_price_per_mtoken: output_price,
         cache_read_price_per_mtoken: cache_read_price,
+        cache_write_price_per_mtoken: cache_write_price,
         service_tier: normalize_service_tier(service_tier),
         tier_multiplier,
     }
@@ -309,6 +347,7 @@ pub(crate) fn calculate_aggregate_billing(
     input_tokens: u64,
     output_tokens: u64,
     cached_tokens: u64,
+    cache_write_tokens: u64,
     model: &str,
     service_tier: Option<&str>,
     is_long: bool,
@@ -318,6 +357,7 @@ pub(crate) fn calculate_aggregate_billing(
             input_tokens,
             output_tokens,
             cached_tokens,
+            cache_write_tokens,
             service_tier,
             is_long,
         )
@@ -326,6 +366,7 @@ pub(crate) fn calculate_aggregate_billing(
         input_tokens,
         output_tokens,
         cached_tokens,
+        cache_write_tokens,
         pricing,
         service_tier,
         is_long,
@@ -337,6 +378,7 @@ pub(crate) fn calculate_billing_amount(
     input_tokens: u64,
     output_tokens: u64,
     cached_tokens: u64,
+    cache_write_tokens: u64,
     model: &str,
     service_tier: Option<&str>,
 ) -> f64 {
@@ -344,6 +386,7 @@ pub(crate) fn calculate_billing_amount(
         input_tokens,
         output_tokens,
         cached_tokens,
+        cache_write_tokens,
         model,
         service_tier,
     )
@@ -365,6 +408,7 @@ fn highest_pricing_for_request(
     input_tokens: u64,
     output_tokens: u64,
     cached_tokens: u64,
+    cache_write_tokens: u64,
     service_tier: Option<&str>,
 ) -> ModelPricing {
     MODEL_PRICING_RULES
@@ -374,6 +418,7 @@ fn highest_pricing_for_request(
                 input_tokens,
                 output_tokens,
                 cached_tokens,
+                cache_write_tokens,
                 highest,
                 service_tier,
             )
@@ -382,6 +427,7 @@ fn highest_pricing_for_request(
                 input_tokens,
                 output_tokens,
                 cached_tokens,
+                cache_write_tokens,
                 rule.pricing,
                 service_tier,
             )
@@ -398,6 +444,7 @@ fn highest_pricing_for_context(
     input_tokens: u64,
     output_tokens: u64,
     cached_tokens: u64,
+    cache_write_tokens: u64,
     service_tier: Option<&str>,
     is_long: bool,
 ) -> ModelPricing {
@@ -408,6 +455,7 @@ fn highest_pricing_for_context(
                 input_tokens,
                 output_tokens,
                 cached_tokens,
+                cache_write_tokens,
                 highest,
                 service_tier,
                 is_long,
@@ -417,6 +465,7 @@ fn highest_pricing_for_context(
                 input_tokens,
                 output_tokens,
                 cached_tokens,
+                cache_write_tokens,
                 rule.pricing,
                 service_tier,
                 is_long,

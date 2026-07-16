@@ -285,6 +285,8 @@ async fn codex_backend_client_websocket_should_forward_headers_and_preserve_payl
             Vec::new(),
         );
     request.use_websocket = true;
+    request.responses_lite = Some("true".to_string());
+    request.memgen_request = Some("true".to_string());
     request.set_prompt_cache_key(Some("client-thread".to_string()));
     request.set_client_metadata(Some(json!({
         "safe": "yes",
@@ -351,7 +353,8 @@ async fn codex_backend_client_websocket_should_forward_headers_and_preserve_payl
         json!({
             "safe": "yes",
             "x-openai-subagent": "review",
-            "ignored_non_string": 42
+            "ignored_non_string": 42,
+            "ws_request_header_x_openai_internal_codex_responses_lite": "true"
         })
     );
 
@@ -405,6 +408,16 @@ async fn codex_backend_client_websocket_should_forward_headers_and_preserve_payl
     assert!(
         headers
             .iter()
+            .all(|(name, _)| name != "x-openai-internal-codex-responses-lite")
+    );
+    assert!(
+        headers
+            .iter()
+            .any(|(name, value)| { name == "x-openai-memgen-request" && value == "true" })
+    );
+    assert!(
+        headers
+            .iter()
             .any(|(name, value)| name == "session-id" && value == "cp_derived")
     );
     assert!(headers.iter().all(|(name, _)| name != "thread-id"));
@@ -430,6 +443,14 @@ async fn codex_backend_client_should_send_desktop_headers_and_capture_response_m
         .and(wiremock::matchers::header("originator", "Codex Desktop"))
         .and(wiremock::matchers::header("x-client-request-id", "req_1"))
         .and(wiremock::matchers::header("x-codex-turn-state", "turn_1"))
+        .and(wiremock::matchers::header(
+            "x-openai-internal-codex-responses-lite",
+            "true",
+        ))
+        .and(wiremock::matchers::header(
+            "x-openai-memgen-request",
+            "true",
+        ))
         .and(wiremock::matchers::header("cookie", "cf_clearance=old"))
         .and(wiremock::matchers::body_json(json!({
             "model": "gpt-5.5",
@@ -460,6 +481,8 @@ async fn codex_backend_client_should_send_desktop_headers_and_capture_response_m
             Vec::new(),
         );
     request.force_http_sse = true;
+    request.responses_lite = Some("true".to_string());
+    request.memgen_request = Some("true".to_string());
 
     let response = client
         .create_response(
@@ -493,6 +516,7 @@ async fn codex_backend_client_should_send_desktop_headers_and_capture_response_m
                 input_tokens: 2,
                 output_tokens: 3,
                 cached_tokens: 1,
+                cache_write_tokens: 0,
                 reasoning_tokens: 0,
                 image_input_tokens: 0,
                 image_output_tokens: 0,
@@ -577,6 +601,123 @@ async fn codex_backend_client_should_send_latest_wire_profile_user_agent() {
         .collect::<Vec<_>>();
 
     assert_eq!(user_agents, vec![expected_user_agent]);
+}
+
+#[tokio::test]
+async fn codex_backend_client_websocket_should_preserve_exact_chain_then_rotate_profile() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (first_stream, _) = listener.accept().await.unwrap();
+        let mut first_user_agent = String::new();
+        let mut first = accept_codex_test_websocket_with(first_stream, |request, _response| {
+            first_user_agent = request
+                .headers()
+                .get("user-agent")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+        })
+        .await;
+        let _ = first.next().await.unwrap().unwrap();
+        first
+            .send(Message::Text(
+                completed_websocket_response("resp_profile_first", 1, 1).into(),
+            ))
+            .await
+            .unwrap();
+
+        let _ = timeout(Duration::from_secs(2), first.next())
+            .await
+            .expect("connection-local continuation should reuse the original websocket")
+            .unwrap()
+            .unwrap();
+        first
+            .send(Message::Text(
+                completed_websocket_response("resp_profile_continued", 1, 1).into(),
+            ))
+            .await
+            .unwrap();
+
+        let (second_stream, _) = timeout(Duration::from_secs(2), listener.accept())
+            .await
+            .expect("updated profile should open a new websocket")
+            .unwrap();
+        let mut second_user_agent = String::new();
+        let mut second = accept_codex_test_websocket_with(second_stream, |request, _response| {
+            second_user_agent = request
+                .headers()
+                .get("user-agent")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+        })
+        .await;
+        let _ = second.next().await.unwrap().unwrap();
+        second
+            .send(Message::Text(
+                completed_websocket_response("resp_profile_second", 1, 1).into(),
+            ))
+            .await
+            .unwrap();
+
+        (first_user_agent, second_user_agent)
+    });
+
+    let profile = crate::support::wire_profile::test_wire_profile();
+    let pool = Arc::new(
+        codex_proxy_rs::upstream::openai::transport::websocket_pool::CodexWebSocketPool::new(
+            8,
+            Duration::from_mins(1),
+        ),
+    );
+    let client = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        profile.clone(),
+    )
+    .with_websocket_pool(pool);
+    let mut request =
+        codex_proxy_rs::upstream::openai::protocol::responses::CodexResponsesRequest::new_http_sse(
+            "gpt-5.5",
+            "",
+            Vec::new(),
+        );
+    request.use_websocket = true;
+    request.local_conversation_id = Some("profile-rotation".to_string());
+
+    client
+        .create_response(
+            &request,
+            request_context("req_profile_first", Some("acct-profile")),
+        )
+        .await
+        .unwrap();
+    profile.update_desktop_release("26.900.1", "7001");
+    let mut continuation = request.clone();
+    continuation.set_previous_response_id(Some("resp_profile_first".to_string()));
+    continuation.previous_response_scope = Some(
+        codex_proxy_rs::upstream::openai::protocol::responses::PreviousResponseScope::ConnectionLocal,
+    );
+    client
+        .create_response(
+            &continuation,
+            request_context("req_profile_continued", Some("acct-profile")),
+        )
+        .await
+        .unwrap();
+    client
+        .create_response(
+            &request,
+            request_context("req_profile_second", Some("acct-profile")),
+        )
+        .await
+        .unwrap();
+
+    let (first_user_agent, second_user_agent) = server.await.unwrap();
+    assert!(first_user_agent.contains("26.707.72221"));
+    assert!(second_user_agent.contains("26.900.1"));
+    assert_ne!(first_user_agent, second_user_agent);
 }
 
 #[tokio::test]
