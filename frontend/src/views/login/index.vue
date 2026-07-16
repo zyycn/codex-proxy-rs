@@ -77,7 +77,7 @@ async function handleSubmit(): Promise<void> {
   --login-route-stream: color-mix(in srgb, var(--cp-info) 17%, transparent);
   --login-route-audit: color-mix(in srgb, var(--cp-text-tertiary) 18%, transparent);
   --login-semantic: color-mix(in srgb, var(--cp-info) 26%, transparent);
-  --login-particle: color-mix(in srgb, var(--cp-info) 76%, var(--cp-normal));
+  --login-particle: var(--cp-accent-primary);
   --login-particle-glow: color-mix(in srgb, var(--cp-info) 62%, transparent);
   --login-watermark: color-mix(in srgb, var(--cp-text-primary) 55%, transparent);
   --login-stack-text: color-mix(in srgb, var(--cp-text-primary) 84%, transparent);
@@ -94,7 +94,7 @@ async function handleSubmit(): Promise<void> {
   --login-form-shadow: color-mix(in srgb, var(--cp-text-primary) 20%, transparent);
   --login-form-line: color-mix(in srgb, var(--cp-info-border) 54%, transparent);
   --login-logo-bg: color-mix(in srgb, var(--cp-info-bg) 74%, var(--cp-bg-surface));
-  --login-logo-text: color-mix(in srgb, var(--cp-info) 72%, var(--cp-normal));
+  --login-logo-text: var(--cp-accent-primary);
   --login-title: var(--cp-text-primary);
   --login-brand-title: var(--cp-text-strong);
   --login-brand-caption: var(--cp-text-secondary);
@@ -112,10 +112,10 @@ async function handleSubmit(): Promise<void> {
   --login-error-bg: var(--cp-danger-bg);
   --login-error-icon: var(--cp-danger);
   --login-error-text: var(--cp-danger-text);
-  --login-button: color-mix(in srgb, var(--cp-info) 74%, var(--cp-normal));
-  --login-button-hover: color-mix(in srgb, var(--cp-info-hover) 74%, var(--cp-normal-hover));
-  --login-button-active: color-mix(in srgb, var(--cp-info-pressed) 74%, var(--cp-normal-pressed));
-  --login-button-shadow: color-mix(in srgb, var(--cp-info) 30%, transparent);
+  --login-button: var(--cp-accent-primary);
+  --login-button-hover: var(--cp-info-hover);
+  --login-button-active: var(--cp-info-pressed);
+  --login-button-shadow: color-mix(in srgb, var(--cp-accent-primary) 30%, transparent);
   --login-footer: color-mix(in srgb, var(--cp-text-secondary) 82%, var(--cp-text-tertiary));
   --login-toggle-bg: color-mix(in srgb, var(--cp-bg-muted) 74%, transparent);
   --login-toggle-sun: var(--login-logo-text);

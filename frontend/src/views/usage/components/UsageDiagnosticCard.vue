@@ -3,6 +3,7 @@ import { CornerDownRight } from '@lucide/vue'
 import { computed } from 'vue'
 
 import BaseCard from '@/components/base/BaseCard.vue'
+import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 
@@ -84,6 +85,7 @@ const displayItems = computed(() =>
     nameDisplay: diagnosticNameDisplay(item.name),
   })),
 )
+const hasData = computed(() => !props.loading && displayItems.value.length > 0)
 
 function diagnosticNameDisplay(name: string) {
   const raw = name.trim() || '未知'
@@ -117,17 +119,18 @@ function diagnosticNameDisplay(name: string) {
       <BaseSegmented
         v-model="dimension"
         :options="dimensionOptions"
+        :disabled="loading"
         class="w-full min-w-0 lg:w-80"
       />
     </template>
 
     <template #body>
       <BaseTable
+        v-if="hasData"
         :key="resultDimension"
         class="min-h-0 w-full"
         :columns="diagnosticColumns"
         :rows="displayItems"
-        :loading="loading"
         compact
         row-key="name"
         empty-text="暂无诊断数据"
@@ -204,6 +207,14 @@ function diagnosticNameDisplay(name: string) {
           </span>
         </template>
       </BaseTable>
+      <BaseEmpty
+        v-else
+        compact
+        plain
+        :title="loading ? '正在加载热点诊断数据' : '暂无诊断数据'"
+        description="当前范围没有可诊断的请求记录"
+        class="h-full place-content-center"
+      />
     </template>
   </BaseCard>
 </template>

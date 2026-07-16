@@ -286,13 +286,6 @@ onBeforeUnmount(() => {
                         : undefined,
                   ]"
                 />
-                <span
-                  aria-hidden="true"
-                  class="pointer-events-none absolute bottom-0 left-1/2 h-0.75 w-1.5 -translate-x-1/2 rounded-full bg-(--cp-text-primary) transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
-                  :class="
-                    isActivePoint(point) ? 'translate-y-0 opacity-60' : 'translate-y-1 opacity-0'
-                  "
-                />
               </button>
             </div>
           </template>
