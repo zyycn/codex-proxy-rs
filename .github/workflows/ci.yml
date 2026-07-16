@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
       container: ${{ steps.filter.outputs.container }}
     steps:
       - name: Checkout
@@ -28,11 +30,18 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
-      - name: Detect container changes
+      - name: Detect affected checks
         id: filter
         uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
         with:
           filters: |
+            backend:
+              - 'backend/**'
+              - 'release/version.yaml'
+              - '.github/workflows/**'
+            frontend:
+              - 'frontend/**'
+              - '.github/workflows/**'
             container:
               - 'backend/**'
               - 'frontend/**'
@@ -43,12 +52,15 @@ jobs:
               - '.github/workflows/ci.yml'
 
   quality:
+    needs: changes
     uses: ./.github/workflows/_quality.yml
     with:
       ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      run_backend: ${{ needs.changes.outputs.backend == 'true' }}
+      run_frontend: ${{ needs.changes.outputs.frontend == 'true' }}
 
   container:
-    needs: [changes, quality]
+    needs: changes
     if: needs.changes.outputs.container == 'true'
     permissions:
       contents: read

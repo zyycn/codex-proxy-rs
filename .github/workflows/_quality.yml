@@ -12,12 +12,23 @@ on:
         required: false
         default: false
         type: boolean
+      run_backend:
+        description: Run backend quality checks
+        required: false
+        default: true
+        type: boolean
+      run_frontend:
+        description: Run frontend quality checks
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
 
 jobs:
   backend:
+    if: inputs.run_backend
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -77,6 +88,7 @@ jobs:
         run: cargo test --test main --locked
 
   frontend:
+    if: inputs.run_frontend
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:

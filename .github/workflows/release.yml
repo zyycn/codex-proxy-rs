@@ -165,7 +165,7 @@ jobs:
 
   build-docker-binary:
     name: build-docker-binary (${{ matrix.os }}-${{ matrix.arch }})
-    needs: [release-info, quality]
+    needs: release-info
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.release-info.outputs.docker_matrix) }}
@@ -225,7 +225,7 @@ jobs:
 
   build-binary:
     name: build-binary (${{ matrix.os }}-${{ matrix.arch }})
-    needs: [release-info, quality]
+    needs: release-info
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.release-info.outputs.non_docker_matrix) }}
