@@ -2,6 +2,8 @@
 
 mod events;
 
+use std::time::{Duration, Instant};
+
 use serde_json::Value;
 
 use crate::{
@@ -149,13 +151,18 @@ impl TelemetryController {
             .effective_model
             .as_deref()
             .unwrap_or(exit.display_model);
+        let first_token_ms = request_first_token_ms(
+            exit.started_at,
+            exit.attempt.started_at(),
+            exit.response.first_token_ms,
+        );
         let mut metadata = serde_json::json!({
             "responseId": exit.response_id,
             "stream": false,
             "completed": exit.completed,
             "incomplete": !exit.completed,
             "transport": backend_transport_name(exit.response.transport),
-            "firstTokenMs": exit.response.first_token_ms,
+            "firstTokenMs": first_token_ms,
             "usage": exit.response.usage,
             "effectiveModel": effective_model,
             "modelsEtag": exit.response.response_metadata.models_etag.as_deref(),
@@ -262,6 +269,22 @@ impl TelemetryController {
             }
         }
     }
+}
+
+fn request_first_token_ms(
+    request_started_at: Instant,
+    attempt_started_at: Instant,
+    attempt_first_token_ms: Option<i64>,
+) -> Option<i64> {
+    let attempt_first_token_ms = u64::try_from(attempt_first_token_ms?).ok()?;
+    let output_at =
+        attempt_started_at.checked_add(Duration::from_millis(attempt_first_token_ms))?;
+    i64::try_from(
+        output_at
+            .saturating_duration_since(request_started_at)
+            .as_millis(),
+    )
+    .ok()
 }
 
 async fn record_success(

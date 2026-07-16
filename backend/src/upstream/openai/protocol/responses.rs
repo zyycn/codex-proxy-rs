@@ -195,67 +195,118 @@ pub fn transport_requirement(request: &CodexResponsesRequest) -> TransportRequir
     }
 }
 
-/// 判断已收到的 Responses SSE 内容是否包含首个完整的真实输出事件。
-pub fn response_body_has_first_output(body_bytes: &[u8]) -> bool {
+/// 单个 Responses 事件对计时系统提供的稳定语义信号。
+///
+/// `protocol_progress` 只说明上游仍在工作，不能替代首字；`semantic_output`
+/// 表示模型已经产生客户端可消费的内容。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResponseEventSignals {
+    pub protocol_progress: bool,
+    pub semantic_output: bool,
+}
+
+/// 从已解析的 Responses 事件提取计时语义。
+///
+/// 生命周期帧和结构帧不会被当作输出。`response.output_item.done` 与终态帧只有
+/// 实际携带文本、工具参数、推理或图片结果时才算语义输出。
+pub fn response_event_signals(event_type: Option<&str>, value: &Value) -> ResponseEventSignals {
+    let protocol_progress = !matches!(event_type, Some("response.failed" | "error"));
+    let semantic_output = match event_type {
+        Some("response.output_text.delta") => non_empty_string(value.get("delta")),
+        Some("response.output_text.done") => non_empty_string(value.get("text")),
+        Some("response.reasoning_summary_text.delta" | "response.reasoning_text.delta") => {
+            non_empty_string(value.get("delta"))
+        }
+        Some(
+            "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta",
+        ) => non_empty_string(value.get("delta")),
+        Some("response.function_call_arguments.done") => non_empty_string(value.get("arguments")),
+        Some("response.image_generation_call.partial_image") => non_empty_string(
+            value
+                .get("partial_image_b64")
+                .or_else(|| value.get("partial_image")),
+        ),
+        Some("response.output_item.done") => value
+            .get("item")
+            .is_some_and(output_item_has_semantic_output),
+        Some("response.content_part.done") => value
+            .get("part")
+            .is_some_and(output_item_has_semantic_output),
+        Some("response.completed" | "response.incomplete") => value
+            .pointer("/response/output")
+            .and_then(Value::as_array)
+            .is_some_and(|items| output_items_have_semantic_output(items)),
+        _ => false,
+    };
+    ResponseEventSignals {
+        protocol_progress,
+        semantic_output,
+    }
+}
+
+/// 判断已收到的 Responses SSE 内容是否包含首个完整的语义输出事件。
+pub fn response_body_has_semantic_output(body_bytes: &[u8]) -> bool {
     let body = String::from_utf8_lossy(body_bytes);
     let Some(complete_body) = complete_sse_body_prefix(&body) else {
         return false;
     };
-    parse_sse_events(complete_body)
-        .is_ok_and(|events| events.iter().any(response_sse_event_has_first_output))
+    parse_sse_events(complete_body).is_ok_and(|events| {
+        events.iter().any(|event| {
+            let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
+                return false;
+            };
+            let event_type = event.event.as_deref().or_else(|| {
+                value
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+            });
+            response_event_signals(event_type, &value).semantic_output
+        })
+    })
 }
 
-/// 已收到首个有效 Responses SSE 输出事件时记录耗时。
-pub fn update_first_response_output_ms(
+/// 已收到首个语义输出事件时记录耗时。
+pub fn update_first_response_semantic_output_ms(
     started_at: Instant,
     body_bytes: &[u8],
     first_token_ms: &mut Option<i64>,
 ) {
-    if first_token_ms.is_none() && response_body_has_first_output(body_bytes) {
+    if first_token_ms.is_none() && response_body_has_semantic_output(body_bytes) {
         *first_token_ms = Some(elapsed_millis_i64(started_at).max(1));
     }
 }
 
-fn response_sse_event_has_first_output(event: &SseEvent) -> bool {
-    let data = event.data.trim();
-    if data.is_empty() || data == "[DONE]" {
-        return false;
-    }
+fn output_items_have_semantic_output(items: &[Value]) -> bool {
+    items.iter().any(output_item_has_semantic_output)
+}
 
-    let value = serde_json::from_str::<Value>(data).ok();
-    let event_type = event.event.as_deref().or_else(|| {
-        value
-            .as_ref()
-            .and_then(|value| value.get("type"))
-            .and_then(Value::as_str)
-    });
-
-    match event_type {
-        Some("response.output_text.delta")
-        | Some("response.reasoning_summary_text.delta")
-        | Some("response.reasoning_text.delta")
-        | Some("response.function_call_arguments.delta")
-        | Some("response.custom_tool_call_input.delta") => value
-            .as_ref()
-            .and_then(|value| value.get("delta"))
-            .and_then(Value::as_str)
-            .is_some_and(|delta| !delta.is_empty()),
-        Some("response.output_text.done") => value
-            .as_ref()
-            .and_then(|value| value.get("text"))
-            .and_then(Value::as_str)
-            .is_some_and(|text| !text.is_empty()),
-        Some("response.function_call_arguments.done") => value
-            .as_ref()
-            .and_then(|value| value.get("arguments"))
-            .and_then(Value::as_str)
-            .is_some_and(|arguments| !arguments.is_empty()),
-        Some("response.output_item.added" | "response.output_item.done") => value
-            .as_ref()
-            .and_then(|value| value.get("item"))
-            .is_some_and(Value::is_object),
-        _ => false,
+fn output_item_has_semantic_output(item: &Value) -> bool {
+    match item.get("type").and_then(Value::as_str) {
+        Some("output_text" | "text") => non_empty_string(item.get("text")),
+        Some("reasoning") => {
+            non_empty_string(item.get("text")) || non_empty_string(item.get("summary"))
+        }
+        Some("function_call") => non_empty_string(item.get("arguments")),
+        Some("custom_tool_call") => non_empty_string(item.get("input")),
+        Some("image_generation_call") => {
+            non_empty_string(item.get("result")) || non_empty_string(item.get("image_base64"))
+        }
+        Some("message") => item
+            .get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|items| output_items_have_semantic_output(items)),
+        _ => item
+            .get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|items| output_items_have_semantic_output(items)),
     }
+}
+
+fn non_empty_string(value: Option<&Value>) -> bool {
+    value
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty())
 }
 
 fn complete_sse_body_prefix(body: &str) -> Option<&str> {

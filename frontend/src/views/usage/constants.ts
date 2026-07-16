@@ -48,7 +48,7 @@ export const usageRecordColumns = [
   },
   {
     key: 'firstTokenLatencyMsDisplay',
-    label: '首 Token',
+    label: '首字',
     width: '104px',
     align: 'right' as const,
     ellipsis: false,

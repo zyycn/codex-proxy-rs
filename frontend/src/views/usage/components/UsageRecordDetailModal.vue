@@ -51,7 +51,7 @@ const overviewItems = computed(() => [
   { label: '时间', value: props.record?.createdAtDisplay, mono: true },
   { label: '类型', value: usageRecordType(props.record) },
   { label: '耗时', value: props.record?.latencyMsDisplay, mono: true },
-  { label: '首 Token', value: props.record?.firstTokenLatencyMsDisplay, mono: true },
+  { label: '首字', value: props.record?.firstTokenLatencyMsDisplay, mono: true },
   { label: '总 Token', value: tokenDetails.value.totalTokensDisplay, mono: true },
   { label: '请求 ID', value: props.record?.requestId, mono: true, wide: true },
   { label: '消息', value: props.record?.message, wide: true },

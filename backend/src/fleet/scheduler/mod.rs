@@ -23,7 +23,7 @@ use crate::fleet::account::Account;
 use crate::infra::time::parse_rfc3339_utc;
 
 pub use candidates::{CandidateFilter, CandidateRequest};
-pub use feedback::{FeedbackSample, FeedbackStats};
+pub use feedback::{AttemptFeedback, FeedbackSample, FeedbackStats};
 pub use strategy::smart::rank_candidates;
 pub use strategy::{ScoreBreakdown, ScoreWeights};
 
@@ -69,7 +69,7 @@ pub struct SelectionInput<'a> {
 /// 账号调度器：账号选择的对外门面。
 ///
 /// 持有轮转游标（并列破并列用）、打分权重（Smart 用）与 EWMA 反馈存储。选择热路径
-/// 只读反馈与权重，请求结束后经 [`AccountScheduler::report_feedback`] 回灌。游标用
+/// 只读反馈与权重，请求结束后经 [`AccountScheduler::report_attempt`] 回灌。游标用
 /// [`Mutex`] 保护（选择需可变，但 `AccountScheduler` 以共享引用参与并发请求）。
 #[derive(Debug)]
 pub struct AccountScheduler {
@@ -150,9 +150,9 @@ impl AccountScheduler {
         }
     }
 
-    /// 回灌一次请求结果到运行时 EWMA 反馈（错误率 / TTFT），供 Smart 打分。
-    pub fn report_feedback(&self, account_id: &str, success: bool, first_token_ms: Option<u64>) {
-        self.feedback.report(account_id, success, first_token_ms);
+    /// 回灌一个已启动上游 attempt 的运行时反馈，供 Smart 打分。
+    pub fn report_attempt(&self, account_id: &str, feedback: AttemptFeedback) {
+        self.feedback.report_attempt(account_id, feedback);
     }
 
     /// 移除指定账号的运行时反馈（账号被删除时调用）。

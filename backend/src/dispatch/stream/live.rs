@@ -304,7 +304,7 @@ fn update_first_token_ms(
     started_at: Instant,
     first_token_ms: &mut Option<i64>,
 ) {
-    if first_token_ms.is_none() && decoder.first_output_seen() {
+    if first_token_ms.is_none() && decoder.first_semantic_output_seen() {
         *first_token_ms = Some(elapsed_millis_i64(started_at).max(1));
     }
 }

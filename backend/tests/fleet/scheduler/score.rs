@@ -1,6 +1,8 @@
 use chrono::Utc;
 use codex_proxy_rs::fleet::account::AccountStatus;
-use codex_proxy_rs::fleet::scheduler::{FeedbackStats, ScoreWeights, rank_candidates};
+use codex_proxy_rs::fleet::scheduler::{
+    AttemptFeedback, FeedbackStats, ScoreWeights, rank_candidates,
+};
 
 use crate::support::accounts::test_account;
 
@@ -32,7 +34,7 @@ fn high_error_rate_account_is_penalized() {
     let feedback = FeedbackStats::new();
     // flaky 连续失败，错误率 EWMA 拉高。
     for _ in 0..5 {
-        feedback.report("flaky", false, None);
+        feedback.report_attempt("flaky", AttemptFeedback::FailedBeforeFirstToken);
     }
     let slot_count = |_: &str| 0;
 

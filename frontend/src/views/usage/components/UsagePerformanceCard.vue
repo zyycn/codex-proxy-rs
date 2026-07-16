@@ -33,7 +33,7 @@ const performancePoints = computed<any[]>(() => props.performance.points ?? [])
 
 const viewOptions = [
   { label: '总耗时', value: 'total' },
-  { label: '首 Token', value: 'ttft' },
+  { label: '首字', value: 'firstToken' },
 ]
 
 const percentileLabels = {
@@ -108,10 +108,10 @@ const chartOption = computed<EChartsOption>(() => {
 })
 
 function percentileValue(point: any, percentile: 'p50' | 'p95' | 'p99') {
-  if (activeView.value === 'ttft') {
-    if (percentile === 'p50') return point.ttftP50Ms
-    if (percentile === 'p95') return point.ttftP95Ms
-    return point.ttftP99Ms
+  if (activeView.value === 'firstToken') {
+    if (percentile === 'p50') return point.firstTokenP50Ms
+    if (percentile === 'p95') return point.firstTokenP95Ms
+    return point.firstTokenP99Ms
   }
   if (percentile === 'p50') return point.latencyP50Ms
   if (percentile === 'p95') return point.latencyP95Ms
@@ -172,7 +172,7 @@ function formatTooltip(params: unknown) {
     as="article"
     :padded="false"
     title="响应速度"
-    description="常规、较慢和极慢请求的完成耗时，越低越快"
+    description="总耗时或首字的分位耗时，越低越快"
     header-collapse-at="none"
     header-class="px-5 pt-4"
     body-class="px-5 pt-3 pb-4"
@@ -191,7 +191,7 @@ function formatTooltip(params: unknown) {
           plain
           :title="loading ? '正在加载性能数据' : '暂无性能数据'"
           :description="
-            activeView === 'ttft' ? '当前范围没有首 Token 延迟样本' : '当前范围没有总耗时样本'
+            activeView === 'firstToken' ? '当前范围没有首字耗时样本' : '当前范围没有总耗时样本'
           "
           class="h-66 place-content-center"
         />

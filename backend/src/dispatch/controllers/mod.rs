@@ -51,6 +51,7 @@ use crate::{
         },
     },
     fleet::pool::AccountPoolService,
+    fleet::scheduler::AttemptFeedback,
     upstream::openai::{
         failure::UpstreamFailureFacts,
         protocol::responses::{CodexResponsesRequest, ResponsesSseFailure},
@@ -453,6 +454,18 @@ impl ControllerSet {
             )
             .await;
         }
+        let feedback = if exit.completed {
+            AttemptFeedback::Completed {
+                first_token_ms: nonnegative_u64(exit.response.first_token_ms),
+            }
+        } else {
+            AttemptFeedback::Incomplete {
+                first_token_ms: nonnegative_u64(exit.response.first_token_ms),
+            }
+        };
+        self.account_pool
+            .report_attempt(exit.account_id, feedback)
+            .await;
 
         if successful {
             let _ = best_effort_controller_io(
@@ -657,6 +670,12 @@ impl ControllerSet {
             }),
         )
         .await;
+        self.account_pool
+            .report_attempt(
+                &context.account_id,
+                stream_feedback(summary, context.started_at, context.attempt.started_at()),
+            )
+            .await;
 
         let fallback = usage::StreamUsageExit {
             rate_limit_headers: context.rate_limit_headers.clone(),
@@ -726,7 +745,6 @@ impl ControllerSet {
             }),
         )
         .await;
-
         if !matches!(outcome, FinalOutcome::Cancelled | FinalOutcome::Shutdown) {
             if let Some(classification) = stream_failure.as_ref() {
                 self.apply_stream_policy_failure(&scope, &context.account_id, classification)
@@ -750,6 +768,13 @@ impl ControllerSet {
             usage::UsageController::observe_attempt(&self.account_pool, &scope.usage, observation),
         )
         .await;
+        if let (Some(account), Some(feedback)) =
+            (observation.account.as_ref(), attempt_feedback(observation))
+        {
+            self.account_pool
+                .report_attempt(&account.id, feedback)
+                .await;
+        }
 
         if matches!(
             observation.kind,
@@ -951,6 +976,71 @@ impl ControllerSet {
             }
         }
     }
+}
+
+fn attempt_feedback(observation: &AttemptObservation) -> Option<AttemptFeedback> {
+    observation.attempt.as_ref()?;
+    if matches!(
+        observation.kind,
+        AttemptObservationKind::CompleteResponse(
+            crate::dispatch::lifecycle::contract::CompleteResponseFacts::Completed
+                | crate::dispatch::lifecycle::contract::CompleteResponseFacts::Incomplete,
+        )
+    ) {
+        return None;
+    }
+    Some(AttemptFeedback::FailedBeforeFirstToken)
+}
+
+fn stream_feedback(
+    summary: &crate::dispatch::lifecycle::stream::StreamSummary,
+    request_started_at: Instant,
+    attempt_started_at: Instant,
+) -> AttemptFeedback {
+    let first_token_ms = attempt_first_token_ms(
+        summary.first_token_ms,
+        request_started_at,
+        attempt_started_at,
+    );
+    match summary.terminal {
+        StreamTerminal::Completed { .. } => AttemptFeedback::Completed { first_token_ms },
+        StreamTerminal::Incomplete { .. } => AttemptFeedback::Incomplete { first_token_ms },
+        StreamTerminal::Cancelled | StreamTerminal::DownstreamClosed => AttemptFeedback::Cancelled,
+        StreamTerminal::Shutdown => AttemptFeedback::Shutdown,
+        StreamTerminal::Failed { .. }
+        | StreamTerminal::UpstreamClosed
+        | StreamTerminal::UpstreamError { .. }
+        | StreamTerminal::ProtocolError { .. }
+        | StreamTerminal::CaptureLimitExceeded => {
+            summary
+                .first_token_ms
+                .map_or(AttemptFeedback::FailedBeforeFirstToken, |_| {
+                    AttemptFeedback::FailedAfterFirstToken {
+                        first_token_ms: first_token_ms.unwrap_or(0),
+                    }
+                })
+        }
+    }
+}
+
+fn attempt_first_token_ms(
+    request_first_token_ms: Option<i64>,
+    request_started_at: Instant,
+    attempt_started_at: Instant,
+) -> Option<u64> {
+    let offset_ms = i64::try_from(
+        attempt_started_at
+            .saturating_duration_since(request_started_at)
+            .as_millis(),
+    )
+    .ok()?;
+    request_first_token_ms
+        .and_then(|value| value.checked_sub(offset_ms))
+        .and_then(|value| u64::try_from(value).ok())
+}
+
+fn nonnegative_u64(value: Option<i64>) -> Option<u64> {
+    value.and_then(|value| u64::try_from(value).ok())
 }
 
 fn response_failure(observation: &AttemptObservation) -> Option<&ResponsesSseFailure> {

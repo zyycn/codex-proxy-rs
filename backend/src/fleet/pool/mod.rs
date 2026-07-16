@@ -15,7 +15,7 @@ use thiserror::Error;
 use crate::fleet::quota::{quota_snapshot_limit_reached, quota_snapshot_reset_at};
 use crate::fleet::refresh::{JwtExpiry, jwt_expiry};
 use crate::fleet::scheduler::{
-    AccountScheduler, ScoreWeights,
+    AccountScheduler, AttemptFeedback, ScoreWeights,
     candidates::{self, CandidateFilter, CandidateRequest},
 };
 use crate::fleet::store::AccountStore;
@@ -221,6 +221,11 @@ impl AccountPoolService {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             StdDuration::from_millis(request_interval_ms);
+    }
+
+    /// 回灌一个已经启动的上游 attempt，供 Smart 调度器更新运行时健康反馈。
+    pub async fn report_attempt(&self, account_id: &str, feedback: AttemptFeedback) {
+        self.pool.lock().await.report_attempt(account_id, feedback);
     }
 
     /// 持续接收运行时设置并更新账号池参数。

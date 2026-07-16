@@ -1,5 +1,7 @@
 //! Responses 请求级账号尝试轨迹。
 
+use std::time::Instant;
+
 #[derive(Debug, Default)]
 pub(in crate::dispatch) struct ResponseDispatchTrace {
     next_attempt_index: i64,
@@ -10,6 +12,7 @@ pub(in crate::dispatch) struct ResponseDispatchTrace {
 pub(in crate::dispatch) struct ResponseDispatchAttempt {
     index: i64,
     account_id: String,
+    started_at: Instant,
 }
 
 impl ResponseDispatchTrace {
@@ -20,6 +23,7 @@ impl ResponseDispatchTrace {
         let attempt = ResponseDispatchAttempt {
             index: self.next_attempt_index,
             account_id: account_id.to_string(),
+            started_at: Instant::now(),
         };
         self.next_attempt_index += 1;
         self.attempts.push(attempt.clone());
@@ -38,5 +42,9 @@ impl ResponseDispatchAttempt {
 
     pub(in crate::dispatch) fn account_id(&self) -> &str {
         &self.account_id
+    }
+
+    pub(in crate::dispatch) fn started_at(&self) -> Instant {
+        self.started_at
     }
 }

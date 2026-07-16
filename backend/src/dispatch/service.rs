@@ -220,10 +220,7 @@ impl ResponseDispatchService {
                 requested_model,
                 started_at,
             },
-            AttemptMode::Complete {
-                started_at,
-                tuple_schema,
-            },
+            AttemptMode::Complete { tuple_schema },
             request,
             controller_scope,
             candidates,

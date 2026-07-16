@@ -26,7 +26,7 @@ use tungstenite::{
 use crate::infra::time::china_filename_timestamp_millis;
 use crate::upstream::openai::protocol::events::{self, TokenUsage};
 use crate::upstream::openai::protocol::responses::{
-    CodexResponsesRequest, TransportRequirement, response_body_has_first_output,
+    CodexResponsesRequest, TransportRequirement, response_body_has_semantic_output,
     transport_requirement,
 };
 use crate::upstream::openai::protocol::sse::SseError;

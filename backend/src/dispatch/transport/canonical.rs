@@ -6,8 +6,8 @@ use serde_json::Value;
 use crate::upstream::openai::protocol::{
     events::{TokenUsage, extract_usage},
     responses::{
-        CollectedResponse, ResponsesSseFailure, StreamCommitPolicy,
-        reconvert_responses_sse_event_tuple_values,
+        CollectedResponse, ResponseEventSignals, ResponsesSseFailure, StreamCommitPolicy,
+        reconvert_responses_sse_event_tuple_values, response_event_signals,
     },
     sse::{
         MAX_SSE_EVENT_BUFFER_BYTES, SseError, encode_sse_event, parse_sse_events, sse_frame_end,
@@ -123,34 +123,8 @@ impl CanonicalResponseEvent {
             .or_else(|| extract_usage(&self.data))
     }
 
-    pub(in crate::dispatch) fn has_first_output(&self) -> bool {
-        match self.event_type() {
-            Some(
-                "response.output_text.delta"
-                | "response.reasoning_summary_text.delta"
-                | "response.reasoning_text.delta"
-                | "response.function_call_arguments.delta"
-                | "response.custom_tool_call_input.delta",
-            ) => self
-                .data
-                .get("delta")
-                .and_then(Value::as_str)
-                .is_some_and(|value| !value.is_empty()),
-            Some("response.output_text.done") => self
-                .data
-                .get("text")
-                .and_then(Value::as_str)
-                .is_some_and(|value| !value.is_empty()),
-            Some("response.function_call_arguments.done") => self
-                .data
-                .get("arguments")
-                .and_then(Value::as_str)
-                .is_some_and(|value| !value.is_empty()),
-            Some("response.output_item.done") => {
-                self.data.get("item").is_some_and(Value::is_object)
-            }
-            _ => false,
-        }
+    pub(in crate::dispatch) fn signals(&self) -> ResponseEventSignals {
+        response_event_signals(self.event_type(), &self.data)
     }
 
     pub(in crate::dispatch) fn terminal(&self) -> Option<CanonicalStreamTerminal> {
@@ -230,7 +204,7 @@ impl CanonicalStreamBatch {
     /// 同一上游 chunk 可能同时包含输出与终态，事件顺序不能被网络分块抹掉。
     pub(in crate::dispatch) fn first_failure(&self) -> Option<ResponsesSseFailure> {
         for event in self.chunks.iter().flat_map(|chunk| chunk.events()) {
-            if event.has_first_output() {
+            if event.signals().semantic_output {
                 return None;
             }
             if let Some(terminal) = event.terminal() {
@@ -250,7 +224,7 @@ pub(in crate::dispatch) struct CanonicalStreamDecoder {
     tuple_schema: Option<Value>,
     pending: Vec<u8>,
     forwardable_frame_seen: bool,
-    first_output_seen: bool,
+    first_semantic_output_seen: bool,
     terminal: Option<CanonicalStreamTerminal>,
     transport_done_seen: bool,
     completed_usage: Option<TokenUsage>,
@@ -264,7 +238,7 @@ impl CanonicalStreamDecoder {
             tuple_schema,
             pending: Vec::new(),
             forwardable_frame_seen: false,
-            first_output_seen: false,
+            first_semantic_output_seen: false,
             terminal: None,
             transport_done_seen: false,
             completed_usage: None,
@@ -333,15 +307,15 @@ impl CanonicalStreamDecoder {
         self.transport_done_seen
     }
 
-    pub(in crate::dispatch) fn first_output_seen(&self) -> bool {
-        self.first_output_seen
+    pub(in crate::dispatch) fn first_semantic_output_seen(&self) -> bool {
+        self.first_semantic_output_seen
     }
 
     pub(in crate::dispatch) fn commit_boundary_reached(&self, policy: StreamCommitPolicy) -> bool {
         match policy {
             StreamCommitPolicy::FirstForwardableEvent => self.forwardable_frame_seen,
             StreamCommitPolicy::UntilOutputOrTerminal => {
-                self.first_output_seen || self.terminal.is_some()
+                self.first_semantic_output_seen || self.terminal.is_some()
             }
         }
     }
@@ -406,7 +380,8 @@ impl CanonicalStreamDecoder {
     }
 
     fn observe(&mut self, event: &CanonicalResponseEvent) {
-        self.first_output_seen |= event.has_first_output();
+        let signals = event.signals();
+        self.first_semantic_output_seen |= signals.semantic_output;
         if let Some(response_id) = event.response_id() {
             self.last_response_id = Some(response_id.to_string());
         }

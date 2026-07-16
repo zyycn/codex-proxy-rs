@@ -50,13 +50,8 @@ use super::{
 };
 
 pub(in crate::dispatch) enum AttemptMode {
-    Complete {
-        started_at: Instant,
-        tuple_schema: Option<Value>,
-    },
-    Stream {
-        tuple_schema: Option<Value>,
-    },
+    Complete { tuple_schema: Option<Value> },
+    Stream { tuple_schema: Option<Value> },
 }
 
 pub(in crate::dispatch) struct AttemptRunnerDependencies<'a> {
@@ -288,15 +283,12 @@ impl<'a> AttemptRunner<'a> {
         };
 
         match &self.mode {
-            AttemptMode::Complete {
-                started_at,
-                tuple_schema,
-            } => {
+            AttemptMode::Complete { tuple_schema } => {
                 let result = create_response_with_account(
                     upstream_context,
                     &account_scoped_request,
                     prepared_transport,
-                    *started_at,
+                    attempt.started_at(),
                 )
                 .await;
                 let attempt_request = account_scoped_request.into_request();
@@ -420,7 +412,7 @@ impl<'a> AttemptRunner<'a> {
                             body,
                             &mut decoder,
                             attempt_request.stream_commit_policy,
-                            self.dependencies.started_at,
+                            attempt.started_at(),
                         )
                         .await
                         {
