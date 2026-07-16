@@ -70,8 +70,12 @@ pub struct CodexResponsesRequest {
     pub parent_thread_id: Option<String>,
     /// 已知 previous response 的持久化范围，仅用于本地 transport 校验。
     pub previous_response_scope: Option<PreviousResponseScope>,
-    /// 当前下游 WebSocket 持有的完整历史前缀，仅用于连接内换号恢复。
-    pub local_replay_input: Option<Arc<Vec<Value>>>,
+    /// 当前下游 WebSocket 持有的带来源类型历史，仅用于连接内换号恢复。
+    #[doc(hidden)]
+    pub local_replay_transcript: Option<Arc<LocalReplayTranscript>>,
+    /// `local_replay_transcript` 最后一次成功响应的账号。
+    #[doc(hidden)]
+    pub local_replay_account_id: Option<String>,
     /// 当前下游连接能否在本轮完成后形成完整 canonical replay snapshot。
     pub local_replay_available: bool,
     /// 流式响应在交给下游前的本地提交策略。
@@ -94,6 +98,41 @@ pub enum PreviousResponseScope {
 pub enum StreamCommitPolicy {
     FirstForwardableEvent,
     UntilOutputOrTerminal,
+}
+
+/// 连接内重放 transcript；输入与上游输出在类型层面保持分离。
+#[doc(hidden)]
+#[derive(Debug, Clone, Default)]
+pub struct LocalReplayTranscript {
+    pub(crate) items: Vec<LocalReplayItem>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum LocalReplayItem {
+    ClientInput(Value),
+    SanitizedOutput(Value),
+    AccountOutput { account_id: String, item: Value },
+}
+
+impl LocalReplayTranscript {
+    /// 构造仅含客户端输入的 transcript。
+    #[doc(hidden)]
+    pub fn from_client_input(input: Vec<Value>) -> Self {
+        Self {
+            items: input
+                .into_iter()
+                .map(LocalReplayItem::ClientInput)
+                .collect(),
+        }
+    }
+
+    pub(crate) fn values(&self) -> impl DoubleEndedIterator<Item = &Value> {
+        self.items.iter().map(|item| match item {
+            LocalReplayItem::ClientInput(value)
+            | LocalReplayItem::SanitizedOutput(value)
+            | LocalReplayItem::AccountOutput { item: value, .. } => value,
+        })
+    }
 }
 
 /// Responses 请求携带的 Codex 运行语义。
@@ -633,7 +672,8 @@ impl CodexResponsesRequest {
             codex_window_id: None,
             parent_thread_id: None,
             previous_response_scope: None,
-            local_replay_input: None,
+            local_replay_transcript: None,
+            local_replay_account_id: None,
             local_replay_available: false,
             stream_commit_policy: StreamCommitPolicy::FirstForwardableEvent,
         }
@@ -845,10 +885,10 @@ impl CodexResponsesRequest {
     }
 
     fn latest_multi_agent_mode(&self) -> Option<&str> {
-        latest_multi_agent_mode(self.input()).or_else(|| {
-            self.local_replay_input
+        latest_multi_agent_mode(self.input().iter()).or_else(|| {
+            self.local_replay_transcript
                 .as_deref()
-                .and_then(|input| latest_multi_agent_mode(input.as_slice()))
+                .and_then(|transcript| latest_multi_agent_mode(transcript.values()))
         })
     }
 
@@ -895,8 +935,10 @@ fn non_empty_owned_string(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
-fn latest_multi_agent_mode(input: &[Value]) -> Option<&str> {
-    input.iter().rev().find_map(|item| {
+fn latest_multi_agent_mode<'a>(
+    input: impl DoubleEndedIterator<Item = &'a Value>,
+) -> Option<&'a str> {
+    input.rev().find_map(|item| {
         if item.get("role").and_then(Value::as_str) != Some("developer") {
             return None;
         }

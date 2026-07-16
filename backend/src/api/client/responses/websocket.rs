@@ -131,8 +131,10 @@ struct ResponsesWebSocketSession {
     connection_id: String,
 }
 
-#[derive(Default)]
 struct ConnectionTranscriptCollector {
+    account_id: String,
+    request_input: Vec<Value>,
+    continued_from_previous_response: bool,
     completed_items: Vec<Value>,
     completed: Option<ConnectionTranscriptFacts>,
 }
@@ -143,6 +145,20 @@ enum ForwardDispatchOutcome {
 }
 
 impl ConnectionTranscriptCollector {
+    fn new(
+        account_id: String,
+        request_input: Vec<Value>,
+        continued_from_previous_response: bool,
+    ) -> Self {
+        Self {
+            account_id,
+            request_input,
+            continued_from_previous_response,
+            completed_items: Vec::new(),
+            completed: None,
+        }
+    }
+
     fn observe(&mut self, event: &CanonicalResponseEvent) {
         match event.event_type() {
             Some("response.output_item.done") => {
@@ -166,7 +182,13 @@ impl ConnectionTranscriptCollector {
                     .filter(|output| !output.is_empty())
                     .cloned()
                     .unwrap_or_else(|| self.completed_items.clone());
-                self.completed = Some(ConnectionTranscriptFacts::new(response_id, output));
+                self.completed = Some(ConnectionTranscriptFacts::new(
+                    self.account_id.clone(),
+                    self.request_input.clone(),
+                    self.continued_from_previous_response,
+                    response_id,
+                    output,
+                ));
             }
             _ => {}
         }
@@ -346,6 +368,9 @@ async fn forward_dispatch_stream(
     request_id: &str,
 ) -> ForwardDispatchOutcome {
     let ResponseDispatchStream {
+        account_id,
+        request_input,
+        continued_from_previous_response,
         body,
         mut canonical_events,
         response_headers,
@@ -361,7 +386,11 @@ async fn forward_dispatch_stream(
 
     let mut body = body;
     let mut terminal_sent = false;
-    let mut completed = ConnectionTranscriptCollector::default();
+    let mut completed = ConnectionTranscriptCollector::new(
+        account_id,
+        request_input,
+        continued_from_previous_response,
+    );
     loop {
         let next = if terminal_sent {
             ActiveResponseInput::Upstream(body.next().await)

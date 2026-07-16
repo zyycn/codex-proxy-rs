@@ -79,6 +79,9 @@ pub type ResponseBodyStream =
 
 /// Responses live SSE 调度结果。
 pub struct ResponseDispatchStream {
+    pub(crate) account_id: String,
+    pub(crate) request_input: Vec<Value>,
+    pub(crate) continued_from_previous_response: bool,
     pub body: ResponseBodyStream,
     pub(crate) canonical_events: tokio::sync::mpsc::UnboundedReceiver<Vec<CanonicalResponseEvent>>,
     pub response_headers: Vec<(String, String)>,
@@ -102,13 +105,25 @@ pub(crate) struct ConnectionReplayPlan {
 
 /// API 从 canonical 响应事件采集的原始 transcript 事实。
 pub(crate) struct ConnectionTranscriptFacts {
+    account_id: String,
+    request_input: Vec<Value>,
+    continued_from_previous_response: bool,
     response_id: String,
     output: Vec<Value>,
 }
 
 impl ConnectionTranscriptFacts {
-    pub(crate) fn new(response_id: String, output: Vec<Value>) -> Self {
+    pub(crate) fn new(
+        account_id: String,
+        request_input: Vec<Value>,
+        continued_from_previous_response: bool,
+        response_id: String,
+        output: Vec<Value>,
+    ) -> Self {
         Self {
+            account_id,
+            request_input,
+            continued_from_previous_response,
             response_id,
             output,
         }
@@ -168,6 +183,9 @@ impl ResponseDispatchService {
             plan.inner,
             transcript.response_id,
             transcript.output,
+            transcript.account_id,
+            transcript.request_input,
+            transcript.continued_from_previous_response,
         );
     }
 
