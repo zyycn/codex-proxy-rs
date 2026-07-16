@@ -92,20 +92,14 @@ pub(super) struct PreparedHistoryRequest {
 pub(in crate::dispatch) struct HistoryController;
 
 pub(in crate::dispatch) fn sanitize_cross_account_input(request: &mut CodexResponsesRequest) {
-    if !request.input().iter().any(is_known_response_output_item) {
+    if request.input().is_empty() {
         return;
     }
     let input = request
         .input()
         .iter()
         .cloned()
-        .filter_map(|item| {
-            if is_known_response_output_item(&item) {
-                sanitize_cross_account_output(item)
-            } else {
-                Some(item)
-            }
-        })
+        .filter_map(sanitize_cross_account_item)
         .collect();
     request.set_input(input);
 }
@@ -501,7 +495,7 @@ fn transcript_for_turn(
     account_id: &str,
 ) -> LocalReplayTranscript {
     let mut transcript = LocalReplayTranscript::default();
-    append_client_input(&mut transcript, input, account_id);
+    append_client_input(&mut transcript, input);
     append_account_output(&mut transcript, output, account_id);
     transcript
 }
@@ -513,33 +507,14 @@ fn append_turn(
     account_id: &str,
 ) {
     project_transcript_to_account(transcript, account_id);
-    append_client_input(transcript, input, account_id);
+    append_client_input(transcript, input);
     append_account_output(transcript, output, account_id);
 }
 
-fn append_client_input(
-    transcript: &mut LocalReplayTranscript,
-    input: Vec<Value>,
-    account_id: &str,
-) {
-    transcript.items.extend(input.into_iter().map(|item| {
-        if is_known_response_output_item(&item) {
-            if has_account_bound_output_state(&item) {
-                LocalReplayItem::AccountOutput {
-                    account_id: account_id.to_string(),
-                    item,
-                }
-            } else {
-                LocalReplayItem::SanitizedOutput(item)
-            }
-        } else {
-            LocalReplayItem::ClientInput(item)
-        }
-    }));
-}
-
-fn has_account_bound_output_state(item: &Value) -> bool {
-    item.get("id").is_some() || item.get("encrypted_content").is_some()
+fn append_client_input(transcript: &mut LocalReplayTranscript, input: Vec<Value>) {
+    transcript
+        .items
+        .extend(input.into_iter().map(LocalReplayItem::ClientInput));
 }
 
 fn append_account_output(
@@ -566,7 +541,7 @@ fn project_transcript_to_account(transcript: &mut LocalReplayTranscript, account
                 account_id: owner,
                 item,
             } if owner != account_id => {
-                sanitize_cross_account_output(item).map(LocalReplayItem::SanitizedOutput)
+                sanitize_cross_account_item(item).map(LocalReplayItem::SanitizedOutput)
             }
             item => Some(item),
         })
@@ -586,7 +561,7 @@ fn replay_input_for_account(transcript: &LocalReplayTranscript, account_id: &str
                 item,
             } if owner == account_id => Some(without_output_id(item.clone())),
             LocalReplayItem::AccountOutput { item, .. } => {
-                sanitize_cross_account_output(item.clone())
+                sanitize_cross_account_item(item.clone())
             }
         })
         .collect()
@@ -599,7 +574,7 @@ fn without_output_id(mut item: Value) -> Value {
     item
 }
 
-fn sanitize_cross_account_output(mut item: Value) -> Option<Value> {
+fn sanitize_cross_account_item(mut item: Value) -> Option<Value> {
     if let Value::Object(object) = &mut item {
         if matches!(
             object.get("type").and_then(Value::as_str),
@@ -611,35 +586,6 @@ fn sanitize_cross_account_output(mut item: Value) -> Option<Value> {
         object.remove("encrypted_content");
     }
     Some(item)
-}
-
-fn is_known_response_output_item(item: &Value) -> bool {
-    let item_type = item.get("type").and_then(Value::as_str);
-    if item_type == Some("message") {
-        return item.get("role").and_then(Value::as_str) == Some("assistant");
-    }
-    matches!(
-        item_type,
-        Some(
-            "agent_message"
-                | "reasoning"
-                | "local_shell_call"
-                | "function_call"
-                | "tool_search_call"
-                | "custom_tool_call"
-                | "computer_call"
-                | "web_search_call"
-                | "file_search_call"
-                | "code_interpreter_call"
-                | "image_generation_call"
-                | "mcp_call"
-                | "mcp_list_tools"
-                | "mcp_approval_request"
-                | "compaction"
-                | "compaction_summary"
-                | "context_compaction"
-        )
-    )
 }
 
 fn is_continuation_busy(facts: &UpstreamFailureFacts) -> bool {

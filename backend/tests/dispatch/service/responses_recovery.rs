@@ -2722,9 +2722,15 @@ async fn responses_failover_should_replace_account_identity_and_preserve_session
     assert!(secondary.headers.get("x-codex-turn-state").is_none());
     assert_eq!(secondary_metadata["safe"], "preserved");
     assert_eq!(
-        secondary_body["input"][0], primary_body["input"][0],
-        "ordinary client input must remain verbatim"
+        secondary_body["input"][0]["role"],
+        primary_body["input"][0]["role"]
     );
+    assert_eq!(
+        secondary_body["input"][0]["content"],
+        primary_body["input"][0]["content"]
+    );
+    assert_eq!(primary_body["input"][0]["id"], "client_user_message_id");
+    assert!(secondary_body["input"][0].get("id").is_none());
     assert_eq!(
         secondary_body["input"][0]["tool_arguments"]["id"],
         "client_tool_argument_id"
