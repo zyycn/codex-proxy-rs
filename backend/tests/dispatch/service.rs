@@ -1098,6 +1098,35 @@ pub(crate) async fn accept_websocket_with_authorization(
     .unwrap()
 }
 
+pub(crate) async fn accept_websocket_with_request_headers(
+    stream: TcpStream,
+    expected_authorization: &'static str,
+) -> (
+    tokio_tungstenite::WebSocketStream<TcpStream>,
+    tokio_tungstenite::tungstenite::http::HeaderMap,
+) {
+    let captured_headers = Arc::new(Mutex::new(None));
+    let captured_headers_for_callback = Arc::clone(&captured_headers);
+    let websocket = accept_hdr_async(stream, move |request, _response| {
+        assert_eq!(
+            request
+                .headers()
+                .get("authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_authorization)
+        );
+        *captured_headers_for_callback.lock().unwrap() = Some(request.headers().clone());
+    })
+    .await
+    .unwrap();
+    let headers = captured_headers
+        .lock()
+        .unwrap()
+        .take()
+        .expect("websocket request headers should be captured");
+    (websocket, headers)
+}
+
 async fn reject_next_websocket_upgrade(
     listener: &TcpListener,
     expected_authorization: &str,

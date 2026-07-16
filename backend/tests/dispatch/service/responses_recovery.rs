@@ -2506,7 +2506,24 @@ async fn responses_failover_should_replace_account_identity_and_preserve_session
                 .body(Body::from(
                     json!({
                         "model": "gpt-5.5",
-                        "input": [{"role": "user", "content": "Replay without identity pollution"}],
+                        "input": [
+                            {
+                                "role": "user",
+                                "content": "Replay without identity pollution",
+                                "id": "client_user_message_id",
+                                "tool_arguments": {"id": "client_tool_argument_id"}
+                            },
+                            {
+                                "type": "reasoning",
+                                "id": "reasoning_account_primary",
+                                "encrypted_content": "encrypted_reasoning_account_primary",
+                                "summary": [{
+                                    "type": "summary_text",
+                                    "id": "nested_reasoning_summary_id",
+                                    "text": "semantic summary"
+                                }]
+                            }
+                        ],
                         "stream": false,
                         "use_websocket": false,
                         "prompt_cache_key": "cache-client",
@@ -2704,7 +2721,29 @@ async fn responses_failover_should_replace_account_identity_and_preserve_session
     assert!(secondary_metadata.get("x-codex-turn-state").is_none());
     assert!(secondary.headers.get("x-codex-turn-state").is_none());
     assert_eq!(secondary_metadata["safe"], "preserved");
-    assert_eq!(secondary_body["input"], primary_body["input"]);
+    assert_eq!(
+        secondary_body["input"][0], primary_body["input"][0],
+        "ordinary client input must remain verbatim"
+    );
+    assert_eq!(
+        secondary_body["input"][0]["tool_arguments"]["id"],
+        "client_tool_argument_id"
+    );
+    assert_eq!(primary_body["input"][1]["id"], "reasoning_account_primary");
+    assert_eq!(
+        primary_body["input"][1]["encrypted_content"],
+        "encrypted_reasoning_account_primary"
+    );
+    assert!(secondary_body["input"][1].get("id").is_none());
+    assert!(
+        secondary_body["input"][1]
+            .get("encrypted_content")
+            .is_none()
+    );
+    assert_eq!(
+        secondary_body["input"][1]["summary"][0]["id"],
+        "nested_reasoning_summary_id"
+    );
     assert!(secondary_body.get("previous_response_id").is_none());
 }
 

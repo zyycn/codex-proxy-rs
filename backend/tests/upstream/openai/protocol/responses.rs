@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use codex_proxy_rs::upstream::openai::protocol::responses::LocalReplayTranscript;
 use serde_json::Value;
 
 use super::*;
@@ -536,9 +537,10 @@ fn responses_request_semantics_should_read_mode_from_local_replay_history() {
     });
     let mut request =
         build_codex_request(body.as_object().unwrap().clone(), &HeaderMap::new(), None);
-    request.local_replay_input = Some(Arc::new(vec![developer_multi_agent_mode(
-        "Proactive multi-agent delegation is active.",
-    )]));
+    request.local_replay_transcript =
+        Some(Arc::new(LocalReplayTranscript::from_client_input(vec![
+            developer_multi_agent_mode("Proactive multi-agent delegation is active."),
+        ])));
 
     assert_eq!(request.semantics().reasoning_preset, Some("ultra"));
 }

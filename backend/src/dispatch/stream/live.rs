@@ -57,6 +57,9 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
     body: CodexBackendSseStream,
     shutdown: CancellationToken,
 ) -> ResponseDispatchStream {
+    let account_id = finalizer.account_id().to_string();
+    let request_input = finalizer.request_input().to_vec();
+    let continued_from_previous_response = finalizer.continued_from_previous_response();
     let response_headers = finalizer.response_headers().to_vec();
     let started_at = finalizer.started_at();
     let (sender, receiver) = mpsc::channel(8);
@@ -81,6 +84,9 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
     });
 
     ResponseDispatchStream {
+        account_id,
+        request_input,
+        continued_from_previous_response,
         body: Box::pin(MpscResponseBodyStream {
             receiver,
             cancel: Some(cancel_sender),

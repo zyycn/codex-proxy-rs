@@ -16,7 +16,10 @@ use crate::{
     },
     upstream::openai::{
         failure::{UpstreamFailureFacts, UpstreamFailureKind},
-        protocol::responses::{CodexResponsesRequest, PreviousResponseScope, StreamCommitPolicy},
+        protocol::responses::{
+            CodexResponsesRequest, LocalReplayItem, LocalReplayTranscript, PreviousResponseScope,
+            StreamCommitPolicy,
+        },
         transport::CodexBackendTransport,
         transport::websocket::PreviousResponseUnavailableReason,
     },
@@ -38,7 +41,8 @@ enum HistorySource {
 pub(super) struct HistoryState {
     source: HistorySource,
     managed_entry: Option<SessionAffinityEntry>,
-    local_replay_input: Option<Arc<Vec<Value>>>,
+    local_replay_transcript: Option<Arc<LocalReplayTranscript>>,
+    local_replay_account_id: Option<String>,
     external_attempted_account_id: Option<String>,
     replay_owner_account: bool,
 }
@@ -46,7 +50,8 @@ pub(super) struct HistoryState {
 #[derive(Default)]
 pub(in crate::dispatch) struct ConnectionReplaySnapshot {
     last_response_id: Option<String>,
-    input: Option<Arc<Vec<Value>>>,
+    account_id: Option<String>,
+    transcript: Option<Arc<LocalReplayTranscript>>,
 }
 
 pub(in crate::dispatch) struct ConnectionReplayPlan {
@@ -54,15 +59,56 @@ pub(in crate::dispatch) struct ConnectionReplayPlan {
 }
 
 enum ConnectionReplayUpdate {
-    Replace(Vec<Value>),
-    Append {
-        history: Arc<Vec<Value>>,
-        input: Vec<Value>,
-    },
+    Replace,
+    Append { history: Arc<LocalReplayTranscript> },
     Unavailable,
 }
 
+/// 已确认来源和目标账号不同的完整 transcript 重放边界。
+pub(in crate::dispatch) struct CrossAccountReplay {
+    source_account_id: String,
+    target_account_id: String,
+}
+
+impl CrossAccountReplay {
+    fn between(source_account_id: &str, target_account_id: &str) -> Option<Self> {
+        (source_account_id != target_account_id).then(|| Self {
+            source_account_id: source_account_id.to_string(),
+            target_account_id: target_account_id.to_string(),
+        })
+    }
+
+    pub(in crate::dispatch) fn validate_target(&self, account_id: &str) {
+        debug_assert_ne!(self.source_account_id, self.target_account_id);
+        debug_assert_eq!(self.target_account_id, account_id);
+    }
+}
+
+pub(super) struct PreparedHistoryRequest {
+    pub(super) request: CodexResponsesRequest,
+    pub(super) cross_account_replay: Option<CrossAccountReplay>,
+}
+
 pub(in crate::dispatch) struct HistoryController;
+
+pub(in crate::dispatch) fn sanitize_cross_account_input(request: &mut CodexResponsesRequest) {
+    if !request.input().iter().any(is_known_response_output_item) {
+        return;
+    }
+    let input = request
+        .input()
+        .iter()
+        .cloned()
+        .filter_map(|item| {
+            if is_known_response_output_item(&item) {
+                sanitize_cross_account_output(item)
+            } else {
+                Some(item)
+            }
+        })
+        .collect();
+    request.set_input(input);
+}
 
 impl HistoryController {
     pub(in crate::dispatch) fn new_connection_replay_snapshot() -> ConnectionReplaySnapshot {
@@ -73,28 +119,29 @@ impl HistoryController {
         snapshot: &ConnectionReplaySnapshot,
         request: &mut CodexResponsesRequest,
     ) -> ConnectionReplayPlan {
-        let turn_input = request.input().to_vec();
         let update = match request.previous_response_id() {
             None => {
-                request.local_replay_input = None;
-                ConnectionReplayUpdate::Replace(turn_input)
+                clear_local_replay(request);
+                ConnectionReplayUpdate::Replace
             }
             Some(previous_response_id)
                 if snapshot.last_response_id.as_deref() == Some(previous_response_id) =>
             {
-                if let Some(history) = snapshot.input.as_ref() {
-                    request.local_replay_input = Some(Arc::clone(history));
+                if let (Some(account_id), Some(history)) =
+                    (snapshot.account_id.as_ref(), snapshot.transcript.as_ref())
+                {
+                    request.local_replay_transcript = Some(Arc::clone(history));
+                    request.local_replay_account_id = Some(account_id.clone());
                     ConnectionReplayUpdate::Append {
                         history: Arc::clone(history),
-                        input: turn_input,
                     }
                 } else {
-                    request.local_replay_input = None;
+                    clear_local_replay(request);
                     ConnectionReplayUpdate::Unavailable
                 }
             }
             Some(_) => {
-                request.local_replay_input = None;
+                clear_local_replay(request);
                 ConnectionReplayUpdate::Unavailable
             }
         };
@@ -107,18 +154,38 @@ impl HistoryController {
         plan: ConnectionReplayPlan,
         response_id: String,
         output: Vec<Value>,
+        account_id: String,
+        request_input: Vec<Value>,
+        continued_from_previous_response: bool,
     ) {
         snapshot.last_response_id = Some(response_id);
+        snapshot.account_id = Some(account_id.clone());
         match plan.update {
-            ConnectionReplayUpdate::Replace(input) => {
-                snapshot.input = Some(Arc::new(sanitized_transcript(input, output)));
+            ConnectionReplayUpdate::Replace => {
+                snapshot.transcript = Some(Arc::new(transcript_for_turn(
+                    request_input,
+                    output,
+                    &account_id,
+                )));
             }
-            ConnectionReplayUpdate::Append { mut history, input } => {
-                let mut turn = sanitized_transcript(input, output);
-                Arc::make_mut(&mut history).append(&mut turn);
-                snapshot.input = Some(history);
+            ConnectionReplayUpdate::Append { mut history } => {
+                if continued_from_previous_response {
+                    append_turn(
+                        Arc::make_mut(&mut history),
+                        request_input,
+                        output,
+                        &account_id,
+                    );
+                    snapshot.transcript = Some(history);
+                } else {
+                    snapshot.transcript = Some(Arc::new(transcript_for_turn(
+                        request_input,
+                        output,
+                        &account_id,
+                    )));
+                }
             }
-            ConnectionReplayUpdate::Unavailable => snapshot.input = None,
+            ConnectionReplayUpdate::Unavailable => snapshot.transcript = None,
         }
     }
 
@@ -145,51 +212,67 @@ impl HistoryController {
                 None
             }
         };
-        let local_replay_input = request.local_replay_input.clone();
-        let source = match (&managed_entry, &local_replay_input) {
+        let (local_replay_transcript, local_replay_account_id) = match (
+            request.local_replay_transcript.clone(),
+            request.local_replay_account_id.clone(),
+        ) {
+            (Some(transcript), Some(account_id)) => (Some(transcript), Some(account_id)),
+            (None, None) => (None, None),
+            _ => {
+                tracing::warn!(
+                    previous_response_id,
+                    "Ignoring incomplete connection-local replay provenance"
+                );
+                (None, None)
+            }
+        };
+        let has_complete_local_replay = local_replay_transcript.is_some();
+        let source = match (&managed_entry, has_complete_local_replay) {
             (Some(_), _) => HistorySource::Managed,
-            (None, Some(_)) => HistorySource::ConnectionLocal,
-            (None, None) => HistorySource::ExternalUnknown,
+            (None, true) => HistorySource::ConnectionLocal,
+            (None, false) => HistorySource::ExternalUnknown,
         };
         HistoryState {
             source,
             managed_entry,
-            local_replay_input,
+            local_replay_transcript,
+            local_replay_account_id,
             external_attempted_account_id: None,
             replay_owner_account: false,
         }
     }
 
     pub(super) fn preferred_account_id(state: &HistoryState) -> Option<&str> {
-        state
-            .managed_entry
-            .as_ref()
-            .map(|entry| entry.account_id.as_str())
+        state.local_replay_account_id.as_deref().or_else(|| {
+            state
+                .managed_entry
+                .as_ref()
+                .map(|entry| entry.account_id.as_str())
+        })
     }
 
     pub(super) fn prepare_attempt(
         state: &mut HistoryState,
         request: &CodexResponsesRequest,
         account_id: &str,
-    ) -> Result<CodexResponsesRequest, String> {
+    ) -> Result<PreparedHistoryRequest, String> {
         let prepared = match state.source {
-            HistorySource::None => Some(request.clone()),
+            HistorySource::None => Some(PreparedHistoryRequest::plain(request.clone())),
             HistorySource::ExternalUnknown => {
                 match state.external_attempted_account_id.as_deref() {
                     None => {
                         state.external_attempted_account_id = Some(account_id.to_string());
-                        Some(external_history_request(request))
+                        Some(PreparedHistoryRequest::plain(external_history_request(
+                            request,
+                        )))
                     }
-                    Some(first_account_id) if first_account_id == account_id => {
-                        Some(external_history_request(request))
-                    }
+                    Some(first_account_id) if first_account_id == account_id => Some(
+                        PreparedHistoryRequest::plain(external_history_request(request)),
+                    ),
                     Some(_) => None,
                 }
             }
-            HistorySource::ConnectionLocal => state
-                .local_replay_input
-                .as_deref()
-                .map(|replay_input| full_replay_request(request, replay_input)),
+            HistorySource::ConnectionLocal => full_replay_from_state(state, request, account_id),
             HistorySource::Managed => prepare_managed_attempt(state, request, account_id),
         };
         prepared.ok_or_else(|| CROSS_ACCOUNT_HISTORY_UNAVAILABLE_MESSAGE.to_string())
@@ -213,7 +296,7 @@ impl HistoryController {
                 .is_some_and(|account_id| Self::can_retry_same_account(state, account_id)),
             can_retry_next_candidate: match state.source {
                 HistorySource::None | HistorySource::ConnectionLocal => true,
-                HistorySource::Managed => state.local_replay_input.is_some(),
+                HistorySource::Managed => state.local_replay_transcript.is_some(),
                 HistorySource::ExternalUnknown => false,
             },
         }
@@ -294,7 +377,7 @@ impl HistoryController {
             return false;
         };
         entry.account_id == account_id
-            && state.local_replay_input.is_some()
+            && state.local_replay_transcript.is_some()
             && !state.replay_owner_account
     }
 }
@@ -303,10 +386,10 @@ fn prepare_managed_attempt(
     state: &HistoryState,
     request: &CodexResponsesRequest,
     account_id: &str,
-) -> Option<CodexResponsesRequest> {
+) -> Option<PreparedHistoryRequest> {
     let entry = state.managed_entry.as_ref()?;
     if entry.account_id != account_id || state.replay_owner_account {
-        return replay_for_conversation(state, request, &entry.conversation_id);
+        return replay_for_conversation(state, request, account_id, &entry.conversation_id);
     }
 
     match entry.continuation_scope {
@@ -320,10 +403,10 @@ fn prepare_managed_attempt(
             if prepared.turn_state.as_deref().is_none_or(str::is_empty) {
                 prepared.turn_state.clone_from(&entry.turn_state);
             }
-            Some(prepared)
+            Some(PreparedHistoryRequest::plain(prepared))
         }
         PreviousResponseScope::ReplayRequired => {
-            replay_for_conversation(state, request, &entry.conversation_id)
+            replay_for_conversation(state, request, account_id, &entry.conversation_id)
         }
         PreviousResponseScope::Unavailable => None,
     }
@@ -332,13 +415,28 @@ fn prepare_managed_attempt(
 fn replay_for_conversation(
     state: &HistoryState,
     request: &CodexResponsesRequest,
+    account_id: &str,
     conversation_id: &str,
-) -> Option<CodexResponsesRequest> {
-    state.local_replay_input.as_deref().map(|replay_input| {
-        let mut prepared = full_replay_request(request, replay_input);
-        prepared.local_conversation_id = Some(conversation_id.to_string());
+) -> Option<PreparedHistoryRequest> {
+    full_replay_from_state(state, request, account_id).map(|mut prepared| {
+        prepared.request.local_conversation_id = Some(conversation_id.to_string());
         prepared
     })
+}
+
+fn full_replay_from_state(
+    state: &HistoryState,
+    request: &CodexResponsesRequest,
+    account_id: &str,
+) -> Option<PreparedHistoryRequest> {
+    let transcript = state.local_replay_transcript.as_deref()?;
+    let source_account_id = state.local_replay_account_id.as_deref()?;
+    Some(full_replay_request(
+        request,
+        transcript,
+        source_account_id,
+        account_id,
+    ))
 }
 
 impl HistoryState {
@@ -346,7 +444,8 @@ impl HistoryState {
         Self {
             source: HistorySource::None,
             managed_entry: None,
-            local_replay_input: None,
+            local_replay_transcript: None,
+            local_replay_account_id: None,
             external_attempted_account_id: None,
             replay_owner_account: false,
         }
@@ -363,41 +462,184 @@ fn external_history_request(original: &CodexResponsesRequest) -> CodexResponsesR
 
 fn full_replay_request(
     original: &CodexResponsesRequest,
-    replay_input: &[Value],
-) -> CodexResponsesRequest {
+    transcript: &LocalReplayTranscript,
+    source_account_id: &str,
+    target_account_id: &str,
+) -> PreparedHistoryRequest {
+    let cross_account_replay = CrossAccountReplay::between(source_account_id, target_account_id);
     let mut request = original.clone();
-    let mut input = Vec::with_capacity(replay_input.len() + original.input().len());
-    input.extend_from_slice(replay_input);
+    let mut input = replay_input_for_account(transcript, target_account_id);
+    input.reserve(original.input().len());
     input.extend_from_slice(original.input());
-    sanitize_replay_items(&mut input);
     request.set_input(input);
     request.set_previous_response_id(None);
     request.turn_state = None;
     request.stream_commit_policy = StreamCommitPolicy::UntilOutputOrTerminal;
-    request
+    PreparedHistoryRequest {
+        request,
+        cross_account_replay,
+    }
 }
 
-fn sanitized_transcript(mut input: Vec<Value>, mut output: Vec<Value>) -> Vec<Value> {
-    sanitize_replay_items(&mut input);
-    sanitize_replay_items(&mut output);
-    input.append(&mut output);
-    input
-}
-
-fn sanitize_replay_items(values: &mut [Value]) {
-    for value in values {
-        match value {
-            Value::Array(values) => sanitize_replay_items(values),
-            Value::Object(object) => {
-                object.remove("id");
-                object.remove("encrypted_content");
-                for value in object.values_mut() {
-                    sanitize_replay_items(std::slice::from_mut(value));
-                }
-            }
-            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+impl PreparedHistoryRequest {
+    fn plain(request: CodexResponsesRequest) -> Self {
+        Self {
+            request,
+            cross_account_replay: None,
         }
     }
+}
+
+fn clear_local_replay(request: &mut CodexResponsesRequest) {
+    request.local_replay_transcript = None;
+    request.local_replay_account_id = None;
+}
+
+fn transcript_for_turn(
+    input: Vec<Value>,
+    output: Vec<Value>,
+    account_id: &str,
+) -> LocalReplayTranscript {
+    let mut transcript = LocalReplayTranscript::default();
+    append_client_input(&mut transcript, input, account_id);
+    append_account_output(&mut transcript, output, account_id);
+    transcript
+}
+
+fn append_turn(
+    transcript: &mut LocalReplayTranscript,
+    input: Vec<Value>,
+    output: Vec<Value>,
+    account_id: &str,
+) {
+    project_transcript_to_account(transcript, account_id);
+    append_client_input(transcript, input, account_id);
+    append_account_output(transcript, output, account_id);
+}
+
+fn append_client_input(
+    transcript: &mut LocalReplayTranscript,
+    input: Vec<Value>,
+    account_id: &str,
+) {
+    transcript.items.extend(input.into_iter().map(|item| {
+        if is_known_response_output_item(&item) {
+            if has_account_bound_output_state(&item) {
+                LocalReplayItem::AccountOutput {
+                    account_id: account_id.to_string(),
+                    item,
+                }
+            } else {
+                LocalReplayItem::SanitizedOutput(item)
+            }
+        } else {
+            LocalReplayItem::ClientInput(item)
+        }
+    }));
+}
+
+fn has_account_bound_output_state(item: &Value) -> bool {
+    item.get("id").is_some() || item.get("encrypted_content").is_some()
+}
+
+fn append_account_output(
+    transcript: &mut LocalReplayTranscript,
+    output: Vec<Value>,
+    account_id: &str,
+) {
+    transcript.items.extend(
+        output
+            .into_iter()
+            .map(|item| LocalReplayItem::AccountOutput {
+                account_id: account_id.to_string(),
+                item,
+            }),
+    );
+}
+
+fn project_transcript_to_account(transcript: &mut LocalReplayTranscript, account_id: &str) {
+    transcript.items = transcript
+        .items
+        .drain(..)
+        .filter_map(|item| match item {
+            LocalReplayItem::AccountOutput {
+                account_id: owner,
+                item,
+            } if owner != account_id => {
+                sanitize_cross_account_output(item).map(LocalReplayItem::SanitizedOutput)
+            }
+            item => Some(item),
+        })
+        .collect();
+}
+
+fn replay_input_for_account(transcript: &LocalReplayTranscript, account_id: &str) -> Vec<Value> {
+    transcript
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            LocalReplayItem::ClientInput(value) | LocalReplayItem::SanitizedOutput(value) => {
+                Some(value.clone())
+            }
+            LocalReplayItem::AccountOutput {
+                account_id: owner,
+                item,
+            } if owner == account_id => Some(without_output_id(item.clone())),
+            LocalReplayItem::AccountOutput { item, .. } => {
+                sanitize_cross_account_output(item.clone())
+            }
+        })
+        .collect()
+}
+
+fn without_output_id(mut item: Value) -> Value {
+    if let Value::Object(object) = &mut item {
+        object.remove("id");
+    }
+    item
+}
+
+fn sanitize_cross_account_output(mut item: Value) -> Option<Value> {
+    if let Value::Object(object) = &mut item {
+        if matches!(
+            object.get("type").and_then(Value::as_str),
+            Some("compaction" | "compaction_summary" | "context_compaction")
+        ) {
+            return None;
+        }
+        object.remove("id");
+        object.remove("encrypted_content");
+    }
+    Some(item)
+}
+
+fn is_known_response_output_item(item: &Value) -> bool {
+    let item_type = item.get("type").and_then(Value::as_str);
+    if item_type == Some("message") {
+        return item.get("role").and_then(Value::as_str) == Some("assistant");
+    }
+    matches!(
+        item_type,
+        Some(
+            "agent_message"
+                | "reasoning"
+                | "local_shell_call"
+                | "function_call"
+                | "tool_search_call"
+                | "custom_tool_call"
+                | "computer_call"
+                | "web_search_call"
+                | "file_search_call"
+                | "code_interpreter_call"
+                | "image_generation_call"
+                | "mcp_call"
+                | "mcp_list_tools"
+                | "mcp_approval_request"
+                | "compaction"
+                | "compaction_summary"
+                | "context_compaction"
+        )
+    )
 }
 
 fn is_continuation_busy(facts: &UpstreamFailureFacts) -> bool {

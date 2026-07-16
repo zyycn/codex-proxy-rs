@@ -1,7 +1,8 @@
 use std::{fs, net::SocketAddr, path::Path, time::Duration};
 
 use axum::Router;
-use codex_proxy_rs::fleet::account::AccountStatus;
+use chrono::Utc;
+use codex_proxy_rs::fleet::{account::AccountStatus, cookies::PgCookieStore};
 use futures::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::{net::TcpListener, task::JoinHandle, time::timeout};
@@ -16,6 +17,7 @@ use tokio_tungstenite::{
 
 use crate::dispatch::service::{
     accept_async as accept_upstream_websocket, accept_websocket_with_authorization,
+    accept_websocket_with_request_headers,
 };
 
 struct TestServer {
@@ -43,7 +45,7 @@ fn responses_websocket_replay_policy_should_be_owned_by_history_controller() {
     for forbidden in [
         "ConnectionReplayState",
         "PendingReplayUpdate",
-        "sanitize_replay_items",
+        "sanitize_cross_account_output",
         ".previous_response_id()",
         "dispatch::controllers",
     ] {
@@ -57,7 +59,10 @@ fn responses_websocket_replay_policy_should_be_owned_by_history_controller() {
         "ConnectionReplayUpdate::Replace",
         "ConnectionReplayUpdate::Append",
         "ConnectionReplayUpdate::Unavailable",
-        "sanitize_replay_items",
+        "struct CrossAccountReplay",
+        "LocalReplayItem::ClientInput",
+        "sanitize_cross_account_output",
+        "project_transcript_to_account",
         "snapshot.last_response_id.as_deref() == Some(previous_response_id)",
     ] {
         assert!(
@@ -77,7 +82,8 @@ fn responses_websocket_replay_policy_should_be_owned_by_history_controller() {
             "ResponseDispatchService must expose narrow replay boundary {boundary}"
         );
     }
-    assert!(!protocol.contains("sanitize_replay_items"));
+    assert!(protocol.contains("enum LocalReplayItem"));
+    assert!(!protocol.contains("sanitize_cross_account_output"));
 }
 
 #[tokio::test]
@@ -355,6 +361,10 @@ async fn responses_websocket_should_replay_connection_history_after_previous_res
     let mut first_payload: Value = serde_json::from_str(&response_create_payload("first")).unwrap();
     first_payload["input"][0]["id"] = json!("client_input_id");
     first_payload["input"][0]["encrypted_content"] = json!("client_secret");
+    first_payload["input"][0]["tool_arguments"] = json!({
+        "id": "user_tool_argument_id",
+        "encrypted_content": "user_tool_argument_secret"
+    });
     websocket
         .send(Message::Text(first_payload.to_string().into()))
         .await
@@ -380,10 +390,427 @@ async fn responses_websocket_should_replay_connection_history_after_previous_res
     assert_eq!(replayed["input"][0]["content"], "first");
     assert_eq!(replayed["input"][1]["role"], "assistant");
     assert_eq!(replayed["input"][2]["content"], "second");
-    let replayed_json = replayed.to_string();
-    assert!(!replayed_json.contains("client_input_id"));
-    assert!(!replayed_json.contains("client_secret"));
-    assert!(!replayed_json.contains("assistant_output_resp_first"));
+    assert_eq!(replayed["input"][0]["id"], "client_input_id");
+    assert_eq!(replayed["input"][0]["encrypted_content"], "client_secret");
+    assert_eq!(
+        replayed["input"][0]["tool_arguments"]["id"],
+        "user_tool_argument_id"
+    );
+    assert_eq!(
+        replayed["input"][0]["tool_arguments"]["encrypted_content"],
+        "user_tool_argument_secret"
+    );
+    assert!(replayed["input"][1].get("id").is_none());
+}
+
+#[tokio::test]
+async fn responses_websocket_cross_account_replay_should_isolate_account_bound_state() {
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_base_url = format!("http://{}", upstream_listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        let (primary_stream, _) = upstream_listener.accept().await.unwrap();
+        let (mut primary, primary_headers) =
+            accept_websocket_with_request_headers(primary_stream, "Bearer access-primary").await;
+        let initial_primary = receive_upstream_request(&mut primary).await;
+        send_upstream_response_with_output(
+            &mut primary,
+            "resp_account_a",
+            "answer from A",
+            vec![
+                json!({
+                    "type": "message",
+                    "id": "msg_account_a",
+                    "role": "assistant",
+                    "encrypted_content": "encrypted_message_a",
+                    "content": [{
+                        "type": "output_text",
+                        "id": "nested_content_id_a",
+                        "text": "answer from A"
+                    }],
+                }),
+                json!({
+                    "type": "reasoning",
+                    "id": "reasoning_account_a",
+                    "encrypted_content": "encrypted_reasoning_a",
+                    "summary": [{
+                        "type": "summary_text",
+                        "id": "nested_summary_id_a",
+                        "text": "reasoning summary A"
+                    }],
+                }),
+                json!({
+                    "type": "function_call",
+                    "id": "function_account_a",
+                    "call_id": "call_account_a",
+                    "caller": "client",
+                    "name": "lookup",
+                    "arguments": "{\"id\":\"tool_argument_id_a\"}",
+                }),
+                json!({
+                    "type": "compaction",
+                    "id": "compaction_account_a",
+                    "encrypted_content": "encrypted_compaction_a",
+                }),
+            ],
+        )
+        .await;
+
+        let (secondary_stream, _) = upstream_listener.accept().await.unwrap();
+        let (mut secondary, secondary_headers) =
+            accept_websocket_with_request_headers(secondary_stream, "Bearer access-secondary")
+                .await;
+        let cross_account_replay = receive_upstream_request(&mut secondary).await;
+        send_upstream_response_with_output(
+            &mut secondary,
+            "resp_account_b",
+            "answer from B",
+            vec![
+                json!({
+                    "type": "message",
+                    "id": "msg_account_b",
+                    "role": "assistant",
+                    "encrypted_content": "encrypted_message_b",
+                    "content": [{"type": "output_text", "text": "answer from B"}],
+                }),
+                json!({
+                    "type": "reasoning",
+                    "id": "reasoning_account_b",
+                    "encrypted_content": "encrypted_reasoning_b",
+                    "summary": [{"type": "summary_text", "text": "reasoning summary B"}],
+                }),
+            ],
+        )
+        .await;
+
+        let continued_secondary = receive_upstream_request(&mut secondary).await;
+        secondary
+            .send(Message::Text(
+                json!({
+                    "type": "response.failed",
+                    "response": {
+                        "id": "resp_account_b_missing",
+                        "status": "failed",
+                        "error": {
+                            "code": "previous_response_not_found",
+                            "message": "Previous response with id resp_account_b was not found",
+                        },
+                    },
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        secondary.close(None).await.unwrap();
+
+        let (retry_stream, _) = upstream_listener.accept().await.unwrap();
+        let (mut retry, retry_headers) =
+            accept_websocket_with_request_headers(retry_stream, "Bearer access-secondary").await;
+        let same_account_replay = receive_upstream_request(&mut retry).await;
+        send_upstream_response(&mut retry, "resp_account_b_recovered", "recovered on B").await;
+
+        (
+            primary_headers,
+            secondary_headers,
+            retry_headers,
+            initial_primary,
+            cross_account_replay,
+            continued_secondary,
+            same_account_replay,
+        )
+    });
+    let (app, state, api_key, pool, _dir) =
+        crate::dispatch::service::test_app_with_two_accounts_and_state(upstream_base_url).await;
+    let cookie_store = PgCookieStore::new(pool);
+    cookie_store
+        .capture_set_cookie(
+            "acct_primary",
+            "cf_clearance=primary; Domain=.chatgpt.com; Path=/codex",
+        )
+        .await
+        .unwrap();
+    cookie_store
+        .capture_set_cookie(
+            "acct_secondary",
+            "cf_clearance=secondary; Domain=.chatgpt.com; Path=/codex",
+        )
+        .await
+        .unwrap();
+    let server = spawn_app(app).await;
+    let mut websocket = connect_responses_websocket(server.address, &api_key).await;
+
+    let mut first_payload: Value = serde_json::from_str(&response_create_payload("first")).unwrap();
+    first_payload["input"][0]["id"] = json!("client_input_id");
+    first_payload["input"][0]["encrypted_content"] = json!("client_semantic_secret");
+    first_payload["input"][0]["tool_arguments"] = json!({"id": "client_tool_argument_id"});
+    first_payload["input"].as_array_mut().unwrap().push(json!({
+        "type": "reasoning",
+        "id": "client_replayed_reasoning_id_a",
+        "encrypted_content": "client_replayed_reasoning_encrypted_a",
+        "summary": [{
+            "type": "summary_text",
+            "id": "client_replayed_summary_id_a",
+            "text": "client replayed summary A"
+        }]
+    }));
+    first_payload["turnState"] = json!("turn_state_account_a");
+    first_payload["x-codex-installation-id"] = json!("client_installation_a");
+    first_payload["client_metadata"] = json!({
+        "x-codex-installation-id": "client_installation_a",
+        "x-codex-turn-state": "turn_state_account_a"
+    });
+    websocket
+        .send(Message::Text(first_payload.to_string().into()))
+        .await
+        .unwrap();
+    let first = receive_response(&mut websocket).await;
+    assert_eq!(first.last().unwrap()["response"]["id"], "resp_account_a");
+
+    timeout(Duration::from_secs(2), async {
+        loop {
+            if state
+                .services
+                .session_affinity
+                .lookup("resp_account_a", Utc::now())
+                .await
+                .is_some()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("first response affinity should be recorded before removal");
+    assert!(
+        state
+            .services
+            .session_affinity
+            .forget("resp_account_a")
+            .await
+    );
+
+    assert!(
+        state
+            .services
+            .account_pool
+            .set_status("acct_primary", AccountStatus::Disabled)
+            .await
+    );
+    let mut second_payload: Value =
+        serde_json::from_str(&response_create_payload("second")).unwrap();
+    second_payload["previous_response_id"] = json!("resp_account_a");
+    second_payload["turnState"] = json!("turn_state_account_a");
+    second_payload["turn_state"] = json!("turn_state_account_a_projection");
+    second_payload["x-codex-turn-state"] = json!("turn_state_account_a_projection");
+    second_payload["turnMetadata"] = json!("{malformed-account-a-metadata");
+    second_payload["authorization"] = json!("Bearer leaked-account-a");
+    second_payload["cookie"] = json!("session=leaked-account-a");
+    second_payload["chatgpt-account-id"] = json!("chatgpt-primary");
+    second_payload["account_id"] = json!("acct_primary");
+    second_payload["conversation"] = json!("conversation_account_a");
+    second_payload["x-codex-installation-id"] = json!("client_installation_a");
+    second_payload["installation_id"] = json!("client_installation_a");
+    second_payload["installationId"] = json!("client_installation_a");
+    second_payload["client_metadata"] = json!({
+        "safe": "preserved",
+        "account_id": "acct_primary",
+        "cookie": "session=leaked-account-a",
+        "x-codex-installation-id": "client_installation_a",
+        "installation_id": "client_installation_a",
+        "installationId": "client_installation_a",
+        "x-codex-turn-state": "turn_state_account_a",
+        "x-codex-turn-metadata": json!({
+            "installation_id": "client_installation_a",
+            "account_id": "acct_primary",
+            "authorization": "Bearer leaked-account-a",
+            "turn_state": "turn_state_account_a",
+            "conversation": "conversation_account_a",
+            "session_id": "session_semantic"
+        }).to_string()
+    });
+    websocket
+        .send(Message::Text(second_payload.to_string().into()))
+        .await
+        .unwrap();
+    let second = receive_response(&mut websocket).await;
+    assert_eq!(second.last().unwrap()["response"]["id"], "resp_account_b");
+
+    let mut third_payload: Value = serde_json::from_str(&response_create_payload("third")).unwrap();
+    third_payload["previous_response_id"] = json!("resp_account_b");
+    websocket
+        .send(Message::Text(third_payload.to_string().into()))
+        .await
+        .unwrap();
+    let third = receive_response(&mut websocket).await;
+    assert_eq!(
+        third.last().unwrap()["response"]["id"],
+        "resp_account_b_recovered"
+    );
+
+    let (
+        primary_headers,
+        secondary_headers,
+        retry_headers,
+        initial_primary,
+        cross_account_replay,
+        continued_secondary,
+        same_account_replay,
+    ) = upstream.await.unwrap();
+    assert_eq!(
+        request_header(&primary_headers, "authorization"),
+        Some("Bearer access-primary")
+    );
+    assert_eq!(
+        request_header(&secondary_headers, "authorization"),
+        Some("Bearer access-secondary")
+    );
+    assert_eq!(
+        request_header(&secondary_headers, "chatgpt-account-id"),
+        Some("chatgpt-secondary")
+    );
+    assert_eq!(
+        request_header(&secondary_headers, "cookie"),
+        Some("cf_clearance=secondary")
+    );
+    assert_eq!(
+        request_header(&retry_headers, "authorization"),
+        Some("Bearer access-secondary")
+    );
+    let primary_installation = request_header(&primary_headers, "x-codex-installation-id").unwrap();
+    let secondary_installation =
+        request_header(&secondary_headers, "x-codex-installation-id").unwrap();
+    assert_ne!(primary_installation, secondary_installation);
+    assert_eq!(
+        request_header(&retry_headers, "x-codex-installation-id"),
+        Some(secondary_installation)
+    );
+    assert!(request_header(&secondary_headers, "x-codex-turn-state").is_none());
+    assert!(request_header(&secondary_headers, "x-codex-turn-metadata").is_none());
+
+    assert_eq!(initial_primary["turnState"], "turn_state_account_a");
+    assert!(cross_account_replay.get("previous_response_id").is_none());
+    for key in [
+        "turnState",
+        "turn_state",
+        "x-codex-turn-state",
+        "turnMetadata",
+        "authorization",
+        "cookie",
+        "chatgpt-account-id",
+        "account_id",
+        "conversation",
+    ] {
+        assert!(
+            cross_account_replay.get(key).is_none(),
+            "cross-account replay leaked top-level field {key}"
+        );
+    }
+    let metadata = &cross_account_replay["client_metadata"];
+    assert_eq!(metadata["safe"], "preserved");
+    for key in ["account_id", "cookie", "x-codex-turn-state"] {
+        assert!(
+            metadata.get(key).is_none(),
+            "cross-account replay leaked metadata field {key}"
+        );
+    }
+    let scoped_turn_metadata: Value = serde_json::from_str(
+        metadata["x-codex-turn-metadata"]
+            .as_str()
+            .expect("valid client metadata turnMetadata should be retained"),
+    )
+    .unwrap();
+    assert_eq!(
+        scoped_turn_metadata["installation_id"].as_str(),
+        Some(secondary_installation)
+    );
+    assert_eq!(scoped_turn_metadata["session_id"], "session_semantic");
+    for key in ["account_id", "authorization", "turn_state", "conversation"] {
+        assert!(
+            scoped_turn_metadata.get(key).is_none(),
+            "cross-account replay leaked turnMetadata field {key}"
+        );
+    }
+    for key in [
+        "x-codex-installation-id",
+        "installation_id",
+        "installationId",
+    ] {
+        assert_eq!(
+            cross_account_replay[key].as_str(),
+            Some(secondary_installation),
+            "top-level installation projection {key}"
+        );
+        assert_eq!(
+            metadata[key].as_str(),
+            Some(secondary_installation),
+            "metadata installation projection {key}"
+        );
+    }
+
+    let replay_input = cross_account_replay["input"].as_array().unwrap();
+    assert_eq!(replay_input.len(), 6);
+    assert_eq!(replay_input[0]["id"], "client_input_id");
+    assert_eq!(
+        replay_input[0]["encrypted_content"],
+        "client_semantic_secret"
+    );
+    assert_eq!(
+        replay_input[0]["tool_arguments"]["id"],
+        "client_tool_argument_id"
+    );
+    assert!(replay_input[1].get("id").is_none());
+    assert!(replay_input[1].get("encrypted_content").is_none());
+    assert_eq!(
+        replay_input[1]["summary"][0]["id"],
+        "client_replayed_summary_id_a"
+    );
+    assert!(replay_input[2].get("id").is_none());
+    assert!(replay_input[2].get("encrypted_content").is_none());
+    assert_eq!(replay_input[2]["content"][0]["id"], "nested_content_id_a");
+    assert!(replay_input[3].get("id").is_none());
+    assert!(replay_input[3].get("encrypted_content").is_none());
+    assert_eq!(replay_input[3]["summary"][0]["id"], "nested_summary_id_a");
+    assert!(replay_input[4].get("id").is_none());
+    assert_eq!(replay_input[4]["call_id"], "call_account_a");
+    assert_eq!(replay_input[4]["caller"], "client");
+    assert_eq!(
+        replay_input[4]["arguments"],
+        "{\"id\":\"tool_argument_id_a\"}"
+    );
+    assert_eq!(replay_input[5]["content"], "second");
+    let cross_account_json = cross_account_replay.to_string();
+    for forbidden in [
+        "msg_account_a",
+        "reasoning_account_a",
+        "function_account_a",
+        "compaction_account_a",
+        "encrypted_message_a",
+        "encrypted_reasoning_a",
+        "encrypted_compaction_a",
+        "client_replayed_reasoning_id_a",
+        "client_replayed_reasoning_encrypted_a",
+    ] {
+        assert!(
+            !cross_account_json.contains(forbidden),
+            "cross-account replay leaked {forbidden}"
+        );
+    }
+
+    assert_eq!(
+        continued_secondary["previous_response_id"],
+        "resp_account_b"
+    );
+    assert_eq!(continued_secondary["input"][0]["content"], "third");
+    assert!(same_account_replay.get("previous_response_id").is_none());
+    let same_account_json = same_account_replay.to_string();
+    assert!(!same_account_json.contains("encrypted_message_a"));
+    assert!(!same_account_json.contains("encrypted_reasoning_a"));
+    assert!(!same_account_json.contains("client_replayed_reasoning_encrypted_a"));
+    assert!(same_account_json.contains("encrypted_message_b"));
+    assert!(same_account_json.contains("encrypted_reasoning_b"));
+    assert!(!same_account_json.contains("msg_account_b"));
+    assert!(!same_account_json.contains("reasoning_account_b"));
 }
 
 #[tokio::test]
@@ -578,6 +1005,26 @@ async fn send_upstream_response(
     response_id: &str,
     text: &str,
 ) {
+    send_upstream_response_with_output(
+        websocket,
+        response_id,
+        text,
+        vec![json!({
+            "type": "message",
+            "id": format!("assistant_output_{response_id}"),
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": text}],
+        })],
+    )
+    .await;
+}
+
+async fn send_upstream_response_with_output(
+    websocket: &mut WebSocketStream<tokio::net::TcpStream>,
+    response_id: &str,
+    text: &str,
+    output: Vec<Value>,
+) {
     for event in [
         json!({
             "type": "response.created",
@@ -593,12 +1040,7 @@ async fn send_upstream_response(
                 "id": response_id,
                 "object": "response",
                 "status": "completed",
-                "output": [{
-                    "type": "message",
-                    "id": format!("assistant_output_{response_id}"),
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": text}],
-                }],
+                "output": output,
                 "usage": {
                     "input_tokens": 3,
                     "output_tokens": 1,
@@ -617,6 +1059,13 @@ async fn send_upstream_response(
 async fn receive_upstream_request(websocket: &mut WebSocketStream<tokio::net::TcpStream>) -> Value {
     let request = websocket.next().await.unwrap().unwrap();
     serde_json::from_str(&request.into_text().unwrap()).unwrap()
+}
+
+fn request_header<'a>(
+    headers: &'a tokio_tungstenite::tungstenite::http::HeaderMap,
+    name: &str,
+) -> Option<&'a str> {
+    headers.get(name).and_then(|value| value.to_str().ok())
 }
 
 async fn receive_response<S>(websocket: &mut WebSocketStream<S>) -> Vec<Value>

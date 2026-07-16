@@ -370,8 +370,10 @@ Continuation scope：
 
 完整 transcript 只存在于当前入站 Responses WebSocket：
 
-- 每次 completed 后追加本轮 input 与 output。
-- full replay 前递归删除 item `id` 和 `encrypted_content`，保留工具配对所需的 `call_id`。
+- 每次 completed 后记录实际响应账号，并以 `ClientInput`、`SanitizedOutput`、`AccountOutput(account_id)` 三种来源类型追加本轮 input 与 output。
+- 普通客户端 input 按值保留；input 中显式携带的已知 Responses output item 按当前来源账号标记。清洗只作用于这些 item 顶层，不递归删除用户消息、工具输出或工具参数中的同名字段。
+- 同账号 full replay 删除 upstream output 顶层 `id`，保留该账号返回的 `encrypted_content`；跨账号 full replay 同时删除顶层 `id` 和 `encrypted_content`，并丢弃纯 opaque 的 compaction item。
+- B 成功后，快照会永久清洗旧账号的 `AccountOutput`，随后只把 B 新返回的 output 作为账号绑定状态保存。
 - transcript 不写 PostgreSQL/Redis，不跨下游连接共享。
 - 有完整 transcript 时，HistoryController 可以删除 previous ID 并在同账号或后续候选全量重放。
 - 只有归属而没有 transcript 时，只允许 owner 账号续接。
@@ -386,13 +388,18 @@ Continuation scope：
 | access token、`chatgpt-account-id`、Cookie | 上游账号认证 | 每次从当前账号重建 |
 | `x-codex-installation-id` 及其 metadata 投影 | 安装/设备指纹 | 由实例 HMAC secret 按账号稳定派生 |
 | `x-codex-turn-state` | 上游 opaque sticky state | 同账号可复用，换号必须删除 |
+| `turnMetadata` | 客户端语义与 installation 投影 | 换号时类型化清除账号字段并改写 installation；解析失败直接删除 |
 | `previous_response_id` | 上游历史句柄 | 只在 owner 账号/socket 使用；full replay 时删除 |
-| session/thread/conversation/turn/window/parent ID | 客户端会话拓扑 | 原样透传，不按账号改写 |
+| `conversation` | Responses 服务端会话句柄 | 换号时删除 |
+| session/thread/`conversation_id`/turn/window/parent ID | 客户端会话拓扑 | 原样透传，不按账号改写 |
 | `prompt_cache_key`、`x-client-request-id` | 会话缓存与请求关联 | 客户端提供时原样透传 |
-| output item `id`、`encrypted_content` | 上游输出引用 | full replay 时删除 |
+| output item 顶层 `id` | 上游输出引用 | full replay 时删除，嵌套同名字段不动 |
+| output item 顶层 `encrypted_content` | 上游加密状态 | 同账号保留，换号删除 |
 | tool `call_id` | 工具输入输出配对 | full replay 时保留 |
 
-`AccountScopedIdentity` 只包含 installation ID；`AccountScopedRequest` 只有在当前账号认证、Cookie、installation ID 和 turn-state 边界处理完成后才能进入 upstream transport。
+跨账号重放的不变量是：目标账号收到完整的客户端会话语义，但请求中不存在任何由来源账号认证、签发、加密、路由或缓存的账号绑定状态。
+
+`CrossAccountReplay(source, target)` 是 HistoryController 产生的显式边界；同一请求内发生普通账号 failover 时也执行相同的 Responses input 类型化清洗。`AccountScopedIdentity` 只包含 installation ID。`AccountScopedRequest` 只有在当前账号认证、Cookie、installation ID、turn-state 和 metadata 边界处理完成后才能进入 upstream transport。
 
 ## 数据存储
 

@@ -340,18 +340,19 @@ impl ControllerSet {
         request: &CodexResponsesRequest,
         context: AttemptRoutePreparationContext<'_>,
     ) -> AttemptRoutePreparation {
-        let request = match HistoryController::prepare_attempt(
+        let prepared = match HistoryController::prepare_attempt(
             &mut scope.history,
             request,
             context.account_id,
         ) {
-            Ok(request) => request,
+            Ok(prepared) => prepared,
             Err(message) => return AttemptRoutePreparation::Unavailable { message },
         };
         AttemptRoutePreparation::Ready(Box::new(context.account_identity.scope_request(
             &mut scope.identity,
-            request,
+            prepared.request,
             context.account_id,
+            prepared.cross_account_replay.as_ref(),
         )))
     }
 

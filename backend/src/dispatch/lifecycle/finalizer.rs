@@ -53,6 +53,21 @@ impl StreamFinalizer {
         self.controller_context.started_at
     }
 
+    pub(in crate::dispatch) fn account_id(&self) -> &str {
+        &self.controller_context.account_id
+    }
+
+    pub(in crate::dispatch) fn request_input(&self) -> &[serde_json::Value] {
+        self.controller_context.request.input()
+    }
+
+    pub(in crate::dispatch) fn continued_from_previous_response(&self) -> bool {
+        self.controller_context
+            .request
+            .previous_response_id()
+            .is_some()
+    }
+
     pub(in crate::dispatch) async fn finalize(
         self,
         sender: &mpsc::Sender<Result<Bytes, ResponseDispatchStreamError>>,
