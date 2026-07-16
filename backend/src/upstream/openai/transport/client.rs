@@ -24,7 +24,8 @@ use tokio_tungstenite::tungstenite::handshake::client::generate_key;
 use crate::upstream::openai::profile::CodexWireProfileState;
 use crate::upstream::openai::protocol::events::{extract_sse_usage, retry_after_seconds_from_body};
 use crate::upstream::openai::protocol::responses::{
-    CodexResponsesRequest, TransportRequirement, transport_requirement,
+    CodexResponsesRequest, TransportRequirement,
+    WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY, transport_requirement,
 };
 use crate::upstream::openai::protocol::sse::SseError;
 use crate::upstream::openai::protocol::websocket::{
@@ -549,8 +550,24 @@ fn is_model_entry(value: &Value) -> bool {
 
 fn websocket_upstream_request(request: &CodexResponsesRequest) -> CodexResponsesRequest {
     let mut request = request.clone();
+    project_responses_lite_to_ws_metadata(&mut request);
     stamp_ws_stream_request_start_ms(&mut request);
     request
+}
+
+fn project_responses_lite_to_ws_metadata(request: &mut CodexResponsesRequest) {
+    let Some(responses_lite) = request.responses_lite.clone() else {
+        return;
+    };
+    let mut metadata = match request.client_metadata() {
+        Some(Value::Object(metadata)) => metadata.clone(),
+        None => Map::new(),
+        Some(_) => return,
+    };
+    metadata
+        .entry(WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY.to_string())
+        .or_insert(Value::String(responses_lite));
+    request.set_client_metadata(Some(Value::Object(metadata)));
 }
 
 fn stamp_ws_stream_request_start_ms(request: &mut CodexResponsesRequest) {

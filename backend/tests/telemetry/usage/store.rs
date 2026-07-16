@@ -241,11 +241,12 @@ async fn usage_record_and_bucket_are_one_transaction_and_keep_zero_ms_samples() 
     record.first_token_ms = Some(0);
     record.input_tokens = Some(11);
     record.output_tokens = Some(7);
+    record.cache_write_tokens = Some(3);
     record.service_tier = Some("priority".to_string());
     store.append(&record).await.unwrap();
 
-    let bucket: (i64, i64, i64, i64, i64, String) = sqlx::query_as(
-        "select success_count, input_tokens, output_tokens, latency_count,
+    let bucket: (i64, i64, i64, i64, i64, i64, String) = sqlx::query_as(
+        "select success_count, input_tokens, output_tokens, cache_write_tokens, latency_count,
                 first_token_latency_count, service_tier
          from request_time_buckets where account_id = $1 and model = $2",
     )
@@ -254,7 +255,7 @@ async fn usage_record_and_bucket_are_one_transaction_and_keep_zero_ms_samples() 
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(bucket, (1, 11, 7, 1, 1, "priority".to_string()));
+    assert_eq!(bucket, (1, 11, 7, 3, 1, 1, "priority".to_string()));
 
     sqlx::raw_sql(
         "create function reject_test_bucket() returns trigger language plpgsql as $$

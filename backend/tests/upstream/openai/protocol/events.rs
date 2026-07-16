@@ -7,7 +7,8 @@ fn extract_usage_should_read_codex_usage_shape() {
             "input_tokens": 12,
             "output_tokens": 5,
             "input_tokens_details": {
-                "cached_tokens": 3
+                "cached_tokens": 3,
+                "cache_write_tokens": 4
             }
         }
     });
@@ -20,6 +21,7 @@ fn extract_usage_should_read_codex_usage_shape() {
             input_tokens: 12,
             output_tokens: 5,
             cached_tokens: 3,
+            cache_write_tokens: 4,
             reasoning_tokens: 0,
             image_input_tokens: 0,
             image_output_tokens: 0,
@@ -49,6 +51,7 @@ fn extract_usage_should_read_reasoning_and_total_tokens() {
             input_tokens: 12,
             output_tokens: 8,
             cached_tokens: 0,
+            cache_write_tokens: 0,
             reasoning_tokens: 6,
             image_input_tokens: 0,
             image_output_tokens: 0,
@@ -83,6 +86,7 @@ fn extract_usage_should_read_image_generation_tokens_separately() {
             input_tokens: 12,
             output_tokens: 5,
             cached_tokens: 3,
+            cache_write_tokens: 0,
             reasoning_tokens: 0,
             image_input_tokens: 31,
             image_output_tokens: 9,
@@ -110,6 +114,7 @@ fn extract_usage_should_read_openai_usage_shape() {
             input_tokens: 8,
             output_tokens: 4,
             cached_tokens: 2,
+            cache_write_tokens: 0,
             reasoning_tokens: 0,
             image_input_tokens: 0,
             image_output_tokens: 0,
@@ -132,6 +137,7 @@ fn extract_sse_usage_should_prefer_completed_response_usage() {
             input_tokens: 3,
             output_tokens: 5,
             cached_tokens: 1,
+            cache_write_tokens: 0,
             reasoning_tokens: 0,
             image_input_tokens: 0,
             image_output_tokens: 0,
@@ -154,6 +160,7 @@ fn extract_sse_usage_should_read_completed_image_generation_tokens() {
             input_tokens: 12,
             output_tokens: 5,
             cached_tokens: 3,
+            cache_write_tokens: 0,
             reasoning_tokens: 0,
             image_input_tokens: 31,
             image_output_tokens: 9,

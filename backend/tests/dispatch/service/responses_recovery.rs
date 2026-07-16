@@ -1490,7 +1490,7 @@ async fn responses_explicit_previous_response_should_fail_without_transparent_re
     let captured = upstream.await.unwrap();
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["error"]["code"], "previous_response_unavailable");
+    assert_eq!(body["error"]["code"], "previous_response_not_found");
     assert!(
         body["error"]["message"]
             .as_str()
@@ -1714,7 +1714,7 @@ async fn responses_explicit_invalid_reasoning_replay_should_not_retry_without_fu
     let captured = upstream.await.unwrap();
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["error"]["code"], "previous_response_unavailable");
+    assert_eq!(body["error"]["code"], "previous_response_not_found");
     assert_eq!(captured.payload["previous_response_id"], "resp_stale");
     assert!(!captured.retry_attempted);
 }
@@ -1777,7 +1777,7 @@ async fn responses_stream_structural_events_should_not_commit_before_history_fai
     let captured = upstream.await.unwrap();
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body.contains("previous_response_unavailable"));
+    assert!(body.contains("previous_response_not_found"));
     assert!(!body.contains("response.created"));
     assert_eq!(captured.payload["previous_response_id"], "resp_stale");
     assert!(!captured.retry_attempted);
@@ -1826,7 +1826,7 @@ async fn responses_http_sse_structural_events_should_not_commit_before_history_f
     let body = response_text(response).await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body.contains("previous_response_unavailable"));
+    assert!(body.contains("previous_response_not_found"));
     assert!(!body.contains("response.created"));
 }
 

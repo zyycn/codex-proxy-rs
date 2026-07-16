@@ -55,6 +55,7 @@ impl AccountUsageQueryService {
                 nonnegative_i64_to_u64(bucket.totals.input_tokens),
                 nonnegative_i64_to_u64(bucket.totals.output_tokens),
                 nonnegative_i64_to_u64(bucket.totals.cached_tokens),
+                nonnegative_i64_to_u64(bucket.totals.cache_write_tokens),
                 &bucket.model,
                 bucket.service_tier.as_deref(),
             );
@@ -159,6 +160,7 @@ pub struct AccountUsageTimeBucket {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
+    pub cache_write_tokens: i64,
     pub first_token_latency_sum: i64,
     pub first_token_latency_count: i64,
     pub latency_sum: i64,
@@ -178,6 +180,7 @@ impl From<UsageTimeBucketRecord> for AccountUsageTimeBucket {
             input_tokens: record.input_tokens,
             output_tokens: record.output_tokens,
             cached_tokens: record.cached_tokens,
+            cache_write_tokens: record.cache_write_tokens,
             first_token_latency_sum: record.first_token_latency_sum,
             first_token_latency_count: record.first_token_latency_count,
             latency_sum: record.latency_sum,

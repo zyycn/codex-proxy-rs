@@ -83,7 +83,7 @@ const MODEL_NOT_FOUND_ERROR: OpenAiErrorKind = OpenAiErrorKind {
 };
 const HISTORY_UNAVAILABLE_ERROR: OpenAiErrorKind = OpenAiErrorKind {
     error_type: "invalid_request_error",
-    code: "previous_response_unavailable",
+    code: "previous_response_not_found",
 };
 const CONTINUATION_BUSY_ERROR: OpenAiErrorKind = OpenAiErrorKind {
     error_type: "server_error",

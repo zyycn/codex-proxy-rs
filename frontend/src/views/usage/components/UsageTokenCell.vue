@@ -14,6 +14,7 @@ const tokenItems = computed(() => [
   { label: '输入 Token', value: tokenDetails.value.inputTokensDisplay },
   { label: '输出 Token', value: tokenDetails.value.outputTokensDisplay },
   { label: '缓存读取 Token', value: tokenDetails.value.cachedTokensDisplay },
+  { label: '缓存写入 Token', value: tokenDetails.value.cacheWriteTokensDisplay },
   { label: '推理 Token', value: tokenDetails.value.reasoningTokensDisplay },
 ])
 </script>

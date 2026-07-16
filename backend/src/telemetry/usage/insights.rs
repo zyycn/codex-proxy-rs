@@ -21,7 +21,7 @@ success_terminals as (
     client_api_key_id, provider, account_id, transport, model_name,
     null::text as failure_class, false as is_client_cancelled,
     false as is_caller_error, latency_ms, first_token_ms, billing_model,
-    service_tier, input_tokens, output_tokens, cached_tokens
+    service_tier, input_tokens, output_tokens, cached_tokens, cache_write_tokens
   from (
     select
       case when request_id is null then 'event:' || id else 'request:' || request_id end as request_key,
@@ -31,7 +31,7 @@ success_terminals as (
         coalesce(nullif(upstream_model, ''), model) as model_name,
       latency_ms, first_token_ms,
       coalesce(nullif(upstream_model, ''), model) as billing_model,
-      service_tier, input_tokens, output_tokens, cached_tokens
+      service_tier, input_tokens, output_tokens, cached_tokens, cache_write_tokens
     from usage_records
     where created_at >= $1 and created_at < $2
   ) candidates
@@ -45,7 +45,7 @@ error_terminals as (
     latency_ms, null::bigint as first_token_ms,
     null::text as billing_model, null::text as service_tier,
     null::bigint as input_tokens, null::bigint as output_tokens,
-    null::bigint as cached_tokens
+    null::bigint as cached_tokens, null::bigint as cache_write_tokens
   from (
     select
       case when request_id is null then 'event:' || id else 'request:' || request_id end as request_key,
@@ -660,7 +660,8 @@ async fn load_cost(
            )::bigint as cache_hit_count,\n\
            coalesce(sum(input_tokens), 0)::bigint as input_tokens,\n\
            coalesce(sum(output_tokens), 0)::bigint as output_tokens,\n\
-           coalesce(sum(least(coalesce(cached_tokens, 0), coalesce(input_tokens, 0))), 0)::bigint as cached_tokens\n\
+           coalesce(sum(least(coalesce(cached_tokens, 0), coalesce(input_tokens, 0))), 0)::bigint as cached_tokens,\n\
+           coalesce(sum(least(coalesce(cache_write_tokens, 0), coalesce(input_tokens, 0))), 0)::bigint as cache_write_tokens\n\
          from usage_records\n\
          where created_at >= $1 and created_at < $2\n\
          group by bucket_start, billing_model, service_tier, is_long\n\
@@ -735,7 +736,8 @@ async fn load_diagnostic_costs(
            )::bigint as cache_hit_count,\n\
            coalesce(sum(input_tokens), 0)::bigint as input_tokens,\n\
            coalesce(sum(output_tokens), 0)::bigint as output_tokens,\n\
-           coalesce(sum(least(coalesce(cached_tokens, 0), coalesce(input_tokens, 0))), 0)::bigint as cached_tokens\n\
+           coalesce(sum(least(coalesce(cached_tokens, 0), coalesce(input_tokens, 0))), 0)::bigint as cached_tokens,\n\
+           coalesce(sum(least(coalesce(cache_write_tokens, 0), coalesce(input_tokens, 0))), 0)::bigint as cache_write_tokens\n\
          from {source}\n\
          where terminal_requests.is_success\n\
          group by name, billing_model, service_tier, is_long"
@@ -764,6 +766,7 @@ struct CostSample {
     input_tokens: u64,
     output_tokens: u64,
     cached_tokens: u64,
+    cache_write_tokens: u64,
     estimated_cost: f64,
     standard_cost: f64,
 }
@@ -776,6 +779,7 @@ struct CostAccumulator {
     input_tokens: u64,
     output_tokens: u64,
     cached_tokens: u64,
+    cache_write_tokens: u64,
     estimated_cost: f64,
     standard_cost: f64,
 }
@@ -790,6 +794,9 @@ impl CostAccumulator {
         self.input_tokens = self.input_tokens.saturating_add(sample.input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(sample.output_tokens);
         self.cached_tokens = self.cached_tokens.saturating_add(sample.cached_tokens);
+        self.cache_write_tokens = self
+            .cache_write_tokens
+            .saturating_add(sample.cache_write_tokens);
         self.estimated_cost += sample.estimated_cost;
         self.standard_cost += sample.standard_cost;
     }
@@ -803,12 +810,14 @@ fn cost_sample(row: &sqlx::postgres::PgRow) -> CostSample {
     let input_tokens = nonnegative(row.get("input_tokens"));
     let output_tokens = nonnegative(row.get("output_tokens"));
     let cached_tokens = nonnegative(row.get("cached_tokens")).min(input_tokens);
+    let cache_write_tokens = nonnegative(row.get("cache_write_tokens")).min(input_tokens);
     let billing_model: String = row.get("billing_model");
     let service_tier: Option<String> = row.get("service_tier");
     let billing = calculate_aggregate_billing(
         input_tokens,
         output_tokens,
         cached_tokens,
+        cache_write_tokens,
         &billing_model,
         service_tier.as_deref(),
         row.get("is_long"),
@@ -820,6 +829,7 @@ fn cost_sample(row: &sqlx::postgres::PgRow) -> CostSample {
         input_tokens,
         output_tokens,
         cached_tokens,
+        cache_write_tokens,
         estimated_cost: billing.total_amount,
         standard_cost: billing.standard_amount,
     }

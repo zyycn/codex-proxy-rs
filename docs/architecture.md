@@ -131,8 +131,8 @@ upstream/openai/
 - `protocol` 定义 Responses body、canonical SSE/WS 事实和序列化，不包含账号策略。
 - `failure.rs` 将各 transport 错误规范化为稳定的 `UpstreamFailureFacts`，不解释账号状态。
 - `transport` 拥有 HTTP/SSE、WebSocket、TLS、header、连接池、熔断和 transport metrics。
-- `profile.rs` 定义配置驱动、启动后不可变的 Codex Desktop 上游请求画像。
-- `desktop_release.rs` 只观测官方 appcast；发布变化不会自动改写生效请求画像。
+- `profile.rs` 定义配置驱动的 Codex Desktop 上游请求画像；请求在发送前读取原子快照。
+- `desktop_release.rs` 定期读取官方 appcast，并自动把合法的 Desktop 版本与构建号应用到运行时画像。新 HTTP 请求立即使用新画像；WebSocket 连接池按实际 opening 画像分代，不复用旧 UA 连接，也不改写在途请求。
 - `token_client.rs` 只实现 OAuth token 刷新协议。
 
 ### fleet

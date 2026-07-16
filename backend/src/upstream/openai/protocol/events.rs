@@ -15,6 +15,8 @@ pub struct TokenUsage {
     pub output_tokens: u64,
     /// 命中缓存的输入 token 数。
     pub cached_tokens: u64,
+    /// 写入 prompt cache 的输入 token 数。
+    pub cache_write_tokens: u64,
     /// 输出 token 中的 reasoning token 数。
     pub reasoning_tokens: u64,
     /// 图片工具输入 token 数。
@@ -44,6 +46,13 @@ pub fn extract_usage(body: &Value) -> Option<TokenUsage> {
         .or_else(|| nested_number_field(usage, &["prompt_tokens_details", "cached_tokens"]))
         .or_else(|| number_field(usage, "cached_tokens"))
         .unwrap_or_default();
+    let cache_write_tokens =
+        nested_number_field(usage, &["input_tokens_details", "cache_write_tokens"])
+            .or_else(|| {
+                nested_number_field(usage, &["prompt_tokens_details", "cache_write_tokens"])
+            })
+            .or_else(|| number_field(usage, "cache_write_tokens"))
+            .unwrap_or_default();
     let reasoning_tokens =
         nested_number_field(usage, &["output_tokens_details", "reasoning_tokens"])
             .or_else(|| {
@@ -64,6 +73,7 @@ pub fn extract_usage(body: &Value) -> Option<TokenUsage> {
         "prompt_tokens",
         "completion_tokens",
         "cached_tokens",
+        "cache_write_tokens",
         "reasoning_tokens",
         "total_tokens",
     ]
@@ -80,6 +90,7 @@ pub fn extract_usage(body: &Value) -> Option<TokenUsage> {
         input_tokens,
         output_tokens,
         cached_tokens,
+        cache_write_tokens,
         reasoning_tokens,
         image_input_tokens,
         image_output_tokens,

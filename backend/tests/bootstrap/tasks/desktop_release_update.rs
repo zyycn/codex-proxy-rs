@@ -14,7 +14,7 @@ async fn desktop_release_update_task_should_start_background_checker() {
 }
 
 #[tokio::test]
-async fn desktop_release_update_task_should_record_initial_appcast_observation() {
+async fn desktop_release_update_task_should_apply_latest_release_to_wire_profile() {
     let server = MockServer::start().await;
     mount_appcast(
         &server,

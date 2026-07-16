@@ -545,7 +545,7 @@ fn parse_response_create(payload: &str) -> Result<Map<String, Value>, ResponseCr
         Some(Value::String(message_type)) if message_type == "response.create" => {}
         _ => return Err(ResponseCreateFrameError::UnsupportedType),
     }
-    if body.get("stream").and_then(Value::as_bool) != Some(true) {
+    if matches!(body.get("stream"), Some(value) if value.as_bool() != Some(true)) {
         return Err(ResponseCreateFrameError::StreamingRequired);
     }
     Ok(body)

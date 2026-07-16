@@ -77,6 +77,50 @@ fn response_event_signals_should_count_reasoning_as_semantic_output() {
 }
 
 #[test]
+fn response_event_signals_should_count_refusal_as_visible_text() {
+    let signals = response_event_signals(
+        Some("response.refusal.delta"),
+        &json!({"delta": "I cannot help with that"}),
+    );
+
+    assert!(signals.semantic_output);
+    assert!(signals.text_output);
+    assert!(!signals.reasoning_output);
+}
+
+#[test]
+fn response_event_signals_should_count_future_nonempty_delta_without_event_table_entry() {
+    let signals = response_event_signals(
+        Some("response.future_tool_payload.delta"),
+        &json!({"delta": {"chunk": 1}}),
+    );
+
+    assert!(signals.semantic_output);
+    assert!(!signals.text_output);
+    assert!(!signals.reasoning_output);
+}
+
+#[test]
+fn response_event_signals_should_count_completed_hosted_tool_item_without_known_fields() {
+    let signals = response_event_signals(
+        Some("response.output_item.done"),
+        &json!({"item": {"type": "mcp_call", "status": "completed"}}),
+    );
+
+    assert!(signals.semantic_output);
+}
+
+#[test]
+fn response_event_signals_should_count_hosted_tool_execution_phase() {
+    let signals = response_event_signals(
+        Some("response.code_interpreter_call.in_progress"),
+        &json!({"type": "response.code_interpreter_call.in_progress"}),
+    );
+
+    assert!(signals.semantic_output);
+}
+
+#[test]
 fn first_token_detection_should_ignore_metadata_and_rate_limit_events() {
     let body = include_bytes!(
         "../../../fixtures/responses/http_sse/metadata_rate_limits_no_first_output.sse"

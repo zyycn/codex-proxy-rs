@@ -353,10 +353,12 @@ pub(super) async fn list_current_window_model_usage(
         let input_tokens = row.input_tokens;
         let output_tokens = row.output_tokens;
         let cached_tokens = row.cached_tokens;
+        let cache_write_tokens = row.cache_write_tokens;
         let billing_amount_usd = billing::calculate_billing_amount(
             nonnegative_i64_to_u64(input_tokens),
             nonnegative_i64_to_u64(output_tokens),
             nonnegative_i64_to_u64(cached_tokens),
+            nonnegative_i64_to_u64(cache_write_tokens),
             &model,
             row.service_tier.as_deref(),
         );

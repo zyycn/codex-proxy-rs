@@ -8,11 +8,18 @@ use tracing::info;
 
 const MIGRATION_LOCK_KEY: i64 = i64::from_be_bytes(*b"CPR-MIGR");
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "initial",
-    sql: include_str!("migrations/0001_initial.sql"),
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "initial",
+        sql: include_str!("migrations/0001_initial.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "cache_write_tokens",
+        sql: include_str!("migrations/0002_cache_write_tokens.sql"),
+    },
+];
 
 struct Migration {
     version: i64,
