@@ -13,23 +13,18 @@ use crate::models::service::{
     ModelRefreshPlanAccount, ModelRefreshResult, ModelService, ModelServiceError,
 };
 
-use super::{
-    coordinator::SchedulerHandle,
-    periodic::{PeriodicTaskConfig, PeriodicTaskRunner, PeriodicTaskStartup, spawn_periodic_task},
-};
+use super::coordinator::SchedulerHandle;
 
 /// 模型刷新任务接线器。
 pub struct ModelRefreshTask {
     model_service: Arc<ModelService>,
     account_pool: Arc<AccountPoolService>,
-    refresh_interval_secs: u64,
     initial_delay_ms: u64,
     retry_delay_ms: u64,
     max_retries: u32,
     account_pseudonymizer: Arc<AccountPseudonymizer>,
 }
 
-const DEFAULT_REFRESH_INTERVAL_SECS: u64 = 3600;
 const INITIAL_DELAY_MS: u64 = 1000;
 const RETRY_DELAY_MS: u64 = 10_000;
 const MAX_RETRIES: u32 = 12;
@@ -44,7 +39,6 @@ impl ModelRefreshTask {
         Self {
             model_service,
             account_pool,
-            refresh_interval_secs: DEFAULT_REFRESH_INTERVAL_SECS,
             initial_delay_ms: INITIAL_DELAY_MS,
             retry_delay_ms: RETRY_DELAY_MS,
             max_retries: MAX_RETRIES,
@@ -52,15 +46,13 @@ impl ModelRefreshTask {
         }
     }
 
-    /// 启动后台刷新任务。
+    /// 启动一次性首次刷新任务。
     pub fn start(self) -> SchedulerHandle {
-        let config = PeriodicTaskConfig::new(
-            self.refresh_interval_secs,
-            "模型刷新任务已启动",
-            "模型刷新任务正在关闭",
-        )
-        .wait_first_interval();
-        spawn_periodic_task(self, config)
+        let (shutdown_tx, mut shutdown_rx) = mpsc::channel(1);
+        let handle = tokio::spawn(async move {
+            self.run_initial_refresh(&mut shutdown_rx).await;
+        });
+        SchedulerHandle::new(shutdown_tx, handle)
     }
 
     /// 在 Responses 响应声明模型目录 ETag 变化时异步刷新。
@@ -115,84 +107,52 @@ impl ModelRefreshTask {
             .await;
         Ok(result)
     }
-}
 
-impl PeriodicTaskRunner for ModelRefreshTask {
-    fn before_loop<'a>(
-        &'a mut self,
-        shutdown_rx: &'a mut mpsc::Receiver<()>,
-    ) -> super::periodic::TaskFuture<'a, PeriodicTaskStartup> {
-        Box::pin(async move {
-            tokio::select! {
-                _ = shutdown_rx.recv() => {
-                    info!("模型刷新任务在首次拉取前关闭");
-                    return PeriodicTaskStartup::Stop;
-                }
-                () = sleep(Duration::from_millis(self.initial_delay_ms)) => {}
+    async fn run_initial_refresh(&self, shutdown_rx: &mut mpsc::Receiver<()>) {
+        tokio::select! {
+            _ = shutdown_rx.recv() => {
+                info!("模型刷新任务在首次拉取前关闭");
+                return;
             }
+            () = sleep(Duration::from_millis(self.initial_delay_ms)) => {}
+        }
 
-            let mut attempt = 0;
-            let mut has_fetched_once = false;
-            let mut deferred_until_accounts_available = false;
-
-            while attempt < self.max_retries {
-                match self.refresh_once().await {
-                    Ok(result) => {
-                        info!(
-                            refreshed_plans = result.refreshed_plans,
-                            model_count = result.model_count,
-                            "首次模型刷新成功"
-                        );
-                        has_fetched_once = true;
-                        break;
-                    }
-                    Err(error) => {
-                        attempt += 1;
-                        if matches!(error, ModelServiceError::NoAccounts) {
-                            info!("首次模型刷新跳过：没有可用账户，将进入周期重试");
-                            deferred_until_accounts_available = true;
-                            break;
-                        }
-
-                        warn!(
-                            attempt,
-                            max_retries = self.max_retries,
-                            error = ?error,
-                            "首次模型刷新失败"
-                        );
-
-                        if attempt < self.max_retries {
-                            tokio::select! {
-                                _ = shutdown_rx.recv() => {
-                                    info!("模型刷新任务在重试等待期间关闭");
-                                    return PeriodicTaskStartup::Stop;
-                                }
-                                () = sleep(Duration::from_millis(self.retry_delay_ms)) => {}
-                            }
-                        }
-                    }
-                }
-            }
-
-            if !has_fetched_once && !deferred_until_accounts_available {
-                warn!("模型刷新任务首次尝试全部失败，切换到周期刷新");
-            }
-
-            PeriodicTaskStartup::Continue
-        })
-    }
-
-    fn tick(&mut self) -> super::periodic::TaskFuture<'_, ()> {
-        Box::pin(async move {
+        let mut attempt = 0;
+        while attempt < self.max_retries {
             match self.refresh_once().await {
-                Ok(_) => {}
+                Ok(result) => {
+                    info!(
+                        refreshed_plans = result.refreshed_plans,
+                        model_count = result.model_count,
+                        "首次模型刷新成功"
+                    );
+                    return;
+                }
                 Err(ModelServiceError::NoAccounts) => {
-                    info!("模型刷新跳过：没有可用账户");
+                    info!("首次模型刷新跳过：没有可用账户，后续由 ETag 或手动操作触发");
+                    return;
                 }
                 Err(error) => {
-                    warn!(error = ?error, "刷新模型列表失败");
+                    attempt += 1;
+                    warn!(
+                        attempt,
+                        max_retries = self.max_retries,
+                        error = ?error,
+                        "首次模型刷新失败"
+                    );
+
+                    if attempt < self.max_retries {
+                        tokio::select! {
+                            _ = shutdown_rx.recv() => {
+                                info!("模型刷新任务在重试等待期间关闭");
+                                return;
+                            }
+                            () = sleep(Duration::from_millis(self.retry_delay_ms)) => {}
+                        }
+                    }
                 }
             }
-        })
+        }
+        warn!("模型刷新任务首次尝试全部失败，等待 ETag 或手动操作再次触发");
     }
 }

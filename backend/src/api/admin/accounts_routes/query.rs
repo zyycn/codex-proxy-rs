@@ -513,7 +513,9 @@ pub(super) fn account_error(error: &AccountManageError) -> AdminError {
         | AccountManageError::OAuthCallbackInvalid
         | AccountManageError::OAuthStateMismatch
         | AccountManageError::NoValidCookies => AdminError::bad_request(error.to_string()),
-        AccountManageError::OAuthCodeExchange(_) => AdminError::bad_gateway(error.to_string()),
+        AccountManageError::OAuthCodeExchange(_) | AccountManageError::RefreshModels(_) => {
+            AdminError::bad_gateway(error.to_string())
+        }
         AccountManageError::NotFound => account_not_found(),
         AccountManageError::Inactive(_) => AdminError::conflict(error.to_string()),
         _ => AdminError::internal(error.to_string()),

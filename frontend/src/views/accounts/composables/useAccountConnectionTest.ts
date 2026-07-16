@@ -3,8 +3,9 @@ import { CheckCircle2, Clock3, Wifi, XCircle } from '@lucide/vue'
 import { useEventSource } from '@vueuse/core'
 import { clamp } from 'es-toolkit'
 
-import { getAccountModels } from '@/api'
+import { getAccountModels, refreshAccountModels } from '@/api'
 import { API_BASE_URL } from '@/api/constants'
+import { toast } from '@/components/base/BaseToast'
 import { withMinimumDuration } from '@/utils/async'
 import { formatDateTime, formatTime } from '@/utils/date'
 
@@ -77,6 +78,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
   const connectionTestDurationMs = shallowRef<number | null>(null)
   const testingConnectionIds = ref<Set<string>>(new Set())
   const loadingConnectionTestModels = shallowRef(false)
+  const refreshingConnectionTestModels = shallowRef(false)
   const connectionTestSelectedModel = shallowRef('')
   const connectionTestModelOptions = ref<ConnectionTestModelOption[]>([])
   const connectionTestUrl = shallowRef<string | undefined>()
@@ -323,11 +325,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     connectionTestError.value = ''
     try {
       const result = (await getAccountModels({ id: account.id })) as AccountModelsResponse
-      connectionTestModelOptions.value = (result.models ?? []).map((model) => ({
-        label: model.label || model.id,
-        value: model.id,
-      }))
-      connectionTestSelectedModel.value = connectionTestModelOptions.value[0]?.value || ''
+      applyConnectionTestModels(result)
       if (!connectionTestSelectedModel.value) {
         connectionTestError.value = '没有可测试模型'
       }
@@ -337,6 +335,35 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
       connectionTestSelectedModel.value = ''
     } finally {
       loadingConnectionTestModels.value = false
+    }
+  }
+
+  function applyConnectionTestModels(result: AccountModelsResponse, preserveSelection = false) {
+    const previousSelection = preserveSelection ? connectionTestSelectedModel.value : ''
+    connectionTestModelOptions.value = (result.models ?? []).map((model) => ({
+      label: model.label || model.id,
+      value: model.id,
+    }))
+    connectionTestSelectedModel.value = connectionTestModelOptions.value.some(
+      (model) => model.value === previousSelection,
+    )
+      ? previousSelection
+      : connectionTestModelOptions.value[0]?.value || ''
+  }
+
+  async function handleRefreshConnectionTestModels(account = testingAccount.value) {
+    if (!account?.id || refreshingConnectionTestModels.value) return
+    refreshingConnectionTestModels.value = true
+    connectionTestError.value = ''
+    try {
+      const result = (await refreshAccountModels({ id: account.id })) as AccountModelsResponse
+      applyConnectionTestModels(result, true)
+      toast.success(`已刷新 ${connectionTestModelOptions.value.length} 个上游模型`)
+    } catch (error: unknown) {
+      connectionTestError.value = errorMessage(error, '刷新上游模型失败')
+      toast.error(connectionTestError.value)
+    } finally {
+      refreshingConnectionTestModels.value = false
     }
   }
 
@@ -429,10 +456,12 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     connectionTestDurationMs,
     testingConnectionIds,
     loadingConnectionTestModels,
+    refreshingConnectionTestModels,
     connectionTestSelectedModel,
     connectionTestModelOptions,
     connectionTestStatusView,
     openConnectionTest,
+    handleRefreshConnectionTestModels,
     handleTestConnection,
   }
 }

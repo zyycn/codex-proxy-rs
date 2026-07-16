@@ -95,10 +95,12 @@ const {
   connectionTestDurationMs,
   testingConnectionIds,
   loadingConnectionTestModels,
+  refreshingConnectionTestModels,
   connectionTestSelectedModel,
   connectionTestModelOptions,
   connectionTestStatusView,
   openConnectionTest,
+  handleRefreshConnectionTestModels,
   handleTestConnection,
 } = useAccountConnectionTest({
   onAccountStatus: patchAccountStatus,
@@ -292,12 +294,14 @@ bindAccountLoader(loadAccounts)
       :error="connectionTestError"
       :finished-at="connectionTestFinishedAt"
       :loading-models="loadingConnectionTestModels"
+      :refreshing-models="refreshingConnectionTestModels"
       :logs="connectionTestLogs"
       :model="connectionTestModel"
       :model-options="connectionTestModelOptions"
       :started-at="connectionTestStartedAt"
       :status="connectionTestStatus"
       :status-view="connectionTestStatusView"
+      @refresh-models="handleRefreshConnectionTestModels()"
       @test="handleTestConnection()"
     />
 

@@ -414,12 +414,17 @@ async fn responses_should_return_no_available_accounts_error_when_no_accounts_ar
 #[tokio::test]
 async fn responses_should_fallback_to_next_account_after_rate_limit() {
     let server = MockServer::start().await;
+    let reset_at = Utc::now().timestamp() + 120;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
         .and(header("authorization", "Bearer access-primary"))
         .respond_with(
             ResponseTemplate::new(429)
                 .insert_header("retry-after", "120")
+                .insert_header("x-codex-active-limit", "codex")
+                .insert_header("x-codex-primary-used-percent", "100")
+                .insert_header("x-codex-primary-window-minutes", "5")
+                .insert_header("x-codex-primary-reset-at", reset_at.to_string())
                 .set_body_json(json!({
                     "error": {
                         "message": "rate limited",
@@ -484,6 +489,13 @@ async fn responses_should_fallback_to_next_account_after_rate_limit() {
     .unwrap();
     assert_eq!(primary_usage, (1, 0, 0));
     assert_eq!(secondary_usage, (1, 5, 2));
+    let quota: (Value,) = sqlx::query_as("select quota_json from accounts where id = $1")
+        .bind("acct_primary")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(quota.0["active_limit"], "codex");
+    assert_eq!(quota.0["snapshots"][0]["primary"]["reset_at"], reset_at);
 }
 
 #[tokio::test]
@@ -856,7 +868,7 @@ async fn responses_stream_should_mark_banned_after_402_deactivated_workspace_and
 }
 
 #[tokio::test]
-async fn responses_should_mark_banned_after_403_and_fallback() {
+async fn responses_should_return_generic_403_without_banning_or_fallback() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -875,7 +887,7 @@ async fn responses_should_mark_banned_after_403_and_fallback() {
                 .insert_header("content-type", "text/event-stream")
                 .set_body_string(RESPONSES_AFTER_403_SSE),
         )
-        .expect(1)
+        .expect(0)
         .mount(&server)
         .await;
 
@@ -908,9 +920,9 @@ async fn responses_should_mark_banned_after_403_and_fallback() {
         .await
         .unwrap();
 
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["id"], "resp_after_403");
-    assert_eq!(account_status.0, "banned");
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"]["message"], "request forbidden");
+    assert_eq!(account_status.0, "active");
 }
 
 #[tokio::test]
@@ -2152,7 +2164,7 @@ async fn responses_stream_should_return_auth_error_when_401_fallback_is_exhauste
 }
 
 #[tokio::test]
-async fn responses_stream_should_mark_banned_after_403_and_fallback() {
+async fn responses_stream_should_return_generic_403_without_banning_or_fallback() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -2171,7 +2183,7 @@ async fn responses_stream_should_mark_banned_after_403_and_fallback() {
                 .insert_header("content-type", "text/event-stream")
                 .set_body_string(RESPONSES_STREAM_AFTER_403_SSE),
         )
-        .expect(1)
+        .expect(0)
         .mount(&server)
         .await;
 
@@ -2210,10 +2222,10 @@ async fn responses_stream_should_mark_banned_after_403_and_fallback() {
         .await
         .unwrap();
 
-    assert_eq!(status, StatusCode::OK);
-    assert!(content_type.starts_with("text/event-stream"));
-    assert!(body.contains("resp_stream_after_403"));
-    assert_eq!(account_status.0, "banned");
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(content_type.starts_with("application/json"));
+    assert!(body.contains("request forbidden"));
+    assert_eq!(account_status.0, "active");
 }
 
 #[tokio::test]

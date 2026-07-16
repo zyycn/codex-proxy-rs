@@ -60,3 +60,29 @@ pub async fn account_models(
         Err(error) => Err(account_error(&error)),
     }
 }
+
+/// `POST /api/admin/accounts/models`
+pub async fn refresh_account_models(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Json(payload): Json<AccountActionRequest>,
+) -> Result<impl IntoResponse, AdminError> {
+    let models = state
+        .services
+        .admin_accounts
+        .refresh_account_models(&payload.id)
+        .await
+        .map_err(|error| account_error(&error))?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(AccountModelsData {
+            models: models
+                .into_iter()
+                .map(|model| AccountModelData {
+                    id: model.id,
+                    label: model.label,
+                })
+                .collect(),
+        }),
+    ))
+}

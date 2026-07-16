@@ -238,6 +238,8 @@ pub struct CreditsSnapshot {
 pub struct ParsedRateLimits {
     /// 以标准化 limit ID 为键的全部计量项。
     pub limits: BTreeMap<String, RateLimitDetails>,
+    /// 当前响应对应的计量项 ID。
+    pub active_limit: Option<String>,
     pub credits: Option<CreditsSnapshot>,
     pub plan_type: Option<String>,
     pub promo_message: Option<String>,
@@ -251,10 +253,15 @@ pub fn parse_rate_limit_headers(headers: &[(String, String)]) -> Option<ParsedRa
         normalized.insert(name.to_ascii_lowercase(), value.trim());
     }
 
+    let active_limit = lookup_non_empty(&normalized, "x-codex-active-limit")
+        .map(|limit_id| normalize_limit_id(&limit_id));
     let mut limit_ids = normalized
         .keys()
         .filter_map(|name| rate_limit_id_from_header_name(name))
         .collect::<std::collections::BTreeSet<_>>();
+    if let Some(active_limit) = &active_limit {
+        limit_ids.insert(active_limit.clone());
+    }
     limit_ids.insert("codex".to_string());
     let limits = limit_ids
         .into_iter()
@@ -270,6 +277,7 @@ pub fn parse_rate_limit_headers(headers: &[(String, String)]) -> Option<ParsedRa
     let rate_limit_reached_type = lookup_non_empty(&normalized, "x-codex-rate-limit-reached-type");
 
     if limits.is_empty()
+        && active_limit.is_none()
         && credits.is_none()
         && plan_type.is_none()
         && promo_message.is_none()
@@ -280,6 +288,7 @@ pub fn parse_rate_limit_headers(headers: &[(String, String)]) -> Option<ParsedRa
 
     Some(ParsedRateLimits {
         limits,
+        active_limit,
         credits,
         plan_type,
         promo_message,
@@ -298,6 +307,7 @@ pub(crate) fn is_rate_limit_header_name(name: &str) -> bool {
             "x-codex-credits-has-credits"
                 | "x-codex-credits-unlimited"
                 | "x-codex-credits-balance"
+                | "x-codex-active-limit"
                 | "x-codex-plan-type"
                 | "x-codex-promo-message"
                 | "x-codex-rate-limit-reached-type"
@@ -343,10 +353,11 @@ pub fn parse_rate_limits_event(value: &Value) -> Option<ParsedRateLimits> {
 
     let mut limits = BTreeMap::new();
     if let Some(details) = details {
-        limits.insert(limit_id, details);
+        limits.insert(limit_id.clone(), details);
     }
     Some(ParsedRateLimits {
         limits,
+        active_limit: Some(limit_id),
         credits,
         plan_type,
         promo_message: value
@@ -430,9 +441,19 @@ pub fn rate_limit_quota(
     let spend_control = existing_quota
         .and_then(|quota| quota.get("spend_control").cloned())
         .unwrap_or(Value::Null);
+    let active_limit = rate_limits.active_limit.as_ref().map_or_else(
+        || {
+            existing_quota
+                .and_then(|quota| quota.get("active_limit"))
+                .cloned()
+                .unwrap_or(Value::Null)
+        },
+        |limit| Value::String(limit.clone()),
+    );
 
     json!({
         "plan_type": rate_limits.plan_type.as_deref().or(plan_type).unwrap_or("unknown"),
+        "active_limit": active_limit,
         "snapshots": snapshots,
         "monthly_limit": monthly_limit,
         "credits": credits,
@@ -445,6 +466,9 @@ pub fn rate_limit_quota(
 /// 将限流状态转换回内部传输头键值对。
 pub fn rate_limits_to_header_pairs(rate_limits: &ParsedRateLimits) -> Vec<(String, String)> {
     let mut headers = Vec::new();
+    if let Some(active_limit) = &rate_limits.active_limit {
+        headers.push(("x-codex-active-limit".to_string(), active_limit.clone()));
+    }
     for details in rate_limits.limits.values() {
         let prefix = format!("x-{}", details.limit_id.replace('_', "-"));
         push_window_headers(&mut headers, &format!("{prefix}-primary"), details.primary);

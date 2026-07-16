@@ -1,3 +1,4 @@
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use codex_proxy_rs::upstream::openai::transport::CodexUpstreamDiagnostics;
 use reqwest::header::{HeaderMap, HeaderValue};
 
@@ -23,4 +24,46 @@ fn diagnostics_should_not_treat_cf_ray_as_request_id() {
 
     assert_eq!(diagnostics.request_id, None);
     assert_eq!(diagnostics.cf_ray(), Some("ray_1"));
+}
+
+#[test]
+fn diagnostics_should_extract_oai_request_id() {
+    let mut headers = HeaderMap::new();
+    headers.insert("x-oai-request-id", HeaderValue::from_static("oai_req_1"));
+
+    let diagnostics = CodexUpstreamDiagnostics::from_headers(Some(500), &headers);
+
+    assert_eq!(diagnostics.request_id.as_deref(), Some("oai_req_1"));
+}
+
+#[test]
+fn diagnostics_should_extract_identity_error_facts() {
+    let encoded = STANDARD.encode(r#"{"error":{"code":"token_expired"}}"#);
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-openai-authorization-error",
+        HeaderValue::from_static("authorization failed"),
+    );
+    headers.insert("x-error-json", HeaderValue::from_str(&encoded).unwrap());
+
+    let diagnostics = CodexUpstreamDiagnostics::from_headers(Some(403), &headers);
+
+    assert_eq!(
+        diagnostics.identity_authorization_error.as_deref(),
+        Some("authorization failed")
+    );
+    assert_eq!(
+        diagnostics.identity_error_code.as_deref(),
+        Some("token_expired")
+    );
+}
+
+#[test]
+fn diagnostics_should_ignore_malformed_identity_error_json() {
+    let mut headers = HeaderMap::new();
+    headers.insert("x-error-json", HeaderValue::from_static("not-base64"));
+
+    let diagnostics = CodexUpstreamDiagnostics::from_headers(Some(403), &headers);
+
+    assert_eq!(diagnostics.identity_error_code, None);
 }

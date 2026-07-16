@@ -86,3 +86,11 @@ export function getAccountModels(data: any) {
     },
   })
 }
+
+export function refreshAccountModels(data: any) {
+  return request({
+    url: '/api/admin/accounts/models',
+    method: 'POST',
+    data,
+  })
+}

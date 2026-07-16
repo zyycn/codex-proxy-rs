@@ -44,7 +44,7 @@ async fn responses_json_should_preserve_upstream_client_failure() {
     let body = response_json(response).await;
 
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(body["error"]["code"], "server_overloaded");
+    assert_eq!(body["error"]["code"], "server_is_overloaded");
     assert_eq!(
         body["error"]["message"],
         "upstream is temporarily overloaded"
@@ -97,9 +97,23 @@ async fn responses_sse_should_preserve_upstream_client_failure() {
 
     assert_eq!(status, StatusCode::OK);
     assert!(content_type.starts_with("text/event-stream"));
-    assert!(body.contains(r#""code":"server_overloaded""#));
+    assert!(body.contains(r#""code":"server_is_overloaded""#));
     assert!(body.contains("upstream is temporarily overloaded"));
     assert!(body.ends_with("data: [DONE]\n\n"));
+}
+
+#[tokio::test]
+async fn responses_context_length_exceeded_should_return_bad_request() {
+    let status = complete_response_failure_status("context_length_exceeded").await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn responses_usage_not_included_should_return_forbidden() {
+    let status = complete_response_failure_status("usage_not_included").await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -126,6 +140,53 @@ async fn responses_should_reject_invalid_json_without_upstream_request() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"]["code"], "invalid_request");
     assert!(requests.is_empty());
+}
+
+async fn complete_response_failure_status(code: &str) -> StatusCode {
+    let server = MockServer::start().await;
+    let body = format!(
+        "event: response.failed\ndata: {}\n\n",
+        json!({
+            "response": {
+                "id": "resp_failed",
+                "object": "response",
+                "status": "failed",
+                "error": {"code": code, "message": "upstream rejected request"}
+            }
+        })
+    );
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (app, api_key, _dir) = test_app_with_account(server.uri()).await;
+
+    app.oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .header("authorization", format!("Bearer {api_key}"))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "model": "gpt-5.5",
+                    "input": [],
+                    "stream": false,
+                    "use_websocket": false
+                })
+                .to_string(),
+            ))
+            .unwrap(),
+    )
+    .await
+    .unwrap()
+    .status()
 }
 
 #[tokio::test]

@@ -19,7 +19,10 @@ use crate::{
             AccountIdentityScope, AccountIdentityService, AccountScopedRequest,
             SessionAffinityService,
         },
-        errors::{ClientFailure, ResponseDispatchError, upstream_error_set_cookie_headers},
+        errors::{
+            ClientFailure, ResponseDispatchError, upstream_error_rate_limit_headers,
+            upstream_error_set_cookie_headers,
+        },
         lifecycle::trace::{ResponseDispatchAttempt, ResponseDispatchTrace},
     },
     fleet::{account::Account, pool::AccountLease},
@@ -271,20 +274,9 @@ pub(in crate::dispatch) struct ControllerEnter {
     pub excluded_account_ids: BTreeSet<String>,
 }
 
-pub(in crate::dispatch) struct AttemptAccountPreparationContext<'a> {
-    pub codex: &'a CodexBackendClient,
-    pub account_identity: &'a AccountIdentityService,
-    pub request_id: &'a str,
-}
-
 pub(in crate::dispatch) struct PreparedAttemptAccount {
     pub lease: AccountLease,
     pub cookie_header: Option<String>,
-}
-
-pub(in crate::dispatch) enum AttemptAccountPreparation {
-    Ready(Box<PreparedAttemptAccount>),
-    Rejected,
 }
 
 pub(in crate::dispatch) struct AttemptRoutePreparationContext<'a> {
@@ -300,38 +292,16 @@ pub(in crate::dispatch) enum AttemptRoutePreparation {
 impl ControllerSet {
     pub(in crate::dispatch) async fn prepare_attempt_account(
         &self,
-        context: AttemptAccountPreparationContext<'_>,
         acquired: AccountLease,
-    ) -> AttemptAccountPreparation {
-        let usage_cookie = self
-            .cloudflare
-            .cookie_header_for_request(&acquired.account.id, "/codex/usage")
-            .await;
-        let acquired = match QuotaController::enter(
-            quota::QuotaEnterContext {
-                account_pool: &self.account_pool,
-                codex: context.codex,
-                cookie_header: usage_cookie.as_deref(),
-                account_identity: context.account_identity,
-                request_id: context.request_id,
-            },
-            acquired,
-        )
-        .await
-        {
-            quota::QuotaEnterOutcome::Ready(acquired) => *acquired,
-            quota::QuotaEnterOutcome::LimitReached => {
-                return AttemptAccountPreparation::Rejected;
-            }
-        };
+    ) -> PreparedAttemptAccount {
         let cookie_header = self
             .cloudflare
             .cookie_header_for_request(&acquired.account.id, "/codex/responses")
             .await;
-        AttemptAccountPreparation::Ready(Box::new(PreparedAttemptAccount {
+        PreparedAttemptAccount {
             lease: acquired,
             cookie_header,
-        }))
+        }
     }
 
     pub(in crate::dispatch) fn prepare_attempt_route(
@@ -396,19 +366,24 @@ impl ControllerSet {
         &self,
         context: AttemptUpstreamErrorContext<'_>,
     ) {
-        let _ = best_effort_controller_io(
+        let cookie = best_effort_controller_io(
             "cookie.attempt_error",
             self.cloudflare.capture_set_cookie_headers(
                 &context.account.id,
                 upstream_error_set_cookie_headers(context.error),
             ),
-        )
-        .await;
-        let _ = best_effort_controller_io(
+        );
+        let rate_limit_headers = upstream_error_rate_limit_headers(context.error);
+        let quota = best_effort_controller_io(
+            "quota.attempt_error_headers",
+            self.account_pool
+                .sync_passive_rate_limit_headers(context.account, &rate_limit_headers),
+        );
+        let telemetry = best_effort_controller_io(
             "telemetry.attempt_error",
             telemetry::TelemetryController::observe_upstream_error(&self.recorder, &context),
-        )
-        .await;
+        );
+        let _ = tokio::join!(cookie, quota, telemetry);
     }
 
     pub(in crate::dispatch) async fn observe_dispatch_error(
@@ -943,9 +918,6 @@ impl ControllerSet {
             ),
             AttemptObservationKind::NoCandidate { .. } => {
                 AttemptDecision::Return(AttemptReturnKind::Observed)
-            }
-            AttemptObservationKind::CandidatePreparationRejected => {
-                unreachable!("candidate preparation controller owns it")
             }
             AttemptObservationKind::RoutePreparationRejected { message } => {
                 AttemptDecision::Return(AttemptReturnKind::RouteUnavailable {

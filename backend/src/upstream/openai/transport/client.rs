@@ -139,9 +139,11 @@ pub enum CodexClientError {
         /// 推导出的重试秒数。
         retry_after_seconds: Option<u64>,
         /// 上游诊断元数据。
-        diagnostics: CodexUpstreamDiagnostics,
+        diagnostics: Box<CodexUpstreamDiagnostics>,
         /// 上游透传的 `set-cookie` 列表。
         set_cookie_headers: Vec<String>,
+        /// 上游错误响应携带的限流头。
+        rate_limit_headers: Vec<(String, String)>,
         /// 实际收到该上游响应的 transport。
         transport: CodexBackendTransport,
     },
@@ -616,13 +618,22 @@ fn websocket_exchange_error_to_client_error(
     match error {
         CodexWebSocketExchangeError::Upstream(upstream) => {
             let upstream = *upstream;
+            let rate_limit_headers = upstream
+                .headers
+                .iter()
+                .filter(|(name, _)| {
+                    crate::upstream::openai::protocol::events::is_rate_limit_header_name(name)
+                })
+                .cloned()
+                .collect();
             CodexClientError::Upstream {
                 status: StatusCode::from_u16(upstream.status_code)
                     .unwrap_or(StatusCode::BAD_GATEWAY),
                 body: upstream.body,
                 retry_after_seconds: upstream.retry_after_seconds,
-                diagnostics: upstream.diagnostics,
+                diagnostics: Box::new(upstream.diagnostics),
                 set_cookie_headers: upstream.set_cookie_headers,
+                rate_limit_headers,
                 transport: CodexBackendTransport::WebSocket,
             }
         }

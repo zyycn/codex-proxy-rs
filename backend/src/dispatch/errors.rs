@@ -9,8 +9,13 @@ use crate::{
         sse::sse_failure_error_body,
     },
     upstream::openai::{
-        protocol::{responses::ResponsesSseFailure, sse::SseError},
-        transport::{CodexBackendTransport, CodexClientError, CodexUpstreamDiagnostics},
+        protocol::{
+            events::is_rate_limit_header_name, responses::ResponsesSseFailure, sse::SseError,
+        },
+        transport::{
+            CodexBackendTransport, CodexClientError, CodexUpstreamDiagnostics,
+            websocket::CodexWebSocketExchangeError,
+        },
     },
 };
 
@@ -235,6 +240,21 @@ pub(crate) fn upstream_error_set_cookie_headers(error: &CodexClientError) -> &[S
             set_cookie_headers, ..
         } => set_cookie_headers,
         _ => &[],
+    }
+}
+
+pub(crate) fn upstream_error_rate_limit_headers(error: &CodexClientError) -> Vec<(String, String)> {
+    match error {
+        CodexClientError::Upstream {
+            rate_limit_headers, ..
+        } => rate_limit_headers.clone(),
+        CodexClientError::WebSocket(CodexWebSocketExchangeError::Upstream(upstream)) => upstream
+            .headers
+            .iter()
+            .filter(|(name, _)| is_rate_limit_header_name(name))
+            .cloned()
+            .collect(),
+        _ => Vec::new(),
     }
 }
 

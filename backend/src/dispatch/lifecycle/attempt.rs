@@ -8,9 +8,8 @@ use crate::{
     dispatch::{
         affinity::AccountIdentityService,
         controllers::{
-            AttemptAccountPreparation, AttemptAccountPreparationContext, AttemptRoutePreparation,
-            AttemptRoutePreparationContext, AttemptUpstreamErrorContext, ControllerRequestScope,
-            ControllerSet,
+            AttemptRoutePreparation, AttemptRoutePreparationContext, AttemptUpstreamErrorContext,
+            ControllerRequestScope, ControllerSet,
         },
         errors::{ClientFailure, ResponseDispatchError},
         failure::exhaustion::AccountExhaustionTracker,
@@ -191,25 +190,11 @@ impl<'a> AttemptRunner<'a> {
             .controller_scope
             .as_mut()
             .ok_or(AttemptContractError::Terminal)?;
-        let prepared_account = match self
+        let prepared_account = self
             .dependencies
             .controllers
-            .prepare_attempt_account(
-                AttemptAccountPreparationContext {
-                    codex: self.dependencies.codex,
-                    account_identity: self.dependencies.account_identity,
-                    request_id: self.dependencies.request_id,
-                },
-                acquired,
-            )
-            .await
-        {
-            AttemptAccountPreparation::Ready(prepared) => *prepared,
-            AttemptAccountPreparation::Rejected => {
-                self.pending = Some(PendingAttempt::CandidatePreparationRejected { account });
-                return self.step();
-            }
-        };
+            .prepare_attempt_account(acquired)
+            .await;
         let acquired = prepared_account.lease;
         let cookie_header = prepared_account.cookie_header;
 
@@ -769,9 +754,6 @@ fn observation_kind(
                 kind: *kind,
             }
         }
-        PendingAttempt::CandidatePreparationRejected { .. } => {
-            AttemptObservationKind::CandidatePreparationRejected
-        }
         PendingAttempt::RoutePreparationRejected { message, .. } => {
             AttemptObservationKind::RoutePreparationRejected {
                 message: message.clone(),
@@ -840,17 +822,15 @@ async fn rejection_error(
             })
         }
         AttemptReturnKind::Observed => match pending {
-            PendingAttempt::NoCandidate | PendingAttempt::CandidatePreparationRejected { .. } => {
-                Ok(on_exhaustion.map_or_else(
-                    || {
-                        exhaustion
-                            .last_exhausted()
-                            .map(ResponseDispatchError::from_exhausted_account)
-                            .unwrap_or(ResponseDispatchError::NoActiveAccount)
-                    },
-                    ResponseDispatchError::Failed,
-                ))
-            }
+            PendingAttempt::NoCandidate => Ok(on_exhaustion.map_or_else(
+                || {
+                    exhaustion
+                        .last_exhausted()
+                        .map(ResponseDispatchError::from_exhausted_account)
+                        .unwrap_or(ResponseDispatchError::NoActiveAccount)
+                },
+                ResponseDispatchError::Failed,
+            )),
             PendingAttempt::RoutePreparationRejected { message, .. } => {
                 Ok(ResponseDispatchError::HistoryUnavailable {
                     upstream_error: message,
@@ -902,8 +882,7 @@ fn pending_account(pending: &PendingAttempt) -> Option<&str> {
 fn pending_account_value(pending: &PendingAttempt) -> Option<&Account> {
     match pending {
         PendingAttempt::NoCandidate | PendingAttempt::PinnedCandidateUnavailable { .. } => None,
-        PendingAttempt::CandidatePreparationRejected { account }
-        | PendingAttempt::RoutePreparationRejected { account, .. }
+        PendingAttempt::RoutePreparationRejected { account, .. }
         | PendingAttempt::UpstreamFailure { account, .. }
         | PendingAttempt::ProtocolFailure { account, .. } => Some(account),
         PendingAttempt::CompleteResponse(complete) => Some(&complete.account),
@@ -919,7 +898,6 @@ fn pending_attempt(pending: &PendingAttempt) -> Option<&super::trace::ResponseDi
         PendingAttempt::StreamResponse(stream) => Some(&stream.attempt),
         PendingAttempt::NoCandidate
         | PendingAttempt::PinnedCandidateUnavailable { .. }
-        | PendingAttempt::CandidatePreparationRejected { .. }
         | PendingAttempt::RoutePreparationRejected { .. } => None,
     }
 }
@@ -936,7 +914,6 @@ fn pending_attempt_request(pending: &PendingAttempt) -> Option<&CodexResponsesRe
         PendingAttempt::StreamResponse(stream) => Some(&stream.attempt_request),
         PendingAttempt::NoCandidate
         | PendingAttempt::PinnedCandidateUnavailable { .. }
-        | PendingAttempt::CandidatePreparationRejected { .. }
         | PendingAttempt::RoutePreparationRejected { .. } => None,
     }
 }
@@ -951,7 +928,6 @@ fn pending_transport(
         PendingAttempt::StreamResponse(stream) => Some(stream.response.transport),
         PendingAttempt::NoCandidate
         | PendingAttempt::PinnedCandidateUnavailable { .. }
-        | PendingAttempt::CandidatePreparationRejected { .. }
         | PendingAttempt::RoutePreparationRejected { .. } => None,
     }
 }
@@ -973,7 +949,6 @@ fn invalid(decision: &'static str, pending: &PendingAttempt) -> AttemptContractE
         observation: match pending {
             PendingAttempt::NoCandidate => "no_candidate",
             PendingAttempt::PinnedCandidateUnavailable { .. } => "pinned_candidate_unavailable",
-            PendingAttempt::CandidatePreparationRejected { .. } => "candidate_preparation_rejected",
             PendingAttempt::RoutePreparationRejected { .. } => "route_preparation_rejected",
             PendingAttempt::UpstreamFailure { .. } => "upstream_failure",
             PendingAttempt::ProtocolFailure { .. } => "protocol_failure",

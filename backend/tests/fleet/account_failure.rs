@@ -60,6 +60,38 @@ fn html_forbidden_page_should_not_ban_account() {
     assert!(classify_client_failure(&error).is_none());
 }
 
+#[test]
+fn generic_forbidden_should_not_ban_account() {
+    let error = upstream_error(403, r#"{"error":{"message":"request forbidden"}}"#);
+
+    assert!(classify_client_failure(&error).is_none());
+}
+
+#[test]
+fn generic_permission_error_should_not_ban_account() {
+    let error = upstream_error(
+        403,
+        r#"{"error":{"code":"forbidden","type":"permission_error"}}"#,
+    );
+
+    assert!(classify_client_failure(&error).is_none());
+}
+
+#[test]
+fn identity_error_header_should_expire_account() {
+    let mut diagnostics = CodexUpstreamDiagnostics::with_status(403);
+    diagnostics.identity_error_code = Some("token_expired".to_string());
+    let error = upstream_error_with_diagnostics(
+        403,
+        r#"{"error":{"message":"request forbidden"}}"#,
+        diagnostics,
+    );
+
+    let failure = classify_client_failure(&error).expect("identity failure should be classified");
+
+    assert_eq!(failure.kind, AccountFailureKind::Expired);
+}
+
 fn classify(
     status: u16,
     body: &str,
@@ -68,12 +100,21 @@ fn classify(
 }
 
 fn upstream_error(status: u16, body: &str) -> CodexClientError {
+    upstream_error_with_diagnostics(status, body, CodexUpstreamDiagnostics::with_status(status))
+}
+
+fn upstream_error_with_diagnostics(
+    status: u16,
+    body: &str,
+    diagnostics: CodexUpstreamDiagnostics,
+) -> CodexClientError {
     CodexClientError::Upstream {
         status: StatusCode::from_u16(status).unwrap(),
         body: body.to_string(),
         retry_after_seconds: None,
-        diagnostics: CodexUpstreamDiagnostics::with_status(status),
+        diagnostics: Box::new(diagnostics),
         set_cookie_headers: Vec::new(),
+        rate_limit_headers: Vec::new(),
         transport: CodexBackendTransport::HttpSse,
     }
 }

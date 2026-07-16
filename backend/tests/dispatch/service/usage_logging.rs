@@ -399,6 +399,7 @@ async fn responses_should_passively_cache_rate_limit_headers() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
+                .insert_header("x-codex-active-limit", "codex")
                 .insert_header("x-codex-primary-used-percent", "100")
                 .insert_header("x-codex-primary-window-minutes", "5")
                 .insert_header("x-codex-primary-reset-at", reset_at.to_string())
@@ -440,6 +441,10 @@ async fn responses_should_passively_cache_rate_limit_headers() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+    let upstream_requests = server.received_requests().await.unwrap();
+    assert_eq!(upstream_requests.len(), 1);
+    assert_eq!(upstream_requests[0].method.as_str(), "POST");
+    assert_eq!(upstream_requests[0].url.path(), "/codex/responses");
     let stored: (
         Value,
         String,
@@ -454,6 +459,7 @@ async fn responses_should_passively_cache_rate_limit_headers() {
     .await
     .unwrap();
     let quota = stored.0;
+    assert_eq!(quota["active_limit"], "codex");
     assert_eq!(quota["snapshots"][0]["source"], "core");
     assert_eq!(quota["snapshots"][0]["primary"]["limit_reached"], true);
     assert_eq!(quota["snapshots"][0]["primary"]["reset_at"], reset_at);

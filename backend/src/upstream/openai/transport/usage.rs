@@ -34,8 +34,9 @@ impl CodexBackendClient {
                     retry_after_seconds: retry_after_seconds
                         .or_else(|| retry_after_seconds_from_body(&body)),
                     body,
-                    diagnostics,
+                    diagnostics: Box::new(diagnostics),
                     set_cookie_headers: Vec::new(),
+                    rate_limit_headers: Vec::new(),
                     transport: super::client::CodexBackendTransport::HttpSse,
                 });
             }
@@ -54,8 +55,11 @@ impl CodexBackendClient {
                 || "usage endpoint is unavailable".to_string(),
                 |body| format!("invalid usage response: {}", truncate_for_error(&body)),
             ),
-            diagnostics: CodexUpstreamDiagnostics::with_status(StatusCode::BAD_GATEWAY.as_u16()),
+            diagnostics: Box::new(CodexUpstreamDiagnostics::with_status(
+                StatusCode::BAD_GATEWAY.as_u16(),
+            )),
             set_cookie_headers: Vec::new(),
+            rate_limit_headers: Vec::new(),
             transport: super::client::CodexBackendTransport::HttpSse,
         })
     }

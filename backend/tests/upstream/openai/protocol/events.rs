@@ -349,6 +349,10 @@ fn parse_rate_limit_headers_should_extract_arbitrary_limits_and_account_metadata
             "63.5".to_string(),
         ),
         (
+            "x-codex-active-limit".to_string(),
+            "codex-other".to_string(),
+        ),
+        (
             "x-codex-other-primary-window-minutes".to_string(),
             "1440".to_string(),
         ),
@@ -371,6 +375,7 @@ fn parse_rate_limit_headers_should_extract_arbitrary_limits_and_account_metadata
     ];
 
     let parsed = parse_rate_limit_headers(&headers).expect("rate limits should parse");
+    assert_eq!(parsed.active_limit.as_deref(), Some("codex_other"));
     let other = parsed.limits.get("codex_other").expect("dynamic limit");
     assert_eq!(other.limit_name.as_deref(), Some("Codex Other"));
     assert_eq!(
