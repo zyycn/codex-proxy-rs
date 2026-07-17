@@ -730,6 +730,24 @@ async fn responses_stream_should_preserve_body_metadata_when_capture_body_enable
 
     let (app, api_key, pool, _dir) =
         test_app_with_account_pool_and_telemetry_capture_body(server.uri()).await;
+    // Force telemetry past the controller wait budget; persistence must outlive that timeout.
+    sqlx::raw_sql(
+        r#"
+        create function delay_usage_record_insert() returns trigger as $$
+        begin
+          perform pg_sleep(0.2);
+          return new;
+        end;
+        $$ language plpgsql;
+
+        create trigger delay_usage_record_insert
+        before insert on usage_records
+        for each row execute function delay_usage_record_insert();
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let response = app
         .oneshot(
             Request::builder()

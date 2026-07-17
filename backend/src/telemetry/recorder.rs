@@ -25,6 +25,8 @@ pub struct Recorder {
 pub enum RecorderError {
     #[error("invalid success usage fact")]
     InvalidUsageFact,
+    #[error("telemetry persistence task failed: {0}")]
+    Task(#[from] tokio::task::JoinError),
     #[error(transparent)]
     Usage(#[from] PgUsageRecordStoreError),
     #[error(transparent)]
@@ -62,13 +64,16 @@ impl Recorder {
             return Err(RecorderError::InvalidUsageFact);
         }
         apply_capture_body_policy(&mut event.metadata, self.capture_body);
-        self.usage_records.append(&event).await?;
+        let usage_records = self.usage_records.clone();
+        // Controller timeouts must stop waiting without cancelling an in-flight fact write.
+        tokio::spawn(async move { usage_records.append(&event).await }).await??;
         Ok(())
     }
 
     pub async fn record_error(&self, mut event: OpsErrorLog) -> Result<(), RecorderError> {
         apply_capture_body_policy(&mut event.metadata, self.capture_body);
-        self.ops_errors.append(&event).await?;
+        let ops_errors = self.ops_errors.clone();
+        tokio::spawn(async move { ops_errors.append(&event).await }).await??;
         Ok(())
     }
 
