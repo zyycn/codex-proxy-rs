@@ -15,7 +15,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    admin_queries::accounts::{AccountListQuery, AccountSummary},
     api::AppState,
     api::admin::{
         response::{
@@ -448,8 +447,7 @@ pub(crate) async fn accounts(
     let sort = account_list_sort(params.sort_by, params.sort_direction)?;
     let result = state
         .services
-        .admin_queries
-        .accounts
+        .account_list
         .query(AccountListQuery {
             page,
             page_size,
@@ -501,7 +499,7 @@ mod import_routes;
 mod lifecycle_routes;
 mod oauth_routes;
 mod probe_routes;
-mod query;
+pub(crate) mod query;
 mod quota_presenter;
 mod quota_routes;
 

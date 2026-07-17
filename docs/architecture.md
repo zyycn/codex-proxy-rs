@@ -64,7 +64,6 @@ backend/src/
 ├── main.rs
 ├── lib.rs
 ├── infra/
-├── admin_queries/
 ├── upstream/
 ├── fleet/
 ├── models/
@@ -84,8 +83,7 @@ backend/src/
 | --- | --- |
 | `main` | 解析子命令，只进入 `bootstrap` 或一次性任务 |
 | `bootstrap` | 进程 composition root，可装配所有领域模块，不拥有业务规则 |
-| `api` | HTTP/WebSocket 契约、鉴权提取和最终响应编码，不写 SQL/Redis |
-| `admin_queries` | 管理端按功能组织的只读用例与消费方端口，不依赖 API presenter 或 upstream adapter |
+| `api` | HTTP/WebSocket 契约、鉴权提取、管理端功能查询和最终响应编码，不直接使用 SQL/Redis 客户端 |
 | `dispatch` | 编排一次 `v1/*` 请求，调用 `fleet`、`models`、`upstream`、`telemetry` |
 | `fleet` | 账号、调度、quota、token、Cookie 和管理操作 |
 | `upstream` | Codex 协议与 HTTP/WebSocket transport，不选择账号 |
@@ -197,7 +195,7 @@ upstream/openai/
 
 `bootstrap` 负责配置、依赖装配、启动任务和关闭协调；它不解释账号错误、history 或 transport outcome。
 
-Dashboard 和账号列表由 `admin_queries` 完成跨域读取，route 只解析参数，presenter 只负责 HTTP casing、显示文本和格式化。上游请求画像与 Desktop 发布观测通过 `admin_queries` 定义的快照端口注入，query service 不引用 OpenAI adapter 类型。
+Dashboard 查询归入 `api/admin/dashboard_routes.rs`，账号列表查询归入 `api/admin/accounts_routes/query.rs`。HTTP handler 负责参数、鉴权和响应，文件内 query service 负责跨域读取，presenter 负责 casing、显示文本和格式化。上游请求画像与 Desktop 发布观测通过 Dashboard 模块定义的快照端口注入，不直接引用 OpenAI adapter 类型。
 
 ## v1 请求生命周期
 

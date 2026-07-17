@@ -6,6 +6,14 @@ use axum::Router;
 use secrecy::ExposeSecret;
 
 use crate::{
+    api::admin::{
+        accounts_routes::query::{AccountListQueryService, RefreshActivityQuery},
+        dashboard_routes::{
+            DashboardDesktopRelease, DashboardDesktopReleaseQuery, DashboardDesktopReleaseSnapshot,
+            DashboardQueryService, DashboardQueryServiceParts, DashboardWireProfile,
+            DashboardWireProfileQuery,
+        },
+    },
     auth::{
         service::SessionService,
         store::{PgAdminUserStore, RedisAdminSessionStore},
@@ -147,11 +155,11 @@ impl UsageRecordOptions {
     }
 }
 
-impl crate::admin_queries::dashboard::DashboardWireProfileQuery for CodexWireProfileState {
-    fn snapshot(&self) -> crate::admin_queries::dashboard::DashboardWireProfile {
+impl DashboardWireProfileQuery for CodexWireProfileState {
+    fn snapshot(&self) -> DashboardWireProfile {
         let profile = CodexWireProfileState::snapshot(self);
         let user_agent = profile.user_agent();
-        crate::admin_queries::dashboard::DashboardWireProfile {
+        DashboardWireProfile {
             originator: profile.originator,
             codex_version: profile.codex_version,
             desktop_version: profile.desktop_version,
@@ -166,22 +174,20 @@ impl crate::admin_queries::dashboard::DashboardWireProfileQuery for CodexWirePro
     }
 }
 
-impl crate::admin_queries::dashboard::DashboardDesktopReleaseQuery for DesktopReleaseStatus {
-    fn snapshot(&self) -> crate::admin_queries::dashboard::DashboardDesktopReleaseSnapshot {
+impl DashboardDesktopReleaseQuery for DesktopReleaseStatus {
+    fn snapshot(&self) -> DashboardDesktopReleaseSnapshot {
         let snapshot = DesktopReleaseStatus::snapshot(self);
-        crate::admin_queries::dashboard::DashboardDesktopReleaseSnapshot {
+        DashboardDesktopReleaseSnapshot {
             checked_at: snapshot.checked_at,
-            latest: snapshot.latest.map(|release| {
-                crate::admin_queries::dashboard::DashboardDesktopRelease {
-                    version: release.version,
-                    build: release.build,
-                    published_at: release.published_at,
-                    minimum_system_version: release.minimum_system_version,
-                    hardware_requirements: release.hardware_requirements,
-                    download_url: release.download_url,
-                    download_size: release.download_size,
-                    signature_present: release.signature_present,
-                }
+            latest: snapshot.latest.map(|release| DashboardDesktopRelease {
+                version: release.version,
+                build: release.build,
+                published_at: release.published_at,
+                minimum_system_version: release.minimum_system_version,
+                hardware_requirements: release.hardware_requirements,
+                download_url: release.download_url,
+                download_size: release.download_size,
+                signature_present: release.signature_present,
             }),
             last_error: snapshot.last_error,
         }
@@ -403,32 +409,25 @@ impl Services {
 
 impl From<&Services> for crate::api::router::ApiServices {
     fn from(services: &Services) -> Self {
-        let refresh_activity = services.token_refresh.clone()
-            as Arc<dyn crate::admin_queries::accounts::RefreshActivityQuery>;
-        let account_list = Arc::new(
-            crate::admin_queries::accounts::AccountListQueryService::new(
-                services.admin_accounts.clone(),
-                services.usage.clone(),
-                refresh_activity.clone(),
-            ),
-        );
-        let dashboard = Arc::new(crate::admin_queries::dashboard::DashboardQueryService::new(
-            crate::admin_queries::dashboard::DashboardQueryServiceParts {
-                accounts: services.accounts.clone(),
-                usage: services.usage.clone(),
-                usage_records: services.usage_records.clone(),
-                account_pool: services.account_pool.clone(),
-                refresh_activity,
-                settings: services.settings.clone(),
-                wire_profile: Arc::new(services.wire_profile.clone()),
-                desktop_release: Arc::new(services.desktop_release.clone()),
-            },
+        let refresh_activity = services.token_refresh.clone() as Arc<dyn RefreshActivityQuery>;
+        let account_list = Arc::new(AccountListQueryService::new(
+            services.admin_accounts.clone(),
+            services.usage.clone(),
+            refresh_activity.clone(),
         ));
+        let dashboard = Arc::new(DashboardQueryService::new(DashboardQueryServiceParts {
+            accounts: services.accounts.clone(),
+            usage: services.usage.clone(),
+            usage_records: services.usage_records.clone(),
+            account_pool: services.account_pool.clone(),
+            refresh_activity,
+            settings: services.settings.clone(),
+            wire_profile: Arc::new(services.wire_profile.clone()),
+            desktop_release: Arc::new(services.desktop_release.clone()),
+        }));
         Self {
-            admin_queries: crate::api::router::AdminQueries {
-                accounts: account_list,
-                dashboard,
-            },
+            account_list,
+            dashboard,
             health_probe: Arc::new(crate::bootstrap::state::RuntimeHealthProbe::new(
                 services.database.clone(),
                 services.redis.clone(),

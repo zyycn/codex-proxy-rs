@@ -1,23 +1,21 @@
 //! 管理端 Dashboard 聚合视图。
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use axum::{
     extract::{Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use thiserror::Error;
 
 use crate::{
-    admin_queries::dashboard::{
-        DashboardAccountUsage, DashboardDesktopReleaseSnapshot, DashboardPoolSummary,
-        DashboardQueryError, DashboardWireProfile,
-    },
     api::AppState,
     api::admin::{
+        accounts_routes::query::RefreshActivityQuery,
         dashboard_presenter::{
             DashboardAccountCounts, DashboardCardsData, DashboardHealthTimelineData,
             DashboardTrendData, DashboardTrendKind, dashboard_cards,
@@ -30,12 +28,28 @@ use crate::{
             usage_record_models, usage_token_details,
         },
     },
-    fleet::pool::AccountCapacitySummary,
+    fleet::{
+        account::{Account, AccountStatus},
+        pool::{AccountCapacitySummary, AccountPoolService},
+        quota::QuotaSnapshot,
+        refresh::token_refresh_status_eligible,
+        store::AccountStore,
+    },
     infra::{
         format::{format_duration_ms, format_tokens},
-        time::{china_datetime, china_relative_time},
+        time::{china_datetime, china_day_start, china_quarter_hour_start, china_relative_time},
     },
-    telemetry::usage::types::{UsageRecord, metadata_i64, metadata_string},
+    settings::service::SettingsService,
+    telemetry::{
+        account_usage::query::{
+            AccountUsageQueryService, AccountUsageTimeBucket, RetainedUsageSummary,
+        },
+        usage::{
+            insights::RequestHealthTimeBucket,
+            query::{UsageQueryFilter, UsageQueryService},
+            types::{UsageRecord, metadata_i64, metadata_string},
+        },
+    },
 };
 
 #[derive(Debug, Deserialize)]
@@ -212,7 +226,6 @@ pub(crate) async fn dashboard_summary(
     let now = Utc::now();
     let dashboard = state
         .services
-        .admin_queries
         .dashboard
         .summary(now)
         .await
@@ -253,7 +266,6 @@ pub(crate) async fn dashboard_trend(
 ) -> Result<impl IntoResponse, AdminError> {
     let time_buckets = state
         .services
-        .admin_queries
         .dashboard
         .time_buckets(Utc::now())
         .await
@@ -419,4 +431,320 @@ fn wire_profile_data(
             error: release_snapshot.last_error,
         },
     }
+}
+
+const ACCOUNT_USAGE_LIMIT: u32 = 4;
+const USAGE_RECORD_LIMIT: u32 = 10;
+const TIME_BUCKET_MINUTES: i64 = 15;
+const TIME_BUCKET_SLOTS: i64 = 7 * 24 * 4;
+
+/// Dashboard 消费的请求画像快照端口。
+pub(crate) trait DashboardWireProfileQuery: Send + Sync {
+    fn snapshot(&self) -> DashboardWireProfile;
+}
+
+/// Dashboard 消费的 Desktop 发布观测端口。
+pub(crate) trait DashboardDesktopReleaseQuery: Send + Sync {
+    fn snapshot(&self) -> DashboardDesktopReleaseSnapshot;
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DashboardWireProfile {
+    pub(crate) originator: String,
+    pub(crate) codex_version: String,
+    pub(crate) desktop_version: String,
+    pub(crate) desktop_build: String,
+    pub(crate) os_type: String,
+    pub(crate) os_version: String,
+    pub(crate) arch: String,
+    pub(crate) terminal: String,
+    pub(crate) user_agent: String,
+    pub(crate) verified_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DashboardDesktopReleaseSnapshot {
+    pub(crate) checked_at: Option<DateTime<Utc>>,
+    pub(crate) latest: Option<DashboardDesktopRelease>,
+    pub(crate) last_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DashboardDesktopRelease {
+    pub(crate) version: String,
+    pub(crate) build: String,
+    pub(crate) published_at: Option<DateTime<Utc>>,
+    pub(crate) minimum_system_version: Option<String>,
+    pub(crate) hardware_requirements: Option<String>,
+    pub(crate) download_url: Option<String>,
+    pub(crate) download_size: Option<u64>,
+    pub(crate) signature_present: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DashboardReadModel {
+    pub(crate) account_counts: DashboardQueryAccountCounts,
+    pub(crate) retained_usage: RetainedUsageSummary,
+    pub(crate) time_buckets: Vec<AccountUsageTimeBucket>,
+    pub(crate) health_buckets: Vec<RequestHealthTimeBucket>,
+    pub(crate) account_usage: Vec<DashboardAccountUsage>,
+    pub(crate) usage_records: Vec<UsageRecord>,
+    pub(crate) account_emails: HashMap<String, String>,
+    pub(crate) pool: DashboardPoolSummary,
+    pub(crate) capacity: AccountCapacitySummary,
+    pub(crate) rotation_strategy: String,
+    pub(crate) wire_profile: DashboardWireProfile,
+    pub(crate) desktop_release: DashboardDesktopReleaseSnapshot,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct DashboardQueryAccountCounts {
+    pub(crate) total: u64,
+    pub(crate) enabled: u64,
+    pub(crate) abnormal: u64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DashboardAccountUsage {
+    pub(crate) id: String,
+    pub(crate) email: String,
+    pub(crate) plan_type: Option<String>,
+    pub(crate) total_tokens: u64,
+    pub(crate) quota_used_percent: Option<f64>,
+    pub(crate) last_used_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct DashboardPoolSummary {
+    pub(crate) total: usize,
+    pub(crate) active: usize,
+    pub(crate) expired: usize,
+    pub(crate) quota_exhausted: usize,
+    pub(crate) refreshing: usize,
+    pub(crate) disabled: usize,
+    pub(crate) banned: usize,
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum DashboardQueryError {
+    #[error("failed to load dashboard {0}")]
+    Data(&'static str),
+}
+
+#[derive(Clone)]
+pub(crate) struct DashboardQueryService {
+    accounts: Arc<dyn AccountStore>,
+    usage: Arc<AccountUsageQueryService>,
+    usage_records: Arc<UsageQueryService>,
+    account_pool: Arc<AccountPoolService>,
+    refresh_activity: Arc<dyn RefreshActivityQuery>,
+    settings: Arc<SettingsService>,
+    wire_profile: Arc<dyn DashboardWireProfileQuery>,
+    desktop_release: Arc<dyn DashboardDesktopReleaseQuery>,
+}
+
+pub(crate) struct DashboardQueryServiceParts {
+    pub(crate) accounts: Arc<dyn AccountStore>,
+    pub(crate) usage: Arc<AccountUsageQueryService>,
+    pub(crate) usage_records: Arc<UsageQueryService>,
+    pub(crate) account_pool: Arc<AccountPoolService>,
+    pub(crate) refresh_activity: Arc<dyn RefreshActivityQuery>,
+    pub(crate) settings: Arc<SettingsService>,
+    pub(crate) wire_profile: Arc<dyn DashboardWireProfileQuery>,
+    pub(crate) desktop_release: Arc<dyn DashboardDesktopReleaseQuery>,
+}
+
+impl DashboardQueryService {
+    pub(crate) fn new(parts: DashboardQueryServiceParts) -> Self {
+        Self {
+            accounts: parts.accounts,
+            usage: parts.usage,
+            usage_records: parts.usage_records,
+            account_pool: parts.account_pool,
+            refresh_activity: parts.refresh_activity,
+            settings: parts.settings,
+            wire_profile: parts.wire_profile,
+            desktop_release: parts.desktop_release,
+        }
+    }
+
+    pub(crate) async fn summary(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<DashboardReadModel, DashboardQueryError> {
+        let accounts = self
+            .accounts
+            .list_pool_accounts()
+            .await
+            .map_err(|_| DashboardQueryError::Data("accounts"))?;
+        let capacity = self.account_pool.capacity_summary_now().await;
+        let filter = UsageQueryFilter {
+            start_time: Some(china_day_start(now)),
+            end_time: Some(now),
+            ..UsageQueryFilter::default()
+        };
+        let retained_usage = self
+            .usage
+            .retained_summary()
+            .await
+            .map_err(|_| DashboardQueryError::Data("retained usage summary"))?;
+        let account_usage_records = self
+            .usage_records
+            .account_usage(filter.clone(), ACCOUNT_USAGE_LIMIT)
+            .await
+            .map_err(|_| DashboardQueryError::Data("account usage ranking"))?;
+        let usage_records = self
+            .usage_records
+            .list_recent(USAGE_RECORD_LIMIT, filter)
+            .await
+            .map_err(|_| DashboardQueryError::Data("recent usage records"))?;
+        let time_buckets = self.time_buckets(now).await?;
+        let health_buckets = self.health_buckets(now).await?;
+        let account_ids = accounts
+            .iter()
+            .map(|account| account.id.clone())
+            .collect::<Vec<_>>();
+        let refreshing = self
+            .refresh_activity
+            .refreshing_account_ids(&account_ids, now)
+            .await
+            .map_err(|_| DashboardQueryError::Data("refreshing accounts"))?;
+        let quota_used = self.quota_used_by_account(&account_usage_records).await?;
+        let account_emails = self
+            .usage_records
+            .account_email_map(&usage_records)
+            .await
+            .map_err(|_| DashboardQueryError::Data("usage record accounts"))?;
+
+        Ok(DashboardReadModel {
+            account_counts: account_counts(&accounts),
+            retained_usage,
+            time_buckets,
+            health_buckets,
+            account_usage: account_usage(&accounts, &account_usage_records, &quota_used),
+            usage_records,
+            account_emails,
+            pool: pool_summary(&accounts, &refreshing),
+            capacity,
+            rotation_strategy: self.settings.current().rotation_strategy,
+            wire_profile: self.wire_profile.snapshot(),
+            desktop_release: self.desktop_release.snapshot(),
+        })
+    }
+
+    pub(crate) async fn time_buckets(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<AccountUsageTimeBucket>, DashboardQueryError> {
+        let current_slot = china_quarter_hour_start(now);
+        let start = current_slot - Duration::minutes(TIME_BUCKET_MINUTES * (TIME_BUCKET_SLOTS - 1));
+        self.usage
+            .time_buckets(start, now)
+            .await
+            .map_err(|_| DashboardQueryError::Data("time buckets"))
+    }
+
+    async fn health_buckets(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<RequestHealthTimeBucket>, DashboardQueryError> {
+        self.usage_records
+            .health_timeline(china_day_start(now), now)
+            .await
+            .map_err(|_| DashboardQueryError::Data("health timeline"))
+    }
+
+    async fn quota_used_by_account(
+        &self,
+        usage: &[crate::telemetry::usage::query::UsageRecordAccountUsage],
+    ) -> Result<HashMap<String, f64>, DashboardQueryError> {
+        let mut quota_used = HashMap::with_capacity(usage.len());
+        for usage in usage {
+            let quota_json = self
+                .accounts
+                .get_quota_json(&usage.account_id)
+                .await
+                .map_err(|_| DashboardQueryError::Data("account quota"))?;
+            let Some(quota) = quota_json
+                .as_deref()
+                .and_then(|value| QuotaSnapshot::from_json(value).ok())
+            else {
+                continue;
+            };
+            if let Some(used_percent) = quota.representative_used_percent() {
+                quota_used.insert(usage.account_id.clone(), used_percent);
+            }
+        }
+        Ok(quota_used)
+    }
+}
+
+fn account_counts(accounts: &[Account]) -> DashboardQueryAccountCounts {
+    DashboardQueryAccountCounts {
+        total: accounts.len() as u64,
+        enabled: accounts
+            .iter()
+            .filter(|account| account.status == AccountStatus::Active)
+            .count() as u64,
+        abnormal: accounts
+            .iter()
+            .filter(|account| account.status != AccountStatus::Active)
+            .count() as u64,
+    }
+}
+
+fn pool_summary(
+    accounts: &[Account],
+    refreshing: &std::collections::HashSet<String>,
+) -> DashboardPoolSummary {
+    let mut summary = DashboardPoolSummary {
+        total: accounts.len(),
+        ..DashboardPoolSummary::default()
+    };
+    for account in accounts {
+        match account.status {
+            status if token_refresh_status_eligible(status) && refreshing.contains(&account.id) => {
+                summary.refreshing += 1;
+            }
+            AccountStatus::Active => summary.active += 1,
+            AccountStatus::Expired => summary.expired += 1,
+            AccountStatus::QuotaExhausted => summary.quota_exhausted += 1,
+            AccountStatus::Disabled => summary.disabled += 1,
+            AccountStatus::Banned => summary.banned += 1,
+        }
+    }
+    summary
+}
+
+fn account_usage(
+    accounts: &[Account],
+    usage_records: &[crate::telemetry::usage::query::UsageRecordAccountUsage],
+    quota_used: &HashMap<String, f64>,
+) -> Vec<DashboardAccountUsage> {
+    let accounts = accounts
+        .iter()
+        .map(|account| (account.id.as_str(), account))
+        .collect::<HashMap<_, _>>();
+    usage_records
+        .iter()
+        .map(|usage| {
+            let account = accounts.get(usage.account_id.as_str()).copied();
+            DashboardAccountUsage {
+                id: usage.account_id.clone(),
+                email: account
+                    .and_then(|account| account.email.clone())
+                    .unwrap_or_else(|| usage.account_id.clone()),
+                plan_type: account.and_then(|account| account.plan_type.clone()),
+                total_tokens: usage.total_tokens,
+                quota_used_percent: quota_used.get(&usage.account_id).copied().or_else(|| {
+                    matches!(
+                        account.map(|account| account.status),
+                        Some(AccountStatus::QuotaExhausted)
+                    )
+                    .then_some(100.0)
+                }),
+                last_used_at: usage.last_used_at,
+            }
+        })
+        .collect()
 }
