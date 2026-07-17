@@ -22,7 +22,7 @@ type LoadingElement = HTMLElement & {
 const OVERLAY_BASE_CLASS = [
   'absolute',
   'inset-0',
-  'z-20',
+  'z-50',
   'grid',
   'min-h-18',
   'place-items-center',

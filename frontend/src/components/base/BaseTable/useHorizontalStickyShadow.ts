@@ -2,17 +2,17 @@ import type { Ref } from 'vue'
 import type BaseScrollbar from '../BaseScrollbar.vue'
 
 import { useResizeObserver } from '@vueuse/core'
-import { nextTick, onMounted, shallowRef, useTemplateRef, watch } from 'vue'
+import { nextTick, onMounted, shallowRef, watch } from 'vue'
 
 interface UseHorizontalStickyShadowOptions {
   hasRows: Ref<boolean>
+  headerWrapRef: Readonly<Ref<HTMLDivElement | null>>
+  bodyScrollbarRef: Readonly<Ref<InstanceType<typeof BaseScrollbar> | null>>
+  tableViewRef: Readonly<Ref<HTMLTableElement | null>>
   watchSources: () => unknown[]
 }
 
 export function useHorizontalStickyShadow(options: UseHorizontalStickyShadowOptions) {
-  const headerWrapRef = useTemplateRef<HTMLDivElement>('headerWrap')
-  const bodyScrollbarRef = useTemplateRef<InstanceType<typeof BaseScrollbar>>('bodyScrollbar')
-  const tableViewRef = useTemplateRef<HTMLTableElement>('tableView')
   const horizontalScrolled = shallowRef(false)
   const horizontalCanScrollRight = shallowRef(false)
 
@@ -21,7 +21,7 @@ export function useHorizontalStickyShadow(options: UseHorizontalStickyShadowOpti
   }
 
   function scrollWrap() {
-    return bodyScrollbarRef.value?.wrapRef ?? null
+    return options.bodyScrollbarRef.value?.wrapRef ?? null
   }
 
   function resetHorizontalScrollbar() {
@@ -48,8 +48,8 @@ export function useHorizontalStickyShadow(options: UseHorizontalStickyShadowOpti
 
   function handleTableScroll() {
     const wrap = scrollWrap()
-    if (wrap && headerWrapRef.value) {
-      headerWrapRef.value.scrollLeft = wrap.scrollLeft
+    if (wrap && options.headerWrapRef.value) {
+      options.headerWrapRef.value.scrollLeft = wrap.scrollLeft
     }
     updateHorizontalScrollbar()
   }
@@ -61,7 +61,7 @@ export function useHorizontalStickyShadow(options: UseHorizontalStickyShadowOpti
 
   useResizeObserver(
     () =>
-      [scrollWrap(), tableViewRef.value].filter(
+      [scrollWrap(), options.tableViewRef.value].filter(
         (element): element is HTMLDivElement | HTMLTableElement => Boolean(element),
       ),
     updateHorizontalScrollbar,
@@ -73,9 +73,6 @@ export function useHorizontalStickyShadow(options: UseHorizontalStickyShadowOpti
   })
 
   return {
-    headerWrapRef,
-    bodyScrollbarRef,
-    tableViewRef,
     horizontalScrolled,
     horizontalCanScrollRight,
     handleTableScroll,
