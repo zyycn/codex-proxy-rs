@@ -311,12 +311,6 @@ function handleHoverLeave() {
   hoverCloseTimer.value = window.setTimeout(closePopover, 90)
 }
 
-function handleTriggerKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape') {
-    closePopover()
-  }
-}
-
 whenever(open, async () => {
   await nextTick()
   updatePopoverPosition()
@@ -332,6 +326,14 @@ watch(
 )
 
 onClickOutside(rootRef, closePopover, { ignore: [popoverRef] })
+useEventListener(triggerRef, 'click', (event) => {
+  event.stopPropagation()
+  togglePopover()
+})
+useEventListener(triggerRef, ['mouseenter', 'focusin'], handleHoverEnter)
+useEventListener(triggerRef, ['mouseleave', 'focusout'], handleHoverLeave)
+useEventListener(popoverRef, ['mouseenter', 'focusin'], handleHoverEnter)
+useEventListener(popoverRef, ['mouseleave', 'focusout'], handleHoverLeave)
 useEventListener(viewportTarget, 'keydown', (event) => {
   if (event instanceof KeyboardEvent && event.key === 'Escape') {
     closePopover()
@@ -348,10 +350,6 @@ onBeforeUnmount(clearHoverCloseTimer)
       ref="triggerRef"
       class="inline-flex"
       :class="props.triggerClass"
-      @click.stop="togglePopover"
-      @keydown="handleTriggerKeydown"
-      @mouseenter="handleHoverEnter"
-      @mouseleave="handleHoverLeave"
     >
       <slot name="trigger" :open="open" :close="closePopover" :toggle="togglePopover" />
     </div>
@@ -370,8 +368,6 @@ onBeforeUnmount(clearHoverCloseTimer)
           ref="popoverRef"
           :class="popoverClasses"
           :style="[sizeStyle, popoverStyle]"
-          @mouseenter="handleHoverEnter"
-          @mouseleave="handleHoverLeave"
         >
           <span
             class="pointer-events-none absolute size-2 rotate-45 bg-inherit"

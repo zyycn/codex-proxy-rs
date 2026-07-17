@@ -1,6 +1,6 @@
 import type { BarSeriesOption, EChartsOption, LineSeriesOption } from 'echarts'
 import type { Ref } from 'vue'
-import type { dashboardTrendView, normalizeDashboardTrendKind } from '../presenter'
+import type { dashboardTrendView, normalizeDashboardTrendKind } from './presenter'
 import { usePreferredReducedMotion } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, shallowRef, watch } from 'vue'
@@ -46,8 +46,8 @@ const tabs = [
 ]
 
 export function useRequestTrendChart(options: {
-  points: Readonly<Ref<TrendView['points']>>
-  summary: Readonly<Ref<TrendView['summary']>>
+  points: Readonly<Ref<TrendPoint[]>>
+  summary: Readonly<Ref<TrendSummaryItem[]>>
   activeKind: Ref<TrendKind>
   onTrendChange: (kind: TrendKind) => void
 }) {

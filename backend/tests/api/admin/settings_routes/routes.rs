@@ -209,7 +209,7 @@ async fn admin_settings_admin_api_key_should_delete_and_revoke_access() {
         .clone()
         .oneshot(
             Request::builder()
-                .method("DELETE")
+                .method("POST")
                 .uri("/api/admin/settings/admin-api-key")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_settings_admin_key_delete")

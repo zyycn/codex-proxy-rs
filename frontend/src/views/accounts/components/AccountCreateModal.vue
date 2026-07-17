@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { useAccountOnboarding } from '../composables/useAccountOnboarding'
-import type { AccountRow } from '../quota'
+import type { AccountRow } from '../constants'
 import { Copy, KeyRound, Upload } from '@lucide/vue'
 
 import { useClipboard, useFileDialog } from '@vueuse/core'
@@ -184,6 +184,7 @@ async function copyOAuthAuthUrl() {
         <BaseFormItem label="Token" required>
           <BaseTextarea
             v-model="tokenText"
+            aria-label="Token"
             size="md"
             placeholder="eyJ...&#10;rt_..."
             :disabled="saving"
@@ -251,6 +252,7 @@ async function copyOAuthAuthUrl() {
           <BaseFormItem label="回调地址" required>
             <BaseTextarea
               v-model="oauthCallback"
+              aria-label="回调地址"
               size="sm"
               placeholder="http://localhost:1455/auth/callback?code=...&state=..."
               :disabled="saving"
@@ -260,7 +262,11 @@ async function copyOAuthAuthUrl() {
       </div>
 
       <BaseForm v-else>
-        <BaseFormItem label="JSON 内容" required :error="fileError || undefined">
+        <BaseFormItem
+          label="JSON 内容"
+          required
+          :error="fileError || undefined"
+        >
           <template #extra>
             <BaseButton variant="default" size="sm" :disabled="saving" @click="openImportFile()">
               <template #icon>
@@ -271,6 +277,7 @@ async function copyOAuthAuthUrl() {
           </template>
           <BaseTextarea
             v-model="importText"
+            aria-label="JSON 内容"
             size="lg"
             placeholder="{&quot;accounts&quot;:[...]}"
             :disabled="saving"

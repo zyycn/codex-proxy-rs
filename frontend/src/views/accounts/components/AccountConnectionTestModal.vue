@@ -63,7 +63,9 @@ function connectionLogClass(tone: string) {
       <section class="rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3">
         <div class="grid gap-2">
           <div class="flex min-h-8 items-center justify-between gap-3">
-            <label class="text-[12px] font-[760] text-(--cp-text-muted)">测试模型</label>
+            <span class="text-[12px] font-[760] text-(--cp-text-muted)">
+              测试模型
+            </span>
             <BaseButton
               variant="ghost"
               size="sm"
@@ -80,6 +82,7 @@ function connectionLogClass(tone: string) {
           </div>
           <BaseSelect
             v-model="selectedModel"
+            aria-label="测试模型"
             :options="modelOptions"
             :disabled="status === 'running' || loadingModels || refreshingModels"
             :placeholder="loadingModels ? '加载模型中...' : '选择上游模型'"

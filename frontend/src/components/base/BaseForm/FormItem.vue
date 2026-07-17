@@ -23,9 +23,12 @@ withDefaults(
     >
       <div class="flex min-w-0 items-center gap-1.5">
         <slot name="label">
-          <label class="min-w-0 text-[13px] leading-none font-medium text-(--cp-text-secondary)">
+          <span
+            v-if="label"
+            class="min-w-0 text-[13px] leading-none font-medium text-(--cp-text-secondary)"
+          >
             {{ label }}
-          </label>
+          </span>
         </slot>
         <span v-if="required" class="text-[13px] leading-none font-bold text-(--cp-danger)">
           *

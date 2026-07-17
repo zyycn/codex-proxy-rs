@@ -26,8 +26,11 @@ const emit = defineEmits<{
   scroll: [payload: { scrollTop: number, scrollLeft: number }]
 }>()
 
+const rootRef = useTemplateRef<HTMLDivElement>('root')
 const wrapRef = useTemplateRef<HTMLDivElement>('wrap')
 const viewRef = useTemplateRef<HTMLElement>('view')
+const verticalTrackRef = useTemplateRef<HTMLDivElement>('verticalTrack')
+const horizontalTrackRef = useTemplateRef<HTMLDivElement>('horizontalTrack')
 const thumbHeight = shallowRef(0)
 const thumbTop = shallowRef(0)
 const horizontalThumbWidth = shallowRef(0)
@@ -67,7 +70,7 @@ const rootClasses = computed(() => [
   props.maxHeight || props.height ? undefined : 'h-full',
 ])
 const wrapClasses = computed(() => [
-  'base-scrollbar-wrap min-h-0 max-h-[inherit] overflow-auto',
+  'base-scrollbar-wrap min-h-0 max-h-[inherit] overflow-auto outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-(--cp-info-border)',
   props.maxHeight ? undefined : 'h-full',
 ])
 const verticalTrackClass = computed(() =>
@@ -372,6 +375,14 @@ useEventListener(document, 'pointermove', handleThumbPointerMove)
 useEventListener(document, 'pointerup', handleThumbPointerUp)
 useEventListener(document, 'pointermove', handleHorizontalThumbPointerMove)
 useEventListener(document, 'pointerup', handleHorizontalThumbPointerUp)
+useEventListener(rootRef, ['mouseenter', 'mousemove'], activateScrollbar)
+useEventListener(rootRef, 'mouseleave', hideScrollbar)
+useEventListener(verticalTrackRef, 'mouseenter', () => handleTrackMouseEnter('vertical'))
+useEventListener(verticalTrackRef, 'mouseleave', () => handleTrackMouseLeave('vertical'))
+useEventListener(verticalTrackRef, 'pointerdown', handleTrackPointerDown)
+useEventListener(horizontalTrackRef, 'mouseenter', () => handleTrackMouseEnter('horizontal'))
+useEventListener(horizontalTrackRef, 'mouseleave', () => handleTrackMouseLeave('horizontal'))
+useEventListener(horizontalTrackRef, 'pointerdown', handleHorizontalTrackPointerDown)
 
 defineExpose({
   update,
@@ -383,13 +394,11 @@ defineExpose({
 
 <template>
   <div
+    ref="root"
     :class="rootClasses"
     :style="{ maxHeight, height }"
-    @mouseenter="activateScrollbar"
-    @mousemove="activateScrollbar"
-    @mouseleave="hideScrollbar"
   >
-    <div ref="wrap" :class="wrapClasses">
+    <div ref="wrap" :class="wrapClasses" tabindex="0">
       <div ref="view" :class="viewClass">
         <slot />
       </div>
@@ -397,15 +406,14 @@ defineExpose({
 
     <div
       v-show="canScrollY"
+      ref="verticalTrack"
+      aria-hidden="true"
       class="absolute top-1 z-40 w-1.5 rounded-full transition-opacity duration-200"
       :class="[
         verticalTrackInsetClass,
         verticalTrackClass,
         verticalScrollbarVisible ? 'opacity-100' : 'opacity-0',
       ]"
-      @mouseenter="handleTrackMouseEnter('vertical')"
-      @mouseleave="handleTrackMouseLeave('vertical')"
-      @pointerdown="handleTrackPointerDown"
     >
       <div
         class="w-full rounded-full bg-(--cp-scrollbar-thumb) transition-colors duration-200 hover:bg-(--cp-scrollbar-thumb-hover)"
@@ -417,15 +425,14 @@ defineExpose({
 
     <div
       v-show="canScrollX"
+      ref="horizontalTrack"
+      aria-hidden="true"
       class="absolute z-40 h-1.5 rounded-full transition-opacity duration-200"
       :class="[
         horizontalTrackInsetClass,
         horizontalTrackClass,
         horizontalScrollbarVisible ? 'opacity-100' : 'opacity-0',
       ]"
-      @mouseenter="handleTrackMouseEnter('horizontal')"
-      @mouseleave="handleTrackMouseLeave('horizontal')"
-      @pointerdown="handleHorizontalTrackPointerDown"
     >
       <div
         class="h-full rounded-full bg-(--cp-scrollbar-thumb) transition-colors duration-200 hover:bg-(--cp-scrollbar-thumb-hover)"

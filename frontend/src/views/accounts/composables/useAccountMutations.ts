@@ -121,7 +121,10 @@ export function useAccountMutations(options: {
 
     await exportingAccountsAction.run(
       async () => {
-        const payload = await exportAccounts({ ids: selected.join(',') })
+        const payload = await exportAccounts({
+          ids: selected.join(','),
+          confirm: 'export_sensitive_accounts',
+        })
         await downloadJson(payload, exportFileName(selected.length))
         toast.success(`已导出 ${selected.length} 个账号`)
       },

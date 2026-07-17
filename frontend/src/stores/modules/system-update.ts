@@ -1,25 +1,22 @@
-import type { SystemUpdateEvent } from '@/api/streams/system-update'
+import { useEventSource } from '@vueuse/core'
+import { delay } from 'es-toolkit'
 import { defineStore } from 'pinia'
 
-import { computed, ref, shallowRef } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import {
   getSystemUpdateDetail,
   getSystemVersion,
   performSystemUpdate,
   restartSystem,
 } from '@/api'
+import { API_BASE_URL } from '@/api/constants'
 import { ApiError } from '@/api/request'
-import { openSystemUpdateStream } from '@/api/streams/system-update'
-import { delay, reloadPage } from '@/platform/browser'
 import { errorMessage } from '@/utils/async'
-import { reduceSystemUpdateLogs } from './system-update-reducer'
 
 const maxUpdateLogs = 200
 const restartReadyTimeoutMs = 60_000
 const restartProbeTimeoutMs = 2_000
 const restartReadyPollIntervalMs = 500
-
-type SystemUpdateStream = NonNullable<ReturnType<typeof openSystemUpdateStream>>
 
 export const useSystemUpdateStore = defineStore('system-update', () => {
   const version = shallowRef<Awaited<ReturnType<typeof getSystemVersion>> | null>(null)
@@ -32,12 +29,26 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
   const updateSuccess = shallowRef(false)
   const needRestart = shallowRef(false)
   const loadedOnce = shallowRef(false)
-  const updateLogs = ref<SystemUpdateEvent[]>([])
+  const updateLogs = ref<any[]>([])
   const updateStreaming = shallowRef(false)
   const updateStreamError = shallowRef('')
   const restartTargetVersion = shallowRef('')
+  const {
+    data: updateEventMessage,
+    status: updateEventStatus,
+    error: updateEventError,
+    eventSource: updateEventSource,
+    open: openUpdateEventSource,
+    close: closeUpdateEventSource,
+  } = useEventSource(`${API_BASE_URL}/api/admin/system/update-events`, ['update'], {
+    autoConnect: false,
+    immediate: false,
+    withCredentials: true,
+    serializer: {
+      read: raw => ({ raw }),
+    },
+  })
 
-  let updateEventSource: SystemUpdateStream | null = null
   let loadVersionPromise: ReturnType<typeof getSystemVersion> | undefined
   let loadSystemPromise: Promise<void> | undefined
 
@@ -60,8 +71,9 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     restartTargetVersion.value = ''
   }
 
-  function appendUpdateLog(log: SystemUpdateEvent) {
-    updateLogs.value = reduceSystemUpdateLogs(updateLogs.value, log, maxUpdateLogs)
+  function appendUpdateLog(log: any) {
+    const logs = updateLogs.value.filter(item => item.id !== log.id)
+    updateLogs.value = [...logs, log].slice(-maxUpdateLogs)
   }
 
   function clearUpdateLogs() {
@@ -69,56 +81,48 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     updateStreamError.value = ''
   }
 
+  watch(updateEventStatus, (status) => {
+    updateStreaming.value = status === 'OPEN'
+    if (status === 'OPEN')
+      updateStreamError.value = ''
+  })
+
+  watch(updateEventError, (error) => {
+    if (error)
+      updateStreamError.value = '更新日志连接中断'
+  })
+
+  watch(updateEventMessage, (message) => {
+    if (!message?.raw)
+      return
+    try {
+      const event = JSON.parse(message.raw)
+      appendUpdateLog(event)
+      if (event.terminal)
+        disconnectUpdateEvents()
+    }
+    catch {
+      updateStreamError.value = '更新日志解析失败'
+    }
+  })
+
   function connectUpdateEvents(force = false) {
     if (force) {
       disconnectUpdateEvents()
     }
-    else if (updateEventSource) {
+    else if (updateEventSource.value) {
       return
     }
 
     updateStreamError.value = ''
-    let source: SystemUpdateStream | null = null
-    source = openSystemUpdateStream({
-      onOpen: () => {
-        if (updateEventSource !== source)
-          return
-        updateStreaming.value = true
-        updateStreamError.value = ''
-      },
-      onEvent: (event) => {
-        if (updateEventSource !== source)
-          return
-        appendUpdateLog(event)
-        if (event.terminal)
-          disconnectUpdateEvents(source)
-      },
-      onError: (closed) => {
-        if (updateEventSource !== source)
-          return
-        updateStreaming.value = false
-        updateStreamError.value = '更新日志连接中断'
-        if (closed)
-          updateEventSource = null
-      },
-      onParseError: () => {
-        if (updateEventSource === source)
-          updateStreamError.value = '更新日志解析失败'
-      },
-    })
-    if (!source) {
+    openUpdateEventSource()
+    if (!updateEventSource.value) {
       updateStreamError.value = '当前浏览器不支持实时更新日志'
-      return
     }
-    updateEventSource = source
   }
 
-  function disconnectUpdateEvents(source = updateEventSource) {
-    source?.close()
-    if (source && updateEventSource !== source)
-      return
-    updateEventSource = null
-    updateStreaming.value = false
+  function disconnectUpdateEvents() {
+    closeUpdateEventSource()
   }
 
   async function loadSystem(refresh = false) {
@@ -127,7 +131,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
 
     loading.value = true
     loadSystemPromise = (async () => {
-      updateInfo.value = await getSystemUpdateDetail(refresh)
+      updateInfo.value = await getSystemUpdateDetail({ refresh })
       if (!version.value)
         version.value = await getSystemVersion()
       loadedOnce.value = true
@@ -164,7 +168,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     checking.value = true
     resetUpdateResult()
     try {
-      updateInfo.value = await getSystemUpdateDetail(refresh)
+      updateInfo.value = await getSystemUpdateDetail({ refresh })
       if (!version.value)
         version.value = await getSystemVersion()
       loadedOnce.value = true
@@ -187,7 +191,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     updateError.value = ''
     updateSuccess.value = false
     try {
-      const result = await performSystemUpdate(confirmedTargetVersion)
+      const result = await performSystemUpdate({ targetVersion: confirmedTargetVersion })
       updateSuccess.value = true
       needRestart.value = result.needRestart
       restartTargetVersion.value = result.needRestart ? normalizeVersion(result.targetVersion) : ''
@@ -219,9 +223,9 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
 
     while (Date.now() < deadline) {
       try {
-        const readyVersion = await getSystemVersion({ timeoutMs: restartProbeTimeoutMs })
+        const readyVersion = await getSystemVersion(restartProbeTimeoutMs)
         if (normalizeVersion(readyVersion.version) === expectedVersion) {
-          reloadPage()
+          window.location.reload()
           return
         }
       }

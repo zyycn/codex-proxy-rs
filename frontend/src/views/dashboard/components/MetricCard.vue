@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts'
-import type { MetricCardView, MetricTone } from '../presenter'
+import type { MetricCardView, MetricTone } from '../composables/presenter'
 
 import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'

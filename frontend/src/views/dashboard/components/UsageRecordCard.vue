@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { dashboardSnapshotView } from '../presenter'
+import type { dashboardSnapshotView } from '../composables/presenter'
 
 import { Minimize2 } from '@lucide/vue'
 import BaseCard from '@/components/base/BaseCard.vue'

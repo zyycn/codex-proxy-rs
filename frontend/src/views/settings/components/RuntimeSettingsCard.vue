@@ -21,32 +21,60 @@ const requestIntervalMs = defineModel<string>('requestIntervalMs', { required: t
     body-class="px-5 py-5"
   >
     <BaseForm :columns="2" class="max-w-6xl">
-      <BaseFormItem label="单账号最大并发" description="限制单个账号同一时间可承载的请求数">
-        <BaseInput v-model="maxConcurrentPerAccount" type="number">
+      <BaseFormItem
+        label="单账号最大并发"
+        description="限制单个账号同一时间可承载的请求数"
+      >
+        <BaseInput
+          v-model="maxConcurrentPerAccount"
+          aria-label="单账号最大并发"
+          type="number"
+        >
           <template #prefix>
             <Gauge class="size-4" />
           </template>
         </BaseInput>
       </BaseFormItem>
 
-      <BaseFormItem label="提前刷新秒数" description="Token 过期前多少秒触发刷新">
-        <BaseInput v-model="refreshMarginSeconds" type="number">
+      <BaseFormItem
+        label="提前刷新秒数"
+        description="Token 过期前多少秒触发刷新"
+      >
+        <BaseInput
+          v-model="refreshMarginSeconds"
+          aria-label="提前刷新秒数"
+          type="number"
+        >
           <template #prefix>
             <Timer class="size-4" />
           </template>
         </BaseInput>
       </BaseFormItem>
 
-      <BaseFormItem label="刷新并发数" description="同时刷新 Token 的最大请求数，减小可避免限流">
-        <BaseInput v-model="refreshConcurrency" type="number">
+      <BaseFormItem
+        label="刷新并发数"
+        description="同时刷新 Token 的最大请求数，减小可避免限流"
+      >
+        <BaseInput
+          v-model="refreshConcurrency"
+          aria-label="刷新并发数"
+          type="number"
+        >
           <template #prefix>
             <Zap class="size-4" />
           </template>
         </BaseInput>
       </BaseFormItem>
 
-      <BaseFormItem label="请求间隔 ms" description="控制同一账号两次调度之间的最小等待时间">
-        <BaseInput v-model="requestIntervalMs" type="number">
+      <BaseFormItem
+        label="请求间隔 ms"
+        description="控制同一账号两次调度之间的最小等待时间"
+      >
+        <BaseInput
+          v-model="requestIntervalMs"
+          aria-label="请求间隔 ms"
+          type="number"
+        >
           <template #prefix>
             <Timer class="size-4" />
           </template>

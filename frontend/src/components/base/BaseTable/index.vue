@@ -53,9 +53,9 @@ const props = withDefaults(
 )
 
 const emit = defineEmits<{
-  'page-change': [page: number]
-  'page-size-change': [pageSize: number]
-  'sort-change': [sort: BaseTableSort | undefined]
+  pageChange: [page: number]
+  pageSizeChange: [pageSize: number]
+  sortChange: [sort: BaseTableSort | undefined]
 }>()
 const slots = useSlots()
 
@@ -184,13 +184,13 @@ function toggleColumnSort(column: BaseTableColumn<Row>) {
   const key = columnSortKey(column)
   const direction = columnSortDirection(column)
   if (!direction) {
-    emit('sort-change', { key, direction: 'asc' })
+    emit('sortChange', { key, direction: 'asc' })
   }
   else if (direction === 'asc') {
-    emit('sort-change', { key, direction: 'desc' })
+    emit('sortChange', { key, direction: 'desc' })
   }
   else {
-    emit('sort-change', undefined)
+    emit('sortChange', undefined)
   }
 }
 
@@ -220,12 +220,11 @@ function sortButtonLabel(column: BaseTableColumn<Row>) {
       class="relative flex min-h-0 max-w-full flex-1 overflow-hidden pb-3"
     >
       <div class="flex min-h-0 max-w-full flex-1 flex-col overflow-hidden">
-        <div ref="headerWrap" class="max-w-full overflow-hidden">
+        <div class="max-w-full overflow-hidden">
           <table
             class="w-full shrink-0 table-fixed border-separate text-left"
             :class="compact ? 'border-spacing-y-0.5' : 'border-spacing-y-1'"
             :style="tableViewStyle"
-            role="table"
           >
             <colgroup>
               <col
@@ -236,7 +235,7 @@ function sortButtonLabel(column: BaseTableColumn<Row>) {
             </colgroup>
 
             <thead>
-              <tr :class="headerRowClass" role="row">
+              <tr :class="headerRowClass">
                 <th
                   v-for="(column, index) in computedColumns"
                   :key="column.key"
@@ -248,7 +247,6 @@ function sortButtonLabel(column: BaseTableColumn<Row>) {
                     fixedHeaderClass(column),
                     column.headerClass,
                   ]"
-                  role="columnheader"
                   scope="col"
                   :aria-sort="columnAriaSort(column)"
                 >
@@ -302,7 +300,6 @@ function sortButtonLabel(column: BaseTableColumn<Row>) {
 
         <BaseScrollbar
           v-if="hasRows"
-          ref="bodyScrollbar"
           class="min-h-0 flex-1"
           horizontal
           :max-height="maxHeight"
@@ -310,11 +307,9 @@ function sortButtonLabel(column: BaseTableColumn<Row>) {
           @scroll="handleTableScroll"
         >
           <table
-            ref="tableView"
             class="w-full table-fixed border-separate text-left"
             :class="compact ? 'border-spacing-y-1' : 'border-spacing-y-2'"
             :style="tableViewStyle"
-            role="table"
           >
             <colgroup>
               <col
@@ -326,7 +321,7 @@ function sortButtonLabel(column: BaseTableColumn<Row>) {
 
             <tbody>
               <template v-for="(row, index) in displayRows" :key="getRowKey(row, index)">
-                <tr :class="rowClass(row, index)" role="row">
+                <tr :class="rowClass(row, index)">
                   <td
                     v-for="(column, columnIndex) in computedColumns"
                     :key="column.key"
@@ -337,7 +332,6 @@ function sortButtonLabel(column: BaseTableColumn<Row>) {
                       fixedBodyClass(column, row, index),
                       column.cellClass,
                     ]"
-                    role="cell"
                   >
                     <div :class="cellContentClass(column)" :title="bodyCellTitle(column, row)">
                       <slot
@@ -352,11 +346,10 @@ function sortButtonLabel(column: BaseTableColumn<Row>) {
                     </div>
                   </td>
                 </tr>
-                <tr v-if="isRowExpanded(row, index)" role="row">
+                <tr v-if="isRowExpanded(row, index)">
                   <td
                     :colspan="computedColumns.length"
                     class="rounded-(--cp-input-radius-base) bg-(--cp-info-bg) p-0"
-                    role="cell"
                   >
                     <slot name="expanded" :row="row" :index="index" />
                   </td>
@@ -376,8 +369,8 @@ function sortButtonLabel(column: BaseTableColumn<Row>) {
       v-if="pagination"
       :pagination="pagination"
       :loading="loading"
-      @page-change="emit('page-change', $event)"
-      @page-size-change="emit('page-size-change', $event)"
+      @page-change="emit('pageChange', $event)"
+      @page-size-change="emit('pageSizeChange', $event)"
     />
   </div>
 </template>

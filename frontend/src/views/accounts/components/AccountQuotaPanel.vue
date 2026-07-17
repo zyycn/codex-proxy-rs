@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import type { AccountRow } from '../quota'
+import type { AccountRow } from '../constants'
 import { RefreshCw } from '@lucide/vue'
 
 import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
-import { orderedPanelQuotaWindows } from '../quota'
+import { orderedPanelQuotaWindows } from '../constants'
 import AccountPlanBadge from './AccountPlanBadge.vue'
 import AccountQuotaWindow from './AccountQuotaWindow.vue'
 

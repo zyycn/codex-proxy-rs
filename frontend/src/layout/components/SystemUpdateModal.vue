@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import type { getSystemUpdateDetail } from '@/api'
-import type { SystemUpdateEvent } from '@/api/streams/system-update'
 import {
   ArrowUpCircle,
   CheckCircle2,
@@ -48,7 +46,7 @@ const { loadSystem, checkUpdates, updateNow, restartNow } = systemUpdateStore
 
 const updateLogScrollbar = useTemplateRef<InstanceType<typeof BaseScrollbar>>('updateLogScrollbar')
 const updateConfirmOpen = shallowRef(false)
-const updateConfirmInfo = shallowRef<Awaited<ReturnType<typeof getSystemUpdateDetail>> | null>(null)
+const updateConfirmInfo = shallowRef<any>(null)
 const updateConfirmPreviousTarget = shallowRef('')
 const preparingUpdate = shallowRef(false)
 
@@ -185,7 +183,7 @@ function formatLogTime(value: string) {
   return date.toLocaleTimeString('zh-CN', { hour12: false })
 }
 
-function logMarkerClass(level: SystemUpdateEvent['level']) {
+function logMarkerClass(level: string) {
   if (level === 'success')
     return 'text-(--cp-success)'
   if (level === 'warning')
@@ -195,7 +193,7 @@ function logMarkerClass(level: SystemUpdateEvent['level']) {
   return 'text-(--cp-info)'
 }
 
-function logTextClass(level: SystemUpdateEvent['level']) {
+function logTextClass(level: string) {
   if (level === 'success')
     return 'text-(--cp-success)'
   if (level === 'warning')

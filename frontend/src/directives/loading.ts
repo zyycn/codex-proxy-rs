@@ -35,7 +35,6 @@ const PANEL_CLASS = [
   'items-center',
   'gap-2.5',
   'rounded-xl',
-  'bg-(--cp-bg-surface)',
   'py-2.25',
   'pr-3.5',
   'pl-3',
@@ -43,7 +42,6 @@ const PANEL_CLASS = [
   'leading-[1.15]',
   'font-[760]',
   'text-(--cp-text-secondary)',
-  'shadow-(--cp-shadow-popover)',
 ].join(' ')
 const MARK_CLASS = [
   'inline-block',

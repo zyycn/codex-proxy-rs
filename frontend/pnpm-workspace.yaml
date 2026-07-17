@@ -1,2 +1,4 @@
+autoInstallPeers: false
+
 minimumReleaseAgeExclude:
   - vite@8.1.3

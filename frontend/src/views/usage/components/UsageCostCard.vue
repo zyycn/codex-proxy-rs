@@ -39,7 +39,7 @@ const props = withDefaults(
 
 const activeView = shallowRef('cost')
 const { palette } = useUsageChartPalette()
-const points = computed(() => props.cost.points)
+const points = computed<any[]>(() => props.cost.points)
 
 const viewOptions = [
   { label: '费用', value: 'cost' },

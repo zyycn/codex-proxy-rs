@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { dashboardSnapshotView } from '../presenter'
+import type { dashboardSnapshotView } from '../composables/presenter'
 import { CircleCheck, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
 import { clamp } from 'es-toolkit'
 

@@ -4,24 +4,9 @@ import type {
   AxiosRequestConfig,
   AxiosResponse,
 } from 'axios'
-import type { ZodType } from 'zod'
 import axios from 'axios'
 
 import { API_BASE_URL, API_TIMEOUT_MS } from './constants'
-
-interface ApiEnvelope<T = unknown> {
-  code: number
-  message: string
-  data: T
-}
-
-interface ApiErrorBody {
-  code?: number
-  message?: string
-  data?: unknown
-}
-
-type UnauthorizedHandler = () => void | Promise<void>
 
 export class ApiError extends Error {
   constructor(
@@ -42,9 +27,9 @@ const http: AxiosInstance = axios.create({
 })
 
 let unauthorizedHandled = false
-let unauthorizedHandler: UnauthorizedHandler | undefined
+let unauthorizedHandler: (() => void | Promise<void>) | undefined
 
-export function setUnauthorizedHandler(handler: UnauthorizedHandler) {
+export function setUnauthorizedHandler(handler: () => void | Promise<void>) {
   unauthorizedHandler = handler
 }
 
@@ -69,7 +54,7 @@ http.interceptors.response.use(
   (response: AxiosResponse) => {
     return response
   },
-  (error: AxiosError<ApiErrorBody>) => {
+  (error: AxiosError<any>) => {
     const { response } = error
 
     const status = response?.status || 0
@@ -85,7 +70,7 @@ http.interceptors.response.use(
   },
 )
 
-function isApiEnvelope(value: unknown): value is ApiEnvelope {
+function isApiEnvelope(value: any) {
   return (
     typeof value === 'object'
     && value !== null
@@ -96,7 +81,7 @@ function isApiEnvelope(value: unknown): value is ApiEnvelope {
 }
 
 export default async function request(config: AxiosRequestConfig) {
-  const response = await http.request<unknown, AxiosResponse<unknown>>({
+  const response = await http.request({
     ...config,
   })
 
@@ -105,11 +90,4 @@ export default async function request(config: AxiosRequestConfig) {
   }
 
   return response.data
-}
-
-export async function requestParsed<const Schema extends ZodType>(
-  config: AxiosRequestConfig,
-  schema: Schema,
-) {
-  return schema.parse(await request(config))
 }

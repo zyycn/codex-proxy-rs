@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { dashboardSnapshotView } from '../presenter'
+import type { dashboardSnapshotView } from '../composables/presenter'
 import { Box, CheckCircle2, Monitor, RefreshCw, Terminal, TriangleAlert } from '@lucide/vue'
 
 import { computed } from 'vue'

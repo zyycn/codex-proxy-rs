@@ -9,7 +9,7 @@ import {
   dashboardSnapshotView,
   dashboardTrendView,
   normalizeDashboardTrendKind,
-} from '../presenter'
+} from './presenter'
 
 export function useDashboard() {
   const activeTrendKind = shallowRef(normalizeDashboardTrendKind('usage'))
@@ -108,7 +108,7 @@ export function useDashboard() {
 
   function isCurrentTrendRequest(
     requestId: number,
-    kind: Awaited<ReturnType<typeof getDashboardTrend>>['kind'],
+    kind: ReturnType<typeof normalizeDashboardTrendKind>,
   ) {
     return requestId === trendRequestId && activeTrendKind.value === kind
   }

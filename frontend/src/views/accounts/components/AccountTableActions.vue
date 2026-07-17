@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AccountRow } from '../quota'
+import type { AccountRow } from '../constants'
 import { KeyRound, LoaderCircle, MoreHorizontal, Power, RefreshCw, Trash2, Wifi } from '@lucide/vue'
 
 import { computed } from 'vue'

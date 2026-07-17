@@ -122,15 +122,16 @@ export function dashboardTrendView(trend: DashboardTrend | null) {
     return { points, summary: usageTrendSummary(points) }
   }
 
-  return {
-    points: trend.points,
-    summary: trend.summary.map(item => ({
+  const summary = []
+  for (const item of trend.summary) {
+    summary.push({
       label: item.label,
       value: trend.kind === 'errors' && item.ratio !== null ? item.ratio : item.value,
       tone: trendSummaryTone(item.label),
       colorVar: trendSummaryColorVar(trend.kind, item.label),
-    })),
+    })
   }
+  return { points: trend.points, summary }
 }
 
 export function normalizeDashboardTrendKind(kind: string): DashboardTrendKind {

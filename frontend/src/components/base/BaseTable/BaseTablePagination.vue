@@ -18,8 +18,8 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  'page-change': [page: number]
-  'page-size-change': [pageSize: number]
+  pageChange: [page: number]
+  pageSizeChange: [pageSize: number]
 }>()
 
 const totalPages = computed(() => getTotalPages(props.pagination))
@@ -36,7 +36,7 @@ const pageSizeModel = computed({
 
     const pageSize = Number(value)
     if (Number.isFinite(pageSize) && pageSize > 0) {
-      emit('page-size-change', pageSize)
+      emit('pageSizeChange', pageSize)
     }
   },
 })
@@ -46,7 +46,7 @@ function goToPage(page: number) {
     return
   }
 
-  emit('page-change', page)
+  emit('pageChange', page)
 }
 
 function paginationButtonClass(disabled: boolean) {
@@ -81,6 +81,7 @@ function paginationPageClass(page: number) {
     <div class="flex items-center gap-2">
       <BaseSelect
         v-model="pageSizeModel"
+        aria-label="每页条数"
         :options="pageSizeOptions"
         :disabled="loading"
         size="compact"

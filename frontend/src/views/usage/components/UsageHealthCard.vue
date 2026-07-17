@@ -36,7 +36,7 @@ const props = withDefaults(
 use([BarChart])
 
 const { palette } = useUsageChartPalette()
-const points = computed(() => props.health.points)
+const points = computed<HealthPoint[]>(() => props.health.points)
 
 const hasData = computed(
   () => !props.loading && points.value.some(point => requestCount(point) > 0),

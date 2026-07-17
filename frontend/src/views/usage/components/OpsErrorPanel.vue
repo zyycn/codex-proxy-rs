@@ -89,7 +89,9 @@ function showDetail(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][nu
       @page-size-change="handlePageSizeChange"
     >
       <template #statusCode="{ row }">
-        <UsageStatusCodeBadge :status-code="row.statusCode" />
+        <UsageStatusCodeBadge
+          :status-code="typeof row.statusCode === 'number' ? row.statusCode : null"
+        />
       </template>
       <template #failureClass="{ row }">
         <span class="font-mono text-[12px] font-[680] text-(--cp-danger-text)">

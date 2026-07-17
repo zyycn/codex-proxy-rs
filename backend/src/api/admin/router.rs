@@ -46,7 +46,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/admin/settings", get(settings).post(update_settings))
         .route(
             "/api/admin/settings/admin-api-key",
-            get(admin_api_key_status).delete(delete_admin_api_key),
+            get(admin_api_key_status).post(delete_admin_api_key),
         )
         .route(
             "/api/admin/settings/admin-api-key/regenerate",

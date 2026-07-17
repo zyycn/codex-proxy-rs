@@ -49,11 +49,19 @@ const label = formField('label')
   >
     <BaseForm>
       <BaseFormItem label="名称" required>
-        <BaseInput v-model="name" placeholder="例如：生产环境、测试账号..." />
+        <BaseInput
+          v-model="name"
+          aria-label="名称"
+          placeholder="例如：生产环境、测试账号..."
+        />
       </BaseFormItem>
 
       <BaseFormItem label="标签（可选）">
-        <BaseInput v-model="label" placeholder="备注信息..." />
+        <BaseInput
+          v-model="label"
+          aria-label="标签（可选）"
+          placeholder="备注信息..."
+        />
       </BaseFormItem>
     </BaseForm>
 
@@ -89,9 +97,9 @@ const label = formField('label')
       </div>
 
       <div>
-        <label class="block text-[13px] font-medium text-(--cp-text-secondary) mb-2">
+        <p class="mb-2 text-[13px] font-medium text-(--cp-text-secondary)">
           API Key
-        </label>
+        </p>
         <div class="flex items-center gap-2">
           <code
             class="flex-1 px-3 py-2.5 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) text-[13px] font-mono text-(--cp-text-primary) break-all"

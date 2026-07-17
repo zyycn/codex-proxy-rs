@@ -1,14 +1,10 @@
-import type { getAccounts } from '@/api'
-import type { AccountConnectionEvent } from '@/api/streams/account-connection'
 import { CheckCircle2, Clock3, Wifi, XCircle } from '@lucide/vue'
+import { useEventSource } from '@vueuse/core'
 
 import { clamp } from 'es-toolkit'
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { getAccountModels, refreshAccountModels } from '@/api'
-import {
-
-  openAccountConnectionStream,
-} from '@/api/streams/account-connection'
+import { API_BASE_URL } from '@/api/constants'
 import { toast } from '@/components/base/BaseToast'
 import { errorMessage, withMinimumDuration } from '@/utils/async'
 import { formatDateTime, formatTime } from '@/utils/date'
@@ -20,8 +16,6 @@ interface ConnectionTestRun {
 
 type ConnectionTestStatus = 'idle' | 'running' | 'success' | 'error'
 type ConnectionTestLogTone = 'normal' | 'info' | 'success' | 'danger'
-
-type ConnectionTestAccount = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 
 interface ConnectionTestModelOption {
   label: string
@@ -36,10 +30,9 @@ interface ConnectionTestLog {
   detail: string
 }
 
-type ConnectionTestRequestPayload = Extract<
-  AccountConnectionEvent,
-  { type: 'request' }
->['payload']
+interface ConnectionTestRequestPayload {
+  input?: Array<{ content?: Array<{ type?: string, text?: string }> }>
+}
 
 interface AccountConnectionTestOptions {
   onAccountStatus: (accountId: string, status: string) => void
@@ -47,7 +40,7 @@ interface AccountConnectionTestOptions {
 
 export function useAccountConnectionTest(options: AccountConnectionTestOptions) {
   const showConnectionTestModal = shallowRef(false)
-  const testingAccount = shallowRef<ConnectionTestAccount | null>(null)
+  const testingAccount = shallowRef<any>(null)
   const connectionTestStatus = shallowRef<ConnectionTestStatus>('idle')
   const connectionTestModel = shallowRef('')
   const connectionTestContent = shallowRef('')
@@ -61,10 +54,24 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
   const refreshingConnectionTestModels = shallowRef(false)
   const connectionTestSelectedModel = shallowRef('')
   const connectionTestModelOptions = ref<ConnectionTestModelOption[]>([])
+  const connectionTestStreamUrl = shallowRef<string>()
+  const {
+    data: connectionTestStreamMessage,
+    error: connectionTestStreamError,
+    eventSource: connectionTestEventSource,
+    open: openConnectionTestEventSource,
+    close: closeConnectionTestEventSource,
+  } = useEventSource(connectionTestStreamUrl, [], {
+    autoConnect: false,
+    immediate: false,
+    withCredentials: true,
+    serializer: {
+      read: raw => ({ raw }),
+    },
+  })
 
   let connectionTestStartedAtMs = 0
   let connectionTestRun: ConnectionTestRun | undefined
-  let connectionTestSource: ReturnType<typeof openAccountConnectionStream> | null = null
 
   const connectionTestStatusView = computed(() => {
     if (connectionTestStatus.value === 'running') {
@@ -103,7 +110,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     }
   })
 
-  function openConnectionTest(account: ConnectionTestAccount) {
+  function openConnectionTest(account: any) {
     abortConnectionTest()
     testingAccount.value = account
     connectionTestSelectedModel.value = ''
@@ -209,8 +216,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
   function clearConnectionTestRun() {
     const run = connectionTestRun
     connectionTestRun = undefined
-    connectionTestSource?.close()
-    connectionTestSource = null
+    closeConnectionTestEventSource()
     if (run) {
       const next = new Set(testingConnectionIds.value)
       next.delete(run.accountId)
@@ -228,7 +234,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     clearConnectionTestRun()
   }
 
-  function handleConnectionTestEvent(event: AccountConnectionEvent) {
+  function handleConnectionTestEvent(event: any) {
     if (event.type === 'test_start') {
       connectionTestModel.value = event.model || connectionTestModel.value
       appendConnectionTestLog(`开始测试 ${connectionTestModel.value || '未选择模型'}`, 'info')
@@ -299,15 +305,15 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     }
   }
 
-  function applyConnectionTestModels(
-    result: Awaited<ReturnType<typeof getAccountModels>>,
-    preserveSelection = false,
-  ) {
+  function applyConnectionTestModels(result: any, preserveSelection = false) {
     const previousSelection = preserveSelection ? connectionTestSelectedModel.value : ''
-    connectionTestModelOptions.value = (result.models ?? []).map(model => ({
-      label: model.label || model.id,
-      value: model.id,
-    }))
+    connectionTestModelOptions.value = []
+    for (const model of result.models ?? []) {
+      connectionTestModelOptions.value.push({
+        label: model.label || model.id,
+        value: model.id,
+      })
+    }
     connectionTestSelectedModel.value = connectionTestModelOptions.value.some(
       model => model.value === previousSelection,
     )
@@ -364,15 +370,15 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
               accountId: account.id,
               resolve,
             }
-            connectionTestSource = openAccountConnectionStream({
-              accountId: account.id,
+            const params = new URLSearchParams({
+              id: account.id,
               modelId: connectionTestSelectedModel.value,
-              onEvent: handleConnectionTestEvent,
-              onError: () => {
-                if (connectionTestRun)
-                  failConnectionTest('测试连接已断开')
-              },
             })
+            connectionTestStreamUrl.value
+              = `${API_BASE_URL}/api/admin/accounts/test?${params}`
+            openConnectionTestEventSource()
+            if (!connectionTestEventSource.value)
+              failConnectionTest('当前浏览器不支持连接测试')
           }),
       )
       if (connectionTestStatus.value === 'running') {
@@ -390,6 +396,22 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
       clearConnectionTestRun()
     }
   }
+
+  watch(connectionTestStreamMessage, (message) => {
+    if (!message?.raw || !connectionTestRun)
+      return
+    try {
+      handleConnectionTestEvent(JSON.parse(message.raw))
+    }
+    catch {
+      failConnectionTest('测试响应解析失败')
+    }
+  })
+
+  watch(connectionTestStreamError, (error) => {
+    if (error && connectionTestRun)
+      failConnectionTest('测试连接已断开')
+  })
 
   watch(showConnectionTestModal, (open) => {
     if (!open) {
