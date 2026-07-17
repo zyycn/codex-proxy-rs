@@ -1,19 +1,17 @@
-//! 优雅关闭信号处理。
+//! 进程关闭与重启信号处理。
 
-use std::{
-    path::PathBuf,
-    sync::{
-        OnceLock,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::{path::PathBuf, sync::OnceLock};
 
 use tokio::signal;
 use tokio::sync::broadcast;
 
-static SHUTDOWN_REQUESTS: OnceLock<broadcast::Sender<()>> = OnceLock::new();
-static RESTART_REQUESTED: AtomicBool = AtomicBool::new(false);
-static RESTART_EXECUTABLE_PATH: OnceLock<PathBuf> = OnceLock::new();
+static SHUTDOWN_REQUESTS: OnceLock<broadcast::Sender<ShutdownAction>> = OnceLock::new();
+
+#[derive(Clone)]
+pub(crate) enum ShutdownAction {
+    Graceful,
+    Restart(PathBuf),
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RuntimeProcessControl;
@@ -24,12 +22,12 @@ impl crate::api::router::ProcessControl for RuntimeProcessControl {
     }
 
     fn request_restart(&self, executable_path: PathBuf) {
-        request_process_restart(executable_path);
+        request_immediate_restart(executable_path);
     }
 }
 
-/// 等待进程关闭信号（Ctrl+C 或 SIGTERM）。
-pub async fn shutdown_signal() {
+/// 等待进程关闭或重启信号。
+pub(crate) async fn shutdown_signal() -> ShutdownAction {
     let mut requested = shutdown_sender().subscribe();
     let ctrl_c = async {
         signal::ctrl_c()
@@ -49,33 +47,25 @@ pub async fn shutdown_signal() {
     let terminate = std::future::pending::<()>();
 
     tokio::select! {
-        _ = requested.recv() => {},
-        () = ctrl_c => {},
-        () = terminate => {},
+        action = requested.recv() => match action {
+            Ok(action) => action,
+            Err(_) => ShutdownAction::Graceful,
+        },
+        () = ctrl_c => ShutdownAction::Graceful,
+        () = terminate => ShutdownAction::Graceful,
     }
 }
 
 /// 请求进程按优雅关闭路径退出。
 pub fn request_shutdown() {
-    let _ = shutdown_sender().send(());
+    let _ = shutdown_sender().send(ShutdownAction::Graceful);
 }
 
-/// 请求进程完成优雅关闭后以新二进制替换当前进程。
-pub fn request_process_restart(executable_path: PathBuf) {
-    let _ = RESTART_EXECUTABLE_PATH.set(executable_path);
-    RESTART_REQUESTED.store(true, Ordering::SeqCst);
-    request_shutdown();
+fn request_immediate_restart(executable_path: PathBuf) {
+    let _ = shutdown_sender().send(ShutdownAction::Restart(executable_path));
 }
 
-/// 获取待 exec 的重启目标。
-pub fn restart_executable_path() -> Option<PathBuf> {
-    RESTART_REQUESTED
-        .load(Ordering::SeqCst)
-        .then(|| RESTART_EXECUTABLE_PATH.get().cloned())
-        .flatten()
-}
-
-fn shutdown_sender() -> &'static broadcast::Sender<()> {
+fn shutdown_sender() -> &'static broadcast::Sender<ShutdownAction> {
     SHUTDOWN_REQUESTS.get_or_init(|| {
         let (sender, _receiver) = broadcast::channel(16);
         sender

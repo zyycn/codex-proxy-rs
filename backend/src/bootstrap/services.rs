@@ -546,6 +546,7 @@ pub async fn run(config: BootstrapConfig) -> Result<(), Box<dyn Error + Send + S
     let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
     let (router, task_coordinator, connection_drain) = build_router(config).await?;
     let mut task_coordinator = Some(task_coordinator);
+    let mut restart_path = None;
 
     let serve_result = {
         let (graceful_shutdown_tx, graceful_shutdown_rx) = tokio::sync::oneshot::channel();
@@ -560,45 +561,62 @@ pub async fn run(config: BootstrapConfig) -> Result<(), Box<dyn Error + Send + S
         tokio::pin!(serve);
         tokio::select! {
             result = &mut serve => result,
-            () = crate::bootstrap::shutdown::shutdown_signal() => {
-                let _ = graceful_shutdown_tx.send(());
-                let active_websocket_connections = connection_drain.begin_shutdown();
-                tracing::info!(
-                    active_websocket_connections,
-                    "正在排空入站连接并关闭运行时任务"
-                );
-                let coordinator = task_coordinator.take();
-                let connection_drain = connection_drain.clone();
-                let runtime_shutdown = async move {
-                    let shutdown_tasks = async move {
-                        if let Some(coordinator) = coordinator {
-                            coordinator.shutdown().await;
-                        }
-                    };
-                    tokio::join!(shutdown_tasks, connection_drain.wait());
-                };
-                let drain_runtime = async {
-                    let (serve_result, ()) = tokio::join!(&mut serve, runtime_shutdown);
-                    serve_result
-                };
-                tokio::pin!(drain_runtime);
-                tokio::select! {
-                    result = &mut drain_runtime => result,
-                    () = tokio::time::sleep(HTTP_DRAIN_TIMEOUT) => {
-                        tracing::warn!(
-                            timeout_secs = HTTP_DRAIN_TIMEOUT.as_secs(),
-                            "HTTP graceful shutdown timed out; cancelling remaining connections"
-                        );
+            action = crate::bootstrap::shutdown::shutdown_signal() => {
+                match action {
+                    crate::bootstrap::shutdown::ShutdownAction::Restart(executable_path) => {
+                        restart_path = Some(executable_path);
                         Ok(())
                     }
-                    () = crate::bootstrap::shutdown::shutdown_signal() => {
-                        tracing::warn!("Received a second shutdown signal; cancelling remaining connections");
-                        Ok(())
+                    crate::bootstrap::shutdown::ShutdownAction::Graceful => {
+                        let _ = graceful_shutdown_tx.send(());
+                        let active_websocket_connections = connection_drain.begin_shutdown();
+                        tracing::info!(
+                            active_websocket_connections,
+                            "正在排空入站连接并关闭运行时任务"
+                        );
+                        let coordinator = task_coordinator.take();
+                        let connection_drain = connection_drain.clone();
+                        let runtime_shutdown = async move {
+                            let shutdown_tasks = async move {
+                                if let Some(coordinator) = coordinator {
+                                    coordinator.shutdown().await;
+                                }
+                            };
+                            tokio::join!(shutdown_tasks, connection_drain.wait());
+                        };
+                        let drain_runtime = async {
+                            let (serve_result, ()) = tokio::join!(&mut serve, runtime_shutdown);
+                            serve_result
+                        };
+                        tokio::pin!(drain_runtime);
+                        tokio::select! {
+                            result = &mut drain_runtime => result,
+                            () = tokio::time::sleep(HTTP_DRAIN_TIMEOUT) => {
+                                tracing::warn!(
+                                    timeout_secs = HTTP_DRAIN_TIMEOUT.as_secs(),
+                                    "HTTP graceful shutdown timed out; cancelling remaining connections"
+                                );
+                                Ok(())
+                            }
+                            _ = crate::bootstrap::shutdown::shutdown_signal() => {
+                                tracing::warn!("Received a second shutdown signal; cancelling remaining connections");
+                                Ok(())
+                            }
+                        }
                     }
                 }
             }
         }
     };
+
+    if let Some(executable_path) = restart_path {
+        tracing::info!(
+            executable = %executable_path.display(),
+            "正在以更新后的二进制替换当前进程"
+        );
+        drop(log_guard);
+        return exec_replacement_process(executable_path);
+    }
 
     if let Some(coordinator) = task_coordinator.take() {
         let active_websocket_connections = connection_drain.begin_shutdown();
@@ -609,15 +627,6 @@ pub async fn run(config: BootstrapConfig) -> Result<(), Box<dyn Error + Send + S
         tokio::join!(coordinator.shutdown(), connection_drain.wait());
     }
     serve_result?;
-
-    if let Some(executable_path) = crate::bootstrap::shutdown::restart_executable_path() {
-        tracing::info!(
-            executable = %executable_path.display(),
-            "正在以更新后的二进制替换当前进程"
-        );
-        drop(log_guard);
-        exec_replacement_process(executable_path)?;
-    }
 
     Ok(())
 }
