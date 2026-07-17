@@ -106,19 +106,27 @@ function togglePasswordVisible(): void {
         <p>{{ props.error }}</p>
       </div>
 
-      <label class="grid min-w-0 gap-2">
+      <div class="grid min-w-0 gap-2">
         <span class="text-[13px] leading-[1.1] font-bold text-(--login-label)">管理员账号</span>
-        <BaseInput v-model="username" placeholder="admin@example.com" autocomplete="username">
+        <BaseInput
+          v-model="username"
+          name="username"
+          aria-label="管理员账号"
+          placeholder="admin@example.com"
+          autocomplete="username"
+        >
           <template #prefix>
             <Mail :size="17" />
           </template>
         </BaseInput>
-      </label>
+      </div>
 
-      <label class="grid min-w-0 gap-2">
+      <div class="grid min-w-0 gap-2">
         <span class="text-[13px] leading-[1.1] font-bold text-(--login-label)">访问密钥</span>
         <BaseInput
           v-model="password"
+          name="password"
+          aria-label="访问密钥"
           placeholder="输入会话密钥"
           :type="passwordType"
           autocomplete="current-password"
@@ -141,7 +149,7 @@ function togglePasswordVisible(): void {
             </BaseButton>
           </template>
         </BaseInput>
-      </label>
+      </div>
 
       <div class="min-w-0 mb-2">
         <BaseButton

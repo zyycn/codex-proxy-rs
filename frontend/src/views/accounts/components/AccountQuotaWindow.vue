@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AccountQuotaWindow } from '../quota'
+import type { AccountQuotaWindow } from '../constants'
 import {
 
   quotaWindowBarClass,
@@ -7,7 +7,7 @@ import {
   quotaWindowLocalUsageDisplay,
   quotaWindowPercentTextClass,
   shouldShowQuotaWindowLocalUsage,
-} from '../quota'
+} from '../constants'
 
 defineProps<{
   window: AccountQuotaWindow

@@ -33,21 +33,11 @@ function elementHasSize(element: HTMLElement) {
   return element.clientWidth > 0 && element.clientHeight > 0
 }
 
-function cancelPendingInit() {
-  pendingInitElement.value = undefined
-  pausePendingInit()
-}
-
 function ensureChart(element: HTMLElement) {
   if (chart.value || !elementHasSize(element))
     return
   chart.value = init(element, undefined, { renderer: 'canvas' })
   applyOption(chartOption.value)
-}
-
-function scheduleInit(element: HTMLElement) {
-  pendingInitElement.value = element
-  resumePendingInit()
 }
 
 const { pause: pausePendingInit, resume: resumePendingInit } = useRafFn(
@@ -60,6 +50,16 @@ const { pause: pausePendingInit, resume: resumePendingInit } = useRafFn(
   },
   { immediate: false, once: true },
 )
+
+function cancelPendingInit() {
+  pendingInitElement.value = undefined
+  pausePendingInit()
+}
+
+function scheduleInit(element: HTMLElement) {
+  pendingInitElement.value = element
+  resumePendingInit()
+}
 
 function resize() {
   chart.value?.resize()

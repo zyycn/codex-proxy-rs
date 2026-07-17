@@ -8,6 +8,8 @@ const props = withDefaults(
     disabled?: boolean
     error?: string
     autocomplete?: string
+    name?: string
+    ariaLabel?: string
   }>(),
   {
     placeholder: '',
@@ -15,6 +17,8 @@ const props = withDefaults(
     disabled: false,
     error: undefined,
     autocomplete: undefined,
+    name: undefined,
+    ariaLabel: undefined,
   },
 )
 
@@ -54,7 +58,7 @@ const inputClasses = computed(() => [
 </script>
 
 <template>
-  <label class="grid box-content gap-2 overflow-visible p-0.75">
+  <div class="grid box-content gap-2 overflow-visible p-0.75">
     <span class="base-input__control" :class="containerClasses">
       <span v-if="$slots.prefix" :class="iconClasses">
         <slot name="prefix" />
@@ -63,10 +67,12 @@ const inputClasses = computed(() => [
         v-model="model"
         class="base-input__field"
         :class="inputClasses"
+        :name="name"
         :placeholder="placeholder"
         :type="type"
         :disabled="disabled"
         :autocomplete="autocomplete"
+        :aria-label="ariaLabel"
         :aria-invalid="error ? 'true' : undefined"
       >
       <span v-if="$slots.suffix" :class="iconClasses">
@@ -76,7 +82,7 @@ const inputClasses = computed(() => [
     <span v-if="error" class="text-xs font-[650] leading-[1.15] text-(--cp-danger-text)">{{
       error
     }}</span>
-  </label>
+  </div>
 </template>
 
 <style scoped>

@@ -33,7 +33,7 @@ const props = withDefaults(
 
 const activeView = shallowRef('total')
 const { palette } = useUsageChartPalette()
-const performancePoints = computed(() => props.performance.points)
+const performancePoints = computed<PerformancePoint[]>(() => props.performance.points)
 
 const viewOptions = [
   { label: '总耗时', value: 'total' },

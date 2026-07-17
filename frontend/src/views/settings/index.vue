@@ -11,7 +11,7 @@ import RotationStrategyCard from './components/RotationStrategyCard.vue'
 import RuntimeSettingsCard from './components/RuntimeSettingsCard.vue'
 import { useAdminApiKey } from './composables/useAdminApiKey'
 import { useSettingsForm } from './composables/useSettingsForm'
-import { rotationOptions } from './options'
+import { rotationOptions } from './constants'
 
 const {
   loading,

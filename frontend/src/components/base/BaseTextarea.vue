@@ -9,12 +9,16 @@ const props = withDefaults(
     disabled?: boolean
     error?: string
     size?: TextareaSize
+    name?: string
+    ariaLabel?: string
   }>(),
   {
     placeholder: '',
     disabled: false,
     error: undefined,
     size: 'md',
+    name: undefined,
+    ariaLabel: undefined,
   },
 )
 
@@ -37,16 +41,18 @@ const textareaClasses = computed(() => [
 </script>
 
 <template>
-  <label class="grid box-content gap-2 overflow-visible p-0.75">
+  <div class="grid box-content gap-2 overflow-visible p-0.75">
     <textarea
       v-model="model"
       :class="textareaClasses"
+      :name="name"
       :placeholder="placeholder"
       :disabled="disabled"
+      :aria-label="ariaLabel"
       :aria-invalid="error ? 'true' : undefined"
     />
     <span v-if="error" class="text-xs leading-[1.15] font-[650] text-(--cp-danger-text)">
       {{ error }}
     </span>
-  </label>
+  </div>
 </template>

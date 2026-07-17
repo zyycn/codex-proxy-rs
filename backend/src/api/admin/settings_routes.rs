@@ -115,7 +115,7 @@ pub(crate) async fn regenerate_admin_api_key(
     ))
 }
 
-/// `DELETE /api/admin/settings/admin-api-key`
+/// `POST /api/admin/settings/admin-api-key`
 pub(crate) async fn delete_admin_api_key(
     State(state): State<AppState>,
     _auth: AdminAuth,

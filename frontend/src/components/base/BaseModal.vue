@@ -2,7 +2,7 @@
 import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, useTemplateRef, watch } from 'vue'
 
-import { lockBodyScroll, unlockBodyScroll } from '@/utils/bodyScrollLock'
+import { lockBodyScroll, unlockBodyScroll } from '@/utils/body-scroll-lock'
 import BaseButton from './BaseButton.vue'
 import BaseScrollbar from './BaseScrollbar.vue'
 
@@ -183,7 +183,13 @@ onBeforeUnmount(() => {
         role="presentation"
         @keydown="handleKeydown"
       >
-        <div class="absolute inset-0 bg-(--cp-overlay-scrim)" @click="closeModal" />
+        <button
+          type="button"
+          tabindex="-1"
+          aria-label="关闭弹窗"
+          class="absolute inset-0 cursor-default border-0 bg-(--cp-overlay-scrim) p-0"
+          @click="closeModal"
+        />
         <section
           ref="panel"
           class="cp-modal-panel [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] relative grid max-h-[calc(100dvh-1.5rem)] min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-(--cp-card-radius) bg-(--cp-bg-surface) shadow-(--cp-shadow-popover) sm:max-h-[calc(100dvh-3rem)]"

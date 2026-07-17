@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AccountRow } from '../quota'
+import type { AccountRow } from '../constants'
 
 import { computed } from 'vue'
 import {
@@ -10,7 +10,7 @@ import {
   quotaWindowPercentTextClass,
   shouldShowQuotaWindowLocalUsage,
   visibleSummaryQuotaWindows,
-} from '../quota'
+} from '../constants'
 
 const props = defineProps<{
   account: AccountRow

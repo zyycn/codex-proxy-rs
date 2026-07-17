@@ -1,4 +1,4 @@
-import type { rotationOptions } from '../options'
+import type { rotationOptions } from '../constants'
 import { sortBy } from 'es-toolkit'
 
 import { computed, onMounted, reactive, ref, shallowRef } from 'vue'

@@ -24,12 +24,14 @@ const props = withDefaults(
     disabled?: boolean
     placeholder?: string
     emptyText?: string
+    ariaLabel?: string
   }>(),
   {
     size: 'default',
     disabled: false,
     placeholder: '请选择',
     emptyText: '暂无选项',
+    ariaLabel: undefined,
   },
 )
 
@@ -270,6 +272,7 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
       :class="triggerClasses"
       :disabled="disabled"
       role="combobox"
+      :aria-label="ariaLabel"
       :aria-expanded="open"
       :aria-controls="`${selectId}-listbox`"
       :aria-activedescendant="open && activeIndex >= 0 ? optionId(activeIndex) : undefined"
@@ -328,6 +331,7 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
               :disabled="option.disabled"
               :class="optionClasses(option, index)"
               @mouseenter="activeIndex = option.disabled ? activeIndex : index"
+              @focus="activeIndex = option.disabled ? activeIndex : index"
               @mousedown.prevent
               @click="chooseOption(option, index)"
             >

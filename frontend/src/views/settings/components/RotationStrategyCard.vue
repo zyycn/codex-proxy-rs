@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { rotationOptions } from '../options'
+import type { rotationOptions } from '../constants'
 import BaseCard from '@/components/base/BaseCard.vue'
 
 type RotationOption = (typeof rotationOptions)[number]

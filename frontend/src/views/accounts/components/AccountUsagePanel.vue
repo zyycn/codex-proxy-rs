@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AccountRow } from '../quota'
+import type { AccountRow } from '../constants'
 
 defineProps<{
   account: AccountRow

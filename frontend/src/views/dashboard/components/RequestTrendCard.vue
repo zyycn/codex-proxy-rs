@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { dashboardTrendView, normalizeDashboardTrendKind } from '../presenter'
+import type { dashboardTrendView, normalizeDashboardTrendKind } from '../composables/presenter'
 
 import { toRef } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
