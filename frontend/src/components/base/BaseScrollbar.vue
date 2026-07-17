@@ -70,7 +70,7 @@ const rootClasses = computed(() => [
   props.maxHeight || props.height ? undefined : 'h-full',
 ])
 const wrapClasses = computed(() => [
-  'base-scrollbar-wrap min-h-0 max-h-[inherit] overflow-auto outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-(--cp-info-border)',
+  'base-scrollbar-wrap min-h-0 max-h-[inherit] overflow-auto outline-none',
   props.maxHeight ? undefined : 'h-full',
 ])
 const verticalTrackClass = computed(() =>

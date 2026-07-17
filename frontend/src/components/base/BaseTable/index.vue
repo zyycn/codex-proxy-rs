@@ -3,7 +3,7 @@ import type { BaseTableColumn, BaseTableSort, ResolvedTableColumn } from './colu
 import type { BaseTablePagination as BaseTablePaginationConfig } from './pagination'
 
 import { Triangle } from '@lucide/vue'
-import { computed, shallowRef, useSlots, watch } from 'vue'
+import { computed, shallowRef, useSlots, useTemplateRef, watch } from 'vue'
 import BaseEmpty from '../BaseEmpty.vue'
 import BaseScrollbar from '../BaseScrollbar.vue'
 import BaseTablePagination from './BaseTablePagination.vue'
@@ -89,9 +89,15 @@ const displayRows = computed(() =>
   props.loading && props.rows.length === 0 ? retainedRows.value : props.rows,
 )
 const hasRows = computed(() => displayRows.value.length > 0)
+const headerWrapRef = useTemplateRef<HTMLDivElement>('headerWrap')
+const bodyScrollbarRef = useTemplateRef<InstanceType<typeof BaseScrollbar>>('bodyScrollbar')
+const tableViewRef = useTemplateRef<HTMLTableElement>('tableView')
 const { horizontalScrolled, horizontalCanScrollRight, handleTableScroll }
   = useHorizontalStickyShadow({
     hasRows,
+    headerWrapRef,
+    bodyScrollbarRef,
+    tableViewRef,
     watchSources: () => [displayRows.value.length, props.minWidth],
   })
 
@@ -216,11 +222,11 @@ function sortButtonLabel(column: BaseTableColumn<Row>) {
 <template>
   <div class="flex h-full min-h-0 w-full max-w-full flex-col overflow-hidden">
     <div
-      v-loading="{ loading, preserveContent: hasRows }"
+      v-loading="loading"
       class="relative flex min-h-0 max-w-full flex-1 overflow-hidden pb-3"
     >
       <div class="flex min-h-0 max-w-full flex-1 flex-col overflow-hidden">
-        <div class="max-w-full overflow-hidden">
+        <div ref="headerWrap" class="max-w-full overflow-hidden">
           <table
             class="w-full shrink-0 table-fixed border-separate text-left"
             :class="compact ? 'border-spacing-y-0.5' : 'border-spacing-y-1'"
@@ -300,6 +306,7 @@ function sortButtonLabel(column: BaseTableColumn<Row>) {
 
         <BaseScrollbar
           v-if="hasRows"
+          ref="bodyScrollbar"
           class="min-h-0 flex-1"
           horizontal
           :max-height="maxHeight"
@@ -307,6 +314,7 @@ function sortButtonLabel(column: BaseTableColumn<Row>) {
           @scroll="handleTableScroll"
         >
           <table
+            ref="tableView"
             class="w-full table-fixed border-separate text-left"
             :class="compact ? 'border-spacing-y-1' : 'border-spacing-y-2'"
             :style="tableViewStyle"
