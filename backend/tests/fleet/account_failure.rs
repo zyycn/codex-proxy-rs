@@ -1,17 +1,12 @@
-use codex_proxy_rs::{
-    fleet::{
-        account::AccountStatus,
-        account_failure::{AccountFailureKind, AccountStateEffect, classify_client_failure},
-    },
-    upstream::openai::transport::{
-        CodexBackendTransport, CodexClientError, CodexUpstreamDiagnostics,
-    },
+use codex_proxy_rs::fleet::{
+    account::AccountStatus,
+    account_failure::{AccountFailureKind, AccountStateEffect, classify_account_failure},
+    account_gateway::AccountFailureObservation,
 };
-use reqwest::StatusCode;
 
 #[test]
 fn deactivated_workspace_should_be_banned_before_generic_payment_classification() {
-    let failure = classify(402, r#"{"detail":{"code":"deactivated_workspace"}}"#);
+    let failure = classify(observation(402, Some("deactivated_workspace"), ""));
 
     assert_eq!(failure.kind, AccountFailureKind::Banned);
     assert_eq!(
@@ -22,7 +17,7 @@ fn deactivated_workspace_should_be_banned_before_generic_payment_classification(
 
 #[test]
 fn generic_payment_required_should_exhaust_quota() {
-    let failure = classify(402, r#"{"detail":{"code":"payment_required"}}"#);
+    let failure = classify(observation(402, Some("payment_required"), ""));
 
     assert_eq!(failure.kind, AccountFailureKind::QuotaExhausted);
     assert_eq!(
@@ -33,7 +28,7 @@ fn generic_payment_required_should_exhaust_quota() {
 
 #[test]
 fn unauthorized_should_expire_account() {
-    let failure = classify(401, r#"{"error":{"message":"unauthorized"}}"#);
+    let failure = classify(observation(401, None, "unauthorized"));
 
     assert_eq!(failure.kind, AccountFailureKind::Expired);
     assert_eq!(
@@ -44,7 +39,7 @@ fn unauthorized_should_expire_account() {
 
 #[test]
 fn rate_limit_should_create_temporary_quota_effect() {
-    let failure = classify(429, r#"{"error":{"code":"rate_limit_exceeded"}}"#);
+    let failure = classify(observation(429, Some("rate_limit_exceeded"), ""));
 
     assert_eq!(failure.kind, AccountFailureKind::RateLimited);
     assert!(matches!(
@@ -55,66 +50,52 @@ fn rate_limit_should_create_temporary_quota_effect() {
 
 #[test]
 fn html_forbidden_page_should_not_ban_account() {
-    let error = upstream_error(403, "<!doctype html><html>temporary edge failure</html>");
+    let facts = observation(
+        403,
+        None,
+        "<!doctype html><html>temporary edge failure</html>",
+    );
 
-    assert!(classify_client_failure(&error).is_none());
+    assert!(classify_account_failure(&facts).is_none());
 }
 
 #[test]
 fn generic_forbidden_should_not_ban_account() {
-    let error = upstream_error(403, r#"{"error":{"message":"request forbidden"}}"#);
+    let facts = observation(403, None, "request forbidden");
 
-    assert!(classify_client_failure(&error).is_none());
+    assert!(classify_account_failure(&facts).is_none());
 }
 
 #[test]
 fn generic_permission_error_should_not_ban_account() {
-    let error = upstream_error(
-        403,
-        r#"{"error":{"code":"forbidden","type":"permission_error"}}"#,
-    );
+    let mut facts = observation(403, Some("forbidden"), "");
+    facts.error_type = Some("permission_error".to_string());
 
-    assert!(classify_client_failure(&error).is_none());
+    assert!(classify_account_failure(&facts).is_none());
 }
 
 #[test]
 fn identity_error_header_should_expire_account() {
-    let mut diagnostics = CodexUpstreamDiagnostics::with_status(403);
-    diagnostics.identity_error_code = Some("token_expired".to_string());
-    let error = upstream_error_with_diagnostics(
-        403,
-        r#"{"error":{"message":"request forbidden"}}"#,
-        diagnostics,
-    );
+    let mut facts = observation(403, None, "request forbidden");
+    facts.identity_error_code = Some("token_expired".to_string());
 
-    let failure = classify_client_failure(&error).expect("identity failure should be classified");
+    let failure = classify(facts);
 
     assert_eq!(failure.kind, AccountFailureKind::Expired);
 }
 
 fn classify(
-    status: u16,
-    body: &str,
+    facts: AccountFailureObservation,
 ) -> codex_proxy_rs::fleet::account_failure::ClassifiedAccountFailure {
-    classify_client_failure(&upstream_error(status, body)).expect("failure should be classified")
+    classify_account_failure(&facts).expect("failure should be classified")
 }
 
-fn upstream_error(status: u16, body: &str) -> CodexClientError {
-    upstream_error_with_diagnostics(status, body, CodexUpstreamDiagnostics::with_status(status))
-}
-
-fn upstream_error_with_diagnostics(
-    status: u16,
-    body: &str,
-    diagnostics: CodexUpstreamDiagnostics,
-) -> CodexClientError {
-    CodexClientError::Upstream {
-        status: StatusCode::from_u16(status).unwrap(),
-        body: body.to_string(),
-        retry_after_seconds: None,
-        diagnostics: Box::new(diagnostics),
-        set_cookie_headers: Vec::new(),
-        rate_limit_headers: Vec::new(),
-        transport: CodexBackendTransport::HttpSse,
+fn observation(status_code: u16, code: Option<&str>, message: &str) -> AccountFailureObservation {
+    AccountFailureObservation {
+        status_code: Some(status_code),
+        code: code.map(ToString::to_string),
+        message: message.to_string(),
+        body: message.to_string(),
+        ..AccountFailureObservation::default()
     }
 }

@@ -1,3 +1,6 @@
+import type { AccountRow } from './quota'
+import type { BaseTableColumn } from '@/components/base/BaseTable/columns'
+
 const relaxedCellClass = 'py-3 align-middle'
 
 export const accountColumns = [
@@ -58,7 +61,7 @@ export const accountColumns = [
     sortable: true,
     flex: 1.2,
     minWidth: '160px',
-    format: (_value: unknown, row: any) => row.usage?.lastUsedAtDisplay,
+    format: (_value: unknown, row: AccountRow) => row.usage.lastUsedAtDisplay,
     cellClass: `${relaxedCellClass} text-(--cp-text-secondary)`,
   },
   {
@@ -76,7 +79,7 @@ export const accountColumns = [
     width: '110px',
     minWidth: '110px',
   },
-]
+] satisfies BaseTableColumn<AccountRow>[]
 
 export const statusLabels: Record<string, string> = {
   active: '正常',

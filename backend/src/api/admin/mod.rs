@@ -2,6 +2,7 @@
 
 pub mod accounts_routes;
 pub mod auth_routes;
+mod dashboard_presenter;
 pub mod dashboard_routes;
 pub mod keys_routes;
 pub mod ops_routes;

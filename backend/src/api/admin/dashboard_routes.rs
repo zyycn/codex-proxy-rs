@@ -1,19 +1,28 @@
 //! 管理端 Dashboard 聚合视图。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use axum::{
     extract::{Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
+    admin_queries::dashboard::{
+        DashboardAccountUsage, DashboardDesktopReleaseSnapshot, DashboardPoolSummary,
+        DashboardQueryError, DashboardWireProfile,
+    },
     api::AppState,
     api::admin::{
+        dashboard_presenter::{
+            DashboardAccountCounts, DashboardCardsData, DashboardHealthTimelineData,
+            DashboardTrendData, DashboardTrendKind, dashboard_cards,
+            dashboard_health_timeline_data, dashboard_trend_data,
+        },
         response::{AdminEnvelope, AdminError, AdminResponse},
         session::AdminAuth,
         usage_routes::{
@@ -21,37 +30,13 @@ use crate::{
             usage_record_models, usage_token_details,
         },
     },
-    fleet::{
-        account::{Account, AccountStatus},
-        pool::AccountCapacitySummary,
-        refresh::token_refresh_status_eligible,
-    },
+    fleet::pool::AccountCapacitySummary,
     infra::{
         format::{format_duration_ms, format_tokens},
-        time::{china_datetime, china_day_start, china_quarter_hour_start, china_relative_time},
+        time::{china_datetime, china_relative_time},
     },
-    telemetry::{
-        account_usage::query::AccountUsageTimeBucket,
-        dashboard::{
-            DashboardAccountCounts, DashboardCardsData, DashboardHealthTimelineData,
-            DashboardTrendData, DashboardTrendKind, dashboard_cards,
-            dashboard_health_timeline_data, dashboard_trend_data,
-        },
-        usage::{
-            insights::RequestHealthTimeBucket,
-            query::{UsageQueryFilter, UsageRecordAccountUsage},
-            types::{UsageRecord, metadata_i64, metadata_string},
-        },
-    },
+    telemetry::usage::types::{UsageRecord, metadata_i64, metadata_string},
 };
-
-const DASHBOARD_ACCOUNT_USAGE_LIMIT: u32 = 4;
-const DASHBOARD_USAGE_RECORD_LIMIT: u32 = 10;
-const DASHBOARD_TIME_BUCKET_MINUTES: i64 = 15;
-const DASHBOARD_TIME_BUCKET_SLOTS: i64 = 7 * 24 * 4;
-const FIVE_HOUR_WINDOW_SECONDS: u64 = 18_000;
-const WEEK_WINDOW_SECONDS: u64 = 604_800;
-const MONTH_WINDOW_SECONDS: u64 = 2_592_000;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -193,6 +178,20 @@ struct AccountCapacityDiagnostics {
     available_slots: usize,
 }
 
+impl From<DashboardPoolSummary> for AccountPoolDiagnostics {
+    fn from(summary: DashboardPoolSummary) -> Self {
+        Self {
+            total: summary.total,
+            active: summary.active,
+            expired: summary.expired,
+            quota_exhausted: summary.quota_exhausted,
+            refreshing: summary.refreshing,
+            disabled: summary.disabled,
+            banned: summary.banned,
+        }
+    }
+}
+
 impl From<AccountCapacitySummary> for AccountCapacityDiagnostics {
     fn from(summary: AccountCapacitySummary) -> Self {
         Self {
@@ -204,108 +203,46 @@ impl From<AccountCapacitySummary> for AccountCapacityDiagnostics {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum QuotaWindowPriority {
-    FiveHour,
-    Weekly,
-    Monthly,
-    Other,
-}
-
 /// `GET /api/admin/dashboard/summary`
 pub(crate) async fn dashboard_summary(
     State(state): State<AppState>,
     _auth: AdminAuth,
     Query(query): Query<DashboardTrendQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let accounts = state
-        .services
-        .accounts
-        .list_pool_accounts()
-        .await
-        .map_err(|error| dashboard_data_error("accounts", &error))?;
-    let capacity = state.services.account_pool.capacity_summary_now().await;
     let now = Utc::now();
-    let today_filter = today_usage_record_filter(now);
-    let retained_usage = state
+    let dashboard = state
         .services
-        .usage
-        .retained_summary()
+        .admin_queries
+        .dashboard
+        .summary(now)
         .await
-        .map_err(|error| dashboard_data_error("retained usage summary", &error))?;
-    let account_usage_records = state
-        .services
-        .usage_records
-        .account_usage(today_filter.clone(), DASHBOARD_ACCOUNT_USAGE_LIMIT)
-        .await
-        .map_err(|error| dashboard_data_error("account usage ranking", &error))?;
-    let recent_events = state
-        .services
-        .usage_records
-        .list_recent(DASHBOARD_USAGE_RECORD_LIMIT, today_filter)
-        .await
-        .map_err(|error| dashboard_data_error("recent usage records", &error))?;
-
-    let (time_buckets, health_buckets) = tokio::try_join!(
-        dashboard_time_buckets(&state, now),
-        dashboard_health_buckets(&state, now),
-    )?;
-    let account_ids = accounts
-        .iter()
-        .map(|account| account.id.clone())
-        .collect::<Vec<_>>();
-    let refreshing_account_ids = state
-        .services
-        .token_refresh
-        .refreshing_account_ids(&account_ids, now)
-        .await
-        .map_err(|error| dashboard_data_error("refreshing accounts", &error))?;
-    let pool_summary = account_pool_summary(&accounts, &refreshing_account_ids);
-    let trend = dashboard_trend_data(&time_buckets, query.kind.unwrap_or_default());
-    let quota_used_by_account =
-        account_quota_used_percent_by_id(&state, &account_usage_records).await?;
-    let settings = state.services.settings.current();
-    let recent_usage_records = recent_events;
-    let account_emails = state
-        .services
-        .usage_records
-        .account_email_map(&recent_usage_records)
-        .await
-        .map_err(|error| AdminError::usage_record_accounts_failed(error.to_string()))?;
+        .map_err(dashboard_query_error)?;
+    let trend = dashboard_trend_data(&dashboard.time_buckets, query.kind.unwrap_or_default());
     let dashboard_usage_records =
-        dashboard_usage_record_items(recent_usage_records, &account_emails);
+        dashboard_usage_record_items(dashboard.usage_records, &dashboard.account_emails);
 
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(DashboardSummaryData {
             cards: dashboard_cards(
-                dashboard_account_counts(&accounts),
-                &time_buckets,
-                &retained_usage,
+                DashboardAccountCounts {
+                    total: dashboard.account_counts.total,
+                    enabled: dashboard.account_counts.enabled,
+                    abnormal: dashboard.account_counts.abnormal,
+                },
+                &dashboard.time_buckets,
+                &dashboard.retained_usage,
             ),
             trend,
-            health_timeline: dashboard_health_timeline_data(&health_buckets),
-            account_usage: account_usage_data(
-                &accounts,
-                &account_usage_records,
-                &quota_used_by_account,
-                now,
-            ),
-            wire_profile: wire_profile_data(&state),
+            health_timeline: dashboard_health_timeline_data(&dashboard.health_buckets),
+            account_usage: account_usage_data(&dashboard.account_usage, now),
+            wire_profile: wire_profile_data(dashboard.wire_profile, dashboard.desktop_release),
             usage_records: dashboard_usage_records,
-            pool_summary,
-            capacity_info: AccountCapacityDiagnostics::from(capacity),
-            rotation_strategy: Some(settings.rotation_strategy.clone()),
+            pool_summary: AccountPoolDiagnostics::from(dashboard.pool),
+            capacity_info: AccountCapacityDiagnostics::from(dashboard.capacity),
+            rotation_strategy: Some(dashboard.rotation_strategy),
         }),
     ))
-}
-
-fn today_usage_record_filter(now: DateTime<Utc>) -> UsageQueryFilter {
-    UsageQueryFilter {
-        start_time: Some(china_day_start(now)),
-        end_time: Some(now),
-        ..UsageQueryFilter::default()
-    }
 }
 
 /// `GET /api/admin/dashboard/trend?kind=usage|latency|errors`
@@ -314,7 +251,13 @@ pub(crate) async fn dashboard_trend(
     _auth: AdminAuth,
     Query(query): Query<DashboardTrendQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let time_buckets = dashboard_time_buckets(&state, Utc::now()).await?;
+    let time_buckets = state
+        .services
+        .admin_queries
+        .dashboard
+        .time_buckets(Utc::now())
+        .await
+        .map_err(dashboard_query_error)?;
 
     Ok(AdminResponse::new(
         StatusCode::OK,
@@ -325,211 +268,26 @@ pub(crate) async fn dashboard_trend(
     ))
 }
 
-async fn dashboard_time_buckets(
-    state: &AppState,
-    now: DateTime<Utc>,
-) -> Result<Vec<AccountUsageTimeBucket>, AdminError> {
-    let current_slot = china_quarter_hour_start(now);
-    let start = current_slot
-        - Duration::minutes(DASHBOARD_TIME_BUCKET_MINUTES * (DASHBOARD_TIME_BUCKET_SLOTS - 1));
-    state
-        .services
-        .usage
-        .time_buckets(start, now)
-        .await
-        .map_err(|error| dashboard_data_error("time buckets", &error))
-}
-
-async fn dashboard_health_buckets(
-    state: &AppState,
-    now: DateTime<Utc>,
-) -> Result<Vec<RequestHealthTimeBucket>, AdminError> {
-    state
-        .services
-        .usage_records
-        .health_timeline(china_day_start(now), now)
-        .await
-        .map_err(|error| dashboard_data_error("health timeline", &error))
-}
-
-fn dashboard_account_counts(accounts: &[Account]) -> DashboardAccountCounts {
-    DashboardAccountCounts {
-        total: accounts.len() as u64,
-        enabled: accounts
-            .iter()
-            .filter(|account| account.status == AccountStatus::Active)
-            .count() as u64,
-        abnormal: accounts
-            .iter()
-            .filter(|account| account.status != AccountStatus::Active)
-            .count() as u64,
-    }
-}
-
-fn account_pool_summary(
-    accounts: &[Account],
-    refreshing_account_ids: &HashSet<String>,
-) -> AccountPoolDiagnostics {
-    let mut summary = AccountPoolDiagnostics {
-        total: accounts.len(),
-        ..AccountPoolDiagnostics::default()
-    };
-    for account in accounts {
-        match account.status {
-            status
-                if token_refresh_status_eligible(status)
-                    && refreshing_account_ids.contains(&account.id) =>
-            {
-                summary.refreshing += 1;
-            }
-            AccountStatus::Active => summary.active += 1,
-            AccountStatus::Expired => summary.expired += 1,
-            AccountStatus::QuotaExhausted => summary.quota_exhausted += 1,
-            AccountStatus::Disabled => summary.disabled += 1,
-            AccountStatus::Banned => summary.banned += 1,
-        }
-    }
-    summary
-}
-
 fn account_usage_data(
-    accounts: &[Account],
-    usage_records: &[UsageRecordAccountUsage],
-    quota_used_by_account: &HashMap<String, f64>,
+    usage_records: &[DashboardAccountUsage],
     now: DateTime<Utc>,
 ) -> Vec<DashboardAccountUsageData> {
-    let account_by_id = accounts
-        .iter()
-        .map(|account| (account.id.as_str(), account))
-        .collect::<HashMap<_, _>>();
     usage_records
         .iter()
-        .map(|usage| {
-            let account = account_by_id.get(usage.account_id.as_str()).copied();
-            let quota_used_percent = quota_used_by_account
-                .get(&usage.account_id)
-                .copied()
-                .or_else(|| {
-                    matches!(
-                        account.map(|account| account.status),
-                        Some(AccountStatus::QuotaExhausted)
-                    )
-                    .then_some(100.0)
-                });
-            DashboardAccountUsageData {
-                id: usage.account_id.clone(),
-                email: account
-                    .and_then(|account| account.email.as_ref())
-                    .cloned()
-                    .unwrap_or_else(|| usage.account_id.clone()),
-                plan_type: account
-                    .and_then(|account| account.plan_type.as_ref())
-                    .cloned(),
-                tokens: format_tokens(usage.total_tokens),
-                quota_used_percent,
-                last_used: china_relative_time(Some(usage.last_used_at), now),
-            }
+        .map(|usage| DashboardAccountUsageData {
+            id: usage.id.clone(),
+            email: usage.email.clone(),
+            plan_type: usage.plan_type.clone(),
+            tokens: format_tokens(usage.total_tokens),
+            quota_used_percent: usage.quota_used_percent,
+            last_used: china_relative_time(Some(usage.last_used_at), now),
         })
         .collect()
 }
 
-async fn account_quota_used_percent_by_id(
-    state: &AppState,
-    usage_records: &[UsageRecordAccountUsage],
-) -> Result<HashMap<String, f64>, AdminError> {
-    let mut quota_used_by_account = HashMap::with_capacity(usage_records.len());
-    for usage in usage_records {
-        let quota_json = state
-            .services
-            .accounts
-            .get_quota_json(&usage.account_id)
-            .await
-            .map_err(|error| dashboard_data_error("account quota", &error))?;
-        let Some(quota_json) = quota_json else {
-            continue;
-        };
-        if let Some(used_percent) = quota_used_percent(&quota_json) {
-            quota_used_by_account.insert(usage.account_id.clone(), used_percent);
-        }
-    }
-    Ok(quota_used_by_account)
-}
-
-fn dashboard_data_error(source: &'static str, error: &impl std::fmt::Display) -> AdminError {
-    tracing::error!(source, error = %error, "Failed to load dashboard data");
+fn dashboard_query_error(error: DashboardQueryError) -> AdminError {
+    tracing::error!(error = %error, "Failed to load dashboard data");
     AdminError::internal("Failed to load dashboard data")
-}
-
-fn quota_used_percent(quota_json: &str) -> Option<f64> {
-    let quota = serde_json::from_str::<Value>(quota_json).ok()?;
-    let mut selected = None;
-    if let Some(monthly_limit) = quota.get("monthly_limit") {
-        select_quota_used_percent(
-            &mut selected,
-            quota_window_priority(monthly_limit, QuotaWindowPriority::Monthly),
-            monthly_limit.get("used_percent").and_then(percent_value),
-        );
-    }
-    if let Some(snapshots) = quota.get("snapshots").and_then(Value::as_array) {
-        for snapshot in snapshots {
-            for role in ["primary", "secondary"] {
-                if let Some(window) = snapshot.get(role) {
-                    select_quota_used_percent(
-                        &mut selected,
-                        quota_window_priority(window, QuotaWindowPriority::Other),
-                        window.get("used_percent").and_then(percent_value),
-                    );
-                }
-            }
-        }
-    }
-    selected.map(|(_, used_percent)| used_percent)
-}
-
-fn select_quota_used_percent(
-    selected: &mut Option<(QuotaWindowPriority, f64)>,
-    priority: QuotaWindowPriority,
-    used_percent: Option<f64>,
-) {
-    let Some(used_percent) = used_percent else {
-        return;
-    };
-    match selected {
-        Some((selected_priority, selected_percent))
-            if priority > *selected_priority
-                || (priority == *selected_priority && used_percent <= *selected_percent) => {}
-        _ => *selected = Some((priority, used_percent)),
-    }
-}
-
-fn quota_window_priority(window: &Value, fallback: QuotaWindowPriority) -> QuotaWindowPriority {
-    let window_seconds = window
-        .get("window_minutes")
-        .and_then(Value::as_u64)
-        .and_then(|minutes| minutes.checked_mul(60));
-    match window_seconds {
-        Some(seconds) if quota_window_matches(seconds, FIVE_HOUR_WINDOW_SECONDS) => {
-            QuotaWindowPriority::FiveHour
-        }
-        Some(seconds) if quota_window_matches(seconds, WEEK_WINDOW_SECONDS) => {
-            QuotaWindowPriority::Weekly
-        }
-        Some(seconds) if quota_window_matches(seconds, MONTH_WINDOW_SECONDS) => {
-            QuotaWindowPriority::Monthly
-        }
-        _ => fallback,
-    }
-}
-
-fn quota_window_matches(actual: u64, expected: u64) -> bool {
-    actual > 0 && actual.abs_diff(expected) <= expected / 20
-}
-
-fn percent_value(value: &Value) -> Option<f64> {
-    let percent = value
-        .as_f64()
-        .or_else(|| value.as_str().and_then(|value| value.parse::<f64>().ok()))?;
-    percent.is_finite().then_some(percent.clamp(0.0, 100.0))
 }
 
 fn dashboard_usage_record_items(
@@ -611,9 +369,10 @@ fn metadata_duration_ms(metadata: &Value, key: &str) -> Option<i64> {
     metadata_i64(metadata, &[key]).filter(|value| *value >= 0)
 }
 
-fn wire_profile_data(state: &AppState) -> DashboardWireProfileData {
-    let profile = state.services.wire_profile.snapshot();
-    let release_snapshot = state.services.desktop_release.snapshot();
+fn wire_profile_data(
+    profile: DashboardWireProfile,
+    release_snapshot: DashboardDesktopReleaseSnapshot,
+) -> DashboardWireProfileData {
     let release_status = if release_snapshot.last_error.is_some() {
         "check_failed"
     } else if let Some(latest) = &release_snapshot.latest {
@@ -638,7 +397,7 @@ fn wire_profile_data(state: &AppState) -> DashboardWireProfileData {
             arch: profile.arch.clone(),
             terminal: profile.terminal.clone(),
         },
-        user_agent: profile.user_agent(),
+        user_agent: profile.user_agent,
         verified_at: profile.verified_at,
         release: DashboardDesktopReleaseData {
             status: release_status,

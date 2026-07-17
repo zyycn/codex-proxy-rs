@@ -1,69 +1,86 @@
-use std::{convert::Infallible, pin::Pin};
+use std::pin::Pin;
 
-use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use secrecy::ExposeSecret;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::{
     fleet::{
         account::AccountStatus,
-        account_failure::{classify_client_failure, classify_response_failure},
+        account_failure::classify_account_failure,
+        account_gateway::{
+            AccountGatewayError, AccountProbeEvent, AccountProbeRequest, AccountProbeSession,
+            AccountUpstreamContext,
+        },
         store::StoredAccount,
     },
     models::{
         service::{ModelRefreshPlanAccount, ModelRefreshResult},
         types::CodexModelInfo,
     },
-    upstream::openai::{
-        protocol::{
-            responses::{CodexResponsesRequest, ResponsesSseFailure},
-            sse::{SseEvent, encode_sse_event, parse_sse_events},
-        },
-        transport::{CodexClientError, CodexRequestContext},
-    },
 };
 
 use super::{AccountManageService, types::AccountManageError};
 
-pub(super) type AccountTestStream = Pin<Box<dyn Stream<Item = Result<Bytes, Infallible>> + Send>>;
+pub type AccountTestStream = Pin<Box<dyn Stream<Item = AccountTestEvent> + Send>>;
 
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
+pub enum AccountTestEvent {
+    Started {
+        model: String,
+    },
+    Request {
+        payload: Value,
+    },
+    Content {
+        text: String,
+    },
+    Complete {
+        account_status: Option<AccountStatus>,
+    },
+    Error {
+        error: String,
+        account_status: Option<AccountStatus>,
+    },
+}
+
+#[derive(Debug, Clone)]
 pub struct AccountModelOption {
     pub id: String,
     pub label: String,
 }
 
 struct AccountTestOutcome {
-    event: Value,
+    error: Option<String>,
     status: Option<AccountStatus>,
 }
 
 impl AccountTestOutcome {
     fn success() -> Self {
         Self {
-            event: json!({ "type": "test_complete", "success": true }),
+            error: None,
             status: Some(AccountStatus::Active),
         }
     }
 
     fn error(error: impl Into<String>, status: Option<AccountStatus>) -> Self {
         Self {
-            event: json!({ "type": "error", "error": error.into() }),
+            error: Some(error.into()),
             status,
         }
     }
 
-    fn attach_account_status(&mut self, status: AccountStatus) {
-        let Some(event) = self.event.as_object_mut() else {
-            return;
-        };
-        event.insert(
-            "accountStatus".to_string(),
-            Value::String(status.as_str().to_string()),
-        );
+    fn into_event(self) -> AccountTestEvent {
+        match self.error {
+            Some(error) => AccountTestEvent::Error {
+                error,
+                account_status: self.status,
+            },
+            None => AccountTestEvent::Complete {
+                account_status: self.status,
+            },
+        }
     }
 }
 
@@ -147,84 +164,55 @@ impl AccountManageService {
             .await
             .map_err(|_| AccountManageError::Inspect)?
             .ok_or(AccountManageError::NotFound)?;
-
-        let token = account.access_token.expose_secret().to_string();
-        let upstream_account_id = account.account_id.clone();
-        let cookie_header = self
-            .cookies
-            .cookie_header_for_request(&account.id, "chatgpt.com", "/codex/responses")
-            .await
-            .ok()
-            .flatten();
-        let installation_id = self.account_pseudonymizer.installation_id(&account.id);
-        let codex = self.codex.clone();
+        let context = AccountUpstreamContext {
+            access_token: account.access_token.clone(),
+            account_id: account.account_id.clone(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+            cookie_header: self
+                .cookies
+                .cookie_header_for_request(&account.id, "chatgpt.com", "/codex/responses")
+                .await
+                .ok()
+                .flatten(),
+            installation_id: Some(self.account_pseudonymizer.installation_id(&account.id)),
+        };
+        let upstream = self.upstream.clone();
         let service = self.clone();
-        let stored_account_id = account.id.clone();
-        let request_id = uuid::Uuid::new_v4().to_string();
-        let (tx, rx) = mpsc::channel::<Bytes>(16);
+        let stored_account_id = account.id;
+        let (tx, rx) = mpsc::channel(16);
 
         tokio::spawn(async move {
             send_test_event(
                 &tx,
-                json!({
-                    "type": "test_start",
-                    "model": model.clone(),
-                    "text": "正在连接 Codex Responses"
-                }),
+                AccountTestEvent::Started {
+                    model: model.clone(),
+                },
             )
             .await;
-
-            let request = test_responses_request(model);
-            send_test_event(
-                &tx,
-                json!({
-                    "type": "request",
-                    "payload": serde_json::to_value(&request).unwrap_or_else(|_| json!({}))
-                }),
-            )
-            .await;
-
-            let context = CodexRequestContext {
-                access_token: &token,
-                account_id: upstream_account_id.as_deref(),
-                request_id: &request_id,
-                turn_state: None,
-                turn_metadata: None,
-                beta_features: None,
-                include_timing_metrics: None,
-                version: None,
-                codex_window_id: None,
-                parent_thread_id: None,
-                cookie_header: cookie_header.as_deref(),
-                installation_id: Some(&installation_id),
-                session_id: None,
-                thread_id: None,
-                client_request_id: None,
-                turn_id: None,
+            let request = AccountProbeRequest {
+                model,
+                instructions:
+                    "You are checking whether this Codex account can answer. Reply with ok."
+                        .to_string(),
+                input_text: "hi".to_string(),
             };
-
-            let mut outcome = match codex.create_response_stream(&request, context).await {
-                Ok(response) => process_upstream_test_stream(response.body, &tx).await,
+            let mut outcome = match upstream.probe_response(context, request).await {
+                Ok(session) => process_probe_session(session, &tx).await,
                 Err(error) => AccountTestOutcome::error(
                     error.to_string(),
-                    account_status_from_client_error(&error),
+                    account_status_from_gateway_error(&error),
                 ),
             };
-
-            if let Some(status) = outcome.status
-                && let Some(status) = service
+            if let Some(status) = outcome.status {
+                outcome.status = service
                     .apply_connection_test_status(&stored_account_id, status)
-                    .await
-            {
-                outcome.attach_account_status(status);
+                    .await;
             }
-            send_test_event(&tx, outcome.event).await;
+            send_test_event(&tx, outcome.into_event()).await;
         });
 
         let stream = futures::stream::unfold(rx, |mut rx| async {
-            rx.recv()
-                .await
-                .map(|bytes| (Ok::<Bytes, Infallible>(bytes), rx))
+            rx.recv().await.map(|event| (event, rx))
         });
         Ok(Box::pin(stream))
     }
@@ -249,7 +237,6 @@ impl AccountManageService {
         if current.status == AccountStatus::Disabled {
             return Some(AccountStatus::Disabled);
         }
-
         match self.store.set_status(account_id, status).await {
             Ok(true) => {}
             Ok(false) => return None,
@@ -263,7 +250,6 @@ impl AccountManageService {
                 return None;
             }
         }
-
         if matches!(status, AccountStatus::Expired | AccountStatus::Banned)
             && let Err(error) = self.store.set_next_refresh_at(account_id, None).await
         {
@@ -277,6 +263,34 @@ impl AccountManageService {
             .await;
         Some(status)
     }
+}
+
+async fn process_probe_session(
+    mut session: AccountProbeSession,
+    tx: &mpsc::Sender<AccountTestEvent>,
+) -> AccountTestOutcome {
+    send_test_event(
+        tx,
+        AccountTestEvent::Request {
+            payload: session.request_payload,
+        },
+    )
+    .await;
+    while let Some(event) = session.events.next().await {
+        match event {
+            AccountProbeEvent::Content(text) => {
+                send_test_event(tx, AccountTestEvent::Content { text }).await;
+            }
+            AccountProbeEvent::Complete => return AccountTestOutcome::success(),
+            AccountProbeEvent::Failed(error) => {
+                return AccountTestOutcome::error(
+                    error.to_string(),
+                    account_status_from_gateway_error(&error),
+                );
+            }
+        }
+    }
+    AccountTestOutcome::error("Stream ended before response.completed", None)
 }
 
 fn account_model_option(model: &CodexModelInfo) -> AccountModelOption {
@@ -296,125 +310,10 @@ fn account_plan_type(account: &StoredAccount) -> String {
         .to_string()
 }
 
-fn test_responses_request(model: String) -> CodexResponsesRequest {
-    let mut request = CodexResponsesRequest::new_http_sse(
-        model,
-        "You are checking whether this Codex account can answer. Reply with ok.",
-        vec![json!({
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": "hi"
-                }
-            ]
-        })],
-    );
-    request.set_stream(true);
-    request.set_store(false);
-    request.force_http_sse = true;
-    request
+fn account_status_from_gateway_error(error: &AccountGatewayError) -> Option<AccountStatus> {
+    classify_account_failure(error.failure()?)?.account_status()
 }
 
-async fn process_upstream_test_stream(
-    mut body: crate::upstream::openai::transport::CodexBackendSseStream,
-    tx: &mpsc::Sender<Bytes>,
-) -> AccountTestOutcome {
-    let mut buffer = String::new();
-
-    while let Some(chunk) = body.next().await {
-        let chunk = match chunk {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                return AccountTestOutcome::error(
-                    error.to_string(),
-                    account_status_from_client_error(&error),
-                );
-            }
-        };
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
-
-        while let Some(frame) = take_sse_frame(&mut buffer) {
-            if let Some(outcome) = process_sse_frame(tx, &frame).await {
-                return outcome;
-            }
-        }
-    }
-
-    if !buffer.trim().is_empty()
-        && let Some(outcome) = process_sse_frame(tx, &buffer).await
-    {
-        return outcome;
-    }
-
-    AccountTestOutcome::error("Stream ended before response.completed", None)
-}
-
-async fn process_sse_frame(tx: &mpsc::Sender<Bytes>, frame: &str) -> Option<AccountTestOutcome> {
-    let events = match parse_sse_events(frame) {
-        Ok(events) => events,
-        Err(error) => {
-            return Some(AccountTestOutcome::error(error.to_string(), None));
-        }
-    };
-
-    for event in events {
-        if let Some(outcome) = process_sse_event(tx, &event).await {
-            return Some(outcome);
-        }
-    }
-    None
-}
-
-async fn process_sse_event(
-    tx: &mpsc::Sender<Bytes>,
-    event: &SseEvent,
-) -> Option<AccountTestOutcome> {
-    let value: Value = match serde_json::from_str(&event.data) {
-        Ok(value) => value,
-        Err(_) => return None,
-    };
-    match value.get("type").and_then(Value::as_str) {
-        Some("response.output_text.delta") => {
-            if let Some(delta) = value.get("delta").and_then(Value::as_str)
-                && !delta.is_empty()
-            {
-                send_test_event(tx, json!({ "type": "content", "text": delta })).await;
-            }
-            None
-        }
-        Some("response.completed" | "response.done") => Some(AccountTestOutcome::success()),
-        Some(event_name @ ("response.failed" | "error")) => {
-            let failure = ResponsesSseFailure::from_event(event_name, &value);
-            let status = sse_failure_account_status(&failure);
-            Some(AccountTestOutcome::error(failure.message, status))
-        }
-        _ => None,
-    }
-}
-
-fn account_status_from_client_error(error: &CodexClientError) -> Option<AccountStatus> {
-    classify_client_failure(error)?.account_status()
-}
-
-fn sse_failure_account_status(failure: &ResponsesSseFailure) -> Option<AccountStatus> {
-    classify_response_failure(failure)?.account_status()
-}
-
-fn take_sse_frame(buffer: &mut String) -> Option<String> {
-    let index = buffer.find("\n\n").or_else(|| buffer.find("\r\n\r\n"))?;
-    let delimiter_len = if buffer[index..].starts_with("\r\n\r\n") {
-        4
-    } else {
-        2
-    };
-    let frame = buffer[..index + delimiter_len].to_string();
-    buffer.drain(..index + delimiter_len);
-    Some(frame)
-}
-
-async fn send_test_event(tx: &mpsc::Sender<Bytes>, event: Value) {
-    let _ = tx
-        .send(Bytes::from(encode_sse_event("", &event.to_string())))
-        .await;
+async fn send_test_event(tx: &mpsc::Sender<AccountTestEvent>, event: AccountTestEvent) {
+    let _ = tx.send(event).await;
 }

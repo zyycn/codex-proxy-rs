@@ -54,6 +54,7 @@ uuid = { version = "1.23.3", features = ["v4", "v7", "serde"] }
 
 [dev-dependencies]
 sqlx = { version = "0.9.0", default-features = false, features = ["derive"] }
+syn = { version = "2.0.118", features = ["full", "visit"] }
 tempfile = "3.27.0"
 tokio = { version = "1.52.3", default-features = false, features = ["test-util"] }
 wiremock = "0.6.5"

@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::upstream::openai::protocol::sse::{SseError, parse_sse_events};
 
@@ -382,87 +382,6 @@ pub fn parse_rate_limits_event_raw(raw: &str) -> Option<ParsedRateLimits> {
         .and_then(|value| parse_rate_limits_event(&value))
 }
 
-/// 将解析后的限流状态转换为配额响应体。
-pub fn rate_limit_quota(
-    rate_limits: &ParsedRateLimits,
-    plan_type: Option<&str>,
-    existing_quota: Option<&Value>,
-) -> Value {
-    let mut snapshots = rate_limits
-        .limits
-        .values()
-        .filter_map(|details| {
-            let (source, metered_feature) = quota_identity(&details.limit_id);
-            let limit_name = details
-                .limit_name
-                .as_deref()
-                .or_else(|| (source != "core").then_some(details.limit_id.as_str()));
-            quota_snapshot_from_windows(
-                source,
-                limit_name,
-                metered_feature,
-                details.primary,
-                details.secondary,
-                details.allowed,
-                details.limit_reached,
-            )
-        })
-        .collect::<Vec<_>>();
-
-    if let Some(existing_quota) = existing_quota
-        && let Some(existing_snapshots) = existing_quota.get("snapshots").and_then(Value::as_array)
-    {
-        for snapshot in existing_snapshots {
-            if !rate_limits
-                .limits
-                .keys()
-                .any(|limit_id| quota_snapshot_matches_limit(snapshot, limit_id))
-            {
-                snapshots.push(snapshot.clone());
-            }
-        }
-    }
-
-    let monthly_limit = monthly_limit_from_snapshots(&snapshots)
-        .or_else(|| existing_quota.and_then(|quota| quota.get("monthly_limit").cloned()))
-        .unwrap_or(Value::Null);
-    let credits = rate_limits
-        .credits
-        .as_ref()
-        .map(|credits| {
-            json!({
-                "has_credits": credits.has_credits,
-                "unlimited": credits.unlimited,
-                "balance": credits.balance,
-            })
-        })
-        .or_else(|| existing_quota.and_then(|quota| quota.get("credits").cloned()))
-        .unwrap_or(Value::Null);
-    let spend_control = existing_quota
-        .and_then(|quota| quota.get("spend_control").cloned())
-        .unwrap_or(Value::Null);
-    let active_limit = rate_limits.active_limit.as_ref().map_or_else(
-        || {
-            existing_quota
-                .and_then(|quota| quota.get("active_limit"))
-                .cloned()
-                .unwrap_or(Value::Null)
-        },
-        |limit| Value::String(limit.clone()),
-    );
-
-    json!({
-        "plan_type": rate_limits.plan_type.as_deref().or(plan_type).unwrap_or("unknown"),
-        "active_limit": active_limit,
-        "snapshots": snapshots,
-        "monthly_limit": monthly_limit,
-        "credits": credits,
-        "spend_control": spend_control,
-        "promo_message": rate_limits.promo_message,
-        "rate_limit_reached_type": rate_limits.rate_limit_reached_type,
-    })
-}
-
 /// 将限流状态转换回内部传输头键值对。
 pub fn rate_limits_to_header_pairs(rate_limits: &ParsedRateLimits) -> Vec<(String, String)> {
     let mut headers = Vec::new();
@@ -507,26 +426,6 @@ pub fn rate_limits_to_header_pairs(rate_limits: &ParsedRateLimits) -> Vec<(Strin
         ));
     }
     headers
-}
-
-fn quota_identity(limit_id: &str) -> (&'static str, Option<&str>) {
-    if limit_id == "codex" {
-        ("core", None)
-    } else if is_review_limit_name(Some(limit_id)) {
-        ("code_review", Some(limit_id))
-    } else {
-        ("additional", Some(limit_id))
-    }
-}
-
-fn quota_snapshot_matches_limit(snapshot: &Value, limit_id: &str) -> bool {
-    let (source, metered_feature) = quota_identity(limit_id);
-    if snapshot.get("source").and_then(Value::as_str) != Some(source) {
-        return false;
-    }
-    source == "core"
-        || snapshot.get("metered_feature").and_then(Value::as_str) == metered_feature
-        || snapshot.get("limit_name").and_then(Value::as_str) == Some(limit_id)
 }
 
 fn number_field(value: &Value, field: &str) -> Option<u64> {
@@ -792,84 +691,6 @@ fn parse_window_from_object(value: &Value) -> Option<RateLimitWindow> {
     })
 }
 
-fn quota_snapshot_from_windows(
-    source: &str,
-    limit_name: Option<&str>,
-    metered_feature: Option<&str>,
-    primary: Option<RateLimitWindow>,
-    secondary: Option<RateLimitWindow>,
-    allowed: Option<bool>,
-    limit_reached: Option<bool>,
-) -> Option<Value> {
-    if primary.is_none() && secondary.is_none() {
-        return None;
-    }
-    let blocked = limit_reached.unwrap_or(false)
-        || allowed.is_some_and(|allowed| !allowed)
-        || primary.is_some_and(|window| window.used_percent >= 100.0)
-        || secondary.is_some_and(|window| window.used_percent >= 100.0);
-    Some(json!({
-        "source": source,
-        "limit_name": limit_name,
-        "metered_feature": metered_feature,
-        "allowed": allowed,
-        "limit_reached": limit_reached,
-        "blocked": blocked,
-        "primary": quota_window(primary),
-        "secondary": quota_window(secondary),
-    }))
-}
-
-fn quota_window(window: Option<RateLimitWindow>) -> Value {
-    let Some(window) = window else {
-        return Value::Null;
-    };
-    let limit_reached = window.used_percent >= 100.0;
-    json!({
-        "used_percent": window.used_percent,
-        "remaining_percent": remaining_percent(window.used_percent),
-        "reset_at": window.reset_at,
-        "window_minutes": window.window_minutes,
-        "limit_reached": limit_reached,
-    })
-}
-
-fn monthly_limit_from_snapshots(snapshots: &[Value]) -> Option<Value> {
-    for snapshot in snapshots {
-        if snapshot.get("source").and_then(Value::as_str) != Some("core") {
-            continue;
-        }
-        for key in ["primary", "secondary"] {
-            let Some(bucket) = snapshot.get(key).filter(|value| !value.is_null()) else {
-                continue;
-            };
-            if bucket
-                .get("window_minutes")
-                .and_then(Value::as_u64)
-                .is_some_and(|minutes| minutes.abs_diff(43_200) <= 2_160)
-            {
-                return Some(json!({
-                    "key": "core-monthly",
-                    "source": "rate_limit",
-                    "used_percent": bucket.get("used_percent").cloned().unwrap_or(Value::Null),
-                    "remaining_percent": bucket.get("remaining_percent").cloned().unwrap_or(Value::Null),
-                    "reset_at": bucket.get("reset_at").cloned().unwrap_or(Value::Null),
-                    "window_minutes": bucket.get("window_minutes").cloned().unwrap_or(Value::Null),
-                    "limit_reached": bucket.get("limit_reached").cloned().unwrap_or(Value::Bool(false)),
-                    "used_credits": Value::Null,
-                    "limit_credits": Value::Null,
-                }));
-            }
-        }
-    }
-    None
-}
-
-fn remaining_percent(used_percent: f64) -> i64 {
-    let used = used_percent.clamp(0.0, 100.0);
-    (100.0 - used).round() as i64
-}
-
 fn parse_finite_percent(value: &str) -> Option<f64> {
     value
         .trim()
@@ -911,15 +732,4 @@ fn rate_limit_name(value: &Value) -> Option<&str> {
 
 fn normalize_limit_id(value: impl AsRef<str>) -> String {
     value.as_ref().trim().to_ascii_lowercase().replace('-', "_")
-}
-
-fn is_review_limit_name(value: Option<&str>) -> bool {
-    let Some(value) = value else {
-        return false;
-    };
-    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
-    matches!(
-        normalized.as_str(),
-        "review" | "code_review" | "codex_review" | "codex_code_review"
-    )
 }

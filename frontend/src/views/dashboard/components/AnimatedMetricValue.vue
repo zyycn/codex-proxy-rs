@@ -20,9 +20,9 @@ const props = withDefaults(
 const preferredMotion = usePreferredReducedMotion()
 const hasAnimatedValue = computed(
   () =>
-    typeof props.rawValue === 'number' &&
-    Number.isFinite(props.rawValue) &&
-    Boolean(props.formatter),
+    typeof props.rawValue === 'number'
+    && Number.isFinite(props.rawValue)
+    && Boolean(props.formatter),
 )
 const sourceValue = computed(() => (hasAnimatedValue.value ? (props.rawValue ?? 0) : 0))
 const disabled = computed(() => preferredMotion.value === 'reduce' || !hasAnimatedValue.value)

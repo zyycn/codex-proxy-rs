@@ -1,21 +1,24 @@
+import type { Ref } from 'vue'
+import type { UsageTimeRangeParams } from './useUsageTimeRange'
 import { watchDebounced } from '@vueuse/core'
 import { clamp } from 'es-toolkit'
-import { computed, onMounted, shallowRef, watch } from 'vue'
 
+import { computed, onMounted, shallowRef, watch } from 'vue'
 import { getOpsErrors } from '@/api'
 import { toast } from '@/components/base/BaseToast'
-import { withMinimumDuration } from '@/utils/async'
+import { errorMessage, withMinimumDuration } from '@/utils/async'
 
-export function useOpsErrorsTable(timeRangeParams: any) {
+export function useOpsErrorsTable(timeRangeParams: Readonly<Ref<UsageTimeRangeParams>>) {
   const loading = shallowRef(true)
   const refreshing = shallowRef(false)
-  const records = shallowRef<any[]>([])
+  const records = shallowRef<Awaited<ReturnType<typeof getOpsErrors>>['items']>([])
   const page = shallowRef(1)
   const pageSize = shallowRef(10)
   const total = shallowRef(0)
   const searchQuery = shallowRef('')
   const failureClass = shallowRef('')
   const route = shallowRef('')
+  let loadRequestId = 0
 
   const pagination = computed(() => ({
     page: page.value,
@@ -25,6 +28,7 @@ export function useOpsErrorsTable(timeRangeParams: any) {
   }))
 
   async function load() {
+    const requestId = ++loadRequestId
     try {
       loading.value = true
       const result = await getOpsErrors({
@@ -35,19 +39,26 @@ export function useOpsErrorsTable(timeRangeParams: any) {
         route: route.value.trim() || undefined,
         ...timeRangeParams.value,
       })
+      if (requestId !== loadRequestId)
+        return
       records.value = result.items
-      pageSize.value = result.page.pageSize ?? pageSize.value
-      total.value = result.page.total ?? result.items.length
-      page.value = result.page.page ?? page.value
+      pageSize.value = result.page.pageSize
+      total.value = result.page.total
+      page.value = result.page.page
 
       if (records.value.length === 0 && total.value > 0 && page.value > 1) {
-        page.value = clamp(result.page.totalPages ?? page.value - 1, 1, Number.POSITIVE_INFINITY)
+        page.value = clamp(result.page.totalPages, 1, Number.POSITIVE_INFINITY)
         await load()
       }
-    } catch (error: any) {
-      toast.error(error.message || '加载错误明细失败')
-    } finally {
-      loading.value = false
+    }
+    catch (error: unknown) {
+      if (requestId !== loadRequestId)
+        return
+      toast.error(errorMessage(error, '加载错误明细失败'))
+    }
+    finally {
+      if (requestId === loadRequestId)
+        loading.value = false
     }
   }
 
@@ -63,11 +74,13 @@ export function useOpsErrorsTable(timeRangeParams: any) {
   }
 
   async function refresh() {
-    if (refreshing.value || loading.value) return
+    if (refreshing.value || loading.value)
+      return
     refreshing.value = true
     try {
       await withMinimumDuration(load)
-    } finally {
+    }
+    finally {
       refreshing.value = false
     }
   }

@@ -1,4 +1,11 @@
 use super::*;
+use std::convert::Infallible;
+
+use bytes::Bytes;
+use futures::StreamExt;
+use serde_json::json;
+
+use crate::fleet::manage::AccountTestEvent;
 
 /// `GET /api/admin/accounts/test?id=...&modelId=...`
 pub async fn test_account_connection(
@@ -21,6 +28,12 @@ pub async fn test_account_connection(
         .test_connection_stream(&account_id, model)
         .await
         .map_err(|error| account_error(&error))?;
+    let stream = stream.map(|event| {
+        Ok::<Bytes, Infallible>(Bytes::from(format!(
+            "data: {}\n\n",
+            account_test_event_json(event)
+        )))
+    });
 
     Response::builder()
         .status(StatusCode::OK)
@@ -30,6 +43,43 @@ pub async fn test_account_connection(
         .header("x-accel-buffering", "no")
         .body(Body::from_stream(stream))
         .map_err(|_| AdminError::internal("Failed to build account test stream"))
+}
+
+fn account_test_event_json(event: AccountTestEvent) -> Value {
+    match event {
+        AccountTestEvent::Started { model } => json!({
+            "type": "test_start",
+            "model": model,
+            "text": "正在连接 Codex Responses"
+        }),
+        AccountTestEvent::Request { payload } => json!({
+            "type": "request",
+            "payload": payload
+        }),
+        AccountTestEvent::Content { text } => json!({ "type": "content", "text": text }),
+        AccountTestEvent::Complete { account_status } => account_test_terminal_event(
+            json!({ "type": "test_complete", "success": true }),
+            account_status,
+        ),
+        AccountTestEvent::Error {
+            error,
+            account_status,
+        } => {
+            account_test_terminal_event(json!({ "type": "error", "error": error }), account_status)
+        }
+    }
+}
+
+fn account_test_terminal_event(mut event: Value, account_status: Option<AccountStatus>) -> Value {
+    if let Some(account_status) = account_status
+        && let Some(event) = event.as_object_mut()
+    {
+        event.insert(
+            "accountStatus".to_string(),
+            Value::String(account_status.as_str().to_string()),
+        );
+    }
+    event
 }
 
 /// `GET /api/admin/accounts/models?id=...`

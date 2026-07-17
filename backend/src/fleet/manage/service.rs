@@ -9,14 +9,14 @@ use super::oauth;
 
 use crate::{
     fleet::{
+        account_gateway::AccountUpstreamGateway,
         cookies::PgCookieStore,
         pool::AccountPoolService,
-        refresh::{RedisRefreshLeaseStore, RuntimeRefreshPolicy},
+        refresh::{RedisRefreshLeaseStore, RuntimeRefreshPolicy, TokenRefresher},
         store::PgAccountStore,
     },
     infra::identity::AccountPseudonymizer,
     models::service::ModelService,
-    upstream::openai::{token_client::TokenRefresher, transport::CodexBackendClient},
 };
 
 use super::types::{AccountManageError, RefreshedAccountTokens};
@@ -25,7 +25,7 @@ use super::types::{AccountManageError, RefreshedAccountTokens};
 pub struct AccountManageService {
     pub store: PgAccountStore,
     pub(crate) cookies: PgCookieStore,
-    pub(crate) codex: Arc<CodexBackendClient>,
+    pub(crate) upstream: Arc<dyn AccountUpstreamGateway>,
     pub(crate) models: Arc<ModelService>,
     pub(crate) account_pool: Arc<AccountPoolService>,
     pub(crate) token_refresher: Arc<dyn TokenRefresher>,
@@ -39,7 +39,7 @@ pub struct AccountManageService {
 pub struct AccountManageServiceParts {
     pub store: PgAccountStore,
     pub cookies: PgCookieStore,
-    pub codex: Arc<CodexBackendClient>,
+    pub upstream: Arc<dyn AccountUpstreamGateway>,
     pub models: Arc<ModelService>,
     pub account_pool: Arc<AccountPoolService>,
     pub token_refresher: Arc<dyn TokenRefresher>,
@@ -54,7 +54,7 @@ impl AccountManageService {
         Self {
             store: parts.store,
             cookies: parts.cookies,
-            codex: parts.codex,
+            upstream: parts.upstream,
             models: parts.models,
             account_pool: parts.account_pool,
             token_refresher: parts.token_refresher,
@@ -127,7 +127,7 @@ impl AccountManageService {
     }
 
     pub(crate) async fn evict_account_websocket_pool(&self, account_id: &str) {
-        self.codex.evict_websocket_account(account_id).await;
+        self.upstream.evict_account_connections(account_id).await;
         match self.store.get(account_id).await {
             Ok(Some(account)) => {
                 if let Some(upstream_account_id) = account
@@ -135,8 +135,8 @@ impl AccountManageService {
                     .as_deref()
                     .filter(|value| *value != account_id)
                 {
-                    self.codex
-                        .evict_websocket_account(upstream_account_id)
+                    self.upstream
+                        .evict_account_connections(upstream_account_id)
                         .await;
                 }
             }

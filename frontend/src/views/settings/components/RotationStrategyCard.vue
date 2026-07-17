@@ -1,16 +1,12 @@
 <script setup lang="ts">
+import type { rotationOptions } from '../options'
 import BaseCard from '@/components/base/BaseCard.vue'
 
-type RotationStrategy = 'smart' | 'quota_reset_priority' | 'round_robin' | 'sticky'
-
-interface RotationOption {
-  label: string
-  value: RotationStrategy
-  description: string
-}
+type RotationOption = (typeof rotationOptions)[number]
+type RotationStrategy = RotationOption['value']
 
 defineProps<{
-  options: RotationOption[]
+  options: readonly RotationOption[]
 }>()
 
 const model = defineModel<RotationStrategy | ''>({ required: true })

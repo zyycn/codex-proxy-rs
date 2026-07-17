@@ -4,31 +4,7 @@ use async_trait::async_trait;
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 
-/// 一次刷新返回的 token 对。
-#[derive(Debug, Clone)]
-pub struct TokenPair {
-    pub access_token: String,
-    pub refresh_token: Option<String>,
-}
-
-/// OpenAI 刷新端点失败分类。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum RefreshFailure {
-    #[error("refresh token is invalid or expired")]
-    InvalidGrant,
-    #[error("account is banned")]
-    Banned,
-    #[error("refresh transport failed before server processing")]
-    RetryableTransport,
-    #[error("refresh transport failed after possible server processing")]
-    Transport,
-}
-
-/// 刷新令牌的上游端口。
-#[async_trait]
-pub trait TokenRefresher: Send + Sync + 'static {
-    async fn refresh(&self, refresh_token: &str) -> Result<TokenPair, RefreshFailure>;
-}
+use crate::fleet::refresh::{RefreshFailure, TokenPair, TokenRefresher};
 
 /// OpenAI token 续期客户端配置。
 #[derive(Debug, Clone, PartialEq, Eq)]

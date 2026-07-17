@@ -5,8 +5,8 @@ import { computed, shallowRef } from 'vue'
 type ThemeMode = 'system' | 'light' | 'dark'
 type ThemeName = 'light' | 'dark'
 type ColorModeStorageValue = 'auto' | ThemeName
-type ThemeTransitionOrigin = { x: number; y: number }
-type ViewTransition = {
+interface ThemeTransitionOrigin { x: number, y: number }
+interface ViewTransition {
   ready: Promise<void>
   finished: Promise<void>
 }
@@ -63,10 +63,10 @@ export const useUiStore = defineStore(
       }
 
       if (
-        !themeApplied ||
-        !themeTransitionRequested ||
-        preferredMotion.value === 'reduce' ||
-        themeTransitioning.value
+        !themeApplied
+        || !themeTransitionRequested
+        || preferredMotion.value === 'reduce'
+        || themeTransitioning.value
       ) {
         commitTheme(theme)
         themeApplied = true
@@ -87,8 +87,8 @@ export const useUiStore = defineStore(
 
     function runThemeTransition(theme: ThemeName) {
       const transitionDocument = document as ViewTransitionDocument
-      const shrinkingDarkLayer =
-        document.documentElement.dataset.theme === 'dark' && theme === 'light'
+      const shrinkingDarkLayer
+        = document.documentElement.dataset.theme === 'dark' && theme === 'light'
 
       if (!transitionDocument.startViewTransition) {
         runFallbackThemeTransition(theme)
@@ -108,7 +108,8 @@ export const useUiStore = defineStore(
       let transition: ViewTransition
       try {
         transition = transitionDocument.startViewTransition(() => commitTheme(theme))
-      } catch {
+      }
+      catch {
         document.documentElement.classList.remove('theme-view-transition-shrink')
         themeTransitioning.value = false
         runFallbackThemeTransition(theme)

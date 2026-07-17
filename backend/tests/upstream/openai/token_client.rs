@@ -3,8 +3,9 @@ use wiremock::{
     matchers::{method, path},
 };
 
-use codex_proxy_rs::upstream::openai::token_client::{
-    OpenAiTokenClient, RefreshFailure, TokenClientConfig, TokenRefresher,
+use codex_proxy_rs::{
+    fleet::refresh::{RefreshFailure, TokenRefresher},
+    upstream::openai::token_client::{OpenAiTokenClient, TokenClientConfig},
 };
 
 #[tokio::test]

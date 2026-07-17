@@ -189,12 +189,7 @@ function togglePasswordVisible(): void {
   --cp-input-height-default: 43px;
 
   background:
-    linear-gradient(
-      118deg,
-      var(--login-form-bg-a),
-      var(--login-form-bg-b) 56%,
-      var(--login-form-bg-c)
-    ),
+    linear-gradient(118deg, var(--login-form-bg-a), var(--login-form-bg-b) 56%, var(--login-form-bg-c)),
     var(--login-form-bg-b);
   box-shadow: 0 18px 38px -20px var(--login-form-shadow);
   backdrop-filter: blur(18px) saturate(1.08);
@@ -207,12 +202,7 @@ function togglePasswordVisible(): void {
   left: 22px;
   width: calc(100% - 44px);
   height: 2px;
-  background: linear-gradient(
-    90deg,
-    var(--cp-transparent),
-    var(--login-form-line),
-    var(--cp-transparent)
-  );
+  background: linear-gradient(90deg, var(--cp-transparent), var(--login-form-line), var(--cp-transparent));
   opacity: 0.42;
   pointer-events: none;
 }

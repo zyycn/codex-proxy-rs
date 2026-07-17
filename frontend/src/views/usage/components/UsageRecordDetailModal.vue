@@ -1,18 +1,20 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts'
+import type { getUsageRecordDetail } from '@/api'
 import { storeToRefs } from 'pinia'
-import { computed } from 'vue'
 
+import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { useUiStore } from '@/stores/modules/ui'
+import { readCssVariable } from '@/utils/css'
 import {
   usageAccountText,
-  usageClientIp,
   usageBilling,
   usageBillingText,
+  usageClientIp,
   usageModelDisplay,
   usageReasoningEffort,
   usageRecordType,
@@ -23,36 +25,38 @@ import {
 } from '../constants'
 import UsageStatusCodeBadge from './UsageStatusCodeBadge.vue'
 
-const open = defineModel<boolean>({ default: false })
-
 const props = defineProps<{
-  record: any
+  record: Awaited<ReturnType<typeof getUsageRecordDetail>> | null
 }>()
+
+const open = defineModel<boolean>({ default: false })
 
 const { themeRevision } = storeToRefs(useUiStore())
 
-const requestText = computed(() => visibleRequestText(props.record))
-const responseText = computed(() => visibleResponseText(props.record))
-const modelDisplay = computed(() => usageModelDisplay(props.record))
-const tokenDetails = computed(() => usageTokenDetails(props.record))
-const billing = computed(() => usageBilling(props.record))
+const requestText = computed(() => props.record ? visibleRequestText(props.record) : '')
+const responseText = computed(() => props.record ? visibleResponseText(props.record) : '')
+const modelDisplay = computed(() => props.record
+  ? usageModelDisplay(props.record)
+  : { primary: '—', secondary: '' })
+const tokenDetails = computed(() => props.record ? usageTokenDetails(props.record) : null)
+const billing = computed(() => props.record ? usageBilling(props.record) : null)
 
 const panelClass = 'rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5'
 const panelTitleClass = 'm-0 text-[12px] leading-none font-[780] text-(--cp-text-secondary)'
 const fieldLabelClass = 'text-[11px] leading-none font-bold text-(--cp-text-muted)'
-const fieldValueBaseClass =
-  'mt-1.5 mb-0 min-w-0 truncate text-[12px] leading-none font-[700] text-(--cp-text-primary)'
+const fieldValueBaseClass
+  = 'mt-1.5 mb-0 min-w-0 truncate text-[12px] leading-none font-[700] text-(--cp-text-primary)'
 const codeBlockViewClass = 'rounded-(--cp-input-radius-base) bg-(--cp-bg-surface) px-3 py-2.5'
-const codeBlockClass =
-  'm-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.65] text-(--cp-text-primary)'
+const codeBlockClass
+  = 'm-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.65] text-(--cp-text-primary)'
 
-const accountDisplay = computed(() => usageAccountText(props.record))
+const accountDisplay = computed(() => props.record ? usageAccountText(props.record) : '—')
 const overviewItems = computed(() => [
   { label: '时间', value: props.record?.createdAtDisplay, mono: true },
-  { label: '类型', value: usageRecordType(props.record) },
+  { label: '类型', value: props.record ? usageRecordType(props.record) : '—' },
   { label: '耗时', value: props.record?.latencyMsDisplay, mono: true },
   { label: '首字', value: props.record?.firstTokenLatencyMsDisplay, mono: true },
-  { label: '总 Token', value: tokenDetails.value.totalTokensDisplay, mono: true },
+  { label: '总 Token', value: tokenDetails.value?.totalTokensDisplay, mono: true },
   { label: '请求 ID', value: props.record?.requestId, mono: true, wide: true },
   { label: '消息', value: props.record?.message, wide: true },
 ])
@@ -69,7 +73,7 @@ const detailGroups = computed(() => [
         mono: true,
       },
       { label: '存储模型', value: props.record?.model, mono: true },
-      { label: '推理强度', value: usageReasoningEffort(props.record) },
+      { label: '推理强度', value: props.record ? usageReasoningEffort(props.record) : '—' },
       { label: '账号 ID', value: props.record?.accountId, mono: true },
       { label: '请求 ID', value: props.record?.requestId, mono: true },
       { label: '响应 ID', value: props.record?.responseId, mono: true },
@@ -79,7 +83,7 @@ const detailGroups = computed(() => [
   {
     title: '客户端与上游',
     items: [
-      { label: '客户端 IP', value: usageClientIp(props.record), mono: true },
+      { label: '客户端 IP', value: props.record ? usageClientIp(props.record) : '—', mono: true },
       { label: 'User-Agent', value: props.record ? usageUserAgent(props.record) : '', mono: true },
       { label: '传输方式', value: props.record?.transport, mono: true },
       { label: '事件类型', value: props.record?.kind, mono: true },
@@ -95,7 +99,11 @@ const clientUpstreamGroup = computed(() => detailGroups.value[1])
 const billingItems = computed(() => {
   const value = billing.value
   if (!value) {
-    return [{ label: '总费用', value: usageBillingText(props.record), mono: true }]
+    return [{
+      label: '总费用',
+      value: props.record ? usageBillingText(props.record) : '—',
+      mono: true,
+    }]
   }
 
   return [
@@ -117,38 +125,38 @@ const billingItems = computed(() => {
 const tokenChartItems = computed(() => [
   {
     label: '输入',
-    value: Number(tokenDetails.value.inputTokens || 0),
-    display: tokenDetails.value.inputTokensDisplay,
+    value: Number(tokenDetails.value?.inputTokens || 0),
+    display: tokenDetails.value?.inputTokensDisplay ?? '—',
     color: themeColor('--cp-info', '#2563EB'),
   },
   {
     label: '输出',
-    value: Number(tokenDetails.value.outputTokens || 0),
-    display: tokenDetails.value.outputTokensDisplay,
+    value: Number(tokenDetails.value?.outputTokens || 0),
+    display: tokenDetails.value?.outputTokensDisplay ?? '—',
     color: themeColor('--cp-success', '#10B981'),
   },
   {
     label: '缓存读取',
-    value: Number(tokenDetails.value.cachedTokens || 0),
-    display: tokenDetails.value.cachedTokensDisplay,
+    value: Number(tokenDetails.value?.cachedTokens || 0),
+    display: tokenDetails.value?.cachedTokensDisplay ?? '—',
     color: themeColor('--cp-warning', '#D97706'),
   },
   {
     label: '缓存写入',
-    value: Number(tokenDetails.value.cacheWriteTokens || 0),
-    display: tokenDetails.value.cacheWriteTokensDisplay,
+    value: Number(tokenDetails.value?.cacheWriteTokens || 0),
+    display: tokenDetails.value?.cacheWriteTokensDisplay ?? '—',
     color: themeColor('--cp-danger', '#DC2626'),
   },
   {
     label: '推理',
-    value: Number(tokenDetails.value.reasoningTokens || 0),
-    display: tokenDetails.value.reasoningTokensDisplay,
-    color: themeColor('--cp-focus-ring', '#8B5CF6'),
+    value: Number(tokenDetails.value?.reasoningTokens || 0),
+    display: tokenDetails.value?.reasoningTokensDisplay ?? '—',
+    color: themeColor('--cp-reasoning', '#8B5CF6'),
   },
 ])
 
 const tokenDonutOption = computed<EChartsOption>(() => {
-  const items = tokenChartItems.value.filter((item) => item.value > 0)
+  const items = tokenChartItems.value.filter(item => item.value > 0)
 
   return {
     tooltip: {
@@ -164,10 +172,15 @@ const tokenDonutOption = computed<EChartsOption>(() => {
         fontWeight: 650,
       },
       extraCssText: 'border-radius: 12px; box-shadow: var(--cp-shadow-popover);',
-      formatter: (params: any) => {
-        const item = tokenChartItems.value.find((entry) => entry.label === params.name)
-        if (!item) return ''
-        return `${params.marker}${item.label}: ${item.display}`
+      formatter: (params: unknown) => {
+        if (typeof params !== 'object' || params === null)
+          return ''
+        const name = 'name' in params && typeof params.name === 'string' ? params.name : ''
+        const marker = 'marker' in params && typeof params.marker === 'string' ? params.marker : ''
+        const item = tokenChartItems.value.find(entry => entry.label === name)
+        if (!item)
+          return ''
+        return `${marker}${item.label}: ${item.display}`
       },
     },
     series: [
@@ -182,7 +195,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
         label: { show: false },
         labelLine: { show: false },
         data: items.length
-          ? items.map((item) => ({
+          ? items.map(item => ({
               name: item.label,
               value: item.value,
               itemStyle: { color: item.color },
@@ -201,7 +214,8 @@ const tokenDonutOption = computed<EChartsOption>(() => {
 })
 
 function displayValue(value: unknown) {
-  if (value === undefined || value === null || value === '') return '—'
+  if (value === undefined || value === null || value === '')
+    return '—'
   return String(value)
 }
 
@@ -210,8 +224,8 @@ function fieldValueClass(mono?: boolean) {
 }
 
 function themeColor(name: string, fallback: string) {
-  themeRevision.value
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
+  void themeRevision.value
+  return readCssVariable(name, fallback)
 }
 </script>
 
@@ -241,7 +255,9 @@ function themeColor(name: string, fallback: string) {
           class="mt-4 grid grid-cols-2 gap-x-5 gap-y-3 lg:grid-cols-[120px_120px_repeat(5,minmax(0,1fr))]"
         >
           <div class="min-w-0">
-            <dt :class="fieldLabelClass">状态码</dt>
+            <dt :class="fieldLabelClass">
+              状态码
+            </dt>
             <dd class="mt-1.5 mb-0">
               <UsageStatusCodeBadge :status-code="record.statusCode" />
             </dd>
@@ -253,7 +269,9 @@ function themeColor(name: string, fallback: string) {
             class="min-w-0"
             :class="item.wide ? 'col-span-2 lg:col-span-2' : undefined"
           >
-            <dt :class="fieldLabelClass">{{ item.label }}</dt>
+            <dt :class="fieldLabelClass">
+              {{ item.label }}
+            </dt>
             <dd :class="fieldValueClass(item.mono)" :title="displayValue(item.value)">
               {{ displayValue(item.value) }}
             </dd>
@@ -264,10 +282,14 @@ function themeColor(name: string, fallback: string) {
       <section class="grid gap-3 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
         <div class="flex min-h-0 flex-col gap-3">
           <section :class="panelClass">
-            <h3 :class="panelTitleClass">{{ modelRouteGroup.title }}</h3>
+            <h3 :class="panelTitleClass">
+              {{ modelRouteGroup.title }}
+            </h3>
             <dl class="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
               <div v-for="item in modelRouteGroup.items" :key="item.label" class="min-w-0">
-                <dt :class="fieldLabelClass">{{ item.label }}</dt>
+                <dt :class="fieldLabelClass">
+                  {{ item.label }}
+                </dt>
                 <dd :class="fieldValueClass(item.mono)" :title="displayValue(item.value)">
                   {{ displayValue(item.value) }}
                 </dd>
@@ -275,8 +297,10 @@ function themeColor(name: string, fallback: string) {
             </dl>
           </section>
 
-          <section :class="[panelClass, 'flex min-h-0 flex-1 flex-col']">
-            <h3 :class="panelTitleClass">Token</h3>
+          <section class="flex min-h-0 flex-1 flex-col" :class="[panelClass]">
+            <h3 :class="panelTitleClass">
+              Token
+            </h3>
             <div
               class="mt-3 grid min-h-38 flex-1 grid-cols-1 content-center items-center gap-3 sm:grid-cols-[150px_minmax(0,1fr)]"
             >
@@ -290,7 +314,7 @@ function themeColor(name: string, fallback: string) {
                     <strong
                       class="mt-1 font-mono text-[16px] leading-none font-extrabold tabular-nums text-(--cp-text-primary)"
                     >
-                      {{ tokenDetails.totalTokensDisplay }}
+                      {{ tokenDetails?.totalTokensDisplay ?? '—' }}
                     </strong>
                   </div>
                 </div>
@@ -306,7 +330,7 @@ function themeColor(name: string, fallback: string) {
                     <span class="truncate">{{ item.label }}</span>
                   </dt>
                   <dd
-                    :class="[fieldValueBaseClass, 'font-mono tabular-nums']"
+                    class="font-mono tabular-nums" :class="[fieldValueBaseClass]"
                     :title="displayValue(item.display)"
                   >
                     {{ displayValue(item.display) }}
@@ -318,11 +342,15 @@ function themeColor(name: string, fallback: string) {
         </div>
 
         <div class="flex min-h-0 flex-col gap-3">
-          <section :class="[panelClass, 'flex-1']">
-            <h3 :class="panelTitleClass">{{ clientUpstreamGroup.title }}</h3>
+          <section class="flex-1" :class="[panelClass]">
+            <h3 :class="panelTitleClass">
+              {{ clientUpstreamGroup.title }}
+            </h3>
             <dl class="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
               <div v-for="item in clientUpstreamGroup.items" :key="item.label" class="min-w-0">
-                <dt :class="fieldLabelClass">{{ item.label }}</dt>
+                <dt :class="fieldLabelClass">
+                  {{ item.label }}
+                </dt>
                 <dd :class="fieldValueClass(item.mono)" :title="displayValue(item.value)">
                   {{ displayValue(item.value) }}
                 </dd>
@@ -331,10 +359,14 @@ function themeColor(name: string, fallback: string) {
           </section>
 
           <section :class="panelClass">
-            <h3 :class="panelTitleClass">费用</h3>
+            <h3 :class="panelTitleClass">
+              费用
+            </h3>
             <dl class="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
               <div v-for="item in billingItems" :key="item.label" class="min-w-0">
-                <dt :class="fieldLabelClass">{{ item.label }}</dt>
+                <dt :class="fieldLabelClass">
+                  {{ item.label }}
+                </dt>
                 <dd :class="fieldValueClass(item.mono)" :title="displayValue(item.value)">
                   {{ displayValue(item.value) }}
                 </dd>
@@ -348,23 +380,29 @@ function themeColor(name: string, fallback: string) {
         v-if="requestText || responseText"
         class="grid min-h-0 grid-cols-1 gap-3 lg:grid-cols-2"
       >
-        <div v-if="requestText" :class="[panelClass, 'min-h-0']">
-          <h3 class="mb-3" :class="panelTitleClass">请求内容</h3>
+        <div v-if="requestText" class="min-h-0" :class="[panelClass]">
+          <h3 class="mb-3" :class="panelTitleClass">
+            请求内容
+          </h3>
           <BaseScrollbar max-height="180px" :view-class="codeBlockViewClass">
             <pre :class="codeBlockClass">{{ requestText }}</pre>
           </BaseScrollbar>
         </div>
 
-        <div v-if="responseText" :class="[panelClass, 'min-h-0']">
-          <h3 class="mb-3" :class="panelTitleClass">响应内容</h3>
+        <div v-if="responseText" class="min-h-0" :class="[panelClass]">
+          <h3 class="mb-3" :class="panelTitleClass">
+            响应内容
+          </h3>
           <BaseScrollbar max-height="180px" :view-class="codeBlockViewClass">
             <pre :class="codeBlockClass">{{ responseText }}</pre>
           </BaseScrollbar>
         </div>
       </section>
 
-      <section v-if="record.metadata" :class="[panelClass, 'min-h-0']">
-        <h3 class="mb-3" :class="panelTitleClass">元数据</h3>
+      <section v-if="record.metadata" class="min-h-0" :class="[panelClass]">
+        <h3 class="mb-3" :class="panelTitleClass">
+          元数据
+        </h3>
         <BaseScrollbar max-height="min(32dvh, 340px)" :view-class="codeBlockViewClass">
           <pre :class="codeBlockClass">{{ JSON.stringify(record.metadata, null, 2) }}</pre>
         </BaseScrollbar>
@@ -372,7 +410,9 @@ function themeColor(name: string, fallback: string) {
     </template>
 
     <template #footer>
-      <BaseButton variant="primary" @click="open = false">关闭</BaseButton>
+      <BaseButton variant="primary" @click="open = false">
+        关闭
+      </BaseButton>
     </template>
   </BaseModal>
 </template>

@@ -2,11 +2,11 @@
 
 use tracing::{debug, info, warn};
 
+use crate::fleet::refresh::TokenRefresher;
 use crate::fleet::{
     refresh::{RedisRefreshLeaseStore, RuntimeRefreshPolicy, TokenRefreshService},
     store::PgAccountStore,
 };
-use crate::upstream::openai::token_client::TokenRefresher;
 
 use super::{
     coordinator::SchedulerHandle,

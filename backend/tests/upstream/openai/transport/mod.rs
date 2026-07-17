@@ -13,7 +13,7 @@ use codex_proxy_rs::upstream::openai::{
         CodexWebSocketConnection, CodexWebSocketExchangeError, CodexWebSocketRequest,
         execute_response_create_request, responses_websocket_endpoint,
     },
-    transport::websocket_pool::{CodexWebSocketPool, CodexWebSocketPoolConfig},
+    transport::websocket::{CodexWebSocketPool, CodexWebSocketPoolConfig},
     transport::{
         CodexBackendClient, CodexBackendTransport, CodexClientError, CodexRequestContext,
         CodexTransportDecision,
@@ -239,6 +239,8 @@ pub(crate) fn websocket_pool_config_for_tests(
         enabled: true,
         max_age: Duration::from_mins(1),
         max_per_account: 8,
+        max_total: 64,
+        max_connecting: 16,
         maintenance_interval,
         ping_interval,
         ping_timeout: Duration::from_secs(1),

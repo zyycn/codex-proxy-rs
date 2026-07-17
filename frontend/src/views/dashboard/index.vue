@@ -2,13 +2,14 @@
 import { RefreshCw } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
+import BasePageHeader from '@/components/base/BasePageHeader.vue'
 
 import AccountOverviewCard from './components/AccountOverviewCard.vue'
 import DashboardHeartbeat from './components/DashboardHeartbeat.vue'
-import UsageRecordCard from './components/UsageRecordCard.vue'
 import MetricCard from './components/MetricCard.vue'
 import RequestHealthTimelineCard from './components/RequestHealthTimelineCard.vue'
 import RequestTrendCard from './components/RequestTrendCard.vue'
+import UsageRecordCard from './components/UsageRecordCard.vue'
 import WireProfileCard from './components/WireProfileCard.vue'
 import { useDashboard } from './composables/useDashboard'
 
@@ -35,33 +36,27 @@ const {
 
 <template>
   <div class="w-full">
-    <header class="flex min-h-17 items-start justify-between gap-4">
-      <div>
-        <h1 class="mt-0 text-[34px] leading-[1.15] font-extrabold mb-0 text-(--cp-text-primary)">
-          系统概览
-        </h1>
-        <p
-          class="mt-2.5 mb-0 flex items-center gap-2 text-[15px] leading-[1.15] font-semibold text-(--cp-text-secondary)"
+    <BasePageHeader title="系统概览">
+      <template #description>
+        <span>当日统计</span>
+        <DashboardHeartbeat :updated-at="lastRefreshedAt" />
+      </template>
+      <template #actions>
+        <BaseButton
+          icon-only
+          class="text-(--cp-normal)"
+          size="md"
+          label="刷新概览"
+          :disabled="loading || refreshing"
+          @click="refresh"
         >
-          <span>当日统计</span>
-          <DashboardHeartbeat :updated-at="lastRefreshedAt" />
-        </p>
-      </div>
-
-      <BaseButton
-        icon-only
-        class="mt-0.5 text-(--cp-normal)"
-        size="md"
-        label="刷新概览"
-        :disabled="loading || refreshing"
-        @click="refresh"
-      >
-        <RefreshCw :size="19" :class="loading || refreshing ? 'animate-spin' : undefined" />
-      </BaseButton>
-    </header>
+          <RefreshCw :size="19" :class="loading || refreshing ? 'animate-spin' : undefined" />
+        </BaseButton>
+      </template>
+    </BasePageHeader>
 
     <section
-      class="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4 xl:gap-6"
+      class="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-4 2xl:gap-6"
       aria-label="核心指标"
     >
       <MetricCard v-for="metric in metrics" :key="metric.title" :metric="metric" />

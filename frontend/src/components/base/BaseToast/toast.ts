@@ -2,7 +2,7 @@ import { reactive } from 'vue'
 
 export type ToastType = 'success' | 'error' | 'warning' | 'info'
 
-export interface ToastMessage {
+interface ToastMessage {
   id: string
   type: ToastType
   title?: string
@@ -40,7 +40,7 @@ function remove(id: string) {
     timers.delete(id)
   }
 
-  const index = messages.findIndex((message) => message.id === id)
+  const index = messages.findIndex(message => message.id === id)
   if (index >= 0) {
     messages.splice(index, 1)
   }

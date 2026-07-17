@@ -8,13 +8,9 @@ use std::{
 use thiserror::Error;
 use tokio::sync::watch;
 
-use crate::{
-    settings::SettingsSnapshot,
-    upstream::openai::transport::{CodexModelCatalogClient, CodexModelCatalogRequest},
-};
-
 use super::{
     catalog::ModelCatalog,
+    gateway::{ModelCatalogRequest, ModelCatalogSource},
     store::{ModelSnapshotStore, ModelSnapshotStoreError},
     types::{ModelConfig, ModelPlanSnapshot},
 };
@@ -91,7 +87,7 @@ pub struct ModelService {
     snapshots: Arc<RwLock<Vec<ModelPlanSnapshot>>>,
     catalog: Arc<RwLock<ModelCatalog>>,
     store: Option<Arc<dyn ModelSnapshotStore>>,
-    upstream_client: Option<Arc<dyn CodexModelCatalogClient>>,
+    upstream_client: Option<Arc<dyn ModelCatalogSource>>,
     models_etag: Arc<RwLock<Option<String>>>,
     etag_change_tx: watch::Sender<u64>,
     refresh_lock: Arc<tokio::sync::Mutex<()>>,
@@ -102,7 +98,7 @@ impl ModelService {
     pub fn new(
         config: ModelConfig,
         store: Option<Arc<dyn ModelSnapshotStore>>,
-        upstream_client: Option<Arc<dyn CodexModelCatalogClient>>,
+        upstream_client: Option<Arc<dyn ModelCatalogSource>>,
     ) -> Self {
         let catalog = ModelCatalog::from_config(&config);
         let (etag_change_tx, _) = watch::channel(0);
@@ -153,15 +149,9 @@ impl ModelService {
     }
 
     /// 持续接收运行时设置并更新模型别名。
-    pub async fn subscribe_settings(
-        self: Arc<Self>,
-        mut receiver: watch::Receiver<SettingsSnapshot>,
-    ) {
+    pub async fn subscribe_config(self: Arc<Self>, mut receiver: watch::Receiver<ModelConfig>) {
         while receiver.changed().await.is_ok() {
-            let settings = receiver.borrow_and_update().clone();
-            self.update_config(ModelConfig {
-                model_aliases: settings.model_aliases,
-            });
+            self.update_config(receiver.borrow_and_update().clone());
         }
     }
 
@@ -244,7 +234,7 @@ impl ModelService {
         };
 
         for plan_account in plan_accounts {
-            let request = CodexModelCatalogRequest {
+            let request = ModelCatalogRequest {
                 access_token: &plan_account.access_token,
                 account_id: plan_account.account_id.as_deref(),
                 request_id,
@@ -272,7 +262,7 @@ impl ModelService {
             };
 
             let snapshot =
-                ModelPlanSnapshot::from_backend_values(plan_account.plan_type.clone(), entries);
+                ModelPlanSnapshot::from_backend_entries(plan_account.plan_type.clone(), entries);
             if snapshot.models.is_empty() {
                 result.failed_plans += 1;
                 if let Some(snapshot) = previous_snapshots.get(&plan_account.plan_type) {

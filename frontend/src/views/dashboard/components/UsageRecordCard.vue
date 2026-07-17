@@ -1,8 +1,15 @@
 <script setup lang="ts">
-import { Minimize2 } from '@lucide/vue'
+import type { dashboardSnapshotView } from '../presenter'
 
+import { Minimize2 } from '@lucide/vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
+import UsageBillingCell from '@/views/usage/components/UsageBillingCell.vue'
+import UsageClientIpCell from '@/views/usage/components/UsageClientIpCell.vue'
+import UsageLatencyCell from '@/views/usage/components/UsageLatencyCell.vue'
+import UsageModelCell from '@/views/usage/components/UsageModelCell.vue'
+import UsageReasoningEffortCell from '@/views/usage/components/UsageReasoningEffortCell.vue'
+import UsageTokenCell from '@/views/usage/components/UsageTokenCell.vue'
 import {
   usageAccountText,
   usageIsCompact,
@@ -10,18 +17,14 @@ import {
   usageRecordType,
   usageRecordTypeClass,
 } from '@/views/usage/constants'
-import UsageClientIpCell from '@/views/usage/components/UsageClientIpCell.vue'
-import UsageBillingCell from '@/views/usage/components/UsageBillingCell.vue'
-import UsageLatencyCell from '@/views/usage/components/UsageLatencyCell.vue'
-import UsageModelCell from '@/views/usage/components/UsageModelCell.vue'
-import UsageReasoningEffortCell from '@/views/usage/components/UsageReasoningEffortCell.vue'
-import UsageTokenCell from '@/views/usage/components/UsageTokenCell.vue'
+
+type DashboardSnapshot = ReturnType<typeof dashboardSnapshotView>
 
 defineProps<{
-  rows: any[]
+  rows: DashboardSnapshot['usageRecords']
 }>()
 
-const dashboardUsageRecordColumns = usageRecordColumns.filter((column) => column.key !== 'actions')
+const dashboardUsageRecordColumns = usageRecordColumns.filter(column => column.key !== 'actions')
 </script>
 
 <template>

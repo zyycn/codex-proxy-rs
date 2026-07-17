@@ -23,7 +23,7 @@ const props = withDefaults(
 )
 
 const emit = defineEmits<{
-  scroll: [payload: { scrollTop: number; scrollLeft: number }]
+  scroll: [payload: { scrollTop: number, scrollLeft: number }]
 }>()
 
 const wrapRef = useTemplateRef<HTMLDivElement>('wrap')
@@ -252,8 +252,8 @@ function handleTrackPointerDown(event: PointerEvent) {
   const nextThumbTop = event.clientY - rect.top - thumbHeight.value / 2
   const scrollRange = maxScrollTop(wrap)
   const thumbRange = maxThumbTop(wrap)
-  wrap.scrollTop =
-    thumbRange > 0 ? (clamp(nextThumbTop, 0, thumbRange) / thumbRange) * scrollRange : 0
+  wrap.scrollTop
+    = thumbRange > 0 ? (clamp(nextThumbTop, 0, thumbRange) / thumbRange) * scrollRange : 0
 }
 
 function handleHorizontalTrackPointerDown(event: PointerEvent) {
@@ -271,8 +271,8 @@ function handleHorizontalTrackPointerDown(event: PointerEvent) {
   const nextThumbLeft = event.clientX - rect.left - horizontalThumbWidth.value / 2
   const scrollRange = maxScrollLeft(wrap)
   const thumbRange = maxHorizontalThumbLeft(wrap)
-  wrap.scrollLeft =
-    thumbRange > 0 ? (clamp(nextThumbLeft, 0, thumbRange) / thumbRange) * scrollRange : 0
+  wrap.scrollLeft
+    = thumbRange > 0 ? (clamp(nextThumbLeft, 0, thumbRange) / thumbRange) * scrollRange : 0
 }
 
 function handleThumbPointerDown(event: PointerEvent) {
@@ -338,9 +338,9 @@ function handleHorizontalThumbPointerMove(event: PointerEvent) {
   }
 
   const scrollRange = maxScrollLeft(wrap)
-  wrap.scrollLeft =
-    horizontalDragStartScrollLeft +
-    ((event.clientX - horizontalDragStartX) / thumbRange) * scrollRange
+  wrap.scrollLeft
+    = horizontalDragStartScrollLeft
+      + ((event.clientX - horizontalDragStartX) / thumbRange) * scrollRange
 }
 
 function handleThumbPointerUp() {

@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { BarChart } from 'echarts/charts'
 import type { EChartsOption } from 'echarts'
+import type { getUsageRecordInsightsOverview } from '@/api'
+import { BarChart } from 'echarts/charts'
 import { use } from 'echarts/core'
-import { computed } from 'vue'
 
+import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
@@ -18,11 +19,12 @@ import {
 } from '../utils/chart'
 import { escapeTooltip, formatCompactNumber, formatPercent } from '../utils/format'
 
-use([BarChart])
+type Health = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['health']
+type HealthPoint = Health['points'][number]
 
 const props = withDefaults(
   defineProps<{
-    health: any
+    health: Health
     granularity: string
     loading?: boolean
   }>(),
@@ -31,11 +33,13 @@ const props = withDefaults(
   },
 )
 
+use([BarChart])
+
 const { palette } = useUsageChartPalette()
-const points = computed<any[]>(() => props.health.points ?? [])
+const points = computed(() => props.health.points)
 
 const hasData = computed(
-  () => !props.loading && points.value.some((point) => requestCount(point) > 0),
+  () => !props.loading && points.value.some(point => requestCount(point) > 0),
 )
 
 const granularityText = computed(() => {
@@ -43,8 +47,8 @@ const granularityText = computed(() => {
     '15m': '15 分钟',
     '1h': '小时',
     '1d': '天',
-    day: '天',
-    hour: '小时',
+    'day': '天',
+    'hour': '小时',
   }
   return labels[props.granularity] ?? props.granularity
 })
@@ -52,7 +56,7 @@ const granularityText = computed(() => {
 const chartOption = computed<EChartsOption>(() => {
   const theme = palette.value
   const chartPoints = points.value
-  const activePointCount = chartPoints.filter((point) => requestCount(point) > 0).length
+  const activePointCount = chartPoints.filter(point => requestCount(point) > 0).length
 
   return {
     animationDuration: 240,
@@ -73,12 +77,12 @@ const chartOption = computed<EChartsOption>(() => {
     },
     tooltip: usageTooltip(theme, formatTooltip),
     xAxis: usageCategoryAxis(
-      chartPoints.map((point) => point.label),
+      chartPoints.map(point => point.label),
       theme,
     ),
     yAxis: [
-      usageValueAxis(theme, (value) => formatCompactNumber(value)),
-      usageValueAxis(theme, (value) => formatPercent(value), {
+      usageValueAxis(theme, value => formatCompactNumber(value)),
+      usageValueAxis(theme, value => formatPercent(value), {
         min: 0,
         max: 1,
         splitLine: false,
@@ -107,7 +111,7 @@ const chartOption = computed<EChartsOption>(() => {
       {
         name: '失败',
         type: 'line',
-        data: chartPoints.map((point) => (point.failedRequests > 0 ? requestCount(point) : null)),
+        data: chartPoints.map(point => (point.failedRequests > 0 ? requestCount(point) : null)),
         connectNulls: false,
         showSymbol: true,
         symbol: 'circle',
@@ -124,11 +128,11 @@ const chartOption = computed<EChartsOption>(() => {
   }
 })
 
-function requestCount(point: any) {
+function requestCount(point: HealthPoint) {
   return Math.max(0, point.successRequests ?? 0) + Math.max(0, point.failedRequests ?? 0)
 }
 
-function requestSuccessRate(point: any) {
+function requestSuccessRate(point: HealthPoint) {
   const total = requestCount(point)
   return total > 0 ? Math.max(0, point.successRequests ?? 0) / total : null
 }
@@ -136,7 +140,8 @@ function requestSuccessRate(point: any) {
 function formatTooltip(params: unknown) {
   const rows = tooltipRows(params)
   const point = points.value[tooltipIndex(rows[0])]
-  if (!point) return ''
+  if (!point)
+    return ''
 
   const successRate = requestSuccessRate(point)
 

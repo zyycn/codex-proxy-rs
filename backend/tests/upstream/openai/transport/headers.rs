@@ -294,7 +294,7 @@ async fn codex_backend_client_websocket_should_forward_headers_and_preserve_payl
         "ignored_non_string": 42
     })));
     let pool = Arc::new(
-        codex_proxy_rs::upstream::openai::transport::websocket_pool::CodexWebSocketPool::new(
+        codex_proxy_rs::upstream::openai::transport::websocket::CodexWebSocketPool::new(
             8,
             std::time::Duration::from_mins(1),
         ),
@@ -666,7 +666,7 @@ async fn codex_backend_client_websocket_should_preserve_exact_chain_then_rotate_
 
     let profile = crate::support::wire_profile::test_wire_profile();
     let pool = Arc::new(
-        codex_proxy_rs::upstream::openai::transport::websocket_pool::CodexWebSocketPool::new(
+        codex_proxy_rs::upstream::openai::transport::websocket::CodexWebSocketPool::new(
             8,
             Duration::from_mins(1),
         ),
@@ -808,9 +808,7 @@ async fn codex_backend_client_usage_should_use_wham_usage_headers() {
 
 #[tokio::test]
 async fn codex_backend_client_models_should_use_original_auxiliary_headers() {
-    use codex_proxy_rs::upstream::openai::transport::{
-        CodexModelCatalogClient, CodexModelCatalogRequest,
-    };
+    use codex_proxy_rs::models::gateway::{ModelCatalogRequest, ModelCatalogSource};
 
     let server = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("GET"))
@@ -831,7 +829,7 @@ async fn codex_backend_client_models_should_use_original_auxiliary_headers() {
     );
 
     let models = client
-        .fetch_models(&CodexModelCatalogRequest {
+        .fetch_models(&ModelCatalogRequest {
             access_token: "access-token",
             account_id: Some("chatgpt-account"),
             request_id: "req_models",
@@ -841,7 +839,7 @@ async fn codex_backend_client_models_should_use_original_auxiliary_headers() {
         .await
         .unwrap();
 
-    assert_eq!(models[0]["slug"], "gpt-5.5");
+    assert_eq!(models[0].slug.as_deref(), Some("gpt-5.5"));
     let requests = server.received_requests().await.unwrap();
     let models_request = requests
         .iter()

@@ -1,7 +1,6 @@
 use chrono::{Duration, Utc};
-use codex_proxy_rs::telemetry::account_usage::store::{
-    AccountUsageStore, AccountUsageWindow, PgAccountUsageStore,
-};
+use codex_proxy_rs::fleet::usage::{AccountUsageStore, AccountUsageWindow};
+use codex_proxy_rs::telemetry::account_usage::store::PgAccountUsageStore;
 
 use crate::support::storage::init_test_db;
 

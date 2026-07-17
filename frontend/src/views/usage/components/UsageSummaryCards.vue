@@ -1,11 +1,12 @@
 <script setup lang="ts">
+import type { getUsageRecordSummary } from '@/api'
 import { Activity, Database, FileText, Timer } from '@lucide/vue'
-import { computed } from 'vue'
 
+import { computed } from 'vue'
 import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
 
 const props = defineProps<{
-  summary: any
+  summary: Awaited<ReturnType<typeof getUsageRecordSummary>>
 }>()
 
 const items = computed(() => [

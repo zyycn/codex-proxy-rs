@@ -1,12 +1,13 @@
 <script setup lang="ts">
+import type { UsageDisplayRecord } from '../constants'
 import { Info } from '@lucide/vue'
-import { computed } from 'vue'
 
+import { computed } from 'vue'
 import BasePopover from '@/components/base/BasePopover.vue'
 import { usageLatencyDetails } from '../constants'
 
 const props = defineProps<{
-  record: any
+  record: UsageDisplayRecord
 }>()
 
 const latencyDetails = computed(() => usageLatencyDetails(props.record))
@@ -40,7 +41,9 @@ const latencyDetails = computed(() => usageLatencyDetails(props.record))
       </template>
 
       <div class="grid gap-2 text-[12px] leading-none">
-        <p class="m-0 font-[760] text-(--cp-text-primary)">延迟明细</p>
+        <p class="m-0 font-[760] text-(--cp-text-primary)">
+          延迟明细
+        </p>
 
         <div
           v-if="latencyDetails.breakdownItems.length"
@@ -57,7 +60,9 @@ const latencyDetails = computed(() => usageLatencyDetails(props.record))
             </span>
           </div>
         </div>
-        <p v-else class="m-0 text-(--cp-text-muted)">此记录未采集完整的阶段耗时。</p>
+        <p v-else class="m-0 text-(--cp-text-muted)">
+          此记录未采集完整的阶段耗时。
+        </p>
 
         <div class="flex justify-between border-t border-(--cp-divider-subtle) pt-2">
           <span class="whitespace-nowrap text-(--cp-text-secondary)">总耗时</span>
@@ -70,7 +75,9 @@ const latencyDetails = computed(() => usageLatencyDetails(props.record))
           v-if="latencyDetails.transportItems.length"
           class="grid gap-1.5 border-t border-(--cp-divider-subtle) pt-2 text-(--cp-text-secondary)"
         >
-          <p class="m-0 font-[760] text-(--cp-text-primary)">传输观测</p>
+          <p class="m-0 font-[760] text-(--cp-text-primary)">
+            传输观测
+          </p>
           <div
             v-for="item in latencyDetails.transportItems"
             :key="item.label"

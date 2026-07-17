@@ -18,11 +18,15 @@ use crate::{
     fleet::{
         cookies::PgCookieStore,
         manage::{AccountManageService, AccountManageServiceParts},
-        pool::{AccountPoolOptions, AccountPoolService, AccountPoolStaticSettings},
+        pool::{
+            AccountPoolOptions, AccountPoolRuntimeOptions, AccountPoolService,
+            AccountPoolStaticSettings, RotationStrategy,
+        },
         refresh::{
             RedisRefreshLeaseStore, RefreshPolicy, RuntimeRefreshPolicy, TokenRefreshService,
         },
         store::{AccountStore, PgAccountStore},
+        usage::AccountUsageStore,
     },
     infra::{
         database::connect,
@@ -33,6 +37,7 @@ use crate::{
     },
     keys::{manage::KeyManageService, service::KeyVerifier, store::PgClientKeyStore},
     models::{
+        gateway::ModelCatalogSource,
         service::{ModelService, ModelServiceError},
         store::{ModelSnapshotStore, RedisModelSnapshotStore},
         types::ModelConfig,
@@ -40,7 +45,7 @@ use crate::{
     settings::{SettingsSnapshot, service::SettingsService},
     telemetry::{
         account_usage::query::AccountUsageQueryService,
-        account_usage::store::{AccountUsageStore, PgAccountUsageStore},
+        account_usage::store::PgAccountUsageStore,
         buckets::store::PgRequestBucketStore,
         ops::query::OpsQueryService,
         ops::store::PgOpsErrorLogStore,
@@ -54,8 +59,8 @@ use crate::{
         profile::{CodexWireProfile, CodexWireProfileState},
         token_client::{OpenAiTokenClient, TokenClientConfig, default_openai_token_client},
         transport::{
-            CodexBackendClient, CodexModelCatalogClient, CodexWebSocketPool,
-            CodexWebSocketPoolConfig, build_reqwest_client, tls::CustomCaError,
+            CodexBackendClient, CodexWebSocketPool, CodexWebSocketPoolConfig, build_reqwest_client,
+            tls::CustomCaError,
         },
     },
 };
@@ -142,6 +147,47 @@ impl UsageRecordOptions {
     }
 }
 
+impl crate::admin_queries::dashboard::DashboardWireProfileQuery for CodexWireProfileState {
+    fn snapshot(&self) -> crate::admin_queries::dashboard::DashboardWireProfile {
+        let profile = CodexWireProfileState::snapshot(self);
+        let user_agent = profile.user_agent();
+        crate::admin_queries::dashboard::DashboardWireProfile {
+            originator: profile.originator,
+            codex_version: profile.codex_version,
+            desktop_version: profile.desktop_version,
+            desktop_build: profile.desktop_build,
+            os_type: profile.os_type,
+            os_version: profile.os_version,
+            arch: profile.arch,
+            terminal: profile.terminal,
+            user_agent,
+            verified_at: profile.verified_at,
+        }
+    }
+}
+
+impl crate::admin_queries::dashboard::DashboardDesktopReleaseQuery for DesktopReleaseStatus {
+    fn snapshot(&self) -> crate::admin_queries::dashboard::DashboardDesktopReleaseSnapshot {
+        let snapshot = DesktopReleaseStatus::snapshot(self);
+        crate::admin_queries::dashboard::DashboardDesktopReleaseSnapshot {
+            checked_at: snapshot.checked_at,
+            latest: snapshot.latest.map(|release| {
+                crate::admin_queries::dashboard::DashboardDesktopRelease {
+                    version: release.version,
+                    build: release.build,
+                    published_at: release.published_at,
+                    minimum_system_version: release.minimum_system_version,
+                    hardware_requirements: release.hardware_requirements,
+                    download_url: release.download_url,
+                    download_size: release.download_size,
+                    signature_present: release.signature_present,
+                }
+            }),
+            last_error: snapshot.last_error,
+        }
+    }
+}
+
 impl Services {
     pub fn new(
         config: &AppConfig,
@@ -203,6 +249,8 @@ impl Services {
                 enabled: true,
                 max_age: std::time::Duration::from_millis(config.ws_pool.max_age_ms),
                 max_per_account: config.ws_pool.max_per_account,
+                max_total: config.ws_pool.max_total,
+                max_connecting: config.ws_pool.max_connecting,
                 initial_event_timeout: (config.ws_pool.initial_event_timeout_ms > 0).then(|| {
                     std::time::Duration::from_millis(config.ws_pool.initial_event_timeout_ms)
                 }),
@@ -269,7 +317,7 @@ impl Services {
             )
             .with_refresh_lease_store(stores.refresh_leases.clone()),
         );
-        let upstream_client: Arc<dyn CodexModelCatalogClient> = codex.clone();
+        let upstream_client: Arc<dyn ModelCatalogSource> = codex.clone();
         let store: Arc<dyn ModelSnapshotStore> = Arc::new(stores.model_snapshots.clone());
         let models = Arc::new(ModelService::new(
             ModelConfig {
@@ -281,7 +329,7 @@ impl Services {
         let admin_accounts = Arc::new(AccountManageService::new(AccountManageServiceParts {
             store: stores.accounts.clone(),
             cookies: stores.cookies.clone(),
-            codex: codex.clone(),
+            upstream: codex.clone(),
             models: models.clone(),
             account_pool: account_pool.clone(),
             token_refresher: Arc::new(token_client),
@@ -355,13 +403,37 @@ impl Services {
 
 impl From<&Services> for crate::api::router::ApiServices {
     fn from(services: &Services) -> Self {
+        let refresh_activity = services.token_refresh.clone()
+            as Arc<dyn crate::admin_queries::accounts::RefreshActivityQuery>;
+        let account_list = Arc::new(
+            crate::admin_queries::accounts::AccountListQueryService::new(
+                services.admin_accounts.clone(),
+                services.usage.clone(),
+                refresh_activity.clone(),
+            ),
+        );
+        let dashboard = Arc::new(crate::admin_queries::dashboard::DashboardQueryService::new(
+            crate::admin_queries::dashboard::DashboardQueryServiceParts {
+                accounts: services.accounts.clone(),
+                usage: services.usage.clone(),
+                usage_records: services.usage_records.clone(),
+                account_pool: services.account_pool.clone(),
+                refresh_activity,
+                settings: services.settings.clone(),
+                wire_profile: Arc::new(services.wire_profile.clone()),
+                desktop_release: Arc::new(services.desktop_release.clone()),
+            },
+        ));
         Self {
+            admin_queries: crate::api::router::AdminQueries {
+                accounts: account_list,
+                dashboard,
+            },
             health_probe: Arc::new(crate::bootstrap::state::RuntimeHealthProbe::new(
                 services.database.clone(),
                 services.redis.clone(),
             )),
             models: services.models.clone(),
-            accounts: services.accounts.clone(),
             client_keys: services.client_keys.clone(),
             admin_client_keys: services.admin_client_keys.clone(),
             admin_sessions: services.admin_sessions.clone(),
@@ -369,13 +441,9 @@ impl From<&Services> for crate::api::router::ApiServices {
             admin_accounts: services.admin_accounts.clone(),
             usage_records: services.usage_records.clone(),
             ops_errors: services.ops_errors.clone(),
-            usage: services.usage.clone(),
             account_pool: services.account_pool.clone(),
-            token_refresh: services.token_refresh.clone(),
             responses: services.responses.clone(),
             session_affinity: services.session_affinity.clone(),
-            wire_profile: services.wire_profile.clone(),
-            desktop_release: services.desktop_release.clone(),
             process_control: Arc::new(crate::bootstrap::shutdown::RuntimeProcessControl),
             system_update: services.system_update.clone(),
             connection_drain: services.connection_drain.clone(),
@@ -441,11 +509,33 @@ pub fn wire_profile_from_config(
 }
 
 pub fn account_pool_options_from_config(config: &AppConfig) -> AccountPoolOptions {
-    AccountPoolStaticSettings {
+    let static_settings = AccountPoolStaticSettings {
         skip_quota_limited: config.quota.skip_exhausted,
         tier_priority: config.auth.tier_priority.clone(),
+    };
+    account_pool_runtime_options(&settings_snapshot_from_config(config), &static_settings).options
+}
+
+pub fn account_pool_runtime_options(
+    settings: &SettingsSnapshot,
+    static_settings: &AccountPoolStaticSettings,
+) -> AccountPoolRuntimeOptions {
+    AccountPoolRuntimeOptions {
+        options: AccountPoolOptions {
+            max_concurrent_per_account: settings.max_concurrent_per_account,
+            rotation_strategy: match settings.rotation_strategy.as_str() {
+                "smart" => RotationStrategy::Smart,
+                "quota_reset_priority" => RotationStrategy::QuotaResetPriority,
+                "round_robin" => RotationStrategy::RoundRobin,
+                "sticky" => RotationStrategy::Sticky,
+                _ => RotationStrategy::Smart,
+            },
+            skip_quota_limited: static_settings.skip_quota_limited,
+            tier_priority: static_settings.tier_priority.clone(),
+            ..AccountPoolOptions::default()
+        },
+        request_interval_ms: settings.request_interval_ms,
     }
-    .pool_options(&settings_snapshot_from_config(config))
 }
 
 pub async fn run(config: BootstrapConfig) -> Result<(), Box<dyn Error + Send + Sync>> {

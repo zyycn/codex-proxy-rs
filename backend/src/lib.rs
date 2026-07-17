@@ -1,3 +1,4 @@
+pub mod admin_queries;
 pub mod api;
 pub mod auth;
 pub mod bootstrap;

@@ -8,18 +8,14 @@ mod response_meta;
 pub mod tls;
 pub mod usage;
 pub mod websocket;
-pub mod websocket_breaker;
-pub mod websocket_pool;
-pub(crate) mod websocket_pump;
 
 pub(crate) use self::client::PreparedResponseTransport;
 pub use self::{
     client::{
         CodexBackendClient, CodexBackendResponse, CodexBackendSseStream,
         CodexBackendStreamingResponse, CodexBackendTransport, CodexClientError, CodexClientResult,
-        CodexModelCatalogClient, CodexModelCatalogClientError, CodexModelCatalogRequest,
-        CodexRateLimitHeaderUpdates, CodexRequestContext, CodexResponseMetadata,
-        CodexTransportDecision, CodexTransportMetrics, CodexTurnStateUpdate, build_reqwest_client,
+        CodexRateLimitHeaderUpdates, CodexRequestContext, CodexTransportDecision,
+        CodexTransportMetrics, CodexTurnStateUpdate, build_reqwest_client,
     },
     diagnostics::CodexUpstreamDiagnostics,
     endpoints::{
@@ -27,7 +23,8 @@ pub use self::{
         endpoint_request_path, endpoint_url, usage_endpoint_urls,
     },
     headers::{build_codex_base_headers, build_codex_headers},
-    websocket_pool::{
+    response_meta::CodexResponseMetadata,
+    websocket::{
         CodexWebSocketPool, CodexWebSocketPoolConfig, CodexWebSocketPoolKey, WebSocketPoolDecision,
     },
 };

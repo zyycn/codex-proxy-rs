@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { RefreshCw } from '@lucide/vue'
+import type { useAccountConnectionTest } from '../composables/useAccountConnectionTest'
 
+import { RefreshCw } from '@lucide/vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
@@ -8,33 +9,37 @@ import BaseSelect from '@/components/base/BaseSelect.vue'
 import AccountIdentityCell from './AccountIdentityCell.vue'
 import AccountStatusBadge from './AccountStatusBadge.vue'
 
+type ConnectionTest = ReturnType<typeof useAccountConnectionTest>
+
 defineProps<{
-  account: any
-  status: string
+  account: ConnectionTest['testingAccount']['value']
+  status: ConnectionTest['connectionTestStatus']['value']
   model: string
-  logs: any[]
+  logs: ConnectionTest['connectionTestLogs']['value']
   error: string
   startedAt: string
   finishedAt: string
   durationMs: number | null
   loadingModels: boolean
   refreshingModels: boolean
-  modelOptions: any[]
-  statusView: any
+  modelOptions: ConnectionTest['connectionTestModelOptions']['value']
+  statusView: ConnectionTest['connectionTestStatusView']['value']
 }>()
-
-const open = defineModel<boolean>({ default: false })
-const selectedModel = defineModel<string>('selectedModel', { required: true })
 
 const emit = defineEmits<{
   test: []
   refreshModels: []
 }>()
+const open = defineModel<boolean>({ default: false })
+const selectedModel = defineModel<string>('selectedModel', { required: true })
 
 function connectionLogClass(tone: string) {
-  if (tone === 'success') return 'text-(--cp-success-text)'
-  if (tone === 'danger') return 'text-(--cp-danger-text)'
-  if (tone === 'info') return 'text-(--cp-info-text)'
+  if (tone === 'success')
+    return 'text-(--cp-success-text)'
+  if (tone === 'danger')
+    return 'text-(--cp-danger-text)'
+  if (tone === 'info')
+    return 'text-(--cp-info-text)'
   return 'text-(--cp-text-secondary)'
 }
 </script>
@@ -117,19 +122,25 @@ function connectionLogClass(tone: string) {
 
         <div class="mt-4 grid gap-3 sm:grid-cols-3">
           <div class="rounded-lg bg-(--cp-bg-surface) px-3 py-2.5">
-            <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">开始时间</p>
+            <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">
+              开始时间
+            </p>
             <p class="mt-1.5 mb-0 font-mono text-[12px] font-[650] text-(--cp-text-primary)">
               {{ startedAt || '-' }}
             </p>
           </div>
           <div class="rounded-lg bg-(--cp-bg-surface) px-3 py-2.5">
-            <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">完成时间</p>
+            <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">
+              完成时间
+            </p>
             <p class="mt-1.5 mb-0 font-mono text-[12px] font-[650] text-(--cp-text-primary)">
               {{ finishedAt || '-' }}
             </p>
           </div>
           <div class="rounded-lg bg-(--cp-bg-surface) px-3 py-2.5">
-            <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">响应耗时</p>
+            <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">
+              响应耗时
+            </p>
             <p class="mt-1.5 mb-0 font-mono text-[12px] font-[650] text-(--cp-text-primary)">
               {{ durationMs !== null ? `${durationMs}ms` : '-' }}
             </p>
@@ -137,7 +148,9 @@ function connectionLogClass(tone: string) {
         </div>
 
         <div class="mt-3 rounded-lg bg-(--cp-bg-surface) px-3 py-2.5">
-          <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">测试模型</p>
+          <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">
+            测试模型
+          </p>
           <p
             class="mt-1.5 mb-0 truncate font-mono text-[12px] font-[650] text-(--cp-text-primary)"
             :title="model || '-'"
@@ -147,7 +160,9 @@ function connectionLogClass(tone: string) {
         </div>
 
         <div class="mt-3 rounded-lg bg-(--cp-bg-surface) px-3 py-2.5">
-          <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">事件轨迹</p>
+          <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">
+            事件轨迹
+          </p>
           <BaseScrollbar max-height="260px" view-class="pt-2 pr-2">
             <div v-if="logs.length === 0" class="text-[12px] font-[650] text-(--cp-text-muted)">
               -
@@ -167,7 +182,7 @@ function connectionLogClass(tone: string) {
                     <BaseScrollbar max-height="138px" view-class="pr-2">
                       <pre
                         class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[11px] leading-[1.6] font-[620] text-(--cp-text-primary)"
-                        >{{ item.detail }}</pre>
+                      >{{ item.detail }}</pre>
                     </BaseScrollbar>
                   </div>
                 </div>
@@ -177,7 +192,9 @@ function connectionLogClass(tone: string) {
         </div>
 
         <div v-if="error" class="mt-3 rounded-lg bg-(--cp-danger-bg) px-3 py-2.5">
-          <p class="m-0 text-[11px] font-[760] text-(--cp-danger-text)">错误信息</p>
+          <p class="m-0 text-[11px] font-[760] text-(--cp-danger-text)">
+            错误信息
+          </p>
           <BaseScrollbar max-height="118px" view-class="pt-1.5 pr-2">
             <p
               class="m-0 wrap-break-word text-[12px] leading-[1.55] font-[650] text-(--cp-danger-text)"
@@ -190,7 +207,9 @@ function connectionLogClass(tone: string) {
     </div>
 
     <template #footer>
-      <BaseButton variant="ghost" @click="open = false">关闭</BaseButton>
+      <BaseButton variant="ghost" @click="open = false">
+        关闭
+      </BaseButton>
       <BaseButton
         variant="primary"
         :loading="status === 'running'"

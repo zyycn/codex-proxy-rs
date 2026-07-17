@@ -1,4 +1,4 @@
-export const CODEX_CC_SWITCH_MODEL = 'gpt-5.5'
+const CODEX_CC_SWITCH_MODEL = 'gpt-5.5'
 
 export interface CodexCcSwitchImportInput {
   apiKey: string

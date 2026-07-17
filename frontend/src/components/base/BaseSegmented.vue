@@ -1,7 +1,7 @@
 <script setup lang="ts">
+import type { Component } from 'vue'
 import { clamp } from 'es-toolkit'
 import { computed } from 'vue'
-import type { Component } from 'vue'
 
 interface SegmentedOption {
   label: string
@@ -22,7 +22,7 @@ const props = withDefaults(
 const model = defineModel<string>({ required: true })
 
 const activeIndex = computed(() => {
-  const index = props.options.findIndex((option) => option.value === model.value)
+  const index = props.options.findIndex(option => option.value === model.value)
   return index >= 0 ? index : 0
 })
 
@@ -38,7 +38,8 @@ const indicatorStyle = computed(() => ({
 }))
 
 function selectOption(value: string) {
-  if (props.disabled || value === model.value) return
+  if (props.disabled || value === model.value)
+    return
   model.value = value
 }
 </script>

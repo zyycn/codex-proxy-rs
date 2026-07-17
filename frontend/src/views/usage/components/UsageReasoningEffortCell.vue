@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { Bot } from '@lucide/vue'
+import type { UsageDisplayRecord } from '../constants'
 
+import { Bot } from '@lucide/vue'
 import { usageIsSubagent, usageReasoningEffort } from '../constants'
 
 defineProps<{
-  record: any
+  record: UsageDisplayRecord
 }>()
 </script>
 

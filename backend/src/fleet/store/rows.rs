@@ -7,7 +7,7 @@ use sqlx::{PgPool, Postgres, QueryBuilder, Row, postgres::PgRow};
 use crate::{
     fleet::{
         account::{Account, AccountStatus},
-        quota::{quota_snapshot_limit_window_seconds, quota_snapshot_reset_at},
+        quota::{QuotaSnapshot, quota_snapshot_limit_window_seconds, quota_snapshot_reset_at},
     },
     infra::format::nonnegative_i64_to_u64,
 };
@@ -45,13 +45,11 @@ pub(super) async fn get_pool_account(
 }
 
 pub(super) fn pool_account_from_row(row: &PgRow) -> PgAccountStoreResult<Account> {
-    let quota_json = row
+    let quota = row
         .get::<Option<sqlx::types::Json<Value>>, _>("quota_json")
-        .map(|quota_json| quota_json.0);
-    let quota_window_reset_at = quota_json.as_ref().and_then(quota_snapshot_reset_at);
-    let quota_limit_window_seconds = quota_json
-        .as_ref()
-        .and_then(quota_snapshot_limit_window_seconds);
+        .and_then(|quota_json| QuotaSnapshot::from_value(quota_json.0).ok());
+    let quota_window_reset_at = quota.as_ref().and_then(quota_snapshot_reset_at);
+    let quota_limit_window_seconds = quota.as_ref().and_then(quota_snapshot_limit_window_seconds);
 
     Ok(Account {
         id: row.get("id"),

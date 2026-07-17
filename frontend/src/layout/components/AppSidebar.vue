@@ -1,22 +1,8 @@
 <script setup lang="ts">
-import { usePreferredReducedMotion, useTimeoutFn } from '@vueuse/core'
-import { gsap } from 'gsap'
 import {
-  computed,
-  nextTick,
-  onBeforeUnmount,
-  onMounted,
-  ref,
-  shallowRef,
-  useTemplateRef,
-  watch,
-} from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { storeToRefs } from 'pinia'
-import {
+  ArrowUpCircle,
   Cat,
   ChartNoAxesColumn,
-  ArrowUpCircle,
   Info,
   KeyRound,
   LayoutDashboard,
@@ -28,24 +14,26 @@ import {
   Sun,
   Users,
 } from '@lucide/vue'
+import { usePreferredReducedMotion, useTimeoutFn } from '@vueuse/core'
+import { gsap } from 'gsap'
+import { storeToRefs } from 'pinia'
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  shallowRef,
+  useTemplateRef,
+  watch,
+} from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
-import { useSystemUpdate } from '@/composables/useSystemUpdate'
 import { useAuthStore } from '@/stores/modules/auth'
+import { useSystemUpdateStore } from '@/stores/modules/system-update'
 import { useUiStore } from '@/stores/modules/ui'
-
-import AppAboutModal from './AppAboutModal.vue'
-import SystemUpdateModal from './SystemUpdateModal.vue'
-
-const route = useRoute()
-const router = useRouter()
-const authStore = useAuthStore()
-const uiStore = useUiStore()
-const { effectiveTheme } = storeToRefs(uiStore)
-const { toggleTheme } = uiStore
-const preferredMotion = usePreferredReducedMotion()
-const { version, hasUpdate, loadedOnce, loadVersion, loadSystem } = useSystemUpdate()
 
 const props = withDefaults(
   defineProps<{
@@ -57,12 +45,22 @@ const props = withDefaults(
     mobile: false,
   },
 )
-
 const emit = defineEmits<{
   close: []
   navigate: []
+  openAbout: []
+  openSystemUpdate: []
   toggle: []
 }>()
+const route = useRoute()
+const router = useRouter()
+const authStore = useAuthStore()
+const systemUpdateStore = useSystemUpdateStore()
+const uiStore = useUiStore()
+const { version, hasUpdate } = storeToRefs(systemUpdateStore)
+const { effectiveTheme } = storeToRefs(uiStore)
+const { toggleTheme } = uiStore
+const preferredMotion = usePreferredReducedMotion()
 
 const navItems = [
   { label: '概览', icon: LayoutDashboard, path: '/' },
@@ -72,13 +70,14 @@ const navItems = [
   { label: '系统设置', icon: Settings, path: '/settings' },
 ]
 
-const isActive = (path: string) => {
-  if (path === '/') return route.path === '/'
+function isActive(path: string) {
+  if (path === '/')
+    return route.path === '/'
   return route.path.startsWith(path)
 }
 
 const activeNavIndex = computed(() => {
-  const index = navItems.findIndex((item) => isActive(item.path))
+  const index = navItems.findIndex(item => isActive(item.path))
   return Math.max(0, index)
 })
 const activeNavIndicatorStyle = computed(() => ({
@@ -105,22 +104,8 @@ function navigate(path: string) {
   emit('navigate')
 }
 
-const systemUpdateOpening = shallowRef(false)
-
-async function openSystemUpdate() {
-  if (systemUpdateOpen.value || systemUpdateOpening.value) return
-
-  systemUpdateOpening.value = true
-  try {
-    if (!loadedOnce.value) {
-      await loadSystem(false)
-    }
-  } catch {
-    // 弹窗打开后由弹窗内的加载逻辑提示失败原因
-  } finally {
-    systemUpdateOpening.value = false
-    systemUpdateOpen.value = true
-  }
+function openSystemUpdate() {
+  emit('openSystemUpdate')
 }
 
 async function handleLogout() {
@@ -132,8 +117,6 @@ async function handleLogout() {
 const sidebarEl = ref<HTMLElement | null>(null)
 const brandLabelEl = ref<HTMLElement | null>(null)
 const navSignalEl = useTemplateRef<HTMLElement>('navSignal')
-const systemUpdateOpen = shallowRef(false)
-const aboutOpen = shallowRef(false)
 const isCollapsed = computed(() => !props.mobile && Boolean(props.collapsed))
 const sidebarWidth = computed(() => (isCollapsed.value ? 88 : 256))
 const brandLabelVisible = shallowRef(!isCollapsed.value)
@@ -253,7 +236,8 @@ function animateSidebarWidth(collapsed: boolean) {
 
 function animateNavSignal() {
   const signal = navSignalEl.value
-  if (!signal) return
+  if (!signal)
+    return
 
   gsap.killTweensOf(signal)
   if (prefersReducedMotion()) {
@@ -281,7 +265,8 @@ onMounted(() => {
   })
   if (isCollapsed.value) {
     hideBrandLabel()
-  } else {
+  }
+  else {
     gsap.set(brandLabelEl.value, {
       opacity: 1,
       x: 0,
@@ -289,7 +274,6 @@ onMounted(() => {
   }
   animateSidebarLabels(isCollapsed.value)
   gsap.set(navSignalEl.value, { opacity: 0, xPercent: -70 })
-  void loadVersion().catch(() => undefined)
 })
 
 watch(
@@ -297,7 +281,8 @@ watch(
   async (collapsed) => {
     if (collapsed) {
       hideBrandLabel()
-    } else {
+    }
+    else {
       brandLabelVisible.value = true
     }
     animateSidebarLabels(Boolean(collapsed))
@@ -306,14 +291,14 @@ watch(
     if (!collapsed) {
       animateBrandLabelEnter()
     }
-    animateSidebarLabels(Boolean(collapsed))
   },
 )
 
 watch(
   () => route.path,
   async (path, previousPath) => {
-    if (path === previousPath) return
+    if (path === previousPath)
+      return
     muteNavFeedbackDuringMove()
     await nextTick()
     animateNavSignal()
@@ -375,10 +360,8 @@ onBeforeUnmount(() => {
               hasUpdate
                 ? 'bg-(--cp-success-bg) text-(--cp-success-text) hover:bg-(--cp-success-bg-hover)'
                 : 'bg-(--cp-bg-subtle) text-(--cp-text-muted) hover:bg-(--cp-bg-muted) hover:text-(--cp-text-secondary)',
-              systemUpdateOpening ? 'cursor-wait opacity-70' : '',
             ]"
             :title="updateButtonLabel"
-            :disabled="systemUpdateOpening"
             @click="openSystemUpdate"
           >
             <span>{{ versionLabel }}</span>
@@ -421,8 +404,7 @@ onBeforeUnmount(() => {
         <span
           class="sidebar-label overflow-hidden whitespace-nowrap transition-[opacity,transform] duration-200"
           :class="isCollapsed ? 'pointer-events-none w-0' : 'w-auto'"
-          >{{ item.label }}</span
-        >
+        >{{ item.label }}</span>
       </button>
     </nav>
 
@@ -450,7 +432,6 @@ onBeforeUnmount(() => {
             :variant="hasUpdate ? 'success' : 'ghost'"
             size="default"
             :label="updateButtonLabel"
-            :loading="systemUpdateOpening"
             @click="openSystemUpdate"
           >
             <ArrowUpCircle :size="19" />
@@ -483,7 +464,7 @@ onBeforeUnmount(() => {
             variant="ghost"
             :size="isCollapsed ? 'default' : 'sm'"
             label="关于"
-            @click="aboutOpen = true"
+            @click="emit('openAbout')"
           >
             <Info :size="isCollapsed ? 19 : 18" />
           </BaseButton>
@@ -515,18 +496,10 @@ onBeforeUnmount(() => {
       </div>
     </div>
   </aside>
-
-  <AppAboutModal v-model="aboutOpen" />
-  <SystemUpdateModal v-model="systemUpdateOpen" />
 </template>
 
 <style scoped>
 .sidebar-active-signal {
-  background: linear-gradient(
-    90deg,
-    transparent,
-    color-mix(in srgb, var(--cp-info) 9%, transparent),
-    transparent
-  );
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--cp-info) 9%, transparent), transparent);
 }
 </style>

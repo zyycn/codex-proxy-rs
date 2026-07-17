@@ -12,7 +12,7 @@ use crate::{
     fleet::{
         account_failure::{
             AccountFailureKind, AccountStateEffect, apply_account_state_effect_immediately,
-            classify_response_failure, classify_upstream_failure,
+            classify_account_failure,
         },
         pool::AccountPoolService,
     },
@@ -133,15 +133,17 @@ impl AccountFailureController {
         if code == "usage_not_included" {
             return Some(ClientFailure::new(failure.clone(), 403, false));
         }
-        classify_response_failure(failure).map(|classified| {
-            let status = match classified.kind {
-                AccountFailureKind::ModelUnsupported => 400,
-                AccountFailureKind::Expired => 401,
-                AccountFailureKind::Disabled | AccountFailureKind::Banned => 403,
-                AccountFailureKind::QuotaExhausted | AccountFailureKind::RateLimited => 429,
-            };
-            ClientFailure::new(failure.clone(), status, false)
-        })
+        classify_account_failure(&super::failure_observation::from_response(failure)).map(
+            |classified| {
+                let status = match classified.kind {
+                    AccountFailureKind::ModelUnsupported => 400,
+                    AccountFailureKind::Expired => 401,
+                    AccountFailureKind::Disabled | AccountFailureKind::Banned => 403,
+                    AccountFailureKind::QuotaExhausted | AccountFailureKind::RateLimited => 429,
+                };
+                ClientFailure::new(failure.clone(), status, false)
+            },
+        )
     }
 }
 
@@ -177,7 +179,7 @@ fn classify_upstream(account_id: &str, facts: &UpstreamFailureFacts) -> Option<C
         account_id,
         &facts.body,
         facts.status_code,
-        classify_upstream_failure(facts)?,
+        classify_account_failure(&super::failure_observation::from_upstream(facts))?,
     )
 }
 
@@ -186,7 +188,7 @@ fn classify_sse(account_id: &str, failure: &ResponsesSseFailure) -> Option<Class
         account_id,
         &crate::dispatch::failure::sse::sse_failure_error_body(failure),
         failure.explicit_status_code,
-        classify_response_failure(failure)?,
+        classify_account_failure(&super::failure_observation::from_response(failure))?,
     )
 }
 

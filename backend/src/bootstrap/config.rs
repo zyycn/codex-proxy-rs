@@ -350,6 +350,10 @@ pub struct WebSocketPoolSettings {
     pub max_age_ms: u64,
     /// 单账号最大连接数。
     pub max_per_account: usize,
+    /// 所有账号合计最大连接数。
+    pub max_total: usize,
+    /// 所有账号合计最大并发建连数。
+    pub max_connecting: usize,
     /// 首个真实输出（首事件）到达前的绝对超时；`0` 表示禁用。
     pub initial_event_timeout_ms: u64,
 }
@@ -538,6 +542,14 @@ fn validate_file_config(config: &FileAppConfig) -> Result<(), ConfigError> {
     }
     if config.ws_pool.max_per_account == 0 {
         return Err(ConfigError::InvalidField("ws_pool.max_per_account"));
+    }
+    if config.ws_pool.max_total == 0 {
+        return Err(ConfigError::InvalidField("ws_pool.max_total"));
+    }
+    if config.ws_pool.max_connecting == 0
+        || config.ws_pool.max_connecting > config.ws_pool.max_total
+    {
+        return Err(ConfigError::InvalidField("ws_pool.max_connecting"));
     }
     validate_wire_profile(&config.wire_profile)?;
     validate_logging(&config.logging)?;

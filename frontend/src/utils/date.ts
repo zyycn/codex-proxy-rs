@@ -1,4 +1,5 @@
-import dayjs, { type ConfigType } from 'dayjs'
+import type { ConfigType } from 'dayjs'
+import dayjs from 'dayjs'
 
 const DATE_TIME_FORMAT = 'YYYY-MM-DD HH:mm:ss'
 const TIME_FORMAT = 'HH:mm:ss'

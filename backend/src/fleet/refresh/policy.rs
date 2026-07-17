@@ -12,8 +12,8 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use serde_json::{Map, Value};
 use tokio::sync::{Semaphore, watch};
 
+use super::{RefreshFailure, TokenPair, TokenRefresher};
 use crate::fleet::account::{Account, AccountStatus};
-use crate::upstream::openai::token_client::{RefreshFailure, TokenPair, TokenRefresher};
 
 pub(crate) const PERMANENT_FAILURE_CONFIRMATION_THRESHOLD: usize = 2;
 pub(crate) const RECOVERY_DELAY_SECONDS: i64 = 10 * 60;
@@ -238,16 +238,9 @@ impl RuntimeRefreshPolicy {
     }
 
     /// 持续接收运行时设置并更新刷新策略。
-    pub async fn subscribe_settings(
-        self,
-        mut receiver: watch::Receiver<crate::settings::SettingsSnapshot>,
-    ) {
+    pub async fn subscribe_policy(self, mut receiver: watch::Receiver<RefreshPolicy>) {
         while receiver.changed().await.is_ok() {
-            let settings = receiver.borrow_and_update();
-            self.update(RefreshPolicy {
-                refresh_margin_seconds: settings.refresh_margin_seconds,
-                refresh_concurrency: settings.refresh_concurrency,
-            });
+            self.update(*receiver.borrow_and_update());
         }
     }
 

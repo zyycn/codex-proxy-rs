@@ -10,15 +10,14 @@ use crate::{
     infra::time::elapsed_millis_i64,
     telemetry::{
         ops::types::OpsErrorLog,
-        recorder::{
-            DispatchErrorLogRecord, Recorder, enrich_event_route_metadata,
-            enrich_response_request_semantics, enrich_usage_record_identity,
-            event_kind as response_event_kind, reasoning_effort_from_request,
-            record_dispatch_error_event,
+        recorder::Recorder,
+        usage::types::{
+            UsageRecord, UsageRecordLevel, metadata_i64, metadata_service_tier,
+            metadata_string as metadata_string_any,
         },
-        usage::types::UsageRecordLevel,
     },
     upstream::openai::{
+        protocol::events::TokenUsage,
         protocol::responses::{CodexResponsesRequest, ResponsesSseFailure},
         transport::{
             CodexBackendTransport, CodexClientError, CodexResponseMetadata,
@@ -26,6 +25,9 @@ use crate::{
         },
     },
 };
+
+const RESPONSE_EVENT_KIND: &str = "v1.response";
+const RESPONSES_API_KIND: &str = "responses";
 
 use crate::dispatch::{
     errors::{
@@ -84,6 +86,119 @@ pub(super) struct ResponseDispatchErrorEventRecord<'a> {
     pub(super) compact: bool,
     pub(super) transport: Option<&'a str>,
     pub(super) error: &'a ResponseDispatchError,
+}
+
+pub(super) struct ResponseUsageEventRecord<'a> {
+    pub(super) recorder: &'a Recorder,
+    pub(super) request_id: &'a str,
+    pub(super) client_api_key_id: Option<&'a str>,
+    pub(super) account_id: &'a str,
+    pub(super) route: &'a str,
+    pub(super) model: &'a str,
+    pub(super) requested_model: Option<&'a str>,
+    pub(super) client_ip: Option<&'a str>,
+    pub(super) client_user_agent: Option<&'a str>,
+    pub(super) reasoning_effort: Option<&'a str>,
+    pub(super) service_tier: Option<&'a str>,
+    pub(super) started_at: Instant,
+    pub(super) status_code: i64,
+    pub(super) message: &'a str,
+    pub(super) usage: Option<TokenUsage>,
+    pub(super) metadata: Value,
+    pub(super) rate_limit_headers: &'a [(String, String)],
+}
+
+pub(super) struct LiveResponseStreamEventRecord<'a> {
+    pub(super) context: &'a StreamContext<'a>,
+    pub(super) status_code: i64,
+    pub(super) level: UsageRecordLevel,
+    pub(super) message: &'a str,
+    pub(super) usage: Option<TokenUsage>,
+    pub(super) metadata: Value,
+    pub(super) rate_limit_headers: &'a [(String, String)],
+    pub(super) body: &'a str,
+}
+
+struct DispatchErrorLogRecord<'a> {
+    recorder: &'a Recorder,
+    request_id: &'a str,
+    client_api_key_id: Option<&'a str>,
+    provider: Option<&'a str>,
+    account_id: Option<&'a str>,
+    route: &'a str,
+    model: &'a str,
+    started_at: Instant,
+    status_code: i64,
+    message: &'a str,
+    metadata: Value,
+}
+
+pub(super) async fn record_response_event(record: ResponseUsageEventRecord<'_>) {
+    let mut metadata = record.metadata;
+    enrich_event_route_metadata(&mut metadata, record.route);
+
+    let mut event = UsageRecord::new(
+        RESPONSE_EVENT_KIND,
+        record.message,
+        record.account_id,
+        record.model,
+        record.status_code,
+    );
+    event.request_id = Some(record.request_id.to_string());
+    event.client_api_key_id = record.client_api_key_id.map(ToString::to_string);
+    event.route = Some(record.route.to_string());
+    event.latency_ms = Some(elapsed_millis_i64(record.started_at));
+    event.requested_model = normalized_string(record.requested_model.or(Some(record.model)));
+    event.upstream_model = normalized_string(Some(record.model));
+    event.service_tier = normalized_string(record.service_tier);
+    enrich_usage_record_identity(
+        &mut metadata,
+        record.requested_model,
+        record.model,
+        record.client_ip,
+        record.client_user_agent,
+        record.reasoning_effort,
+        record.service_tier,
+    );
+    if !record.rate_limit_headers.is_empty()
+        && let Some(object) = metadata.as_object_mut()
+    {
+        object.insert(
+            "rateLimitHeaders".to_string(),
+            serde_json::json!(record.rate_limit_headers),
+        );
+    }
+    lift_success_fact_fields(&mut event, &mut metadata, record.usage);
+    event.metadata = metadata;
+
+    if let Err(error) = record.recorder.record_usage(event).await {
+        tracing::error!(account_id = %record.account_id, error = %error, "Failed to record response event");
+    }
+}
+
+async fn record_dispatch_error_event(record: DispatchErrorLogRecord<'_>) {
+    let mut metadata = record.metadata;
+    enrich_event_route_metadata(&mut metadata, record.route);
+
+    let mut event = OpsErrorLog::new(RESPONSE_EVENT_KIND, record.message);
+    event.request_id = Some(record.request_id.to_string());
+    event.client_api_key_id = record.client_api_key_id.map(ToString::to_string);
+    event.provider = record.provider.map(ToString::to_string);
+    event.account_id = record.account_id.map(ToString::to_string);
+    event.route = Some(record.route.to_string());
+    event.model = Some(record.model.to_string());
+    event.status_code = Some(record.status_code);
+    event.latency_ms = Some(elapsed_millis_i64(record.started_at));
+    event.metadata = metadata;
+    lift_error_fact_fields(&mut event);
+
+    if let Err(error) = record.recorder.record_error(event).await {
+        tracing::error!(
+            account_id = record.account_id.unwrap_or(""),
+            error = %error,
+            "Failed to record dispatch error event"
+        );
+    }
 }
 
 pub(super) async fn record_response_dispatch_error_event(
@@ -172,6 +287,7 @@ pub(super) async fn record_response_upstream_error_event(
     );
     enrich_response_request_semantics(&mut metadata, record.request);
     event.metadata = metadata;
+    lift_error_fact_fields(&mut event);
     if let Err(error) = record.recorder.record_error(event).await {
         tracing::error!(account_id = %record.account_id, error = %error, "Failed to record upstream error event");
     }
@@ -221,10 +337,7 @@ pub(super) async fn record_prefetched_response_stream_failure_event(
         record.request.service_tier(),
     );
     enrich_response_request_semantics(&mut metadata, record.request);
-    let mut event = OpsErrorLog::new(
-        response_event_kind(record.route),
-        "v1 responses stream failed",
-    );
+    let mut event = OpsErrorLog::new(RESPONSE_EVENT_KIND, "v1 responses stream failed");
     event.request_id = Some(record.request_id.to_string());
     event.client_api_key_id = record.request.client_api_key_id.clone();
     event.provider = Some("openai".to_string());
@@ -242,8 +355,206 @@ pub(super) async fn record_prefetched_response_stream_failure_event(
         );
     }
     event.metadata = metadata;
+    lift_error_fact_fields(&mut event);
     if let Err(error) = record.recorder.record_error(event).await {
         tracing::error!(account_id = %record.account_id, error = %error, "Failed to record prefetched stream error event");
+    }
+}
+
+fn lift_error_fact_fields(event: &mut OpsErrorLog) {
+    event.client_status_code = event
+        .client_status_code
+        .or_else(|| metadata_i64(&event.metadata, &["clientStatusCode", "client_status_code"]));
+    event.upstream_status_code = event
+        .upstream_status_code
+        .or_else(|| metadata_i64(&event.metadata, &["upstreamStatusCode", "upstreamStatus"]));
+    event.transport = event
+        .transport
+        .take()
+        .or_else(|| metadata_string_any(&event.metadata, &["transport"]));
+    event.attempt_index = event
+        .attempt_index
+        .or_else(|| metadata_i64(&event.metadata, &["attemptIndex", "attempt_index"]));
+    event.failure_class = event
+        .failure_class
+        .take()
+        .or_else(|| metadata_string_any(&event.metadata, &["failureClass", "failure_class"]));
+    event.response_id = event
+        .response_id
+        .take()
+        .or_else(|| metadata_string_any(&event.metadata, &["responseId", "response_id"]));
+    event.upstream_request_id = event.upstream_request_id.take().or_else(|| {
+        metadata_string_any(
+            &event.metadata,
+            &[
+                "upstreamRequestId",
+                "upstream_request_id",
+                "openaiRequestId",
+            ],
+        )
+    });
+    event.service_tier = event
+        .service_tier
+        .take()
+        .or_else(|| metadata_service_tier(&event.metadata).map(ToString::to_string));
+
+    let Some(metadata) = event.metadata.as_object_mut() else {
+        return;
+    };
+    for key in [
+        "clientStatusCode",
+        "client_status_code",
+        "upstreamStatusCode",
+        "upstreamStatus",
+        "transport",
+        "attemptIndex",
+        "attempt_index",
+        "failureClass",
+        "failure_class",
+        "responseId",
+        "response_id",
+        "upstreamRequestId",
+        "upstream_request_id",
+        "openaiRequestId",
+        "serviceTier",
+    ] {
+        metadata.remove(key);
+    }
+}
+
+fn lift_success_fact_fields(
+    event: &mut UsageRecord,
+    metadata: &mut Value,
+    usage: Option<TokenUsage>,
+) {
+    event.transport = metadata_string(metadata, "transport");
+    event.attempt_index = metadata_nonnegative_i64(metadata, "attemptIndex");
+    event.response_id = metadata_string(metadata, "responseId");
+    event.upstream_request_id = metadata_string(metadata, "upstreamRequestId")
+        .or_else(|| metadata_string(metadata, "openaiRequestId"));
+    event.first_token_ms = metadata_nonnegative_i64(metadata, "firstTokenMs");
+    if let Some(usage) = usage {
+        event.input_tokens = i64::try_from(usage.input_tokens).ok();
+        event.output_tokens = i64::try_from(usage.output_tokens).ok();
+        event.cached_tokens = i64::try_from(usage.cached_tokens).ok();
+        event.cache_write_tokens = i64::try_from(usage.cache_write_tokens).ok();
+        event.reasoning_tokens = i64::try_from(usage.reasoning_tokens).ok();
+    }
+
+    let Some(object) = metadata.as_object_mut() else {
+        return;
+    };
+    for key in [
+        "usage",
+        "route",
+        "apiKind",
+        "requestedModel",
+        "upstreamModel",
+        "serviceTier",
+        "statusCode",
+        "transport",
+        "attemptIndex",
+        "responseId",
+        "upstreamRequestId",
+        "openaiRequestId",
+        "firstTokenMs",
+    ] {
+        object.remove(key);
+    }
+}
+
+fn metadata_string(metadata: &Value, field: &str) -> Option<String> {
+    metadata
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn metadata_nonnegative_i64(metadata: &Value, field: &str) -> Option<i64> {
+    metadata
+        .get(field)
+        .and_then(Value::as_i64)
+        .filter(|value| *value >= 0)
+}
+
+fn normalized_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn enrich_event_route_metadata(metadata: &mut Value, route: &str) {
+    let Some(object) = metadata.as_object_mut() else {
+        return;
+    };
+    object
+        .entry("route".to_string())
+        .or_insert_with(|| Value::String(route.to_string()));
+    object
+        .entry("apiKind".to_string())
+        .or_insert_with(|| Value::String(RESPONSES_API_KIND.to_string()));
+}
+
+fn enrich_usage_record_identity(
+    metadata: &mut Value,
+    requested_model: Option<&str>,
+    upstream_model: &str,
+    client_ip: Option<&str>,
+    client_user_agent: Option<&str>,
+    reasoning_effort: Option<&str>,
+    service_tier: Option<&str>,
+) {
+    let Some(object) = metadata.as_object_mut() else {
+        return;
+    };
+    let upstream_model = upstream_model.trim();
+    let requested_model = requested_model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(upstream_model);
+    object.insert(
+        "requestedModel".to_string(),
+        Value::String(requested_model.to_string()),
+    );
+    object.insert(
+        "upstreamModel".to_string(),
+        Value::String(upstream_model.to_string()),
+    );
+    insert_trimmed_string(object, "clientIp", client_ip);
+    insert_trimmed_string(object, "userAgent", client_user_agent);
+    insert_trimmed_string(object, "reasoningEffort", reasoning_effort);
+    insert_trimmed_string(object, "serviceTier", service_tier);
+}
+
+pub(super) fn enrich_response_request_semantics(
+    metadata: &mut Value,
+    request: &CodexResponsesRequest,
+) {
+    let Some(object) = metadata.as_object_mut() else {
+        return;
+    };
+    let semantics = request.semantics();
+    object.insert("compact".to_string(), Value::Bool(semantics.compact));
+    insert_trimmed_string(object, "requestKind", semantics.request_kind.as_deref());
+    insert_trimmed_string(object, "subagentKind", semantics.subagent_kind.as_deref());
+    insert_trimmed_string(object, "reasoningPreset", semantics.reasoning_preset);
+}
+
+pub(super) fn reasoning_effort_from_request(request: &CodexResponsesRequest) -> Option<&str> {
+    request
+        .reasoning()?
+        .get("effort")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn insert_trimmed_string(object: &mut Map<String, Value>, key: &str, value: Option<&str>) {
+    if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
+        object.insert(key.to_string(), Value::String(value.to_string()));
     }
 }
 
@@ -510,15 +821,17 @@ fn upstream_failure_client_status_code(upstream_status: i64) -> i64 {
     ))
 }
 
-pub(super) async fn record_live_response_stream_event(
-    context: &StreamContext<'_>,
-    status_code: i64,
-    level: UsageRecordLevel,
-    message: &str,
-    mut metadata: Value,
-    rate_limit_headers: &[(String, String)],
-    body: &str,
-) {
+pub(super) async fn record_live_response_stream_event(record: LiveResponseStreamEventRecord<'_>) {
+    let LiveResponseStreamEventRecord {
+        context,
+        status_code,
+        level,
+        message,
+        usage,
+        mut metadata,
+        rate_limit_headers,
+        body,
+    } = record;
     let effective_model = context
         .response_metadata
         .effective_model
@@ -567,29 +880,28 @@ pub(super) async fn record_live_response_stream_event(
     enrich_response_request_semantics(&mut metadata, context.request);
 
     if is_success_usage_event(level, status_code) {
-        crate::telemetry::recorder::record_response_event(
-            crate::telemetry::usage::types::ResponseUsageRecord {
-                recorder: context.recorder,
-                request_id: context.request_id,
-                client_api_key_id: context.request.client_api_key_id.as_deref(),
-                account_id: context.account_id,
-                route: context.route,
-                model: effective_model,
-                requested_model: Some(context.requested_model),
-                client_ip: context.request.client_ip.as_deref(),
-                client_user_agent: context.request.client_user_agent.as_deref(),
-                reasoning_effort: reasoning_effort_from_request(context.request),
-                service_tier: context.request.service_tier(),
-                started_at: context.started_at,
-                status_code,
-                message,
-                metadata,
-                rate_limit_headers,
-            },
-        )
+        record_response_event(ResponseUsageEventRecord {
+            recorder: context.recorder,
+            request_id: context.request_id,
+            client_api_key_id: context.request.client_api_key_id.as_deref(),
+            account_id: context.account_id,
+            route: context.route,
+            model: effective_model,
+            requested_model: Some(context.requested_model),
+            client_ip: context.request.client_ip.as_deref(),
+            client_user_agent: context.request.client_user_agent.as_deref(),
+            reasoning_effort: reasoning_effort_from_request(context.request),
+            service_tier: context.request.service_tier(),
+            started_at: context.started_at,
+            status_code,
+            message,
+            usage,
+            metadata,
+            rate_limit_headers,
+        })
         .await;
     } else {
-        let mut event = OpsErrorLog::new(response_event_kind(context.route), message);
+        let mut event = OpsErrorLog::new(RESPONSE_EVENT_KIND, message);
         event.request_id = Some(context.request_id.to_string());
         event.client_api_key_id = context.request.client_api_key_id.clone();
         event.provider = Some("openai".to_string());
@@ -599,6 +911,7 @@ pub(super) async fn record_live_response_stream_event(
         event.status_code = Some(status_code);
         event.latency_ms = Some(elapsed_millis_i64(context.started_at));
         event.metadata = metadata;
+        lift_error_fact_fields(&mut event);
         if let Err(error) = context.recorder.record_error(event).await {
             tracing::error!(account_id = %context.account_id, error = %error, "Failed to record live response stream error event");
         }

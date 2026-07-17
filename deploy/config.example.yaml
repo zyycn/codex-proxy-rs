@@ -44,6 +44,10 @@ x-cpr:
     enabled: true
     max_age_ms: 3300000
     max_per_account: 8
+    # 所有账号合计最多保留 64 个 Idle/Busy/Connecting slot。
+    max_total: 64
+    # 限制并发 TCP/TLS/WebSocket opening，避免多账号冷启动风暴。
+    max_connecting: 16
     # 首个真实输出的绝对超时，单位毫秒；0 表示禁用。
     initial_event_timeout_ms: 20000
 

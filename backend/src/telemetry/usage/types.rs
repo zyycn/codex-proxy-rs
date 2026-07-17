@@ -141,23 +141,3 @@ pub(crate) fn metadata_i64(metadata: &Value, keys: &[&str]) -> Option<i64> {
     keys.iter()
         .find_map(|key| metadata.get(*key).and_then(Value::as_i64))
 }
-
-/// 响应事件记录（供 dispatch 模块使用）。
-pub struct ResponseUsageRecord<'a> {
-    pub recorder: &'a crate::telemetry::recorder::Recorder,
-    pub request_id: &'a str,
-    pub client_api_key_id: Option<&'a str>,
-    pub account_id: &'a str,
-    pub route: &'a str,
-    pub model: &'a str,
-    pub requested_model: Option<&'a str>,
-    pub client_ip: Option<&'a str>,
-    pub client_user_agent: Option<&'a str>,
-    pub reasoning_effort: Option<&'a str>,
-    pub service_tier: Option<&'a str>,
-    pub started_at: std::time::Instant,
-    pub status_code: i64,
-    pub message: &'a str,
-    pub metadata: serde_json::Value,
-    pub rate_limit_headers: &'a [(String, String)],
-}

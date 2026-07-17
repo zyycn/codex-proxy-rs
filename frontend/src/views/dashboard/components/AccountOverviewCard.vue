@@ -1,16 +1,19 @@
 <script setup lang="ts">
-import { clamp } from 'es-toolkit'
-import { computed } from 'vue'
+import type { dashboardSnapshotView } from '../presenter'
 import { CircleCheck, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
+import { clamp } from 'es-toolkit'
 
+import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import AccountIdentityCell from '@/views/accounts/components/AccountIdentityCell.vue'
 
+type DashboardSnapshot = ReturnType<typeof dashboardSnapshotView>
+
 const props = defineProps<{
-  accounts: any[]
-  pool?: any
-  capacity?: any
+  accounts: DashboardSnapshot['accountUsage']
+  pool?: DashboardSnapshot['poolSummary']
+  capacity?: DashboardSnapshot['capacityInfo']
   rotationStrategy?: string | null
 }>()
 
@@ -25,19 +28,22 @@ const scheduleStats = computed(() => {
 
 const usedPercent = computed(() => {
   const cap = props.capacity
-  if (!cap || cap.totalSlots === 0) return 0
+  if (!cap || cap.totalSlots === 0)
+    return 0
   return clamp(Math.round((cap.usedSlots / cap.totalSlots) * 100), 0, 100)
 })
 
 const usedRatio = computed(() => {
   const cap = props.capacity
-  if (!cap) return '— / —'
+  if (!cap)
+    return '— / —'
   return `${cap.usedSlots} / ${cap.totalSlots}`
 })
 
 const strategyLabel = computed(() => {
   const s = props.rotationStrategy
-  if (!s) return '—'
+  if (!s)
+    return '—'
   const map: Record<string, string> = {
     smart: '智能调度（推荐）',
     quota_reset_priority: '额度重置优先',
@@ -91,13 +97,15 @@ const statusRows = computed(() => {
 
 const availabilityRate = computed(() => {
   const p = props.pool
-  if (!p || p.total === 0) return '0%'
+  if (!p || p.total === 0)
+    return '0%'
   return `${((p.active / p.total) * 100).toFixed(1)}%`
 })
 
 const statusBars = computed(() => {
   const p = props.pool
-  if (!p || p.total === 0) return []
+  if (!p || p.total === 0)
+    return []
   const active = (p.active / p.total) * 100
   const refreshing = (p.refreshing / p.total) * 100
   const quota = (p.quotaExhausted / p.total) * 100
@@ -107,7 +115,7 @@ const statusBars = computed(() => {
     { pct: refreshing, cls: 'bg-(--cp-normal)' },
     { pct: quota, cls: 'bg-(--cp-warning)' },
     { pct: unavailable, cls: 'bg-(--cp-danger)' },
-  ].filter((b) => b.pct > 0)
+  ].filter(b => b.pct > 0)
 })
 
 const rowToneClasses: Record<string, string> = {
@@ -141,25 +149,22 @@ const quotaToneClasses: Record<string, string> = {
       class="grid px-4 pt-5 pb-6 lg:px-7 lg:pt-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.28fr)_minmax(280px,0.9fr)] xl:gap-7 xl:pb-0"
     >
       <section class="min-w-0 w-full pb-6 xl:h-100.5 xl:pb-0">
-        <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">账号调度</h2>
+        <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">
+          账号调度
+        </h2>
         <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
           容量、并发与分配策略
         </p>
 
         <div class="mt-6.75 grid gap-4 xl:h-82.5 xl:grid-rows-[122px_90px_minmax(0,1fr)]">
           <div class="grid h-30.5 content-between rounded-[14px] bg-(--cp-bg-subtle) p-4 xl:h-auto">
-            <span class="block h-3.5 text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)"
-              >槽位占用</span
-            >
+            <span class="block h-3.5 text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)">槽位占用</span>
             <div>
               <div class="grid h-8.5 grid-cols-[minmax(0,1fr)_auto] items-start gap-4">
                 <strong
                   class="font-mono text-[32px] leading-[1.05] font-[760] tabular-nums text-(--cp-text-primary)"
-                  >{{ usedRatio }}</strong
-                >
-                <span class="mt-3.5 text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)"
-                  >{{ usedPercent }}% 已占用</span
-                >
+                >{{ usedRatio }}</strong>
+                <span class="mt-3.5 text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)">{{ usedPercent }}% 已占用</span>
               </div>
               <div class="mt-4 h-2.5 w-full overflow-hidden rounded-full bg-(--cp-progress-track)">
                 <i
@@ -179,15 +184,12 @@ const quotaToneClasses: Record<string, string> = {
               }}</span>
               <strong
                 class="block font-mono text-[21px] leading-[1.1] font-[760] tabular-nums text-(--cp-text-primary)"
-                >{{ stat.value }}</strong
-              >
+              >{{ stat.value }}</strong>
             </div>
           </div>
 
           <div class="grid h-20.5 content-between rounded-[14px] bg-(--cp-bg-subtle) p-4 xl:h-auto">
-            <span class="text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)"
-              >分配策略</span
-            >
+            <span class="text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)">分配策略</span>
             <strong class="block text-[17px] leading-[1.15] font-[650] text-(--cp-text-primary)">{{
               strategyLabel
             }}</strong>
@@ -196,7 +198,9 @@ const quotaToneClasses: Record<string, string> = {
       </section>
 
       <section class="min-w-0 w-full">
-        <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">活跃账号用量</h2>
+        <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">
+          活跃账号用量
+        </h2>
         <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
           最近使用排序
         </p>
@@ -223,19 +227,14 @@ const quotaToneClasses: Record<string, string> = {
                 class="grid min-w-0 grid-cols-[minmax(0,0.82fr)_minmax(0,0.64fr)_minmax(104px,1fr)] items-end gap-3 xl:contents"
               >
                 <span class="grid min-w-0 gap-1">
-                  <span class="text-[11px] leading-none font-[720] text-(--cp-text-muted)"
-                    >Token</span
-                  >
+                  <span class="text-[11px] leading-none font-[720] text-(--cp-text-muted)">Token</span>
                   <strong
                     class="font-mono text-sm leading-[1.15] font-[780] tabular-nums text-(--cp-text-primary)"
-                    >{{ account.tokens }}</strong
-                  >
+                  >{{ account.tokens }}</strong>
                 </span>
 
                 <span class="grid min-w-0 gap-1">
-                  <span class="text-[11px] leading-none font-[720] text-(--cp-text-muted)"
-                    >最近</span
-                  >
+                  <span class="text-[11px] leading-none font-[720] text-(--cp-text-muted)">最近</span>
                   <span
                     class="min-w-0 truncate text-xs leading-[1.15] font-[680] text-(--cp-text-secondary) xl:whitespace-nowrap"
                   >
@@ -245,13 +244,10 @@ const quotaToneClasses: Record<string, string> = {
 
                 <span class="grid min-w-0 gap-2">
                   <span class="flex items-center justify-between gap-2">
-                    <span class="text-[11px] leading-none font-[720] text-(--cp-text-muted)"
-                      >额度</span
-                    >
+                    <span class="text-[11px] leading-none font-[720] text-(--cp-text-muted)">额度</span>
                     <span
                       class="font-mono text-[10px] leading-none font-[760] text-(--cp-text-muted)"
-                      >{{ account.quotaPercent }}%</span
-                    >
+                    >{{ account.quotaPercent }}%</span>
                   </span>
                   <span class="block h-1.5 w-full overflow-hidden rounded-full bg-(--cp-bg-muted)">
                     <i
@@ -273,7 +269,9 @@ const quotaToneClasses: Record<string, string> = {
       <section class="min-w-0 w-full pt-6 xl:h-100.5 xl:pt-0">
         <header class="flex h-12.5 items-start justify-between">
           <div>
-            <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">账号状态</h2>
+            <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">
+              账号状态
+            </h2>
             <p class="mt-1 mb-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)">
               账号池健康结构
             </p>
@@ -281,22 +279,15 @@ const quotaToneClasses: Record<string, string> = {
           <div class="grid justify-items-end">
             <strong
               class="font-mono text-2xl leading-[1.05] font-[760] tabular-nums text-(--cp-success-text)"
-              >{{ availabilityRate }}</strong
-            >
-            <span class="mt-0.5 text-xs leading-[1.15] font-bold text-(--cp-text-secondary)"
-              >可用率</span
-            >
+            >{{ availabilityRate }}</strong>
+            <span class="mt-0.5 text-xs leading-[1.15] font-bold text-(--cp-text-secondary)">可用率</span>
           </div>
         </header>
 
         <div class="mt-5.5 h-10.5 w-full">
           <div class="flex h-4 items-center justify-between">
-            <span class="text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)"
-              >状态分布</span
-            >
-            <span class="text-xs leading-[1.15] font-[650] text-(--cp-danger-text)"
-              >不可用 {{ statusRows[3]?.value || '0' }}</span
-            >
+            <span class="text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)">状态分布</span>
+            <span class="text-xs leading-[1.15] font-[650] text-(--cp-danger-text)">不可用 {{ statusRows[3]?.value || '0' }}</span>
           </div>
           <div class="mt-2.5 flex h-3 w-full overflow-hidden rounded-full bg-(--cp-bg-muted)">
             <i
@@ -332,8 +323,7 @@ const quotaToneClasses: Record<string, string> = {
             <strong
               class="col-start-4 text-right font-mono text-[17px] leading-[1.15] font-[760] tabular-nums"
               :class="valueToneClasses[row.tone]"
-              >{{ row.value }}</strong
-            >
+            >{{ row.value }}</strong>
           </div>
         </div>
       </section>

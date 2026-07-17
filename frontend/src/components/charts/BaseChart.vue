@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { useRafFn, useResizeObserver } from '@vueuse/core'
 import type { EChartsOption } from 'echarts'
-import { init, type EChartsType } from 'echarts/core'
+import type { EChartsType } from 'echarts/core'
+import { useRafFn, useResizeObserver } from '@vueuse/core'
+import { init } from 'echarts/core'
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onBeforeUnmount, shallowRef, useTemplateRef, watch } from 'vue'
 
-import '@/plugins/echarts'
 import { useUiStore } from '@/stores/modules/ui'
+import '@/plugins/echarts'
 
 const props = withDefaults(
   defineProps<{
@@ -38,7 +39,8 @@ function cancelPendingInit() {
 }
 
 function ensureChart(element: HTMLElement) {
-  if (chart.value || !elementHasSize(element)) return
+  if (chart.value || !elementHasSize(element))
+    return
   chart.value = init(element, undefined, { renderer: 'canvas' })
   applyOption(chartOption.value)
 }
@@ -64,7 +66,8 @@ function resize() {
 }
 
 function applyOption(option: EChartsOption) {
-  if (!chart.value) return
+  if (!chart.value)
+    return
   chart.value.setOption(option, true)
 }
 
@@ -72,7 +75,8 @@ async function recreateChartAfterThemeChange() {
   await nextTick()
   requestAnimationFrame(() => {
     const element = chartElement.value
-    if (!element) return
+    if (!element)
+      return
     dispose()
     ensureChart(element)
     resize()
@@ -112,7 +116,8 @@ watch(
   chartElement,
   (element) => {
     dispose()
-    if (!element) return
+    if (!element)
+      return
     scheduleInit(element)
   },
   { immediate: true },
@@ -120,7 +125,8 @@ watch(
 
 useResizeObserver(chartElement, () => {
   const element = chartElement.value
-  if (!element) return
+  if (!element)
+    return
 
   if (chart.value) {
     resize()

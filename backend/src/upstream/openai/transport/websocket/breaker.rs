@@ -141,6 +141,24 @@ impl WebSocketOriginBreaker {
             };
         }
     }
+
+    fn cancel_probe(&self, origin_key: &str, probe_id: Option<Uuid>) {
+        let Some(probe_id) = probe_id else {
+            return;
+        };
+        let mut circuits = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if permit_still_owns_state(circuits.get(origin_key), Some(probe_id)) {
+            circuits.insert(
+                origin_key.to_string(),
+                CircuitState::Open {
+                    until: Instant::now(),
+                },
+            );
+        }
+    }
 }
 
 /// 一次新的 WebSocket opening 许可；消费式完成保证 half-open 探针不会泄漏。
@@ -196,6 +214,7 @@ impl WebSocketOriginBreakerPermit {
 
     /// opening 因账号驱逐或服务关闭而取消，不污染 origin 可用性。
     pub(crate) fn cancel(mut self) {
+        self.breaker.cancel_probe(&self.origin_key, self.probe_id);
         self.armed = false;
     }
 

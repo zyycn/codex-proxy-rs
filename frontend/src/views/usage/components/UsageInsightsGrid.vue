@@ -1,4 +1,9 @@
 <script setup lang="ts">
+import type {
+  getUsageRecordInsightsDiagnostics,
+  getUsageRecordInsightsOverview,
+} from '@/api'
+
 import UsageCostCard from './UsageCostCard.vue'
 import UsageDiagnosticCard from './UsageDiagnosticCard.vue'
 import UsageHealthCard from './UsageHealthCard.vue'
@@ -6,8 +11,8 @@ import UsagePerformanceCard from './UsagePerformanceCard.vue'
 
 withDefaults(
   defineProps<{
-    overview: any
-    diagnostics: any
+    overview: Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>
+    diagnostics: Awaited<ReturnType<typeof getUsageRecordInsightsDiagnostics>>
     loading?: boolean
   }>(),
   {

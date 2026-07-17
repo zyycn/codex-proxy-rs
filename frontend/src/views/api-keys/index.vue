@@ -5,12 +5,9 @@ import { API_BASE_URL } from '@/api/constants'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
+import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
-import { apiKeyColumns } from './constants'
-import { useApiKeyFilters } from './composables/useApiKeyFilters'
-import { useApiKeyMutations } from './composables/useApiKeyMutations'
-import { useApiKeysTable } from './composables/useApiKeysTable'
-import { buildCodexCcSwitchImportDeeplink } from './utils/ccswitchImport'
+import { usePageSelection } from '@/composables/usePageSelection'
 import ApiKeyActions from './components/ApiKeyActions.vue'
 import ApiKeyCreateModal from './components/ApiKeyCreateModal.vue'
 import ApiKeyFilters from './components/ApiKeyFilters.vue'
@@ -18,27 +15,28 @@ import ApiKeyIdentityCell from './components/ApiKeyIdentityCell.vue'
 import ApiKeyPrefixCell from './components/ApiKeyPrefixCell.vue'
 import ApiKeyStatusBadge from './components/ApiKeyStatusBadge.vue'
 import ApiKeyUseModal from './components/ApiKeyUseModal.vue'
+import { useApiKeyMutations } from './composables/useApiKeyMutations'
+import { useApiKeysQuery } from './composables/useApiKeysQuery'
+import { apiKeyColumns } from './constants'
+import { buildCodexCcSwitchImportDeeplink } from './utils/ccswitchImport'
 
 const selectedIds = ref<Set<string>>(new Set())
-const totalApiKeys = ref(0)
 const showUseKeyModal = shallowRef(false)
-const selectedUseKey = shallowRef<any>(null)
-
-const {
-  page,
-  pageSize,
-  searchQuery,
-  sort,
-  apiKeyPagination,
-  bindApiKeyLoader,
-  handlePageChange,
-  handlePageSizeChange,
-  handleSortChange,
-} = useApiKeyFilters(totalApiKeys)
 
 const {
   loading,
   apiKeys,
+  loadApiKeys,
+  searchQuery,
+  sort,
+  apiKeyPagination,
+  handlePageChange,
+  handlePageSizeChange,
+  handleSortChange,
+} = useApiKeysQuery()
+const selectedUseKey = shallowRef<(typeof apiKeys.value)[number] | null>(null)
+
+const {
   showCreateModal,
   showDeleteModal,
   showSingleDeleteModal,
@@ -51,21 +49,18 @@ const {
   batchDeleting,
   updatingStatusKeyIds,
   createForm,
-  loadApiKeys,
   handleCreate,
   requestDeleteKey,
   handleDelete,
   handleBatchDelete,
   handleToggleStatus,
   copyToClipboard,
-} = useApiKeyMutations({ page, pageSize, searchQuery, sort, selectedIds, totalApiKeys })
+} = useApiKeyMutations({ selectedIds, reload: loadApiKeys })
 
-const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll } = useApiKeysTable(
+const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll } = usePageSelection(
   apiKeys,
   selectedIds,
 )
-
-bindApiKeyLoader(loadApiKeys)
 
 const serviceRootUrl = computed(() => resolveServiceRootUrl())
 const openAiBaseUrl = computed(() => `${serviceRootUrl.value}/v1`)
@@ -90,7 +85,8 @@ function resolveServiceRootUrl() {
 }
 
 function importCreatedKeyToCcs() {
-  if (!createdKey.value) return
+  if (!createdKey.value)
+    return
 
   window.location.href = buildCodexCcSwitchImportDeeplink({
     apiKey: createdKey.value,
@@ -99,13 +95,14 @@ function importCreatedKeyToCcs() {
   })
 }
 
-function openUseKeyModal(apiKey: any) {
+function openUseKeyModal(apiKey: (typeof apiKeys.value)[number]) {
   selectedUseKey.value = apiKey
   showUseKeyModal.value = true
 }
 
-function importToCcs(apiKey: any) {
-  if (!apiKey.key) return
+function importToCcs(apiKey: (typeof apiKeys.value)[number]) {
+  if (!apiKey.key)
+    return
 
   window.location.href = buildCodexCcSwitchImportDeeplink({
     apiKey: apiKey.key,
@@ -117,16 +114,11 @@ function importToCcs(apiKey: any) {
 
 <template>
   <div class="flex h-full min-h-0 w-full flex-col overflow-hidden">
-    <header class="flex h-17 shrink-0 items-start justify-between">
-      <div>
-        <h1 class="mt-0 mb-0 text-[34px] leading-[1.15] font-extrabold text-(--cp-text-primary)">
-          API 密钥
-        </h1>
-        <p class="mt-2.5 mb-0 text-[15px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
-          签发与维护客户端访问凭证，控制网关调用入口
-        </p>
-      </div>
-    </header>
+    <BasePageHeader
+      class="h-17"
+      title="API 密钥"
+      description="签发与维护客户端访问凭证，控制网关调用入口"
+    />
 
     <BaseCard
       :padded="false"
@@ -231,7 +223,9 @@ function importToCcs(apiKey: any) {
       width="480px"
       @confirm="handleBatchDelete"
     >
-      <p class="m-0">确定要删除选中的 {{ selectedIds.size }} 个 API Key 吗？此操作不可撤销</p>
+      <p class="m-0">
+        确定要删除选中的 {{ selectedIds.size }} 个 API Key 吗？此操作不可撤销
+      </p>
     </BaseConfirmModal>
 
     <BaseConfirmModal

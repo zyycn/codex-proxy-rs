@@ -101,11 +101,7 @@ async function handleSubmit(): Promise<void> {
   --login-description: color-mix(in srgb, var(--cp-text-secondary) 82%, var(--cp-text-primary));
   --login-label: color-mix(in srgb, var(--cp-text-primary) 84%, var(--cp-text-secondary));
   --login-input-bg: color-mix(in srgb, var(--cp-input-soft-bg) 82%, var(--cp-bg-surface));
-  --login-input-bg-hover: color-mix(
-    in srgb,
-    var(--cp-input-soft-bg-hover) 86%,
-    var(--cp-bg-surface)
-  );
+  --login-input-bg-hover: color-mix(in srgb, var(--cp-input-soft-bg-hover) 86%, var(--cp-bg-surface));
   --login-input-focus: var(--cp-input-soft-bg-focus);
   --login-input-icon: var(--cp-info);
   --login-placeholder: var(--cp-text-secondary);
@@ -125,12 +121,7 @@ async function handleSubmit(): Promise<void> {
   --login-disabled-bg: var(--cp-disabled-bg);
   --login-disabled-text: var(--cp-disabled-text);
 
-  background: linear-gradient(
-    118deg,
-    var(--login-page-a),
-    var(--login-page-b) 52%,
-    var(--login-page-c)
-  );
+  background: linear-gradient(118deg, var(--login-page-a), var(--login-page-b) 52%, var(--login-page-c));
   isolation: isolate;
 }
 

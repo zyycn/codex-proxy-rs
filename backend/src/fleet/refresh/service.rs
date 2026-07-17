@@ -19,13 +19,13 @@ use tokio_util::task::TaskTracker;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+use super::TokenRefresher;
 use crate::fleet::{
     account::{Account, AccountStatus},
     store::{
         AccountClaimsUpdate, AccountStore, PgAccountStore, PgAccountStoreError, StoredAccount,
     },
 };
-use crate::upstream::openai::token_client::TokenRefresher;
 
 use super::{
     lease::{RedisRefreshLeaseStore, RedisRefreshLeaseStoreError},

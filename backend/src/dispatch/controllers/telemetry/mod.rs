@@ -9,10 +9,13 @@ use serde_json::Value;
 use crate::{
     dispatch::{
         controllers::telemetry::events::{
-            ResponseUpstreamErrorEventRecord, insert_openai_processing_ms, insert_output_timing_ms,
-            insert_response_status_metadata, insert_response_trace_metadata,
-            insert_response_upstream_diagnostics, insert_websocket_pool_decision,
-            record_live_response_stream_event, record_response_upstream_error_event,
+            LiveResponseStreamEventRecord, ResponseUpstreamErrorEventRecord,
+            ResponseUsageEventRecord, enrich_response_request_semantics,
+            insert_openai_processing_ms, insert_output_timing_ms, insert_response_status_metadata,
+            insert_response_trace_metadata, insert_response_upstream_diagnostics,
+            insert_websocket_pool_decision, reasoning_effort_from_request,
+            record_live_response_stream_event, record_response_event,
+            record_response_upstream_error_event,
         },
         controllers::{
             AttemptUpstreamErrorContext, CompleteExit, DispatchErrorObservation,
@@ -29,13 +32,7 @@ use crate::{
         },
     },
     infra::time::elapsed_millis_i64,
-    telemetry::{
-        recorder::{
-            Recorder, enrich_response_request_semantics, reasoning_effort_from_request,
-            record_response_event,
-        },
-        usage::types::{ResponseUsageRecord, UsageRecordLevel},
-    },
+    telemetry::{recorder::Recorder, usage::types::UsageRecordLevel},
     upstream::openai::{
         protocol::responses::{CodexResponsesRequest, ResponsesSseFailure},
         transport::{
@@ -200,7 +197,7 @@ impl TelemetryController {
         insert_response_trace_metadata(&mut metadata, exit.trace, Some(exit.attempt));
         insert_websocket_pool_decision(&mut metadata, exit.response.websocket_pool_decision);
         enrich_response_request_semantics(&mut metadata, exit.request);
-        record_response_event(ResponseUsageRecord {
+        record_response_event(ResponseUsageEventRecord {
             recorder: exit.recorder,
             request_id: exit.request_id,
             client_api_key_id: exit.request.client_api_key_id.as_deref(),
@@ -219,6 +216,7 @@ impl TelemetryController {
             } else {
                 "v1 responses incomplete"
             },
+            usage: exit.response.usage,
             metadata,
             rate_limit_headers: &exit.response.rate_limit_headers,
         })
@@ -277,15 +275,16 @@ impl TelemetryController {
                     summary.first_reasoning_ms,
                     summary.first_text_ms,
                 );
-                record_live_response_stream_event(
+                record_live_response_stream_event(LiveResponseStreamEventRecord {
                     context,
                     status_code,
-                    UsageRecordLevel::Warn,
-                    "v1 responses stream cancelled",
+                    level: UsageRecordLevel::Warn,
+                    message: "v1 responses stream cancelled",
+                    usage: summary.usage,
                     metadata,
                     rate_limit_headers,
                     body,
-                )
+                })
                 .await;
             }
         }
@@ -330,19 +329,20 @@ async fn record_success(
         summary.first_reasoning_ms,
         summary.first_text_ms,
     );
-    record_live_response_stream_event(
+    record_live_response_stream_event(LiveResponseStreamEventRecord {
         context,
-        200,
-        UsageRecordLevel::Info,
-        if completed {
+        status_code: 200,
+        level: UsageRecordLevel::Info,
+        message: if completed {
             "v1 responses stream completed"
         } else {
             "v1 responses stream incomplete"
         },
+        usage: summary.usage,
         metadata,
         rate_limit_headers,
         body,
-    )
+    })
     .await;
 }
 
@@ -401,14 +401,15 @@ async fn record_failure(
         summary.first_text_ms,
     );
     metadata["firstEventMs"] = Value::Number(summary.first_event_ms.into());
-    record_live_response_stream_event(
+    record_live_response_stream_event(LiveResponseStreamEventRecord {
         context,
         status_code,
-        UsageRecordLevel::Error,
-        "v1 responses stream failed",
+        level: UsageRecordLevel::Error,
+        message: "v1 responses stream failed",
+        usage: summary.usage,
         metadata,
         rate_limit_headers,
         body,
-    )
+    })
     .await;
 }

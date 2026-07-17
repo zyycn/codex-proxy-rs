@@ -9,36 +9,33 @@ use async_trait::async_trait;
 use axum::{Router, extract::State, http::StatusCode, middleware, routing::get};
 
 use crate::{
+    admin_queries::{accounts::AccountListQueryService, dashboard::DashboardQueryService},
     api::{
         admin, assets, client,
         middleware::{request_id::attach_request_id, trace::http_trace_layer},
     },
     auth::service::SessionService,
     dispatch::{affinity::SessionAffinityService, service::ResponseDispatchService},
-    fleet::{
-        manage::AccountManageService, pool::AccountPoolService, refresh::TokenRefreshService,
-        store::AccountStore,
-    },
+    fleet::{manage::AccountManageService, pool::AccountPoolService},
     keys::{manage::KeyManageService, service::KeyVerifier},
     models::service::ModelService,
     settings::service::SettingsService,
-    telemetry::{
-        account_usage::query::AccountUsageQueryService, ops::query::OpsQueryService,
-        usage::query::UsageQueryService,
-    },
+    telemetry::{ops::query::OpsQueryService, usage::query::UsageQueryService},
     update::service::SystemUpdateService,
-    upstream::openai::{
-        desktop_release::DesktopReleaseStatus, profile::CodexWireProfileState,
-        token_client::OpenAiTokenClient,
-    },
 };
+
+#[derive(Clone)]
+pub struct AdminQueries {
+    pub accounts: Arc<AccountListQueryService>,
+    pub dashboard: Arc<DashboardQueryService>,
+}
 
 /// HTTP API 所需的领域服务集合。
 #[derive(Clone)]
 pub struct ApiServices {
+    pub admin_queries: AdminQueries,
     pub health_probe: Arc<dyn HealthProbe>,
     pub models: Arc<ModelService>,
-    pub accounts: Arc<dyn AccountStore>,
     pub client_keys: Arc<KeyVerifier>,
     pub admin_client_keys: Arc<KeyManageService>,
     pub admin_sessions: Arc<SessionService>,
@@ -46,13 +43,9 @@ pub struct ApiServices {
     pub admin_accounts: Arc<AccountManageService>,
     pub usage_records: Arc<UsageQueryService>,
     pub ops_errors: Arc<OpsQueryService>,
-    pub usage: Arc<AccountUsageQueryService>,
     pub account_pool: Arc<AccountPoolService>,
-    pub token_refresh: Arc<TokenRefreshService<OpenAiTokenClient>>,
     pub responses: Arc<ResponseDispatchService>,
     pub session_affinity: Arc<SessionAffinityService>,
-    pub wire_profile: CodexWireProfileState,
-    pub desktop_release: DesktopReleaseStatus,
     pub process_control: Arc<dyn ProcessControl>,
     pub system_update: Arc<SystemUpdateService>,
     pub connection_drain: crate::api::middleware::connection_drain::ConnectionDrain,

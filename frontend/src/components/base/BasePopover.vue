@@ -1,11 +1,11 @@
 <script setup lang="ts">
+import type { CSSProperties } from 'vue'
 import { onClickOutside, useEventListener, useThrottleFn, whenever } from '@vueuse/core'
 import { clamp } from 'es-toolkit'
 import { computed, nextTick, onBeforeUnmount, ref, shallowRef, useAttrs, watch } from 'vue'
-import type { CSSProperties } from 'vue'
 
-type PopoverPlacement =
-  'top' | 'top-start' | 'top-end' | 'right' | 'bottom' | 'bottom-start' | 'bottom-end' | 'left'
+type PopoverPlacement
+  = 'top' | 'top-start' | 'top-end' | 'right' | 'bottom' | 'bottom-start' | 'bottom-end' | 'left'
 type PopoverTrigger = 'click' | 'hover'
 
 interface PopoverPoint {
@@ -81,7 +81,8 @@ function toCssLength(value?: number | string) {
 
 function updatePopoverPosition() {
   const anchorElement = props.anchorElement ?? triggerRef.value
-  if (!open.value || !anchorElement) return
+  if (!open.value || !anchorElement)
+    return
 
   const viewportPadding = 8
   const triggerRect = anchorElement.getBoundingClientRect()
@@ -155,20 +156,20 @@ function placementCandidates(placement: PopoverPlacement): PopoverPlacement[] {
     'left',
   ]
   const opposite: Record<PopoverPlacement, PopoverPlacement> = {
-    top: 'bottom',
+    'top': 'bottom',
     'top-start': 'bottom-start',
     'top-end': 'bottom-end',
-    right: 'left',
-    bottom: 'top',
+    'right': 'left',
+    'bottom': 'top',
     'bottom-start': 'top-start',
     'bottom-end': 'top-end',
-    left: 'right',
+    'left': 'right',
   }
 
   return [
     placement,
     opposite[placement],
-    ...all.filter((item) => item !== placement && item !== opposite[placement]),
+    ...all.filter(item => item !== placement && item !== opposite[placement]),
   ]
 }
 
@@ -186,17 +187,17 @@ function popoverPoint(
   const centerTop = triggerRect.top + triggerRect.height / 2 - panelHeight / 2
 
   const points: Record<PopoverPlacement, PopoverPoint> = {
-    top: { left: centerLeft, top: triggerRect.top - panelHeight - offset },
+    'top': { left: centerLeft, top: triggerRect.top - panelHeight - offset },
     'top-start': { left: triggerRect.left, top: triggerRect.top - panelHeight - offset },
     'top-end': {
       left: triggerRect.right - panelWidth,
       top: triggerRect.top - panelHeight - offset,
     },
-    right: { left: triggerRect.right + offset, top: centerTop },
-    bottom: { left: centerLeft, top: triggerRect.bottom + offset },
+    'right': { left: triggerRect.right + offset, top: centerTop },
+    'bottom': { left: centerLeft, top: triggerRect.bottom + offset },
     'bottom-start': { left: triggerRect.left, top: triggerRect.bottom + offset },
     'bottom-end': { left: triggerRect.right - panelWidth, top: triggerRect.bottom + offset },
-    left: { left: triggerRect.left - panelWidth - offset, top: centerTop },
+    'left': { left: triggerRect.left - panelWidth - offset, top: centerTop },
   }
 
   return points[placement]
@@ -213,10 +214,10 @@ function isPointInViewport(
   const { panelWidth, panelHeight, viewportPadding } = options
 
   return (
-    point.left >= viewportPadding &&
-    point.top >= viewportPadding &&
-    point.left + panelWidth <= window.innerWidth - viewportPadding &&
-    point.top + panelHeight <= window.innerHeight - viewportPadding
+    point.left >= viewportPadding
+    && point.top >= viewportPadding
+    && point.left + panelWidth <= window.innerWidth - viewportPadding
+    && point.top + panelHeight <= window.innerHeight - viewportPadding
   )
 }
 
@@ -256,7 +257,8 @@ function popoverArrowPosition(options: {
 const updatePopoverPositionThrottled = useThrottleFn(updatePopoverPosition, 32, true)
 
 async function openPopover() {
-  if (props.disabled || open.value) return
+  if (props.disabled || open.value)
+    return
 
   clearHoverCloseTimer()
   open.value = true
@@ -322,7 +324,8 @@ whenever(open, async () => {
 watch(
   () => props.anchorElement,
   async () => {
-    if (!open.value) return
+    if (!open.value)
+      return
     await nextTick()
     updatePopoverPosition()
   },

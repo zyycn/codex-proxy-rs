@@ -65,6 +65,7 @@ mod account_failure;
 mod affinity;
 pub(crate) mod cloudflare;
 pub(crate) mod cyber_policy;
+mod failure_observation;
 pub(in crate::dispatch) mod history;
 mod quota;
 pub(in crate::dispatch) mod telemetry;
@@ -356,8 +357,12 @@ impl ControllerSet {
         .await;
         let _ = best_effort_controller_io(
             "quota.complete_headers",
-            self.account_pool
-                .sync_passive_rate_limit_headers(account, rate_limit_headers),
+            usage::UsageController::sync_passive_quota(
+                &self.account_pool,
+                &account.id,
+                account.plan_type.as_deref(),
+                rate_limit_headers,
+            ),
         )
         .await;
     }
@@ -376,8 +381,12 @@ impl ControllerSet {
         let rate_limit_headers = upstream_error_rate_limit_headers(context.error);
         let quota = best_effort_controller_io(
             "quota.attempt_error_headers",
-            self.account_pool
-                .sync_passive_rate_limit_headers(context.account, &rate_limit_headers),
+            usage::UsageController::sync_passive_quota(
+                &self.account_pool,
+                &context.account.id,
+                context.account.plan_type.as_deref(),
+                &rate_limit_headers,
+            ),
         );
         let telemetry = best_effort_controller_io(
             "telemetry.attempt_error",

@@ -10,13 +10,12 @@ use axum::{
     },
     response::{IntoResponse, Response},
 };
-use std::collections::{HashMap, HashSet};
-
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
+    admin_queries::accounts::{AccountListQuery, AccountSummary},
     api::AppState,
     api::admin::{
         response::{
@@ -30,11 +29,7 @@ use crate::{
         manage::{
             AccountHealthCheck, AccountManageError, AccountRefreshOutcome, AccountRefreshResult,
             AccountUpdate, ManagedAccount, OAuthExchangeInput,
-            quota_view::{
-                AccountQuotaData, AccountQuotaUsageWindow, AccountQuotaWindowLocalUsage, quota_data,
-            },
         },
-        refresh::token_refresh_status_eligible,
     },
     infra::{
         format::{
@@ -44,14 +39,9 @@ use crate::{
         json::{SortDirection, clamp_limit, clamp_page, total_pages},
         time::{china_datetime, china_relative_time, china_rfc3339},
     },
-    telemetry::{
-        account_usage::query::AccountUsageRecord,
-        billing,
-        buckets::query::{ModelUsageWindow, UsageBucketWindow},
-    },
+    telemetry::account_usage::query::AccountUsageRecord,
 };
 
-const ACCOUNT_STATS_PAGE_LIMIT: u32 = 200;
 const ACCOUNT_EXPORT_CONFIRMATION: &str = "export_sensitive_accounts";
 
 #[derive(Debug, Deserialize)]
@@ -195,21 +185,14 @@ impl AdminAccountData {
 struct AdminAccountUsageData {
     request_count: i64,
     request_count_display: String,
-    empty_response_count: i64,
     input_tokens: i64,
     input_tokens_display: String,
     output_tokens: i64,
     output_tokens_display: String,
     cached_tokens: i64,
     cached_tokens_display: String,
-    reasoning_tokens: i64,
     total_tokens: i64,
     total_tokens_display: String,
-    image_input_tokens: i64,
-    image_output_tokens: i64,
-    image_tokens_display: String,
-    image_request_count: i64,
-    image_request_failed_count: i64,
     created_tokens: i64,
     created_tokens_display: String,
     read_tokens: i64,
@@ -225,16 +208,10 @@ impl AdminAccountUsageData {
         models: Vec<AdminAccountModelUsageData>,
     ) -> Self {
         let request_count = usage.map_or(0, |usage| usage.window_request_count);
-        let empty_response_count = 0;
         let input_tokens = usage.map_or(0, |usage| usage.window_input_tokens);
         let output_tokens = usage.map_or(0, |usage| usage.window_output_tokens);
         let cached_tokens = usage.map_or(0, |usage| usage.window_cached_tokens);
-        let reasoning_tokens = 0;
         let total_tokens = input_tokens.saturating_add(output_tokens);
-        let image_input_tokens = 0;
-        let image_output_tokens = 0;
-        let image_request_count = 0;
-        let image_request_failed_count = 0;
         let created_tokens = input_tokens.saturating_sub(cached_tokens);
         let read_tokens = cached_tokens;
         let last_used_at = usage.and_then(|usage| usage.last_used_at);
@@ -242,23 +219,14 @@ impl AdminAccountUsageData {
         Self {
             request_count,
             request_count_display: format_plain_number(nonnegative_i64_to_u64(request_count)),
-            empty_response_count,
             input_tokens,
             input_tokens_display: format_tokens(nonnegative_i64_to_u64(input_tokens)),
             output_tokens,
             output_tokens_display: format_tokens(nonnegative_i64_to_u64(output_tokens)),
             cached_tokens,
             cached_tokens_display: format_tokens(nonnegative_i64_to_u64(cached_tokens)),
-            reasoning_tokens,
             total_tokens,
             total_tokens_display: format_tokens(nonnegative_i64_to_u64(total_tokens)),
-            image_input_tokens,
-            image_output_tokens,
-            image_tokens_display: format_tokens(nonnegative_i64_to_u64(
-                image_input_tokens + image_output_tokens,
-            )),
-            image_request_count,
-            image_request_failed_count,
             created_tokens,
             created_tokens_display: format_tokens(nonnegative_i64_to_u64(created_tokens)),
             read_tokens,
@@ -292,50 +260,6 @@ struct AdminAccountModelUsageData {
     last_used_at_display: String,
 }
 
-#[derive(Debug, Clone, Default)]
-struct AccountListStats {
-    usage_by_account: HashMap<String, AccountUsageRecord>,
-    quota_by_account: HashMap<String, AccountQuotaData>,
-    models_by_account: HashMap<String, Vec<AdminAccountModelUsageData>>,
-    refreshing_account_ids: HashSet<String>,
-}
-
-struct AccountModelUsageRecord {
-    account_id: String,
-    model: String,
-    request_count: i64,
-    error_count: i64,
-    input_tokens: i64,
-    output_tokens: i64,
-    cached_tokens: i64,
-    billing_amount_usd: f64,
-    last_used_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone)]
-struct AccountQuotaWindowSelection {
-    account_id: String,
-    window: AccountQuotaUsageWindow,
-}
-
-impl AccountListStats {
-    fn data_for(&self, account: ManagedAccount) -> AdminAccountData {
-        let account_id = account.id.clone();
-        let token_refreshing = token_refresh_status_eligible(account.status)
-            && self.refreshing_account_ids.contains(&account_id);
-        AdminAccountData::from_parts(
-            account,
-            self.usage_by_account.get(&account_id),
-            self.quota_by_account.get(&account_id).cloned(),
-            self.models_by_account
-                .get(&account_id)
-                .cloned()
-                .unwrap_or_default(),
-            token_refreshing,
-        )
-    }
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AdminAccountSummaryData {
@@ -343,6 +267,17 @@ struct AdminAccountSummaryData {
     active: u64,
     quota_exhausted: u64,
     attention: u64,
+}
+
+impl From<AccountSummary> for AdminAccountSummaryData {
+    fn from(summary: AccountSummary) -> Self {
+        Self {
+            total: summary.total,
+            active: summary.active,
+            quota_exhausted: summary.quota_exhausted,
+            attention: summary.attention,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -511,34 +446,34 @@ pub(crate) async fn accounts(
     let page_size = clamp_limit(params.page_size.unwrap_or(50));
     let status = account_status_filter(params.status)?;
     let sort = account_list_sort(params.sort_by, params.sort_direction)?;
-    let quota_by_account = quota_snapshots_by_account(&state).await;
-    let summary = account_summary_data(&state).await;
-
-    match state
+    let result = state
         .services
-        .admin_accounts
-        .list_page(page, page_size, params.search, status, sort)
+        .admin_queries
+        .accounts
+        .query(AccountListQuery {
+            page,
+            page_size,
+            search: params.search,
+            status,
+            sort,
+        })
         .await
-    {
-        Ok(page) => {
-            let stats = account_list_stats(&state, &page.items, &quota_by_account).await?;
-            let page = crate::infra::json::NumberedPage {
-                items: page
-                    .items
-                    .into_iter()
-                    .map(|item| stats.data_for(item))
-                    .collect(),
-                total: page.total,
-                page: page.page,
-                page_size: page.page_size,
-            };
-            Ok(AdminResponse::new(
-                StatusCode::OK,
-                AdminAccountPageEnvelope::ok(page, summary),
-            ))
-        }
-        Err(error) => Err(account_error(&error)),
-    }
+        .map_err(|error| AdminError::internal(error.to_string()))?;
+    let page = crate::infra::json::NumberedPage {
+        items: result
+            .page
+            .items
+            .into_iter()
+            .map(account_list_item_data)
+            .collect(),
+        total: result.page.total,
+        page: result.page.page,
+        page_size: result.page.page_size,
+    };
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminAccountPageEnvelope::ok(page, result.summary.into()),
+    ))
 }
 
 /// `POST /api/admin/accounts`
@@ -567,6 +502,7 @@ mod lifecycle_routes;
 mod oauth_routes;
 mod probe_routes;
 mod query;
+mod quota_presenter;
 mod quota_routes;
 
 pub(crate) use export_routes::*;
@@ -575,4 +511,5 @@ pub(crate) use lifecycle_routes::*;
 pub(crate) use oauth_routes::*;
 pub(crate) use probe_routes::*;
 use query::*;
+use quota_presenter::*;
 pub(crate) use quota_routes::*;

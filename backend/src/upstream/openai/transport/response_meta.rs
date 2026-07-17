@@ -8,7 +8,20 @@ use crate::upstream::openai::protocol::{
     events::is_rate_limit_header_name, responses::response_event_signals, sse::SseEventDecoder,
 };
 
-use super::{client::CodexResponseMetadata, diagnostics::CodexUpstreamDiagnostics};
+use super::diagnostics::CodexUpstreamDiagnostics;
+
+/// Codex Responses 上游响应元数据。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CodexResponseMetadata {
+    /// 上游实际选用的模型。
+    pub effective_model: Option<String>,
+    /// 模型目录版本。
+    pub models_etag: Option<String>,
+    /// 上游是否声明响应包含 reasoning。
+    pub reasoning_included: bool,
+    /// 允许透传给客户端的安全响应头。
+    pub client_headers: Vec<(String, String)>,
+}
 
 const CLIENT_RESPONSE_HEADERS: [&str; 5] = [
     "x-request-id",

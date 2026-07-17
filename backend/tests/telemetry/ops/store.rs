@@ -1,7 +1,7 @@
 use chrono::{Duration, Utc};
 use codex_proxy_rs::telemetry::{
-    ops::store::{OpsErrorFilter, PgOpsErrorLogStore},
-    ops::types::OpsErrorLog,
+    ops::store::PgOpsErrorLogStore,
+    ops::types::{OpsErrorFilter, OpsErrorLog},
 };
 
 use crate::support::storage::init_test_db;

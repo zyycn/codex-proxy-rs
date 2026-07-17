@@ -1,11 +1,13 @@
 import { clamp, sumBy } from 'es-toolkit'
 
-export interface BaseTableColumn {
+export type TableRow = Record<string, unknown>
+
+export interface BaseTableColumn<Row extends TableRow = TableRow> {
   key: string
   label?: string
   sortable?: boolean
   sortKey?: string
-  format?: (value: any, row: Record<string, any>) => any
+  format?: (value: unknown, row: Row) => unknown
   width?: number | string
   minWidth?: number | string
   maxWidth?: number | string
@@ -18,44 +20,45 @@ export interface BaseTableColumn {
   cellClass?: string
 }
 
-export type BaseTableSortDirection = 'asc' | 'desc'
+type BaseTableSortDirection = 'asc' | 'desc'
 
 export interface BaseTableSort {
   key: string
   direction: BaseTableSortDirection
 }
 
-export type ResolvedTableColumn = Omit<BaseTableColumn, 'fixed'> & {
+export type ResolvedTableColumn<Row extends TableRow = TableRow> = Omit<
+  BaseTableColumn<Row>,
+  'fixed'
+> & {
   fixed?: 'left' | 'right'
   resolvedWidth: string
   resolvedMinWidth?: string
   resolvedMaxWidth?: string
 }
 
-export function resolveColumns(
-  columns: BaseTableColumn[],
+export function resolveColumns<Row extends TableRow>(
+  columns: BaseTableColumn<Row>[],
   minWidth?: number | string,
-): ResolvedTableColumn[] {
-  const actionColumnIndex = columns.findIndex((column) => column.key === 'actions')
+): ResolvedTableColumn<Row>[] {
+  const actionColumnIndex = columns.findIndex(column => column.key === 'actions')
   const fixedColumnIndex = actionColumnIndex >= 0 ? actionColumnIndex : 0
-  const fixedPercentTotal = sumBy(columns, (column) =>
-    column.width === undefined ? 0 : numericPercentWidth(column.width),
-  )
-  const fixedPixelTotal = sumBy(columns, (column) =>
-    column.width === undefined ? 0 : numericPixelWidth(column.width),
-  )
+  const fixedPercentTotal = sumBy(columns, column =>
+    column.width === undefined ? 0 : numericPercentWidth(column.width))
+  const fixedPixelTotal = sumBy(columns, column =>
+    column.width === undefined ? 0 : numericPixelWidth(column.width))
   const minWidthPixels = minWidth === undefined ? 0 : numericPixelWidth(minWidth)
-  const flexibleColumns = columns.filter((column) => column.width === undefined)
-  const flexTotal = sumBy(flexibleColumns, (column) => column.flex ?? 1)
+  const flexibleColumns = columns.filter(column => column.width === undefined)
+  const flexTotal = sumBy(flexibleColumns, column => column.flex ?? 1)
   const available = clamp(100 - fixedPercentTotal, 0, Number.POSITIVE_INFINITY)
   const availablePixels = clamp(minWidthPixels - fixedPixelTotal, 0, Number.POSITIVE_INFINITY)
 
   return columns.map((column, index) => {
     const flex = column.flex ?? 1
-    const automaticallyFixed =
-      index === fixedColumnIndex ? (actionColumnIndex >= 0 ? 'right' : 'left') : undefined
-    const width =
-      column.width === undefined
+    const automaticallyFixed
+      = index === fixedColumnIndex ? (actionColumnIndex >= 0 ? 'right' : 'left') : undefined
+    const width
+      = column.width === undefined
         ? minWidthPixels > 0 && fixedPercentTotal === 0
           ? flexTotal > 0
             ? `${(availablePixels * flex) / flexTotal}px`
@@ -75,11 +78,11 @@ export function resolveColumns(
   })
 }
 
-export function normalizeWidth(width: number | string) {
+function normalizeWidth(width: number | string) {
   return typeof width === 'number' ? `${width}px` : width
 }
 
-export function columnStyle(column: ResolvedTableColumn) {
+export function columnStyle<Row extends TableRow>(column: ResolvedTableColumn<Row>) {
   return {
     width: column.resolvedWidth,
     minWidth: column.resolvedMinWidth,
@@ -95,7 +98,7 @@ export function tableStyle(minWidth?: number | string) {
   return { width: `max(100%, ${normalizeWidth(minWidth)})` }
 }
 
-export function alignClass(column: BaseTableColumn) {
+export function alignClass<Row extends TableRow>(column: BaseTableColumn<Row>) {
   if (column.align === 'center') {
     return 'text-center'
   }
@@ -107,21 +110,21 @@ export function alignClass(column: BaseTableColumn) {
   return 'text-left'
 }
 
-export function cellValue(row: Record<string, any>, key: string) {
+export function cellValue(row: TableRow, key: string) {
   return row[key]
 }
 
-export function isEmptyCellValue(value: unknown) {
+function isEmptyCellValue(value: unknown) {
   return value === undefined || value === null || value === ''
 }
 
-export function cellDisplayValue(column: BaseTableColumn, row: Record<string, any>) {
+export function cellDisplayValue<Row extends TableRow>(column: BaseTableColumn<Row>, row: Row) {
   const rawValue = cellValue(row, column.key)
   const value = column.format ? column.format(rawValue, row) : rawValue
   return isEmptyCellValue(value) ? (column.emptyText ?? '—') : value
 }
 
-export function cellTitle(column: BaseTableColumn, row: Record<string, any>) {
+export function cellTitle<Row extends TableRow>(column: BaseTableColumn<Row>, row: Row) {
   if (column.ellipsis === false || column.key === 'selection' || column.key === 'actions') {
     return undefined
   }
@@ -134,7 +137,7 @@ export function cellTitle(column: BaseTableColumn, row: Record<string, any>) {
   return typeof value === 'string' || typeof value === 'number' ? String(value) : undefined
 }
 
-export function cellContentClass(column: BaseTableColumn) {
+export function cellContentClass<Row extends TableRow>(column: BaseTableColumn<Row>) {
   if (column.key === 'selection') {
     return [
       'flex min-w-0 items-center overflow-visible leading-none',

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import type { HealthTimelinePoint } from '../constants'
 
+import { computed } from 'vue'
 import {
   formatHealthCount,
   healthReliabilityValueClass,
   healthStatusMeta,
-  type HealthTimelinePoint,
+
 } from '../constants'
 
 const props = defineProps<{
@@ -19,7 +20,8 @@ const observedRequests = computed(
 )
 const outcomeSegments = computed(() => {
   const total = observedRequests.value
-  if (total === 0) return []
+  if (total === 0)
+    return []
 
   return [
     {
@@ -43,8 +45,8 @@ const outcomeSegments = computed(() => {
       className: 'bg-(--cp-info)',
     },
   ]
-    .filter((item) => item.value > 0)
-    .map((item) => ({
+    .filter(item => item.value > 0)
+    .map(item => ({
       ...item,
       percentage: (item.value / total) * 100,
     }))

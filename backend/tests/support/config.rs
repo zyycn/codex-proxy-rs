@@ -40,6 +40,8 @@ pub(crate) fn test_config(database_url: String) -> AppConfig {
             enabled: true,
             max_age_ms: 3_300_000,
             max_per_account: 8,
+            max_total: 64,
+            max_connecting: 16,
             initial_event_timeout_ms: 20_000,
         },
         wire_profile: crate::support::wire_profile::test_wire_profile_config(),

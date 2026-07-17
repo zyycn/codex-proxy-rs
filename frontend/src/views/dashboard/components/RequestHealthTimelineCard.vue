@@ -1,19 +1,19 @@
 <script setup lang="ts">
+import type { HealthTimeline, HealthTimelinePoint } from '../constants'
 import { usePreferredReducedMotion } from '@vueuse/core'
 import { gsap } from 'gsap'
-import { computed, onBeforeUnmount, shallowRef, useTemplateRef, watch } from 'vue'
 
+import { computed, onBeforeUnmount, shallowRef, useTemplateRef, watch } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
-import HealthTimelinePointPopover from './HealthTimelinePointPopover.vue'
 import {
   formatHealthCount,
   healthLegend,
   healthReliabilityValueClass,
   healthStatusMeta,
-  type HealthTimeline,
-  type HealthTimelinePoint,
+
 } from '../constants'
+import HealthTimelinePointPopover from './HealthTimelinePointPopover.vue'
 
 const props = defineProps<{
   timeline: HealthTimeline
@@ -31,10 +31,10 @@ let wavedCellIndexes = new Set<number>()
 
 function observedRequests(point: HealthTimelinePoint) {
   return (
-    point.successRequests +
-    point.failedRequests +
-    point.cancelledRequests +
-    point.callerErrorRequests
+    point.successRequests
+    + point.failedRequests
+    + point.cancelledRequests
+    + point.callerErrorRequests
   )
 }
 
@@ -47,7 +47,8 @@ function isActivePoint(point: HealthTimelinePoint) {
 }
 
 function activatePoint(point: HealthTimelinePoint, pointIndex: number, event: Event) {
-  if (!(event.currentTarget instanceof HTMLElement)) return
+  if (!(event.currentTarget instanceof HTMLElement))
+    return
   if (!isInteractivePoint(point)) {
     closePointPopover()
     return
@@ -85,26 +86,27 @@ function timelineCell(button?: HTMLButtonElement) {
 function animatePointWave(centerIndex: number) {
   const buttons = timelineButtons()
   const centerButton = buttons[centerIndex]
-  if (!centerButton) return
+  if (!centerButton)
+    return
 
   const centerRow = centerButton.offsetTop
   const nextCellIndexes = new Set<number>()
   const cellsByDistance: HTMLElement[][] = [[], [], []]
 
   for (let distance = 0; distance <= 2; distance += 1) {
-    const candidateIndexes =
-      distance === 0 ? [centerIndex] : [centerIndex - distance, centerIndex + distance]
+    const candidateIndexes
+      = distance === 0 ? [centerIndex] : [centerIndex - distance, centerIndex + distance]
 
     for (const index of candidateIndexes) {
       const button = buttons[index]
       const point = points.value[index]
       const cell = timelineCell(button)
       if (
-        !button ||
-        !point ||
-        !cell ||
-        button.offsetTop !== centerRow ||
-        !isInteractivePoint(point)
+        !button
+        || !point
+        || !cell
+        || button.offsetTop !== centerRow
+        || !isInteractivePoint(point)
       ) {
         continue
       }
@@ -115,8 +117,8 @@ function animatePointWave(centerIndex: number) {
   }
 
   const cellsToRelease = [...wavedCellIndexes]
-    .filter((index) => !nextCellIndexes.has(index))
-    .map((index) => timelineCell(buttons[index]))
+    .filter(index => !nextCellIndexes.has(index))
+    .map(index => timelineCell(buttons[index]))
     .filter((cell): cell is HTMLElement => Boolean(cell))
 
   if (preferredMotion.value === 'reduce') {
@@ -140,7 +142,8 @@ function animateWaveCells(
   duration: number,
   ease: string,
 ) {
-  if (cells.length === 0) return
+  if (cells.length === 0)
+    return
 
   gsap.set(cells, { willChange: 'transform' })
   gsap.to(cells, {
@@ -153,7 +156,8 @@ function animateWaveCells(
 }
 
 function settleWaveCells(cells: HTMLElement[]) {
-  if (cells.length === 0) return
+  if (cells.length === 0)
+    return
 
   gsap.to(cells, {
     y: 0,
@@ -168,12 +172,13 @@ function settleWaveCells(cells: HTMLElement[]) {
 function releasePointWave() {
   const buttons = timelineButtons()
   const cells = [...wavedCellIndexes]
-    .map((index) => timelineCell(buttons[index]))
+    .map(index => timelineCell(buttons[index]))
     .filter((cell): cell is HTMLElement => Boolean(cell))
 
   if (preferredMotion.value === 'reduce') {
     gsap.set(cells, { clearProps: 'transform,willChange' })
-  } else {
+  }
+  else {
     settleWaveCells(cells)
   }
   wavedCellIndexes = new Set<number>()
@@ -185,14 +190,15 @@ function pointAccessibilityLabel(point: HealthTimelinePoint) {
 }
 
 watch(popoverOpen, (open) => {
-  if (open) return
+  if (open)
+    return
 
   resetPointInteraction()
 })
 
 onBeforeUnmount(() => {
   const cells = timelineButtons()
-    .map((button) => timelineCell(button))
+    .map(button => timelineCell(button))
     .filter((cell): cell is HTMLElement => Boolean(cell))
   gsap.killTweensOf(cells)
 })

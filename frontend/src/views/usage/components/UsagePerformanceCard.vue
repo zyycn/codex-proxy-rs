@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { EChartsOption, LineSeriesOption } from 'echarts'
-import { computed, shallowRef } from 'vue'
+import type { getUsageRecordInsightsOverview } from '@/api'
 
+import { computed, shallowRef } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
@@ -17,9 +18,12 @@ import {
 } from '../utils/chart'
 import { escapeTooltip, formatDuration, formatDurationAxis } from '../utils/format'
 
+type Performance = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['performance']
+type PerformancePoint = Performance['points'][number]
+
 const props = withDefaults(
   defineProps<{
-    performance: any
+    performance: Performance
     loading?: boolean
   }>(),
   {
@@ -29,7 +33,7 @@ const props = withDefaults(
 
 const activeView = shallowRef('total')
 const { palette } = useUsageChartPalette()
-const performancePoints = computed<any[]>(() => props.performance.points ?? [])
+const performancePoints = computed(() => props.performance.points)
 
 const viewOptions = [
   { label: '总耗时', value: 'total' },
@@ -43,7 +47,7 @@ const percentileLabels = {
 }
 
 const selectedPoints = computed(() =>
-  performancePoints.value.map((point) => ({
+  performancePoints.value.map(point => ({
     point,
     p50: percentileValue(point, 'p50'),
     p95: percentileValue(point, 'p95'),
@@ -53,9 +57,9 @@ const selectedPoints = computed(() =>
 
 const hasData = computed(
   () =>
-    !props.loading &&
-    selectedPoints.value.some(
-      (point) => point.p50 != null || point.p95 != null || point.p99 != null,
+    !props.loading
+    && selectedPoints.value.some(
+      point => point.p50 != null || point.p95 != null || point.p99 != null,
     ),
 )
 
@@ -89,32 +93,36 @@ const chartOption = computed<EChartsOption>(() => {
     series: [
       lineSeries(
         percentileLabels.p50,
-        points.map((point) => point.p50),
+        points.map(point => point.p50),
         theme.info,
         true,
       ),
       lineSeries(
         percentileLabels.p95,
-        points.map((point) => point.p95),
+        points.map(point => point.p95),
         theme.warning,
       ),
       lineSeries(
         percentileLabels.p99,
-        points.map((point) => point.p99),
+        points.map(point => point.p99),
         theme.danger,
       ),
     ],
   }
 })
 
-function percentileValue(point: any, percentile: 'p50' | 'p95' | 'p99') {
+function percentileValue(point: PerformancePoint, percentile: 'p50' | 'p95' | 'p99') {
   if (activeView.value === 'firstToken') {
-    if (percentile === 'p50') return point.firstTokenP50Ms
-    if (percentile === 'p95') return point.firstTokenP95Ms
+    if (percentile === 'p50')
+      return point.firstTokenP50Ms
+    if (percentile === 'p95')
+      return point.firstTokenP95Ms
     return point.firstTokenP99Ms
   }
-  if (percentile === 'p50') return point.latencyP50Ms
-  if (percentile === 'p95') return point.latencyP95Ms
+  if (percentile === 'p50')
+    return point.latencyP50Ms
+  if (percentile === 'p95')
+    return point.latencyP95Ms
   return point.latencyP99Ms
 }
 
@@ -127,7 +135,7 @@ function lineSeries(
   return {
     name,
     type: 'line',
-    data: data.map((value) => value ?? null),
+    data: data.map(value => value ?? null),
     connectNulls: false,
     smooth: true,
     showSymbol: data.length <= 12,
@@ -156,7 +164,8 @@ function lineSeries(
 function formatTooltip(params: unknown) {
   const rows = tooltipRows(params)
   const selected = selectedPoints.value[tooltipIndex(rows[0])]
-  if (!selected) return ''
+  if (!selected)
+    return ''
 
   return [
     escapeTooltip(selected.point.label),

@@ -10,7 +10,8 @@ use crate::{
         cookies::PgCookieStore,
         pool::AccountPoolService,
         quota::{QuotaRefreshService, QuotaRefreshSummary},
-        store::PgAccountStore,
+        store::{AccountStore, PgAccountStore},
+        usage::AccountUsageStore,
     },
     infra::identity::AccountPseudonymizer,
     telemetry::account_usage::store::PgAccountUsageStore,
@@ -42,8 +43,8 @@ impl QuotaRefreshTask {
     ) -> Self {
         Self {
             service: QuotaRefreshService::with_min_refresh_interval_secs(
-                store,
-                usage_store,
+                Arc::new(store) as Arc<dyn AccountStore>,
+                Arc::new(usage_store) as Arc<dyn AccountUsageStore>,
                 codex,
                 account_pool,
                 account_pseudonymizer,

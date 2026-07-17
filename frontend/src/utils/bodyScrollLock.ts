@@ -11,5 +11,6 @@ export function lockBodyScroll() {
 
 export function unlockBodyScroll() {
   lockCount = Math.max(0, lockCount - 1)
-  if (lockCount === 0) document.body.style.overflow = previousOverflow
+  if (lockCount === 0)
+    document.body.style.overflow = previousOverflow
 }

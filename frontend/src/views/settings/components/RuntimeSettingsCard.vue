@@ -2,8 +2,8 @@
 import { Gauge, Timer, Zap } from '@lucide/vue'
 
 import BaseCard from '@/components/base/BaseCard.vue'
-import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
+import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 
 const maxConcurrentPerAccount = defineModel<string>('maxConcurrentPerAccount', { required: true })

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, shallowRef, useTemplateRef, watch } from 'vue'
+import type { getSystemUpdateDetail } from '@/api'
+import type { SystemUpdateEvent } from '@/api/streams/system-update'
 import {
   ArrowUpCircle,
   CheckCircle2,
@@ -11,17 +12,21 @@ import {
   XCircle,
 } from '@lucide/vue'
 
+import { storeToRefs } from 'pinia'
+import { computed, nextTick, shallowRef, useTemplateRef, watch } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import { toast } from '@/components/base/BaseToast'
-import { useSystemUpdate, type SystemUpdateLogLevel } from '@/composables/useSystemUpdate'
+import { useSystemUpdateStore } from '@/stores/modules/system-update'
+import { errorMessage } from '@/utils/async'
 import { renderMarkdown } from '@/utils/markdown'
 
 const open = defineModel<boolean>({ default: false })
 
+const systemUpdateStore = useSystemUpdateStore()
 const {
   version,
   updateInfo,
@@ -38,16 +43,12 @@ const {
   updateStreamError,
   hasUpdate,
   canUpdate,
-  loadSystem,
-  checkUpdates,
-  updateNow,
-  restartNow,
-  disconnectUpdateEvents,
-} = useSystemUpdate()
+} = storeToRefs(systemUpdateStore)
+const { loadSystem, checkUpdates, updateNow, restartNow } = systemUpdateStore
 
 const updateLogScrollbar = useTemplateRef<InstanceType<typeof BaseScrollbar>>('updateLogScrollbar')
 const updateConfirmOpen = shallowRef(false)
-const updateConfirmInfo = shallowRef<any>(null)
+const updateConfirmInfo = shallowRef<Awaited<ReturnType<typeof getSystemUpdateDetail>> | null>(null)
 const updateConfirmPreviousTarget = shallowRef('')
 const preparingUpdate = shallowRef(false)
 
@@ -129,7 +130,7 @@ const summaryItems = computed(() => [
 ])
 
 const updateLogRows = computed(() =>
-  updateLogs.value.map((item) => ({
+  updateLogs.value.map(item => ({
     ...item,
     time: formatLogTime(item.at),
   })),
@@ -162,8 +163,10 @@ const updateConfirmRows = computed(() => [
 ])
 
 const streamStatusLabel = computed(() => {
-  if (updateStreaming.value) return '实时'
-  if (updateStreamError.value) return '断开'
+  if (updateStreaming.value)
+    return '实时'
+  if (updateStreamError.value)
+    return '断开'
   return '待连接'
 })
 
@@ -177,21 +180,28 @@ function displayValue(value: unknown) {
 
 function formatLogTime(value: string) {
   const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '--:--:--'
+  if (Number.isNaN(date.getTime()))
+    return '--:--:--'
   return date.toLocaleTimeString('zh-CN', { hour12: false })
 }
 
-function logMarkerClass(level: SystemUpdateLogLevel) {
-  if (level === 'success') return 'text-(--cp-success)'
-  if (level === 'warning') return 'text-(--cp-warning)'
-  if (level === 'error') return 'text-(--cp-danger)'
+function logMarkerClass(level: SystemUpdateEvent['level']) {
+  if (level === 'success')
+    return 'text-(--cp-success)'
+  if (level === 'warning')
+    return 'text-(--cp-warning)'
+  if (level === 'error')
+    return 'text-(--cp-danger)'
   return 'text-(--cp-info)'
 }
 
-function logTextClass(level: SystemUpdateLogLevel) {
-  if (level === 'success') return 'text-(--cp-success)'
-  if (level === 'warning') return 'text-(--cp-warning)'
-  if (level === 'error') return 'text-(--cp-danger)'
+function logTextClass(level: SystemUpdateEvent['level']) {
+  if (level === 'success')
+    return 'text-(--cp-success)'
+  if (level === 'warning')
+    return 'text-(--cp-warning)'
+  if (level === 'error')
+    return 'text-(--cp-danger)'
   return 'text-(--cp-text-primary)'
 }
 
@@ -216,13 +226,15 @@ async function handleCheckUpdates(force = true) {
   try {
     const data = await checkUpdates(force)
     toast.success(data?.hasUpdate ? '发现可用更新' : '当前已是最新版本')
-  } catch (error: any) {
-    toast.error(error.message || '检查更新失败')
+  }
+  catch (error: unknown) {
+    toast.error(errorMessage(error, '检查更新失败'))
   }
 }
 
 async function handleUpdateRequest() {
-  if (preparingUpdate.value || updating.value) return
+  if (preparingUpdate.value || updating.value)
+    return
 
   const previousTargetVersion = normalizeUpdateVersion(updateInfo.value?.latestVersion)
   preparingUpdate.value = true
@@ -244,9 +256,11 @@ async function handleUpdateRequest() {
       return
     }
     await runConfirmedUpdate(remoteTargetVersion)
-  } catch (error: any) {
-    toast.error(error.message || '检查更新失败')
-  } finally {
+  }
+  catch (error: unknown) {
+    toast.error(errorMessage(error, '检查更新失败'))
+  }
+  finally {
     preparingUpdate.value = false
   }
 }
@@ -257,14 +271,16 @@ async function runConfirmedUpdate(targetVersion: string) {
     if (result?.needRestart) {
       toast.success('更新完成，请重启服务')
     }
-  } catch (error: any) {
-    toast.error(error.message || '更新失败')
+  }
+  catch (error: unknown) {
+    toast.error(errorMessage(error, '更新失败'))
   }
 }
 
 async function handleConfirmUpdate() {
   const targetVersion = normalizeUpdateVersion(updateConfirmInfo.value?.latestVersion)
-  if (!targetVersion) return
+  if (!targetVersion)
+    return
 
   updateConfirmOpen.value = false
   await nextTick()
@@ -274,15 +290,16 @@ async function handleConfirmUpdate() {
 async function handleRestart() {
   try {
     await restartNow()
-  } catch (error: any) {
-    toast.error(error.message || '重启失败')
+  }
+  catch (error: unknown) {
+    toast.error(errorMessage(error, '重启失败'))
   }
 }
 
 watch(open, (visible) => {
   if (visible && !loadedOnce.value) {
-    void loadSystem(false).catch((error: any) => {
-      toast.error(error.message || '加载系统更新信息失败')
+    void loadSystem(false).catch((error: unknown) => {
+      toast.error(errorMessage(error, '加载系统更新信息失败'))
     })
   }
 })
@@ -290,16 +307,13 @@ watch(open, (visible) => {
 watch(
   () => updateLogs.value.at(-1)?.id,
   (logId, previousLogId) => {
-    if (!logId || logId === previousLogId) return
+    if (!logId || logId === previousLogId)
+      return
 
     pinUpdateLogsToBottom()
   },
   { flush: 'post' },
 )
-
-onUnmounted(() => {
-  disconnectUpdateEvents()
-})
 </script>
 
 <template>
@@ -375,7 +389,9 @@ onUnmounted(() => {
         class="grid gap-2 rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5"
       >
         <div class="flex items-center justify-between gap-3">
-          <p class="m-0 text-[13px] font-[760] text-(--cp-text-primary)">发布说明</p>
+          <p class="m-0 text-[13px] font-[760] text-(--cp-text-primary)">
+            发布说明
+          </p>
           <span class="font-mono text-[11px] font-[650] text-(--cp-text-muted)">
             {{ displayValue(updateInfo?.latestVersion) }}
           </span>
@@ -392,7 +408,9 @@ onUnmounted(() => {
         <header class="flex items-center justify-between gap-3 px-4 pt-3.5 pb-2.5">
           <div class="flex min-w-0 items-center gap-2">
             <Terminal class="size-4 shrink-0 text-(--cp-success)" />
-            <p class="m-0 text-[13px] leading-none font-[760] text-(--cp-text-primary)">更新进度</p>
+            <p class="m-0 text-[13px] leading-none font-[760] text-(--cp-text-primary)">
+              更新进度
+            </p>
           </div>
           <span
             class="inline-flex h-6 items-center gap-1.5 rounded-full bg-(--cp-bg-subtle) px-2 text-[11px] leading-none font-[720] text-(--cp-text-secondary)"

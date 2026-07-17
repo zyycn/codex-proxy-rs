@@ -232,7 +232,7 @@ fn continuation_scope_should_be_owned_by_history_and_use_actual_transport() {
 fn websocket_preparation_and_send_should_have_one_way_boundary() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let attempt = read(&manifest.join("src/dispatch/lifecycle/attempt.rs"));
-    let websocket = read(&manifest.join("src/upstream/openai/transport/websocket.rs"));
+    let websocket = read(&manifest.join("src/upstream/openai/transport/websocket/coordinator.rs"));
     let client = read(&manifest.join("src/upstream/openai/transport/client_sse.rs"));
 
     assert!(attempt.contains("tokio::join!("));

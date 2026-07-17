@@ -55,6 +55,29 @@ pub struct OpsErrorLog {
     pub created_at: DateTime<Utc>,
 }
 
+/// 运维错误查询条件。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OpsErrorFilter {
+    pub kind: Option<String>,
+    pub client_api_key_id: Option<String>,
+    pub provider: Option<String>,
+    pub request_id: Option<String>,
+    pub account_id: Option<String>,
+    pub route: Option<String>,
+    pub model: Option<String>,
+    pub status_code: Option<i64>,
+    pub client_status_code: Option<i64>,
+    pub upstream_status_code: Option<i64>,
+    pub transport: Option<String>,
+    pub attempt_index: Option<i64>,
+    pub failure_class: Option<String>,
+    pub response_id: Option<String>,
+    pub upstream_request_id: Option<String>,
+    pub search: Option<String>,
+    pub start_time: Option<DateTime<Utc>>,
+    pub end_time: Option<DateTime<Utc>>,
+}
+
 impl OpsErrorLog {
     /// 构造运维错误事件。
     pub fn new(kind: impl Into<String>, message: impl Into<String>) -> Self {

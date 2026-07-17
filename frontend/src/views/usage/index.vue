@@ -4,53 +4,45 @@ import { shallowRef, watch } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
-import BaseSelect from '@/components/base/BaseSelect.vue'
+import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
+import OpsErrorPanel from './components/OpsErrorPanel.vue'
+import UsageBillingCell from './components/UsageBillingCell.vue'
+import UsageClientIpCell from './components/UsageClientIpCell.vue'
+import UsageFilters from './components/UsageFilters.vue'
+import UsageInsightsGrid from './components/UsageInsightsGrid.vue'
+import UsageLatencyCell from './components/UsageLatencyCell.vue'
+import UsageModelCell from './components/UsageModelCell.vue'
+import UsageReasoningEffortCell from './components/UsageReasoningEffortCell.vue'
+import UsageRecordDetailModal from './components/UsageRecordDetailModal.vue'
+import UsageSummaryCards from './components/UsageSummaryCards.vue'
+import UsageTokenCell from './components/UsageTokenCell.vue'
+import { useUsageRecordDetail } from './composables/useUsageRecordDetail'
+import { useUsageRecordsTable } from './composables/useUsageRecordsTable'
+import { useUsageTimeRange } from './composables/useUsageTimeRange'
 import {
-  usageTimeRangeOptions,
   usageAccountText,
   usageIsCompact,
   usageRecordColumns,
   usageRecordType,
   usageRecordTypeClass,
+  usageTimeRangeOptions,
 } from './constants'
-import { useUsageRecordDetail } from './composables/useUsageRecordDetail'
-import { useUsageFilters } from './composables/useUsageFilters'
-import { useUsageRecordsTable } from './composables/useUsageRecordsTable'
-import { useUsageTimeRange } from './composables/useUsageTimeRange'
-import UsageClientIpCell from './components/UsageClientIpCell.vue'
-import UsageBillingCell from './components/UsageBillingCell.vue'
-import UsageFilters from './components/UsageFilters.vue'
-import UsageInsightsGrid from './components/UsageInsightsGrid.vue'
-import UsageLatencyCell from './components/UsageLatencyCell.vue'
-import UsageModelCell from './components/UsageModelCell.vue'
-import OpsErrorPanel from './components/OpsErrorPanel.vue'
-import UsageRecordDetailModal from './components/UsageRecordDetailModal.vue'
-import UsageReasoningEffortCell from './components/UsageReasoningEffortCell.vue'
-import UsageSummaryCards from './components/UsageSummaryCards.vue'
-import UsageTokenCell from './components/UsageTokenCell.vue'
 
-const totalRecords = shallowRef(0)
 const recordView = shallowRef('success')
 const recordViewOptions = [
   { label: '成功记录', value: 'success' },
   { label: '错误排查', value: 'errors' },
 ]
-const { timeRange, timeRangeParams, refreshTimeRangeEnd, latestTimeRangeParams } =
-  useUsageTimeRange()
+const { timeRange, timeRangeParams, refreshTimeRangeEnd, latestTimeRangeParams }
+  = useUsageTimeRange()
 
 const {
   page,
-  pageSize,
   searchQuery,
   usagePagination,
-  bindUsageRecordLoader,
-  handlePageChange,
-  handlePageSizeChange,
-} = useUsageFilters(totalRecords)
-
-const {
   loading,
   analyticsLoading,
   records,
@@ -60,20 +52,16 @@ const {
   diagnosticDimension,
   loadUsageRecords,
   refreshUsageRecords,
+  handlePageChange,
+  handlePageSizeChange,
 } = useUsageRecordsTable({
-  page,
-  pageSize,
-  searchQuery,
   timeRangeParams,
-  totalRecords,
   latestTimeRangeParams,
 })
 
 const { showDetailModal, selectedUsageRecord, handleViewDetail } = useUsageRecordDetail({
   timeRangeParams,
 })
-
-bindUsageRecordLoader(loadUsageRecords)
 
 watch(timeRange, () => {
   refreshTimeRangeEnd()
@@ -84,20 +72,12 @@ watch(timeRange, () => {
 
 <template>
   <div class="w-full">
-    <header class="flex min-h-17 shrink-0 items-start justify-between gap-4">
-      <div>
-        <h1 class="mt-0 mb-0 text-[34px] leading-[1.15] font-extrabold text-(--cp-text-primary)">
-          使用统计
-        </h1>
-        <p class="mt-2.5 mb-0 text-[15px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
-          查看请求用量、性能趋势与调用错误记录
-        </p>
-      </div>
-      <div class="flex shrink-0 items-center gap-2">
+    <BasePageHeader title="使用统计" description="查看请求用量、性能趋势与调用错误记录">
+      <template #actions>
         <CalendarDays class="size-4 text-(--cp-text-muted)" />
         <BaseSelect v-model="timeRange" :options="usageTimeRangeOptions" class="w-34" />
-      </div>
-    </header>
+      </template>
+    </BasePageHeader>
 
     <UsageSummaryCards :summary="summary" />
     <UsageInsightsGrid
@@ -116,7 +96,9 @@ watch(timeRange, () => {
       <template #header>
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">请求明细</h2>
+            <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">
+              请求明细
+            </h2>
             <p
               class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)"
             >

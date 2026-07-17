@@ -7,26 +7,22 @@ use std::{
 };
 
 use chrono::Utc;
+use secrecy::SecretString;
 use thiserror::Error;
 use tokio::time::{Instant, sleep};
 use tracing::warn;
 
+use crate::fleet::cookies::PgCookieStore;
 use crate::fleet::{
     account::{Account, AccountStatus},
-    account_failure::apply_client_failure_effect,
+    account_failure::{apply_account_state_effect, classify_account_failure},
+    account_gateway::{AccountGatewayError, AccountUpstreamContext, AccountUpstreamGateway},
     pool::AccountPoolService,
     quota::{
-        quota_from_usage, quota_snapshot_limit_reached, quota_snapshot_limit_window_seconds,
-        quota_snapshot_reset_at,
+        quota_snapshot_limit_reached, quota_snapshot_limit_window_seconds, quota_snapshot_reset_at,
     },
-    store::{AccountStore, AccountStoreError, PgAccountStore, PgAccountStoreError},
-};
-use crate::{
-    fleet::cookies::PgCookieStore,
-    telemetry::account_usage::store::{
-        AccountUsageStore, AccountUsageStoreError, PgAccountUsageStore,
-    },
-    upstream::openai::transport::{CodexBackendClient, CodexClientError, CodexRequestContext},
+    store::{AccountStore, AccountStoreError},
+    usage::{AccountUsageStore, AccountUsageStoreError},
 };
 
 const MIN_REFRESH_INTERVAL_SECS: u64 = 30 * 60;
@@ -35,9 +31,9 @@ const COOLDOWN_REFRESH_GRACE_SECS: i64 = 30;
 
 /// 运行时 quota refresh 服务。
 pub struct QuotaRefreshService {
-    store: PgAccountStore,
-    usage_store: PgAccountUsageStore,
-    codex: Arc<CodexBackendClient>,
+    store: Arc<dyn AccountStore>,
+    usage_store: Arc<dyn AccountUsageStore>,
+    upstream: Arc<dyn AccountUpstreamGateway>,
     min_refresh_interval_secs: u64,
     request_spacing: Duration,
     account_pseudonymizer: Arc<crate::infra::identity::AccountPseudonymizer>,
@@ -48,16 +44,16 @@ pub struct QuotaRefreshService {
 impl QuotaRefreshService {
     /// 构造默认 quota refresh 服务。
     pub fn new(
-        store: PgAccountStore,
-        usage_store: PgAccountUsageStore,
-        codex: Arc<CodexBackendClient>,
+        store: Arc<dyn AccountStore>,
+        usage_store: Arc<dyn AccountUsageStore>,
+        upstream: Arc<dyn AccountUpstreamGateway>,
         account_pool: Arc<AccountPoolService>,
         account_pseudonymizer: Arc<crate::infra::identity::AccountPseudonymizer>,
     ) -> Self {
         Self {
             store,
             usage_store,
-            codex,
+            upstream,
             min_refresh_interval_secs: MIN_REFRESH_INTERVAL_SECS,
             request_spacing: Self::default_request_spacing(),
             account_pseudonymizer,
@@ -72,9 +68,9 @@ impl QuotaRefreshService {
 
     /// 使用自定义最小刷新间隔构造 quota refresh 服务。
     pub fn with_min_refresh_interval_secs(
-        store: PgAccountStore,
-        usage_store: PgAccountUsageStore,
-        codex: Arc<CodexBackendClient>,
+        store: Arc<dyn AccountStore>,
+        usage_store: Arc<dyn AccountUsageStore>,
+        upstream: Arc<dyn AccountUpstreamGateway>,
         account_pool: Arc<AccountPoolService>,
         account_pseudonymizer: Arc<crate::infra::identity::AccountPseudonymizer>,
         min_refresh_interval_secs: u64,
@@ -82,7 +78,7 @@ impl QuotaRefreshService {
         Self {
             store,
             usage_store,
-            codex,
+            upstream,
             min_refresh_interval_secs,
             request_spacing: Self::default_request_spacing(),
             account_pseudonymizer,
@@ -153,40 +149,29 @@ impl QuotaRefreshService {
             }
             last_refreshed.insert(account.id.clone(), now);
 
-            let request_id = uuid::Uuid::new_v4().to_string();
             let cookie_header = self.usage_cookie_header(&account.id).await;
             let installation_id = self.account_pseudonymizer.installation_id(&account.id);
             match self
-                .codex
-                .fetch_usage(CodexRequestContext {
-                    access_token: &account.access_token,
-                    account_id: account.account_id.as_deref(),
-                    request_id: &request_id,
-                    turn_state: None,
-                    turn_metadata: None,
-                    beta_features: None,
-                    include_timing_metrics: None,
-                    version: None,
-                    codex_window_id: None,
-                    parent_thread_id: None,
-                    cookie_header: cookie_header.as_deref(),
-                    installation_id: Some(&installation_id),
-                    session_id: None,
-                    thread_id: None,
-                    client_request_id: None,
-                    turn_id: None,
+                .upstream
+                .fetch_usage(AccountUpstreamContext {
+                    access_token: SecretString::new(account.access_token.clone().into()),
+                    account_id: account.account_id.clone(),
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    cookie_header,
+                    installation_id: Some(installation_id),
                 })
                 .await
             {
-                Ok(raw) => {
-                    let quota = quota_from_usage(&raw);
+                Ok(result) => {
+                    let quota = result.quota;
                     let limit_reached = quota_snapshot_limit_reached(&quota);
                     let reset_at = quota_snapshot_reset_at(&quota);
+                    let quota_json = quota.to_json()?;
                     if self
                         .store
                         .apply_quota_snapshot(
                             &account.id,
-                            &quota.to_string(),
+                            &quota_json,
                             limit_reached,
                             limit_reached.then_some(reset_at).flatten(),
                         )
@@ -208,13 +193,17 @@ impl QuotaRefreshService {
                     self.sync_runtime_pool_account(&account.id).await;
                 }
                 Err(error) => {
-                    apply_client_failure_effect(
-                        &self.account_pool,
-                        &self.codex,
-                        &account.id,
-                        &error,
-                    )
-                    .await;
+                    if let Some(classified) = error.failure().and_then(classify_account_failure)
+                        && let Some(effect) = &classified.effect
+                    {
+                        apply_account_state_effect(
+                            &self.account_pool,
+                            self.upstream.as_ref(),
+                            &account.id,
+                            effect,
+                        )
+                        .await;
+                    }
                     warn!(
                         account_id = %account.id,
                         error = %error,
@@ -289,15 +278,15 @@ pub enum QuotaRefreshServiceError {
     /// 账号读取失败。
     #[error("failed to list accounts for quota refresh: {0}")]
     AccountStore(#[from] AccountStoreError),
-    /// 账号写入失败。
-    #[error("failed to persist quota refresh result: {0}")]
-    Store(#[from] PgAccountStoreError),
     /// 用量窗口写入失败。
     #[error("failed to persist quota usage window: {0}")]
     UsageStore(#[from] AccountUsageStoreError),
+    /// typed quota 序列化失败。
+    #[error("failed to serialize quota snapshot: {0}")]
+    SerializeQuota(#[from] serde_json::Error),
     /// 上游 usage 请求失败。
     #[error("failed to fetch quota usage: {0}")]
-    Codex(#[from] CodexClientError),
+    Upstream(#[from] AccountGatewayError),
 }
 
 /// quota refresh 服务结果。

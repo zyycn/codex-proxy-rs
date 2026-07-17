@@ -1,18 +1,22 @@
 <script setup lang="ts">
+import type { dashboardSnapshotView } from '../presenter'
 import { Box, CheckCircle2, Monitor, RefreshCw, Terminal, TriangleAlert } from '@lucide/vue'
-import { computed } from 'vue'
 
+import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import { formatDateTime } from '@/utils/date'
 
+type DashboardSnapshot = ReturnType<typeof dashboardSnapshotView>
+
 const props = defineProps<{
-  profile: any
+  profile: DashboardSnapshot['wireProfile']
 }>()
 
 const releaseLabel = computed(() => {
   const release = props.profile?.release
-  if (!release?.latestVersion) return '尚未检查'
+  if (!release?.latestVersion)
+    return '尚未检查'
   return release.latestBuild
     ? `${release.latestVersion} · Build ${release.latestBuild}`
     : release.latestVersion

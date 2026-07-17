@@ -1,12 +1,14 @@
 use chrono::Utc;
 use secrecy::SecretString;
 
+use crate::fleet::account_gateway::AccountUpstreamContext;
+
 use super::{
     AccountManageService,
     types::{
         AccountManageError, ImportSupplementalAccountInfo, ImportSupplementalNeeds,
         ImportedAccountState, ImportedAccounts, ResolvedImportTokens, import_quota_plan_type,
-        import_status_from_usage_error, import_usage_plan_type, import_usage_string,
+        import_status_from_usage_error,
     },
 };
 
@@ -190,41 +192,26 @@ impl AccountManageService {
             return ImportSupplementalAccountInfo::default();
         }
 
-        let request_id = uuid::Uuid::new_v4().to_string();
         let installation_id =
             account_id.map(|account_id| self.account_pseudonymizer.installation_id(account_id));
-        let context = crate::upstream::openai::transport::CodexRequestContext {
-            access_token,
-            account_id,
-            request_id: &request_id,
-            turn_state: None,
-            turn_metadata: None,
-            beta_features: None,
-            include_timing_metrics: None,
-            version: None,
-            codex_window_id: None,
-            parent_thread_id: None,
+        let context = AccountUpstreamContext {
+            access_token: SecretString::new(access_token.to_string().into()),
+            account_id: account_id.map(ToString::to_string),
+            request_id: uuid::Uuid::new_v4().to_string(),
             cookie_header: None,
-            installation_id: installation_id.as_deref(),
-            session_id: None,
-            thread_id: None,
-            client_request_id: None,
-            turn_id: None,
+            installation_id,
         };
 
-        match self.codex.fetch_usage(context).await {
-            Ok(raw) => {
-                let normalized = crate::fleet::quota::quota_from_usage(&raw);
-                ImportSupplementalAccountInfo {
-                    account_id: import_usage_string(&raw, "account_id"),
-                    user_id: import_usage_string(&raw, "user_id"),
-                    email: import_usage_string(&raw, "email"),
-                    plan_type: import_usage_plan_type(&raw),
-                    quota_json: serde_json::to_string(&normalized).ok(),
-                    quota_fetched_at: Some(Utc::now()),
-                    status: None,
-                }
-            }
+        match self.upstream.fetch_usage(context).await {
+            Ok(result) => ImportSupplementalAccountInfo {
+                account_id: result.account_id,
+                user_id: result.user_id,
+                email: result.email,
+                plan_type: result.plan_type,
+                quota_json: result.quota.to_json().ok(),
+                quota_fetched_at: Some(Utc::now()),
+                status: None,
+            },
             Err(error) => {
                 tracing::warn!(
                     error = %error,

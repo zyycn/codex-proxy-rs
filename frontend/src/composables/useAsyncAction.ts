@@ -49,7 +49,8 @@ export function useAsyncAction() {
       return options.minimumMs === undefined
         ? await execute()
         : await withMinimumDuration(execute, options.minimumMs)
-    } catch (error) {
+    }
+    catch (error) {
       options.onError?.(error)
 
       const message = resolveErrorText(error, options.errorText)
@@ -61,7 +62,8 @@ export function useAsyncAction() {
         throw error
       }
       return undefined
-    } finally {
+    }
+    finally {
       loading.value = false
     }
   }

@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import type { getAccounts } from '@/api'
 import { AlertTriangle, Gauge, ShieldCheck, Users } from '@lucide/vue'
 
+import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
 
 const props = defineProps<{
-  summary: any
+  summary: Awaited<ReturnType<typeof getAccounts>>['summary']
 }>()
 
 const overviewItems = computed(() => [

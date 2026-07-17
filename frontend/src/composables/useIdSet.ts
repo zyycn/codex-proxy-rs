@@ -27,7 +27,8 @@ export function useIdSet<T extends string | number>() {
     add(id)
     try {
       return await task()
-    } finally {
+    }
+    finally {
       remove(id)
     }
   }

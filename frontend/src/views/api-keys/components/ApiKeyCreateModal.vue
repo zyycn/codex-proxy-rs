@@ -1,29 +1,31 @@
 <script setup lang="ts">
+import type { useApiKeyMutations } from '../composables/useApiKeyMutations'
 import { Copy, Upload } from '@lucide/vue'
-import { computed } from 'vue'
 
+import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
-import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
+import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
+
+type CreateForm = ReturnType<typeof useApiKeyMutations>['createForm']['value']
 
 defineProps<{
   createdKey: string
   saving: boolean
 }>()
 
-const open = defineModel<boolean>({ default: false })
-const createdOpen = defineModel<boolean>('createdOpen', { default: false })
-const form = defineModel<any>('form', { required: true })
-
 const emit = defineEmits<{
   create: []
   copy: [text: string]
   importCcs: []
 }>()
+const open = defineModel<boolean>({ default: false })
+const createdOpen = defineModel<boolean>('createdOpen', { default: false })
+const form = defineModel<CreateForm>('form', { required: true })
 
-function formField(key: string) {
+function formField(key: keyof CreateForm) {
   return computed({
     get: () => form.value[key] ?? '',
     set: (value: string) => {
@@ -56,7 +58,9 @@ const label = formField('label')
     </BaseForm>
 
     <template #footer>
-      <BaseButton variant="ghost" :disabled="saving" @click="open = false">取消</BaseButton>
+      <BaseButton variant="ghost" :disabled="saving" @click="open = false">
+        取消
+      </BaseButton>
       <BaseButton
         variant="primary"
         :loading="saving"
@@ -114,7 +118,9 @@ const label = formField('label')
         </template>
         导入 CCSwitch
       </BaseButton>
-      <BaseButton variant="primary" @click="createdOpen = false">我已保存</BaseButton>
+      <BaseButton variant="primary" @click="createdOpen = false">
+        我已保存
+      </BaseButton>
     </template>
   </BaseModal>
 </template>
