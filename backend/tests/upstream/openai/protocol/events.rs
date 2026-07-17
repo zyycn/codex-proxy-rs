@@ -422,73 +422,13 @@ fn parse_rate_limits_event_should_keep_metered_limit_credits_and_plan() {
     );
 }
 
-#[test]
-fn rate_limit_quota_should_preserve_existing_monthly_and_credits_when_passive_data_lacks_them() {
-    let headers = vec![
-        ("x-codex-primary-used-percent".to_string(), "25".to_string()),
-        (
-            "x-codex-primary-window-minutes".to_string(),
-            "5".to_string(),
-        ),
-        (
-            "x-codex-primary-reset-at".to_string(),
-            "1893456300".to_string(),
-        ),
-    ];
-    let existing = json!({
-        "monthly_limit": {
-            "key": "spend-control-monthly",
-            "source": "spend_control",
-            "used_percent": 52,
-            "remaining_percent": 48,
-            "reset_at": 1896048000,
-            "window_minutes": 43200,
-            "limit_reached": false
-        },
-        "credits": {
-            "has_credits": true,
-            "unlimited": false,
-            "balance": 12
-        }
-    });
-    let parsed = parse_rate_limit_headers(&headers).expect("rate limits should parse");
-
-    let quota = rate_limit_quota(&parsed, Some("plus"), Some(&existing));
-
-    assert_eq!(quota["plan_type"], "plus");
-    assert_eq!(quota["snapshots"][0]["primary"]["remaining_percent"], 75);
-    assert_eq!(quota["monthly_limit"]["used_percent"], 52);
-    assert_eq!(quota["credits"]["balance"], 12);
-}
-
-#[test]
-fn rate_limit_quota_should_block_when_window_is_exhausted_even_if_flag_is_false() {
-    let event = json!({
-        "type": "codex.rate_limits",
-        "rate_limits": {
-            "limit_reached": false,
-            "primary": {
-                "used_percent": 100,
-                "window_minutes": 300,
-                "reset_at": 1893456300
-            }
-        }
-    });
-    let parsed = parse_rate_limits_event(&event).expect("event should parse");
-
-    let quota = rate_limit_quota(&parsed, Some("plus"), None);
-
-    assert_eq!(quota["snapshots"][0]["blocked"], true);
-}
-
 #[tokio::test]
 async fn refresh_scheduler_should_refresh_before_expiry_and_preserve_refresh_token() {
     use async_trait::async_trait;
     use chrono::{Duration as ChronoDuration, Utc};
     use codex_proxy_rs::fleet::account::AccountStatus;
-    use codex_proxy_rs::{
-        fleet::refresh::{RefreshPolicy, RefreshScheduler},
-        upstream::openai::token_client::{RefreshFailure, TokenPair, TokenRefresher},
+    use codex_proxy_rs::fleet::refresh::{
+        RefreshFailure, RefreshPolicy, RefreshScheduler, TokenPair, TokenRefresher,
     };
 
     #[derive(Clone)]

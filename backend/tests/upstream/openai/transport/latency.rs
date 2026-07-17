@@ -1,11 +1,11 @@
 use codex_proxy_rs::upstream::openai::{
     protocol::responses::{CodexResponsesRequest, PreviousResponseScope},
     transport::{
+        websocket::CodexWebSocketPool,
         websocket::{CodexWebSocketExchangeError, PreviousResponseUnavailableReason},
-        websocket_breaker::{
+        websocket::{
             WebSocketOriginBreaker, WebSocketOriginBreakerConfig, WebSocketOriginBreakerDecision,
         },
-        websocket_pool::CodexWebSocketPool,
     },
 };
 
@@ -477,6 +477,142 @@ async fn connection_local_continuation_should_use_the_exact_socket() {
 }
 
 #[tokio::test]
+async fn concurrent_multi_profile_continuations_should_select_each_exact_socket() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (first_stream, _) = listener.accept().await.unwrap();
+        let mut first = accept_codex_test_websocket(first_stream).await;
+        let _ = first.next().await.unwrap().unwrap();
+        first
+            .send(Message::Text(
+                completed_websocket_response("resp_profile_a", 2, 1).into(),
+            ))
+            .await
+            .unwrap();
+
+        let (second_stream, _) = listener.accept().await.unwrap();
+        let mut second = accept_codex_test_websocket(second_stream).await;
+        let _ = second.next().await.unwrap().unwrap();
+        second
+            .send(Message::Text(
+                completed_websocket_response("resp_profile_b", 2, 1).into(),
+            ))
+            .await
+            .unwrap();
+
+        let first_continuation = async {
+            let message = timeout(Duration::from_secs(2), first.next())
+                .await
+                .expect("profile A should receive its continuation")
+                .unwrap()
+                .unwrap();
+            let Message::Text(payload) = message else {
+                panic!("profile A continuation should be text");
+            };
+            let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+            assert_eq!(payload["previous_response_id"], "resp_profile_a");
+            first
+                .send(Message::Text(
+                    completed_websocket_response("resp_profile_a_next", 2, 1).into(),
+                ))
+                .await
+                .unwrap();
+        };
+        let second_continuation = async {
+            let message = timeout(Duration::from_secs(2), second.next())
+                .await
+                .expect("profile B should receive its continuation")
+                .unwrap()
+                .unwrap();
+            let Message::Text(payload) = message else {
+                panic!("profile B continuation should be text");
+            };
+            let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+            assert_eq!(payload["previous_response_id"], "resp_profile_b");
+            second
+                .send(Message::Text(
+                    completed_websocket_response("resp_profile_b_next", 2, 1).into(),
+                ))
+                .await
+                .unwrap();
+        };
+        tokio::join!(first_continuation, second_continuation);
+    });
+
+    let profile = crate::support::wire_profile::test_wire_profile();
+    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        profile.clone(),
+    )
+    .with_websocket_pool(Arc::clone(&pool));
+    let request = new_chain_request("conversation-multi-profile-exact");
+
+    backend
+        .create_response(
+            &request,
+            request_context("req_profile_a_seed", Some("chatgpt-account")),
+        )
+        .await
+        .unwrap();
+    profile.update_desktop_release("26.900.1", "7001");
+    backend
+        .create_response(
+            &request,
+            request_context("req_profile_b_seed", Some("chatgpt-account")),
+        )
+        .await
+        .unwrap();
+    profile.update_desktop_release("26.901.1", "7002");
+
+    let continuation = |response_id: &str| {
+        let mut continuation = request.clone();
+        continuation.set_previous_response_id(Some(response_id.to_string()));
+        continuation.previous_response_scope = Some(PreviousResponseScope::ConnectionLocal);
+        continuation
+    };
+    let first_request = continuation("resp_profile_a");
+    let second_request = continuation("resp_profile_b");
+    let start = Arc::new(tokio::sync::Barrier::new(3));
+    let first_backend = backend.clone();
+    let first_start = Arc::clone(&start);
+    let first = tokio::spawn(async move {
+        first_start.wait().await;
+        first_backend
+            .create_response(
+                &first_request,
+                request_context("req_profile_a_next", Some("chatgpt-account")),
+            )
+            .await
+    });
+    let second_backend = backend.clone();
+    let second_start = Arc::clone(&start);
+    let second = tokio::spawn(async move {
+        second_start.wait().await;
+        second_backend
+            .create_response(
+                &second_request,
+                request_context("req_profile_b_next", Some("chatgpt-account")),
+            )
+            .await
+    });
+    start.wait().await;
+
+    let first = first.await.unwrap().unwrap();
+    let second = second.await.unwrap().unwrap();
+    timeout(Duration::from_secs(2), server)
+        .await
+        .expect("multi-profile server should finish")
+        .unwrap();
+
+    assert!(first.body.contains("resp_profile_a_next"));
+    assert!(second.body.contains("resp_profile_b_next"));
+    pool.shutdown().await;
+}
+
+#[tokio::test]
 async fn missing_exact_socket_should_fail_without_opening_a_connection() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -564,6 +700,10 @@ async fn concurrent_same_key_should_singleflight_websocket_opening() {
     server.await.unwrap();
 
     assert_eq!(first.transport, CodexBackendTransport::WebSocket);
+    assert_eq!(
+        first.transport_metrics.decision,
+        Some(CodexTransportDecision::ConnectedWebSocket)
+    );
     assert_eq!(second.transport, CodexBackendTransport::HttpSse);
     assert_eq!(
         second.transport_metrics.decision,
@@ -644,6 +784,70 @@ async fn origin_breaker_should_open_then_allow_only_one_half_open_probe() {
         breaker.try_acquire("https://example.test:443"),
         WebSocketOriginBreakerDecision::Allowed(_)
     ));
+}
+
+#[tokio::test]
+async fn cancelled_half_open_opening_should_allow_another_probe() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let origin_key = format!("http://{addr}");
+    let breaker = WebSocketOriginBreaker::with_config(WebSocketOriginBreakerConfig {
+        failure_threshold: 1,
+        failure_window: Duration::from_secs(1),
+        open_duration: Duration::ZERO,
+    });
+    let WebSocketOriginBreakerDecision::Allowed(permit) = breaker.try_acquire(&origin_key) else {
+        panic!("closed breaker should grant the initial permit");
+    };
+    permit.fast_timeout();
+
+    let (opening_started_tx, opening_started_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut opening, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut opening).await;
+        assert!(request.starts_with("GET /codex/responses HTTP/1.1"));
+        opening_started_tx.send(()).unwrap();
+
+        let mut byte = [0_u8; 1];
+        let read = timeout(Duration::from_secs(1), opening.read(&mut byte))
+            .await
+            .expect("account eviction should close the half-open probe")
+            .unwrap();
+        assert_eq!(read, 0);
+    });
+    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        origin_key.clone(),
+        crate::support::wire_profile::test_wire_profile(),
+    )
+    .with_websocket_pool(Arc::clone(&pool))
+    .with_websocket_origin_breaker(breaker.clone());
+    let attempt = tokio::spawn(async move {
+        backend
+            .create_response(
+                &explicit_websocket_warmup_request("conversation-cancelled-half-open"),
+                request_context("req_cancelled_half_open", Some("chatgpt-account")),
+            )
+            .await
+    });
+
+    opening_started_rx.await.unwrap();
+    pool.evict_account("chatgpt-account").await;
+    timeout(Duration::from_secs(1), attempt)
+        .await
+        .expect("cancelled request should finish")
+        .unwrap()
+        .expect_err("cancelled half-open opening should fail the request");
+    server.await.unwrap();
+
+    let WebSocketOriginBreakerDecision::Allowed(next_probe) = breaker.try_acquire(&origin_key)
+    else {
+        panic!("cancelled half-open probe should release its ownership");
+    };
+    assert!(next_probe.is_half_open_probe());
+    next_probe.succeed();
+    pool.shutdown().await;
 }
 
 #[test]

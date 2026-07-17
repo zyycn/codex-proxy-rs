@@ -26,6 +26,8 @@ fn config_loader_should_load_complete_example() {
             config.wire_profile.desktop_version.as_str(),
             config.wire_profile.desktop_build.as_str(),
             config.quota.refresh_interval_minutes,
+            config.ws_pool.max_total,
+            config.ws_pool.max_connecting,
             config.ws_pool.initial_event_timeout_ms,
             config.admin.default_username.as_str(),
             config.telemetry.enabled,
@@ -38,6 +40,8 @@ fn config_loader_should_load_complete_example() {
             "26.707.72221",
             "5307",
             5,
+            64,
+            16,
             20_000,
             "admin@cpr.local",
             true,
@@ -156,6 +160,26 @@ fn config_loader_should_reject_missing_explicit_fields() {
     let error = BootstrapConfig::load_from_path(directory.path().join("config.yaml")).unwrap_err();
 
     assert!(matches!(error, ConfigError::InvalidDocument { .. }));
+}
+
+#[test]
+fn config_loader_should_reject_zero_websocket_total_cap() {
+    let yaml = complete_config().replace("    max_total: 64", "    max_total: 0");
+    let directory = write_config(&yaml);
+
+    let error = BootstrapConfig::load_from_path(directory.path().join("config.yaml")).unwrap_err();
+
+    assert_eq!(error, ConfigError::InvalidField("ws_pool.max_total"));
+}
+
+#[test]
+fn config_loader_should_reject_websocket_connecting_cap_above_total() {
+    let yaml = complete_config().replace("    max_connecting: 16", "    max_connecting: 65");
+    let directory = write_config(&yaml);
+
+    let error = BootstrapConfig::load_from_path(directory.path().join("config.yaml")).unwrap_err();
+
+    assert_eq!(error, ConfigError::InvalidField("ws_pool.max_connecting"));
 }
 
 #[test]

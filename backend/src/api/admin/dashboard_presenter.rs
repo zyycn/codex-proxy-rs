@@ -1,4 +1,4 @@
-//! Dashboard 遥测聚合与展示模型。
+//! Dashboard 遥测事实的 HTTP presenter。
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -11,8 +11,8 @@ use crate::infra::{
     time::{china_day_start, china_quarter_hour_start},
 };
 
-use super::account_usage::query::{AccountUsageTimeBucket, RetainedUsageSummary};
-use super::usage::insights::RequestHealthTimeBucket;
+use crate::telemetry::account_usage::query::{AccountUsageTimeBucket, RetainedUsageSummary};
+use crate::telemetry::usage::insights::RequestHealthTimeBucket;
 
 const HEALTH_TIMELINE_SLOT_MINUTES: i64 = 15;
 const HEALTH_TIMELINE_SLOTS: i64 = 24 * 4;

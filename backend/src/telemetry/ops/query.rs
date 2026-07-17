@@ -3,8 +3,8 @@
 use thiserror::Error;
 
 use crate::telemetry::{
-    ops::store::{OpsErrorFilter, PgOpsErrorLogStore},
-    ops::types::OpsErrorLog,
+    ops::store::PgOpsErrorLogStore,
+    ops::types::{OpsErrorFilter, OpsErrorLog},
 };
 
 /// 管理端运维错误事件错误。

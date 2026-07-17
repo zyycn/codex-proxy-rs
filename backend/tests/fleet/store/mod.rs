@@ -1,12 +1,11 @@
 use chrono::{DateTime, Duration, Utc};
 use codex_proxy_rs::fleet::{
     account::AccountStatus,
-    quota::{quota_snapshot_limit_reached, quota_snapshot_reset_at},
+    quota::{QuotaSnapshot, quota_snapshot_limit_reached, quota_snapshot_reset_at},
     store::{AccountClaimsUpdate, AccountStore, ImportedAccountUpsert, NewAccount, PgAccountStore},
+    usage::{AccountUsageDelta, AccountUsageStore, AccountUsageWindow},
 };
-use codex_proxy_rs::telemetry::account_usage::store::{
-    AccountUsageDelta, AccountUsageStore, AccountUsageWindow, PgAccountUsageStore,
-};
+use codex_proxy_rs::telemetry::account_usage::store::PgAccountUsageStore;
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::json;
 
@@ -685,7 +684,7 @@ async fn account_store_should_mark_quota_exhausted_for_any_exhausted_window() {
     let (pool, _dir) = account_store_parts("accounts", 47).await;
     let repo = PgAccountStore::new(pool.clone());
     seed_repo_account(&pool, "acct_a", "2026-06-11T00:00:00Z").await;
-    let quota = json!({
+    let quota = QuotaSnapshot::from_value(json!({
         "plan_type": "plus",
         "snapshots": [{
             "source": "additional",
@@ -700,12 +699,18 @@ async fn account_store_should_mark_quota_exhausted_for_any_exhausted_window() {
             },
             "secondary": null
         }]
-    });
+    }))
+    .expect("quota should parse");
     let limit_reached = quota_snapshot_limit_reached(&quota);
     let cooldown_until = quota_snapshot_reset_at(&quota);
 
     let updated = repo
-        .apply_quota_snapshot("acct_a", &quota.to_string(), limit_reached, cooldown_until)
+        .apply_quota_snapshot(
+            "acct_a",
+            &quota.to_json().expect("quota should serialize"),
+            limit_reached,
+            cooldown_until,
+        )
         .await
         .unwrap();
     let status: (String, bool, Option<DateTime<Utc>>) = sqlx::query_as(

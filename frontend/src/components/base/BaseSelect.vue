@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { onClickOutside, useEventListener, useThrottleFn, whenever } from '@vueuse/core'
+import type { CSSProperties } from 'vue'
 import { Check, ChevronDown } from '@lucide/vue'
+import { onClickOutside, useEventListener, useThrottleFn, whenever } from '@vueuse/core'
 import { clamp } from 'es-toolkit'
 import { computed, nextTick, ref, useAttrs, watch } from 'vue'
-import type { CSSProperties } from 'vue'
 
 interface SelectOption {
   label: string
@@ -65,7 +65,7 @@ const sizeConfig: Record<
   },
 }
 
-const selectedOption = computed(() => props.options.find((option) => option.value === model.value))
+const selectedOption = computed(() => props.options.find(option => option.value === model.value))
 
 const triggerClasses = computed(() => [
   'relative inline-flex w-full min-w-0 items-center gap-2 overflow-visible border-0 text-left font-[650] leading-none shadow-(--cp-shadow-input) outline-none transition-[background-color,box-shadow,color] duration-[160ms]',
@@ -95,7 +95,7 @@ function enabledIndexes() {
 }
 
 function selectedIndex() {
-  return props.options.findIndex((option) => option.value === model.value)
+  return props.options.findIndex(option => option.value === model.value)
 }
 
 function setActiveToSelected() {
@@ -109,7 +109,8 @@ function setActiveToSelected() {
 }
 
 function updatePopoverPosition() {
-  if (!open.value || !triggerRef.value) return
+  if (!open.value || !triggerRef.value)
+    return
 
   const rect = triggerRef.value.getBoundingClientRect()
   const gap = 6
@@ -135,7 +136,8 @@ function updatePopoverPosition() {
 const updatePopoverPositionThrottled = useThrottleFn(updatePopoverPosition, 32, true)
 
 async function openMenu() {
-  if (props.disabled || open.value) return
+  if (props.disabled || open.value)
+    return
 
   open.value = true
   setActiveToSelected()
@@ -158,7 +160,8 @@ function toggleMenu() {
 
 function moveActive(delta: number) {
   const indexes = enabledIndexes()
-  if (indexes.length === 0) return
+  if (indexes.length === 0)
+    return
 
   const current = indexes.indexOf(activeIndex.value)
   const next = current === -1 ? (delta > 0 ? 0 : indexes.length - 1) : current + delta
@@ -166,7 +169,8 @@ function moveActive(delta: number) {
 }
 
 function chooseOption(option: SelectOption, index: number) {
-  if (option.disabled) return
+  if (option.disabled)
+    return
 
   model.value = option.value
   activeIndex.value = index
@@ -175,13 +179,15 @@ function chooseOption(option: SelectOption, index: number) {
 
 function chooseActive() {
   const option = props.options[activeIndex.value]
-  if (!option) return
+  if (!option)
+    return
 
   chooseOption(option, activeIndex.value)
 }
 
 function handleTriggerKeydown(event: KeyboardEvent) {
-  if (props.disabled) return
+  if (props.disabled)
+    return
 
   if (event.key === 'ArrowDown') {
     event.preventDefault()
@@ -240,7 +246,8 @@ whenever(open, async () => {
 watch(
   () => [props.options, model.value],
   () => {
-    if (!open.value) return
+    if (!open.value)
+      return
     setActiveToSelected()
   },
 )

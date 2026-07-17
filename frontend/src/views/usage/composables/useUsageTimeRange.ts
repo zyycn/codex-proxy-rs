@@ -1,4 +1,5 @@
-import dayjs, { type Dayjs } from 'dayjs'
+import type { Dayjs } from 'dayjs'
+import dayjs from 'dayjs'
 import { computed, shallowRef } from 'vue'
 
 export type UsageTimeRange = 'today' | '7d' | '30d'

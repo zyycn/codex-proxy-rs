@@ -9,12 +9,12 @@ defineProps<{
   selectedCount: number
 }>()
 
-const search = defineModel<string>('search', { required: true })
-
 const emit = defineEmits<{
   create: []
   deleteSelected: []
 }>()
+
+const search = defineModel<string>('search', { required: true })
 </script>
 
 <template>

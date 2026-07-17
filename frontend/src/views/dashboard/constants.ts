@@ -1,5 +1,5 @@
-export type HealthStatus =
-  'future' | 'no_data' | 'unavailable' | 'unstable' | 'low_sample' | 'stable'
+export type HealthStatus
+  = 'future' | 'no_data' | 'unavailable' | 'unstable' | 'low_sample' | 'stable'
 
 export interface HealthTimelinePoint {
   time: string
@@ -35,7 +35,7 @@ export const healthLegend = [
   { status: 'unstable', label: '不稳定' },
   { status: 'low_sample', label: '低样本' },
   { status: 'stable', label: '稳定' },
-] satisfies { status: HealthStatus; label: string }[]
+] satisfies { status: HealthStatus, label: string }[]
 
 export const healthStatusMeta: Record<HealthStatus, HealthStatusMeta> = {
   future: {
@@ -72,12 +72,16 @@ export const healthStatusMeta: Record<HealthStatus, HealthStatusMeta> = {
 
 export function healthReliabilityValueClass(successRequests: number, failedRequests: number) {
   const eligibleRequests = Math.max(0, successRequests) + Math.max(0, failedRequests)
-  if (eligibleRequests === 0) return 'text-(--cp-text-muted)'
+  if (eligibleRequests === 0)
+    return 'text-(--cp-text-muted)'
 
   const reliability = (Math.max(0, successRequests) / eligibleRequests) * 100
-  if (reliability >= 99.5) return 'text-(--cp-success-text)'
-  if (reliability >= 98) return 'text-(--cp-normal-text)'
-  if (reliability >= 95) return 'text-(--cp-warning-text)'
+  if (reliability >= 99.5)
+    return 'text-(--cp-success-text)'
+  if (reliability >= 98)
+    return 'text-(--cp-normal-text)'
+  if (reliability >= 95)
+    return 'text-(--cp-warning-text)'
   return 'text-(--cp-danger-text)'
 }
 

@@ -1,23 +1,27 @@
 <script setup lang="ts">
-import { useClipboard, useFileDialog } from '@vueuse/core'
-import { computed, ref } from 'vue'
+import type { useAccountOnboarding } from '../composables/useAccountOnboarding'
+import type { AccountRow } from '../quota'
 import { Copy, KeyRound, Upload } from '@lucide/vue'
 
+import { useClipboard, useFileDialog } from '@vueuse/core'
+import { computed, ref } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
-import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
+import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { toast } from '@/components/base/BaseToast'
 
+type CreateForm = ReturnType<typeof useAccountOnboarding>['createForm']['value']
+
 const props = withDefaults(
   defineProps<{
     saving?: boolean
     oauthLoading?: boolean
     reauthorizing?: boolean
-    account?: any
+    account?: AccountRow | null
   }>(),
   {
     saving: false,
@@ -27,14 +31,13 @@ const props = withDefaults(
   },
 )
 
-const open = defineModel<boolean>({ default: false })
-const form = defineModel<any>('form', { required: true })
-const { copy } = useClipboard()
-
 const emit = defineEmits<{
   create: []
   generateOauth: []
 }>()
+const open = defineModel<boolean>({ default: false })
+const form = defineModel<CreateForm>('form', { required: true })
+const { copy } = useClipboard()
 
 const fileError = ref('')
 const { open: openImportFile, onChange: onImportFileChange } = useFileDialog({
@@ -54,7 +57,8 @@ const modeOptions = [
 const mode = computed({
   get: () => form.value.mode,
   set: (value: string) => {
-    if (props.reauthorizing && value !== 'oauth') return
+    if (props.reauthorizing && value !== 'oauth')
+      return
     form.value = { ...form.value, mode: value }
     fileError.value = ''
   },
@@ -102,13 +106,15 @@ const oauthPanelDescription = computed(() => {
 })
 
 const canSubmit = computed(() => {
-  if (props.saving || props.oauthLoading) return false
+  if (props.saving || props.oauthLoading)
+    return false
   if (mode.value === 'oauth') {
     return Boolean(
       form.value.oauthSessionId && oauthAuthUrl.value && oauthCallback.value.trim().length > 0,
     )
   }
-  if (mode.value === 'token') return tokenText.value.trim().length > 0
+  if (mode.value === 'token')
+    return tokenText.value.trim().length > 0
   return importText.value.trim().length > 0
 })
 
@@ -134,11 +140,13 @@ const description = computed(() => {
 async function loadImportFile(files: FileList | null) {
   fileError.value = ''
   const file = files?.[0]
-  if (!file) return
+  if (!file)
+    return
 
   try {
     importText.value = await file.text()
-  } catch {
+  }
+  catch {
     fileError.value = '文件读取失败'
   }
 }
@@ -148,11 +156,13 @@ onImportFileChange((files) => {
 })
 
 async function copyOAuthAuthUrl() {
-  if (!oauthAuthUrl.value) return
+  if (!oauthAuthUrl.value)
+    return
   try {
     await copy(oauthAuthUrl.value)
     toast.success('授权链接已复制')
-  } catch {
+  }
+  catch {
     toast.error('复制失败')
   }
 }
@@ -232,7 +242,7 @@ async function copyOAuthAuthUrl() {
             >
               <pre
                 class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.6] font-[650] text-(--cp-text-secondary)"
-                >{{ oauthAuthUrl }}</pre>
+              >{{ oauthAuthUrl }}</pre>
             </BaseScrollbar>
           </BaseFormItem>
         </BaseForm>
@@ -262,7 +272,7 @@ async function copyOAuthAuthUrl() {
           <BaseTextarea
             v-model="importText"
             size="lg"
-            placeholder='{"accounts":[...]}'
+            placeholder="{&quot;accounts&quot;:[...]}"
             :disabled="saving"
           />
         </BaseFormItem>
@@ -270,7 +280,9 @@ async function copyOAuthAuthUrl() {
     </div>
 
     <template #footer>
-      <BaseButton variant="ghost" :disabled="saving" @click="open = false">取消</BaseButton>
+      <BaseButton variant="ghost" :disabled="saving" @click="open = false">
+        取消
+      </BaseButton>
       <BaseButton
         variant="primary"
         :loading="saving"

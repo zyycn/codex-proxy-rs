@@ -10,12 +10,12 @@ use tokio::time::sleep;
 use uuid::Uuid;
 
 use crate::{
+    fleet::refresh::RefreshFailure,
     fleet::{
         account::{AccountListSort, AccountStatus},
         store::AccountStore,
     },
     infra::{json::NumberedPage, time::elapsed_millis_i64},
-    upstream::openai::token_client::RefreshFailure,
 };
 
 use super::{

@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import type { getUsageRecordInsightsDiagnostics } from '@/api'
 import { CornerDownRight } from '@lucide/vue'
-import { computed } from 'vue'
 
+import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
@@ -9,9 +10,11 @@ import BaseTable from '@/components/base/BaseTable/index.vue'
 
 import { formatCompactNumber, formatDuration, formatPercent, formatUsd } from '../utils/format'
 
+type Diagnostics = Awaited<ReturnType<typeof getUsageRecordInsightsDiagnostics>>
+
 const props = withDefaults(
   defineProps<{
-    diagnostics: any
+    diagnostics: Diagnostics
     loading?: boolean
   }>(),
   {
@@ -65,12 +68,12 @@ const diagnosticColumns = [
 ]
 
 const selectedDimensionLabel = computed(
-  () => dimensionOptions.find((option) => option.value === dimension.value)?.label ?? '维度',
+  () => dimensionOptions.find(option => option.value === dimension.value)?.label ?? '维度',
 )
 
 const resultDimension = computed(() => props.diagnostics.dimension || dimension.value)
 const resultDimensionLabel = computed(
-  () => dimensionOptions.find((option) => option.value === resultDimension.value)?.label ?? '维度',
+  () => dimensionOptions.find(option => option.value === resultDimension.value)?.label ?? '维度',
 )
 
 const sortedItems = computed(() =>
@@ -80,7 +83,7 @@ const sortedItems = computed(() =>
 )
 
 const displayItems = computed(() =>
-  sortedItems.value.map((item) => ({
+  sortedItems.value.map(item => ({
     ...item,
     nameDisplay: diagnosticNameDisplay(item.name),
   })),
@@ -89,8 +92,8 @@ const hasData = computed(() => !props.loading && displayItems.value.length > 0)
 
 function diagnosticNameDisplay(name: string) {
   const raw = name.trim() || '未知'
-  const full =
-    resultDimension.value === 'transport' ? ({ websocket: 'WS', http_sse: 'SSE' }[raw] ?? raw) : raw
+  const full
+    = resultDimension.value === 'transport' ? ({ websocket: 'WS', http_sse: 'SSE' }[raw] ?? raw) : raw
   if (resultDimension.value !== 'model' && resultDimension.value !== 'account') {
     return { primary: full, secondary: '', full }
   }

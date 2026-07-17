@@ -69,11 +69,11 @@ function createMotionTimeline(root: HTMLElement, glyphElement: HTMLElement, phas
   stopActiveTimeline(targets)
   gsap.set(targets, { willChange: 'transform' })
 
-  let timeline: MotionTimeline
-  timeline = gsap.timeline({
+  const timeline = gsap.timeline({
     defaults: { ease: 'power2.out' },
     onComplete: () => {
-      if (activeTimeline !== timeline) return
+      if (activeTimeline !== timeline)
+        return
       activeTimeline = undefined
 
       if (phase === 'leave' && !isPointerInside) {
@@ -90,11 +90,11 @@ function createMotionTimeline(root: HTMLElement, glyphElement: HTMLElement, phas
 }
 
 function nextRandomReaction() {
-  const index =
-    previousReactionIndex < 0
+  const index
+    = previousReactionIndex < 0
       ? Math.floor(Math.random() * randomReactions.length)
-      : (previousReactionIndex + 1 + Math.floor(Math.random() * (randomReactions.length - 1))) %
-        randomReactions.length
+      : (previousReactionIndex + 1 + Math.floor(Math.random() * (randomReactions.length - 1)))
+        % randomReactions.length
   previousReactionIndex = index
   return randomReactions[index]!
 }
@@ -258,7 +258,8 @@ function playEnterReaction() {
 
   const root = icon.value
   const glyphElement = glyph.value
-  if (!root || !glyphElement) return
+  if (!root || !glyphElement)
+    return
 
   activeReaction = props.variant === 'brand' ? brandReaction : nextRandomReaction()
   activeReaction.enter(root, glyphElement)
@@ -282,7 +283,8 @@ function playLeaveReaction() {
 }
 
 watch(preferredMotion, (motion) => {
-  if (motion === 'reduce') resetMotion()
+  if (motion === 'reduce')
+    resetMotion()
 })
 
 onBeforeUnmount(resetMotion)

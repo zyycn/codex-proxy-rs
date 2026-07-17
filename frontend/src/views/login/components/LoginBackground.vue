@@ -1,5 +1,5 @@
 <script setup lang="ts">
-type RouteCluster = {
+interface RouteCluster {
   id: string
   labels: readonly string[]
   className: string
@@ -254,25 +254,17 @@ const routeClusters: readonly RouteCluster[] = [
   opacity: 0.68;
   background-image:
     linear-gradient(var(--login-grain), var(--login-grain)) 139px 109px / 3px 2px no-repeat,
-    linear-gradient(var(--login-grain-alt-a), var(--login-grain-alt-a)) 288px 192px / 1px 1px
-      no-repeat,
-    linear-gradient(var(--login-grain-alt-b), var(--login-grain-alt-b)) 437px 275px / 1px 1px
-      no-repeat,
+    linear-gradient(var(--login-grain-alt-a), var(--login-grain-alt-a)) 288px 192px / 1px 1px no-repeat,
+    linear-gradient(var(--login-grain-alt-b), var(--login-grain-alt-b)) 437px 275px / 1px 1px no-repeat,
     linear-gradient(var(--login-grain), var(--login-grain)) 586px 358px / 2px 1px no-repeat,
-    linear-gradient(var(--login-grain-alt-a), var(--login-grain-alt-a)) 735px 441px / 1px 2px
-      no-repeat,
-    linear-gradient(var(--login-grain-alt-b), var(--login-grain-alt-b)) 884px 524px / 3px 1px
-      no-repeat,
+    linear-gradient(var(--login-grain-alt-a), var(--login-grain-alt-a)) 735px 441px / 1px 2px no-repeat,
+    linear-gradient(var(--login-grain-alt-b), var(--login-grain-alt-b)) 884px 524px / 3px 1px no-repeat,
     linear-gradient(var(--login-grain), var(--login-grain)) 1033px 607px / 2px 1px no-repeat,
-    linear-gradient(var(--login-grain-alt-a), var(--login-grain-alt-a)) 1182px 690px / 1px 1px
-      no-repeat,
-    linear-gradient(var(--login-grain-alt-b), var(--login-grain-alt-b)) 1331px 773px / 1px 2px
-      no-repeat,
+    linear-gradient(var(--login-grain-alt-a), var(--login-grain-alt-a)) 1182px 690px / 1px 1px no-repeat,
+    linear-gradient(var(--login-grain-alt-b), var(--login-grain-alt-b)) 1331px 773px / 1px 2px no-repeat,
     linear-gradient(var(--login-grain), var(--login-grain)) 1480px 856px / 2px 1px no-repeat,
-    linear-gradient(var(--login-grain-alt-a), var(--login-grain-alt-a)) 1629px 939px / 3px 1px
-      no-repeat,
-    linear-gradient(var(--login-grain-alt-b), var(--login-grain-alt-b)) 1778px 67px / 1px 1px
-      no-repeat;
+    linear-gradient(var(--login-grain-alt-a), var(--login-grain-alt-a)) 1629px 939px / 3px 1px no-repeat,
+    linear-gradient(var(--login-grain-alt-b), var(--login-grain-alt-b)) 1778px 67px / 1px 1px no-repeat;
 }
 
 .login-protocol-stack {

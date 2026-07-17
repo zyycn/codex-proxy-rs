@@ -108,30 +108,52 @@ impl TaskCoordinator {
     /// 启动各领域的设置订阅任务。
     pub fn start_settings_subscriptions(services: &crate::bootstrap::services::Services) -> Self {
         let mut coordinator = TaskCoordinator::default();
+        let mut settings = services.settings.subscribe();
+        let initial = settings.borrow().clone();
+        let (model_tx, model_rx) = tokio::sync::watch::channel(crate::models::types::ModelConfig {
+            model_aliases: initial.model_aliases.clone(),
+        });
+        let (pool_tx, pool_rx) =
+            tokio::sync::watch::channel(crate::bootstrap::services::account_pool_runtime_options(
+                &initial,
+                &services.account_pool_static,
+            ));
+        let (refresh_tx, refresh_rx) =
+            tokio::sync::watch::channel(crate::fleet::refresh::RefreshPolicy {
+                refresh_margin_seconds: initial.refresh_margin_seconds,
+                refresh_concurrency: initial.refresh_concurrency,
+            });
         coordinator.push(
             "model_settings",
-            SchedulerHandle::spawn(
-                services
-                    .models
-                    .clone()
-                    .subscribe_settings(services.settings.subscribe()),
-            ),
+            SchedulerHandle::spawn(services.models.clone().subscribe_config(model_rx)),
         );
         coordinator.push(
             "account_pool_settings",
-            SchedulerHandle::spawn(services.account_pool.clone().subscribe_settings(
-                services.settings.subscribe(),
-                services.account_pool_static.clone(),
-            )),
+            SchedulerHandle::spawn(services.account_pool.clone().subscribe_options(pool_rx)),
         );
         coordinator.push(
             "refresh_policy_settings",
-            SchedulerHandle::spawn(
-                services
-                    .refresh_policy
-                    .clone()
-                    .subscribe_settings(services.settings.subscribe()),
-            ),
+            SchedulerHandle::spawn(services.refresh_policy.clone().subscribe_policy(refresh_rx)),
+        );
+        let static_settings = services.account_pool_static.clone();
+        coordinator.push(
+            "settings_fanout",
+            SchedulerHandle::spawn(async move {
+                while settings.changed().await.is_ok() {
+                    let snapshot = settings.borrow_and_update().clone();
+                    model_tx.send_replace(crate::models::types::ModelConfig {
+                        model_aliases: snapshot.model_aliases.clone(),
+                    });
+                    pool_tx.send_replace(crate::bootstrap::services::account_pool_runtime_options(
+                        &snapshot,
+                        &static_settings,
+                    ));
+                    refresh_tx.send_replace(crate::fleet::refresh::RefreshPolicy {
+                        refresh_margin_seconds: snapshot.refresh_margin_seconds,
+                        refresh_concurrency: snapshot.refresh_concurrency,
+                    });
+                }
+            }),
         );
         coordinator
     }

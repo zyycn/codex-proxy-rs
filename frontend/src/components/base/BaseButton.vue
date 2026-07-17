@@ -45,8 +45,8 @@ const variantClasses = {
     'bg-transparent text-(--cp-text-secondary) hover:bg-(--cp-bg-subtle) active:bg-(--cp-bg-muted)',
 }
 
-const iconOnlyDefaultClasses =
-  'bg-(--cp-bg-surface) text-(--cp-text-secondary) shadow-(--cp-shadow-control) hover:bg-(--cp-default-bg-hover) hover:text-(--cp-normal) active:bg-(--cp-default-bg-active)'
+const iconOnlyDefaultClasses
+  = 'bg-(--cp-bg-surface) text-(--cp-text-secondary) shadow-(--cp-shadow-control) hover:bg-(--cp-default-bg-hover) hover:text-(--cp-normal) active:bg-(--cp-default-bg-active)'
 
 const sizeClasses: Record<ButtonSize, string> = {
   sm: 'h-7 gap-1.5 px-3 text-xs',
@@ -86,7 +86,7 @@ const ariaLabel = computed(() => props.label || props.title)
 const labelText = computed(() => {
   const defaultSlot = slots.default?.()
   const text = defaultSlot
-    ?.map((node) => (typeof node.children === 'string' ? node.children : ''))
+    ?.map(node => (typeof node.children === 'string' ? node.children : ''))
     .join('')
     .trim()
 

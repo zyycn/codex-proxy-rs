@@ -1,12 +1,13 @@
 <script setup lang="ts">
+import type { AccountRow } from '../quota'
 import { KeyRound, LoaderCircle, MoreHorizontal, Power, RefreshCw, Trash2, Wifi } from '@lucide/vue'
-import { computed } from 'vue'
 
+import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
 
 const props = defineProps<{
-  account: any
+  account: AccountRow
   deleting: boolean
   refreshing: boolean
   testing: boolean
@@ -14,19 +15,19 @@ const props = defineProps<{
   scheduleLabel: string
 }>()
 
+const emit = defineEmits<{
+  delete: [account: AccountRow]
+  test: [account: AccountRow]
+  refresh: [accountId: string]
+  reauthorize: [account: AccountRow]
+  toggleSchedule: [account: AccountRow]
+}>()
+
 const canRefreshToken = computed(
   () =>
-    props.account.hasRefreshToken &&
-    (props.account.status === 'active' || props.account.status === 'quota_exhausted'),
+    props.account.hasRefreshToken
+    && (props.account.status === 'active' || props.account.status === 'quota_exhausted'),
 )
-
-const emit = defineEmits<{
-  delete: [account: any]
-  test: [account: any]
-  refresh: [accountId: string]
-  reauthorize: [account: any]
-  toggleSchedule: [account: any]
-}>()
 </script>
 
 <template>

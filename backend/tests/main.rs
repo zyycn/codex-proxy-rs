@@ -1,4 +1,5 @@
 mod api;
+mod architecture;
 mod auth;
 mod bootstrap;
 mod dispatch;

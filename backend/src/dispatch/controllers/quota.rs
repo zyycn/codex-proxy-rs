@@ -10,7 +10,7 @@ use crate::{
     fleet::{
         account_failure::{
             AccountFailureKind, AccountStateEffect, apply_account_state_effect_immediately,
-            classify_response_failure, classify_upstream_failure,
+            classify_account_failure,
         },
         pool::AccountPoolService,
     },
@@ -90,7 +90,11 @@ fn classify_upstream(
     account_id: &str,
     facts: &UpstreamFailureFacts,
 ) -> Option<ClassifiedQuotaFailure> {
-    classified_quota_failure(account_id, &facts.body, classify_upstream_failure(facts)?)
+    classified_quota_failure(
+        account_id,
+        &facts.body,
+        classify_account_failure(&super::failure_observation::from_upstream(facts))?,
+    )
 }
 
 fn classify_stream(
@@ -98,7 +102,11 @@ fn classify_stream(
     failure: &ResponsesSseFailure,
 ) -> Option<ClassifiedQuotaFailure> {
     let body = crate::dispatch::failure::sse::sse_failure_error_body(failure);
-    classified_quota_failure(account_id, &body, classify_response_failure(failure)?)
+    classified_quota_failure(
+        account_id,
+        &body,
+        classify_account_failure(&super::failure_observation::from_response(failure))?,
+    )
 }
 
 fn classified_quota_failure(

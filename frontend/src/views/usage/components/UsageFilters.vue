@@ -9,11 +9,11 @@ defineProps<{
   loading: boolean
 }>()
 
-const search = defineModel<string>('search', { required: true })
-
 const emit = defineEmits<{
   refresh: []
 }>()
+
+const search = defineModel<string>('search', { required: true })
 </script>
 
 <template>

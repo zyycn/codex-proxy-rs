@@ -1,13 +1,23 @@
-import { shallowRef } from 'vue'
+import type { Ref } from 'vue'
+import type { UsageTimeRangeParams } from './useUsageTimeRange'
 
+import type { getUsageRecords } from '@/api'
+import { shallowRef } from 'vue'
 import { getUsageRecordDetail } from '@/api'
 import { toast } from '@/components/base/BaseToast'
+import { errorMessage } from '@/utils/async'
 
-export function useUsageRecordDetail(options: any = {}) {
+export function useUsageRecordDetail(options: {
+  timeRangeParams?: Readonly<Ref<UsageTimeRangeParams>>
+} = {}) {
   const showDetailModal = shallowRef(false)
-  const selectedUsageRecord = shallowRef<any>(null)
+  const selectedUsageRecord = shallowRef<Awaited<ReturnType<typeof getUsageRecordDetail>> | null>(
+    null,
+  )
 
-  async function handleViewDetail(record: any) {
+  async function handleViewDetail(
+    record: Awaited<ReturnType<typeof getUsageRecords>>['items'][number],
+  ) {
     try {
       const detail = await getUsageRecordDetail({
         ...(options?.timeRangeParams?.value ?? {}),
@@ -15,8 +25,9 @@ export function useUsageRecordDetail(options: any = {}) {
       })
       selectedUsageRecord.value = detail
       showDetailModal.value = true
-    } catch (error: any) {
-      toast.error(error.message || '加载详情失败')
+    }
+    catch (error: unknown) {
+      toast.error(errorMessage(error, '加载详情失败'))
     }
   }
 

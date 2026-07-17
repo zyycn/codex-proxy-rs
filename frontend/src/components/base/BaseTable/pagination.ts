@@ -34,7 +34,7 @@ export function getCurrentPage(pagination: BaseTablePagination | undefined, tota
 export function getPageSizeOptions(pagination?: BaseTablePagination) {
   const pageSizes = pagination?.pageSizes?.length ? pagination.pageSizes : DEFAULT_PAGE_SIZES
 
-  return pageSizes.map((pageSize) => ({
+  return pageSizes.map(pageSize => ({
     label: `${pageSize} 条/页`,
     value: String(pageSize),
   }))
@@ -57,7 +57,7 @@ export function getPagerItems(total: number, current: number): PagerItem[] {
     pages.add(total - 3)
   }
 
-  const sorted = [...pages].filter((page) => page >= 1 && page <= total).sort((a, b) => a - b)
+  const sorted = [...pages].filter(page => page >= 1 && page <= total).sort((a, b) => a - b)
   const items: PagerItem[] = []
   for (const page of sorted) {
     const previous = items[items.length - 1]

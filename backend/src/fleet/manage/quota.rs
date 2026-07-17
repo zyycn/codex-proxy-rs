@@ -1,7 +1,16 @@
-use secrecy::ExposeSecret;
+use serde_json::Value;
 
 use super::{AccountManageService, types::AccountManageError};
-use crate::fleet::account_failure::apply_client_failure_effect;
+use crate::fleet::{
+    account_failure::{apply_account_state_effect, classify_account_failure},
+    account_gateway::AccountUpstreamContext,
+    quota::QuotaSnapshot,
+};
+
+pub struct AccountQuotaRefresh {
+    pub quota: QuotaSnapshot,
+    pub raw: Value,
+}
 
 impl AccountManageService {
     async fn usage_cookie_header(&self, account_id: &str) -> Option<String> {
@@ -24,7 +33,7 @@ impl AccountManageService {
     pub async fn account_quota(
         &self,
         account_id: &str,
-    ) -> Result<serde_json::Value, AccountManageError> {
+    ) -> Result<AccountQuotaRefresh, AccountManageError> {
         let stored = self
             .store
             .get(account_id)
@@ -32,42 +41,38 @@ impl AccountManageService {
             .map_err(|_| AccountManageError::NotFound)?
             .ok_or(AccountManageError::NotFound)?;
 
-        let request_id = uuid::Uuid::new_v4().to_string();
-        let token = stored.access_token.expose_secret().to_string();
-        let cookie_header = self.usage_cookie_header(account_id).await;
-        let installation_id = self.account_pseudonymizer.installation_id(account_id);
-        let context = crate::upstream::openai::transport::CodexRequestContext {
-            access_token: &token,
-            account_id: stored.account_id.as_deref(),
-            request_id: &request_id,
-            turn_state: None,
-            turn_metadata: None,
-            beta_features: None,
-            include_timing_metrics: None,
-            version: None,
-            codex_window_id: None,
-            parent_thread_id: None,
-            cookie_header: cookie_header.as_deref(),
-            installation_id: Some(&installation_id),
-            session_id: None,
-            thread_id: None,
-            client_request_id: None,
-            turn_id: None,
+        let context = AccountUpstreamContext {
+            access_token: stored.access_token.clone(),
+            account_id: stored.account_id.clone(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+            cookie_header: self.usage_cookie_header(account_id).await,
+            installation_id: Some(self.account_pseudonymizer.installation_id(account_id)),
         };
-        let raw = match self.codex.fetch_usage(context).await {
-            Ok(raw) => raw,
+        let result = match self.upstream.fetch_usage(context).await {
+            Ok(result) => result,
             Err(error) => {
-                apply_client_failure_effect(&self.account_pool, &self.codex, account_id, &error)
+                if let Some(classified) = error.failure().and_then(classify_account_failure)
+                    && let Some(effect) = &classified.effect
+                {
+                    apply_account_state_effect(
+                        &self.account_pool,
+                        self.upstream.as_ref(),
+                        account_id,
+                        effect,
+                    )
                     .await;
+                }
                 return Err(AccountManageError::FetchQuota(error.to_string()));
             }
         };
-        let normalized = crate::fleet::quota::quota_from_usage(&raw);
         self.account_pool
-            .apply_quota_snapshot(account_id, &normalized)
+            .apply_quota_snapshot(account_id, &result.quota)
             .await;
         self.sync_account_pool_best_effort(account_id, "account quota refresh")
             .await;
-        Ok(serde_json::json!({ "quota": normalized, "raw": raw }))
+        Ok(AccountQuotaRefresh {
+            quota: result.quota,
+            raw: result.raw,
+        })
     }
 }

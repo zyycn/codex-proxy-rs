@@ -26,12 +26,11 @@ const props = withDefaults(
   },
 )
 
-const open = defineModel<boolean>({ default: false })
 const emit = defineEmits<{
   confirm: []
   cancel: []
 }>()
-
+const open = defineModel<boolean>({ default: false })
 const confirmVariantMap: Record<ConfirmVariant, ButtonVariant> = {
   info: 'primary',
   warning: 'warning',
@@ -40,13 +39,15 @@ const confirmVariantMap: Record<ConfirmVariant, ButtonVariant> = {
 }
 
 function handleCancel() {
-  if (props.loading) return
+  if (props.loading)
+    return
   open.value = false
   emit('cancel')
 }
 
 function handleConfirm() {
-  if (props.loading || props.confirmDisabled) return
+  if (props.loading || props.confirmDisabled)
+    return
   emit('confirm')
 }
 </script>

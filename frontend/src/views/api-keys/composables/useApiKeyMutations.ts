@@ -1,31 +1,29 @@
+import type { Ref } from 'vue'
+import type { getApiKeys } from '@/api'
 import { useClipboard } from '@vueuse/core'
-import { clamp } from 'es-toolkit'
-import { onMounted, ref, type Ref } from 'vue'
 
-import { createApiKey, deleteApiKeys, getApiKeys, updateApiKey } from '@/api'
+import { ref } from 'vue'
+import { createApiKey, deleteApiKeys, updateApiKey } from '@/api'
 import { toast } from '@/components/base/BaseToast'
-import type { BaseTableSort } from '@/components/base/BaseTable/columns'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useIdSet } from '@/composables/useIdSet'
+import { errorMessage } from '@/utils/async'
+
+type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number]
 
 export function useApiKeyMutations(options: {
-  page: Ref<number>
-  pageSize: Ref<number>
-  searchQuery: Ref<string>
-  sort: Ref<BaseTableSort | undefined>
   selectedIds: Ref<Set<string>>
-  totalApiKeys: Ref<number>
+  reload: () => Promise<unknown>
 }) {
   const { copy } = useClipboard()
-  const loading = ref(true)
-  const apiKeys = ref<any[]>([])
+  const loadApiKeys = options.reload
   const showCreateModal = ref(false)
   const showDeleteModal = ref(false)
   const showSingleDeleteModal = ref(false)
   const showKeyModal = ref(false)
   const createdKey = ref('')
   const createdKeyName = ref('')
-  const pendingDeleteKey = ref<any>(null)
+  const pendingDeleteKey = ref<ApiKeyRow | null>(null)
   const creatingKeyAction = useAsyncAction()
   const deletingKeyAction = useAsyncAction()
   const batchDeletingAction = useAsyncAction()
@@ -40,34 +38,9 @@ export function useApiKeyMutations(options: {
     label: '',
   })
 
-  async function loadApiKeys() {
-    try {
-      loading.value = true
-      const result = await getApiKeys({
-        page: options.page.value,
-        pageSize: options.pageSize.value,
-        search: options.searchQuery.value.trim() || undefined,
-        sortBy: options.sort.value?.key,
-        sortDirection: options.sort.value?.direction,
-      })
-      apiKeys.value = result.items
-      options.page.value = result.page.page
-      options.pageSize.value = result.page.pageSize
-      options.totalApiKeys.value = result.page.total
-
-      if (apiKeys.value.length === 0 && result.page.total > 0 && result.page.page > 1) {
-        options.page.value = clamp(result.page.totalPages, 1, Number.POSITIVE_INFINITY)
-        await loadApiKeys()
-      }
-    } catch (error: any) {
-      toast.error(error.message || '加载失败')
-    } finally {
-      loading.value = false
-    }
-  }
-
   async function handleCreate() {
-    if (creatingKey.value) return
+    if (creatingKey.value)
+      return
     if (!createForm.value.name.trim()) {
       toast.warning('请输入 API Key 名称')
       return
@@ -93,16 +66,18 @@ export function useApiKeyMutations(options: {
     )
   }
 
-  function requestDeleteKey(key: any) {
+  function requestDeleteKey(key: ApiKeyRow) {
     pendingDeleteKey.value = key
     showSingleDeleteModal.value = true
   }
 
   async function handleDelete() {
-    if (deletingKey.value) return
+    if (deletingKey.value)
+      return
 
     const keyId = pendingDeleteKey.value?.id
-    if (!keyId) return
+    if (!keyId)
+      return
 
     await deletingKeyAction.run(
       async () => {
@@ -117,8 +92,10 @@ export function useApiKeyMutations(options: {
   }
 
   async function handleBatchDelete() {
-    if (batchDeleting.value) return
-    if (options.selectedIds.value.size === 0) return
+    if (batchDeleting.value)
+      return
+    if (options.selectedIds.value.size === 0)
+      return
 
     await batchDeletingAction.run(
       async () => {
@@ -133,14 +110,15 @@ export function useApiKeyMutations(options: {
     )
   }
 
-  async function handleToggleStatus(key: any) {
+  async function handleToggleStatus(key: ApiKeyRow) {
     await updatingStatusKeys.run(key.id, async () => {
       try {
         await updateApiKey({ id: key.id, status: key.enabled ? 'disabled' : 'active' })
         await loadApiKeys()
         toast.success(key.enabled ? '已禁用' : '已启用')
-      } catch (error: any) {
-        toast.error(error.message || '状态更新失败')
+      }
+      catch (error: unknown) {
+        toast.error(errorMessage(error, '状态更新失败'))
       }
     })
   }
@@ -154,18 +132,13 @@ export function useApiKeyMutations(options: {
     try {
       await copy(text)
       toast.success('已复制到剪贴板')
-    } catch {
+    }
+    catch {
       toast.error('复制失败')
     }
   }
 
-  onMounted(() => {
-    void loadApiKeys()
-  })
-
   return {
-    loading,
-    apiKeys,
     showCreateModal,
     showDeleteModal,
     showSingleDeleteModal,
@@ -178,7 +151,6 @@ export function useApiKeyMutations(options: {
     batchDeleting,
     updatingStatusKeyIds,
     createForm,
-    loadApiKeys,
     handleCreate,
     requestDeleteKey,
     handleDelete,

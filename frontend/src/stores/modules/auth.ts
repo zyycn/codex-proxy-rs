@@ -1,8 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
-import { getAuthStatus, login as apiLogin, logout as apiLogout } from '@/api'
+import { login as apiLogin, logout as apiLogout, getAuthStatus } from '@/api'
 import { resetUnauthorizedHandling } from '@/api/request'
+import { errorMessage } from '@/utils/async'
 
 export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = ref(false)
@@ -14,17 +15,20 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const status = await getAuthStatus()
       isAuthenticated.value = status.authenticated
-      if (status.authenticated) resetUnauthorizedHandling()
+      if (status.authenticated)
+        resetUnauthorizedHandling()
       return status.authenticated
-    } catch (err: any) {
+    }
+    catch {
       isAuthenticated.value = false
       return false
-    } finally {
+    }
+    finally {
       sessionChecked.value = true
     }
   }
 
-  async function login(payload: any) {
+  async function login(payload: Parameters<typeof apiLogin>[0]) {
     try {
       loading.value = true
       error.value = null
@@ -35,11 +39,13 @@ export const useAuthStore = defineStore('auth', () => {
       resetUnauthorizedHandling()
 
       return true
-    } catch (err: any) {
-      error.value = err.message || '登录失败'
+    }
+    catch (cause: unknown) {
+      error.value = errorMessage(cause, '登录失败')
       isAuthenticated.value = false
       return false
-    } finally {
+    }
+    finally {
       loading.value = false
     }
   }
@@ -47,9 +53,11 @@ export const useAuthStore = defineStore('auth', () => {
   async function logout() {
     try {
       await apiLogout()
-    } catch (err) {
+    }
+    catch {
       // 忽略登出错误
-    } finally {
+    }
+    finally {
       isAuthenticated.value = false
       sessionChecked.value = true
     }

@@ -11,10 +11,10 @@ use async_trait::async_trait;
 use chrono::{Duration, TimeZone, Utc};
 use codex_proxy_rs::fleet::account::AccountStatus;
 use codex_proxy_rs::fleet::refresh::{RedisRefreshLeaseStore, RefreshPolicy};
+use codex_proxy_rs::fleet::refresh::{RefreshFailure, TokenPair, TokenRefresher};
 use codex_proxy_rs::fleet::store::{
     AccountClaimsUpdate, NewAccount, PgAccountStore, StoredAccount,
 };
-use codex_proxy_rs::upstream::openai::token_client::{RefreshFailure, TokenPair, TokenRefresher};
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::json;
 use tokio::{

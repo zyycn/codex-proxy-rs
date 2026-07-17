@@ -639,6 +639,66 @@ async fn websocket_pool_should_release_slot_when_client_drops_stream() {
 }
 
 #[tokio::test]
+async fn websocket_pool_shutdown_should_cancel_and_join_active_stream() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let _request = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.output_text.delta",
+                    "delta": "streaming before shutdown"
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let close = timeout(Duration::from_secs(2), websocket.next())
+            .await
+            .expect("pool shutdown should close the active websocket")
+            .expect("shutdown should produce a close frame")
+            .expect("close frame should be valid");
+        std::assert_matches!(close, Message::Close(_));
+    });
+    let pool = Arc::new(CodexWebSocketPool::default());
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        crate::support::wire_profile::test_wire_profile(),
+    )
+    .with_websocket_pool(Arc::clone(&pool));
+    let request = pooled_websocket_request("conversation-shutdown-stream");
+    let mut stream = backend
+        .create_response_stream(
+            &request,
+            request_context("req_shutdown_stream", Some("chatgpt-account")),
+        )
+        .await
+        .expect("pooled websocket stream should start")
+        .body;
+    let first = stream
+        .next()
+        .await
+        .expect("stream should yield before shutdown")
+        .expect("stream chunk should be valid");
+    assert!(
+        std::str::from_utf8(&first)
+            .unwrap()
+            .contains("before shutdown")
+    );
+
+    timeout(Duration::from_secs(2), pool.shutdown())
+        .await
+        .expect("pool shutdown should join the stream forwarder");
+    server.await.unwrap();
+    assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
 async fn websocket_pool_should_use_http_for_new_keys_after_account_cap() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -711,6 +771,199 @@ async fn websocket_pool_should_use_http_for_new_keys_after_account_cap() {
         Some(CodexTransportDecision::Http2PoolUnavailable)
     );
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn websocket_pool_should_bound_concurrent_openings_across_accounts() {
+    let (websockets, http) = concurrent_pool_transport_counts(8, 2).await;
+
+    assert_eq!((websockets, http), (2, 6));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn websocket_pool_should_bound_total_slots_across_accounts() {
+    let (websockets, http) = concurrent_pool_transport_counts(3, 8).await;
+
+    assert_eq!((websockets, http), (3, 5));
+}
+
+#[tokio::test]
+async fn websocket_pool_should_evict_lru_idle_connection_at_total_cap() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (first_stream, _) = listener.accept().await.unwrap();
+        let mut first = accept_codex_test_websocket(first_stream).await;
+        let _ = first.next().await.unwrap().unwrap();
+        first
+            .send(Message::Text(
+                completed_websocket_response("resp_global_lru_first", 2, 1).into(),
+            ))
+            .await
+            .unwrap();
+
+        let (second_stream, _) = listener.accept().await.unwrap();
+        let mut second = accept_codex_test_websocket(second_stream).await;
+        let _ = second.next().await.unwrap().unwrap();
+        second
+            .send(Message::Text(
+                completed_websocket_response("resp_global_lru_second", 2, 1).into(),
+            ))
+            .await
+            .unwrap();
+
+        let close = timeout(Duration::from_secs(2), first.next())
+            .await
+            .expect("global LRU eviction should close the oldest idle socket")
+            .expect("oldest idle socket should emit a close frame")
+            .expect("oldest idle socket close should be valid");
+        std::assert_matches!(close, Message::Close(_));
+
+        let (third_stream, _) = listener.accept().await.unwrap();
+        let mut third = accept_codex_test_websocket(third_stream).await;
+        let _ = third.next().await.unwrap().unwrap();
+        third
+            .send(Message::Text(
+                completed_websocket_response("resp_global_lru_third", 2, 1).into(),
+            ))
+            .await
+            .unwrap();
+    });
+    let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
+        max_per_account: 8,
+        max_total: 2,
+        max_connecting: 2,
+        ..websocket_pool_config_for_tests(None, None, None)
+    }));
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        crate::support::wire_profile::test_wire_profile(),
+    )
+    .with_websocket_pool(Arc::clone(&pool));
+
+    let mut responses = Vec::new();
+    for index in 0..3 {
+        let request = pooled_websocket_request(&format!("conversation-global-lru-{index}"));
+        let account_id = format!("account-global-lru-{index}");
+        let request_id = format!("req_global_lru_{index}");
+        responses.push(
+            backend
+                .create_response(&request, request_context(&request_id, Some(&account_id)))
+                .await
+                .expect("global LRU request should keep using websocket"),
+        );
+    }
+    server.await.unwrap();
+
+    assert!(responses[0].body.contains("resp_global_lru_first"));
+    assert!(responses[1].body.contains("resp_global_lru_second"));
+    assert!(responses[2].body.contains("resp_global_lru_third"));
+    assert!(
+        responses
+            .iter()
+            .all(|response| response.transport == CodexBackendTransport::WebSocket)
+    );
+    pool.shutdown().await;
+}
+
+async fn concurrent_pool_transport_counts(
+    max_total: usize,
+    max_connecting: usize,
+) -> (usize, usize) {
+    const REQUEST_COUNT: usize = 8;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let mut websocket_streams = Vec::new();
+        let mut http_count = 0;
+        for _ in 0..REQUEST_COUNT {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let method = timeout(Duration::from_secs(2), async {
+                let mut prefix = [0_u8; 4];
+                loop {
+                    let read = stream.peek(&mut prefix).await.unwrap();
+                    if read == prefix.len() {
+                        break prefix;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("upstream request method should arrive");
+            if method == *b"GET " {
+                websocket_streams.push(stream);
+            } else {
+                let request = read_http_request(&mut stream).await;
+                assert!(request.starts_with("POST /codex/responses HTTP/1.1"));
+                write_completed_sse_response(&mut stream).await;
+                http_count += 1;
+            }
+        }
+
+        let websocket_count = websocket_streams.len();
+        for (index, stream) in websocket_streams.into_iter().enumerate() {
+            let mut websocket = accept_codex_test_websocket(stream).await;
+            let _ = websocket.next().await.unwrap().unwrap();
+            websocket
+                .send(Message::Text(
+                    completed_websocket_response(
+                        &format!("resp_global_cap_{max_total}_{max_connecting}_{index}"),
+                        2,
+                        1,
+                    )
+                    .into(),
+                ))
+                .await
+                .unwrap();
+        }
+        (websocket_count, http_count)
+    });
+    let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
+        max_per_account: REQUEST_COUNT,
+        max_total,
+        max_connecting,
+        ..websocket_pool_config_for_tests(None, None, None)
+    }));
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        crate::support::wire_profile::test_wire_profile(),
+    )
+    .with_websocket_pool(Arc::clone(&pool))
+    .with_websocket_fast_path_budget(Duration::from_secs(5));
+    let start = Arc::new(tokio::sync::Barrier::new(REQUEST_COUNT + 1));
+    let mut requests = Vec::new();
+    for index in 0..REQUEST_COUNT {
+        let backend = backend.clone();
+        let start = Arc::clone(&start);
+        requests.push(tokio::spawn(async move {
+            let request = pooled_websocket_request(&format!("conversation-global-cap-{index}"));
+            let account_id = format!("account-global-cap-{index}");
+            let request_id = format!("req_global_cap_{index}");
+            start.wait().await;
+            backend
+                .create_response(&request, request_context(&request_id, Some(&account_id)))
+                .await
+        }));
+    }
+    start.wait().await;
+
+    let mut websocket_responses = 0;
+    for request in requests {
+        let response = request
+            .await
+            .unwrap()
+            .expect("globally capped request should complete");
+        if response.transport == CodexBackendTransport::WebSocket {
+            websocket_responses += 1;
+        }
+    }
+    let (accepted_websockets, accepted_http) = server.await.unwrap();
+    assert_eq!(websocket_responses, accepted_websockets);
+    pool.shutdown().await;
+    (accepted_websockets, accepted_http)
 }
 
 #[tokio::test]
@@ -899,6 +1152,74 @@ async fn websocket_pool_should_gc_expired_idle_connections() {
     assert!(first.body.contains("resp_gc_first"));
     assert!(second.body.contains("resp_gc_second"));
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn websocket_pool_constructed_outside_runtime_should_start_maintenance_on_first_acquire() {
+    const MAX_AGE: Duration = Duration::from_millis(300);
+
+    let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
+        max_age: MAX_AGE,
+        maintenance_interval: Some(Duration::from_millis(20)),
+        ping_interval: None,
+        liveness_timeout: None,
+        ..CodexWebSocketPoolConfig::default()
+    }));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async move {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_codex_test_websocket(stream).await;
+            let _request = websocket.next().await.unwrap().unwrap();
+            websocket
+                .send(Message::Text(
+                    completed_websocket_response("resp_lazy_supervisor", 2, 1).into(),
+                ))
+                .await
+                .unwrap();
+            let close = timeout(Duration::from_secs(2), websocket.next())
+                .await
+                .expect("lazy supervisor should close the expired idle websocket")
+                .expect("maintenance should produce a close frame")
+                .expect("close frame should be valid");
+            std::assert_matches!(close, Message::Close(_));
+        });
+        let backend = CodexBackendClient::new(
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+            format!("http://{addr}"),
+            crate::support::wire_profile::test_wire_profile(),
+        )
+        .with_websocket_pool(Arc::clone(&pool));
+        let request = pooled_websocket_request("conversation-lazy-supervisor");
+        let response = backend
+            .create_response(
+                &request,
+                request_context("req_lazy_supervisor", Some("chatgpt-account")),
+            )
+            .await
+            .expect("first acquire should start pool maintenance");
+
+        assert!(response.body.contains("resp_lazy_supervisor"));
+        server.await.unwrap();
+        pool.shutdown().await;
+    });
+}
+
+#[tokio::test]
+async fn websocket_pool_zero_maintenance_interval_should_not_start_a_panicking_task() {
+    let pool = CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
+        maintenance_interval: Some(Duration::ZERO),
+        ..CodexWebSocketPoolConfig::default()
+    });
+
+    tokio::task::yield_now().await;
+    assert!(!pool.is_shutdown().await);
+    pool.shutdown().await;
 }
 
 #[tokio::test]

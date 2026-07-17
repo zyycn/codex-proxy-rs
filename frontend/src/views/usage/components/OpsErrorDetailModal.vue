@@ -1,15 +1,16 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import type { getOpsErrors } from '@/api'
 
+import { computed } from 'vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import UsageStatusCodeBadge from './UsageStatusCodeBadge.vue'
 
-const open = defineModel<boolean>({ default: false })
-
 const props = defineProps<{
-  record: any | null
+  record: Awaited<ReturnType<typeof getOpsErrors>>['items'][number] | null
 }>()
+
+const open = defineModel<boolean>({ default: false })
 
 const fields = computed(() => [
   { label: '时间', value: props.record?.createdAtDisplay },
@@ -30,7 +31,8 @@ const fields = computed(() => [
 
 const metadataText = computed(() => {
   const metadata = props.record?.metadata
-  if (!metadata || (typeof metadata === 'object' && Object.keys(metadata).length === 0)) return ''
+  if (!metadata || (typeof metadata === 'object' && Object.keys(metadata).length === 0))
+    return ''
   return JSON.stringify(metadata, null, 2)
 })
 
@@ -93,7 +95,9 @@ function latencyDisplay(value: unknown) {
         v-if="metadataText"
         class="mt-3 rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5"
       >
-        <h3 class="m-0 text-[12px] leading-none font-[780] text-(--cp-text-secondary)">Metadata</h3>
+        <h3 class="m-0 text-[12px] leading-none font-[780] text-(--cp-text-secondary)">
+          Metadata
+        </h3>
         <BaseScrollbar
           class="mt-3"
           max-height="260px"
@@ -101,7 +105,7 @@ function latencyDisplay(value: unknown) {
         >
           <pre
             class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.65] text-(--cp-text-primary)"
-            >{{ metadataText }}</pre>
+          >{{ metadataText }}</pre>
         </BaseScrollbar>
       </section>
     </template>

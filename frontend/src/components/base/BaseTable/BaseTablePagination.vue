@@ -1,14 +1,15 @@
 <script setup lang="ts">
+import type { BaseTablePagination } from './pagination'
 import { ChevronLeft, ChevronRight } from '@lucide/vue'
-import { computed } from 'vue'
 
+import { computed } from 'vue'
 import BaseSelect from '../BaseSelect.vue'
 import {
+
   getCurrentPage,
-  getPageSizeOptions,
   getPagerItems,
+  getPageSizeOptions,
   getTotalPages,
-  type BaseTablePagination,
 } from './pagination'
 
 const props = defineProps<{

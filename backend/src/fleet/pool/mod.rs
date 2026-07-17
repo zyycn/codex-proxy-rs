@@ -12,7 +12,10 @@ use chrono::{DateTime, Duration, Utc};
 use indexmap::IndexMap;
 use thiserror::Error;
 
-use crate::fleet::quota::{quota_snapshot_limit_reached, quota_snapshot_reset_at};
+use crate::fleet::quota::{
+    QuotaObservation, QuotaSnapshot, quota_from_observation, quota_snapshot_limit_reached,
+    quota_snapshot_reset_at,
+};
 use crate::fleet::refresh::{JwtExpiry, jwt_expiry};
 use crate::fleet::scheduler::{
     AccountScheduler, AttemptFeedback, ScoreWeights,
@@ -21,13 +24,11 @@ use crate::fleet::scheduler::{
 use crate::fleet::store::AccountStore;
 use crate::fleet::{
     account::{Account, AccountStatus},
+    usage::{
+        AccountUsageDelta, AccountUsageSnapshot, AccountUsageStore, AccountUsageWindow,
+        ResponseUsage,
+    },
     window::should_reset_usage_window,
-};
-use crate::telemetry::account_usage::store::{
-    AccountUsageDelta, AccountUsageSnapshot, AccountUsageStore, AccountUsageWindow,
-};
-use crate::upstream::openai::protocol::events::{
-    TokenUsage as CodexTokenUsage, parse_rate_limit_headers, rate_limit_quota,
 };
 
 pub use crate::fleet::scheduler::RotationStrategy;
@@ -48,23 +49,10 @@ pub struct AccountPoolStaticSettings {
     pub tier_priority: Vec<String>,
 }
 
-impl AccountPoolStaticSettings {
-    /// 将设置快照转换为账号池选项。
-    pub fn pool_options(&self, settings: &crate::settings::SettingsSnapshot) -> AccountPoolOptions {
-        AccountPoolOptions {
-            max_concurrent_per_account: settings.max_concurrent_per_account,
-            rotation_strategy: match settings.rotation_strategy.as_str() {
-                "smart" => RotationStrategy::Smart,
-                "quota_reset_priority" => RotationStrategy::QuotaResetPriority,
-                "round_robin" => RotationStrategy::RoundRobin,
-                "sticky" => RotationStrategy::Sticky,
-                _ => RotationStrategy::Smart,
-            },
-            skip_quota_limited: self.skip_quota_limited,
-            tier_priority: self.tier_priority.clone(),
-            ..AccountPoolOptions::default()
-        }
-    }
+#[derive(Debug, Clone)]
+pub struct AccountPoolRuntimeOptions {
+    pub options: AccountPoolOptions,
+    pub request_interval_ms: u64,
 }
 
 #[derive(Clone)]
@@ -229,18 +217,14 @@ impl AccountPoolService {
     }
 
     /// 持续接收运行时设置并更新账号池参数。
-    pub async fn subscribe_settings(
+    pub async fn subscribe_options(
         self: Arc<Self>,
-        mut receiver: tokio::sync::watch::Receiver<crate::settings::SettingsSnapshot>,
-        static_settings: AccountPoolStaticSettings,
+        mut receiver: tokio::sync::watch::Receiver<AccountPoolRuntimeOptions>,
     ) {
         while receiver.changed().await.is_ok() {
-            let settings = receiver.borrow_and_update().clone();
-            self.apply_options(
-                static_settings.pool_options(&settings),
-                settings.request_interval_ms,
-            )
-            .await;
+            let runtime = receiver.borrow_and_update().clone();
+            self.apply_options(runtime.options, runtime.request_interval_ms)
+                .await;
         }
     }
 
@@ -546,16 +530,11 @@ impl AccountPoolService {
         }
     }
 
-    /// 记录上游 token 用量。
-    pub async fn record_token_usage(&self, account_id: &str, usage: &CodexTokenUsage) {
-        self.record_response_usage(account_id, *usage, false).await;
-    }
-
     /// 记录 Responses 请求用量。
     pub async fn record_response_usage(
         &self,
         account_id: &str,
-        usage: CodexTokenUsage,
+        usage: ResponseUsage,
         image_generation_requested: bool,
     ) {
         let image_request_succeeded = image_generation_requested && usage.image_output_tokens > 0;
@@ -626,32 +605,29 @@ impl AccountPoolService {
         }
     }
 
-    /// 根据上游返回的 rate-limit header 被动同步 quota 状态。
-    pub async fn sync_passive_rate_limit_headers(
+    /// 被动同步上游 adapter 已归一化的 quota observation。
+    pub async fn sync_passive_quota_observation(
         &self,
         account: &Account,
-        headers: &[(String, String)],
+        observation: &QuotaObservation,
     ) {
-        self.sync_passive_rate_limit_headers_for_account(
+        self.sync_passive_quota_observation_for_account(
             &account.id,
             account.plan_type.as_deref(),
-            headers,
+            observation,
         )
         .await;
     }
 
-    /// 根据上游返回的 rate-limit header 被动同步指定账号 quota 状态。
-    pub async fn sync_passive_rate_limit_headers_for_account(
+    /// 被动同步指定账号的 typed quota observation。
+    pub async fn sync_passive_quota_observation_for_account(
         &self,
         account_id: &str,
         plan_type: Option<&str>,
-        headers: &[(String, String)],
+        observation: &QuotaObservation,
     ) {
-        let Some(rate_limits) = parse_rate_limit_headers(headers) else {
-            return;
-        };
         let existing_quota = match self.store.get_quota_json(account_id).await {
-            Ok(Some(quota_json)) => serde_json::from_str::<serde_json::Value>(&quota_json).ok(),
+            Ok(Some(quota_json)) => QuotaSnapshot::from_json(&quota_json).ok(),
             Ok(None) => None,
             Err(error) => {
                 tracing::error!(
@@ -662,18 +638,28 @@ impl AccountPoolService {
                 None
             }
         };
-        let quota = rate_limit_quota(&rate_limits, plan_type, existing_quota.as_ref());
+        let quota = quota_from_observation(observation, plan_type, existing_quota.as_ref());
         self.apply_quota_snapshot(account_id, &quota).await;
     }
 
     /// 应用 quota 快照到持久化存储和运行时账号池。
-    pub async fn apply_quota_snapshot(&self, account_id: &str, quota: &serde_json::Value) -> bool {
+    pub async fn apply_quota_snapshot(&self, account_id: &str, quota: &QuotaSnapshot) -> bool {
         let limit_reached = quota_snapshot_limit_reached(quota);
         let reset_at = quota_snapshot_reset_at(quota);
         let cooldown_until = limit_reached.then_some(reset_at).flatten();
         let limit_window_seconds =
             reset_at.and_then(|_| crate::fleet::quota::quota_snapshot_limit_window_seconds(quota));
-        let quota_json = quota.to_string();
+        let quota_json = match quota.to_json() {
+            Ok(quota_json) => quota_json,
+            Err(error) => {
+                tracing::error!(
+                    account_id,
+                    error = %error,
+                    "Failed to serialize verified quota snapshot"
+                );
+                return false;
+            }
+        };
         let persisted = match self
             .store
             .apply_quota_snapshot(account_id, &quota_json, limit_reached, cooldown_until)

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { EChartsOption, LineSeriesOption } from 'echarts'
-import { computed, shallowRef } from 'vue'
+import type { getUsageRecordInsightsOverview } from '@/api'
 
+import { computed, shallowRef } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
@@ -23,9 +24,12 @@ import {
   formatUsdAxis,
 } from '../utils/format'
 
+type Cost = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['cost']
+type UsageChartPalette = ReturnType<typeof useUsageChartPalette>['palette']['value']
+
 const props = withDefaults(
   defineProps<{
-    cost: any
+    cost: Cost
     loading?: boolean
   }>(),
   {
@@ -35,7 +39,7 @@ const props = withDefaults(
 
 const activeView = shallowRef('cost')
 const { palette } = useUsageChartPalette()
-const points = computed<any[]>(() => props.cost.points ?? [])
+const points = computed(() => props.cost.points)
 
 const viewOptions = [
   { label: '费用', value: 'cost' },
@@ -44,14 +48,15 @@ const viewOptions = [
 ]
 
 const hasData = computed(() => {
-  if (props.loading || points.value.length === 0) return false
+  if (props.loading || points.value.length === 0)
+    return false
   if (activeView.value === 'cost') {
-    return points.value.some((point) => point.estimatedCost > 0 || point.standardCost > 0)
+    return points.value.some(point => point.estimatedCost > 0 || point.standardCost > 0)
   }
   if (activeView.value === 'tokens') {
-    return points.value.some((point) => point.totalTokens > 0 || point.cachedTokens > 0)
+    return points.value.some(point => point.totalTokens > 0 || point.cachedTokens > 0)
   }
-  return points.value.some((point) => point.cachedTokenRate > 0 || point.cacheHitRequestRate > 0)
+  return points.value.some(point => point.cachedTokenRate > 0 || point.cacheHitRequestRate > 0)
 })
 
 const chartOption = computed<EChartsOption>(() => {
@@ -77,7 +82,7 @@ const chartOption = computed<EChartsOption>(() => {
     },
     tooltip: usageTooltip(theme, formatTooltip),
     xAxis: usageCategoryAxis(
-      points.value.map((point) => point.label),
+      points.value.map(point => point.label),
       theme,
     ),
     yAxis: usageValueAxis(theme, axisFormatter(), {
@@ -89,36 +94,40 @@ const chartOption = computed<EChartsOption>(() => {
 })
 
 function legendNames() {
-  if (activeView.value === 'tokens') return ['未缓存输入', '缓存输入', '输出']
-  if (activeView.value === 'cache') return ['缓存 Token 占比', '命中请求率']
+  if (activeView.value === 'tokens')
+    return ['未缓存输入', '缓存输入', '输出']
+  if (activeView.value === 'cache')
+    return ['缓存 Token 占比', '命中请求率']
   return ['预估费用', '标准费用']
 }
 
 function axisFormatter() {
-  if (activeView.value === 'cost') return formatUsdAxis
-  if (activeView.value === 'cache') return (value: number) => formatPercent(value)
+  if (activeView.value === 'cost')
+    return formatUsdAxis
+  if (activeView.value === 'cache')
+    return (value: number) => formatPercent(value)
   return (value: number) => formatCompactNumber(value)
 }
 
-function chartSeries(theme: any): LineSeriesOption[] {
+function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
   const chartPoints = points.value
   if (activeView.value === 'tokens') {
     return [
       lineSeries(
         '未缓存输入',
-        chartPoints.map((point) => Math.max(0, point.inputTokens - point.cachedTokens)),
+        chartPoints.map(point => Math.max(0, point.inputTokens - point.cachedTokens)),
         theme.info,
         'tokens',
       ),
       lineSeries(
         '缓存输入',
-        chartPoints.map((point) => point.cachedTokens),
+        chartPoints.map(point => point.cachedTokens),
         theme.normal,
         'tokens',
       ),
       lineSeries(
         '输出',
-        chartPoints.map((point) => point.outputTokens),
+        chartPoints.map(point => point.outputTokens),
         theme.success,
         'tokens',
       ),
@@ -129,12 +138,12 @@ function chartSeries(theme: any): LineSeriesOption[] {
     return [
       lineSeries(
         '缓存 Token 占比',
-        chartPoints.map((point) => point.cachedTokenRate),
+        chartPoints.map(point => point.cachedTokenRate),
         theme.normal,
       ),
       lineSeries(
         '命中请求率',
-        chartPoints.map((point) => point.cacheHitRequestRate),
+        chartPoints.map(point => point.cacheHitRequestRate),
         theme.success,
       ),
     ]
@@ -143,14 +152,14 @@ function chartSeries(theme: any): LineSeriesOption[] {
   return [
     lineSeries(
       '预估费用',
-      chartPoints.map((point) => point.estimatedCost),
+      chartPoints.map(point => point.estimatedCost),
       theme.success,
       undefined,
       true,
     ),
     lineSeries(
       '标准费用',
-      chartPoints.map((point) => point.standardCost),
+      chartPoints.map(point => point.standardCost),
       theme.textMuted,
     ),
   ]
@@ -195,7 +204,8 @@ function lineSeries(
 function formatTooltip(params: unknown) {
   const rows = tooltipRows(params)
   const point = points.value[tooltipIndex(rows[0])]
-  if (!point) return ''
+  if (!point)
+    return ''
 
   const title = escapeTooltip(point.label)
   if (activeView.value === 'tokens') {

@@ -19,6 +19,8 @@ async fn scheduler_handle_should_shutdown_websocket_pool() {
         liveness_timeout: None,
         max_age: Duration::from_secs(60),
         max_per_account: 1,
+        max_total: 1,
+        max_connecting: 1,
         enabled: true,
         ping_timeout: Duration::ZERO,
         initial_event_timeout: None,

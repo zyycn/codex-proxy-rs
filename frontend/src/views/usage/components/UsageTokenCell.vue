@@ -1,12 +1,13 @@
 <script setup lang="ts">
+import type { UsageDisplayRecord } from '../constants'
 import { Archive, ArrowDown, ArrowUp, Info } from '@lucide/vue'
-import { computed } from 'vue'
 
+import { computed } from 'vue'
 import BasePopover from '@/components/base/BasePopover.vue'
 import { usageTokenDetails } from '../constants'
 
 const props = defineProps<{
-  record: any
+  record: UsageDisplayRecord
 }>()
 
 const tokenDetails = computed(() => usageTokenDetails(props.record))
@@ -55,7 +56,9 @@ const tokenItems = computed(() => [
       </template>
 
       <div class="grid gap-2 text-[12px] leading-none">
-        <p class="m-0 font-[760] text-(--cp-text-primary)">Token 明细</p>
+        <p class="m-0 font-[760] text-(--cp-text-primary)">
+          Token 明细
+        </p>
         <div class="grid gap-1.5 text-(--cp-text-secondary)">
           <div v-for="item in tokenItems" :key="item.label" class="flex justify-between gap-4">
             <span class="whitespace-nowrap">{{ item.label }}</span>

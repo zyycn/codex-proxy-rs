@@ -1,8 +1,8 @@
 import type { Directive, DirectiveBinding } from 'vue'
 
-type LoadingBindingValue =
-  | boolean
-  | {
+type LoadingBindingValue
+  = | boolean
+    | {
       loading?: boolean
       text?: string
       preserveContent?: boolean
@@ -101,7 +101,8 @@ function createOverlay(text: string, preserveContent: boolean) {
 function showLoading(element: LoadingElement, text: string, preserveContent: boolean) {
   if (element.__cpLoading) {
     const label = element.__cpLoading.overlay.querySelector<HTMLElement>('[data-loading-label]')
-    if (label) label.textContent = text
+    if (label)
+      label.textContent = text
     if (element.__cpLoading.preserveContent !== preserveContent) {
       element.__cpLoading.overlay.className = overlayClass(preserveContent)
       element.__cpLoading.preserveContent = preserveContent
@@ -129,7 +130,8 @@ function showLoading(element: LoadingElement, text: string, preserveContent: boo
 
 function hideLoading(element: LoadingElement) {
   const state = element.__cpLoading
-  if (!state) return
+  if (!state)
+    return
 
   state.overlay.remove()
   element.removeAttribute('aria-busy')
@@ -144,7 +146,8 @@ function syncLoading(element: LoadingElement, binding: DirectiveBinding<LoadingB
   const { loading, text, preserveContent } = normalizeBinding(binding.value)
   if (loading) {
     showLoading(element, text, preserveContent)
-  } else {
+  }
+  else {
     hideLoading(element)
   }
 }

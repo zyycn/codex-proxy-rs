@@ -27,6 +27,15 @@ const props = withDefaults(
   },
 )
 
+const slots = defineSlots<{
+  header?: () => unknown
+  title?: () => unknown
+  description?: () => unknown
+  actions?: () => unknown
+  body?: () => unknown
+  default?: () => unknown
+}>()
+
 const paddingClasses: Record<CardVariant, string> = {
   default: 'px-5 py-3',
   dashboard: 'px-7 py-5.5',
@@ -38,15 +47,6 @@ const shadowClasses: Record<CardVariant, string> = {
   dashboard: 'shadow-(--cp-shadow-card)',
   elevated: 'shadow-(--cp-shadow-popover)',
 }
-
-const slots = defineSlots<{
-  header?: () => unknown
-  title?: () => unknown
-  description?: () => unknown
-  actions?: () => unknown
-  body?: () => unknown
-  default?: () => unknown
-}>()
 
 const hasManagedHeader = computed(
   () =>
@@ -69,9 +69,8 @@ const managedHeaderLayoutClasses = computed(() => {
 <template>
   <component
     :is="props.as"
-    class="[--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] overflow-hidden bg-(--cp-bg-surface)"
+    class="[--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] overflow-hidden bg-(--cp-bg-surface) rounded-(--cp-card-radius)"
     :class="[
-      'rounded-(--cp-card-radius)',
       shadowClasses[props.variant],
       props.padded ? paddingClasses[props.variant] : undefined,
     ]"
@@ -85,13 +84,17 @@ const managedHeaderLayoutClasses = computed(() => {
                 v-if="props.title || $slots.title"
                 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)"
               >
-                <slot name="title">{{ props.title }}</slot>
+                <slot name="title">
+                  {{ props.title }}
+                </slot>
               </h2>
               <p
                 v-if="props.description || $slots.description"
                 class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)"
               >
-                <slot name="description">{{ props.description }}</slot>
+                <slot name="description">
+                  {{ props.description }}
+                </slot>
               </p>
             </div>
 

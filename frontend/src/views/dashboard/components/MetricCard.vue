@@ -1,42 +1,16 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts'
-import type { Component } from 'vue'
-import { computed } from 'vue'
+import type { MetricCardView, MetricTone } from '../presenter'
 
+import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
-import BaseChart from '@/components/charts/BaseChart.vue'
 
+import BaseChart from '@/components/charts/BaseChart.vue'
 import AnimatedMetricValue from './AnimatedMetricValue.vue'
 
-type MetricTone = 'normal' | 'info' | 'success' | 'warning' | 'danger'
-
-interface MetricDetail {
-  label: string
-  value: string
-  tone?: MetricTone
-}
-
-interface Metric {
-  title: string
-  value: string
-  valueRaw?: number | null
-  valueFormatter?: (value: number) => string
-  icon: Component
-  tone: MetricTone
-  sparkline?: {
-    values: number[]
-    tone: MetricTone
-  }
-  trend?: {
-    direction: 'up' | 'down' | 'flat'
-    tone: MetricTone
-  }
-  details: MetricDetail[]
-}
-
 const props = defineProps<{
-  metric: Metric
+  metric: MetricCardView
 }>()
 
 const iconToneClasses: Record<MetricTone, string> = {
@@ -73,7 +47,8 @@ const sparklineColors: Record<MetricTone, string> = {
 
 const sparklineOption = computed<EChartsOption | null>(() => {
   const values = (props.metric.sparkline?.values ?? []) as number[]
-  if (values.length < 2) return null
+  if (values.length < 2)
+    return null
 
   const color = sparklineColors[props.metric.sparkline?.tone ?? 'normal']
   return {

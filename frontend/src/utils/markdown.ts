@@ -9,7 +9,8 @@ const marked = new Marked({
 
 export function renderMarkdown(source?: string | null) {
   const value = source?.trim()
-  if (!value) return ''
+  if (!value)
+    return ''
 
   const html = marked
     .parse(value, { async: false })

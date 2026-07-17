@@ -1,16 +1,16 @@
 {
-  "include": ["vite.config.ts"],
   "compilerOptions": {
     "composite": true,
-    "target": "ES2024",
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
+    "target": "ES2024",
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "types": ["node"],
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "verbatimModuleSyntax": true,
     "noEmit": true,
-    "types": ["node"]
-  }
+    "verbatimModuleSyntax": true
+  },
+  "include": ["vite.config.ts"]
 }

@@ -2,13 +2,10 @@
 
 use chrono::{Duration, Utc};
 
-use crate::{
-    fleet::{account::AccountStatus, pool::AccountPoolService},
-    upstream::openai::{
-        failure::{UpstreamFailureFacts, upstream_failure_facts},
-        protocol::responses::ResponsesSseFailure,
-        transport::{CodexBackendClient, CodexClientError},
-    },
+use crate::fleet::{
+    account::AccountStatus,
+    account_gateway::{AccountFailureObservation, AccountUpstreamGateway},
+    pool::AccountPoolService,
 };
 
 const DEFAULT_RATE_LIMIT_RETRY_SECONDS: u64 = 60;
@@ -44,11 +41,9 @@ impl ClassifiedAccountFailure {
     }
 }
 
-pub fn classify_client_failure(error: &CodexClientError) -> Option<ClassifiedAccountFailure> {
-    classify_upstream_failure(&upstream_failure_facts(error))
-}
-
-pub fn classify_upstream_failure(facts: &UpstreamFailureFacts) -> Option<ClassifiedAccountFailure> {
+pub fn classify_account_failure(
+    facts: &AccountFailureObservation,
+) -> Option<ClassifiedAccountFailure> {
     classify_failure(FailureFields {
         status_code: facts.status_code,
         code: facts.code.as_deref(),
@@ -61,24 +56,9 @@ pub fn classify_upstream_failure(facts: &UpstreamFailureFacts) -> Option<Classif
     })
 }
 
-pub fn classify_response_failure(
-    failure: &ResponsesSseFailure,
-) -> Option<ClassifiedAccountFailure> {
-    classify_failure(FailureFields {
-        status_code: failure.explicit_status_code,
-        code: failure.upstream_code.as_deref(),
-        error_type: failure.upstream_type.as_deref(),
-        identity_authorization_error: None,
-        identity_error_code: None,
-        message: &failure.message,
-        body: &failure.message,
-        retry_after_seconds: failure.retry_after_seconds,
-    })
-}
-
 pub async fn apply_account_state_effect_immediately(
     account_pool: &AccountPoolService,
-    codex: &CodexBackendClient,
+    upstream: &dyn AccountUpstreamGateway,
     account_id: &str,
     effect: &AccountStateEffect,
 ) {
@@ -94,12 +74,12 @@ pub async fn apply_account_state_effect_immediately(
                 .await;
         }
     }
-    codex.evict_websocket_account(account_id).await;
+    upstream.evict_account_connections(account_id).await;
 }
 
 pub async fn apply_account_state_effect(
     account_pool: &AccountPoolService,
-    codex: &CodexBackendClient,
+    upstream: &dyn AccountUpstreamGateway,
     account_id: &str,
     effect: &AccountStateEffect,
 ) -> bool {
@@ -111,21 +91,8 @@ pub async fn apply_account_state_effect(
                 .await
         }
     };
-    codex.evict_websocket_account(account_id).await;
+    upstream.evict_account_connections(account_id).await;
     updated
-}
-
-pub async fn apply_client_failure_effect(
-    account_pool: &AccountPoolService,
-    codex: &CodexBackendClient,
-    account_id: &str,
-    error: &CodexClientError,
-) -> Option<ClassifiedAccountFailure> {
-    let classified = classify_client_failure(error)?;
-    if let Some(effect) = &classified.effect {
-        apply_account_state_effect(account_pool, codex, account_id, effect).await;
-    }
-    Some(classified)
 }
 
 struct FailureFields<'a> {

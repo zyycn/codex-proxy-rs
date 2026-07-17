@@ -10,6 +10,9 @@ use async_trait::async_trait;
 
 use codex_proxy_rs::fleet::account::{Account, AccountStatus};
 use codex_proxy_rs::models::catalog::ModelCatalog;
+use codex_proxy_rs::models::gateway::{
+    ModelCatalogRequest, ModelCatalogSource, ModelCatalogSourceError,
+};
 use codex_proxy_rs::models::service::{
     ModelRefreshPlanAccount, ModelRefreshResult, ModelService, ModelServiceError,
 };
@@ -17,9 +20,6 @@ use codex_proxy_rs::models::store::{ModelSnapshotStore, ModelSnapshotStoreResult
 use codex_proxy_rs::models::types::{
     BackendModelEntry, BackendReasoningEffort, BackendTruncationPolicy, ModelConfig,
     ModelPlanSnapshot,
-};
-use codex_proxy_rs::upstream::openai::transport::{
-    CodexModelCatalogClient, CodexModelCatalogClientError, CodexModelCatalogRequest,
 };
 
 #[test]
@@ -301,11 +301,11 @@ impl FakeModelCatalogClient {
 }
 
 #[async_trait]
-impl CodexModelCatalogClient for FakeModelCatalogClient {
+impl ModelCatalogSource for FakeModelCatalogClient {
     async fn fetch_models(
         &self,
-        request: &CodexModelCatalogRequest<'_>,
-    ) -> Result<Vec<serde_json::Value>, CodexModelCatalogClientError> {
+        request: &ModelCatalogRequest<'_>,
+    ) -> Result<Vec<BackendModelEntry>, ModelCatalogSourceError> {
         self.requested_plan_types
             .lock()
             .await
@@ -314,9 +314,6 @@ impl CodexModelCatalogClient for FakeModelCatalogClient {
             .models_by_plan
             .get(request.plan_type)
             .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|model| serde_json::to_value(model).unwrap())
-            .collect())
+            .unwrap_or_default())
     }
 }

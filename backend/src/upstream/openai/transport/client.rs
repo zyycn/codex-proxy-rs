@@ -7,7 +7,6 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{Stream, StreamExt, TryStreamExt};
 use reqwest::{
@@ -36,17 +35,16 @@ use super::diagnostics::CodexUpstreamDiagnostics;
 use super::endpoints::{CODEX_RESPONSES_PATH, endpoint_url};
 use super::headers::{build_codex_base_headers, insert_optional_header, websocket_header_pairs};
 use super::response_meta;
+use super::response_meta::CodexResponseMetadata;
 use super::tls::{CustomCaError, build_reqwest_client_with_custom_ca, custom_ca_env_cache_key};
 use super::websocket::{
-    CodexWebSocketConnection, CodexWebSocketExchangeError, CodexWebSocketRateLimitHeaderUpdates,
-    CodexWebSocketRequest, CodexWebSocketTurnStateUpdate, PreparedWebSocket,
-    WEBSOCKET_FAST_PATH_BUDGET, execute_prepared_response_create_request,
-    execute_prepared_response_create_request_stream, post_send_ambiguous,
-    prepare_response_create_request_with_pool, write_websocket_audit_artifact_from_env,
-};
-use super::websocket_breaker::WebSocketOriginBreaker;
-use super::websocket_pool::{
-    CodexWebSocketPool, CodexWebSocketPoolKey, DEFAULT_INITIAL_EVENT_TIMEOUT, WebSocketPoolDecision,
+    CodexWebSocketConnection, CodexWebSocketExchangeError, CodexWebSocketPool,
+    CodexWebSocketPoolKey, CodexWebSocketRateLimitHeaderUpdates, CodexWebSocketRequest,
+    CodexWebSocketTurnStateUpdate, DEFAULT_INITIAL_EVENT_TIMEOUT, PreparedWebSocket,
+    WEBSOCKET_FAST_PATH_BUDGET, WebSocketOriginBreaker, WebSocketPoolDecision,
+    execute_prepared_response_create_request, execute_prepared_response_create_request_stream,
+    post_send_ambiguous, prepare_response_create_request_with_pool,
+    write_websocket_audit_artifact_from_env,
 };
 
 // ---------------------------------------------------------------------------
@@ -173,42 +171,6 @@ pub type CodexClientResult<T> = Result<T, CodexClientError>;
 pub type CodexBackendSseStream =
     Pin<Box<dyn Stream<Item = CodexClientResult<Bytes>> + Send + 'static>>;
 
-/// 拉取上游模型目录时的请求上下文。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CodexModelCatalogRequest<'a> {
-    /// 当前账号访问令牌。
-    pub access_token: &'a str,
-    /// 上游账号 ID。
-    pub account_id: Option<&'a str>,
-    /// 请求 ID。
-    pub request_id: &'a str,
-    /// Codex installation id。
-    pub installation_id: Option<&'a str>,
-    /// 订阅计划类型。
-    pub plan_type: &'a str,
-}
-
-/// 上游模型目录客户端错误。
-#[derive(Debug, Error)]
-pub enum CodexModelCatalogClientError {
-    /// 上游请求失败。
-    #[error("model catalog request failed: {message}")]
-    RequestFailed {
-        /// 错误说明。
-        message: String,
-    },
-}
-
-/// 上游模型目录客户端。
-#[async_trait]
-pub trait CodexModelCatalogClient: Send + Sync + 'static {
-    /// 读取当前账号可见的上游模型目录。
-    async fn fetch_models(
-        &self,
-        request: &CodexModelCatalogRequest<'_>,
-    ) -> Result<Vec<Value>, CodexModelCatalogClientError>;
-}
-
 // ---------------------------------------------------------------------------
 // Request context & response types
 // ---------------------------------------------------------------------------
@@ -248,19 +210,6 @@ pub struct CodexRequestContext<'a> {
     pub client_request_id: Option<&'a str>,
     /// 客户端 turn ID。
     pub turn_id: Option<&'a str>,
-}
-
-/// Codex Responses 上游响应。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CodexResponseMetadata {
-    /// 上游实际选用的模型。
-    pub effective_model: Option<String>,
-    /// 模型目录版本。
-    pub models_etag: Option<String>,
-    /// 上游是否声明响应包含 reasoning。
-    pub reasoning_included: bool,
-    /// 允许透传给客户端的安全响应头。
-    pub client_headers: Vec<(String, String)>,
 }
 
 /// Codex Responses 上游响应。
@@ -417,34 +366,42 @@ struct PreparedWebSocketRoute {
 #[path = "client_sse.rs"]
 mod requests;
 
-#[async_trait]
-impl CodexModelCatalogClient for CodexBackendClient {
+#[async_trait::async_trait]
+impl crate::models::gateway::ModelCatalogSource for CodexBackendClient {
     async fn fetch_models(
         &self,
-        request: &CodexModelCatalogRequest<'_>,
-    ) -> Result<Vec<Value>, CodexModelCatalogClientError> {
-        self.fetch_models_with_context(CodexRequestContext {
-            access_token: request.access_token,
-            account_id: request.account_id,
-            request_id: request.request_id,
-            turn_state: None,
-            turn_metadata: None,
-            beta_features: None,
-            include_timing_metrics: None,
-            version: None,
-            codex_window_id: None,
-            parent_thread_id: None,
-            cookie_header: None,
-            installation_id: request.installation_id,
-            session_id: None,
-            thread_id: None,
-            client_request_id: None,
-            turn_id: None,
-        })
-        .await
-        .map_err(|error| CodexModelCatalogClientError::RequestFailed {
-            message: error.to_string(),
-        })
+        request: &crate::models::gateway::ModelCatalogRequest<'_>,
+    ) -> Result<
+        Vec<crate::models::types::BackendModelEntry>,
+        crate::models::gateway::ModelCatalogSourceError,
+    > {
+        let values = self
+            .fetch_models_with_context(CodexRequestContext {
+                access_token: request.access_token,
+                account_id: request.account_id,
+                request_id: request.request_id,
+                turn_state: None,
+                turn_metadata: None,
+                beta_features: None,
+                include_timing_metrics: None,
+                version: None,
+                codex_window_id: None,
+                parent_thread_id: None,
+                cookie_header: None,
+                installation_id: request.installation_id,
+                session_id: None,
+                thread_id: None,
+                client_request_id: None,
+                turn_id: None,
+            })
+            .await
+            .map_err(|error| {
+                crate::models::gateway::ModelCatalogSourceError::new(error.to_string())
+            })?;
+        Ok(values
+            .into_iter()
+            .filter_map(|value| serde_json::from_value(value).ok())
+            .collect())
     }
 }
 
@@ -618,14 +575,6 @@ fn websocket_exchange_error_to_client_error(
     match error {
         CodexWebSocketExchangeError::Upstream(upstream) => {
             let upstream = *upstream;
-            let rate_limit_headers = upstream
-                .headers
-                .iter()
-                .filter(|(name, _)| {
-                    crate::upstream::openai::protocol::events::is_rate_limit_header_name(name)
-                })
-                .cloned()
-                .collect();
             CodexClientError::Upstream {
                 status: StatusCode::from_u16(upstream.status_code)
                     .unwrap_or(StatusCode::BAD_GATEWAY),
@@ -633,7 +582,7 @@ fn websocket_exchange_error_to_client_error(
                 retry_after_seconds: upstream.retry_after_seconds,
                 diagnostics: Box::new(upstream.diagnostics),
                 set_cookie_headers: upstream.set_cookie_headers,
-                rate_limit_headers,
+                rate_limit_headers: Vec::new(),
                 transport: CodexBackendTransport::WebSocket,
             }
         }

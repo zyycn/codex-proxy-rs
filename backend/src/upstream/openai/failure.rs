@@ -92,18 +92,14 @@ pub fn upstream_failure_facts(error: &CodexClientError) -> UpstreamFailureFacts 
             UpstreamFailureFacts {
                 kind: UpstreamFailureKind::WebSocketUpstream,
                 status_code: Some(upstream.status_code),
-                code: upstream.code.clone().or(body_code),
-                error_type: upstream.error_type.clone().or(body_type),
+                code: body_code,
+                error_type: body_type,
                 identity_authorization_error: upstream
                     .diagnostics
                     .identity_authorization_error
                     .clone(),
                 identity_error_code: upstream.diagnostics.identity_error_code.clone(),
-                message: upstream
-                    .message
-                    .clone()
-                    .or(body_message)
-                    .unwrap_or_else(|| upstream.body.clone()),
+                message: body_message.unwrap_or_else(|| upstream.body.clone()),
                 body: upstream.body.clone(),
                 retry_after_seconds: upstream.retry_after_seconds,
             }
@@ -125,7 +121,7 @@ pub fn upstream_failure_facts(error: &CodexClientError) -> UpstreamFailureFacts 
             | CodexWebSocketExchangeError::OriginHalfOpenBusy
             | CodexWebSocketExchangeError::SharedConnectFailed
             | CodexWebSocketExchangeError::ClosedBeforeTerminal
-            | CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstToken { .. },
+            | CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstEvent { .. },
         ) => simple_facts(UpstreamFailureKind::WebSocketTransport, error),
         CodexClientError::WebSocket(CodexWebSocketExchangeError::PostSendAmbiguous { .. }) => {
             simple_facts(UpstreamFailureKind::PostSendAmbiguous, error)

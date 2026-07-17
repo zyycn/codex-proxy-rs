@@ -1,7 +1,8 @@
-import { useResizeObserver } from '@vueuse/core'
-import { nextTick, onMounted, shallowRef, useTemplateRef, watch, type Ref } from 'vue'
-
+import type { Ref } from 'vue'
 import type BaseScrollbar from '../BaseScrollbar.vue'
+
+import { useResizeObserver } from '@vueuse/core'
+import { nextTick, onMounted, shallowRef, useTemplateRef, watch } from 'vue'
 
 interface UseHorizontalStickyShadowOptions {
   hasRows: Ref<boolean>

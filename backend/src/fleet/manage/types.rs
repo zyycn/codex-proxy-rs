@@ -4,13 +4,12 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::{
-    fleet::{
-        account::{AccountStatus, AccountStatus as AcctStatus},
-        account_failure::classify_client_failure,
-        store::StoredAccountMetadata,
-    },
-    upstream::openai::{token_client::RefreshFailure, transport::CodexClientError},
+use crate::fleet::{
+    account::{AccountStatus, AccountStatus as AcctStatus},
+    account_failure::classify_account_failure,
+    account_gateway::AccountGatewayError,
+    refresh::RefreshFailure,
+    store::StoredAccountMetadata,
 };
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -298,21 +297,6 @@ pub(super) fn stored_to_admin_metadata(s: crate::fleet::store::StoredAccount) ->
     })
 }
 
-pub(super) fn import_usage_plan_type(usage: &serde_json::Value) -> Option<String> {
-    usage
-        .get("plan_type")
-        .and_then(serde_json::Value::as_str)
-        .and_then(normalized_plan_type)
-}
-
-pub(super) fn import_usage_string(usage: &serde_json::Value, key: &str) -> Option<String> {
-    usage
-        .get(key)
-        .and_then(serde_json::Value::as_str)
-        .and_then(|value| crate::fleet::import::normalize_nonempty_str(Some(value)))
-        .map(ToString::to_string)
-}
-
 pub(super) fn import_quota_plan_type(quota: &serde_json::Value) -> Option<String> {
     quota
         .get("plan_type")
@@ -325,8 +309,8 @@ fn normalized_plan_type(value: &str) -> Option<String> {
     (!value.is_empty() && !matches!(value.as_str(), "unknown" | "null")).then_some(value)
 }
 
-pub(super) fn import_status_from_usage_error(error: &CodexClientError) -> Option<AccountStatus> {
-    classify_client_failure(error)?
+pub(super) fn import_status_from_usage_error(error: &AccountGatewayError) -> Option<AccountStatus> {
+    classify_account_failure(error.failure()?)?
         .account_status()
         .filter(|status| *status == AccountStatus::Banned)
 }

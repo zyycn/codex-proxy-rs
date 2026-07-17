@@ -1,50 +1,49 @@
 <script setup lang="ts">
-import { ref } from 'vue'
 import { ChevronDown, Download, Plus, Search, Trash2 } from '@lucide/vue'
+import { ref } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
-import { accountColumns, accountStatusFilterOptions } from './constants'
-import { useAccountConnectionTest } from './composables/useAccountConnectionTest'
-import { useAccountFilters } from './composables/useAccountFilters'
-import { useAccountMutations } from './composables/useAccountMutations'
-import { useAccountsTable } from './composables/useAccountsTable'
 import AccountConnectionTestModal from './components/AccountConnectionTestModal.vue'
 import AccountCreateModal from './components/AccountCreateModal.vue'
 import AccountIdentityCell from './components/AccountIdentityCell.vue'
 import AccountOverviewCards from './components/AccountOverviewCards.vue'
 import AccountPlanBadge from './components/AccountPlanBadge.vue'
-import AccountQuotaSummaryCell from './components/AccountQuotaSummaryCell.vue'
 import AccountQuotaPanel from './components/AccountQuotaPanel.vue'
+import AccountQuotaSummaryCell from './components/AccountQuotaSummaryCell.vue'
 import AccountStatusBadge from './components/AccountStatusBadge.vue'
 import AccountTableActions from './components/AccountTableActions.vue'
 import AccountUsagePanel from './components/AccountUsagePanel.vue'
+import { useAccountConnectionTest } from './composables/useAccountConnectionTest'
+import { useAccountMutations } from './composables/useAccountMutations'
+import { useAccountsQuery } from './composables/useAccountsQuery'
+import { useAccountsTable } from './composables/useAccountsTable'
+import { accountColumns, accountStatusFilterOptions } from './constants'
 
 const selectedIds = ref<Set<string>>(new Set())
-const totalAccounts = ref(0)
 
 const {
-  page,
-  pageSize,
+  totalAccounts,
+  loading,
+  accounts,
+  loadAccounts,
   searchQuery,
   statusQuery,
   sort,
+  accountSummary,
   accountPagination,
-  bindAccountLoader,
   handlePageChange,
   handlePageSizeChange,
   handleSortChange,
-} = useAccountFilters(totalAccounts)
+} = useAccountsQuery()
 
 const {
-  loading,
-  accounts,
-  accountSummary,
   showCreateModal,
   showDeleteModal,
   showSingleDeleteModal,
@@ -59,7 +58,6 @@ const {
   exportingAccounts,
   reauthorizingAccount,
   createForm,
-  loadAccounts,
   handleCreate,
   handleAuthorizeOAuth,
   openCreateAccount,
@@ -74,13 +72,13 @@ const {
   handleToggleSchedule,
   scheduleActionLabel,
 } = useAccountMutations({
-  page,
-  pageSize,
-  searchQuery,
+  accounts,
+  accountSummary,
   statusQuery,
   sort,
   selectedIds,
   totalAccounts,
+  reload: loadAccounts,
 })
 
 const {
@@ -116,22 +114,15 @@ const {
   toggleExpanded,
   toggleAll,
 } = useAccountsTable(accounts, selectedIds)
-
-bindAccountLoader(loadAccounts)
 </script>
 
 <template>
   <div class="flex h-full min-h-0 w-full flex-col overflow-hidden">
-    <header class="flex h-17 shrink-0 items-start justify-between">
-      <div>
-        <h1 class="mt-0 text-[34px] leading-[1.15] font-extrabold mb-0 text-(--cp-text-primary)">
-          账号管理
-        </h1>
-        <p class="mt-2.5 text-[15px] leading-[1.15] font-semibold mb-0 text-(--cp-text-secondary)">
-          维护 Codex 账号池，快速确认可用性、配额与连接状态
-        </p>
-      </div>
-    </header>
+    <BasePageHeader
+      class="h-17"
+      title="账号管理"
+      description="维护 Codex 账号池，快速确认可用性、配额与连接状态"
+    />
 
     <AccountOverviewCards :summary="accountSummary" />
 
@@ -326,7 +317,9 @@ bindAccountLoader(loadAccounts)
       width="480px"
       @confirm="handleBatchDelete"
     >
-      <p class="m-0">确定要删除选中的 {{ selectedIds.size }} 个账号吗？此操作不可撤销</p>
+      <p class="m-0">
+        确定要删除选中的 {{ selectedIds.size }} 个账号吗？此操作不可撤销
+      </p>
     </BaseConfirmModal>
 
     <BaseConfirmModal
@@ -342,10 +335,10 @@ bindAccountLoader(loadAccounts)
       <p class="m-0">
         确定要删除
         {{
-          pendingDeleteAccount?.email ||
-          pendingDeleteAccount?.accountId ||
-          pendingDeleteAccount?.id ||
-          '该账号'
+          pendingDeleteAccount?.email
+            || pendingDeleteAccount?.accountId
+            || pendingDeleteAccount?.id
+            || '该账号'
         }}
         吗？
       </p>

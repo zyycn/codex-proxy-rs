@@ -50,12 +50,12 @@ function toggle() {
   >
     <span :class="boxClasses">
       <Minus
-        class="absolute transition-opacity duration-150"
-        :class="['size-3', indeterminate ? 'opacity-100' : 'opacity-0']"
+        class="absolute transition-opacity duration-150 size-3"
+        :class="[indeterminate ? 'opacity-100' : 'opacity-0']"
       />
       <Check
-        class="absolute transition-opacity duration-150"
-        :class="['size-3', !indeterminate && model ? 'opacity-100' : 'opacity-0']"
+        class="absolute transition-opacity duration-150 size-3"
+        :class="[!indeterminate && model ? 'opacity-100' : 'opacity-0']"
       />
     </span>
   </button>

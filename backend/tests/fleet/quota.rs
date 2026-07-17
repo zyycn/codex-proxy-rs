@@ -1,12 +1,18 @@
-use std::{collections::HashMap, sync::Arc, time::Duration as StdDuration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+    time::Duration as StdDuration,
+};
 
 use chrono::{Duration, Utc};
 use codex_proxy_rs::fleet::{
     account::AccountStatus,
+    account_gateway::{AccountUpstreamContext, AccountUpstreamGateway},
     cookies::PgCookieStore,
     pool::{AccountPoolOptions, AccountPoolService},
     quota::{
-        QuotaRefreshService, quota_from_usage, quota_snapshot_limit_reached,
+        QuotaLimitObservation, QuotaObservation, QuotaRefreshService, QuotaSnapshot,
+        QuotaWindowObservation, quota_from_observation, quota_snapshot_limit_reached,
         quota_snapshot_limit_window_seconds, quota_snapshot_reset_at,
     },
     store::{AccountStore, NewAccount, PgAccountStore},
@@ -36,8 +42,35 @@ fn test_account_pool(pool: &sqlx::PgPool) -> Arc<AccountPoolService> {
     ))
 }
 
-#[test]
-fn quota_from_usage_should_preserve_spend_control_individual_limit() {
+async fn quota_from_usage_fixture(usage: Value) -> QuotaSnapshot {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(usage))
+        .mount(&server)
+        .await;
+    let codex = CodexBackendClient::new(
+        reqwest::Client::new(),
+        server.uri(),
+        crate::support::wire_profile::test_wire_profile(),
+    );
+    AccountUpstreamGateway::fetch_usage(
+        &codex,
+        AccountUpstreamContext {
+            access_token: SecretString::new("access-token".to_string().into()),
+            account_id: Some("upstream-account".to_string()),
+            request_id: "quota-fixture".to_string(),
+            cookie_header: None,
+            installation_id: Some("installation-id".to_string()),
+        },
+    )
+    .await
+    .expect("usage should parse")
+    .quota
+}
+
+#[tokio::test]
+async fn quota_from_usage_should_preserve_spend_control_individual_limit() {
     let usage = json!({
         "plan_type": "plus",
         "rate_limit": {
@@ -59,24 +92,15 @@ fn quota_from_usage_should_preserve_spend_control_individual_limit() {
         }
     });
 
-    let quota = quota_from_usage(&usage);
+    let quota = quota_from_usage_fixture(usage).await;
 
-    assert_eq!(
-        quota
-            .pointer("/monthly_limit/source")
-            .and_then(Value::as_str),
-        Some("spend_control")
-    );
-    assert_eq!(
-        quota
-            .pointer("/monthly_limit/used_percent")
-            .and_then(Value::as_f64),
-        Some(52.0)
-    );
+    let monthly = quota.monthly_limit.expect("monthly limit");
+    assert_eq!(monthly.source.as_deref(), Some("spend_control"));
+    assert_eq!(monthly.used_percent, Some(52.0));
 }
 
-#[test]
-fn quota_from_usage_should_preserve_additional_limit_snapshot_by_limit_name() {
+#[tokio::test]
+async fn quota_from_usage_should_preserve_additional_limit_snapshot_by_limit_name() {
     let usage = json!({
         "plan_type": "plus",
         "additional_rate_limits": [{
@@ -98,30 +122,23 @@ fn quota_from_usage_should_preserve_additional_limit_snapshot_by_limit_name() {
         }]
     });
 
-    let quota = quota_from_usage(&usage);
+    let quota = quota_from_usage_fixture(usage).await;
 
+    let limit = quota.limits.first().expect("additional limit");
+    assert_eq!(limit.source, "additional");
+    assert_eq!(limit.limit_name.as_deref(), Some("gpt-5.3-codex-spark"));
+    assert!(limit.blocked);
     assert_eq!(
-        quota.pointer("/snapshots/0/source"),
-        Some(&Value::String("additional".to_string()))
-    );
-    assert_eq!(
-        quota.pointer("/snapshots/0/limit_name"),
-        Some(&Value::String("gpt-5.3-codex-spark".to_string()))
-    );
-    assert_eq!(
-        quota.pointer("/snapshots/0/blocked"),
-        Some(&Value::Bool(true))
-    );
-    assert_eq!(
-        quota
-            .pointer("/snapshots/0/secondary/window_minutes")
-            .and_then(Value::as_u64),
+        limit
+            .secondary
+            .as_ref()
+            .and_then(|window| window.window_minutes),
         Some(10_080)
     );
 }
 
-#[test]
-fn quota_from_usage_should_preserve_additional_limit_name_and_metered_feature() {
+#[tokio::test]
+async fn quota_from_usage_should_preserve_additional_limit_name_and_metered_feature() {
     let usage = json!({
         "plan_type": "plus",
         "additional_rate_limits": [{
@@ -139,20 +156,16 @@ fn quota_from_usage_should_preserve_additional_limit_name_and_metered_feature() 
         }]
     });
 
-    let quota = quota_from_usage(&usage);
+    let quota = quota_from_usage_fixture(usage).await;
 
-    assert_eq!(
-        quota.pointer("/snapshots/0/limit_name"),
-        Some(&Value::String("Code review".to_string()))
-    );
-    assert_eq!(
-        quota.pointer("/snapshots/0/metered_feature"),
-        Some(&Value::String("review".to_string()))
-    );
+    let limit = quota.limits.first().expect("additional limit");
+    assert_eq!(limit.limit_name.as_deref(), Some("Code review"));
+    assert_eq!(limit.metered_feature.as_deref(), Some("review"));
 }
 
-#[test]
-fn quota_snapshot_limit_reached_should_keep_allowed_free_account_without_reset_credits_available() {
+#[tokio::test]
+async fn quota_snapshot_limit_reached_should_keep_allowed_free_account_without_reset_credits_available()
+ {
     let usage = json!({
         "plan_type": "free",
         "rate_limit": {
@@ -171,13 +184,13 @@ fn quota_snapshot_limit_reached_should_keep_allowed_free_account_without_reset_c
             "balance": 0
         }
     });
-    let quota = quota_from_usage(&usage);
+    let quota = quota_from_usage_fixture(usage).await;
 
     assert!(!quota_snapshot_limit_reached(&quota));
 }
 
-#[test]
-fn quota_snapshot_reset_at_should_use_non_blocking_core_window() {
+#[tokio::test]
+async fn quota_snapshot_reset_at_should_use_non_blocking_core_window() {
     let usage = json!({
         "plan_type": "free",
         "rate_limit": {
@@ -190,7 +203,7 @@ fn quota_snapshot_reset_at_should_use_non_blocking_core_window() {
             }
         }
     });
-    let quota = quota_from_usage(&usage);
+    let quota = quota_from_usage_fixture(usage).await;
 
     assert_eq!(
         quota_snapshot_reset_at(&quota).map(|reset_at| reset_at.timestamp()),
@@ -201,7 +214,7 @@ fn quota_snapshot_reset_at_should_use_non_blocking_core_window() {
 
 #[test]
 fn quota_snapshot_reset_at_should_prefer_core_window_over_preserved_monthly_limit() {
-    let quota = json!({
+    let quota = QuotaSnapshot::from_value(json!({
         "snapshots": [{
             "source": "core",
             "blocked": false,
@@ -223,7 +236,8 @@ fn quota_snapshot_reset_at_should_prefer_core_window_over_preserved_monthly_limi
             "window_minutes": 43200,
             "limit_reached": false
         }
-    });
+    }))
+    .expect("quota should parse");
 
     assert_eq!(
         quota_snapshot_reset_at(&quota).map(|reset_at| reset_at.timestamp()),
@@ -234,21 +248,22 @@ fn quota_snapshot_reset_at_should_prefer_core_window_over_preserved_monthly_limi
 
 #[test]
 fn quota_snapshot_limit_reached_should_block_explicit_credit_overage_limit() {
-    let quota = json!({
+    let quota = QuotaSnapshot::from_value(json!({
         "credits": {
             "has_credits": false,
             "unlimited": false,
             "overage_limit_reached": true,
             "balance": 0
         }
-    });
+    }))
+    .expect("quota should parse");
 
     assert!(quota_snapshot_limit_reached(&quota));
 }
 
 #[test]
 fn quota_snapshot_limit_reached_should_block_any_exhausted_window() {
-    let quota = json!({
+    let quota = QuotaSnapshot::from_value(json!({
         "snapshots": [{
             "source": "additional",
             "blocked": false,
@@ -262,14 +277,15 @@ fn quota_snapshot_limit_reached_should_block_any_exhausted_window() {
             },
             "secondary": null
         }]
-    });
+    }))
+    .expect("quota should parse");
 
     assert!(quota_snapshot_limit_reached(&quota));
 }
 
 #[test]
 fn quota_snapshot_window_should_follow_blocking_window() {
-    let quota = json!({
+    let quota = QuotaSnapshot::from_value(json!({
         "snapshots": [{
             "source": "additional",
             "blocked": false,
@@ -282,7 +298,8 @@ fn quota_snapshot_window_should_follow_blocking_window() {
             },
             "secondary": null
         }]
-    });
+    }))
+    .expect("quota should parse");
 
     assert_eq!(
         (
@@ -291,6 +308,103 @@ fn quota_snapshot_window_should_follow_blocking_window() {
         ),
         (Some(1_893_456_300), Some(604_800))
     );
+}
+
+#[test]
+fn quota_observation_should_preserve_unobserved_monthly_limit_and_credits() {
+    let existing = QuotaSnapshot::from_value(json!({
+        "monthly_limit": {
+            "key": "spend-control-monthly",
+            "source": "spend_control",
+            "used_percent": 52,
+            "remaining_percent": 48,
+            "reset_at": 1896048000,
+            "window_minutes": 43200,
+            "limit_reached": false
+        },
+        "credits": {
+            "has_credits": true,
+            "unlimited": false,
+            "balance": 12
+        }
+    }))
+    .expect("existing quota should parse");
+    let observation = QuotaObservation {
+        limits: BTreeMap::from([(
+            "codex".to_string(),
+            QuotaLimitObservation {
+                limit_id: "codex".to_string(),
+                limit_name: None,
+                metered_feature: None,
+                allowed: None,
+                limit_reached: None,
+                primary: Some(QuotaWindowObservation {
+                    used_percent: 25.0,
+                    window_minutes: Some(5),
+                    reset_at: Some(1_893_456_300),
+                    used: None,
+                    limit: None,
+                }),
+                secondary: None,
+            },
+        )]),
+        ..QuotaObservation::default()
+    };
+
+    let quota = quota_from_observation(&observation, Some("plus"), Some(&existing));
+
+    assert_eq!(quota.plan_type.as_deref(), Some("plus"));
+    assert_eq!(
+        quota.limits[0]
+            .primary
+            .as_ref()
+            .and_then(|window| window.remaining_percent),
+        Some(75)
+    );
+    assert_eq!(
+        quota
+            .monthly_limit
+            .as_ref()
+            .and_then(|limit| limit.used_percent),
+        Some(52.0)
+    );
+    assert_eq!(
+        quota
+            .credits
+            .as_ref()
+            .and_then(|credits| credits.balance.as_ref()),
+        Some(&json!(12))
+    );
+}
+
+#[test]
+fn quota_observation_should_block_exhausted_window_without_explicit_flag() {
+    let observation = QuotaObservation {
+        limits: BTreeMap::from([(
+            "codex".to_string(),
+            QuotaLimitObservation {
+                limit_id: "codex".to_string(),
+                limit_name: None,
+                metered_feature: None,
+                allowed: None,
+                limit_reached: Some(false),
+                primary: Some(QuotaWindowObservation {
+                    used_percent: 100.0,
+                    window_minutes: Some(300),
+                    reset_at: Some(1_893_456_300),
+                    used: None,
+                    limit: None,
+                }),
+                secondary: None,
+            },
+        )]),
+        ..QuotaObservation::default()
+    };
+
+    let quota = quota_from_observation(&observation, Some("plus"), None);
+
+    assert!(quota.limits[0].blocked);
+    assert!(quota_snapshot_limit_reached(&quota));
 }
 
 #[tokio::test]
@@ -330,8 +444,8 @@ async fn quota_refresh_service_should_send_usage_cookie_when_cookie_store_is_con
         crate::support::wire_profile::test_wire_profile(),
     );
     let service = QuotaRefreshService::new(
-        store,
-        PgAccountUsageStore::new(pool.clone()),
+        Arc::new(store.clone()),
+        Arc::new(PgAccountUsageStore::new(pool.clone())),
         Arc::new(codex),
         test_account_pool(&pool),
         test_account_pseudonymizer(),
@@ -413,8 +527,8 @@ async fn quota_refresh_service_should_fetch_usage_for_quota_locked_accounts_and_
         crate::support::wire_profile::test_wire_profile(),
     );
     let service = QuotaRefreshService::new(
-        store.clone(),
-        PgAccountUsageStore::new(pool.clone()),
+        Arc::new(store.clone()),
+        Arc::new(PgAccountUsageStore::new(pool.clone())),
         Arc::new(codex),
         test_account_pool(&pool),
         test_account_pseudonymizer(),
@@ -471,8 +585,8 @@ async fn quota_refresh_service_should_ban_deactivated_workspace() {
         crate::support::wire_profile::test_wire_profile(),
     ));
     let service = QuotaRefreshService::new(
-        store,
-        PgAccountUsageStore::new(pool.clone()),
+        Arc::new(store.clone()),
+        Arc::new(PgAccountUsageStore::new(pool.clone())),
         codex,
         test_account_pool(&pool),
         test_account_pseudonymizer(),
@@ -533,8 +647,8 @@ async fn quota_refresh_service_should_refresh_quota_exhausted_accounts() {
         crate::support::wire_profile::test_wire_profile(),
     );
     let service = QuotaRefreshService::new(
-        store,
-        PgAccountUsageStore::new(pool.clone()),
+        Arc::new(store.clone()),
+        Arc::new(PgAccountUsageStore::new(pool.clone())),
         Arc::new(codex),
         test_account_pool(&pool),
         test_account_pseudonymizer(),
@@ -570,8 +684,8 @@ async fn quota_refresh_service_should_skip_recent_locked_account_before_cooldown
         crate::support::wire_profile::test_wire_profile(),
     );
     let service = QuotaRefreshService::with_min_refresh_interval_secs(
-        store,
-        PgAccountUsageStore::new(pool.clone()),
+        Arc::new(store.clone()),
+        Arc::new(PgAccountUsageStore::new(pool.clone())),
         Arc::new(codex),
         test_account_pool(&pool),
         test_account_pseudonymizer(),
@@ -611,8 +725,8 @@ async fn quota_refresh_service_should_skip_recent_locked_account_inside_cooldown
         crate::support::wire_profile::test_wire_profile(),
     );
     let service = QuotaRefreshService::with_min_refresh_interval_secs(
-        store,
-        PgAccountUsageStore::new(pool.clone()),
+        Arc::new(store.clone()),
+        Arc::new(PgAccountUsageStore::new(pool.clone())),
         Arc::new(codex),
         test_account_pool(&pool),
         test_account_pseudonymizer(),
@@ -669,8 +783,8 @@ async fn quota_refresh_service_should_bypass_recent_skip_after_cooldown_grace() 
         crate::support::wire_profile::test_wire_profile(),
     );
     let service = QuotaRefreshService::with_min_refresh_interval_secs(
-        store,
-        PgAccountUsageStore::new(pool.clone()),
+        Arc::new(store.clone()),
+        Arc::new(PgAccountUsageStore::new(pool.clone())),
         Arc::new(codex),
         test_account_pool(&pool),
         test_account_pseudonymizer(),
@@ -725,8 +839,8 @@ async fn quota_refresh_service_should_stagger_multiple_locked_account_requests()
         crate::support::wire_profile::test_wire_profile(),
     );
     let service = QuotaRefreshService::new(
-        store,
-        PgAccountUsageStore::new(pool.clone()),
+        Arc::new(store.clone()),
+        Arc::new(PgAccountUsageStore::new(pool.clone())),
         Arc::new(codex),
         test_account_pool(&pool),
         test_account_pseudonymizer(),

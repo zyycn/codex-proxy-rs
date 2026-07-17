@@ -22,7 +22,8 @@ const statusLabel = computed(() =>
 function pulse() {
   const dot = heartbeatDot.value
   const ring = heartbeatRing.value
-  if (!dot || !ring || preferredMotion.value === 'reduce') return
+  if (!dot || !ring || preferredMotion.value === 'reduce')
+    return
 
   gsap.killTweensOf([dot, ring])
   gsap.fromTo(
@@ -52,7 +53,8 @@ function pulse() {
 watch(
   () => props.updatedAt,
   async (updatedAt, previousUpdatedAt) => {
-    if (!updatedAt || updatedAt === previousUpdatedAt) return
+    if (!updatedAt || updatedAt === previousUpdatedAt)
+      return
     await nextTick()
     pulse()
   },

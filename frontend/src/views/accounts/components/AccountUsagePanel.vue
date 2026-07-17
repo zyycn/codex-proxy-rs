@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import type { AccountRow } from '../quota'
+
 defineProps<{
-  account: any
+  account: AccountRow
 }>()
 </script>
 
@@ -9,7 +11,9 @@ defineProps<{
     class="grid gap-4 rounded-lg bg-(--cp-bg-surface) p-4 shadow-(--cp-shadow-control) xl:grid-cols-[0.52fr_1.48fr]"
   >
     <div>
-      <h3 class="m-0 mb-3 text-[14px] font-[760] text-(--cp-text-primary)">Token 结构</h3>
+      <h3 class="m-0 mb-3 text-[14px] font-[760] text-(--cp-text-primary)">
+        Token 结构
+      </h3>
       <div class="grid gap-2">
         <div class="flex items-center justify-between rounded-lg bg-(--cp-success-bg) px-3 py-2">
           <span class="text-[12px] font-bold text-(--cp-success-text)">输入 Tokens</span>
@@ -48,7 +52,9 @@ defineProps<{
       class="min-w-0 pt-4 shadow-[inset_0_1px_0_var(--cp-divider-subtle)] xl:pt-0 xl:pl-4 xl:shadow-[inset_1px_0_0_var(--cp-divider-subtle)]"
     >
       <div class="mb-3 flex items-center justify-between">
-        <h3 class="m-0 text-[14px] font-[760] text-(--cp-text-primary)">模型使用排行</h3>
+        <h3 class="m-0 text-[14px] font-[760] text-(--cp-text-primary)">
+          模型使用排行
+        </h3>
       </div>
 
       <div

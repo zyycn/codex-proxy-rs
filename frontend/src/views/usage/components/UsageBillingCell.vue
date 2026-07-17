@@ -1,18 +1,20 @@
 <script setup lang="ts">
+import type { UsageDisplayRecord } from '../constants'
 import { Info } from '@lucide/vue'
-import { computed } from 'vue'
 
+import { computed } from 'vue'
 import BasePopover from '@/components/base/BasePopover.vue'
 import { usageBilling, usageBillingText } from '../constants'
 
 const props = defineProps<{
-  record: any
+  record: UsageDisplayRecord
 }>()
 
 const billing = computed(() => usageBilling(props.record))
 const amountItems = computed(() => {
   const value = billing.value
-  if (!value) return []
+  if (!value)
+    return []
 
   return [
     { label: '输入费用', value: value.inputAmountDisplay, accent: false },
@@ -26,7 +28,8 @@ const amountItems = computed(() => {
 })
 const billingItems = computed(() => {
   const value = billing.value
-  if (!value) return []
+  if (!value)
+    return []
 
   return [
     { label: '服务档位', value: value.serviceTierDisplay, tone: 'info' },
@@ -37,8 +40,10 @@ const billingItems = computed(() => {
 })
 
 function itemValueClass(tone?: string, accent?: boolean) {
-  if (tone === 'success') return 'text-(--cp-success-text)'
-  if (tone === 'info' || accent) return 'text-(--cp-info-text)'
+  if (tone === 'success')
+    return 'text-(--cp-success-text)'
+  if (tone === 'info' || accent)
+    return 'text-(--cp-info-text)'
   return 'text-(--cp-text-primary)'
 }
 </script>
@@ -69,7 +74,9 @@ function itemValueClass(tone?: string, accent?: boolean) {
       <div
         class="grid gap-2 text-[12px] leading-none [&_span:first-child]:whitespace-nowrap [&_span:last-child]:whitespace-nowrap"
       >
-        <p class="m-0 font-[760] text-(--cp-text-primary)">计费明细</p>
+        <p class="m-0 font-[760] text-(--cp-text-primary)">
+          计费明细
+        </p>
         <div class="grid gap-1.5 text-(--cp-text-secondary)">
           <div v-for="item in amountItems" :key="item.label" class="flex justify-between gap-4">
             <span>{{ item.label }}</span>

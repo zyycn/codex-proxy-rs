@@ -11,7 +11,8 @@ export function useDownload() {
     })
     await nextTick()
 
-    if (!objectUrl.value) return
+    if (!objectUrl.value)
+      return
 
     const link = document.createElement('a')
     link.href = objectUrl.value

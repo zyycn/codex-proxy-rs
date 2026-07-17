@@ -9,11 +9,9 @@ use codex_proxy_rs::{
     fleet::pool::{AccountAcquireRequest, AccountPoolOptions, AccountPoolService},
     infra::identity::AccountPseudonymizer,
     models::{
+        gateway::{ModelCatalogRequest, ModelCatalogSource, ModelCatalogSourceError},
         store::{ModelSnapshotStore, ModelSnapshotStoreResult},
         types::{BackendModelEntry, ModelPlanSnapshot},
-    },
-    upstream::openai::transport::{
-        CodexModelCatalogClient, CodexModelCatalogClientError, CodexModelCatalogRequest,
     },
 };
 
@@ -145,19 +143,16 @@ struct FakeModelCatalogClient {
 }
 
 #[async_trait]
-impl CodexModelCatalogClient for FakeModelCatalogClient {
+impl ModelCatalogSource for FakeModelCatalogClient {
     async fn fetch_models(
         &self,
-        request: &CodexModelCatalogRequest<'_>,
-    ) -> Result<Vec<serde_json::Value>, CodexModelCatalogClientError> {
+        request: &ModelCatalogRequest<'_>,
+    ) -> Result<Vec<BackendModelEntry>, ModelCatalogSourceError> {
         Ok(self
             .models_by_plan
             .get(request.plan_type)
             .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|model| serde_json::to_value(model).unwrap())
-            .collect())
+            .unwrap_or_default())
     }
 }
 

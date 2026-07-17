@@ -1,4 +1,9 @@
+import type { getDashboardSummary, getUsageRecords } from '@/api'
 import { formatDuration } from './utils/format'
+
+type UsageRecord = Awaited<ReturnType<typeof getUsageRecords>>['items'][number]
+type DashboardUsageRecord = Awaited<ReturnType<typeof getDashboardSummary>>['usageRecords'][number]
+export type UsageDisplayRecord = UsageRecord | DashboardUsageRecord
 
 export const usageRecordColumns = [
   {
@@ -148,117 +153,73 @@ export const usageTimeRangeOptions = [
   { label: '最近 30 天', value: '30d' },
 ]
 
-export function tokenTotal(record: any) {
-  const tokenDetails = record?.tokenDetails
-  if (tokenDetails) {
-    return numberValue(tokenDetails.totalTokens)
-  }
-
-  const usage = record?.metadata?.usage
-  if (!usage) {
-    return 0
-  }
-
-  return (
-    numberValue(usage.totalTokens) ||
-    numberValue(usage.inputTokens) + numberValue(usage.outputTokens)
-  )
-}
-
-export function formatTokenCount(value: number) {
-  if (!value) {
-    return '—'
-  }
-
-  return new Intl.NumberFormat('zh-CN').format(value)
-}
-
-export function formatUsageMetric(value: number) {
-  return new Intl.NumberFormat('zh-CN').format(value || 0)
-}
-
-export function formatCompactUsageMetric(value: number) {
-  const num = Number(value || 0)
-  if (num >= 1_000_000_000) return `${formatCompact(num / 1_000_000_000)}B`
-  if (num >= 1_000_000) return `${formatCompact(num / 1_000_000)}M`
-  if (num >= 1_000) return `${formatCompact(num / 1_000)}K`
-  return new Intl.NumberFormat('zh-CN').format(num)
-}
-
-function formatCompact(value: number) {
-  const rounded =
-    value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2)
-  return rounded.replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1')
-}
-
-export function formatLatencyAverage(value: number | null) {
-  if (value === null || value === undefined) {
-    return '—'
-  }
-
-  return `${Math.round(value)} ms`
-}
-
-export function usageRecordType(record: any) {
+export function usageRecordType(record: UsageDisplayRecord) {
+  const metadata = recordMetadata(record)
   if (record?.transport === 'websocket') {
     return 'WS'
   }
 
-  if (record?.metadata?.stream === true || record?.transport === 'http_sse') {
+  if (metadata?.stream === true || record.transport === 'http_sse') {
     return 'SSE'
   }
 
-  if (record?.metadata?.stream === false) {
+  if (metadata?.stream === false) {
     return 'HTTP'
   }
 
-  return record?.metadata?.apiKind === 'chat' ? 'Chat' : 'HTTP'
+  return metadata?.apiKind === 'chat' ? 'Chat' : 'HTTP'
 }
 
-export function usageRecordTypeClass(record: any) {
+export function usageRecordTypeClass(record: UsageDisplayRecord) {
   const type = usageRecordType(record)
-  if (type === 'WS') return 'bg-(--cp-info-bg) text-(--cp-info-text)'
-  if (type === 'SSE') return 'bg-(--cp-success-bg) text-(--cp-success-text)'
-  if (type === 'Chat') return 'bg-(--cp-warning-bg) text-(--cp-warning-text)'
+  if (type === 'WS')
+    return 'bg-(--cp-info-bg) text-(--cp-info-text)'
+  if (type === 'SSE')
+    return 'bg-(--cp-success-bg) text-(--cp-success-text)'
+  if (type === 'Chat')
+    return 'bg-(--cp-warning-bg) text-(--cp-warning-text)'
   return 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)'
 }
 
-export function usageAccountText(record: any) {
-  return record?.accountEmail || '—'
+export function usageAccountText(record: UsageDisplayRecord) {
+  return record.accountEmail || '—'
 }
 
-export function usageClientIp(record: any) {
-  return record?.clientIp || record?.metadata?.clientIp || '—'
+export function usageClientIp(record: UsageDisplayRecord) {
+  return record.clientIp || stringProperty(recordMetadata(record), 'clientIp') || '—'
 }
 
-export function usageUserAgent(record: any) {
-  return record?.userAgent || record?.metadata?.userAgent || '—'
+export function usageUserAgent(record: UsageDisplayRecord) {
+  return record.userAgent || stringProperty(recordMetadata(record), 'userAgent') || '—'
 }
 
-export function usageReasoningEffort(record: any) {
-  const reasoningEffort = record?.reasoningEffort || record?.metadata?.reasoningEffort || '—'
+export function usageReasoningEffort(record: UsageDisplayRecord) {
+  const metadata = recordMetadata(record)
+  const reasoningEffort
+    = record.reasoningEffort || stringProperty(metadata, 'reasoningEffort') || '—'
   if (usageIsSubagent(record)) {
     return reasoningEffort
   }
 
-  return record?.reasoningPreset || record?.metadata?.reasoningPreset || reasoningEffort
+  return record.reasoningPreset || stringProperty(metadata, 'reasoningPreset') || reasoningEffort
 }
 
-export function usageIsSubagent(record: any) {
-  return Boolean(record?.subagentKind)
+export function usageIsSubagent(record: UsageDisplayRecord) {
+  return Boolean(record.subagentKind)
 }
 
-export function usageIsCompact(record: any) {
-  return record?.compact === true || record?.metadata?.compact === true
+export function usageIsCompact(record: UsageDisplayRecord) {
+  return record.compact === true || recordMetadata(record)?.compact === true
 }
 
-export function usageModelDisplay(record: any) {
-  const requestedModel = record?.requestedModel || record?.metadata?.requestedModel || ''
-  const upstreamModel = record?.upstreamModel || record?.metadata?.upstreamModel || ''
-  const storedModel = record?.model || ''
+export function usageModelDisplay(record: UsageDisplayRecord) {
+  const metadata = recordMetadata(record)
+  const requestedModel = record.requestedModel || stringProperty(metadata, 'requestedModel') || ''
+  const upstreamModel = record.upstreamModel || stringProperty(metadata, 'upstreamModel') || ''
+  const storedModel = record.model || ''
   const primary = requestedModel || storedModel || upstreamModel || '—'
-  const secondary =
-    upstreamModel && upstreamModel !== primary
+  const secondary
+    = upstreamModel && upstreamModel !== primary
       ? upstreamModel
       : requestedModel && storedModel && storedModel !== requestedModel
         ? storedModel
@@ -267,42 +228,18 @@ export function usageModelDisplay(record: any) {
   return { primary, secondary }
 }
 
-export function usageTokenDetails(record: any) {
-  const details = record?.tokenDetails
-  if (details) {
-    return details
-  }
-
-  const usage = record?.metadata?.usage || {}
-  const inputTokens = numberValue(usage.inputTokens)
-  const outputTokens = numberValue(usage.outputTokens)
-  const cachedTokens = numberValue(usage.cachedTokens)
-  const cacheWriteTokens = numberValue(usage.cacheWriteTokens)
-  const reasoningTokens = numberValue(usage.reasoningTokens)
-  const totalTokens = numberValue(usage.totalTokens) || inputTokens + outputTokens
-
-  return {
-    inputTokens,
-    outputTokens,
-    cachedTokens,
-    cacheWriteTokens,
-    reasoningTokens,
-    totalTokens,
-    inputTokensDisplay: formatTokenCount(inputTokens),
-    outputTokensDisplay: formatTokenCount(outputTokens),
-    cachedTokensDisplay: formatCompactTokenCount(cachedTokens),
-    cacheWriteTokensDisplay: formatCompactTokenCount(cacheWriteTokens),
-    reasoningTokensDisplay: formatTokenCount(reasoningTokens),
-    totalTokensDisplay: formatTokenCount(totalTokens),
-  }
+export function usageTokenDetails(record: UsageDisplayRecord) {
+  return record.tokenDetails
 }
 
-export function usageLatencyDetails(record: any) {
-  const latencyDetails = record?.latencyDetails || record?.metadata || {}
-  const firstTokenMs = durationValue(record?.firstTokenLatencyMs ?? latencyDetails.firstTokenMs)
-  const totalMs = durationValue(record?.latencyMs)
-  const firstReasoningMs = durationValue(latencyDetails.firstReasoningMs)
-  const firstTextMs = durationValue(latencyDetails.firstTextMs)
+export function usageLatencyDetails(record: UsageDisplayRecord) {
+  const latencyDetails = recordLatencyDetails(record)
+  const firstTokenMs = durationValue(
+    record.firstTokenLatencyMs ?? property(latencyDetails, 'firstTokenMs'),
+  )
+  const totalMs = durationValue(record.latencyMs)
+  const firstReasoningMs = durationValue(property(latencyDetails, 'firstReasoningMs'))
+  const firstTextMs = durationValue(property(latencyDetails, 'firstTextMs'))
   const breakdownItems = []
 
   if (firstTokenMs !== null && totalMs !== null && firstTokenMs <= totalMs) {
@@ -317,7 +254,8 @@ export function usageLatencyDetails(record: any) {
         })
       }
       breakdownItems.push({ label: '正文生成', value: formatDuration(totalMs - firstTextMs) })
-    } else {
+    }
+    else {
       breakdownItems.push({
         label: '首个输出后完成',
         value: formatDuration(totalMs - firstTokenMs),
@@ -326,14 +264,17 @@ export function usageLatencyDetails(record: any) {
   }
 
   const transportItems = [
-    { label: '传输决策等待', value: durationValue(latencyDetails.transportDecisionWaitMs) },
-    { label: 'WebSocket 连接', value: durationValue(latencyDetails.wsConnectMs) },
-    { label: '上游响应头', value: durationValue(latencyDetails.upstreamHeadersMs) },
-    { label: '首个上游事件', value: durationValue(latencyDetails.firstEventMs) },
-    { label: '上游处理', value: durationValue(latencyDetails.openaiProcessingMs) },
+    {
+      label: '传输决策等待',
+      value: durationValue(property(latencyDetails, 'transportDecisionWaitMs')),
+    },
+    { label: 'WebSocket 连接', value: durationValue(property(latencyDetails, 'wsConnectMs')) },
+    { label: '上游响应头', value: durationValue(property(latencyDetails, 'upstreamHeadersMs')) },
+    { label: '首个上游事件', value: durationValue(property(latencyDetails, 'firstEventMs')) },
+    { label: '上游处理', value: durationValue(property(latencyDetails, 'openaiProcessingMs')) },
   ]
-    .filter((item) => item.value !== null)
-    .map((item) => ({ ...item, value: formatDuration(item.value) }))
+    .filter(item => item.value !== null)
+    .map(item => ({ ...item, value: formatDuration(item.value) }))
 
   return {
     firstTokenDisplay: formatDuration(firstTokenMs),
@@ -343,23 +284,16 @@ export function usageLatencyDetails(record: any) {
   }
 }
 
-export function usageBilling(record: any) {
-  return record?.billing || null
+export function usageBilling(record: UsageDisplayRecord) {
+  return record.billing
 }
 
-export function usageBillingText(record: any) {
+export function usageBillingText(record: UsageDisplayRecord) {
   return usageBilling(record)?.totalAmountDisplay || '—'
 }
 
-function formatCompactTokenCount(value: number) {
-  if (!value) return '—'
-  if (value < 1000) return formatTokenCount(value)
-  if (value < 1_000_000) return `${Number((value / 1000).toFixed(value >= 100_000 ? 0 : 1))}K`
-  return `${Number((value / 1_000_000).toFixed(value >= 100_000_000 ? 0 : 1))}M`
-}
-
-export function visibleRequestText(record: any) {
-  const body = record?.metadata?.requestBody
+export function visibleRequestText(record: UsageDisplayRecord) {
+  const body = property(recordMetadata(record), 'requestBody')
   if (!body) {
     return ''
   }
@@ -367,8 +301,8 @@ export function visibleRequestText(record: any) {
   return extractInputText(body) || JSON.stringify(body, null, 2)
 }
 
-export function visibleResponseText(record: any) {
-  const body = record?.metadata?.responseBody
+export function visibleResponseText(record: UsageDisplayRecord) {
+  const body = property(recordMetadata(record), 'responseBody')
   if (!body) {
     return ''
   }
@@ -377,19 +311,15 @@ export function visibleResponseText(record: any) {
     return body
   }
 
-  return body.output_text || extractOutputText(body) || JSON.stringify(body, null, 2)
-}
-
-function numberValue(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+  return stringProperty(asRecord(body), 'output_text') || extractOutputText(body) || JSON.stringify(body, null, 2)
 }
 
 function durationValue(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
 }
 
-function extractInputText(body: any) {
-  const input = body?.input
+function extractInputText(body: unknown) {
+  const input = property(asRecord(body), 'input')
   if (typeof input === 'string') {
     return input
   }
@@ -400,35 +330,65 @@ function extractInputText(body: any) {
 
   return input
     .flatMap((item) => {
-      if (typeof item?.content === 'string') {
-        return [item.content]
+      const content = property(asRecord(item), 'content')
+      if (typeof content === 'string') {
+        return [content]
       }
 
-      if (!Array.isArray(item?.content)) {
+      if (!Array.isArray(content)) {
         return []
       }
 
-      return item.content
-        .filter((part: any) => part?.type === 'input_text' && typeof part.text === 'string')
-        .map((part: any) => part.text)
+      return content.flatMap((part) => {
+        const value = asRecord(part)
+        const text = stringProperty(value, 'text')
+        return value?.type === 'input_text' && text ? [text] : []
+      })
     })
     .filter(Boolean)
     .join('\n')
 }
 
-function extractOutputText(body: any) {
-  if (!Array.isArray(body?.output)) {
+function extractOutputText(body: unknown) {
+  const output = property(asRecord(body), 'output')
+  if (!Array.isArray(output)) {
     return ''
   }
 
-  return body.output
-    .flatMap((item: any) =>
-      Array.isArray(item?.content)
-        ? item.content
-            .filter((part: any) => typeof part?.text === 'string')
-            .map((part: any) => part.text)
-        : [],
-    )
+  return output
+    .flatMap((item) => {
+      const content = property(asRecord(item), 'content')
+      if (!Array.isArray(content))
+        return []
+      return content.flatMap((part) => {
+        const text = stringProperty(asRecord(part), 'text')
+        return text ? [text] : []
+      })
+    })
     .filter(Boolean)
     .join('\n')
+}
+
+function recordMetadata(record: UsageDisplayRecord) {
+  return asRecord('metadata' in record ? record.metadata : undefined)
+}
+
+function recordLatencyDetails(record: UsageDisplayRecord) {
+  return asRecord('latencyDetails' in record ? record.latencyDetails : undefined)
+    ?? recordMetadata(record)
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
+function property(value: Record<string, unknown> | undefined, key: string) {
+  return value?.[key]
+}
+
+function stringProperty(value: Record<string, unknown> | undefined, key: string) {
+  const valueAtKey = property(value, key)
+  return typeof valueAtKey === 'string' ? valueAtKey : undefined
 }

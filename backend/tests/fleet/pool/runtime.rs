@@ -5,11 +5,12 @@ use codex_proxy_rs::fleet::{
     account::{Account, AccountStatus},
     pool::{AccountAcquireRequest, AccountPoolOptions, AccountPoolService, RotationStrategy},
     store::{AccountStore, AccountStoreResult, PgAccountStore},
+    usage::{
+        AccountUsageDelta, AccountUsageSnapshot, AccountUsageStore, AccountUsageStoreError,
+        AccountUsageWindow,
+    },
 };
-use codex_proxy_rs::telemetry::account_usage::store::{
-    AccountUsageDelta, AccountUsageSnapshot, AccountUsageStore, AccountUsageStoreError,
-    AccountUsageWindow, PgAccountUsageStore,
-};
+use codex_proxy_rs::telemetry::account_usage::store::PgAccountUsageStore;
 
 use crate::support::storage::init_test_db;
 

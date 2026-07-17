@@ -455,9 +455,13 @@ async fn websocket_execute_response_create_request_should_reject_binary_event() 
         .expect_err("binary websocket events should be rejected");
     server.await.unwrap();
 
+    assert_eq!(
+        std::error::Error::source(&error).map(ToString::to_string),
+        Some("unexpected binary websocket event".to_string())
+    );
     std::assert_matches!(
         error,
-        CodexWebSocketExchangeError::PostSendAmbiguous { message }
+        CodexWebSocketExchangeError::PostSendAmbiguous { message, .. }
             if message.contains("unexpected binary websocket event")
     );
 }
@@ -862,7 +866,7 @@ async fn websocket_execute_response_create_request_should_reject_invalid_complet
         .expect_err("invalid response.completed should be rejected");
     server.await.unwrap();
 
-    let CodexWebSocketExchangeError::PostSendAmbiguous { message } = error else {
+    let CodexWebSocketExchangeError::PostSendAmbiguous { message, .. } = error else {
         panic!("expected post-send ambiguous websocket response");
     };
     assert!(message.contains("failed to parse ResponseCompleted"));
@@ -912,7 +916,7 @@ async fn websocket_execute_response_create_request_should_reject_completed_witho
 
     std::assert_matches!(
         error,
-        CodexWebSocketExchangeError::PostSendAmbiguous { message }
+        CodexWebSocketExchangeError::PostSendAmbiguous { message, .. }
             if message.contains("response.completed is missing response")
     );
 }
@@ -1009,7 +1013,10 @@ async fn codex_backend_client_should_timeout_when_upstream_is_silent() {
 
     std::assert_matches!(
         error,
-        CodexClientError::WebSocket(CodexWebSocketExchangeError::PostSendAmbiguous { message })
+        CodexClientError::WebSocket(CodexWebSocketExchangeError::PostSendAmbiguous {
+            message,
+            ..
+        })
             if message.contains("30ms")
     );
 }
@@ -1174,7 +1181,10 @@ async fn codex_backend_client_stream_should_reject_binary_websocket_event() {
 
     std::assert_matches!(
         error,
-        CodexClientError::WebSocket(CodexWebSocketExchangeError::PostSendAmbiguous { message })
+        CodexClientError::WebSocket(CodexWebSocketExchangeError::PostSendAmbiguous {
+            message,
+            ..
+        })
             if message.contains("unexpected binary websocket event")
     );
 }
@@ -1316,7 +1326,10 @@ async fn codex_backend_client_stream_should_error_when_websocket_closes_before_t
 
     std::assert_matches!(
         error,
-        CodexClientError::WebSocket(CodexWebSocketExchangeError::PostSendAmbiguous { message })
+        CodexClientError::WebSocket(CodexWebSocketExchangeError::PostSendAmbiguous {
+            message,
+            ..
+        })
             if message.contains("closed before terminal event")
     );
 }
@@ -1632,7 +1645,10 @@ async fn codex_backend_client_stream_should_timeout_when_active_websocket_stalls
 
     std::assert_matches!(
         error,
-        CodexClientError::WebSocket(CodexWebSocketExchangeError::PostSendAmbiguous { message })
+        CodexClientError::WebSocket(CodexWebSocketExchangeError::PostSendAmbiguous {
+            message,
+            ..
+        })
             if message.contains("300s")
     );
 }

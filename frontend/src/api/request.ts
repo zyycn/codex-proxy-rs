@@ -1,9 +1,11 @@
-import axios, {
+import type {
   AxiosError,
-  type AxiosInstance,
-  type AxiosRequestConfig,
-  type AxiosResponse,
+  AxiosInstance,
+  AxiosRequestConfig,
+  AxiosResponse,
 } from 'axios'
+import type { ZodType } from 'zod'
+import axios from 'axios'
 
 import { API_BASE_URL, API_TIMEOUT_MS } from './constants'
 
@@ -18,6 +20,8 @@ interface ApiErrorBody {
   message?: string
   data?: unknown
 }
+
+type UnauthorizedHandler = () => void | Promise<void>
 
 export class ApiError extends Error {
   constructor(
@@ -38,6 +42,11 @@ const http: AxiosInstance = axios.create({
 })
 
 let unauthorizedHandled = false
+let unauthorizedHandler: UnauthorizedHandler | undefined
+
+export function setUnauthorizedHandler(handler: UnauthorizedHandler) {
+  unauthorizedHandler = handler
+}
 
 export function resetUnauthorizedHandling() {
   unauthorizedHandled = false
@@ -48,18 +57,12 @@ function isAuthenticationRequest(url?: string) {
 }
 
 function handleUnauthorizedOnce() {
-  if (unauthorizedHandled) return
+  if (unauthorizedHandled || !unauthorizedHandler)
+    return
   unauthorizedHandled = true
-  void Promise.all([import('@/stores/modules/auth'), import('@/router')])
-    .then(async ([{ useAuthStore }, { router }]) => {
-      useAuthStore().invalidateSession()
-      if (router.currentRoute.value.path !== '/login') {
-        await router.replace({ name: 'login' })
-      }
-    })
-    .catch(() => {
-      unauthorizedHandled = false
-    })
+  void Promise.resolve(unauthorizedHandler()).catch(() => {
+    unauthorizedHandled = false
+  })
 }
 
 http.interceptors.response.use(
@@ -84,22 +87,29 @@ http.interceptors.response.use(
 
 function isApiEnvelope(value: unknown): value is ApiEnvelope {
   return (
-    typeof value === 'object' &&
-    value !== null &&
-    'data' in value &&
-    'code' in value &&
-    'message' in value
+    typeof value === 'object'
+    && value !== null
+    && 'data' in value
+    && 'code' in value
+    && 'message' in value
   )
 }
 
-export default async function request<T = any>(config: AxiosRequestConfig): Promise<T> {
+export default async function request(config: AxiosRequestConfig) {
   const response = await http.request<unknown, AxiosResponse<unknown>>({
     ...config,
   })
 
   if (isApiEnvelope(response.data)) {
-    return response.data.data as T
+    return response.data.data
   }
 
-  return response.data as T
+  return response.data
+}
+
+export async function requestParsed<const Schema extends ZodType>(
+  config: AxiosRequestConfig,
+  schema: Schema,
+) {
+  return schema.parse(await request(config))
 }

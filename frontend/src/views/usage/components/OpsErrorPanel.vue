@@ -1,17 +1,19 @@
 <script setup lang="ts">
+import type { UsageTimeRangeParams } from '../composables/useUsageTimeRange'
+import type { getOpsErrors } from '@/api'
+
 import { Eye, RefreshCw, Search } from '@lucide/vue'
 import { shallowRef, toRef } from 'vue'
-
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
-import { opsErrorColumns } from '../constants'
 import { useOpsErrorsTable } from '../composables/useOpsErrorsTable'
+import { opsErrorColumns } from '../constants'
 import OpsErrorDetailModal from './OpsErrorDetailModal.vue'
 import UsageStatusCodeBadge from './UsageStatusCodeBadge.vue'
 
 const props = defineProps<{
-  timeRangeParams: Record<string, string>
+  timeRangeParams: UsageTimeRangeParams
 }>()
 
 const {
@@ -27,10 +29,12 @@ const {
   refresh,
 } = useOpsErrorsTable(toRef(props, 'timeRangeParams'))
 
-const selectedRecord = shallowRef<any | null>(null)
+const selectedRecord = shallowRef<Awaited<ReturnType<typeof getOpsErrors>>['items'][number] | null>(
+  null,
+)
 const detailOpen = shallowRef(false)
 
-function showDetail(record: any) {
+function showDetail(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][number]) {
   selectedRecord.value = record
   detailOpen.value = true
 }

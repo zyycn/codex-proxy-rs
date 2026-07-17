@@ -2,9 +2,9 @@
 import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, useTemplateRef, watch } from 'vue'
 
+import { lockBodyScroll, unlockBodyScroll } from '@/utils/bodyScrollLock'
 import BaseButton from './BaseButton.vue'
 import BaseScrollbar from './BaseScrollbar.vue'
-import { lockBodyScroll, unlockBodyScroll } from '@/utils/bodyScrollLock'
 
 type ModalVariant = 'default' | 'info' | 'warning' | 'danger' | 'success'
 
@@ -36,8 +36,8 @@ const focusableSelector = [
 const variant = computed(() => props.variant ?? 'default')
 
 const modalStyle = computed(() => {
-  const preferredWidth =
-    typeof props.width === 'number' ? `${props.width}px` : (props.width ?? '560px')
+  const preferredWidth
+    = typeof props.width === 'number' ? `${props.width}px` : (props.width ?? '560px')
 
   return {
     width: `min(${preferredWidth}, calc(100dvw - 1.5rem))`,
@@ -59,7 +59,7 @@ const iconMap = {
   success: CheckCircle2,
 }
 
-const variantClasses: Record<ModalVariant, { iconBg: string; icon: string }> = {
+const variantClasses: Record<ModalVariant, { iconBg: string, icon: string }> = {
   default: {
     iconBg: 'bg-(--cp-info-bg)',
     icon: 'text-(--cp-info)',
@@ -83,13 +83,14 @@ const variantClasses: Record<ModalVariant, { iconBg: string; icon: string }> = {
 }
 
 function closeModal() {
-  if (props.closeDisabled) return
+  if (props.closeDisabled)
+    return
   open.value = false
 }
 
 function focusableElements() {
   return Array.from(panel.value?.querySelectorAll<HTMLElement>(focusableSelector) ?? []).filter(
-    (element) => !element.hidden && element.getAttribute('aria-hidden') !== 'true',
+    element => !element.hidden && element.getAttribute('aria-hidden') !== 'true',
   )
 }
 
@@ -99,7 +100,8 @@ function handleKeydown(event: KeyboardEvent) {
     closeModal()
     return
   }
-  if (event.key !== 'Tab') return
+  if (event.key !== 'Tab')
+    return
 
   const focusable = focusableElements()
   if (focusable.length === 0) {
@@ -111,31 +113,37 @@ function handleKeydown(event: KeyboardEvent) {
   const last = focusable[focusable.length - 1]
   if (!panel.value?.contains(document.activeElement)) {
     event.preventDefault()
-    if (event.shiftKey) last?.focus()
+    if (event.shiftKey)
+      last?.focus()
     else first?.focus()
-  } else if (event.shiftKey && document.activeElement === first) {
+  }
+  else if (event.shiftKey && document.activeElement === first) {
     event.preventDefault()
     last?.focus()
-  } else if (!event.shiftKey && document.activeElement === last) {
+  }
+  else if (!event.shiftKey && document.activeElement === last) {
     event.preventDefault()
     first?.focus()
   }
 }
 
 function acquireScrollLock() {
-  if (ownsScrollLock) return
+  if (ownsScrollLock)
+    return
   ownsScrollLock = true
   lockBodyScroll()
 }
 
 function releaseScrollLock() {
-  if (!ownsScrollLock) return
+  if (!ownsScrollLock)
+    return
   ownsScrollLock = false
   unlockBodyScroll()
 }
 
 function restorePreviousFocus() {
-  if (previouslyFocused?.isConnected) previouslyFocused.focus()
+  if (previouslyFocused?.isConnected)
+    previouslyFocused.focus()
   previouslyFocused = null
 }
 
@@ -143,12 +151,13 @@ watch(
   open,
   async (isOpen) => {
     if (isOpen) {
-      previouslyFocused =
-        document.activeElement instanceof HTMLElement ? document.activeElement : null
+      previouslyFocused
+        = document.activeElement instanceof HTMLElement ? document.activeElement : null
       acquireScrollLock()
       await nextTick()
       const first = focusableElements()[0]
-      if (first) first.focus()
+      if (first)
+        first.focus()
       else panel.value?.focus()
       return
     }
@@ -231,8 +240,12 @@ onBeforeUnmount(() => {
             class="flex shrink-0 flex-wrap justify-end gap-2 px-4 pb-4 sm:gap-3 sm:px-7 sm:pb-7"
           >
             <slot name="footer">
-              <BaseButton variant="default" @click="open = false">取消</BaseButton>
-              <BaseButton variant="primary" @click="open = false">确认</BaseButton>
+              <BaseButton variant="default" @click="open = false">
+                取消
+              </BaseButton>
+              <BaseButton variant="primary" @click="open = false">
+                确认
+              </BaseButton>
             </slot>
           </footer>
         </section>

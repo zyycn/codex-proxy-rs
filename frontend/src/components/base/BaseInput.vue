@@ -68,7 +68,7 @@ const inputClasses = computed(() => [
         :disabled="disabled"
         :autocomplete="autocomplete"
         :aria-invalid="error ? 'true' : undefined"
-      />
+      >
       <span v-if="$slots.suffix" :class="iconClasses">
         <slot name="suffix" />
       </span>

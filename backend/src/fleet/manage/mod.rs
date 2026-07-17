@@ -6,9 +6,9 @@ mod lifecycle;
 pub(crate) mod oauth;
 mod probe;
 mod quota;
-pub mod quota_view;
 mod service;
 mod types;
 
+pub use probe::{AccountModelOption, AccountTestEvent, AccountTestStream};
 pub use service::*;
 pub use types::*;

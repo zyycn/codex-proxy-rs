@@ -5,12 +5,12 @@ use chrono::{Duration, Utc};
 use codex_proxy_rs::fleet::account::{Account, AccountStatus};
 use codex_proxy_rs::fleet::cookies::PgCookieStore;
 use codex_proxy_rs::fleet::store::{AccountStore, AccountStoreResult};
-use codex_proxy_rs::models::service::ModelService;
-use codex_proxy_rs::models::types::ModelConfig;
-use codex_proxy_rs::telemetry::account_usage::store::{
+use codex_proxy_rs::fleet::usage::{
     AccountUsageDelta, AccountUsageSnapshot, AccountUsageStore, AccountUsageStoreError,
     AccountUsageWindow,
 };
+use codex_proxy_rs::models::service::ModelService;
+use codex_proxy_rs::models::types::ModelConfig;
 use codex_proxy_rs::upstream::openai::desktop_release::{
     DesktopReleaseSnapshot, DesktopReleaseStatus,
 };

@@ -1,4 +1,11 @@
-export function usageTooltip(theme: any, formatter: any) {
+import type { useUsageChartPalette } from '../composables/useUsageChartPalette'
+
+type UsageChartPalette = ReturnType<typeof useUsageChartPalette>['palette']['value']
+
+export function usageTooltip(
+  theme: UsageChartPalette,
+  formatter: (params: unknown) => string,
+) {
   return {
     trigger: 'axis' as const,
     backgroundColor: theme.surface,
@@ -20,7 +27,7 @@ export function usageTooltip(theme: any, formatter: any) {
   }
 }
 
-export function usageCategoryAxis(labels: string[], theme: any) {
+export function usageCategoryAxis(labels: string[], theme: UsageChartPalette) {
   return {
     type: 'category' as const,
     data: labels,
@@ -36,9 +43,9 @@ export function usageCategoryAxis(labels: string[], theme: any) {
 }
 
 export function usageValueAxis(
-  theme: any,
+  theme: UsageChartPalette,
   formatter: (value: number) => string,
-  options: any = {},
+  options: { min?: number, max?: number, splitLine?: boolean } = {},
 ) {
   return {
     type: 'value' as const,
@@ -61,11 +68,15 @@ export function usageValueAxis(
   }
 }
 
-export function tooltipRows(params: any) {
+export function tooltipRows(params: unknown): Record<string, unknown>[] {
   const values = Array.isArray(params) ? params : [params]
-  return values.filter((value) => typeof value === 'object' && value !== null)
+  return values.filter(
+    (value): value is Record<string, unknown> => typeof value === 'object' && value !== null,
+  )
 }
 
-export function tooltipIndex(source: any) {
-  return typeof source?.dataIndex === 'number' ? source.dataIndex : -1
+export function tooltipIndex(source: unknown) {
+  if (typeof source !== 'object' || source === null || !('dataIndex' in source))
+    return -1
+  return typeof source.dataIndex === 'number' ? source.dataIndex : -1
 }

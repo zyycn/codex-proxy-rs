@@ -15,11 +15,11 @@ const props = defineProps<{
   apiBaseUrl: string
 }>()
 
-const open = defineModel<boolean>({ default: false })
-
 const emit = defineEmits<{
   copy: [text: string]
 }>()
+
+const open = defineModel<boolean>({ default: false })
 
 const activePlatform = shallowRef('unix')
 
@@ -104,14 +104,16 @@ const visibleFiles = computed(() => [
           >
             <pre
               class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.65] font-[650] text-(--cp-text-primary)"
-              >{{ file.content }}</pre>
+            >{{ file.content }}</pre>
           </BaseScrollbar>
         </section>
       </div>
     </div>
 
     <template #footer>
-      <BaseButton variant="primary" @click="open = false">关闭</BaseButton>
+      <BaseButton variant="primary" @click="open = false">
+        关闭
+      </BaseButton>
     </template>
   </BaseModal>
 </template>

@@ -43,7 +43,7 @@ impl CodexBackendClient {
 
             let body = response.text().await?;
             match serde_json::from_str::<Value>(&body) {
-                Ok(parsed) if parsed.get("rate_limit").is_some() => return Ok(parsed),
+                Ok(parsed) if is_usage_response(&parsed) => return Ok(parsed),
                 _ => last_invalid_body = Some(body),
             }
         }
@@ -63,4 +63,15 @@ impl CodexBackendClient {
             transport: super::client::CodexBackendTransport::HttpSse,
         })
     }
+}
+
+fn is_usage_response(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.get("rate_limit").is_some_and(Value::is_object)
+            || object
+                .get("additional_rate_limits")
+                .is_some_and(Value::is_array)
+            || object.get("spend_control").is_some_and(Value::is_object)
+            || object.get("credits").is_some_and(Value::is_object)
+    })
 }

@@ -1,33 +1,32 @@
-<script setup lang="ts">
+<script setup lang="ts" generic="Row extends Record<string, unknown> = Record<string, unknown>">
+import type { BaseTableColumn, BaseTableSort, ResolvedTableColumn } from './columns'
+import type { BaseTablePagination as BaseTablePaginationConfig } from './pagination'
+
 import { Triangle } from '@lucide/vue'
 import { computed, shallowRef, useSlots, watch } from 'vue'
-
 import BaseEmpty from '../BaseEmpty.vue'
 import BaseScrollbar from '../BaseScrollbar.vue'
 import BaseTablePagination from './BaseTablePagination.vue'
 import {
   alignClass,
+
   cellContentClass,
   cellDisplayValue,
   cellTitle,
   cellValue,
   columnStyle,
   resolveColumns,
+
   tableStyle as resolveTableStyle,
-  type BaseTableColumn,
-  type BaseTableSort,
-  type ResolvedTableColumn,
 } from './columns'
-import type { BaseTablePagination as BaseTablePaginationConfig } from './pagination'
 import { useHorizontalStickyShadow } from './useHorizontalStickyShadow'
 
-type TableRow = Record<string, any>
-type RowKey = string | ((row: TableRow, index: number) => string | number)
+type RowKey = string | ((row: Row, index: number) => string | number)
 
 const props = withDefaults(
   defineProps<{
-    columns: BaseTableColumn[]
-    rows: any[]
+    columns: BaseTableColumn<Row>[]
+    rows: Row[]
     rowKey?: RowKey
     selectedRowKeys?: Array<string | number>
     stripe?: boolean
@@ -76,7 +75,7 @@ const bodyCellClass = computed(() => [
 
 const computedColumns = computed(() => resolveColumns(props.columns, props.minWidth))
 const tableViewStyle = computed(() => resolveTableStyle(props.minWidth))
-const retainedRows = shallowRef<any[]>([])
+const retainedRows = shallowRef<Row[]>([])
 watch(
   [() => props.rows, () => props.loading],
   ([rows, loading]) => {
@@ -90,19 +89,19 @@ const displayRows = computed(() =>
   props.loading && props.rows.length === 0 ? retainedRows.value : props.rows,
 )
 const hasRows = computed(() => displayRows.value.length > 0)
-const { horizontalScrolled, horizontalCanScrollRight, handleTableScroll } =
-  useHorizontalStickyShadow({
+const { horizontalScrolled, horizontalCanScrollRight, handleTableScroll }
+  = useHorizontalStickyShadow({
     hasRows,
     watchSources: () => [displayRows.value.length, props.minWidth],
   })
 
-function fixedHeaderClass(column: ResolvedTableColumn) {
+function fixedHeaderClass(column: ResolvedTableColumn<Row>) {
   if (!column.fixed) {
     return undefined
   }
 
-  const showShadow =
-    column.fixed === 'left' ? horizontalScrolled.value : horizontalCanScrollRight.value
+  const showShadow
+    = column.fixed === 'left' ? horizontalScrolled.value : horizontalCanScrollRight.value
 
   return [
     'sticky z-30 bg-(--cp-bg-subtle)',
@@ -115,13 +114,13 @@ function fixedHeaderClass(column: ResolvedTableColumn) {
   ]
 }
 
-function fixedBodyClass(column: ResolvedTableColumn, row: TableRow, index: number) {
+function fixedBodyClass(column: ResolvedTableColumn<Row>, row: Row, index: number) {
   if (!column.fixed) {
     return undefined
   }
 
-  const showShadow =
-    column.fixed === 'left' ? horizontalScrolled.value : horizontalCanScrollRight.value
+  const showShadow
+    = column.fixed === 'left' ? horizontalScrolled.value : horizontalCanScrollRight.value
 
   return [
     'sticky z-20',
@@ -139,7 +138,7 @@ function fixedBodyClass(column: ResolvedTableColumn, row: TableRow, index: numbe
   ]
 }
 
-function getRowKey(row: TableRow, index: number) {
+function getRowKey(row: Row, index: number) {
   if (typeof props.rowKey === 'function') {
     return props.rowKey(row, index)
   }
@@ -148,15 +147,15 @@ function getRowKey(row: TableRow, index: number) {
   return typeof value === 'string' || typeof value === 'number' ? value : index
 }
 
-function isRowSelected(row: TableRow, index: number) {
+function isRowSelected(row: Row, index: number) {
   return props.selectedRowKeys.includes(getRowKey(row, index))
 }
 
-function isRowExpanded(row: TableRow, index: number) {
+function isRowExpanded(row: Row, index: number) {
   return props.expandedRowKeys.includes(getRowKey(row, index))
 }
 
-function rowClass(row: TableRow, index: number) {
+function rowClass(row: Row, index: number) {
   return [
     bodyRowClass.value,
     'hover:[&>td]:bg-(--cp-default-bg-hover)',
@@ -169,41 +168,47 @@ function isLastColumn(index: number) {
   return index === computedColumns.value.length - 1
 }
 
-function bodyCellTitle(column: BaseTableColumn, row: TableRow) {
+function bodyCellTitle(column: BaseTableColumn<Row>, row: Row) {
   return slots[column.key] ? undefined : cellTitle(column, row)
 }
 
-function columnSortKey(column: BaseTableColumn) {
+function columnSortKey(column: BaseTableColumn<Row>) {
   return column.sortKey || column.key
 }
 
-function columnSortDirection(column: BaseTableColumn) {
+function columnSortDirection(column: BaseTableColumn<Row>) {
   return props.sort?.key === columnSortKey(column) ? props.sort.direction : undefined
 }
 
-function toggleColumnSort(column: BaseTableColumn) {
+function toggleColumnSort(column: BaseTableColumn<Row>) {
   const key = columnSortKey(column)
   const direction = columnSortDirection(column)
   if (!direction) {
     emit('sort-change', { key, direction: 'asc' })
-  } else if (direction === 'asc') {
+  }
+  else if (direction === 'asc') {
     emit('sort-change', { key, direction: 'desc' })
-  } else {
+  }
+  else {
     emit('sort-change', undefined)
   }
 }
 
-function columnAriaSort(column: BaseTableColumn) {
+function columnAriaSort(column: BaseTableColumn<Row>) {
   const direction = columnSortDirection(column)
-  if (direction === 'asc') return 'ascending'
-  if (direction === 'desc') return 'descending'
+  if (direction === 'asc')
+    return 'ascending'
+  if (direction === 'desc')
+    return 'descending'
   return column.sortable ? 'none' : undefined
 }
 
-function sortButtonLabel(column: BaseTableColumn) {
+function sortButtonLabel(column: BaseTableColumn<Row>) {
   const direction = columnSortDirection(column)
-  if (!direction) return `${column.label || column.key}：升序排列`
-  if (direction === 'asc') return `${column.label || column.key}：降序排列`
+  if (!direction)
+    return `${column.label || column.key}：升序排列`
+  if (direction === 'asc')
+    return `${column.label || column.key}：降序排列`
   return `${column.label || column.key}：取消排序`
 }
 </script>
@@ -227,7 +232,7 @@ function sortButtonLabel(column: BaseTableColumn) {
                 v-for="column in computedColumns"
                 :key="column.key"
                 :style="columnStyle(column)"
-              />
+              >
             </colgroup>
 
             <thead>
@@ -316,7 +321,7 @@ function sortButtonLabel(column: BaseTableColumn) {
                 v-for="column in computedColumns"
                 :key="column.key"
                 :style="columnStyle(column)"
-              />
+              >
             </colgroup>
 
             <tbody>

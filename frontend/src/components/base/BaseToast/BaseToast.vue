@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CheckCircle2, AlertCircle, AlertTriangle, Info, X } from '@lucide/vue'
+import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from '@lucide/vue'
 
 import { toast } from './toast'
 

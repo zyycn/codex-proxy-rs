@@ -1,14 +1,13 @@
 <script setup lang="ts">
+import type { getAccounts } from '@/api'
 import { sumBy } from 'es-toolkit'
 import { computed } from 'vue'
 
 import AccountPlanBadge from './AccountPlanBadge.vue'
 
-type AccountIdentity = {
-  id?: string | number | null
-  email: string
-  planType?: string | null
-}
+type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
+type AccountIdentity = Pick<AccountRow, 'id' | 'email' | 'planType'>
+  & Partial<Pick<AccountRow, 'accountId'>>
 
 const props = withDefaults(
   defineProps<{
@@ -22,7 +21,14 @@ const props = withDefaults(
   },
 )
 
-const emailText = computed(() => props.account.email.trim())
+const emailText = computed(() => {
+  const email = props.account.email?.trim()
+  if (email)
+    return email
+  if ('accountId' in props.account && typeof props.account.accountId === 'string')
+    return props.account.accountId
+  return String(props.account.id)
+})
 
 const displayTitle = computed(() => emailText.value.split('@')[0])
 
@@ -48,7 +54,7 @@ const avatarClass = computed(() => {
     'bg-(--cp-warning-bg) text-(--cp-warning-text) shadow-[inset_0_0_0_1px_var(--cp-warning-border)]',
   ]
   const key = String(props.account.id || props.account.email || displayTitle.value)
-  const hash = sumBy([...key], (char) => char.charCodeAt(0))
+  const hash = sumBy([...key], char => char.charCodeAt(0))
   return palettes[hash % palettes.length]
 })
 </script>
