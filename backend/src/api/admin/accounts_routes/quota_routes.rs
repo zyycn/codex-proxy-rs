@@ -17,10 +17,7 @@ pub async fn account_quota(
             let quota = serde_json::to_value(&data.quota)
                 .map_err(|error| AdminError::internal(error.to_string()))?;
             let raw = data.raw;
-            let quota_read = crate::admin_queries::accounts::AccountQuotaReadModel::from_snapshot(
-                data.quota,
-                Some(Utc::now()),
-            );
+            let quota_read = AccountQuotaReadModel::from_snapshot(data.quota, Some(Utc::now()));
             let account = state
                 .services
                 .admin_accounts
@@ -30,8 +27,7 @@ pub async fn account_quota(
                 .ok_or_else(account_not_found)?;
             let item = state
                 .services
-                .admin_queries
-                .accounts
+                .account_list
                 .enrich_account(account, quota_read)
                 .await
                 .map_err(|error| AdminError::internal(error.to_string()))?;

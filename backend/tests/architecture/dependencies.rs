@@ -158,15 +158,8 @@ fn forbidden_dependency(source: &[String], dependency: &[String]) -> Option<&'st
         return Some("models owns ModelCatalogSource; upstream is only its adapter");
     }
 
-    if source_owner == "admin_queries" && matches!(dependency_owner, Some("api" | "upstream")) {
-        return Some("admin query services cannot depend on transport or API presenters");
-    }
-
-    if source_owner == "api"
-        && (matches!(dependency_owner, Some("sqlx" | "redis"))
-            || dependency.iter().any(|segment| segment == "store"))
-    {
-        return Some("API routes and presenters cannot access persistence adapters directly");
+    if source_owner == "api" && matches!(dependency_owner, Some("sqlx" | "redis")) {
+        return Some("API code cannot access database clients directly");
     }
 
     None

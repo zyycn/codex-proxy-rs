@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::{
-    admin_queries::accounts::{AccountQuotaReadModel, AccountQuotaWindowLocalUsage},
+    api::admin::accounts_routes::query::{AccountQuotaReadModel, AccountQuotaWindowLocalUsage},
     fleet::quota::{QuotaWindowKind, QuotaWindowRole},
     infra::{
         format::{

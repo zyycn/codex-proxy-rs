@@ -221,7 +221,7 @@ dispatch error 同时包装 transport/SSE failure、决定 HTTP status 和 camel
 建议按入口组合：
 
 - `ProxyRuntime`
-- `AdminQueries`
+- 管理端查询依赖按功能模块就地组织
 - `AdminCommands`
 - `BackgroundTasks`
 

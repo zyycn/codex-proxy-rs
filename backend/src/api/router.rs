@@ -9,9 +9,12 @@ use async_trait::async_trait;
 use axum::{Router, extract::State, http::StatusCode, middleware, routing::get};
 
 use crate::{
-    admin_queries::{accounts::AccountListQueryService, dashboard::DashboardQueryService},
     api::{
-        admin, assets, client,
+        admin::{
+            self, accounts_routes::query::AccountListQueryService,
+            dashboard_routes::DashboardQueryService,
+        },
+        assets, client,
         middleware::{request_id::attach_request_id, trace::http_trace_layer},
     },
     auth::service::SessionService,
@@ -24,16 +27,11 @@ use crate::{
     update::service::SystemUpdateService,
 };
 
-#[derive(Clone)]
-pub struct AdminQueries {
-    pub accounts: Arc<AccountListQueryService>,
-    pub dashboard: Arc<DashboardQueryService>,
-}
-
 /// HTTP API 所需的领域服务集合。
 #[derive(Clone)]
 pub struct ApiServices {
-    pub admin_queries: AdminQueries,
+    pub(crate) account_list: Arc<AccountListQueryService>,
+    pub(crate) dashboard: Arc<DashboardQueryService>,
     pub health_probe: Arc<dyn HealthProbe>,
     pub models: Arc<ModelService>,
     pub client_keys: Arc<KeyVerifier>,
