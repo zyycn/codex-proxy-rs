@@ -1,0 +1,273 @@
+//! `ProviderAccountStore` 的 Codex 行转换；本文件不含 SQL。
+
+use std::sync::Arc;
+use std::time::SystemTime;
+
+use chrono::{DateTime, Utc};
+use gateway_core::engine::credential::{
+    AccountAvailability, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
+    CredentialRevision, LoadedCredential, NewProviderAccount, ProviderAccount, ProviderAccountId,
+    ProviderAccountStore, ProviderAccountUpdate,
+};
+use gateway_core::routing::{ProviderInstanceId, ProviderKind};
+use secrecy::ExposeSecret;
+use thiserror::Error;
+
+use super::security::{CodexCredentialCodec, CodexCredentialDataError, CodexRuntimeCredential};
+use super::types::{
+    CodexAccountProfile, CodexCredentialData, CreateCodexCredential, CredentialRecord,
+    RotateCodexCredential,
+};
+
+const PROVIDER_NAME: &str = "openai";
+
+#[derive(Clone)]
+pub struct CodexCredentialRepository {
+    store: Arc<dyn ProviderAccountStore>,
+}
+
+impl CodexCredentialRepository {
+    #[must_use]
+    pub const fn new(store: Arc<dyn ProviderAccountStore>) -> Self {
+        Self { store }
+    }
+
+    #[must_use]
+    pub fn store(&self) -> &Arc<dyn ProviderAccountStore> {
+        &self.store
+    }
+
+    pub async fn create_oauth_credential(
+        &self,
+        input: CreateCodexCredential,
+    ) -> Result<CredentialRecord, CredentialRepositoryError> {
+        let account_id = ProviderAccountId::new(input.account_id)
+            .map_err(|_| CredentialRepositoryError::InvalidInput("account_id"))?;
+        let instance = ProviderInstanceId::new(input.provider_instance_id)
+            .map_err(|_| CredentialRepositoryError::InvalidInput("provider_instance_id"))?;
+        let provider = ProviderKind::new(PROVIDER_NAME)
+            .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
+        let revision = CredentialRevision::new(1)
+            .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
+        let access_token_expires_at = required_time(input.account.access_token_expires_at)?;
+        let upstream_user_id = input
+            .account
+            .chatgpt_user_id
+            .clone()
+            .unwrap_or_else(|| input.account.chatgpt_account_id.clone());
+        let credential = CodexCredentialCodec::encode(&input.secret, Vec::new())?;
+        let has_refresh_token = input.secret.refresh_token.is_some();
+        let next_refresh_at = optional_time(input.account.next_refresh_at);
+        let account = ProviderAccount::new(
+            account_id.clone(),
+            instance.clone(),
+            provider,
+            input.name,
+            upstream_user_id,
+            revision,
+            access_token_expires_at,
+        )
+        .with_profile(
+            input.account.email,
+            Some(input.account.chatgpt_account_id),
+            input.account.plan_type,
+        )
+        .with_runtime_state(input.enabled, AccountAvailability::Ready, None)
+        .with_refresh_schedule(has_refresh_token, next_refresh_at);
+        self.store
+            .create_account(NewProviderAccount {
+                account,
+                credential,
+            })
+            .await?;
+        Ok(CredentialRecord {
+            account_id: account_id.to_string(),
+            provider_instance_id: instance.to_string(),
+            credential_revision: revision.get(),
+        })
+    }
+
+    pub async fn rotate_oauth_secret(
+        &self,
+        input: RotateCodexCredential,
+    ) -> Result<CredentialRevision, CredentialRepositoryError> {
+        let account_id = ProviderAccountId::new(input.account_id)
+            .map_err(|_| CredentialRepositoryError::InvalidInput("account_id"))?;
+        let expected = CredentialRevision::new(input.expected_credential_revision)
+            .map_err(|_| CredentialRepositoryError::InvalidInput("credential_revision"))?;
+        let current = self.store.load_credential(&account_id, expected).await?;
+        verify_identity(&current, &input.verified_account)?;
+        let mut data = CodexCredentialCodec::decode_complete(&current.credential)?;
+        data.access_token = input.secret.access_token.expose_secret().to_owned();
+        data.refresh_token = input
+            .secret
+            .refresh_token
+            .as_ref()
+            .map(|value| value.expose_secret().to_owned());
+        data.id_token = input
+            .secret
+            .id_token
+            .as_ref()
+            .map(|value| value.expose_secret().to_owned());
+        let credential = CodexCredentialCodec::encode_complete(data)?;
+        let update = CredentialCasUpdate::new(
+            account_id.clone(),
+            expected,
+            ProviderAccountUpdate {
+                account_id,
+                name: current.account.name().to_owned(),
+                email: input.verified_account.email.clone(),
+                plan_type: input.verified_account.plan_type.clone(),
+            },
+            credential,
+            input.secret.refresh_token.is_some(),
+            required_time(input.verified_account.access_token_expires_at)?,
+            optional_time(input.verified_account.next_refresh_at),
+        )
+        .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
+        let outcome = self.store.compare_and_swap_credential(update).await?;
+        match outcome {
+            CredentialCasOutcome::Updated(revision) => Ok(revision),
+            CredentialCasOutcome::Conflict => Err(CredentialRepositoryError::RevisionConflict),
+        }
+    }
+
+    pub async fn list_for_instance(
+        &self,
+        instance: &ProviderInstanceId,
+    ) -> Result<Vec<ProviderAccount>, CredentialRepositoryError> {
+        self.store
+            .list_for_instance(instance)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn load_runtime_credential(
+        &self,
+        account: &ProviderAccount,
+    ) -> Result<CodexRuntimeCredential, CredentialRepositoryError> {
+        if account.provider().as_str() != PROVIDER_NAME {
+            return Err(CredentialRepositoryError::InvalidCredentialData);
+        }
+        let loaded = self
+            .store
+            .load_credential(account.id(), account.revision())
+            .await?;
+        if loaded.account != *account {
+            return Err(CredentialRepositoryError::RevisionConflict);
+        }
+        CodexCredentialCodec::decode(&loaded.credential).map_err(Into::into)
+    }
+
+    pub async fn load_complete_data(
+        &self,
+        account: &ProviderAccount,
+    ) -> Result<CodexCredentialData, CredentialRepositoryError> {
+        let loaded = self
+            .store
+            .load_credential(account.id(), account.revision())
+            .await?;
+        CodexCredentialCodec::decode_complete(&loaded.credential).map_err(Into::into)
+    }
+
+    pub async fn compare_and_swap_data(
+        &self,
+        account: &ProviderAccount,
+        data: CodexCredentialData,
+    ) -> Result<CredentialRevision, CredentialRepositoryError> {
+        let has_refresh_token = data.refresh_token.is_some();
+        let credential = CodexCredentialCodec::encode_complete(data)?;
+        let update = CredentialCasUpdate::new(
+            account.id().clone(),
+            account.revision(),
+            ProviderAccountUpdate {
+                account_id: account.id().clone(),
+                name: account.name().to_owned(),
+                email: account.email().map(str::to_owned),
+                plan_type: account.plan_type().map(str::to_owned),
+            },
+            credential,
+            has_refresh_token,
+            account.access_token_expires_at(),
+            account.next_refresh_at(),
+        )
+        .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
+        let outcome = self.store.compare_and_swap_credential(update).await?;
+        match outcome {
+            CredentialCasOutcome::Updated(revision) => Ok(revision),
+            CredentialCasOutcome::Conflict => Err(CredentialRepositoryError::RevisionConflict),
+        }
+    }
+
+    pub async fn apply_state(
+        &self,
+        account: &ProviderAccount,
+        availability: AccountAvailability,
+        reason: Option<String>,
+        cooldown_until: Option<SystemTime>,
+        observed_at: SystemTime,
+    ) -> Result<(), CredentialRepositoryError> {
+        self.store
+            .apply_state_change(AccountStateChange {
+                account_id: account.id().clone(),
+                expected_revision: account.revision(),
+                availability,
+                reason,
+                cooldown_until,
+                observed_at,
+            })
+            .await?;
+        Ok(())
+    }
+}
+
+fn verify_identity(
+    current: &LoadedCredential,
+    verified: &CodexAccountProfile,
+) -> Result<(), CredentialRepositoryError> {
+    if current.account.upstream_account_id() != Some(verified.chatgpt_account_id.as_str())
+        || verified
+            .chatgpt_user_id
+            .as_deref()
+            .is_some_and(|user| user != current.account.upstream_user_id())
+    {
+        return Err(CredentialRepositoryError::IdentityMismatch);
+    }
+    Ok(())
+}
+
+fn required_time(value: Option<DateTime<Utc>>) -> Result<SystemTime, CredentialRepositoryError> {
+    value
+        .map(SystemTime::from)
+        .ok_or(CredentialRepositoryError::InvalidCredentialData)
+}
+
+fn optional_time(value: Option<DateTime<Utc>>) -> Option<SystemTime> {
+    value.map(SystemTime::from)
+}
+
+#[derive(Debug, Error)]
+pub enum CredentialRepositoryError {
+    #[error("invalid Codex credential input: {0}")]
+    InvalidInput(&'static str),
+    #[error("Codex credential data is invalid")]
+    InvalidCredentialData,
+    #[error("Codex credential identity does not match")]
+    IdentityMismatch,
+    #[error("Codex credential revision conflict")]
+    RevisionConflict,
+    #[error("provider account store is unavailable")]
+    Store,
+}
+
+impl From<gateway_core::error::StoreError> for CredentialRepositoryError {
+    fn from(_: gateway_core::error::StoreError) -> Self {
+        Self::Store
+    }
+}
+
+impl From<CodexCredentialDataError> for CredentialRepositoryError {
+    fn from(_: CodexCredentialDataError) -> Self {
+        Self::InvalidCredentialData
+    }
+}

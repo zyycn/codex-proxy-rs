@@ -16,16 +16,16 @@ import { rotationOptions } from './constants'
 const {
   loading,
   saving,
-  aliasError,
+  error,
   form,
-  aliasRows,
+  mappings,
+  addMapping,
+  updateMapping,
+  removeMapping,
   refreshMarginSecondsValue,
   refreshConcurrencyValue,
   maxConcurrentPerAccountValue,
   requestIntervalMsValue,
-  addAliasRow,
-  updateAliasRow,
-  removeAliasRow,
   saveSettings,
 } = useSettingsForm()
 
@@ -75,12 +75,12 @@ const {
       />
 
       <ModelAliasesCard
-        :rows="aliasRows"
-        :error="aliasError"
-        :disabled="saving || loading"
-        @add="addAliasRow"
-        @update="updateAliasRow"
-        @remove="removeAliasRow"
+        :mappings="mappings"
+        :loading="loading"
+        :error="error"
+        @add-mapping="addMapping"
+        @update-mapping="updateMapping"
+        @remove-mapping="removeMapping"
       />
 
       <RotationStrategyCard v-model="form.rotationStrategy" :options="rotationOptions" />

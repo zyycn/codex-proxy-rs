@@ -11,23 +11,31 @@ import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { toast } from '@/components/base/BaseToast'
+import { accountProviderModeOptions } from '../composables/useAccountOnboarding'
 
-type CreateForm = ReturnType<typeof useAccountOnboarding>['createForm']['value']
+type AccountOnboarding = ReturnType<typeof useAccountOnboarding>
+type CreateForm = AccountOnboarding['createForm']['value']
+type ProviderInstanceOptions = AccountOnboarding['providerInstanceOptions']['value']
 
 const props = withDefaults(
   defineProps<{
     saving?: boolean
     oauthLoading?: boolean
+    loadingProviderInstances?: boolean
     reauthorizing?: boolean
     account?: AccountRow | null
+    providerInstanceOptions?: ProviderInstanceOptions
   }>(),
   {
     saving: false,
     oauthLoading: false,
+    loadingProviderInstances: false,
     reauthorizing: false,
     account: null,
+    providerInstanceOptions: () => [],
   },
 )
 
@@ -46,13 +54,28 @@ const { open: openImportFile, onChange: onImportFileChange } = useFileDialog({
   reset: true,
 })
 
-const modeOptions = [
-  { label: 'OAuth', value: 'oauth' },
-  { label: 'Token', value: 'token' },
-  { label: 'CPR', value: 'cpr' },
-  { label: 'Sub2', value: 'sub2api' },
-  { label: 'CPA', value: 'cliproxyapi' },
+const providerOptions = [
+  { label: 'OpenAI', value: 'openai' },
+  { label: 'xAI', value: 'xai' },
 ]
+const modeOptions = computed(() => accountProviderModeOptions(form.value.provider))
+
+const provider = computed({
+  get: () => form.value.provider,
+  set: (value: string) => {
+    if (props.reauthorizing)
+      return
+    form.value = { ...form.value, provider: value }
+    fileError.value = ''
+  },
+})
+
+const providerInstanceId = computed({
+  get: () => form.value.providerInstanceId,
+  set: (value: string) => {
+    form.value = { ...form.value, providerInstanceId: value }
+  },
+})
 
 const mode = computed({
   get: () => form.value.mode,
@@ -87,6 +110,7 @@ const oauthCallback = computed({
 })
 
 const oauthAuthUrl = computed(() => form.value.oauthAuthUrl || '')
+const isXai = computed(() => form.value.provider === 'xai')
 
 const accountName = computed(() => {
   return props.account?.email || props.account?.accountId || props.account?.id || '该账号'
@@ -94,24 +118,31 @@ const accountName = computed(() => {
 
 const modalTitle = computed(() => (props.reauthorizing ? '重新授权账号' : '添加账号'))
 
-const oauthPanelTitle = computed(() =>
-  props.reauthorizing ? accountName.value : '使用 OpenAI OAuth 完成账号接入',
-)
+const oauthPanelTitle = computed(() => {
+  if (props.reauthorizing)
+    return accountName.value
+  return isXai.value ? '使用 xAI OAuth 完成账号接入' : '使用 OpenAI OAuth 完成账号接入'
+})
 
 const oauthPanelDescription = computed(() => {
-  if (props.reauthorizing) {
+  if (props.reauthorizing)
     return '生成新的授权链接，完成后粘贴回调地址更新账号凭据'
-  }
   return '复制授权链接到浏览器打开，完成后把回调地址粘贴到下方即可导入'
 })
 
+const canGenerateOauth = computed(() =>
+  !props.saving
+  && !props.oauthLoading
+  && Boolean(providerInstanceId.value),
+)
+
 const canSubmit = computed(() => {
-  if (props.saving || props.oauthLoading)
+  if (props.saving || props.oauthLoading || !providerInstanceId.value)
     return false
   if (mode.value === 'oauth') {
-    return Boolean(
-      form.value.oauthSessionId && oauthAuthUrl.value && oauthCallback.value.trim().length > 0,
-    )
+    if (!form.value.oauthFlowId || !oauthAuthUrl.value)
+      return false
+    return oauthCallback.value.trim().length > 0
   }
   if (mode.value === 'token')
     return tokenText.value.trim().length > 0
@@ -119,22 +150,18 @@ const canSubmit = computed(() => {
 })
 
 const description = computed(() => {
-  if (props.reauthorizing) {
+  if (props.reauthorizing)
     return '完成授权后粘贴回调地址，系统会更新账号凭据'
+  if (isXai.value) {
+    return mode.value === 'oauth'
+      ? '复制 xAI 授权链接，完成后粘贴回调地址，不使用 xAI API Key'
+      : '导入 Grok OAuth 账号 JSON，已存在账号会更新'
   }
-  if (mode.value === 'token') {
+  if (mode.value === 'token')
     return '一行一个 Access Token 或 Refresh Token，Access Token 会直接补全账号信息'
-  }
-  if (mode.value === 'oauth') {
+  if (mode.value === 'oauth')
     return '复制 OpenAI 授权链接，完成后粘贴回调地址，系统会自动写入或更新账号'
-  }
-  if (mode.value === 'sub2api') {
-    return '导入 Sub2API 导出的账号 JSON，已存在账号会更新'
-  }
-  if (mode.value === 'cliproxyapi') {
-    return '导入 CLIProxyAPI Codex auth JSON，已存在账号会更新'
-  }
-  return '导入 Codex Proxy RS 账号 JSON，已存在账号会更新'
+  return '导入 OpenAI OAuth 账号 JSON，系统会按文档结构自动识别'
 })
 
 async function loadImportFile(files: FileList | null) {
@@ -155,12 +182,12 @@ onImportFileChange((files) => {
   void loadImportFile(files)
 })
 
-async function copyOAuthAuthUrl() {
-  if (!oauthAuthUrl.value)
+async function copyText(value: string, successText: string) {
+  if (!value)
     return
   try {
-    await copy(oauthAuthUrl.value)
-    toast.success('授权链接已复制')
+    await copy(value)
+    toast.success(successText)
   }
   catch {
     toast.error('复制失败')
@@ -178,6 +205,32 @@ async function copyOAuthAuthUrl() {
     :close-disabled="saving"
   >
     <div class="flex flex-col gap-4">
+      <BaseForm v-if="!reauthorizing">
+        <div
+          class="grid gap-4"
+          :class="providerInstanceOptions.length > 1 ? 'sm:grid-cols-2' : 'sm:grid-cols-1'"
+        >
+          <BaseFormItem label="平台" required>
+            <BaseSelect
+              v-model="provider"
+              :options="providerOptions"
+              :disabled="saving || oauthLoading"
+              aria-label="平台"
+            />
+          </BaseFormItem>
+          <BaseFormItem v-if="providerInstanceOptions.length > 1" label="上游实例" required>
+            <BaseSelect
+              v-model="providerInstanceId"
+              :options="providerInstanceOptions"
+              :disabled="saving || oauthLoading || loadingProviderInstances"
+              :placeholder="loadingProviderInstances ? '加载中...' : '选择上游实例'"
+              empty-text="没有可用的上游实例"
+              aria-label="上游实例"
+            />
+          </BaseFormItem>
+        </div>
+      </BaseForm>
+
       <BaseSegmented v-if="!reauthorizing" v-model="mode" :options="modeOptions" class="w-full" />
 
       <BaseForm v-if="mode === 'token'">
@@ -215,7 +268,7 @@ async function copyOAuthAuthUrl() {
           <BaseButton
             variant="default"
             :loading="oauthLoading"
-            :disabled="saving"
+            :disabled="!canGenerateOauth"
             @click="emit('generateOauth')"
           >
             {{ reauthorizing ? '重新生成授权链接' : '生成授权链接' }}
@@ -232,7 +285,7 @@ async function copyOAuthAuthUrl() {
                 title="复制链接"
                 label="复制链接"
                 :disabled="saving || oauthLoading"
-                @click="copyOAuthAuthUrl"
+                @click="copyText(oauthAuthUrl, '授权链接已复制')"
               >
                 <Copy class="size-3.5" />
               </BaseButton>
@@ -254,7 +307,7 @@ async function copyOAuthAuthUrl() {
               v-model="oauthCallback"
               aria-label="回调地址"
               size="sm"
-              placeholder="http://localhost:1455/auth/callback?code=...&state=..."
+              :placeholder="isXai ? 'http://127.0.0.1:56121/callback?code=...&state=...' : 'http://localhost:1455/auth/callback?code=...&state=...'"
               :disabled="saving"
             />
           </BaseFormItem>

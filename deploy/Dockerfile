@@ -23,8 +23,9 @@ ENV CPR_GIT_SHA=${CPR_GIT_SHA}
 ENV CPR_BUILD_TIME=${CPR_BUILD_TIME}
 ENV CPR_BUILD_TYPE=${CPR_BUILD_TYPE}
 COPY backend/Cargo.toml backend/Cargo.lock ./
-COPY backend/build.rs ./build.rs
-COPY backend/src ./src
+COPY backend/apps ./apps
+COPY backend/crates ./crates
+COPY backend/migrations ./migrations
 COPY release/version.yaml /app/release/version.yaml
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \

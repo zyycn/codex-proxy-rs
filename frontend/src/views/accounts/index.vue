@@ -10,6 +10,7 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
+import ProviderBadge from '@/components/ProviderBadge.vue'
 import AccountConnectionTestModal from './components/AccountConnectionTestModal.vue'
 import AccountCreateModal from './components/AccountCreateModal.vue'
 import AccountIdentityCell from './components/AccountIdentityCell.vue'
@@ -27,6 +28,11 @@ import { useAccountsTable } from './composables/useAccountsTable'
 import { accountColumns, accountStatusFilterOptions } from './constants'
 
 const selectedIds = ref<Set<string>>(new Set())
+const providerFilterOptions = [
+  { label: '全部平台', value: '' },
+  { label: 'OpenAI', value: 'openai' },
+  { label: 'xAI', value: 'xai' },
+]
 
 const {
   totalAccounts,
@@ -34,9 +40,11 @@ const {
   accounts,
   loadAccounts,
   searchQuery,
+  providerQuery,
   statusQuery,
   sort,
   accountSummary,
+  configRevision,
   accountPagination,
   handlePageChange,
   handlePageSizeChange,
@@ -54,9 +62,11 @@ const {
   deletingAccount,
   creatingAccount,
   authorizingOAuth,
+  loadingProviderInstances,
   batchDeleting,
   exportingAccounts,
   reauthorizingAccount,
+  providerInstanceOptions,
   createForm,
   handleCreate,
   handleAuthorizeOAuth,
@@ -78,6 +88,7 @@ const {
   sort,
   selectedIds,
   totalAccounts,
+  configRevision,
   reload: loadAccounts,
 })
 
@@ -121,7 +132,7 @@ const {
     <BasePageHeader
       class="h-17"
       title="账号管理"
-      description="维护 Codex 账号池，快速确认可用性、配额与连接状态"
+      description="维护账号池，查看可用性、配额与使用状态"
     />
 
     <AccountOverviewCards :summary="accountSummary" />
@@ -148,6 +159,13 @@ const {
                 <Search class="size-4.5 text-(--cp-text-tertiary)" />
               </template>
             </BaseInput>
+
+            <BaseSelect
+              v-model="providerQuery"
+              :options="providerFilterOptions"
+              aria-label="按平台筛选"
+              class="w-34 shrink-0 [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] md:w-40"
+            />
 
             <BaseSelect
               v-model="statusQuery"
@@ -235,8 +253,12 @@ const {
             <AccountIdentityCell :account="row" />
           </template>
 
+          <template #provider="{ row }">
+            <ProviderBadge :provider="row.provider" />
+          </template>
+
           <template #status="{ row }">
-            <AccountStatusBadge :status="row.displayStatus" />
+            <AccountStatusBadge :status="row.tokenRefreshing ? 'refreshing' : row.status" />
           </template>
 
           <template #planType="{ row }">
@@ -256,8 +278,8 @@ const {
               :testing="testingConnectionIds.has(row.id)"
               :updating-status="updatingStatusAccountIds.has(row.id)"
               @delete="requestDeleteAccount"
-              @reauthorize="openReauthorizeAccount"
               @refresh="handleRefresh"
+              @reauthorize="openReauthorizeAccount"
               @test="openConnectionTest"
               @toggle-schedule="handleToggleSchedule"
             />
@@ -300,7 +322,9 @@ const {
       v-model="showCreateModal"
       v-model:form="createForm"
       :account="reauthorizingAccount"
+      :loading-provider-instances="loadingProviderInstances"
       :oauth-loading="authorizingOAuth"
+      :provider-instance-options="providerInstanceOptions"
       :reauthorizing="Boolean(reauthorizingAccount)"
       :saving="creatingAccount"
       @create="handleCreate"

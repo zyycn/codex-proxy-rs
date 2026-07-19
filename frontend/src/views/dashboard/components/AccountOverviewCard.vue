@@ -19,23 +19,26 @@ const props = defineProps<{
 
 const scheduleStats = computed(() => {
   const cap = props.capacity
+  const display = (value: number | null | undefined) => value === null || value === undefined
+    ? '—'
+    : String(value)
   return [
-    { label: '单账号并发', value: cap ? String(cap.maxConcurrentPerAccount) : '—' },
-    { label: '总槽位', value: cap ? String(cap.totalSlots) : '—' },
-    { label: '空闲槽位', value: cap ? String(cap.availableSlots) : '—' },
+    { label: '单账号并发', value: display(cap?.maxConcurrentPerAccount) },
+    { label: '总槽位', value: display(cap?.totalSlots) },
+    { label: '空闲槽位', value: display(cap?.availableSlots) },
   ]
 })
 
 const usedPercent = computed(() => {
   const cap = props.capacity
-  if (!cap || cap.totalSlots === 0)
-    return 0
+  if (!cap || cap.totalSlots === 0 || cap.usedSlots === null || cap.usedSlots === undefined)
+    return null
   return clamp(Math.round((cap.usedSlots / cap.totalSlots) * 100), 0, 100)
 })
 
 const usedRatio = computed(() => {
   const cap = props.capacity
-  if (!cap)
+  if (!cap || cap.usedSlots === null || cap.usedSlots === undefined)
     return '— / —'
   return `${cap.usedSlots} / ${cap.totalSlots}`
 })
@@ -55,6 +58,14 @@ const strategyLabel = computed(() => {
 
 const statusRows = computed(() => {
   const p = props.pool
+  if (!p) {
+    return [
+      { label: '活跃账号', description: '暂无账号池观测', value: '—', tone: 'success', icon: CircleCheck },
+      { label: '刷新中', description: '暂无账号池观测', value: '—', tone: 'normal', icon: RefreshCw },
+      { label: '额度受限', description: '暂无账号池观测', value: '—', tone: 'warning', icon: TriangleAlert },
+      { label: '不可用', description: '暂无账号池观测', value: '—', tone: 'danger', icon: ShieldAlert },
+    ]
+  }
   const active = p?.active ?? 0
   const refreshing = p?.refreshing ?? 0
   const quota = p?.quotaExhausted ?? 0
@@ -98,7 +109,7 @@ const statusRows = computed(() => {
 const availabilityRate = computed(() => {
   const p = props.pool
   if (!p || p.total === 0)
-    return '0%'
+    return '—'
   return `${((p.active / p.total) * 100).toFixed(1)}%`
 })
 
@@ -164,12 +175,14 @@ const quotaToneClasses: Record<string, string> = {
                 <strong
                   class="font-mono text-[32px] leading-[1.05] font-[760] tabular-nums text-(--cp-text-primary)"
                 >{{ usedRatio }}</strong>
-                <span class="mt-3.5 text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)">{{ usedPercent }}% 已占用</span>
+                <span class="mt-3.5 text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)">
+                  {{ usedPercent === null ? '暂无实时占用' : `${usedPercent}% 已占用` }}
+                </span>
               </div>
               <div class="mt-4 h-2.5 w-full overflow-hidden rounded-full bg-(--cp-progress-track)">
                 <i
                   class="block h-2.5 rounded-full bg-(--cp-success)"
-                  :style="{ width: `${usedPercent}%` }"
+                  :style="{ width: usedPercent === null ? '0' : `${usedPercent}%` }"
                 />
               </div>
             </div>
@@ -247,14 +260,14 @@ const quotaToneClasses: Record<string, string> = {
                     <span class="text-[11px] leading-none font-[720] text-(--cp-text-muted)">额度</span>
                     <span
                       class="font-mono text-[10px] leading-none font-[760] text-(--cp-text-muted)"
-                    >{{ account.quotaPercent }}%</span>
+                    >{{ account.quotaPercent === null ? '—' : `${account.quotaPercent}%` }}</span>
                   </span>
                   <span class="block h-1.5 w-full overflow-hidden rounded-full bg-(--cp-bg-muted)">
                     <i
                       class="block h-1.5 rounded-full"
                       :class="quotaToneClasses[account.quotaTone]"
                       :style="{
-                        width: `${account.quotaPercent}%`,
+                        width: account.quotaPercent === null ? '0' : `${account.quotaPercent}%`,
                         minWidth: account.quotaPercent > 0 ? '7px' : '0',
                       }"
                     />

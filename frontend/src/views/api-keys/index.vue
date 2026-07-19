@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, shallowRef } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 
 import { API_BASE_URL } from '@/api/constants'
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -7,7 +7,10 @@ import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
+import { toast } from '@/components/base/BaseToast'
+import ProviderBadge from '@/components/ProviderBadge.vue'
 import { usePageSelection } from '@/composables/usePageSelection'
+import { errorMessage } from '@/utils/async'
 import ApiKeyActions from './components/ApiKeyActions.vue'
 import ApiKeyCreateModal from './components/ApiKeyCreateModal.vue'
 import ApiKeyFilters from './components/ApiKeyFilters.vue'
@@ -27,6 +30,7 @@ const {
   loading,
   apiKeys,
   loadApiKeys,
+  configRevision,
   searchQuery,
   sort,
   apiKeyPagination,
@@ -34,7 +38,6 @@ const {
   handlePageSizeChange,
   handleSortChange,
 } = useApiKeysQuery()
-const selectedUseKey = shallowRef<(typeof apiKeys.value)[number] | null>(null)
 
 const {
   showCreateModal,
@@ -48,6 +51,7 @@ const {
   deletingKey,
   batchDeleting,
   updatingStatusKeyIds,
+  revealingKeyIds,
   createForm,
   handleCreate,
   requestDeleteKey,
@@ -55,7 +59,10 @@ const {
   handleBatchDelete,
   handleToggleStatus,
   copyToClipboard,
-} = useApiKeyMutations({ selectedIds, reload: loadApiKeys })
+  revealPlaintextKey,
+  copyApiKey,
+} = useApiKeyMutations({ selectedIds, configRevision, reload: loadApiKeys })
+const selectedUseKey = shallowRef<(typeof apiKeys.value)[number] | null>(null)
 
 const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll } = usePageSelection(
   apiKeys,
@@ -95,21 +102,35 @@ function importCreatedKeyToCcs() {
   })
 }
 
-function openUseKeyModal(apiKey: (typeof apiKeys.value)[number]) {
-  selectedUseKey.value = apiKey
-  showUseKeyModal.value = true
+async function openUseKeyModal(apiKey: (typeof apiKeys.value)[number]) {
+  try {
+    const key = await revealPlaintextKey(apiKey)
+    selectedUseKey.value = { ...apiKey, key }
+    showUseKeyModal.value = true
+  }
+  catch (error: unknown) {
+    toast.error(errorMessage(error, '读取完整密钥失败'))
+  }
 }
 
-function importToCcs(apiKey: (typeof apiKeys.value)[number]) {
-  if (!apiKey.key)
-    return
-
-  window.location.href = buildCodexCcSwitchImportDeeplink({
-    apiKey: apiKey.key,
-    baseUrl: openAiBaseUrl.value,
-    providerName: apiKey.name || apiKey.prefix || 'codex-proxy-rs',
-  })
+async function importToCcs(apiKey: (typeof apiKeys.value)[number]) {
+  try {
+    const key = await revealPlaintextKey(apiKey)
+    window.location.href = buildCodexCcSwitchImportDeeplink({
+      apiKey: key,
+      baseUrl: openAiBaseUrl.value,
+      providerName: apiKey.name || apiKey.prefix || 'codex-proxy-rs',
+    })
+  }
+  catch (error: unknown) {
+    toast.error(errorMessage(error, '读取完整密钥失败'))
+  }
 }
+
+watch(showUseKeyModal, (open) => {
+  if (!open)
+    selectedUseKey.value = null
+})
 </script>
 
 <template>
@@ -173,7 +194,15 @@ function importToCcs(apiKey: (typeof apiKeys.value)[number]) {
           </template>
 
           <template #prefix="{ row }">
-            <ApiKeyPrefixCell :key-value="row.key" :prefix="row.prefix" @copy="copyToClipboard" />
+            <ApiKeyPrefixCell
+              :prefix="row.prefix"
+              :revealing="revealingKeyIds.has(row.id)"
+              @copy="copyApiKey(row)"
+            />
+          </template>
+
+          <template #providerKind="{ row }">
+            <ProviderBadge :provider="row.providerKind" />
           </template>
 
           <template #enabled="{ row }">
@@ -184,6 +213,7 @@ function importToCcs(apiKey: (typeof apiKeys.value)[number]) {
             <ApiKeyActions
               :api-key="row"
               :deleting="deletingKey"
+              :revealing="revealingKeyIds.has(row.id)"
               :updating-status="updatingStatusKeyIds.has(row.id)"
               @delete="requestDeleteKey"
               @import-ccs="importToCcs"

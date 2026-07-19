@@ -36,13 +36,13 @@ export interface MetricCardView {
 const metricSparklineBuckets = 12
 
 const emptyCards: DashboardSummary['cards'] = {
-  accounts: {
+  credentials: {
     total: '0',
     totalValue: 0,
     enabled: '0',
     enabledValue: 0,
-    abnormal: '0',
-    abnormalValue: 0,
+    unavailable: '0',
+    unavailableValue: 0,
   },
   traffic: {
     todayRequests: '0',
@@ -75,25 +75,16 @@ const emptyHealthTimeline: DashboardSummary['healthTimeline'] = {
   successRequests: 0,
   failedRequests: 0,
   cancelledRequests: 0,
+  incompleteRequests: 0,
   callerErrorRequests: 0,
   points: [],
 }
 
-const emptyPoolSummary: DashboardSummary['poolSummary'] = {
-  total: 0,
-  active: 0,
-  expired: 0,
-  quotaExhausted: 0,
-  refreshing: 0,
-  disabled: 0,
-  banned: 0,
-}
-
-const emptyCapacityInfo: DashboardSummary['capacityInfo'] = {
-  maxConcurrentPerAccount: 0,
-  totalSlots: 0,
-  usedSlots: 0,
-  availableSlots: 0,
+const emptyCapacityInfo = {
+  maxConcurrentPerAccount: null,
+  totalSlots: null,
+  usedSlots: null,
+  availableSlots: null,
 }
 
 export function dashboardSnapshotView(summary: DashboardSummary | null) {
@@ -104,7 +95,7 @@ export function dashboardSnapshotView(summary: DashboardSummary | null) {
     accountUsage: (summary?.accountUsage ?? []).map(accountUsageItem),
     wireProfile: summary?.wireProfile ?? null,
     usageRecords: summary?.usageRecords ?? [],
-    poolSummary: summary?.poolSummary ?? emptyPoolSummary,
+    poolSummary: summary?.poolSummary ?? null,
     capacityInfo: summary?.capacityInfo ?? emptyCapacityInfo,
     rotationStrategy: summary?.rotationStrategy ?? null,
   }
@@ -144,26 +135,26 @@ function metricCards(
   cards: DashboardSummary['cards'],
   points: DashboardTrendPoint[],
 ): MetricCardView[] {
-  const { accounts, traffic, tokens, cache } = cards
+  const { credentials, traffic, tokens, cache } = cards
   const recentPoints = recentTrendWindow(points)
   return [
     {
       title: '账号',
-      value: accounts.total,
-      valueRaw: accounts.totalValue,
+      value: credentials.total,
+      valueRaw: credentials.totalValue,
       valueFormatter: formatDashboardCompactNumber,
       icon: Users,
       tone: 'normal',
       details: [
         {
           label: '启用',
-          value: accounts.enabled,
-          tone: accounts.enabledValue > 0 ? 'success' : 'normal',
+          value: credentials.enabled,
+          tone: credentials.enabledValue > 0 ? 'success' : 'normal',
         },
         {
           label: '不可用',
-          value: accounts.abnormal,
-          tone: accounts.abnormalValue > 0 ? 'danger' : 'normal',
+          value: credentials.unavailable,
+          tone: credentials.unavailableValue > 0 ? 'danger' : 'normal',
         },
       ],
     },
@@ -359,11 +350,13 @@ function accountUsageItem(item: DashboardSummary['accountUsage'][number]) {
 
 function quotaUsedPercent(value: number | null) {
   if (typeof value !== 'number' || !Number.isFinite(value))
-    return 0
+    return null
   return clamp(Math.round(value), 0, 100)
 }
 
-function quotaTone(percent: number) {
+function quotaTone(percent: number | null) {
+  if (percent === null)
+    return 'normal'
   if (percent >= 95)
     return 'danger'
   if (percent >= 80)

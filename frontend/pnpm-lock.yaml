@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@boxicons/vue':
+        specifier: 1.0.1
+        version: 1.0.1(vue@3.5.39(typescript@6.0.3))
       '@fontsource-variable/inter':
         specifier: ^5.2.8
         version: 5.2.8
@@ -194,6 +197,11 @@ packages:
   '@babel/types@8.0.0':
     resolution: {integrity: sha512-K8ponJDxBwDHigkeFqaqT5wLGl4bTlwMafR8k7b5CPxr6Ww+UG9ls8Yx6Tcpboxu97eeGVEEyKcHmEyOwN1vSw==}
     engines: {node: ^22.18.0 || >=24.11.0}
+
+  '@boxicons/vue@1.0.1':
+    resolution: {integrity: sha512-eZKXfR0oQTq06MJAEgvGqx1Oi9aLNfqVFdEDY4YWEN3AVf167WY9OH5wMjRDVL1mn3GgplpdmPEIe+Sj7/A3PQ==}
+    peerDependencies:
+      vue: '>=3.0.0'
 
   '@clack/core@1.4.3':
     resolution: {integrity: sha512-/kr3UWNtdJfxZtPgDqUOmG2pvwlmcLGheex5yiZKdwbzZJxhV+HMNR9QNmyY5cGwTNV6LrR7Jtp+KjhUAP1qBQ==}
@@ -2402,6 +2410,10 @@ snapshots:
     dependencies:
       '@babel/helper-string-parser': 8.0.0
       '@babel/helper-validator-identifier': 8.0.2
+
+  '@boxicons/vue@1.0.1(vue@3.5.39(typescript@6.0.3))':
+    dependencies:
+      vue: 3.5.39(typescript@6.0.3)
 
   '@clack/core@1.4.3':
     dependencies:

@@ -1,0 +1,25 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "grok-4.5-catalog-entry",
+      "model": "grok-4.5",
+      "modelId": "grok-4.5-fallback",
+      "name": "Grok 4.5",
+      "description": "Official Grok Build coding model.",
+      "contextWindow": 1000000,
+      "maxCompletionTokens": 131072,
+      "apiBackend": "responses",
+      "supportedInApi": true,
+      "supportsReasoningEffort": true,
+      "supportsBackendSearch": true,
+      "streamToolCalls": true,
+      "hidden": false,
+      "apiKey": "provider-only field must not enter catalog metadata",
+      "extraHeaders": {
+        "x-api-key": "provider-only field"
+      },
+      "baseUrl": "https://provider-only.invalid/v1"
+    }
+  ]
+}
