@@ -86,7 +86,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     if (connectionTestStatus.value === 'success') {
       return {
         label: '连接正常',
-        description: '账号令牌可用，已完成 Codex Responses 流式验证',
+        description: '账号凭据可用，已完成 Responses 流式验证',
         icon: CheckCircle2,
         badge: 'bg-(--cp-success-bg) text-(--cp-success-text)',
         iconClass: 'text-(--cp-success)',

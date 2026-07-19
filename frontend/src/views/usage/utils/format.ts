@@ -16,6 +16,14 @@ export function formatPercent(value?: number | null) {
   return value == null || !Number.isFinite(value) ? '—' : percentFormatter.format(value)
 }
 
+export function formatProvider(value?: string | null) {
+  if (value === 'openai')
+    return 'OpenAI'
+  if (value === 'xai')
+    return 'xAI'
+  return value || '—'
+}
+
 export function formatDuration(value?: number | null) {
   if (value == null || !Number.isFinite(value) || value < 0)
     return '—'
@@ -36,8 +44,18 @@ export function formatDurationAxis(value: number) {
   return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}s`
 }
 
-export function formatUsd(value: number, precise = false) {
-  const safeValue = finiteOrZero(value)
+export function decimalDisplayNumber(value?: string | number | null) {
+  if (value == null)
+    return null
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+export function formatUsd(value?: string | number | null, precise = false) {
+  const parsed = decimalDisplayNumber(value)
+  if (parsed == null)
+    return '—'
+  const safeValue = parsed
   const fractionDigits = precise || (Math.abs(safeValue) > 0 && Math.abs(safeValue) < 0.01) ? 4 : 2
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -45,6 +63,12 @@ export function formatUsd(value: number, precise = false) {
     minimumFractionDigits: fractionDigits,
     maximumFractionDigits: fractionDigits,
   }).format(safeValue)
+}
+
+export function formatEstimatedAmount(currency: string, value?: string | null) {
+  if (value == null)
+    return '—'
+  return currency.toUpperCase() === 'USD' ? formatUsd(value, true) : `${currency} ${value}`
 }
 
 export function formatUsdAxis(value: number) {

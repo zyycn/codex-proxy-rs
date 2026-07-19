@@ -1,0 +1,54 @@
+[package]
+name = "provider-openai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+autotests = false
+
+[dependencies]
+async-stream = "0.3.6"
+async-trait = "0.1.89"
+base64 = "0.22.1"
+bytes = "1.11.1"
+chrono = { version = "0.4.45", features = ["clock", "serde"] }
+cookie = "0.18.1"
+futures = "0.3.32"
+gateway-core = { path = "../../gateway-core" }
+gateway-protocol = { path = "../../gateway-protocol" }
+getrandom = "0.3.4"
+hex = "0.4.3"
+jsonwebtoken = { version = "=10.3.0", default-features = false, features = ["rust_crypto"] }
+reqwest = { version = "=0.12.28", default-features = false, features = ["json", "stream", "cookies", "rustls-tls-native-roots", "gzip", "brotli", "zstd", "deflate", "http2"] }
+rustls = { version = "=0.23.42", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8.4"
+rustls-pki-types = "1.14.1"
+secrecy = "0.10.3"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.150", features = ["preserve_order"] }
+sha2 = "0.11.0"
+subtle = "2.6.1"
+thiserror = "2.0.18"
+tokio = { version = "1.52.3", default-features = false, features = ["fs", "macros", "rt", "sync", "time"] }
+tokio-util = { version = "0.7.18", features = ["rt"] }
+# 官方 Codex WebSocket 需要上游尚未发布的 proxy 与 permessage-deflate 实现，固定到已审计提交。
+tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "0e5b2d73aa18dd9f0a50ee9ff199d5aef7594186", features = ["proxy", "rustls-tls-native-roots"] }
+tracing = "0.1.44"
+tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "4fffad30fe373adbdcffab9545e9e9bf4f2fc19f", features = ["deflate", "proxy"] }
+url = "2.5.8"
+uuid = { version = "1.23.3", features = ["v4", "v7"] }
+zeroize = { version = "1.8.2", features = ["derive"] }
+
+[dev-dependencies]
+rsa = "=0.9.10"
+tempfile = "3.27.0"
+tokio = { version = "1.52.3", default-features = false, features = ["rt-multi-thread", "test-util"] }
+wiremock = "0.6.5"
+
+[[test]]
+name = "main"
+path = "tests/main.rs"
+
+[lints]
+workspace = true

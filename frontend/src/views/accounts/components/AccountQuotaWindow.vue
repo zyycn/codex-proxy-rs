@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { AccountQuotaWindow } from '../constants'
 import {
-
   quotaWindowBarClass,
   quotaWindowBarStyle,
   quotaWindowLocalUsageDisplay,
@@ -38,10 +37,10 @@ defineProps<{
       />
     </div>
     <div
-      class="mt-3 flex flex-wrap justify-between gap-x-3 gap-y-1 text-[12px] font-[620] text-(--cp-text-secondary)"
+      v-if="window.resetAtDisplay !== '—'"
+      class="mt-3 text-[12px] font-[620] text-(--cp-text-secondary)"
     >
       <span>重置时间: {{ window.resetAtDisplay }}</span>
-      <span>窗口已用: {{ window.windowUsedDisplay }}</span>
     </div>
   </div>
 </template>

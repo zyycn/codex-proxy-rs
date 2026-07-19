@@ -13,6 +13,7 @@
     "format:check": "pnpm run lint"
   },
   "dependencies": {
+    "@boxicons/vue": "1.0.1",
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@lucide/vue": "^1.24.0",

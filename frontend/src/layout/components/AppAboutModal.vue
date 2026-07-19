@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ExternalLink, GitBranch } from '@lucide/vue'
+import { Github } from '@boxicons/vue'
+import { ExternalLink } from '@lucide/vue'
 import { storeToRefs } from 'pinia'
 import { computed } from 'vue'
 
@@ -42,7 +43,7 @@ const linkItems = [
     label: 'GitHub',
     value: 'codex-proxy-rs',
     href: githubUrl,
-    icon: GitBranch,
+    icon: Github,
   },
 ]
 </script>
@@ -76,7 +77,7 @@ const linkItems = [
             <span
               class="inline-flex size-8 shrink-0 items-center justify-center rounded-(--cp-icon-button-radius) bg-(--cp-bg-muted) text-(--cp-text-secondary)"
             >
-              <component :is="item.icon" class="size-4" />
+              <component :is="item.icon" class="size-5 text-white" />
             </span>
             <div class="min-w-0">
               <p class="m-0 text-[11px] leading-none font-[760] text-(--cp-text-muted)">

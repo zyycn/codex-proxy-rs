@@ -28,6 +28,7 @@ const canRefreshToken = computed(
     props.account.hasRefreshToken
     && (props.account.status === 'active' || props.account.status === 'quota_exhausted'),
 )
+const canReauthorize = computed(() => props.account.provider === 'openai')
 </script>
 
 <template>
@@ -75,6 +76,7 @@ const canRefreshToken = computed(
           刷新 token
         </button>
         <button
+          v-if="canReauthorize"
           type="button"
           class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover)"
           @click.stop="(close(), emit('reauthorize', account))"

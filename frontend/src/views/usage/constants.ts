@@ -1,5 +1,5 @@
 import type { getDashboardSummary, getUsageRecords } from '@/api'
-import { formatDuration } from './utils/format'
+import { formatDuration, formatProvider } from './utils/format'
 
 type UsageRecord = Awaited<ReturnType<typeof getUsageRecords>>['items'][number]
 type DashboardUsageRecord = Awaited<ReturnType<typeof getDashboardSummary>>['usageRecords'][number]
@@ -9,8 +9,15 @@ export const usageRecordColumns = [
   {
     key: 'accountEmail',
     label: '账号',
-    width: '250px',
+    width: '280px',
     ellipsis: true,
+  },
+  {
+    key: 'provider',
+    label: '平台',
+    width: '140px',
+    ellipsis: false,
+    format: (value: unknown) => formatProvider(typeof value === 'string' ? value : null),
   },
   {
     key: 'model',

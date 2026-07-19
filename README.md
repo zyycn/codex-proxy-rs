@@ -5,7 +5,7 @@
 
 # Codex Proxy RS
 
-**基于 Rust 的高性能 Codex 多账号网关代理**
+**基于 Rust 的多 Provider 透明 AI 网关**
 
 [![CI](https://github.com/zyycn/codex-proxy-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/zyycn/codex-proxy-rs/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/zyycn/codex-proxy-rs?display_name=tag&sort=semver&style=flat-square)](https://github.com/zyycn/codex-proxy-rs/releases)
@@ -23,13 +23,12 @@
 
 | 领域     | 实现                                             |
 | -------- | ------------------------------------------------ |
-| 协议     | Responses HTTP、SSE、官方 WebSocket              |
-| 传输     | 会话级 WebSocket 池、共享 HTTP/2 后备            |
-| 调度     | 智能调度、额度优先、轮询、粘滞                   |
-| 故障处理 | 额度、认证、封禁、模型与传输故障切换             |
-| 身份     | 账号身份隔离、稳定 installation ID、会话拓扑透传 |
-| 管理     | 账号、客户端 Key、模型别名、运行设置与在线更新   |
-| 遥测     | Token、费用、缓存、TTFT、延迟与错误              |
+| 协议     | OpenAI Responses JSON/SSE 与模型目录                      |
+| Provider | Codex OAuth、xAI/Grok OAuth session                        |
+| 路由     | Provider instance、能力过滤、显式 fallback 与多 credential |
+| 延续     | Provider 原生 continuation 与加密 portable transcript      |
+| 管理     | Client Key、Provider、模型、Route、Target、价格与 OAuth     |
+| 计量     | Request/Attempt usage、版本价格、预算、聚合与恢复            |
 
 ## 快速开始
 
@@ -84,9 +83,12 @@ curl -i http://127.0.0.1:8080/healthz
 ### 3. 初始化
 
 1. 使用 `admin@cpr.local` 与初始密码登录。
-2. 添加 Codex 账号并执行连接测试。
-3. 创建 `sk_...` 客户端 Key。
-4. 复制 Codex CLI 配置，或导入 CCSwitch。
+2. 创建 Provider instance，并通过 OAuth 导入 Codex 或 xAI credential。
+3. 配置 Provider model、对外 Route/Target；严格预算场景同时发布价格版本。
+4. 创建 `sk_...` 客户端 Key，并设置模型 allowlist、速率、并发和预算策略。
+
+> [!IMPORTANT]
+> xAI 使用 OAuth session，不支持把 xAI API Key 作为上游 credential。
 
 > [!NOTE]
 > `admin.default_password` 只在首次创建管理员时生效。
@@ -120,12 +122,9 @@ curl http://127.0.0.1:8080/v1/responses \
 
 | 路由                        | 用途                |
 | --------------------------- | ------------------- |
-| `POST /v1/responses`        | JSON 或 SSE         |
-| `GET /v1/responses`         | Responses WebSocket |
-| `POST /v1/responses/review` | Review              |
-| `GET /v1/models`            | 模型列表            |
-| `GET /v1/models/catalog`    | 模型目录            |
-| `GET /v1/models/{model_id}` | 模型详情            |
+| `POST /v1/responses`        | JSON 或 SSE 透明代理 |
+| `GET /v1/models`            | 启用的公开模型列表   |
+| `GET /v1/models/{model_id}` | 公开模型详情         |
 
 所有 `/v1/*` 路由都需要客户端 API Key。
 
@@ -156,5 +155,7 @@ upgrade 与真实客户端 IP；不要暴露 PostgreSQL 或 Redis。
 
 - [部署](deploy/README.md)
 - [架构](docs/architecture.md)
+- [多 Provider 目标架构](docs/multi-provider-architecture.md)
+- [终态数据模型](docs/multi-provider-database.md)
 - [Release](https://github.com/zyycn/codex-proxy-rs/releases)
 - [容器镜像](https://github.com/zyycn/codex-proxy-rs/pkgs/container/codex-proxy-rs)

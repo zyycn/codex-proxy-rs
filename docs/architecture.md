@@ -1,537 +1,157 @@
-# Codex Proxy RS 架构
+# Codex Proxy RS 当前架构
 
-本文定义仓库当前生效的系统结构、责任边界和运行时不变量。设计讨论、故障排查、迁移过程和阶段性验收不属于架构文档；代码边界发生变化时，本文必须在同一变更中同步。
+本文只描述仓库当前生效的终态。设计依据是
+[多 Provider 目标架构](multi-provider-architecture.md) 与
+[终态数据模型](multi-provider-database.md)；旧账号池、旧 dispatch、旧 telemetry 和迁移期兼容路径不属于当前系统。
 
 ## 系统边界
 
-Codex Proxy RS 是一个单进程 Rust 网关，同时提供：
+Codex Proxy RS 是单进程、多 Provider 的透明 AI 网关：
 
-- OpenAI Responses 兼容接口：`/v1/*`，包括 HTTP JSON、HTTP SSE 和官方 Responses WebSocket。
-- 管理端接口：`/api/admin/*`。
-- Vue 管理端静态资源。
-- PostgreSQL 与 Redis 健康检查：`/healthz`。
-- Codex 账号池调度、上游传输、历史恢复、用量和运维遥测。
+- 客户端面提供 `POST /v1/responses`、`GET /v1/models` 和模型详情。
+- 控制面提供 `/api/admin/*` 与 Vue 管理端静态资源。
+- 当前注册 Provider 为 Codex 和 xAI；两者都使用 OAuth credential，xAI 不接受 API Key 模式。
+- PostgreSQL 保存配置、请求、Attempt、价格、延续和审计等权威事实。
+- Redis 只保存可恢复的 admission、lease、cooldown、OAuth pending flow 与配置通知。
+- `.runtime/` 保存本地密钥材料、日志和部署数据，不把秘密写入源码或普通配置 JSON。
 
-网关为每次代理请求选择一个可用上游账号，注入该账号的认证身份和安装身份，再调用 ChatGPT Codex 后端。请求和响应默认保持上游语义；只有模型别名、账号身份隔离、transport control 和具备完整上下文的历史重放允许改写。
+客户端协议、Gateway Engine 与 Provider adapter 相互独立。OpenAI Responses handler 不识别 Codex/xAI；Provider 不拥有调用方预算和跨平台路由策略。
 
-运行时依赖：
-
-| 依赖 | 责任 |
-| --- | --- |
-| PostgreSQL | 账号、Key、设置、Cookie 和遥测事实的权威存储 |
-| Redis | 管理会话、刷新租约、模型快照、响应归属和会话级短期状态 |
-| ChatGPT Codex | Responses、模型目录、配额和 OAuth token 刷新 |
-| `.runtime/` | 身份派生密钥、更新状态、日志及本地 PostgreSQL/Redis 数据 |
-
-PostgreSQL 和 Redis 都是启动必需依赖。运行中任一健康检查失败时，`/healthz` 返回 `503`。
-
-## 架构不变量
-
-1. `v1/*` 使用 Request → Attempt → Stream 三层静态洋葱生命周期；管理端、健康检查和静态资源不进入业务洋葱。
-2. 一个功能只有一个规则 owner。跨入口的账号失败语义属于 `fleet/account_failure.rs`；`v1/*` 的 retry、exhaustion 和 commit decision 属于对应 controller。
-3. API 只解析和编码；lifecycle 只编排顺序、retry、commit 和 finalize；transport 只建立连接并产出 typed facts。
-4. 上游响应一旦可能收到 payload，transport 或账号都不得自动重放同一请求。
-5. 账号认证身份按 attempt 重建；客户端会话拓扑按原值透传；两者不能共用一个“身份”抽象。
-6. `v1/*` 热路径中的账号明确失效先在线性化的内存路径生效并驱逐 WebSocket，再异步持久化 PostgreSQL；管理端和后台任务可等待同一状态 effect 持久化完成。
-7. 每项生产能力只有一条执行路径，不设置兼容 wrapper、双状态机或运行时切换的新旧实现。
-8. `backend/src/` 只放生产代码；所有测试和 test-only helper 位于 `backend/tests/`。
-9. 功能端口由消费方定义，provider 仅在 `bootstrap` 绑定；`fleet` 不依赖 `telemetry/upstream`，`models` 不依赖 `upstream`。
-10. 前端外部响应先按 endpoint 在 API adapter 运行时收窄，内部类型以实现和组合式函数返回值推导为主。
-
-## 仓库结构
+## Workspace 与依赖方向
 
 ```text
-.
-├── backend/
-│   ├── src/                 Rust 生产代码
-│   ├── tests/               按生产边界组织的集成与契约测试
-│   ├── Cargo.toml
-│   └── Cargo.lock
-├── frontend/                Vue 管理端
-├── deploy/                  Dockerfile、Compose 和运行配置
-├── docs/
-│   └── architecture.md      当前架构
-├── release/                 版本、平台和发布脚本
-└── skills/                  仓库内开发约束
+backend/
+├── apps/gateway/                 composition root、HTTP、任务
+├── crates/gateway-core/          operation、routing、engine、policy、accounting
+├── crates/gateway-api/           OpenAI Responses 边界适配
+├── crates/gateway-protocol/      可共享 wire contract
+├── crates/gateway-store/         PostgreSQL/Redis adapter
+├── crates/providers/codex/       Codex Provider 与 credential owner
+├── crates/providers/xai/         xAI/Grok OAuth session Provider
+├── migrations/0001_initial.sql   唯一初始迁移
+└── Cargo.toml
 ```
 
-## 后端分层
-
-`backend/src/lib.rs` 只声明顶层模块。项目不设置通用 `application` 层，跨领域对象仅在 `bootstrap` 装配。
+依赖方向固定为：
 
 ```text
-backend/src/
-├── main.rs
-├── lib.rs
-├── infra/
-├── upstream/
-├── fleet/
-├── models/
-├── dispatch/
-├── telemetry/
-├── keys/
-├── auth/
-├── settings/
-├── update/
-├── api/
-└── bootstrap/
+gateway binary
+├── gateway-api -------> gateway-core
+├── gateway-store -----> gateway-core
+├── provider-codex ----> gateway-core
+└── provider-xai ------> gateway-core
 ```
 
-依赖方向：
+`gateway-core` 不依赖 Axum、SQLx、Redis、reqwest 或具体 Provider。Provider crate 之间禁止互相依赖；只有 bootstrap 可以把具体 adapter 绑定到抽象边界。
 
-| 模块 | 责任与依赖边界 |
-| --- | --- |
-| `main` | 解析子命令，只进入 `bootstrap` 或一次性任务 |
-| `bootstrap` | 进程 composition root，可装配所有领域模块，不拥有业务规则 |
-| `api` | HTTP/WebSocket 契约、鉴权提取、管理端功能查询和最终响应编码，不直接使用 SQL/Redis 客户端 |
-| `dispatch` | 编排一次 `v1/*` 请求，调用 `fleet`、`models`、`upstream`、`telemetry` |
-| `fleet` | 账号、调度、quota、token、Cookie 和管理操作 |
-| `upstream` | Codex 协议与 HTTP/WebSocket transport，不选择账号 |
-| `telemetry` | 保存已经确定的成功、失败和聚合事实，不参与调度 |
-| `infra` | PostgreSQL、Redis、日志、时间、路径和身份基础设施，不依赖 API |
+## 数据面
 
-`backend/tests/architecture/dependencies.rs` 使用 Rust AST 检查全局禁止依赖，不用源码字面量模拟模块图。新增模块或移动端口时必须先更新真实依赖，再讨论是否调整守卫规则。
-
-### infra
-
-`infra` 提供：
-
-- `database.rs`：PostgreSQL 连接池、迁移、迁移 checksum 和 ping。
-- `redis.rs`：Redis `ConnectionManager`、统一 `cpr:` 前缀和 ping。
-- `identity.rs`：密码哈希、API Key、会话令牌和 HMAC 伪名。
-- `paths.rs`：数据目录与 `identity_hmac_secret`。
-- `logging.rs`：TTY compact 日志与非 TTY/文件 JSON 日志。
-- `time.rs`、`json.rs`、`format.rs`：无业务语义的通用值处理。
-
-### upstream
+一次请求只有一个 `gateway_requests`，所有可能到达上游的调用分别对应有序 `request_attempts`：
 
 ```text
-upstream/openai/
-├── token_client.rs
-├── failure.rs
-├── profile.rs
-├── desktop_release.rs
-├── protocol/
-│   ├── responses.rs
-│   ├── events.rs
-│   ├── sse.rs
-│   ├── websocket.rs
-│   └── schema.rs
-├── transport/
-│   ├── client.rs
-│   ├── client_sse.rs
-│   ├── headers.rs
-│   ├── tls.rs
-│   ├── response_meta.rs
-│   ├── diagnostics.rs
-│   ├── usage.rs
-│   └── websocket/
-│       ├── mod.rs
-│       ├── audit.rs
-│       ├── breaker.rs
-│       ├── coordinator.rs
-│       ├── error.rs
-│       ├── handshake.rs
-│       ├── model.rs
-│       ├── pump.rs
-│       ├── pool/
-│       │   ├── mod.rs
-│       │   ├── lease.rs
-│       │   ├── state.rs
-│       │   └── supervisor.rs
-│       └── exchange/
-│           ├── mod.rs
-│           ├── collect.rs
-│           ├── io.rs
-│           ├── reducer.rs
-│           └── stream.rs
+API decode
+  -> authenticate client key + freeze RuntimeSnapshot
+  -> resolve native/portable continuation
+  -> compile RoutePlan + admission reservation
+  -> persist logical request
+  -> Provider selects credential and returns cold stream
+  -> persist Attempt
+  -> mark ambiguous immediately before first poll/send
+  -> canonical events
+  -> downstream commit barrier
+  -> terminal CAS + usage/cost/bucket/continuation transaction
 ```
 
-- `protocol` 定义 Responses body、canonical SSE/WS 事实和序列化，不包含账号策略。
-- `failure.rs` 将各 transport 错误规范化为稳定的 `UpstreamFailureFacts`，不解释账号状态。
-- `transport` 拥有 HTTP/SSE、WebSocket、TLS、header、连接池、熔断和 transport metrics。
-- `profile.rs` 定义配置驱动的 Codex Desktop 上游请求画像；请求在发送前读取原子快照。
-- `desktop_release.rs` 定期读取官方 appcast，并自动把合法的 Desktop 版本与构建号应用到运行时画像。新 HTTP 请求立即使用新画像；WebSocket 连接池按实际 opening 画像分代，不复用旧 UA 连接，也不改写在途请求。
-- `token_client.rs` 只实现 OAuth token 刷新协议。
+不变量：
 
-### fleet
+1. Logical request 与 Attempt 必须先提交 PostgreSQL，才允许发送可能计费的 payload。
+2. `upstream_send_state` 与 `downstream_committed` 是独立边界。
+3. `not_sent` 和已经收到明确失败响应的 `sent` 可在下游 commit 前按策略 retry；`ambiguous` 禁止自动重放。
+4. 同一 request 最多一个 committed Attempt，commit 后不能新建 Attempt。
+5. Provider transport 不隐藏 credential retry、payload retry 或跨 origin redirect。
+6. 请求级 RoutePlan、credential revision、service tier 与价格时间线均来自同一冻结 Snapshot。
 
-`fleet` 是账号领域：
+### 路由与价格
 
-- `store`：账号与 quota 的 PostgreSQL 映射和事务写入。
-- `pool`：进程内账号快照、并发 slot、请求间隔和候选 lease。
-- `account_failure.rs`：HTTP、SSE、手动额度查询和后台额度刷新共享的账号失败分类与状态 effect。
-- `scheduler`：候选过滤与排序的唯一 owner，支持 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
-- `scheduler/feedback`：进程内 EWMA 错误率和首字延迟。
-- `quota`：配额查询、窗口与运行时限制。
-- `refresh`：token 刷新策略、Redis 租约和刷新服务。
-- `cookies`：账号级 Cloudflare Cookie。
-- `manage`：导入、导出、OAuth、探测、刷新和账号生命周期。
+Router 先按 operation、capability、健康、地区和调用方 allowlist 过滤，再按 route policy 排序。Target 只引用 Provider instance 与上游模型，不固定 credential。
 
-### models
+每个 Attempt 按自己的 `started_at` 从冻结价格时间线选择 `effective_from <= started_at` 的最新版本。`not_sent` 阶段不写价格；跨越 send barrier 时同时冻结 price version ID，终态使用十进制定点计算 known/partial/unknown 成本。零价必须由显式零费率表达。
 
-- `catalog.rs` 合并官方模型快照与运行时别名。
-- `service.rs` 请求 `/codex/models`，按订阅计划维护模型目录。
-- `store.rs` 在 Redis 中保存计划模型快照。
-- `types.rs` 定义模型、计划和目录值对象。
+Strict budget 只保留同币种且可计算完整保守上界的 target，按输入估算、最大输出和最大 attempts 预留。终结时使用全部 Attempts 的 known 成本结算；任何 partial/unknown 都不会按零释放。Redis epoch 丢失时先从持久事实重建，再恢复 admission。
 
-### telemetry、keys、auth、settings、update
+### Continuation
 
-- `telemetry`：成功事实 `usage_records`、失败事实 `ops_error_logs`、请求时间桶、账号用量和计费。
-- `keys`：客户端 API Key 生命周期与 PostgreSQL 鉴权。
-- `auth`：管理员用户、密码校验和 Redis 登录会话。
-- `settings`：`runtime_settings` 读写及 `watch` 广播。
-- `update`：Release 查询、checksum 校验、文件替换、状态和回滚。
+- Native continuation 固定 Provider、instance 和必要 credential scope；single-use claim/consume/ambiguous 由 PostgreSQL CAS 保证。
+- Portable continuation 使用调用方隔离的加密 transcript snapshot 链，可跨 Provider 路由；输入、可表示的成功输出和 binding 与 terminal request/Attempt 在同一事务提交，失败与取消不生成正文。
+- Redis 只协助短期串行化，flush 不会让已经可能消费的 native handle 再次可用。
+- 终态 continuation、最终 Attempt 与 request 在同一事务完成后，API 才能发送 terminal event。
 
-### api 与 bootstrap
+## Provider 边界
 
-`api` 组合客户端接口、管理端接口、健康检查和 SPA：
+`Provider` 接收 canonical `Operation + PlannedTarget + AttemptContext`，返回带冻结 metadata 的 cold canonical stream。Gateway Engine 只通过 Registry 查找 Provider，不写平台分支。
 
-- `api/client/responses` 解析 HTTP JSON/SSE 与入站 Responses WebSocket。
-- `api/client/errors.rs` 将 typed dispatch error 编码为稳定 OpenAI 错误。
-- `api/admin` 提供管理端路由和统一 `no-store` 响应。
-- `api/middleware` 负责 request ID、访问日志和连接排空。
-- `api/assets.rs` 提供静态资源与 Vue Router fallback，未知 API 路径不回退 SPA。
+Credential 由对应 Provider 独占管理：
 
-`bootstrap` 负责配置、依赖装配、启动任务和关闭协调；它不解释账号错误、history 或 transport outcome。
+- Codex：OAuth token、ChatGPT 可查询字段、Cookie policy、credential selector 与 Codex transport。
+- xAI：Device/Authorization Code OAuth、OIDC 校验、加密 session token、Grok inference transport。
 
-Dashboard 查询归入 `api/admin/dashboard_routes.rs`，账号列表查询归入 `api/admin/accounts_routes/query.rs`。HTTP handler 负责参数、鉴权和响应，文件内 query service 负责跨域读取，presenter 负责 casing、显示文本和格式化。上游请求画像与 Desktop 发布观测通过 Dashboard 模块定义的快照端口注入，不直接引用 OpenAI adapter 类型。
+Provider selector 同时冻结 `credential_revision` 与 `state_revision`。明确的认证失败、额度耗尽和 429 分别写入 `invalid`、`exhausted` 或带截止时间的 `cooldown`；更新使用 credential/state 双 revision CAS 与 `observed_at`，因此旧请求不能污染已经轮换的新 secret。普通成功 Attempt 不回写 credential state。
 
-## v1 请求生命周期
+Secret envelope、Cookie、PKCE verifier、device code 和 native state 使用用途/owner/行身份绑定的 AEAD；日志、Debug、Admin API 与 audit details 不输出秘密或完整身份。
 
-`dispatch` 是 `v1/*` 的业务编排边界：
+## 控制面
 
-```text
-API adapter
-  -> Request lifecycle
-       -> AttemptRunner(account A)
-            -> controller enter
-            -> request interval || transport prepare
-            -> upstream exchange
-            <- typed observation / decision
-       -> AttemptRunner(account B)  [仅 OpenAttempt 可 retry]
-       -> Stream lifecycle          [CommittedAttempt 无 retry API]
-  <- controller finalize / API encoding
-```
+控制面管理 client key、Provider instance/model、model route/target、不可变 price version，以及 Codex/xAI OAuth credential。
 
-### Request
+所有 Admin HTTP 契约遵守：
 
-`dispatch/lifecycle/request.rs`：
+- 只使用 GET 与 POST。
+- ID 放在 query params 或 JSON body，不放动态 URL path。
+- 结构变更携带 `expectedConfigRevision`。
+- 业务写入、单调 `config_revision` 和脱敏 audit event 位于同一 PostgreSQL 事务。
+- OAuth token rotation 只推进 `credential_revision`，高频 availability/cooldown 只推进 `state_revision`。
 
-1. 解析模型和请求不变量。
-2. 建立 history、cyber policy、identity、usage 等 request scope。
-3. 并行读取互不依赖的 Redis 状态，读取有 100ms 上限并 fail-open。
-4. 合并 preferred/excluded 账号集合。
-5. 按当前 scheduler 冻结本请求的完整候选顺序。
+Provider instance 的 create/update/enable 在 PostgreSQL mutation 前先由当前已注册 adapter 校验 endpoint 和公开 options；未知 Provider 或非法配置不会推进 revision。提交成功后，控制面通过带 namespace 的 Redis Pub/Sub v1 通知广播 config/credential/state revision；credential ID 在进入 payload 前只保留 SHA-256 指纹，通知不携带 secret 或资源原文。通知只唤醒一次完整 PostgreSQL reload，解析失败、断线、乱序或发布失败都不会拼接局部状态，也不会改变已经提交的 PostgreSQL 结果。
 
-Request scope 在 attempt 之间传递，但 controller 只能访问自己的状态。
+RuntimeSnapshot 周期对账始终每 5 秒比较全局 `config_revision` 和 credential `(credential_revision, state_revision)` 向量，Redis 通知仅缩短收敛延迟。对账允许 config revision 跨多个版本并直接重载最新一致快照；任何 revision 回退、credential 集合无结构版本变化或候选快照无效都会保持 fail closed。
 
-### Attempt
+Price version 发布后不可更新或删除修正；更正必须发布新版本。
 
-`dispatch/lifecycle/attempt.rs` 对每个候选账号执行：
+## 持久化 owner
 
-1. 从账号池获取 lease，并在真正获取时重读运行时可用状态。
-2. 由 quota、Cookie、history 和 identity controller 构造 `AccountScopedRequest`。
-3. 并行执行账号请求间隔等待与 prepared transport。
-4. 发送上游请求，将 HTTP、SSE、WebSocket 结果规范化为 `AttemptObservation`。
-5. 由 `ControllerSet` 按静态优先级调用 owner 分类和 effect。
-6. lifecycle 只解释 `Accept`、`RetrySameAccount`、`RetryNextCandidate`、`Return`。
-
-`OpenAttempt` 暴露 decision/retry；`CommittedAttempt` 只允许建立结果或 stream。提交边界后的类型没有 retry 方法。
-
-### Stream
-
-`dispatch/transport/canonical.rs` 对上游事件只解码一次，同时保留 raw bytes 和 typed facts。prefetch 在首个真实输出或 terminal 前保持请求可恢复；提交后由 `dispatch/stream/live.rs` 转发事件，并由 consuming finalizer 保证所有结束路径只 finalize 一次。
-
-Stream terminal 包括 completed、incomplete、failed、上游断开、下游取消、shutdown 和 capture limit。已提交流中的明确账号事实仍会更新账号状态，但只影响后续请求。
-
-### Controller 所有权
-
-| 功能 | 唯一 owner |
+| 事实 | 唯一 owner |
 | --- | --- |
-| previous response 所有权、scope、full replay | `controllers/history.rs` |
-| cyber policy 会话排除和 CAS 清理 | `controllers/cyber_policy/` |
-| v1 quota 与 rate limit attempt decision | `controllers/quota.rs` |
-| v1 封禁、过期、模型不支持的 exhaustion decision | `controllers/account_failure.rs` |
-| transport 错误到稳定上游事实 | `upstream/openai/failure.rs` |
-| 跨入口账号失败分类、状态 effect 与 WS 驱逐 | `fleet/account_failure.rs` |
-| Cloudflare Cookie 与冷却 | `controllers/cloudflare.rs` |
-| 会话亲和写入 | `controllers/affinity.rs` |
-| usage 结算 | `controllers/usage.rs` |
-| 代理事件与 transport metrics | `controllers/telemetry/` |
+| client key、runtime settings | control-plane settings |
+| Provider instance/model/route/price | config publisher |
+| upstream credential secret/config | 对应 Provider credential manager |
+| credential availability/cooldown | Provider state owner |
+| request/attempt | Gateway execution lifecycle |
+| transcript/binding | history/continuation owner |
+| ops event | ops recorder |
+| request/attempt metric bucket | bucket aggregator |
 
-Controller 之间不直接调用。跨功能优先级只在 `ControllerSet` 声明；API、transport、store 和 lifecycle 不重复识别功能语义。Controller 只把共享账号分类翻译为 v1 生命周期 decision；手动额度查询和后台额度刷新执行同一状态 effect，但各自保留自己的返回与调度职责。
+`backend/migrations/0001_initial.sql` 直接创建终态 schema。应用只接受空业务 schema，不包含旧表 backfill、dual-write、旧字段读取或兼容 migration。可表达的关系全部使用真实 FK，并为 FK 子列提供支持索引；外部协议 ID、删除后保留的 `_ref` 与多态 audit ref 是明确例外。
 
-## 上游双热传输
+## Redis epoch 与后台任务
 
-Responses transport 使用会话级 WebSocket 池与 origin 级 HTTP/2 池两条常热通道。WebSocket 保存 connection-local response 状态；HTTP/2 提供新链和可持久化续链的低延迟后备。transport 只竞速连接准备，不并行发送业务 payload。
+Redis 空状态不等于零使用量：
 
-### TransportRequirement
+- client admission epoch 从 running/近期 request 与 attempt 成本事实重建。
+- Provider/credential lease epoch 从 running Attempt 和存活 worker 的 live guard 重建。
+- epoch 为 missing/rebuilding 时，受限 admission 与 lease acquire 均 fail closed。
+- Lua 使用 Redis server time、hash tag 和 fencing/epoch 检查完成原子操作。
 
-`upstream/openai/protocol/responses.rs` 将请求事实归一化为：
+后台任务还负责 RuntimeSnapshot revision 对账、stale execution recovery、closed bucket rebuild 与 retention。Retention 固定先 recovery，再清 binding/transcript，最后清 request/attempt 和过期 bucket。
 
-| Requirement | 语义 |
-| --- | --- |
-| `HttpRequired` | 客户端明确要求 HTTP |
-| `ExplicitWebSocketWarmup` | `generate=false + store=false`，必须使用可保留 socket 的 WebSocket |
-| `ExactWebSocketContinuation` | 只能使用持有指定 connection-local response ID 的 socket |
-| `PersistedContinuation` | previous response 已持久化，可使用 WS 或 HTTP/2 |
-| `ExternalUnknown` | previous response owner 未知，只允许选定账号原样尝试 |
-| `NewChain` | 无 previous response 的普通新链 |
+## 前端与测试
 
-`generate=false + store=false` 的约束优先于本地 HTTP hint，避免产生无法续接的 warmup response。
+前端复用旧项目的克制视觉语言，但信息架构只面向终态控制面。外部响应在 API/composable 边界收窄；局部状态与返回值以推导为主，不维护与后端 DTO 镜像的显式类型层。
 
-### Prepared typestate 与 fallback
+测试全部位于对应 package 的 `tests/`，目录结构镜像 `src/`。生产 `src` 不包含 `#[cfg(test)]`、测试模块挂载或 test-only 分支；架构测试会强制检查该约束：
 
-`PreparedResponseTransport` 只表示“账号、header 和连接已准备，但 payload 尚未发送”。WebSocket opening 与 `response.create` 发送是单向类型边界：
+- core 规则使用快速单元测试。
+- Provider 使用 contract suite 覆盖流、错误、取消、secret redaction。
+- FK、CAS、revision、continuation、price、retention 和 rebuild 使用真实 PostgreSQL。
+- admission、lease、OAuth pending flow 与 epoch recovery 使用真实 Redis，必要时联合真实 PostgreSQL。
 
-- 热 WS 可用时立即租用并发送 WS payload。
-- 普通新链、persisted continuation 和 external unknown 没有热 WS 时创建一个 `Connecting` slot；前台从该 slot 的统一起点最多等待 800ms。
-- 800ms 内握手成功时，连接原子执行 `Connecting → Busy(owner)`，connection 与 lease 直接交给当前请求，再发送 WS payload。
-- 800ms 耗尽时，当前请求不发送 WS payload，立即在同账号使用 HTTP/2；未完成的握手由 pool 在后台继续，仍受 15 秒硬连接超时约束。
-- 当前请求耗尽 800ms、handoff receiver 已关闭后，后台握手成功才进入 `Idle`，供后续请求复用；最终失败则删除 `Connecting` slot。相同 key 的后续请求沿用原 opening 的绝对 deadline，不会重新获得一段 800ms。
-- DNS/TCP/TLS 立即失败、pool 不可用或 breaker 打开时，同账号使用 HTTP/2。
-- opening 已返回明确上游响应时，事实直接进入 controller，不追加 HTTP 请求。
-- warmup 与 exact continuation 必须等待所需 WS，不使用 HTTP fallback。
-- payload 发送后的连接断开、发送超时或首事件超时统一为 `PostSendAmbiguous`，不得换 transport 或账号。
-
-AttemptRunner 将 prepared transport 与账号请求间隔并行，800ms、熔断阈值和连接状态只存在于 `upstream/openai/transport`。
-
-### WebSocket pool
-
-Pool key 为 `(base_url, account_id, local_conversation_id)`，slot 状态为：
-
-- `Idle`：可租用的热 socket。
-- `Busy`：单 socket 上已有一个 in-flight response。
-- `Connecting`：同 key opening 单飞，包含统一 started-at、结果通知和取消令牌。
-
-每条连接记录最新 completed response ID。Exact continuation 只有 ID 完全匹配时才能租用；socket 缺失、busy、失活或 ID 不匹配时不新建连接碰运气，由 HistoryController 决定 full replay 或失败。
-
-池化 socket 默认每 25 秒发送带唯一序列的 Ping，匹配 Pong 的 deadline 为 5 秒，最大寿命为 55 分钟。任意业务入站帧同样证明链路存活；下游背压导致 pump 无法读取 socket 时暂停主动探活。后台 pump 统一处理 ping/pong、EOF、close 和 liveness，复用前只读取原子连接状态，不增加网络往返。
-
-`Idle`、`Busy` 和 `Connecting` 都计入 slot 上限：`ws_pool.max_per_account` 默认单账号 8 个，`ws_pool.max_total` 默认全局 64 个；`ws_pool.max_connecting` 的全局 semaphore 默认只允许 16 个 opening 同时执行。总量满且存在 Idle 时淘汰最久未使用的 socket；Busy/Connecting 不抢占，无法释放容量或获取 opening permit 时，同账号当前请求按既有策略使用 HTTP/2。账号驱逐会删除该账号全部 slot、关闭 idle socket 并取消 connecting；busy socket 在归还时因 reservation 已失效而关闭。lease 的 Drop 同步释放状态，不依赖当前线程存在 Tokio runtime。进程关闭会取消并等待 pool-owned opening、流式 forwarder 和维护任务，迟到连接不能在驱逐或 shutdown 后重新入池。pool 在 runtime 外构造时，会在首次 acquire 时补启动维护任务；零维护间隔按禁用处理，不创建 panic task。
-
-### Origin breaker
-
-Breaker key 为 origin 与 TLS profile，不按账号区分：
-
-- 30 秒窗口内 3 次退化 opening 后打开 30 秒；退化包括 800ms 快路径预算耗尽、transport 失败和 5xx opening 响应。
-- 同一次 opening 的前台预算耗尽与后台最终失败只计一次；迟到成功也不抹去已经发生的快路径退化。
-- 预算内成功 opening 会清空该 origin 的历史退化记录。
-- 打开期间热 WS 仍可使用；普通冷 opening 直接走 HTTP/2。
-- 到期后只允许一个 half-open probe。
-- 账号或请求级 4xx opening 响应证明 origin 可达并关闭 half-open。
-- 5xx 或 transport probe 失败重新打开 breaker。
-- 账号驱逐和进程 shutdown 触发的主动取消不计为 origin 故障。
-
-Breaker 不更新账号状态；账号失效只由 controller 的明确 typed fact 触发。
-
-### HTTP/2
-
-Reqwest client 按 TLS profile 缓存并自动 ALPN 协商，配置为：
-
-```rust
-Client::builder()
-    .pool_idle_timeout(None::<Duration>)
-    .http2_keep_alive_interval(Duration::from_secs(30))
-    .http2_keep_alive_timeout(Duration::from_secs(5))
-    .http2_keep_alive_while_idle(true)
-```
-
-HTTP/2 连接按 origin/TLS profile 共享，账号 Authorization 只属于单个 stream。系统没有强制 HTTP/1.1 配置或第二套 transport builder。
-
-### Transport metrics
-
-成功与失败事实记录：
-
-- `transportDecision`
-- `wsConnectMs`
-- `transportDecisionWaitMs`
-- `upstreamHeadersMs`
-- `firstEventMs`
-- `firstTokenMs`
-- `httpVersion`
-- `websocketPool.kind`
-
-`wsConnectMs` 只表示已经成功的 WS 握手耗时；复用、预算耗尽和其他 HTTP fallback 不填写该字段。`transportDecisionWaitMs` 表示当前请求为 transport 选择实际等待的时间。后台 opening 另外记录 `ws_preconnect_duration_ms`、`ws_preconnect_outcome` 和 `foreground_waiting`，不把未成功握手的 800ms 伪装成连接耗时。
-
-稳定 decision 包括 `ws_reused`、`ws_connected_fast`、`ws_exact_required`、`ws_required`、`http2_ws_budget_exhausted`、`http2_breaker_open`、`http2_pool_unavailable` 和 `http2_ws_pre_send_failure`。
-
-## 账号调度与失效
-
-Scheduler 先过滤不可用账号，再按运行时 `rotation_strategy` 排序。候选顺序在 Request 阶段冻结；层级只影响顺序，不缩小 failover 集合。候选账本不会重复租用同一账号。
-
-明确上游事实的处理顺序：
-
-1. transport 提取 status、code、type、message、retry-after 等事实。
-2. `fleet/account_failure.rs` 将跨入口账号事实统一分类为 quota、rate limit、expired、disabled、banned 或 model unsupported；Cloudflare 与 cyber policy 保持各自 owner。
-3. v1 controller 把共享分类翻译为 retry/exhaustion decision。
-4. 对账号全局事实，账号池 mutex 内立即失效 runtime state 并移除 slot。
-5. 驱逐该账号的 idle/busy/connecting WebSocket entry。
-6. lifecycle 从冻结候选中选择下一账号。
-6. PostgreSQL 状态写入后台有序队列。
-
-数据库延迟不会延长当前换号路径，也不会使并发请求重新租到已失效账号。
-
-`cyber_policy` 是会话级负亲和，不是账号全局状态。它按客户端 API Key 和会话身份隔离，以 revision token 做 CAS 清理，TTL 为 1 小时；不设置功能私有的重试次数，候选耗尽由通用 lifecycle 返回。
-
-## Previous response 与重放
-
-成功 response 的 Redis 归属记录保存账号、conversation、turn state、variant 和 continuation scope，不保存请求/响应正文。
-
-Continuation scope：
-
-| Scope | 含义 |
-| --- | --- |
-| `Persisted` | `store=true`，上游可在新 transport hydration |
-| `ConnectionLocal` | `store=false` 且 completed socket 仍在池中 |
-| `ReplayRequired` | 没有可续接 socket，但当前入站 WS 持有完整 canonical transcript |
-| `Unavailable` | 没有 socket，也没有完整 replay snapshot |
-| `ExternalUnknown` | owner 无法由代理确认 |
-
-完整 transcript 只存在于当前入站 Responses WebSocket：
-
-- 每次 completed 后记录实际响应账号，并以 `ClientInput`、`SanitizedOutput`、`AccountOutput(account_id)` 三种来源类型追加本轮 input 与 output。
-- 普通客户端 input 按值保留；input 中显式携带的已知 Responses output item 按当前来源账号标记。清洗只作用于这些 item 顶层，不递归删除用户消息、工具输出或工具参数中的同名字段。
-- 同账号 full replay 删除 upstream output 顶层 `id`，保留该账号返回的 `encrypted_content`；跨账号 full replay 同时删除顶层 `id` 和 `encrypted_content`，并丢弃纯 opaque 的 compaction item。
-- B 成功后，快照会永久清洗旧账号的 `AccountOutput`，随后只把 B 新返回的 output 作为账号绑定状态保存。
-- transcript 不写 PostgreSQL/Redis，不跨下游连接共享。
-- 有完整 transcript 时，HistoryController 可以删除 previous ID 并在同账号或后续候选全量重放。
-- 只有归属而没有 transcript 时，只允许 owner 账号续接。
-- owner 与 transcript 都未知时，只在首个选定账号原样尝试。
-
-真实输出提交后不执行透明 history recovery。客户端负责在新的 turn 中重新提交完整上下文。
-
-## 身份隔离
-
-| 字段 | 所属语义 | attempt 行为 |
-| --- | --- | --- |
-| access token、`chatgpt-account-id`、Cookie | 上游账号认证 | 每次从当前账号重建 |
-| `x-codex-installation-id` 及其 metadata 投影 | 安装/设备指纹 | 由实例 HMAC secret 按账号稳定派生 |
-| `x-codex-turn-state` | 上游 opaque sticky state | 同账号可复用，换号必须删除 |
-| `turnMetadata` | 客户端语义与 installation 投影 | 换号时类型化清除账号字段并改写 installation；解析失败直接删除 |
-| `previous_response_id` | 上游历史句柄 | 只在 owner 账号/socket 使用；full replay 时删除 |
-| `conversation` | Responses 服务端会话句柄 | 换号时删除 |
-| session/thread/`conversation_id`/turn/window/parent ID | 客户端会话拓扑 | 原样透传，不按账号改写 |
-| `prompt_cache_key`、`x-client-request-id` | 会话缓存与请求关联 | 客户端提供时原样透传 |
-| output item 顶层 `id` | 上游输出引用 | full replay 时删除，嵌套同名字段不动 |
-| output item 顶层 `encrypted_content` | 上游加密状态 | 同账号保留，换号删除 |
-| tool `call_id` | 工具输入输出配对 | full replay 时保留 |
-
-跨账号重放的不变量是：目标账号收到完整的客户端会话语义，但请求中不存在任何由来源账号认证、签发、加密、路由或缓存的账号绑定状态。
-
-`CrossAccountReplay(source, target)` 是 HistoryController 产生的显式边界；同一请求内发生普通账号 failover 时也执行相同的 Responses input 类型化清洗。`AccountScopedIdentity` 只包含 installation ID。`AccountScopedRequest` 只有在当前账号认证、Cookie、installation ID、turn-state 和 metadata 边界处理完成后才能进入 upstream transport。
-
-## 数据存储
-
-### PostgreSQL
-
-PostgreSQL 保存：
-
-| 数据 | 表 |
-| --- | --- |
-| 管理员 | `admin_users` |
-| 客户端 Key | `client_api_keys` |
-| 运行时设置 | `runtime_settings` |
-| 账号与 quota | `accounts` |
-| 账号累计用量 | `account_usage` |
-| 成功请求事实 | `usage_records` |
-| 失败请求事实 | `ops_error_logs` |
-| 请求聚合桶 | `request_time_buckets` |
-| Cloudflare Cookie | `account_cookies` |
-| 迁移记录 | `schema_migrations` |
-
-时间列使用 `timestamptz`，应用按 UTC 时间点读写，中国自然日和展示时区由 `infra::time` 定义。迁移版本严格递增并校验名称与 SQL checksum。
-
-### Redis
-
-Redis 使用统一 `cpr:` 前缀：
-
-| Key | 内容 | 生命周期 |
-| --- | --- | --- |
-| `admin:session:<hash>` | 管理员会话 | 配置 TTL |
-| `lease:refresh:<account_id>` | token 刷新租约 | PX TTL |
-| `models:plan_snapshots` | 计划模型快照 | 刷新替换 |
-| `affinity:v3:resp:<response_id>` | response owner | 4 小时 |
-| `affinity:v3:conv:<conversation_id>` | conversation 索引 | 4 小时 |
-| `affinity:v3:account:<account_id>` | account 索引 | 4 小时 |
-| `affinity:v3:global:*` | 全局裁剪索引和字节计数 | 4 小时 |
-| `cyber-policy:v2:session:<hash>` | 会话级账号排除 | 1 小时 |
-
-Affinity metadata 单条上限 64 KiB、全局上限 128 MiB，并在写入时惰性裁剪。
-
-### 本地目录
-
-```text
-.runtime/
-├── data/
-│   ├── identity_hmac_secret
-│   ├── update-state.json
-│   ├── update.lock
-│   └── update-tmp/
-├── logs/
-├── postgres/
-└── redis/
-```
-
-Compose 将应用配置只读挂载到 `/app/deploy/config.yaml`。应用数据、日志、PostgreSQL 和 Redis 均使用独立 bind mount；Redis 启用 AOF。
-
-## 启动、任务与关闭
-
-`serve` 按以下顺序启动：
-
-1. 定位并严格解析 `deploy/config.yaml`。
-2. 解析相对路径并注入 PostgreSQL/Redis secret。
-3. 初始化日志和监听地址。
-4. 连接 PostgreSQL，校验并执行迁移。
-5. 连接 Redis。
-6. 读取 `runtime_settings`。
-7. 创建领域 store、service、OpenAI client 和账号池。
-8. 读取或创建 `identity_hmac_secret`。
-9. 构造上游请求画像并初始化管理员和模型快照。
-10. 启动后台任务并挂载 HTTP router。
-
-后台任务由 `TaskCoordinator` 管理：
-
-- Cookie 清理和事实表 retention。
-- 模型目录刷新。
-- token 与 quota 刷新。
-- Codex Desktop 官方发布观测。
-- settings 订阅。
-- WebSocket pool 生命周期。
-
-关闭时停止接收新请求，结束 HTTP 长流和入站 WebSocket，关闭上游 WebSocket pool 与后台任务。连接总排空上限为 20 秒，单任务等待上限为 5 秒。
-
-## 前端与路由
-
-Vue 管理端位于 `frontend/src`，使用 Vue Router、Pinia 和按领域划分的 API client。生产构建写入 `frontend/dist` 并由 Rust 进程托管。
-
-固定依赖方向：
-
-```text
-view / component
-      -> feature composable / explicit Pinia store
-             -> api module -> request transport
-             -> VueUse SSE
-```
-
-- `api/request.ts` 只负责请求与管理端 envelope 解包；endpoint module 不声明响应 DTO，直接透传 `data` / `params`，管理端写操作统一使用 `POST`。
-- 401 处理由 `main.ts` 注入，request transport 不依赖 router 或 store。
-- SSE 由对应 feature composable / Pinia store 使用 VueUse `useEventSource` 管理，连接随 feature 生命周期关闭，不保留手写 `api/streams` transport。
-- 账号、API Key、usage 列表使用 latest-request-wins 的 `usePagedQuery`，页内选择统一由 `usePageSelection` 管理。
-- system update 是 layout 持有的单例 Pinia 状态；桌面和移动 Sidebar 只发出打开意图，不挂载或清理共享 stream。
-- API 结果、composable 返回值和局部 view model 默认依赖 TypeScript 推导；显式类型只用于 Props/Emits、领域判别联合和可复用泛型边界。
-- 移动导航入口位于滚动容器内的 sticky 工具栏，不以悬浮控件遮挡页面数据。
-- ESLint dependency restriction 禁止 API 反向依赖 layout/router/store/view，并禁止 UI 层直接导入 Axios。
-
-| 路径 | 作用 |
-| --- | --- |
-| `GET /healthz` | PostgreSQL/Redis 健康检查 |
-| `POST /v1/responses` | Responses JSON 或 SSE |
-| `GET /v1/responses` | Responses WebSocket upgrade |
-| `POST /v1/responses/review` | Review 入口 |
-| `GET /v1/models*` | 模型目录和运行信息 |
-| `/api/admin/*` | 管理端 API |
-| 其他非 API 路径 | Vue SPA 静态资源 |
-
-客户端接口使用 `sk_` API Key。管理端支持登录 Cookie 和管理员 API Key。请求 body 与 WebSocket 文本帧上限均为 16 MiB。
+架构验收以两个权威文档为准；若新增普通 Provider 仍需要修改 Gateway Engine、OpenAI handler 或通用 schema，说明边界已经回退。

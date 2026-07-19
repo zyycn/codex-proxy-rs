@@ -10,6 +10,7 @@ defineProps<{
   apiKey: ApiKeyRow
   deleting: boolean
   updatingStatus: boolean
+  revealing: boolean
 }>()
 
 const emit = defineEmits<{
@@ -27,6 +28,8 @@ const emit = defineEmits<{
       variant="ghost"
       size="sm"
       label="使用密钥"
+      :loading="revealing"
+      :disabled="revealing"
       @click.stop="emit('use', apiKey)"
     >
       <Terminal class="size-3.5 text-(--cp-normal)" />
@@ -37,6 +40,7 @@ const emit = defineEmits<{
       variant="ghost"
       size="sm"
       label="导入 CCSwitch"
+      :disabled="revealing"
       @click.stop="emit('importCcs', apiKey)"
     >
       <Upload class="size-3.5 text-(--cp-info)" />

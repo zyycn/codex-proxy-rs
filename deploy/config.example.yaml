@@ -15,9 +15,6 @@ x-cpr:
     host: '127.0.0.1'
     port: 8080
 
-  api:
-    base_url: 'https://chatgpt.com/backend-api'
-
   database:
     # 本地连接地址；Docker 内由 compose.yaml 固定改用 postgres 服务名。
     # 密码不要写进 URL。
@@ -31,25 +28,6 @@ x-cpr:
     url: 'redis://127.0.0.1:6379/'
     # 必填：48 位十六进制字符。
     password: &redis_password ''
-
-  runtime:
-    # 相对路径以 deploy/config.yaml 所在目录为基准。
-    data_directory: '../.runtime/data'
-
-  quota:
-    refresh_interval_minutes: 5
-    skip_exhausted: true
-
-  ws_pool:
-    enabled: true
-    max_age_ms: 3300000
-    max_per_account: 8
-    # 所有账号合计最多保留 64 个 Idle/Busy/Connecting slot。
-    max_total: 64
-    # 限制并发 TCP/TLS/WebSocket opening，避免多账号冷启动风暴。
-    max_connecting: 16
-    # 首个真实输出的绝对超时，单位毫秒；0 表示禁用。
-    initial_event_timeout_ms: 20000
 
   wire_profile:
     # 该画像来自 Desktop 制品与 bundled Codex Core 的联合审计。
@@ -81,9 +59,6 @@ x-cpr:
       retention_days: 14
       max_file_size_mb: 20
       max_files: 20
-
-  telemetry:
-    enabled: true
 
 # Compose 凭据桥接区。通常不需要修改。
 services:

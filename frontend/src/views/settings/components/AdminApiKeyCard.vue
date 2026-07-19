@@ -80,7 +80,7 @@ const emit = defineEmits<{
                 loading
                   ? '加载中...'
                   : status.exists
-                    ? '管理员 API 访问已启用，服务端仅保存凭证摘要'
+                    ? '管理员 API 访问已启用，完整 Key 仅在生成时回显'
                     : '外部系统暂时无法通过 API Key 调用管理接口'
               }}
             </p>

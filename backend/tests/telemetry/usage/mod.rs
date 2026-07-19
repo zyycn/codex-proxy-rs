@@ -1,2 +1,0 @@
-mod insights;
-mod store;

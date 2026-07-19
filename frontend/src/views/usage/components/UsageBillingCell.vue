@@ -11,6 +11,19 @@ const props = defineProps<{
 }>()
 
 const billing = computed(() => usageBilling(props.record))
+const billingItems = computed(() => {
+  const value = billing.value
+  if (!value)
+    return []
+
+  return [
+    { label: '服务档位', value: value.serviceTierDisplay, tone: 'info' },
+    { label: '倍率', value: value.multiplierDisplay, tone: 'info' },
+    { label: '总费用', value: value.totalAmountDisplay, tone: 'success' },
+    { label: '标准费用', value: value.standardAmountDisplay, tone: 'default' },
+  ]
+})
+
 const amountItems = computed(() => {
   const value = billing.value
   if (!value)
@@ -24,18 +37,6 @@ const amountItems = computed(() => {
     { label: '缓存读取费用', value: value.cacheReadAmountDisplay, accent: false },
     { label: '缓存写入费用', value: value.cacheWriteAmountDisplay, accent: false },
     { label: '缓存写入单价', value: value.cacheWritePriceDisplay, accent: true },
-  ]
-})
-const billingItems = computed(() => {
-  const value = billing.value
-  if (!value)
-    return []
-
-  return [
-    { label: '服务档位', value: value.serviceTierDisplay, tone: 'info' },
-    { label: '倍率', value: value.multiplierDisplay, tone: 'info' },
-    { label: '总费用', value: value.totalAmountDisplay, tone: 'success' },
-    { label: '标准费用', value: value.standardAmountDisplay, tone: 'default' },
   ]
 })
 
@@ -71,9 +72,7 @@ function itemValueClass(tone?: string, accent?: boolean) {
         </button>
       </template>
 
-      <div
-        class="grid gap-2 text-[12px] leading-none [&_span:first-child]:whitespace-nowrap [&_span:last-child]:whitespace-nowrap"
-      >
+      <div class="grid gap-2 text-[12px] leading-none">
         <p class="m-0 font-[760] text-(--cp-text-primary)">
           计费明细
         </p>
@@ -85,9 +84,7 @@ function itemValueClass(tone?: string, accent?: boolean) {
             </span>
           </div>
         </div>
-        <div
-          class="mt-1 grid gap-1.5 border-t border-(--cp-divider-subtle) pt-2 text-(--cp-text-secondary)"
-        >
+        <div class="mt-1 grid gap-1.5 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) p-2 text-(--cp-text-secondary)">
           <div v-for="item in billingItems" :key="item.label" class="flex justify-between gap-4">
             <span>{{ item.label }}</span>
             <span class="font-mono font-[760]" :class="itemValueClass(item.tone)">

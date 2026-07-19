@@ -8,6 +8,7 @@ import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
+import ProviderBadge from '@/components/ProviderBadge.vue'
 import OpsErrorPanel from './components/OpsErrorPanel.vue'
 import UsageBillingCell from './components/UsageBillingCell.vue'
 import UsageClientIpCell from './components/UsageClientIpCell.vue'
@@ -42,6 +43,7 @@ const { timeRange, timeRangeParams, refreshTimeRangeEnd, latestTimeRangeParams }
 const {
   page,
   searchQuery,
+  providerQuery,
   usagePagination,
   loading,
   analyticsLoading,
@@ -59,9 +61,7 @@ const {
   latestTimeRangeParams,
 })
 
-const { showDetailModal, selectedUsageRecord, handleViewDetail } = useUsageRecordDetail({
-  timeRangeParams,
-})
+const { showDetailModal, selectedUsageRecord, handleViewDetail } = useUsageRecordDetail()
 
 watch(timeRange, () => {
   refreshTimeRangeEnd()
@@ -116,6 +116,7 @@ watch(timeRange, () => {
         >
           <UsageFilters
             v-model:search="searchQuery"
+            v-model:provider="providerQuery"
             :loading="loading"
             :refreshing="refreshingList"
             @refresh="refreshUsageRecords"
@@ -132,6 +133,10 @@ watch(timeRange, () => {
             @page-change="handlePageChange"
             @page-size-change="handlePageSizeChange"
           >
+            <template #provider="{ row }">
+              <ProviderBadge :provider="String(row.provider || '')" />
+            </template>
+
             <template #accountEmail="{ row }">
               <span
                 class="block max-w-full truncate font-mono text-[12px] leading-none font-[720] text-(--cp-text-primary)"

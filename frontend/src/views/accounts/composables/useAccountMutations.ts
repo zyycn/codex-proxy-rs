@@ -1,18 +1,22 @@
 import type { Ref } from 'vue'
-import type {
-  getAccounts,
-} from '@/api'
-
+import type { getAccounts } from '@/api'
 import type { BaseTableSort } from '@/components/base/BaseTable/columns'
+
 import dayjs from 'dayjs'
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import {
-  deleteAccounts,
+  deleteCodexCredential,
+  deleteXaiCredential,
+  disableCodexCredential,
+  disableXaiCredential,
+  enableCodexCredential,
+  enableXaiCredential,
   exportAccounts,
   getAccountQuota,
   refreshAccount,
-  updateAccount,
+  refreshAccountQuota,
 } from '@/api'
+import { ApiError } from '@/api/request'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useDownload } from '@/composables/useDownload'
@@ -21,8 +25,7 @@ import { errorMessage, withMinimumDuration } from '@/utils/async'
 
 import { useAccountOnboarding } from './useAccountOnboarding'
 
-type AccountListResult = Awaited<ReturnType<typeof getAccounts>>
-type AccountRow = AccountListResult['items'][number]
+type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 
 const attentionAccountStatuses = new Set(['expired', 'disabled', 'banned'])
 const accountStatusSortRank: Record<string, number> = {
@@ -35,33 +38,51 @@ const accountStatusSortRank: Record<string, number> = {
 
 export function useAccountMutations(options: {
   accounts: Ref<AccountRow[]>
-  accountSummary: Ref<AccountListResult['summary']>
+  accountSummary: Ref<Awaited<ReturnType<typeof getAccounts>>['summary']>
   statusQuery: Ref<string>
   sort: Ref<BaseTableSort | undefined>
   selectedIds: Ref<Set<string>>
   totalAccounts: Ref<number>
+  configRevision: Ref<number>
   reload: () => Promise<unknown>
 }) {
-  const { downloadJson } = useDownload()
-  const accounts = options.accounts
-  const accountSummary = options.accountSummary
   const loadAccounts = options.reload
-  const onboarding = useAccountOnboarding({ reload: loadAccounts })
+  const { downloadJson } = useDownload()
+  const onboarding = useAccountOnboarding({
+    reload: loadAccounts,
+    configRevision: options.configRevision,
+  })
+  const selectedAccountsById = new Map<string, AccountRow>()
   const showDeleteModal = ref(false)
   const showSingleDeleteModal = ref(false)
   const pendingDeleteAccount = ref<AccountRow | null>(null)
+  const updatingStatusAccounts = useIdSet<string>()
   const refreshingAccounts = useIdSet<string>()
   const refreshingQuotaAccounts = useIdSet<string>()
-  const updatingStatusAccounts = useIdSet<string>()
   const deletingAccountAction = useAsyncAction()
   const batchDeletingAction = useAsyncAction()
   const exportingAccountsAction = useAsyncAction()
+  const updatingStatusAccountIds = updatingStatusAccounts.ids
   const refreshingAccountIds = refreshingAccounts.ids
   const refreshingQuotaAccountIds = refreshingQuotaAccounts.ids
-  const updatingStatusAccountIds = updatingStatusAccounts.ids
   const deletingAccount = deletingAccountAction.loading
   const batchDeleting = batchDeletingAction.loading
   const exportingAccounts = exportingAccountsAction.loading
+
+  watch(
+    [options.accounts, options.selectedIds],
+    ([accounts, selectedIds]) => {
+      for (const account of accounts) {
+        if (selectedIds.has(account.id))
+          selectedAccountsById.set(account.id, account)
+      }
+      for (const accountId of selectedAccountsById.keys()) {
+        if (!selectedIds.has(accountId))
+          selectedAccountsById.delete(accountId)
+      }
+    },
+    { immediate: true, flush: 'sync' },
+  )
 
   function requestDeleteAccount(account: AccountRow) {
     pendingDeleteAccount.value = account
@@ -69,16 +90,16 @@ export function useAccountMutations(options: {
   }
 
   async function handleDelete() {
-    if (deletingAccount.value)
-      return
-
-    const accountId = pendingDeleteAccount.value?.id
-    if (!accountId)
+    const account = pendingDeleteAccount.value
+    if (deletingAccount.value || !account)
       return
 
     await deletingAccountAction.run(
       async () => {
-        await deleteAccounts({ ids: [accountId] })
+        await mutateCredential(account, 'delete')
+        const remaining = new Set(options.selectedIds.value)
+        remaining.delete(account.id)
+        options.selectedIds.value = remaining
         showSingleDeleteModal.value = false
         pendingDeleteAccount.value = null
         await loadAccounts()
@@ -89,22 +110,33 @@ export function useAccountMutations(options: {
   }
 
   async function handleBatchDelete() {
-    if (batchDeleting.value)
-      return
-    if (options.selectedIds.value.size === 0)
+    if (batchDeleting.value || options.selectedIds.value.size === 0)
       return
 
+    let deletedCount = 0
     await batchDeletingAction.run(
       async () => {
-        await deleteAccounts({ ids: [...options.selectedIds.value] })
-        options.selectedIds.value = new Set()
+        const selected = accountsById([...options.selectedIds.value])
+        for (const account of selected) {
+          await mutateCredential(account, 'delete')
+          deletedCount += 1
+          const remaining = new Set(options.selectedIds.value)
+          remaining.delete(account.id)
+          options.selectedIds.value = remaining
+        }
         showDeleteModal.value = false
         await loadAccounts()
+        toast.success(`已删除 ${deletedCount} 个账号`)
       },
       {
         errorText: false,
         onError: (error) => {
-          console.error('Failed to batch delete accounts:', error)
+          void loadAccounts().catch(() => undefined)
+          toast.error(
+            deletedCount > 0
+              ? `已删除 ${deletedCount} 个账号，其余未删除：${errorMessage(error, '操作失败')}`
+              : errorMessage(error, '批量删除失败'),
+          )
         },
       },
     )
@@ -125,7 +157,8 @@ export function useAccountMutations(options: {
           ids: selected.join(','),
           confirm: 'export_sensitive_accounts',
         })
-        await downloadJson(payload, exportFileName(selected.length))
+        const fileName = `cpr-accounts-selected-${selected.length}-${dayjs().format('YYYY-MM-DD')}.json`
+        await downloadJson(payload, fileName)
         toast.success(`已导出 ${selected.length} 个账号`)
       },
       { errorText: '导出失败' },
@@ -135,20 +168,23 @@ export function useAccountMutations(options: {
   async function handleRefresh(accountId: string) {
     await refreshingAccounts.run(accountId, async () => {
       try {
-        const result = await withMinimumDuration(async () => {
-          const result = await refreshAccount({ id: accountId })
-          await loadAccounts()
-          return result
-        })
-        if (result.result === 'alive') {
-          toast.success('Token 已刷新')
-        }
-        else if (result.result === 'skipped') {
+        const result = await withMinimumDuration(() =>
+          refreshAccount({
+            id: accountId,
+            expectedConfigRevision: options.configRevision.value,
+          }),
+        )
+        onboarding.commitConfigRevision(result.configRevision)
+        await loadAccounts()
+        if (result.result === 'skipped') {
           toast.warning(result.error || 'Token 正在刷新中')
+          return
         }
-        else {
+        if (result.result === 'failed') {
           toast.error(result.error || '刷新失败')
+          return
         }
+        toast.success('Token 已刷新')
       }
       catch (error: unknown) {
         toast.error(errorMessage(error, '刷新失败'))
@@ -160,39 +196,34 @@ export function useAccountMutations(options: {
     await refreshingQuotaAccounts.run(accountId, async () => {
       try {
         await withMinimumDuration(async () => {
+          await refreshAccountQuota({ id: accountId })
           const result = await getAccountQuota({ id: accountId })
-          mergeAccountQuotaRefresh(accountId, result)
+          options.accounts.value = options.accounts.value.map(account =>
+            account.id === accountId ? { ...account, ...result.account } : account,
+          )
         })
+        toast.success('额度已刷新')
       }
-      catch (error) {
-        console.error('Failed to refresh account quota:', error)
+      catch (error: unknown) {
+        toast.error(errorMessage(error, '额度刷新失败'))
       }
     })
   }
 
-  function mergeAccountQuotaRefresh(
-    accountId: string,
-    result: Awaited<ReturnType<typeof getAccountQuota>>,
-  ) {
-    accounts.value = accounts.value.map(account =>
-      account.id === accountId ? { ...account, ...result.account } : account,
-    )
-  }
-
   function patchAccountStatus(accountId: string, status: string) {
-    const current = accounts.value.find(account => account.id === accountId)
+    const current = options.accounts.value.find(account => account.id === accountId)
     if (!current)
       return
 
     if (options.statusQuery.value && options.statusQuery.value !== status) {
-      accounts.value = accounts.value.filter(account => account.id !== accountId)
+      options.accounts.value = options.accounts.value.filter(account => account.id !== accountId)
       options.totalAccounts.value = Math.max(0, options.totalAccounts.value - 1)
       options.selectedIds.value = new Set(
         [...options.selectedIds.value].filter(id => id !== accountId),
       )
     }
     else {
-      const nextAccounts = accounts.value.map(account =>
+      const rows = options.accounts.value.map(account =>
         account.id === accountId
           ? {
               ...account,
@@ -201,39 +232,38 @@ export function useAccountMutations(options: {
             }
           : account,
       )
-      accounts.value = sortAccountsByStatusIfActive(nextAccounts)
+      options.accounts.value = sortAccountsByStatus(rows)
     }
 
     if (current.status === status)
       return
-    accountSummary.value = {
-      ...accountSummary.value,
+    options.accountSummary.value = {
+      ...options.accountSummary.value,
       active: Math.max(
         0,
-        accountSummary.value.active
+        options.accountSummary.value.active
         + Number(status === 'active')
         - Number(current.status === 'active'),
       ),
       quotaExhausted: Math.max(
         0,
-        accountSummary.value.quotaExhausted
+        options.accountSummary.value.quotaExhausted
         + Number(status === 'quota_exhausted')
         - Number(current.status === 'quota_exhausted'),
       ),
       attention: Math.max(
         0,
-        accountSummary.value.attention
+        options.accountSummary.value.attention
         + Number(attentionAccountStatuses.has(status))
         - Number(attentionAccountStatuses.has(current.status)),
       ),
     }
   }
 
-  function sortAccountsByStatusIfActive(rows: AccountRow[]) {
-    const sort = options.sort.value
-    if (sort?.key !== 'status')
+  function sortAccountsByStatus(rows: AccountRow[]) {
+    if (options.sort.value?.key !== 'status')
       return rows
-    const direction = sort.direction === 'asc' ? 1 : -1
+    const direction = options.sort.value.direction === 'asc' ? 1 : -1
     return [...rows].sort((left, right) => {
       const rankDifference
         = (accountStatusSortRank[left.status] ?? 5) - (accountStatusSortRank[right.status] ?? 5)
@@ -244,12 +274,12 @@ export function useAccountMutations(options: {
   }
 
   async function handleToggleSchedule(account: AccountRow) {
-    const nextStatus = account.status === 'disabled' ? 'active' : 'disabled'
+    const action = account.enabled ? 'disable' : 'enable'
     await updatingStatusAccounts.run(account.id, async () => {
       try {
-        await updateAccount({ id: account.id, status: nextStatus })
+        await mutateCredential(account, action)
         await loadAccounts()
-        toast.success(nextStatus === 'disabled' ? '已禁用调度' : '已启用调度')
+        toast.success(action === 'disable' ? '已禁用调度' : '已启用调度')
       }
       catch (error: unknown) {
         toast.error(errorMessage(error, '状态更新失败'))
@@ -258,11 +288,60 @@ export function useAccountMutations(options: {
   }
 
   function scheduleActionLabel(account: AccountRow) {
-    return account.status === 'disabled' ? '启用调度' : '禁用调度'
+    return account.enabled ? '禁用调度' : '启用调度'
   }
 
-  function exportFileName(selectedCount: number) {
-    return `cpr-accounts-selected-${selectedCount}-${dayjs().format('YYYY-MM-DD')}.json`
+  function accountsById(ids: string[]) {
+    const accounts = []
+    for (const id of ids) {
+      const account = selectedAccountsById.get(id)
+      if (!account)
+        throw new Error(`账号 ${id} 的页面数据已失效，请重新选择`)
+      accounts.push(account)
+    }
+    return accounts
+  }
+
+  async function mutateCredential(account: AccountRow, action: 'enable' | 'disable' | 'delete') {
+    const payload = {
+      credentialId: account.id,
+      expectedConfigRevision: await onboarding.requireConfigRevision(),
+    }
+    try {
+      const result = account.provider === 'openai'
+        ? await mutateCodexCredential(action, payload)
+        : account.provider === 'xai'
+          ? await mutateXaiCredential(action, payload)
+          : undefined
+      if (!result)
+        throw new Error(`不支持的 Provider：${account.provider}`)
+      onboarding.commitConfigRevision(result.configRevision)
+    }
+    catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        await Promise.allSettled([
+          onboarding.loadProviderInstances(),
+          loadAccounts(),
+        ])
+      }
+      throw error
+    }
+  }
+
+  function mutateCodexCredential(action: 'enable' | 'disable' | 'delete', payload: object) {
+    if (action === 'enable')
+      return enableCodexCredential(payload)
+    if (action === 'disable')
+      return disableCodexCredential(payload)
+    return deleteCodexCredential(payload)
+  }
+
+  function mutateXaiCredential(action: 'enable' | 'disable' | 'delete', payload: object) {
+    if (action === 'enable')
+      return enableXaiCredential(payload)
+    if (action === 'disable')
+      return disableXaiCredential(payload)
+    return deleteXaiCredential(payload)
   }
 
   return {
@@ -270,9 +349,9 @@ export function useAccountMutations(options: {
     showDeleteModal,
     showSingleDeleteModal,
     pendingDeleteAccount,
+    updatingStatusAccountIds,
     refreshingAccountIds,
     refreshingQuotaAccountIds,
-    updatingStatusAccountIds,
     deletingAccount,
     batchDeleting,
     exportingAccounts,

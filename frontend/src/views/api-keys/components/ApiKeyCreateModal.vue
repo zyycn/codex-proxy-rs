@@ -8,6 +8,7 @@ import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
+import BaseSelect from '@/components/base/BaseSelect.vue'
 
 type CreateForm = ReturnType<typeof useApiKeyMutations>['createForm']['value']
 
@@ -36,6 +37,11 @@ function formField(key: keyof CreateForm) {
 
 const name = formField('name')
 const label = formField('label')
+const providerKind = formField('providerKind')
+const providerOptions = [
+  { label: 'OpenAI', value: 'openai' },
+  { label: 'xAI / Grok', value: 'xai' },
+]
 </script>
 
 <template>
@@ -62,6 +68,10 @@ const label = formField('label')
           aria-label="标签（可选）"
           placeholder="备注信息..."
         />
+      </BaseFormItem>
+
+      <BaseFormItem label="平台" required>
+        <BaseSelect v-model="providerKind" :options="providerOptions" aria-label="平台" />
       </BaseFormItem>
     </BaseForm>
 

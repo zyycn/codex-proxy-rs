@@ -17,6 +17,7 @@ import {
   usageValueAxis,
 } from '../utils/chart'
 import {
+  decimalDisplayNumber,
   escapeTooltip,
   formatCompactNumber,
   formatPercent,
@@ -51,12 +52,14 @@ const hasData = computed(() => {
   if (props.loading || points.value.length === 0)
     return false
   if (activeView.value === 'cost') {
-    return points.value.some(point => point.estimatedCost > 0 || point.standardCost > 0)
+    return points.value.some(point => point.estimatedCost != null || point.standardCost != null)
   }
   if (activeView.value === 'tokens') {
     return points.value.some(point => point.totalTokens > 0 || point.cachedTokens > 0)
   }
-  return points.value.some(point => point.cachedTokenRate > 0 || point.cacheHitRequestRate > 0)
+  return points.value.some(
+    point => point.inputTokens > 0 || point.cachedTokenRate > 0 || point.cacheHitRequestRate > 0,
+  )
 })
 
 const chartOption = computed<EChartsOption>(() => {
@@ -152,14 +155,14 @@ function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
   return [
     lineSeries(
       '预估费用',
-      chartPoints.map(point => point.estimatedCost),
+      chartPoints.map(point => decimalDisplayNumber(point.estimatedCost)),
       theme.success,
       undefined,
       true,
     ),
     lineSeries(
       '标准费用',
-      chartPoints.map(point => point.standardCost),
+      chartPoints.map(point => decimalDisplayNumber(point.standardCost)),
       theme.textMuted,
     ),
   ]
@@ -167,7 +170,7 @@ function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
 
 function lineSeries(
   name: string,
-  data: number[],
+  data: Array<number | null>,
   color: string,
   stack?: string,
   area = Boolean(stack),
@@ -175,7 +178,8 @@ function lineSeries(
   return {
     name,
     type: 'line',
-    data,
+    data: data.map(value => value ?? null),
+    connectNulls: false,
     stack,
     smooth: true,
     showSymbol: data.length <= 12,

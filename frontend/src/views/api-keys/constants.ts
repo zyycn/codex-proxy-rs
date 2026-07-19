@@ -12,6 +12,12 @@ export const apiKeyColumns = [
   },
   { key: 'prefix', label: '密钥前缀', minWidth: '240px', flex: 1.35 },
   {
+    key: 'providerKind',
+    label: '平台',
+    width: '120px',
+    minWidth: '120px',
+  },
+  {
     key: 'enabled',
     label: '状态',
     sortable: true,

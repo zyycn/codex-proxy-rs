@@ -5,11 +5,11 @@ import BaseButton from '@/components/base/BaseButton.vue'
 
 defineProps<{
   prefix: string
-  keyValue: string
+  revealing: boolean
 }>()
 
 const emit = defineEmits<{
-  copy: [text: string]
+  copy: []
 }>()
 </script>
 
@@ -23,7 +23,9 @@ const emit = defineEmits<{
       variant="ghost"
       size="sm"
       label="复制完整密钥"
-      @click="emit('copy', keyValue)"
+      :loading="revealing"
+      :disabled="revealing"
+      @click="emit('copy')"
     >
       <Copy class="size-3.5" />
     </BaseButton>
