@@ -174,6 +174,7 @@ update accounts
 set
   status = case
     when status in ('disabled', 'banned') then status
+    when $4 = 'expired' and access_token_expires_at > $2 then status
     when (
       case
         when not $1 and quota_cooldown_until is not null and quota_cooldown_until > $2 then quota_limit_reached
