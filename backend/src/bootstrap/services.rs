@@ -321,7 +321,8 @@ impl Services {
                 refresh_policy.clone(),
                 token_client.clone(),
             )
-            .with_refresh_lease_store(stores.refresh_leases.clone()),
+            .with_refresh_lease_store(stores.refresh_leases.clone())
+            .with_account_pool_sync(account_pool.clone()),
         );
         let upstream_client: Arc<dyn ModelCatalogSource> = codex.clone();
         let store: Arc<dyn ModelSnapshotStore> = Arc::new(stores.model_snapshots.clone());

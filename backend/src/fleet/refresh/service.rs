@@ -22,6 +22,7 @@ use uuid::Uuid;
 use super::TokenRefresher;
 use crate::fleet::{
     account::{Account, AccountStatus},
+    pool::AccountPoolService,
     store::{
         AccountClaimsUpdate, AccountStore, PgAccountStore, PgAccountStoreError, StoredAccount,
     },
@@ -48,6 +49,7 @@ where
     C: TokenRefresher,
 {
     store: PgAccountStore,
+    account_pool: Option<Arc<AccountPoolService>>,
     scheduler: Arc<RefreshScheduler<C>>,
     policy: RuntimeRefreshPolicy,
     refresh_leases: Option<RedisRefreshLeaseStore>,
@@ -193,6 +195,7 @@ where
     fn clone(&self) -> Self {
         Self {
             store: self.store.clone(),
+            account_pool: self.account_pool.clone(),
             scheduler: self.scheduler.clone(),
             policy: self.policy.clone(),
             refresh_leases: self.refresh_leases.clone(),
@@ -215,6 +218,7 @@ where
         let policy = policy.into();
         Self {
             store,
+            account_pool: None,
             scheduler: Arc::new(RefreshScheduler::new(policy.clone(), client)),
             policy,
             refresh_leases: None,
@@ -230,6 +234,12 @@ where
     /// 使用刷新租约存储保护账号刷新。
     pub fn with_refresh_lease_store(mut self, refresh_leases: RedisRefreshLeaseStore) -> Self {
         self.refresh_leases = Some(refresh_leases);
+        self
+    }
+
+    /// 刷新后同步持久化账号到运行时池，避免旧 token 快照覆盖新状态。
+    pub fn with_account_pool_sync(mut self, account_pool: Arc<AccountPoolService>) -> Self {
+        self.account_pool = Some(account_pool);
         self
     }
 
@@ -587,6 +597,7 @@ where
             if attempt.refresh_token.is_none() {
                 persist_status(&self.store, &attempt.id, AccountStatus::Expired).await?;
                 persist_next_refresh_at(&self.store, &attempt.id, None).await?;
+                self.sync_account_pool_after_update(&attempt.id).await;
                 return Ok(TokenRefreshOutcome::StatusUpdated);
             }
 
@@ -601,6 +612,7 @@ where
 
                     persist_status(&self.store, &attempt.id, updated.status).await?;
                     persist_next_refresh_at(&self.store, &attempt.id, None).await?;
+                    self.sync_account_pool_after_update(&attempt.id).await;
                     return Ok(TokenRefreshOutcome::StatusUpdated);
                 }
                 Ok(mut updated) => {
@@ -609,6 +621,7 @@ where
                     updated.next_refresh_at = self.computed_refresh_at(&updated);
                     let refresh_token_rotated = updated.refresh_token != attempt.refresh_token;
                     persist_token_update(&self.store, &updated).await?;
+                    self.sync_account_pool_after_update(&updated.id).await;
                     info!(
                         account_id = %updated.id,
                         attempt = attempt_index + 1,
@@ -641,6 +654,19 @@ where
         }
 
         Ok(TokenRefreshOutcome::Skipped)
+    }
+
+    async fn sync_account_pool_after_update(&self, account_id: &str) {
+        let Some(account_pool) = self.account_pool.as_ref() else {
+            return;
+        };
+        if let Err(error) = account_pool.sync_account_from_store(account_id).await {
+            warn!(
+                account_id,
+                error = %error,
+                "Failed to sync runtime account pool after token refresh"
+            );
+        }
     }
 
     async fn prepare_refresh_attempt(

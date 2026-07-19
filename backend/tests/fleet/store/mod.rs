@@ -794,6 +794,66 @@ async fn account_store_runtime_state_sync_should_not_clear_newer_future_quota_co
 }
 
 #[tokio::test]
+async fn account_store_runtime_state_sync_should_not_expire_a_newer_refreshed_token() {
+    let (pool, _dir) = account_store_parts("accounts", 49).await;
+    let repo = PgAccountStore::new(pool.clone());
+    let stale_expires_at = pg_timestamp(Utc::now() - Duration::minutes(1));
+    repo.insert(NewAccount {
+        id: "acct_a".to_string(),
+        email: Some("user@example.com".to_string()),
+        account_id: Some("chatgpt-account".to_string()),
+        user_id: Some("chatgpt-user".to_string()),
+        label: None,
+        plan_type: Some("plus".to_string()),
+        access_token: SecretString::new("stale-access-token".to_string().into()),
+        refresh_token: Some(SecretString::new("refresh-token".to_string().into())),
+        access_token_expires_at: Some(stale_expires_at),
+        status: AccountStatus::Active,
+        added_at: None,
+    })
+    .await
+    .unwrap();
+    let mut stale_account = AccountStore::list_pool_accounts(&repo)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|account| account.id == "acct_a")
+        .unwrap();
+    let refreshed_expires_at = pg_timestamp(Utc::now() + Duration::hours(1));
+    repo.update_from_claims(
+        "acct_a",
+        AccountClaimsUpdate {
+            email: Some("user@example.com".to_string()),
+            account_id: Some("chatgpt-account".to_string()),
+            user_id: Some("chatgpt-user".to_string()),
+            plan_type: Some("plus".to_string()),
+            access_token: SecretString::new("refreshed-access-token".to_string().into()),
+            refresh_token: None,
+            access_token_expires_at: Some(refreshed_expires_at),
+            next_refresh_at: Some(refreshed_expires_at - Duration::minutes(5)),
+            status: AccountStatus::Active,
+        },
+    )
+    .await
+    .unwrap();
+    stale_account.status = AccountStatus::Expired;
+
+    repo.sync_runtime_account_state(&stale_account)
+        .await
+        .unwrap();
+    let stored = repo.get("acct_a").await.unwrap().unwrap();
+
+    assert_eq!(stored.status, AccountStatus::Active);
+    assert_eq!(
+        (
+            stored.access_token.expose_secret(),
+            stored.access_token_expires_at
+        ),
+        ("refreshed-access-token", Some(refreshed_expires_at))
+    );
+}
+
+#[tokio::test]
 async fn account_store_runtime_state_sync_should_not_regress_newer_usage_window() {
     let (pool, _dir) = account_store_parts("accounts", 43).await;
     let repo = PgAccountStore::new(pool.clone());

@@ -9,12 +9,17 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::{Duration, TimeZone, Utc};
-use codex_proxy_rs::fleet::account::AccountStatus;
 use codex_proxy_rs::fleet::refresh::{RedisRefreshLeaseStore, RefreshPolicy};
 use codex_proxy_rs::fleet::refresh::{RefreshFailure, TokenPair, TokenRefresher};
 use codex_proxy_rs::fleet::store::{
     AccountClaimsUpdate, NewAccount, PgAccountStore, StoredAccount,
 };
+use codex_proxy_rs::fleet::{
+    account::AccountStatus,
+    pool::{AccountPoolOptions, AccountPoolService},
+    store::AccountStore,
+};
+use codex_proxy_rs::telemetry::account_usage::store::PgAccountUsageStore;
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::json;
 use tokio::{

@@ -1,6 +1,86 @@
 use super::*;
 
 #[tokio::test]
+async fn token_refresh_task_should_sync_refreshed_token_into_runtime_account_pool() {
+    let (pool, _guard) = init_test_db("token-refresh-runtime-pool-sync").await;
+    let store = PgAccountStore::new(pool.clone());
+    let now = Utc.with_ymd_and_hms(2026, 6, 18, 7, 0, 0).unwrap();
+    let new_expires_at = now + Duration::hours(1);
+    let new_access_token = test_jwt(new_expires_at.timestamp());
+    store
+        .insert(NewAccount {
+            id: "acct-refresh-runtime-pool".to_string(),
+            email: Some("runtime-pool@example.com".to_string()),
+            account_id: Some("chatgpt-runtime-pool".to_string()),
+            user_id: Some("user-runtime-pool".to_string()),
+            label: None,
+            plan_type: Some("plus".to_string()),
+            access_token: SecretString::new(
+                test_jwt((now + Duration::seconds(30)).timestamp()).into(),
+            ),
+            refresh_token: Some(SecretString::new("refresh-runtime-pool".to_string().into())),
+            added_at: None,
+            access_token_expires_at: Some(now + Duration::seconds(30)),
+            status: AccountStatus::Active,
+        })
+        .await
+        .expect("account should be inserted");
+    let account_pool = Arc::new(AccountPoolService::new(
+        Arc::new(store.clone()) as Arc<dyn AccountStore>,
+        Arc::new(PgAccountUsageStore::new(pool)),
+        AccountPoolOptions {
+            max_concurrent_per_account: 1,
+            ..AccountPoolOptions::default()
+        },
+        0,
+    ));
+    account_pool
+        .restore_from_store()
+        .await
+        .expect("runtime account pool should restore");
+    let refresher = StaticTokenRefresher {
+        response: Arc::new(Mutex::new(Ok(TokenPair {
+            access_token: new_access_token.clone(),
+            refresh_token: None,
+        }))),
+    };
+    let task = codex_proxy_rs::fleet::refresh::TokenRefreshService::new(
+        store.clone(),
+        RefreshPolicy {
+            refresh_margin_seconds: 300,
+            refresh_concurrency: 1,
+        },
+        refresher,
+    )
+    .with_account_pool_sync(Arc::clone(&account_pool));
+
+    task.schedule_account_timers_once_at(now)
+        .await
+        .expect("refresh timer should be scheduled");
+    let stored = wait_for_account(&store, "acct-refresh-runtime-pool", |account| {
+        account.access_token.expose_secret() == new_access_token.as_str()
+    })
+    .await;
+    let capacity = timeout(StdDuration::from_secs(2), async {
+        loop {
+            let capacity = account_pool
+                .capacity_summary(now + Duration::minutes(1))
+                .await;
+            if capacity.available_slots == 1 {
+                return capacity;
+            }
+            sleep(StdDuration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("refreshed account should remain available in the runtime pool");
+    task.shutdown().await;
+
+    assert_eq!(stored.status, AccountStatus::Active);
+    assert_eq!(capacity.available_slots, 1);
+}
+
+#[tokio::test]
 async fn token_refresh_task_should_persist_refreshed_access_token_and_keep_refresh_token() {
     let (pool, _guard) = init_test_db("token-refresh").await;
     let store = PgAccountStore::new(pool);
