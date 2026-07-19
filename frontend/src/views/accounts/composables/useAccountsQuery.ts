@@ -9,7 +9,9 @@ import { errorMessage } from '@/utils/async'
 
 export function useAccountsQuery() {
   const searchQuery = shallowRef('')
+  const providerQuery = shallowRef('')
   const statusQuery = shallowRef('')
+  const configRevision = shallowRef(0)
   const sort = shallowRef<BaseTableSort>()
   const accountSummary = shallowRef({
     total: 0,
@@ -25,12 +27,14 @@ export function useAccountsQuery() {
         page,
         pageSize,
         search: searchQuery.value,
+        provider: providerQuery.value || undefined,
         status: statusQuery.value || undefined,
         sortBy: sort.value?.key,
         sortDirection: sort.value?.direction,
       }),
     onSuccess: (result) => {
       accountSummary.value = result.summary
+      configRevision.value = result.configRevision || configRevision.value
     },
     onError: (error) => {
       toast.error(errorMessage(error, '账号加载失败'))
@@ -70,7 +74,7 @@ export function useAccountsQuery() {
     { debounce: 250 },
   )
 
-  watch(statusQuery, () => {
+  watch([providerQuery, statusQuery], () => {
     query.page.value = 1
     void query.execute()
   })
@@ -87,9 +91,11 @@ export function useAccountsQuery() {
     accounts: query.items,
     loadAccounts: query.execute,
     searchQuery,
+    providerQuery,
     statusQuery,
     sort,
     accountSummary,
+    configRevision,
     accountPagination,
     handlePageChange,
     handlePageSizeChange,

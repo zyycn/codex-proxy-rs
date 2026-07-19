@@ -372,7 +372,7 @@ onBeforeUnmount(() => {
     </div>
 
     <nav
-      class="relative mt-7 grid gap-3"
+      class="relative mt-6 grid gap-3"
       :class="isCollapsed ? 'w-11.5' : 'w-full'"
       aria-label="主导航"
     >

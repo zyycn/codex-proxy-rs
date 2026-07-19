@@ -30,10 +30,12 @@ const quotaWindows = computed(() => orderedPanelQuotaWindows(props.account.quota
         <p
           class="m-0 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] font-[620] text-(--cp-text-secondary)"
         >
-          <span>Codex 额度</span>
-          <span>·</span>
-          <span>套餐:</span>
-          <AccountPlanBadge :plan-type="account.planType" size="sm" />
+          <span>{{ account.provider === 'xai' ? 'xAI 用量窗口' : 'Codex 额度' }}</span>
+          <template v-if="account.provider === 'openai'">
+            <span>·</span>
+            <span>套餐:</span>
+            <AccountPlanBadge :plan-type="account.planType" size="sm" />
+          </template>
           <span>·</span>
           <span>最近刷新: {{ account.quota.refreshedAtDisplay }}</span>
         </p>
@@ -52,6 +54,9 @@ const quotaWindows = computed(() => orderedPanelQuotaWindows(props.account.quota
 
     <div class="grid gap-3">
       <AccountQuotaWindow v-for="window in quotaWindows" :key="window.key" :window="window" />
+      <p v-if="quotaWindows.length === 0" class="m-0 text-[12px] font-[620] text-(--cp-text-muted)">
+        暂无 Provider quota 观测
+      </p>
     </div>
   </section>
 </template>

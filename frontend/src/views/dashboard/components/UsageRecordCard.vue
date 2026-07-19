@@ -4,6 +4,7 @@ import type { dashboardSnapshotView } from '../composables/presenter'
 import { Minimize2 } from '@lucide/vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
+import ProviderBadge from '@/components/ProviderBadge.vue'
 import UsageBillingCell from '@/views/usage/components/UsageBillingCell.vue'
 import UsageClientIpCell from '@/views/usage/components/UsageClientIpCell.vue'
 import UsageLatencyCell from '@/views/usage/components/UsageLatencyCell.vue'
@@ -44,6 +45,10 @@ const dashboardUsageRecordColumns = usageRecordColumns.filter(column => column.k
           empty-text="暂无成功记录"
           min-width="1824px"
         >
+          <template #provider="{ row }">
+            <ProviderBadge :provider="String(row.provider || '')" />
+          </template>
+
           <template #accountEmail="{ row }">
             <span
               class="block max-w-full truncate font-mono text-[12px] leading-none font-[720] text-(--cp-text-primary)"

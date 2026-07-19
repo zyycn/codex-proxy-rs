@@ -1,0 +1,40 @@
+{
+  "models": [
+    {
+      "slug": "gpt-5.4",
+      "display_name": "GPT-5.4",
+      "description": "Frontier agentic coding model.",
+      "supported_in_api": true,
+      "priority": 1,
+      "visibility": "list",
+      "context_window": 272000,
+      "max_context_window": 272000,
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "supports_search_tool": true,
+      "support_verbosity": true,
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth"
+        }
+      ],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "base_instructions": "provider-only instructions must never enter catalog metadata",
+      "model_messages": {
+        "instructions_template": "provider-only template"
+      },
+      "available_in_plans": [
+        "business",
+        "plus"
+      ]
+    }
+  ]
+}

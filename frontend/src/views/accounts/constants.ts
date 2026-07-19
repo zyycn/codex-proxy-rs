@@ -47,6 +47,14 @@ export const accountColumns = [
     cellClass: relaxedCellClass,
   },
   {
+    key: 'provider',
+    label: '平台',
+    width: '100px',
+    minWidth: '100px',
+    format: value => accountProviderLabel(typeof value === 'string' ? value : null),
+    cellClass: `${relaxedCellClass} text-(--cp-text-secondary)`,
+  },
+  {
     key: 'status',
     label: '状态',
     sortable: true,
@@ -178,4 +186,12 @@ export function shouldShowQuotaWindowLocalUsage(window: AccountQuotaWindow) {
 
 function groupOrder(window: AccountQuotaWindow, order: Map<string, number>) {
   return order.get(window.group) ?? order.size
+}
+
+function accountProviderLabel(value?: string | null) {
+  if (value === 'openai')
+    return 'OpenAI'
+  if (value === 'xai')
+    return 'xAI'
+  return value || '—'
 }

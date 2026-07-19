@@ -1,0 +1,518 @@
+//! Provider 的唯一动态执行边界。
+
+use std::collections::BTreeMap;
+use std::fmt;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
+use async_trait::async_trait;
+use futures::Stream;
+use thiserror::Error;
+
+use crate::engine::credential::{CredentialRevision, ProviderAccountId};
+use crate::engine::{AttemptContext, UpstreamSendState};
+use crate::error::{
+    IdentifierError, ProviderError, ProviderErrorKind, SafeUpstreamValue, validate_text,
+};
+use crate::event::{EventSequenceValidator, GatewayEvent};
+use crate::operation::Operation;
+use crate::routing::{
+    ModelCapabilities, ProviderCandidate, ProviderInstance, ProviderInstanceId, ProviderKind,
+    UpstreamModelId,
+};
+
+/// Box 只出现在 Provider Registry 的 event stream 边界。
+pub type EventStream =
+    Pin<Box<dyn Stream<Item = Result<GatewayEvent, ProviderError>> + Send + 'static>>;
+
+/// 匿名 credential/resource 引用。
+///
+/// 有 credential 的值必须是带算法/版本标识的不可逆伪名；无 credential 的
+/// Provider 使用 `__none__`。邮箱、API Key prefix 等身份信息不能进入该类型。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ResourceId(String);
+
+impl ResourceId {
+    /// 无 credential 的稳定 sentinel。
+    #[must_use]
+    pub fn none() -> Self {
+        Self("__none__".to_owned())
+    }
+
+    /// 创建匿名资源 ID。
+    ///
+    /// # Errors
+    ///
+    /// ID 为空、过长、含控制字符或使用 `__` 保留前缀时返回错误。
+    pub fn anonymous(value: impl Into<String>) -> Result<Self, IdentifierError> {
+        let value = value.into();
+        validate_text(&value, 128, true, None)?;
+        Ok(Self(value))
+    }
+
+    /// 返回匿名引用。
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Provider 本次调用实际使用的账号或匿名资源。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderResource {
+    Account {
+        id: ProviderAccountId,
+        revision: CredentialRevision,
+    },
+    Anonymous(ResourceId),
+}
+
+impl ProviderResource {
+    #[must_use]
+    pub const fn account_id(&self) -> Option<&ProviderAccountId> {
+        match self {
+            Self::Account { id, .. } => Some(id),
+            Self::Anonymous(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn credential_revision(&self) -> Option<CredentialRevision> {
+        match self {
+            Self::Account { revision, .. } => Some(*revision),
+            Self::Anonymous(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn anonymous_id(&self) -> Option<&ResourceId> {
+        match self {
+            Self::Account { .. } => None,
+            Self::Anonymous(resource) => Some(resource),
+        }
+    }
+}
+
+/// 上游 transport 注册名称。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct UpstreamTransport(String);
+
+impl UpstreamTransport {
+    /// 校验 transport 名称。
+    ///
+    /// # Errors
+    ///
+    /// 名称无效时返回错误。
+    pub fn new(value: impl Into<String>) -> Result<Self, IdentifierError> {
+        let value = value.into();
+        validate_text(&value, 64, true, None)?;
+        Ok(Self(value))
+    }
+
+    /// 返回 transport 名称。
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Provider 选定单个 credential 后返回的事实。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderCallMetadata {
+    provider: ProviderKind,
+    instance: ProviderInstanceId,
+    upstream_model: UpstreamModelId,
+    resource: ProviderResource,
+    upstream_request_id: Option<SafeUpstreamValue>,
+    transport: UpstreamTransport,
+}
+
+impl ProviderCallMetadata {
+    /// 创建一次调用的不可变事实。
+    #[must_use]
+    pub const fn new(
+        provider: ProviderKind,
+        instance: ProviderInstanceId,
+        upstream_model: UpstreamModelId,
+        resource: ProviderResource,
+        transport: UpstreamTransport,
+    ) -> Self {
+        Self {
+            provider,
+            instance,
+            upstream_model,
+            resource,
+            upstream_request_id: None,
+            transport,
+        }
+    }
+
+    /// 设置 adapter 已分类为非 bearer 的 request ID。
+    #[must_use]
+    pub fn with_upstream_request_id(mut self, request_id: SafeUpstreamValue) -> Self {
+        self.upstream_request_id = Some(request_id);
+        self
+    }
+
+    /// 返回 Provider。
+    #[must_use]
+    pub const fn provider(&self) -> &ProviderKind {
+        &self.provider
+    }
+
+    /// 返回 instance。
+    #[must_use]
+    pub const fn instance(&self) -> &ProviderInstanceId {
+        &self.instance
+    }
+
+    /// 返回实际模型；必须与冻结 target 一致。
+    #[must_use]
+    pub const fn upstream_model(&self) -> &UpstreamModelId {
+        &self.upstream_model
+    }
+
+    /// 返回匿名资源；账号调用返回 `None`。
+    #[must_use]
+    pub const fn anonymous_resource(&self) -> Option<&ResourceId> {
+        self.resource.anonymous_id()
+    }
+
+    /// 返回 live Provider account ID。
+    #[must_use]
+    pub const fn provider_account_id(&self) -> Option<&ProviderAccountId> {
+        self.resource.account_id()
+    }
+
+    /// 返回本次冻结的 credential revision。
+    #[must_use]
+    pub const fn upstream_credential_revision(&self) -> Option<CredentialRevision> {
+        self.resource.credential_revision()
+    }
+
+    /// 返回安全上游 request ID。
+    #[must_use]
+    pub const fn upstream_request_id(&self) -> Option<&SafeUpstreamValue> {
+        self.upstream_request_id.as_ref()
+    }
+
+    /// 返回 transport。
+    #[must_use]
+    pub const fn transport(&self) -> &UpstreamTransport {
+        &self.transport
+    }
+
+    /// 确认 metadata 没有替换请求计划中冻结的 Provider 候选。
+    #[must_use]
+    pub fn confirms(&self, candidate: &ProviderCandidate) -> bool {
+        candidate.provider() == &self.provider
+            && candidate.instance() == &self.instance
+            && candidate.upstream_model() == &self.upstream_model
+    }
+}
+
+/// Provider 自己持有的 credential/concurrency 租约。
+///
+/// 句柄必须通过 `Drop` 释放资源。Core 不读取 credential，也不为 lease 定义
+/// 平台无关字段。
+pub trait ResourceLease: Send + Sync + 'static {}
+
+impl<T> ResourceLease for T where T: Send + Sync + 'static {}
+
+/// Metadata、canonical event stream 与 owned lease 的统一返回值。
+///
+/// 底层 stream 必须是 cold stream：在第一次 poll 前不得发送请求级 handshake
+/// 或业务 payload。这样 Coordinator 可以先持久化 attempt，再越过发送屏障。
+pub struct ProviderStream {
+    metadata: ProviderCallMetadata,
+    events: EventStream,
+    _lease: Box<dyn ResourceLease>,
+    validator: EventSequenceValidator,
+    terminated: bool,
+}
+
+impl ProviderStream {
+    /// 组装一次、且仅一次可见上游调用。
+    #[must_use]
+    pub fn new(
+        metadata: ProviderCallMetadata,
+        events: EventStream,
+        lease: impl ResourceLease,
+    ) -> Self {
+        Self {
+            metadata,
+            events,
+            _lease: Box::new(lease),
+            validator: EventSequenceValidator::new(),
+            terminated: false,
+        }
+    }
+
+    /// 返回调用事实。
+    #[must_use]
+    pub const fn metadata(&self) -> &ProviderCallMetadata {
+        &self.metadata
+    }
+}
+
+impl Stream for ProviderStream {
+    type Item = Result<GatewayEvent, ProviderError>;
+
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.terminated {
+            return Poll::Ready(None);
+        }
+
+        match this.events.as_mut().poll_next(context) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Some(Ok(event))) => match this.validator.observe(&event) {
+                Ok(()) => Poll::Ready(Some(Ok(event))),
+                Err(_) => {
+                    this.terminated = true;
+                    Poll::Ready(Some(Err(ProviderError::new(
+                        ProviderErrorKind::Protocol,
+                        UpstreamSendState::Sent,
+                    ))))
+                }
+            },
+            Poll::Ready(Some(Err(error))) => {
+                this.terminated = true;
+                Poll::Ready(Some(Err(error)))
+            }
+            Poll::Ready(None) => {
+                this.terminated = true;
+                match this.validator.finish() {
+                    Ok(()) => Poll::Ready(None),
+                    Err(_) => Poll::Ready(Some(Err(ProviderError::new(
+                        ProviderErrorKind::Protocol,
+                        UpstreamSendState::Sent,
+                    )))),
+                }
+            }
+        }
+    }
+}
+
+/// 传给 Provider 的单候选请求。
+#[derive(Clone)]
+pub struct ProviderRequest {
+    operation: Operation,
+    candidate: ProviderCandidate,
+}
+
+/// Provider 实时目录编译后的单模型能力。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderModelCapabilities {
+    upstream_model: UpstreamModelId,
+    capabilities: ModelCapabilities,
+}
+
+impl ProviderModelCapabilities {
+    #[must_use]
+    pub const fn new(upstream_model: UpstreamModelId, capabilities: ModelCapabilities) -> Self {
+        Self {
+            upstream_model,
+            capabilities,
+        }
+    }
+
+    #[must_use]
+    pub const fn upstream_model(&self) -> &UpstreamModelId {
+        &self.upstream_model
+    }
+
+    #[must_use]
+    pub const fn capabilities(&self) -> &ModelCapabilities {
+        &self.capabilities
+    }
+}
+
+impl ProviderRequest {
+    /// 绑定 operation 与请求计划中冻结的 Provider 候选。
+    #[must_use]
+    pub const fn new(operation: Operation, candidate: ProviderCandidate) -> Self {
+        Self {
+            operation,
+            candidate,
+        }
+    }
+
+    /// 返回业务 operation。
+    #[must_use]
+    pub const fn operation(&self) -> &Operation {
+        &self.operation
+    }
+
+    /// 返回冻结 Provider 候选。
+    #[must_use]
+    pub const fn candidate(&self) -> &ProviderCandidate {
+        &self.candidate
+    }
+}
+
+impl fmt::Debug for ProviderRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProviderRequest")
+            .field("operation", &self.operation)
+            .field("provider", self.candidate.provider())
+            .field("instance", self.candidate.instance())
+            .field("upstream_model", self.candidate.upstream_model())
+            .finish()
+    }
+}
+
+/// Provider 热路径唯一接口。
+///
+/// 每次 `execute` 只能选择一个 credential 并准备一次可见上游调用。实现不得
+/// 在内部轮换 credential 或隐藏业务 retry；失败后由 Attempt Coordinator 使用
+/// 新的 attempt 再次调用。
+#[async_trait]
+pub trait Provider: Send + Sync {
+    /// 返回编译期注册名称。
+    fn name(&self) -> &'static str;
+
+    /// 查询 instance 的实时模型目录，并由 Provider 自己编译能力事实。
+    ///
+    /// # Errors
+    ///
+    /// 目录 transport、认证或 Provider 协议失败时返回稳定错误。
+    async fn query_model_capabilities(
+        &self,
+        instance: &ProviderInstance,
+    ) -> Result<Vec<ProviderModelCapabilities>, ProviderError>;
+
+    /// 选择一个未被排除的资源并返回 cold [`ProviderStream`]。
+    ///
+    /// # Errors
+    ///
+    /// 没有可用资源、请求无效或在产生 stream 前失败时返回 Provider 错误。
+    async fn execute(
+        &self,
+        request: ProviderRequest,
+        context: AttemptContext,
+    ) -> Result<ProviderStream, ProviderError>;
+}
+
+/// Provider Registry 构建错误。
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum RegistryError {
+    /// Provider 名称无效。
+    #[error("invalid provider registry name")]
+    InvalidName,
+    /// Provider 重复注册。
+    #[error("provider `{provider}` is already registered")]
+    Duplicate {
+        /// Provider 名称。
+        provider: String,
+    },
+}
+
+/// Registry 实时目录查询错误。
+#[derive(Debug, Error)]
+pub enum ProviderCatalogError {
+    #[error("provider `{provider}` is not registered")]
+    NotRegistered { provider: String },
+    #[error("provider model catalog query failed")]
+    Query(#[source] ProviderError),
+}
+
+/// 唯一保存 `Arc<dyn Provider>` 的异构注册表。
+#[derive(Default)]
+pub struct ProviderRegistryBuilder {
+    providers: BTreeMap<ProviderKind, Arc<dyn Provider>>,
+}
+
+impl ProviderRegistryBuilder {
+    /// 创建空 builder。
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            providers: BTreeMap::new(),
+        }
+    }
+
+    /// 注册 Provider。
+    ///
+    /// # Errors
+    ///
+    /// 名称无效或重复时返回错误。
+    pub fn register(&mut self, provider: Arc<dyn Provider>) -> Result<(), RegistryError> {
+        let kind = ProviderKind::new(provider.name()).map_err(|_| RegistryError::InvalidName)?;
+        if self.providers.contains_key(&kind) {
+            return Err(RegistryError::Duplicate {
+                provider: kind.as_str().to_owned(),
+            });
+        }
+        self.providers.insert(kind, provider);
+        Ok(())
+    }
+
+    /// 冻结注册表。
+    #[must_use]
+    pub fn build(self) -> ProviderRegistry {
+        ProviderRegistry {
+            providers: Arc::new(self.providers),
+        }
+    }
+}
+
+/// Bootstrap 后不可变的 Provider Registry。
+#[derive(Clone, Default)]
+pub struct ProviderRegistry {
+    providers: Arc<BTreeMap<ProviderKind, Arc<dyn Provider>>>,
+}
+
+impl ProviderRegistry {
+    /// 创建 builder。
+    #[must_use]
+    pub const fn builder() -> ProviderRegistryBuilder {
+        ProviderRegistryBuilder::new()
+    }
+
+    /// 按 Provider 名称查询 adapter。
+    #[must_use]
+    pub fn get(&self, provider: &ProviderKind) -> Option<&Arc<dyn Provider>> {
+        self.providers.get(provider)
+    }
+
+    /// 通过编译期 Provider adapter 查询并编译 instance 的实时能力目录。
+    ///
+    /// # Errors
+    ///
+    /// Provider 未注册或目录查询失败时返回错误。
+    pub async fn query_model_capabilities(
+        &self,
+        instance: &ProviderInstance,
+    ) -> Result<Vec<ProviderModelCapabilities>, ProviderCatalogError> {
+        let provider = self.providers.get(instance.provider()).ok_or_else(|| {
+            ProviderCatalogError::NotRegistered {
+                provider: instance.provider().as_str().to_owned(),
+            }
+        })?;
+        provider
+            .query_model_capabilities(instance)
+            .await
+            .map_err(ProviderCatalogError::Query)
+    }
+
+    /// 判断 Provider 是否已注册。
+    #[must_use]
+    pub fn contains(&self, provider: &ProviderKind) -> bool {
+        self.providers.contains_key(provider)
+    }
+
+    /// 返回注册数量。
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.providers.len()
+    }
+
+    /// 判断注册表是否为空。
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.providers.is_empty()
+    }
+}

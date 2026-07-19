@@ -123,6 +123,8 @@ services:
       CPR_DEPLOYMENT_MODE: docker
       CPR_UPDATE_REPOSITORY: zyycn/codex-proxy-rs
       CPR_UPDATE_CHANNEL: stable
+      CPR_GITHUB_API_BASE: https://api.github.com/repos
+      CPR_UPDATE_EXE_PATH: /app/bin/codex-proxy-rs
       CPR_UPDATE_TEMP_DIR: /app/.runtime/data/update-tmp
       CPR_UPDATE_STATE_FILE: /app/.runtime/data/update-state.json
       CPR_UPDATE_LOCK_FILE: /app/.runtime/data/update.lock

@@ -31,6 +31,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   const pageSize = shallowRef(10)
   const totalRecords = shallowRef(0)
   const searchQuery = shallowRef('')
+  const providerQuery = shallowRef('')
   const tableTimeRangeParams = shallowRef<UsageTimeRangeParams>({
     ...options.timeRangeParams.value,
   })
@@ -38,7 +39,10 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   const diagnosticDimension = shallowRef('model')
   let loadRequestId = 0
   let diagnosticRequestId = 0
-  const scopedParams = () => ({ ...options.timeRangeParams.value })
+  const scopedParams = () => ({
+    ...options.timeRangeParams.value,
+    ...(providerQuery.value ? { provider: providerQuery.value } : {}),
+  })
   const filterParams = () => ({
     search: searchQuery.value || undefined,
   })
@@ -185,6 +189,11 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     void loadDiagnostics()
   })
 
+  watch(providerQuery, () => {
+    page.value = 1
+    void loadUsageRecords('all')
+  })
+
   watchDebounced(
     searchQuery,
     () => {
@@ -198,6 +207,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     page,
     pageSize,
     searchQuery,
+    providerQuery,
     usagePagination,
     loading,
     analyticsLoading,
@@ -241,6 +251,7 @@ function emptyOverview() {
       successRequests: 0,
       failedRequests: 0,
       cancelledRequests: 0,
+      incompleteRequests: 0,
       callerErrorRequests: 0,
       successRate: 0,
       requestChangeRate: null,
@@ -259,9 +270,9 @@ function emptyOverview() {
       points: [],
     },
     cost: {
-      estimatedCost: 0,
-      standardCost: 0,
-      costPerRequest: 0,
+      estimatedCost: null,
+      standardCost: null,
+      costPerRequest: null,
       tokensPerRequest: 0,
       cachedTokenRate: 0,
       cacheHitRequestRate: 0,
