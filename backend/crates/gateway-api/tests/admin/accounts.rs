@@ -1,7 +1,6 @@
 mod query {
-    use gateway_api::admin::accounts::{
-        AccountStatus, ListQuery, ProviderFilter, SortDirection, SortField,
-    };
+    use gateway_admin::model::accounts::{AccountSortField, AccountStatus, SortDirection};
+    use gateway_api::admin::accounts::ListQuery;
     use serde_json::json;
 
     #[test]
@@ -18,14 +17,17 @@ mod query {
         .expect("deserialize account query");
         let query = query.validate().expect("validate account query");
         assert_eq!(query.page, 3);
-        assert_eq!(query.page_size, 20);
+        assert_eq!(query.page_size.get(), 20);
         assert!(matches!(
-            query.provider,
-            ProviderFilter::Provider(ref provider) if provider.as_str() == "xai"
+            query.provider_kind,
+            Some(ref provider) if provider.as_str() == "xai"
         ));
         assert_eq!(query.search.as_deref(), Some("operator"));
         assert_eq!(query.status, Some(AccountStatus::Active));
-        assert_eq!(query.sort.expect("sort").field, SortField::LastUsedAt);
+        assert_eq!(
+            query.sort.expect("sort").field,
+            AccountSortField::LastUsedAt
+        );
         assert_eq!(
             query.sort.expect("copy sort").direction,
             SortDirection::Desc
@@ -92,6 +94,9 @@ mod response {
 }
 
 mod actions {
+    use gateway_admin::model::accounts::{
+        AccountConnectionTestEvent as DomainConnectionTestEvent, AccountStatus,
+    };
     use gateway_api::admin::accounts::{
         AccountActionRequest, AccountConnectionTestEvent, AccountExportData, AccountExportQuery,
         AccountIdQuery, AccountRefreshRequest, AccountTestQuery,
@@ -106,7 +111,12 @@ mod actions {
         }))
         .expect("decode export query");
         assert_eq!(
-            valid.into_ids().expect("valid export"),
+            valid
+                .into_ids()
+                .expect("valid export")
+                .into_iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>(),
             ["acct_1".to_owned(), "acct_2".to_owned()]
         );
 
@@ -156,19 +166,47 @@ mod actions {
     #[test]
     fn connection_test_events_should_preserve_the_existing_frontend_contract() {
         let events = [
-            AccountConnectionTestEvent::started("grok-4.5"),
-            AccountConnectionTestEvent::request(json!({ "model": "grok-4.5" })),
-            AccountConnectionTestEvent::content("OK"),
-            AccountConnectionTestEvent::completed("active"),
-            AccountConnectionTestEvent::failed("upstream unavailable", "active"),
+            DomainConnectionTestEvent::Started {
+                model: "grok-4.5".to_owned(),
+            },
+            DomainConnectionTestEvent::Request {
+                model: "grok-4.5".to_owned(),
+                input_text: "Reply with exactly OK.".to_owned(),
+                stream: true,
+                store: false,
+            },
+            DomainConnectionTestEvent::Content {
+                text: "OK".to_owned(),
+            },
+            DomainConnectionTestEvent::Completed {
+                account_status: AccountStatus::Active,
+            },
+            DomainConnectionTestEvent::Failed {
+                message: "upstream unavailable".to_owned(),
+                account_status: AccountStatus::Active,
+            },
         ]
-        .map(|event| event.data);
+        .map(|event| AccountConnectionTestEvent::from(event).data);
 
         assert_eq!(
             events,
             [
                 json!({ "type": "test_start", "model": "grok-4.5", "text": "正在连接上游 Responses" }),
-                json!({ "type": "request", "payload": { "model": "grok-4.5" } }),
+                json!({
+                    "type": "request",
+                    "payload": {
+                        "model": "grok-4.5",
+                        "input": [{
+                            "role": "user",
+                            "content": [{
+                                "type": "input_text",
+                                "text": "Reply with exactly OK."
+                            }]
+                        }],
+                        "stream": true,
+                        "store": false
+                    }
+                }),
                 json!({ "type": "content", "text": "OK" }),
                 json!({ "type": "test_complete", "success": true, "accountStatus": "active" }),
                 json!({ "type": "error", "error": "upstream unavailable", "accountStatus": "active" }),

@@ -156,7 +156,11 @@ impl GrokOAuthImportDocument {
         }
         let wire: OAuthAccountDocumentWire = serde_json::from_slice(document)
             .map_err(|_| GrokOAuthImportError::InvalidField("document"))?;
-        if wire.version.is_some_and(|version| version != 1)
+        if wire
+            .kind
+            .as_deref()
+            .is_some_and(|kind| kind != "external-account-bundle")
+            || wire.version.is_some_and(|version| version != 1)
             || !wire.proxies.is_empty()
             || wire.accounts.is_empty()
             || wire.accounts.len() > MAX_IMPORT_ACCOUNTS
@@ -244,7 +248,7 @@ impl fmt::Debug for GrokOAuthImportDocument {
 #[serde(deny_unknown_fields)]
 struct OAuthAccountDocumentWire {
     #[serde(default, rename = "type")]
-    _kind: Option<serde::de::IgnoredAny>,
+    kind: Option<String>,
     #[serde(default)]
     version: Option<u32>,
     exported_at: DateTime<Utc>,

@@ -1,14 +1,12 @@
 use std::{env, error::Error, io};
 
-use codex_proxy_rs::{BootstrapConfig, run};
-
 fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut arguments = env::args_os().skip(1);
     match arguments.next().as_deref().and_then(|value| value.to_str()) {
         None | Some("serve") => {
             reject_extra_arguments(arguments)?;
-            let config = BootstrapConfig::load()?;
-            runtime()?.block_on(run(config))
+            runtime()?.block_on(codex_proxy_rs::bootstrap::run())?;
+            Ok(())
         }
         Some(command) => {
             Err(invalid_cli(&format!("unknown command {command:?}; expected serve")).into())

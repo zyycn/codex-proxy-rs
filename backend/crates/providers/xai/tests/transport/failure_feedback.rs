@@ -2,20 +2,23 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use async_trait::async_trait;
 use chrono::Utc;
 use gateway_core::engine::credential::{
     AccountAvailability, AccountRuntimeSignals, AccountSelectionPolicy, CredentialCasOutcome,
-    CredentialRevision, ProviderAccountId, ProviderAccountStore, RotationStrategy,
+    CredentialRevision, OpaqueProviderData, ProviderAccountId, ProviderAccountStore,
+    QuotaObservation, QuotaWriteOutcome, RotationStrategy,
+};
+use gateway_core::provider_ports::{
+    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderSchedulingState,
+    ProviderStoreError,
 };
 use provider_xai::{
-    GrokAccountCatalog, GrokAccountSchedulingState, GrokAccountSessionSelector,
+    GrokAccountCatalog, GrokAccountSessionSelector, GrokBillingRequest, GrokBillingTransport,
+    GrokBillingTransportError, GrokBillingTransportErrorKind, GrokBillingTransportFuture,
     GrokCredentialAdmin, GrokCredentialAvailability, GrokCredentialCatalogCache,
-    GrokCredentialCatalogSeed, GrokCredentialFailure, GrokCredentialLeaseAcquisition,
-    GrokCredentialLeaseCoordinator, GrokCredentialLeaseCoordinatorError,
-    GrokCredentialLeaseRequest, GrokCredentialRepository, GrokSessionSelection,
-    GrokSessionSelector, GrokSessionSelectorError, RotateManagedGrokCredential,
-    UpdateGrokCredentialState,
+    GrokCredentialCatalogSeed, GrokCredentialFailure, GrokCredentialQuotaService,
+    GrokCredentialRepository, GrokSessionSelection, GrokSessionSelector, GrokSessionSelectorError,
+    RotateManagedGrokCredential, UpdateGrokCredentialState,
 };
 
 use crate::support::{
@@ -28,43 +31,62 @@ struct SchedulingCoordinator {
     denied: Mutex<BTreeSet<ProviderAccountId>>,
 }
 
-#[async_trait]
-impl GrokCredentialLeaseCoordinator for SchedulingCoordinator {
-    async fn load_scheduling_state(
-        &self,
-        _: &gateway_core::routing::ProviderInstanceId,
-        _: &[ProviderAccountId],
-    ) -> Result<GrokAccountSchedulingState, GrokCredentialLeaseCoordinatorError> {
-        Ok(GrokAccountSchedulingState {
-            signals: self.signals.lock().expect("signals").clone(),
-            sticky_account: None,
-            round_robin_cursor: 0,
+struct UnavailableBillingTransport;
+
+impl GrokBillingTransport for UnavailableBillingTransport {
+    fn execute(&self, _: GrokBillingRequest) -> GrokBillingTransportFuture<'_> {
+        Box::pin(async {
+            Err(GrokBillingTransportError::new(
+                GrokBillingTransportErrorKind::Unavailable,
+            ))
+        })
+    }
+}
+
+impl ProviderLeasePort for SchedulingCoordinator {
+    fn load_state<'a>(
+        &'a self,
+        _: &'a gateway_core::routing::ProviderInstanceId,
+        _: &'a [ProviderAccountId],
+    ) -> futures::future::BoxFuture<'a, Result<ProviderSchedulingState, ProviderStoreError>> {
+        Box::pin(async move {
+            Ok(ProviderSchedulingState::new(
+                self.signals.lock().expect("signals").clone(),
+                None,
+                0,
+            ))
         })
     }
 
-    async fn try_acquire(
+    fn try_acquire(
         &self,
-        request: &GrokCredentialLeaseRequest,
-    ) -> Result<GrokCredentialLeaseAcquisition, GrokCredentialLeaseCoordinatorError> {
-        Ok(
-            if self
-                .denied
-                .lock()
-                .expect("denied")
-                .contains(&request.account_id)
-            {
-                GrokCredentialLeaseAcquisition::Unavailable {
-                    retry_after: Some(Duration::from_millis(25)),
-                }
-            } else {
-                GrokCredentialLeaseAcquisition::Acquired(Box::new(()))
-            },
-        )
+        request: ProviderLeaseRequest,
+    ) -> futures::future::BoxFuture<'_, Result<ProviderLeaseAcquisition, ProviderStoreError>> {
+        Box::pin(async move {
+            let ProviderLeaseRequest::Scheduling(request) = request else {
+                panic!("expected scheduling lease request");
+            };
+            Ok(
+                if self
+                    .denied
+                    .lock()
+                    .expect("denied")
+                    .contains(request.account_id())
+                {
+                    ProviderLeaseAcquisition::Busy {
+                        retry_after: Some(Duration::from_millis(25)),
+                    }
+                } else {
+                    ProviderLeaseAcquisition::Acquired(Box::new(()))
+                },
+            )
+        })
     }
 }
 
 struct SelectorFixture {
     store: Arc<MemoryProviderAccountStore>,
+    cache: Arc<MemoryGrokCatalogCache>,
     selector: GrokAccountSessionSelector,
     coordinator: Arc<SchedulingCoordinator>,
 }
@@ -105,7 +127,7 @@ impl SelectorFixture {
                     in_flight: 0,
                     last_started_at: None,
                     quota_reset_at: None,
-                    quota_remaining_rank: Some(100),
+                    quota_remaining_rank: None,
                 },
             );
         }
@@ -113,12 +135,17 @@ impl SelectorFixture {
             signals: Mutex::new(signals),
             denied: Mutex::new(BTreeSet::new()),
         });
-        let catalog_cache: Arc<dyn GrokCredentialCatalogCache> = cache;
-        let lease_port: Arc<dyn GrokCredentialLeaseCoordinator> = coordinator.clone();
+        let catalog_cache: Arc<dyn GrokCredentialCatalogCache> = cache.clone();
+        let lease_port: Arc<dyn ProviderLeasePort> = coordinator.clone();
+        let quota = Arc::new(GrokCredentialQuotaService::new(
+            repository.clone(),
+            Arc::new(UnavailableBillingTransport),
+        ));
         let selector =
-            GrokAccountSessionSelector::new(repository.clone(), catalog_cache, lease_port);
+            GrokAccountSessionSelector::new(repository.clone(), catalog_cache, quota, lease_port);
         Self {
             store,
+            cache,
             selector,
             coordinator,
         }
@@ -133,17 +160,56 @@ impl SelectorFixture {
         excluded: BTreeSet<ProviderAccountId>,
         required_account: Option<ProviderAccountId>,
     ) -> GrokSessionSelection {
+        self.request_with_policy(excluded, required_account, RotationStrategy::Smart)
+    }
+
+    fn request_with_policy(
+        &self,
+        excluded: BTreeSet<ProviderAccountId>,
+        required_account: Option<ProviderAccountId>,
+        strategy: RotationStrategy,
+    ) -> GrokSessionSelection {
         GrokSessionSelection::new(
             instance_id(),
             gateway_core::routing::UpstreamModelId::new("grok-4.5").expect("model"),
             excluded,
             required_account,
             AccountSelectionPolicy::new(
-                RotationStrategy::Smart,
+                strategy,
                 std::num::NonZeroU32::new(2).expect("limit"),
                 Duration::ZERO,
             ),
+            SystemTime::now() + Duration::from_secs(30),
         )
+    }
+
+    async fn seed_quota(&self, id: &ProviderAccountId, used_percent: f64, reset_after: Duration) {
+        let reset_at = (Utc::now()
+            + chrono::Duration::from_std(reset_after).expect("valid reset duration"))
+        .to_rfc3339();
+        let document = serde_json::json!({
+            "config": {
+                "creditUsagePercent": used_percent,
+                "currentPeriod": {
+                    "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                    "start": Utc::now().to_rfc3339(),
+                    "end": reset_at
+                }
+            }
+        });
+        let outcome = self
+            .store
+            .compare_and_swap_quota(QuotaObservation {
+                account_id: id.clone(),
+                expected_revision: CredentialRevision::new(1).expect("revision"),
+                quota: Some(OpaqueProviderData::new(
+                    document.as_object().expect("quota object").clone(),
+                )),
+                observed_at: Some(SystemTime::now()),
+            })
+            .await
+            .expect("persist quota");
+        assert_eq!(outcome, QuotaWriteOutcome::Updated);
     }
 }
 
@@ -313,7 +379,7 @@ async fn smart_strategy_prefers_lower_in_flight_account() {
 }
 
 #[tokio::test]
-async fn stale_catalog_revision_fails_closed() {
+async fn stale_catalog_revision_does_not_block_transparent_request() {
     let fixture = SelectorFixture::new(&["catalog-stale"]).await;
     let id = account_id("catalog-stale");
     let current = fixture
@@ -331,6 +397,7 @@ async fn stale_catalog_revision_fails_closed() {
                 scope: provider_xai::OFFICIAL_SCOPES.join(" "),
             },
             verified_account: crate::support::profile("subject-catalog-stale"),
+            next_refresh_at: chrono::Utc::now() + chrono::Duration::minutes(30),
         })
         .expect("rotate");
     assert!(matches!(
@@ -341,11 +408,141 @@ async fn stale_catalog_revision_fails_closed() {
             .expect("persist rotation"),
         CredentialCasOutcome::Updated(revision) if revision.get() == 2
     ));
-    assert!(matches!(
-        fixture
-            .selector
-            .select(fixture.request(BTreeSet::new()))
-            .await,
-        Err(GrokSessionSelectorError::NoEligibleSession)
-    ));
+    let session = fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+        .expect("stale auxiliary catalog must not block selection");
+    assert_eq!(session.account_id(), &id);
+}
+
+#[tokio::test]
+async fn explicit_catalog_non_membership_excludes_only_unsupported_account() {
+    let fixture = SelectorFixture::new(&["aaa-unsupported", "zzz-supported"]).await;
+    fixture
+        .cache
+        .replace(GrokAccountCatalog::new(
+            account_id("aaa-unsupported"),
+            CredentialRevision::new(1).expect("revision"),
+            Utc::now(),
+            GrokCredentialCatalogSeed::new(["grok-other"], None).expect("catalog"),
+        ))
+        .await
+        .expect("replace catalog");
+
+    let session = fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+        .expect("supported account");
+
+    assert_eq!(session.account_id(), &account_id("zzz-supported"));
+}
+
+#[tokio::test]
+async fn smart_strategy_uses_fresh_provider_quota_after_load_ties() {
+    let fixture = SelectorFixture::new(&["aaa-low-quota", "zzz-high-quota"]).await;
+    fixture
+        .seed_quota(&account_id("aaa-low-quota"), 90.0, Duration::from_secs(600))
+        .await;
+    fixture
+        .seed_quota(
+            &account_id("zzz-high-quota"),
+            10.0,
+            Duration::from_secs(600),
+        )
+        .await;
+
+    let session = fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+        .expect("quota-ranked account");
+
+    assert_eq!(session.account_id(), &account_id("zzz-high-quota"));
+}
+
+#[tokio::test]
+async fn smart_strategy_never_reuses_quota_projection_after_credential_rotation() {
+    let fixture = SelectorFixture::new(&["aaa-stale-high", "zzz-current-low"]).await;
+    let stale = account_id("aaa-stale-high");
+    fixture
+        .seed_quota(&stale, 5.0, Duration::from_secs(600))
+        .await;
+    fixture
+        .seed_quota(
+            &account_id("zzz-current-low"),
+            95.0,
+            Duration::from_secs(600),
+        )
+        .await;
+    let first = fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+        .expect("initial quota-ranked account");
+    assert_eq!(first.account_id(), &stale);
+    drop(first);
+
+    let current = fixture
+        .store
+        .load_credential(&stale, CredentialRevision::new(1).expect("revision"))
+        .await
+        .expect("current credential");
+    let prepared = GrokCredentialAdmin
+        .prepare_rotation(&RotateManagedGrokCredential {
+            current,
+            secret: provider_xai::GrokOAuthSecret {
+                access_token: provider_xai::SecretValue::new("rotated-access"),
+                refresh_token: provider_xai::SecretValue::new("rotated-refresh"),
+                id_token: None,
+                scope: provider_xai::OFFICIAL_SCOPES.join(" "),
+            },
+            verified_account: crate::support::profile("subject-aaa-stale-high"),
+            next_refresh_at: chrono::Utc::now() + chrono::Duration::minutes(30),
+        })
+        .expect("rotate");
+    let outcome = fixture
+        .store
+        .compare_and_swap_credential(prepared.credential)
+        .await
+        .expect("persist rotation");
+    assert!(matches!(outcome, CredentialCasOutcome::Updated(revision) if revision.get() == 2));
+
+    let selected = fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+        .expect("current quota-ranked account");
+
+    assert_eq!(selected.account_id(), &account_id("zzz-current-low"));
+}
+
+#[tokio::test]
+async fn quota_reset_strategy_uses_provider_reported_earliest_reset() {
+    let fixture = SelectorFixture::new(&["aaa-later-reset", "zzz-earlier-reset"]).await;
+    fixture
+        .seed_quota(
+            &account_id("aaa-later-reset"),
+            10.0,
+            Duration::from_secs(1_200),
+        )
+        .await;
+    fixture
+        .seed_quota(
+            &account_id("zzz-earlier-reset"),
+            90.0,
+            Duration::from_secs(600),
+        )
+        .await;
+    let request =
+        fixture.request_with_policy(BTreeSet::new(), None, RotationStrategy::QuotaResetPriority);
+
+    let session = fixture
+        .selector
+        .select(request)
+        .await
+        .expect("reset-ranked account");
+
+    assert_eq!(session.account_id(), &account_id("zzz-earlier-reset"));
 }

@@ -18,45 +18,16 @@ pub mod system;
 pub mod wire;
 pub mod xai;
 
-pub use auth::{
-    AdminAuth, AdminPrincipal, AdminRequestContext, AdminServiceError, AdminServiceErrorKind,
-    AdminSessionResolver, AdminSessionState,
-};
-pub use settings::{
-    AdminApiKeyStatus, DeletedAdminApiKey, ProviderModelMappings, RegeneratedAdminApiKey,
-    RuntimeSettingsView, UpdateRuntimeSettingsRequest,
-};
+pub use auth::{AdminAuth, AdminSessionState};
 pub use wire::{
     ADMIN_OK_CODE, ADMIN_OK_MESSAGE, AdminEnvelope, AdminError, AdminErrorBody, AdminErrorCode,
     AdminPageData, AdminResponse, PageMeta, WireValidationError,
 };
 
-use accounts::AccountAdminState;
-use auth::AdminAuthState;
-use catalog::CatalogAdminState;
-use client_keys::ClientKeyAdminState;
-use observability::ObservabilityAdminState;
-use openai::CodexAdminState;
-use settings::AdminSettingsState;
-use system::SystemAdminState;
-use xai::XaiAdminState;
-
 /// 构造完整且固定的 `/api/admin` 路由。
 pub fn router<S>() -> Router<S>
 where
-    S: AccountAdminState
-        + AdminAuthState
-        + CatalogAdminState
-        + ClientKeyAdminState
-        + CodexAdminState
-        + ObservabilityAdminState
-        + AdminSettingsState
-        + SystemAdminState
-        + XaiAdminState
-        + Clone
-        + Send
-        + Sync
-        + 'static,
+    S: AdminSessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
         .merge(accounts::router::<S>())

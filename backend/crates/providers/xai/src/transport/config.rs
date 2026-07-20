@@ -74,12 +74,6 @@ pub enum GrokProviderConfigError {
     UnsafeBaseUrl,
 }
 
-pub(crate) fn valid_header_value(value: &str, max_bytes: usize) -> bool {
-    !value.is_empty()
-        && value.len() <= max_bytes
-        && value.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
-}
-
 fn validate_official_base_url(value: &str) -> Result<Url, GrokProviderConfigError> {
     let mut url = Url::parse(value).map_err(|_| GrokProviderConfigError::InvalidBaseUrl)?;
     if url.scheme() != "https"

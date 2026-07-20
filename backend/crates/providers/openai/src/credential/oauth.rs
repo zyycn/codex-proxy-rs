@@ -6,9 +6,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, TimeDelta, Utc};
+use gateway_admin::model::provider_credentials::{
+    AuthorizationMutationTarget, AuthorizationOwner, PendingAuthorizationMutation,
+};
 use gateway_core::engine::credential::{
     CredentialRevision, NewProviderAccount, ProviderAccountId, ProviderAccountStore,
 };
+use gateway_core::provider_ports::ProviderRuntimePolicyPort;
 use secrecy::{ExposeSecret, SecretString};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq as _;
@@ -17,9 +21,12 @@ use uuid::Uuid;
 
 use super::admin::{
     CodexCredentialAdmin, CodexCredentialAdminError, ImportCodexOAuthCredential,
-    PreparedCodexCredentialRotation, RotateManagedCodexCredential,
+    PreparedCodexCredentialRotation, RotateManagedCodexCredential, refresh_time,
 };
-use super::identity::{CodexAuthorizationTokenVerifier, CodexIdentityVerificationError};
+use super::identity::{
+    CodexAccountIdentityVerifier, CodexIdentityExpectation, CodexIdentityVerificationError,
+};
+use super::security::CodexCredentialCodec;
 use super::token_client::{
     AuthorizationCodeExchangeError, AuthorizationCodeExchanger, AuthorizationCodeGrant,
     OFFICIAL_CODEX_OAUTH_CLIENT_ID, OFFICIAL_CODEX_REDIRECT_URI,
@@ -31,50 +38,9 @@ const AUTHORIZATION_TTL: TimeDelta = TimeDelta::minutes(10);
 const MAX_CALLBACK_BYTES: usize = 16 * 1024;
 const MAX_TEXT_BYTES: usize = 512;
 
-#[derive(Clone)]
-pub struct CodexOAuthFlowBinding {
-    owner_ref: String,
-    started_request_ref: String,
-}
-
-impl CodexOAuthFlowBinding {
-    pub fn new(
-        owner_ref: impl Into<String>,
-        started_request_ref: impl Into<String>,
-    ) -> Result<Self, CodexOAuthAdminError> {
-        let binding = Self {
-            owner_ref: owner_ref.into(),
-            started_request_ref: started_request_ref.into(),
-        };
-        if !valid_text(&binding.owner_ref) || !valid_text(&binding.started_request_ref) {
-            return Err(CodexOAuthAdminError::InvalidInput);
-        }
-        Ok(binding)
-    }
-}
-
-impl fmt::Debug for CodexOAuthFlowBinding {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CodexOAuthFlowBinding")
-            .field("owner_ref", &"<redacted>")
-            .field("started_request_ref", &"<redacted>")
-            .finish()
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct StartCodexOAuthAuthorization {
-    pub binding: CodexOAuthFlowBinding,
-    pub provider_instance_id: String,
-    pub name: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct StartCodexOAuthReauthorization {
-    pub binding: CodexOAuthFlowBinding,
-    pub account_id: ProviderAccountId,
-    pub expected_credential_revision: CredentialRevision,
+    pub mutation: PendingAuthorizationMutation,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -119,6 +85,37 @@ pub struct CompleteCodexOAuthAuthorization {
     pub callback_url: SecretString,
 }
 
+/// OAuth exchange 后返回的 Provider prepared credential 及其原始事务信封。
+pub struct CompletedCodexOAuthAuthorization<T> {
+    pub mutation: PendingAuthorizationMutation,
+    pub credential: T,
+}
+
+/// OAuth exchange 后唯一的 credential preparation 结果。
+pub enum CompletedCodexOAuthCredential {
+    Create(NewProviderAccount),
+    Reauthorize(PreparedCodexCredentialRotation),
+}
+
+impl fmt::Debug for CompletedCodexOAuthCredential {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Create(_) => formatter.write_str("Create([PREPARED])"),
+            Self::Reauthorize(_) => formatter.write_str("Reauthorize([PREPARED])"),
+        }
+    }
+}
+
+impl<T> fmt::Debug for CompletedCodexOAuthAuthorization<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CompletedCodexOAuthAuthorization")
+            .field("mutation", &self.mutation)
+            .field("credential", &"[PREPARED]")
+            .finish()
+    }
+}
+
 impl fmt::Debug for CompleteCodexOAuthAuthorization {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -141,6 +138,7 @@ pub struct CodexPendingAuthorization {
     nonce: SecretString,
     code_verifier: SecretString,
     reauthorization: Option<CodexOAuthReauthorizationTarget>,
+    mutation: PendingAuthorizationMutation,
 }
 
 pub struct StoredCodexPendingAuthorization {
@@ -155,6 +153,7 @@ pub struct StoredCodexPendingAuthorization {
     pub code_verifier: SecretString,
     pub reauthorization_account_id: Option<String>,
     pub reauthorization_credential_revision: Option<u64>,
+    pub mutation: PendingAuthorizationMutation,
 }
 
 impl CodexPendingAuthorization {
@@ -185,6 +184,7 @@ impl CodexPendingAuthorization {
             nonce: input.nonce,
             code_verifier: input.code_verifier,
             reauthorization,
+            mutation: input.mutation,
         };
         if !valid_text(&pending.flow_id)
             || !valid_text(&pending.owner_ref)
@@ -195,6 +195,7 @@ impl CodexPendingAuthorization {
             || !valid_secret(pending.state.expose_secret())
             || !valid_secret(pending.nonce.expose_secret())
             || !valid_secret(pending.code_verifier.expose_secret())
+            || !pending_mutation_matches(&pending)
         {
             return Err(CodexOAuthPendingStoreError::InvalidValue);
         }
@@ -250,6 +251,11 @@ impl CodexPendingAuthorization {
     pub const fn reauthorization(&self) -> Option<&CodexOAuthReauthorizationTarget> {
         self.reauthorization.as_ref()
     }
+
+    #[must_use]
+    pub const fn mutation(&self) -> &PendingAuthorizationMutation {
+        &self.mutation
+    }
 }
 
 impl fmt::Debug for CodexPendingAuthorization {
@@ -266,6 +272,7 @@ impl fmt::Debug for CodexPendingAuthorization {
             .field("nonce", &"<redacted>")
             .field("code_verifier", &"<redacted>")
             .field("reauthorization", &self.reauthorization)
+            .field("mutation", &self.mutation)
             .finish()
     }
 }
@@ -326,24 +333,15 @@ pub trait CodexOAuthAdmin: Send + Sync {
     async fn complete_authorization(
         &self,
         command: CompleteCodexOAuthAuthorization,
-    ) -> Result<NewProviderAccount, CodexOAuthAdminError>;
-
-    async fn start_reauthorization(
-        &self,
-        command: StartCodexOAuthReauthorization,
-    ) -> Result<CodexOAuthAuthorizationStarted, CodexOAuthAdminError>;
-
-    async fn complete_reauthorization(
-        &self,
-        command: CompleteCodexOAuthAuthorization,
-    ) -> Result<PreparedCodexCredentialRotation, CodexOAuthAdminError>;
+    ) -> Result<CompletedCodexOAuthAuthorization<CompletedCodexOAuthCredential>, CodexOAuthAdminError>;
 }
 
 pub struct CodexOAuthAdminService {
     pending: Arc<dyn CodexOAuthPendingStore>,
     exchanger: Arc<dyn AuthorizationCodeExchanger>,
-    verifier: Arc<dyn CodexAuthorizationTokenVerifier>,
+    verifier: Arc<dyn CodexAccountIdentityVerifier>,
     store: Arc<dyn ProviderAccountStore>,
+    runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     credentials: CodexCredentialAdmin,
 }
 
@@ -352,8 +350,9 @@ impl CodexOAuthAdminService {
     pub const fn new(
         pending: Arc<dyn CodexOAuthPendingStore>,
         exchanger: Arc<dyn AuthorizationCodeExchanger>,
-        verifier: Arc<dyn CodexAuthorizationTokenVerifier>,
+        verifier: Arc<dyn CodexAccountIdentityVerifier>,
         store: Arc<dyn ProviderAccountStore>,
+        runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
         credentials: CodexCredentialAdmin,
     ) -> Self {
         Self {
@@ -361,6 +360,7 @@ impl CodexOAuthAdminService {
             exchanger,
             verifier,
             store,
+            runtime_policy,
             credentials,
         }
     }
@@ -372,11 +372,44 @@ impl CodexOAuthAdmin for CodexOAuthAdminService {
         &self,
         command: StartCodexOAuthAuthorization,
     ) -> Result<CodexOAuthAuthorizationStarted, CodexOAuthAdminError> {
+        let (provider_instance_id, name, reauthorization) = match command.mutation.target() {
+            AuthorizationMutationTarget::Create {
+                provider_instance_id,
+                name,
+            } => (provider_instance_id.to_string(), name.clone(), None),
+            AuthorizationMutationTarget::Reauthorize {
+                provider_instance_id,
+                account_id,
+                expected_credential_revision,
+            } => {
+                let expected_revision = CredentialRevision::new(expected_credential_revision.get())
+                    .map_err(|_| CodexOAuthAdminError::InvalidInput)?;
+                let current = self
+                    .store
+                    .load_credential(account_id, expected_revision)
+                    .await
+                    .map_err(map_store_error)?;
+                if current.account.provider().as_str() != "openai"
+                    || current.account.id() != account_id
+                    || current.account.instance() != provider_instance_id
+                {
+                    return Err(CodexOAuthAdminError::NotFound);
+                }
+                (
+                    current.account.instance().to_string(),
+                    current.account.name().to_owned(),
+                    Some(CodexOAuthReauthorizationTarget {
+                        account_id: account_id.clone(),
+                        credential_revision: expected_revision,
+                    }),
+                )
+            }
+        };
         self.start_pending(
-            command.binding,
-            command.provider_instance_id,
-            command.name,
-            None,
+            command.mutation,
+            provider_instance_id,
+            name,
+            reauthorization,
         )
         .await
     }
@@ -384,83 +417,97 @@ impl CodexOAuthAdmin for CodexOAuthAdminService {
     async fn complete_authorization(
         &self,
         command: CompleteCodexOAuthAuthorization,
-    ) -> Result<NewProviderAccount, CodexOAuthAdminError> {
+    ) -> Result<CompletedCodexOAuthAuthorization<CompletedCodexOAuthCredential>, CodexOAuthAdminError>
+    {
         if !valid_text(&command.owner_ref)
             || !valid_text(&command.flow_id)
             || command.callback_url.expose_secret().len() > MAX_CALLBACK_BYTES
         {
             return Err(CodexOAuthAdminError::InvalidInput);
         }
-        let pending = self.exchange_pending(command).await?;
-        if pending.0.reauthorization().is_some() {
-            return Err(CodexOAuthAdminError::Conflict);
-        }
-        let (pending, secret, profile) = pending;
-        self.credentials
-            .prepare_import(ImportCodexOAuthCredential {
-                account_id: format!("acct_{}", Uuid::now_v7().simple()),
-                provider_instance_id: pending.provider_instance_id,
-                name: pending.name,
-                secret,
-                verified_account: profile,
-                enabled: true,
-            })
-            .map_err(map_admin_error)
-    }
-
-    async fn start_reauthorization(
-        &self,
-        command: StartCodexOAuthReauthorization,
-    ) -> Result<CodexOAuthAuthorizationStarted, CodexOAuthAdminError> {
-        let current = self
-            .store
-            .load_credential(&command.account_id, command.expected_credential_revision)
+        let (pending, mut secret, id_token) = self.exchange_pending(command).await?;
+        let mutation = pending.mutation.clone();
+        let current = if let Some(target) = pending.reauthorization() {
+            let current = self
+                .store
+                .load_credential(target.account_id(), target.credential_revision())
+                .await
+                .map_err(map_store_error)?;
+            Some(current)
+        } else {
+            None
+        };
+        let expectation = current
+            .as_ref()
+            .map(oauth_identity_expectation)
+            .transpose()?
+            .unwrap_or_default();
+        let profile = self
+            .verifier
+            .verify_authorization(&secret, &id_token, &pending.nonce, &expectation)
             .await
-            .map_err(map_store_error)?;
-        if current.account.provider().as_str() != "openai"
-            || current.account.id() != &command.account_id
-        {
-            return Err(CodexOAuthAdminError::NotFound);
-        }
-        self.start_pending(
-            command.binding,
-            current.account.instance().to_string(),
-            current.account.name().to_owned(),
-            Some(CodexOAuthReauthorizationTarget {
-                account_id: command.account_id,
-                credential_revision: command.expected_credential_revision,
-            }),
-        )
-        .await
-    }
-
-    async fn complete_reauthorization(
-        &self,
-        command: CompleteCodexOAuthAuthorization,
-    ) -> Result<PreparedCodexCredentialRotation, CodexOAuthAdminError> {
-        let (pending, secret, profile) = self.exchange_pending(command).await?;
-        let target = pending
-            .reauthorization()
-            .ok_or(CodexOAuthAdminError::Conflict)?;
-        let current = self
-            .store
-            .load_credential(target.account_id(), target.credential_revision())
+            .and_then(super::identity::CodexIdentityVerification::into_complete)
+            .map_err(map_identity_error)?;
+        secret.id_token = Some(id_token);
+        let policy = self
+            .runtime_policy
+            .load_refresh_policy()
             .await
-            .map_err(map_store_error)?;
-        self.credentials
-            .prepare_rotation(RotateManagedCodexCredential {
-                current,
-                secret,
-                verified_account: profile,
-            })
-            .map_err(map_admin_error)
+            .map_err(|_| CodexOAuthAdminError::StorageUnavailable)?;
+        let credential = if let Some(current) = current {
+            let next_refresh_at = refresh_time(
+                policy,
+                current.account.id(),
+                profile.access_token_expires_at,
+                secret.refresh_token.is_some(),
+            )
+            .map_err(map_admin_error)?;
+            CompletedCodexOAuthCredential::Reauthorize(
+                self.credentials
+                    .prepare_rotation(RotateManagedCodexCredential {
+                        current,
+                        secret,
+                        verified_account: profile,
+                        next_refresh_at,
+                    })
+                    .map_err(map_admin_error)?,
+            )
+        } else {
+            let account_id = format!("acct_{}", Uuid::now_v7().simple());
+            let typed_account_id = ProviderAccountId::new(account_id.clone())
+                .map_err(|_| CodexOAuthAdminError::Credential)?;
+            let next_refresh_at = refresh_time(
+                policy,
+                &typed_account_id,
+                profile.access_token_expires_at,
+                secret.refresh_token.is_some(),
+            )
+            .map_err(map_admin_error)?;
+            CompletedCodexOAuthCredential::Create(
+                self.credentials
+                    .prepare_import(ImportCodexOAuthCredential {
+                        account_id,
+                        provider_instance_id: pending.provider_instance_id,
+                        name: pending.name,
+                        secret,
+                        verified_account: profile,
+                        next_refresh_at,
+                        enabled: true,
+                    })
+                    .map_err(map_admin_error)?,
+            )
+        };
+        Ok(CompletedCodexOAuthAuthorization {
+            mutation,
+            credential,
+        })
     }
 }
 
 impl CodexOAuthAdminService {
     async fn start_pending(
         &self,
-        binding: CodexOAuthFlowBinding,
+        mutation: PendingAuthorizationMutation,
         provider_instance_id: String,
         name: String,
         reauthorization: Option<CodexOAuthReauthorizationTarget>,
@@ -471,10 +518,12 @@ impl CodexOAuthAdminService {
         let expires_at = Utc::now()
             .checked_add_signed(AUTHORIZATION_TTL)
             .ok_or(CodexOAuthAdminError::InvalidInput)?;
+        let owner_ref = oauth_owner_ref(mutation.owner_binding().owner());
+        let started_request_ref = mutation.owner_binding().started_request_id().to_owned();
         let pending = CodexPendingAuthorization::from_stored(StoredCodexPendingAuthorization {
             flow_id: random_secret()?,
-            owner_ref: binding.owner_ref,
-            started_request_ref: binding.started_request_ref,
+            owner_ref,
+            started_request_ref,
             provider_instance_id,
             name,
             expires_at,
@@ -486,6 +535,7 @@ impl CodexOAuthAdminService {
                 .map(|target| target.account_id().to_string()),
             reauthorization_credential_revision: reauthorization
                 .map(|target| target.credential_revision().get()),
+            mutation,
         })
         .map_err(map_pending_error)?;
         self.pending
@@ -506,7 +556,7 @@ impl CodexOAuthAdminService {
         (
             CodexPendingAuthorization,
             super::types::CodexOAuthSecret,
-            super::types::CodexAccountProfile,
+            SecretString,
         ),
         CodexOAuthAdminError,
     > {
@@ -532,7 +582,7 @@ impl CodexOAuthAdminService {
         ) {
             return Err(CodexOAuthAdminError::UpstreamRejected);
         }
-        let mut tokens = self
+        let tokens = self
             .exchanger
             .exchange_authorization_code(AuthorizationCodeGrant {
                 code,
@@ -540,14 +590,27 @@ impl CodexOAuthAdminService {
             })
             .await
             .map_err(map_exchange_error)?;
-        let profile = self
-            .verifier
-            .verify_authorization(&tokens.secret, &tokens.id_token, &pending.nonce)
-            .await
-            .map_err(map_identity_error)?;
-        tokens.secret.id_token = Some(tokens.id_token);
-        Ok((pending, tokens.secret, profile))
+        Ok((pending, tokens.secret, tokens.id_token))
     }
+}
+
+fn oauth_identity_expectation(
+    current: &gateway_core::engine::credential::LoadedCredential,
+) -> Result<CodexIdentityExpectation, CodexOAuthAdminError> {
+    let runtime = CodexCredentialCodec::decode(&current.credential)
+        .map_err(|_| CodexOAuthAdminError::Credential)?;
+    let account_id = current
+        .account
+        .upstream_account_id()
+        .ok_or(CodexOAuthAdminError::Credential)?;
+    CodexIdentityExpectation::current(
+        runtime.principal.oauth_subject,
+        runtime.principal.poid,
+        account_id.to_owned(),
+        current.account.upstream_user_id().to_owned(),
+        runtime.installation_id,
+    )
+    .map_err(|_| CodexOAuthAdminError::Credential)
 }
 
 fn authorization_url(pending: &CodexPendingAuthorization) -> Result<String, CodexOAuthAdminError> {
@@ -613,6 +676,50 @@ fn valid_text(value: &str) -> bool {
 
 fn valid_secret(value: &str) -> bool {
     valid_text(value) && value.len() >= 16
+}
+
+pub(crate) fn oauth_owner_ref(owner: &AuthorizationOwner) -> String {
+    let mut digest = Sha256::new();
+    match owner {
+        AuthorizationOwner::AdminSession { admin_user_id } => {
+            digest.update(b"admin-session\0");
+            digest.update(admin_user_id.as_bytes());
+        }
+        AuthorizationOwner::AdminApiKey => digest.update(b"admin-api-key"),
+        AuthorizationOwner::System => digest.update(b"system"),
+    }
+    URL_SAFE_NO_PAD.encode(digest.finalize())
+}
+
+fn pending_mutation_matches(pending: &CodexPendingAuthorization) -> bool {
+    if pending.mutation.provider_kind().as_str() != "openai"
+        || pending.mutation.owner_binding().started_request_id() != pending.started_request_ref
+        || oauth_owner_ref(pending.mutation.owner_binding().owner()) != pending.owner_ref
+    {
+        return false;
+    }
+    match (pending.mutation.target(), pending.reauthorization.as_ref()) {
+        (
+            AuthorizationMutationTarget::Create {
+                provider_instance_id,
+                name,
+            },
+            None,
+        ) => provider_instance_id.as_str() == pending.provider_instance_id && name == &pending.name,
+        (
+            AuthorizationMutationTarget::Reauthorize {
+                provider_instance_id,
+                account_id,
+                expected_credential_revision,
+            },
+            Some(target),
+        ) => {
+            provider_instance_id.as_str() == pending.provider_instance_id
+                && account_id == target.account_id()
+                && expected_credential_revision.get() == target.credential_revision().get()
+        }
+        _ => false,
+    }
 }
 
 fn map_pending_error(error: CodexOAuthPendingStoreError) -> CodexOAuthAdminError {

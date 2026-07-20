@@ -1,0 +1,45 @@
+[package]
+name = "gateway-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+autotests = false
+
+[dependencies]
+async-trait = "0.1.89"
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
+chrono = { version = "0.4.45", features = ["clock", "serde"] }
+config = { version = "0.15.23", default-features = false, features = ["yaml"] }
+flate2 = "1.1.9"
+futures = "0.3.32"
+gateway-admin = { path = "../gateway-admin" }
+gateway-core = { path = "../gateway-core" }
+hex = "0.4.3"
+reqwest = { version = "=0.12.28", default-features = false, features = ["json", "stream", "rustls-tls-native-roots"] }
+semver = "1.0.27"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+sha2 = "0.11.0"
+tar = "0.4.44"
+thiserror = "2.0.18"
+tokio = { version = "1.52.3", default-features = false, features = ["macros", "rt", "signal", "time", "sync", "net"] }
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+uuid = { version = "1.23.3", features = ["v7"] }
+
+[dev-dependencies]
+filetime = "0.2.27"
+tempfile = "3.27.0"
+tokio = { version = "1.52.3", default-features = false, features = ["rt-multi-thread", "test-util"] }
+tower = { version = "0.5.3", features = ["util"] }
+wiremock = "0.6.5"
+
+[[test]]
+name = "main"
+path = "tests/main.rs"
+
+[lints]
+workspace = true

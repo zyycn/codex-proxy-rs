@@ -1,6 +1,9 @@
+mod admission;
 mod continuation;
 mod coordinator;
 mod credential;
+mod execution;
+mod probe;
 mod provider;
 
 use gateway_core::engine::{AttemptTrigger, CancellationToken, UpstreamSendState};

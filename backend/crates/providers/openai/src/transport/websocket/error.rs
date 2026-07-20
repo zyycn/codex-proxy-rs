@@ -6,6 +6,7 @@ use gateway_protocol::openai::sse::SseError;
 use thiserror::Error;
 
 use crate::transport::diagnostics::CodexUpstreamDiagnostics;
+use crate::transport::diagnostics::CodexUpstreamSendPhase;
 
 use super::PreviousResponseUnavailableReason;
 
@@ -113,6 +114,8 @@ pub struct CodexWebSocketUpstreamError {
     pub set_cookie_headers: Vec<String>,
     /// 上游诊断元数据。
     pub diagnostics: CodexUpstreamDiagnostics,
+    /// 上游拒绝相对业务 payload 的发送阶段。
+    pub send_phase: CodexUpstreamSendPhase,
 }
 
 impl fmt::Display for CodexWebSocketUpstreamError {
@@ -132,6 +135,7 @@ impl CodexWebSocketExchangeError {
         body: String,
         set_cookie_headers: Vec<String>,
         diagnostics: CodexUpstreamDiagnostics,
+        send_phase: CodexUpstreamSendPhase,
     ) -> Self {
         Self::Upstream(Box::new(CodexWebSocketUpstreamError {
             status_code,
@@ -139,6 +143,7 @@ impl CodexWebSocketExchangeError {
             body,
             set_cookie_headers,
             diagnostics,
+            send_phase,
         }))
     }
 

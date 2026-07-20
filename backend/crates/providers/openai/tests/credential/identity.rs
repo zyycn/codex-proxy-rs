@@ -6,9 +6,11 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode, get_current_timestamp};
 use provider_openai::credential::token_client::OFFICIAL_CODEX_OAUTH_CLIENT_ID;
 use provider_openai::credential::{
-    CodexAuthorizationTokenVerifier, CodexIdentityVerificationError, CodexJwksSource,
-    CodexJwtIdentityVerifier, CodexOAuthSecret, CodexTokenIdentityVerifier,
-    OFFICIAL_OPENAI_API_AUDIENCE, OFFICIAL_OPENAI_ISSUER, ReqwestOpenAiJwksSource,
+    CodexAccountIdentityService, CodexAccountIdentityVerifier, CodexAuthenticatedAccount,
+    CodexAuthenticatedAccountSource, CodexIdentityExpectation, CodexIdentityVerification,
+    CodexIdentityVerificationError, CodexJwksSource, CodexJwtIdentityVerifier, CodexOAuthSecret,
+    CodexSignedIdentityVerifier, OFFICIAL_OPENAI_API_AUDIENCE, OFFICIAL_OPENAI_ISSUER,
+    ReqwestOpenAiJwksSource,
 };
 use rsa::RsaPrivateKey;
 use rsa::pkcs1::EncodeRsaPrivateKey;
@@ -62,6 +64,21 @@ impl CodexJwksSource for StaticJwksSource {
             return Err(error);
         }
         Ok(self.body.clone())
+    }
+}
+
+struct StaticAccountSource {
+    result: Result<CodexAuthenticatedAccount, CodexIdentityVerificationError>,
+}
+
+#[async_trait]
+impl CodexAuthenticatedAccountSource for StaticAccountSource {
+    async fn fetch(
+        &self,
+        _secret: &CodexOAuthSecret,
+        _expectation: &CodexIdentityExpectation,
+    ) -> Result<CodexAuthenticatedAccount, CodexIdentityVerificationError> {
+        self.result.clone()
     }
 }
 
@@ -130,6 +147,17 @@ fn secret(claims: &Value, refresh_token: Option<&str>) -> CodexOAuthSecret {
     }
 }
 
+pub(crate) async fn signed_identity_fixture() -> provider_openai::credential::CodexSignedIdentity {
+    let (verifier, _) = verifier();
+    verifier
+        .verify_access(&secret(
+            &claims(get_current_timestamp() + 3_600),
+            Some("refresh-token"),
+        ))
+        .await
+        .expect("signed identity fixture")
+}
+
 fn id_token_claims(nonce: &str, subject: &str) -> Value {
     let now = get_current_timestamp();
     json!({
@@ -147,18 +175,126 @@ fn id_token_claims(nonce: &str, subject: &str) -> Value {
 async fn verifier_should_derive_identity_only_from_valid_signed_claims() {
     let (verifier, calls) = verifier();
     let profile = verifier
-        .verify(&secret(
+        .verify_access(&secret(
             &claims(get_current_timestamp() + 3_600),
             Some("refresh-token"),
         ))
         .await
         .expect("verify signed Codex token");
 
-    assert_eq!(profile.chatgpt_account_id, "account-signed");
-    assert_eq!(profile.chatgpt_user_id.as_deref(), Some("user-signed"));
-    assert_eq!(profile.email.as_deref(), Some("signed@example.invalid"));
-    assert!(profile.next_refresh_at.is_some());
+    assert_eq!(profile.oauth_subject(), "subject-signed");
+    assert_eq!(profile.poid(), None);
+    assert_eq!(profile.claimed_account_id(), Some("account-signed"));
+    assert_eq!(profile.claimed_user_id(), Some("user-signed"));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn verifier_should_accept_current_signed_poid_account_identity() {
+    let (verifier, _) = verifier();
+    let mut current = claims(get_current_timestamp() + 3_600);
+    current["https://api.openai.com/auth"]
+        .as_object_mut()
+        .expect("auth claims")
+        .remove("chatgpt_account_id");
+    current["https://api.openai.com/auth"]["poid"] = json!("organization-signed");
+
+    let profile = verifier
+        .verify_access(&secret(&current, Some("refresh-token")))
+        .await
+        .expect("verify current signed Codex token");
+
+    assert_eq!(profile.oauth_subject(), "subject-signed");
+    assert_eq!(profile.poid(), Some("organization-signed"));
+    assert_eq!(profile.claimed_account_id(), None);
+}
+
+#[tokio::test]
+async fn account_identity_requires_matching_authenticated_usage_facts() {
+    let (signed, _) = verifier();
+    let service = CodexAccountIdentityService::new(
+        Arc::new(signed),
+        Arc::new(StaticAccountSource {
+            result: Ok(CodexAuthenticatedAccount {
+                chatgpt_account_id: "account-signed".to_owned(),
+                chatgpt_user_id: "user-signed".to_owned(),
+                email: Some("usage@example.invalid".to_owned()),
+                plan_type: Some("pro".to_owned()),
+            }),
+        }),
+    );
+    let verification = service
+        .verify(
+            &secret(&claims(get_current_timestamp() + 3_600), None),
+            &CodexIdentityExpectation::imported(
+                Some("account-signed".to_owned()),
+                Some("user-signed".to_owned()),
+            )
+            .expect("import expectation"),
+        )
+        .await
+        .expect("complete authenticated identity");
+    let CodexIdentityVerification::Complete(profile) = verification else {
+        panic!("usage facts must complete the identity");
+    };
+
+    assert_eq!(profile.oauth_subject, "subject-signed");
+    assert_eq!(profile.chatgpt_account_id, "account-signed");
+    assert_eq!(profile.chatgpt_user_id, "user-signed");
+    assert_eq!(profile.email.as_deref(), Some("usage@example.invalid"));
+}
+
+#[tokio::test]
+async fn account_identity_rejects_imported_workspace_conflict() {
+    let (signed, _) = verifier();
+    let service = CodexAccountIdentityService::new(
+        Arc::new(signed),
+        Arc::new(StaticAccountSource {
+            result: Ok(CodexAuthenticatedAccount {
+                chatgpt_account_id: "account-signed".to_owned(),
+                chatgpt_user_id: "user-signed".to_owned(),
+                email: None,
+                plan_type: None,
+            }),
+        }),
+    );
+    let error = service
+        .verify(
+            &secret(&claims(get_current_timestamp() + 3_600), None),
+            &CodexIdentityExpectation::imported(Some("other-account".to_owned()), None)
+                .expect("import expectation"),
+        )
+        .await
+        .expect_err("document workspace cannot override authenticated usage");
+
+    assert_eq!(error, CodexIdentityVerificationError::Rejected);
+}
+
+#[tokio::test]
+async fn account_identity_keeps_usage_unavailable_out_of_ready_profile() {
+    let (signed, _) = verifier();
+    let service = CodexAccountIdentityService::new(
+        Arc::new(signed),
+        Arc::new(StaticAccountSource {
+            result: Err(CodexIdentityVerificationError::Unavailable),
+        }),
+    );
+    let verification = service
+        .verify(
+            &secret(&claims(get_current_timestamp() + 3_600), None),
+            &CodexIdentityExpectation::default(),
+        )
+        .await
+        .expect("signed identity remains explicit");
+
+    assert!(matches!(
+        &verification,
+        CodexIdentityVerification::SignedOnly(_)
+    ));
+    assert_eq!(
+        verification.into_complete().expect_err("not Ready"),
+        CodexIdentityVerificationError::Unavailable
+    );
 }
 
 #[tokio::test]
@@ -173,14 +309,11 @@ async fn verifier_should_reject_expired_wrong_issuer_audience_or_unbound_tokens(
     ];
     cases[1]["iss"] = json!("https://attacker.invalid");
     cases[2]["aud"] = json!(["https://attacker.invalid"]);
-    cases[3]["https://api.openai.com/auth"]
-        .as_object_mut()
-        .expect("auth claims")
-        .remove("chatgpt_account_id");
+    cases[3]["sub"] = json!("");
 
     for claims in cases {
         let error = verifier
-            .verify(&secret(&claims, None))
+            .verify_access(&secret(&claims, None))
             .await
             .expect_err("invalid identity token must fail");
         assert_eq!(error, CodexIdentityVerificationError::Rejected);
@@ -193,7 +326,7 @@ async fn verifier_should_reject_user_rebinding_and_invalid_refresh_shape() {
     let mut rebound = claims(get_current_timestamp() + 3_600);
     rebound["https://api.openai.com/auth"]["user_id"] = json!("other-user");
     let rebound_error = verifier
-        .verify(&secret(&rebound, None))
+        .verify_access(&secret(&rebound, None))
         .await
         .expect_err("signed aliases must not disagree");
     let access = token(&claims(get_current_timestamp() + 3_600));
@@ -203,7 +336,7 @@ async fn verifier_should_reject_user_rebinding_and_invalid_refresh_shape() {
         id_token: None,
     };
     let refresh_error = verifier
-        .verify(&reused)
+        .verify_access(&reused)
         .await
         .expect_err("refresh token must have independent shape");
 
@@ -215,8 +348,14 @@ async fn verifier_should_reject_user_rebinding_and_invalid_refresh_shape() {
 async fn verifier_should_cache_jwks_and_fail_closed_when_source_is_unavailable() {
     let (verifier, calls) = verifier();
     let valid = secret(&claims(get_current_timestamp() + 3_600), None);
-    verifier.verify(&valid).await.expect("first verification");
-    verifier.verify(&valid).await.expect("cached verification");
+    verifier
+        .verify_access(&valid)
+        .await
+        .expect("first verification");
+    verifier
+        .verify_access(&valid)
+        .await
+        .expect("cached verification");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 
     let unavailable = CodexJwtIdentityVerifier::new(Box::new(StaticJwksSource {
@@ -225,7 +364,7 @@ async fn verifier_should_cache_jwks_and_fail_closed_when_source_is_unavailable()
         error: Some(CodexIdentityVerificationError::Unavailable),
     }));
     let error = unavailable
-        .verify(&valid)
+        .verify_access(&valid)
         .await
         .expect_err("unavailable JWKS must fail closed");
     assert_eq!(error, CodexIdentityVerificationError::Unavailable);
@@ -305,7 +444,7 @@ async fn supplied_real_access_only_account_should_pass_official_signature_verifi
         ReqwestOpenAiJwksSource::new().expect("build official JWKS source"),
     ));
     let profile = verifier
-        .verify(&CodexOAuthSecret {
+        .verify_access(&CodexOAuthSecret {
             access_token: SecretString::new(account.token.into()),
             refresh_token: account
                 .refresh_token
@@ -315,7 +454,6 @@ async fn supplied_real_access_only_account_should_pass_official_signature_verifi
         .await
         .expect("verify official access-only Codex account");
 
-    assert!(!profile.chatgpt_account_id.is_empty());
-    assert!(profile.access_token_expires_at.is_some());
-    assert!(profile.next_refresh_at.is_none());
+    assert!(!profile.oauth_subject().is_empty());
+    assert!(profile.access_token_expires_at() > chrono::Utc::now());
 }

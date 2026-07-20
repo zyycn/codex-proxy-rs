@@ -8,7 +8,7 @@ mod stream;
 use std::{
     pin::Pin,
     sync::Arc,
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant},
 };
 
 use bytes::Bytes;
@@ -62,8 +62,8 @@ pub struct CodexWebSocketExchange {
     pub first_event_ms: Option<i64>,
     /// WebSocket 连接池决策。
     pub pool_decision: Option<WebSocketPoolDecision>,
-    /// terminal completed 后该 socket 保留 connection-local continuation 的最晚时间。
-    pub connection_local_continuation_expires_at: Option<SystemTime>,
+    /// terminal completed 后该 socket 是否会保留 connection-local continuation。
+    pub connection_local_continuation: bool,
     /// 上游诊断元数据。
     pub diagnostics: CodexUpstreamDiagnostics,
     /// 安全响应元数据。
@@ -88,8 +88,8 @@ pub struct CodexWebSocketStreamingExchange {
     pub turn_state_update: CodexWebSocketTurnStateUpdate,
     /// WebSocket 连接池决策。
     pub pool_decision: Option<WebSocketPoolDecision>,
-    /// terminal completed 后该 socket 保留 connection-local continuation 的最晚时间。
-    pub connection_local_continuation_expires_at: Option<SystemTime>,
+    /// terminal completed 后该 socket 是否会保留 connection-local continuation。
+    pub connection_local_continuation: bool,
     /// 上游诊断元数据。
     pub diagnostics: CodexUpstreamDiagnostics,
     /// 安全响应元数据。
@@ -125,7 +125,6 @@ pub async fn execute_response_create_request(
 pub(super) fn reusable_websocket_metadata(
     mut metadata: CodexWebSocketConnectionMetadata,
 ) -> CodexWebSocketConnectionMetadata {
-    metadata.set_cookie_headers.clear();
     metadata.rate_limit_headers.clear();
     metadata
 }

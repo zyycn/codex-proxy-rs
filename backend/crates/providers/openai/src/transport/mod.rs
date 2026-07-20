@@ -17,7 +17,7 @@ pub mod usage;
 pub mod websocket;
 
 pub use self::{
-    canonical::CodexCanonicalDecoder,
+    canonical::{CodexCanonicalDecoder, CodexCanonicalError},
     catalog::{
         CodexCatalogCapabilities, CodexCatalogCapabilityEvidence, CodexCatalogLimits,
         CodexCatalogMetadata, CodexCatalogModel, CodexCatalogVisibility, CodexModelCatalogError,
@@ -29,7 +29,7 @@ pub use self::{
         CodexRateLimitHeaderUpdates, CodexRequestContext, CodexTransportDecision,
         CodexTransportMetrics, CodexTurnStateUpdate, build_reqwest_client,
     },
-    diagnostics::CodexUpstreamDiagnostics,
+    diagnostics::{CodexUpstreamDiagnostics, CodexUpstreamSendPhase},
     endpoints::{
         CODEX_RESPONSES_PATH, CODEX_USAGE_API_PATH, CODEX_USAGE_PATH, WHAM_USAGE_PATH,
         endpoint_request_path, endpoint_url, usage_endpoint_urls,

@@ -13,6 +13,7 @@ async-trait = "0.1.89"
 base64 = "0.22.1"
 chrono = { version = "0.4.45", features = ["clock", "serde"] }
 futures = "0.3.32"
+gateway-admin = { path = "../../gateway-admin" }
 gateway-core = { path = "../../gateway-core" }
 gateway-protocol = { path = "../../gateway-protocol" }
 getrandom = "0.3.4"

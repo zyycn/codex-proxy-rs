@@ -1,10 +1,20 @@
 //! Provider instance、账号与 OAuth refresh 的 Redis lease/fencing。
 
-use std::{fmt, time::Duration};
+use std::collections::BTreeMap;
+use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::future::join_all;
+use gateway_core::engine::credential::{AccountRuntimeSignals, ProviderAccountId};
+use gateway_core::provider_ports::{
+    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
+    ProviderRefreshCapacityRequest, ProviderSchedulingLeaseRequest, ProviderSchedulingState,
+    ProviderStoreError, ProviderStoreErrorKind,
+};
+use gateway_core::routing::ProviderInstanceId;
 use redis::{Script, aio::ConnectionManager};
 use uuid::Uuid;
 
@@ -13,6 +23,9 @@ use crate::{Revision, StoreError, StoreResult, redis_unavailable, require_nonemp
 use super::{MAX_REDIS_EXACT_INTEGER, namespace, resource_fingerprint};
 
 const SIGNAL_TTL_MILLIS: u64 = 24 * 60 * 60 * 1_000;
+const PROVIDER_ACCOUNT_LEASE_TTL: Duration = Duration::from_secs(10 * 60);
+const OAUTH_REFRESH_LEASE_TTL: Duration = Duration::from_secs(5 * 60);
+const OAUTH_REFRESH_CAPACITY_RESOURCE: &str = "oauth-refresh-global";
 
 const ACQUIRE_SCRIPT: &str = r#"
 local clock = redis.call('TIME')
@@ -99,10 +112,22 @@ local last_started = redis.call('GET', KEYS[2]) or '0'
 return {tostring(in_flight), tostring(last_started)}
 "#;
 
+const ADVANCE_SCHEDULING_CURSOR_SCRIPT: &str = r#"
+local cursor = redis.call('INCR', KEYS[1])
+if cursor > tonumber(ARGV[1]) then
+  redis.call('SET', KEYS[1], '1', 'PX', ARGV[2])
+  cursor = 1
+else
+  redis.call('PEXPIRE', KEYS[1], ARGV[2])
+end
+return tostring(cursor - 1)
+"#;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CredentialLeaseScope {
     ProviderInstance,
     ProviderAccount,
+    OAuthRefreshCapacity,
     OAuthRefresh,
     ProviderTask,
 }
@@ -112,6 +137,7 @@ impl CredentialLeaseScope {
         match self {
             Self::ProviderInstance => "instance",
             Self::ProviderAccount => "account",
+            Self::OAuthRefreshCapacity => "refresh-capacity",
             Self::OAuthRefresh => "refresh",
             Self::ProviderTask => "task",
         }
@@ -135,9 +161,10 @@ impl CredentialLeaseRequest {
     }
 }
 
-/// Provider account 的计数 lease 请求。
+/// 对任意明确资源施加并发数和启动间隔约束的计数 lease。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CredentialSchedulingLeaseRequest {
+pub struct CredentialBoundedLeaseRequest {
+    pub scope: CredentialLeaseScope,
     pub resource_id: String,
     pub owner_id: String,
     pub max_concurrent: u32,
@@ -145,14 +172,10 @@ pub struct CredentialSchedulingLeaseRequest {
     pub ttl: Duration,
 }
 
-impl CredentialSchedulingLeaseRequest {
+impl CredentialBoundedLeaseRequest {
     pub fn validate(&self) -> StoreResult<()> {
-        require_nonempty(
-            "credential scheduling lease",
-            "resource_id",
-            &self.resource_id,
-        )?;
-        require_nonempty("credential scheduling lease", "owner_id", &self.owner_id)?;
+        require_nonempty("credential bounded lease", "resource_id", &self.resource_id)?;
+        require_nonempty("credential bounded lease", "owner_id", &self.owner_id)?;
         if self.max_concurrent == 0 {
             return Err(invalid("max_concurrent must be positive"));
         }
@@ -163,7 +186,7 @@ impl CredentialSchedulingLeaseRequest {
 
     fn lease_request(&self) -> CredentialLeaseRequest {
         CredentialLeaseRequest {
-            scope: CredentialLeaseScope::ProviderAccount,
+            scope: self.scope,
             resource_id: self.resource_id.clone(),
             owner_id: self.owner_id.clone(),
             ttl: self.ttl,
@@ -186,12 +209,12 @@ pub struct CredentialRuntimeSignal {
     pub last_started_at: Option<DateTime<Utc>>,
 }
 
-pub enum CredentialSchedulingLeaseAcquisition {
+pub enum CredentialBoundedLeaseAcquisition {
     Acquired(CredentialLeaseGuard),
     Busy { retry_after: Option<Duration> },
 }
 
-impl fmt::Debug for CredentialSchedulingLeaseAcquisition {
+impl fmt::Debug for CredentialBoundedLeaseAcquisition {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Acquired(_) => formatter.write_str("Acquired([LEASE_GUARD])"),
@@ -273,10 +296,10 @@ pub trait CredentialLeaseRepository: Send + Sync {
         &self,
         resource_ids: &[String],
     ) -> StoreResult<Vec<CredentialRuntimeSignal>>;
-    async fn try_acquire_scheduling_lease(
+    async fn try_acquire_bounded_lease(
         &self,
-        request: &CredentialSchedulingLeaseRequest,
-    ) -> StoreResult<CredentialSchedulingLeaseAcquisition>;
+        request: &CredentialBoundedLeaseRequest,
+    ) -> StoreResult<CredentialBoundedLeaseAcquisition>;
 }
 
 #[derive(Clone)]
@@ -306,6 +329,27 @@ impl RedisCredentialLeaseRepository {
         }))
     }
 
+    /// 原子推进跨进程共享的 Provider instance 调度游标。
+    pub async fn advance_scheduling_cursor(&self, provider_instance_id: &str) -> StoreResult<u64> {
+        require_nonempty(
+            "provider scheduling cursor",
+            "provider_instance_id",
+            provider_instance_id,
+        )?;
+        let key = self.scheduling_cursor_key(provider_instance_id)?;
+        let mut connection = self.connection.clone();
+        let cursor = Script::new(ADVANCE_SCHEDULING_CURSOR_SCRIPT)
+            .key(key)
+            .arg(MAX_REDIS_EXACT_INTEGER)
+            .arg(SIGNAL_TTL_MILLIS)
+            .invoke_async::<String>(&mut connection)
+            .await
+            .map_err(|_| redis_unavailable("advance provider scheduling cursor"))?;
+        cursor
+            .parse::<u64>()
+            .map_err(|_| invalid("Redis returned an invalid scheduling cursor"))
+    }
+
     fn keys(&self, request: &CredentialLeaseRequest) -> StoreResult<[String; 3]> {
         let fingerprint = resource_fingerprint("credential lease", &request.resource_id)?;
         let tag = format!("{{{fingerprint}}}");
@@ -326,6 +370,14 @@ impl RedisCredentialLeaseRepository {
             "{owner}|{}|{}",
             grant.lease_id,
             grant.fencing_token.get()
+        ))
+    }
+
+    fn scheduling_cursor_key(&self, provider_instance_id: &str) -> StoreResult<String> {
+        let fingerprint = resource_fingerprint("provider scheduling cursor", provider_instance_id)?;
+        Ok(format!(
+            "{}:scheduler:instance:{{{fingerprint}}}:cursor",
+            self.namespace
         ))
     }
 
@@ -403,6 +455,192 @@ impl RedisCredentialLeaseRepository {
     }
 }
 
+/// Store-owned 的通用 Provider lease 能力；具体 Provider 不感知 Redis。
+pub(crate) struct RedisProviderLeaseCoordinator {
+    repository: RedisCredentialLeaseRepository,
+    process_id: String,
+    sequence: AtomicU64,
+}
+
+impl RedisProviderLeaseCoordinator {
+    #[must_use]
+    pub(crate) fn new(repository: RedisCredentialLeaseRepository) -> Self {
+        Self {
+            repository,
+            process_id: format!("gateway_{}", Uuid::now_v7().simple()),
+            sequence: AtomicU64::new(0),
+        }
+    }
+
+    fn owner_id(&self, operation: &str) -> String {
+        let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
+        format!("{}:{operation}:{sequence}", self.process_id)
+    }
+
+    async fn next_scheduling_cursor(
+        &self,
+        provider_instance_id: &ProviderInstanceId,
+    ) -> Result<u64, ProviderStoreError> {
+        self.repository
+            .advance_scheduling_cursor(provider_instance_id.as_str())
+            .await
+            .map_err(|_| provider_unavailable("advance scheduling cursor"))
+    }
+
+    async fn load_signals(
+        &self,
+        accounts: &[ProviderAccountId],
+    ) -> Result<BTreeMap<ProviderAccountId, AccountRuntimeSignals>, ProviderStoreError> {
+        let ids = accounts
+            .iter()
+            .map(|account| account.as_str().to_owned())
+            .collect::<Vec<_>>();
+        let signals = self
+            .repository
+            .credential_runtime_signals(&ids)
+            .await
+            .map_err(|_| provider_unavailable("load scheduling signals"))?;
+        signals
+            .into_iter()
+            .map(|signal| {
+                let account = ProviderAccountId::new(signal.resource_id).map_err(|_| {
+                    ProviderStoreError::new(
+                        ProviderStoreErrorKind::InvalidData,
+                        "decode scheduling signals",
+                    )
+                })?;
+                Ok((
+                    account,
+                    AccountRuntimeSignals {
+                        in_flight: signal.in_flight,
+                        last_started_at: signal.last_started_at.map(Into::into),
+                        quota_reset_at: None,
+                        quota_remaining_rank: None,
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    async fn acquire_scheduling(
+        &self,
+        request: &ProviderSchedulingLeaseRequest,
+    ) -> Result<ProviderLeaseAcquisition, ProviderStoreError> {
+        let ttl = request
+            .deadline()
+            .duration_since(SystemTime::now())
+            .ok()
+            .filter(|remaining| !remaining.is_zero())
+            .map(|remaining| remaining.min(PROVIDER_ACCOUNT_LEASE_TTL))
+            .ok_or_else(|| {
+                ProviderStoreError::new(
+                    ProviderStoreErrorKind::Unavailable,
+                    "acquire expired scheduling lease",
+                )
+            })?;
+        let acquisition = self
+            .repository
+            .try_acquire_bounded_lease(&CredentialBoundedLeaseRequest {
+                scope: CredentialLeaseScope::ProviderAccount,
+                resource_id: request.account_id().as_str().to_owned(),
+                owner_id: self.owner_id("request"),
+                max_concurrent: request.max_concurrent().get(),
+                request_interval: request.request_interval(),
+                ttl,
+            })
+            .await
+            .map_err(|_| provider_unavailable("acquire scheduling lease"))?;
+        Ok(match acquisition {
+            CredentialBoundedLeaseAcquisition::Acquired(guard) => {
+                ProviderLeaseAcquisition::Acquired(Box::new(guard))
+            }
+            CredentialBoundedLeaseAcquisition::Busy { retry_after } => {
+                ProviderLeaseAcquisition::Busy { retry_after }
+            }
+        })
+    }
+
+    async fn acquire_refresh_capacity(
+        &self,
+        request: ProviderRefreshCapacityRequest,
+    ) -> Result<ProviderLeaseAcquisition, ProviderStoreError> {
+        let acquisition = self
+            .repository
+            .try_acquire_bounded_lease(&CredentialBoundedLeaseRequest {
+                scope: CredentialLeaseScope::OAuthRefreshCapacity,
+                resource_id: OAUTH_REFRESH_CAPACITY_RESOURCE.to_owned(),
+                owner_id: self.owner_id("refresh-capacity"),
+                max_concurrent: request.max_concurrent().get(),
+                request_interval: Duration::ZERO,
+                ttl: OAUTH_REFRESH_LEASE_TTL,
+            })
+            .await
+            .map_err(|_| provider_unavailable("acquire refresh capacity"))?;
+        Ok(match acquisition {
+            CredentialBoundedLeaseAcquisition::Acquired(guard) => {
+                ProviderLeaseAcquisition::Acquired(Box::new(guard))
+            }
+            CredentialBoundedLeaseAcquisition::Busy { retry_after } => {
+                ProviderLeaseAcquisition::Busy { retry_after }
+            }
+        })
+    }
+}
+
+impl ProviderLeasePort for RedisProviderLeaseCoordinator {
+    fn load_state<'a>(
+        &'a self,
+        provider_instance_id: &'a ProviderInstanceId,
+        accounts: &'a [ProviderAccountId],
+    ) -> futures::future::BoxFuture<'a, Result<ProviderSchedulingState, ProviderStoreError>> {
+        Box::pin(async move {
+            let signals = self.load_signals(accounts).await?;
+            let round_robin_cursor = self.next_scheduling_cursor(provider_instance_id).await?;
+            Ok(ProviderSchedulingState::new(
+                signals,
+                None,
+                round_robin_cursor,
+            ))
+        })
+    }
+
+    fn try_acquire(
+        &self,
+        request: ProviderLeaseRequest,
+    ) -> futures::future::BoxFuture<'_, Result<ProviderLeaseAcquisition, ProviderStoreError>> {
+        Box::pin(async move {
+            match request {
+                ProviderLeaseRequest::Scheduling(request) => {
+                    self.acquire_scheduling(&request).await
+                }
+                ProviderLeaseRequest::RefreshCapacity(request) => {
+                    self.acquire_refresh_capacity(request).await
+                }
+                ProviderLeaseRequest::Refresh(request) => {
+                    let lease = CredentialLeaseRequest {
+                        scope: CredentialLeaseScope::OAuthRefresh,
+                        resource_id: request.account_id().as_str().to_owned(),
+                        owner_id: self.owner_id("refresh"),
+                        ttl: OAUTH_REFRESH_LEASE_TTL,
+                    };
+                    self.repository
+                        .try_acquire_guard(lease)
+                        .await
+                        .map(|guard| match guard {
+                            Some(guard) => ProviderLeaseAcquisition::Acquired(Box::new(guard)),
+                            None => ProviderLeaseAcquisition::Busy { retry_after: None },
+                        })
+                        .map_err(|_| provider_unavailable("acquire refresh lease"))
+                }
+            }
+        })
+    }
+}
+
+fn provider_unavailable(operation: &'static str) -> ProviderStoreError {
+    ProviderStoreError::new(ProviderStoreErrorKind::Unavailable, operation)
+}
+
 #[async_trait]
 impl CredentialLeaseRepository for RedisCredentialLeaseRepository {
     async fn acquire_credential_lease(
@@ -475,10 +713,10 @@ impl CredentialLeaseRepository for RedisCredentialLeaseRepository {
         signals.into_iter().collect()
     }
 
-    async fn try_acquire_scheduling_lease(
+    async fn try_acquire_bounded_lease(
         &self,
-        request: &CredentialSchedulingLeaseRequest,
-    ) -> StoreResult<CredentialSchedulingLeaseAcquisition> {
+        request: &CredentialBoundedLeaseRequest,
+    ) -> StoreResult<CredentialBoundedLeaseAcquisition> {
         request.validate()?;
         let lease_request = request.lease_request();
         let attempt = self
@@ -489,14 +727,14 @@ impl CredentialLeaseRepository for RedisCredentialLeaseRepository {
             )
             .await?;
         match attempt.grant {
-            Some(grant) => Ok(CredentialSchedulingLeaseAcquisition::Acquired(
+            Some(grant) => Ok(CredentialBoundedLeaseAcquisition::Acquired(
                 CredentialLeaseGuard {
                     repository: self.clone(),
                     request: lease_request,
                     grant: Some(grant),
                 },
             )),
-            None => Ok(CredentialSchedulingLeaseAcquisition::Busy {
+            None => Ok(CredentialBoundedLeaseAcquisition::Busy {
                 retry_after: attempt.retry_after,
             }),
         }

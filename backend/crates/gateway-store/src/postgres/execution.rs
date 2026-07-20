@@ -220,6 +220,8 @@ pub struct ModelRequestFinalization {
     pub client_response_id: Option<String>,
     pub upstream_request_id: Option<String>,
     pub upstream_response_id: Option<String>,
+    pub upstream_transport: Option<String>,
+    pub http_version: Option<String>,
     pub error_kind: Option<String>,
     pub provider_error_code: Option<String>,
     pub error_message: Option<String>,
@@ -254,6 +256,14 @@ impl ModelRequestFinalization {
             && (currency.len() != 3 || !currency.bytes().all(|byte| byte.is_ascii_uppercase()))
         {
             return Err(invalid("cost currency must be three uppercase characters"));
+        }
+        for (field, value) in [
+            ("upstream_transport", self.upstream_transport.as_deref()),
+            ("http_version", self.http_version.as_deref()),
+        ] {
+            if let Some(value) = value {
+                require_nonempty(ENTITY, field, value)?;
+            }
         }
         self.timings.validate()
     }
@@ -480,7 +490,9 @@ impl ModelRequestRepository for PgExecutionStore {
                  cost_currency = $23, transport_decision_wait_ms = $24, connect_ms = $25,
                  headers_ms = $26, first_event_ms = $27, first_reasoning_ms = $28,
                  first_text_ms = $29, first_token_ms = $30, provider_processing_ms = $31,
-                 latency_ms = $32, completed_at = $33
+                 latency_ms = $32, completed_at = $33,
+                 upstream_transport = coalesce($34, upstream_transport),
+                 http_version = coalesce($35, http_version)
              where id = $1 and outcome = 'running'",
         )
         .bind(&finalization.model_request_id)
@@ -555,6 +567,8 @@ impl ModelRequestRepository for PgExecutionStore {
         )?)
         .bind(optional_i64(finalization.timings.latency_ms, "latency_ms")?)
         .bind(finalization.completed_at)
+        .bind(finalization.upstream_transport)
+        .bind(finalization.http_version)
         .execute(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("finalize model request"))?;
@@ -713,10 +727,13 @@ impl ExecutionStore for PgExecutionStore {
                 provider_account_ref: failure.account_id.as_ref().map(|id| id.as_str().to_owned()),
                 upstream_model_id: Some(failure.upstream_model_id.as_str().to_owned()),
                 failure_kind: error.kind().as_str().to_owned(),
-                status_code: error.upstream_status(),
+                status_code: error.upstream_status().or(failure.upstream_status_code),
                 provider_error_code: error.upstream_code().map(|code| code.as_str().to_owned()),
                 retry_after_ms,
-                upstream_request_id: error.upstream_request_id().map(|id| id.as_str().to_owned()),
+                upstream_request_id: error
+                    .upstream_request_id()
+                    .map(|id| id.as_str().to_owned())
+                    .or(failure.upstream_request_id),
                 latency_ms: Some(
                     u64::try_from(failure.latency.as_millis())
                         .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?,
@@ -771,6 +788,8 @@ impl ExecutionStore for PgExecutionStore {
                 client_response_id: finalization.client_response_id,
                 upstream_request_id: finalization.upstream_request_id,
                 upstream_response_id: finalization.upstream_response_id,
+                upstream_transport: finalization.upstream_transport,
+                http_version: finalization.http_version,
                 error_kind,
                 provider_error_code: finalization.provider_error_code,
                 error_message,

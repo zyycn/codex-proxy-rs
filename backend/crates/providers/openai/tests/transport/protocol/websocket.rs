@@ -90,15 +90,23 @@ fn websocket_response_create_payload_should_keep_explicit_empty_instructions() {
 
 #[test]
 fn required_websocket_audit_should_forbid_http_fallback() {
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-test", "", Vec::new());
-    request.use_websocket = true;
-    request.force_websocket = true;
+    let request = CodexResponsesRequest::from_body(
+        json!({
+            "model": "gpt-test",
+            "input": [],
+            "stream": true,
+            "store": false,
+            "generate": false
+        })
+        .as_object()
+        .expect("request object")
+        .clone(),
+    );
     let payload = websocket_payload_audit_snapshot(&request);
-
     let artifact =
         websocket_audit_artifact_from_attempt(&request, OpeningAuditSnapshot::default(), payload);
 
-    assert_eq!(artifact.transport_mode, "websocket_required");
+    assert_eq!(artifact.transport_mode, "explicit_websocket_warmup");
     assert!(!artifact.fallback_allowed);
 }
 

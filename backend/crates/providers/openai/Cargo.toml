@@ -15,12 +15,15 @@ bytes = "1.11.1"
 chrono = { version = "0.4.45", features = ["clock", "serde"] }
 cookie = "0.18.1"
 futures = "0.3.32"
+gateway-admin = { path = "../../gateway-admin" }
 gateway-core = { path = "../../gateway-core" }
 gateway-protocol = { path = "../../gateway-protocol" }
 getrandom = "0.3.4"
 hex = "0.4.3"
 jsonwebtoken = { version = "=10.3.0", default-features = false, features = ["rust_crypto"] }
 reqwest = { version = "=0.12.28", default-features = false, features = ["json", "stream", "cookies", "rustls-tls-native-roots", "gzip", "brotli", "zstd", "deflate", "http2"] }
+roxmltree = "0.21.1"
+semver = "1.0.27"
 rustls = { version = "=0.23.42", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8.4"
 rustls-pki-types = "1.14.1"

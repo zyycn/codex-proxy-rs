@@ -60,12 +60,10 @@ impl CodexWebSocketPoolKey {
         ])
     }
 
-    /// 原生 continuation 不依赖客户端 conversation ID，只依赖上游 origin、
-    /// 已冻结账号和握手画像；具体连接再由 latest_response_id 精确确认。
-    pub(super) fn same_upstream_owner(&self, other: &Self) -> bool {
+    pub(super) fn same_logical_connection(&self, other: &Self) -> bool {
         self.base_url == other.base_url
             && self.account_id == other.account_id
-            && self.connection_profile == other.connection_profile
+            && self.conversation_id == other.conversation_id
     }
 }
 

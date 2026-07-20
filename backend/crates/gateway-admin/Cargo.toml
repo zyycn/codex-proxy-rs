@@ -1,0 +1,33 @@
+[package]
+name = "gateway-admin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+autotests = false
+
+[[test]]
+name = "main"
+path = "tests/main.rs"
+
+[dependencies]
+argon2 = "0.5.3"
+async-trait = "0.1.89"
+base64 = "0.22.1"
+chrono = "0.4.45"
+futures = "0.3.32"
+gateway-core = { path = "../gateway-core" }
+hex = "0.4.3"
+rand_core = { version = "0.6.4", features = ["getrandom"] }
+serde = { version = "1.0.228", features = ["derive"] }
+secrecy = { version = "0.10.3", features = ["serde"] }
+subtle = "2.6.1"
+thiserror = "2.0.18"
+uuid = { version = "1.23.3", features = ["v7"] }
+
+[dev-dependencies]
+tokio = { version = "1.52.3", default-features = false, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

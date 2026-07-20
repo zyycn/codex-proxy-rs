@@ -1,6 +1,5 @@
 //! Codex OAuth credential 管理端 wire contract。
 
-use async_trait::async_trait;
 use axum::{
     Json, Router,
     extract::{Query, State},
@@ -8,13 +7,28 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
+use gateway_admin::model::{
+    AdminError as AdminServiceError, AdminErrorKind, PageSize, Revision,
+    accounts::{AccountAvailability, AccountRecord},
+    provider_credentials::{
+        AuthorizationStarted, CompleteAuthorization, CredentialAvailabilityFilter,
+        CredentialCursor, CredentialDetails, CredentialImportResult, CredentialListQuery,
+        CredentialListWindow, CredentialMutation, CredentialMutationResult, CredentialPage,
+        ImportCredentials, ProviderDocument, ReauthorizationTarget, RotateCredential,
+        StartAuthorization,
+    },
+};
+use gateway_core::{
+    engine::credential::{OpaqueProviderData, ProviderAccountId},
+    routing::ProviderInstanceId,
+};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::admin::{
-    AdminAuth, AdminEnvelope, AdminError, AdminRequestContext, AdminResponse, AdminServiceError,
-    AdminServiceErrorKind, AdminSessionState, WireValidationError,
+    AdminAuth, AdminEnvelope, AdminError, AdminResponse, AdminSessionState, WireValidationError,
 };
 
 pub const DEFAULT_PAGE_SIZE: u16 = 50;
@@ -67,6 +81,28 @@ impl ListCredentialsQuery {
         }
         Ok(())
     }
+
+    fn into_command(self) -> Result<CredentialListQuery, WireValidationError> {
+        self.validate()?;
+        Ok(CredentialListQuery {
+            provider_instance_id: self
+                .provider_instance_id
+                .map(ProviderInstanceId::new)
+                .transpose()
+                .map_err(|_| WireValidationError::new("providerInstanceId"))?,
+            availability: self
+                .availability
+                .as_deref()
+                .map(parse_availability)
+                .transpose()?,
+            enabled: self.enabled,
+            window: CredentialListWindow::Page {
+                cursor: self.cursor.as_deref().map(decode_cursor).transpose()?,
+                page_size: PageSize::new(self.limit.unwrap_or(DEFAULT_PAGE_SIZE))
+                    .map_err(|_| WireValidationError::new("limit"))?,
+            },
+        })
+    }
 }
 
 /// Codex credential 详情查询。
@@ -80,6 +116,12 @@ impl CredentialDetailsQuery {
     /// 校验 credential ID。
     pub fn validate(&self) -> Result<(), WireValidationError> {
         require_id(&self.credential_id, "credentialId")
+    }
+
+    fn into_account_id(self) -> Result<ProviderAccountId, WireValidationError> {
+        self.validate()?;
+        ProviderAccountId::new(self.credential_id)
+            .map_err(|_| WireValidationError::new("credentialId"))
     }
 }
 
@@ -104,6 +146,23 @@ impl ImportCredentialsDocumentRequest {
             return Err(WireValidationError::new("document"));
         }
         Ok(())
+    }
+
+    fn into_command(
+        self,
+        context: gateway_admin::model::MutationContext,
+    ) -> Result<ImportCredentials, WireValidationError> {
+        self.validate()?;
+        Ok(ImportCredentials {
+            context,
+            expected_config_revision: revision(
+                self.expected_config_revision,
+                "expectedConfigRevision",
+            )?,
+            provider_instance_id: ProviderInstanceId::new(self.provider_instance_id)
+                .map_err(|_| WireValidationError::new("providerInstanceId"))?,
+            document: provider_document(self.document, "document")?,
+        })
     }
 }
 
@@ -136,6 +195,33 @@ impl StartOAuthAuthorizationRequest {
         }
         Ok(())
     }
+
+    fn into_command(
+        self,
+        context: gateway_admin::model::MutationContext,
+    ) -> Result<StartAuthorization, WireValidationError> {
+        self.validate()?;
+        let reauthorization = match (self.credential_id, self.expected_credential_revision) {
+            (None, None) => None,
+            (Some(account_id), Some(credential_revision)) => Some(ReauthorizationTarget {
+                account_id: ProviderAccountId::new(account_id)
+                    .map_err(|_| WireValidationError::new("credentialId"))?,
+                credential_revision: revision(credential_revision, "expectedCredentialRevision")?,
+            }),
+            _ => return Err(WireValidationError::new("reauthorization")),
+        };
+        Ok(StartAuthorization {
+            context,
+            expected_config_revision: revision(
+                self.expected_config_revision,
+                "expectedConfigRevision",
+            )?,
+            provider_instance_id: ProviderInstanceId::new(self.provider_instance_id)
+                .map_err(|_| WireValidationError::new("providerInstanceId"))?,
+            name: self.name,
+            reauthorization,
+        })
+    }
 }
 
 /// 完成 Codex Authorization Code flow；flow ID 与 callback 都放在 POST body。
@@ -148,9 +234,7 @@ pub struct CompleteOAuthAuthorizationRequest {
 
 impl CompleteOAuthAuthorizationRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
-        use base64::Engine as _;
-
-        if !base64::engine::general_purpose::URL_SAFE_NO_PAD
+        if !URL_SAFE_NO_PAD
             .decode(&self.flow_id)
             .is_ok_and(|decoded| decoded.len() == 32)
         {
@@ -163,6 +247,18 @@ impl CompleteOAuthAuthorizationRequest {
             return Err(WireValidationError::new("callbackUrl"));
         }
         Ok(())
+    }
+
+    fn into_command(
+        self,
+        context: gateway_admin::model::MutationContext,
+    ) -> Result<CompleteAuthorization, WireValidationError> {
+        self.validate()?;
+        Ok(CompleteAuthorization {
+            context,
+            flow_id: self.flow_id,
+            callback_url: self.callback_url,
+        })
     }
 }
 
@@ -188,6 +284,35 @@ impl RotateCredentialRequest {
         )?;
         validate_oauth_material(&self.access_token, self.refresh_token.as_deref())
     }
+
+    fn into_command(
+        self,
+        context: gateway_admin::model::MutationContext,
+    ) -> Result<RotateCredential, WireValidationError> {
+        self.validate()?;
+        let mut material = Map::new();
+        material.insert("access_token".to_owned(), Value::String(self.access_token));
+        material.insert(
+            "refresh_token".to_owned(),
+            self.refresh_token.map_or(Value::Null, Value::String),
+        );
+        Ok(RotateCredential {
+            mutation: CredentialMutation {
+                context,
+                expected_config_revision: revision(
+                    self.expected_config_revision,
+                    "expectedConfigRevision",
+                )?,
+                account_id: ProviderAccountId::new(self.credential_id)
+                    .map_err(|_| WireValidationError::new("credentialId"))?,
+            },
+            expected_credential_revision: revision(
+                self.expected_credential_revision,
+                "expectedCredentialRevision",
+            )?,
+            provider_material: ProviderDocument::new(OpaqueProviderData::new(material)),
+        })
+    }
 }
 
 /// Codex credential 生命周期 mutation 请求。
@@ -203,6 +328,22 @@ impl CredentialMutationRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
         require_id(&self.credential_id, "credentialId")?;
         require_positive(self.expected_config_revision, "expectedConfigRevision")
+    }
+
+    fn into_command(
+        self,
+        context: gateway_admin::model::MutationContext,
+    ) -> Result<CredentialMutation, WireValidationError> {
+        self.validate()?;
+        Ok(CredentialMutation {
+            context,
+            expected_config_revision: revision(
+                self.expected_config_revision,
+                "expectedConfigRevision",
+            )?,
+            account_id: ProviderAccountId::new(self.credential_id)
+                .map_err(|_| WireValidationError::new("credentialId"))?,
+        })
     }
 }
 
@@ -287,6 +428,72 @@ pub struct CodexCredentialRotationData {
     pub credential_revision: i64,
 }
 
+impl From<AccountRecord> for CodexCredentialView {
+    fn from(account: AccountRecord) -> Self {
+        Self {
+            id: account.id,
+            provider_instance_id: account.provider_instance_id.to_string(),
+            name: account.name,
+            email: account.email,
+            upstream_user_id: account.upstream_user_id,
+            upstream_account_id: account.upstream_account_id,
+            enabled: account.enabled,
+            credential_revision: i64::try_from(account.credential_revision.get())
+                .unwrap_or(i64::MAX),
+            has_refresh_token: account.has_refresh_token,
+            availability: codex_availability(account.availability).to_owned(),
+            availability_reason: account.availability_reason,
+            plan_type: account.plan_type,
+            access_token_expires_at: account.access_token_expires_at,
+            next_refresh_at: account.next_refresh_at,
+            cooldown_until: account.cooldown_until,
+            created_at: account.created_at,
+            updated_at: account.updated_at,
+        }
+    }
+}
+
+impl From<CredentialDetails> for CodexCredentialDetailsData {
+    fn from(details: CredentialDetails) -> Self {
+        Self {
+            config_revision: details.config_revision.get(),
+            credential: details.credential.into(),
+        }
+    }
+}
+
+impl From<CredentialImportResult> for CodexCredentialsDocumentImportData {
+    fn from(result: CredentialImportResult) -> Self {
+        Self {
+            config_revision: result.config_revision.get(),
+            credential_ids: result
+                .credential_ids
+                .into_iter()
+                .map(|id| id.to_string())
+                .collect(),
+        }
+    }
+}
+
+impl From<AuthorizationStarted> for CodexOAuthAuthorizationStartedData {
+    fn from(started: AuthorizationStarted) -> Self {
+        Self {
+            flow_id: started.flow_id,
+            authorization_url: started.authorization_url,
+            expires_at: started.expires_at,
+        }
+    }
+}
+
+impl From<CredentialMutationResult> for CodexCredentialMutationData {
+    fn from(result: CredentialMutationResult) -> Self {
+        Self {
+            config_revision: result.config_revision.get(),
+            credential_id: result.account_id.to_string(),
+        }
+    }
+}
+
 fn validate_oauth_material(
     access_token: &str,
     refresh_token: Option<&str>,
@@ -346,63 +553,10 @@ fn require_positive(value: u64, field: &'static str) -> Result<(), WireValidatio
     Ok(())
 }
 
-/// Codex OAuth credential 管理应用端口。
-#[async_trait]
-pub trait CodexAdminService: Send + Sync {
-    async fn list(
-        &self,
-        query: ListCredentialsQuery,
-    ) -> Result<CodexCredentialListData, AdminServiceError>;
-    async fn details(
-        &self,
-        credential_id: String,
-    ) -> Result<CodexCredentialDetailsData, AdminServiceError>;
-    async fn import_document(
-        &self,
-        context: &AdminRequestContext,
-        request: ImportCredentialsDocumentRequest,
-    ) -> Result<CodexCredentialsDocumentImportData, AdminServiceError>;
-    async fn start_authorization(
-        &self,
-        context: &AdminRequestContext,
-        request: StartOAuthAuthorizationRequest,
-    ) -> Result<CodexOAuthAuthorizationStartedData, AdminServiceError>;
-    async fn complete_authorization(
-        &self,
-        context: &AdminRequestContext,
-        request: CompleteOAuthAuthorizationRequest,
-    ) -> Result<CodexCredentialMutationData, AdminServiceError>;
-    async fn rotate(
-        &self,
-        context: &AdminRequestContext,
-        request: RotateCredentialRequest,
-    ) -> Result<CodexCredentialRotationData, AdminServiceError>;
-    async fn enable(
-        &self,
-        context: &AdminRequestContext,
-        request: CredentialMutationRequest,
-    ) -> Result<CodexCredentialMutationData, AdminServiceError>;
-    async fn disable(
-        &self,
-        context: &AdminRequestContext,
-        request: CredentialMutationRequest,
-    ) -> Result<CodexCredentialMutationData, AdminServiceError>;
-    async fn delete(
-        &self,
-        context: &AdminRequestContext,
-        request: CredentialMutationRequest,
-    ) -> Result<CodexCredentialMutationData, AdminServiceError>;
-}
-
-/// Codex HTTP module 所需最小 state。
-pub trait CodexAdminState: AdminSessionState {
-    fn codex_admin_service(&self) -> &dyn CodexAdminService;
-}
-
 /// 构造固定 GET/POST Codex credential 管理路由。
 pub fn router<S>() -> Router<S>
 where
-    S: CodexAdminState + Clone + Send + Sync + 'static,
+    S: AdminSessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route("/api/admin/openai/credentials", get(list_credentials::<S>))
@@ -443,13 +597,16 @@ async fn list_credentials<S>(
     Query(query): Query<ListCredentialsQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: CodexAdminState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
-    query.validate().map_err(map_wire_error)?;
-    ok(
-        StatusCode::OK,
-        state.codex_admin_service().list(query).await,
-    )
+    let command = query.into_command().map_err(map_wire_error)?;
+    let page = state
+        .admin_services()
+        .openai()
+        .list(command)
+        .await
+        .map_err(map_service_error)?;
+    ok(StatusCode::OK, credential_list_data(page)?)
 }
 
 async fn credential_details<S>(
@@ -458,88 +615,173 @@ async fn credential_details<S>(
     Query(query): Query<CredentialDetailsQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: CodexAdminState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
-    query.validate().map_err(map_wire_error)?;
+    let account_id = query.into_account_id().map_err(map_wire_error)?;
+    let details = state
+        .admin_services()
+        .openai()
+        .details(&account_id)
+        .await
+        .map_err(map_service_error)?;
+    ok(StatusCode::OK, CodexCredentialDetailsData::from(details))
+}
+
+async fn import_credentials_document<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    Json(request): Json<ImportCredentialsDocumentRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let command = request
+        .into_command(auth.context().mutation_context())
+        .map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .openai()
+        .import_document(command)
+        .await
+        .map_err(map_service_error)?;
     ok(
-        StatusCode::OK,
-        state
-            .codex_admin_service()
-            .details(query.credential_id)
-            .await,
+        StatusCode::CREATED,
+        CodexCredentialsDocumentImportData::from(result),
     )
 }
 
-macro_rules! codex_post_handler {
-    ($name:ident, $request:ty, $method:ident, $status:expr) => {
-        async fn $name<S>(
-            auth: AdminAuth,
-            State(state): State<S>,
-            Json(request): Json<$request>,
-        ) -> Result<impl IntoResponse, AdminError>
-        where
-            S: CodexAdminState + Send + Sync,
-        {
-            request.validate().map_err(map_wire_error)?;
-            ok(
-                $status,
-                state
-                    .codex_admin_service()
-                    .$method(auth.context(), request)
-                    .await,
-            )
-        }
-    };
+async fn start_oauth_authorization<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    Json(request): Json<StartOAuthAuthorizationRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let command = request
+        .into_command(auth.context().mutation_context())
+        .map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .openai()
+        .start_authorization(command)
+        .await
+        .map_err(map_service_error)?;
+    ok(
+        StatusCode::CREATED,
+        CodexOAuthAuthorizationStartedData::from(result),
+    )
 }
 
-codex_post_handler!(
-    import_credentials_document,
-    ImportCredentialsDocumentRequest,
-    import_document,
-    StatusCode::CREATED
-);
-codex_post_handler!(
-    start_oauth_authorization,
-    StartOAuthAuthorizationRequest,
-    start_authorization,
-    StatusCode::CREATED
-);
-codex_post_handler!(
-    complete_oauth_authorization,
-    CompleteOAuthAuthorizationRequest,
-    complete_authorization,
-    StatusCode::CREATED
-);
-codex_post_handler!(
-    rotate_credential,
-    RotateCredentialRequest,
-    rotate,
-    StatusCode::OK
-);
-codex_post_handler!(
-    enable_credential,
-    CredentialMutationRequest,
-    enable,
-    StatusCode::OK
-);
-codex_post_handler!(
-    disable_credential,
-    CredentialMutationRequest,
-    disable,
-    StatusCode::OK
-);
-codex_post_handler!(
-    delete_credential,
-    CredentialMutationRequest,
-    delete,
-    StatusCode::OK
-);
+async fn complete_oauth_authorization<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    Json(request): Json<CompleteOAuthAuthorizationRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let command = request
+        .into_command(auth.context().mutation_context())
+        .map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .openai()
+        .complete_authorization(command)
+        .await
+        .map_err(map_service_error)?;
+    ok(
+        StatusCode::CREATED,
+        CodexCredentialMutationData::from(result),
+    )
+}
+
+async fn rotate_credential<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    Json(request): Json<RotateCredentialRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let command = request
+        .into_command(auth.context().mutation_context())
+        .map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .openai()
+        .rotate(command)
+        .await
+        .map_err(map_service_error)?;
+    ok(StatusCode::OK, credential_rotation_data(result)?)
+}
+
+async fn enable_credential<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    Json(request): Json<CredentialMutationRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    mutate_credential(auth, state, request, CredentialAction::Enable).await
+}
+
+async fn disable_credential<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    Json(request): Json<CredentialMutationRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    mutate_credential(auth, state, request, CredentialAction::Disable).await
+}
+
+async fn delete_credential<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    Json(request): Json<CredentialMutationRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    mutate_credential(auth, state, request, CredentialAction::Delete).await
+}
+
+#[derive(Clone, Copy)]
+enum CredentialAction {
+    Enable,
+    Disable,
+    Delete,
+}
+
+async fn mutate_credential<S>(
+    auth: AdminAuth,
+    state: S,
+    request: CredentialMutationRequest,
+    action: CredentialAction,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let command = request
+        .into_command(auth.context().mutation_context())
+        .map_err(map_wire_error)?;
+    let service = state.admin_services().openai();
+    let result = match action {
+        CredentialAction::Enable => service.enable(command).await,
+        CredentialAction::Disable => service.disable(command).await,
+        CredentialAction::Delete => service.delete(command).await,
+    }
+    .map_err(map_service_error)?;
+    ok(StatusCode::OK, CodexCredentialMutationData::from(result))
+}
 
 fn ok<T: Serialize>(
     status: StatusCode,
-    result: Result<T, AdminServiceError>,
+    data: T,
 ) -> Result<AdminResponse<AdminEnvelope<T>>, AdminError> {
-    let data = result.map_err(map_service_error)?;
     Ok(AdminResponse::new(status, AdminEnvelope::ok(data)))
 }
 
@@ -549,10 +791,105 @@ fn map_wire_error(error: WireValidationError) -> AdminError {
 
 fn map_service_error(error: AdminServiceError) -> AdminError {
     match error.kind() {
-        AdminServiceErrorKind::Invalid => AdminError::bad_request(error.to_string()),
-        AdminServiceErrorKind::NotFound => AdminError::not_found(error.to_string()),
-        AdminServiceErrorKind::Conflict => AdminError::conflict(error.to_string()),
-        AdminServiceErrorKind::Unavailable => AdminError::service_unavailable(error.to_string()),
-        AdminServiceErrorKind::Internal => AdminError::internal(error.to_string()),
+        AdminErrorKind::Invalid => AdminError::bad_request(error.to_string()),
+        AdminErrorKind::Unauthorized => AdminError::admin_session_required(),
+        AdminErrorKind::NotFound => AdminError::not_found(error.to_string()),
+        AdminErrorKind::Conflict => AdminError::conflict(error.to_string()),
+        AdminErrorKind::RateLimited => AdminError::too_many_login_attempts(),
+        AdminErrorKind::BadGateway => AdminError::bad_gateway(error.to_string()),
+        AdminErrorKind::Unavailable => AdminError::service_unavailable(error.to_string()),
+        AdminErrorKind::Internal => AdminError::internal(error.to_string()),
+    }
+}
+
+fn revision(value: u64, field: &'static str) -> Result<Revision, WireValidationError> {
+    Revision::new(value).map_err(|_| WireValidationError::new(field))
+}
+
+fn provider_document(
+    value: Value,
+    field: &'static str,
+) -> Result<ProviderDocument, WireValidationError> {
+    match value {
+        Value::Object(document) => Ok(ProviderDocument::new(OpaqueProviderData::new(document))),
+        _ => Err(WireValidationError::new(field)),
+    }
+}
+
+fn parse_availability(value: &str) -> Result<CredentialAvailabilityFilter, WireValidationError> {
+    match value {
+        "unknown" => Ok(CredentialAvailabilityFilter::Exact(
+            AccountAvailability::Unknown,
+        )),
+        "ready" => Ok(CredentialAvailabilityFilter::Exact(
+            AccountAvailability::Ready,
+        )),
+        "cooldown" => Ok(CredentialAvailabilityFilter::Exact(
+            AccountAvailability::Cooldown,
+        )),
+        "exhausted" => Ok(CredentialAvailabilityFilter::Exact(
+            AccountAvailability::QuotaExhausted,
+        )),
+        "invalid" => Ok(CredentialAvailabilityFilter::AnyOf(vec![
+            AccountAvailability::Expired,
+            AccountAvailability::Banned,
+            AccountAvailability::Invalid,
+        ])),
+        _ => Err(WireValidationError::new("availability")),
+    }
+}
+
+fn decode_cursor(value: &str) -> Result<CredentialCursor, WireValidationError> {
+    let encoded = URL_SAFE_NO_PAD
+        .decode(value)
+        .map_err(|_| WireValidationError::new("cursor"))?;
+    let wire: CredentialCursorWire =
+        serde_json::from_slice(&encoded).map_err(|_| WireValidationError::new("cursor"))?;
+    require_id(&wire.credential_id, "cursor")?;
+    Ok(CredentialCursor {
+        created_at: wire.created_at,
+        account_id: ProviderAccountId::new(wire.credential_id)
+            .map_err(|_| WireValidationError::new("cursor"))?,
+    })
+}
+
+fn encode_cursor(cursor: &CredentialCursor) -> Result<String, AdminError> {
+    let encoded = serde_json::to_vec(&CredentialCursorWire {
+        created_at: cursor.created_at,
+        credential_id: cursor.account_id.to_string(),
+    })
+    .map_err(|_| AdminError::internal("Failed to encode credential cursor"))?;
+    Ok(URL_SAFE_NO_PAD.encode(encoded))
+}
+
+fn credential_list_data(page: CredentialPage) -> Result<CodexCredentialListData, AdminError> {
+    Ok(CodexCredentialListData {
+        config_revision: page.config_revision.get(),
+        items: page.items.into_iter().map(Into::into).collect(),
+        next_cursor: page.next_cursor.as_ref().map(encode_cursor).transpose()?,
+    })
+}
+
+fn credential_rotation_data(
+    result: CredentialMutationResult,
+) -> Result<CodexCredentialRotationData, AdminError> {
+    let credential_revision = result
+        .credential_revision
+        .ok_or_else(|| AdminError::internal("Credential revision is missing"))?;
+    Ok(CodexCredentialRotationData {
+        credential_id: result.account_id.to_string(),
+        credential_revision: i64::try_from(credential_revision.get()).unwrap_or(i64::MAX),
+    })
+}
+
+const fn codex_availability(value: AccountAvailability) -> &'static str {
+    match value {
+        AccountAvailability::Unknown => "unknown",
+        AccountAvailability::Ready => "ready",
+        AccountAvailability::Cooldown => "cooldown",
+        AccountAvailability::QuotaExhausted => "exhausted",
+        AccountAvailability::Expired
+        | AccountAvailability::Banned
+        | AccountAvailability::Invalid => "invalid",
     }
 }

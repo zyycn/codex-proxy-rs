@@ -4,6 +4,13 @@ use std::{collections::HashSet, time::Duration};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use gateway_core::engine::admission::{
+    ClientAdmissionDecision as CoreAdmissionDecision, ClientAdmissionError as CoreAdmissionError,
+    ClientAdmissionPort, ClientAdmissionRecovery as CoreAdmissionRecovery,
+    ClientAdmissionRejection as CoreAdmissionRejection,
+    ClientAdmissionRequest as CoreAdmissionRequest,
+    ClientAdmissionRestoreResult as CoreAdmissionRestoreResult,
+};
 use redis::{Script, aio::ConnectionManager};
 
 use crate::{StoreError, StoreResult, redis_unavailable, require_nonempty};
@@ -394,6 +401,85 @@ impl ClientAdmissionRepository for RedisClientAdmissionRepository {
             .await
             .map_err(|_| redis_unavailable("clear client admission"))?;
         Ok(())
+    }
+}
+
+impl ClientAdmissionPort for RedisClientAdmissionRepository {
+    fn admit(
+        &self,
+        request: CoreAdmissionRequest,
+    ) -> futures::future::BoxFuture<'_, Result<CoreAdmissionDecision, CoreAdmissionError>> {
+        Box::pin(async move {
+            self.admit_client_request(&ClientAdmissionRequest {
+                model_request_id: request.model_request_id.as_str().to_owned(),
+                client_api_key_ref: request.client_api_key_id.as_str().to_owned(),
+                input_token_estimate: request.input_token_estimate,
+                lease_ttl: request.lease_ttl,
+                limits: ClientAdmissionLimits {
+                    max_concurrency: request.limits.max_concurrency,
+                    requests_per_minute: request.limits.requests_per_minute,
+                    tokens_per_minute: request.limits.tokens_per_minute,
+                },
+            })
+            .await
+            .map(|decision| match decision {
+                ClientAdmissionDecision::Granted => CoreAdmissionDecision::Granted,
+                ClientAdmissionDecision::Rejected(ClientAdmissionRejection::RateLimited) => {
+                    CoreAdmissionDecision::Rejected(CoreAdmissionRejection::RateLimited)
+                }
+                ClientAdmissionDecision::Rejected(ClientAdmissionRejection::ConcurrencyLimited) => {
+                    CoreAdmissionDecision::Rejected(CoreAdmissionRejection::ConcurrencyLimited)
+                }
+            })
+            .map_err(|_| CoreAdmissionError)
+        })
+    }
+
+    fn release<'a>(
+        &'a self,
+        client_api_key_id: &'a gateway_core::policy::ClientApiKeyId,
+        model_request_id: &'a gateway_core::engine::ModelRequestId,
+    ) -> futures::future::BoxFuture<'a, Result<bool, CoreAdmissionError>> {
+        Box::pin(async move {
+            self.release_client_request(client_api_key_id.as_str(), model_request_id.as_str())
+                .await
+                .map_err(|_| CoreAdmissionError)
+        })
+    }
+
+    fn restore(
+        &self,
+        recovery: CoreAdmissionRecovery,
+    ) -> futures::future::BoxFuture<'_, Result<CoreAdmissionRestoreResult, CoreAdmissionError>>
+    {
+        Box::pin(async move {
+            self.restore_client_admission(&ClientAdmissionRestore {
+                client_api_key_ref: recovery.client_api_key_id.as_str().to_owned(),
+                recent_requests: recovery
+                    .recent_requests
+                    .into_iter()
+                    .map(|request| ClientAdmissionRecentRequest {
+                        model_request_id: request.model_request_id.as_str().to_owned(),
+                        started_at: DateTime::<Utc>::from(request.started_at),
+                        input_token_estimate: request.input_token_estimate,
+                    })
+                    .collect(),
+                running_requests: recovery
+                    .running_requests
+                    .into_iter()
+                    .map(|request| ClientAdmissionRunningRequest {
+                        model_request_id: request.model_request_id.as_str().to_owned(),
+                        expires_at: DateTime::<Utc>::from(request.expires_at),
+                    })
+                    .collect(),
+            })
+            .await
+            .map(|restored| CoreAdmissionRestoreResult {
+                restored_recent_requests: restored.restored_recent_requests,
+                restored_running_requests: restored.restored_running_requests,
+            })
+            .map_err(|_| CoreAdmissionError)
+        })
     }
 }
 

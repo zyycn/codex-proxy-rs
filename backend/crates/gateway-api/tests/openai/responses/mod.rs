@@ -2,13 +2,15 @@ mod http;
 mod websocket;
 
 use gateway_api::openai::responses::{
-    ContinuationIntent, RequestDecodeError, ResponseEncodeError, ResponsesCollector, decode_request,
+    ContinuationIntent, OpenAiResponsesEncoder, RequestDecodeError, ResponseEncodeError,
+    ResponsesCollector, decode_request, decode_response_create,
 };
 use gateway_core::{
     accounting::{CalculatedCost, ProviderReportedCost, Usage},
+    error::SafeUpstreamValue,
     event::{
-        ContentItem, ContentKind, EventSequenceError, FinishReason, GatewayEvent, ReasoningDelta,
-        ResponseMeta, TextDelta, ToolCallDelta,
+        ContentItem, ContentKind, EventSequenceError, FinishReason, GatewayEvent,
+        ProtocolWireEvent, ProviderEvent, ReasoningDelta, ResponseMeta, TextDelta, ToolCallDelta,
     },
     operation::{
         ContentPart, Feature, MessageRole, Operation, OutputFormat, ReasoningEffort,
@@ -29,6 +31,15 @@ fn generate_operation(
         Operation::Generate(request) => request,
         _ => panic!("Responses decoder must produce Generate"),
     }
+}
+
+fn openai_wire_body(
+    decoded: &gateway_api::openai::responses::DecodedResponsesRequest,
+) -> &serde_json::Map<String, Value> {
+    generate_operation(decoded)
+        .protocol_payload()
+        .expect("OpenAI request should retain wire payload")
+        .body()
 }
 
 fn response_meta() -> ResponseMeta {
@@ -150,6 +161,19 @@ fn decoder_should_preserve_roles_tools_reasoning_schema_and_provider_options() {
 }
 
 #[test]
+fn decoder_should_preserve_a_bounded_prompt_cache_key_without_debug_exposure() {
+    let decoded = generate_request(json!({
+        "model": "smart-code",
+        "input": "cache this prefix",
+        "prompt_cache_key": "private-cache-route"
+    }));
+    let request = generate_operation(&decoded);
+
+    assert_eq!(request.prompt_cache_key(), Some("private-cache-route"));
+    assert!(!format!("{decoded:?}").contains("private-cache-route"));
+}
+
+#[test]
 fn decoder_should_map_string_input_to_user_text() {
     let decoded = generate_request(json!({"model": "smart-code", "input": "hello"}));
     let message = &generate_operation(&decoded).messages()[0];
@@ -161,7 +185,7 @@ fn decoder_should_map_string_input_to_user_text() {
 }
 
 #[test]
-fn decoder_should_default_to_buffered_stored_response() {
+fn decoder_should_default_to_streaming_non_stored_response() {
     let decoded = generate_request(json!({"model": "smart-code", "input": "hello"}));
 
     assert_eq!(
@@ -170,8 +194,96 @@ fn decoder_should_default_to_buffered_stored_response() {
             decoded.metadata().store(),
             generate_operation(&decoded).response_persistence(),
         ),
-        (false, true, ResponsePersistence::Store)
+        (true, false, ResponsePersistence::DoNotStore)
     );
+}
+
+#[test]
+fn decoder_should_project_boolean_transport_override_without_wire_leak() {
+    for (use_websocket, expected) in [(true, "websocket"), (false, "http_sse")] {
+        let decoded = generate_request(json!({
+            "model": "smart-code",
+            "input": "hello",
+            "use_websocket": use_websocket
+        }));
+        let request = generate_operation(&decoded);
+
+        assert!(openai_wire_body(&decoded).get("use_websocket").is_none());
+        assert_eq!(
+            request
+                .provider_options()
+                .get("openai")
+                .and_then(|options| options.get("transport")),
+            Some(&json!(expected))
+        );
+    }
+}
+
+#[test]
+fn decoder_should_reject_non_boolean_transport_override_without_disclosure() {
+    let secret = "private-transport-marker";
+    let error = decode_request(
+        json!({"model": "smart-code", "input": "hello", "use_websocket": secret})
+            .to_string()
+            .as_bytes(),
+    )
+    .expect_err("transport override must be a boolean");
+
+    assert_eq!(
+        error,
+        RequestDecodeError::InvalidType {
+            field: "use_websocket".to_owned(),
+            expected: "a boolean"
+        }
+    );
+    assert!(!format!("{error:?}\n{error}").contains(secret));
+}
+
+#[test]
+fn decoder_should_prefer_explicit_provider_transport_over_body_override() {
+    let decoded = generate_request(json!({
+        "model": "smart-code",
+        "input": "hello",
+        "use_websocket": true,
+        "provider_options": {
+            "version": "v1",
+            "providers": {
+                "openai": {"schema_version": 1, "transport": "http_sse"}
+            }
+        }
+    }));
+
+    assert_eq!(
+        generate_operation(&decoded)
+            .provider_options()
+            .get("openai")
+            .and_then(|options| options.get("transport")),
+        Some(&json!("http_sse"))
+    );
+    assert!(openai_wire_body(&decoded).get("use_websocket").is_none());
+}
+
+#[test]
+fn response_create_should_share_transport_override_projection() {
+    let decoded = decode_response_create(
+        &json!({
+            "type": "response.create",
+            "model": "smart-code",
+            "input": "hello",
+            "use_websocket": false
+        })
+        .to_string(),
+    )
+    .expect("WebSocket response.create should use the shared request decoder");
+
+    assert_eq!(
+        generate_operation(&decoded)
+            .provider_options()
+            .get("openai")
+            .and_then(|options| options.get("transport")),
+        Some(&json!("http_sse"))
+    );
+    assert!(openai_wire_body(&decoded).get("use_websocket").is_none());
 }
 
 #[test]
@@ -327,43 +439,41 @@ fn decoder_should_require_input() {
 }
 
 #[test]
-fn decoder_should_reject_zero_max_output_tokens() {
-    let error = decode_request(
+fn decoder_should_preserve_zero_max_output_tokens_for_upstream_validation() {
+    let decoded = decode_request(
         json!({"model": "smart-code", "input": "hello", "max_output_tokens": 0})
             .to_string()
             .as_bytes(),
     )
-    .expect_err("zero output limit must fail");
+    .expect("opaque OpenAI field should pass through");
 
     assert_eq!(
-        error,
-        RequestDecodeError::InvalidValue {
-            field: "max_output_tokens".to_owned()
-        }
+        (
+            generate_operation(&decoded).max_output_tokens(),
+            openai_wire_body(&decoded).get("max_output_tokens"),
+        ),
+        (None, Some(&json!(0)))
     );
 }
 
 #[test]
-fn decoder_should_reject_fractional_max_output_tokens() {
-    let error = decode_request(
+fn decoder_should_preserve_fractional_max_output_tokens_for_upstream_validation() {
+    let decoded = decode_request(
         json!({"model": "smart-code", "input": "hello", "max_output_tokens": 1.5})
             .to_string()
             .as_bytes(),
     )
-    .expect_err("fractional output limit must fail");
+    .expect("opaque OpenAI field should pass through");
 
     assert_eq!(
-        error,
-        RequestDecodeError::InvalidType {
-            field: "max_output_tokens".to_owned(),
-            expected: "a non-negative integer"
-        }
+        openai_wire_body(&decoded).get("max_output_tokens"),
+        Some(&json!(1.5))
     );
 }
 
 #[test]
-fn decoder_should_reject_an_unscoped_previous_response_id() {
-    let error = decode_request(
+fn decoder_should_accept_an_external_previous_response_id() {
+    let decoded = decode_request(
         json!({
             "model": "smart-code",
             "input": "continue",
@@ -372,14 +482,12 @@ fn decoder_should_reject_an_unscoped_previous_response_id() {
         .to_string()
         .as_bytes(),
     )
-    .expect_err("non-gateway response ID must fail");
+    .expect("external response ID should pass through");
 
-    assert_eq!(
-        error,
-        RequestDecodeError::InvalidValue {
-            field: "previous_response_id".to_owned()
-        }
-    );
+    assert!(matches!(
+        decoded.metadata().continuation(),
+        ContinuationIntent::PreviousResponseId(value) if value == "upstream-response-id"
+    ));
 }
 
 #[test]
@@ -426,8 +534,8 @@ fn decoder_should_reject_an_oversized_gateway_response_id() {
 }
 
 #[test]
-fn decoder_should_reject_inline_image_data() {
-    let error = decode_request(
+fn decoder_should_preserve_inline_image_data_without_decoding_it() {
+    let decoded = decode_request(
         json!({
             "model": "smart-vision",
             "input": [{
@@ -441,20 +549,27 @@ fn decoder_should_reject_inline_image_data() {
         .to_string()
         .as_bytes(),
     )
-    .expect_err("inline image data must fail");
+    .expect("Provider should own OpenAI image validation");
 
+    assert!(
+        decoded
+            .operation()
+            .capability_requirements()
+            .features()
+            .contains(&Feature::Vision)
+    );
     assert_eq!(
-        error,
-        RequestDecodeError::InvalidValue {
-            field: "input[0].content[0].image_url".to_owned()
-        }
+        openai_wire_body(&decoded)
+            .get("input")
+            .and_then(|input| input.pointer("/0/content/0/image_url")),
+        Some(&json!("data:image/png;base64,cHJpdmF0ZQ=="))
     );
 }
 
 #[test]
-fn decoder_should_report_nested_unknown_field_path_without_its_value() {
+fn decoder_should_preserve_nested_unknown_fields_without_debug_exposure() {
     let secret = "nested-private-value";
-    let error = decode_request(
+    let decoded = decode_request(
         json!({
             "model": "smart-code",
             "input": [{
@@ -469,49 +584,45 @@ fn decoder_should_report_nested_unknown_field_path_without_its_value() {
         .to_string()
         .as_bytes(),
     )
-    .expect_err("nested unknown field must fail");
-    let rendered = format!("{error:?}\n{error}\n{}", error.protocol_body().into_value());
+    .expect("unknown OpenAI fields should pass through");
+    let rendered = format!("{decoded:?}");
 
     assert_eq!(
-        error,
-        RequestDecodeError::UnknownField {
-            field: "input[0].content[0].secret_value".to_owned()
-        }
+        openai_wire_body(&decoded)
+            .get("input")
+            .and_then(|input| input.pointer("/0/content/0/secret_value")),
+        Some(&json!(secret))
     );
     assert!(!rendered.contains(secret));
 }
 
 #[test]
-fn decoder_should_reject_unknown_top_level_field() {
-    let error = decode_request(
+fn decoder_should_preserve_unknown_top_level_field() {
+    let decoded = decode_request(
         json!({"model": "smart-code", "input": "hello", "mystery": true})
             .to_string()
             .as_bytes(),
     )
-    .expect_err("unknown field must fail");
+    .expect("unknown OpenAI fields should pass through");
 
     assert_eq!(
-        error,
-        RequestDecodeError::UnknownField {
-            field: "mystery".to_owned()
-        }
+        openai_wire_body(&decoded).get("mystery"),
+        Some(&json!(true))
     );
 }
 
 #[test]
-fn decoder_should_reject_known_unsupported_semantic() {
-    let error = decode_request(
+fn decoder_should_preserve_new_official_semantic_without_gateway_enumeration() {
+    let decoded = decode_request(
         json!({"model": "smart-code", "input": "hello", "background": true})
             .to_string()
             .as_bytes(),
     )
-    .expect_err("known unsupported field must fail");
+    .expect("Provider should own OpenAI request evolution");
 
     assert_eq!(
-        error,
-        RequestDecodeError::UnsupportedField {
-            field: "background".to_owned()
-        }
+        openai_wire_body(&decoded).get("background"),
+        Some(&json!(true))
     );
 }
 
@@ -535,11 +646,11 @@ fn decoder_should_reject_unknown_provider_options_version() {
 fn request_errors_should_not_disclose_prompt_or_raw_body() {
     let secret = "private prompt that must not appear";
     let error = decode_request(
-        json!({"model": "smart-code", "input": secret, "background": true})
+        json!({"model": "smart-code", "input": secret, "stream": "private-invalid-value"})
             .to_string()
             .as_bytes(),
     )
-    .expect_err("unsupported field must fail");
+    .expect_err("wire routing field type must fail");
     let rendered = format!("{error:?}\n{error}\n{}", error.protocol_body().into_value());
 
     assert!(!rendered.contains(secret) && !rendered.contains("private prompt"));
@@ -837,4 +948,76 @@ fn collector_should_reject_unrepresentable_media_output() {
         error,
         ResponseEncodeError::UnsupportedContentKind { kind: "image" }
     );
+}
+
+#[test]
+fn openai_wire_encoder_should_preserve_unknown_media_events_and_hide_upstream_response_id() {
+    let upstream_id = "resp_upstream_private";
+    let gateway_id = "resp_gateway_public";
+    let started = ResponseMeta::new(gateway_id, "gpt-test").with_upstream_response_id(
+        SafeUpstreamValue::new(upstream_id).expect("safe upstream response ID"),
+    );
+    let completed = ResponseMeta::new(gateway_id, "gpt-test")
+        .with_finish_reason(FinishReason::Stop)
+        .with_upstream_response_id(
+            SafeUpstreamValue::new(upstream_id).expect("safe upstream response ID"),
+        );
+    let events = [
+        openai_wire_event(
+            vec![GatewayEvent::Started(started)],
+            "response.created",
+            json!({
+                "type": "response.created",
+                "response": {"id": upstream_id, "status": "in_progress"}
+            }),
+        ),
+        openai_wire_event(
+            Vec::new(),
+            "response.image_generation_call.partial_image",
+            json!({
+                "type": "response.image_generation_call.partial_image",
+                "response_id": upstream_id,
+                "partial_image_b64": "opaque-image-fragment"
+            }),
+        ),
+        openai_wire_event(
+            vec![GatewayEvent::Completed(completed)],
+            "response.completed",
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": upstream_id,
+                    "status": "completed",
+                    "output": [{"type": "image_generation_call", "result": "opaque-image"}]
+                }
+            }),
+        ),
+    ];
+    let mut encoder = OpenAiResponsesEncoder::new(1_700_000_000);
+    let frames = events
+        .iter()
+        .flat_map(|event| encoder.push_sse(event).expect("wire event should encode"))
+        .collect::<Vec<_>>();
+    let response = encoder.finish().expect("wire response should finish");
+    let parsed = parse_sse_events(&frames.join("")).expect("wire SSE should parse");
+
+    assert_eq!(parsed.len(), 3);
+    assert_eq!(
+        serde_json::from_str::<Value>(&parsed[1].data)
+            .expect("unknown event JSON")
+            .get("partial_image_b64"),
+        Some(&json!("opaque-image-fragment"))
+    );
+    assert_eq!(response.get("id"), Some(&json!(gateway_id)));
+    assert!(!frames.join("").contains(upstream_id));
+}
+
+fn openai_wire_event(canonical: Vec<GatewayEvent>, event_type: &str, data: Value) -> ProviderEvent {
+    let wire = ProtocolWireEvent::json("openai", Some(event_type.to_owned()), data)
+        .expect("valid OpenAI wire event");
+    if canonical.is_empty() {
+        ProviderEvent::wire(wire)
+    } else {
+        ProviderEvent::canonical_with_wire(canonical, wire)
+    }
 }

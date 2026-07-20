@@ -246,6 +246,25 @@ impl AdminError {
     }
 }
 
+/// 把管理用例的稳定错误分类映射到既有 HTTP 错误 contract。
+pub(crate) fn map_admin_service_error(
+    error: gateway_admin::model::AdminError,
+    unavailable_message: &'static str,
+) -> AdminError {
+    use gateway_admin::model::AdminErrorKind;
+
+    match error.kind() {
+        AdminErrorKind::Invalid => AdminError::bad_request(error.to_string()),
+        AdminErrorKind::Unauthorized => AdminError::admin_session_required(),
+        AdminErrorKind::NotFound => AdminError::not_found(error.to_string()),
+        AdminErrorKind::Conflict => AdminError::conflict(error.to_string()),
+        AdminErrorKind::RateLimited => AdminError::too_many_login_attempts(),
+        AdminErrorKind::BadGateway => AdminError::bad_gateway(error.to_string()),
+        AdminErrorKind::Unavailable => AdminError::service_unavailable(unavailable_message),
+        AdminErrorKind::Internal => AdminError::internal(error.to_string()),
+    }
+}
+
 impl IntoResponse for AdminError {
     fn into_response(self) -> Response {
         (self.status, Json(self.body)).into_response()

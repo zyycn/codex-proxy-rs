@@ -1,7 +1,15 @@
+use gateway_admin::{
+    model::client_keys::{
+        ClientKeyListQuery as AdminClientKeyListQuery, ClientKeyPageSize,
+        ClientKeySort as AdminClientKeySort, ClientKeySortField as AdminClientKeySortField,
+        SortDirection as AdminSortDirection,
+    },
+    ports::store::ClientKeyStore as _,
+};
 use gateway_store::postgres::{
     ClientApiKeyCursor, ClientApiKeyCursorValue, ClientApiKeyListQuery, ClientApiKeyRepository,
     ClientApiKeySort, ClientApiKeySortDirection, ClientApiKeySortField, NewClientApiKey,
-    PgClientApiKeyRepository,
+    PgAdminClientKeyStore, PgClientApiKeyRepository,
 };
 
 use super::TestDatabase;
@@ -90,6 +98,16 @@ async fn client_key_list_uses_safe_keyset_search_and_filtered_total() {
 #[test]
 fn client_key_cursor_is_bound_to_one_sort_contract() {
     let created_sort = ClientApiKeySort::default();
+    assert!(
+        ClientApiKeyListQuery {
+            cursor: None,
+            page_size: u16::MAX,
+            search: None,
+            sort: created_sort,
+        }
+        .validate()
+        .is_ok()
+    );
     let cursor = ClientApiKeyCursor::new(
         created_sort,
         ClientApiKeyCursorValue::CreatedAt(chrono::Utc::now()),
@@ -114,6 +132,29 @@ fn client_key_cursor_is_bound_to_one_sort_contract() {
         )
         .is_err()
     );
+}
+
+#[tokio::test]
+async fn admin_client_key_adapter_should_preserve_the_full_nonzero_u16_page_size() {
+    let Some(database) = TestDatabase::create("admin_client_key_max_page").await else {
+        return;
+    };
+    let page = PgAdminClientKeyStore::new(database.pool.clone())
+        .list_client_keys(AdminClientKeyListQuery {
+            cursor: None,
+            page_size: ClientKeyPageSize::new(u16::MAX).expect("maximum page size"),
+            search: None,
+            sort: AdminClientKeySort {
+                field: AdminClientKeySortField::CreatedAt,
+                direction: AdminSortDirection::Desc,
+            },
+        })
+        .await
+        .expect("maximum Client Key page size");
+
+    assert_eq!(page.total, 0);
+    assert!(page.items.is_empty());
+    database.close().await;
 }
 
 #[tokio::test]

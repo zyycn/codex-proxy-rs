@@ -1,30 +1,35 @@
 //! Codex quota 原始观察、Provider-owned 解析与账号状态投影。
 
-use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::collections::BTreeMap;
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{DateTime, Utc};
 use gateway_core::engine::credential::{
-    AccountAvailability, CredentialRevision, OpaqueProviderData, ProviderAccountId,
-    ProviderAccountStore, QuotaObservation, QuotaWriteOutcome,
+    AccountAvailability, AccountQuotaSignals, CredentialRevision, OpaqueProviderData,
+    ProviderAccount, ProviderAccountId, ProviderAccountStore, QuotaObservation, QuotaWriteOutcome,
 };
 use gateway_core::routing::ProviderInstance;
+use gateway_protocol::openai::events::{
+    ParsedRateLimits, RateLimitDetails, RateLimitWindow, parse_rate_limit_headers,
+};
 use reqwest::{Client, StatusCode};
 use secrecy::ExposeSecret;
 use serde_json::{Map, Value};
 use thiserror::Error;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::provider::{CodexEndpointPolicy, CodexProviderInstanceConfig};
+use crate::provider::{CodexOriginPolicy, CodexProviderInstanceConfig};
 use crate::transport::profile::CodexWireProfileState;
-use crate::transport::{
-    CodexBackendClient, CodexClientError, CodexRequestContext, build_reqwest_client,
-};
+use crate::transport::{CodexBackendClient, CodexClientError, CodexRequestContext};
 
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
 
 const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 const MAX_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60 * 60);
+const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);
+const QUOTA_HYDRATION_FAILURE_TTL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CodexQuotaFact {
@@ -172,8 +177,6 @@ pub enum CodexCredentialQuotaError {
     InvalidInstance,
     #[error("Codex quota response is invalid")]
     InvalidCredentialData,
-    #[error("Codex quota transport could not initialize")]
-    TransportInitialization,
     #[error(transparent)]
     Repository(#[from] CredentialRepositoryError),
     #[error("provider account store is unavailable")]
@@ -197,31 +200,237 @@ pub struct CodexCredentialQuotaService {
     store: Arc<dyn ProviderAccountStore>,
     profile: CodexWireProfileState,
     http: Client,
-    endpoint_policy: CodexEndpointPolicy,
+    origin_policy: Arc<dyn CodexOriginPolicy>,
+    scheduling: CodexQuotaSchedulingProjection,
+}
+
+#[derive(Clone, Default)]
+struct CodexQuotaSchedulingProjection {
+    state: Arc<RwLock<CodexQuotaProjectionState>>,
+    hydration: Arc<Mutex<()>>,
+}
+
+#[derive(Default)]
+struct CodexQuotaProjectionState {
+    next_version: u64,
+    entries: BTreeMap<ProviderAccountId, CodexQuotaSchedulingEntry>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CodexQuotaSchedulingEntry {
+    version: u64,
+    revision: CredentialRevision,
+    expires_at: Instant,
+    signals: Option<AccountQuotaSignals>,
+}
+
+#[derive(Clone)]
+struct CodexQuotaHydrationTarget {
+    account: ProviderAccount,
+    expected_version: Option<u64>,
+}
+
+impl CodexQuotaSchedulingProjection {
+    fn hydration_targets(&self, accounts: &[ProviderAccount]) -> Vec<CodexQuotaHydrationTarget> {
+        let state = self
+            .state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let now = Instant::now();
+        accounts
+            .iter()
+            .filter_map(|account| {
+                let current = state.entries.get(account.id());
+                current
+                    .is_none_or(|entry| {
+                        entry.revision != account.revision() || now >= entry.expires_at
+                    })
+                    .then(|| CodexQuotaHydrationTarget {
+                        account: account.clone(),
+                        expected_version: current.map(|entry| entry.version),
+                    })
+            })
+            .collect()
+    }
+
+    fn observe(
+        &self,
+        account_id: ProviderAccountId,
+        revision: CredentialRevision,
+        observed_at: SystemTime,
+        fact: CodexQuotaFact,
+    ) -> bool {
+        let Some(remaining_ttl) = quota_projection_ttl(observed_at) else {
+            return false;
+        };
+        self.replace(
+            account_id,
+            revision,
+            remaining_ttl,
+            quota_scheduling_signals(fact),
+        );
+        true
+    }
+
+    fn mark_unknown_if_unchanged(&self, target: &CodexQuotaHydrationTarget, ttl: Duration) {
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state
+            .entries
+            .get(target.account.id())
+            .map(|entry| entry.version)
+            != target.expected_version
+        {
+            return;
+        }
+        insert_projection_entry(
+            &mut state,
+            target.account.id().clone(),
+            target.account.revision(),
+            ttl,
+            None,
+        );
+    }
+
+    fn observe_if_unchanged(
+        &self,
+        target: &CodexQuotaHydrationTarget,
+        snapshot: &CodexAccountQuotaSnapshot,
+    ) -> bool {
+        let Some(remaining_ttl) = quota_projection_ttl(snapshot.observed_at()) else {
+            return false;
+        };
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state
+            .entries
+            .get(target.account.id())
+            .map(|entry| entry.version)
+            != target.expected_version
+        {
+            return true;
+        }
+        insert_projection_entry(
+            &mut state,
+            snapshot.account_id().clone(),
+            snapshot.credential_revision(),
+            remaining_ttl,
+            quota_scheduling_signals(snapshot.fact()),
+        );
+        true
+    }
+
+    fn replace(
+        &self,
+        account_id: ProviderAccountId,
+        revision: CredentialRevision,
+        ttl: Duration,
+        signals: Option<AccountQuotaSignals>,
+    ) {
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        insert_projection_entry(&mut state, account_id, revision, ttl, signals);
+    }
+
+    fn signals(&self, account: &ProviderAccount) -> Option<AccountQuotaSignals> {
+        let state = self
+            .state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state
+            .entries
+            .get(account.id())
+            .filter(|entry| {
+                entry.revision == account.revision() && Instant::now() < entry.expires_at
+            })
+            .and_then(|entry| entry.signals)
+    }
+}
+
+fn insert_projection_entry(
+    state: &mut CodexQuotaProjectionState,
+    account_id: ProviderAccountId,
+    revision: CredentialRevision,
+    ttl: Duration,
+    signals: Option<AccountQuotaSignals>,
+) {
+    state.next_version = state.next_version.saturating_add(1);
+    state.entries.insert(
+        account_id,
+        CodexQuotaSchedulingEntry {
+            version: state.next_version,
+            revision,
+            expires_at: Instant::now() + ttl,
+            signals,
+        },
+    );
 }
 
 impl CodexCredentialQuotaService {
     pub fn new(
         repository: CodexCredentialRepository,
         profile: CodexWireProfileState,
-    ) -> Result<Self, CodexCredentialQuotaError> {
-        Self::new_with_endpoint_policy(repository, profile, CodexEndpointPolicy::Official)
-    }
-
-    pub fn new_with_endpoint_policy(
-        repository: CodexCredentialRepository,
-        profile: CodexWireProfileState,
-        endpoint_policy: CodexEndpointPolicy,
-    ) -> Result<Self, CodexCredentialQuotaError> {
-        let http = build_reqwest_client()
-            .map_err(|_| CodexCredentialQuotaError::TransportInitialization)?;
-        Ok(Self {
+        http: Client,
+        origin_policy: Arc<dyn CodexOriginPolicy>,
+    ) -> Self {
+        Self {
             store: Arc::clone(repository.store()),
             repository,
             profile,
             http,
-            endpoint_policy,
-        })
+            origin_policy,
+            scheduling: CodexQuotaSchedulingProjection::default(),
+        }
+    }
+
+    /// 批量预热请求级额度投影；持久层或 Provider JSON 异常只退化为未知额度。
+    pub async fn prepare_scheduling(&self, accounts: &[ProviderAccount]) {
+        if self.scheduling.hydration_targets(accounts).is_empty() {
+            return;
+        }
+        let _hydration = self.scheduling.hydration.lock().await;
+        let pending = self.scheduling.hydration_targets(accounts);
+        if pending.is_empty() {
+            return;
+        }
+        let account_ids = pending
+            .iter()
+            .map(|target| target.account.id().clone())
+            .collect::<Vec<_>>();
+        let Ok(observations) = self.store.get_quotas(&account_ids).await else {
+            for target in &pending {
+                self.scheduling
+                    .mark_unknown_if_unchanged(target, QUOTA_HYDRATION_FAILURE_TTL);
+            }
+            return;
+        };
+        let observations = observations
+            .into_iter()
+            .map(|observation| (observation.account_id.clone(), observation))
+            .collect::<BTreeMap<_, _>>();
+        for target in pending {
+            let snapshot = observations
+                .get(target.account.id())
+                .filter(|observation| observation.expected_revision == target.account.revision())
+                .and_then(quota_snapshot_from_observation);
+            if !snapshot
+                .is_some_and(|snapshot| self.scheduling.observe_if_unchanged(&target, &snapshot))
+            {
+                self.scheduling
+                    .mark_unknown_if_unchanged(&target, QUOTA_SCHEDULING_TTL);
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn scheduling_signals(&self, account: &ProviderAccount) -> Option<AccountQuotaSignals> {
+        self.scheduling.signals(account)
     }
 
     pub async fn synchronize_instance(
@@ -229,7 +438,7 @@ impl CodexCredentialQuotaService {
         instance: &gateway_core::routing::ProviderInstance,
     ) -> Result<CodexQuotaSyncSummary, CodexCredentialQuotaError> {
         let config =
-            CodexProviderInstanceConfig::from_snapshot_with_policy(instance, self.endpoint_policy)
+            CodexProviderInstanceConfig::from_snapshot(instance, self.origin_policy.as_ref())
                 .map_err(|_| CodexCredentialQuotaError::InvalidInstance)?;
         let client = CodexBackendClient::new(
             self.http.clone(),
@@ -238,7 +447,11 @@ impl CodexCredentialQuotaService {
         );
         let accounts = self.repository.list_for_instance(config.id()).await?;
         let mut summary = CodexQuotaSyncSummary::default();
-        for account in accounts.into_iter().filter(|account| account.enabled()) {
+        let now = SystemTime::now();
+        for account in accounts
+            .into_iter()
+            .filter(|account| eligible_quota_sync_account(account, now))
+        {
             let runtime = match self.repository.load_runtime_credential(&account).await {
                 Ok(runtime) => runtime,
                 Err(_) => {
@@ -294,6 +507,12 @@ impl CodexCredentialQuotaService {
                         summary.stale += 1;
                         continue;
                     }
+                    self.scheduling.observe(
+                        current.id().clone(),
+                        current.revision(),
+                        observed_at,
+                        fact,
+                    );
                     if fact.exhausted() {
                         summary.exhausted += 1;
                     } else {
@@ -346,6 +565,69 @@ impl CodexCredentialQuotaService {
         Ok(summary)
     }
 
+    /// 把正常推理响应携带的限流事实合并进 Provider 原始 quota JSON。
+    pub async fn synchronize_passive_headers(
+        &self,
+        account: &ProviderAccount,
+        headers: &[(String, String)],
+    ) -> Result<bool, CodexCredentialQuotaError> {
+        let Some(rate_limits) = parse_rate_limit_headers(headers) else {
+            return Ok(false);
+        };
+        let existing = self
+            .store
+            .get_quotas(std::slice::from_ref(account.id()))
+            .await?
+            .into_iter()
+            .find(|observation| {
+                observation.account_id == *account.id()
+                    && observation.expected_revision == account.revision()
+            })
+            .and_then(|observation| observation.quota)
+            .map(OpaqueProviderData::into_inner)
+            .unwrap_or_default();
+        let quota = merge_passive_quota(existing, &rate_limits);
+        let fact = parse_codex_quota_usage(&Value::Object(quota.clone()))?;
+        let observed_at = SystemTime::now();
+        let outcome = self
+            .store
+            .compare_and_swap_quota(QuotaObservation {
+                account_id: account.id().clone(),
+                expected_revision: account.revision(),
+                quota: Some(OpaqueProviderData::new(quota)),
+                observed_at: Some(observed_at),
+            })
+            .await?;
+        if outcome == QuotaWriteOutcome::Conflict {
+            return Ok(false);
+        }
+        let Some(current) = self.store.get_account(account.id()).await? else {
+            return Ok(false);
+        };
+        if current.revision() != account.revision() {
+            return Ok(false);
+        }
+        self.scheduling
+            .observe(current.id().clone(), current.revision(), observed_at, fact);
+        if let Some(availability) = quota_success_availability(
+            current.availability(),
+            current.cooldown_until(),
+            fact.exhausted(),
+            observed_at,
+        ) {
+            self.repository
+                .apply_state(
+                    &current,
+                    availability,
+                    fact.exhausted().then_some("quota_exhausted".to_owned()),
+                    None,
+                    observed_at,
+                )
+                .await?;
+        }
+        Ok(true)
+    }
+
     /// 读取单账号最后一次落库的 Provider quota，并由 Codex 域解析展示窗口。
     pub async fn read_account(
         &self,
@@ -357,7 +639,13 @@ impl CodexCredentialQuotaService {
             .await?
             .filter(|account| account.provider().as_str() == "openai")
             .ok_or(CodexCredentialQuotaError::NotFound)?;
-        let Some(observation) = self.store.get_quota(account_id).await? else {
+        let Some(observation) = self
+            .store
+            .get_quotas(std::slice::from_ref(account_id))
+            .await?
+            .into_iter()
+            .next()
+        else {
             return Ok(None);
         };
         if observation.account_id != *account_id
@@ -371,13 +659,19 @@ impl CodexCredentialQuotaService {
         let observed_at = observation
             .observed_at
             .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
-        parse_account_quota_snapshot(
+        let snapshot = parse_account_quota_snapshot(
             account_id.clone(),
             account.revision(),
             observed_at,
             &Value::Object(data.expose_to_provider().clone()),
-        )
-        .map(Some)
+        )?;
+        self.scheduling.observe(
+            snapshot.account_id().clone(),
+            snapshot.credential_revision(),
+            snapshot.observed_at(),
+            snapshot.fact(),
+        );
+        Ok(Some(snapshot))
     }
 
     /// 只刷新指定账号，revision-fenced 写入动态 Provider JSON 后返回解析快照。
@@ -387,7 +681,7 @@ impl CodexCredentialQuotaService {
         account_id: &ProviderAccountId,
     ) -> Result<CodexAccountQuotaSnapshot, CodexCredentialQuotaError> {
         let config =
-            CodexProviderInstanceConfig::from_snapshot_with_policy(instance, self.endpoint_policy)
+            CodexProviderInstanceConfig::from_snapshot(instance, self.origin_policy.as_ref())
                 .map_err(|_| CodexCredentialQuotaError::InvalidInstance)?;
         let account = self
             .store
@@ -473,6 +767,12 @@ impl CodexCredentialQuotaService {
         if current.revision() != account.revision() {
             return Err(CodexCredentialQuotaError::RevisionConflict);
         }
+        self.scheduling.observe(
+            snapshot.account_id().clone(),
+            snapshot.credential_revision(),
+            snapshot.observed_at(),
+            snapshot.fact(),
+        );
         if let Some(availability) = quota_success_availability(
             current.availability(),
             current.cooldown_until(),
@@ -493,6 +793,150 @@ impl CodexCredentialQuotaService {
                 .await?;
         }
         Ok(snapshot)
+    }
+}
+
+fn eligible_quota_sync_account(account: &ProviderAccount, now: SystemTime) -> bool {
+    account.enabled()
+        && account.access_token_expires_at() > now
+        && match account.availability() {
+            AccountAvailability::Unknown
+            | AccountAvailability::Ready
+            | AccountAvailability::Cooldown
+            | AccountAvailability::QuotaExhausted => true,
+            AccountAvailability::Expired
+            | AccountAvailability::Banned
+            | AccountAvailability::Invalid => false,
+        }
+}
+
+fn merge_passive_quota(
+    mut quota: Map<String, Value>,
+    rate_limits: &ParsedRateLimits,
+) -> Map<String, Value> {
+    let active_limit = rate_limits
+        .active_limit
+        .as_deref()
+        .or_else(|| rate_limits.limits.contains_key("codex").then_some("codex"));
+    if let Some(active_limit) = active_limit {
+        quota.insert(
+            "active_limit".to_owned(),
+            Value::String(active_limit.to_owned()),
+        );
+    }
+    if let Some(plan_type) = rate_limits.plan_type.as_ref() {
+        quota.insert("plan_type".to_owned(), Value::String(plan_type.clone()));
+    }
+    if let Some(promo_message) = rate_limits.promo_message.as_ref() {
+        quota.insert(
+            "promo_message".to_owned(),
+            Value::String(promo_message.clone()),
+        );
+    }
+    if let Some(reached_type) = rate_limits.rate_limit_reached_type.as_ref() {
+        quota.insert(
+            "rate_limit_reached_type".to_owned(),
+            Value::String(reached_type.clone()),
+        );
+    }
+    if let Some(credits) = rate_limits.credits.as_ref() {
+        let mut value = quota
+            .remove("credits")
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        value.insert("has_credits".to_owned(), Value::Bool(credits.has_credits));
+        value.insert("unlimited".to_owned(), Value::Bool(credits.unlimited));
+        if let Some(balance) = credits.balance.as_ref() {
+            value.insert("balance".to_owned(), Value::String(balance.clone()));
+        }
+        quota.insert("credits".to_owned(), Value::Object(value));
+    }
+
+    let mut additional = quota
+        .remove("additional_rate_limits")
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default();
+    for (limit_id, details) in &rate_limits.limits {
+        if Some(limit_id.as_str()) == active_limit {
+            let mut value = quota
+                .remove("rate_limit")
+                .and_then(|value| value.as_object().cloned())
+                .unwrap_or_default();
+            merge_rate_limit_details(&mut value, details);
+            quota.insert("rate_limit".to_owned(), Value::Object(value));
+            continue;
+        }
+        let index = additional.iter().position(|item| {
+            item.get("metered_feature")
+                .or_else(|| item.get("limit_name"))
+                .and_then(Value::as_str)
+                .is_some_and(|existing| existing == limit_id)
+        });
+        let mut item = index
+            .and_then(|index| additional.get(index))
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        item.insert(
+            "metered_feature".to_owned(),
+            Value::String(limit_id.clone()),
+        );
+        if let Some(name) = details.limit_name.as_ref() {
+            item.insert("limit_name".to_owned(), Value::String(name.clone()));
+        }
+        let mut value = item
+            .remove("rate_limit")
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        merge_rate_limit_details(&mut value, details);
+        item.insert("rate_limit".to_owned(), Value::Object(value));
+        match index {
+            Some(index) => additional[index] = Value::Object(item),
+            None => additional.push(Value::Object(item)),
+        }
+    }
+    quota.insert(
+        "additional_rate_limits".to_owned(),
+        Value::Array(additional),
+    );
+    quota
+}
+
+fn merge_rate_limit_details(target: &mut Map<String, Value>, details: &RateLimitDetails) {
+    if let Some(allowed) = details.allowed {
+        target.insert("allowed".to_owned(), Value::Bool(allowed));
+    }
+    if let Some(limit_reached) = details.limit_reached {
+        target.insert("limit_reached".to_owned(), Value::Bool(limit_reached));
+    }
+    for (field, window) in [
+        ("primary_window", details.primary),
+        ("secondary_window", details.secondary),
+    ] {
+        let Some(window) = window else {
+            continue;
+        };
+        let mut value = target
+            .remove(field)
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        merge_rate_limit_window(&mut value, window);
+        target.insert(field.to_owned(), Value::Object(value));
+    }
+}
+
+fn merge_rate_limit_window(target: &mut Map<String, Value>, window: RateLimitWindow) {
+    if let Some(number) = serde_json::Number::from_f64(window.used_percent) {
+        target.insert("used_percent".to_owned(), Value::Number(number));
+    }
+    if let Some(seconds) = window
+        .window_minutes
+        .and_then(|minutes| minutes.checked_mul(60))
+    {
+        target.insert("limit_window_seconds".to_owned(), Value::from(seconds));
+    }
+    if let Some(reset_at) = window.reset_at {
+        target.insert("reset_at".to_owned(), Value::from(reset_at));
     }
 }
 
@@ -632,6 +1076,40 @@ pub fn parse_codex_quota_usage(usage: &Value) -> Result<CodexQuotaFact, CodexCre
         resets_at: aggregate.resets_at,
         exhausted: aggregate.exhausted,
     })
+}
+
+fn quota_snapshot_from_observation(
+    observation: &QuotaObservation,
+) -> Option<CodexAccountQuotaSnapshot> {
+    let observed_at = observation.observed_at?;
+    let quota = observation.quota.as_ref()?;
+    parse_account_quota_snapshot(
+        observation.account_id.clone(),
+        observation.expected_revision,
+        observed_at,
+        &Value::Object(quota.expose_to_provider().clone()),
+    )
+    .ok()
+}
+
+fn quota_projection_ttl(observed_at: SystemTime) -> Option<Duration> {
+    let age = SystemTime::now()
+        .duration_since(observed_at)
+        .unwrap_or(Duration::ZERO);
+    QUOTA_SCHEDULING_TTL
+        .checked_sub(age)
+        .filter(|remaining| !remaining.is_zero())
+}
+
+fn quota_scheduling_signals(fact: CodexQuotaFact) -> Option<AccountQuotaSignals> {
+    let remaining_rank = fact.remaining_percent().map(|value| u64::from(value) * 100);
+    let now = SystemTime::now();
+    let reset_at = fact
+        .resets_at()
+        .map(SystemTime::from)
+        .filter(|reset_at| *reset_at > now);
+    (remaining_rank.is_some() || reset_at.is_some())
+        .then(|| AccountQuotaSignals::new(reset_at, remaining_rank))
 }
 
 fn parse_account_quota_snapshot(

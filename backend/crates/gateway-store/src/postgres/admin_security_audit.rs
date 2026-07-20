@@ -71,11 +71,11 @@ impl AdminAuditEvent {
 pub trait AdminSecurityAuditRepository: Send + Sync {
     async fn password_hash(&self, admin_user_id: &str) -> StoreResult<Option<String>>;
 
-    async fn replace_password_hash(
+    async fn create_password_hash_if_absent(
         &self,
         admin_user_id: &str,
         password_hash: &str,
-    ) -> StoreResult<()>;
+    ) -> StoreResult<bool>;
 
     async fn append_admin_audit_event(&self, event: AdminAuditEvent) -> StoreResult<()>;
 }
@@ -103,25 +103,24 @@ impl AdminSecurityAuditRepository for PgAdminSecurityAuditRepository {
             .map_err(|_| postgres_unavailable("read admin password hash"))
     }
 
-    async fn replace_password_hash(
+    async fn create_password_hash_if_absent(
         &self,
         admin_user_id: &str,
         password_hash: &str,
-    ) -> StoreResult<()> {
+    ) -> StoreResult<bool> {
         require_nonempty("admin user", "id", admin_user_id)?;
         require_nonempty("admin user", "password_hash", password_hash)?;
-        sqlx::query(
+        let result = sqlx::query(
             "insert into admin_users (id, password_hash, created_at, updated_at)
              values ($1, $2, now(), now())
-             on conflict (id) do update
-             set password_hash = excluded.password_hash, updated_at = now()",
+             on conflict (id) do nothing",
         )
         .bind(admin_user_id)
         .bind(password_hash)
         .execute(&self.pool)
         .await
-        .map_err(|_| postgres_unavailable("replace admin password hash"))?;
-        Ok(())
+        .map_err(|_| postgres_unavailable("create admin password hash"))?;
+        Ok(result.rows_affected() == 1)
     }
 
     async fn append_admin_audit_event(&self, event: AdminAuditEvent) -> StoreResult<()> {

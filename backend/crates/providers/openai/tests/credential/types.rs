@@ -1,6 +1,7 @@
 use chrono::Utc;
 use provider_openai::credential::{
-    CodexAccountProfile, CodexCookie, CodexCredentialData, CodexOAuthSecret,
+    CodexAccountProfile, CodexCookie, CodexCredentialData, CodexCredentialPrincipal,
+    CodexOAuthSecret,
 };
 use secrecy::SecretString;
 
@@ -21,11 +22,12 @@ fn oauth_secret_debug_redacts_every_token() {
 fn account_profile_debug_redacts_identity_fields() {
     let profile = CodexAccountProfile {
         email: Some("private@example.com".to_owned()),
+        oauth_subject: "subject-private".to_owned(),
+        poid: Some("poid-private".to_owned()),
         chatgpt_account_id: "chatgpt-private".to_owned(),
-        chatgpt_user_id: Some("user-private".to_owned()),
+        chatgpt_user_id: "user-private".to_owned(),
         plan_type: Some("pro".to_owned()),
         access_token_expires_at: Some(Utc::now()),
-        next_refresh_at: None,
     };
     let debug = format!("{profile:?}");
     assert!(!debug.contains("private@example.com"));
@@ -38,6 +40,11 @@ fn account_profile_debug_redacts_identity_fields() {
 fn plaintext_provider_schema_round_trips_dynamic_cookie_data() {
     let data = CodexCredentialData {
         schema_version: 1,
+        principal: CodexCredentialPrincipal {
+            oauth_subject: "subject-private".to_owned(),
+            poid: Some("poid-private".to_owned()),
+        },
+        installation_id: "00000000-0000-4000-8000-000000000001".to_owned(),
         access_token: "at".to_owned(),
         refresh_token: Some("rt".to_owned()),
         id_token: None,
@@ -65,9 +72,19 @@ fn plaintext_provider_schema_round_trips_dynamic_cookie_data() {
 fn provider_schema_rejects_unknown_public_layer_fields() {
     let value = serde_json::json!({
         "schema_version": 1,
+        "principal": {"oauth_subject": "subject-private", "poid": null},
+        "installation_id": "00000000-0000-4000-8000-000000000001",
         "access_token": "at",
         "cookies": [],
         "unknown_field": 9
     });
     assert!(serde_json::from_value::<CodexCredentialData>(value).is_err());
+    assert!(
+        serde_json::from_value::<CodexCredentialData>(serde_json::json!({
+            "schema_version": 1,
+            "access_token": "at",
+            "cookies": []
+        }))
+        .is_err()
+    );
 }

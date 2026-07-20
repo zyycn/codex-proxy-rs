@@ -1,8 +1,14 @@
-use gateway_api::admin::openai::{
-    CompleteOAuthAuthorizationRequest, CredentialDetailsQuery, CredentialMutationRequest,
-    ImportCredentialsDocumentRequest, ListCredentialsQuery, RotateCredentialRequest,
-    StartOAuthAuthorizationRequest,
+use chrono::{TimeZone, Utc};
+use gateway_admin::model::{
+    Revision,
+    accounts::{AccountAvailability, AccountRecord},
 };
+use gateway_api::admin::openai::{
+    CodexCredentialView, CompleteOAuthAuthorizationRequest, CredentialDetailsQuery,
+    CredentialMutationRequest, ImportCredentialsDocumentRequest, ListCredentialsQuery,
+    RotateCredentialRequest, StartOAuthAuthorizationRequest,
+};
+use gateway_core::routing::{ProviderInstanceId, ProviderKind};
 
 fn compact_jwt() -> String {
     "header.payload.signature".to_owned()
@@ -158,4 +164,39 @@ fn oauth_reauthorization_requires_account_and_revision_together() {
         missing_revision.validate().unwrap_err().field(),
         "reauthorization"
     );
+}
+
+#[test]
+fn credential_result_should_map_to_the_existing_safe_wire_view() {
+    let timestamp = Utc
+        .with_ymd_and_hms(2026, 7, 18, 3, 0, 0)
+        .single()
+        .expect("valid fixture timestamp");
+    let view = CodexCredentialView::from(AccountRecord {
+        id: "acct_openai_safe".to_owned(),
+        provider_instance_id: ProviderInstanceId::new("inst_openai").expect("provider instance ID"),
+        provider_kind: ProviderKind::new("openai").expect("provider kind"),
+        name: "Codex OAuth".to_owned(),
+        email: Some("verified@example.com".to_owned()),
+        upstream_user_id: "subject_openai".to_owned(),
+        upstream_account_id: None,
+        plan_type: Some("pro".to_owned()),
+        credential_revision: Revision::new(2).expect("credential revision"),
+        has_refresh_token: true,
+        access_token_expires_at: timestamp,
+        next_refresh_at: Some(timestamp),
+        enabled: true,
+        availability: AccountAvailability::Banned,
+        availability_reason: Some("account disabled".to_owned()),
+        cooldown_until: None,
+        availability_observed_at: timestamp,
+        quota_observed_at: None,
+        created_at: timestamp,
+        updated_at: timestamp,
+    });
+
+    let rendered = serde_json::to_value(view).expect("serialize safe credential view");
+    assert_eq!(rendered["availability"], "invalid");
+    assert_eq!(rendered["credentialRevision"], 2);
+    assert!(rendered.get("accessToken").is_none());
 }

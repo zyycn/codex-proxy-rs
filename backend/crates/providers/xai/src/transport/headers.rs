@@ -5,7 +5,6 @@ use gateway_core::routing::UpstreamModelId;
 
 use crate::SecretValue;
 
-use super::request::GrokResponsesRequest;
 use super::{GrokProviderInstanceConfig, SelectedGrokSession};
 
 const CLIENT_IDENTIFIER: &str = "codex-proxy-rs";
@@ -83,16 +82,11 @@ impl GrokHeader {
 
 pub fn build_grok_headers(
     instance: &GrokProviderInstanceConfig,
-    request: &GrokResponsesRequest,
     session: &SelectedGrokSession,
     request_id: &ModelRequestId,
     model: &UpstreamModelId,
 ) -> Vec<GrokHeader> {
-    let options = request.header_options();
     let request_id = request_id.as_str();
-    let conversation_id = options.conversation_id().unwrap_or(request_id);
-    let session_id = options.session_id().unwrap_or(request_id);
-    let agent_id = options.agent_id().unwrap_or(CLIENT_IDENTIFIER);
 
     let mut headers = vec![
         GrokHeader::sensitive(
@@ -112,14 +106,14 @@ pub fn build_grok_headers(
         ),
         GrokHeader::public("content-type", "application/json"),
         GrokHeader::public("accept", "text/event-stream"),
-        GrokHeader::sensitive(
-            "x-grok-conv-id",
-            SecretValue::new(conversation_id.to_owned()),
-        ),
+        GrokHeader::sensitive("x-grok-conv-id", SecretValue::new(request_id.to_owned())),
         GrokHeader::sensitive("x-grok-req-id", SecretValue::new(request_id.to_owned())),
         GrokHeader::public("x-grok-model-override", model.as_str()),
-        GrokHeader::sensitive("x-grok-session-id", SecretValue::new(session_id.to_owned())),
-        GrokHeader::sensitive("x-grok-agent-id", SecretValue::new(agent_id.to_owned())),
+        GrokHeader::sensitive("x-grok-session-id", SecretValue::new(request_id.to_owned())),
+        GrokHeader::sensitive(
+            "x-grok-agent-id",
+            SecretValue::new(CLIENT_IDENTIFIER.to_owned()),
+        ),
     ];
     if let Some(email) = session.email() {
         headers.push(GrokHeader::sensitive("x-email", email.clone()));

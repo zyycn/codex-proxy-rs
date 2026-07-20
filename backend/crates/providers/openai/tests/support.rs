@@ -2,10 +2,12 @@
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 use gateway_core::engine::credential::{
     AccountAvailability, AccountRuntimeSignals, AccountStateChange, CredentialCasOutcome,
     CredentialCasUpdate, CredentialRevision, LoadedCredential, NewProviderAccount, ProviderAccount,
@@ -13,12 +15,18 @@ use gateway_core::engine::credential::{
     QuotaWriteOutcome,
 };
 use gateway_core::error::{StoreError, StoreErrorKind};
+use gateway_core::provider_ports::{
+    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshPolicy,
+    ProviderRuntimePolicyPort, ProviderSchedulingLeaseRequest, ProviderSchedulingState,
+    ProviderStoreError,
+};
 use gateway_core::routing::{ProviderInstanceId, ProviderKind};
+use provider_openai::CodexOriginPolicy;
 use provider_openai::credential::{
-    CodexAccountProfile, CodexCredentialRepository, CodexOAuthSecret, CredentialLeaseCoordinator,
-    CredentialLeaseCoordinatorError, CredentialLeaseRequest, LeaseAcquisition,
+    CodexAccountProfile, CodexCredentialRepository, CodexOAuthSecret,
 };
 use secrecy::SecretString;
+use url::{Host, Url};
 
 #[derive(Clone)]
 struct StoredAccount {
@@ -30,6 +38,7 @@ struct StoredAccount {
 #[derive(Default)]
 pub(crate) struct MemoryAccountStore {
     accounts: Mutex<BTreeMap<ProviderAccountId, StoredAccount>>,
+    quota_reads: AtomicUsize,
 }
 
 impl MemoryAccountStore {
@@ -44,6 +53,10 @@ impl MemoryAccountStore {
             .expect("account store lock")
             .get(&id)
             .map(|stored| stored.account.clone())
+    }
+
+    pub(crate) fn quota_reads(&self) -> usize {
+        self.quota_reads.load(Ordering::SeqCst)
     }
 }
 
@@ -156,21 +169,20 @@ impl ProviderAccountStore for MemoryAccountStore {
             },
         );
         stored.credential = credential;
+        stored.quota = None;
         Ok(CredentialCasOutcome::Updated(next))
     }
 
-    async fn get_quota(
+    async fn get_quotas(
         &self,
-        account: &ProviderAccountId,
-    ) -> Result<Option<QuotaObservation>, StoreError> {
-        Ok(self
-            .accounts
-            .lock()
-            .expect("account store lock")
-            .get(account)
-            .ok_or_else(|| store_error(StoreErrorKind::InvalidData))?
-            .quota
-            .clone())
+        accounts: &[ProviderAccountId],
+    ) -> Result<Vec<QuotaObservation>, StoreError> {
+        self.quota_reads.fetch_add(1, Ordering::SeqCst);
+        let stored = self.accounts.lock().expect("account store lock");
+        Ok(accounts
+            .iter()
+            .filter_map(|account| stored.get(account)?.quota.clone())
+            .collect())
     }
 
     async fn compare_and_swap_quota(
@@ -272,6 +284,21 @@ const fn store_error(kind: StoreErrorKind) -> StoreError {
     StoreError::new(kind)
 }
 
+#[derive(Debug)]
+pub(crate) struct LoopbackCodexOriginPolicy;
+
+impl CodexOriginPolicy for LoopbackCodexOriginPolicy {
+    fn allows(&self, url: &Url) -> bool {
+        url.scheme() == "http"
+            && matches!(url.host(), Some(Host::Ipv4(host)) if host.is_loopback())
+            && url.port().is_some()
+    }
+}
+
+pub(crate) fn loopback_origin_policy() -> Arc<dyn CodexOriginPolicy> {
+    Arc::new(LoopbackCodexOriginPolicy)
+}
+
 struct AccountRebuild {
     revision: CredentialRevision,
     enabled: bool,
@@ -315,76 +342,96 @@ fn rebuild_account(current: &ProviderAccount, rebuild: AccountRebuild) -> Provid
 
 #[derive(Default)]
 pub(crate) struct TestLeaseCoordinator {
-    pub(crate) requests: Mutex<Vec<CredentialLeaseRequest>>,
+    pub(crate) requests: Mutex<Vec<ProviderSchedulingLeaseRequest>>,
     pub(crate) busy: Mutex<bool>,
     round_robin_cursor: Mutex<u64>,
 }
 
-#[async_trait]
-impl CredentialLeaseCoordinator for TestLeaseCoordinator {
-    async fn runtime_signals(
-        &self,
-        accounts: &[ProviderAccountId],
-    ) -> Result<BTreeMap<ProviderAccountId, AccountRuntimeSignals>, CredentialLeaseCoordinatorError>
-    {
-        Ok(accounts
-            .iter()
-            .cloned()
-            .map(|account| {
-                (
-                    account,
-                    AccountRuntimeSignals {
-                        in_flight: 0,
-                        last_started_at: None,
-                        quota_reset_at: None,
-                        quota_remaining_rank: None,
-                    },
-                )
-            })
-            .collect())
+impl ProviderLeasePort for TestLeaseCoordinator {
+    fn load_state<'a>(
+        &'a self,
+        _provider_instance_id: &'a ProviderInstanceId,
+        accounts: &'a [ProviderAccountId],
+    ) -> BoxFuture<'a, Result<ProviderSchedulingState, ProviderStoreError>> {
+        Box::pin(async move {
+            let signals = accounts
+                .iter()
+                .cloned()
+                .map(|account| {
+                    (
+                        account,
+                        AccountRuntimeSignals {
+                            in_flight: 0,
+                            last_started_at: None,
+                            quota_reset_at: None,
+                            quota_remaining_rank: None,
+                        },
+                    )
+                })
+                .collect();
+            let mut cursor = self
+                .round_robin_cursor
+                .lock()
+                .expect("round robin cursor lock");
+            let current = *cursor;
+            *cursor = cursor.wrapping_add(1);
+            Ok(ProviderSchedulingState::new(signals, None, current))
+        })
     }
 
-    fn next_round_robin_cursor(
+    fn try_acquire(
         &self,
-        _provider_instance_id: &ProviderInstanceId,
-    ) -> Result<u64, CredentialLeaseCoordinatorError> {
-        let mut cursor = self
-            .round_robin_cursor
-            .lock()
-            .expect("round robin cursor lock");
-        let current = *cursor;
-        *cursor = cursor.wrapping_add(1);
-        Ok(current)
-    }
-
-    async fn try_acquire(
-        &self,
-        request: CredentialLeaseRequest,
-    ) -> Result<LeaseAcquisition, CredentialLeaseCoordinatorError> {
-        self.requests
-            .lock()
-            .expect("lease requests lock")
-            .push(request);
-        if *self.busy.lock().expect("lease busy lock") {
-            Ok(LeaseAcquisition::Busy {
-                retry_after: Some(Duration::from_millis(25)),
-            })
-        } else {
-            Ok(LeaseAcquisition::Acquired(Box::new(())))
-        }
+        request: ProviderLeaseRequest,
+    ) -> BoxFuture<'_, Result<ProviderLeaseAcquisition, ProviderStoreError>> {
+        Box::pin(async move {
+            let ProviderLeaseRequest::Scheduling(request) = request else {
+                panic!("expected scheduling lease request");
+            };
+            self.requests
+                .lock()
+                .expect("lease requests lock")
+                .push(request);
+            if *self.busy.lock().expect("lease busy lock") {
+                Ok(ProviderLeaseAcquisition::Busy {
+                    retry_after: Some(Duration::from_millis(25)),
+                })
+            } else {
+                Ok(ProviderLeaseAcquisition::Acquired(Box::new(())))
+            }
+        })
     }
 }
 
 pub(crate) fn profile(account_id: &str) -> CodexAccountProfile {
     let now = chrono::Utc::now();
     CodexAccountProfile {
+        oauth_subject: format!("subject-{account_id}"),
+        poid: Some(format!("poid-{account_id}")),
         chatgpt_account_id: account_id.to_owned(),
-        chatgpt_user_id: Some(format!("user-{account_id}")),
+        chatgpt_user_id: format!("user-{account_id}"),
         email: Some(format!("{account_id}@example.com")),
         plan_type: Some("pro".to_owned()),
         access_token_expires_at: Some(now + chrono::Duration::hours(1)),
-        next_refresh_at: Some(now + chrono::Duration::minutes(45)),
     }
+}
+
+pub(crate) struct StaticRuntimePolicy;
+
+impl ProviderRuntimePolicyPort for StaticRuntimePolicy {
+    fn load_refresh_policy(
+        &self,
+    ) -> BoxFuture<'_, Result<ProviderRefreshPolicy, ProviderStoreError>> {
+        Box::pin(async {
+            ProviderRefreshPolicy::try_new(
+                Duration::from_secs(60 * 60),
+                NonZeroU32::new(2).expect("positive concurrency"),
+            )
+        })
+    }
+}
+
+pub(crate) fn runtime_policy() -> Arc<dyn ProviderRuntimePolicyPort> {
+    Arc::new(StaticRuntimePolicy)
 }
 
 pub(crate) fn secret(access_token: &str) -> CodexOAuthSecret {

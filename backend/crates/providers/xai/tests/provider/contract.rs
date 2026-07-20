@@ -6,21 +6,18 @@ use std::time::{Duration, SystemTime};
 
 use futures::{StreamExt, stream};
 use gateway_core::engine::continuation::{
-    NativeContinuationPin, NativeContinuationReuse, PreviousResponseId,
+    ContinuationBinding, NativeContinuationPin, NativeContinuationReuse, PreviousResponseId,
 };
 use gateway_core::engine::credential::{
     AccountSelectionPolicy, CredentialRevision, ProviderAccountStore, RotationStrategy,
 };
 use gateway_core::engine::provider::{Provider, ProviderRequest};
 use gateway_core::engine::{
-    AccountSelectionConstraints, AttemptContext, CancellationToken, ModelRequestId,
-    UpstreamSendState,
+    AccountAttemptContext, AttemptContext, CancellationToken, ModelRequestId, UpstreamSendState,
 };
 use gateway_core::error::{ProviderError, ProviderErrorKind, SafeUpstreamValue};
-use gateway_core::event::GatewayEvent;
-use gateway_core::operation::{
-    ContentPart, GenerateRequest, Message, MessageRole, Operation, OperationKind,
-};
+use gateway_core::event::{GatewayEvent, UpstreamHttpVersion};
+use gateway_core::operation::{GenerateRequest, Operation, OperationKind, ProtocolPayload};
 use gateway_core::routing::{
     ConfigRevision, InstanceHealth, ModelCapabilities, ProviderInstance, ProviderKind,
     ProviderModel, PublicModelId, RoutingContext, RuntimeSnapshot, UpstreamModelId,
@@ -35,6 +32,7 @@ use provider_xai::{
     GrokSessionSelector, GrokSessionSelectorError, GrokSessionSelectorFuture, SecretValue,
     SelectedGrokSession,
 };
+use serde_json::{Map, json};
 
 use crate::support::{
     MemoryGrokCatalogCache, MemoryProviderAccountStore, account_id, create_input, instance_id,
@@ -178,15 +176,19 @@ impl GrokInferenceTransport for StubInferenceTransport {
             .expect("one transport mode");
         Box::pin(async move {
             match mode {
-                InferenceMode::Success => {
-                    Ok(GrokInferenceResponse::new(Box::pin(stream::iter([Ok(
-                        SUCCESS_SSE.to_vec(),
-                    )]))))
-                }
+                InferenceMode::Success => Ok(GrokInferenceResponse::new(
+                    Box::pin(stream::iter([Ok(SUCCESS_SSE.to_vec())])),
+                    UpstreamHttpVersion::Http2,
+                    200,
+                    None,
+                )),
                 InferenceMode::Error(error) => Err(error),
-                InferenceMode::StreamError(error) => Ok(GrokInferenceResponse::new(Box::pin(
-                    stream::iter([Err(error)]),
-                ))),
+                InferenceMode::StreamError(error) => Ok(GrokInferenceResponse::new(
+                    Box::pin(stream::iter([Err(error)])),
+                    UpstreamHttpVersion::Http2,
+                    200,
+                    None,
+                )),
             }
         })
     }
@@ -245,24 +247,30 @@ async fn mapped_transport_error(
         )
         .await
         .expect("stream");
-    stream
-        .next()
-        .await
-        .expect("error event")
-        .expect_err("transport rejection")
+    next_provider_error(&mut stream).await
+}
+
+async fn next_provider_error(
+    stream: &mut gateway_core::engine::provider::ProviderStream,
+) -> ProviderError {
+    loop {
+        match stream.next().await.expect("error event") {
+            Ok(event) => assert!(!event.has_client_event()),
+            Err(error) => return error,
+        }
+    }
 }
 
 fn operation() -> Operation {
-    Operation::Generate(
-        GenerateRequest::new(vec![
-            Message::new(
-                MessageRole::User,
-                vec![ContentPart::Text("hello".to_owned())],
-            )
-            .expect("message"),
-        ])
-        .expect("generate request"),
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        Map::from_iter([
+            ("model".to_owned(), json!("client-model")),
+            ("input".to_owned(), json!("hello")),
+        ]),
     )
+    .expect("OpenAI payload");
+    Operation::Generate(GenerateRequest::from_protocol_payload(Vec::new(), payload))
 }
 
 fn instance(provider: &str) -> ProviderInstance {
@@ -314,22 +322,26 @@ fn selection_policy() -> AccountSelectionPolicy {
 
 fn context(
     cancellation: CancellationToken,
-    continuation: Option<NativeContinuationPin>,
+    continuation: Option<ContinuationBinding>,
 ) -> AttemptContext {
     context_with_required(cancellation, continuation, None)
 }
 
 fn context_with_required(
     cancellation: CancellationToken,
-    continuation: Option<NativeContinuationPin>,
+    continuation: Option<ContinuationBinding>,
     required_account: Option<gateway_core::engine::credential::ProviderAccountId>,
 ) -> AttemptContext {
+    let account_state_owner = continuation
+        .as_ref()
+        .and_then(ContinuationBinding::pinned)
+        .map(gateway_core::engine::ProviderAccountStateOwner::from_continuation);
     AttemptContext::new(
         ModelRequestId::new("req_xai").expect("request ID"),
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
         selection_policy(),
-        AccountSelectionConstraints::new(BTreeSet::new(), required_account),
+        AccountAttemptContext::new(BTreeSet::new(), required_account, account_state_owner),
         continuation,
         cancellation,
     )
@@ -380,10 +392,20 @@ async fn execute_returns_cold_stream_and_records_selected_account() {
     let events = stream.by_ref().collect::<Vec<_>>().await;
     assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
     assert!(events.iter().all(Result::is_ok));
+    let observation = events[0]
+        .as_ref()
+        .expect("response observation")
+        .response_observation()
+        .expect("transport facts");
+    assert_eq!(observation.transport().as_str(), "http_sse");
+    assert_eq!(observation.http_version(), Some(UpstreamHttpVersion::Http2));
+    assert_eq!(observation.status_code(), Some(200));
     assert!(
         events
             .iter()
-            .any(|event| matches!(event, Ok(GatewayEvent::Completed(_))))
+            .filter_map(|event| event.as_ref().ok())
+            .flat_map(|event| event.canonical_facts())
+            .any(|event| matches!(event, GatewayEvent::Completed(_)))
     );
 }
 
@@ -435,11 +457,7 @@ async fn unauthorized_transport_feedback_is_bound_to_selected_account() {
         )
         .await
         .expect("stream");
-    let error = stream
-        .next()
-        .await
-        .expect("error event")
-        .expect_err("transport error");
+    let error = next_provider_error(&mut stream).await;
     assert_eq!(error.kind(), ProviderErrorKind::Unauthorized);
     assert_eq!(
         selector.feedback.lock().expect("feedback").as_slice(),
@@ -497,11 +515,7 @@ async fn generic_http_403_does_not_mutate_or_switch_credential() {
         )
         .await
         .expect("stream");
-    let error = stream
-        .next()
-        .await
-        .expect("error event")
-        .expect_err("transport rejection");
+    let error = next_provider_error(&mut stream).await;
 
     assert_eq!(error.kind(), ProviderErrorKind::PermissionDenied);
     assert!(!error.replay_is_safe());
@@ -579,11 +593,35 @@ async fn native_previous_response_is_rejected_before_selection() {
     let error = match provider
         .execute(
             provider_request("xai"),
-            context(CancellationToken::new(), Some(pin)),
+            context(
+                CancellationToken::new(),
+                Some(ContinuationBinding::Pinned(pin)),
+            ),
         )
         .await
     {
         Ok(_) => panic!("xAI native continuation must fail"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), ProviderErrorKind::Unsupported);
+    assert_eq!(selector.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn external_previous_response_is_rejected_before_selection() {
+    let selector = StubSelector::success();
+    let provider = provider(selector.clone(), StubInferenceTransport::success()).await;
+    let binding = ContinuationBinding::External(
+        PreviousResponseId::new("external-provider-response").expect("response ID"),
+    );
+    let error = match provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), Some(binding)),
+        )
+        .await
+    {
+        Ok(_) => panic!("xAI external continuation must fail"),
         Err(error) => error,
     };
     assert_eq!(error.kind(), ProviderErrorKind::Unsupported);

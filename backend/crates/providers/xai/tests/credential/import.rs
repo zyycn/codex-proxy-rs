@@ -1,19 +1,19 @@
 use std::future::ready;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration as StdDuration, SystemTime};
+use std::time::SystemTime;
 
 use chrono::{Duration, Utc};
 use provider_xai::{
     FailClosedTokenVerifier, FailureClass, GrokCredentialAdmin, GrokOAuthClient, GrokOAuthConfig,
     GrokOAuthImportCandidate, GrokOAuthImportDocument, GrokOAuthImportError,
     GrokOAuthImportMetadata, GrokOAuthImportTokens, OAuthHttpRequest, OAuthHttpResponse,
-    OAuthHttpTransport, ReqwestOAuthTransport, ReqwestOidcTokenVerifier, SecretValue,
-    TokenCandidate, TokenVerificationContext, TokenVerifier, TransportFuture, VerificationEvidence,
-    VerificationFuture, VerifiedGrokAccount,
+    OAuthHttpTransport, OfficialGrokEndpointPolicy, ReqwestOAuthTransport,
+    ReqwestOidcTokenVerifier, SecretValue, TokenCandidate, TokenVerificationContext, TokenVerifier,
+    TransportFuture, VerificationEvidence, VerificationFuture, VerifiedGrokAccount,
 };
 
-use crate::support::{account_id, instance_id};
+use crate::support::{account_id, instance_id, refresh_policy};
 
 const DISCOVERY: &[u8] = include_bytes!("fixtures/discovery.json");
 const INVALID_GRANT: &[u8] = include_bytes!("fixtures/invalid_grant.json");
@@ -139,17 +139,23 @@ async fn verified_import_inside_refresh_margin_should_schedule_immediate_refresh
         .expect("still-valid imported credential");
     let before = SystemTime::now();
     let prepared = GrokCredentialAdmin
-        .prepare_verified_account(&VerifiedGrokAccount {
-            account_id: account_id("refresh-window-import"),
-            provider_instance_id: instance_id(),
-            name: "refresh-window-import".to_owned(),
-            email: None,
-            upstream_account_id: None,
-            plan_type: None,
-            tokens,
-            enabled: true,
-            refresh_margin: StdDuration::from_secs(60 * 60),
-        })
+        .prepare_verified_account(
+            &VerifiedGrokAccount {
+                account_id: account_id("refresh-window-import"),
+                provider_instance_id: instance_id(),
+                name: "refresh-window-import".to_owned(),
+                email: None,
+                upstream_account_id: None,
+                plan_type: None,
+                tokens,
+                enabled: true,
+            },
+            gateway_core::provider_ports::ProviderRefreshPolicy::try_new(
+                std::time::Duration::from_secs(60 * 60),
+                std::num::NonZeroU32::new(2).expect("positive concurrency"),
+            )
+            .expect("valid refresh policy"),
+        )
         .expect("valid credential inside refresh window must be imported");
     let after = SystemTime::now();
     let next_refresh_at = prepared
@@ -310,8 +316,13 @@ fn real_oauth_account_should_match_provider_import_contract() {
 }
 
 #[tokio::test]
-#[ignore = "requires XAI_REAL_ACCOUNT_FIXTURE and official xAI network access"]
+#[ignore = "requires a disposable XAI_REAL_ACCOUNT_FIXTURE and explicit destructive refresh approval"]
 async fn real_oauth_accounts_should_cross_the_official_verification_boundary() {
+    assert_eq!(
+        std::env::var("XAI_ALLOW_DESTRUCTIVE_FIXTURE_REFRESH").as_deref(),
+        Ok("1"),
+        "official verification may rotate a refresh token; use a disposable fixture and set XAI_ALLOW_DESTRUCTIVE_FIXTURE_REFRESH=1",
+    );
     let path = std::env::var_os("XAI_REAL_ACCOUNT_FIXTURE")
         .expect("XAI_REAL_ACCOUNT_FIXTURE must point to a local secret fixture");
     let document = std::fs::read(path).expect("read local secret fixture");
@@ -319,10 +330,17 @@ async fn real_oauth_accounts_should_cross_the_official_verification_boundary() {
         .expect("real document must match the import contract")
         .into_entries();
     let expected_accounts = entries.len();
+    let endpoint_policy = Arc::new(OfficialGrokEndpointPolicy);
     let client = GrokOAuthClient::new(
         GrokOAuthConfig::official("0.2.101").expect("official config"),
-        Arc::new(ReqwestOAuthTransport::new().expect("production OAuth transport")),
-        Arc::new(ReqwestOidcTokenVerifier::new().expect("production token verifier")),
+        Arc::new(
+            ReqwestOAuthTransport::new(endpoint_policy.clone())
+                .expect("production OAuth transport"),
+        ),
+        Arc::new(
+            ReqwestOidcTokenVerifier::new(endpoint_policy, std::time::Duration::from_secs(60 * 60))
+                .expect("production token verifier"),
+        ),
     );
     let discovery = client.discover().await.expect("official discovery");
     let mut prepared_accounts = 0_usize;
@@ -333,17 +351,19 @@ async fn real_oauth_accounts_should_cross_the_official_verification_boundary() {
             .expect("real OAuth credential must pass official verification");
         let suffix = format!("real-import-{index}");
         GrokCredentialAdmin
-            .prepare_verified_account(&VerifiedGrokAccount {
-                account_id: account_id(&suffix),
-                provider_instance_id: instance_id(),
-                name: suffix,
-                email: None,
-                upstream_account_id: None,
-                plan_type: None,
-                tokens,
-                enabled: true,
-                refresh_margin: StdDuration::from_secs(60 * 60),
-            })
+            .prepare_verified_account(
+                &VerifiedGrokAccount {
+                    account_id: account_id(&suffix),
+                    provider_instance_id: instance_id(),
+                    name: suffix,
+                    email: None,
+                    upstream_account_id: None,
+                    plan_type: None,
+                    tokens,
+                    enabled: true,
+                },
+                refresh_policy(),
+            )
             .expect("verified real credential must cross account preparation");
         prepared_accounts += 1;
     }

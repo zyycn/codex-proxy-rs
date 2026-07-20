@@ -83,10 +83,10 @@ impl ProviderAccountStore for CooldownTestAccountStore {
         ))
     }
 
-    async fn get_quota(
+    async fn get_quotas(
         &self,
-        _account: &ProviderAccountId,
-    ) -> Result<Option<QuotaObservation>, CoreStoreError> {
+        _accounts: &[ProviderAccountId],
+    ) -> Result<Vec<QuotaObservation>, CoreStoreError> {
         unreachable!("cooldown tests do not read quota")
     }
 

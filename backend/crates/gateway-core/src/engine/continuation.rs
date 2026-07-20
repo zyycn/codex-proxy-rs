@@ -1,14 +1,16 @@
-//! 客户端历史与可选 Provider 原生 previous-response 约束。
+//! Provider 原生 previous-response 的调用方隔离、账号绑定与复用约束。
 //!
-//! Core 不保存 transcript，也不提供 portable history repository。普通连续对话已经
-//! 作为 [`Operation`](crate::operation::Operation) 的完整消息输入进入本次请求。
+//! Core 不解释 Provider transcript；同一客户端连接需要的可携带状态由
+//! [`ProviderSessionState`](crate::operation::ProviderSessionState) 不透明承载。
 
 use std::fmt;
 
+use futures::future::BoxFuture;
 use thiserror::Error;
 
 use crate::engine::credential::ProviderAccountId;
 use crate::error::{IdentifierError, SafeUpstreamValue, validate_text};
+use crate::policy::ClientApiKeyId;
 use crate::routing::{ProviderInstanceId, ProviderKind};
 
 /// 客户端传入的 previous response ID。
@@ -40,6 +42,15 @@ pub enum NativeContinuationReuse {
     SingleUse,
 }
 
+/// Provider 原生 response handle 的续接范围。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeContinuationScope {
+    /// 上游已持久化，可由同账号的新连接继续。
+    Persisted,
+    /// 只存在于完成上一轮的 WebSocket。
+    ConnectionLocal,
+}
+
 /// 外层已解析并认证的 native previous-response pin。
 ///
 /// 该值不代表数据库 transcript；它只阻止 native handle 被发送到错误的
@@ -54,6 +65,7 @@ pub struct NativeContinuationPin {
     instance: ProviderInstanceId,
     account: ProviderAccountId,
     reuse: NativeContinuationReuse,
+    scope: NativeContinuationScope,
 }
 
 impl NativeContinuationPin {
@@ -73,7 +85,15 @@ impl NativeContinuationPin {
             instance,
             account,
             reuse,
+            scope: NativeContinuationScope::ConnectionLocal,
         }
+    }
+
+    /// 设置 Store 已确认的原生续接范围。
+    #[must_use]
+    pub const fn with_scope(mut self, scope: NativeContinuationScope) -> Self {
+        self.scope = scope;
+        self
     }
 
     #[must_use]
@@ -107,6 +127,11 @@ impl NativeContinuationPin {
         self.reuse
     }
 
+    #[must_use]
+    pub const fn scope(&self) -> NativeContinuationScope {
+        self.scope
+    }
+
     /// 校验本次 route/account 选择没有破坏 native pin。
     #[must_use]
     pub fn matches(
@@ -129,7 +154,48 @@ impl fmt::Debug for NativeContinuationPin {
             .field("instance", &self.instance)
             .field("account", &self.account)
             .field("reuse", &self.reuse)
+            .field("scope", &self.scope)
             .finish()
+    }
+}
+
+/// 一次请求最终采用的 previous-response 绑定方式。
+///
+/// 已命中网关历史的 handle 携带完整账号 pin；未命中历史的外部 handle 只保留
+/// 客户端提交的 opaque ID，由目标 Provider 在首次且唯一一次 attempt 中解释。
+#[derive(Clone, PartialEq, Eq)]
+pub enum ContinuationBinding {
+    Pinned(NativeContinuationPin),
+    External(PreviousResponseId),
+}
+
+impl ContinuationBinding {
+    #[must_use]
+    pub const fn previous_response_id(&self) -> &PreviousResponseId {
+        match self {
+            Self::Pinned(pin) => pin.previous_response_id(),
+            Self::External(previous_response_id) => previous_response_id,
+        }
+    }
+
+    #[must_use]
+    pub const fn pinned(&self) -> Option<&NativeContinuationPin> {
+        match self {
+            Self::Pinned(pin) => Some(pin),
+            Self::External(_) => None,
+        }
+    }
+}
+
+impl fmt::Debug for ContinuationBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pinned(pin) => formatter.debug_tuple("Pinned").field(pin).finish(),
+            Self::External(_) => formatter
+                .debug_tuple("External")
+                .field(&"<redacted>")
+                .finish(),
+        }
     }
 }
 
@@ -207,4 +273,17 @@ impl NativeClaim {
 pub enum ContinuationError {
     #[error("native continuation handle is already claimed or terminal")]
     AlreadyClaimed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("native continuation store is unavailable")]
+pub struct NativeContinuationStoreError;
+
+/// 调用方隔离后的 previous-response 解析端口。
+pub trait NativeContinuationPort: Send + Sync {
+    fn resolve<'a>(
+        &'a self,
+        client_api_key_id: &'a ClientApiKeyId,
+        previous_response_id: &'a PreviousResponseId,
+    ) -> BoxFuture<'a, Result<Option<NativeContinuationPin>, NativeContinuationStoreError>>;
 }

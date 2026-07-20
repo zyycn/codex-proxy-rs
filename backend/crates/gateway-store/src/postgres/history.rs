@@ -2,9 +2,14 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use gateway_core::engine::continuation::{NativeContinuationPort, NativeContinuationStoreError};
+use gateway_core::policy::ClientApiKeyId;
 use gateway_core::{
     engine::{
-        continuation::{NativeContinuationPin, NativeContinuationReuse, PreviousResponseId},
+        continuation::{
+            NativeContinuationPin, NativeContinuationReuse, NativeContinuationScope,
+            PreviousResponseId,
+        },
         credential::ProviderAccountId,
     },
     error::SafeUpstreamValue,
@@ -127,7 +132,6 @@ impl ModelRequestHistoryRepository for PgHistoryRepository {
                and mr.client_api_key_ref = $2
                and mr.outcome = 'succeeded'
                and mr.downstream_committed_at is not null
-               and mr.upstream_transport = 'websocket'
                and mr.upstream_response_id is not null",
         )
         .bind(client_response_id)
@@ -137,6 +141,27 @@ impl ModelRequestHistoryRepository for PgHistoryRepository {
         .map_err(|_| postgres_unavailable("resolve native continuation pin"))?;
         row.map(|row| native_pin_from_row(client_response_id, row, reuse))
             .transpose()
+    }
+}
+
+impl NativeContinuationPort for PgHistoryRepository {
+    fn resolve<'a>(
+        &'a self,
+        client_api_key_id: &'a ClientApiKeyId,
+        previous_response_id: &'a PreviousResponseId,
+    ) -> futures::future::BoxFuture<
+        'a,
+        Result<Option<NativeContinuationPin>, NativeContinuationStoreError>,
+    > {
+        Box::pin(async move {
+            self.resolve_native_continuation_pin(
+                previous_response_id.as_str(),
+                client_api_key_id.as_str(),
+                NativeContinuationReuse::Reusable,
+            )
+            .await
+            .map_err(|_| NativeContinuationStoreError)
+        })
     }
 }
 
@@ -239,7 +264,8 @@ fn native_pin_from_row(
         instance,
         account,
         reuse,
-    ))
+    )
+    .with_scope(NativeContinuationScope::Persisted))
 }
 
 fn invalid_native_pin(message: &str) -> StoreError {

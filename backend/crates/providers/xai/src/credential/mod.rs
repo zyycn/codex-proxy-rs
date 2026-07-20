@@ -27,9 +27,10 @@ pub use config::{
 
 pub use catalog::{
     GROK_FREE_ROLLING_WINDOW_SECONDS, GrokAccountCatalog, GrokBillingPresentation,
-    GrokCatalogCacheError, GrokCredentialCatalogCache, GrokCredentialCatalogError,
-    GrokCredentialCatalogSeed, GrokCredentialCatalogService, GrokCredentialCatalogSnapshot,
-    GrokCredentialQuotaService, GrokQuotaError, GrokQuotaPeriodKind, GrokQuotaSnapshot,
+    GrokCatalogCache, GrokCatalogCacheError, GrokCredentialCatalogCache,
+    GrokCredentialCatalogError, GrokCredentialCatalogSeed, GrokCredentialCatalogService,
+    GrokCredentialCatalogSnapshot, GrokCredentialQuotaService, GrokQuotaError, GrokQuotaPeriodKind,
+    GrokQuotaSnapshot,
 };
 pub use discovery::DiscoveryDocument;
 pub use error::{
@@ -49,19 +50,14 @@ pub use pkce::Pkce;
 pub use refresh::{
     DueGrokCredential, GrokCredentialRefreshError, GrokCredentialRefreshOutcome,
     GrokCredentialRefreshService, GrokCredentialRefresher, GrokOAuthRefreshClient,
-    GrokRefreshFailure, GrokRefreshLeaseAcquisition, GrokRefreshLeaseCoordinator,
-    GrokRefreshLeaseError, GrokRefreshLeaseGuard, GrokRefreshLeaseRequest, GrokRefreshTokens,
+    GrokRefreshFailure, GrokRefreshTokens,
 };
 pub use repository::{
     GrokAccountExport, GrokCredentialAdmin, GrokCredentialLifecycle, GrokCredentialRepository,
     GrokCredentialRepositoryError, VerifiedGrokAccount,
 };
 pub use secret::SecretValue;
-pub use selector::{
-    GrokAccountSchedulingState, GrokAccountSessionSelector, GrokCredentialLeaseAcquisition,
-    GrokCredentialLeaseCoordinator, GrokCredentialLeaseCoordinatorError, GrokCredentialLeaseGuard,
-    GrokCredentialLeaseRequest,
-};
+pub use selector::GrokAccountSessionSelector;
 pub use token::{
     OAuthPrincipal, RefreshTokenGrant, RefreshedTokenSet, VerifiedTokenSet, parse_oauth_error,
     parse_refresh_success,

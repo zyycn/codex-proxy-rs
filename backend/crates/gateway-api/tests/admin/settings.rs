@@ -1,118 +1,16 @@
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, Mutex},
-};
-
-use async_trait::async_trait;
 use axum::{
     Router,
     body::{Body, to_bytes},
     http::{Method, Request, StatusCode, header},
 };
-use chrono::Utc;
-use gateway_api::admin::{
-    AdminRequestContext, AdminServiceError, AdminSessionResolver, AdminSessionState,
-    RuntimeSettingsView, UpdateRuntimeSettingsRequest,
-    settings::{self, AdminSettingsService, AdminSettingsState},
-};
+use gateway_api::admin::settings::{self, UpdateRuntimeSettingsRequest};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-struct FakeSettings {
-    settings: Mutex<RuntimeSettingsView>,
-    key_exists: Mutex<bool>,
-}
+use super::{AdminTestFixture, AdminTestState};
 
-impl Default for FakeSettings {
-    fn default() -> Self {
-        Self {
-            settings: Mutex::new(runtime_settings()),
-            key_exists: Mutex::new(false),
-        }
-    }
-}
-
-#[async_trait]
-impl AdminSessionResolver for FakeSettings {
-    async fn resolve_admin_user_id(
-        &self,
-        session_id: Option<&str>,
-    ) -> Result<Option<String>, AdminServiceError> {
-        Ok((session_id == Some("valid-session")).then(|| "admin_1".to_owned()))
-    }
-
-    async fn verify_admin_api_key(&self, key: &str) -> Result<bool, AdminServiceError> {
-        Ok(key == "admin-valid-test-key")
-    }
-}
-
-#[async_trait]
-impl AdminSettingsService for FakeSettings {
-    async fn load(&self) -> Result<RuntimeSettingsView, AdminServiceError> {
-        Ok(self.settings.lock().expect("settings state").clone())
-    }
-
-    async fn replace(
-        &self,
-        context: &AdminRequestContext,
-        request: UpdateRuntimeSettingsRequest,
-    ) -> Result<RuntimeSettingsView, AdminServiceError> {
-        assert_eq!(context.admin_user_id(), Some("admin_1"));
-        let settings = RuntimeSettingsView {
-            config_revision: request.expected_config_revision + 1,
-            provider_model_mappings: request.provider_model_mappings,
-            refresh_margin_seconds: request.refresh_margin_seconds,
-            refresh_concurrency: request.refresh_concurrency,
-            max_concurrent_per_account: request.max_concurrent_per_account,
-            request_interval_ms: request.request_interval_ms,
-            rotation_strategy: request.rotation_strategy,
-            usage_retention_days: request.usage_retention_days,
-            ops_event_retention_days: request.ops_event_retention_days,
-            audit_retention_days: request.audit_retention_days,
-            updated_at: Utc::now(),
-        };
-        *self.settings.lock().expect("settings state") = settings.clone();
-        Ok(settings)
-    }
-
-    async fn admin_api_key_exists(&self) -> Result<bool, AdminServiceError> {
-        Ok(*self.key_exists.lock().expect("key state"))
-    }
-
-    async fn regenerate_admin_api_key(
-        &self,
-        _context: &AdminRequestContext,
-    ) -> Result<String, AdminServiceError> {
-        *self.key_exists.lock().expect("key state") = true;
-        Ok("admin-generated-secret-once".to_owned())
-    }
-
-    async fn delete_admin_api_key(
-        &self,
-        _context: &AdminRequestContext,
-    ) -> Result<(), AdminServiceError> {
-        *self.key_exists.lock().expect("key state") = false;
-        Ok(())
-    }
-}
-
-#[derive(Clone)]
-struct TestState(Arc<FakeSettings>);
-
-impl AdminSessionState for TestState {
-    fn admin_session_resolver(&self) -> &dyn AdminSessionResolver {
-        self.0.as_ref()
-    }
-}
-
-impl AdminSettingsState for TestState {
-    fn admin_settings_service(&self) -> &dyn AdminSettingsService {
-        self.0.as_ref()
-    }
-}
-
-fn app(settings: Arc<FakeSettings>) -> Router {
-    settings::router::<TestState>().with_state(TestState(settings))
+fn app(state: AdminTestState) -> Router {
+    settings::router::<AdminTestState>().with_state(state)
 }
 
 fn request(method: Method, path: &str, body: Option<Value>) -> Request<Body> {
@@ -135,31 +33,6 @@ async fn response_json(response: axum::response::Response) -> Value {
         .await
         .expect("read response body");
     serde_json::from_slice(&bytes).expect("parse response JSON")
-}
-
-fn runtime_settings() -> RuntimeSettingsView {
-    RuntimeSettingsView {
-        config_revision: 7,
-        provider_model_mappings: BTreeMap::from([
-            (
-                "openai".to_owned(),
-                BTreeMap::from([("coding-default".to_owned(), "gpt-5.4".to_owned())]),
-            ),
-            (
-                "xai".to_owned(),
-                BTreeMap::from([("grok-latest".to_owned(), "grok-4.5".to_owned())]),
-            ),
-        ]),
-        refresh_margin_seconds: 3600,
-        refresh_concurrency: 2,
-        max_concurrent_per_account: 3,
-        request_interval_ms: 50,
-        rotation_strategy: "smart".into(),
-        usage_retention_days: 31,
-        ops_event_retention_days: 30,
-        audit_retention_days: 90,
-        updated_at: Utc::now(),
-    }
 }
 
 fn update_body() -> Value {
@@ -219,7 +92,9 @@ fn settings_request_should_reject_removed_bucket_retention() {
 
 #[tokio::test]
 async fn settings_get_should_preserve_provider_scoped_model_mappings() {
-    let response = app(Arc::new(FakeSettings::default()))
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let response = app(fixture.state())
         .oneshot(request(Method::GET, "/api/admin/settings", None))
         .await
         .expect("settings response");
@@ -237,7 +112,9 @@ async fn settings_get_should_preserve_provider_scoped_model_mappings() {
 
 #[tokio::test]
 async fn settings_post_should_replace_provider_scoped_model_mappings() {
-    let response = app(Arc::new(FakeSettings::default()))
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let response = app(fixture.state())
         .oneshot(request(
             Method::POST,
             "/api/admin/settings",
@@ -275,7 +152,8 @@ fn settings_request_should_reject_invalid_provider_mapping_slug() {
 
 #[tokio::test]
 async fn settings_should_require_admin_auth() {
-    let response = app(Arc::new(FakeSettings::default()))
+    let fixture = AdminTestFixture::new().await;
+    let response = app(fixture.state())
         .oneshot(
             Request::builder()
                 .uri("/api/admin/settings")
@@ -291,7 +169,9 @@ async fn settings_should_require_admin_auth() {
 
 #[tokio::test]
 async fn admin_key_should_return_secret_only_on_regenerate() {
-    let response = app(Arc::new(FakeSettings::default()))
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let response = app(fixture.state())
         .oneshot(request(
             Method::POST,
             "/api/admin/settings/admin-api-key/regenerate",
@@ -301,14 +181,19 @@ async fn admin_key_should_return_secret_only_on_regenerate() {
         .expect("regenerate response");
     let data = response_json(response).await["data"].clone();
 
-    assert_eq!(data["key"], "admin-generated-secret-once");
+    assert!(
+        data["key"]
+            .as_str()
+            .is_some_and(|key| key.starts_with("admin-") && key.len() == 70)
+    );
 }
 
 #[tokio::test]
 async fn admin_key_delete_should_use_fixed_post_path() {
-    let settings = Arc::new(FakeSettings::default());
-    *settings.key_exists.lock().expect("key state") = true;
-    let response = app(settings)
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    fixture.settings.set_api_key("admin-valid-test-key");
+    let response = app(fixture.state())
         .oneshot(request(
             Method::POST,
             "/api/admin/settings/admin-api-key",
@@ -322,11 +207,14 @@ async fn admin_key_delete_should_use_fixed_post_path() {
 
 #[tokio::test]
 async fn settings_should_accept_admin_api_key_header() {
-    let response = app(Arc::new(FakeSettings::default()))
+    let fixture = AdminTestFixture::new().await;
+    let key = format!("admin-{}", "a".repeat(64));
+    fixture.auth.set_api_key(&key);
+    let response = app(fixture.state())
         .oneshot(
             Request::builder()
                 .uri("/api/admin/settings")
-                .header("x-api-key", "admin-valid-test-key")
+                .header("x-api-key", key)
                 .header("x-request-id", "req_api_key")
                 .body(Body::empty())
                 .expect("api key request"),

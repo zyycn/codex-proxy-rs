@@ -7,48 +7,13 @@
 #
 # 三个密码建议分别执行 `openssl rand -hex 24` 生成。
 
-x-cpr:
-  schema_version: 1
+schema_version: 1
 
-  server:
-    # 本地 cargo run 使用；Docker 内由 compose.yaml 固定覆盖为 0.0.0.0:8080。
+host:
+  listen:
+    # 本地 cargo run 使用；Docker 内由 CPR_SERVER_HOST/PORT 覆盖。
     host: '127.0.0.1'
     port: 8080
-
-  database:
-    # 本地连接地址；Docker 内由 compose.yaml 固定改用 postgres 服务名。
-    # 密码不要写进 URL。
-    url: 'postgres://codex_proxy@127.0.0.1:5432/codex_proxy'
-    # 必填：48 位十六进制字符。
-    password: &postgres_password ''
-
-  redis:
-    # 本地连接地址；Docker 内由 compose.yaml 固定改用 redis 服务名。
-    # 密码不要写进 URL。
-    url: 'redis://127.0.0.1:6379/'
-    # 必填：48 位十六进制字符。
-    password: &redis_password ''
-
-  wire_profile:
-    # 该画像来自 Desktop 制品与 bundled Codex Core 的联合审计。
-    # appcast 成功检查后会自动同步 Desktop 版本和 Build；其余字段保持此处配置。
-    originator: 'Codex Desktop'
-    codex_version: '0.144.2'
-    desktop_version: '26.707.72221'
-    desktop_build: '5307'
-    # 固定参考主机画像；必须在重新抓包核验后再修改。
-    os_type: 'Mac OS'
-    os_version: '15.7.1'
-    arch: 'arm64'
-    terminal: 'unknown'
-    verified_at: '2026-07-15T02:25:50+08:00'
-
-  admin:
-    session_ttl_minutes: 1440
-    default_username: 'admin@cpr.local'
-    # 仅首次创建管理员时使用；至少 12 个字符且不能包含 `$`。
-    default_password: ''
-
   logging:
     level: 'info'
     stdout: true
@@ -59,25 +24,43 @@ x-cpr:
       retention_days: 14
       max_file_size_mb: 20
       max_files: 20
+  drain_timeout_seconds: 30
+  worker_shutdown_timeout_seconds: 30
 
-# Compose 凭据桥接区。通常不需要修改。
-services:
-  postgres-credentials:
-    environment:
-      POSTGRES_PASSWORD: *postgres_password
+store:
+  database:
+    # Docker 内由 CPR_DATABASE_URL 覆盖；密码不要写进 URL。
+    url: 'postgres://codex_proxy@127.0.0.1:5432/codex_proxy'
+    password: ''
+  redis:
+    # Docker 内由 CPR_REDIS_URL 覆盖；密码不要写进 URL。
+    url: 'redis://127.0.0.1:6379/'
+    password: ''
 
-  redis-credentials:
-    command:
-      - redis-server
-      - --appendonly
-      - 'yes'
-      - --requirepass
-      - *redis_password
-    healthcheck:
-      test:
-        - CMD
-        - redis-cli
-        - --no-auth-warning
-        - -a
-        - *redis_password
-        - ping
+admin:
+  session_ttl_minutes: 1440
+  default_username: 'admin@cpr.local'
+  # 仅首次创建管理员时使用；至少 12 个字符且不能包含 `$`。
+  default_password: ''
+
+api:
+  # Docker 内由 CPR_WEB_DIST_DIR 覆盖。
+  asset_directory: '../frontend/dist'
+  cors_allowed_origins: []
+  request_timeout_seconds: null
+  request_id_header: 'x-request-id'
+
+openai:
+  wire_profile:
+    # 该画像来自 Desktop 制品与 bundled Codex Core 的联合审计。
+    originator: 'Codex Desktop'
+    codex_version: '0.144.2'
+    desktop_version: '26.707.72221'
+    desktop_build: '5307'
+    os_type: 'Mac OS'
+    os_version: '15.7.1'
+    arch: 'arm64'
+    terminal: 'unknown'
+    verified_at: '2026-07-15T02:25:50+08:00'
+
+xai: {}

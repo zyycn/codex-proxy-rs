@@ -1,45 +1,46 @@
 mod bootstrap;
-mod workers;
 
-use std::collections::BTreeSet;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use syn::{Attribute, Item, Meta};
 
 #[test]
-fn app_tree_is_exactly_the_frozen_six_rust_files() {
+fn app_tree_matches_frozen_terminal_manifest() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     assert_eq!(
         rust_files(&root.join("src")),
         BTreeSet::from([
             PathBuf::from("bootstrap.rs"),
+            PathBuf::from("lib.rs"),
             PathBuf::from("main.rs"),
-            PathBuf::from("workers.rs"),
         ]),
     );
     assert_eq!(
         rust_files(&root.join("tests")),
-        BTreeSet::from([
-            PathBuf::from("bootstrap.rs"),
-            PathBuf::from("main.rs"),
-            PathBuf::from("workers.rs"),
-        ]),
+        BTreeSet::from([PathBuf::from("bootstrap.rs"), PathBuf::from("main.rs")]),
     );
 }
 
 #[test]
-fn cargo_library_root_is_bootstrap() {
+fn cargo_library_root_is_conventional_lib() {
     let manifest = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
         .expect("read app Cargo.toml");
-    let normalized = manifest.split_whitespace().collect::<String>();
-    assert!(normalized.contains("[lib]path=\"src/bootstrap.rs\""));
+    assert!(!manifest.contains("[lib]"));
+    assert!(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/lib.rs")
+            .is_file()
+    );
 }
 
 #[test]
 fn production_files_have_no_hidden_modules_or_test_hooks() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    for relative in ["bootstrap.rs", "main.rs", "workers.rs"] {
+    for relative in ["bootstrap.rs", "lib.rs", "main.rs"] {
         let path = root.join(relative);
         let source = fs::read_to_string(&path).expect("read production source");
         assert!(
@@ -55,11 +56,6 @@ fn production_files_have_no_hidden_modules_or_test_hooks() {
                     "{} has an inline module",
                     path.display()
                 );
-                assert!(
-                    !module.attrs.iter().any(is_path_or_test_cfg),
-                    "{} has a hidden module hook",
-                    path.display(),
-                );
             }
             for attribute in item_attrs(item) {
                 assert!(
@@ -73,24 +69,25 @@ fn production_files_have_no_hidden_modules_or_test_hooks() {
 }
 
 #[test]
-fn bootstrap_and_workers_do_not_own_storage_or_provider_wire_algorithms() {
+fn bootstrap_owns_only_bundle_wiring() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let bootstrap = fs::read_to_string(root.join("bootstrap.rs")).expect("read bootstrap");
-    let workers = fs::read_to_string(root.join("workers.rs")).expect("read workers");
     for forbidden in [
-        "sqlx::query",
-        "sqlx::query_as",
-        "redis::Script",
-        "redis.call(",
-        "access_token\"",
-        "refresh_token\"",
+        "sqlx::",
+        "redis::",
+        "Repository",
+        "impl Provider",
+        "impl ExecutionService",
+        "tokio::spawn",
+        "access_token",
+        "refresh_token",
     ] {
         assert!(
             !bootstrap.contains(forbidden),
             "bootstrap owns `{forbidden}`"
         );
-        assert!(!workers.contains(forbidden), "workers owns `{forbidden}`");
     }
+    assert!(bootstrap.lines().count() <= 300);
 }
 
 fn rust_files(root: &Path) -> BTreeSet<PathBuf> {

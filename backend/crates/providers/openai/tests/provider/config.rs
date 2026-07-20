@@ -1,8 +1,10 @@
 use gateway_core::routing::{InstanceHealth, ProviderInstance, ProviderInstanceId, ProviderKind};
 use provider_openai::{
-    CodexEndpointPolicy, CodexProviderConfigError, CodexProviderInstanceConfig,
-    CodexProviderTransport, OFFICIAL_CODEX_BASE_PATH,
+    CodexProviderConfigError, CodexProviderInstanceConfig, CodexProviderTransport,
+    OFFICIAL_CODEX_BASE_PATH, OfficialCodexOriginPolicy,
 };
+
+use crate::support::LoopbackCodexOriginPolicy;
 
 fn instance(provider: &str, base_url: &str) -> ProviderInstance {
     ProviderInstance::new(
@@ -16,13 +18,16 @@ fn instance(provider: &str, base_url: &str) -> ProviderInstance {
 
 #[test]
 fn official_instance_requires_exact_https_origin_and_base_path() {
-    let compiled = CodexProviderInstanceConfig::from_snapshot(&instance(
-        "openai",
-        "https://chatgpt.com/backend-api/",
-    ))
+    let compiled = CodexProviderInstanceConfig::from_snapshot(
+        &instance("openai", "https://chatgpt.com/backend-api/"),
+        &OfficialCodexOriginPolicy,
+    )
     .expect("official endpoint");
     assert_eq!(compiled.base_url().path(), OFFICIAL_CODEX_BASE_PATH);
-    assert_eq!(compiled.transport(), CodexProviderTransport::HttpSse);
+    assert_eq!(
+        compiled.transport(),
+        CodexProviderTransport::PreferWebSocket
+    );
 }
 
 #[test]
@@ -37,7 +42,10 @@ fn official_policy_rejects_lookalike_private_and_metadata_origins() {
         "http://chatgpt.com/backend-api",
     ] {
         assert_eq!(
-            CodexProviderInstanceConfig::from_snapshot(&instance("openai", endpoint)),
+            CodexProviderInstanceConfig::from_snapshot(
+                &instance("openai", endpoint),
+                &OfficialCodexOriginPolicy,
+            ),
             Err(CodexProviderConfigError::UnsafeBaseUrl),
             "endpoint must fail closed: {endpoint}"
         );
@@ -48,20 +56,16 @@ fn official_policy_rejects_lookalike_private_and_metadata_origins() {
 fn loopback_policy_requires_explicit_numeric_loopback_host() {
     let numeric = instance("openai", "http://127.0.0.1:43123/backend-api");
     assert_eq!(
-        CodexProviderInstanceConfig::from_snapshot(&numeric),
+        CodexProviderInstanceConfig::from_snapshot(&numeric, &OfficialCodexOriginPolicy),
         Err(CodexProviderConfigError::UnsafeBaseUrl)
     );
     assert!(
-        CodexProviderInstanceConfig::from_snapshot_with_policy(
-            &numeric,
-            CodexEndpointPolicy::Loopback,
-        )
-        .is_ok()
+        CodexProviderInstanceConfig::from_snapshot(&numeric, &LoopbackCodexOriginPolicy).is_ok()
     );
     assert_eq!(
-        CodexProviderInstanceConfig::from_snapshot_with_policy(
+        CodexProviderInstanceConfig::from_snapshot(
             &instance("openai", "http://localhost:43123/backend-api"),
-            CodexEndpointPolicy::Loopback,
+            &LoopbackCodexOriginPolicy,
         ),
         Err(CodexProviderConfigError::UnsafeBaseUrl)
     );
@@ -70,10 +74,10 @@ fn loopback_policy_requires_explicit_numeric_loopback_host() {
 #[test]
 fn non_codex_instance_is_rejected_before_transport_initialization() {
     assert_eq!(
-        CodexProviderInstanceConfig::from_snapshot(&instance(
-            "xai",
-            "https://chatgpt.com/backend-api",
-        )),
+        CodexProviderInstanceConfig::from_snapshot(
+            &instance("xai", "https://chatgpt.com/backend-api"),
+            &OfficialCodexOriginPolicy,
+        ),
         Err(CodexProviderConfigError::ProviderMismatch)
     );
 }

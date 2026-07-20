@@ -1,15 +1,10 @@
-use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-
-use async_trait::async_trait;
-use gateway_api::admin::AdminServiceError;
+use gateway_admin::model::auth::{LoginCommand, LoginError};
 use gateway_api::admin::auth::{
-    AdminAuthAuditEvent, AdminAuthBackend, AdminAuthService, AdminBackendSession, AdminLoginData,
-    AdminLoginError, AdminLoginRequest, AdminLogoutData, AdminSessionResolver,
-    AdminSessionStatusData, DefaultAdminAuthService,
+    AdminLoginData, AdminLoginRequest, AdminLogoutData, AdminSessionStatusData,
 };
 use serde_json::json;
+
+use super::AdminTestFixture;
 
 #[test]
 fn login_request_should_deny_unknown_fields_and_redact_password_debug() {
@@ -50,200 +45,107 @@ fn auth_responses_should_keep_stable_wire_shapes() {
     );
 }
 
-#[derive(Default)]
-struct MemoryAuthBackend {
-    password_hash: Mutex<Option<String>>,
-    admin_api_key: Mutex<Option<String>>,
-    sessions: Mutex<BTreeMap<String, AdminBackendSession>>,
-    login_failures: Mutex<BTreeMap<String, u32>>,
-    audits: Mutex<Vec<AdminAuthAuditEvent>>,
-    fail_audit: AtomicBool,
-}
-
-#[async_trait]
-impl AdminAuthBackend for MemoryAuthBackend {
-    async fn password_hash(
-        &self,
-        _admin_user_id: &str,
-    ) -> Result<Option<String>, AdminServiceError> {
-        Ok(self.password_hash.lock().expect("password lock").clone())
-    }
-
-    async fn store_password_hash(
-        &self,
-        _admin_user_id: &str,
-        password_hash: &str,
-    ) -> Result<(), AdminServiceError> {
-        *self.password_hash.lock().expect("password lock") = Some(password_hash.to_owned());
-        Ok(())
-    }
-
-    async fn admin_api_key(&self) -> Result<Option<String>, AdminServiceError> {
-        Ok(self.admin_api_key.lock().expect("API key lock").clone())
-    }
-
-    async fn load_admin_session(
-        &self,
-        session_id: &str,
-    ) -> Result<Option<AdminBackendSession>, AdminServiceError> {
-        Ok(self
-            .sessions
-            .lock()
-            .expect("session lock")
-            .get(session_id)
-            .cloned())
-    }
-
-    async fn store_admin_session(
-        &self,
-        session_id: &str,
-        session: &AdminBackendSession,
-    ) -> Result<(), AdminServiceError> {
-        self.sessions
-            .lock()
-            .expect("session lock")
-            .insert(session_id.to_owned(), session.clone());
-        Ok(())
-    }
-
-    async fn delete_admin_session(
-        &self,
-        session_id: &str,
-    ) -> Result<Option<AdminBackendSession>, AdminServiceError> {
-        Ok(self
-            .sessions
-            .lock()
-            .expect("session lock")
-            .remove(session_id))
-    }
-
-    async fn login_source_is_throttled(
-        &self,
-        source: &str,
-        failure_limit: u32,
-        _window_seconds: u64,
-    ) -> Result<bool, AdminServiceError> {
-        Ok(self
-            .login_failures
-            .lock()
-            .expect("failure lock")
-            .get(source)
-            .is_some_and(|count| *count >= failure_limit))
-    }
-
-    async fn record_login_failure(
-        &self,
-        source: &str,
-        failure_limit: u32,
-        _window_seconds: u64,
-    ) -> Result<bool, AdminServiceError> {
-        let mut failures = self.login_failures.lock().expect("failure lock");
-        let count = failures.entry(source.to_owned()).or_default();
-        *count = count.saturating_add(1);
-        Ok(*count >= failure_limit)
-    }
-
-    async fn clear_login_failures(&self, source: &str) -> Result<(), AdminServiceError> {
-        self.login_failures
-            .lock()
-            .expect("failure lock")
-            .remove(source);
-        Ok(())
-    }
-
-    async fn append_auth_audit(&self, event: AdminAuthAuditEvent) -> Result<(), AdminServiceError> {
-        if self.fail_audit.load(Ordering::SeqCst) {
-            return Err(AdminServiceError::unavailable("audit unavailable"));
-        }
-        self.audits.lock().expect("audit lock").push(event);
-        Ok(())
-    }
-}
-
 #[tokio::test]
 async fn default_auth_service_should_initialize_login_validate_and_logout() {
-    let backend = Arc::new(MemoryAuthBackend::default());
-    let service = DefaultAdminAuthService::new("admin_1".to_owned(), 60, backend.clone());
-    assert!(
-        service
-            .ensure_default_admin("strong-admin-password")
-            .await
-            .unwrap()
-    );
-    assert!(
-        !service
-            .ensure_default_admin("different-password")
-            .await
-            .unwrap()
-    );
-
+    let fixture = AdminTestFixture::new().await;
+    let service = fixture.services.auth();
     let session = service
-        .login(
-            "127.0.0.1",
-            Some("admin_1".to_owned()),
-            "strong-admin-password".to_owned(),
-        )
+        .login(LoginCommand {
+            source: "127.0.0.1".to_owned(),
+            username: Some("admin_1".to_owned()),
+            password: "strong-admin-password".to_owned(),
+        })
         .await
         .expect("login succeeds");
     assert!(
         service
-            .validate(Some(session.session_id.clone()))
+            .validate_session(Some(&session.session_id))
             .await
-            .unwrap()
+            .expect("validate session")
     );
     assert_eq!(
         service
             .resolve_admin_user_id(Some(&session.session_id))
             .await
-            .unwrap()
+            .expect("resolve session")
             .as_deref(),
-        Some("admin_1"),
+        Some("admin_1")
     );
-    service.logout(session.session_id.clone()).await.unwrap();
-    assert!(!service.validate(Some(session.session_id)).await.unwrap());
-    assert_eq!(backend.audits.lock().expect("audit lock").len(), 2);
+    service
+        .logout(&session.session_id)
+        .await
+        .expect("logout session");
+    assert!(
+        !service
+            .validate_session(Some(&session.session_id))
+            .await
+            .expect("validate logged-out session")
+    );
+    assert_eq!(fixture.auth.audit_count(), 2);
 }
 
 #[tokio::test]
 async fn default_auth_service_should_throttle_repeated_invalid_identity() {
-    let backend = Arc::new(MemoryAuthBackend::default());
-    let service = DefaultAdminAuthService::new("admin_1".to_owned(), 60, backend.clone());
+    let fixture = AdminTestFixture::new().await;
     for attempt in 1..=5 {
-        let error = service
-            .login(
-                "shared-source",
-                Some("wrong-user".to_owned()),
-                "wrong-password".to_owned(),
-            )
+        let error = fixture
+            .services
+            .auth()
+            .login(LoginCommand {
+                source: "shared-source".to_owned(),
+                username: Some("wrong-user".to_owned()),
+                password: "wrong-password".to_owned(),
+            })
             .await
-            .unwrap_err();
+            .expect_err("invalid login");
         if attempt < 5 {
-            assert_eq!(error, AdminLoginError::InvalidCredentials);
+            assert_eq!(error, LoginError::InvalidCredentials);
         } else {
-            assert_eq!(error, AdminLoginError::Throttled);
+            assert_eq!(error, LoginError::Throttled);
         }
     }
     assert_eq!(
-        service
-            .login("shared-source", None, "anything".to_owned())
+        fixture
+            .services
+            .auth()
+            .login(LoginCommand {
+                source: "shared-source".to_owned(),
+                username: None,
+                password: "anything".to_owned(),
+            })
             .await
-            .unwrap_err(),
-        AdminLoginError::Throttled,
+            .expect_err("source remains throttled"),
+        LoginError::Throttled
     );
-    assert!(backend.sessions.lock().expect("session lock").is_empty());
+    assert_eq!(fixture.auth.session_count(), 0);
 }
 
 #[tokio::test]
 async fn default_auth_service_should_verify_only_full_plaintext_admin_key() {
-    let backend = Arc::new(MemoryAuthBackend::default());
+    let fixture = AdminTestFixture::new().await;
     let key = format!("admin-{}", "a".repeat(64));
-    *backend.admin_api_key.lock().expect("API key lock") = Some(key.clone());
-    let service = DefaultAdminAuthService::new("admin_1".to_owned(), 60, backend);
+    fixture.auth.set_api_key(&key);
 
-    assert!(service.verify_admin_api_key(&key).await.unwrap());
-    assert!(!service.verify_admin_api_key("admin-short").await.unwrap());
     assert!(
-        !service
+        fixture
+            .services
+            .auth()
+            .verify_admin_api_key(&key)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !fixture
+            .services
+            .auth()
+            .verify_admin_api_key("admin-short")
+            .await
+            .unwrap()
+    );
+    assert!(
+        !fixture
+            .services
+            .auth()
             .verify_admin_api_key(&format!("admin-{}", "b".repeat(64)))
             .await
             .unwrap()
@@ -252,19 +154,21 @@ async fn default_auth_service_should_verify_only_full_plaintext_admin_key() {
 
 #[tokio::test]
 async fn audit_failure_should_revoke_new_session_before_returning_it() {
-    let backend = Arc::new(MemoryAuthBackend::default());
-    let service = DefaultAdminAuthService::new("admin_1".to_owned(), 60, backend.clone());
-    service
-        .ensure_default_admin("strong-admin-password")
-        .await
-        .unwrap();
-    backend.fail_audit.store(true, Ordering::SeqCst);
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.fail_audit(true);
 
     assert_eq!(
-        service
-            .login("source", None, "strong-admin-password".to_owned())
+        fixture
+            .services
+            .auth()
+            .login(LoginCommand {
+                source: "source".to_owned(),
+                username: None,
+                password: "strong-admin-password".to_owned(),
+            })
             .await
-            .unwrap_err(),
-        AdminLoginError::Unavailable,
+            .expect_err("audit failure rejects login"),
+        LoginError::Unavailable
     );
+    assert_eq!(fixture.auth.session_count(), 0);
 }

@@ -107,7 +107,7 @@ pub(in crate::transport::websocket) async fn collect_websocket_response(
                 first_text_ms,
                 first_event_ms,
                 pool_decision: None,
-                connection_local_continuation_expires_at: None,
+                connection_local_continuation: false,
                 diagnostics: metadata.diagnostics.clone(),
                 response_metadata: metadata.response_metadata.clone(),
             };

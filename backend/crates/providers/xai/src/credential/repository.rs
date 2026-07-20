@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use gateway_core::engine::credential::{
@@ -12,6 +12,7 @@ use gateway_core::engine::credential::{
     ProviderAccountUpdate, QuotaObservation, QuotaWriteOutcome,
 };
 use gateway_core::error::StoreErrorKind;
+use gateway_core::provider_ports::ProviderRefreshPolicy;
 use gateway_core::routing::{ProviderInstanceId, ProviderKind};
 use serde_json::Value;
 use thiserror::Error;
@@ -42,7 +43,6 @@ pub struct VerifiedGrokAccount {
     pub plan_type: Option<String>,
     pub tokens: VerifiedTokenSet,
     pub enabled: bool,
-    pub refresh_margin: Duration,
 }
 
 impl std::fmt::Debug for VerifiedGrokAccount {
@@ -60,7 +60,6 @@ impl std::fmt::Debug for VerifiedGrokAccount {
             .field("plan_type", &self.plan_type)
             .field("tokens", &self.tokens)
             .field("enabled", &self.enabled)
-            .field("refresh_margin", &self.refresh_margin)
             .finish()
     }
 }
@@ -175,7 +174,7 @@ impl GrokCredentialAdmin {
             availability(input.initial_availability),
             input.initial_cooldown_until.map(to_system_time),
         )
-        .with_refresh_schedule(true, input.account.next_refresh_at.map(to_system_time));
+        .with_refresh_schedule(true, Some(to_system_time(input.next_refresh_at)));
         Ok(NewProviderAccount {
             account,
             credential: encode_secret(&input.secret, &input.account)?,
@@ -206,12 +205,8 @@ impl GrokCredentialAdmin {
     pub fn prepare_verified_account(
         &self,
         input: &VerifiedGrokAccount,
+        policy: ProviderRefreshPolicy,
     ) -> Result<NewProviderAccount, GrokCredentialRepositoryError> {
-        if input.refresh_margin.is_zero() {
-            return Err(GrokCredentialRepositoryError::InvalidInput(
-                "refresh_margin",
-            ));
-        }
         let expires_in = input
             .tokens
             .expires_in()
@@ -224,9 +219,9 @@ impl GrokCredentialAdmin {
         let access_token_expires_at = now
             .checked_add(expires_in)
             .ok_or(GrokCredentialRepositoryError::InvalidInput("expires_in"))?;
-        let next_refresh_at = access_token_expires_at
-            .checked_sub(input.refresh_margin)
-            .map_or(now, |planned| planned.max(now));
+        let next_refresh_at = policy
+            .next_attempt_at(&input.account_id, access_token_expires_at, now)
+            .map_err(|_| GrokCredentialRepositoryError::InvalidInput("next_refresh_at"))?;
         self.prepare_import(&CreateGrokCredential {
             account_id: input.account_id.clone(),
             provider_instance_id: input.provider_instance_id.clone(),
@@ -244,8 +239,8 @@ impl GrokCredentialAdmin {
                 plan_type: input.plan_type.clone(),
                 access_token_expires_at: access_token_expires_at.into(),
                 refresh_token_expires_at: None,
-                next_refresh_at: Some(next_refresh_at.into()),
             },
+            next_refresh_at: next_refresh_at.into(),
             enabled: input.enabled,
             initial_availability: GrokCredentialAvailability::Ready,
             initial_availability_reason: None,
@@ -335,6 +330,7 @@ impl GrokCredentialAdmin {
             account.revision(),
             &input.secret,
             &input.verified_account,
+            input.next_refresh_at,
         )
     }
 }
@@ -390,6 +386,7 @@ impl GrokCredentialRepository {
             input.expected_revision,
             &input.secret,
             &input.verified_account,
+            input.next_refresh_at,
         )?;
         let outcome = self
             .store
@@ -405,6 +402,48 @@ impl GrokCredentialRepository {
             provider_instance_id: current.account.instance().clone(),
             credential_revision: revision,
         })
+    }
+
+    /// 临时失败时只推进持久刷新时刻，不改变 OAuth material 或账号可用性。
+    pub(crate) async fn defer_refresh(
+        &self,
+        account_id: &ProviderAccountId,
+        expected_revision: CredentialRevision,
+        next_refresh_at: SystemTime,
+    ) -> Result<(), GrokCredentialRepositoryError> {
+        let current = self
+            .store
+            .load_credential(account_id, expected_revision)
+            .await
+            .map_err(map_rotation_load_error)?;
+        ensure_xai(&current.account)?;
+        let profile = ProviderAccountUpdate {
+            account_id: account_id.clone(),
+            name: current.account.name().to_owned(),
+            email: current.account.email().map(str::to_owned),
+            plan_type: current.account.plan_type().map(str::to_owned),
+        };
+        let update = CredentialCasUpdate::new(
+            account_id.clone(),
+            expected_revision,
+            profile,
+            current.credential,
+            true,
+            current.account.access_token_expires_at(),
+            Some(next_refresh_at),
+        )
+        .map_err(|_| GrokCredentialRepositoryError::InvalidCredentialData)?;
+        match self
+            .store
+            .compare_and_swap_credential(update)
+            .await
+            .map_err(map_store_error)?
+        {
+            CredentialCasOutcome::Updated(_) => Ok(()),
+            CredentialCasOutcome::Conflict => {
+                Err(GrokCredentialRepositoryError::StaleCredentialRevision)
+            }
+        }
     }
 
     /// 用同一 credential revision fence 更新可用性。
@@ -540,7 +579,25 @@ impl GrokCredentialRepository {
     ) -> Result<Option<QuotaObservation>, GrokCredentialRepositoryError> {
         self.ensure_xai_account(account_id).await?;
         self.store
-            .get_quota(account_id)
+            .get_quotas(std::slice::from_ref(account_id))
+            .await
+            .map_err(map_store_error)
+            .map(|mut observations| observations.pop())
+    }
+
+    pub(crate) async fn quota_observations(
+        &self,
+        accounts: &[ProviderAccount],
+    ) -> Result<Vec<QuotaObservation>, GrokCredentialRepositoryError> {
+        for account in accounts {
+            ensure_xai(account)?;
+        }
+        let account_ids = accounts
+            .iter()
+            .map(|account| account.id().clone())
+            .collect::<Vec<_>>();
+        self.store
+            .get_quotas(&account_ids)
             .await
             .map_err(map_store_error)
     }
@@ -613,8 +670,10 @@ fn prepare_rotation(
     expected_revision: CredentialRevision,
     secret: &GrokOAuthSecret,
     verified_account: &GrokAccountProfile,
+    next_refresh_at: DateTime<Utc>,
 ) -> Result<PreparedGrokCredentialRotation, GrokCredentialRepositoryError> {
     validate_profile(verified_account)?;
+    validate_refresh_schedule(next_refresh_at, verified_account.access_token_expires_at)?;
     validate_secret(secret)?;
     ensure_xai(current)?;
     if current.revision() != expected_revision {
@@ -648,7 +707,7 @@ fn prepare_rotation(
         encode_secret(&merged_secret, verified_account)?,
         true,
         to_system_time(verified_account.access_token_expires_at),
-        verified_account.next_refresh_at.map(to_system_time),
+        Some(to_system_time(next_refresh_at)),
     )
     .map_err(|_| GrokCredentialRepositoryError::InvalidCredentialData)?;
     Ok(PreparedGrokCredentialRotation::new(profile, credential))
@@ -674,6 +733,7 @@ fn decode_secret(
 fn validate_create(input: &CreateGrokCredential) -> Result<(), GrokCredentialRepositoryError> {
     validate_name(&input.name)?;
     validate_profile(&input.account)?;
+    validate_refresh_schedule(input.next_refresh_at, input.account.access_token_expires_at)?;
     validate_secret(&input.secret)?;
     validate_reason(input.initial_availability_reason.as_deref())?;
     validate_cooldown(input.initial_availability, input.initial_cooldown_until)
@@ -692,12 +752,21 @@ fn validate_profile(profile: &GrokAccountProfile) -> Result<(), GrokCredentialRe
         || profile
             .refresh_token_expires_at
             .is_some_and(|expires_at| expires_at <= profile.access_token_expires_at)
-        || profile
-            .next_refresh_at
-            .is_some_and(|next| next >= profile.access_token_expires_at)
     {
         return Err(GrokCredentialRepositoryError::InvalidInput(
             "token_lifetime",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_refresh_schedule(
+    next_refresh_at: DateTime<Utc>,
+    access_token_expires_at: DateTime<Utc>,
+) -> Result<(), GrokCredentialRepositoryError> {
+    if next_refresh_at >= access_token_expires_at {
+        return Err(GrokCredentialRepositoryError::InvalidInput(
+            "next_refresh_at",
         ));
     }
     Ok(())

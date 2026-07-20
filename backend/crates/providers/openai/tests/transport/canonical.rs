@@ -1,8 +1,35 @@
 use gateway_core::engine::UpstreamSendState;
 use gateway_core::error::ProviderErrorKind;
-use gateway_core::event::{ContentKind, FinishReason, GatewayEvent};
+use gateway_core::event::{ContentKind, FinishReason, GatewayEvent, ProviderEvent};
 
-use provider_openai::CodexCanonicalDecoder;
+use provider_openai::transport::canonical::{
+    CodexCanonicalDecoder, CodexCanonicalError, CodexCanonicalFailure, CodexCanonicalOutcome,
+};
+
+const METADATA_PREFIX_FIXTURE: &str = include_str!(
+    "../../../../gateway-api/tests/openai/responses/fixtures/http_sse/metadata_only_prefix.sse"
+);
+
+#[test]
+fn decoder_should_preserve_existing_metadata_fixture_as_openai_wire() {
+    let events = CodexCanonicalDecoder::new("fallback")
+        .push(METADATA_PREFIX_FIXTURE.as_bytes())
+        .expect("metadata fixture should remain open-world");
+    let wire_types = events
+        .iter()
+        .filter_map(ProviderEvent::wire_event)
+        .filter_map(|wire| wire.event_type())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        wire_types,
+        vec!["response.created", "codex.rate_limits", "response.metadata"]
+    );
+    assert!(matches!(
+        canonical_facts(&events).as_slice(),
+        [GatewayEvent::Started(_)]
+    ));
+}
 
 #[test]
 fn decoder_should_emit_calculated_cost_for_complete_known_model_usage() {
@@ -16,7 +43,7 @@ fn decoder_should_emit_calculated_cost_for_complete_known_model_usage() {
         .push(body.as_bytes())
         .expect("canonical priced response");
 
-    assert!(events.iter().any(|event| matches!(
+    assert!(canonical_facts(&events).into_iter().any(|event| matches!(
         event,
         GatewayEvent::CalculatedCost(cost)
             if cost.total().amount().scaled() == 3_437_500
@@ -38,17 +65,18 @@ fn decoder_should_normalize_text_usage_and_completion() {
     let events = CodexCanonicalDecoder::new("fallback")
         .push(body.as_bytes())
         .expect("canonical response");
+    let canonical = canonical_facts(&events);
 
-    assert!(matches!(events[0], GatewayEvent::Started(_)));
+    assert!(matches!(canonical[0], GatewayEvent::Started(_)));
     assert!(matches!(
-        events[1],
-        GatewayEvent::ContentAdded(ref item) if item.kind() == ContentKind::Text
+        canonical[1],
+        GatewayEvent::ContentAdded(item) if item.kind() == ContentKind::Text
     ));
-    assert!(matches!(events[2], GatewayEvent::TextDelta(_)));
-    assert!(matches!(events[3], GatewayEvent::Usage(_)));
+    assert!(matches!(canonical[2], GatewayEvent::TextDelta(_)));
+    assert!(matches!(canonical[3], GatewayEvent::Usage(_)));
     assert!(matches!(
-        events[4],
-        GatewayEvent::Completed(ref meta)
+        canonical[4],
+        GatewayEvent::Completed(meta)
             if meta.finish_reason() == Some(FinishReason::Stop)
     ));
 }
@@ -71,9 +99,10 @@ fn decoder_should_accept_official_codex_metadata_lifecycle_events() {
     let events = CodexCanonicalDecoder::new("fallback")
         .push(body.as_bytes())
         .expect("official Codex metadata lifecycle events");
+    let canonical = canonical_facts(&events);
 
     assert!(matches!(
-        events.as_slice(),
+        canonical.as_slice(),
         [
             GatewayEvent::Started(_),
             GatewayEvent::ContentAdded(_),
@@ -100,6 +129,7 @@ fn decoder_should_accept_whole_function_call_without_argument_deltas() {
         .expect("canonical function call");
     let tool_deltas = events
         .iter()
+        .flat_map(ProviderEvent::canonical_facts)
         .filter_map(|event| match event {
             GatewayEvent::ToolCallDelta(delta) => Some(delta),
             _ => None,
@@ -112,21 +142,57 @@ fn decoder_should_accept_whole_function_call_without_argument_deltas() {
 }
 
 #[test]
-fn decoder_should_fail_closed_for_unknown_events_without_echoing_body() {
+fn decoder_should_preserve_unknown_events_without_exposing_wire_data_in_debug() {
     let body = concat!(
         "event: response.created\n",
         "data: {\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-test\"}}\n\n",
         "event: response.secret_future_event\n",
         "data: {\"secret\":\"must-not-leak\"}\n\n",
     );
-    let error = CodexCanonicalDecoder::new("fallback")
+    let events = CodexCanonicalDecoder::new("fallback")
         .push(body.as_bytes())
-        .expect_err("unknown event must fail closed");
+        .expect("unknown OpenAI event should remain wire-only");
+    let unknown = events[1]
+        .wire_event()
+        .expect("unknown event should retain wire data");
 
-    assert_eq!(error.kind(), ProviderErrorKind::Unsupported);
-    assert_eq!(error.send_state(), UpstreamSendState::Sent);
-    assert!(!format!("{error:?}").contains("must-not-leak"));
-    assert!(!format!("{error}").contains("must-not-leak"));
+    assert_eq!(unknown.event_type(), Some("response.secret_future_event"));
+    assert_eq!(
+        unknown.data().get("secret"),
+        Some(&serde_json::json!("must-not-leak"))
+    );
+    assert!(!format!("{unknown:?}").contains("must-not-leak"));
+}
+
+#[test]
+fn decoder_should_keep_media_and_hosted_tool_events_as_openai_wire() {
+    for event_type in [
+        "response.image_generation_call.partial_image",
+        "response.audio.delta",
+        "response.web_search_call.searching",
+        "response.code_interpreter_call.in_progress",
+        "response.computer_tool_call.in_progress",
+    ] {
+        let body = format!(
+            "event: response.created\ndata: {{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_open_world\",\"model\":\"gpt-test\"}}}}\n\nevent: {event_type}\ndata: {{\"type\":\"{event_type}\",\"opaque\":{{\"future\":true}}}}\n\n"
+        );
+        let events = CodexCanonicalDecoder::new("fallback")
+            .push(body.as_bytes())
+            .expect("open-world event should remain protocol wire");
+        let event = &events[1];
+
+        assert!(event.canonical_facts().is_empty(), "{event_type}");
+        assert_eq!(
+            event.wire_event().and_then(|wire| wire.event_type()),
+            Some(event_type)
+        );
+        assert_eq!(
+            event
+                .wire_event()
+                .and_then(|wire| wire.data().pointer("/opaque/future")),
+            Some(&serde_json::json!(true))
+        );
+    }
 }
 
 #[test]
@@ -144,7 +210,10 @@ fn decoder_finish_should_parse_a_final_frame_without_blank_line() {
     decoder.push(tail.as_bytes()).expect("buffer partial frame");
 
     let events = decoder.finish().expect("finish partial frame");
-    assert!(matches!(events.as_slice(), [GatewayEvent::Completed(_)]));
+    assert!(matches!(
+        canonical_facts(&events).as_slice(),
+        [GatewayEvent::Completed(_)]
+    ));
 }
 
 #[test]
@@ -161,52 +230,78 @@ fn decoder_should_accept_done_only_after_terminal_event() {
         .push(body.as_bytes())
         .expect("terminal done marker");
 
-    assert!(matches!(events.last(), Some(GatewayEvent::Completed(_))));
+    assert!(matches!(
+        canonical_facts(&events).last(),
+        Some(GatewayEvent::Completed(_))
+    ));
 }
 
 #[test]
 fn decoder_should_classify_official_token_invalid_failure() {
-    assert_failed_event(
-        "token_invalid",
-        ProviderErrorKind::Unauthorized,
-        "auth-secret-marker",
-    );
+    assert_failed_event("token_invalid", "auth-secret-marker");
 }
 
 #[test]
 fn decoder_should_classify_official_model_not_supported_failure() {
-    assert_failed_event(
-        "model_not_supported",
-        ProviderErrorKind::Unsupported,
-        "model-secret-marker",
-    );
+    assert_failed_event("model_not_supported", "model-secret-marker");
 }
 
 #[test]
 fn decoder_should_classify_official_quota_failure() {
-    assert_failed_event(
-        "quota_exceeded",
-        ProviderErrorKind::QuotaExhausted,
-        "quota-secret-marker",
-    );
+    assert_failed_event("quota_exceeded", "quota-secret-marker");
 }
 
 #[test]
 fn decoder_should_classify_official_server_overloaded_failure() {
-    assert_failed_event(
-        "server_is_overloaded",
-        ProviderErrorKind::Unavailable,
-        "server-secret-marker",
-    );
+    assert_failed_event("server_is_overloaded", "server-secret-marker");
 }
 
 #[test]
 fn decoder_should_classify_official_cyber_policy_as_an_invalid_request() {
-    assert_failed_event(
-        "cyber_policy",
-        ProviderErrorKind::InvalidRequest,
-        "policy-secret-marker",
+    assert_failed_event("cyber_policy", "policy-secret-marker");
+}
+
+#[test]
+fn decoder_should_preserve_same_chunk_output_before_typed_failure() {
+    let marker = "same-chunk-secret-marker";
+    let body = format!(
+        concat!(
+            "event: response.created\n",
+            "data: {{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_partial\",\"model\":\"gpt-test\"}}}}\n\n",
+            "event: response.content_part.added\n",
+            "data: {{\"type\":\"response.content_part.added\",\"output_index\":0,\"content_index\":0,\"part\":{{\"type\":\"output_text\"}}}}\n\n",
+            "event: response.output_text.delta\n",
+            "data: {{\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello\"}}\n\n",
+            "event: response.failed\n",
+            "data: {{\"type\":\"response.failed\",\"response\":{{\"id\":\"resp_partial\",\"status\":\"failed\",\"error\":{{\"code\":\"rate_limit_exceeded\",\"message\":\"{}\"}}}}}}\n\n"
+        ),
+        marker
     );
+
+    let failure = CodexCanonicalDecoder::new("fallback")
+        .push(body.as_bytes())
+        .expect_err("response.failed must retain the preceding batch");
+    let facts = canonical_facts(failure.events());
+    let wire_types = failure
+        .events()
+        .iter()
+        .filter_map(ProviderEvent::wire_event)
+        .filter_map(|wire| wire.event_type())
+        .collect::<Vec<_>>();
+
+    assert!(failure.semantic_output_seen());
+    assert!(matches!(facts[0], GatewayEvent::Started(_)));
+    assert!(matches!(facts[1], GatewayEvent::ContentAdded(_)));
+    assert!(matches!(facts[2], GatewayEvent::TextDelta(_)));
+    assert_eq!(
+        wire_types,
+        vec![
+            "response.created",
+            "response.content_part.added",
+            "response.output_text.delta"
+        ]
+    );
+    assert!(!format!("{failure:?}").contains(marker));
 }
 
 #[test]
@@ -233,25 +328,31 @@ fn decoder_should_reject_a_changed_upstream_response_id() {
         "data: {\"response\":{\"id\":\"resp_changed\",\"model\":\"gpt-test\"}}\n\n",
     );
 
-    let error = CodexCanonicalDecoder::new("fallback")
+    let failure = CodexCanonicalDecoder::new("fallback")
         .push(body.as_bytes())
         .expect_err("response ID changes must fail closed");
 
+    let CodexCanonicalError::Protocol(error) = failure.error() else {
+        panic!("response ID changes are protocol failures");
+    };
     assert_eq!(error.kind(), ProviderErrorKind::Protocol);
     assert_eq!(error.send_state(), UpstreamSendState::Sent);
 }
 
-fn assert_failed_event(code: &str, expected: ProviderErrorKind, marker: &str) {
+fn assert_failed_event(code: &str, marker: &str) {
     let body = format!(
         "event: response.failed\ndata: {{\"response\":{{\"id\":\"resp_failed\",\"status\":\"failed\",\"error\":{{\"code\":\"{code}\",\"message\":\"{marker}\"}}}}}}\n\n"
     );
-    let error = CodexCanonicalDecoder::new("fallback")
+    let failure = CodexCanonicalDecoder::new("fallback")
         .push(body.as_bytes())
         .expect_err("failed event must become a typed error");
 
-    assert_eq!(error.kind(), expected);
-    assert_eq!(error.send_state(), UpstreamSendState::Sent);
-    assert!(!format!("{error:?} {error}").contains(marker));
+    let CodexCanonicalError::Upstream(upstream) = failure.error() else {
+        panic!("response.failed must preserve its typed upstream failure");
+    };
+    assert_eq!(upstream.upstream_code.as_deref(), Some(code));
+    assert!(!failure.semantic_output_seen());
+    assert!(!format!("{failure:?}").contains(marker));
 }
 
 fn assert_incomplete_reason(reason: &str, expected: FinishReason) {
@@ -261,10 +362,40 @@ fn assert_incomplete_reason(reason: &str, expected: FinishReason) {
     let events = CodexCanonicalDecoder::new("fallback")
         .push(body.as_bytes())
         .expect("incomplete response is terminal");
-    let finish_reason = events.iter().find_map(|event| match event {
-        GatewayEvent::Completed(meta) => meta.finish_reason(),
-        _ => None,
-    });
+    let finish_reason = canonical_facts(&events)
+        .into_iter()
+        .find_map(|event| match event {
+            GatewayEvent::Completed(meta) => meta.finish_reason(),
+            _ => None,
+        });
 
     assert_eq!(finish_reason, Some(expected));
+}
+
+trait CanonicalOutcomeAssertions {
+    fn expect(self, message: &str) -> Vec<ProviderEvent>;
+    fn expect_err(self, message: &str) -> CodexCanonicalFailure;
+}
+
+impl CanonicalOutcomeAssertions for CodexCanonicalOutcome {
+    fn expect(self, message: &str) -> Vec<ProviderEvent> {
+        match self {
+            Self::Events(events) => events,
+            Self::Failed(failure) => panic!("{message}: {failure:?}"),
+        }
+    }
+
+    fn expect_err(self, message: &str) -> CodexCanonicalFailure {
+        match self {
+            Self::Events(events) => panic!("{message}: decoded {} events", events.len()),
+            Self::Failed(failure) => failure,
+        }
+    }
+}
+
+fn canonical_facts(events: &[ProviderEvent]) -> Vec<&GatewayEvent> {
+    events
+        .iter()
+        .flat_map(ProviderEvent::canonical_facts)
+        .collect()
 }

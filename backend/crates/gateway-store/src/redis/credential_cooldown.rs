@@ -12,6 +12,9 @@ use gateway_core::{
         QuotaWriteOutcome,
     },
     error::StoreError as CoreStoreError,
+    provider_ports::{
+        ProviderCooldown, ProviderCooldownPort, ProviderStoreError, ProviderStoreErrorKind,
+    },
     routing::ProviderInstanceId,
 };
 use redis::{Script, aio::ConnectionManager};
@@ -180,6 +183,66 @@ impl CredentialCooldownRepository for RedisCredentialCooldownRepository {
     }
 }
 
+impl ProviderCooldownPort for RedisCredentialCooldownRepository {
+    fn put_if_later(
+        &self,
+        cooldown: ProviderCooldown,
+    ) -> futures::future::BoxFuture<'_, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            let record = CredentialCooldown {
+                provider_account_id: cooldown.account_id().as_str().to_owned(),
+                credential_revision: Revision::new(cooldown.credential_revision().get())
+                    .map_err(|_| provider_invalid("encode credential cooldown"))?,
+                cooldown_until: cooldown.until().into(),
+            };
+            CredentialCooldownRepository::cache_credential_cooldown(self, &record)
+                .await
+                .map_err(|_| provider_unavailable("cache credential cooldown"))
+        })
+    }
+
+    fn read<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+    ) -> futures::future::BoxFuture<'a, Result<Option<ProviderCooldown>, ProviderStoreError>> {
+        Box::pin(async move {
+            CredentialCooldownRepository::read_credential_cooldown(self, account_id.as_str())
+                .await
+                .map_err(|_| provider_unavailable("read credential cooldown"))?
+                .map(|record| {
+                    let account_id = ProviderAccountId::new(record.provider_account_id)
+                        .map_err(|_| provider_invalid("decode credential cooldown"))?;
+                    let revision = CredentialRevision::new(record.credential_revision.get())
+                        .map_err(|_| provider_invalid("decode credential cooldown"))?;
+                    Ok(ProviderCooldown::new(
+                        account_id,
+                        revision,
+                        record.cooldown_until.into(),
+                    ))
+                })
+                .transpose()
+        })
+    }
+
+    fn clear<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+        through_revision: CredentialRevision,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            let revision = Revision::new(through_revision.get())
+                .map_err(|_| provider_invalid("encode credential cooldown revision"))?;
+            CredentialCooldownRepository::invalidate_credential_cooldown(
+                self,
+                account_id.as_str(),
+                revision,
+            )
+            .await
+            .map_err(|_| provider_unavailable("clear credential cooldown"))
+        })
+    }
+}
+
 /// PostgreSQL 账号事实到可丢失 cooldown cache 的 write-through adapter。
 pub struct CooldownCachingProviderAccountStore {
     authoritative: Arc<dyn ProviderAccountStore>,
@@ -305,11 +368,11 @@ impl ProviderAccountStore for CooldownCachingProviderAccountStore {
         Ok(outcome)
     }
 
-    async fn get_quota(
+    async fn get_quotas(
         &self,
-        account: &ProviderAccountId,
-    ) -> Result<Option<QuotaObservation>, CoreStoreError> {
-        self.authoritative.get_quota(account).await
+        accounts: &[ProviderAccountId],
+    ) -> Result<Vec<QuotaObservation>, CoreStoreError> {
+        self.authoritative.get_quotas(accounts).await
     }
 
     async fn compare_and_swap_quota(
@@ -382,4 +445,12 @@ fn invalid(message: &str) -> StoreError {
         entity: "credential cooldown",
         message: message.to_owned(),
     }
+}
+
+fn provider_unavailable(operation: &'static str) -> ProviderStoreError {
+    ProviderStoreError::new(ProviderStoreErrorKind::Unavailable, operation)
+}
+
+fn provider_invalid(operation: &'static str) -> ProviderStoreError {
+    ProviderStoreError::new(ProviderStoreErrorKind::InvalidData, operation)
 }

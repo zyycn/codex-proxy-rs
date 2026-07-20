@@ -7,8 +7,14 @@ use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use futures::{StreamExt as _, stream};
 use gateway_core::engine::credential::{
     AccountAvailability, CredentialRevision, ProviderAccountId,
+};
+use gateway_core::provider_ports::{
+    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
+    ProviderRefreshCapacityRequest, ProviderRefreshLeaseRequest, ProviderRefreshPolicy,
+    ProviderRuntimePolicyPort, ProviderStoreError, provider_refresh_retry_at,
 };
 use gateway_core::routing::ProviderInstanceId;
 
@@ -30,7 +36,7 @@ const MAX_REFRESH_BATCH: u32 = 100;
 const MAX_REFRESH_EXCLUSIONS: usize = 400;
 const MAX_SECRET_BYTES: usize = 64 * 1_024;
 const DISCOVERY_NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(5);
-const TRANSIENT_COOLDOWN: Duration = Duration::from_secs(30);
+const REFRESH_RETRY_DELAY: Duration = Duration::from_secs(10 * 60);
 
 /// 一个到期且已按 revision 读取明文 RT 的 xAI account。
 pub struct DueGrokCredential {
@@ -118,9 +124,7 @@ pub enum GrokRefreshFailure {
 
 #[async_trait]
 pub trait GrokCredentialRefresher: Send + Sync {
-    async fn prepare_cycle(&self) -> Result<(), GrokRefreshFailure> {
-        Ok(())
-    }
+    async fn prepare_cycle(&self) -> Result<(), GrokRefreshFailure>;
 
     async fn refresh(
         &self,
@@ -204,36 +208,6 @@ impl GrokCredentialRefresher for GrokOAuthRefreshClient {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GrokRefreshLeaseRequest {
-    pub provider_instance_id: ProviderInstanceId,
-    pub account_id: ProviderAccountId,
-    pub credential_revision: CredentialRevision,
-}
-
-pub trait GrokRefreshLeaseGuard: Send + Sync + 'static {}
-
-impl<T> GrokRefreshLeaseGuard for T where T: Send + Sync + 'static {}
-
-pub enum GrokRefreshLeaseAcquisition {
-    Acquired(Box<dyn GrokRefreshLeaseGuard>),
-    Unavailable,
-}
-
-#[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
-pub enum GrokRefreshLeaseError {
-    #[error("xAI credential refresh lease is unavailable")]
-    Unavailable,
-}
-
-#[async_trait]
-pub trait GrokRefreshLeaseCoordinator: Send + Sync {
-    async fn try_acquire(
-        &self,
-        request: &GrokRefreshLeaseRequest,
-    ) -> Result<GrokRefreshLeaseAcquisition, GrokRefreshLeaseError>;
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GrokCredentialRefreshOutcome {
     Refreshed {
         account_id: ProviderAccountId,
@@ -267,9 +241,9 @@ pub enum GrokCredentialRefreshError {
     #[error(transparent)]
     Repository(#[from] GrokCredentialRepositoryError),
     #[error(transparent)]
-    Lease(#[from] GrokRefreshLeaseError),
-    #[error("xAI credential refresh configuration is invalid")]
-    InvalidConfiguration,
+    Lease(#[from] ProviderStoreError),
+    #[error("xAI credential refresh lease is busy")]
+    LeaseBusy,
     #[error("xAI OAuth refresh response is invalid")]
     InvalidRefreshResponse,
     #[error("xAI OAuth refresh preparation failed")]
@@ -282,8 +256,8 @@ pub struct GrokCredentialRefreshService {
     repository: GrokCredentialRepository,
     refresher: Arc<dyn GrokCredentialRefresher>,
     catalog: Arc<GrokCredentialCatalogService>,
-    leases: Arc<dyn GrokRefreshLeaseCoordinator>,
-    refresh_margin: Duration,
+    leases: Arc<dyn ProviderLeasePort>,
+    runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
 }
 
 impl GrokCredentialRefreshService {
@@ -291,33 +265,29 @@ impl GrokCredentialRefreshService {
         repository: GrokCredentialRepository,
         refresher: Arc<dyn GrokCredentialRefresher>,
         catalog: Arc<GrokCredentialCatalogService>,
-        leases: Arc<dyn GrokRefreshLeaseCoordinator>,
-        refresh_margin: Duration,
-    ) -> Result<Self, GrokCredentialRefreshError> {
-        if refresh_margin.is_zero() || chrono::Duration::from_std(refresh_margin).is_err() {
-            return Err(GrokCredentialRefreshError::InvalidConfiguration);
-        }
-        Ok(Self {
+        leases: Arc<dyn ProviderLeasePort>,
+        runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
+    ) -> Self {
+        Self {
             repository,
             refresher,
             catalog,
             leases,
-            refresh_margin,
-        })
+            runtime_policy,
+        }
     }
 
     pub async fn refresh_due(
         &self,
-        limit: u32,
     ) -> Result<Vec<GrokCredentialRefreshOutcome>, GrokCredentialRefreshError> {
         if !self.prepare_cycle_if_due().await? {
             return Ok(Vec::new());
         }
-        self.refresh_due_excluding(limit, &[]).await
+        self.refresh_due_excluding(&[]).await
     }
 
     pub async fn prepare_cycle_if_due(&self) -> Result<bool, GrokCredentialRefreshError> {
-        if !self.repository.has_due_refresh(self.refresh_margin).await? {
+        if !self.repository.has_due_refresh().await? {
             return Ok(false);
         }
         self.refresher
@@ -338,6 +308,7 @@ impl GrokCredentialRefreshService {
             .load_managed(account_id, expected_revision)
             .await?;
         let loaded = super::repository::loaded_from_core(current.clone())?;
+        let policy = self.runtime_policy.load_refresh_policy().await?;
         if loaded
             .refresh_token_expires_at
             .is_some_and(|expires_at| expires_at <= Utc::now())
@@ -350,18 +321,28 @@ impl GrokCredentialRefreshService {
             .prepare_cycle()
             .await
             .map_err(GrokCredentialRefreshError::ManualFailure)?;
-        let lease = self
+        let capacity_guard = match self
             .leases
-            .try_acquire(&GrokRefreshLeaseRequest {
-                provider_instance_id: current.account.instance().clone(),
-                account_id: account_id.clone(),
-                credential_revision: expected_revision,
-            })
-            .await?;
-        let guard = match lease {
-            GrokRefreshLeaseAcquisition::Acquired(guard) => guard,
-            GrokRefreshLeaseAcquisition::Unavailable => {
-                return Err(GrokRefreshLeaseError::Unavailable.into());
+            .try_acquire(ProviderLeaseRequest::RefreshCapacity(
+                ProviderRefreshCapacityRequest::new(policy.concurrency()),
+            ))
+            .await?
+        {
+            ProviderLeaseAcquisition::Acquired(guard) => guard,
+            ProviderLeaseAcquisition::Busy { .. } => {
+                return Err(GrokCredentialRefreshError::LeaseBusy);
+            }
+        };
+        let account_guard = match self
+            .leases
+            .try_acquire(ProviderLeaseRequest::Refresh(
+                ProviderRefreshLeaseRequest::new(account_id.clone(), expected_revision),
+            ))
+            .await?
+        {
+            ProviderLeaseAcquisition::Acquired(guard) => guard,
+            ProviderLeaseAcquisition::Busy { .. } => {
+                return Err(GrokCredentialRefreshError::LeaseBusy);
             }
         };
         let tokens = self
@@ -380,7 +361,7 @@ impl GrokCredentialRefreshService {
             return Err(GrokCredentialRefreshError::InvalidRefreshResponse);
         }
         let (access_token_expires_at, next_refresh_at) =
-            refreshed_deadlines(tokens.expires_in, self.refresh_margin)
+            refreshed_deadlines(account_id, tokens.expires_in, policy)
                 .ok_or(GrokCredentialRefreshError::InvalidRefreshResponse)?;
         let prepared = GrokCredentialAdmin
             .prepare_rotation(&RotateManagedGrokCredential {
@@ -402,21 +383,21 @@ impl GrokCredentialRefreshService {
                     } else {
                         loaded.refresh_token_expires_at
                     },
-                    next_refresh_at: Some(next_refresh_at),
                 },
+                next_refresh_at,
             })
             .map_err(GrokCredentialRefreshError::from)?;
-        Ok(prepared.with_refresh_guard(guard))
+        Ok(prepared.with_refresh_guards(capacity_guard, account_guard))
     }
 
     pub async fn refresh_due_excluding(
         &self,
-        limit: u32,
         excluded_account_ids: &[ProviderAccountId],
     ) -> Result<Vec<GrokCredentialRefreshOutcome>, GrokCredentialRefreshError> {
+        let policy = self.runtime_policy.load_refresh_policy().await?;
         let batch = self
             .repository
-            .list_due_refresh_batch_excluding(self.refresh_margin, limit, excluded_account_ids)
+            .list_due_refresh_batch_excluding(excluded_account_ids)
             .await?;
         let mut outcomes = batch
             .failed_account_ids
@@ -424,9 +405,18 @@ impl GrokCredentialRefreshService {
             .map(|account_id| GrokCredentialRefreshOutcome::Failed { account_id })
             .collect::<Vec<_>>();
         outcomes.reserve(batch.credentials.len());
-        for credential in batch.credentials {
+        let refreshed = stream::iter(batch.credentials.into_iter().map(|credential| async move {
             let account_id = credential.account_id.clone();
-            match self.refresh_one(credential).await {
+            (
+                account_id,
+                self.refresh_one_with_policy(credential, policy).await,
+            )
+        }))
+        .buffer_unordered(policy.concurrency().get() as usize)
+        .collect::<Vec<_>>()
+        .await;
+        for (account_id, result) in refreshed {
+            match result {
                 Ok(outcome) => outcomes.push(outcome),
                 Err(_) => outcomes.push(GrokCredentialRefreshOutcome::Failed { account_id }),
             }
@@ -437,6 +427,15 @@ impl GrokCredentialRefreshService {
     pub async fn refresh_one(
         &self,
         credential: DueGrokCredential,
+    ) -> Result<GrokCredentialRefreshOutcome, GrokCredentialRefreshError> {
+        let policy = self.runtime_policy.load_refresh_policy().await?;
+        self.refresh_one_with_policy(credential, policy).await
+    }
+
+    async fn refresh_one_with_policy(
+        &self,
+        credential: DueGrokCredential,
+        policy: ProviderRefreshPolicy,
     ) -> Result<GrokCredentialRefreshOutcome, GrokCredentialRefreshError> {
         let account_id = credential.account_id.clone();
         if credential
@@ -451,23 +450,36 @@ impl GrokCredentialRefreshService {
                 )
                 .await;
         }
+        let capacity = self
+            .leases
+            .try_acquire(ProviderLeaseRequest::RefreshCapacity(
+                ProviderRefreshCapacityRequest::new(policy.concurrency()),
+            ))
+            .await?;
+        let _capacity_guard = match capacity {
+            ProviderLeaseAcquisition::Acquired(guard) => guard,
+            ProviderLeaseAcquisition::Busy { .. } => {
+                return Ok(GrokCredentialRefreshOutcome::LeaseUnavailable { account_id });
+            }
+        };
         let lease = self
             .leases
-            .try_acquire(&GrokRefreshLeaseRequest {
-                provider_instance_id: credential.provider_instance_id.clone(),
-                account_id: account_id.clone(),
-                credential_revision: credential.credential_revision,
-            })
+            .try_acquire(ProviderLeaseRequest::Refresh(
+                ProviderRefreshLeaseRequest::new(
+                    account_id.clone(),
+                    credential.credential_revision,
+                ),
+            ))
             .await?;
         let _guard = match lease {
-            GrokRefreshLeaseAcquisition::Acquired(guard) => guard,
-            GrokRefreshLeaseAcquisition::Unavailable => {
+            ProviderLeaseAcquisition::Acquired(guard) => guard,
+            ProviderLeaseAcquisition::Busy { .. } => {
                 return Ok(GrokCredentialRefreshOutcome::LeaseUnavailable { account_id });
             }
         };
 
         match self.refresher.refresh(&credential.refresh_token).await {
-            Ok(tokens) => self.persist_success(credential, tokens).await,
+            Ok(tokens) => self.persist_success(credential, tokens, policy).await,
             Err(GrokRefreshFailure::InvalidGrant) => {
                 self.persist_terminal_failure(
                     credential,
@@ -493,14 +505,24 @@ impl GrokCredentialRefreshService {
                 .await
                 .map(|_| GrokCredentialRefreshOutcome::Ambiguous { account_id }),
             Err(GrokRefreshFailure::Transient) => {
-                self.persist_cooldown(&credential, "refresh_transient")
-                    .await?;
-                Ok(GrokCredentialRefreshOutcome::Transient { account_id })
+                if self
+                    .persist_backoff(&credential, "refresh-transient")
+                    .await?
+                {
+                    Ok(GrokCredentialRefreshOutcome::Transient { account_id })
+                } else {
+                    Ok(GrokCredentialRefreshOutcome::Stale { account_id })
+                }
             }
             Err(GrokRefreshFailure::Rejected) => {
-                self.persist_cooldown(&credential, "refresh_rejected")
-                    .await?;
-                Ok(GrokCredentialRefreshOutcome::Rejected { account_id })
+                if self
+                    .persist_backoff(&credential, "refresh-rejected")
+                    .await?
+                {
+                    Ok(GrokCredentialRefreshOutcome::Rejected { account_id })
+                } else {
+                    Ok(GrokCredentialRefreshOutcome::Stale { account_id })
+                }
             }
         }
     }
@@ -509,6 +531,7 @@ impl GrokCredentialRefreshService {
         &self,
         credential: DueGrokCredential,
         tokens: GrokRefreshTokens,
+        policy: ProviderRefreshPolicy,
     ) -> Result<GrokCredentialRefreshOutcome, GrokCredentialRefreshError> {
         if tokens.access_token.is_empty() || tokens.access_token.len() > MAX_SECRET_BYTES {
             return Err(GrokCredentialRefreshError::InvalidRefreshResponse);
@@ -520,10 +543,10 @@ impl GrokCredentialRefreshService {
         if refresh_token.is_empty() || refresh_token.len() > MAX_SECRET_BYTES {
             return Err(GrokCredentialRefreshError::InvalidRefreshResponse);
         }
-        let (access_expires_at, next_refresh_at) =
-            refreshed_deadlines(tokens.expires_in, self.refresh_margin)
-                .ok_or(GrokCredentialRefreshError::InvalidRefreshResponse)?;
         let account_id = credential.account_id.clone();
+        let (access_expires_at, next_refresh_at) =
+            refreshed_deadlines(&account_id, tokens.expires_in, policy)
+                .ok_or(GrokCredentialRefreshError::InvalidRefreshResponse)?;
         let access_token = tokens.access_token.clone();
         let subject = credential.subject.clone();
         let email = credential.email.clone();
@@ -549,8 +572,8 @@ impl GrokCredentialRefreshService {
                     } else {
                         credential.refresh_token_expires_at
                     },
-                    next_refresh_at: Some(next_refresh_at),
                 },
+                next_refresh_at,
             })
             .await
         {
@@ -591,6 +614,17 @@ impl GrokCredentialRefreshService {
         let account_id = credential.account_id.clone();
         match self
             .repository
+            .load(&account_id, credential.credential_revision)
+            .await
+        {
+            Ok(_) => {}
+            Err(error) if stale_repository_error(&error) => {
+                return Ok(GrokCredentialRefreshOutcome::Stale { account_id });
+            }
+            Err(error) => return Err(error.into()),
+        }
+        match self
+            .repository
             .update_state(&UpdateGrokCredentialState {
                 account_id: account_id.clone(),
                 expected_revision: credential.credential_revision,
@@ -609,59 +643,54 @@ impl GrokCredentialRefreshService {
         }
     }
 
-    async fn persist_cooldown(
+    async fn persist_backoff(
         &self,
         credential: &DueGrokCredential,
-        reason: &str,
-    ) -> Result<(), GrokCredentialRefreshError> {
-        let cooldown_until = chrono::Duration::from_std(TRANSIENT_COOLDOWN)
-            .ok()
-            .and_then(|duration| Utc::now().checked_add_signed(duration));
-        self.repository
-            .update_state(&UpdateGrokCredentialState {
-                account_id: credential.account_id.clone(),
-                expected_revision: credential.credential_revision,
-                availability: GrokCredentialAvailability::Cooldown,
-                availability_reason: Some(reason.to_owned()),
-                cooldown_until,
-                observed_at: Utc::now(),
-            })
+        reason: &'static str,
+    ) -> Result<bool, GrokCredentialRefreshError> {
+        let retry_at = provider_refresh_retry_at(
+            &credential.account_id,
+            SystemTime::now(),
+            REFRESH_RETRY_DELAY,
+            reason,
+        )?;
+        match self
+            .repository
+            .defer_refresh(
+                &credential.account_id,
+                credential.credential_revision,
+                retry_at,
+            )
             .await
-            .map_err(Into::into)
+        {
+            Ok(()) => Ok(true),
+            Err(error) if stale_repository_error(&error) => Ok(false),
+            Err(error) => Err(error.into()),
+        }
     }
 }
 
 impl GrokCredentialRepository {
-    pub async fn has_due_refresh(
-        &self,
-        refresh_before: Duration,
-    ) -> Result<bool, GrokCredentialRepositoryError> {
+    pub async fn has_due_refresh(&self) -> Result<bool, GrokCredentialRepositoryError> {
         Ok(self
             .list_all_accounts()
             .await?
             .iter()
-            .any(|account| account_due(account, refresh_before, SystemTime::now())))
+            .any(|account| account_due(account, SystemTime::now())))
     }
 
     pub async fn list_due_refresh(
         &self,
-        refresh_before: Duration,
-        limit: u32,
     ) -> Result<Vec<DueGrokCredential>, GrokCredentialRepositoryError> {
-        self.list_due_refresh_batch_excluding(refresh_before, limit, &[])
+        self.list_due_refresh_batch_excluding(&[])
             .await
             .map(|batch| batch.credentials)
     }
 
     async fn list_due_refresh_batch_excluding(
         &self,
-        refresh_before: Duration,
-        limit: u32,
         excluded_account_ids: &[ProviderAccountId],
     ) -> Result<DueGrokRefreshBatch, GrokCredentialRepositoryError> {
-        if limit == 0 || limit > MAX_REFRESH_BATCH {
-            return Err(GrokCredentialRepositoryError::InvalidInput("refresh_limit"));
-        }
         if excluded_account_ids.len() > MAX_REFRESH_EXCLUSIONS {
             return Err(GrokCredentialRepositoryError::InvalidInput(
                 "refresh_exclusions",
@@ -676,9 +705,7 @@ impl GrokCredentialRepository {
             .list_all_accounts()
             .await?
             .into_iter()
-            .filter(|account| {
-                !excluded.contains(account.id()) && account_due(account, refresh_before, now)
-            })
+            .filter(|account| !excluded.contains(account.id()) && account_due(account, now))
             .collect::<Vec<_>>();
         accounts.sort_by_key(|account| {
             (
@@ -687,7 +714,7 @@ impl GrokCredentialRepository {
                 account.id().clone(),
             )
         });
-        accounts.truncate(limit as usize);
+        accounts.truncate(MAX_REFRESH_BATCH as usize);
 
         let mut due = Vec::with_capacity(accounts.len());
         let mut failed_account_ids = Vec::new();
@@ -722,7 +749,6 @@ impl GrokCredentialRepository {
 
 fn account_due(
     account: &gateway_core::engine::credential::ProviderAccount,
-    refresh_before: Duration,
     now: SystemTime,
 ) -> bool {
     let availability = account.availability();
@@ -736,11 +762,7 @@ fn account_due(
         )
         && (availability != AccountAvailability::Cooldown
             || account.cooldown_until().is_some_and(|until| until <= now))
-        && (account.next_refresh_at().is_some_and(|next| next <= now)
-            || account
-                .access_token_expires_at()
-                .duration_since(now)
-                .is_ok_and(|remaining| remaining <= refresh_before))
+        && account.next_refresh_at().is_some_and(|next| next <= now)
 }
 
 fn refreshed_tokens(tokens: RefreshedTokenSet) -> Result<GrokRefreshTokens, GrokRefreshFailure> {
@@ -775,20 +797,20 @@ fn classify_oauth_refresh_error(error: OAuthError) -> GrokRefreshFailure {
 }
 
 fn refreshed_deadlines(
+    account_id: &ProviderAccountId,
     expires_in: Duration,
-    refresh_margin: Duration,
+    policy: ProviderRefreshPolicy,
 ) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
     if expires_in.is_zero() {
         return None;
     }
-    let lead = refresh_margin.min(expires_in / 2);
-    if lead.is_zero() || lead >= expires_in {
-        return None;
-    }
     let expires = chrono::Duration::from_std(expires_in).ok()?;
-    let lead = chrono::Duration::from_std(lead).ok()?;
-    let access_expires_at = Utc::now().checked_add_signed(expires)?;
-    let next_refresh_at = access_expires_at.checked_sub_signed(lead)?;
+    let observed_at = SystemTime::now();
+    let access_expires_at = DateTime::<Utc>::from(observed_at).checked_add_signed(expires)?;
+    let next_refresh_at = policy
+        .next_attempt_at(account_id, access_expires_at.into(), observed_at)
+        .ok()
+        .map(DateTime::<Utc>::from)?;
     Some((access_expires_at, next_refresh_at))
 }
 

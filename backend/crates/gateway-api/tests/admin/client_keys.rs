@@ -1,16 +1,14 @@
 use chrono::{DateTime, TimeZone as _, Utc};
 use gateway_api::admin::client_keys::{
-    self, ClientKeyAdminService, ClientKeyAdminState, ClientKeyCursorData, ClientKeyCursorValue,
-    ClientKeyListData, ClientKeyRevisionRequest, ClientKeySort, ClientKeySortDirection,
-    ClientKeySortField, ClientKeyView, ClientKeyViewFields, CreateClientKeyFields,
-    CreateClientKeyRequest, CreatedClientKeyData, ListClientKeysFields, ListClientKeysQuery,
-    MutatedClientKeyData, RevealedClientKeyData, UpdateClientKeyFields, UpdateClientKeyRequest,
-    decode_client_key_cursor, encode_client_key_cursor,
-};
-use gateway_api::admin::{
-    AdminRequestContext, AdminServiceError, AdminSessionResolver, AdminSessionState,
+    self, ClientKeyCursorData, ClientKeyCursorValue, ClientKeyListData, ClientKeyRevisionRequest,
+    ClientKeySort, ClientKeySortDirection, ClientKeySortField, ClientKeyView,
+    CreateClientKeyRequest, CreatedClientKeyData, ListClientKeysQuery, MutatedClientKeyData,
+    RevealedClientKeyData, UpdateClientKeyRequest, decode_client_key_cursor,
+    encode_client_key_cursor,
 };
 use serde_json::json;
+
+use super::{AdminTestFixture, AdminTestState};
 
 #[test]
 fn client_key_queries_should_reject_unknown_zero_and_oversized_fields() {
@@ -37,33 +35,33 @@ fn client_key_queries_should_reject_unknown_zero_and_oversized_fields() {
 
     assert!(unknown.is_err());
     assert_eq!(
-        zero.into_parts().expect_err("reject zero limit").field(),
+        zero.into_command().expect_err("reject zero limit").field(),
         "limit"
     );
     assert_eq!(
         oversized
-            .into_parts()
+            .into_command()
             .expect_err("reject oversized cursor")
             .field(),
         "cursor"
     );
     assert_eq!(
         oversized_search
-            .into_parts()
+            .into_command()
             .expect_err("reject oversized search")
             .field(),
         "search"
     );
     assert_eq!(
         secret_search
-            .into_parts()
+            .into_command()
             .expect_err("reject full key in search")
             .field(),
         "search"
     );
     assert_eq!(
         invalid_sort
-            .into_parts()
+            .into_command()
             .expect_err("reject invalid sort")
             .field(),
         "sortBy"
@@ -73,22 +71,32 @@ fn client_key_queries_should_reject_unknown_zero_and_oversized_fields() {
         "sortDirection": "asc"
     }))
     .expect("deserialize valid sort")
-    .into_parts()
+    .into_command()
     .expect("validate sort");
     assert_eq!(
-        sorted.sort,
-        ClientKeySort {
-            field: ClientKeySortField::LastUsedAt,
-            direction: ClientKeySortDirection::Asc,
-        }
+        sorted.sort.field,
+        gateway_admin::model::client_keys::ClientKeySortField::LastUsedAt,
+    );
+    assert_eq!(
+        sorted.sort.direction,
+        gateway_admin::model::client_keys::SortDirection::Asc,
     );
     assert_eq!(
         serde_json::from_value::<ListClientKeysQuery>(json!({ "search": "  " }))
             .expect("deserialize blank search")
-            .into_parts()
+            .into_command()
             .expect("normalize blank search")
             .search,
         None
+    );
+    assert_eq!(
+        serde_json::from_value::<ListClientKeysQuery>(json!({ "limit": u16::MAX }))
+            .expect("deserialize maximum u16 page size")
+            .into_command()
+            .expect("accept maximum u16 page size")
+            .page_size
+            .get(),
+        u16::MAX
     );
 }
 
@@ -104,9 +112,9 @@ fn client_key_mutations_should_validate_revision_text_limits_and_unknown_fields(
         "tokensPerMinute": 100000
     }))
     .expect("deserialize create")
-    .into_fields()
+    .into_command()
     .expect("validate create");
-    assert_eq!(valid.expected_config_revision, 7);
+    assert_eq!(valid.expected_config_revision.get(), 7);
 
     for (payload, field) in [
         (
@@ -147,7 +155,7 @@ fn client_key_mutations_should_validate_revision_text_limits_and_unknown_fields(
             .expect("deserialize invalid create shape");
         assert_eq!(
             request
-                .into_fields()
+                .into_command()
                 .expect_err("reject invalid create")
                 .field(),
             field
@@ -207,16 +215,18 @@ fn client_key_responses_should_keep_shape_and_redact_creation_debug() {
         .with_ymd_and_hms(2026, 7, 18, 8, 0, 0)
         .single()
         .expect("valid time");
-    let view = ClientKeyView::new(ClientKeyViewFields {
-        id: "key_visible".to_owned(),
+    let view = ClientKeyView::from(gateway_admin::model::client_keys::ClientKeyRecord {
+        id: gateway_core::policy::ClientApiKeyId::new("key_visible").expect("Client Key ID"),
         name: "visible".to_owned(),
         label: None,
-        provider_kind: "openai".to_owned(),
+        provider_kind: gateway_core::routing::ProviderKind::new("openai").expect("Provider kind"),
         prefix: "sk_visible12".to_owned(),
         enabled: true,
-        max_concurrency: 2,
-        requests_per_minute: 60,
-        tokens_per_minute: 100_000,
+        limits: gateway_core::policy::RateLimits {
+            max_concurrency: 2,
+            requests_per_minute: 60,
+            tokens_per_minute: 100_000,
+        },
         created_at,
         updated_at: created_at,
         last_used_at: Some(created_at),
@@ -265,93 +275,6 @@ fn client_key_responses_should_keep_shape_and_redact_creation_debug() {
     );
 }
 
-struct RevealService;
-
-#[async_trait::async_trait]
-impl AdminSessionResolver for RevealService {
-    async fn resolve_admin_user_id(
-        &self,
-        session_id: Option<&str>,
-    ) -> Result<Option<String>, AdminServiceError> {
-        Ok((session_id == Some("valid-session")).then(|| "admin_1".to_owned()))
-    }
-}
-
-#[async_trait::async_trait]
-impl ClientKeyAdminService for RevealService {
-    async fn list(
-        &self,
-        _query: ListClientKeysFields,
-    ) -> Result<ClientKeyListData, AdminServiceError> {
-        Err(AdminServiceError::internal("unused test operation"))
-    }
-
-    async fn create(
-        &self,
-        _context: &AdminRequestContext,
-        _fields: CreateClientKeyFields,
-    ) -> Result<CreatedClientKeyData, AdminServiceError> {
-        Err(AdminServiceError::internal("unused test operation"))
-    }
-
-    async fn reveal(&self, id: String) -> Result<RevealedClientKeyData, AdminServiceError> {
-        Ok(RevealedClientKeyData::new(
-            id,
-            format!("sk_{}", "a".repeat(43)),
-        ))
-    }
-
-    async fn update(
-        &self,
-        _context: &AdminRequestContext,
-        _fields: UpdateClientKeyFields,
-    ) -> Result<MutatedClientKeyData, AdminServiceError> {
-        Err(AdminServiceError::internal("unused test operation"))
-    }
-
-    async fn disable(
-        &self,
-        _context: &AdminRequestContext,
-        _id: String,
-        _expected_config_revision: u64,
-    ) -> Result<MutatedClientKeyData, AdminServiceError> {
-        Err(AdminServiceError::internal("unused test operation"))
-    }
-
-    async fn enable(
-        &self,
-        _context: &AdminRequestContext,
-        _id: String,
-        _expected_config_revision: u64,
-    ) -> Result<MutatedClientKeyData, AdminServiceError> {
-        Err(AdminServiceError::internal("unused test operation"))
-    }
-
-    async fn delete(
-        &self,
-        _context: &AdminRequestContext,
-        _id: String,
-        _expected_config_revision: u64,
-    ) -> Result<MutatedClientKeyData, AdminServiceError> {
-        Err(AdminServiceError::internal("unused test operation"))
-    }
-}
-
-#[derive(Clone)]
-struct RevealState(std::sync::Arc<RevealService>);
-
-impl AdminSessionState for RevealState {
-    fn admin_session_resolver(&self) -> &dyn AdminSessionResolver {
-        self.0.as_ref()
-    }
-}
-
-impl ClientKeyAdminState for RevealState {
-    fn client_key_admin_service(&self) -> &dyn ClientKeyAdminService {
-        self.0.as_ref()
-    }
-}
-
 #[tokio::test]
 async fn reveal_route_should_use_query_id_and_no_store_response() {
     use axum::{
@@ -360,9 +283,10 @@ async fn reveal_route_should_use_query_id_and_no_store_response() {
     };
     use tower::ServiceExt as _;
 
-    let state = RevealState(std::sync::Arc::new(RevealService));
-    let response = client_keys::router::<RevealState>()
-        .with_state(state)
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let response = client_keys::router::<AdminTestState>()
+        .with_state(fixture.state())
         .oneshot(
             Request::builder()
                 .uri("/api/admin/client-keys/reveal?id=key_1")
@@ -390,4 +314,30 @@ async fn reveal_route_should_use_query_id_and_no_store_response() {
         value["data"]["plaintextKey"],
         format!("sk_{}", "a".repeat(43))
     );
+}
+
+#[tokio::test]
+async fn list_route_should_accept_the_full_nonzero_u16_page_size() {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode, header},
+    };
+    use tower::ServiceExt as _;
+
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let response = client_keys::router::<AdminTestState>()
+        .with_state(fixture.state())
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/client-keys?limit=65535")
+                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header("x-request-id", "req_client_keys_max_page")
+                .body(Body::empty())
+                .expect("client key list request"),
+        )
+        .await
+        .expect("client key list response");
+
+    assert_eq!(response.status(), StatusCode::OK);
 }

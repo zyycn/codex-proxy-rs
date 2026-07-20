@@ -1,8 +1,10 @@
 [workspace]
 members = [
     "apps/gateway",
+    "crates/gateway-admin",
     "crates/gateway-api",
     "crates/gateway-core",
+    "crates/gateway-host",
     "crates/gateway-protocol",
     "crates/gateway-store",
     "crates/providers/openai",

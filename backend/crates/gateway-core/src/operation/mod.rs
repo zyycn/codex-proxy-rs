@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
@@ -197,6 +198,104 @@ impl fmt::Debug for ProviderOptions {
             .debug_struct("ProviderOptions")
             .field("providers", &self.0.keys().collect::<Vec<_>>())
             .field("values", &"<not included in Debug>")
+            .finish()
+    }
+}
+
+/// 同一客户端连接内由 Provider 生成并解释的不透明会话状态。
+///
+/// Core 只在重试和路由过程中保持该值；协议层只能把 Provider 返回的状态原样带入
+/// 下一轮，不能读取或改写正文。
+#[derive(Clone, PartialEq)]
+pub struct ProviderSessionState {
+    provider: String,
+    payload: Map<String, Value>,
+}
+
+impl ProviderSessionState {
+    /// 创建 Provider 私有会话状态。
+    ///
+    /// # Errors
+    ///
+    /// Provider 名称无效时返回错误。
+    pub fn new(
+        provider: impl Into<String>,
+        payload: Map<String, Value>,
+    ) -> Result<Self, OperationError> {
+        let provider = provider.into();
+        validate_text(&provider, 64, true, None).map_err(|_| OperationError::EmptyField {
+            field: "provider_session_state provider",
+        })?;
+        Ok(Self { provider, payload })
+    }
+
+    #[must_use]
+    pub fn provider(&self) -> &str {
+        &self.provider
+    }
+
+    #[must_use]
+    pub const fn payload(&self) -> &Map<String, Value> {
+        &self.payload
+    }
+}
+
+impl fmt::Debug for ProviderSessionState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProviderSessionState")
+            .field("provider", &self.provider)
+            .field("payload", &"<not included in Debug>")
+            .finish()
+    }
+}
+
+/// 客户端协议交给 Provider 的不透明 JSON object。
+///
+/// Core 只负责在路由和重试过程中保持该值，不读取或改写正文。协议 adapter
+/// 与对应 Provider 共同拥有其语义。
+#[derive(Clone, PartialEq)]
+pub struct ProtocolPayload {
+    protocol: String,
+    body: Map<String, Value>,
+}
+
+impl ProtocolPayload {
+    /// 创建协议不透明正文。
+    ///
+    /// # Errors
+    ///
+    /// 协议名称为空、过长或含控制字符时返回错误。
+    pub fn json_object(
+        protocol: impl Into<String>,
+        body: Map<String, Value>,
+    ) -> Result<Self, OperationError> {
+        let protocol = protocol.into();
+        validate_text(&protocol, 64, true, None).map_err(|_| OperationError::EmptyField {
+            field: "protocol_payload protocol",
+        })?;
+        Ok(Self { protocol, body })
+    }
+
+    /// 返回协议名称。
+    #[must_use]
+    pub fn protocol(&self) -> &str {
+        &self.protocol
+    }
+
+    /// 返回仅供对应 Provider 解释的 JSON object。
+    #[must_use]
+    pub const fn body(&self) -> &Map<String, Value> {
+        &self.body
+    }
+}
+
+impl fmt::Debug for ProtocolPayload {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProtocolPayload")
+            .field("protocol", &self.protocol)
+            .field("body", &"<not included in Debug>")
             .finish()
     }
 }
@@ -549,16 +648,25 @@ pub enum ContinuationMode {
 /// 通用生成请求。
 #[derive(Clone, PartialEq)]
 pub struct GenerateRequest {
-    messages: Vec<Message>,
-    tools: Vec<ToolDefinition>,
-    output_format: OutputFormat,
+    payload: Arc<GeneratePayload>,
     reasoning: Option<ReasoningRequirement>,
     continuation: Option<ContinuationMode>,
     max_output_tokens: Option<u64>,
     estimated_context_tokens: u64,
     retry_safety: RetrySafety,
     response_persistence: ResponsePersistence,
+}
+
+#[derive(Clone, PartialEq)]
+struct GeneratePayload {
+    messages: Vec<Message>,
+    tools: Vec<ToolDefinition>,
+    output_format: OutputFormat,
+    prompt_cache_key: Option<String>,
     provider_options: ProviderOptions,
+    required_features: BTreeSet<Feature>,
+    protocol_payload: Option<ProtocolPayload>,
+    provider_session_state: Option<ProviderSessionState>,
 }
 
 impl GenerateRequest {
@@ -571,31 +679,53 @@ impl GenerateRequest {
         if messages.is_empty() {
             return Err(OperationError::EmptyField { field: "messages" });
         }
-        Ok(Self {
-            messages,
-            tools: Vec::new(),
-            output_format: OutputFormat::Text,
+        Ok(Self::from_parts(messages, None))
+    }
+
+    /// 创建携带协议不透明正文的生成请求。
+    ///
+    /// `messages` 是 Router 使用的已知语义投影，允许为空；完整请求始终由
+    /// `protocol_payload` 保留并交给对应 Provider 解释。
+    #[must_use]
+    pub fn from_protocol_payload(
+        messages: Vec<Message>,
+        protocol_payload: ProtocolPayload,
+    ) -> Self {
+        Self::from_parts(messages, Some(protocol_payload))
+    }
+
+    fn from_parts(messages: Vec<Message>, protocol_payload: Option<ProtocolPayload>) -> Self {
+        Self {
+            payload: Arc::new(GeneratePayload {
+                messages,
+                tools: Vec::new(),
+                output_format: OutputFormat::Text,
+                prompt_cache_key: None,
+                provider_options: ProviderOptions::new(),
+                required_features: BTreeSet::new(),
+                protocol_payload,
+                provider_session_state: None,
+            }),
             reasoning: None,
             continuation: None,
             max_output_tokens: None,
             estimated_context_tokens: 0,
             retry_safety: RetrySafety::NonIdempotent,
             response_persistence: ResponsePersistence::Store,
-            provider_options: ProviderOptions::new(),
-        })
+        }
     }
 
     /// 设置工具。
     #[must_use]
     pub fn with_tools(mut self, tools: Vec<ToolDefinition>) -> Self {
-        self.tools = tools;
+        Arc::make_mut(&mut self.payload).tools = tools;
         self
     }
 
     /// 设置输出格式。
     #[must_use]
     pub fn with_output_format(mut self, output_format: OutputFormat) -> Self {
-        self.output_format = output_format;
+        Arc::make_mut(&mut self.payload).output_format = output_format;
         self
     }
 
@@ -617,6 +747,13 @@ impl GenerateRequest {
     #[must_use]
     pub const fn with_max_output_tokens(mut self, tokens: u64) -> Self {
         self.max_output_tokens = Some(tokens);
+        self
+    }
+
+    /// 设置客户端提供的稳定 prompt cache 路由键。
+    #[must_use]
+    pub fn with_prompt_cache_key(mut self, key: impl Into<String>) -> Self {
+        Arc::make_mut(&mut self.payload).prompt_cache_key = Some(key.into());
         self
     }
 
@@ -647,26 +784,42 @@ impl GenerateRequest {
     /// 设置 Provider 专属参数。
     #[must_use]
     pub fn with_provider_options(mut self, provider_options: ProviderOptions) -> Self {
-        self.provider_options = provider_options;
+        Arc::make_mut(&mut self.payload).provider_options = provider_options;
+        self
+    }
+
+    /// 附着同一客户端连接上一轮由 Provider 返回的不透明状态。
+    #[must_use]
+    pub fn with_provider_session_state(mut self, state: ProviderSessionState) -> Self {
+        Arc::make_mut(&mut self.payload).provider_session_state = Some(state);
+        self
+    }
+
+    /// 增加从不透明协议正文识别出的稳定能力要求。
+    #[must_use]
+    pub fn require_feature(mut self, feature: Feature) -> Self {
+        Arc::make_mut(&mut self.payload)
+            .required_features
+            .insert(feature);
         self
     }
 
     /// 返回消息。
     #[must_use]
     pub fn messages(&self) -> &[Message] {
-        &self.messages
+        &self.payload.messages
     }
 
     /// 返回工具。
     #[must_use]
     pub fn tools(&self) -> &[ToolDefinition] {
-        &self.tools
+        &self.payload.tools
     }
 
     /// 返回输出格式。
     #[must_use]
-    pub const fn output_format(&self) -> &OutputFormat {
-        &self.output_format
+    pub fn output_format(&self) -> &OutputFormat {
+        &self.payload.output_format
     }
 
     /// 返回推理要求。
@@ -685,6 +838,12 @@ impl GenerateRequest {
     #[must_use]
     pub const fn max_output_tokens(&self) -> Option<u64> {
         self.max_output_tokens
+    }
+
+    /// 返回客户端提供的 prompt cache 路由键。
+    #[must_use]
+    pub fn prompt_cache_key(&self) -> Option<&str> {
+        self.payload.prompt_cache_key.as_deref()
     }
 
     /// 返回协议层估算的 context token 数。
@@ -707,18 +866,36 @@ impl GenerateRequest {
 
     /// 返回 Provider 专属参数。
     #[must_use]
-    pub const fn provider_options(&self) -> &ProviderOptions {
-        &self.provider_options
+    pub fn provider_options(&self) -> &ProviderOptions {
+        &self.payload.provider_options
+    }
+
+    /// 返回指定 Provider 的连接内会话状态。
+    #[must_use]
+    pub fn provider_session_state(&self, provider: &str) -> Option<&ProviderSessionState> {
+        self.payload
+            .provider_session_state
+            .as_ref()
+            .filter(|state| state.provider() == provider)
+    }
+
+    /// 返回协议不透明正文。
+    #[must_use]
+    pub fn protocol_payload(&self) -> Option<&ProtocolPayload> {
+        self.payload.protocol_payload.as_ref()
     }
 
     fn requirements(&self) -> CapabilityRequirements {
         let mut requirements = CapabilityRequirements::new(OperationKind::Generate)
             .with_minimum_context_tokens(self.estimated_context_tokens)
             .with_requested_output_tokens(self.max_output_tokens);
-        if !self.tools.is_empty() {
+        for feature in &self.payload.required_features {
+            requirements = requirements.require(*feature);
+        }
+        if !self.payload.tools.is_empty() {
             requirements = requirements.require(Feature::Tools);
         }
-        if self.messages.iter().any(|message| {
+        if self.payload.messages.iter().any(|message| {
             message
                 .content()
                 .iter()
@@ -729,7 +906,7 @@ impl GenerateRequest {
         if self.reasoning.is_some() {
             requirements = requirements.require(Feature::Reasoning);
         }
-        if matches!(self.output_format, OutputFormat::JsonSchema(_)) {
+        if matches!(self.payload.output_format, OutputFormat::JsonSchema(_)) {
             requirements = requirements.require(Feature::JsonSchema);
         }
         if self.continuation.is_some() {
@@ -744,16 +921,30 @@ impl fmt::Debug for GenerateRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("GenerateRequest")
-            .field("messages", &self.messages.len())
-            .field("tools", &self.tools.len())
-            .field("output_format", &self.output_format)
+            .field("messages", &self.payload.messages.len())
+            .field("tools", &self.payload.tools.len())
+            .field("output_format", &self.payload.output_format)
             .field("reasoning", &self.reasoning)
             .field("continuation", &self.continuation)
             .field("max_output_tokens", &self.max_output_tokens)
+            .field(
+                "prompt_cache_key",
+                &self.payload.prompt_cache_key.as_ref().map(|_| "<present>"),
+            )
             .field("estimated_context_tokens", &self.estimated_context_tokens)
             .field("retry_safety", &self.retry_safety)
             .field("response_persistence", &self.response_persistence)
-            .field("provider_options", &self.provider_options)
+            .field("provider_options", &self.payload.provider_options)
+            .field(
+                "provider_session_state",
+                &self
+                    .payload
+                    .provider_session_state
+                    .as_ref()
+                    .map(|_| "<present>"),
+            )
+            .field("required_features", &self.payload.required_features)
+            .field("protocol_payload", &self.payload.protocol_payload)
             .finish()
     }
 }
@@ -957,6 +1148,15 @@ pub enum Operation {
 }
 
 impl Operation {
+    /// 附着协议连接持有的 Provider 私有状态；非生成 operation 保持不变。
+    #[must_use]
+    pub fn with_provider_session_state(self, state: ProviderSessionState) -> Self {
+        match self {
+            Self::Generate(request) => Self::Generate(request.with_provider_session_state(state)),
+            operation => operation,
+        }
+    }
+
     /// 返回稳定 operation 分类。
     #[must_use]
     pub const fn kind(&self) -> OperationKind {
@@ -997,6 +1197,15 @@ impl Operation {
     pub fn provider_options(&self, provider: &str) -> Option<&Map<String, Value>> {
         match self {
             Self::Generate(request) => request.provider_options().get(provider),
+            Self::Embed(_) | Self::Rerank(_) | Self::GenerateImage(_) | Self::Speech(_) => None,
+        }
+    }
+
+    /// 返回当前 Provider 的连接内私有状态。
+    #[must_use]
+    pub fn provider_session_state(&self, provider: &str) -> Option<&ProviderSessionState> {
+        match self {
+            Self::Generate(request) => request.provider_session_state(provider),
             Self::Embed(_) | Self::Rerank(_) | Self::GenerateImage(_) | Self::Speech(_) => None,
         }
     }

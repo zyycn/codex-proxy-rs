@@ -128,12 +128,6 @@ async fn fetch_should_use_wham_usage_headers_only() {
         ("originator", "codex_cli_rs"),
         ("accept", "application/json"),
         ("cookie", "session=old"),
-        ("openai-beta", "codex-1"),
-        ("oai-language", "zh-CN"),
-        ("sec-fetch-site", "none"),
-        ("sec-fetch-mode", "no-cors"),
-        ("sec-fetch-dest", "empty"),
-        ("priority", "u=4, i"),
     ] {
         assert_eq!(
             headers.get(name).and_then(|value| value.to_str().ok()),
@@ -154,13 +148,7 @@ async fn fetch_should_use_wham_usage_headers_only() {
             "authorization",
             "chatgpt-account-id",
             "cookie",
-            "oai-language",
-            "openai-beta",
             "originator",
-            "priority",
-            "sec-fetch-dest",
-            "sec-fetch-mode",
-            "sec-fetch-site",
             "user-agent",
         ])
     );

@@ -265,9 +265,13 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
     for (name, expected) in [
         ("x-client-request-id", "req_ws_security"),
         ("x-codex-installation-id", "install-123"),
+        ("x-openai-internal-codex-residency", "us"),
         ("x-codex-turn-state", "turn-state"),
+        ("x-codex-turn-metadata", "{\"thread_source\":\"subagent\"}"),
         ("x-codex-beta-features", "feature-a"),
+        ("x-responsesapi-include-timing-metrics", "true"),
         ("version", "26.318.11754"),
+        ("x-codex-window-id", "cw_derived"),
         ("x-codex-parent-thread-id", "parent-456"),
         ("x-openai-subagent", "review"),
         ("x-openai-memgen-request", "true"),
@@ -283,6 +287,7 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
         "content-type",
         "accept",
         "session_id",
+        "thread-id",
         "x-openai-internal-codex-responses-lite",
     ] {
         assert!(headers.iter().all(|(header, _)| header != forbidden));
@@ -379,4 +384,124 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
     ] {
         assert!(header_names.iter().all(|name| name != forbidden));
     }
+}
+
+#[tokio::test]
+async fn websocket_should_keep_an_exact_chain_while_new_connections_adopt_the_latest_wire_profile()
+{
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind profile server");
+    let address = listener.local_addr().expect("profile server address");
+    let server = tokio::spawn(async move {
+        let (first_stream, _) = listener.accept().await.expect("first websocket");
+        let mut first_user_agent = String::new();
+        let mut first = accept_codex_test_websocket_with(first_stream, |request, _response| {
+            first_user_agent = request
+                .headers()
+                .get("user-agent")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned();
+        })
+        .await;
+        let _ = first
+            .next()
+            .await
+            .expect("first response.create")
+            .expect("valid first response.create");
+        first
+            .send(Message::Text(
+                completed_websocket_response("resp_profile_first", 1, 1).into(),
+            ))
+            .await
+            .expect("first response.completed");
+
+        let _ = timeout(Duration::from_secs(2), first.next())
+            .await
+            .expect("exact continuation should keep the original websocket")
+            .expect("continuation response.create")
+            .expect("valid continuation response.create");
+        first
+            .send(Message::Text(
+                completed_websocket_response("resp_profile_continued", 1, 1).into(),
+            ))
+            .await
+            .expect("continuation response.completed");
+
+        let (second_stream, _) = timeout(Duration::from_secs(2), listener.accept())
+            .await
+            .expect("new chain should use a new wire profile connection")
+            .expect("second websocket");
+        let mut second_user_agent = String::new();
+        let mut second = accept_codex_test_websocket_with(second_stream, |request, _response| {
+            second_user_agent = request
+                .headers()
+                .get("user-agent")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned();
+        })
+        .await;
+        let _ = second
+            .next()
+            .await
+            .expect("second response.create")
+            .expect("valid second response.create");
+        second
+            .send(Message::Text(
+                completed_websocket_response("resp_profile_second", 1, 1).into(),
+            ))
+            .await
+            .expect("second response.completed");
+
+        (first_user_agent, second_user_agent)
+    });
+
+    let profile = test_wire_profile();
+    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
+    let client = CodexBackendClient::new(
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("HTTP client"),
+        format!("http://{address}"),
+        profile.clone(),
+    )
+    .with_websocket_pool(pool);
+    let mut request = CodexResponsesRequest::new_http_sse("gpt-test", "", Vec::new());
+    request.use_websocket = true;
+    request.local_conversation_id = Some("profile-rotation".to_owned());
+
+    client
+        .create_response(
+            &request,
+            request_context("req_profile_first", Some("acct-profile")),
+        )
+        .await
+        .expect("first response");
+    profile.update_desktop_release("26.900.1", "7001");
+
+    let mut continuation = request.clone();
+    continuation.set_previous_response_id(Some("resp_profile_first".to_owned()));
+    continuation.previous_response_scope = Some(PreviousResponseScope::ConnectionLocal);
+    client
+        .create_response(
+            &continuation,
+            request_context("req_profile_continued", Some("acct-profile")),
+        )
+        .await
+        .expect("continued response");
+    client
+        .create_response(
+            &request,
+            request_context("req_profile_second", Some("acct-profile")),
+        )
+        .await
+        .expect("second response");
+
+    let (first_user_agent, second_user_agent) = server.await.expect("profile server task");
+    assert!(first_user_agent.contains("1.2.3"));
+    assert!(second_user_agent.contains("26.900.1"));
+    assert_ne!(first_user_agent, second_user_agent);
 }

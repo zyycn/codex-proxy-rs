@@ -9,21 +9,19 @@ use axum::{
 use gateway_core::routing::PublicModelId;
 use serde_json::{Value, json};
 
+use crate::ApiState;
+
 use super::{
     auth::{authenticate_client, authentication_error_response},
     error::model_not_found_response,
-    service::{OpenAiApiState, OpenAiClientService},
 };
 
 const MODEL_CREATED_TIMESTAMP: i64 = 1_700_000_000;
 
 /// `GET /v1/models`。
-pub async fn models<S>(State(state): State<S>, headers: HeaderMap) -> Response
-where
-    S: OpenAiApiState,
-{
-    let service = state.openai_client_api();
-    let client = match authenticate_client(&service, &headers) {
+pub(crate) async fn models(State(state): State<ApiState>, headers: HeaderMap) -> Response {
+    let service = state.openai();
+    let client = match authenticate_client(service, &headers) {
         Ok(client) => client,
         Err(error) => return authentication_error_response(error),
     };
@@ -44,16 +42,13 @@ where
 }
 
 /// `GET /v1/models/{model_id}`。
-pub async fn model_detail<S>(
-    State(state): State<S>,
+pub(crate) async fn model_detail(
+    State(state): State<ApiState>,
     headers: HeaderMap,
     Path(model_id): Path<String>,
-) -> Response
-where
-    S: OpenAiApiState,
-{
-    let service = state.openai_client_api();
-    let client = match authenticate_client(&service, &headers) {
+) -> Response {
+    let service = state.openai();
+    let client = match authenticate_client(service, &headers) {
         Ok(client) => client,
         Err(error) => return authentication_error_response(error),
     };

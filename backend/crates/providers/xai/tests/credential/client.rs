@@ -3,7 +3,6 @@
 use std::collections::VecDeque;
 use std::future::ready;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use gateway_core::engine::credential::AccountAvailability;
 use provider_xai::{
@@ -16,7 +15,7 @@ use provider_xai::{
     VerifiedGrokAccount,
 };
 
-use crate::support::{account_id, instance_id};
+use crate::support::{account_id, instance_id, refresh_policy};
 
 const DISCOVERY: &[u8] = include_bytes!("fixtures/discovery.json");
 const TOKEN_SUCCESS: &[u8] = include_bytes!("fixtures/token_success.json");
@@ -114,17 +113,19 @@ async fn credential_import_should_require_exact_metadata_and_official_userinfo()
 
     assert_eq!(verified.evidence().method(), VerificationMethod::UserInfo);
     let prepared = GrokCredentialAdmin
-        .prepare_verified_account(&VerifiedGrokAccount {
-            account_id: account_id("verified-import"),
-            provider_instance_id: instance_id(),
-            name: "verified import".to_owned(),
-            email: Some("verified@example.com".to_owned()),
-            upstream_account_id: None,
-            plan_type: None,
-            tokens: verified,
-            enabled: true,
-            refresh_margin: Duration::from_secs(300),
-        })
+        .prepare_verified_account(
+            &VerifiedGrokAccount {
+                account_id: account_id("verified-import"),
+                provider_instance_id: instance_id(),
+                name: "verified import".to_owned(),
+                email: Some("verified@example.com".to_owned()),
+                upstream_account_id: None,
+                plan_type: None,
+                tokens: verified,
+                enabled: true,
+            },
+            refresh_policy(),
+        )
         .expect("Provider projects verified token lifetime");
     assert_eq!(prepared.account.availability(), AccountAvailability::Ready);
     assert!(prepared.account.next_refresh_at().is_some());

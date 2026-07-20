@@ -3,10 +3,13 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use serde_json::Value;
 use thiserror::Error;
 
 use crate::accounting::{CalculatedCost, ProviderReportedCost, Usage};
-use crate::error::SafeUpstreamValue;
+use crate::engine::provider::UpstreamTransport;
+use crate::error::{IdentifierError, SafeUpstreamValue, validate_text};
+use crate::operation::ProviderSessionState;
 
 /// 一次响应的稳定元数据。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,6 +203,250 @@ impl fmt::Debug for ToolCallDelta {
     }
 }
 
+/// Provider 返回的协议原生 JSON event。
+///
+/// Core 不解释 `data`，只把它与同一上游事件产生的 canonical facts 一起
+/// 交给客户端协议 adapter。Debug 永不输出正文。
+#[derive(Clone, PartialEq)]
+pub struct ProtocolWireEvent {
+    protocol: String,
+    event_type: Option<String>,
+    data: Value,
+}
+
+impl ProtocolWireEvent {
+    /// 创建协议原生 JSON event。
+    ///
+    /// # Errors
+    ///
+    /// 协议名或显式事件名为空、过长或含控制字符时返回错误。
+    pub fn json(
+        protocol: impl Into<String>,
+        event_type: Option<String>,
+        data: Value,
+    ) -> Result<Self, IdentifierError> {
+        let protocol = protocol.into();
+        validate_text(&protocol, 64, true, None)?;
+        if let Some(event_type) = event_type.as_deref() {
+            validate_text(event_type, 256, true, None)?;
+        }
+        Ok(Self {
+            protocol,
+            event_type,
+            data,
+        })
+    }
+
+    /// 返回客户端协议名称。
+    #[must_use]
+    pub fn protocol(&self) -> &str {
+        &self.protocol
+    }
+
+    /// 返回可选的协议事件名称。
+    #[must_use]
+    pub fn event_type(&self) -> Option<&str> {
+        self.event_type.as_deref()
+    }
+
+    /// 返回协议原生 JSON 数据。
+    #[must_use]
+    pub const fn data(&self) -> &Value {
+        &self.data
+    }
+
+    /// 拆出协议原生 JSON 数据。
+    #[must_use]
+    pub fn into_data(self) -> Value {
+        self.data
+    }
+}
+
+impl fmt::Debug for ProtocolWireEvent {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProtocolWireEvent")
+            .field("protocol", &self.protocol)
+            .field("event_type", &self.event_type)
+            .field("data", &"<not included in Debug>")
+            .finish()
+    }
+}
+
+/// 上游响应使用的 HTTP 协议版本。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpstreamHttpVersion {
+    Unknown,
+    Http09,
+    Http10,
+    Http11,
+    Http2,
+    Http3,
+}
+
+impl UpstreamHttpVersion {
+    /// 解析 transport 已规范化的协议版本。
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_uppercase().as_str() {
+            "HTTP/0.9" | "0.9" => Some(Self::Http09),
+            "HTTP/1.0" | "HTTP/1" | "1.0" => Some(Self::Http10),
+            "HTTP/1.1" | "1.1" => Some(Self::Http11),
+            "HTTP/2" | "HTTP/2.0" | "2" | "2.0" => Some(Self::Http2),
+            "HTTP/3" | "HTTP/3.0" | "3" | "3.0" => Some(Self::Http3),
+            _ => None,
+        }
+    }
+
+    /// 返回数据库使用的稳定名称。
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Http09 => "HTTP/0.9",
+            Self::Http10 => "HTTP/1.0",
+            Self::Http11 => "HTTP/1.1",
+            Self::Http2 => "HTTP/2",
+            Self::Http3 => "HTTP/3",
+        }
+    }
+}
+
+/// Provider transport 边界测得的阶段耗时。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProviderResponseTimings {
+    pub transport_decision_wait_ms: Option<u64>,
+    pub connect_ms: Option<u64>,
+    pub headers_ms: Option<u64>,
+    pub first_event_ms: Option<u64>,
+}
+
+/// Provider 已筛选、可由协议 adapter 再次按白名单表达的响应头。
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProviderResponseHeader {
+    name: String,
+    value: SafeUpstreamValue,
+}
+
+impl ProviderResponseHeader {
+    /// 创建规范化的小写响应头；非 ASCII token 名称直接拒绝。
+    #[must_use]
+    pub fn new(name: impl Into<String>, value: SafeUpstreamValue) -> Option<Self> {
+        let name = name.into().trim().to_ascii_lowercase();
+        let valid = !name.is_empty()
+            && name.len() <= 64
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+        valid.then_some(Self { name, value })
+    }
+
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
+    pub const fn value(&self) -> &SafeUpstreamValue {
+        &self.value
+    }
+}
+
+impl fmt::Debug for ProviderResponseHeader {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProviderResponseHeader")
+            .field("name", &self.name)
+            .field("value", &"<redacted>")
+            .finish()
+    }
+}
+
+/// Core 消费的实际上游响应事实。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderResponseObservation {
+    transport: UpstreamTransport,
+    http_version: Option<UpstreamHttpVersion>,
+    status_code: Option<u16>,
+    request_id: Option<SafeUpstreamValue>,
+    timings: ProviderResponseTimings,
+    client_headers: Vec<ProviderResponseHeader>,
+}
+
+impl ProviderResponseObservation {
+    #[must_use]
+    pub fn new(transport: UpstreamTransport) -> Self {
+        Self {
+            transport,
+            http_version: None,
+            status_code: None,
+            request_id: None,
+            timings: ProviderResponseTimings::default(),
+            client_headers: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub const fn with_http_version(mut self, version: UpstreamHttpVersion) -> Self {
+        self.http_version = Some(version);
+        self
+    }
+
+    #[must_use]
+    pub fn with_status_code(mut self, status_code: u16) -> Self {
+        self.status_code = (100..=599).contains(&status_code).then_some(status_code);
+        self
+    }
+
+    #[must_use]
+    pub fn with_request_id(mut self, request_id: SafeUpstreamValue) -> Self {
+        self.request_id = Some(request_id);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_timings(mut self, timings: ProviderResponseTimings) -> Self {
+        self.timings = timings;
+        self
+    }
+
+    #[must_use]
+    pub fn with_client_headers(mut self, client_headers: Vec<ProviderResponseHeader>) -> Self {
+        self.client_headers = client_headers;
+        self
+    }
+
+    #[must_use]
+    pub const fn transport(&self) -> &UpstreamTransport {
+        &self.transport
+    }
+
+    #[must_use]
+    pub const fn http_version(&self) -> Option<UpstreamHttpVersion> {
+        self.http_version
+    }
+
+    #[must_use]
+    pub const fn status_code(&self) -> Option<u16> {
+        self.status_code
+    }
+
+    #[must_use]
+    pub const fn request_id(&self) -> Option<&SafeUpstreamValue> {
+        self.request_id.as_ref()
+    }
+
+    #[must_use]
+    pub const fn timings(&self) -> ProviderResponseTimings {
+        self.timings
+    }
+
+    #[must_use]
+    pub fn client_headers(&self) -> &[ProviderResponseHeader] {
+        &self.client_headers
+    }
+}
+
 /// 所有 Provider 都必须输出的稳定事件集合。
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -224,6 +471,154 @@ pub enum GatewayEvent {
     Completed(ResponseMeta),
 }
 
+/// Provider 单个上游事件产生的事实与可选协议原生表达。
+///
+/// 一个值至少包含一个 canonical fact 或一条 wire event。把同一 wire event
+/// 产生的多个 canonical facts 放在同一封套，可避免客户端重复收到该事件。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderEvent {
+    canonical: Vec<GatewayEvent>,
+    wire: Option<Box<ProtocolWireEvent>>,
+    observation: Option<Box<ProviderResponseObservation>>,
+    session_update: Option<Box<ProviderSessionState>>,
+}
+
+impl ProviderEvent {
+    /// 创建只有一个 canonical fact 的事件。
+    #[must_use]
+    pub fn canonical(event: GatewayEvent) -> Self {
+        Self {
+            canonical: vec![event],
+            wire: None,
+            observation: None,
+            session_update: None,
+        }
+    }
+
+    /// 创建只有协议原生表达的事件。
+    #[must_use]
+    pub fn wire(wire: ProtocolWireEvent) -> Self {
+        Self {
+            canonical: Vec::new(),
+            wire: Some(Box::new(wire)),
+            observation: None,
+            session_update: None,
+        }
+    }
+
+    /// 创建同一上游事件的 canonical facts 与协议原生表达。
+    #[must_use]
+    pub fn canonical_with_wire(canonical: Vec<GatewayEvent>, wire: ProtocolWireEvent) -> Self {
+        Self {
+            canonical,
+            wire: Some(Box::new(wire)),
+            observation: None,
+            session_update: None,
+        }
+    }
+
+    /// 创建仅供 Core 消费的上游响应观察；该事件不会进入客户端 adapter。
+    #[must_use]
+    pub fn observation(observation: ProviderResponseObservation) -> Self {
+        Self {
+            canonical: Vec::new(),
+            wire: None,
+            observation: Some(Box::new(observation)),
+            session_update: None,
+        }
+    }
+
+    /// 附着只由同协议客户端连接保存、并在下一轮原样交还 Provider 的状态。
+    #[must_use]
+    pub fn with_session_update(mut self, state: ProviderSessionState) -> Self {
+        self.session_update = Some(Box::new(state));
+        self
+    }
+
+    /// 把本事件标记为 Provider 连接内状态的提交边界。
+    pub fn attach_session_update(&mut self, state: ProviderSessionState) {
+        self.session_update = Some(Box::new(state));
+    }
+
+    /// 返回 Provider 私有的连接内状态更新。
+    #[must_use]
+    pub fn session_update(&self) -> Option<&ProviderSessionState> {
+        self.session_update.as_deref()
+    }
+
+    /// 取出 Provider 连接内状态更新，交给协议连接持有。
+    #[must_use]
+    pub fn take_session_update(&mut self) -> Option<ProviderSessionState> {
+        self.session_update.take().map(|state| *state)
+    }
+
+    /// 返回 Core 可解释的全部 facts。
+    #[must_use]
+    pub fn canonical_facts(&self) -> &[GatewayEvent] {
+        &self.canonical
+    }
+
+    /// 返回 Core 可改写客户端响应身份的全部 facts。
+    #[must_use]
+    pub fn canonical_facts_mut(&mut self) -> &mut [GatewayEvent] {
+        &mut self.canonical
+    }
+
+    /// 返回协议原生表达。
+    #[must_use]
+    pub fn wire_event(&self) -> Option<&ProtocolWireEvent> {
+        self.wire.as_deref()
+    }
+
+    /// 取出仅供 Core 持久化的响应观察。
+    #[must_use]
+    pub fn take_observation(&mut self) -> Option<ProviderResponseObservation> {
+        self.observation.take().map(|observation| *observation)
+    }
+
+    /// 返回仅供 Core 持久化的响应观察。
+    #[must_use]
+    pub fn response_observation(&self) -> Option<&ProviderResponseObservation> {
+        self.observation.as_deref()
+    }
+
+    /// 拆分 canonical facts 与协议原生表达。
+    #[must_use]
+    pub fn into_parts(self) -> (Vec<GatewayEvent>, Option<ProtocolWireEvent>) {
+        (self.canonical, self.wire.map(|wire| *wire))
+    }
+
+    /// 返回是否含有可用于 commit barrier 的 canonical fact。
+    #[must_use]
+    pub fn has_canonical_facts(&self) -> bool {
+        !self.canonical.is_empty()
+    }
+
+    /// 返回该封套是否仍包含可交付客户端的表达。
+    #[must_use]
+    pub fn has_client_event(&self) -> bool {
+        !self.canonical.is_empty() || self.wire.is_some()
+    }
+
+    /// 返回是否包含足以冻结下游 commit barrier 的 canonical fact。
+    ///
+    /// 单独的 wire event 不能冻结边界：协议层在看到 `Started`
+    /// 携带的网关响应身份前无法安全编码它。Core 会保留这些
+    /// 事件，直到首个 canonical 可见增量或终态再一并交付。
+    #[must_use]
+    pub fn is_commit_significant(&self) -> bool {
+        self.canonical
+            .iter()
+            .any(GatewayEvent::is_commit_significant)
+    }
+}
+
+impl From<GatewayEvent> for ProviderEvent {
+    fn from(event: GatewayEvent) -> Self {
+        Self::canonical(event)
+    }
+}
+
 impl GatewayEvent {
     /// Canonical event 均为客户端 encoder 可交付事件。
     ///
@@ -232,6 +627,21 @@ impl GatewayEvent {
     #[must_use]
     pub const fn is_downstream_deliverable(&self) -> bool {
         true
+    }
+
+    /// 返回该 fact 是否足以冻结下游 commit barrier。
+    ///
+    /// 生命周期、结构与结算 facts 可以在换号前安全丢弃；首个可见增量或
+    /// Provider 正常终态才会使客户端输出不可撤回。
+    #[must_use]
+    pub const fn is_commit_significant(&self) -> bool {
+        matches!(
+            self,
+            Self::TextDelta(_)
+                | Self::ReasoningDelta(_)
+                | Self::ToolCallDelta(_)
+                | Self::Completed(_)
+        )
     }
 
     /// 冻结客户端可见的网关 response ID，并返回 Provider 原生 response ID。

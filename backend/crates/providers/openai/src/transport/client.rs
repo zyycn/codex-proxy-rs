@@ -12,6 +12,7 @@ use crate::transport::profile::CodexWireProfileState;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use gateway_protocol::openai::{
+    WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY,
     events::{TokenUsage, retry_after_seconds_from_body},
     sse::SseError,
 };
@@ -22,12 +23,9 @@ use reqwest::{
 use serde_json::{Value, map::Map};
 use thiserror::Error;
 
-use crate::transport::protocol::responses::{
-    CodexResponsesRequest, TransportRequirement,
-    WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY,
-};
+use crate::transport::protocol::responses::{CodexResponsesRequest, TransportRequirement};
 
-use super::diagnostics::CodexUpstreamDiagnostics;
+use super::diagnostics::{CodexUpstreamDiagnostics, CodexUpstreamFailure, CodexUpstreamSendPhase};
 use super::response_meta::CodexResponseMetadata;
 use super::tls::{CustomCaError, build_reqwest_client_with_custom_ca, custom_ca_env_cache_key};
 use super::websocket::{
@@ -137,6 +135,10 @@ pub enum CodexClientError {
         rate_limit_headers: Vec<(String, String)>,
         /// 实际收到该上游响应的 transport。
         transport: CodexBackendTransport,
+        /// 错误响应前已经确认的 transport 与 HTTP 阶段事实。
+        transport_metrics: Box<CodexTransportMetrics>,
+        /// 上游拒绝发生时业务 payload 的发送阶段。
+        send_phase: CodexUpstreamSendPhase,
     },
 }
 
@@ -168,12 +170,14 @@ impl fmt::Debug for CodexClientError {
                 status,
                 retry_after_seconds,
                 transport,
+                send_phase,
                 ..
             } => formatter
                 .debug_struct("CodexClientError::Upstream")
                 .field("status", status)
                 .field("retry_after_seconds", retry_after_seconds)
                 .field("transport", transport)
+                .field("send_phase", send_phase)
                 .field("body", &"[REDACTED]")
                 .finish(),
         }
@@ -194,6 +198,41 @@ impl CodexClientError {
             | Self::InvalidHeaderName(_)
             | Self::InvalidHeaderValue(_)
             | Self::WebSocketEncode(_) => None,
+        }
+    }
+
+    pub(crate) fn upstream_failure(&self) -> Option<CodexUpstreamFailure> {
+        match self {
+            Self::Upstream {
+                status,
+                body,
+                retry_after_seconds,
+                diagnostics,
+                set_cookie_headers,
+                rate_limit_headers,
+                send_phase,
+                ..
+            } => Some(CodexUpstreamFailure::from_response(
+                *status,
+                body,
+                *retry_after_seconds,
+                diagnostics,
+                set_cookie_headers,
+                rate_limit_headers,
+                *send_phase,
+            )),
+            Self::WebSocket(CodexWebSocketExchangeError::Upstream(upstream)) => {
+                Some(CodexUpstreamFailure::from_response(
+                    StatusCode::from_u16(upstream.status_code).unwrap_or(StatusCode::BAD_GATEWAY),
+                    &upstream.body,
+                    upstream.retry_after_seconds,
+                    &upstream.diagnostics,
+                    &upstream.set_cookie_headers,
+                    &[],
+                    upstream.send_phase,
+                ))
+            }
+            _ => None,
         }
     }
 }
@@ -293,8 +332,8 @@ pub struct CodexBackendResponse {
     pub response_metadata: CodexResponseMetadata,
     /// 传输选择与低延迟阶段耗时。
     pub transport_metrics: CodexTransportMetrics,
-    /// 池中 WebSocket 保留 connection-local continuation 的最晚时间。
-    pub connection_local_continuation_expires_at: Option<SystemTime>,
+    /// 当前响应是否由池中 WebSocket 保留 connection-local continuation。
+    pub connection_local_continuation: bool,
 }
 
 /// Codex Responses 实际使用的上游传输。
@@ -377,8 +416,8 @@ pub struct CodexBackendStreamingResponse {
     pub response_metadata: CodexResponseMetadata,
     /// 传输选择与低延迟阶段耗时。
     pub transport_metrics: CodexTransportMetrics,
-    /// terminal completed 后池中 WebSocket 保留 connection-local continuation 的最晚时间。
-    pub connection_local_continuation_expires_at: Option<SystemTime>,
+    /// terminal completed 后是否由池中 WebSocket 保留 connection-local continuation。
+    pub connection_local_continuation: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -612,6 +651,8 @@ pub(super) fn websocket_exchange_error_to_client_error(
                 set_cookie_headers: upstream.set_cookie_headers,
                 rate_limit_headers: Vec::new(),
                 transport: CodexBackendTransport::WebSocket,
+                transport_metrics: Box::default(),
+                send_phase: upstream.send_phase,
             }
         }
         error => CodexClientError::WebSocket(error),
@@ -624,9 +665,7 @@ pub(super) fn websocket_success_decision(
 ) -> CodexTransportDecision {
     match requirement {
         TransportRequirement::ExactWebSocketContinuation => CodexTransportDecision::ExactWebSocket,
-        TransportRequirement::WebSocketRequired | TransportRequirement::ExplicitWebSocketWarmup => {
-            CodexTransportDecision::RequiredWebSocket
-        }
+        TransportRequirement::ExplicitWebSocketWarmup => CodexTransportDecision::RequiredWebSocket,
         _ if prepared.reused() => CodexTransportDecision::ReusedWebSocket,
         _ => CodexTransportDecision::ConnectedWebSocket,
     }

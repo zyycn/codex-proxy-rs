@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -15,7 +16,7 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 use url::Url;
 
-use crate::transport::network::{BoundedBody, GrokEndpointPolicy, build_client, collect_bounded};
+use crate::transport::network::{BoundedBody, GrokEndpointPolicy, collect_bounded};
 use crate::{
     OFFICIAL_CLIENT_ID, OFFICIAL_ISSUER, TokenCandidate, TokenVerificationContext, TokenVerifier,
     VerificationEvidence, VerificationFailure, VerificationFlow, VerificationFuture,
@@ -23,7 +24,6 @@ use crate::{
 
 const ES256_JWA: &str = "ES256";
 const JWT_TYPE: &str = "JWT";
-const JWKS_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_JWKS_BODY_BYTES: usize = 256 * 1024;
 const MAX_USERINFO_BODY_BYTES: usize = 64 * 1024;
@@ -37,7 +37,7 @@ const MAX_AUDIENCES: usize = 16;
 /// 使用官方 JWKS 与 user-info endpoint 的严格生产 verifier。
 pub struct ReqwestOidcTokenVerifier {
     client: Client,
-    endpoint_policy: GrokEndpointPolicy,
+    endpoint_policy: Arc<dyn GrokEndpointPolicy>,
     jwks_cache: Mutex<JwksCache>,
     cache_ttl: Duration,
 }
@@ -48,32 +48,16 @@ impl ReqwestOidcTokenVerifier {
     /// # Errors
     ///
     /// TLS client 初始化失败时返回 transport build error。
-    pub fn new() -> Result<Self, crate::transport::GrokReqwestTransportBuildError> {
-        let endpoint_policy = GrokEndpointPolicy::official_oauth();
-        Self::with_endpoint_policy(endpoint_policy)
-    }
-
-    /// 构建使用显式 endpoint policy 的 verifier。
-    ///
-    /// # Errors
-    ///
-    /// HTTP client 初始化失败时返回 transport build error。
-    pub fn with_endpoint_policy(
-        endpoint_policy: GrokEndpointPolicy,
-    ) -> Result<Self, crate::transport::GrokReqwestTransportBuildError> {
-        Self::with_endpoint_policy_and_cache_ttl(endpoint_policy, JWKS_CACHE_TTL)
-    }
-
     /// 构建使用显式 endpoint policy 与 JWKS cache TTL 的 verifier。
     ///
     /// # Errors
     ///
     /// HTTP client 初始化失败时返回 transport build error。
-    pub fn with_endpoint_policy_and_cache_ttl(
-        endpoint_policy: GrokEndpointPolicy,
+    pub fn new(
+        endpoint_policy: Arc<dyn GrokEndpointPolicy>,
         cache_ttl: Duration,
     ) -> Result<Self, crate::transport::GrokReqwestTransportBuildError> {
-        let client = build_client(&endpoint_policy, Some(REQUEST_TIMEOUT))?;
+        let client = endpoint_policy.build_oauth_client(Some(REQUEST_TIMEOUT))?;
         Ok(Self {
             client,
             endpoint_policy,

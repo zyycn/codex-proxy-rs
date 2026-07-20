@@ -4,6 +4,16 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use gateway_core::{
+    engine::{
+        ModelRequestId,
+        admission::{
+            ClientAdmissionError, ClientAdmissionRecovery as CoreAdmissionRecovery,
+            ClientAdmissionRecoveryPort, RecentAdmissionFact, RunningAdmissionFact,
+        },
+    },
+    policy::ClientApiKeyId,
+};
 use sqlx::PgPool;
 
 use crate::{StoreError, StoreResult, postgres_unavailable};
@@ -100,6 +110,54 @@ impl ClientAdmissionRecoveryRepository for PgClientAdmissionRecoveryRepository {
             }
         }
         Ok(recoveries.into_values().collect())
+    }
+}
+
+impl ClientAdmissionRecoveryPort for PgClientAdmissionRecoveryRepository {
+    fn load_recovery(
+        &self,
+        since: std::time::SystemTime,
+    ) -> futures::future::BoxFuture<'_, Result<Vec<CoreAdmissionRecovery>, ClientAdmissionError>>
+    {
+        Box::pin(async move {
+            self.load_client_admission_recovery(DateTime::<Utc>::from(since))
+                .await
+                .map_err(|_| ClientAdmissionError)?
+                .into_iter()
+                .map(|recovery| {
+                    let client_api_key_id = ClientApiKeyId::new(recovery.client_api_key_ref)
+                        .map_err(|_| ClientAdmissionError)?;
+                    let recent_requests = recovery
+                        .recent_requests
+                        .into_iter()
+                        .map(|request| {
+                            Ok(RecentAdmissionFact {
+                                model_request_id: ModelRequestId::new(request.model_request_id)
+                                    .map_err(|_| ClientAdmissionError)?,
+                                started_at: request.started_at.into(),
+                                input_token_estimate: request.input_token_estimate,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, ClientAdmissionError>>()?;
+                    let running_requests = recovery
+                        .running_requests
+                        .into_iter()
+                        .map(|request| {
+                            Ok(RunningAdmissionFact {
+                                model_request_id: ModelRequestId::new(request.model_request_id)
+                                    .map_err(|_| ClientAdmissionError)?,
+                                expires_at: request.deadline_at.into(),
+                            })
+                        })
+                        .collect::<Result<Vec<_>, ClientAdmissionError>>()?;
+                    Ok(CoreAdmissionRecovery {
+                        client_api_key_id,
+                        recent_requests,
+                        running_requests,
+                    })
+                })
+                .collect()
+        })
     }
 }
 

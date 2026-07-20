@@ -86,7 +86,7 @@ async fn native_pin_is_caller_scoped_and_uses_live_account_and_upstream_handle()
 }
 
 #[tokio::test]
-async fn native_pin_requires_committed_success_and_websocket_transport() {
+async fn native_pin_requires_committed_success_but_not_a_specific_transport() {
     let Some(database) = TestDatabase::create("native_pin_boundaries").await else {
         return;
     };
@@ -164,23 +164,6 @@ async fn native_pin_requires_committed_success_and_websocket_transport() {
             )
             .await
             .expect("resolve HTTP response")
-            .is_none()
-    );
-    sqlx::query(
-        "update model_requests set upstream_transport = 'websocket' where id = 'req_history'",
-    )
-    .execute(&database.pool)
-    .await
-    .expect("restore WebSocket response");
-    assert!(
-        repository
-            .resolve_native_continuation_pin(
-                "resp_gateway_visible",
-                "key_owner",
-                NativeContinuationReuse::Reusable,
-            )
-            .await
-            .expect("resolve restored WebSocket response")
             .is_some()
     );
 

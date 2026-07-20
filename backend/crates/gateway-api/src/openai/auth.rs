@@ -4,10 +4,11 @@ use axum::{
     http::{HeaderMap, header::AUTHORIZATION},
     response::{IntoResponse, Response},
 };
+use gateway_core::engine::execution::AuthenticatedClient;
 
 use super::{
     error::{missing_client_api_key_response, runtime_unavailable_response},
-    service::OpenAiClientService,
+    service::OpenAiService,
 };
 
 /// Client API key 鉴权失败原因。
@@ -63,13 +64,10 @@ pub fn bearer_client_api_key(headers: &HeaderMap) -> Result<&str, ClientApiKeyAu
     Ok(token)
 }
 
-pub(crate) fn authenticate_client<S>(
-    service: &S,
+pub(crate) fn authenticate_client(
+    service: &OpenAiService,
     headers: &HeaderMap,
-) -> Result<S::Client, ClientApiKeyAuthError>
-where
-    S: OpenAiClientService,
-{
+) -> Result<AuthenticatedClient, ClientApiKeyAuthError> {
     bearer_client_api_key(headers).and_then(|key| service.authenticate(key))
 }
 

@@ -1,11 +1,13 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
+use futures::future::join_all;
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountStateChange, CredentialRevision, OpaqueProviderData,
-    ProviderAccountStore, QuotaObservation,
+    AccountAvailability, AccountStateChange, CredentialCasUpdate, CredentialRevision,
+    OpaqueProviderData, ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
+    QuotaObservation,
 };
 use gateway_core::routing::{ConfigRevision, InstanceHealth, ProviderInstance, ProviderKind};
 use provider_xai::{
@@ -102,6 +104,40 @@ impl GrokBillingTransport for QueueBillingTransport {
     }
 }
 
+enum BillingMutation {
+    State(AccountStateChange),
+    Credential(CredentialCasUpdate),
+}
+
+struct MutatingBillingTransport {
+    store: Arc<MemoryProviderAccountStore>,
+    mutation: Mutex<Option<BillingMutation>>,
+    body: Vec<u8>,
+}
+
+impl GrokBillingTransport for MutatingBillingTransport {
+    fn execute(&self, _: GrokBillingRequest) -> GrokBillingTransportFuture<'_> {
+        let store = Arc::clone(&self.store);
+        let mutation = self.mutation.lock().expect("mutation").take();
+        let body = self.body.clone();
+        Box::pin(async move {
+            match mutation.expect("one mutation per request") {
+                BillingMutation::State(change) => store
+                    .apply_state_change(change)
+                    .await
+                    .expect("apply concurrent state"),
+                BillingMutation::Credential(update) => {
+                    store
+                        .compare_and_swap_credential(update)
+                        .await
+                        .expect("apply concurrent credential rotation");
+                }
+            }
+            Ok(GrokBillingTransportResponse::new(body))
+        })
+    }
+}
+
 fn instance() -> ProviderInstance {
     ProviderInstance::new(
         instance_id(),
@@ -126,15 +162,53 @@ async fn repository_with_accounts(
     (store, repository)
 }
 
+async fn set_account_state(
+    store: &MemoryProviderAccountStore,
+    id: &ProviderAccountId,
+    availability: AccountAvailability,
+    cooldown_until: Option<SystemTime>,
+) {
+    store
+        .apply_state_change(AccountStateChange {
+            account_id: id.clone(),
+            expected_revision: CredentialRevision::new(1).expect("revision"),
+            availability,
+            reason: Some("test isolation".to_owned()),
+            cooldown_until,
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("set account state");
+}
+
+#[tokio::test]
+async fn concurrent_cold_scheduling_hydration_reads_quota_once() {
+    let (store, repository) =
+        repository_with_accounts(&[("quota-hydration", "subject-hydration")]).await;
+    let account = store
+        .account(&account_id("quota-hydration"))
+        .expect("created account");
+    let service = GrokCredentialQuotaService::new(repository, QueueBillingTransport::failure());
+
+    join_all((0..32).map(|_| service.prepare_scheduling(std::slice::from_ref(&account)))).await;
+
+    assert_eq!(store.quota_reads(), 1);
+}
+
 #[tokio::test]
 async fn synchronization_caches_each_account_and_returns_strict_union() {
     let (_, repository) =
         repository_with_accounts(&[("catalog-a", "subject-a"), ("catalog-b", "subject-b")]).await;
     let cache = MemoryGrokCatalogCache::shared();
     let cache_port: Arc<dyn GrokCredentialCatalogCache> = cache.clone();
-    let transport =
-        QueueCatalogTransport::from_bodies([OFFICIAL_FIXTURE.to_vec(), OFFICIAL_FIXTURE.to_vec()]);
+    let transport = QueueCatalogTransport::from_bodies([
+        OFFICIAL_FIXTURE.to_vec(),
+        OFFICIAL_FIXTURE.to_vec(),
+        OFFICIAL_FIXTURE.to_vec(),
+        OFFICIAL_FIXTURE.to_vec(),
+    ]);
     let service = GrokCredentialCatalogService::new(repository, transport, cache_port);
+    assert_eq!(service.catalog_generation().get(), 0);
     let snapshot = service
         .synchronize_instance(
             &instance(),
@@ -142,20 +216,27 @@ async fn synchronization_caches_each_account_and_returns_strict_union() {
         )
         .await
         .expect("catalog sync");
+    assert_eq!(service.catalog_generation().get(), 1);
+    service
+        .query_instance_models(&instance())
+        .await
+        .expect("same catalog sync");
+    assert_eq!(service.catalog_generation().get(), 1);
 
     assert_eq!(snapshot.accounts().len(), 2);
     assert_eq!(snapshot.models().len(), 1);
     assert_eq!(snapshot.models()[0].request_model().as_str(), "grok-4.5");
     for id in [account_id("catalog-a"), account_id("catalog-b")] {
-        assert!(
+        assert_eq!(
             cache
-                .permits(
+                .observed_model_support(
                     &id,
                     gateway_core::engine::credential::CredentialRevision::new(1).expect("revision"),
                     "grok-4.5",
                 )
                 .await
-                .expect("cache lookup")
+                .expect("cache lookup"),
+            Some(true)
         );
     }
 }
@@ -342,9 +423,10 @@ async fn quota_refresh_persists_dynamic_provider_document_and_projects_known_fie
         .await
         .expect("refresh quota");
     let persisted = store
-        .get_quota(&account_id("quota"))
+        .get_quotas(&[account_id("quota")])
         .await
         .expect("read persisted quota")
+        .pop()
         .expect("quota exists");
     let document = persisted.quota.expect("provider quota");
 
@@ -364,6 +446,144 @@ async fn quota_refresh_persists_dynamic_provider_document_and_projects_known_fie
             .get("futureWindow")
             .is_some()
     );
+}
+
+#[tokio::test]
+async fn recovered_quota_refresh_releases_existing_quota_and_cooldown_isolation() {
+    for (suffix, availability, cooldown_until) in [
+        ("recover-quota", AccountAvailability::QuotaExhausted, None),
+        (
+            "recover-cooldown",
+            AccountAvailability::Cooldown,
+            SystemTime::now().checked_add(Duration::from_secs(300)),
+        ),
+    ] {
+        let (store, repository) = repository_with_accounts(&[(suffix, suffix)]).await;
+        let id = account_id(suffix);
+        set_account_state(&store, &id, availability, cooldown_until).await;
+        GrokCredentialQuotaService::new(
+            repository,
+            QueueBillingTransport::success(br#"{"config":{"creditUsagePercent":25}}"#),
+        )
+        .refresh_account(&id)
+        .await
+        .expect("refresh recovered quota");
+
+        let account = store.account(&id).expect("account");
+        assert_eq!(account.availability(), AccountAvailability::Ready);
+        assert_eq!(account.cooldown_until(), None);
+    }
+}
+
+#[tokio::test]
+async fn authoritative_exhaustion_preserves_quota_exhausted_state() {
+    let (store, repository) =
+        repository_with_accounts(&[("still-exhausted", "still-exhausted")]).await;
+    let id = account_id("still-exhausted");
+    set_account_state(&store, &id, AccountAvailability::QuotaExhausted, None).await;
+
+    GrokCredentialQuotaService::new(
+        repository,
+        QueueBillingTransport::success(br#"{"config":{"creditUsagePercent":100}}"#),
+    )
+    .refresh_account(&id)
+    .await
+    .expect("refresh exhausted quota");
+
+    assert_eq!(
+        store.account(&id).expect("account").availability(),
+        AccountAvailability::QuotaExhausted
+    );
+}
+
+#[tokio::test]
+async fn recovered_quota_does_not_clear_terminal_account_states() {
+    for (suffix, availability) in [
+        ("keep-banned", AccountAvailability::Banned),
+        ("keep-expired", AccountAvailability::Expired),
+        ("keep-invalid", AccountAvailability::Invalid),
+    ] {
+        let (store, repository) = repository_with_accounts(&[(suffix, suffix)]).await;
+        let id = account_id(suffix);
+        set_account_state(&store, &id, availability, None).await;
+        GrokCredentialQuotaService::new(
+            repository,
+            QueueBillingTransport::success(br#"{"config":{"creditUsagePercent":10}}"#),
+        )
+        .refresh_account(&id)
+        .await
+        .expect("refresh terminal account quota");
+
+        assert_eq!(
+            store.account(&id).expect("account").availability(),
+            availability
+        );
+    }
+}
+
+#[tokio::test]
+async fn quota_refresh_does_not_overwrite_a_newer_cooldown() {
+    let (store, repository) = repository_with_accounts(&[("new-cooldown", "new-cooldown")]).await;
+    let id = account_id("new-cooldown");
+    let new_cooldown = SystemTime::now()
+        .checked_add(Duration::from_secs(600))
+        .expect("cooldown time");
+    let transport = Arc::new(MutatingBillingTransport {
+        store: Arc::clone(&store),
+        mutation: Mutex::new(Some(BillingMutation::State(AccountStateChange {
+            account_id: id.clone(),
+            expected_revision: CredentialRevision::new(1).expect("revision"),
+            availability: AccountAvailability::Cooldown,
+            reason: Some("new rate limit".to_owned()),
+            cooldown_until: Some(new_cooldown),
+            observed_at: SystemTime::now(),
+        }))),
+        body: br#"{"config":{"creditUsagePercent":10}}"#.to_vec(),
+    });
+
+    GrokCredentialQuotaService::new(repository, transport)
+        .refresh_account(&id)
+        .await
+        .expect("refresh around concurrent cooldown");
+
+    let account = store.account(&id).expect("account");
+    assert_eq!(account.availability(), AccountAvailability::Cooldown);
+    assert_eq!(account.cooldown_until(), Some(new_cooldown));
+}
+
+#[tokio::test]
+async fn quota_refresh_rejects_a_concurrent_credential_revision() {
+    let (store, repository) = repository_with_accounts(&[("new-revision", "new-revision")]).await;
+    let id = account_id("new-revision");
+    let account = store.account(&id).expect("account");
+    let update = CredentialCasUpdate::new(
+        id.clone(),
+        account.revision(),
+        ProviderAccountUpdate {
+            account_id: id.clone(),
+            name: account.name().to_owned(),
+            email: account.email().map(str::to_owned),
+            plan_type: account.plan_type().map(str::to_owned),
+        },
+        store.credential(&id).expect("credential"),
+        account.has_refresh_token(),
+        account.access_token_expires_at(),
+        account.next_refresh_at(),
+    )
+    .expect("credential update");
+    let transport = Arc::new(MutatingBillingTransport {
+        store: Arc::clone(&store),
+        mutation: Mutex::new(Some(BillingMutation::Credential(update))),
+        body: br#"{"config":{"creditUsagePercent":10}}"#.to_vec(),
+    });
+
+    assert!(matches!(
+        GrokCredentialQuotaService::new(repository, transport)
+            .refresh_account(&id)
+            .await,
+        Err(GrokQuotaError::StaleCredentialSnapshot)
+    ));
+    assert_eq!(store.account(&id).expect("account").revision().get(), 2);
 }
 
 #[tokio::test]
@@ -518,9 +738,10 @@ async fn failed_quota_refresh_does_not_replace_last_good_observation() {
         Err(GrokQuotaError::Upstream)
     ));
     let persisted = store
-        .get_quota(&account_id("stable"))
+        .get_quotas(&[account_id("stable")])
         .await
         .expect("read quota")
+        .pop()
         .expect("quota remains")
         .quota
         .expect("provider document");

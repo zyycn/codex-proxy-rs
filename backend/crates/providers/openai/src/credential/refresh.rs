@@ -4,25 +4,34 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use gateway_core::engine::credential::{
-    AccountAvailability, CredentialRevision, ProviderAccount, ProviderAccountId,
+use futures::{StreamExt as _, stream};
+use gateway_core::engine::credential::{AccountAvailability, ProviderAccount, ProviderAccountId};
+use gateway_core::provider_ports::{
+    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
+    ProviderRefreshCapacityRequest, ProviderRefreshLeaseRequest, ProviderRefreshPolicy,
+    ProviderRuntimePolicyPort, ProviderStoreError, provider_refresh_retry_at,
 };
 use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
 
+use super::identity::{
+    CodexAccountIdentityVerifier, CodexIdentityExpectation, CodexIdentityVerification,
+    CodexIdentityVerificationError,
+};
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
 use super::token_client::{RefreshFailure, TokenPair, TokenRefresher};
-use super::types::{CodexAccountProfile, CodexOAuthSecret, RotateCodexCredential};
+use super::types::{CodexCredentialPrincipal, CodexOAuthSecret, RotateCodexCredential};
 
 const PROVIDER_NAME: &str = "openai";
 const MAX_REFRESH_BATCH: u32 = 1_000;
-const TRANSIENT_COOLDOWN: Duration = Duration::from_secs(30);
+const REFRESH_RETRY_DELAY: Duration = Duration::from_secs(10 * 60);
 
 pub struct DueCodexCredential {
     pub account: ProviderAccount,
     pub secret: CodexOAuthSecret,
+    principal: CodexCredentialPrincipal,
+    installation_id: String,
 }
 
 impl std::fmt::Debug for DueCodexCredential {
@@ -33,34 +42,6 @@ impl std::fmt::Debug for DueCodexCredential {
             .field("secret", &"<redacted>")
             .finish()
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct CodexRefreshLeaseRequest {
-    pub account_id: ProviderAccountId,
-    pub credential_revision: CredentialRevision,
-}
-
-pub trait CodexRefreshLeaseGuard: Send + Sync + 'static {}
-impl<T> CodexRefreshLeaseGuard for T where T: Send + Sync + 'static {}
-
-pub enum CodexRefreshLeaseAcquisition {
-    Acquired(Box<dyn CodexRefreshLeaseGuard>),
-    Unavailable,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum CodexRefreshLeaseError {
-    #[error("Codex refresh lease runtime is unavailable")]
-    Unavailable,
-}
-
-#[async_trait]
-pub trait CodexRefreshLeaseCoordinator: Send + Sync {
-    async fn try_acquire(
-        &self,
-        request: &CodexRefreshLeaseRequest,
-    ) -> Result<CodexRefreshLeaseAcquisition, CodexRefreshLeaseError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,9 +78,7 @@ pub enum CodexCredentialRefreshError {
     #[error(transparent)]
     Repository(#[from] CredentialRepositoryError),
     #[error(transparent)]
-    Lease(#[from] CodexRefreshLeaseError),
-    #[error("Codex refresh configuration is invalid")]
-    InvalidConfiguration,
+    Lease(#[from] ProviderStoreError),
     #[error("Codex refresh response is invalid")]
     InvalidRefreshResponse,
 }
@@ -107,48 +86,53 @@ pub enum CodexCredentialRefreshError {
 pub struct CodexCredentialRefreshService {
     repository: CodexCredentialRepository,
     refresher: Arc<dyn TokenRefresher>,
-    leases: Arc<dyn CodexRefreshLeaseCoordinator>,
-    refresh_margin: Duration,
+    identity: Arc<dyn CodexAccountIdentityVerifier>,
+    leases: Arc<dyn ProviderLeasePort>,
+    runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
 }
 
 impl CodexCredentialRefreshService {
     pub fn new(
         repository: CodexCredentialRepository,
         refresher: Arc<dyn TokenRefresher>,
-        leases: Arc<dyn CodexRefreshLeaseCoordinator>,
-        refresh_margin: Duration,
-    ) -> Result<Self, CodexCredentialRefreshError> {
-        if refresh_margin.is_zero() {
-            return Err(CodexCredentialRefreshError::InvalidConfiguration);
-        }
-        Ok(Self {
+        identity: Arc<dyn CodexAccountIdentityVerifier>,
+        leases: Arc<dyn ProviderLeasePort>,
+        runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
+    ) -> Self {
+        Self {
             repository,
             refresher,
+            identity,
             leases,
-            refresh_margin,
-        })
+            runtime_policy,
+        }
     }
 
     pub async fn refresh_due(
         &self,
-        limit: u32,
     ) -> Result<Vec<CodexCredentialRefreshOutcome>, CodexCredentialRefreshError> {
-        self.refresh_due_excluding(limit, &BTreeSet::new()).await
+        self.refresh_due_excluding(&BTreeSet::new()).await
     }
 
     pub async fn refresh_due_excluding(
         &self,
-        limit: u32,
         excluded: &BTreeSet<ProviderAccountId>,
     ) -> Result<Vec<CodexCredentialRefreshOutcome>, CodexCredentialRefreshError> {
-        if limit == 0 || limit > MAX_REFRESH_BATCH {
-            return Err(CodexCredentialRefreshError::InvalidConfiguration);
-        }
-        let (due, mut outcomes) = self.list_due_refresh(limit, excluded).await?;
+        let policy = self.runtime_policy.load_refresh_policy().await?;
+        let (due, mut outcomes) = self.list_due_refresh(excluded).await?;
         outcomes.reserve(due.len());
-        for credential in due {
+        let refreshed = stream::iter(due.into_iter().map(|credential| async move {
             let account_id = credential.account.id().to_string();
-            match self.refresh_one(credential).await {
+            (
+                account_id,
+                self.refresh_one_with_policy(credential, policy).await,
+            )
+        }))
+        .buffer_unordered(policy.concurrency().get() as usize)
+        .collect::<Vec<_>>()
+        .await;
+        for (account_id, result) in refreshed {
+            match result {
                 Ok(outcome) => outcomes.push(outcome),
                 Err(_) => outcomes.push(CodexCredentialRefreshOutcome::Failed { account_id }),
             }
@@ -160,17 +144,37 @@ impl CodexCredentialRefreshService {
         &self,
         due: DueCodexCredential,
     ) -> Result<CodexCredentialRefreshOutcome, CodexCredentialRefreshError> {
+        let policy = self.runtime_policy.load_refresh_policy().await?;
+        self.refresh_one_with_policy(due, policy).await
+    }
+
+    async fn refresh_one_with_policy(
+        &self,
+        due: DueCodexCredential,
+        policy: ProviderRefreshPolicy,
+    ) -> Result<CodexCredentialRefreshOutcome, CodexCredentialRefreshError> {
         let account_id = due.account.id().to_string();
+        let capacity = self
+            .leases
+            .try_acquire(ProviderLeaseRequest::RefreshCapacity(
+                ProviderRefreshCapacityRequest::new(policy.concurrency()),
+            ))
+            .await?;
+        let _capacity_guard = match capacity {
+            ProviderLeaseAcquisition::Acquired(guard) => guard,
+            ProviderLeaseAcquisition::Busy { .. } => {
+                return Ok(CodexCredentialRefreshOutcome::LeaseUnavailable { account_id });
+            }
+        };
         let acquisition = self
             .leases
-            .try_acquire(&CodexRefreshLeaseRequest {
-                account_id: due.account.id().clone(),
-                credential_revision: due.account.revision(),
-            })
+            .try_acquire(ProviderLeaseRequest::Refresh(
+                ProviderRefreshLeaseRequest::new(due.account.id().clone(), due.account.revision()),
+            ))
             .await?;
         let _guard = match acquisition {
-            CodexRefreshLeaseAcquisition::Acquired(guard) => guard,
-            CodexRefreshLeaseAcquisition::Unavailable => {
+            ProviderLeaseAcquisition::Acquired(guard) => guard,
+            ProviderLeaseAcquisition::Busy { .. } => {
                 return Ok(CodexCredentialRefreshOutcome::LeaseUnavailable { account_id });
             }
         };
@@ -180,37 +184,55 @@ impl CodexCredentialRefreshService {
             .as_ref()
             .ok_or(CodexCredentialRefreshError::InvalidRefreshResponse)?;
         match self.refresher.refresh(refresh_token.expose_secret()).await {
-            Ok(tokens) => self.persist_success(due, tokens).await,
+            Ok(tokens) => self.persist_success(due, tokens, policy).await,
             Err(RefreshFailure::InvalidGrant) => {
-                self.invalidate(&due.account, AccountAvailability::Expired, "invalid_grant")
-                    .await?;
-                Ok(CodexCredentialRefreshOutcome::Invalidated { account_id })
+                self.persist_terminal(
+                    &due.account,
+                    AccountAvailability::Expired,
+                    "invalid_grant",
+                    CodexCredentialRefreshOutcome::Invalidated { account_id },
+                )
+                .await
             }
             Err(RefreshFailure::Banned) => {
-                self.invalidate(&due.account, AccountAvailability::Banned, "account_banned")
-                    .await?;
-                Ok(CodexCredentialRefreshOutcome::Banned { account_id })
+                self.persist_terminal(
+                    &due.account,
+                    AccountAvailability::Banned,
+                    "account_banned",
+                    CodexCredentialRefreshOutcome::Banned { account_id },
+                )
+                .await
             }
             Err(RefreshFailure::RetryableTransport) => {
-                self.cooldown(&due.account).await?;
-                Ok(CodexCredentialRefreshOutcome::Transient { account_id })
+                if self
+                    .defer_refresh(&due.account, "transport-not-sent")
+                    .await?
+                {
+                    Ok(CodexCredentialRefreshOutcome::Transient { account_id })
+                } else {
+                    Ok(CodexCredentialRefreshOutcome::Stale { account_id })
+                }
             }
             Err(RefreshFailure::Transport) => {
-                Ok(CodexCredentialRefreshOutcome::Ambiguous { account_id })
+                self.persist_terminal(
+                    &due.account,
+                    AccountAvailability::Invalid,
+                    "refresh_ambiguous",
+                    CodexCredentialRefreshOutcome::Ambiguous { account_id },
+                )
+                .await
             }
         }
     }
 
     async fn list_due_refresh(
         &self,
-        limit: u32,
         excluded: &BTreeSet<ProviderAccountId>,
     ) -> Result<
         (Vec<DueCodexCredential>, Vec<CodexCredentialRefreshOutcome>),
         CodexCredentialRefreshError,
     > {
         let now = SystemTime::now();
-        let threshold = now.checked_add(self.refresh_margin).unwrap_or(now);
         let mut accounts = self
             .repository
             .store()
@@ -222,12 +244,18 @@ impl CodexCredentialRefreshService {
                 && account.enabled()
                 && account.has_refresh_token()
                 && !excluded.contains(account.id())
-                && account
-                    .next_refresh_at()
-                    .is_some_and(|next| next <= threshold)
+                && !matches!(
+                    account.availability(),
+                    AccountAvailability::Expired
+                        | AccountAvailability::Banned
+                        | AccountAvailability::Invalid
+                )
+                && (account.availability() != AccountAvailability::Cooldown
+                    || account.cooldown_until().is_some_and(|until| until <= now))
+                && account.next_refresh_at().is_some_and(|next| next <= now)
         });
         accounts.sort_by_key(|account| (account.next_refresh_at(), account.id().clone()));
-        accounts.truncate(limit as usize);
+        accounts.truncate(MAX_REFRESH_BATCH as usize);
         let mut due = Vec::with_capacity(accounts.len());
         let mut failures = Vec::new();
         for account in accounts {
@@ -237,6 +265,8 @@ impl CodexCredentialRefreshService {
                     due.push(DueCodexCredential {
                         account,
                         secret: runtime.secret,
+                        principal: runtime.principal,
+                        installation_id: runtime.installation_id,
                     });
                 }
                 Ok(_) | Err(_) => {
@@ -251,44 +281,106 @@ impl CodexCredentialRefreshService {
         &self,
         due: DueCodexCredential,
         tokens: TokenPair,
+        policy: ProviderRefreshPolicy,
     ) -> Result<CodexCredentialRefreshOutcome, CodexCredentialRefreshError> {
-        if tokens.access_token.is_empty() || tokens.expires_in <= self.refresh_margin {
+        if tokens.access_token.is_empty() || tokens.expires_in.is_zero() {
             return Err(CodexCredentialRefreshError::InvalidRefreshResponse);
         }
         let refresh_token = tokens
             .refresh_token
             .map(SecretString::from)
             .or(due.secret.refresh_token);
-        let now = SystemTime::now();
-        let expires_at = now
-            .checked_add(tokens.expires_in)
+        let account_id = due
+            .account
+            .upstream_account_id()
             .ok_or(CodexCredentialRefreshError::InvalidRefreshResponse)?;
-        let next_refresh_at = expires_at
-            .checked_sub(self.refresh_margin)
-            .ok_or(CodexCredentialRefreshError::InvalidRefreshResponse)?;
-        let profile = CodexAccountProfile {
-            email: due.account.email().map(str::to_owned),
-            chatgpt_account_id: due
-                .account
-                .upstream_account_id()
-                .unwrap_or(due.account.upstream_user_id())
-                .to_owned(),
-            chatgpt_user_id: Some(due.account.upstream_user_id().to_owned()),
-            plan_type: due.account.plan_type().map(str::to_owned),
-            access_token_expires_at: Some(DateTime::<Utc>::from(expires_at)),
-            next_refresh_at: Some(DateTime::<Utc>::from(next_refresh_at)),
+        let expectation = CodexIdentityExpectation::current(
+            due.principal.oauth_subject,
+            due.principal.poid,
+            account_id.to_owned(),
+            due.account.upstream_user_id().to_owned(),
+            due.installation_id,
+        )
+        .map_err(|_| CodexCredentialRefreshError::InvalidRefreshResponse)?;
+        let secret = CodexOAuthSecret {
+            access_token: SecretString::from(tokens.access_token),
+            refresh_token,
+            id_token: due.secret.id_token,
         };
+        let verification = match self.identity.verify(&secret, &expectation).await {
+            Ok(verification) => verification,
+            Err(CodexIdentityVerificationError::Rejected) => {
+                return self
+                    .persist_terminal(
+                        &due.account,
+                        AccountAvailability::Invalid,
+                        "refreshed_identity_rejected",
+                        CodexCredentialRefreshOutcome::Invalidated {
+                            account_id: due.account.id().to_string(),
+                        },
+                    )
+                    .await;
+            }
+            Err(CodexIdentityVerificationError::Unavailable) => {
+                return self
+                    .persist_terminal(
+                        &due.account,
+                        AccountAvailability::Invalid,
+                        "refreshed_identity_unavailable",
+                        CodexCredentialRefreshOutcome::Ambiguous {
+                            account_id: due.account.id().to_string(),
+                        },
+                    )
+                    .await;
+            }
+        };
+        let profile = match verification {
+            CodexIdentityVerification::Complete(profile) => profile,
+            CodexIdentityVerification::SignedOnly(signed) => {
+                let retry_at = provider_refresh_retry_at(
+                    due.account.id(),
+                    SystemTime::now(),
+                    REFRESH_RETRY_DELAY,
+                    "identity-completion",
+                )?;
+                match self
+                    .repository
+                    .rotate_signed_secret(&due.account, secret, &signed, retry_at)
+                    .await
+                {
+                    Ok(_) => {
+                        return Ok(CodexCredentialRefreshOutcome::Transient {
+                            account_id: due.account.id().to_string(),
+                        });
+                    }
+                    Err(CredentialRepositoryError::RevisionConflict) => {
+                        return Ok(CodexCredentialRefreshOutcome::Stale {
+                            account_id: due.account.id().to_string(),
+                        });
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        };
+        let next_refresh_at = policy
+            .next_attempt_at(
+                due.account.id(),
+                profile
+                    .access_token_expires_at
+                    .map(SystemTime::from)
+                    .ok_or(CodexCredentialRefreshError::InvalidRefreshResponse)?,
+                SystemTime::now(),
+            )
+            .map(DateTime::<Utc>::from)
+            .map_err(CodexCredentialRefreshError::from)?;
         let result = self
             .repository
             .rotate_oauth_secret(RotateCodexCredential {
                 account_id: due.account.id().to_string(),
                 expected_credential_revision: due.account.revision().get(),
-                secret: CodexOAuthSecret {
-                    access_token: SecretString::from(tokens.access_token),
-                    refresh_token,
-                    id_token: due.secret.id_token,
-                },
+                secret,
                 verified_account: profile,
+                next_refresh_at: Some(next_refresh_at),
             })
             .await;
         match result {
@@ -305,13 +397,24 @@ impl CodexCredentialRefreshService {
         }
     }
 
-    async fn invalidate(
+    async fn persist_terminal(
         &self,
         account: &ProviderAccount,
         availability: AccountAvailability,
         reason: &'static str,
-    ) -> Result<(), CodexCredentialRefreshError> {
-        self.repository
+        outcome: CodexCredentialRefreshOutcome,
+    ) -> Result<CodexCredentialRefreshOutcome, CodexCredentialRefreshError> {
+        match self.repository.load_runtime_credential(account).await {
+            Ok(_) => {}
+            Err(CredentialRepositoryError::RevisionConflict) => {
+                return Ok(CodexCredentialRefreshOutcome::Stale {
+                    account_id: account.id().to_string(),
+                });
+            }
+            Err(error) => return Err(error.into()),
+        }
+        match self
+            .repository
             .apply_state(
                 account,
                 availability,
@@ -319,21 +422,33 @@ impl CodexCredentialRefreshService {
                 None,
                 SystemTime::now(),
             )
-            .await?;
-        Ok(())
+            .await
+        {
+            Ok(()) => Ok(outcome),
+            Err(CredentialRepositoryError::RevisionConflict) => {
+                Ok(CodexCredentialRefreshOutcome::Stale {
+                    account_id: account.id().to_string(),
+                })
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
-    async fn cooldown(&self, account: &ProviderAccount) -> Result<(), CodexCredentialRefreshError> {
-        let now = SystemTime::now();
-        self.repository
-            .apply_state(
-                account,
-                AccountAvailability::Cooldown,
-                Some("refresh_transport".to_owned()),
-                now.checked_add(TRANSIENT_COOLDOWN),
-                now,
-            )
-            .await?;
-        Ok(())
+    async fn defer_refresh(
+        &self,
+        account: &ProviderAccount,
+        reason: &'static str,
+    ) -> Result<bool, CodexCredentialRefreshError> {
+        let retry_at = provider_refresh_retry_at(
+            account.id(),
+            SystemTime::now(),
+            REFRESH_RETRY_DELAY,
+            reason,
+        )?;
+        match self.repository.defer_refresh(account, retry_at).await {
+            Ok(_) => Ok(true),
+            Err(CredentialRepositoryError::RevisionConflict) => Ok(false),
+            Err(error) => Err(error.into()),
+        }
     }
 }

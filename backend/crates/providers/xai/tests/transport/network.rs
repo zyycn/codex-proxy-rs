@@ -12,13 +12,15 @@ use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use provider_xai::{
-    FailClosedTokenVerifier, FormField, GrokBillingRequest, GrokBillingTransport,
-    GrokDnsResolutionPlan, GrokDnsResolutionPolicy, GrokEndpointPolicy, GrokInferenceRequest,
-    GrokInferenceTransport, GrokInferenceTransportErrorKind, GrokModelCatalogSession,
-    GrokOAuthClient, GrokOAuthConfig, GrokSessionBinding, HttpMethod, OAuthHttpRequest,
-    OAuthHttpTransport, ReqwestGrokInferenceTransport, ReqwestGrokModelCatalogTransport,
+    FailClosedTokenVerifier, FormField, GrokBillingClient, GrokDnsResolutionPlan,
+    GrokDnsResolutionPolicy, GrokInferenceRequest, GrokInferenceTransport,
+    GrokInferenceTransportErrorKind, GrokModelCatalogSession, GrokOAuthClient, GrokOAuthConfig,
+    GrokSessionBinding, HttpMethod, OAuthHttpRequest, OAuthHttpTransport,
+    OfficialGrokEndpointPolicy, ReqwestGrokInferenceTransport, ReqwestGrokModelCatalogTransport,
     ReqwestOAuthTransport, SecretValue,
 };
+
+use crate::support::loopback_endpoint_policy;
 
 #[tokio::test]
 async fn oauth_transport_should_post_form_once_without_redirect() {
@@ -74,6 +76,11 @@ async fn inference_transport_should_stream_one_official_shape_response() {
     );
 
     let response = transport.execute(request).await.expect("SSE response");
+    assert_eq!(
+        response.http_version(),
+        gateway_core::event::UpstreamHttpVersion::Http11
+    );
+    assert_eq!(response.status_code(), 200);
     let chunks = response.into_body().collect::<Vec<_>>().await;
 
     assert_eq!(chunks.len(), 1);
@@ -114,8 +121,15 @@ async fn inference_transport_should_classify_http_failures_without_retaining_bod
                 error.status(),
                 error.send_state(),
                 error.sensitive_context_was_redacted(),
+                error.http_version(),
             ),
-            (expected_kind, Some(status), UpstreamSendState::Sent, true,)
+            (
+                expected_kind,
+                Some(status),
+                UpstreamSendState::Sent,
+                true,
+                Some(gateway_core::event::UpstreamHttpVersion::Http11),
+            )
         );
         assert!(!rendered.contains(&secret));
     }
@@ -187,9 +201,9 @@ async fn billing_transport_should_get_exact_credits_resource_without_redirect() 
         .mount(&server)
         .await;
     let origin = Url::parse(&server.uri()).expect("wiremock origin");
-    let policy = GrokEndpointPolicy::loopback(&origin).expect("loopback policy");
     let transport = Arc::new(
-        ReqwestGrokModelCatalogTransport::with_endpoint_policy(policy).expect("billing transport"),
+        ReqwestGrokModelCatalogTransport::new(loopback_endpoint_policy(&origin))
+            .expect("billing transport"),
     );
     let session = GrokModelCatalogSession::new(
         SecretValue::new("access-token".to_owned()),
@@ -198,15 +212,10 @@ async fn billing_transport_should_get_exact_credits_resource_without_redirect() 
         "0.2.101",
     )
     .expect("billing session");
-    let request = GrokBillingRequest::for_endpoint(
-        origin
-            .join("v1/billing?format=credits")
-            .expect("billing URL"),
-        &session,
-    )
-    .expect("billing request");
-
-    transport.execute(request).await.expect("billing response");
+    GrokBillingClient::new(transport)
+        .fetch(&session)
+        .await
+        .expect("billing response");
 }
 
 #[test]
@@ -220,7 +229,7 @@ fn endpoint_policy_should_reject_private_and_documentation_addresses() {
         "::1",
     ] {
         assert!(
-            !GrokEndpointPolicy::accepts_resolved_address(
+            !OfficialGrokEndpointPolicy::accepts_resolved_address(
                 address.parse().expect("fixture address")
             ),
             "{address} must be rejected"
@@ -297,7 +306,10 @@ async fn official_oauth_transport_should_resolve_through_the_production_policy_w
     }
     let client = GrokOAuthClient::new(
         GrokOAuthConfig::official("0.2.101").expect("official config"),
-        Arc::new(ReqwestOAuthTransport::new().expect("production OAuth transport")),
+        Arc::new(
+            ReqwestOAuthTransport::new(Arc::new(OfficialGrokEndpointPolicy))
+                .expect("production OAuth transport"),
+        ),
         Arc::new(FailClosedTokenVerifier),
     );
 
@@ -320,15 +332,12 @@ fn oauth_request_method_should_remain_typed() {
 }
 
 fn oauth_transport(origin: &Url) -> ReqwestOAuthTransport {
-    let endpoint_policy = GrokEndpointPolicy::loopback(origin).expect("loopback policy");
-    ReqwestOAuthTransport::with_endpoint_policy(endpoint_policy)
-        .expect("injected loopback transport")
+    ReqwestOAuthTransport::new(loopback_endpoint_policy(origin)).expect("loopback transport")
 }
 
 fn inference_transport(origin: &Url) -> ReqwestGrokInferenceTransport {
-    let endpoint_policy = GrokEndpointPolicy::loopback(origin).expect("loopback policy");
-    ReqwestGrokInferenceTransport::with_endpoint_policy(endpoint_policy)
-        .expect("injected loopback transport")
+    ReqwestGrokInferenceTransport::new(loopback_endpoint_policy(origin))
+        .expect("loopback transport")
 }
 
 fn inference_request(origin: &Url) -> GrokInferenceRequest {

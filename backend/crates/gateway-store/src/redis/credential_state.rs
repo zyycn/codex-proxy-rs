@@ -4,7 +4,13 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use redis::{Script, aio::ConnectionManager};
 
-use gateway_core::engine::credential::OpaqueProviderData;
+use gateway_core::engine::credential::{
+    AccountAvailability, CredentialRevision, OpaqueProviderData, ProviderAccountId,
+};
+use gateway_core::provider_ports::{
+    ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCredentialState,
+    ProviderCredentialStatePort, ProviderStoreError, ProviderStoreErrorKind,
+};
 
 use crate::{Revision, StoreError, StoreResult, redis_unavailable, require_nonempty};
 
@@ -23,6 +29,7 @@ return 1
 "#;
 
 const MAX_PROVIDER_CATALOG_BYTES: usize = 1024 * 1024;
+const CREDENTIAL_STATE_TTL_SECONDS: u64 = 24 * 60 * 60;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialStateCache {
@@ -271,6 +278,122 @@ impl ProviderAccountCatalogCacheRepository for RedisCredentialStateRepository {
     }
 }
 
+impl ProviderCredentialStatePort for RedisCredentialStateRepository {
+    fn replace(
+        &self,
+        state: ProviderCredentialState,
+    ) -> futures::future::BoxFuture<'_, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            let observed_at: DateTime<Utc> = state.observed_at().into();
+            let cached = CredentialStateCache {
+                provider_account_id: state.account_id().as_str().to_owned(),
+                revision: Revision::new(state.credential_revision().get())
+                    .map_err(|_| provider_invalid("encode credential state"))?,
+                enabled: state.enabled(),
+                availability: state.availability().as_str().to_owned(),
+                observed_at,
+            };
+            CredentialStateRepository::cache_credential_state(
+                self,
+                &cached,
+                CREDENTIAL_STATE_TTL_SECONDS,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|_| provider_unavailable("replace credential state"))
+        })
+    }
+
+    fn read<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+    ) -> futures::future::BoxFuture<'a, Result<Option<ProviderCredentialState>, ProviderStoreError>>
+    {
+        Box::pin(async move {
+            let cached =
+                CredentialStateRepository::read_credential_state(self, account_id.as_str())
+                    .await
+                    .map_err(|_| provider_unavailable("read credential state"))?;
+            cached
+                .map(|state| {
+                    let account_id = ProviderAccountId::new(state.provider_account_id)
+                        .map_err(|_| provider_invalid("decode credential state"))?;
+                    let revision = CredentialRevision::new(state.revision.get())
+                        .map_err(|_| provider_invalid("decode credential state"))?;
+                    let availability = AccountAvailability::parse(&state.availability)
+                        .ok_or_else(|| provider_invalid("decode credential state"))?;
+                    Ok(ProviderCredentialState::new(
+                        account_id,
+                        revision,
+                        state.enabled,
+                        availability,
+                        state.observed_at.into(),
+                    ))
+                })
+                .transpose()
+        })
+    }
+
+    fn clear<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            CredentialStateRepository::clear_credential_state(self, account_id.as_str())
+                .await
+                .map_err(|_| provider_unavailable("clear credential state"))
+        })
+    }
+}
+
+impl ProviderCatalogCachePort for RedisCredentialStateRepository {
+    fn replace<'a>(
+        &'a self,
+        key: &'a ProviderCatalogCacheKey,
+        catalog: &'a OpaqueProviderData,
+        ttl: std::time::Duration,
+    ) -> futures::future::BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            let ttl_seconds = ttl.as_secs();
+            if ttl_seconds == 0 || ttl.subsec_nanos() != 0 {
+                return Err(provider_invalid("validate catalog cache TTL"));
+            }
+            let key = ProviderAccountCatalogCacheKey {
+                provider_kind: key.provider_kind().as_str().to_owned(),
+                provider_account_id: key.account_id().as_str().to_owned(),
+                credential_revision: Revision::new(key.credential_revision().get())
+                    .map_err(|_| provider_invalid("encode catalog cache key"))?,
+            };
+            ProviderAccountCatalogCacheRepository::replace_provider_account_catalog(
+                self,
+                &key,
+                catalog,
+                ttl_seconds,
+            )
+            .await
+            .map_err(|_| provider_unavailable("replace catalog cache"))
+        })
+    }
+
+    fn read<'a>(
+        &'a self,
+        key: &'a ProviderCatalogCacheKey,
+    ) -> futures::future::BoxFuture<'a, Result<Option<OpaqueProviderData>, ProviderStoreError>>
+    {
+        Box::pin(async move {
+            let key = ProviderAccountCatalogCacheKey {
+                provider_kind: key.provider_kind().as_str().to_owned(),
+                provider_account_id: key.account_id().as_str().to_owned(),
+                credential_revision: Revision::new(key.credential_revision().get())
+                    .map_err(|_| provider_invalid("encode catalog cache key"))?,
+            };
+            ProviderAccountCatalogCacheRepository::get_provider_account_catalog(self, &key)
+                .await
+                .map_err(|_| provider_unavailable("read catalog cache"))
+        })
+    }
+}
+
 fn invalid(message: &str) -> StoreError {
     StoreError::InvalidData {
         entity: "credential state cache",
@@ -283,4 +406,12 @@ fn catalog_invalid(message: &str) -> StoreError {
         entity: "provider account catalog cache",
         message: message.to_owned(),
     }
+}
+
+fn provider_unavailable(operation: &'static str) -> ProviderStoreError {
+    ProviderStoreError::new(ProviderStoreErrorKind::Unavailable, operation)
+}
+
+fn provider_invalid(operation: &'static str) -> ProviderStoreError {
+    ProviderStoreError::new(ProviderStoreErrorKind::InvalidData, operation)
 }
