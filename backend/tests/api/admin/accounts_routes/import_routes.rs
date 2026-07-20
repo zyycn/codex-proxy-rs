@@ -238,6 +238,89 @@ async fn admin_accounts_import_should_read_sub2api_backup_access_token_only_acco
 }
 
 #[tokio::test]
+async fn admin_accounts_import_should_keep_opaque_sub2api_token_active() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "account_id": "sub2api-opaque-account",
+            "user_id": "sub2api-opaque-user",
+            "email": "sub2api-opaque@example.com",
+            "plan_type": "team",
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {
+                    "used_percent": 0,
+                    "reset_at": 1_800_000_000,
+                    "limit_window_seconds": 18_000
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_api_base_url(
+        "admin-accounts-import-sub2api-opaque-at",
+        128,
+        format!("{}/backend-api", server.uri()),
+    )
+    .await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/import")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_accounts_import_sub2api_opaque_at")
+                .body(Body::from(
+                    json!({
+                        "sourceFormat": "sub2api",
+                        "exported_at": "2026-07-19T18:05:29Z",
+                        "proxies": [],
+                        "accounts": [{
+                            "name": "sub2api-opaque@example.com",
+                            "platform": "openai",
+                            "type": "oauth",
+                            "credentials": {
+                                "access_token": "at-sub2api-opaque-token",
+                                "chatgpt_account_id": "sub2api-opaque-account",
+                                "chatgpt_user_id": "sub2api-opaque-user",
+                                "email": "sub2api-opaque@example.com",
+                                "plan_type": "team",
+                                "refresh_token": "",
+                                "expires_at": "2099-12-01T00:00:00Z"
+                            },
+                            "auto_pause_on_expired": true,
+                            "concurrency": 30,
+                            "priority": 1,
+                            "type": "oauth"
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    let store = PgAccountStore::new(pool);
+    let stored = store
+        .find_by_chatgpt_identity("sub2api-opaque-account", Some("sub2api-opaque-user"))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["imported"], 1);
+    assert_eq!(stored.status, AccountStatus::Active);
+    assert!(stored.access_token_expires_at.is_some());
+    assert!(stored.refresh_token.is_none());
+}
+
+#[tokio::test]
 async fn admin_accounts_import_should_read_cliproxyapi_codex_auth_files() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

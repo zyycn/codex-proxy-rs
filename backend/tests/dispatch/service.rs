@@ -212,6 +212,7 @@ const WEBSOCKET_SECOND_ACCOUNT_LIMITED: &str =
 mod responses_http;
 mod responses_recovery;
 mod responses_websocket;
+mod sub2api_import;
 mod usage_logging;
 
 async fn test_app_state_with_pool(config: &AppConfig, pool: PgPool) -> AppState {

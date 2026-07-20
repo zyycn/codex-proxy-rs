@@ -586,11 +586,22 @@ pub fn normalized_imported_account_status(
     status: AccountStatus,
     source: AccountImportSource,
     access_token: &str,
+    access_token_expires_at: Option<&DateTime<Utc>>,
 ) -> AccountStatus {
-    if source == AccountImportSource::Sub2Api
-        && status == AccountStatus::Active
-        && jwt_expiry(access_token, Utc::now()) != JwtExpiry::Valid
-    {
+    if source != AccountImportSource::Sub2Api || status != AccountStatus::Active {
+        return status;
+    }
+
+    let now = Utc::now();
+    if let Some(expires_at) = access_token_expires_at {
+        return if now >= *expires_at {
+            AccountStatus::Expired
+        } else {
+            status
+        };
+    }
+
+    if jwt_expiry(access_token, now) != JwtExpiry::Valid {
         AccountStatus::Expired
     } else {
         status

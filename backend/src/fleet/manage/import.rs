@@ -83,16 +83,17 @@ impl AccountManageService {
         let parsed_status =
             crate::fleet::import::parse_account_import_status(entry.status.as_deref())
                 .map_err(|error| AccountManageError::InvalidStatus(error.to_string()))?;
-        let mut status = crate::fleet::import::normalized_imported_account_status(
-            parsed_status,
-            source,
-            &resolved_tokens.access_token,
-        );
         let access_token_expires_at = resolved_tokens
             .claims
             .as_ref()
             .map(|claims| claims.expires_at)
             .or(access_token_expires_at);
+        let mut status = crate::fleet::import::normalized_imported_account_status(
+            parsed_status,
+            source,
+            &resolved_tokens.access_token,
+            access_token_expires_at.as_ref(),
+        );
         let claims = resolved_tokens.claims.as_ref();
         let mut plan_type = claims
             .and_then(|claims| claims.plan_type.clone())
