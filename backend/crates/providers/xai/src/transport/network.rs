@@ -27,6 +27,8 @@ use crate::{
     TransportFailure, TransportFailureKind, TransportFuture,
 };
 use gateway_core::engine::UpstreamSendState;
+use gateway_core::error::SafeUpstreamValue;
+use gateway_core::event::UpstreamHttpVersion;
 use gateway_protocol::openai::sse::MAX_SSE_EVENT_BUFFER_BYTES;
 
 pub(crate) const OFFICIAL_OAUTH_HOST: &str = "auth.x.ai";
@@ -57,9 +59,6 @@ pub enum GrokReqwestTransportBuildError {
     /// Reqwest TLS/client 初始化失败。
     #[error("Grok reqwest transport initialization failed")]
     ClientInitialization,
-    /// Injected origin 不是数字 loopback HTTP origin。
-    #[error("Grok injected transport origin is invalid")]
-    InvalidEndpointOrigin,
 }
 
 /// 固定官方 host 的 DNS 解析路径；只有系统结果全部为公网地址时才直接使用。
@@ -150,136 +149,82 @@ impl GrokDnsResolutionPolicy {
 #[error("Grok official DNS resolution was rejected")]
 pub struct GrokDnsResolutionError;
 
-#[derive(Debug, Clone)]
-enum EndpointPolicyKind {
-    Official { host: &'static str },
-    Loopback { origin: LoopbackOrigin },
+/// HTTP client construction and endpoint validation are one injected security boundary.
+pub trait GrokEndpointPolicy: fmt::Debug + Send + Sync {
+    fn build_oauth_client(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<Client, GrokReqwestTransportBuildError>;
+    fn build_inference_client(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<Client, GrokReqwestTransportBuildError>;
+    fn validate_oauth(&self, url: &Url) -> bool;
+    fn validate_inference(&self, url: &Url) -> bool;
+    fn validate_model_catalog(&self, url: &Url) -> bool;
+    fn route_billing(&self, url: &Url) -> Option<Url>;
+    fn validate_jwks(&self, url: &Url) -> bool;
+    fn validate_userinfo(&self, url: &Url) -> bool;
 }
 
-/// Auditable endpoint policy injected into reqwest transports and OIDC verification.
-#[derive(Debug, Clone)]
-pub struct GrokEndpointPolicy(EndpointPolicyKind);
+#[derive(Debug, Default)]
+pub struct OfficialGrokEndpointPolicy;
 
-impl GrokEndpointPolicy {
-    /// Restricts requests to the official xAI OAuth origin.
-    #[must_use]
-    pub const fn official_oauth() -> Self {
-        Self(EndpointPolicyKind::Official {
-            host: OFFICIAL_OAUTH_HOST,
-        })
-    }
-
-    /// Restricts requests to the official Grok CLI inference origin.
-    #[must_use]
-    pub const fn official_inference() -> Self {
-        Self(EndpointPolicyKind::Official {
-            host: OFFICIAL_INFERENCE_HOST,
-        })
-    }
-
-    /// Creates an explicitly injected numeric-loopback HTTP origin policy.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for domains, non-loopback addresses, missing ports, or
-    /// origins containing credentials, query, fragment, or a non-root path.
-    pub fn loopback(origin: &Url) -> Result<Self, GrokReqwestTransportBuildError> {
-        Ok(Self(EndpointPolicyKind::Loopback {
-            origin: LoopbackOrigin::parse(origin)?,
-        }))
-    }
-
-    /// Applies the same public-address predicate used by the strict DNS resolver.
+impl OfficialGrokEndpointPolicy {
     #[must_use]
     pub fn accepts_resolved_address(address: IpAddr) -> bool {
         is_public_ip(address)
     }
+}
+
+impl GrokEndpointPolicy for OfficialGrokEndpointPolicy {
+    fn build_oauth_client(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<Client, GrokReqwestTransportBuildError> {
+        build_official_client(OFFICIAL_OAUTH_HOST, timeout)
+    }
+
+    fn build_inference_client(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<Client, GrokReqwestTransportBuildError> {
+        build_official_client(OFFICIAL_INFERENCE_HOST, timeout)
+    }
 
     fn validate_oauth(&self, url: &Url) -> bool {
-        match &self.0 {
-            EndpointPolicyKind::Official { host } => valid_official_url(url, host, None),
-            EndpointPolicyKind::Loopback { origin } => origin.matches(url),
-        }
+        valid_official_url(url, OFFICIAL_OAUTH_HOST, None)
     }
 
     fn validate_inference(&self, url: &Url) -> bool {
-        match &self.0 {
-            EndpointPolicyKind::Official { host } => {
-                valid_official_url(url, host, Some(OFFICIAL_INFERENCE_PATH))
-            }
-            EndpointPolicyKind::Loopback { origin } => origin.matches(url),
-        }
+        valid_official_url(url, OFFICIAL_INFERENCE_HOST, Some(OFFICIAL_INFERENCE_PATH))
     }
 
     fn validate_model_catalog(&self, url: &Url) -> bool {
-        match &self.0 {
-            EndpointPolicyKind::Official { host } => {
-                valid_official_url(url, host, Some(OFFICIAL_MODEL_CATALOG_PATH))
-            }
-            EndpointPolicyKind::Loopback { origin } => {
-                origin.matches(url)
-                    && url.path() == OFFICIAL_MODEL_CATALOG_PATH
-                    && url.query().is_none()
-                    && url.fragment().is_none()
-            }
-        }
+        valid_official_url(
+            url,
+            OFFICIAL_INFERENCE_HOST,
+            Some(OFFICIAL_MODEL_CATALOG_PATH),
+        )
     }
 
-    fn validate_billing(&self, url: &Url) -> bool {
-        let valid_query = url.query_pairs().count() == 1
-            && url
-                .query_pairs()
-                .next()
-                .is_some_and(|(key, value)| key == "format" && value == "credits");
-        if !valid_query || url.fragment().is_some() {
-            return false;
-        }
-        match &self.0 {
-            EndpointPolicyKind::Official { host } => {
-                url.scheme() == "https"
-                    && url.host_str() == Some(*host)
-                    && url.port_or_known_default() == Some(443)
-                    && url.path() == OFFICIAL_BILLING_PATH
-                    && url.username().is_empty()
-                    && url.password().is_none()
-            }
-            EndpointPolicyKind::Loopback { origin } => {
-                origin.matches(url) && url.path() == OFFICIAL_BILLING_PATH
-            }
-        }
+    fn route_billing(&self, url: &Url) -> Option<Url> {
+        valid_billing_url(url, OFFICIAL_INFERENCE_HOST).then(|| url.clone())
     }
 
-    pub(crate) fn validate_jwks(&self, url: &Url) -> bool {
-        self.validate_exact_oauth_path(url, OFFICIAL_JWKS_PATH)
+    fn validate_jwks(&self, url: &Url) -> bool {
+        valid_official_url(url, OFFICIAL_OAUTH_HOST, Some(OFFICIAL_JWKS_PATH))
     }
 
-    pub(crate) fn validate_userinfo(&self, url: &Url) -> bool {
-        self.validate_exact_oauth_path(url, OFFICIAL_USERINFO_PATH)
+    fn validate_userinfo(&self, url: &Url) -> bool {
+        valid_official_url(url, OFFICIAL_OAUTH_HOST, Some(OFFICIAL_USERINFO_PATH))
     }
-
-    fn validate_exact_oauth_path(&self, url: &Url, path: &str) -> bool {
-        match &self.0 {
-            EndpointPolicyKind::Official { host } => valid_official_url(url, host, Some(path)),
-            EndpointPolicyKind::Loopback { origin } => {
-                origin.matches(url)
-                    && url.path() == path
-                    && url.query().is_none()
-                    && url.fragment().is_none()
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct LoopbackOrigin {
-    host: IpAddr,
-    port: u16,
 }
 
 /// 官方 OAuth HTTP transport。只允许 `auth.x.ai:443`。
 pub struct ReqwestOAuthTransport {
     client: Client,
-    endpoint_policy: GrokEndpointPolicy,
+    endpoint_policy: Arc<dyn GrokEndpointPolicy>,
 }
 
 impl ReqwestOAuthTransport {
@@ -288,20 +233,10 @@ impl ReqwestOAuthTransport {
     /// # Errors
     ///
     /// TLS client 初始化失败时返回错误。
-    pub fn new() -> Result<Self, GrokReqwestTransportBuildError> {
-        let endpoint_policy = GrokEndpointPolicy::official_oauth();
-        Self::with_endpoint_policy(endpoint_policy)
-    }
-
-    /// Builds an OAuth transport with an explicit endpoint policy.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the reqwest client cannot be initialized.
-    pub fn with_endpoint_policy(
-        endpoint_policy: GrokEndpointPolicy,
+    pub fn new(
+        endpoint_policy: Arc<dyn GrokEndpointPolicy>,
     ) -> Result<Self, GrokReqwestTransportBuildError> {
-        let client = build_client(&endpoint_policy, Some(OAUTH_REQUEST_TIMEOUT))?;
+        let client = endpoint_policy.build_oauth_client(Some(OAUTH_REQUEST_TIMEOUT))?;
         Ok(Self {
             client,
             endpoint_policy,
@@ -359,7 +294,7 @@ impl OAuthHttpTransport for ReqwestOAuthTransport {
 /// 官方 Grok Responses HTTP SSE transport。
 pub struct ReqwestGrokInferenceTransport {
     client: Client,
-    endpoint_policy: GrokEndpointPolicy,
+    endpoint_policy: Arc<dyn GrokEndpointPolicy>,
 }
 
 impl ReqwestGrokInferenceTransport {
@@ -368,20 +303,10 @@ impl ReqwestGrokInferenceTransport {
     /// # Errors
     ///
     /// TLS client 初始化失败时返回错误。
-    pub fn new() -> Result<Self, GrokReqwestTransportBuildError> {
-        let endpoint_policy = GrokEndpointPolicy::official_inference();
-        Self::with_endpoint_policy(endpoint_policy)
-    }
-
-    /// Builds an inference transport with an explicit endpoint policy.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the reqwest client cannot be initialized.
-    pub fn with_endpoint_policy(
-        endpoint_policy: GrokEndpointPolicy,
+    pub fn new(
+        endpoint_policy: Arc<dyn GrokEndpointPolicy>,
     ) -> Result<Self, GrokReqwestTransportBuildError> {
-        let client = build_client(&endpoint_policy, None)?;
+        let client = endpoint_policy.build_inference_client(None)?;
         Ok(Self {
             client,
             endpoint_policy,
@@ -429,6 +354,9 @@ impl GrokInferenceTransport for ReqwestGrokInferenceTransport {
                     UpstreamSendState::Sent,
                 ));
             }
+            let http_version = upstream_http_version(response.version());
+            let status_code = response.status().as_u16();
+            let request_id = upstream_request_id(&response);
             let body = response.bytes_stream().map(|chunk| match chunk {
                 Ok(chunk) if chunk.len() <= MAX_SSE_EVENT_BUFFER_BYTES => Ok(chunk.to_vec()),
                 Ok(_) => Err(GrokInferenceTransportError::new(
@@ -437,7 +365,12 @@ impl GrokInferenceTransport for ReqwestGrokInferenceTransport {
                 )),
                 Err(error) => Err(classify_inference_stream_error(&error)),
             });
-            Ok(GrokInferenceResponse::new(Box::pin(body)))
+            Ok(GrokInferenceResponse::new(
+                Box::pin(body),
+                http_version,
+                status_code,
+                request_id,
+            ))
         })
     }
 }
@@ -445,7 +378,7 @@ impl GrokInferenceTransport for ReqwestGrokInferenceTransport {
 /// 官方 Grok CLI proxy 模型目录 GET transport。
 pub struct ReqwestGrokModelCatalogTransport {
     client: Client,
-    endpoint_policy: GrokEndpointPolicy,
+    endpoint_policy: Arc<dyn GrokEndpointPolicy>,
 }
 
 impl ReqwestGrokModelCatalogTransport {
@@ -454,19 +387,10 @@ impl ReqwestGrokModelCatalogTransport {
     /// # Errors
     ///
     /// TLS client 初始化失败时返回错误。
-    pub fn new() -> Result<Self, GrokReqwestTransportBuildError> {
-        Self::with_endpoint_policy(GrokEndpointPolicy::official_inference())
-    }
-
-    /// 使用显式 endpoint policy 构建测试或生产 transport。
-    ///
-    /// # Errors
-    ///
-    /// Reqwest client 无法初始化时返回错误。
-    pub fn with_endpoint_policy(
-        endpoint_policy: GrokEndpointPolicy,
+    pub fn new(
+        endpoint_policy: Arc<dyn GrokEndpointPolicy>,
     ) -> Result<Self, GrokReqwestTransportBuildError> {
-        let client = build_client(&endpoint_policy, Some(OAUTH_REQUEST_TIMEOUT))?;
+        let client = endpoint_policy.build_inference_client(Some(OAUTH_REQUEST_TIMEOUT))?;
         Ok(Self {
             client,
             endpoint_policy,
@@ -540,12 +464,12 @@ impl GrokBillingTransport for ReqwestGrokModelCatalogTransport {
         let client = self.client.clone();
         let endpoint_policy = self.endpoint_policy.clone();
         Box::pin(async move {
-            if !endpoint_policy.validate_billing(request.endpoint()) {
-                return Err(GrokBillingTransportError::new(
-                    GrokBillingTransportErrorKind::Protocol,
-                ));
-            }
-            let mut builder = client.get(request.endpoint().clone());
+            let endpoint = endpoint_policy
+                .route_billing(request.endpoint())
+                .ok_or_else(|| {
+                    GrokBillingTransportError::new(GrokBillingTransportErrorKind::Protocol)
+                })?;
+            let mut builder = client.get(endpoint);
             for header in request.headers() {
                 builder = builder.header(header.name(), header.value().expose());
             }
@@ -575,8 +499,8 @@ impl GrokBillingTransport for ReqwestGrokModelCatalogTransport {
     }
 }
 
-pub(crate) fn build_client(
-    policy: &GrokEndpointPolicy,
+fn build_official_client(
+    host: &'static str,
     timeout: Option<Duration>,
 ) -> Result<Client, GrokReqwestTransportBuildError> {
     let mut builder = Client::builder()
@@ -584,62 +508,15 @@ pub(crate) fn build_client(
         .no_proxy()
         .connect_timeout(CONNECT_TIMEOUT)
         .pool_idle_timeout(POOL_IDLE_TIMEOUT)
-        .tcp_nodelay(true);
-    match &policy.0 {
-        EndpointPolicyKind::Official { host } => {
-            let resolver = StrictDnsResolver::new(host)?;
-            builder = builder.https_only(true).dns_resolver(Arc::new(resolver));
-        }
-        EndpointPolicyKind::Loopback { .. } => {
-            builder = builder.https_only(false);
-        }
-    }
+        .tcp_nodelay(true)
+        .https_only(true)
+        .dns_resolver(Arc::new(StrictDnsResolver::new(host)?));
     if let Some(timeout) = timeout {
         builder = builder.timeout(timeout);
     }
     builder
         .build()
         .map_err(|_| GrokReqwestTransportBuildError::ClientInitialization)
-}
-
-impl LoopbackOrigin {
-    fn parse(url: &Url) -> Result<Self, GrokReqwestTransportBuildError> {
-        let host = url
-            .host()
-            .and_then(|host| match host {
-                url::Host::Ipv4(address) => Some(IpAddr::V4(address)),
-                url::Host::Ipv6(address) => Some(IpAddr::V6(address)),
-                url::Host::Domain(_) => None,
-            })
-            .filter(IpAddr::is_loopback)
-            .ok_or(GrokReqwestTransportBuildError::InvalidEndpointOrigin)?;
-        if url.scheme() != "http"
-            || url.path() != "/"
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-        {
-            return Err(GrokReqwestTransportBuildError::InvalidEndpointOrigin);
-        }
-        let port = url
-            .port()
-            .ok_or(GrokReqwestTransportBuildError::InvalidEndpointOrigin)?;
-        Ok(Self { host, port })
-    }
-
-    fn matches(&self, url: &Url) -> bool {
-        url.scheme() == "http"
-            && url.port() == Some(self.port)
-            && url.host().is_some_and(|host| match host {
-                url::Host::Ipv4(address) => IpAddr::V4(address) == self.host,
-                url::Host::Ipv6(address) => IpAddr::V6(address) == self.host,
-                url::Host::Domain(_) => false,
-            })
-            && url.username().is_empty()
-            && url.password().is_none()
-            && url.fragment().is_none()
-    }
 }
 
 fn valid_official_url(url: &Url, host: &str, path: Option<&str>) -> bool {
@@ -651,6 +528,21 @@ fn valid_official_url(url: &Url, host: &str, path: Option<&str>) -> bool {
         && url.password().is_none()
         && url.query().is_none()
         && url.fragment().is_none()
+}
+
+fn valid_billing_url(url: &Url, host: &str) -> bool {
+    url.scheme() == "https"
+        && url.host_str() == Some(host)
+        && url.port_or_known_default() == Some(443)
+        && url.path() == OFFICIAL_BILLING_PATH
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.fragment().is_none()
+        && url.query_pairs().count() == 1
+        && url
+            .query_pairs()
+            .next()
+            .is_some_and(|(key, value)| key == "format" && value == "credits")
 }
 
 #[derive(Debug)]
@@ -910,6 +802,8 @@ fn classify_inference_stream_error(error: &reqwest::Error) -> GrokInferenceTrans
 async fn classify_inference_status(response: Response) -> GrokInferenceTransportError {
     let status = response.status();
     let retry_after = retry_after(&response);
+    let http_version = upstream_http_version(response.version());
+    let request_id = upstream_request_id(&response);
     let kind = match status {
         StatusCode::BAD_REQUEST
         | StatusCode::NOT_FOUND
@@ -929,11 +823,31 @@ async fn classify_inference_status(response: Response) -> GrokInferenceTransport
     let _ = collect_bounded(response, MAX_ERROR_BODY_BYTES).await;
     let mut error = GrokInferenceTransportError::new(kind, UpstreamSendState::Sent)
         .with_status(status)
+        .with_response_facts(http_version, request_id)
         .redact_sensitive_context("upstream response body");
     if let Some(retry_after) = retry_after {
         error = error.with_retry_after(retry_after);
     }
     error
+}
+
+fn upstream_http_version(version: reqwest::Version) -> UpstreamHttpVersion {
+    match version {
+        reqwest::Version::HTTP_09 => UpstreamHttpVersion::Http09,
+        reqwest::Version::HTTP_10 => UpstreamHttpVersion::Http10,
+        reqwest::Version::HTTP_11 => UpstreamHttpVersion::Http11,
+        reqwest::Version::HTTP_2 => UpstreamHttpVersion::Http2,
+        reqwest::Version::HTTP_3 => UpstreamHttpVersion::Http3,
+        _ => UpstreamHttpVersion::Unknown,
+    }
+}
+
+fn upstream_request_id(response: &Response) -> Option<SafeUpstreamValue> {
+    ["x-request-id", "request-id", "cf-ray"]
+        .into_iter()
+        .find_map(|name| response.headers().get(name))
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| SafeUpstreamValue::new(value.to_owned()).ok())
 }
 
 async fn classify_model_catalog_status(response: Response) -> GrokModelCatalogTransportError {

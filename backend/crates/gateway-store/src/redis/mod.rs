@@ -11,20 +11,22 @@ mod client_admission;
 mod credential_cooldown;
 mod credential_leases;
 mod credential_state;
+mod oauth_pending;
 mod provider_circuit;
 mod runtime_change;
+pub(crate) mod worker_lease;
 
 pub use client_admission::*;
 pub use credential_cooldown::*;
 pub use credential_leases::*;
 pub use credential_state::*;
+pub use oauth_pending::*;
 pub use provider_circuit::*;
 pub use runtime_change::*;
 
 use crate::{StoreError, StoreResult, redis_unavailable, require_nonempty};
 
 pub(crate) const MAX_REDIS_EXACT_INTEGER: u64 = (1_u64 << 53) - 1;
-
 const RECORD_ADMIN_LOGIN_FAILURE_SCRIPT: &str = r#"
 local count = redis.call('INCR', KEYS[1])
 local ttl = redis.call('PTTL', KEYS[1])

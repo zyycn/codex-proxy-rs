@@ -65,9 +65,10 @@ mod query {
 
 mod response {
     use chrono::{TimeZone, Utc};
+    use gateway_admin::model::observability::DesktopReleaseStatus;
     use gateway_api::admin::observability::{
-        BillingView, CostCoverageView, CursorWire, PageData, PageMeta, TokenDetailsView, TrendData,
-        TrendKind, TrendPointView, TrendSummaryView,
+        BillingView, CostCoverageView, CursorWire, DashboardDesktopReleaseStatusView, PageData,
+        PageMeta, TokenDetailsView, TrendData, TrendKind, TrendPointView, TrendSummaryView,
     };
     use serde_json::json;
 
@@ -180,4 +181,46 @@ mod response {
         assert_eq!(value["serviceTierDisplay"], "Fast");
         assert_eq!(value["multiplierDisplay"], "1.00x");
     }
+
+    #[test]
+    fn desktop_release_status_should_preserve_the_existing_dashboard_wire_values() {
+        for (domain, expected) in [
+            (DesktopReleaseStatus::Unchecked, "unchecked"),
+            (DesktopReleaseStatus::Current, "aligned"),
+            (DesktopReleaseStatus::UpdateAvailable, "review_required"),
+            (DesktopReleaseStatus::Failed, "check_failed"),
+        ] {
+            let status = DashboardDesktopReleaseStatusView::from(domain);
+            assert_eq!(serde_json::to_value(status).unwrap(), expected);
+        }
+    }
+}
+
+#[tokio::test]
+async fn usage_route_should_forward_a_bounded_unknown_outcome_filter() {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode, header},
+    };
+    use gateway_api::admin::observability;
+    use tower::ServiceExt as _;
+
+    use super::{AdminTestFixture, AdminTestState};
+
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let response = observability::router::<AdminTestState>()
+        .with_state(fixture.state())
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/usage/records?outcome=provider_future_state")
+                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header("x-request-id", "req_usage_other_outcome")
+                .body(Body::empty())
+                .expect("usage request"),
+        )
+        .await
+        .expect("usage response");
+
+    assert_eq!(response.status(), StatusCode::OK);
 }

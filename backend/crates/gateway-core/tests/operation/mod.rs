@@ -86,6 +86,16 @@ fn response_persistence_should_be_explicit_in_generate_request() {
 }
 
 #[test]
+fn prompt_cache_key_should_be_explicit_and_redacted_in_generate_request() {
+    let request = GenerateRequest::new(vec![text_message(MessageRole::User, "input")])
+        .expect("test request is valid")
+        .with_prompt_cache_key("private-cache-route");
+
+    assert_eq!(request.prompt_cache_key(), Some("private-cache-route"));
+    assert!(!format!("{request:?}").contains("private-cache-route"));
+}
+
+#[test]
 fn message_should_reject_empty_content() {
     let error = Message::new(MessageRole::User, Vec::new()).expect_err("content is required");
 

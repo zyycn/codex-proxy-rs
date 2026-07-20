@@ -2,21 +2,21 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use chrono::{TimeZone, Utc};
+use futures::future::join_all;
 use gateway_core::engine::credential::{
     AccountAvailability, AccountStateChange, ProviderAccountStore,
 };
 use gateway_core::routing::{InstanceHealth, ProviderInstance, ProviderKind};
-use provider_openai::CodexEndpointPolicy;
 use provider_openai::credential::{
     CodexCredentialQuotaService, CodexQuotaSyncSummary, CodexQuotaWindowKind,
     CreateCodexCredential, parse_codex_quota_usage,
 };
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use serde_json::json;
-use wiremock::matchers::{header, headers, method, path};
+use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use crate::support::{MemoryAccountStore, instance_id, profile, secret};
+use crate::support::{MemoryAccountStore, instance_id, loopback_origin_policy, profile, secret};
 
 #[test]
 fn parser_extracts_dynamic_windows_without_a_fixed_database_shape() {
@@ -133,6 +133,42 @@ fn wire_profile() -> CodexWireProfileState {
     })
 }
 
+fn quota_service(store: &Arc<MemoryAccountStore>) -> CodexCredentialQuotaService {
+    CodexCredentialQuotaService::new(
+        store.repository(),
+        wire_profile(),
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        loopback_origin_policy(),
+    )
+}
+
+#[tokio::test]
+async fn concurrent_cold_scheduling_hydration_reads_quota_once() {
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .repository()
+        .create_oauth_credential(CreateCodexCredential {
+            account_id: "acct_hydration".to_owned(),
+            provider_instance_id: instance_id().to_string(),
+            name: "hydration".to_owned(),
+            secret: secret("hydration-token"),
+            account: profile("chatgpt-acct_hydration"),
+            next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await
+        .expect("create account");
+    let account = store.account("acct_hydration").expect("created account");
+    let service = quota_service(&store);
+
+    join_all((0..32).map(|_| service.prepare_scheduling(std::slice::from_ref(&account)))).await;
+
+    assert_eq!(store.quota_reads(), 1);
+}
+
 #[tokio::test]
 async fn quota_service_stores_raw_provider_json_and_projects_common_state() {
     let server = MockServer::start().await;
@@ -164,12 +200,6 @@ async fn quota_service_stores_raw_provider_json_and_projects_common_state() {
     Mock::given(method("GET"))
         .and(path("/backend-api/wham/usage"))
         .and(header("authorization", "Bearer quota-token"))
-        .and(header("openai-beta", "codex-1"))
-        .and(header("oai-language", "zh-CN"))
-        .and(header("sec-fetch-site", "none"))
-        .and(header("sec-fetch-mode", "no-cors"))
-        .and(header("sec-fetch-dest", "empty"))
-        .and(headers("priority", vec!["u=4", "i"]))
         .respond_with(ResponseTemplate::new(200).set_body_json(&raw))
         .expect(2)
         .mount(&server)
@@ -183,16 +213,12 @@ async fn quota_service_stores_raw_provider_json_and_projects_common_state() {
             name: "quota".to_owned(),
             secret: secret("quota-token"),
             account: profile("chatgpt-acct_quota"),
+            next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
         .await
         .expect("create account");
-    let service = CodexCredentialQuotaService::new_with_endpoint_policy(
-        store.repository(),
-        wire_profile(),
-        CodexEndpointPolicy::Loopback,
-    )
-    .expect("quota service");
+    let service = quota_service(&store);
     let instance = ProviderInstance::new(
         instance_id(),
         ProviderKind::new("openai").expect("provider"),
@@ -229,9 +255,10 @@ async fn quota_service_stores_raw_provider_json_and_projects_common_state() {
     assert_eq!(refreshed.account_id(), account.id());
     assert_eq!(refreshed.windows()[0].used_percent(), Some(37.0));
     let observation = store
-        .get_quota(account.id())
+        .get_quotas(std::slice::from_ref(account.id()))
         .await
         .expect("quota read")
+        .pop()
         .expect("quota observation");
     assert_eq!(
         observation
@@ -270,17 +297,13 @@ async fn quota_refresh_success_must_not_clear_newer_future_cooldown() {
             name: "quota cooldown".to_owned(),
             secret: secret("quota-cooldown-token"),
             account: profile("chatgpt-acct_quota_cooldown"),
+            next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
         .await
         .expect("create account");
     let account = store.account("acct_quota_cooldown").expect("quota account");
-    let service = CodexCredentialQuotaService::new_with_endpoint_policy(
-        store.repository(),
-        wire_profile(),
-        CodexEndpointPolicy::Loopback,
-    )
-    .expect("quota service");
+    let service = quota_service(&store);
     let instance = ProviderInstance::new(
         instance_id(),
         ProviderKind::new("openai").expect("provider"),
@@ -332,6 +355,73 @@ async fn non_exhausted_quota_refresh_should_restore_quota_exhausted_account() {
     assert_eq!(
         (summary.updated, availability, cooldown_until),
         (1, AccountAvailability::Ready, None)
+    );
+}
+
+#[tokio::test]
+async fn passive_rate_limit_headers_update_quota_and_account_state_with_revision_fence() {
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .repository()
+        .create_oauth_credential(CreateCodexCredential {
+            account_id: "acct_passive_quota".to_owned(),
+            provider_instance_id: instance_id().to_string(),
+            name: "passive quota".to_owned(),
+            secret: secret("passive-quota-token"),
+            account: profile("chatgpt-acct_passive_quota"),
+            next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await
+        .expect("create account");
+    let account = store.account("acct_passive_quota").expect("account");
+    let service = quota_service(&store);
+    let reset_at = 1_900_000_000_i64;
+    let headers = vec![
+        ("x-codex-active-limit".to_owned(), "codex".to_owned()),
+        ("x-codex-primary-used-percent".to_owned(), "100".to_owned()),
+        (
+            "x-codex-primary-window-minutes".to_owned(),
+            "300".to_owned(),
+        ),
+        ("x-codex-primary-reset-at".to_owned(), reset_at.to_string()),
+        ("x-codex-limit-reached".to_owned(), "true".to_owned()),
+    ];
+
+    assert!(
+        service
+            .synchronize_passive_headers(&account, &headers)
+            .await
+            .expect("passive quota")
+    );
+    let current = store
+        .account("acct_passive_quota")
+        .expect("current account");
+    assert_eq!(current.availability(), AccountAvailability::QuotaExhausted);
+    let observation = store
+        .get_quotas(std::slice::from_ref(account.id()))
+        .await
+        .expect("quota")
+        .pop()
+        .expect("quota observation");
+    let quota = serde_json::Value::Object(
+        observation
+            .quota
+            .expect("quota JSON")
+            .expose_to_provider()
+            .clone(),
+    );
+    assert_eq!(
+        quota
+            .pointer("/rate_limit/primary_window/limit_window_seconds")
+            .and_then(serde_json::Value::as_u64),
+        Some(18_000)
+    );
+    assert_eq!(
+        quota
+            .pointer("/rate_limit/primary_window/reset_at")
+            .and_then(serde_json::Value::as_i64),
+        Some(reset_at)
     );
 }
 
@@ -417,6 +507,7 @@ async fn synchronize_account_from_state(
             name: account_id.to_owned(),
             secret: secret(&format!("token-{account_id}")),
             account: profile(&format!("chatgpt-{account_id}")),
+            next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
         .await
@@ -433,12 +524,7 @@ async fn synchronize_account_from_state(
         })
         .await
         .expect("apply initial account state");
-    let service = CodexCredentialQuotaService::new_with_endpoint_policy(
-        store.repository(),
-        wire_profile(),
-        CodexEndpointPolicy::Loopback,
-    )
-    .expect("quota service");
+    let service = quota_service(&store);
     let instance = ProviderInstance::new(
         instance_id(),
         ProviderKind::new("openai").expect("provider"),

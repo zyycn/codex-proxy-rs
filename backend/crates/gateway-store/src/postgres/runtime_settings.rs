@@ -1,10 +1,16 @@
 //! `runtime_settings` 单例与 config revision 的 PostgreSQL owner。
 
+use std::num::NonZeroU32;
+use std::time::Duration;
 use std::{collections::BTreeMap, fmt};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
+
+use gateway_core::provider_ports::{
+    ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError, ProviderStoreErrorKind,
+};
 
 use crate::{ConflictKind, Revision, StoreError, StoreResult, postgres_unavailable};
 
@@ -182,6 +188,24 @@ impl RuntimeSettingsRepository for PgRuntimeSettingsRepository {
     }
 }
 
+impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
+    fn load_refresh_policy(
+        &self,
+    ) -> futures::future::BoxFuture<'_, Result<ProviderRefreshPolicy, ProviderStoreError>> {
+        Box::pin(async move {
+            let settings = RuntimeSettingsRepository::load_runtime_settings(self)
+                .await
+                .map_err(|_| provider_unavailable("load refresh policy"))?;
+            let concurrency = NonZeroU32::new(settings.refresh_concurrency)
+                .ok_or_else(|| provider_invalid("decode refresh policy"))?;
+            ProviderRefreshPolicy::try_new(
+                Duration::from_secs(settings.refresh_margin_seconds),
+                concurrency,
+            )
+        })
+    }
+}
+
 pub(crate) async fn load_runtime_settings_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<RuntimeSettings> {
@@ -314,6 +338,14 @@ fn invalid_numeric() -> StoreError {
         entity: "runtime settings",
         message: "numeric field is outside its supported range".to_owned(),
     }
+}
+
+fn provider_unavailable(operation: &'static str) -> ProviderStoreError {
+    ProviderStoreError::new(ProviderStoreErrorKind::Unavailable, operation)
+}
+
+fn provider_invalid(operation: &'static str) -> ProviderStoreError {
+    ProviderStoreError::new(ProviderStoreErrorKind::InvalidData, operation)
 }
 
 fn valid_model_mappings(mappings: &BTreeMap<String, BTreeMap<String, String>>) -> bool {

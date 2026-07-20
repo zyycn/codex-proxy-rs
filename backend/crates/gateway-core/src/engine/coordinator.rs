@@ -1,6 +1,6 @@
 //! 唯一的账号重试、Provider instance 切换、发送与下游 commit barrier owner。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -10,25 +10,28 @@ use futures_timer::Delay;
 use uuid::Uuid;
 
 use crate::accounting::{CostEstimate, CostSource, Usage};
-use crate::engine::continuation::NativeContinuationPin;
+use crate::engine::continuation::ContinuationBinding;
 use crate::engine::provider::{Provider, ProviderCallMetadata, ProviderRequest, ProviderStream};
 use crate::engine::{
-    AccountSelectionConstraints, AttemptContext, AttemptRecord, AttemptTrigger, CancellationToken,
-    CommitRequirement, CoordinatedEvent, EngineError, ExecutionOutcome, ExecutionStore,
-    GatewayEngine, IntermediateFailure, ModelRequestFinalization, ModelRequestId,
-    ModelRequestTimings, NewModelRequest, ProviderAttemptOutcome, UpstreamSendState,
+    AccountAttemptContext, AttemptContext, AttemptRecord, AttemptTrigger, CancellationToken,
+    CommitRequirement, ContinuationAttempt, CoordinatedEvent, EngineError, ExecutionOutcome,
+    ExecutionStore, GatewayEngine, IntermediateFailure, ModelRequestFinalization, ModelRequestId,
+    ModelRequestTimings, NewModelRequest, ProviderAccountStateOwner, ProviderAttemptOutcome,
+    UpstreamSendState,
 };
 use crate::error::{GatewayError, GatewayErrorKind, ProviderError, ProviderErrorKind};
-use crate::event::GatewayEvent;
+use crate::event::{
+    GatewayEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseObservation,
+};
 use crate::operation::{Operation, RetrySafety};
 use crate::routing::RoutingPlan;
 
 /// Request 级协调器；不会创建或写入 `request_attempts`。
-pub struct AttemptCoordinator<S> {
+pub struct AttemptCoordinator<S: ?Sized> {
     engine: Arc<GatewayEngine<S>>,
 }
 
-impl<S> AttemptCoordinator<S>
+impl<S: ?Sized> AttemptCoordinator<S>
 where
     S: ExecutionStore,
 {
@@ -50,7 +53,7 @@ where
         operation: Operation,
         plan: RoutingPlan,
         required_account: Option<crate::engine::credential::ProviderAccountId>,
-        continuation: Option<NativeContinuationPin>,
+        continuation: Option<ContinuationBinding>,
         cancellation: CancellationToken,
     ) -> Result<ResponseExecutionSession<S>, EngineError> {
         let request_id = request.id.clone();
@@ -58,6 +61,17 @@ where
         let deadline = request.deadline_at;
         self.engine.store().create_model_request(request).await?;
         let gateway_response_id = format!("resp_{}", Uuid::now_v7().simple());
+        let account_state_owner = continuation
+            .as_ref()
+            .and_then(ContinuationBinding::pinned)
+            .map(ProviderAccountStateOwner::from_continuation);
+        let continuation_attempt =
+            initial_continuation_attempt(&operation, &plan, continuation.as_ref());
+        let commit_policy = if continuation_attempt == ContinuationAttempt::None {
+            StreamCommitPolicy::FirstCanonicalEvent
+        } else {
+            StreamCommitPolicy::UntilOutputOrTerminal
+        };
 
         let mut session = ResponseExecutionSession {
             engine: Arc::clone(&self.engine),
@@ -68,6 +82,9 @@ where
             plan,
             required_account,
             continuation,
+            continuation_attempt,
+            commit_policy,
+            account_state_owner,
             cancellation,
             candidate_index: 0,
             last_attempt_candidate_index: None,
@@ -86,6 +103,7 @@ where
             client_response_id: None,
             upstream_response_id: None,
             provider_attempt_outcomes: Vec::new(),
+            before_commit: VecDeque::new(),
         };
 
         if session.cancellation.is_cancelled() {
@@ -107,6 +125,7 @@ struct CurrentAttempt {
     index: NonZeroU32,
     started_at: SystemTime,
     send_observed: bool,
+    response_observation: Option<ProviderResponseObservation>,
 }
 
 struct FailureFinalization {
@@ -119,11 +138,17 @@ struct FailureFinalization {
     provider_response_id: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+enum StreamCommitPolicy {
+    FirstCanonicalEvent,
+    UntilOutputOrTerminal,
+}
+
 /// API 可逐事件消费的 Core 执行会话。
 ///
 /// API 只能提交下游 delivery 边界；账号重试、Provider instance 切换、断流终结与
 /// `model_requests` 写回均留在本类型内。
-pub struct ResponseExecutionSession<S> {
+pub struct ResponseExecutionSession<S: ?Sized> {
     engine: Arc<GatewayEngine<S>>,
     request_id: ModelRequestId,
     request_started_at: SystemTime,
@@ -131,7 +156,10 @@ pub struct ResponseExecutionSession<S> {
     operation: Operation,
     plan: RoutingPlan,
     required_account: Option<crate::engine::credential::ProviderAccountId>,
-    continuation: Option<NativeContinuationPin>,
+    continuation: Option<ContinuationBinding>,
+    continuation_attempt: ContinuationAttempt,
+    commit_policy: StreamCommitPolicy,
+    account_state_owner: Option<ProviderAccountStateOwner>,
     cancellation: CancellationToken,
     candidate_index: usize,
     last_attempt_candidate_index: Option<usize>,
@@ -150,9 +178,10 @@ pub struct ResponseExecutionSession<S> {
     client_response_id: Option<String>,
     upstream_response_id: Option<String>,
     provider_attempt_outcomes: Vec<ProviderAttemptOutcome>,
+    before_commit: VecDeque<ProviderEvent>,
 }
 
-impl<S> ResponseExecutionSession<S>
+impl<S: ?Sized> ResponseExecutionSession<S>
 where
     S: ExecutionStore,
 {
@@ -168,19 +197,43 @@ where
         if self.finalized {
             return Ok(None);
         }
+        if self.downstream_committed_at.is_some()
+            && let Some(event) = self.before_commit.pop_front()
+        {
+            return Ok(Some(CoordinatedEvent::single(
+                event,
+                CommitRequirement::AlreadyCommitted,
+            )));
+        }
 
         loop {
             match self.pull().await? {
                 PullOutcome::Event(event) => {
-                    let requirement = if self.downstream_committed_at.is_some() {
-                        CommitRequirement::AlreadyCommitted
-                    } else {
-                        self.delivery_pending = true;
-                        CommitRequirement::CommitBeforeDelivery
+                    if self.downstream_committed_at.is_some() {
+                        return Ok(Some(CoordinatedEvent::single(
+                            event,
+                            CommitRequirement::AlreadyCommitted,
+                        )));
+                    }
+                    let commit_significant = match self.commit_policy {
+                        StreamCommitPolicy::FirstCanonicalEvent => event.has_canonical_facts(),
+                        StreamCommitPolicy::UntilOutputOrTerminal => event.is_commit_significant(),
                     };
-                    return Ok(Some(CoordinatedEvent::new(event, requirement)));
+                    self.before_commit.push_back(event);
+                    if !commit_significant {
+                        continue;
+                    }
+                    self.delivery_pending = true;
+                    let events = self.before_commit.drain(..).collect();
+                    return CoordinatedEvent::try_batch(
+                        events,
+                        CommitRequirement::CommitBeforeDelivery,
+                    )
+                    .map(Some);
                 }
-                PullOutcome::AttemptDiscarded => {}
+                PullOutcome::AttemptDiscarded => {
+                    self.before_commit.clear();
+                }
                 PullOutcome::End => {
                     if self.downstream_committed_at.is_some() {
                         self.finish_success().await?;
@@ -196,7 +249,7 @@ where
     /// # Errors
     ///
     /// 会话已提交、已有待提交结果或执行失败时返回错误。
-    pub async fn collect_uncommitted(&mut self) -> Result<Vec<GatewayEvent>, EngineError> {
+    pub async fn collect_uncommitted(&mut self) -> Result<Vec<ProviderEvent>, EngineError> {
         if self.downstream_committed_at.is_some() || self.delivery_pending {
             return Err(EngineError::InvalidDeliveryState);
         }
@@ -279,6 +332,16 @@ where
         &self.provider_attempt_outcomes
     }
 
+    /// 返回最终选中 attempt 已公开给协议层的安全响应头。
+    #[must_use]
+    pub fn response_headers(&self) -> &[ProviderResponseHeader] {
+        self.current
+            .as_ref()
+            .and_then(|current| current.response_observation.as_ref())
+            .map(ProviderResponseObservation::client_headers)
+            .unwrap_or_default()
+    }
+
     /// 请求取消；实际终态在下一次会话 poll 时由 Core 持久化。
     pub fn cancel(&self) {
         self.cancellation.cancel();
@@ -325,17 +388,37 @@ where
                     return Err(EngineError::Deadline);
                 }
                 PollBoundary::Item(Some(Ok(mut event))) => {
-                    match self.freeze_response_identity(&mut event) {
-                        Ok(()) => {
-                            self.observe_event(&event).await?;
-                            return Ok(PullOutcome::Event(event));
+                    if let Some(observation) = event.take_observation()
+                        && let Err(error) = self.observe_response(observation)
+                    {
+                        if self.handle_stream_error(error).await? {
+                            return Ok(PullOutcome::AttemptDiscarded);
                         }
-                        Err(error) => {
-                            if self.handle_stream_error(error).await? {
-                                return Ok(PullOutcome::AttemptDiscarded);
-                            }
+                        continue;
+                    }
+                    let mut identity_error = None;
+                    for fact in event.canonical_facts_mut() {
+                        if let Err(error) = self.freeze_response_identity(fact) {
+                            identity_error = Some(error);
+                            break;
                         }
                     }
+                    if let Some(error) = identity_error {
+                        if self.handle_stream_error(error).await? {
+                            return Ok(PullOutcome::AttemptDiscarded);
+                        }
+                        continue;
+                    }
+                    for fact in event.canonical_facts() {
+                        self.observe_event(fact).await?;
+                    }
+                    if event.wire_event().is_some() && !event.has_canonical_facts() {
+                        self.observe_wire_event().await?;
+                    }
+                    if !event.has_client_event() {
+                        continue;
+                    }
+                    return Ok(PullOutcome::Event(event));
                 }
                 PollBoundary::Item(Some(Err(error))) => {
                     if self.handle_stream_error(error).await? {
@@ -383,13 +466,15 @@ where
                 next_attempt,
                 self.deadline,
                 self.plan.account_selection_policy(),
-                AccountSelectionConstraints::new(
+                AccountAttemptContext::new(
                     self.excluded_accounts.clone(),
                     self.required_account.clone(),
+                    self.account_state_owner.clone(),
                 ),
                 self.continuation.clone(),
                 self.cancellation.clone(),
-            );
+            )
+            .with_continuation_attempt(self.continuation_attempt);
             let trigger = if self.attempts == 0 {
                 AttemptTrigger::Initial
             } else if self.last_attempt_candidate_index == Some(self.candidate_index) {
@@ -493,7 +578,11 @@ where
                 .await?;
                 return Err(EngineError::RequiredAccountMismatch);
             }
-            if let Some(pin) = self.continuation.as_ref()
+            if let Some(pin) = self
+                .continuation
+                .as_ref()
+                .and_then(ContinuationBinding::pinned)
+                && self.continuation_attempt == ContinuationAttempt::Native
                 && !metadata.provider_account_id().is_some_and(|account| {
                     pin.matches(metadata.provider(), metadata.instance(), account)
                 })
@@ -513,6 +602,15 @@ where
                 })
                 .await?;
                 return Err(EngineError::ContinuationPinMismatch);
+            }
+            if self.account_state_owner.is_none()
+                && let Some(account) = metadata.provider_account_id()
+            {
+                self.account_state_owner = Some(ProviderAccountStateOwner::new(
+                    metadata.provider().clone(),
+                    metadata.instance().clone(),
+                    account.clone(),
+                ));
             }
             self.engine
                 .store()
@@ -538,6 +636,7 @@ where
                 index: next_attempt,
                 started_at: SystemTime::now(),
                 send_observed: false,
+                response_observation: None,
             });
             return Ok(());
         }
@@ -566,6 +665,51 @@ where
                 .await?;
             current.send_observed = true;
         }
+        Ok(())
+    }
+
+    async fn observe_wire_event(&mut self) -> Result<(), EngineError> {
+        let current = self.current.as_mut().ok_or(EngineError::EmptyRoutingPlan)?;
+        if !current.send_observed {
+            self.engine
+                .store()
+                .mark_send_state(&self.request_id, UpstreamSendState::Sent)
+                .await?;
+            current.send_observed = true;
+        }
+        Ok(())
+    }
+
+    fn observe_response(
+        &mut self,
+        observation: ProviderResponseObservation,
+    ) -> Result<(), ProviderError> {
+        let send_state = self.current_send_state();
+        let current = self
+            .current
+            .as_mut()
+            .ok_or_else(|| ProviderError::new(ProviderErrorKind::Protocol, send_state))?;
+        if current
+            .response_observation
+            .as_ref()
+            .is_some_and(|existing| existing.transport() != observation.transport())
+        {
+            return Err(ProviderError::new(ProviderErrorKind::Protocol, send_state));
+        }
+        let observed = observation.timings();
+        if let Some(value) = observed.transport_decision_wait_ms {
+            self.timings.transport_decision_wait_ms = Some(value);
+        }
+        if let Some(value) = observed.connect_ms {
+            self.timings.connect_ms = Some(value);
+        }
+        if let Some(value) = observed.headers_ms {
+            self.timings.headers_ms = Some(value);
+        }
+        if let Some(value) = observed.first_event_ms {
+            self.timings.first_event_ms = Some(value);
+        }
+        current.response_observation = Some(observation);
         Ok(())
     }
 
@@ -606,19 +750,25 @@ where
             .store()
             .mark_send_state(&self.request_id, send_state)
             .await?;
-        let provider_proved_replay_safe =
-            !current.send_observed && provider_proved_replay_safe(&error);
-        let retryable = self.required_account.is_none()
-            && self.continuation.is_none()
+        let provider_proved_replay_safe = provider_proved_replay_safe(&error);
+        let continuation_retry = self.prepare_continuation_retry(
+            &current,
+            &error,
+            send_state,
+            provider_proved_replay_safe,
+        );
+        let ordinary_retry = self.required_account.is_none()
+            && self.continuation_attempt == ContinuationAttempt::None
             && self.downstream_committed_at.is_none()
             && !self.delivery_pending
             && send_state != UpstreamSendState::Ambiguous
             && (self.operation.retry_safety() == RetrySafety::Idempotent
                 || provider_proved_replay_safe)
             && self.attempts < self.plan.max_attempts().get();
+        let retryable = continuation_retry || ordinary_retry;
 
         if retryable {
-            if let Some(account) = current.metadata.provider_account_id() {
+            if !continuation_retry && let Some(account) = current.metadata.provider_account_id() {
                 self.excluded_accounts.insert(account.clone());
             }
             if error.kind() == ProviderErrorKind::Unsupported
@@ -636,6 +786,15 @@ where
                     provider_kind: current.metadata.provider().clone(),
                     account_id: current.metadata.provider_account_id().cloned(),
                     upstream_model_id: current.metadata.upstream_model().clone(),
+                    upstream_status_code: current
+                        .response_observation
+                        .as_ref()
+                        .and_then(ProviderResponseObservation::status_code),
+                    upstream_request_id: current
+                        .response_observation
+                        .as_ref()
+                        .and_then(ProviderResponseObservation::request_id)
+                        .map(|value| value.as_str().to_owned()),
                     latency: current.started_at.elapsed().unwrap_or_default(),
                     error,
                 })
@@ -651,24 +810,85 @@ where
         Err(engine_error)
     }
 
+    fn prepare_continuation_retry(
+        &mut self,
+        current: &CurrentAttempt,
+        error: &ProviderError,
+        send_state: UpstreamSendState,
+        provider_proved_replay_safe: bool,
+    ) -> bool {
+        if self.required_account.is_some()
+            || self.continuation_attempt == ContinuationAttempt::None
+            || self.downstream_committed_at.is_some()
+            || self.delivery_pending
+            || send_state == UpstreamSendState::Ambiguous
+            || !provider_proved_replay_safe
+            || self.attempts >= self.plan.max_attempts().get()
+            || self
+                .operation
+                .provider_session_state(current.metadata.provider().as_str())
+                .is_none()
+        {
+            return false;
+        }
+
+        match self.continuation_attempt {
+            ContinuationAttempt::Native if error.continuation_failure().is_some() => {
+                self.continuation_attempt = ContinuationAttempt::ReplayOwner;
+            }
+            ContinuationAttempt::Native | ContinuationAttempt::ReplayOwner => {
+                self.continuation_attempt = ContinuationAttempt::ReplayAny;
+                if let Some(account) = current.metadata.provider_account_id() {
+                    self.excluded_accounts.insert(account.clone());
+                }
+            }
+            ContinuationAttempt::ReplayAny => {
+                if let Some(account) = current.metadata.provider_account_id() {
+                    self.excluded_accounts.insert(account.clone());
+                }
+            }
+            ContinuationAttempt::None => return false,
+        }
+        true
+    }
+
     fn reset_uncommitted_observations(&mut self) {
         self.usage = Usage::new();
         self.cost = CostEstimate::unavailable();
         self.client_response_id = None;
         self.upstream_response_id = None;
+        self.timings.transport_decision_wait_ms = None;
+        self.timings.connect_ms = None;
+        self.timings.headers_ms = None;
         self.timings.first_event_ms = None;
         self.timings.first_reasoning_ms = None;
         self.timings.first_text_ms = None;
         self.timings.first_token_ms = None;
         self.upstream_complete = false;
+        self.before_commit.clear();
     }
 
     fn can_fallback_instance(&self, provider_proved_replay_safe: bool) -> bool {
-        self.required_account.is_none()
-            && self.continuation.is_none()
-            && (self.operation.retry_safety() == RetrySafety::Idempotent
-                || provider_proved_replay_safe)
-            && self.candidate_index + 1 < self.plan.candidates().len()
+        if self.required_account.is_some()
+            || self.candidate_index + 1 >= self.plan.candidates().len()
+        {
+            return false;
+        }
+        let next = &self.plan.candidates()[self.candidate_index + 1];
+        match self.continuation_attempt {
+            ContinuationAttempt::None => {
+                self.operation.retry_safety() == RetrySafety::Idempotent
+                    || provider_proved_replay_safe
+            }
+            ContinuationAttempt::ReplayAny => {
+                provider_proved_replay_safe
+                    && self
+                        .operation
+                        .provider_session_state(next.provider().as_str())
+                        .is_some()
+            }
+            ContinuationAttempt::Native | ContinuationAttempt::ReplayOwner => false,
+        }
     }
 
     async fn finish_success(&mut self) -> Result<(), EngineError> {
@@ -679,10 +899,27 @@ where
         self.timings.latency_ms = Some(elapsed_ms(self.request_started_at, completed_at));
         let upstream_request_id = self.current.as_ref().and_then(|current| {
             current
-                .metadata
-                .upstream_request_id()
-                .map(|value| value.as_str().to_owned())
+                .response_observation
+                .as_ref()
+                .and_then(|observation| {
+                    observation
+                        .request_id()
+                        .map(|value| value.as_str().to_owned())
+                })
+                .or_else(|| {
+                    current
+                        .metadata
+                        .upstream_request_id()
+                        .map(|value| value.as_str().to_owned())
+                })
         });
+        let upstream_status_code = self
+            .current
+            .as_ref()
+            .and_then(|current| current.response_observation.as_ref())
+            .and_then(ProviderResponseObservation::status_code)
+            .or(Some(200));
+        let (upstream_transport, http_version) = self.current_transport_observation();
         self.engine
             .store()
             .finalize_model_request(ModelRequestFinalization {
@@ -692,10 +929,12 @@ where
                 attempt_count: self.attempts,
                 downstream_committed_at: self.downstream_committed_at,
                 client_status_code: self.client_status_code,
-                upstream_status_code: Some(200),
+                upstream_status_code,
                 client_response_id: self.client_response_id.clone(),
                 upstream_request_id,
                 upstream_response_id: self.upstream_response_id.clone(),
+                upstream_transport,
+                http_version,
                 error: None,
                 provider_error_code: None,
                 retry_after_ms: None,
@@ -800,10 +1039,26 @@ where
         self.timings.latency_ms = Some(elapsed_ms(self.request_started_at, completed_at));
         let upstream_request_id = self.current.as_ref().and_then(|current| {
             current
-                .metadata
-                .upstream_request_id()
-                .map(|value| value.as_str().to_owned())
+                .response_observation
+                .as_ref()
+                .and_then(|observation| {
+                    observation
+                        .request_id()
+                        .map(|value| value.as_str().to_owned())
+                })
+                .or_else(|| {
+                    current
+                        .metadata
+                        .upstream_request_id()
+                        .map(|value| value.as_str().to_owned())
+                })
         });
+        let observed_status_code = self
+            .current
+            .as_ref()
+            .and_then(|current| current.response_observation.as_ref())
+            .and_then(ProviderResponseObservation::status_code);
+        let (upstream_transport, http_version) = self.current_transport_observation();
         self.engine
             .store()
             .finalize_model_request(ModelRequestFinalization {
@@ -813,12 +1068,14 @@ where
                 attempt_count: self.attempts,
                 downstream_committed_at: self.downstream_committed_at,
                 client_status_code: self.client_status_code,
-                upstream_status_code: finalization.upstream_status_code,
+                upstream_status_code: finalization.upstream_status_code.or(observed_status_code),
                 client_response_id: self.client_response_id.clone(),
                 upstream_request_id,
                 upstream_response_id: finalization
                     .provider_response_id
                     .or_else(|| self.upstream_response_id.clone()),
+                upstream_transport,
+                http_version,
                 error: Some(finalization.error),
                 provider_error_code: finalization.provider_error_code,
                 retry_after_ms: finalization.retry_after_ms,
@@ -830,6 +1087,21 @@ where
             .await?;
         self.finalized = true;
         Ok(())
+    }
+
+    fn current_transport_observation(&self) -> (Option<String>, Option<String>) {
+        let Some(current) = self.current.as_ref() else {
+            return (None, None);
+        };
+        let Some(observation) = current.response_observation.as_ref() else {
+            return (None, None);
+        };
+        (
+            Some(observation.transport().as_str().to_owned()),
+            observation
+                .http_version()
+                .map(|version| version.as_str().to_owned()),
+        )
     }
 
     fn current_send_state(&self) -> UpstreamSendState {
@@ -883,13 +1155,13 @@ where
 }
 
 enum PullOutcome {
-    Event(GatewayEvent),
+    Event(ProviderEvent),
     AttemptDiscarded,
     End,
 }
 
 enum PollBoundary {
-    Item(Option<Result<GatewayEvent, ProviderError>>),
+    Item(Option<Result<ProviderEvent, ProviderError>>),
     Cancelled,
     Deadline,
 }
@@ -937,6 +1209,26 @@ async fn poll_provider(
         _ = cancelled => ProviderBoundary::Cancelled,
         _ = timeout => ProviderBoundary::Deadline,
         result = execution => ProviderBoundary::Result(Box::new(result)),
+    }
+}
+
+fn initial_continuation_attempt(
+    operation: &Operation,
+    plan: &RoutingPlan,
+    continuation: Option<&ContinuationBinding>,
+) -> ContinuationAttempt {
+    match continuation {
+        None => ContinuationAttempt::None,
+        Some(ContinuationBinding::External(_))
+            if plan.candidates().first().is_some_and(|candidate| {
+                operation
+                    .provider_session_state(candidate.provider().as_str())
+                    .is_some()
+            }) =>
+        {
+            ContinuationAttempt::ReplayAny
+        }
+        Some(_) => ContinuationAttempt::Native,
     }
 }
 

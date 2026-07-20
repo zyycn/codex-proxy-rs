@@ -452,9 +452,6 @@ async fn connection_local_continuation_should_use_the_exact_socket() {
         .await
         .unwrap();
     let mut second_request = first_request;
-    // DB 只保存 upstream response ID，不保存客户端 conversation ID；续接必须仍能
-    // 按 origin/account/native handle 找回原连接。
-    second_request.local_conversation_id = Some("conversation-after-restart".to_string());
     second_request.set_previous_response_id(Some("resp_exact_seed".to_string()));
     second_request.previous_response_scope = Some(PreviousResponseScope::ConnectionLocal);
     let second = backend
@@ -466,9 +463,9 @@ async fn connection_local_continuation_should_use_the_exact_socket() {
         .unwrap();
     server.await.unwrap();
 
-    assert!(first.connection_local_continuation_expires_at.is_some());
+    assert!(first.connection_local_continuation);
     assert!(first.transport_metrics.first_event_ms.is_some());
-    assert!(second.connection_local_continuation_expires_at.is_some());
+    assert!(second.connection_local_continuation);
     assert_eq!(
         second.transport_metrics.decision,
         Some(CodexTransportDecision::ExactWebSocket)

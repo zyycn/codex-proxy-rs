@@ -1,7 +1,4 @@
-//! OpenAI Responses 的请求 decoder 与 canonical event encoder。
-//!
-//! 这里的“透明”指已声明语义逐项映射，而不是原始 JSON/SSE passthrough。
-//! 未实现语义会返回稳定的 typed error，不能静默删除。
+//! OpenAI Responses 的透明 wire adapter 与 Core canonical facts 投影。
 
 mod error;
 mod http;
@@ -10,13 +7,23 @@ mod response;
 mod websocket;
 
 pub use error::{ProtocolErrorBody, RequestDecodeError, ResponseEncodeError};
-pub use http::{collect_execution_response, responses, stream_execution_response};
+pub use http::{collect_execution_response, stream_execution_response};
+pub(crate) use http::{responses, review_responses};
 pub use request::{
     ContinuationIntent, DecodedResponsesRequest, PROVIDER_OPTIONS_VERSION,
     ResponsesRequestMetadata, decode_request,
 };
-pub use response::{CollectedResponses, ResponsesCollector};
-pub use websocket::{
-    ResponseCreateFrameError, ResponsesWebSocketAdapter, decode_response_create,
-    responses_websocket,
-};
+pub use response::{CollectedResponses, OpenAiResponsesEncoder, ResponsesCollector};
+pub(crate) use websocket::responses_websocket;
+pub use websocket::{ResponseCreateFrameError, decode_response_create};
+
+pub(super) fn safe_response_header_name(name: &str) -> Option<&'static str> {
+    match name {
+        "x-request-id" => Some("x-request-id"),
+        "openai-model" => Some("openai-model"),
+        "x-models-etag" => Some("x-models-etag"),
+        "x-reasoning-included" => Some("x-reasoning-included"),
+        "openai-processing-ms" => Some("openai-processing-ms"),
+        _ => None,
+    }
+}

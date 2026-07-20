@@ -99,6 +99,7 @@ async fn rotate_uses_revision_cas_and_replaces_plaintext_tokens() {
                 scope: provider_xai::OFFICIAL_SCOPES.join(" "),
             },
             verified_account: profile("subject-rotate"),
+            next_refresh_at: chrono::Utc::now() + chrono::Duration::minutes(30),
         })
         .expect("rotate");
     assert!(matches!(
@@ -145,6 +146,7 @@ async fn stale_rotate_does_not_modify_tokens() {
                 scope: provider_xai::OFFICIAL_SCOPES.join(" "),
             },
             verified_account: profile("subject-stale"),
+            next_refresh_at: chrono::Utc::now() + chrono::Duration::minutes(30),
         })
         .expect("winning rotation");
     let stale = GrokCredentialAdmin
@@ -157,6 +159,7 @@ async fn stale_rotate_does_not_modify_tokens() {
                 scope: provider_xai::OFFICIAL_SCOPES.join(" "),
             },
             verified_account: profile("subject-stale"),
+            next_refresh_at: chrono::Utc::now() + chrono::Duration::minutes(30),
         })
         .expect("stale command");
     assert!(matches!(
@@ -203,6 +206,7 @@ async fn rotate_rejects_verified_identity_rebind() {
             scope: provider_xai::OFFICIAL_SCOPES.join(" "),
         },
         verified_account: profile("subject-b"),
+        next_refresh_at: chrono::Utc::now() + chrono::Duration::minutes(30),
     });
     assert!(matches!(
         result,
@@ -303,6 +307,7 @@ async fn repository_rejects_account_owned_by_another_provider() {
                 scope: provider_xai::OFFICIAL_SCOPES.join(" "),
             },
             verified_account: profile("subject"),
+            next_refresh_at: chrono::Utc::now() + chrono::Duration::minutes(30),
         }),
         Err(GrokCredentialRepositoryError::WrongProviderKind)
     ));

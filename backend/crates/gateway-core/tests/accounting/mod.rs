@@ -1,8 +1,9 @@
 use std::str::FromStr;
 
 use gateway_core::accounting::{
-    CalculatedCost, CalculatedCostBreakdown, CostEstimate, CostEstimateStatus, CostSource,
-    CurrencyCode, Decimal, Money, ProviderReportedCost, Usage,
+    CalculatedCost, CalculatedCostAmounts, CalculatedCostBreakdown, CalculatedCostRates,
+    CostEstimate, CostEstimateStatus, CostSource, CurrencyCode, Decimal, Money,
+    ProviderReportedCost, Usage,
 };
 
 #[test]
@@ -41,16 +42,20 @@ fn calculated_breakdown_should_preserve_runtime_components_without_changing_tota
     let usd = CurrencyCode::new("USD").expect("USD currency");
     let money = |ticks| Money::new(Decimal::from_scaled(ticks).expect("valid ticks"), usd);
     let breakdown = CalculatedCostBreakdown::new(
-        money(100),
-        money(200),
-        money(30),
-        money(0),
-        money(330),
-        money(330),
-        money(10_000_000_000),
-        money(20_000_000_000),
-        money(3_000_000_000),
-        money(0),
+        CalculatedCostAmounts::new(
+            money(100),
+            money(200),
+            money(30),
+            money(0),
+            money(330),
+            money(330),
+        ),
+        CalculatedCostRates::new(
+            money(10_000_000_000),
+            money(20_000_000_000),
+            money(3_000_000_000),
+            money(0),
+        ),
         Some("default".to_owned()),
         100,
     );

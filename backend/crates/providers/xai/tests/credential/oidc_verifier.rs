@@ -14,10 +14,12 @@ use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use provider_xai::{
-    GrokEndpointPolicy, OFFICIAL_CLIENT_ID, OFFICIAL_ISSUER, ReqwestOidcTokenVerifier, SecretValue,
-    TokenCandidate, TokenVerificationContext, TokenVerifier, VerificationFailure, VerificationFlow,
+    OFFICIAL_CLIENT_ID, OFFICIAL_ISSUER, ReqwestOidcTokenVerifier, SecretValue, TokenCandidate,
+    TokenVerificationContext, TokenVerifier, VerificationFailure, VerificationFlow,
     VerificationMethod,
 };
+
+use crate::support::loopback_endpoint_policy;
 
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 
@@ -289,9 +291,8 @@ fn endpoints(server: &MockServer) -> TestEndpoints {
 }
 
 fn verifier(origin: &Url, cache_ttl: Duration) -> ReqwestOidcTokenVerifier {
-    let endpoint_policy = GrokEndpointPolicy::loopback(origin).expect("loopback policy");
-    ReqwestOidcTokenVerifier::with_endpoint_policy_and_cache_ttl(endpoint_policy, cache_ttl)
-        .expect("injected loopback verifier")
+    ReqwestOidcTokenVerifier::new(loopback_endpoint_policy(origin), cache_ttl)
+        .expect("loopback verifier")
 }
 
 fn auth_context<'a>(

@@ -5,10 +5,10 @@ use std::time::{Duration, SystemTime};
 use serde_json::{Map, Value};
 
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountCandidate, AccountRuntimeSignals, AccountSelectionContext,
-    AccountSelectionPolicy, AccountSelector, CredentialCasUpdate, CredentialRevision,
-    OpaqueProviderData, PlaintextCredential, ProviderAccount, ProviderAccountId,
-    ProviderAccountUpdate, RotationStrategy,
+    AccountAvailability, AccountCandidate, AccountQuotaSignals, AccountRuntimeSignals,
+    AccountSelectionContext, AccountSelectionPolicy, AccountSelector, CredentialCasUpdate,
+    CredentialRevision, OpaqueProviderData, PlaintextCredential, ProviderAccount,
+    ProviderAccountId, ProviderAccountUpdate, RotationStrategy,
 };
 use gateway_core::routing::{ProviderInstanceId, ProviderKind};
 
@@ -86,6 +86,27 @@ fn disabled_account_should_not_be_schedulable() {
 }
 
 #[test]
+fn cooldown_account_should_become_schedulable_at_its_deadline() {
+    let now = SystemTime::now();
+    let account =
+        account("acct_cooldown").with_runtime_state(true, AccountAvailability::Cooldown, Some(now));
+
+    assert!(account.is_schedulable(now));
+}
+
+#[test]
+fn cooldown_account_should_remain_isolated_before_its_deadline() {
+    let now = SystemTime::now();
+    let account = account("acct_cooldown").with_runtime_state(
+        true,
+        AccountAvailability::Cooldown,
+        Some(now + Duration::from_secs(1)),
+    );
+
+    assert!(!account.is_schedulable(now));
+}
+
+#[test]
 fn smart_selector_should_prefer_lower_inflight_count() {
     let candidates = vec![
         candidate("acct_busy", 2, Some(100)),
@@ -96,6 +117,145 @@ fn smart_selector_should_prefer_lower_inflight_count() {
         .expect("candidate available");
 
     assert_eq!(selected.account.id().as_str(), "acct_idle");
+}
+
+#[test]
+fn provider_quota_overlay_should_preserve_store_concurrency_facts() {
+    let reset_at = SystemTime::now() + Duration::from_secs(60);
+    let last_started_at = SystemTime::now();
+    let signals = AccountRuntimeSignals {
+        in_flight: 2,
+        last_started_at: Some(last_started_at),
+        quota_reset_at: None,
+        quota_remaining_rank: None,
+    }
+    .with_provider_quota(Some(AccountQuotaSignals::new(Some(reset_at), Some(75))));
+
+    assert_eq!(
+        (
+            signals.in_flight,
+            signals.last_started_at,
+            signals.quota_reset_at,
+            signals.quota_remaining_rank,
+        ),
+        (2, Some(last_started_at), Some(reset_at), Some(75))
+    );
+}
+
+#[test]
+fn smart_selector_should_use_provider_quota_rank_after_load_is_equal() {
+    let candidates = vec![
+        candidate("acct_low_quota", 0, Some(20)),
+        candidate("acct_high_quota", 0, Some(80)),
+    ];
+    let selected = AccountSelector
+        .select(&candidates, &context(RotationStrategy::Smart))
+        .expect("candidate available");
+
+    assert_eq!(selected.account.id().as_str(), "acct_high_quota");
+}
+
+#[test]
+fn quota_reset_selector_should_prefer_known_earliest_window() {
+    let now = SystemTime::now();
+    let unknown = candidate("acct_unknown", 0, None);
+    let mut later = candidate("acct_later", 0, None);
+    later.signals.quota_reset_at = Some(now + Duration::from_secs(120));
+    let mut earlier = candidate("acct_earlier", 0, None);
+    earlier.signals.quota_reset_at = Some(now + Duration::from_secs(60));
+    let candidates = vec![unknown, later, earlier];
+    let selected = AccountSelector
+        .select(&candidates, &context(RotationStrategy::QuotaResetPriority))
+        .expect("candidate available");
+
+    assert_eq!(selected.account.id().as_str(), "acct_earlier");
+}
+
+#[test]
+fn smart_selector_should_prefer_known_quota_over_unknown_after_load_is_equal() {
+    let candidates = vec![
+        candidate("acct_unknown", 0, None),
+        candidate("acct_known", 0, Some(1)),
+    ];
+    let selected = AccountSelector
+        .select(&candidates, &context(RotationStrategy::Smart))
+        .expect("candidate available");
+
+    assert_eq!(selected.account.id().as_str(), "acct_known");
+}
+
+#[test]
+fn selector_should_reject_account_at_concurrency_limit() {
+    let candidates = vec![
+        candidate("acct_full", 3, Some(100)),
+        candidate("acct_available", 2, Some(1)),
+    ];
+    let selected = AccountSelector
+        .select(&candidates, &context(RotationStrategy::Smart))
+        .expect("candidate available");
+
+    assert_eq!(selected.account.id().as_str(), "acct_available");
+}
+
+#[test]
+fn selector_should_enforce_request_interval_until_boundary() {
+    let now = SystemTime::now();
+    let mut cooling = candidate("acct_cooling", 0, Some(100));
+    cooling.signals.last_started_at = Some(now - Duration::from_millis(9));
+    let mut ready = candidate("acct_ready", 0, Some(1));
+    ready.signals.last_started_at = Some(now - Duration::from_millis(10));
+    let candidates = vec![cooling, ready];
+    let mut context = context(RotationStrategy::Smart);
+    context.now = now;
+    context.policy = AccountSelectionPolicy::new(
+        RotationStrategy::Smart,
+        NonZeroU32::new(3).expect("positive"),
+        Duration::from_millis(10),
+    );
+    let selected = AccountSelector
+        .select(&candidates, &context)
+        .expect("candidate available");
+
+    assert_eq!(selected.account.id().as_str(), "acct_ready");
+}
+
+#[test]
+fn sticky_selector_should_fall_back_when_requested_account_is_excluded() {
+    let candidates = vec![
+        candidate("acct_sticky", 0, None),
+        candidate("acct_fallback", 0, None),
+    ];
+    let mut context = context(RotationStrategy::Sticky);
+    let sticky = ProviderAccountId::new("acct_sticky").expect("valid account");
+    context.sticky_account = Some(sticky.clone());
+    context.excluded_accounts.insert(sticky);
+    let selected = AccountSelector
+        .select(&candidates, &context)
+        .expect("fallback candidate available");
+
+    assert_eq!(selected.account.id().as_str(), "acct_fallback");
+}
+
+#[test]
+fn round_robin_selector_should_be_stable_for_unsorted_candidates() {
+    let candidates = vec![
+        candidate("acct_second", 0, None),
+        candidate("acct_first", 0, None),
+    ];
+    let mut context = context(RotationStrategy::RoundRobin);
+    context.round_robin_cursor = 0;
+    let first = AccountSelector
+        .select(&candidates, &context)
+        .expect("first candidate available");
+    context.round_robin_cursor = 1;
+    let second = AccountSelector
+        .select(&candidates, &context)
+        .expect("second candidate available");
+
+    assert_eq!(
+        (first.account.id().as_str(), second.account.id().as_str()),
+        ("acct_first", "acct_second")
+    );
 }
 
 #[test]

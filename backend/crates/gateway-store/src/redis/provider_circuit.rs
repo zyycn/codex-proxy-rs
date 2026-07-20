@@ -5,6 +5,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use gateway_core::engine::execution::{
+    ProviderCircuitDecision as CoreCircuitDecision, ProviderCircuitError, ProviderCircuitPort,
+};
+use gateway_core::routing::ProviderInstanceId;
 use redis::{Script, aio::ConnectionManager};
 
 use crate::{StoreError, StoreResult, redis_unavailable, require_nonempty};
@@ -172,6 +176,48 @@ impl ProviderCircuitRepository for RedisProviderCircuitRepository {
             .await
             .map_err(|_| redis_unavailable("reset provider circuit"))?;
         Ok(())
+    }
+}
+
+impl ProviderCircuitPort for RedisProviderCircuitRepository {
+    fn decision<'a>(
+        &'a self,
+        provider_instance_id: &'a ProviderInstanceId,
+    ) -> futures::future::BoxFuture<'a, Result<CoreCircuitDecision, ProviderCircuitError>> {
+        Box::pin(async move {
+            self.provider_circuit_decision(provider_instance_id.as_str())
+                .await
+                .map(|decision| match decision {
+                    ProviderCircuitDecision::Allow => CoreCircuitDecision::Allow,
+                    ProviderCircuitDecision::BlockedUntil(until) => {
+                        CoreCircuitDecision::BlockedUntil(until.into())
+                    }
+                })
+                .map_err(|_| ProviderCircuitError)
+        })
+    }
+
+    fn observe_failure<'a>(
+        &'a self,
+        provider_instance_id: &'a ProviderInstanceId,
+    ) -> futures::future::BoxFuture<'a, Result<(), ProviderCircuitError>> {
+        Box::pin(async move {
+            self.observe_provider_failure(provider_instance_id.as_str())
+                .await
+                .map(|_| ())
+                .map_err(|_| ProviderCircuitError)
+        })
+    }
+
+    fn observe_success<'a>(
+        &'a self,
+        provider_instance_id: &'a ProviderInstanceId,
+    ) -> futures::future::BoxFuture<'a, Result<(), ProviderCircuitError>> {
+        Box::pin(async move {
+            self.observe_provider_success(provider_instance_id.as_str())
+                .await
+                .map_err(|_| ProviderCircuitError)
+        })
     }
 }
 

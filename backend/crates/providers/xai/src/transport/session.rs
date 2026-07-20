@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use gateway_core::engine::credential::{
     AccountSelectionPolicy, CredentialRevision, ProviderAccountId,
@@ -167,6 +167,7 @@ pub struct GrokSessionSelection {
     excluded_accounts: BTreeSet<ProviderAccountId>,
     required_account: Option<ProviderAccountId>,
     account_selection_policy: AccountSelectionPolicy,
+    deadline: SystemTime,
 }
 
 impl GrokSessionSelection {
@@ -178,6 +179,7 @@ impl GrokSessionSelection {
         excluded_accounts: BTreeSet<ProviderAccountId>,
         required_account: Option<ProviderAccountId>,
         account_selection_policy: AccountSelectionPolicy,
+        deadline: SystemTime,
     ) -> Self {
         Self {
             provider_instance_id,
@@ -185,6 +187,7 @@ impl GrokSessionSelection {
             excluded_accounts,
             required_account,
             account_selection_policy,
+            deadline,
         }
     }
 
@@ -216,6 +219,12 @@ impl GrokSessionSelection {
     #[must_use]
     pub const fn account_selection_policy(&self) -> AccountSelectionPolicy {
         self.account_selection_policy
+    }
+
+    /// Returns the absolute deadline that bounds the scheduling lease.
+    #[must_use]
+    pub const fn deadline(&self) -> SystemTime {
+        self.deadline
     }
 }
 

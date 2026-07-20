@@ -6,9 +6,9 @@ use async_trait::async_trait;
 use futures::stream;
 
 use gateway_core::engine::provider::{
-    EventStream, Provider, ProviderCallMetadata, ProviderModelCapabilities, ProviderRegistry,
-    ProviderRequest, ProviderResource, ProviderStream, RegistryError, ResourceId,
-    UpstreamTransport,
+    EventStream, Provider, ProviderCallMetadata, ProviderCatalogGeneration,
+    ProviderModelCapabilities, ProviderRegistry, ProviderRequest, ProviderResource, ProviderStream,
+    RegistryError, ResourceId, UpstreamTransport,
 };
 use gateway_core::engine::{AttemptContext, UpstreamSendState};
 use gateway_core::error::{IdentifierError, ProviderError, ProviderErrorKind};
@@ -24,6 +24,10 @@ struct NamedProvider(&'static str);
 impl Provider for NamedProvider {
     fn name(&self) -> &'static str {
         self.0
+    }
+
+    fn catalog_generation(&self) -> ProviderCatalogGeneration {
+        ProviderCatalogGeneration::default()
     }
 
     async fn query_model_capabilities(

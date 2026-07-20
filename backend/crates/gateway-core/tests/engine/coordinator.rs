@@ -10,24 +10,31 @@ use futures::executor::block_on;
 
 use gateway_core::accounting::{CalculatedCost, CostSource, ProviderReportedCost, Usage};
 use gateway_core::engine::continuation::{
-    NativeContinuationPin, NativeContinuationReuse, PreviousResponseId,
+    ContinuationBinding, NativeContinuationPin, NativeContinuationReuse, PreviousResponseId,
 };
 use gateway_core::engine::credential::{
     AccountSelectionPolicy, CredentialRevision, ProviderAccountId, RotationStrategy,
 };
 use gateway_core::engine::provider::{
-    Provider, ProviderCallMetadata, ProviderModelCapabilities, ProviderRegistry, ProviderRequest,
-    ProviderResource, ProviderStream, UpstreamTransport,
+    Provider, ProviderCallMetadata, ProviderCatalogGeneration, ProviderModelCapabilities,
+    ProviderRegistry, ProviderRequest, ProviderResource, ProviderStream, UpstreamTransport,
 };
 use gateway_core::engine::{
     AttemptContext, AttemptCoordinator, AttemptRecord, CancellationToken, CommitRequirement,
-    ExecutionOutcome, ExecutionStore, GatewayEngine, IntermediateFailure, ModelRequestFinalization,
-    ModelRequestId, NewModelRequest, ProviderAttemptOutcome, RecoveryReport, UpstreamSendState,
+    ContinuationAttempt, ExecutionOutcome, ExecutionStore, GatewayEngine, IntermediateFailure,
+    ModelRequestFinalization, ModelRequestId, NewModelRequest, ProviderAttemptOutcome,
+    RecoveryReport, UpstreamSendState,
 };
-use gateway_core::error::{ProviderError, ProviderErrorKind, SafeUpstreamValue, StoreError};
-use gateway_core::event::{GatewayEvent, ResponseMeta};
+use gateway_core::error::{
+    ContinuationFailure, ProviderError, ProviderErrorKind, SafeUpstreamValue, StoreError,
+};
+use gateway_core::event::{
+    GatewayEvent, ProtocolWireEvent, ProviderEvent, ProviderResponseObservation,
+    ProviderResponseTimings, ResponseMeta, UpstreamHttpVersion,
+};
 use gateway_core::operation::{
-    ContentPart, GenerateRequest, Message, MessageRole, Operation, OperationKind, RetrySafety,
+    ContentPart, GenerateRequest, Message, MessageRole, Operation, OperationKind,
+    ProviderSessionState, RetrySafety,
 };
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::{
@@ -35,6 +42,7 @@ use gateway_core::routing::{
     ProviderKind, ProviderModel, PublicModelId, RoutingContext, RoutingPlan, RuntimeSnapshot,
     UpstreamModelId,
 };
+use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FinalState {
@@ -49,6 +57,14 @@ struct FinalState {
     latency_ms: Option<u64>,
     client_response_id: Option<String>,
     upstream_response_id: Option<String>,
+    upstream_transport: Option<String>,
+    http_version: Option<String>,
+    upstream_request_id: Option<String>,
+    upstream_status_code: Option<u16>,
+    transport_decision_wait_ms: Option<u64>,
+    connect_ms: Option<u64>,
+    headers_ms: Option<u64>,
+    first_event_ms: Option<u64>,
     cost_source: CostSource,
     cost_ticks: Option<u128>,
 }
@@ -62,6 +78,8 @@ struct StoreState {
     committed_statuses: Vec<Option<u16>>,
     recorded_statuses: Vec<u16>,
     intermediate_failures: usize,
+    intermediate_status_codes: Vec<Option<u16>>,
+    intermediate_request_ids: Vec<Option<String>>,
     finalizations: Vec<FinalState>,
 }
 
@@ -126,9 +144,16 @@ impl ExecutionStore for FakeStore {
 
     async fn record_intermediate_failure(
         &self,
-        _failure: IntermediateFailure,
+        failure: IntermediateFailure,
     ) -> Result<(), StoreError> {
-        self.state.lock().expect("store lock").intermediate_failures += 1;
+        let mut state = self.state.lock().expect("store lock");
+        state.intermediate_failures += 1;
+        state
+            .intermediate_status_codes
+            .push(failure.upstream_status_code);
+        state
+            .intermediate_request_ids
+            .push(failure.upstream_request_id);
         Ok(())
     }
 
@@ -152,6 +177,14 @@ impl ExecutionStore for FakeStore {
                 latency_ms: finalization.timings.latency_ms,
                 client_response_id: finalization.client_response_id,
                 upstream_response_id: finalization.upstream_response_id,
+                upstream_transport: finalization.upstream_transport,
+                http_version: finalization.http_version,
+                upstream_request_id: finalization.upstream_request_id,
+                upstream_status_code: finalization.upstream_status_code,
+                transport_decision_wait_ms: finalization.timings.transport_decision_wait_ms,
+                connect_ms: finalization.timings.connect_ms,
+                headers_ms: finalization.timings.headers_ms,
+                first_event_ms: finalization.timings.first_event_ms,
                 cost_source: finalization.cost.source(),
                 cost_ticks: finalization
                     .cost
@@ -170,6 +203,10 @@ enum Script {
     Stream {
         account_id: &'static str,
         items: Vec<Result<GatewayEvent, ProviderError>>,
+    },
+    ObservedStream {
+        account_id: &'static str,
+        items: Vec<Result<ProviderEvent, ProviderError>>,
     },
     Error(ProviderError),
 }
@@ -192,6 +229,10 @@ impl ScriptedProvider {
 impl Provider for ScriptedProvider {
     fn name(&self) -> &'static str {
         "openai"
+    }
+
+    fn catalog_generation(&self) -> ProviderCatalogGeneration {
+        ProviderCatalogGeneration::default()
     }
 
     async fn query_model_capabilities(
@@ -229,6 +270,28 @@ impl Provider for ScriptedProvider {
                 )
                 .with_upstream_request_id(
                     SafeUpstreamValue::new("upstream-request").expect("safe request id"),
+                );
+                Ok(ProviderStream::new(
+                    metadata,
+                    Box::pin(futures::stream::iter(
+                        items
+                            .into_iter()
+                            .map(|event| event.map(ProviderEvent::from)),
+                    )),
+                    (),
+                ))
+            }
+            Script::ObservedStream { account_id, items } => {
+                let candidate = request.candidate();
+                let metadata = ProviderCallMetadata::new(
+                    candidate.provider().clone(),
+                    candidate.instance().clone(),
+                    candidate.upstream_model().clone(),
+                    ProviderResource::Account {
+                        id: ProviderAccountId::new(account_id).expect("account id"),
+                        revision: CredentialRevision::new(1).expect("revision"),
+                    },
+                    UpstreamTransport::new("websocket").expect("planned transport"),
                 );
                 Ok(ProviderStream::new(
                     metadata,
@@ -366,7 +429,7 @@ fn coordinator(
 
 fn terminal_non_idempotent_failure(
     items: Vec<Result<GatewayEvent, ProviderError>>,
-    continuation: Option<NativeContinuationPin>,
+    continuation: Option<ContinuationBinding>,
 ) -> (Arc<FakeStore>, Arc<ScriptedProvider>) {
     let operation = operation(RetrySafety::NonIdempotent);
     let route_plan = plan(&operation, 2, 1);
@@ -417,11 +480,11 @@ fn success_updates_one_model_request_and_persists_usage() {
     .expect("start execution");
     let events = block_on(session.collect_uncommitted()).expect("collect response");
     assert_eq!(events.len(), 3);
-    let started_id = match &events[0] {
+    let started_id = match &events[0].canonical_facts()[0] {
         GatewayEvent::Started(metadata) => metadata.response_id(),
         event => panic!("unexpected first event: {event:?}"),
     };
-    let completed_id = match &events[2] {
+    let completed_id = match &events[2].canonical_facts()[0] {
         GatewayEvent::Completed(metadata) => metadata.response_id(),
         event => panic!("unexpected final event: {event:?}"),
     };
@@ -456,6 +519,188 @@ fn success_updates_one_model_request_and_persists_usage() {
     assert_eq!(
         finalization.upstream_response_id.as_deref(),
         Some("response-1")
+    );
+}
+
+#[test]
+fn response_observation_is_persisted_but_never_delivered() {
+    let operation = operation(RetrySafety::Idempotent);
+    let route_plan = plan(&operation, 1, 1);
+    let observation = ProviderResponseObservation::new(
+        UpstreamTransport::new("http_sse").expect("actual transport"),
+    )
+    .with_http_version(UpstreamHttpVersion::Http2)
+    .with_status_code(200)
+    .with_request_id(SafeUpstreamValue::new("upstream-observed").expect("request id"))
+    .with_timings(ProviderResponseTimings {
+        transport_decision_wait_ms: Some(7),
+        connect_ms: Some(11),
+        headers_ms: Some(13),
+        first_event_ms: Some(17),
+    });
+    let mut items = vec![Ok(ProviderEvent::observation(observation))];
+    items.extend(
+        complete_stream(Some(21))
+            .into_iter()
+            .map(|event| event.map(ProviderEvent::canonical)),
+    );
+    let (coordinator, store, _) = coordinator(vec![Script::ObservedStream {
+        account_id: "acct_observed",
+        items,
+    }]);
+    let mut session = block_on(coordinator.start(
+        model_request(SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+
+    let events = block_on(session.collect_uncommitted()).expect("collect response");
+    assert_eq!(events.len(), 3);
+    block_on(session.commit_downstream(Some(200))).expect("commit response");
+
+    let state = store.state.lock().expect("store lock");
+    let finalization = &state.finalizations[0];
+    assert_eq!(finalization.upstream_transport.as_deref(), Some("http_sse"));
+    assert_eq!(finalization.http_version.as_deref(), Some("HTTP/2"));
+    assert_eq!(
+        finalization.upstream_request_id.as_deref(),
+        Some("upstream-observed")
+    );
+    assert_eq!(finalization.upstream_status_code, Some(200));
+    assert_eq!(finalization.transport_decision_wait_ms, Some(7));
+    assert_eq!(finalization.connect_ms, Some(11));
+    assert_eq!(finalization.headers_ms, Some(13));
+    assert_eq!(finalization.first_event_ms, Some(17));
+}
+
+#[test]
+fn unknown_wire_event_before_response_identity_is_discarded_with_retried_attempt() {
+    let operation = operation(RetrySafety::Idempotent);
+    let route_plan = plan(&operation, 2, 1);
+    let unknown = ProtocolWireEvent::json(
+        "openai",
+        Some("response.future_event".to_owned()),
+        serde_json::json!({"type": "response.future_event", "opaque": true}),
+    )
+    .expect("wire event");
+    let (coordinator, store, provider) = coordinator(vec![
+        Script::ObservedStream {
+            account_id: "acct_first",
+            items: vec![
+                Ok(ProviderEvent::wire(unknown)),
+                Err(ProviderError::new(
+                    ProviderErrorKind::Unavailable,
+                    UpstreamSendState::Sent,
+                )),
+            ],
+        },
+        Script::Stream {
+            account_id: "acct_second",
+            items: complete_stream(None),
+        },
+    ]);
+    let mut session = block_on(coordinator.start(
+        model_request(SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+
+    block_on(session.collect_uncommitted()).expect("retry response");
+    block_on(session.commit_downstream(Some(200))).expect("commit winning response");
+
+    assert_eq!(provider.contexts.lock().expect("contexts lock").len(), 2);
+    assert!(provider.scripts.lock().expect("scripts lock").is_empty());
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.intermediate_failures, 1);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
+}
+
+#[test]
+fn discarded_attempt_observation_does_not_leak_into_retry_result() {
+    let operation = operation(RetrySafety::Idempotent);
+    let route_plan = plan(&operation, 2, 1);
+    let first_observation = ProviderResponseObservation::new(
+        UpstreamTransport::new("websocket").expect("first transport"),
+    )
+    .with_http_version(UpstreamHttpVersion::Http11)
+    .with_status_code(503)
+    .with_request_id(SafeUpstreamValue::new("discarded-request").expect("request id"))
+    .with_timings(ProviderResponseTimings {
+        transport_decision_wait_ms: Some(7),
+        connect_ms: Some(11),
+        headers_ms: Some(13),
+        first_event_ms: Some(987_654),
+    });
+    let second_observation = ProviderResponseObservation::new(
+        UpstreamTransport::new("http_sse").expect("second transport"),
+    )
+    .with_http_version(UpstreamHttpVersion::Http2)
+    .with_status_code(200)
+    .with_request_id(SafeUpstreamValue::new("winning-request").expect("request id"));
+    let mut second_items = vec![Ok(ProviderEvent::observation(second_observation))];
+    second_items.extend(
+        complete_stream(None)
+            .into_iter()
+            .map(|event| event.map(ProviderEvent::canonical)),
+    );
+    let (coordinator, store, _) = coordinator(vec![
+        Script::ObservedStream {
+            account_id: "acct_first",
+            items: vec![
+                Ok(ProviderEvent::observation(first_observation)),
+                Err(
+                    ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::Sent)
+                        .with_replay_safe(),
+                ),
+            ],
+        },
+        Script::ObservedStream {
+            account_id: "acct_second",
+            items: second_items,
+        },
+    ]);
+    let mut session = block_on(coordinator.start(
+        model_request(SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+
+    block_on(session.collect_uncommitted()).expect("retry response");
+    block_on(session.commit_downstream(Some(200))).expect("commit response");
+
+    let state = store.state.lock().expect("store lock");
+    let finalization = &state.finalizations[0];
+    assert_eq!(finalization.upstream_transport.as_deref(), Some("http_sse"));
+    assert_eq!(finalization.http_version.as_deref(), Some("HTTP/2"));
+    assert_eq!(
+        finalization.upstream_request_id.as_deref(),
+        Some("winning-request")
+    );
+    assert_eq!(finalization.upstream_status_code, Some(200));
+    assert_eq!(finalization.transport_decision_wait_ms, None);
+    assert_eq!(finalization.connect_ms, None);
+    assert_eq!(finalization.headers_ms, None);
+    assert!(
+        finalization
+            .first_event_ms
+            .is_some_and(|elapsed| elapsed < 987_654)
+    );
+    assert_eq!(state.intermediate_status_codes, vec![Some(503)]);
+    assert_eq!(
+        state.intermediate_request_ids,
+        vec![Some("discarded-request".to_owned())]
     );
 }
 
@@ -507,7 +752,7 @@ fn authenticated_native_continuation_reaches_every_attempt_context() {
         operation,
         route_plan,
         None,
-        Some(continuation),
+        Some(ContinuationBinding::Pinned(continuation)),
         CancellationToken::new(),
     ))
     .expect("start execution");
@@ -519,6 +764,8 @@ fn authenticated_native_continuation_reaches_every_attempt_context() {
         contexts[0]
             .continuation()
             .expect("continuation")
+            .pinned()
+            .expect("pinned continuation")
             .previous_response_id()
             .as_str(),
         "previous-secret-id"
@@ -527,9 +774,100 @@ fn authenticated_native_continuation_reaches_every_attempt_context() {
         contexts[0]
             .continuation()
             .expect("continuation")
+            .pinned()
+            .expect("pinned continuation")
             .upstream_response_id()
             .as_str(),
         "provider-native-id"
+    );
+    let owner = contexts[0]
+        .account_state_owner()
+        .expect("continuation account-state owner");
+    assert!(owner.matches(
+        &ProviderKind::new("openai").expect("provider"),
+        &ProviderInstanceId::new("inst_openai_1").expect("instance"),
+        &ProviderAccountId::new("acct_one").expect("account"),
+    ));
+}
+
+#[test]
+fn native_continuation_replays_owner_before_safely_switching_account() {
+    let Operation::Generate(generate) = operation(RetrySafety::Idempotent) else {
+        panic!("generate operation");
+    };
+    let mut payload = Map::new();
+    payload.insert("transcript".to_owned(), Value::Array(Vec::new()));
+    let operation = Operation::Generate(generate.with_provider_session_state(
+        ProviderSessionState::new("openai", payload).expect("provider session state"),
+    ));
+    let route_plan = plan(&operation, 3, 1);
+    let (coordinator, _, provider) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_one",
+            items: vec![
+                Ok(GatewayEvent::Started(ResponseMeta::new(
+                    "response-native",
+                    "gpt-5",
+                ))),
+                Err(
+                    ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::Sent)
+                        .with_continuation_failure(ContinuationFailure::HistoryUnavailable)
+                        .with_replay_safe(),
+                ),
+            ],
+        },
+        Script::Stream {
+            account_id: "acct_one",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::Transport,
+                UpstreamSendState::NotSent,
+            )
+            .with_replay_safe())],
+        },
+        Script::Stream {
+            account_id: "acct_two",
+            items: complete_stream(None),
+        },
+    ]);
+    let continuation = NativeContinuationPin::new(
+        PreviousResponseId::new("previous-secret-id").expect("previous response"),
+        SafeUpstreamValue::new("provider-native-id").expect("upstream response"),
+        ProviderKind::new("openai").expect("provider"),
+        ProviderInstanceId::new("inst_openai_1").expect("instance"),
+        ProviderAccountId::new("acct_one").expect("account"),
+        NativeContinuationReuse::Reusable,
+    );
+
+    let mut session = block_on(coordinator.start(
+        model_request(SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        Some(ContinuationBinding::Pinned(continuation)),
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+    block_on(session.collect_uncommitted()).expect("portable replay succeeds");
+    block_on(session.commit_downstream(Some(200))).expect("commit response");
+
+    let contexts = provider.contexts.lock().expect("contexts lock");
+    assert_eq!(contexts.len(), 3);
+    assert_eq!(
+        contexts[0].continuation_attempt(),
+        ContinuationAttempt::Native
+    );
+    assert_eq!(
+        contexts[1].continuation_attempt(),
+        ContinuationAttempt::ReplayOwner
+    );
+    assert_eq!(
+        contexts[2].continuation_attempt(),
+        ContinuationAttempt::ReplayAny
+    );
+    assert!(
+        contexts[2]
+            .excluded_accounts()
+            .contains(&ProviderAccountId::new("acct_one").expect("account"))
     );
 }
 
@@ -941,6 +1279,16 @@ fn pre_commit_failure_excludes_account_and_retries_same_target() {
 
     let contexts = provider.contexts.lock().expect("contexts lock");
     assert_eq!(contexts.len(), 2);
+    assert!(contexts[0].account_state_owner().is_none());
+    assert!(
+        contexts[1]
+            .account_state_owner()
+            .is_some_and(|owner| owner.matches(
+                &ProviderKind::new("openai").expect("provider"),
+                &ProviderInstanceId::new("inst_openai_1").expect("instance"),
+                &ProviderAccountId::new("acct_first").expect("account"),
+            ))
+    );
     assert!(
         contexts[1]
             .excluded_accounts()
@@ -1038,25 +1386,47 @@ fn explicit_429_with_ambiguous_send_state_is_not_retried() {
 }
 
 #[test]
-fn explicit_429_after_canonical_event_is_not_retried() {
-    let (store, provider) = terminal_non_idempotent_failure(
-        vec![
-            Ok(GatewayEvent::Started(ResponseMeta::new(
-                "response-started",
-                "gpt-5",
-            ))),
-            Err(
-                ProviderError::new(ProviderErrorKind::RateLimited, UpstreamSendState::Sent)
-                    .with_status(429)
-                    .with_replay_safe(),
-            ),
-        ],
+fn explicit_429_after_structural_event_should_retry_before_commit() {
+    let operation = operation(RetrySafety::NonIdempotent);
+    let route_plan = plan(&operation, 2, 1);
+    let (coordinator, store, provider) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_first",
+            items: vec![
+                Ok(GatewayEvent::Started(ResponseMeta::new(
+                    "response-started",
+                    "gpt-5",
+                ))),
+                Err(
+                    ProviderError::new(ProviderErrorKind::RateLimited, UpstreamSendState::Sent)
+                        .with_status(429)
+                        .with_replay_safe(),
+                ),
+            ],
+        },
+        Script::Stream {
+            account_id: "acct_second",
+            items: complete_stream(None),
+        },
+    ]);
+    let mut session = block_on(coordinator.start(
+        model_request(SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
         None,
-    );
-    assert_eq!(provider.contexts.lock().expect("contexts lock").len(), 1);
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+
+    block_on(session.collect_uncommitted()).expect("second account succeeds");
+    block_on(session.commit_downstream(Some(200))).expect("commit response");
+
+    assert_eq!(provider.contexts.lock().expect("contexts lock").len(), 2);
     let state = store.state.lock().expect("store lock");
-    assert_eq!(state.attempts.len(), 1);
-    assert_eq!(state.intermediate_failures, 0);
+    assert_eq!(state.attempts.len(), 2);
+    assert_eq!(state.intermediate_failures, 1);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
 }
 
 #[test]
@@ -1076,9 +1446,34 @@ fn native_continuation_explicit_429_is_not_retried() {
         )
         .with_status(429)
         .with_replay_safe())],
+        Some(ContinuationBinding::Pinned(continuation)),
+    );
+    assert_eq!(provider.contexts.lock().expect("contexts lock").len(), 1);
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.attempts.len(), 1);
+    assert_eq!(state.intermediate_failures, 0);
+}
+
+#[test]
+fn external_continuation_explicit_429_is_not_retried() {
+    let continuation = ContinuationBinding::External(
+        PreviousResponseId::new("external-provider-response").expect("previous response"),
+    );
+    let (store, provider) = terminal_non_idempotent_failure(
+        vec![Err(ProviderError::new(
+            ProviderErrorKind::RateLimited,
+            UpstreamSendState::Sent,
+        )
+        .with_status(429)
+        .with_replay_safe())],
         Some(continuation),
     );
     assert_eq!(provider.contexts.lock().expect("contexts lock").len(), 1);
+    assert!(
+        provider.contexts.lock().expect("contexts lock")[0]
+            .account_state_owner()
+            .is_none()
+    );
     let state = store.state.lock().expect("store lock");
     assert_eq!(state.attempts.len(), 1);
     assert_eq!(state.intermediate_failures, 0);
@@ -1111,7 +1506,10 @@ fn non_idempotent_not_sent_failure_can_fallback_target() {
     block_on(session.collect_uncommitted()).expect("safe instance fallback succeeds");
     block_on(session.commit_downstream(Some(200))).expect("commit response");
 
-    assert_eq!(provider.contexts.lock().expect("contexts lock").len(), 2);
+    let contexts = provider.contexts.lock().expect("contexts lock");
+    assert_eq!(contexts.len(), 2);
+    assert!(contexts[0].account_state_owner().is_none());
+    assert!(contexts[1].account_state_owner().is_none());
     let state = store.state.lock().expect("store lock");
     assert_eq!(state.attempts.len(), 1);
     assert_eq!(
@@ -1167,7 +1565,7 @@ fn ambiguous_send_state_stops_retry() {
 }
 
 #[test]
-fn failure_after_first_event_is_incomplete_and_never_retried() {
+fn structural_event_before_replay_safe_failure_should_switch_account_before_commit() {
     let operation = operation(RetrySafety::Idempotent);
     let route_plan = plan(&operation, 2, 1);
     let (coordinator, store, provider) = coordinator(vec![
@@ -1178,10 +1576,10 @@ fn failure_after_first_event_is_incomplete_and_never_retried() {
                     "response-1",
                     "gpt-5",
                 ))),
-                Err(ProviderError::new(
-                    ProviderErrorKind::Transport,
-                    UpstreamSendState::Sent,
-                )),
+                Err(
+                    ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::Sent)
+                        .with_replay_safe(),
+                ),
             ],
         },
         Script::Stream {
@@ -1206,13 +1604,9 @@ fn failure_after_first_event_is_incomplete_and_never_retried() {
         first.commit_requirement(),
         CommitRequirement::CommitBeforeDelivery
     );
+    assert_eq!(first.into_provider_events().len(), 1);
     block_on(session.commit_downstream(Some(200))).expect("commit first event");
-    let error = block_on(session.next_event()).expect_err("committed stream failure is terminal");
-
-    assert!(matches!(
-        error,
-        gateway_core::engine::EngineError::Provider(_)
-    ));
+    block_on(session.next_event()).expect_err("committed stream failure must not be replayed");
     assert_eq!(
         session.provider_attempt_outcomes(),
         &[ProviderAttemptOutcome::Failed {

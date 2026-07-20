@@ -15,16 +15,16 @@ use crate::engine::{AttemptContext, UpstreamSendState};
 use crate::error::{
     IdentifierError, ProviderError, ProviderErrorKind, SafeUpstreamValue, validate_text,
 };
-use crate::event::{EventSequenceValidator, GatewayEvent};
+use crate::event::{EventSequenceValidator, ProviderEvent};
 use crate::operation::Operation;
 use crate::routing::{
     ModelCapabilities, ProviderCandidate, ProviderInstance, ProviderInstanceId, ProviderKind,
     UpstreamModelId,
 };
 
-/// Box 只出现在 Provider Registry 的 event stream 边界。
+/// Box 只出现在 Provider Registry 的统一 event envelope 边界。
 pub type EventStream =
-    Pin<Box<dyn Stream<Item = Result<GatewayEvent, ProviderError>> + Send + 'static>>;
+    Pin<Box<dyn Stream<Item = Result<ProviderEvent, ProviderError>> + Send + 'static>>;
 
 /// 匿名 credential/resource 引用。
 ///
@@ -235,14 +235,13 @@ pub struct ProviderStream {
 impl ProviderStream {
     /// 组装一次、且仅一次可见上游调用。
     #[must_use]
-    pub fn new(
-        metadata: ProviderCallMetadata,
-        events: EventStream,
-        lease: impl ResourceLease,
-    ) -> Self {
+    pub fn new<S>(metadata: ProviderCallMetadata, events: S, lease: impl ResourceLease) -> Self
+    where
+        S: Stream<Item = Result<ProviderEvent, ProviderError>> + Send + 'static,
+    {
         Self {
             metadata,
-            events,
+            events: Box::pin(events),
             _lease: Box::new(lease),
             validator: EventSequenceValidator::new(),
             terminated: false,
@@ -257,7 +256,7 @@ impl ProviderStream {
 }
 
 impl Stream for ProviderStream {
-    type Item = Result<GatewayEvent, ProviderError>;
+    type Item = Result<ProviderEvent, ProviderError>;
 
     fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
@@ -267,16 +266,18 @@ impl Stream for ProviderStream {
 
         match this.events.as_mut().poll_next(context) {
             Poll::Pending => Poll::Pending,
-            Poll::Ready(Some(Ok(event))) => match this.validator.observe(&event) {
-                Ok(()) => Poll::Ready(Some(Ok(event))),
-                Err(_) => {
-                    this.terminated = true;
-                    Poll::Ready(Some(Err(ProviderError::new(
-                        ProviderErrorKind::Protocol,
-                        UpstreamSendState::Sent,
-                    ))))
+            Poll::Ready(Some(Ok(event))) => {
+                for fact in event.canonical_facts() {
+                    if this.validator.observe(fact).is_err() {
+                        this.terminated = true;
+                        return Poll::Ready(Some(Err(ProviderError::new(
+                            ProviderErrorKind::Protocol,
+                            UpstreamSendState::Sent,
+                        ))));
+                    }
                 }
-            },
+                Poll::Ready(Some(Ok(event)))
+            }
             Poll::Ready(Some(Err(error))) => {
                 this.terminated = true;
                 Poll::Ready(Some(Err(error)))
@@ -302,11 +303,38 @@ pub struct ProviderRequest {
     candidate: ProviderCandidate,
 }
 
+/// Provider 对公共观测表可解释的请求语义；未知字段保持空值。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProviderRequestObservation {
+    pub reasoning_preset: Option<String>,
+    pub request_kind: Option<String>,
+    pub subagent_kind: Option<String>,
+    pub compact: bool,
+}
+
 /// Provider 实时目录编译后的单模型能力。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderModelCapabilities {
     upstream_model: UpstreamModelId,
     capabilities: ModelCapabilities,
+}
+
+/// Provider 实时目录成功发布后的进程内单调代次。
+///
+/// 代次只表达“目录内容已经变化”，不承载模型、ETag 或 Provider 私有数据。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ProviderCatalogGeneration(u64);
+
+impl ProviderCatalogGeneration {
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
 }
 
 impl ProviderModelCapabilities {
@@ -373,6 +401,14 @@ impl fmt::Debug for ProviderRequest {
 pub trait Provider: Send + Sync {
     /// 返回编译期注册名称。
     fn name(&self) -> &'static str;
+
+    /// 返回当前进程已经成功发布的目录代次。
+    fn catalog_generation(&self) -> ProviderCatalogGeneration;
+
+    /// 解释 Provider 差异化观测字段；不参与路由和传输。
+    fn request_observation(&self, _operation: &Operation) -> ProviderRequestObservation {
+        ProviderRequestObservation::default()
+    }
 
     /// 查询 instance 的实时模型目录，并由 Provider 自己编译能力事实。
     ///
@@ -466,6 +502,17 @@ pub struct ProviderRegistry {
 }
 
 impl ProviderRegistry {
+    /// 从一组异构 Provider 构造冻结注册表。
+    pub fn new(
+        providers: impl IntoIterator<Item = Arc<dyn Provider>>,
+    ) -> Result<Self, RegistryError> {
+        let mut builder = ProviderRegistryBuilder::new();
+        for provider in providers {
+            builder.register(provider)?;
+        }
+        Ok(builder.build())
+    }
+
     /// 创建 builder。
     #[must_use]
     pub const fn builder() -> ProviderRegistryBuilder {
@@ -476,6 +523,28 @@ impl ProviderRegistry {
     #[must_use]
     pub fn get(&self, provider: &ProviderKind) -> Option<&Arc<dyn Provider>> {
         self.providers.get(provider)
+    }
+
+    #[must_use]
+    pub fn request_observation(
+        &self,
+        provider: &ProviderKind,
+        operation: &Operation,
+    ) -> ProviderRequestObservation {
+        self.providers
+            .get(provider)
+            .map_or_else(ProviderRequestObservation::default, |registered| {
+                registered.request_observation(operation)
+            })
+    }
+
+    /// 读取全部 Provider 的目录代次，用于 Core 快照稳定性校验与对账。
+    #[must_use]
+    pub fn catalog_generations(&self) -> BTreeMap<ProviderKind, ProviderCatalogGeneration> {
+        self.providers
+            .iter()
+            .map(|(kind, provider)| (kind.clone(), provider.catalog_generation()))
+            .collect()
     }
 
     /// 通过编译期 Provider adapter 查询并编译 instance 的实时能力目录。

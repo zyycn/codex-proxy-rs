@@ -29,15 +29,16 @@ impl fmt::Debug for CodexOAuthSecret {
     }
 }
 
-/// 已由官方 JWT/OIDC 验证器确认的账号投影。
+/// 已由官方 JWT/OIDC 与认证 usage 响应共同确认的完整账号投影。
 #[derive(Clone)]
 pub struct CodexAccountProfile {
     pub email: Option<String>,
+    pub oauth_subject: String,
+    pub poid: Option<String>,
     pub chatgpt_account_id: String,
-    pub chatgpt_user_id: Option<String>,
+    pub chatgpt_user_id: String,
     pub plan_type: Option<String>,
     pub access_token_expires_at: Option<DateTime<Utc>>,
-    pub next_refresh_at: Option<DateTime<Utc>>,
 }
 
 impl fmt::Debug for CodexAccountProfile {
@@ -45,14 +46,30 @@ impl fmt::Debug for CodexAccountProfile {
         formatter
             .debug_struct("CodexAccountProfile")
             .field("email", &self.email.as_ref().map(|_| "<redacted>"))
+            .field("oauth_subject", &"<redacted>")
+            .field("poid", &self.poid.as_ref().map(|_| "<redacted>"))
             .field("chatgpt_account_id", &"<redacted>")
-            .field(
-                "chatgpt_user_id",
-                &self.chatgpt_user_id.as_ref().map(|_| "<redacted>"),
-            )
+            .field("chatgpt_user_id", &"<redacted>")
             .field("plan_type", &self.plan_type)
             .field("access_token_expires_at", &self.access_token_expires_at)
-            .field("next_refresh_at", &self.next_refresh_at)
+            .finish()
+    }
+}
+
+/// 持久化在 Provider credential JSON 中的签名认证主体。
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CodexCredentialPrincipal {
+    pub oauth_subject: String,
+    pub poid: Option<String>,
+}
+
+impl fmt::Debug for CodexCredentialPrincipal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CodexCredentialPrincipal")
+            .field("oauth_subject", &"<redacted>")
+            .field("poid", &self.poid.as_ref().map(|_| "<redacted>"))
             .finish()
     }
 }
@@ -89,6 +106,8 @@ impl fmt::Debug for CodexCookie {
 #[serde(deny_unknown_fields)]
 pub struct CodexCredentialData {
     pub schema_version: u32,
+    pub principal: CodexCredentialPrincipal,
+    pub installation_id: String,
     pub access_token: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<String>,
@@ -107,6 +126,8 @@ impl fmt::Debug for CodexCredentialData {
         formatter
             .debug_struct("CodexCredentialData")
             .field("schema_version", &self.schema_version)
+            .field("principal", &self.principal)
+            .field("installation_id", &"<pseudonymous>")
             .field("access_token", &"<redacted>")
             .field(
                 "refresh_token",
@@ -127,6 +148,7 @@ pub struct CreateCodexCredential {
     pub name: String,
     pub secret: CodexOAuthSecret,
     pub account: CodexAccountProfile,
+    pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
 }
 
@@ -139,6 +161,7 @@ impl fmt::Debug for CreateCodexCredential {
             .field("name", &self.name)
             .field("secret", &self.secret)
             .field("account", &self.account)
+            .field("next_refresh_at", &self.next_refresh_at)
             .field("enabled", &self.enabled)
             .finish()
     }
@@ -150,6 +173,7 @@ pub struct RotateCodexCredential {
     pub expected_credential_revision: u64,
     pub secret: CodexOAuthSecret,
     pub verified_account: CodexAccountProfile,
+    pub next_refresh_at: Option<DateTime<Utc>>,
 }
 
 impl fmt::Debug for RotateCodexCredential {
@@ -163,6 +187,7 @@ impl fmt::Debug for RotateCodexCredential {
             )
             .field("secret", &self.secret)
             .field("verified_account", &self.verified_account)
+            .field("next_refresh_at", &self.next_refresh_at)
             .finish()
     }
 }

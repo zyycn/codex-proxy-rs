@@ -1,161 +1,136 @@
-//! OpenAI HTTP adapter 与应用组合根之间的窄端口。
+//! OpenAI wire adapter 到 Core 执行用例的唯一映射。
 
-use std::{future::Future, pin::Pin};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use async_trait::async_trait;
-use gateway_core::{
-    engine::{CommitRequirement, EngineError},
-    error::GatewayError,
-    event::GatewayEvent,
-    routing::PublicModelId,
+use gateway_core::engine::continuation::PreviousResponseId;
+use gateway_core::engine::execution::{
+    AuthenticatedClient, ClientAuthenticationError, ClientTransport, ExecutionRequestMetadata,
+    ExecutionService, StartExecution, StartedExecution,
 };
+use gateway_core::error::{GatewayError, GatewayErrorKind};
+use gateway_core::lifecycle::{ConnectionDraining, ConnectionGuard, ConnectionLifecycle};
+use gateway_core::routing::PublicModelId;
+use uuid::Uuid;
 
-use super::{auth::ClientApiKeyAuthError, responses::DecodedResponsesRequest};
+use super::auth::ClientApiKeyAuthError;
+use super::responses::{ContinuationIntent, DecodedResponsesRequest};
 
-/// 由应用生命周期控制器接管的长连接任务。
-pub type ConnectionTask = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
-
-/// Responses 请求使用的下游传输。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResponsesTransport {
-    /// 普通 HTTP 或 HTTP SSE。
-    Http,
-    /// OpenAI Responses WebSocket。
-    WebSocket,
+/// OpenAI HTTP/WS adapter 共享的 Core 与连接生命周期能力。
+#[derive(Clone)]
+pub(crate) struct OpenAiService {
+    execution: Arc<dyn ExecutionService>,
+    lifecycle: Arc<dyn ConnectionLifecycle>,
 }
 
-/// 一条带下游提交边界的 canonical delivery event。
-pub struct DeliveryEvent {
-    event: GatewayEvent,
-    commit_requirement: CommitRequirement,
-}
-
-impl DeliveryEvent {
-    /// 绑定 canonical event 与 Engine 已冻结的提交要求。
+impl OpenAiService {
     #[must_use]
-    pub const fn new(event: GatewayEvent, commit_requirement: CommitRequirement) -> Self {
-        Self {
-            event,
-            commit_requirement,
-        }
-    }
-
-    /// 拆分 canonical event 与提交要求。
-    #[must_use]
-    pub fn into_parts(self) -> (GatewayEvent, CommitRequirement) {
-        (self.event, self.commit_requirement)
-    }
-}
-
-/// OpenAI response delivery 只依赖的执行会话端口。
-#[async_trait]
-pub trait ResponseExecutionSession: Send + 'static {
-    /// 读取下一条带提交语义的 canonical event。
-    async fn next_delivery_event(&mut self) -> Result<Option<DeliveryEvent>, EngineError>;
-
-    /// 在提交下游前收集完整 canonical event 序列。
-    async fn collect_uncommitted(&mut self) -> Result<Vec<GatewayEvent>, EngineError>;
-
-    /// 原子提交下游 delivery 边界。
-    async fn commit_downstream(
-        &mut self,
-        client_status_code: Option<u16>,
-    ) -> Result<(), EngineError>;
-
-    /// 首字节前失败已经终结后，补写协议 adapter 实际返回的 HTTP 状态。
-    async fn record_client_status(&mut self, client_status_code: u16) -> Result<(), EngineError>;
-
-    /// 返回执行事实是否已经终结。
-    fn is_finalized(&self) -> bool;
-
-    /// 触发请求取消；不得等待清理完成。
-    fn cancel(&self);
-
-    /// 将未完成会话交给应用 runtime 做脱离 HTTP 生命周期的最终清理。
-    fn detach_finalize(self);
-}
-
-/// 已完成认证、请求装配和 logical-request 持久化的执行结果。
-pub struct StartedResponse<S> {
-    request_id: String,
-    session: S,
-    created_at_unix_seconds: u64,
-    streaming: bool,
-}
-
-impl<S> StartedResponse<S> {
-    /// 构造协议 adapter 可消费的执行事实。
-    #[must_use]
-    pub fn new(
-        request_id: String,
-        session: S,
-        created_at_unix_seconds: u64,
-        streaming: bool,
+    pub(crate) const fn new(
+        execution: Arc<dyn ExecutionService>,
+        lifecycle: Arc<dyn ConnectionLifecycle>,
     ) -> Self {
         Self {
-            request_id,
-            session,
-            created_at_unix_seconds,
-            streaming,
+            execution,
+            lifecycle,
         }
     }
 
-    /// 返回 logical request ID。
-    #[must_use]
-    pub fn request_id(&self) -> &str {
-        &self.request_id
-    }
-
-    /// 拆分 handler 编码所需的冻结事实。
-    #[must_use]
-    pub fn into_parts(self) -> (S, u64, bool) {
-        (self.session, self.created_at_unix_seconds, self.streaming)
-    }
-}
-
-/// OpenAI 客户端协议所需的应用服务端口。
-#[async_trait]
-pub trait OpenAiClientService: Clone + Send + Sync + 'static {
-    /// 应用内部的已认证调用方快照。
-    type Client: Clone + Send + Sync + 'static;
-    /// 应用数据面执行会话。
-    type Session: ResponseExecutionSession;
-
-    /// 用明文下游 API key 冻结一次认证快照。
-    fn authenticate(&self, plaintext: &str) -> Result<Self::Client, ClientApiKeyAuthError>;
-
-    /// 返回当前调用方可见的全部公开模型。
-    fn public_models(&self, client: &Self::Client) -> Vec<String>;
-
-    /// 判断调用方是否可访问一个已验证语法的公开模型。
-    fn contains_public_model(&self, client: &Self::Client, model: &PublicModelId) -> bool;
-
-    /// 启动唯一数据面执行路径。
-    async fn start_response(
+    pub(crate) fn authenticate(
         &self,
-        client: Self::Client,
+        plaintext: &str,
+    ) -> Result<AuthenticatedClient, ClientApiKeyAuthError> {
+        self.execution
+            .authenticate(plaintext)
+            .map_err(map_authentication_error)
+    }
+
+    pub(crate) fn public_models(&self, client: &AuthenticatedClient) -> Vec<String> {
+        self.execution
+            .public_models(client)
+            .into_iter()
+            .map(|model| model.as_str().to_owned())
+            .collect()
+    }
+
+    pub(crate) fn contains_public_model(
+        &self,
+        client: &AuthenticatedClient,
+        model: &PublicModelId,
+    ) -> bool {
+        self.execution.contains_public_model(client, model)
+    }
+
+    pub(crate) async fn start_response(
+        &self,
+        client: AuthenticatedClient,
         request: DecodedResponsesRequest,
-        transport: ResponsesTransport,
-    ) -> Result<StartedResponse<Self::Session>, GatewayError>;
+        transport: ClientTransport,
+        endpoint: &'static str,
+    ) -> Result<StartedExecution, GatewayError> {
+        let (operation, metadata) = request.into_parts();
+        let public_model =
+            PublicModelId::new(metadata.public_model().to_owned()).map_err(|_| {
+                GatewayError::new(
+                    GatewayErrorKind::ModelNotFound,
+                    "requested model was not found",
+                )
+            })?;
+        let previous_response_id = match metadata.continuation() {
+            ContinuationIntent::None => None,
+            ContinuationIntent::PreviousResponseId(value) => {
+                Some(PreviousResponseId::new(value.clone()).map_err(|_| {
+                    GatewayError::new(
+                        GatewayErrorKind::InvalidRequest,
+                        "previous_response_id is invalid",
+                    )
+                })?)
+            }
+        };
+        self.execution
+            .start(StartExecution {
+                client,
+                public_model,
+                operation,
+                metadata: ExecutionRequestMetadata {
+                    protocol: "openai".to_owned(),
+                    endpoint: endpoint.to_owned(),
+                    transport,
+                    stream: metadata.stream(),
+                    client_ip: metadata.client_ip(),
+                    user_agent: metadata.user_agent().map(str::to_owned),
+                    previous_response_id,
+                },
+            })
+            .await
+    }
 
-    /// 返回进程是否已停止接收新的长连接。
-    fn is_shutting_down(&self) -> bool;
+    pub(crate) fn try_register_connection(
+        &self,
+    ) -> Result<Box<dyn ConnectionGuard>, ConnectionDraining> {
+        self.lifecycle.try_register()
+    }
 
-    /// 把长连接任务注册到应用生命周期控制器。
-    fn spawn_connection(&self, task: ConnectionTask);
+    #[must_use]
+    pub(crate) fn lifecycle(&self) -> Arc<dyn ConnectionLifecycle> {
+        Arc::clone(&self.lifecycle)
+    }
 
-    /// 分配仅用于诊断的连接 ID。
-    fn next_connection_id(&self) -> String;
-
-    /// 分配在数据面启动前使用的安全请求关联 ID。
-    fn next_request_id(&self) -> String;
+    #[must_use]
+    pub(crate) fn next_request_id(&self) -> String {
+        format!("req_{}", Uuid::now_v7().simple())
+    }
 }
 
-/// Axum state 向协议 router 暴露的唯一组合入口。
-pub trait OpenAiApiState: Clone + Send + Sync + 'static {
-    /// 每个请求获取的轻量服务 adapter。
-    type Service: OpenAiClientService;
+pub(crate) fn created_at_unix_seconds(created_at: SystemTime) -> Result<u64, GatewayError> {
+    created_at
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|_| GatewayError::new(GatewayErrorKind::Internal, "system clock is invalid"))
+}
 
-    /// 返回绑定同一应用服务集合的 OpenAI adapter。
-    fn openai_client_api(&self) -> Self::Service;
+const fn map_authentication_error(error: ClientAuthenticationError) -> ClientApiKeyAuthError {
+    match error {
+        ClientAuthenticationError::InvalidKey => ClientApiKeyAuthError::InvalidKey,
+        ClientAuthenticationError::SnapshotUnavailable => ClientApiKeyAuthError::RuntimeUnavailable,
+    }
 }

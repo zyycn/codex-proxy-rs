@@ -1,8 +1,11 @@
 //! 模型请求生命周期、单行持久化 port 与 commit/send/cancellation 边界。
 
+pub mod admission;
 pub mod continuation;
 pub mod coordinator;
 pub mod credential;
+pub mod execution;
+pub mod probe;
 pub mod provider;
 
 pub use coordinator::{AttemptCoordinator, ResponseExecutionSession};
@@ -20,12 +23,12 @@ use futures::channel::oneshot;
 use thiserror::Error;
 
 use crate::accounting::{CostEstimate, Usage};
-use crate::engine::continuation::NativeContinuationPin;
+use crate::engine::continuation::{ContinuationBinding, NativeContinuationPin};
 use crate::engine::credential::{AccountSelectionPolicy, ProviderAccountId};
 use crate::error::{
     GatewayError, IdentifierError, ProviderError, ProviderErrorKind, StoreError, validate_text,
 };
-use crate::event::GatewayEvent;
+use crate::event::ProviderEvent;
 use crate::operation::OperationKind;
 use crate::policy::ClientApiKeyId;
 use crate::routing::{
@@ -230,25 +233,28 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// 单次 attempt 的账号选择硬约束。
+/// 单次 attempt 的账号选择与账号绑定状态事实。
 ///
 /// `required_account` 只用于管理端 connection test 等必须命中唯一账号的内部请求；
 /// 一旦设置，Core 与 Provider 都不得换号或切换 target。
 #[derive(Debug, Clone, Default)]
-pub struct AccountSelectionConstraints {
+pub struct AccountAttemptContext {
     excluded_accounts: BTreeSet<ProviderAccountId>,
     required_account: Option<ProviderAccountId>,
+    state_owner: Option<ProviderAccountStateOwner>,
 }
 
-impl AccountSelectionConstraints {
+impl AccountAttemptContext {
     #[must_use]
     pub const fn new(
         excluded_accounts: BTreeSet<ProviderAccountId>,
         required_account: Option<ProviderAccountId>,
+        state_owner: Option<ProviderAccountStateOwner>,
     ) -> Self {
         Self {
             excluded_accounts,
             required_account,
+            state_owner,
         }
     }
 
@@ -261,6 +267,84 @@ impl AccountSelectionConstraints {
     pub const fn required_account(&self) -> Option<&ProviderAccountId> {
         self.required_account.as_ref()
     }
+
+    #[must_use]
+    pub const fn state_owner(&self) -> Option<&ProviderAccountStateOwner> {
+        self.state_owner.as_ref()
+    }
+}
+
+/// 请求中 Provider 账号绑定状态的唯一归属。
+///
+/// `turn_state` 等 opaque 状态只能发送给创建它的 Provider、instance 与账号；
+/// Core 在首次真实选号后冻结该事实，Provider 据此决定是否清理跨账号状态。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderAccountStateOwner {
+    provider: ProviderKind,
+    instance: ProviderInstanceId,
+    account: ProviderAccountId,
+}
+
+impl ProviderAccountStateOwner {
+    #[must_use]
+    pub const fn new(
+        provider: ProviderKind,
+        instance: ProviderInstanceId,
+        account: ProviderAccountId,
+    ) -> Self {
+        Self {
+            provider,
+            instance,
+            account,
+        }
+    }
+
+    #[must_use]
+    pub fn from_continuation(pin: &NativeContinuationPin) -> Self {
+        Self::new(
+            pin.provider().clone(),
+            pin.instance().clone(),
+            pin.account().clone(),
+        )
+    }
+
+    #[must_use]
+    pub fn matches(
+        &self,
+        provider: &ProviderKind,
+        instance: &ProviderInstanceId,
+        account: &ProviderAccountId,
+    ) -> bool {
+        self.provider == *provider && self.instance == *instance && self.account == *account
+    }
+
+    #[must_use]
+    pub const fn provider(&self) -> &ProviderKind {
+        &self.provider
+    }
+
+    #[must_use]
+    pub const fn instance(&self) -> &ProviderInstanceId {
+        &self.instance
+    }
+
+    #[must_use]
+    pub const fn account(&self) -> &ProviderAccountId {
+        &self.account
+    }
+}
+
+/// 当前 attempt 对 previous-response 的唯一处理方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContinuationAttempt {
+    /// 没有 previous-response。
+    None,
+    /// 使用 Store 解析出的原生 handle 与账号绑定。
+    Native,
+    /// 在原账号上用完整连接内 transcript 重放。
+    ReplayOwner,
+    /// transcript 已可携带，允许选择其他账号。
+    ReplayAny,
 }
 
 /// Provider 每次执行可见的 request-local context。
@@ -270,8 +354,9 @@ pub struct AttemptContext {
     attempt_index: NonZeroU32,
     deadline: SystemTime,
     account_selection_policy: AccountSelectionPolicy,
-    account_constraints: AccountSelectionConstraints,
-    continuation: Option<NativeContinuationPin>,
+    account: AccountAttemptContext,
+    continuation: Option<ContinuationBinding>,
+    continuation_attempt: ContinuationAttempt,
     cancellation: CancellationToken,
 }
 
@@ -282,19 +367,35 @@ impl AttemptContext {
         attempt_index: NonZeroU32,
         deadline: SystemTime,
         account_selection_policy: AccountSelectionPolicy,
-        account_constraints: AccountSelectionConstraints,
-        continuation: Option<NativeContinuationPin>,
+        account: AccountAttemptContext,
+        continuation: Option<ContinuationBinding>,
         cancellation: CancellationToken,
     ) -> Self {
+        let continuation_attempt = if continuation.is_some() {
+            ContinuationAttempt::Native
+        } else {
+            ContinuationAttempt::None
+        };
         Self {
             request_id,
             attempt_index,
             deadline,
             account_selection_policy,
-            account_constraints,
+            account,
             continuation,
+            continuation_attempt,
             cancellation,
         }
+    }
+
+    /// 覆盖本次 attempt 的 continuation 恢复方式。
+    #[must_use]
+    pub const fn with_continuation_attempt(
+        mut self,
+        continuation_attempt: ContinuationAttempt,
+    ) -> Self {
+        self.continuation_attempt = continuation_attempt;
+        self
     }
 
     #[must_use]
@@ -319,18 +420,28 @@ impl AttemptContext {
 
     #[must_use]
     pub const fn excluded_accounts(&self) -> &BTreeSet<ProviderAccountId> {
-        self.account_constraints.excluded_accounts()
+        self.account.excluded_accounts()
     }
 
     /// 管理端 connection test 等内部请求强制使用的唯一账号。
     #[must_use]
     pub const fn required_account(&self) -> Option<&ProviderAccountId> {
-        self.account_constraints.required_account()
+        self.account.required_account()
     }
 
     #[must_use]
-    pub const fn continuation(&self) -> Option<&NativeContinuationPin> {
+    pub const fn account_state_owner(&self) -> Option<&ProviderAccountStateOwner> {
+        self.account.state_owner()
+    }
+
+    #[must_use]
+    pub const fn continuation(&self) -> Option<&ContinuationBinding> {
         self.continuation.as_ref()
+    }
+
+    #[must_use]
+    pub const fn continuation_attempt(&self) -> ContinuationAttempt {
+        self.continuation_attempt
     }
 
     #[must_use]
@@ -388,6 +499,8 @@ pub struct IntermediateFailure {
     pub provider_kind: ProviderKind,
     pub account_id: Option<ProviderAccountId>,
     pub upstream_model_id: UpstreamModelId,
+    pub upstream_status_code: Option<u16>,
+    pub upstream_request_id: Option<String>,
     pub error: ProviderError,
     pub latency: Duration,
 }
@@ -419,6 +532,8 @@ pub struct ModelRequestFinalization {
     pub upstream_status_code: Option<u16>,
     pub upstream_request_id: Option<String>,
     pub upstream_response_id: Option<String>,
+    pub upstream_transport: Option<String>,
+    pub http_version: Option<String>,
     pub error: Option<GatewayError>,
     pub provider_error_code: Option<String>,
     pub retry_after_ms: Option<u64>,
@@ -476,17 +591,35 @@ pub enum CommitRequirement {
 
 #[derive(Debug)]
 pub struct CoordinatedEvent {
-    event: GatewayEvent,
+    events: Vec<ProviderEvent>,
     commit_requirement: CommitRequirement,
 }
 
 impl CoordinatedEvent {
     #[must_use]
-    pub const fn new(event: GatewayEvent, commit_requirement: CommitRequirement) -> Self {
+    pub fn single(event: ProviderEvent, commit_requirement: CommitRequirement) -> Self {
         Self {
-            event,
+            events: vec![event],
             commit_requirement,
         }
+    }
+
+    /// 创建一个必须在同一下游提交边界内按序编码的事件批次。
+    ///
+    /// # Errors
+    ///
+    /// 空批次无法建立交付边界。
+    pub fn try_batch(
+        events: Vec<ProviderEvent>,
+        commit_requirement: CommitRequirement,
+    ) -> Result<Self, EngineError> {
+        if events.is_empty() {
+            return Err(EngineError::InvalidDeliveryState);
+        }
+        Ok(Self {
+            events,
+            commit_requirement,
+        })
     }
 
     #[must_use]
@@ -495,8 +628,8 @@ impl CoordinatedEvent {
     }
 
     #[must_use]
-    pub fn into_event(self) -> GatewayEvent {
-        self.event
+    pub fn into_provider_events(self) -> Vec<ProviderEvent> {
+        self.events
     }
 }
 
@@ -527,12 +660,12 @@ pub enum EngineError {
 }
 
 /// Engine 只组合 Store 与 Provider Registry；重试算法完全位于 coordinator。
-pub struct GatewayEngine<S> {
+pub struct GatewayEngine<S: ?Sized> {
     store: Arc<S>,
     providers: provider::ProviderRegistry,
 }
 
-impl<S> GatewayEngine<S> {
+impl<S: ?Sized> GatewayEngine<S> {
     #[must_use]
     pub const fn new(store: Arc<S>, providers: provider::ProviderRegistry) -> Self {
         Self { store, providers }

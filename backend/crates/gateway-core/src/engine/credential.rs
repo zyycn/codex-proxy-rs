@@ -354,10 +354,16 @@ impl ProviderAccount {
     /// 判断账号当前能否进入同 target 的候选池。
     #[must_use]
     pub fn is_schedulable(&self, now: SystemTime) -> bool {
-        self.enabled
-            && self.availability == AccountAvailability::Ready
-            && self.cooldown_until.is_none_or(|until| until <= now)
-            && self.access_token_expires_at > now
+        let available = match self.availability {
+            AccountAvailability::Ready => true,
+            AccountAvailability::Cooldown => self.cooldown_until.is_some_and(|until| until <= now),
+            AccountAvailability::Unknown
+            | AccountAvailability::QuotaExhausted
+            | AccountAvailability::Expired
+            | AccountAvailability::Banned
+            | AccountAvailability::Invalid => false,
+        };
+        self.enabled && available && self.access_token_expires_at > now
     }
 }
 
@@ -595,10 +601,10 @@ pub trait ProviderAccountStore: Send + Sync {
         update: CredentialCasUpdate,
     ) -> Result<CredentialCasOutcome, StoreError>;
 
-    async fn get_quota(
+    async fn get_quotas(
         &self,
-        account: &ProviderAccountId,
-    ) -> Result<Option<QuotaObservation>, StoreError>;
+        accounts: &[ProviderAccountId],
+    ) -> Result<Vec<QuotaObservation>, StoreError>;
 
     async fn compare_and_swap_quota(
         &self,
@@ -677,13 +683,51 @@ impl AccountSelectionPolicy {
     }
 }
 
-/// Redis/进程内 owner 提供的可失效调度信号。
+/// Store 提供并发事实，Provider 叠加自己解释的额度事实；全部信号均可重建。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountRuntimeSignals {
     pub in_flight: u32,
     pub last_started_at: Option<SystemTime>,
     pub quota_reset_at: Option<SystemTime>,
     pub quota_remaining_rank: Option<u64>,
+}
+
+impl AccountRuntimeSignals {
+    #[must_use]
+    pub fn with_provider_quota(mut self, quota: Option<AccountQuotaSignals>) -> Self {
+        if let Some(quota) = quota {
+            self.quota_reset_at = quota.reset_at;
+            self.quota_remaining_rank = quota.remaining_rank;
+        }
+        self
+    }
+}
+
+/// Provider 从私有 quota JSON 投影出的中立调度事实。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AccountQuotaSignals {
+    reset_at: Option<SystemTime>,
+    remaining_rank: Option<u64>,
+}
+
+impl AccountQuotaSignals {
+    #[must_use]
+    pub const fn new(reset_at: Option<SystemTime>, remaining_rank: Option<u64>) -> Self {
+        Self {
+            reset_at,
+            remaining_rank,
+        }
+    }
+
+    #[must_use]
+    pub const fn reset_at(self) -> Option<SystemTime> {
+        self.reset_at
+    }
+
+    #[must_use]
+    pub const fn remaining_rank(self) -> Option<u64> {
+        self.remaining_rank
+    }
 }
 
 /// 账号持久事实与可重建运行信号的请求级组合。
@@ -708,7 +752,7 @@ pub struct AccountSelectionContext {
 pub struct AccountSelector;
 
 impl AccountSelector {
-    /// 从可调度账号中确定一个候选，不读取 Provider quota JSON。
+    /// 从可调度账号中确定一个候选；这里只消费 Provider 已解析的额度投影。
     #[must_use]
     pub fn select<'a>(
         &self,
@@ -735,6 +779,7 @@ impl AccountSelector {
         match context.policy.strategy() {
             RotationStrategy::QuotaResetPriority => eligible.sort_by_key(|candidate| {
                 (
+                    candidate.signals.quota_reset_at.is_none(),
                     candidate.signals.quota_reset_at,
                     candidate.signals.in_flight,
                     candidate.signals.last_started_at,

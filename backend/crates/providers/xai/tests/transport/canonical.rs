@@ -1,4 +1,5 @@
-use gateway_core::event::{ContentKind, FinishReason, GatewayEvent};
+use gateway_core::error::ProviderError;
+use gateway_core::event::{ContentKind, FinishReason, GatewayEvent, ProviderEvent};
 
 use provider_xai::{GrokCanonicalDecoder, grok_billing_breakdown};
 
@@ -25,9 +26,25 @@ fn terminal_cost_events(
         cached_tokens = cached_tokens,
         provider_cost = provider_cost,
     );
+    decode_canonical(body.as_bytes()).expect("canonical cost response")
+}
+
+fn decode_canonical(body: &[u8]) -> Result<Vec<GatewayEvent>, ProviderError> {
     GrokCanonicalDecoder::new("fallback")
-        .push(body.as_bytes())
-        .expect("canonical cost response")
+        .push(body)
+        .map(|events| {
+            events
+                .into_iter()
+                .flat_map(|event| event.into_parts().0)
+                .collect()
+        })
+}
+
+fn wire_events(events: &[ProviderEvent]) -> Vec<&gateway_core::event::ProtocolWireEvent> {
+    events
+        .iter()
+        .filter_map(ProviderEvent::wire_event)
+        .collect()
 }
 
 fn calculated_cost_ticks(events: &[GatewayEvent]) -> Option<u128> {
@@ -58,9 +75,7 @@ fn decoder_should_normalize_text_usage_and_completion() {
         "event: response.completed\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"grok-code-test\",\"status\":\"completed\",\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5,\"cost_in_usd_ticks\":37756000}}}\n\n",
     );
-    let events = GrokCanonicalDecoder::new("fallback")
-        .push(body.as_bytes())
-        .expect("canonical response");
+    let events = decode_canonical(body.as_bytes()).expect("canonical response");
 
     assert!(matches!(events[0], GatewayEvent::Started(_)));
     assert!(matches!(
@@ -89,9 +104,7 @@ fn decoder_should_leave_cost_unavailable_when_upstream_omits_it() {
         "event: response.completed\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_no_cost\",\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
     );
-    let events = GrokCanonicalDecoder::new("fallback")
-        .push(body.as_bytes())
-        .expect("canonical response");
+    let events = decode_canonical(body.as_bytes()).expect("canonical response");
 
     assert!(!events.iter().any(|event| matches!(
         event,
@@ -184,9 +197,7 @@ fn decoder_should_leave_incomplete_usage_pricing_unavailable() {
         "event: response.completed\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_partial\",\"model\":\"grok-4.5\",\"status\":\"completed\",\"usage\":{\"total_tokens\":3}}}\n\n",
     );
-    let events = GrokCanonicalDecoder::new("fallback")
-        .push(body.as_bytes())
-        .expect("canonical partial usage response");
+    let events = decode_canonical(body.as_bytes()).expect("canonical partial usage response");
 
     assert_eq!(calculated_cost_ticks(&events), None);
 }
@@ -232,9 +243,7 @@ fn decoder_should_normalize_function_call_and_tool_finish() {
         "event: response.completed\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_tool\",\"model\":\"grok-code-test\",\"status\":\"completed\"}}\n\n",
     );
-    let events = GrokCanonicalDecoder::new("fallback")
-        .push(body.as_bytes())
-        .expect("canonical function call");
+    let events = decode_canonical(body.as_bytes()).expect("canonical function call");
 
     assert!(events.iter().any(|event| matches!(
         event,
@@ -257,9 +266,7 @@ fn decoder_should_coalesce_reasoning_item_part_and_summary_index() {
         "event: response.completed\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_reason\",\"status\":\"completed\"}}\n\n",
     );
-    let events = GrokCanonicalDecoder::new("fallback")
-        .push(body.as_bytes())
-        .expect("canonical reasoning");
+    let events = decode_canonical(body.as_bytes()).expect("canonical reasoning");
 
     assert_eq!(
         events
@@ -272,27 +279,74 @@ fn decoder_should_coalesce_reasoning_item_part_and_summary_index() {
 }
 
 #[test]
-fn decoder_should_fail_closed_for_unknown_or_mismatched_events() {
-    for body in [
-        concat!(
-            "event: response.created\n",
-            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n",
-            "event: response.backend_tool_call.started\n",
-            "data: {\"type\":\"response.backend_tool_call.started\",\"secret\":\"must-not-leak\"}\n\n",
-        ),
-        concat!(
-            "event: response.created\n",
-            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}\n\n",
-        ),
-    ] {
-        let error = GrokCanonicalDecoder::new("fallback")
-            .push(body.as_bytes())
-            .expect_err("unsupported event must fail");
-        let debug = format!("{error:?}");
+fn decoder_should_preserve_unknown_events_as_openai_wire() {
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n",
+        "event: response.backend_tool_call.started\n",
+        "data: {\"type\":\"response.backend_tool_call.started\",\"future\":{\"nested\":[1,true]}}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\"}}\n\n",
+    );
+    let events = GrokCanonicalDecoder::new("fallback")
+        .push(body.as_bytes())
+        .expect("unknown wire event");
+    let wire = wire_events(&events);
 
-        assert!(!debug.contains("must-not-leak"));
-        assert!(error.sensitive_context_was_redacted());
-    }
+    assert_eq!(wire.len(), 3);
+    assert_eq!(wire[1].protocol(), "openai");
+    assert_eq!(
+        wire[1].event_type(),
+        Some("response.backend_tool_call.started")
+    );
+    assert_eq!(
+        wire[1].data().pointer("/future/nested"),
+        Some(&serde_json::json!([1, true]))
+    );
+    assert!(events[1].canonical_facts().is_empty());
+}
+
+#[test]
+fn decoder_should_preserve_image_and_hosted_tool_items_without_inventing_facts() {
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_items\"}}\n\n",
+        "event: response.output_item.added\n",
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"image_generation_call\",\"id\":\"image_1\",\"future\":true}}\n\n",
+        "event: response.output_item.added\n",
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"type\":\"web_search_call\",\"id\":\"search_1\",\"status\":\"searching\"}}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_items\",\"status\":\"completed\"}}\n\n",
+    );
+    let events = GrokCanonicalDecoder::new("fallback")
+        .push(body.as_bytes())
+        .expect("opaque output items");
+
+    assert_eq!(wire_events(&events).len(), 4);
+    assert!(events[1].canonical_facts().is_empty());
+    assert!(events[2].canonical_facts().is_empty());
+    assert_eq!(
+        events[1]
+            .wire_event()
+            .expect("image wire")
+            .data()
+            .pointer("/item/future"),
+        Some(&serde_json::json!(true))
+    );
+}
+
+#[test]
+fn decoder_should_reject_mismatched_event_identity_without_retaining_body() {
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"},\"secret\":\"must-not-leak\"}\n\n",
+    );
+    let error = GrokCanonicalDecoder::new("fallback")
+        .push(body.as_bytes())
+        .expect_err("mismatched event must fail");
+
+    assert!(!format!("{error:?}").contains("must-not-leak"));
+    assert!(error.sensitive_context_was_redacted());
 }
 
 #[test]
@@ -320,9 +374,7 @@ fn decoder_should_preserve_incomplete_length_reason() {
         "event: response.incomplete\n",
         "data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_short\",\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n",
     );
-    let events = GrokCanonicalDecoder::new("fallback")
-        .push(body.as_bytes())
-        .expect("incomplete response");
+    let events = decode_canonical(body.as_bytes()).expect("incomplete response");
 
     assert!(matches!(
         events.last(),

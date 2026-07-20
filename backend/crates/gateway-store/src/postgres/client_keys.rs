@@ -4,10 +4,31 @@ use std::fmt;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use gateway_admin::{
+    model::{
+        MutationContext,
+        client_keys::{
+            ClientKeyCursor as AdminClientKeyCursor,
+            ClientKeyCursorValue as AdminClientKeyCursorValue,
+            ClientKeyListQuery as AdminClientKeyListQuery, ClientKeyPage as AdminClientKeyPage,
+            ClientKeyRecord as AdminClientKeyRecord, ClientKeySecret as AdminClientKeySecret,
+            ClientKeySort as AdminClientKeySort, ClientKeySortField as AdminClientKeySortField,
+            DeleteClientKey, NewClientKey, SetClientKeyEnabled,
+            SortDirection as AdminSortDirection, UpdateClientKey as AdminUpdateClientKey,
+        },
+    },
+    ports::store::{AdminStoreResult, ClientKeyStore},
+};
 use gateway_core::policy::{ClientApiKeyId, PlaintextClientApiKey, RateLimits};
+use gateway_core::routing::ProviderKind;
 use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
 
-use crate::{StoreError, StoreResult, postgres_unavailable, require_nonempty};
+use crate::{
+    StoreError, StoreResult, admin_revision, admin_store_error, mutation_audit,
+    postgres_unavailable, require_nonempty, store_revision,
+};
+
+use super::{ControlPlaneRepository, PgControlPlaneRepository};
 
 const ENTITY: &str = "client API key";
 const KEY_LENGTH: usize = 46;
@@ -189,8 +210,8 @@ pub struct ClientApiKeyListQuery {
 
 impl ClientApiKeyListQuery {
     pub fn validate(&self) -> StoreResult<()> {
-        if self.page_size == 0 || self.page_size > 200 {
-            return Err(invalid("page size must be between 1 and 200"));
+        if self.page_size == 0 {
+            return Err(invalid("page size must be between 1 and 65535"));
         }
         if self.search.as_deref().is_some_and(|search| {
             search.trim().is_empty() || search.len() > 256 || search.chars().any(char::is_control)
@@ -293,6 +314,7 @@ pub trait ClientApiKeyRepository: Send + Sync {
         &self,
         query: ClientApiKeyListQuery,
     ) -> StoreResult<ClientApiKeyPage>;
+    async fn get_client_api_key(&self, id: &str) -> StoreResult<Option<ClientApiKeyRecord>>;
     async fn reveal_client_api_key(&self, id: &str) -> StoreResult<Option<ClientApiKeySecret>>;
     async fn insert_client_api_key(&self, key: NewClientApiKey) -> StoreResult<()>;
     async fn update_client_api_key(&self, key: UpdateClientApiKey) -> StoreResult<bool>;
@@ -388,6 +410,21 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         .transpose()
     }
 
+    async fn get_client_api_key(&self, id: &str) -> StoreResult<Option<ClientApiKeyRecord>> {
+        require_nonempty(ENTITY, "id", id)?;
+        sqlx::query_as::<_, ClientRecordRow>(
+            "select id, name, label, provider_kind, left(key, 10) as prefix, enabled, max_concurrency,
+                    requests_per_minute, tokens_per_minute, last_used_at, created_at, updated_at
+             from client_api_keys where id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| postgres_unavailable("get client API key"))?
+        .map(client_record_from_row)
+        .transpose()
+    }
+
     async fn insert_client_api_key(&self, key: NewClientApiKey) -> StoreResult<()> {
         key.validate()?;
         sqlx::query(
@@ -447,6 +484,315 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         .map_err(|_| postgres_unavailable("touch client API keys"))?;
         Ok(result.rows_affected())
     }
+}
+
+/// Admin 用例所需的 Client Key 事务能力。
+#[derive(Clone)]
+pub struct PgAdminClientKeyStore {
+    keys: PgClientApiKeyRepository,
+    control_plane: PgControlPlaneRepository,
+}
+
+impl PgAdminClientKeyStore {
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self {
+            keys: PgClientApiKeyRepository::new(pool.clone()),
+            control_plane: PgControlPlaneRepository::new(pool),
+        }
+    }
+
+    async fn revision(&self) -> AdminStoreResult<gateway_admin::model::Revision> {
+        self.control_plane
+            .load_control_plane()
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))
+            .and_then(|snapshot| admin_revision(snapshot.settings.config_revision))
+    }
+
+    async fn required_record(&self, id: &ClientApiKeyId) -> AdminStoreResult<AdminClientKeyRecord> {
+        self.keys
+            .get_client_api_key(id.as_str())
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))?
+            .ok_or_else(|| {
+                admin_store_error(
+                    ENTITY,
+                    StoreError::NotFound {
+                        entity: ENTITY,
+                        id: id.as_str().to_owned(),
+                    },
+                )
+            })
+            .and_then(admin_client_key_record)
+    }
+}
+
+#[async_trait]
+impl ClientKeyStore for PgAdminClientKeyStore {
+    async fn list_client_keys(
+        &self,
+        query: AdminClientKeyListQuery,
+    ) -> AdminStoreResult<AdminClientKeyPage> {
+        let config_revision = self.revision().await?;
+        let page = self
+            .keys
+            .list_client_api_keys(store_client_key_query(query)?)
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))?;
+        Ok(AdminClientKeyPage {
+            config_revision,
+            items: page
+                .items
+                .into_iter()
+                .map(admin_client_key_record)
+                .collect::<AdminStoreResult<Vec<_>>>()?,
+            total: page.total,
+            next_cursor: page.next_cursor.map(admin_client_key_cursor).transpose()?,
+        })
+    }
+
+    async fn reveal_client_key(
+        &self,
+        id: &ClientApiKeyId,
+    ) -> AdminStoreResult<Option<AdminClientKeySecret>> {
+        let Some(secret) = self
+            .keys
+            .reveal_client_api_key(id.as_str())
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))?
+        else {
+            return Ok(None);
+        };
+        let record = self.required_record(id).await?;
+        Ok(Some(AdminClientKeySecret::new(record, secret.key)))
+    }
+
+    async fn create_client_key(
+        &self,
+        command: NewClientKey,
+        context: &MutationContext,
+    ) -> AdminStoreResult<(gateway_admin::model::Revision, AdminClientKeyRecord)> {
+        let id = command.id;
+        let revision = self
+            .control_plane
+            .create_client_api_key(
+                store_revision(command.expected_config_revision)?,
+                NewClientApiKey {
+                    id: id.as_str().to_owned(),
+                    name: command.name,
+                    label: command.label,
+                    provider_kind: command.provider_kind.as_str().to_owned(),
+                    key: command.plaintext,
+                    max_concurrency: command.limits.max_concurrency,
+                    requests_per_minute: command.limits.requests_per_minute,
+                    tokens_per_minute: command.limits.tokens_per_minute,
+                },
+                mutation_audit(
+                    context,
+                    "create",
+                    "client_api_key",
+                    id.as_str(),
+                    [
+                        "name",
+                        "label",
+                        "provider_kind",
+                        "key",
+                        "enabled",
+                        "max_concurrency",
+                        "requests_per_minute",
+                        "tokens_per_minute",
+                    ]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+                ),
+            )
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))?;
+        Ok((admin_revision(revision)?, self.required_record(&id).await?))
+    }
+
+    async fn update_client_key(
+        &self,
+        command: AdminUpdateClientKey,
+        context: &MutationContext,
+    ) -> AdminStoreResult<(gateway_admin::model::Revision, AdminClientKeyRecord)> {
+        let id = command.id;
+        let revision = self
+            .control_plane
+            .update_client_api_key(
+                store_revision(command.expected_config_revision)?,
+                UpdateClientApiKeyDetails {
+                    id: id.as_str().to_owned(),
+                    name: command.name,
+                    label: command.label,
+                    provider_kind: command.provider_kind.as_str().to_owned(),
+                    max_concurrency: command.limits.max_concurrency,
+                    requests_per_minute: command.limits.requests_per_minute,
+                    tokens_per_minute: command.limits.tokens_per_minute,
+                },
+                mutation_audit(
+                    context,
+                    "update",
+                    "client_api_key",
+                    id.as_str(),
+                    [
+                        "name",
+                        "label",
+                        "provider_kind",
+                        "max_concurrency",
+                        "requests_per_minute",
+                        "tokens_per_minute",
+                    ]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+                ),
+            )
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))?;
+        Ok((admin_revision(revision)?, self.required_record(&id).await?))
+    }
+
+    async fn set_client_key_enabled(
+        &self,
+        command: SetClientKeyEnabled,
+        context: &MutationContext,
+    ) -> AdminStoreResult<(gateway_admin::model::Revision, AdminClientKeyRecord)> {
+        let id = command.id;
+        let revision = self
+            .control_plane
+            .set_client_api_key_enabled(
+                store_revision(command.expected_config_revision)?,
+                id.as_str(),
+                command.enabled,
+                mutation_audit(
+                    context,
+                    if command.enabled { "enable" } else { "disable" },
+                    "client_api_key",
+                    id.as_str(),
+                    vec!["enabled".to_owned()],
+                ),
+            )
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))?;
+        Ok((admin_revision(revision)?, self.required_record(&id).await?))
+    }
+
+    async fn delete_client_key(
+        &self,
+        command: DeleteClientKey,
+        context: &MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::Revision> {
+        self.control_plane
+            .delete_client_api_key(
+                store_revision(command.expected_config_revision)?,
+                command.id.as_str(),
+                mutation_audit(
+                    context,
+                    "delete",
+                    "client_api_key",
+                    command.id.as_str(),
+                    Vec::new(),
+                ),
+            )
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))
+            .and_then(admin_revision)
+    }
+}
+
+fn store_client_key_query(
+    query: AdminClientKeyListQuery,
+) -> AdminStoreResult<ClientApiKeyListQuery> {
+    let sort = store_client_key_sort(query.sort);
+    Ok(ClientApiKeyListQuery {
+        cursor: query
+            .cursor
+            .map(|cursor| store_client_key_cursor(cursor, sort))
+            .transpose()?,
+        page_size: query.page_size.get(),
+        search: query.search,
+        sort,
+    })
+}
+
+fn store_client_key_sort(sort: AdminClientKeySort) -> ClientApiKeySort {
+    ClientApiKeySort {
+        field: match sort.field {
+            AdminClientKeySortField::Name => ClientApiKeySortField::Name,
+            AdminClientKeySortField::Enabled => ClientApiKeySortField::Enabled,
+            AdminClientKeySortField::CreatedAt => ClientApiKeySortField::CreatedAt,
+            AdminClientKeySortField::LastUsedAt => ClientApiKeySortField::LastUsedAt,
+        },
+        direction: match sort.direction {
+            AdminSortDirection::Asc => ClientApiKeySortDirection::Asc,
+            AdminSortDirection::Desc => ClientApiKeySortDirection::Desc,
+        },
+    }
+}
+
+fn store_client_key_cursor(
+    cursor: AdminClientKeyCursor,
+    sort: ClientApiKeySort,
+) -> AdminStoreResult<ClientApiKeyCursor> {
+    let value = match cursor.value {
+        AdminClientKeyCursorValue::Name(value) => ClientApiKeyCursorValue::Name(value),
+        AdminClientKeyCursorValue::Enabled(value) => ClientApiKeyCursorValue::Enabled(value),
+        AdminClientKeyCursorValue::CreatedAt(value) => ClientApiKeyCursorValue::CreatedAt(value),
+        AdminClientKeyCursorValue::LastUsedAt(value) => ClientApiKeyCursorValue::LastUsedAt(value),
+    };
+    ClientApiKeyCursor::new(sort, value, cursor.id.as_str().to_owned())
+        .map_err(|error| admin_store_error(ENTITY, error))
+}
+
+fn admin_client_key_cursor(cursor: ClientApiKeyCursor) -> AdminStoreResult<AdminClientKeyCursor> {
+    let sort = AdminClientKeySort {
+        field: match cursor.sort.field {
+            ClientApiKeySortField::Name => AdminClientKeySortField::Name,
+            ClientApiKeySortField::Enabled => AdminClientKeySortField::Enabled,
+            ClientApiKeySortField::CreatedAt => AdminClientKeySortField::CreatedAt,
+            ClientApiKeySortField::LastUsedAt => AdminClientKeySortField::LastUsedAt,
+        },
+        direction: match cursor.sort.direction {
+            ClientApiKeySortDirection::Asc => AdminSortDirection::Asc,
+            ClientApiKeySortDirection::Desc => AdminSortDirection::Desc,
+        },
+    };
+    let value = match cursor.value {
+        ClientApiKeyCursorValue::Name(value) => AdminClientKeyCursorValue::Name(value),
+        ClientApiKeyCursorValue::Enabled(value) => AdminClientKeyCursorValue::Enabled(value),
+        ClientApiKeyCursorValue::CreatedAt(value) => AdminClientKeyCursorValue::CreatedAt(value),
+        ClientApiKeyCursorValue::LastUsedAt(value) => AdminClientKeyCursorValue::LastUsedAt(value),
+    };
+    Ok(AdminClientKeyCursor {
+        sort,
+        value,
+        id: ClientApiKeyId::new(cursor.id)
+            .map_err(|_| admin_store_error(ENTITY, invalid("invalid client key id")))?,
+    })
+}
+
+fn admin_client_key_record(record: ClientApiKeyRecord) -> AdminStoreResult<AdminClientKeyRecord> {
+    Ok(AdminClientKeyRecord {
+        id: ClientApiKeyId::new(record.id)
+            .map_err(|_| admin_store_error(ENTITY, invalid("invalid client key id")))?,
+        name: record.name,
+        label: record.label,
+        provider_kind: ProviderKind::new(record.provider_kind)
+            .map_err(|_| admin_store_error(ENTITY, invalid("invalid provider kind")))?,
+        prefix: record.prefix,
+        enabled: record.enabled,
+        limits: RateLimits {
+            max_concurrency: record.max_concurrency,
+            requests_per_minute: record.requests_per_minute,
+            tokens_per_minute: record.tokens_per_minute,
+        },
+        last_used_at: record.last_used_at,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+    })
 }
 
 pub(crate) async fn insert_client_api_key_in_transaction(

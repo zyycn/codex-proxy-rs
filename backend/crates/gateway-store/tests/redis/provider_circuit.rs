@@ -1,5 +1,6 @@
 use std::{num::NonZeroU32, time::Duration};
 
+use gateway_core::{engine::execution::provider_failure_affects_circuit, error::ProviderErrorKind};
 use gateway_store::redis::{
     ProviderCircuitDecision, ProviderCircuitPolicy, ProviderCircuitRepository,
     RedisProviderCircuitRepository,
@@ -10,6 +11,30 @@ use uuid::Uuid;
 #[test]
 fn provider_circuit_default_has_positive_threshold() {
     assert!(ProviderCircuitPolicy::default().failure_threshold.get() > 0);
+}
+
+#[test]
+fn provider_circuit_should_only_count_instance_attributable_failures() {
+    for error_kind in [
+        ProviderErrorKind::Timeout,
+        ProviderErrorKind::Transport,
+        ProviderErrorKind::Protocol,
+        ProviderErrorKind::Unavailable,
+    ] {
+        assert!(provider_failure_affects_circuit(error_kind));
+    }
+    for error_kind in [
+        ProviderErrorKind::InvalidRequest,
+        ProviderErrorKind::Unsupported,
+        ProviderErrorKind::Unauthorized,
+        ProviderErrorKind::PermissionDenied,
+        ProviderErrorKind::RateLimited,
+        ProviderErrorKind::QuotaExhausted,
+        ProviderErrorKind::Cancelled,
+        ProviderErrorKind::ProcessTerminated,
+    ] {
+        assert!(!provider_failure_affects_circuit(error_kind));
+    }
 }
 
 #[tokio::test]

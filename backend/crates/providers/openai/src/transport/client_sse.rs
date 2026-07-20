@@ -5,6 +5,7 @@ use std::{
 
 use futures::{StreamExt, TryStreamExt};
 use gateway_protocol::openai::{
+    X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER, X_OPENAI_MEMGEN_REQUEST_HEADER,
     events::{extract_sse_usage, retry_after_seconds_from_body},
     sse::SseEventDecoder,
 };
@@ -21,6 +22,7 @@ use crate::transport::{
         CodexModelCatalogError, CodexModelCatalogSnapshot, MAX_CODEX_MODEL_CATALOG_BYTES,
         catalog_etag, parse_codex_model_catalog,
     },
+    diagnostics::CodexUpstreamSendPhase,
     endpoints::{CODEX_RESPONSES_PATH, endpoint_url},
     headers::{build_codex_base_headers, insert_optional_header, websocket_header_pairs},
     profile::{CodexWireProfile, CodexWireProfileState},
@@ -126,6 +128,12 @@ impl CodexBackendClient {
                 set_cookie_headers,
                 rate_limit_headers,
                 transport: CodexBackendTransport::HttpSse,
+                transport_metrics: Box::new(CodexTransportMetrics {
+                    upstream_headers_ms: Some(upstream_headers_ms),
+                    http_version: Some(http_version),
+                    ..CodexTransportMetrics::default()
+                }),
+                send_phase: CodexUpstreamSendPhase::AfterPayload,
             });
         }
 
@@ -169,7 +177,7 @@ impl CodexBackendClient {
                 http_version: Some(http_version),
                 ..CodexTransportMetrics::default()
             },
-            connection_local_continuation_expires_at: None,
+            connection_local_continuation: false,
         })
     }
 
@@ -209,6 +217,12 @@ impl CodexBackendClient {
                 set_cookie_headers,
                 rate_limit_headers,
                 transport: CodexBackendTransport::HttpSse,
+                transport_metrics: Box::new(CodexTransportMetrics {
+                    upstream_headers_ms: Some(upstream_headers_ms),
+                    http_version: Some(http_version),
+                    ..CodexTransportMetrics::default()
+                }),
+                send_phase: CodexUpstreamSendPhase::AfterPayload,
             });
         }
 
@@ -228,7 +242,7 @@ impl CodexBackendClient {
                 http_version: Some(http_version),
                 ..CodexTransportMetrics::default()
             },
-            connection_local_continuation_expires_at: None,
+            connection_local_continuation: false,
         })
     }
 
@@ -334,8 +348,7 @@ impl CodexBackendClient {
             TransportRequirement::PersistedContinuation
             | TransportRequirement::ExternalUnknown
             | TransportRequirement::NewChain => Some(self.websocket_fast_path_budget),
-            TransportRequirement::WebSocketRequired
-            | TransportRequirement::ExplicitWebSocketWarmup
+            TransportRequirement::ExplicitWebSocketWarmup
             | TransportRequirement::ExactWebSocketContinuation => None,
             TransportRequirement::HttpRequired => None,
         };
@@ -459,8 +472,7 @@ impl CodexBackendClient {
                             first_event_ms: exchange.first_event_ms,
                             ..metrics
                         },
-                        connection_local_continuation_expires_at: exchange
-                            .connection_local_continuation_expires_at,
+                        connection_local_continuation: exchange.connection_local_continuation,
                     })
             }
         };
@@ -524,8 +536,7 @@ impl CodexBackendClient {
                             diagnostics: exchange.diagnostics,
                             response_metadata: exchange.response_metadata,
                             transport_metrics: metrics,
-                            connection_local_continuation_expires_at: exchange
-                                .connection_local_continuation_expires_at,
+                            connection_local_continuation: exchange.connection_local_continuation,
                         }
                     })
             }
@@ -595,6 +606,8 @@ impl CodexBackendClient {
                 set_cookie_headers,
                 rate_limit_headers: Vec::new(),
                 transport: CodexBackendTransport::HttpSse,
+                transport_metrics: Box::default(),
+                send_phase: CodexUpstreamSendPhase::AfterPayload,
             });
         }
         Ok(parse_codex_model_catalog(&body, etag.as_deref())?)
@@ -615,12 +628,12 @@ impl CodexBackendClient {
         }
         insert_optional_header(
             &mut headers,
-            crate::transport::protocol::responses::X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER,
+            X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER,
             request.responses_lite.as_deref(),
         )?;
         insert_optional_header(
             &mut headers,
-            crate::transport::protocol::responses::X_OPENAI_MEMGEN_REQUEST_HEADER,
+            X_OPENAI_MEMGEN_REQUEST_HEADER,
             request.memgen_request.as_deref(),
         )?;
         Ok(headers)
@@ -632,9 +645,7 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<HeaderMap> {
         let mut headers = self.request_headers_for_http_response(request, context)?;
-        headers.remove(
-            crate::transport::protocol::responses::X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER,
-        );
+        headers.remove(X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER);
         Ok(headers)
     }
 
@@ -725,30 +736,6 @@ impl CodexBackendClient {
         insert_optional_header(&mut headers, "chatgpt-account-id", context.account_id)?;
         insert_optional_header(&mut headers, "cookie", context.cookie_header)?;
         headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
-        headers.insert(
-            HeaderName::from_static("openai-beta"),
-            HeaderValue::from_static("codex-1"),
-        );
-        headers.insert(
-            HeaderName::from_static("oai-language"),
-            HeaderValue::from_static("zh-CN"),
-        );
-        headers.insert(
-            HeaderName::from_static("sec-fetch-site"),
-            HeaderValue::from_static("none"),
-        );
-        headers.insert(
-            HeaderName::from_static("sec-fetch-mode"),
-            HeaderValue::from_static("no-cors"),
-        );
-        headers.insert(
-            HeaderName::from_static("sec-fetch-dest"),
-            HeaderValue::from_static("empty"),
-        );
-        headers.insert(
-            HeaderName::from_static("priority"),
-            HeaderValue::from_static("u=4, i"),
-        );
         Ok(headers)
     }
 }
@@ -776,18 +763,14 @@ async fn read_model_catalog_body(response: ReqwestResponse) -> CodexClientResult
 }
 
 fn websocket_connection_profile(headers: &HeaderMap) -> String {
-    [
-        "originator",
-        "user-agent",
-        crate::transport::protocol::responses::X_OPENAI_MEMGEN_REQUEST_HEADER,
-    ]
-    .map(|name| {
-        headers
-            .get(name)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-    })
-    .join("\0")
+    ["originator", "user-agent", X_OPENAI_MEMGEN_REQUEST_HEADER]
+        .map(|name| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+        })
+        .join("\0")
 }
 
 fn http_sse_stream(response: ReqwestResponse) -> CodexBackendSseStream {

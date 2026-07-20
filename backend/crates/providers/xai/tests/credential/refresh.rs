@@ -8,19 +8,20 @@ use chrono::Utc;
 use gateway_core::engine::credential::{
     AccountAvailability, CredentialCasOutcome, CredentialRevision, ProviderAccountStore,
 };
+use gateway_core::provider_ports::{
+    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderStoreError,
+};
 use provider_xai::{
     GrokCredentialAdmin, GrokCredentialCatalogCache, GrokCredentialCatalogService,
     GrokCredentialRefreshError, GrokCredentialRefreshOutcome, GrokCredentialRefreshService,
     GrokCredentialRefresher, GrokCredentialRepository, GrokModelCatalogRequest,
     GrokModelCatalogTransport, GrokModelCatalogTransportFuture, GrokModelCatalogTransportResponse,
-    GrokRefreshFailure, GrokRefreshLeaseAcquisition, GrokRefreshLeaseCoordinator,
-    GrokRefreshLeaseError, GrokRefreshLeaseRequest, GrokRefreshTokens, RotateManagedGrokCredential,
-    SecretValue,
+    GrokRefreshFailure, GrokRefreshTokens, RotateManagedGrokCredential, SecretValue,
 };
 
 use crate::support::{
     MemoryGrokCatalogCache, MemoryProviderAccountStore, create_input, credential_object, profile,
-    seed_input,
+    runtime_policy, seed_input,
 };
 
 const OFFICIAL_FIXTURE: &[u8] =
@@ -76,17 +77,39 @@ struct TestRefreshLeases {
     calls: AtomicUsize,
 }
 
-#[async_trait]
-impl GrokRefreshLeaseCoordinator for TestRefreshLeases {
-    async fn try_acquire(
+impl ProviderLeasePort for TestRefreshLeases {
+    fn load_state<'a>(
+        &'a self,
+        _: &'a gateway_core::routing::ProviderInstanceId,
+        _: &'a [gateway_core::engine::credential::ProviderAccountId],
+    ) -> futures::future::BoxFuture<
+        'a,
+        Result<gateway_core::provider_ports::ProviderSchedulingState, ProviderStoreError>,
+    > {
+        Box::pin(async {
+            Ok(gateway_core::provider_ports::ProviderSchedulingState::new(
+                Default::default(),
+                None,
+                0,
+            ))
+        })
+    }
+
+    fn try_acquire(
         &self,
-        _: &GrokRefreshLeaseRequest,
-    ) -> Result<GrokRefreshLeaseAcquisition, GrokRefreshLeaseError> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        Ok(if self.available {
-            GrokRefreshLeaseAcquisition::Acquired(Box::new(()))
-        } else {
-            GrokRefreshLeaseAcquisition::Unavailable
+        request: ProviderLeaseRequest,
+    ) -> futures::future::BoxFuture<'_, Result<ProviderLeaseAcquisition, ProviderStoreError>> {
+        Box::pin(async move {
+            assert!(matches!(
+                request,
+                ProviderLeaseRequest::RefreshCapacity(_) | ProviderLeaseRequest::Refresh(_)
+            ));
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(if self.available {
+                ProviderLeaseAcquisition::Acquired(Box::new(()))
+            } else {
+                ProviderLeaseAcquisition::Busy { retry_after: None }
+            })
         })
     }
 }
@@ -102,7 +125,7 @@ fn success_tokens(rotated: Option<&str>) -> GrokRefreshTokens {
 fn due_input(suffix: &str) -> provider_xai::CreateGrokCredential {
     let mut input = create_input(suffix, &format!("subject-{suffix}"));
     input.account.access_token_expires_at = Utc::now() + chrono::Duration::minutes(2);
-    input.account.next_refresh_at = Some(Utc::now() + chrono::Duration::minutes(1));
+    input.next_refresh_at = Utc::now() - chrono::Duration::seconds(1);
     input
 }
 
@@ -152,9 +175,8 @@ async fn fixture_many(
         refresher_port,
         catalog,
         leases,
-        Duration::from_secs(5 * 60),
-    )
-    .expect("refresh service");
+        runtime_policy(),
+    );
     (store, repository, refresher, service)
 }
 
@@ -164,7 +186,7 @@ async fn successful_refresh_rotates_plaintext_tokens_once() {
     let id = input.account_id.clone();
     let (store, _, refresher, service) =
         fixture(input, [Ok(success_tokens(Some("new-refresh")))], true).await;
-    let outcomes = service.refresh_due(10).await.expect("refresh cycle");
+    let outcomes = service.refresh_due().await.expect("refresh cycle");
 
     assert!(matches!(
         outcomes.as_slice(),
@@ -253,7 +275,7 @@ async fn omitted_rotated_refresh_token_preserves_existing_rt() {
     let input = due_input("preserve");
     let id = input.account_id.clone();
     let (store, _, _, service) = fixture(input, [Ok(success_tokens(None))], true).await;
-    service.refresh_due(10).await.expect("refresh");
+    service.refresh_due().await.expect("refresh");
     let credential = store.credential(&id).expect("credential");
     assert_eq!(
         credential_object(&credential)
@@ -271,7 +293,7 @@ async fn unknown_refresh_token_expiry_does_not_block_refresh() {
     input.account.refresh_token_expires_at = None;
     let (store, _, _, service) = fixture(input, [Ok(success_tokens(None))], true).await;
 
-    let outcomes = service.refresh_due(10).await.expect("refresh cycle");
+    let outcomes = service.refresh_due().await.expect("refresh cycle");
     assert!(matches!(
         outcomes.as_slice(),
         [GrokCredentialRefreshOutcome::Refreshed { account_id, .. }] if account_id == &id
@@ -283,13 +305,7 @@ async fn unknown_refresh_token_expiry_does_not_block_refresh() {
 async fn empty_due_set_does_not_resolve_discovery_or_call_upstream() {
     let input = create_input("not-due", "subject-not-due");
     let (_, _, refresher, service) = fixture(input, [], true).await;
-    assert!(
-        service
-            .refresh_due(10)
-            .await
-            .expect("empty cycle")
-            .is_empty()
-    );
+    assert!(service.refresh_due().await.expect("empty cycle").is_empty());
     assert_eq!(refresher.prepare_calls.load(Ordering::SeqCst), 0);
 }
 
@@ -298,7 +314,7 @@ async fn lease_unavailable_never_calls_refresh_exchange() {
     let input = due_input("lease");
     let id = input.account_id.clone();
     let (_, _, refresher, service) = fixture(input, [], false).await;
-    let outcomes = service.refresh_due(10).await.expect("refresh cycle");
+    let outcomes = service.refresh_due().await.expect("refresh cycle");
     assert!(matches!(
         outcomes.as_slice(),
         [GrokCredentialRefreshOutcome::LeaseUnavailable { account_id }] if account_id == &id
@@ -312,7 +328,7 @@ async fn invalid_grant_marks_account_expired() {
     let id = input.account_id.clone();
     let (store, _, _, service) =
         fixture(input, [Err(GrokRefreshFailure::InvalidGrant)], true).await;
-    service.refresh_due(10).await.expect("refresh");
+    service.refresh_due().await.expect("refresh");
     assert_eq!(
         store.account(&id).expect("account").availability(),
         AccountAvailability::Expired
@@ -324,7 +340,7 @@ async fn banned_failure_marks_account_banned() {
     let input = due_input("banned");
     let id = input.account_id.clone();
     let (store, _, _, service) = fixture(input, [Err(GrokRefreshFailure::Banned)], true).await;
-    service.refresh_due(10).await.expect("refresh");
+    service.refresh_due().await.expect("refresh");
     assert_eq!(
         store.account(&id).expect("account").availability(),
         AccountAvailability::Banned
@@ -336,7 +352,7 @@ async fn ambiguous_refresh_fails_closed_and_is_not_retried() {
     let input = due_input("ambiguous");
     let id = input.account_id.clone();
     let (store, _, _, service) = fixture(input, [Err(GrokRefreshFailure::Ambiguous)], true).await;
-    let outcomes = service.refresh_due(10).await.expect("refresh");
+    let outcomes = service.refresh_due().await.expect("refresh");
     assert!(matches!(
         outcomes.as_slice(),
         [GrokCredentialRefreshOutcome::Ambiguous { account_id }] if account_id == &id
@@ -347,7 +363,7 @@ async fn ambiguous_refresh_fails_closed_and_is_not_retried() {
     );
     assert!(
         service
-            .refresh_due(10)
+            .refresh_due()
             .await
             .expect("second cycle")
             .is_empty()
@@ -359,10 +375,15 @@ async fn pre_send_transient_failure_applies_bounded_cooldown() {
     let input = due_input("transient");
     let id = input.account_id.clone();
     let (store, _, _, service) = fixture(input, [Err(GrokRefreshFailure::Transient)], true).await;
-    service.refresh_due(10).await.expect("refresh");
+    service.refresh_due().await.expect("refresh");
     let account = store.account(&id).expect("account");
-    assert_eq!(account.availability(), AccountAvailability::Cooldown);
-    assert!(account.cooldown_until().is_some());
+    assert_eq!(account.availability(), AccountAvailability::Unknown);
+    assert_eq!(account.revision().get(), 2);
+    assert!(
+        account
+            .next_refresh_at()
+            .is_some_and(|retry| retry > std::time::SystemTime::now())
+    );
 }
 
 #[tokio::test]
@@ -370,9 +391,9 @@ async fn stale_due_snapshot_cannot_overwrite_newer_revision() {
     let input = due_input("stale");
     let id = input.account_id.clone();
     let (store, repository, _, service) =
-        fixture(input, [Ok(success_tokens(Some("worker-rt")))], true).await;
+        fixture(input, [Err(GrokRefreshFailure::InvalidGrant)], true).await;
     let due = repository
-        .list_due_refresh(Duration::from_secs(300), 10)
+        .list_due_refresh()
         .await
         .expect("due list")
         .pop()
@@ -391,6 +412,7 @@ async fn stale_due_snapshot_cannot_overwrite_newer_revision() {
                 scope: provider_xai::OFFICIAL_SCOPES.join(" "),
             },
             verified_account: profile("subject-stale"),
+            next_refresh_at: chrono::Utc::now() + chrono::Duration::minutes(30),
         })
         .expect("admin rotation");
     assert!(matches!(
@@ -421,7 +443,7 @@ async fn invalid_refresh_lifetime_is_rejected_without_cas_write() {
     )
     .await;
     assert!(matches!(
-        service.refresh_due(10).await.expect("isolated refresh cycle").as_slice(),
+        service.refresh_due().await.expect("isolated refresh cycle").as_slice(),
         [GrokCredentialRefreshOutcome::Failed { account_id }] if account_id == &id
     ));
     assert_eq!(store.account(&id).expect("account").revision().get(), 1);
@@ -429,14 +451,14 @@ async fn invalid_refresh_lifetime_is_rejected_without_cas_write() {
 
 #[tokio::test]
 async fn malformed_account_refresh_does_not_stop_later_accounts() {
-    let due_at = Utc::now() + chrono::Duration::minutes(1);
+    let due_at = Utc::now() - chrono::Duration::seconds(1);
     let access_expires_at = Utc::now() + chrono::Duration::minutes(2);
     let mut bad = due_input("bad");
-    bad.account.next_refresh_at = Some(due_at);
+    bad.next_refresh_at = due_at;
     bad.account.access_token_expires_at = access_expires_at;
     let bad_id = bad.account_id.clone();
     let mut good = due_input("good");
-    good.account.next_refresh_at = Some(due_at);
+    good.next_refresh_at = due_at;
     good.account.access_token_expires_at = access_expires_at;
     let good_id = good.account_id.clone();
     let (store, _, _, service) = fixture_many(
@@ -453,10 +475,7 @@ async fn malformed_account_refresh_does_not_stop_later_accounts() {
     )
     .await;
 
-    let outcomes = service
-        .refresh_due(10)
-        .await
-        .expect("isolated refresh cycle");
+    let outcomes = service.refresh_due().await.expect("isolated refresh cycle");
 
     assert!(matches!(
         outcomes.as_slice(),

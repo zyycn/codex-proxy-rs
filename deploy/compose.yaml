@@ -8,9 +8,6 @@ x-json-logging: &json-logging
 
 services:
   postgres:
-    extends:
-      file: config.yaml
-      service: postgres-credentials
     image: postgres:18-bookworm@sha256:d9c83446333daec3f0588cc709adb80c26090b7f9f0f7ec8d43c243385d79818
     restart: unless-stopped
     command:
@@ -23,6 +20,7 @@ services:
       TZ: Asia/Shanghai
       POSTGRES_DB: codex_proxy
       POSTGRES_USER: codex_proxy
+      POSTGRES_PASSWORD: ${CPR_DATABASE_PASSWORD:?CPR_DATABASE_PASSWORD is required}
       POSTGRES_INITDB_ARGS: --auth-local=scram-sha-256 --auth-host=scram-sha-256
     volumes:
       - type: bind
@@ -42,11 +40,14 @@ services:
     logging: *json-logging
 
   redis:
-    extends:
-      file: config.yaml
-      service: redis-credentials
     image: redis:8-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
     restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --requirepass
+      - ${CPR_REDIS_PASSWORD:?CPR_REDIS_PASSWORD is required}
     volumes:
       - type: bind
         source: ../.runtime/redis
@@ -56,6 +57,13 @@ services:
     ports:
       - '127.0.0.1:6379:6379'
     healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - --no-auth-warning
+        - -a
+        - ${CPR_REDIS_PASSWORD:?CPR_REDIS_PASSWORD is required}
+        - ping
       interval: 5s
       timeout: 5s
       retries: 10
@@ -120,6 +128,8 @@ services:
       CPR_SERVER_PORT: '8080'
       CPR_DATABASE_URL: postgres://codex_proxy@postgres:5432/codex_proxy
       CPR_REDIS_URL: redis://redis:6379/
+      CPR_DATABASE_PASSWORD: ${CPR_DATABASE_PASSWORD:?CPR_DATABASE_PASSWORD is required}
+      CPR_REDIS_PASSWORD: ${CPR_REDIS_PASSWORD:?CPR_REDIS_PASSWORD is required}
       CPR_DEPLOYMENT_MODE: docker
       CPR_UPDATE_REPOSITORY: zyycn/codex-proxy-rs
       CPR_UPDATE_CHANNEL: stable

@@ -110,7 +110,7 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
         rate_limit_header_updates,
         turn_state_update,
         pool_decision: None,
-        connection_local_continuation_expires_at: None,
+        connection_local_continuation: false,
         diagnostics: response_metadata.diagnostics,
         response_metadata: response_metadata.response_metadata,
     }

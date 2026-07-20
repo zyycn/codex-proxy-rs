@@ -35,23 +35,8 @@ fn instance() -> GrokProviderInstanceConfig {
 
 #[test]
 fn header_debug_should_redact_oauth_and_identity_values() {
-    let request = provider_xai::GrokResponsesRequest::encode(
-        &gateway_core::operation::GenerateRequest::new(vec![
-            gateway_core::operation::Message::new(
-                gateway_core::operation::MessageRole::User,
-                vec![gateway_core::operation::ContentPart::Text(
-                    "hello".to_owned(),
-                )],
-            )
-            .expect("message"),
-        ])
-        .expect("request"),
-        "grok-code-test",
-    )
-    .expect("encoded request");
     let headers = build_grok_headers(
         &instance(),
-        &request,
         &selected_session(),
         &ModelRequestId::new("req_grok_test").expect("request ID"),
         &UpstreamModelId::new("grok-code-test").expect("model"),
@@ -67,4 +52,27 @@ fn header_debug_should_redact_oauth_and_identity_values() {
     ] {
         assert!(!debug.contains(secret), "debug output was {debug}");
     }
+}
+
+#[test]
+fn headers_should_bind_identity_to_the_selected_oauth_account() {
+    let headers = build_grok_headers(
+        &instance(),
+        &selected_session(),
+        &ModelRequestId::new("req_grok_identity").expect("request ID"),
+        &UpstreamModelId::new("grok-code-test").expect("model"),
+    );
+    let value = |name: &str| {
+        headers
+            .iter()
+            .find(|header| header.name().eq_ignore_ascii_case(name))
+            .map(|header| header.value().expose())
+    };
+
+    assert_eq!(value("x-userid"), Some("fixture-user-id"));
+    assert_eq!(value("x-grok-user-id"), Some("fixture-user-id"));
+    assert_eq!(value("x-email"), Some("fixture@example.test"));
+    assert_eq!(value("x-grok-conv-id"), Some("req_grok_identity"));
+    assert_eq!(value("x-grok-session-id"), Some("req_grok_identity"));
+    assert_eq!(value("x-grok-agent-id"), Some("codex-proxy-rs"));
 }

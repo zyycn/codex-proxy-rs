@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, fmt};
 
 use gateway_protocol::openai::{
     events,
@@ -12,15 +12,6 @@ const MULTI_AGENT_MODE_OPEN_TAG: &str = "<multi_agent_mode>";
 const MULTI_AGENT_MODE_CLOSE_TAG: &str = "</multi_agent_mode>";
 const PROACTIVE_MULTI_AGENT_MODE_PREFIX: &str = "Proactive multi-agent delegation is active.";
 
-/// Codex Responses Lite 的 HTTP 兼容头。
-pub const X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER: &str =
-    "x-openai-internal-codex-responses-lite";
-/// Codex Responses Lite 在 WebSocket `client_metadata` 中的官方投影键。
-pub const WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY: &str =
-    "ws_request_header_x_openai_internal_codex_responses_lite";
-/// Codex memory consolidation 请求标记。
-pub const X_OPENAI_MEMGEN_REQUEST_HEADER: &str = "x-openai-memgen-request";
-
 /// Codex Responses 上游请求体。
 ///
 /// 发往上游的 Responses 请求。`body` 持有客户端原始 JSON object，逐字段（含顺序、
@@ -29,7 +20,7 @@ pub const X_OPENAI_MEMGEN_REQUEST_HEADER: &str = "x-openai-memgen-request";
 /// 普通客户端请求不修改 body；模型路由只写入明确受控字段。
 ///
 /// 其余字段是代理控制状态，不进上游 body（原 `#[serde(skip)]` 字段）。
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CodexResponsesRequest {
     /// 上游请求体（唯一真相源）。
     body: Map<String, Value>,
@@ -61,8 +52,6 @@ pub struct CodexResponsesRequest {
     pub use_websocket: bool,
     /// 是否强制 HTTP SSE。
     pub force_http_sse: bool,
-    /// 是否强制 WebSocket，且禁止在同一 attempt 内降级到 HTTP。
-    pub force_websocket: bool,
     /// turn state 透传头。
     pub turn_state: Option<String>,
     /// turn metadata 透传头。
@@ -83,6 +72,23 @@ pub struct CodexResponsesRequest {
     pub parent_thread_id: Option<String>,
     /// 已知 previous response 的持久化范围，仅用于本地 transport 校验。
     pub previous_response_scope: Option<PreviousResponseScope>,
+}
+
+impl fmt::Debug for CodexResponsesRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CodexResponsesRequest")
+            .field("body", &"<not included in Debug>")
+            .field("has_tuple_schema", &self.tuple_schema.is_some())
+            .field("explicit_prompt_cache_key", &self.explicit_prompt_cache_key)
+            .field(
+                "has_local_conversation_id",
+                &self.local_conversation_id.is_some(),
+            )
+            .field("use_websocket", &self.use_websocket)
+            .field("force_http_sse", &self.force_http_sse)
+            .finish()
+    }
 }
 
 /// previous response 在上游的可续接范围。
@@ -122,8 +128,6 @@ impl Serialize for CodexResponsesRequest {
 pub enum TransportRequirement {
     /// 客户端显式要求 HTTP。
     HttpRequired,
-    /// Provider instance 显式冻结 WebSocket transport。
-    WebSocketRequired,
     /// `generate=false + store=false` 预热必须保留在同一条 WebSocket。
     ExplicitWebSocketWarmup,
     /// 只能使用持有指定 connection-local response 的精确 WebSocket。
@@ -141,9 +145,7 @@ impl TransportRequirement {
     pub fn requires_websocket(self) -> bool {
         matches!(
             self,
-            Self::WebSocketRequired
-                | Self::ExplicitWebSocketWarmup
-                | Self::ExactWebSocketContinuation
+            Self::ExplicitWebSocketWarmup | Self::ExactWebSocketContinuation
         )
     }
 
@@ -159,7 +161,6 @@ impl TransportRequirement {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::HttpRequired => "http_required",
-            Self::WebSocketRequired => "websocket_required",
             Self::ExplicitWebSocketWarmup => "explicit_websocket_warmup",
             Self::ExactWebSocketContinuation => "exact_websocket_continuation",
             Self::PersistedContinuation => "persisted_continuation",
@@ -173,17 +174,6 @@ impl TransportRequirement {
 pub fn transport_requirement(request: &CodexResponsesRequest) -> TransportRequirement {
     if !request.generate() && !request.store() {
         return TransportRequirement::ExplicitWebSocketWarmup;
-    }
-    if request.previous_response_id().is_some()
-        && matches!(
-            request.previous_response_scope,
-            Some(PreviousResponseScope::ConnectionLocal)
-        )
-    {
-        return TransportRequirement::ExactWebSocketContinuation;
-    }
-    if request.force_websocket {
-        return TransportRequirement::WebSocketRequired;
     }
     if request.force_http_sse {
         return TransportRequirement::HttpRequired;
@@ -436,7 +426,7 @@ pub enum CollectedResponse {
 }
 
 /// Codex Responses SSE 失败事件。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ResponsesSseFailure {
     /// SSE event 名称。
     pub event: String,
@@ -450,6 +440,20 @@ pub struct ResponsesSseFailure {
     pub explicit_status_code: Option<u16>,
     /// 上游显式重试间隔，或从官方限流消息中解析出的重试间隔。
     pub retry_after_seconds: Option<u64>,
+}
+
+impl fmt::Debug for ResponsesSseFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ResponsesSseFailure")
+            .field("event", &self.event)
+            .field("message", &"<redacted>")
+            .field("has_upstream_code", &self.upstream_code.is_some())
+            .field("has_upstream_type", &self.upstream_type.is_some())
+            .field("explicit_status_code", &self.explicit_status_code)
+            .field("retry_after_seconds", &self.retry_after_seconds)
+            .finish()
+    }
 }
 
 impl ResponsesSseFailure {
@@ -687,7 +691,6 @@ impl CodexResponsesRequest {
             client_api_key_id: None,
             use_websocket: false,
             force_http_sse: false,
-            force_websocket: false,
             turn_state: None,
             turn_metadata: None,
             beta_features: None,
@@ -966,10 +969,6 @@ pub(crate) fn codex_request_semantics_from_parts(
         reasoning_preset,
         compact,
     }
-}
-
-pub(crate) fn proactive_multi_agent_mode_from_text(text: &str) -> Option<bool> {
-    multi_agent_mode_from_text(text).map(|mode| mode.starts_with(PROACTIVE_MULTI_AGENT_MODE_PREFIX))
 }
 
 fn latest_multi_agent_mode<'a>(

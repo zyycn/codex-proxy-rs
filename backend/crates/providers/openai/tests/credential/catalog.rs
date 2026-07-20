@@ -1,13 +1,13 @@
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use chrono::{TimeZone, Utc};
 use futures::executor::block_on;
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountStateChange, ProviderAccountId, ProviderAccountStore as _,
+    AccountAvailability, AccountStateChange, CredentialRevision, ProviderAccountId,
+    ProviderAccountStore as _,
 };
 use gateway_core::routing::{InstanceHealth, ProviderInstance, ProviderKind};
-use provider_openai::CodexEndpointPolicy;
 use provider_openai::credential::{
     CodexCredentialCatalogError, CodexCredentialCatalogService, CreateCodexCredential,
 };
@@ -15,7 +15,7 @@ use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileStat
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use crate::support::{MemoryAccountStore, instance_id, profile, secret};
+use crate::support::{MemoryAccountStore, instance_id, loopback_origin_policy, profile, secret};
 
 fn wire_profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
@@ -53,6 +53,7 @@ async fn create(store: &Arc<MemoryAccountStore>, id: &str, token: &str) {
             name: id.to_owned(),
             secret: secret(token),
             account: profile(&format!("chatgpt-{id}")),
+            next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
         .await
@@ -60,15 +61,14 @@ async fn create(store: &Arc<MemoryAccountStore>, id: &str, token: &str) {
 }
 
 fn service(store: &Arc<MemoryAccountStore>) -> CodexCredentialCatalogService {
-    CodexCredentialCatalogService::new_with_endpoint_policy(
+    CodexCredentialCatalogService::new(
         store.repository(),
         wire_profile(),
         reqwest::Client::builder()
             .no_proxy()
             .build()
             .expect("client"),
-        CodexEndpointPolicy::Loopback,
-        Duration::from_secs(60),
+        loopback_origin_policy(),
     )
 }
 
@@ -82,6 +82,14 @@ fn catalog(model: &str, display: &str) -> serde_json::Value {
             "context_window": 128000
         }]
     })
+}
+
+fn account_id(value: &str) -> ProviderAccountId {
+    ProviderAccountId::new(value).expect("account id")
+}
+
+fn revision() -> CredentialRevision {
+    CredentialRevision::new(1).expect("revision")
 }
 
 #[tokio::test]
@@ -105,11 +113,11 @@ async fn realtime_catalog_builds_union_and_per_account_entitlements() {
         .expect("synchronize catalog");
     assert_eq!(snapshot.models().len(), 2);
     assert_eq!(
-        snapshot.account_models("acct_one"),
+        snapshot.account_models(&account_id("acct_one"), revision()),
         Some(&["gpt-5.4".to_owned()][..])
     );
     assert_eq!(
-        snapshot.account_models("acct_two"),
+        snapshot.account_models(&account_id("acct_two"), revision()),
         Some(&["gpt-5.5".to_owned()][..])
     );
 }
@@ -153,13 +161,13 @@ async fn realtime_catalog_should_preserve_the_official_model_order() {
         official_order
     );
     assert_eq!(
-        snapshot.account_models("acct_order"),
+        snapshot.account_models(&account_id("acct_order"), revision()),
         Some(official_order.map(str::to_owned).as_slice())
     );
 }
 
 #[tokio::test]
-async fn fresh_catalog_is_served_from_ttl_cache_without_postgres_snapshot() {
+async fn catalog_is_reused_until_explicit_invalidation_or_etag_change() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/backend-api/codex/models"))
@@ -206,16 +214,13 @@ async fn single_account_refresh_queries_only_that_account_and_updates_its_cache(
     assert_eq!(models, ["gpt-5.5"]);
     assert_eq!(
         service
-            .cached_account_models(instance.id(), &selected)
+            .cached_account_models(instance.id(), &selected, revision())
             .expect("cache read"),
         Some(vec!["gpt-5.5".to_owned()])
     );
     assert_eq!(
         service
-            .cached_account_models(
-                instance.id(),
-                &ProviderAccountId::new("acct_one").expect("account id")
-            )
+            .cached_account_models(instance.id(), &account_id("acct_one"), revision(),)
             .expect("other cache read"),
         None
     );
@@ -234,15 +239,62 @@ async fn invalidation_forces_a_new_realtime_query() {
     create(&store, "acct_one", "token-one").await;
     let service = service(&store);
     let instance = instance(&format!("{}/backend-api", server.uri()));
+    assert_eq!(service.catalog_generation().get(), 0);
     service
         .synchronize_instance(&instance)
         .await
         .expect("first query");
+    assert_eq!(service.catalog_generation().get(), 1);
     service.invalidate(instance.id()).expect("invalidate");
+    assert_eq!(service.catalog_generation().get(), 2);
     service
         .synchronize_instance(&instance)
         .await
         .expect("second query");
+    assert_eq!(service.catalog_generation().get(), 3);
+}
+
+#[tokio::test]
+async fn response_etag_change_is_deduplicated_and_queued_for_refresh() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/codex/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("etag", "\"models-v1\"")
+                .set_body_json(catalog("gpt-5.4", "GPT-5.4")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let store = Arc::new(MemoryAccountStore::default());
+    create(&store, "acct_one", "token-one").await;
+    let service = service(&store);
+    let instance = instance(&format!("{}/backend-api", server.uri()));
+    service
+        .synchronize_instance(&instance)
+        .await
+        .expect("initial catalog");
+
+    assert!(
+        !service
+            .observe_response_etag(instance.id(), "\"models-v1\"")
+            .expect("same ETag")
+    );
+    assert!(
+        service
+            .observe_response_etag(instance.id(), "\"models-v2\"")
+            .expect("changed ETag")
+    );
+    assert!(
+        !service
+            .observe_response_etag(instance.id(), "\"models-v2\"")
+            .expect("duplicate ETag")
+    );
+    assert_eq!(
+        service.wait_for_etag_refresh().await,
+        vec![instance.id().clone()]
+    );
 }
 
 #[tokio::test]
