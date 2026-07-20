@@ -277,34 +277,78 @@ pub struct CalculatedCostBreakdown {
     multiplier_percent: u32,
 }
 
-impl CalculatedCostBreakdown {
-    #[allow(clippy::too_many_arguments)]
+/// 一次请求的费用组成，全部使用同一币种。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CalculatedCostAmounts {
+    input: Money,
+    output: Money,
+    cache_read: Money,
+    cache_write: Money,
+    standard: Money,
+    total: Money,
+}
+
+impl CalculatedCostAmounts {
     #[must_use]
     pub const fn new(
-        input_amount: Money,
-        output_amount: Money,
-        cache_read_amount: Money,
-        cache_write_amount: Money,
-        standard_amount: Money,
-        total_amount: Money,
-        input_price_per_million: Money,
-        output_price_per_million: Money,
-        cache_read_price_per_million: Money,
-        cache_write_price_per_million: Money,
+        input: Money,
+        output: Money,
+        cache_read: Money,
+        cache_write: Money,
+        standard: Money,
+        total: Money,
+    ) -> Self {
+        Self {
+            input,
+            output,
+            cache_read,
+            cache_write,
+            standard,
+            total,
+        }
+    }
+}
+
+/// 每百万 Token 的费率组成，全部使用同一币种。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CalculatedCostRates {
+    input: Money,
+    output: Money,
+    cache_read: Money,
+    cache_write: Money,
+}
+
+impl CalculatedCostRates {
+    #[must_use]
+    pub const fn new(input: Money, output: Money, cache_read: Money, cache_write: Money) -> Self {
+        Self {
+            input,
+            output,
+            cache_read,
+            cache_write,
+        }
+    }
+}
+
+impl CalculatedCostBreakdown {
+    #[must_use]
+    pub const fn new(
+        amounts: CalculatedCostAmounts,
+        rates: CalculatedCostRates,
         service_tier: Option<String>,
         multiplier_percent: u32,
     ) -> Self {
         Self {
-            input_amount,
-            output_amount,
-            cache_read_amount,
-            cache_write_amount,
-            standard_amount,
-            total_amount,
-            input_price_per_million,
-            output_price_per_million,
-            cache_read_price_per_million,
-            cache_write_price_per_million,
+            input_amount: amounts.input,
+            output_amount: amounts.output,
+            cache_read_amount: amounts.cache_read,
+            cache_write_amount: amounts.cache_write,
+            standard_amount: amounts.standard,
+            total_amount: amounts.total,
+            input_price_per_million: rates.input,
+            output_price_per_million: rates.output,
+            cache_read_price_per_million: rates.cache_read,
+            cache_write_price_per_million: rates.cache_write,
             service_tier,
             multiplier_percent,
         }

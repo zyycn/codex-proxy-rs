@@ -70,6 +70,67 @@ async fn codex_backend_client_should_reuse_pooled_websocket_for_same_account_and
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
 }
 
+#[tokio::test]
+async fn exact_continuation_reuses_owning_socket_after_connection_profile_updates() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let server_accepted = Arc::clone(&accepted);
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        server_accepted.fetch_add(1, Ordering::SeqCst);
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        for response_id in ["resp_connection_local", "resp_continued_after_profile"] {
+            let _request = websocket.next().await.unwrap().unwrap();
+            websocket
+                .send(Message::Text(
+                    completed_websocket_response(response_id, 2, 1).into(),
+                ))
+                .await
+                .unwrap();
+        }
+        websocket.close(None).await.unwrap();
+    });
+    let profile = test_wire_profile();
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        profile.clone(),
+    )
+    .with_websocket_pool(Arc::new(CodexWebSocketPool::new(1, Duration::from_mins(1))));
+    let mut first_request = pooled_websocket_request("wire-profile-continuation");
+    first_request.set_store(false);
+    let first = backend
+        .create_response(
+            &first_request,
+            CodexRequestContext {
+                cookie_header: Some("cf_clearance=before-handshake"),
+                ..request_context("req_local_first", Some("chatgpt-account"))
+            },
+        )
+        .await
+        .expect("connection-local response");
+    profile.update_desktop_release("2.0.0", "200");
+    let mut continuation = first_request;
+    continuation.set_previous_response_id(Some("resp_connection_local".to_owned()));
+    continuation.previous_response_scope = Some(PreviousResponseScope::ConnectionLocal);
+    let second = backend
+        .create_response(
+            &continuation,
+            CodexRequestContext {
+                cookie_header: Some("cf_clearance=after-handshake"),
+                ..request_context("req_local_second", Some("chatgpt-account"))
+            },
+        )
+        .await
+        .expect("exact continuation must keep the owning socket");
+    server.await.unwrap();
+
+    assert_eq!(first.websocket_pool_decision.unwrap().kind(), "new");
+    assert_eq!(second.websocket_pool_decision.unwrap().kind(), "reuse");
+    assert_eq!(accepted.load(Ordering::SeqCst), 1);
+}
+
 /// idle 连接被上游静默关闭后，后台 pump 会实时把它标记为 closed。
 /// 复用前的零成本 `is_closed` 检查应直接丢弃它并新建连接，不经过
 /// “发请求 → 等首帧超时 → stale-reuse 重试” 的长尾（无需任何 maintenance sweep）。
@@ -533,6 +594,94 @@ async fn websocket_pool_should_use_http_while_exact_key_is_busy() {
         third.transport_metrics.decision,
         Some(CodexTransportDecision::Http2PoolUnavailable)
     );
+}
+
+#[tokio::test]
+async fn account_eviction_should_let_busy_stream_finish_without_returning_it_to_the_pool() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (finish_first_tx, finish_first_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (first_stream, _) = listener.accept().await.unwrap();
+        let mut first_websocket = accept_codex_test_websocket(first_stream).await;
+        let _first_message = first_websocket.next().await.unwrap().unwrap();
+        first_websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.output_text.delta",
+                    "delta": "busy stream remains alive"
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        finish_first_rx.await.unwrap();
+        first_websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_busy_evicted", 2, 1).into(),
+            ))
+            .await
+            .unwrap();
+        let close = timeout(Duration::from_secs(2), first_websocket.next())
+            .await
+            .expect("completed evicted stream should be closed instead of pooled")
+            .expect("close frame")
+            .expect("valid close frame");
+        std::assert_matches!(close, Message::Close(_));
+
+        let (second_stream, _) = listener.accept().await.unwrap();
+        let mut second_websocket = accept_codex_test_websocket(second_stream).await;
+        let _second_message = second_websocket.next().await.unwrap().unwrap();
+        second_websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_after_busy_eviction", 3, 1).into(),
+            ))
+            .await
+            .unwrap();
+        second_websocket.close(None).await.unwrap();
+    });
+    let pool = Arc::new(CodexWebSocketPool::default());
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        test_wire_profile(),
+    )
+    .with_websocket_pool(Arc::clone(&pool));
+    let request = pooled_websocket_request("conversation-busy-eviction");
+    let mut first = backend
+        .create_response_stream(
+            &request,
+            request_context("req_busy_eviction", Some("chatgpt-account")),
+        )
+        .await
+        .expect("busy websocket stream")
+        .body;
+    let first_chunk = first
+        .next()
+        .await
+        .expect("first stream event")
+        .expect("valid first stream event");
+    assert!(
+        std::str::from_utf8(&first_chunk)
+            .unwrap()
+            .contains("busy stream remains alive")
+    );
+
+    pool.evict_account("chatgpt-account").await;
+    finish_first_tx.send(()).unwrap();
+    while first.next().await.transpose().unwrap().is_some() {}
+    let second = backend
+        .create_response(
+            &request,
+            request_context("req_after_busy_eviction", Some("chatgpt-account")),
+        )
+        .await
+        .expect("request after eviction should open a fresh websocket");
+    server.await.unwrap();
+
+    assert!(second.body.contains("resp_after_busy_eviction"));
+    assert_eq!(second.websocket_pool_decision.unwrap().kind(), "new");
 }
 
 #[tokio::test]

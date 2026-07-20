@@ -3,14 +3,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use gateway_core::accounting::{
-    CalculatedCost, CalculatedCostBreakdown, CurrencyCode, Decimal, Money, ProviderReportedCost,
-    Usage,
+    CalculatedCost, CalculatedCostAmounts, CalculatedCostBreakdown, CalculatedCostRates,
+    CurrencyCode, Decimal, Money, ProviderReportedCost, Usage,
 };
 use gateway_core::engine::UpstreamSendState;
 use gateway_core::error::{ProviderError, ProviderErrorKind};
 use gateway_core::event::{
-    ContentItem, ContentKind, FinishReason, GatewayEvent, ReasoningDelta, ResponseMeta, TextDelta,
-    ToolCallDelta,
+    ContentItem, ContentKind, FinishReason, GatewayEvent, ProtocolWireEvent, ProviderEvent,
+    ReasoningDelta, ResponseMeta, TextDelta, ToolCallDelta,
 };
 use gateway_protocol::openai::events::{TokenUsage, extract_usage};
 use gateway_protocol::openai::sse::{SseEvent, SseEventDecoder};
@@ -94,16 +94,20 @@ pub fn grok_billing_breakdown(
         .checked_add(cache_read_amount_ticks)?
         .checked_add(output_amount_ticks)?;
     Some(CalculatedCostBreakdown::new(
-        usd_money(input_amount_ticks)?,
-        usd_money(output_amount_ticks)?,
-        usd_money(cache_read_amount_ticks)?,
-        usd_money(0)?,
-        usd_money(standard_amount_ticks)?,
-        usd_money(standard_amount_ticks)?,
-        usd_price_per_million(rates.input_ticks)?,
-        usd_price_per_million(rates.output_ticks)?,
-        usd_price_per_million(rates.cached_input_ticks)?,
-        usd_money(0)?,
+        CalculatedCostAmounts::new(
+            usd_money(input_amount_ticks)?,
+            usd_money(output_amount_ticks)?,
+            usd_money(cache_read_amount_ticks)?,
+            usd_money(0)?,
+            usd_money(standard_amount_ticks)?,
+            usd_money(standard_amount_ticks)?,
+        ),
+        CalculatedCostRates::new(
+            usd_price_per_million(rates.input_ticks)?,
+            usd_price_per_million(rates.output_ticks)?,
+            usd_price_per_million(rates.cached_input_ticks)?,
+            usd_money(0)?,
+        ),
         Some("default".to_owned()),
         100,
     ))
@@ -122,9 +126,7 @@ fn usd_price_per_million(per_token_ticks: u128) -> Option<Money> {
 
 /// Incremental decoder for one official Grok Responses attempt.
 ///
-/// Unknown output kinds and events fail closed because gateway-core does not
-/// currently have canonical representations for Grok backend tools, images,
-/// searches, or MCP activity. No raw upstream data is retained in errors.
+/// 每个上游 event 同时保留 OpenAI wire，并在可识别时附加 canonical facts。
 pub struct GrokCanonicalDecoder {
     decoder: SseEventDecoder,
     fallback_model: String,
@@ -150,23 +152,29 @@ impl GrokCanonicalDecoder {
         }
     }
 
-    pub fn push(&mut self, chunk: &[u8]) -> Result<Vec<GatewayEvent>, ProviderError> {
+    pub fn push(&mut self, chunk: &[u8]) -> Result<Vec<ProviderEvent>, ProviderError> {
         let events = self.decoder.push(chunk).map_err(protocol_error)?;
         self.decode(events)
     }
 
-    pub fn finish(&mut self) -> Result<Vec<GatewayEvent>, ProviderError> {
+    pub fn finish(&mut self) -> Result<Vec<ProviderEvent>, ProviderError> {
         let events = self.decoder.finish().map_err(protocol_error)?;
-        let canonical = self.decode(events)?;
+        let output = self.decode(events)?;
         if !self.completed {
             return Err(protocol_error_marker());
         }
-        Ok(canonical)
+        Ok(output)
     }
 
-    fn decode(&mut self, events: Vec<SseEvent>) -> Result<Vec<GatewayEvent>, ProviderError> {
-        let mut canonical = Vec::new();
+    fn decode(&mut self, events: Vec<SseEvent>) -> Result<Vec<ProviderEvent>, ProviderError> {
+        let mut output = Vec::new();
         for event in events {
+            if event.data.trim() == "[DONE]" {
+                if !self.completed {
+                    return Err(protocol_error_marker());
+                }
+                continue;
+            }
             let value = serde_json::from_str::<Value>(&event.data).map_err(protocol_error)?;
             let body_type = value.get("type").and_then(Value::as_str);
             let event_type = match (event.event.as_deref(), body_type) {
@@ -177,9 +185,17 @@ impl GrokCanonicalDecoder {
                 (None, Some(body)) => body,
                 (None, None) => return Err(protocol_error_marker()),
             };
+            let mut canonical = Vec::new();
             self.decode_event(event_type, &value, &mut canonical)?;
+            let wire = ProtocolWireEvent::json("openai", event.event, value)
+                .map_err(|_| protocol_error_marker())?;
+            output.push(if canonical.is_empty() {
+                ProviderEvent::wire(wire)
+            } else {
+                ProviderEvent::canonical_with_wire(canonical, wire)
+            });
         }
-        Ok(canonical)
+        Ok(output)
     }
 
     fn decode_event(
@@ -206,7 +222,9 @@ impl GrokCanonicalDecoder {
             "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
                 self.reasoning_delta(value, output)
             }
-            "response.function_call_arguments.delta" => self.tool_delta(value, output),
+            "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta" => {
+                self.tool_delta(value, output)
+            }
             "response.completed" | "response.incomplete" => {
                 self.complete(event_type, value, output)
             }
@@ -216,12 +234,13 @@ impl GrokCanonicalDecoder {
             | "response.reasoning_summary_text.done"
             | "response.reasoning_text.done"
             | "response.function_call_arguments.done"
+            | "response.custom_tool_call_input.done"
             | "response.content_part.done"
             | "response.reasoning_summary_part.done"
             | "response.reasoning_part.done"
             | "response.rate_limits.updated"
             | "rate_limits.updated" => Ok(()),
-            _ => Err(unsupported_event_error()),
+            _ => Ok(()),
         }
     }
 
@@ -266,7 +285,7 @@ impl GrokCanonicalDecoder {
         let item = value.get("item").ok_or_else(protocol_error_marker)?;
         let output_index = event_index(value, "output_index")?;
         match item.get("type").and_then(Value::as_str) {
-            Some("function_call") => {
+            Some("function_call" | "custom_tool_call") => {
                 let index = content_index(output_index, 0)?;
                 self.add_content(index, ContentKind::ToolCall, output)?;
                 let call_id = item
@@ -293,8 +312,7 @@ impl GrokCanonicalDecoder {
                 ContentKind::Reasoning,
                 output,
             ),
-            Some("message") => Ok(()),
-            Some(_) | None => Err(unsupported_event_error()),
+            _ => Ok(()),
         }
     }
 
@@ -307,8 +325,8 @@ impl GrokCanonicalDecoder {
         let item = value.get("item").ok_or_else(protocol_error_marker)?;
         match item.get("type").and_then(Value::as_str) {
             Some("message" | "reasoning") => return Ok(()),
-            Some("function_call") => {}
-            Some(_) | None => return Err(unsupported_event_error()),
+            Some("function_call" | "custom_tool_call") => {}
+            Some(_) | None => return Ok(()),
         }
         let output_index = event_index(value, "output_index")?;
         let index = content_index(output_index, 0)?;
@@ -317,6 +335,7 @@ impl GrokCanonicalDecoder {
         }
         let Some(arguments) = item
             .get("arguments")
+            .or_else(|| item.get("input"))
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
         else {
@@ -360,7 +379,7 @@ impl GrokCanonicalDecoder {
         let kind = match part.get("type").and_then(Value::as_str) {
             Some("output_text" | "refusal") => ContentKind::Text,
             Some("summary_text" | "reasoning_text") => ContentKind::Reasoning,
-            Some(_) | None => return Err(unsupported_event_error()),
+            Some(_) | None => return Ok(()),
         };
         self.ensure_content(content_index(output_index, part_index)?, kind, output)
     }
@@ -709,9 +728,4 @@ fn protocol_error(_error: impl std::fmt::Debug) -> ProviderError {
 fn protocol_error_marker() -> ProviderError {
     ProviderError::new(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
         .redact_sensitive_context("invalid upstream event")
-}
-
-fn unsupported_event_error() -> ProviderError {
-    ProviderError::new(ProviderErrorKind::Unsupported, UpstreamSendState::Sent)
-        .redact_sensitive_context("unsupported upstream event")
 }

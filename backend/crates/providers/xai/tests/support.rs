@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
+use std::net::IpAddr;
+use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -11,12 +14,142 @@ use gateway_core::engine::credential::{
     QuotaWriteOutcome,
 };
 use gateway_core::error::{StoreError, StoreErrorKind};
+use gateway_core::provider_ports::{
+    ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError,
+};
 use gateway_core::routing::ProviderInstanceId;
 use provider_xai::{
-    CreateGrokCredential, GrokAccountCatalog, GrokAccountProfile, GrokCatalogCacheError,
-    GrokCredentialAdmin, GrokCredentialAvailability, GrokCredentialCatalogCache,
-    GrokCredentialRepositoryError, GrokOAuthSecret, SecretValue,
+    CreateGrokCredential, GROK_BILLING_URL, GrokAccountCatalog, GrokAccountProfile,
+    GrokCatalogCacheError, GrokCredentialAdmin, GrokCredentialAvailability,
+    GrokCredentialCatalogCache, GrokCredentialRepositoryError, GrokEndpointPolicy, GrokOAuthSecret,
+    GrokReqwestTransportBuildError, SecretValue,
 };
+use reqwest::Client;
+use reqwest::redirect::Policy;
+use url::{Host, Url};
+
+#[derive(Debug, Clone, Copy)]
+pub struct LoopbackGrokEndpointPolicy {
+    address: IpAddr,
+    port: u16,
+}
+
+impl LoopbackGrokEndpointPolicy {
+    pub fn for_origin(origin: &Url) -> Self {
+        assert_eq!(origin.scheme(), "http", "test origin must use HTTP");
+        assert!(
+            origin.username().is_empty(),
+            "test origin must not contain credentials"
+        );
+        assert!(
+            origin.password().is_none(),
+            "test origin must not contain credentials"
+        );
+        assert!(
+            origin.query().is_none(),
+            "test origin must not contain a query"
+        );
+        assert!(
+            origin.fragment().is_none(),
+            "test origin must not contain a fragment"
+        );
+        let address = match origin.host() {
+            Some(Host::Ipv4(address)) if address.is_loopback() => IpAddr::V4(address),
+            Some(Host::Ipv6(address)) if address.is_loopback() => IpAddr::V6(address),
+            _ => panic!("test origin must use a numeric loopback address"),
+        };
+        Self {
+            address,
+            port: origin.port().expect("test origin must contain a port"),
+        }
+    }
+
+    fn accepts_origin(self, url: &Url) -> bool {
+        url.scheme() == "http"
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.host().and_then(|host| match host {
+                Host::Ipv4(address) => Some(IpAddr::V4(address)),
+                Host::Ipv6(address) => Some(IpAddr::V6(address)),
+                Host::Domain(_) => None,
+            }) == Some(self.address)
+            && url.port() == Some(self.port)
+            && url.fragment().is_none()
+    }
+
+    fn build_client(timeout: Option<Duration>) -> Result<Client, GrokReqwestTransportBuildError> {
+        let mut builder = Client::builder()
+            .redirect(Policy::none())
+            .no_proxy()
+            .https_only(false)
+            .tcp_nodelay(true);
+        if let Some(timeout) = timeout {
+            builder = builder.timeout(timeout);
+        }
+        builder
+            .build()
+            .map_err(|_| GrokReqwestTransportBuildError::ClientInitialization)
+    }
+}
+
+impl GrokEndpointPolicy for LoopbackGrokEndpointPolicy {
+    fn build_oauth_client(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<Client, GrokReqwestTransportBuildError> {
+        Self::build_client(timeout)
+    }
+
+    fn build_inference_client(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<Client, GrokReqwestTransportBuildError> {
+        Self::build_client(timeout)
+    }
+
+    fn validate_oauth(&self, url: &Url) -> bool {
+        self.accepts_origin(url)
+    }
+
+    fn validate_inference(&self, url: &Url) -> bool {
+        self.accepts_origin(url) && url.path() == "/v1/responses" && url.query().is_none()
+    }
+
+    fn validate_model_catalog(&self, url: &Url) -> bool {
+        self.accepts_origin(url) && url.path() == "/v1/models" && url.query().is_none()
+    }
+
+    fn route_billing(&self, url: &Url) -> Option<Url> {
+        (url.as_str() == GROK_BILLING_URL).then(|| {
+            let mut endpoint = self.origin();
+            endpoint.set_path("/v1/billing");
+            endpoint.set_query(Some("format=credits"));
+            endpoint
+        })
+    }
+
+    fn validate_jwks(&self, url: &Url) -> bool {
+        self.accepts_origin(url) && url.path() == "/.well-known/jwks.json" && url.query().is_none()
+    }
+
+    fn validate_userinfo(&self, url: &Url) -> bool {
+        self.accepts_origin(url) && url.path() == "/oauth2/userinfo" && url.query().is_none()
+    }
+}
+
+impl LoopbackGrokEndpointPolicy {
+    fn origin(self) -> Url {
+        let origin = match self.address {
+            IpAddr::V4(address) => format!("http://{address}:{}", self.port),
+            IpAddr::V6(address) => format!("http://[{address}]:{}", self.port),
+        };
+        Url::parse(&origin).expect("validated loopback origin")
+    }
+}
+
+pub fn loopback_endpoint_policy(origin: &Url) -> Arc<dyn GrokEndpointPolicy> {
+    Arc::new(LoopbackGrokEndpointPolicy::for_origin(origin))
+}
 
 #[derive(Clone)]
 struct StoredAccount {
@@ -28,6 +161,7 @@ struct StoredAccount {
 #[derive(Default)]
 pub struct MemoryProviderAccountStore {
     accounts: Mutex<BTreeMap<ProviderAccountId, StoredAccount>>,
+    quota_reads: AtomicUsize,
 }
 
 impl MemoryProviderAccountStore {
@@ -49,6 +183,10 @@ impl MemoryProviderAccountStore {
 
     pub fn len(&self) -> usize {
         lock(&self.accounts).len()
+    }
+
+    pub fn quota_reads(&self) -> usize {
+        self.quota_reads.load(Ordering::SeqCst)
     }
 }
 
@@ -146,16 +284,20 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
             },
         );
         stored.credential = credential;
+        stored.quota = None;
         Ok(CredentialCasOutcome::Updated(next))
     }
 
-    async fn get_quota(
+    async fn get_quotas(
         &self,
-        account: &ProviderAccountId,
-    ) -> Result<Option<QuotaObservation>, StoreError> {
-        Ok(lock(&self.accounts)
-            .get(account)
-            .and_then(|stored| stored.quota.clone()))
+        accounts: &[ProviderAccountId],
+    ) -> Result<Vec<QuotaObservation>, StoreError> {
+        self.quota_reads.fetch_add(1, Ordering::SeqCst);
+        let stored = lock(&self.accounts);
+        Ok(accounts
+            .iter()
+            .filter_map(|account| stored.get(account)?.quota.clone())
+            .collect())
     }
 
     async fn compare_and_swap_quota(
@@ -313,15 +455,15 @@ impl GrokCredentialCatalogCache for MemoryGrokCatalogCache {
             .cloned())
     }
 
-    async fn permits(
+    async fn observed_model_support(
         &self,
         account_id: &ProviderAccountId,
         revision: CredentialRevision,
         model: &str,
-    ) -> Result<bool, GrokCatalogCacheError> {
+    ) -> Result<Option<bool>, GrokCatalogCacheError> {
         Ok(lock(&self.entries)
             .get(&(account_id.clone(), revision))
-            .is_some_and(|catalog| catalog.seed().permits(model)))
+            .map(|catalog| catalog.seed().permits(model)))
     }
 }
 
@@ -342,11 +484,11 @@ pub fn profile(subject: &str) -> GrokAccountProfile {
         plan_type: Some("standard".to_owned()),
         access_token_expires_at: now + chrono::Duration::hours(1),
         refresh_token_expires_at: Some(now + chrono::Duration::days(30)),
-        next_refresh_at: Some(now + chrono::Duration::minutes(30)),
     }
 }
 
 pub fn create_input(suffix: &str, subject: &str) -> CreateGrokCredential {
+    let now = Utc::now();
     CreateGrokCredential {
         account_id: account_id(suffix),
         provider_instance_id: instance_id(),
@@ -358,11 +500,34 @@ pub fn create_input(suffix: &str, subject: &str) -> CreateGrokCredential {
             scope: provider_xai::OFFICIAL_SCOPES.join(" "),
         },
         account: profile(subject),
+        next_refresh_at: now + chrono::Duration::minutes(30),
         enabled: true,
         initial_availability: GrokCredentialAvailability::Unknown,
         initial_availability_reason: None,
         initial_cooldown_until: None,
     }
+}
+
+pub struct StaticRuntimePolicy;
+
+impl ProviderRuntimePolicyPort for StaticRuntimePolicy {
+    fn load_refresh_policy(
+        &self,
+    ) -> futures::future::BoxFuture<'_, Result<ProviderRefreshPolicy, ProviderStoreError>> {
+        Box::pin(async { Ok(refresh_policy()) })
+    }
+}
+
+pub fn refresh_policy() -> ProviderRefreshPolicy {
+    ProviderRefreshPolicy::try_new(
+        Duration::from_secs(5 * 60),
+        NonZeroU32::new(2).expect("positive concurrency"),
+    )
+    .expect("valid refresh policy")
+}
+
+pub fn runtime_policy() -> Arc<dyn ProviderRuntimePolicyPort> {
+    Arc::new(StaticRuntimePolicy)
 }
 
 pub fn prepare_input(

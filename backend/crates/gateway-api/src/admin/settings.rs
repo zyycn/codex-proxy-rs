@@ -2,7 +2,6 @@
 
 use std::{collections::BTreeMap, fmt};
 
-use async_trait::async_trait;
 use axum::{
     Json, Router,
     extract::State,
@@ -11,11 +10,19 @@ use axum::{
     routing::{get, post},
 };
 use chrono::{DateTime, Utc};
+use gateway_admin::model::{
+    Revision,
+    settings::{
+        ProviderModelMappings as DomainProviderModelMappings, ReplaceRuntimeSettings,
+        RotationStrategy, RuntimeSettings,
+    },
+};
+use gateway_core::routing::{ProviderKind, PublicModelId, UpstreamModelId};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AdminAuth, AdminEnvelope, AdminError, AdminRequestContext, AdminResponse, AdminServiceError,
-    AdminServiceErrorKind, AdminSessionState, WireValidationError,
+    AdminAuth, AdminEnvelope, AdminError, AdminResponse, AdminSessionState, WireValidationError,
+    wire::map_admin_service_error,
 };
 
 /// 按 Provider 分组的精确模型映射：Provider → 客户端模型 → 上游模型。
@@ -82,6 +89,47 @@ impl UpdateRuntimeSettingsRequest {
         }
         Ok(())
     }
+
+    fn into_command(self) -> Result<ReplaceRuntimeSettings, WireValidationError> {
+        self.validate()?;
+        Ok(ReplaceRuntimeSettings {
+            expected_config_revision: Revision::new(self.expected_config_revision)
+                .map_err(|_| WireValidationError::new("settingsRevisionOverflow"))?,
+            provider_model_mappings: domain_provider_model_mappings(self.provider_model_mappings)?,
+            refresh_margin_seconds: self.refresh_margin_seconds,
+            refresh_concurrency: u32::try_from(self.refresh_concurrency)
+                .map_err(|_| WireValidationError::new("settingsRefreshConcurrencyOverflow"))?,
+            max_concurrent_per_account: u32::try_from(self.max_concurrent_per_account)
+                .map_err(|_| WireValidationError::new("settingsMaxConcurrencyOverflow"))?,
+            request_interval_ms: self.request_interval_ms,
+            rotation_strategy: parse_rotation_strategy(&self.rotation_strategy)
+                .ok_or_else(|| WireValidationError::new("rotationStrategy"))?,
+            usage_retention_days: u32::try_from(self.usage_retention_days)
+                .map_err(|_| WireValidationError::new("settingsUsageRetentionOverflow"))?,
+            ops_event_retention_days: u32::try_from(self.ops_event_retention_days)
+                .map_err(|_| WireValidationError::new("settingsOpsRetentionOverflow"))?,
+            audit_retention_days: u32::try_from(self.audit_retention_days)
+                .map_err(|_| WireValidationError::new("settingsAuditRetentionOverflow"))?,
+        })
+    }
+}
+
+impl From<RuntimeSettings> for RuntimeSettingsView {
+    fn from(settings: RuntimeSettings) -> Self {
+        Self {
+            config_revision: settings.config_revision.get(),
+            provider_model_mappings: wire_provider_model_mappings(settings.provider_model_mappings),
+            refresh_margin_seconds: settings.refresh_margin_seconds,
+            refresh_concurrency: u64::from(settings.refresh_concurrency),
+            max_concurrent_per_account: u64::from(settings.max_concurrent_per_account),
+            request_interval_ms: settings.request_interval_ms,
+            rotation_strategy: rotation_strategy_name(settings.rotation_strategy).to_owned(),
+            usage_retention_days: u64::from(settings.usage_retention_days),
+            ops_event_retention_days: u64::from(settings.ops_event_retention_days),
+            audit_retention_days: u64::from(settings.audit_retention_days),
+            updated_at: settings.updated_at,
+        }
+    }
 }
 
 /// 管理 API Key 状态；状态读取不回显完整值。
@@ -120,39 +168,10 @@ impl Default for DeletedAdminApiKey {
     }
 }
 
-/// 设置页聚合和明文 Admin API Key 管理应用端口。
-#[async_trait]
-pub trait AdminSettingsService: Send + Sync {
-    async fn load(&self) -> Result<RuntimeSettingsView, AdminServiceError>;
-
-    async fn replace(
-        &self,
-        context: &AdminRequestContext,
-        request: UpdateRuntimeSettingsRequest,
-    ) -> Result<RuntimeSettingsView, AdminServiceError>;
-
-    async fn admin_api_key_exists(&self) -> Result<bool, AdminServiceError>;
-
-    async fn regenerate_admin_api_key(
-        &self,
-        context: &AdminRequestContext,
-    ) -> Result<String, AdminServiceError>;
-
-    async fn delete_admin_api_key(
-        &self,
-        context: &AdminRequestContext,
-    ) -> Result<(), AdminServiceError>;
-}
-
-/// 设置 HTTP module 所需最小 state。
-pub trait AdminSettingsState: AdminSessionState {
-    fn admin_settings_service(&self) -> &dyn AdminSettingsService;
-}
-
 /// 构造固定 GET/POST 设置路由。
 pub fn router<S>() -> Router<S>
 where
-    S: AdminSettingsState + Clone + Send + Sync + 'static,
+    S: AdminSessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route(
@@ -174,14 +193,18 @@ async fn settings<S>(
     State(state): State<S>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSettingsState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
-    let data = state
-        .admin_settings_service()
+    let result = state
+        .admin_services()
+        .settings()
         .load()
         .await
         .map_err(map_service_error)?;
-    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(RuntimeSettingsView::from(result)),
+    ))
 }
 
 async fn update_settings<S>(
@@ -190,15 +213,19 @@ async fn update_settings<S>(
     Json(request): Json<UpdateRuntimeSettingsRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSettingsState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
-    request.validate().map_err(map_wire_error)?;
-    let data = state
-        .admin_settings_service()
-        .replace(auth.context(), request)
+    let command = request.into_command().map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .settings()
+        .replace(&auth.context().mutation_context(), command)
         .await
         .map_err(map_service_error)?;
-    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(RuntimeSettingsView::from(result)),
+    ))
 }
 
 async fn admin_api_key_status<S>(
@@ -206,10 +233,11 @@ async fn admin_api_key_status<S>(
     State(state): State<S>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSettingsState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
     let exists = state
-        .admin_settings_service()
+        .admin_services()
+        .settings()
         .admin_api_key_exists()
         .await
         .map_err(map_service_error)?;
@@ -224,16 +252,19 @@ async fn regenerate_admin_api_key<S>(
     State(state): State<S>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSettingsState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
-    let key = state
-        .admin_settings_service()
-        .regenerate_admin_api_key(auth.context())
+    let result = state
+        .admin_services()
+        .settings()
+        .regenerate_admin_api_key(&auth.context().mutation_context())
         .await
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(RegeneratedAdminApiKey { key }),
+        AdminEnvelope::ok(RegeneratedAdminApiKey {
+            key: result.key.expose_for_response().to_owned(),
+        }),
     ))
 }
 
@@ -242,11 +273,12 @@ async fn delete_admin_api_key<S>(
     State(state): State<S>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSettingsState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
     state
-        .admin_settings_service()
-        .delete_admin_api_key(auth.context())
+        .admin_services()
+        .settings()
+        .delete_admin_api_key(&auth.context().mutation_context())
         .await
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
@@ -281,6 +313,64 @@ fn validate_provider_model_mappings(
     Ok(())
 }
 
+fn domain_provider_model_mappings(
+    mappings: ProviderModelMappings,
+) -> Result<DomainProviderModelMappings, WireValidationError> {
+    mappings
+        .into_iter()
+        .map(|(provider, entries)| {
+            let provider = ProviderKind::new(provider)
+                .map_err(|_| WireValidationError::new("providerModelMappings"))?;
+            let entries = entries
+                .into_iter()
+                .map(|(requested, upstream)| {
+                    Ok((
+                        PublicModelId::new(requested)
+                            .map_err(|_| WireValidationError::new("providerModelMappings"))?,
+                        UpstreamModelId::new(upstream)
+                            .map_err(|_| WireValidationError::new("providerModelMappings"))?,
+                    ))
+                })
+                .collect::<Result<_, WireValidationError>>()?;
+            Ok((provider, entries))
+        })
+        .collect()
+}
+
+fn wire_provider_model_mappings(mappings: DomainProviderModelMappings) -> ProviderModelMappings {
+    mappings
+        .into_iter()
+        .map(|(provider, entries)| {
+            (
+                provider.to_string(),
+                entries
+                    .into_iter()
+                    .map(|(requested, upstream)| (requested.to_string(), upstream.to_string()))
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+fn parse_rotation_strategy(value: &str) -> Option<RotationStrategy> {
+    match value {
+        "smart" => Some(RotationStrategy::Smart),
+        "quota_reset_priority" => Some(RotationStrategy::QuotaResetPriority),
+        "round_robin" => Some(RotationStrategy::RoundRobin),
+        "sticky" => Some(RotationStrategy::Sticky),
+        _ => None,
+    }
+}
+
+const fn rotation_strategy_name(strategy: RotationStrategy) -> &'static str {
+    match strategy {
+        RotationStrategy::Smart => "smart",
+        RotationStrategy::QuotaResetPriority => "quota_reset_priority",
+        RotationStrategy::RoundRobin => "round_robin",
+        RotationStrategy::Sticky => "sticky",
+    }
+}
+
 fn valid_slug(value: &str, max_len: usize) -> bool {
     !value.is_empty()
         && value.len() <= max_len
@@ -298,17 +388,18 @@ fn valid_model_name(value: &str, max_len: usize) -> bool {
 }
 
 fn map_wire_error(error: WireValidationError) -> AdminError {
-    AdminError::bad_request(format!("Invalid field: {}", error.field()))
+    let message = match error.field() {
+        "settingsRevisionOverflow" => "expectedConfigRevision must be positive".to_owned(),
+        "settingsRefreshConcurrencyOverflow" => "Invalid refreshConcurrency".to_owned(),
+        "settingsMaxConcurrencyOverflow" => "Invalid maxConcurrentPerAccount".to_owned(),
+        "settingsUsageRetentionOverflow" => "Invalid usageRetentionDays".to_owned(),
+        "settingsOpsRetentionOverflow" => "Invalid opsEventRetentionDays".to_owned(),
+        "settingsAuditRetentionOverflow" => "Invalid auditRetentionDays".to_owned(),
+        field => format!("Invalid field: {field}"),
+    };
+    AdminError::bad_request(message)
 }
 
-fn map_service_error(error: AdminServiceError) -> AdminError {
-    match error.kind() {
-        AdminServiceErrorKind::Invalid => AdminError::bad_request(error.to_string()),
-        AdminServiceErrorKind::NotFound => AdminError::not_found(error.to_string()),
-        AdminServiceErrorKind::Conflict => AdminError::conflict(error.to_string()),
-        AdminServiceErrorKind::Unavailable => {
-            AdminError::service_unavailable("Settings repository unavailable")
-        }
-        AdminServiceErrorKind::Internal => AdminError::internal(error.to_string()),
-    }
+fn map_service_error(error: gateway_admin::model::AdminError) -> AdminError {
+    map_admin_service_error(error, "Settings repository unavailable")
 }

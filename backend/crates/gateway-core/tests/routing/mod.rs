@@ -12,6 +12,8 @@ use gateway_core::routing::{
     ProviderKind, ProviderModel, PublicModelId, RoutingContext, RuntimeSnapshot, UpstreamModelId,
 };
 
+mod snapshot;
+
 fn scheduling() -> AccountSelectionPolicy {
     AccountSelectionPolicy::new(
         RotationStrategy::Smart,

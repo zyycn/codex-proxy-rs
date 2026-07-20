@@ -17,7 +17,9 @@ use crate::{
     transport::protocol::{
         responses::CodexResponsesRequest, websocket::websocket_response_create_payload_text,
     },
-    transport::{endpoints::CODEX_RESPONSES_PATH, response_meta, tls},
+    transport::{
+        diagnostics::CodexUpstreamSendPhase, endpoints::CODEX_RESPONSES_PATH, response_meta, tls,
+    },
 };
 
 use super::{
@@ -192,6 +194,7 @@ fn websocket_opening_error(response: &WsResponse<Option<Vec<u8>>>) -> CodexWebSo
         body,
         response_meta::set_cookie_headers(response.headers()),
         response_meta::diagnostics(Some(status_code), response.headers()),
+        CodexUpstreamSendPhase::BeforePayload,
     )
 }
 

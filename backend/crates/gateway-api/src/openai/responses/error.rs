@@ -197,6 +197,15 @@ pub enum ResponseEncodeError {
     /// Adapter 自身生成的 event framing 无法还原为 WebSocket event JSON。
     #[error("responses event encoder produced an invalid internal framing")]
     InvalidEventEncoding,
+    /// 同一响应混用了协议原生与 canonical 表达。
+    #[error("responses stream changed its wire representation")]
+    MixedWireRepresentation,
+    /// 协议原生流缺少可返回的终态 response object。
+    #[error("responses wire stream has no terminal response")]
+    MissingWireTerminal,
+    /// 协议原生事件携带了不一致的响应身份。
+    #[error("responses wire stream changed its response identity")]
+    WireIdentityChanged,
 }
 
 impl ResponseEncodeError {

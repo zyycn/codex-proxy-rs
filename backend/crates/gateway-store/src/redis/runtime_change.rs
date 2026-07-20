@@ -4,6 +4,10 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
+use gateway_core::routing::{
+    ConfigRevision,
+    snapshot::{SnapshotRevisionStream, SnapshotSubscriptionError, SnapshotSubscriptionPort},
+};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 
@@ -98,6 +102,44 @@ impl RuntimeChangeRepository for RedisRuntimeChangeRepository {
             wire.try_into()
         });
         Ok(Box::pin(stream))
+    }
+}
+
+impl SnapshotSubscriptionPort for RedisRuntimeChangeRepository {
+    fn publish_snapshot_revision(
+        &self,
+        revision: ConfigRevision,
+    ) -> futures::future::BoxFuture<'_, Result<(), SnapshotSubscriptionError>> {
+        Box::pin(async move {
+            let config_revision = Revision::new(revision.get())
+                .map_err(|_| SnapshotSubscriptionError::unavailable())?;
+            self.publish_runtime_change(&RuntimeChange::SnapshotPublished { config_revision })
+                .await
+                .map_err(|_| SnapshotSubscriptionError::unavailable())
+        })
+    }
+
+    fn subscribe_snapshot_revisions(
+        &self,
+    ) -> futures::future::BoxFuture<'_, Result<SnapshotRevisionStream, SnapshotSubscriptionError>>
+    {
+        Box::pin(async move {
+            let stream = self
+                .subscribe_runtime_changes()
+                .await
+                .map_err(|_| SnapshotSubscriptionError::unavailable())?
+                .filter_map(|change| async move {
+                    match change {
+                        Ok(RuntimeChange::SnapshotPublished { config_revision }) => Some(
+                            ConfigRevision::new(config_revision.get())
+                                .map_err(|_| SnapshotSubscriptionError::unavailable()),
+                        ),
+                        Ok(RuntimeChange::ProviderAccountChanged { .. }) => None,
+                        Err(_) => Some(Err(SnapshotSubscriptionError::unavailable())),
+                    }
+                });
+            Ok(Box::pin(stream) as SnapshotRevisionStream)
+        })
     }
 }
 

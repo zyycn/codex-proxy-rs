@@ -1,4 +1,7 @@
-use gateway_core::accounting::{CalculatedCostBreakdown, CurrencyCode, Decimal, Money};
+use gateway_core::accounting::{
+    CalculatedCostAmounts, CalculatedCostBreakdown, CalculatedCostRates, CurrencyCode, Decimal,
+    Money,
+};
 use gateway_protocol::openai::events::retry_after_seconds_from_body;
 use reqwest::StatusCode;
 use serde_json::Value;
@@ -248,16 +251,20 @@ pub fn openai_billing_breakdown(
     let total_amount = apply_percent(standard_amount, multiplier_percent)?;
 
     Some(CalculatedCostBreakdown::new(
-        usd_money(input_amount)?,
-        usd_money(output_amount)?,
-        usd_money(cache_read_amount)?,
-        usd_money(cache_write_amount)?,
-        usd_money(standard_amount)?,
-        usd_money(total_amount)?,
-        usd_price_per_million(rates.input_ticks)?,
-        usd_price_per_million(rates.output_ticks)?,
-        usd_price_per_million(rates.cache_read_ticks)?,
-        usd_price_per_million(cache_write_rate)?,
+        CalculatedCostAmounts::new(
+            usd_money(input_amount)?,
+            usd_money(output_amount)?,
+            usd_money(cache_read_amount)?,
+            usd_money(cache_write_amount)?,
+            usd_money(standard_amount)?,
+            usd_money(total_amount)?,
+        ),
+        CalculatedCostRates::new(
+            usd_price_per_million(rates.input_ticks)?,
+            usd_price_per_million(rates.output_ticks)?,
+            usd_price_per_million(rates.cache_read_ticks)?,
+            usd_price_per_million(cache_write_rate)?,
+        ),
         Some(normalized_tier.unwrap_or_else(|| "default".to_owned())),
         multiplier_percent,
     ))
@@ -344,6 +351,8 @@ impl CodexBackendClient {
                     set_cookie_headers: Vec::new(),
                     rate_limit_headers: Vec::new(),
                     transport: super::client::CodexBackendTransport::HttpSse,
+                    transport_metrics: Box::default(),
+                    send_phase: super::diagnostics::CodexUpstreamSendPhase::AfterPayload,
                 });
             }
             let body = body.into_string();
@@ -362,6 +371,8 @@ impl CodexBackendClient {
                     set_cookie_headers: Vec::new(),
                     rate_limit_headers: Vec::new(),
                     transport: super::client::CodexBackendTransport::HttpSse,
+                    transport_metrics: Box::default(),
+                    send_phase: super::diagnostics::CodexUpstreamSendPhase::AfterPayload,
                 });
             }
 
@@ -384,6 +395,8 @@ impl CodexBackendClient {
             set_cookie_headers: Vec::new(),
             rate_limit_headers: Vec::new(),
             transport: super::client::CodexBackendTransport::HttpSse,
+            transport_metrics: Box::default(),
+            send_phase: super::diagnostics::CodexUpstreamSendPhase::AfterPayload,
         })
     }
 }

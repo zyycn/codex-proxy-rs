@@ -33,7 +33,7 @@ pub use config::{
 pub use headers::{GrokHeader, GrokHeaderValue, build_grok_headers};
 pub use network::{
     GrokDnsResolutionError, GrokDnsResolutionPlan, GrokDnsResolutionPolicy, GrokEndpointPolicy,
-    GrokReqwestTransportBuildError, ReqwestGrokInferenceTransport,
+    GrokReqwestTransportBuildError, OfficialGrokEndpointPolicy, ReqwestGrokInferenceTransport,
     ReqwestGrokModelCatalogTransport, ReqwestOAuthTransport,
 };
 pub use request::{GrokRequestEncodeError, GrokResponsesRequest};

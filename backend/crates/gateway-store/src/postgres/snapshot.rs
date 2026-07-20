@@ -4,6 +4,13 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use gateway_core::routing::{
+    ConfigRevision,
+    snapshot::{
+        SnapshotClientPolicyFacts, SnapshotFacts, SnapshotProviderInstanceFacts,
+        SnapshotSettingsFacts, SnapshotStoreError, SnapshotStorePort,
+    },
+};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 
 use crate::{Revision, StoreError, StoreResult, postgres_unavailable};
@@ -82,7 +89,8 @@ impl RuntimeSnapshotRepository for PgRuntimeSnapshotRepository {
             .await
             .map_err(|_| postgres_unavailable("commit runtime snapshot"))?;
 
-        let observed_current_revision = self.current_config_revision().await?;
+        let observed_current_revision =
+            RuntimeSnapshotRepository::current_config_revision(self).await?;
         Ok(RuntimeSnapshotData {
             config_revision,
             observed_current_revision,
@@ -126,6 +134,73 @@ impl RuntimeSnapshotRepository for PgRuntimeSnapshotRepository {
             })
             .collect()
     }
+}
+
+impl SnapshotStorePort for PgRuntimeSnapshotRepository {
+    fn load_snapshot_facts(
+        &self,
+    ) -> futures::future::BoxFuture<'_, Result<SnapshotFacts, SnapshotStoreError>> {
+        Box::pin(async move {
+            let data = self
+                .load_runtime_snapshot()
+                .await
+                .map_err(|_| SnapshotStoreError::unavailable())?;
+            let config_revision = core_revision(data.config_revision)?;
+            let observed_current_revision = core_revision(data.observed_current_revision)?;
+            let settings = SnapshotSettingsFacts::new(
+                data.settings.max_concurrent_per_account,
+                data.settings.request_interval_ms,
+                data.settings.rotation_strategy,
+                data.settings.provider_model_mappings,
+            );
+            let provider_instances = data
+                .provider_instances
+                .into_iter()
+                .map(|instance| {
+                    SnapshotProviderInstanceFacts::new(
+                        instance.id,
+                        instance.provider_kind,
+                        instance.base_url,
+                        instance.enabled,
+                    )
+                })
+                .collect();
+            let client_policies = data
+                .client_api_keys
+                .into_iter()
+                .map(|key| {
+                    SnapshotClientPolicyFacts::new(
+                        key.id,
+                        key.plaintext_key,
+                        key.provider_kind,
+                        key.limits,
+                    )
+                })
+                .collect();
+            Ok(SnapshotFacts::new(
+                config_revision,
+                observed_current_revision,
+                settings,
+                provider_instances,
+                client_policies,
+            ))
+        })
+    }
+
+    fn current_config_revision(
+        &self,
+    ) -> futures::future::BoxFuture<'_, Result<ConfigRevision, SnapshotStoreError>> {
+        Box::pin(async move {
+            RuntimeSnapshotRepository::current_config_revision(self)
+                .await
+                .map_err(|_| SnapshotStoreError::unavailable())
+                .and_then(core_revision)
+        })
+    }
+}
+
+fn core_revision(revision: Revision) -> Result<ConfigRevision, SnapshotStoreError> {
+    ConfigRevision::new(revision.get()).map_err(|_| SnapshotStoreError::unavailable())
 }
 
 async fn load_settings(

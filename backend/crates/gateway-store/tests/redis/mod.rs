@@ -2,8 +2,10 @@ mod client_admission;
 mod credential_cooldown;
 mod credential_leases;
 mod credential_state;
+mod oauth_pending;
 mod provider_circuit;
 mod runtime_change;
+mod worker_lease;
 
 use chrono::Utc;
 use gateway_store::redis::{

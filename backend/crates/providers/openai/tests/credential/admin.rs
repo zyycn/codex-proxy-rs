@@ -4,21 +4,29 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
+use futures::future::BoxFuture;
 use gateway_core::engine::credential::{
     CredentialRevision, LoadedCredential, PlaintextCredential, ProviderAccountId,
 };
+use gateway_core::provider_ports::{
+    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshLeaseRequest,
+    ProviderStoreError,
+};
 use provider_openai::credential::token_client::{RefreshFailure, TokenPair, TokenRefresher};
 use provider_openai::credential::{
-    CodexCredentialAdmin, CodexCredentialAdminError, CodexCredentialAdminService,
-    CodexCredentialCodec, CodexIdentityVerificationError, CodexJwtIdentityVerifier,
-    CodexRefreshLeaseAcquisition, CodexRefreshLeaseCoordinator, CodexRefreshLeaseError,
-    CodexRefreshLeaseRequest, CodexTokenIdentityVerifier, CreateCodexCredential,
-    ExportManagedCodexCredential, ImportCodexOAuthCredential, ImportCodexOAuthCredentialBatch,
-    ReqwestOpenAiJwksSource, RotateManagedCodexCredential,
+    CodexAccountIdentityService, CodexAccountIdentityVerifier, CodexCredentialAdmin,
+    CodexCredentialAdminError, CodexCredentialAdminService, CodexCredentialCodec,
+    CodexIdentityExpectation, CodexIdentityVerification, CodexIdentityVerificationError,
+    CodexJwtIdentityVerifier, CreateCodexCredential, ExportManagedCodexCredential,
+    ImportCodexOAuthCredential, ImportCodexOAuthCredentialBatch,
+    ReqwestCodexAuthenticatedAccountSource, ReqwestOpenAiJwksSource, RotateManagedCodexCredential,
 };
-use secrecy::ExposeSecret;
+use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
+use secrecy::{ExposeSecret, SecretString};
 
-use crate::support::{MemoryAccountStore, codex_account, instance_id, profile, secret};
+use crate::support::{
+    MemoryAccountStore, codex_account, instance_id, profile, runtime_policy, secret,
+};
 
 fn import(id: &str, token: &str) -> ImportCodexOAuthCredential {
     ImportCodexOAuthCredential {
@@ -27,8 +35,14 @@ fn import(id: &str, token: &str) -> ImportCodexOAuthCredential {
         name: format!("name-{id}"),
         secret: secret(token),
         verified_account: profile(&format!("chatgpt-{id}")),
+        next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
         enabled: true,
     }
+}
+
+fn encoded_credential(account_id: &str, token: &str) -> PlaintextCredential {
+    CodexCredentialCodec::encode_new(&secret(token), &profile(account_id), Vec::new())
+        .expect("encode current credential")
 }
 
 #[test]
@@ -76,8 +90,7 @@ fn prepare_batch_is_all_or_nothing_validation() {
 #[test]
 fn prepare_rotation_preserves_provider_owned_cookie_data() {
     let account = codex_account("acct_rotate");
-    let mut credential = CodexCredentialCodec::encode(&secret("old-access"), Vec::new())
-        .expect("encode current credential");
+    let mut credential = encoded_credential("chatgpt-acct_rotate", "old-access");
     credential
         .expose_to_provider()
         .get("access_token")
@@ -93,6 +106,7 @@ fn prepare_rotation_preserves_provider_owned_cookie_data() {
             },
             secret: secret("new-access"),
             verified_account: profile("chatgpt-acct_rotate"),
+            next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
         })
         .expect("prepare rotation");
     let decoded = CodexCredentialCodec::decode(prepared.credential.credential())
@@ -107,11 +121,11 @@ fn prepare_rotation_rejects_account_rebinding() {
         .prepare_rotation(RotateManagedCodexCredential {
             current: LoadedCredential {
                 account: codex_account("acct_rotate"),
-                credential: CodexCredentialCodec::encode(&secret("old-access"), Vec::new())
-                    .expect("encode current credential"),
+                credential: encoded_credential("chatgpt-acct_rotate", "old-access"),
             },
             secret: secret("new-access"),
             verified_account: profile("chatgpt-other"),
+            next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
         })
         .expect_err("identity rebinding must fail");
     assert_eq!(error, CodexCredentialAdminError::IdentityMismatch);
@@ -130,8 +144,7 @@ fn export_item(id: &str, token: &str) -> ExportManagedCodexCredential {
     ExportManagedCodexCredential {
         current: LoadedCredential {
             account: codex_account(id),
-            credential: CodexCredentialCodec::encode(&secret(token), Vec::new())
-                .expect("credential"),
+            credential: encoded_credential(&format!("chatgpt-{id}"), token),
         },
         added_at: Utc
             .with_ymd_and_hms(2026, 7, 18, 2, 47, 1)
@@ -241,16 +254,28 @@ impl TokenRefresher for ManualRefresher {
 struct ManualVerifier;
 
 #[async_trait]
-impl CodexTokenIdentityVerifier for ManualVerifier {
+impl CodexAccountIdentityVerifier for ManualVerifier {
     async fn verify(
         &self,
         secret: &provider_openai::credential::CodexOAuthSecret,
-    ) -> Result<provider_openai::credential::CodexAccountProfile, CodexIdentityVerificationError>
-    {
+        _expectation: &CodexIdentityExpectation,
+    ) -> Result<CodexIdentityVerification, CodexIdentityVerificationError> {
         if secret.access_token.expose_secret() != "refreshed-access" {
             return Err(CodexIdentityVerificationError::Rejected);
         }
-        Ok(profile("chatgpt-acct_manual_refresh"))
+        Ok(CodexIdentityVerification::Complete(profile(
+            "chatgpt-acct_manual_refresh",
+        )))
+    }
+
+    async fn verify_authorization(
+        &self,
+        _secret: &provider_openai::credential::CodexOAuthSecret,
+        _id_token: &SecretString,
+        _expected_nonce: &SecretString,
+        _expectation: &CodexIdentityExpectation,
+    ) -> Result<CodexIdentityVerification, CodexIdentityVerificationError> {
+        Err(CodexIdentityVerificationError::Rejected)
     }
 }
 
@@ -263,27 +288,48 @@ impl Drop for DropCountGuard {
 }
 
 struct ManualLeases {
-    requests: Mutex<Vec<CodexRefreshLeaseRequest>>,
+    requests: Mutex<Vec<ProviderRefreshLeaseRequest>>,
     drops: Arc<AtomicUsize>,
     available: bool,
 }
 
-#[async_trait]
-impl CodexRefreshLeaseCoordinator for ManualLeases {
-    async fn try_acquire(
+impl ProviderLeasePort for ManualLeases {
+    fn load_state<'a>(
+        &'a self,
+        _: &'a gateway_core::routing::ProviderInstanceId,
+        _: &'a [ProviderAccountId],
+    ) -> BoxFuture<
+        'a,
+        Result<gateway_core::provider_ports::ProviderSchedulingState, ProviderStoreError>,
+    > {
+        Box::pin(async {
+            Ok(gateway_core::provider_ports::ProviderSchedulingState::new(
+                Default::default(),
+                None,
+                0,
+            ))
+        })
+    }
+
+    fn try_acquire(
         &self,
-        request: &CodexRefreshLeaseRequest,
-    ) -> Result<CodexRefreshLeaseAcquisition, CodexRefreshLeaseError> {
-        self.requests
-            .lock()
-            .expect("lease requests")
-            .push(request.clone());
-        Ok(if self.available {
-            CodexRefreshLeaseAcquisition::Acquired(Box::new(DropCountGuard(Arc::clone(
-                &self.drops,
-            ))))
-        } else {
-            CodexRefreshLeaseAcquisition::Unavailable
+        request: ProviderLeaseRequest,
+    ) -> BoxFuture<'_, Result<ProviderLeaseAcquisition, ProviderStoreError>> {
+        Box::pin(async move {
+            match request {
+                ProviderLeaseRequest::RefreshCapacity(_) => {}
+                ProviderLeaseRequest::Refresh(request) => {
+                    self.requests.lock().expect("lease requests").push(request);
+                }
+                ProviderLeaseRequest::Scheduling(_) => panic!("unexpected scheduling lease"),
+            }
+            Ok(if self.available {
+                ProviderLeaseAcquisition::Acquired(Box::new(DropCountGuard(Arc::clone(
+                    &self.drops,
+                ))))
+            } else {
+                ProviderLeaseAcquisition::Busy { retry_after: None }
+            })
         })
     }
 }
@@ -306,6 +352,7 @@ async fn manual_refresh_fixture(
             name: "manual refresh".to_owned(),
             secret: secret("old-access"),
             account: profile("chatgpt-acct_manual_refresh"),
+            next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
         .await
@@ -324,9 +371,8 @@ async fn manual_refresh_fixture(
         refresher.clone(),
         Arc::new(ManualVerifier),
         leases.clone(),
-        Duration::from_secs(60),
-    )
-    .expect("admin service");
+        runtime_policy(),
+    );
     (store, refresher, leases, service)
 }
 
@@ -383,7 +429,7 @@ async fn manual_refresh_prepares_revision_fenced_rotation_without_store_mutation
     );
     assert_eq!(leases.drops.load(Ordering::SeqCst), 0);
     drop(prepared);
-    assert_eq!(leases.drops.load(Ordering::SeqCst), 1);
+    assert_eq!(leases.drops.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
@@ -423,12 +469,12 @@ async fn manual_refresh_stale_revision_and_missing_lease_fail_before_exchange() 
 struct ImportVerifier;
 
 #[async_trait]
-impl CodexTokenIdentityVerifier for ImportVerifier {
+impl CodexAccountIdentityVerifier for ImportVerifier {
     async fn verify(
         &self,
         secret: &provider_openai::credential::CodexOAuthSecret,
-    ) -> Result<provider_openai::credential::CodexAccountProfile, CodexIdentityVerificationError>
-    {
+        expectation: &CodexIdentityExpectation,
+    ) -> Result<CodexIdentityVerification, CodexIdentityVerificationError> {
         let suffix = secret
             .access_token
             .expose_secret()
@@ -437,9 +483,28 @@ impl CodexTokenIdentityVerifier for ImportVerifier {
         let mut profile = profile(&format!("chatgpt-{suffix}"));
         if let Some(user) = suffix.strip_prefix("shared-") {
             profile.chatgpt_account_id = "chatgpt-shared".to_owned();
-            profile.chatgpt_user_id = Some(format!("user-{user}"));
+            profile.chatgpt_user_id = format!("user-{user}");
         }
-        Ok(profile)
+        if expectation
+            .chatgpt_account_id()
+            .is_some_and(|expected| expected != profile.chatgpt_account_id)
+            || expectation
+                .chatgpt_user_id()
+                .is_some_and(|expected| expected != profile.chatgpt_user_id)
+        {
+            return Err(CodexIdentityVerificationError::Rejected);
+        }
+        Ok(CodexIdentityVerification::Complete(profile))
+    }
+
+    async fn verify_authorization(
+        &self,
+        _secret: &provider_openai::credential::CodexOAuthSecret,
+        _id_token: &SecretString,
+        _expected_nonce: &SecretString,
+        _expectation: &CodexIdentityExpectation,
+    ) -> Result<CodexIdentityVerification, CodexIdentityVerificationError> {
+        Err(CodexIdentityVerificationError::Rejected)
     }
 }
 
@@ -456,9 +521,8 @@ fn import_service(
             drops: Arc::new(AtomicUsize::new(0)),
             available: true,
         }),
-        Duration::from_secs(60),
+        runtime_policy(),
     )
-    .expect("import service")
 }
 
 fn unused_import_refresher() -> Arc<ManualRefresher> {
@@ -518,7 +582,7 @@ async fn formal_cpr_import_is_strict_and_uses_the_single_core_write_shape() {
 
 #[tokio::test]
 async fn cpr_import_uses_verified_token_identity_instead_of_stale_export_projections() {
-    let prepared = import_service(unused_import_refresher())
+    let error = import_service(unused_import_refresher())
         .prepare_import_document(
             instance_id(),
             serde_json::json!({
@@ -532,11 +596,9 @@ async fn cpr_import_uses_verified_token_identity_instead_of_stale_export_project
             }),
         )
         .await
-        .expect("signed token identity is authoritative during import");
+        .expect_err("stale document identity must not override authenticated identity");
 
-    let account = &prepared.accounts()[0].account;
-    assert_eq!(account.upstream_account_id(), Some("chatgpt-cpr"));
-    assert_eq!(account.upstream_user_id(), "user-chatgpt-cpr");
+    assert_eq!(error, CodexCredentialAdminError::IdentityRejected);
 }
 
 #[tokio::test]
@@ -671,9 +733,28 @@ async fn real_cpr_fixture_import_contract() {
         provider_openai::credential::token_client::official_openai_token_client()
             .expect("official token client"),
     );
-    let verifier = Arc::new(CodexJwtIdentityVerifier::new(Box::new(
+    let signed = Arc::new(CodexJwtIdentityVerifier::new(Box::new(
         ReqwestOpenAiJwksSource::new().expect("official JWKS source"),
     )));
+    let profile = CodexWireProfileState::new(CodexWireProfile {
+        originator: "codex_cli_rs".to_owned(),
+        codex_version: "0.144.0".to_owned(),
+        desktop_version: "1.0.0".to_owned(),
+        desktop_build: "1".to_owned(),
+        os_type: "linux".to_owned(),
+        os_version: "6.8".to_owned(),
+        arch: "x86_64".to_owned(),
+        terminal: "xterm".to_owned(),
+        verified_at: Utc
+            .with_ymd_and_hms(2026, 7, 18, 0, 0, 0)
+            .single()
+            .expect("fixture time"),
+    });
+    let accounts = Arc::new(
+        ReqwestCodexAuthenticatedAccountSource::new(profile)
+            .expect("official authenticated account source"),
+    );
+    let verifier = Arc::new(CodexAccountIdentityService::new(signed, accounts));
     let service = CodexCredentialAdminService::new(
         store.repository(),
         refresher,
@@ -683,9 +764,8 @@ async fn real_cpr_fixture_import_contract() {
             drops: Arc::new(AtomicUsize::new(0)),
             available: true,
         }),
-        Duration::from_secs(60),
-    )
-    .expect("admin service");
+        runtime_policy(),
+    );
     let prepared = service
         .prepare_import_document(instance_id(), payload)
         .await
@@ -695,6 +775,20 @@ async fn real_cpr_fixture_import_contract() {
     for account in prepared.accounts() {
         assert_eq!(account.account.provider().as_str(), "openai");
         assert!(account.account.id().as_str().starts_with("acct_"));
-        assert!(CodexCredentialCodec::decode(&account.credential).is_ok());
+        assert!(account.account.upstream_account_id().is_some());
+        assert!(!account.account.upstream_user_id().is_empty());
+        let runtime =
+            CodexCredentialCodec::decode(&account.credential).expect("new credential schema");
+        assert!(runtime.principal.poid.is_some());
+        assert_ne!(
+            runtime.principal.poid.as_deref(),
+            account.account.upstream_account_id()
+        );
+        assert_eq!(
+            uuid::Uuid::parse_str(&runtime.installation_id)
+                .expect("random installation UUID")
+                .get_version_num(),
+            4
+        );
     }
 }

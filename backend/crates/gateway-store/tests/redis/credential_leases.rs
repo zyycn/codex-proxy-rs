@@ -1,9 +1,8 @@
 use std::time::Duration;
 
 use gateway_store::redis::{
-    CredentialLeaseRepository, CredentialLeaseRequest, CredentialLeaseScope,
-    CredentialSchedulingLeaseAcquisition, CredentialSchedulingLeaseRequest,
-    RedisCredentialLeaseRepository,
+    CredentialBoundedLeaseAcquisition, CredentialBoundedLeaseRequest, CredentialLeaseRepository,
+    CredentialLeaseRequest, CredentialLeaseScope, RedisCredentialLeaseRepository,
 };
 use redis::aio::ConnectionManager;
 use uuid::Uuid;
@@ -36,14 +35,14 @@ async fn scheduling_lease_counts_concurrency_interval_and_drop_release() {
 
     let first = acquired(
         repository
-            .try_acquire_scheduling_lease(&request)
+            .try_acquire_bounded_lease(&request)
             .await
             .expect("acquire first slot"),
     );
     let first_fence = first.grant().expect("live grant").fencing_token.get();
     let second = acquired(
         repository
-            .try_acquire_scheduling_lease(&request)
+            .try_acquire_bounded_lease(&request)
             .await
             .expect("acquire second slot"),
     );
@@ -55,12 +54,12 @@ async fn scheduling_lease_counts_concurrency_interval_and_drop_release() {
     assert!(signals[0].last_started_at.is_some());
 
     let third = repository
-        .try_acquire_scheduling_lease(&request)
+        .try_acquire_bounded_lease(&request)
         .await
         .expect("capacity decision");
     assert!(matches!(
         third,
-        CredentialSchedulingLeaseAcquisition::Busy {
+        CredentialBoundedLeaseAcquisition::Busy {
             retry_after: Some(_)
         }
     ));
@@ -68,7 +67,7 @@ async fn scheduling_lease_counts_concurrency_interval_and_drop_release() {
     assert!(first.release().await.expect("release first slot"));
     let replacement = acquired(
         repository
-            .try_acquire_scheduling_lease(&request)
+            .try_acquire_bounded_lease(&request)
             .await
             .expect("reuse released slot"),
     );
@@ -110,7 +109,7 @@ async fn scheduling_lease_counts_concurrency_interval_and_drop_release() {
     );
     acquired(
         repository
-            .try_acquire_scheduling_lease(&interval_request)
+            .try_acquire_bounded_lease(&interval_request)
             .await
             .expect("acquire interval slot"),
     )
@@ -118,12 +117,12 @@ async fn scheduling_lease_counts_concurrency_interval_and_drop_release() {
     .await
     .expect("release interval slot");
     let interval_denied = repository
-        .try_acquire_scheduling_lease(&interval_request)
+        .try_acquire_bounded_lease(&interval_request)
         .await
         .expect("interval decision");
     assert!(matches!(
         interval_denied,
-        CredentialSchedulingLeaseAcquisition::Busy {
+        CredentialBoundedLeaseAcquisition::Busy {
             retry_after: Some(value)
         } if value > Duration::ZERO && value <= Duration::from_secs(30)
     ));
@@ -154,7 +153,7 @@ async fn scheduling_lease_ttl_and_cache_loss_rebuild_empty_runtime_signal() {
     request.ttl = Duration::from_millis(25);
     let crashed = acquired(
         repository
-            .try_acquire_scheduling_lease(&request)
+            .try_acquire_bounded_lease(&request)
             .await
             .expect("acquire crash lease"),
     );
@@ -168,7 +167,7 @@ async fn scheduling_lease_ttl_and_cache_loss_rebuild_empty_runtime_signal() {
     assert_eq!(recovered[0].in_flight, 0);
     acquired(
         repository
-            .try_acquire_scheduling_lease(&request)
+            .try_acquire_bounded_lease(&request)
             .await
             .expect("reacquire after TTL"),
     )
@@ -178,7 +177,7 @@ async fn scheduling_lease_ttl_and_cache_loss_rebuild_empty_runtime_signal() {
 
     let cached = acquired(
         repository
-            .try_acquire_scheduling_lease(&request)
+            .try_acquire_bounded_lease(&request)
             .await
             .expect("acquire before cache loss"),
     );
@@ -202,13 +201,59 @@ async fn scheduling_lease_ttl_and_cache_loss_rebuild_empty_runtime_signal() {
     assert_eq!(rebuilt[0].last_started_at, None);
     acquired(
         repository
-            .try_acquire_scheduling_lease(&request)
+            .try_acquire_bounded_lease(&request)
             .await
             .expect("acquire after cache rebuild"),
     )
     .release()
     .await
     .expect("release rebuilt lease");
+}
+
+#[tokio::test]
+async fn scheduling_cursor_is_shared_across_gateway_processes() {
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    let peer = RedisCredentialLeaseRepository::new(connection.clone(), &namespace)
+        .expect("peer repository");
+
+    assert_eq!(
+        repository
+            .advance_scheduling_cursor("route_openai_real")
+            .await
+            .expect("first cursor"),
+        0
+    );
+    assert_eq!(
+        peer.advance_scheduling_cursor("route_openai_real")
+            .await
+            .expect("shared cursor"),
+        1
+    );
+    assert_eq!(
+        peer.advance_scheduling_cursor("route_openai_backup")
+            .await
+            .expect("independent cursor"),
+        0
+    );
+
+    let keys = redis::cmd("KEYS")
+        .arg(format!("{namespace}:*"))
+        .query_async::<Vec<String>>(&mut connection)
+        .await
+        .expect("list cursor keys");
+    assert_eq!(keys.len(), 2);
+    assert!(
+        keys.iter().all(|key| {
+            !key.contains("route_openai_real") && !key.contains("route_openai_backup")
+        })
+    );
+    redis::cmd("DEL")
+        .arg(keys)
+        .query_async::<i64>(&mut connection)
+        .await
+        .expect("clean cursor keys");
 }
 
 #[tokio::test]
@@ -271,13 +316,74 @@ async fn generic_refresh_guard_is_exclusive_and_released_on_drop() {
     }
 }
 
+#[tokio::test]
+async fn refresh_capacity_is_shared_across_provider_callers() {
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    let request = |owner_id: &str| CredentialBoundedLeaseRequest {
+        scope: CredentialLeaseScope::OAuthRefreshCapacity,
+        resource_id: "oauth-refresh-global".to_owned(),
+        owner_id: owner_id.to_owned(),
+        max_concurrent: 2,
+        request_interval: Duration::ZERO,
+        ttl: Duration::from_secs(60),
+    };
+
+    let openai = acquired(
+        repository
+            .try_acquire_bounded_lease(&request("openai-worker"))
+            .await
+            .expect("acquire OpenAI capacity"),
+    );
+    let xai = acquired(
+        repository
+            .try_acquire_bounded_lease(&request("xai-worker"))
+            .await
+            .expect("acquire xAI capacity"),
+    );
+    assert!(matches!(
+        repository
+            .try_acquire_bounded_lease(&request("second-openai-worker"))
+            .await
+            .expect("read shared capacity"),
+        CredentialBoundedLeaseAcquisition::Busy { .. }
+    ));
+
+    openai.release().await.expect("release OpenAI capacity");
+    acquired(
+        repository
+            .try_acquire_bounded_lease(&request("replacement-xai-worker"))
+            .await
+            .expect("reuse shared capacity"),
+    )
+    .release()
+    .await
+    .expect("release replacement capacity");
+    xai.release().await.expect("release xAI capacity");
+
+    let keys = redis::cmd("KEYS")
+        .arg(format!("{namespace}:*"))
+        .query_async::<Vec<String>>(&mut connection)
+        .await
+        .expect("list isolated capacity keys");
+    if !keys.is_empty() {
+        redis::cmd("DEL")
+            .arg(keys)
+            .query_async::<i64>(&mut connection)
+            .await
+            .expect("clean isolated capacity keys");
+    }
+}
+
 fn scheduling_request(
     resource_id: &str,
     owner_id: &str,
     max_concurrent: u32,
     request_interval: Duration,
-) -> CredentialSchedulingLeaseRequest {
-    CredentialSchedulingLeaseRequest {
+) -> CredentialBoundedLeaseRequest {
+    CredentialBoundedLeaseRequest {
+        scope: CredentialLeaseScope::ProviderAccount,
         resource_id: resource_id.to_owned(),
         owner_id: owner_id.to_owned(),
         max_concurrent,
@@ -287,11 +393,11 @@ fn scheduling_request(
 }
 
 fn acquired(
-    acquisition: CredentialSchedulingLeaseAcquisition,
+    acquisition: CredentialBoundedLeaseAcquisition,
 ) -> gateway_store::redis::CredentialLeaseGuard {
     match acquisition {
-        CredentialSchedulingLeaseAcquisition::Acquired(guard) => guard,
-        CredentialSchedulingLeaseAcquisition::Busy { retry_after } => {
+        CredentialBoundedLeaseAcquisition::Acquired(guard) => guard,
+        CredentialBoundedLeaseAcquisition::Busy { retry_after } => {
             panic!("expected acquired lease, retry after {retry_after:?}")
         }
     }

@@ -1,14 +1,42 @@
 //! 管理端账号目录、查询校验与安全响应 wire。
 
-use std::{fmt, pin::Pin};
+use std::{collections::BTreeSet, convert::Infallible, fmt};
 
-use futures::Stream;
-use serde::Deserialize;
+use axum::{
+    Json, Router,
+    extract::{Query, State},
+    http::{HeaderValue, StatusCode, header::CACHE_CONTROL},
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
+    routing::{get, post},
+};
+use chrono::{DateTime, FixedOffset, Utc};
+use futures::{Stream, StreamExt as _};
+use gateway_admin::model::{
+    AdminError as AdminServiceError, AdminErrorKind, PageSize, Revision,
+    accounts::{
+        AccountAvailability, AccountConnectionTestEvent as DomainConnectionTestEvent, AccountCost,
+        AccountListQuery, AccountModelUsage, AccountSort, AccountSortField,
+        AccountStatus as DomainAccountStatus, AccountUsage, SortDirection,
+    },
+    provider_credentials::{
+        AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountRefreshResult,
+        ProviderDocument, ProviderModels, ProviderQuota, ProviderQuotaWindow,
+    },
+};
+use gateway_core::{
+    engine::credential::ProviderAccountId,
+    routing::{ProviderKind, UpstreamModelId},
+};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use gateway_core::routing::ProviderKind;
-
-use crate::admin::WireValidationError;
+use super::{
+    AdminAuth, AdminEnvelope, AdminError, AdminResponse, AdminSessionState, PageMeta,
+    WireValidationError,
+};
 
 const DEFAULT_PAGE_SIZE: u32 = 50;
 const MAX_PAGE_SIZE: u32 = 200;
@@ -28,8 +56,8 @@ pub struct ListQuery {
 }
 
 impl ListQuery {
-    /// 解析并校验全部 wire 字段。
-    pub fn validate(self) -> Result<ValidatedListQuery, WireValidationError> {
+    /// 解析并校验全部 wire 字段，生成 Admin 查询命令。
+    pub fn validate(self) -> Result<AccountListQuery, WireValidationError> {
         let page = self.page.unwrap_or(1);
         if page == 0 {
             return Err(WireValidationError::new("page"));
@@ -38,8 +66,7 @@ impl ListQuery {
         if page_size == 0 || page_size > MAX_PAGE_SIZE {
             return Err(WireValidationError::new("pageSize"));
         }
-        let provider = ProviderFilter::parse(self.provider.as_deref().unwrap_or("all"))
-            .ok_or_else(|| WireValidationError::new("provider"))?;
+        let provider_kind = parse_provider(self.provider.as_deref().unwrap_or("all"))?;
         let search = self
             .search
             .map(|value| value.trim().to_owned())
@@ -52,22 +79,25 @@ impl ListQuery {
         let status = match self.status.as_deref().map(str::trim) {
             None | Some("") => None,
             Some(value) => Some(
-                AccountStatus::parse(value).ok_or_else(|| WireValidationError::new("status"))?,
+                parse_account_status(value).ok_or_else(|| WireValidationError::new("status"))?,
             ),
         };
         let sort = match (self.sort_by.as_deref(), self.sort_direction.as_deref()) {
             (None, None) => None,
             (Some(field), Some(direction)) => Some(AccountSort {
-                field: SortField::parse(field).ok_or_else(|| WireValidationError::new("sortBy"))?,
-                direction: SortDirection::parse(direction)
+                field: parse_sort_field(field).ok_or_else(|| WireValidationError::new("sortBy"))?,
+                direction: parse_sort_direction(direction)
                     .ok_or_else(|| WireValidationError::new("sortDirection"))?,
             }),
             _ => return Err(WireValidationError::new("sort")),
         };
-        Ok(ValidatedListQuery {
+        Ok(AccountListQuery {
             page,
-            page_size,
-            provider,
+            page_size: PageSize::new(
+                u16::try_from(page_size).map_err(|_| WireValidationError::new("pageSize"))?,
+            )
+            .map_err(|_| WireValidationError::new("pageSize"))?,
+            provider_kind,
             search,
             status,
             sort,
@@ -75,109 +105,46 @@ impl ListQuery {
     }
 }
 
-/// 已校验的账号查询。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ValidatedListQuery {
-    pub page: u32,
-    pub page_size: u32,
-    pub provider: ProviderFilter,
-    pub search: Option<String>,
-    pub status: Option<AccountStatus>,
-    pub sort: Option<AccountSort>,
+fn parse_provider(value: &str) -> Result<Option<ProviderKind>, WireValidationError> {
+    let value = value.trim();
+    if value.is_empty() || value.eq_ignore_ascii_case("all") {
+        return Ok(None);
+    }
+    ProviderKind::new(value.to_owned())
+        .map(Some)
+        .map_err(|_| WireValidationError::new("provider"))
 }
 
-/// Provider 过滤值。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProviderFilter {
-    All,
-    Provider(ProviderKind),
-}
-
-impl ProviderFilter {
-    fn parse(value: &str) -> Option<Self> {
-        let value = value.trim();
-        if value.is_empty() || value.eq_ignore_ascii_case("all") {
-            return Some(Self::All);
-        }
-        ProviderKind::new(value.to_owned()).ok().map(Self::Provider)
+fn parse_account_status(value: &str) -> Option<DomainAccountStatus> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "active" => Some(DomainAccountStatus::Active),
+        "expired" => Some(DomainAccountStatus::Expired),
+        "quota_exhausted" => Some(DomainAccountStatus::QuotaExhausted),
+        "disabled" => Some(DomainAccountStatus::Disabled),
+        "banned" => Some(DomainAccountStatus::Banned),
+        _ => None,
     }
 }
 
-/// 账号状态过滤值。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AccountStatus {
-    Active,
-    Expired,
-    QuotaExhausted,
-    Disabled,
-    Banned,
-}
-
-impl AccountStatus {
-    fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "active" => Some(Self::Active),
-            "expired" => Some(Self::Expired),
-            "quota_exhausted" => Some(Self::QuotaExhausted),
-            "disabled" => Some(Self::Disabled),
-            "banned" => Some(Self::Banned),
-            _ => None,
-        }
+fn parse_sort_field(value: &str) -> Option<AccountSortField> {
+    match value.trim() {
+        "email" => Some(AccountSortField::Email),
+        "status" => Some(AccountSortField::Status),
+        "planType" => Some(AccountSortField::PlanType),
+        "usage" => Some(AccountSortField::Usage),
+        "lastUsedAt" => Some(AccountSortField::LastUsedAt),
+        "expiresAt" => Some(AccountSortField::ExpiresAt),
+        _ => None,
     }
 }
 
-/// 账号排序字段。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SortField {
-    Email,
-    Status,
-    PlanType,
-    Usage,
-    LastUsedAt,
-    ExpiresAt,
-}
-
-impl SortField {
-    fn parse(value: &str) -> Option<Self> {
-        match value.trim() {
-            "email" => Some(Self::Email),
-            "status" => Some(Self::Status),
-            "planType" => Some(Self::PlanType),
-            "usage" => Some(Self::Usage),
-            "lastUsedAt" => Some(Self::LastUsedAt),
-            "expiresAt" => Some(Self::ExpiresAt),
-            _ => None,
-        }
+fn parse_sort_direction(value: &str) -> Option<SortDirection> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "asc" => Some(SortDirection::Asc),
+        "desc" => Some(SortDirection::Desc),
+        _ => None,
     }
 }
-
-/// 账号排序方向。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SortDirection {
-    Asc,
-    Desc,
-}
-
-impl SortDirection {
-    fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "asc" => Some(Self::Asc),
-            "desc" => Some(Self::Desc),
-            _ => None,
-        }
-    }
-}
-
-/// 已校验的排序组合。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AccountSort {
-    pub field: SortField,
-    pub direction: SortDirection,
-}
-
-use serde::Serialize;
-
-use crate::admin::PageMeta;
 
 /// 账号列表响应数据。
 #[derive(Debug, Clone, Serialize)]
@@ -333,6 +300,11 @@ impl AccountIdQuery {
     pub fn validate(&self) -> Result<(), WireValidationError> {
         require_account_id(&self.id)
     }
+
+    fn into_id(self) -> Result<ProviderAccountId, WireValidationError> {
+        self.validate()?;
+        ProviderAccountId::new(self.id).map_err(|_| WireValidationError::new("id"))
+    }
 }
 
 /// 敏感导出的固定 query；IDs 使用逗号分隔，禁止隐式导出全部账号。
@@ -344,7 +316,7 @@ pub struct AccountExportQuery {
 }
 
 impl AccountExportQuery {
-    pub fn into_ids(self) -> Result<Vec<String>, WireValidationError> {
+    pub fn into_ids(self) -> Result<Vec<ProviderAccountId>, WireValidationError> {
         if self.confirm != "export_sensitive_accounts" {
             return Err(WireValidationError::new("confirm"));
         }
@@ -359,11 +331,13 @@ impl AccountExportQuery {
         {
             return Err(WireValidationError::new("ids"));
         }
-        let unique = ids.iter().collect::<std::collections::BTreeSet<_>>();
+        let unique = ids.iter().collect::<BTreeSet<_>>();
         if unique.len() != ids.len() {
             return Err(WireValidationError::new("ids"));
         }
-        Ok(ids)
+        ids.into_iter()
+            .map(|id| ProviderAccountId::new(id).map_err(|_| WireValidationError::new("ids")))
+            .collect()
     }
 }
 
@@ -377,6 +351,11 @@ pub struct AccountActionRequest {
 impl AccountActionRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
         require_account_id(&self.id)
+    }
+
+    fn into_id(self) -> Result<ProviderAccountId, WireValidationError> {
+        self.validate()?;
+        ProviderAccountId::new(self.id).map_err(|_| WireValidationError::new("id"))
     }
 }
 
@@ -396,6 +375,15 @@ impl AccountRefreshRequest {
         }
         Ok(())
     }
+
+    fn into_command(self) -> Result<(Revision, ProviderAccountId), WireValidationError> {
+        self.validate()?;
+        Ok((
+            Revision::new(self.expected_config_revision)
+                .map_err(|_| WireValidationError::new("expectedConfigRevision"))?,
+            ProviderAccountId::new(self.id).map_err(|_| WireValidationError::new("id"))?,
+        ))
+    }
 }
 
 /// 连接测试 query；测试仍经唯一 Core/Provider 模型请求路径执行。
@@ -413,6 +401,14 @@ impl AccountTestQuery {
             return Err(WireValidationError::new("modelId"));
         }
         Ok(())
+    }
+
+    fn into_command(self) -> Result<(ProviderAccountId, UpstreamModelId), WireValidationError> {
+        self.validate()?;
+        Ok((
+            ProviderAccountId::new(self.id).map_err(|_| WireValidationError::new("id"))?,
+            UpstreamModelId::new(self.model_id).map_err(|_| WireValidationError::new("modelId"))?,
+        ))
     }
 }
 
@@ -449,6 +445,23 @@ impl AccountExportData {
     pub const fn new(value: Value) -> Self {
         Self(value)
     }
+
+    fn from_result(bundle: AccountExportBundle) -> Self {
+        let documents = bundle
+            .documents
+            .into_iter()
+            .map(|document| {
+                serde_json::json!({
+                    "provider": document.provider_kind.to_string(),
+                    "document": provider_document_value(document.document),
+                })
+            })
+            .collect::<Vec<_>>();
+        Self::new(serde_json::json!({
+            "exportedAt": bundle.exported_at.to_rfc3339(),
+            "documents": documents,
+        }))
+    }
 }
 
 impl fmt::Debug for AccountExportData {
@@ -461,57 +474,51 @@ pub struct AccountConnectionTestEvent {
     pub data: Value,
 }
 
-impl AccountConnectionTestEvent {
-    #[must_use]
-    pub fn started(model: impl Into<String>) -> Self {
-        Self {
-            data: serde_json::json!({
+impl From<DomainConnectionTestEvent> for AccountConnectionTestEvent {
+    fn from(event: DomainConnectionTestEvent) -> Self {
+        let data = match event {
+            DomainConnectionTestEvent::Started { model } => serde_json::json!({
                 "type": "test_start",
-                "model": model.into(),
+                "model": model,
                 "text": "正在连接上游 Responses"
             }),
-        }
-    }
-
-    #[must_use]
-    pub fn request(payload: Value) -> Self {
-        Self {
-            data: serde_json::json!({ "type": "request", "payload": payload }),
-        }
-    }
-
-    #[must_use]
-    pub fn content(text: impl Into<String>) -> Self {
-        Self {
-            data: serde_json::json!({ "type": "content", "text": text.into() }),
-        }
-    }
-
-    #[must_use]
-    pub fn completed(account_status: impl Into<String>) -> Self {
-        Self {
-            data: serde_json::json!({
+            DomainConnectionTestEvent::Request {
+                model,
+                input_text,
+                stream,
+                store,
+            } => serde_json::json!({
+                "type": "request",
+                "payload": {
+                    "model": model,
+                    "input": [{
+                        "role": "user",
+                        "content": [{ "type": "input_text", "text": input_text }]
+                    }],
+                    "stream": stream,
+                    "store": store
+                }
+            }),
+            DomainConnectionTestEvent::Content { text } => {
+                serde_json::json!({ "type": "content", "text": text })
+            }
+            DomainConnectionTestEvent::Completed { account_status } => serde_json::json!({
                 "type": "test_complete",
                 "success": true,
-                "accountStatus": account_status.into()
+                "accountStatus": account_status_name(account_status)
             }),
-        }
-    }
-
-    #[must_use]
-    pub fn failed(error: impl Into<String>, account_status: impl Into<String>) -> Self {
-        Self {
-            data: serde_json::json!({
+            DomainConnectionTestEvent::Failed {
+                message,
+                account_status,
+            } => serde_json::json!({
                 "type": "error",
-                "error": error.into(),
-                "accountStatus": account_status.into()
+                "error": message,
+                "accountStatus": account_status_name(account_status)
             }),
-        }
+        };
+        Self { data }
     }
 }
-
-pub type AccountConnectionTestEventStream =
-    Pin<Box<dyn Stream<Item = AccountConnectionTestEvent> + Send + 'static>>;
 
 fn require_account_id(value: &str) -> Result<(), WireValidationError> {
     if value.trim().is_empty()
@@ -524,59 +531,10 @@ fn require_account_id(value: &str) -> Result<(), WireValidationError> {
     Ok(())
 }
 
-use async_trait::async_trait;
-use axum::{
-    Json, Router,
-    extract::{Query, State},
-    http::{HeaderValue, StatusCode, header::CACHE_CONTROL},
-    response::{
-        IntoResponse, Response,
-        sse::{Event, KeepAlive, Sse},
-    },
-    routing::{get, post},
-};
-use futures::StreamExt as _;
-use std::convert::Infallible;
-
-use super::{
-    AdminAuth, AdminEnvelope, AdminError, AdminResponse, AdminServiceError, AdminServiceErrorKind,
-    AdminSessionState,
-};
-
-/// 统一账号目录应用端口。
-#[async_trait]
-pub trait AccountAdminService: Send + Sync {
-    async fn list(&self, query: ValidatedListQuery) -> Result<AccountPageData, AdminServiceError>;
-    async fn export(
-        &self,
-        context: &super::AdminRequestContext,
-        ids: Vec<String>,
-    ) -> Result<AccountExportData, AdminServiceError>;
-    async fn refresh(
-        &self,
-        context: &super::AdminRequestContext,
-        request: AccountRefreshRequest,
-    ) -> Result<AccountRefreshData, AdminServiceError>;
-    async fn quota(&self, id: String) -> Result<AccountQuotaData, AdminServiceError>;
-    async fn refresh_quota(&self, id: String) -> Result<AccountQuotaData, AdminServiceError>;
-    async fn models(&self, id: String) -> Result<AccountModelsData, AdminServiceError>;
-    async fn refresh_models(&self, id: String) -> Result<AccountModelsData, AdminServiceError>;
-    async fn test_connection(
-        &self,
-        id: String,
-        model_id: String,
-    ) -> Result<AccountConnectionTestEventStream, AdminServiceError>;
-}
-
-/// 账号目录 HTTP module 所需最小 state。
-pub trait AccountAdminState: AdminSessionState {
-    fn account_admin_service(&self) -> &dyn AccountAdminService;
-}
-
 /// 构造固定 GET 账号目录路由。
 pub fn router<S>() -> Router<S>
 where
-    S: AccountAdminState + Clone + Send + Sync + 'static,
+    S: AdminSessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route("/api/admin/accounts", get(list_accounts::<S>))
@@ -604,16 +562,18 @@ async fn list_accounts<S>(
     Query(query): Query<ListQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AccountAdminState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
-    let query = query
-        .validate()
-        .map_err(|error| AdminError::bad_request(format!("Invalid {}", error.field())))?;
-    let data = state
-        .account_admin_service()
-        .list(query)
+    let command = query.validate().map_err(map_wire_error)?;
+    let page = command.page;
+    let page_size = command.page_size.get();
+    let result = state
+        .admin_services()
+        .accounts()
+        .list(command)
         .await
         .map_err(map_service_error)?;
+    let data = account_page_data(result, page, page_size, Utc::now());
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
@@ -623,14 +583,16 @@ async fn export_accounts<S>(
     Query(query): Query<AccountExportQuery>,
 ) -> Result<Response, AdminError>
 where
-    S: AccountAdminState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
     let ids = query.into_ids().map_err(map_wire_error)?;
-    let data = state
-        .account_admin_service()
-        .export(auth.context(), ids)
+    let result = state
+        .admin_services()
+        .accounts()
+        .export(&auth.context().mutation_context(), ids)
         .await
         .map_err(map_service_error)?;
+    let data = AccountExportData::from_result(result);
     let mut response = AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)).into_response();
     response
         .headers_mut()
@@ -644,14 +606,20 @@ async fn refresh_account<S>(
     Json(request): Json<AccountRefreshRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AccountAdminState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
-    request.validate().map_err(map_wire_error)?;
-    let data = state
-        .account_admin_service()
-        .refresh(auth.context(), request)
+    let (expected_config_revision, account_id) = request.into_command().map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .accounts()
+        .refresh(
+            &auth.context().mutation_context(),
+            expected_config_revision,
+            account_id,
+        )
         .await
         .map_err(map_service_error)?;
+    let data = account_refresh_data(result, Utc::now());
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
@@ -661,14 +629,18 @@ async fn account_quota<S>(
     Query(query): Query<AccountIdQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AccountAdminState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
-    query.validate().map_err(map_wire_error)?;
-    let data = state
-        .account_admin_service()
-        .quota(query.id)
+    let account_id = query.into_id().map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .accounts()
+        .quota(&account_id, false)
         .await
         .map_err(map_service_error)?;
+    let data = AccountQuotaData {
+        account: account_view(result, Utc::now()),
+    };
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
@@ -678,14 +650,18 @@ async fn refresh_account_quota<S>(
     Json(request): Json<AccountActionRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AccountAdminState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
-    request.validate().map_err(map_wire_error)?;
-    let data = state
-        .account_admin_service()
-        .refresh_quota(request.id)
+    let account_id = request.into_id().map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .accounts()
+        .quota(&account_id, true)
         .await
         .map_err(map_service_error)?;
+    let data = AccountQuotaData {
+        account: account_view(result, Utc::now()),
+    };
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
@@ -695,14 +671,16 @@ async fn account_models<S>(
     Query(query): Query<AccountIdQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AccountAdminState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
-    query.validate().map_err(map_wire_error)?;
-    let data = state
-        .account_admin_service()
-        .models(query.id)
+    let account_id = query.into_id().map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .accounts()
+        .models(&account_id, false)
         .await
         .map_err(map_service_error)?;
+    let data = account_models_data(result);
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
@@ -712,14 +690,16 @@ async fn refresh_account_models<S>(
     Json(request): Json<AccountActionRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AccountAdminState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
-    request.validate().map_err(map_wire_error)?;
-    let data = state
-        .account_admin_service()
-        .refresh_models(request.id)
+    let account_id = request.into_id().map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .accounts()
+        .models(&account_id, true)
         .await
         .map_err(map_service_error)?;
+    let data = account_models_data(result);
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
@@ -729,19 +709,491 @@ async fn test_account_connection<S>(
     Query(query): Query<AccountTestQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AdminError>
 where
-    S: AccountAdminState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
-    query.validate().map_err(map_wire_error)?;
+    let (account_id, upstream_model) = query.into_command().map_err(map_wire_error)?;
     let stream = state
-        .account_admin_service()
-        .test_connection(query.id, query.model_id)
+        .admin_services()
+        .accounts()
+        .test_connection(account_id, upstream_model)
         .await
         .map_err(map_service_error)?
         .map(|event| {
+            let event = AccountConnectionTestEvent::from(event);
             let data = serde_json::to_string(&event.data).unwrap_or_else(|_| "{}".to_owned());
             Ok(Event::default().data(data))
         });
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+fn account_page_data(
+    result: AccountDirectoryPage,
+    page: u32,
+    page_size: u16,
+    now: DateTime<Utc>,
+) -> AccountPageData {
+    let total_pages = if result.total == 0 {
+        0
+    } else {
+        u32::try_from(result.total.div_ceil(u64::from(page_size))).unwrap_or(u32::MAX)
+    };
+    AccountPageData {
+        config_revision: result.config_revision.get(),
+        items: result
+            .items
+            .into_iter()
+            .map(|item| account_view(item, now))
+            .collect(),
+        page: PageMeta::new(page, u32::from(page_size), result.total, total_pages),
+        summary: AccountSummaryView {
+            total: result.summary.total,
+            active: result.summary.active,
+            quota_exhausted: result.summary.quota_exhausted,
+            attention: result.summary.attention,
+        },
+    }
+}
+
+fn account_refresh_data(result: AccountRefreshResult, now: DateTime<Utc>) -> AccountRefreshData {
+    AccountRefreshData {
+        config_revision: result.config_revision.get(),
+        account: account_view(result.account, now),
+    }
+}
+
+fn account_models_data(result: ProviderModels) -> AccountModelsData {
+    AccountModelsData {
+        models: result
+            .models
+            .into_iter()
+            .map(|model| {
+                let id = model.id.to_string();
+                AccountModelView {
+                    label: id.clone(),
+                    id,
+                }
+            })
+            .collect(),
+    }
+}
+
+fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
+    let AccountDirectoryItem {
+        account,
+        provider_instance_name,
+        status,
+        usage,
+        rolling_usage,
+        quota,
+    } = item;
+    let status = account_status_name(status).to_owned();
+    let expires_at = china_rfc3339(&account.access_token_expires_at);
+    let added_at = china_rfc3339(&account.created_at);
+    let updated_at = china_rfc3339(&account.updated_at);
+    let (quota, refresh_token_expires_at) =
+        account_quota_view(&account.provider_kind, quota, rolling_usage.as_ref(), now);
+    AccountView {
+        id: account.id.clone(),
+        name: account.name,
+        provider: account.provider_kind.to_string(),
+        provider_instance_id: account.provider_instance_id.to_string(),
+        provider_instance_name,
+        resource_ref: account.id,
+        email: account.email,
+        account_id: account.upstream_account_id,
+        user_id: Some(account.upstream_user_id),
+        label: None,
+        plan_type: account.plan_type,
+        has_refresh_token: account.has_refresh_token,
+        status: status.clone(),
+        display_status: status,
+        token_refreshing: false,
+        availability: account_availability_name(account.availability).to_owned(),
+        enabled: account.enabled,
+        credential_revision: account.credential_revision.get(),
+        state_revision: None,
+        access_token_expires_at: Some(expires_at),
+        access_token_expires_at_display: Some(china_datetime(&account.access_token_expires_at)),
+        refresh_token_expires_at,
+        next_refresh_at: account.next_refresh_at.map(|value| china_rfc3339(&value)),
+        added_at,
+        added_at_display: china_datetime(&account.created_at),
+        updated_at,
+        updated_at_display: china_datetime(&account.updated_at),
+        quota,
+        usage: account_usage_view(usage, now),
+    }
+}
+
+fn account_quota_view(
+    provider_kind: &ProviderKind,
+    quota: ProviderQuota,
+    rolling_usage: Option<&AccountUsage>,
+    now: DateTime<Utc>,
+) -> (AccountQuotaView, Option<String>) {
+    let refresh_token_expires_at = quota
+        .refresh_token_expires_at
+        .map(|value| china_rfc3339(&value));
+    let refreshed_at_display = quota
+        .observed_at
+        .map_or_else(|| "—".to_owned(), |value| relative_time(value, now));
+    let windows = quota
+        .windows
+        .into_iter()
+        .map(|window| quota_window_view(provider_kind, window, rolling_usage))
+        .collect();
+    (
+        AccountQuotaView {
+            refreshed_at_display,
+            windows,
+        },
+        refresh_token_expires_at,
+    )
+}
+
+fn quota_window_view(
+    provider_kind: &ProviderKind,
+    window: ProviderQuotaWindow,
+    rolling_usage: Option<&AccountUsage>,
+) -> AccountQuotaWindowView {
+    let ProviderQuotaWindow {
+        key,
+        group,
+        source,
+        window_seconds,
+        used_percent,
+        reset_at,
+        provider_data,
+    } = window;
+    let local_usage = if provider_kind.as_str() == "xai" {
+        provider_data.map(provider_document_value).or_else(|| {
+            (key == "free-rolling-24h")
+                .then(|| rolling_usage.map(free_quota_local_usage))
+                .flatten()
+        })
+    } else {
+        None
+    };
+    AccountQuotaWindowView {
+        label_display: quota_window_label(
+            provider_kind,
+            &key,
+            &group,
+            source.as_deref(),
+            window_seconds,
+        ),
+        key,
+        group,
+        window_seconds,
+        used_percent,
+        used_percent_display: used_percent
+            .map_or_else(|| "—".to_owned(), |value| format!("{value:.1}%")),
+        local_usage,
+        reset_at_display: reset_at.map_or_else(|| "—".to_owned(), |value| china_datetime(&value)),
+    }
+}
+
+fn quota_window_label(
+    provider_kind: &ProviderKind,
+    key: &str,
+    group: &str,
+    source: Option<&str>,
+    window_seconds: Option<u64>,
+) -> String {
+    if provider_kind.as_str() == "xai" && key == "free-rolling-24h" {
+        return "24小时额度".to_owned();
+    }
+    let base = match (provider_kind.as_str(), group) {
+        (_, "monthly") => "月限额".to_owned(),
+        ("openai", "shortTerm") if window_seconds.is_some_and(|seconds| seconds > 86_400) => {
+            "周限额".to_owned()
+        }
+        ("openai", "shortTerm") => "5小时限额".to_owned(),
+        ("xai", "shortTerm") => "周限额".to_owned(),
+        _ => custom_quota_window_label(window_seconds),
+    };
+    if provider_kind.as_str() != "openai" {
+        return base;
+    }
+    let Some(source) = source else {
+        return base;
+    };
+    if matches!(source, "core" | "spend_control" | "monthly_limit") {
+        return base;
+    }
+    let source = if is_codex_review_limit(source) {
+        "代码审查"
+    } else {
+        source
+    };
+    format!("{source} · {base}")
+}
+
+fn custom_quota_window_label(window_seconds: Option<u64>) -> String {
+    let Some(seconds) = window_seconds.filter(|seconds| *seconds > 0) else {
+        return "额度".to_owned();
+    };
+    if seconds % 86_400 == 0 {
+        format!("{}天限额", seconds / 86_400)
+    } else if seconds % 3_600 == 0 {
+        format!("{}小时限额", seconds / 3_600)
+    } else {
+        format!("{}分钟限额", seconds.div_ceil(60))
+    }
+}
+
+fn is_codex_review_limit(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+    matches!(
+        normalized.as_str(),
+        "review" | "code_review" | "codex_review" | "codex_code_review"
+    ) || normalized.contains("code_review")
+        || normalized.contains("codex_review")
+}
+
+fn free_quota_local_usage(usage: &AccountUsage) -> Value {
+    let total_tokens = usage.total_tokens.unwrap_or_default();
+    serde_json::json!({
+        "requestCount": usage.request_count,
+        "requestCountDisplay": format_number(usage.request_count),
+        "inputTokens": usage.input_tokens.unwrap_or_default(),
+        "inputTokensDisplay": display_optional_tokens(usage.input_tokens),
+        "outputTokens": usage.output_tokens.unwrap_or_default(),
+        "outputTokensDisplay": display_optional_tokens(usage.output_tokens),
+        "cachedTokens": usage.cached_tokens.unwrap_or_default(),
+        "cachedTokensDisplay": display_optional_tokens(usage.cached_tokens),
+        "totalTokens": total_tokens,
+        "totalTokensDisplay": format_tokens(total_tokens),
+    })
+}
+
+fn account_usage_view(usage: Option<AccountUsage>, now: DateTime<Utc>) -> AccountUsageView {
+    let Some(usage) = usage else {
+        return empty_account_usage();
+    };
+    let known_count = usage
+        .cost_coverage
+        .provider_reported_count
+        .saturating_add(usage.cost_coverage.calculated_count);
+    let cost_estimate_status = if known_count == 0 {
+        "unknown"
+    } else if usage.cost_coverage.unavailable_count > 0 {
+        "partial"
+    } else {
+        "known"
+    };
+    AccountUsageView {
+        request_count: Some(usage.request_count),
+        request_count_display: format_number(usage.request_count),
+        input_tokens: usage.input_tokens,
+        input_tokens_display: display_optional_tokens(usage.input_tokens),
+        output_tokens: usage.output_tokens,
+        output_tokens_display: display_optional_tokens(usage.output_tokens),
+        cached_tokens: usage.cached_tokens,
+        cached_tokens_display: display_optional_tokens(usage.cached_tokens),
+        total_tokens: usage.total_tokens,
+        total_tokens_display: display_optional_tokens(usage.total_tokens),
+        created_tokens: usage.cache_write_tokens,
+        created_tokens_display: display_optional_tokens(usage.cache_write_tokens),
+        read_tokens: usage.cached_tokens,
+        read_tokens_display: display_optional_tokens(usage.cached_tokens),
+        last_used_at: usage.last_used_at.map(|value| china_rfc3339(&value)),
+        last_used_at_display: usage
+            .last_used_at
+            .map_or_else(|| "—".to_owned(), |value| relative_time(value, now)),
+        cost_estimate_status: cost_estimate_status.to_owned(),
+        known_cost_count: Some(known_count),
+        partial_cost_count: Some(u64::from(cost_estimate_status == "partial")),
+        unknown_cost_count: Some(usage.cost_coverage.unavailable_count),
+        costs: usage.costs.iter().map(account_currency_cost_view).collect(),
+        models: usage
+            .models
+            .into_iter()
+            .map(|model| account_model_usage_view(model, now))
+            .collect(),
+    }
+}
+
+fn account_model_usage_view(usage: AccountModelUsage, now: DateTime<Utc>) -> ModelUsageView {
+    let known_count = usage
+        .cost_coverage
+        .provider_reported_count
+        .saturating_add(usage.cost_coverage.calculated_count);
+    let cost_estimate_status = if known_count == 0 {
+        "unknown"
+    } else if usage.cost_coverage.unavailable_count > 0 {
+        "partial"
+    } else {
+        "known"
+    };
+    let usd = usage
+        .costs
+        .iter()
+        .find(|cost| cost.currency.eq_ignore_ascii_case("USD"));
+    ModelUsageView {
+        model: usage.model,
+        request_count: usage.request_count,
+        request_count_display: format_number(usage.request_count),
+        success_rate: (usage.request_count > 0)
+            .then(|| usage.success_count as f64 * 100.0 / usage.request_count as f64),
+        success_rate_display: if usage.request_count == 0 {
+            "—".to_owned()
+        } else {
+            format!(
+                "{:.1}%",
+                usage.success_count as f64 * 100.0 / usage.request_count as f64
+            )
+        },
+        input_tokens: usage.input_tokens,
+        input_tokens_display: display_optional_tokens(usage.input_tokens),
+        output_tokens: usage.output_tokens,
+        output_tokens_display: display_optional_tokens(usage.output_tokens),
+        cached_tokens: usage.cached_tokens,
+        cached_tokens_display: display_optional_tokens(usage.cached_tokens),
+        total_tokens: usage.total_tokens,
+        total_tokens_display: display_optional_tokens(usage.total_tokens),
+        billing_amount_usd: usd.map(|cost| cost.amount.as_str().to_owned()),
+        billing_amount_usd_display: usd.map_or_else(
+            || "—".to_owned(),
+            |cost| format!("${}", cost.amount.as_str()),
+        ),
+        cost_estimate_status: cost_estimate_status.to_owned(),
+        known_cost_count: known_count,
+        partial_cost_count: u64::from(cost_estimate_status == "partial"),
+        unknown_cost_count: usage.cost_coverage.unavailable_count,
+        costs: usage.costs.iter().map(account_currency_cost_view).collect(),
+        last_used_at: china_rfc3339(&usage.last_used_at),
+        last_used_at_display: relative_time(usage.last_used_at, now),
+    }
+}
+
+fn account_currency_cost_view(cost: &AccountCost) -> CurrencyCostView {
+    CurrencyCostView {
+        currency: cost.currency.clone(),
+        estimated_amount: cost.amount.as_str().to_owned(),
+        estimated_amount_display: format!("{} {}", cost.currency, cost.amount.as_str()),
+    }
+}
+
+fn display_optional_tokens(value: Option<u64>) -> String {
+    value.map_or_else(|| "—".to_owned(), format_tokens)
+}
+
+fn empty_account_usage() -> AccountUsageView {
+    AccountUsageView {
+        request_count: None,
+        request_count_display: "—".to_owned(),
+        input_tokens: None,
+        input_tokens_display: "—".to_owned(),
+        output_tokens: None,
+        output_tokens_display: "—".to_owned(),
+        cached_tokens: None,
+        cached_tokens_display: "—".to_owned(),
+        total_tokens: None,
+        total_tokens_display: "—".to_owned(),
+        created_tokens: None,
+        created_tokens_display: "—".to_owned(),
+        read_tokens: None,
+        read_tokens_display: "—".to_owned(),
+        last_used_at: None,
+        last_used_at_display: "—".to_owned(),
+        cost_estimate_status: "unavailable".to_owned(),
+        known_cost_count: None,
+        partial_cost_count: None,
+        unknown_cost_count: None,
+        costs: Vec::new(),
+        models: Vec::new(),
+    }
+}
+
+fn provider_document_value(document: ProviderDocument) -> Value {
+    Value::Object(document.into_provider_data().into_inner())
+}
+
+fn account_status_name(status: DomainAccountStatus) -> &'static str {
+    match status {
+        DomainAccountStatus::Active => "active",
+        DomainAccountStatus::Expired => "expired",
+        DomainAccountStatus::QuotaExhausted => "quota_exhausted",
+        DomainAccountStatus::Disabled => "disabled",
+        DomainAccountStatus::Banned => "banned",
+        DomainAccountStatus::Attention => "attention",
+    }
+}
+
+fn account_availability_name(availability: AccountAvailability) -> &'static str {
+    match availability {
+        AccountAvailability::Unknown => "unknown",
+        AccountAvailability::Ready => "ready",
+        AccountAvailability::Cooldown => "cooldown",
+        AccountAvailability::QuotaExhausted => "quota_exhausted",
+        AccountAvailability::Expired => "expired",
+        AccountAvailability::Banned => "banned",
+        AccountAvailability::Invalid => "invalid",
+    }
+}
+
+fn format_number(value: u64) -> String {
+    let text = value.to_string();
+    let mut output = String::with_capacity(text.len() + text.len() / 3);
+    for (index, character) in text.chars().rev().enumerate() {
+        if index > 0 && index % 3 == 0 {
+            output.push(',');
+        }
+        output.push(character);
+    }
+    output.chars().rev().collect()
+}
+
+fn format_tokens(value: u64) -> String {
+    if value < 1_000 {
+        return format_number(value);
+    }
+    for (suffix, threshold) in [
+        ("P", 1_000_000_000_000_000_u64),
+        ("T", 1_000_000_000_000_u64),
+        ("B", 1_000_000_000_u64),
+        ("M", 1_000_000_u64),
+        ("K", 1_000_u64),
+    ] {
+        if value >= threshold {
+            let scaled = value as f64 / threshold as f64;
+            return format!("{scaled:.1}{suffix}").replace(".0", "");
+        }
+    }
+    format_number(value)
+}
+
+fn relative_time(value: DateTime<Utc>, now: DateTime<Utc>) -> String {
+    let elapsed = now.signed_duration_since(value);
+    if elapsed.num_seconds() < 0 {
+        return china_datetime(&value);
+    }
+    if elapsed.num_seconds() < 60 {
+        return "刚刚".to_owned();
+    }
+    if elapsed.num_minutes() < 60 {
+        return format!("{} 分钟前", elapsed.num_minutes());
+    }
+    if elapsed.num_hours() < 24 {
+        return format!("{} 小时前", elapsed.num_hours());
+    }
+    format!("{} 天前", elapsed.num_days())
+}
+
+fn china_offset() -> FixedOffset {
+    FixedOffset::east_opt(8 * 60 * 60).expect("UTC+8 is a valid fixed offset")
+}
+
+fn china_rfc3339(value: &DateTime<Utc>) -> String {
+    value.with_timezone(&china_offset()).to_rfc3339()
+}
+
+fn china_datetime(value: &DateTime<Utc>) -> String {
+    value
+        .with_timezone(&china_offset())
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
 }
 
 fn map_wire_error(error: WireValidationError) -> AdminError {
@@ -750,12 +1202,15 @@ fn map_wire_error(error: WireValidationError) -> AdminError {
 
 fn map_service_error(error: AdminServiceError) -> AdminError {
     match error.kind() {
-        AdminServiceErrorKind::Invalid => AdminError::bad_request(error.to_string()),
-        AdminServiceErrorKind::NotFound => AdminError::not_found(error.to_string()),
-        AdminServiceErrorKind::Conflict => AdminError::conflict(error.to_string()),
-        AdminServiceErrorKind::Unavailable => {
+        AdminErrorKind::Invalid => AdminError::bad_request(error.to_string()),
+        AdminErrorKind::Unauthorized => AdminError::admin_session_required(),
+        AdminErrorKind::NotFound => AdminError::not_found(error.to_string()),
+        AdminErrorKind::Conflict => AdminError::conflict(error.to_string()),
+        AdminErrorKind::RateLimited => AdminError::too_many_login_attempts(),
+        AdminErrorKind::BadGateway => AdminError::bad_gateway(error.to_string()),
+        AdminErrorKind::Unavailable => {
             AdminError::service_unavailable("Account directory unavailable")
         }
-        AdminServiceErrorKind::Internal => AdminError::internal(error.to_string()),
+        AdminErrorKind::Internal => AdminError::internal(error.to_string()),
     }
 }

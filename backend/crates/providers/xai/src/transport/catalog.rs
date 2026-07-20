@@ -250,16 +250,6 @@ impl GrokBillingRequest {
     fn from_session(session: &GrokModelCatalogSession) -> Result<Self, GrokBillingError> {
         let endpoint =
             Url::parse(GROK_BILLING_URL).map_err(|_| GrokBillingError::InvalidRequest)?;
-        Self::for_endpoint(endpoint, session)
-    }
-
-    /// 构造由 transport endpoint policy 再次校验的 billing 请求。
-    ///
-    /// 生产 client 只调用固定官方 URL；此入口仅供显式注入的 loopback transport 测试。
-    pub fn for_endpoint(
-        endpoint: Url,
-        session: &GrokModelCatalogSession,
-    ) -> Result<Self, GrokBillingError> {
         let mut headers = vec![
             GrokHeader::sensitive(
                 "authorization",

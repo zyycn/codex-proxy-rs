@@ -7,7 +7,7 @@ mod supervisor;
 use std::{
     future::Future,
     sync::{Arc, Mutex, MutexGuard, atomic::AtomicBool},
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
 use serde_json::{Value, json};
@@ -150,15 +150,6 @@ impl CodexWebSocketPool {
         self.config.initial_event_timeout
     }
 
-    /// 返回指定连接在池策略下的绝对失效时间。
-    pub(crate) fn connection_expires_at(&self, created_at: Instant) -> Option<SystemTime> {
-        let remaining = self.config.max_age.checked_sub(created_at.elapsed())?;
-        if remaining.is_zero() {
-            return None;
-        }
-        SystemTime::now().checked_add(remaining)
-    }
-
     /// 注册由连接池生命周期托管的 opening 任务。
     pub(crate) fn spawn_connect_task(&self, future: impl Future<Output = ()> + Send + 'static) {
         drop(self.tasks.spawn(future));
@@ -178,7 +169,7 @@ impl CodexWebSocketPool {
             }
             let key = if let Some(response_id) = required_response_id {
                 let Some(key) = state.slots.iter().find_map(|(candidate, slot)| {
-                    (candidate.same_upstream_owner(key)
+                    (candidate.same_logical_connection(key)
                         && slot.latest_response_id() == Some(response_id))
                     .then(|| candidate.clone())
                 }) else {

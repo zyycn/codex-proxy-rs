@@ -1,19 +1,19 @@
 //! xAI OAuth account 选择、Redis lease 与失败反馈。
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use async_trait::async_trait;
 use chrono::Utc;
 use gateway_core::engine::credential::{
-    AccountCandidate, AccountRuntimeSignals, AccountSelectionContext, AccountSelector,
-    CredentialRevision, ProviderAccountId,
+    AccountCandidate, AccountSelectionContext, AccountSelector,
 };
-use gateway_core::routing::ProviderInstanceId;
+use gateway_core::provider_ports::{
+    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
+    ProviderSchedulingLeaseRequest,
+};
 
-use super::catalog::GrokCredentialCatalogCache;
+use super::catalog::{GrokCredentialCatalogCache, GrokCredentialQuotaService};
 use super::repository::GrokCredentialRepository;
 use super::types::{GrokCredentialAvailability, UpdateGrokCredentialState};
 use crate::{
@@ -25,70 +25,12 @@ use crate::{
 const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 const MAX_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Redis coordinator 接收的全局调度策略事实。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GrokCredentialLeaseRequest {
-    pub provider_instance_id: ProviderInstanceId,
-    pub account_id: ProviderAccountId,
-    pub credential_revision: CredentialRevision,
-    pub max_concurrent_per_account: u32,
-    pub request_interval: Duration,
-}
-
-pub trait GrokCredentialLeaseGuard: Send + Sync + 'static {}
-
-impl<T> GrokCredentialLeaseGuard for T where T: Send + Sync + 'static {}
-
-pub enum GrokCredentialLeaseAcquisition {
-    Acquired(Box<dyn GrokCredentialLeaseGuard>),
-    Unavailable { retry_after: Option<Duration> },
-}
-
-impl fmt::Debug for GrokCredentialLeaseAcquisition {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Acquired(_) => formatter.write_str("Acquired([LEASE])"),
-            Self::Unavailable { retry_after } => formatter
-                .debug_struct("Unavailable")
-                .field("retry_after", retry_after)
-                .finish(),
-        }
-    }
-}
-
-/// 一次 instance 的可失效调度状态；持久事实仍来自 PostgreSQL。
-#[derive(Debug, Clone)]
-pub struct GrokAccountSchedulingState {
-    pub signals: BTreeMap<ProviderAccountId, AccountRuntimeSignals>,
-    pub sticky_account: Option<ProviderAccountId>,
-    pub round_robin_cursor: u64,
-}
-
-#[async_trait]
-pub trait GrokCredentialLeaseCoordinator: Send + Sync {
-    async fn load_scheduling_state(
-        &self,
-        provider_instance_id: &ProviderInstanceId,
-        accounts: &[ProviderAccountId],
-    ) -> Result<GrokAccountSchedulingState, GrokCredentialLeaseCoordinatorError>;
-
-    async fn try_acquire(
-        &self,
-        request: &GrokCredentialLeaseRequest,
-    ) -> Result<GrokCredentialLeaseAcquisition, GrokCredentialLeaseCoordinatorError>;
-}
-
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum GrokCredentialLeaseCoordinatorError {
-    #[error("Grok credential lease coordinator is unavailable")]
-    Unavailable,
-}
-
 /// 仅经 Core account port、TTL catalog cache 和 Redis lease 选择一个 OAuth session。
 pub struct GrokAccountSessionSelector {
     repository: GrokCredentialRepository,
     catalog_cache: Arc<dyn GrokCredentialCatalogCache>,
-    lease_coordinator: Arc<dyn GrokCredentialLeaseCoordinator>,
+    quota: Arc<GrokCredentialQuotaService>,
+    scheduling: Arc<dyn ProviderLeasePort>,
 }
 
 impl GrokAccountSessionSelector {
@@ -96,12 +38,14 @@ impl GrokAccountSessionSelector {
     pub fn new(
         repository: GrokCredentialRepository,
         catalog_cache: Arc<dyn GrokCredentialCatalogCache>,
-        lease_coordinator: Arc<dyn GrokCredentialLeaseCoordinator>,
+        quota: Arc<GrokCredentialQuotaService>,
+        scheduling: Arc<dyn ProviderLeasePort>,
     ) -> Self {
         Self {
             repository,
             catalog_cache,
-            lease_coordinator,
+            quota,
+            scheduling,
         }
     }
 
@@ -114,18 +58,18 @@ impl GrokAccountSessionSelector {
             .list_accounts_for_instance(request.provider_instance_id())
             .await
             .map_err(|_| GrokSessionSelectorError::Unavailable)?;
+        self.quota.prepare_scheduling(&accounts).await;
         let mut catalog_eligible = Vec::new();
         for account in accounts {
-            if self
+            let support = self
                 .catalog_cache
-                .permits(
+                .observed_model_support(
                     account.id(),
                     account.revision(),
                     request.upstream_model().as_str(),
                 )
-                .await
-                .map_err(|_| GrokSessionSelectorError::Unavailable)?
-            {
+                .await;
+            if !matches!(support, Ok(Some(false))) {
                 catalog_eligible.push(account);
             }
         }
@@ -138,18 +82,19 @@ impl GrokAccountSessionSelector {
             .map(|account| account.id().clone())
             .collect::<Vec<_>>();
         let scheduling = self
-            .lease_coordinator
-            .load_scheduling_state(request.provider_instance_id(), &account_ids)
+            .scheduling
+            .load_state(request.provider_instance_id(), &account_ids)
             .await
             .map_err(|_| GrokSessionSelectorError::Unavailable)?;
         let mut candidates = catalog_eligible
             .into_iter()
             .map(|account| {
                 let signals = scheduling
-                    .signals
+                    .signals()
                     .get(account.id())
                     .cloned()
-                    .ok_or(GrokSessionSelectorError::Unavailable)?;
+                    .ok_or(GrokSessionSelectorError::Unavailable)?
+                    .with_provider_quota(self.quota.scheduling_signals(&account));
                 Ok(AccountCandidate { account, signals })
             })
             .collect::<Result<Vec<_>, GrokSessionSelectorError>>()?;
@@ -164,8 +109,8 @@ impl GrokAccountSessionSelector {
             sticky_account: request
                 .required_account()
                 .cloned()
-                .or(scheduling.sticky_account),
-            round_robin_cursor: scheduling.round_robin_cursor,
+                .or_else(|| scheduling.sticky_account().cloned()),
+            round_robin_cursor: scheduling.round_robin_cursor(),
         };
         let mut capacity_denied = false;
         let mut retry_after = None;
@@ -173,22 +118,24 @@ impl GrokAccountSessionSelector {
             let selected_id = selected.account.id().clone();
             let selected_revision = selected.account.revision();
             let lease = self
-                .lease_coordinator
-                .try_acquire(&GrokCredentialLeaseRequest {
-                    provider_instance_id: request.provider_instance_id().clone(),
-                    account_id: selected_id.clone(),
-                    credential_revision: selected_revision,
-                    max_concurrent_per_account: request
-                        .account_selection_policy()
-                        .max_concurrent_per_account()
-                        .get(),
-                    request_interval: request.account_selection_policy().request_interval(),
-                })
+                .scheduling
+                .try_acquire(ProviderLeaseRequest::Scheduling(
+                    ProviderSchedulingLeaseRequest::new(
+                        request.provider_instance_id().clone(),
+                        selected_id.clone(),
+                        selected_revision,
+                        request
+                            .account_selection_policy()
+                            .max_concurrent_per_account(),
+                        request.account_selection_policy().request_interval(),
+                        request.deadline(),
+                    ),
+                ))
                 .await
                 .map_err(|_| GrokSessionSelectorError::Unavailable)?;
             let guard = match lease {
-                GrokCredentialLeaseAcquisition::Acquired(guard) => guard,
-                GrokCredentialLeaseAcquisition::Unavailable {
+                ProviderLeaseAcquisition::Acquired(guard) => guard,
+                ProviderLeaseAcquisition::Busy {
                     retry_after: candidate_retry,
                 } => {
                     capacity_denied = true;
@@ -240,7 +187,8 @@ impl fmt::Debug for GrokAccountSessionSelector {
             .debug_struct("GrokAccountSessionSelector")
             .field("repository", &self.repository)
             .field("catalog_cache", &"[TTL_CACHE]")
-            .field("lease_coordinator", &"[LEASE_COORDINATOR]")
+            .field("quota", &self.quota)
+            .field("scheduling", &"[SCHEDULING_PORT]")
             .finish()
     }
 }

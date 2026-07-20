@@ -4,9 +4,21 @@ use std::fmt;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
+use gateway_admin::model::{
+    Revision,
+    client_keys::{
+        ClientKeyCursor, ClientKeyCursorValue as DomainCursorValue, ClientKeyListQuery,
+        ClientKeyMutation, ClientKeyPage, ClientKeyPageSize, ClientKeyRecord, ClientKeySecret,
+        ClientKeySort as DomainSort, ClientKeySortField as DomainSortField, CreateClientKey,
+        CreatedClientKey, DeleteClientKey, SetClientKeyEnabled, SortDirection, UpdateClientKey,
+    },
+};
+use gateway_core::{
+    policy::{ClientApiKeyId, RateLimits},
+    routing::ProviderKind,
+};
 use serde::{Deserialize, Serialize};
 
-use async_trait::async_trait;
 use axum::{
     Json, Router,
     extract::{Query, State},
@@ -16,12 +28,13 @@ use axum::{
 };
 
 use super::{
-    AdminAuth, AdminEnvelope, AdminError, AdminRequestContext, AdminResponse, AdminServiceError,
-    AdminServiceErrorKind, AdminSessionState, WireValidationError,
+    AdminAuth, AdminEnvelope, AdminError, AdminResponse, AdminSessionState, WireValidationError,
+    wire::map_admin_service_error,
 };
 
 const MAX_CURSOR_BYTES: usize = 512;
 const MAX_SEARCH_BYTES: usize = 256;
+const DEFAULT_PAGE_SIZE: u16 = 50;
 
 /// Client Key 列表查询。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -35,8 +48,8 @@ pub struct ListClientKeysQuery {
 }
 
 impl ListClientKeysQuery {
-    /// 校验游标与页大小的 wire 边界并取出字段。
-    pub fn into_parts(self) -> Result<ListClientKeysFields, WireValidationError> {
+    /// 校验 wire 边界并直接构造管理用例查询。
+    pub fn into_command(self) -> Result<ClientKeyListQuery, WireValidationError> {
         if self
             .cursor
             .as_deref()
@@ -59,11 +72,20 @@ impl ListClientKeysQuery {
             self.sort_by.as_deref().unwrap_or("createdAt"),
             self.sort_direction.as_deref().unwrap_or("desc"),
         )?;
-        Ok(ListClientKeysFields {
-            cursor: self.cursor,
-            limit: self.limit,
+        let cursor = self
+            .cursor
+            .as_deref()
+            .map(decode_client_key_cursor)
+            .transpose()?
+            .map(domain_cursor)
+            .transpose()?;
+        let page_size = ClientKeyPageSize::new(self.limit.unwrap_or(DEFAULT_PAGE_SIZE))
+            .map_err(|_| WireValidationError::new("limit"))?;
+        Ok(ClientKeyListQuery {
+            cursor,
+            page_size,
             search: search.filter(|search| !search.is_empty()),
-            sort,
+            sort: domain_sort(sort),
         })
     }
 }
@@ -112,15 +134,6 @@ impl ClientKeySort {
     }
 }
 
-/// 已校验的 Client Key 列表查询字段。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ListClientKeysFields {
-    pub cursor: Option<String>,
-    pub limit: Option<u16>,
-    pub search: Option<String>,
-    pub sort: ClientKeySort,
-}
-
 /// 创建 Client Key 请求。
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -135,8 +148,8 @@ pub struct CreateClientKeyRequest {
 }
 
 impl CreateClientKeyRequest {
-    /// 校验请求并转换为应用层可消费字段。
-    pub fn into_fields(self) -> Result<CreateClientKeyFields, WireValidationError> {
+    /// 校验 wire 边界并直接构造管理用例命令。
+    pub fn into_command(self) -> Result<CreateClientKey, WireValidationError> {
         validate_revision(self.expected_config_revision)?;
         validate_required_text(&self.name, "name")?;
         validate_optional_text(self.label.as_deref(), "label")?;
@@ -144,28 +157,19 @@ impl CreateClientKeyRequest {
         validate_limit(self.max_concurrency, "maxConcurrency")?;
         validate_limit(self.requests_per_minute, "requestsPerMinute")?;
         validate_limit(self.tokens_per_minute, "tokensPerMinute")?;
-        Ok(CreateClientKeyFields {
-            expected_config_revision: self.expected_config_revision,
+        Ok(CreateClientKey {
+            expected_config_revision: revision(self.expected_config_revision)?,
             name: self.name,
             label: self.label,
-            provider_kind: self.provider_kind,
-            max_concurrency: self.max_concurrency,
-            requests_per_minute: self.requests_per_minute,
-            tokens_per_minute: self.tokens_per_minute,
+            provider_kind: ProviderKind::new(self.provider_kind)
+                .map_err(|_| WireValidationError::new("providerKind"))?,
+            limits: RateLimits {
+                max_concurrency: self.max_concurrency,
+                requests_per_minute: self.requests_per_minute,
+                tokens_per_minute: self.tokens_per_minute,
+            },
         })
     }
-}
-
-/// 已校验的 Client Key 创建字段。
-#[derive(Debug, Clone, PartialEq)]
-pub struct CreateClientKeyFields {
-    pub expected_config_revision: u64,
-    pub name: String,
-    pub label: Option<String>,
-    pub provider_kind: String,
-    pub max_concurrency: u64,
-    pub requests_per_minute: u64,
-    pub tokens_per_minute: u64,
 }
 
 /// 更新 Client Key 请求。
@@ -183,8 +187,8 @@ pub struct UpdateClientKeyRequest {
 }
 
 impl UpdateClientKeyRequest {
-    /// 校验请求并转换为应用层可消费字段。
-    pub fn into_fields(self) -> Result<UpdateClientKeyFields, WireValidationError> {
+    /// 校验 wire 边界并直接构造管理用例命令。
+    pub fn into_command(self) -> Result<UpdateClientKey, WireValidationError> {
         validate_required_text(&self.id, "id")?;
         validate_revision(self.expected_config_revision)?;
         validate_required_text(&self.name, "name")?;
@@ -193,30 +197,20 @@ impl UpdateClientKeyRequest {
         validate_limit(self.max_concurrency, "maxConcurrency")?;
         validate_limit(self.requests_per_minute, "requestsPerMinute")?;
         validate_limit(self.tokens_per_minute, "tokensPerMinute")?;
-        Ok(UpdateClientKeyFields {
-            id: self.id,
-            expected_config_revision: self.expected_config_revision,
+        Ok(UpdateClientKey {
+            expected_config_revision: revision(self.expected_config_revision)?,
+            id: client_key_id(self.id, "clientKeyMutationNotFound")?,
             name: self.name,
             label: self.label,
-            provider_kind: self.provider_kind,
-            max_concurrency: self.max_concurrency,
-            requests_per_minute: self.requests_per_minute,
-            tokens_per_minute: self.tokens_per_minute,
+            provider_kind: ProviderKind::new(self.provider_kind)
+                .map_err(|_| WireValidationError::new("providerKind"))?,
+            limits: RateLimits {
+                max_concurrency: self.max_concurrency,
+                requests_per_minute: self.requests_per_minute,
+                tokens_per_minute: self.tokens_per_minute,
+            },
         })
     }
-}
-
-/// 已校验的 Client Key 更新字段。
-#[derive(Debug, Clone, PartialEq)]
-pub struct UpdateClientKeyFields {
-    pub id: String,
-    pub expected_config_revision: u64,
-    pub name: String,
-    pub label: Option<String>,
-    pub provider_kind: String,
-    pub max_concurrency: u64,
-    pub requests_per_minute: u64,
-    pub tokens_per_minute: u64,
 }
 
 /// 只携带 ID 与配置 revision 的 Client Key mutation 请求。
@@ -239,6 +233,10 @@ impl ClientKeyIdQuery {
         validate_required_text(&self.id, "id")?;
         Ok(self.id)
     }
+
+    fn into_domain_id(self) -> Result<ClientApiKeyId, WireValidationError> {
+        client_key_id(self.into_id()?, "clientKeyRevealNotFound")
+    }
 }
 
 impl ClientKeyRevisionRequest {
@@ -247,6 +245,14 @@ impl ClientKeyRevisionRequest {
         validate_required_text(&self.id, "id")?;
         validate_revision(self.expected_config_revision)?;
         Ok((self.id, self.expected_config_revision))
+    }
+
+    fn into_command_parts(self) -> Result<(ClientApiKeyId, Revision), WireValidationError> {
+        let (id, expected_config_revision) = self.into_parts()?;
+        Ok((
+            client_key_id(id, "clientKeyMutationNotFound")?,
+            revision(expected_config_revision)?,
+        ))
     }
 }
 
@@ -268,42 +274,23 @@ pub struct ClientKeyView {
     last_used_at: Option<DateTime<Utc>>,
 }
 
-impl ClientKeyView {
-    /// 从应用层已经读取的安全字段构造视图。
-    #[must_use]
-    pub fn new(fields: ClientKeyViewFields) -> Self {
+impl From<ClientKeyRecord> for ClientKeyView {
+    fn from(record: ClientKeyRecord) -> Self {
         Self {
-            id: fields.id,
-            name: fields.name,
-            label: fields.label,
-            provider_kind: fields.provider_kind,
-            prefix: fields.prefix,
-            enabled: fields.enabled,
-            max_concurrency: fields.max_concurrency,
-            requests_per_minute: fields.requests_per_minute,
-            tokens_per_minute: fields.tokens_per_minute,
-            created_at: fields.created_at,
-            updated_at: fields.updated_at,
-            last_used_at: fields.last_used_at,
+            id: record.id.to_string(),
+            name: record.name,
+            label: record.label,
+            provider_kind: record.provider_kind.to_string(),
+            prefix: record.prefix,
+            enabled: record.enabled,
+            max_concurrency: record.limits.max_concurrency,
+            requests_per_minute: record.limits.requests_per_minute,
+            tokens_per_minute: record.limits.tokens_per_minute,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
+            last_used_at: record.last_used_at,
         }
     }
-}
-
-/// Client Key 安全视图的应用层输入字段。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ClientKeyViewFields {
-    pub id: String,
-    pub name: String,
-    pub label: Option<String>,
-    pub provider_kind: String,
-    pub prefix: String,
-    pub enabled: bool,
-    pub max_concurrency: u64,
-    pub requests_per_minute: u64,
-    pub tokens_per_minute: u64,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub last_used_at: Option<DateTime<Utc>>,
 }
 
 /// Client Key 列表响应数据。
@@ -334,6 +321,26 @@ impl ClientKeyListData {
     }
 }
 
+impl TryFrom<ClientKeyPage> for ClientKeyListData {
+    type Error = WireValidationError;
+
+    fn try_from(page: ClientKeyPage) -> Result<Self, Self::Error> {
+        let next_cursor = page
+            .next_cursor
+            .map(wire_cursor)
+            .transpose()?
+            .as_ref()
+            .map(encode_client_key_cursor)
+            .transpose()?;
+        Ok(Self::new(
+            page.config_revision.get(),
+            page.items.into_iter().map(Into::into).collect(),
+            next_cursor,
+            page.total,
+        ))
+    }
+}
+
 /// Client Key 创建响应；完整值只允许出现在本次序列化结果中。
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -354,6 +361,17 @@ impl CreatedClientKeyData {
             prefix,
             plaintext_key,
         }
+    }
+}
+
+impl From<CreatedClientKey> for CreatedClientKeyData {
+    fn from(created: CreatedClientKey) -> Self {
+        Self::new(
+            created.config_revision.get(),
+            created.secret.record.id.to_string(),
+            created.secret.record.prefix.clone(),
+            created.secret.expose_for_response().to_owned(),
+        )
     }
 }
 
@@ -384,6 +402,15 @@ impl RevealedClientKeyData {
     }
 }
 
+impl From<ClientKeySecret> for RevealedClientKeyData {
+    fn from(secret: ClientKeySecret) -> Self {
+        Self::new(
+            secret.record.id.to_string(),
+            secret.expose_for_response().to_owned(),
+        )
+    }
+}
+
 impl fmt::Debug for RevealedClientKeyData {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -410,6 +437,12 @@ impl MutatedClientKeyData {
             config_revision,
             id,
         }
+    }
+}
+
+impl From<ClientKeyMutation> for MutatedClientKeyData {
+    fn from(mutation: ClientKeyMutation) -> Self {
+        Self::new(mutation.config_revision.get(), mutation.id.to_string())
     }
 }
 
@@ -497,11 +530,83 @@ fn validate_client_key_cursor(cursor: &ClientKeyCursorData) -> Result<(), WireVa
     }
 }
 
+const fn domain_sort(sort: ClientKeySort) -> DomainSort {
+    DomainSort {
+        field: match sort.field {
+            ClientKeySortField::Name => DomainSortField::Name,
+            ClientKeySortField::Enabled => DomainSortField::Enabled,
+            ClientKeySortField::CreatedAt => DomainSortField::CreatedAt,
+            ClientKeySortField::LastUsedAt => DomainSortField::LastUsedAt,
+        },
+        direction: match sort.direction {
+            ClientKeySortDirection::Asc => SortDirection::Asc,
+            ClientKeySortDirection::Desc => SortDirection::Desc,
+        },
+    }
+}
+
+const fn wire_sort(sort: DomainSort) -> ClientKeySort {
+    ClientKeySort {
+        field: match sort.field {
+            DomainSortField::Name => ClientKeySortField::Name,
+            DomainSortField::Enabled => ClientKeySortField::Enabled,
+            DomainSortField::CreatedAt => ClientKeySortField::CreatedAt,
+            DomainSortField::LastUsedAt => ClientKeySortField::LastUsedAt,
+        },
+        direction: match sort.direction {
+            SortDirection::Asc => ClientKeySortDirection::Asc,
+            SortDirection::Desc => ClientKeySortDirection::Desc,
+        },
+    }
+}
+
+fn domain_cursor(cursor: ClientKeyCursorData) -> Result<ClientKeyCursor, WireValidationError> {
+    let value = match cursor.value {
+        ClientKeyCursorValue::Name(value) => DomainCursorValue::Name(value),
+        ClientKeyCursorValue::Enabled(value) => DomainCursorValue::Enabled(value),
+        ClientKeyCursorValue::CreatedAt(value) => DomainCursorValue::CreatedAt(value),
+        ClientKeyCursorValue::LastUsedAt(value) => DomainCursorValue::LastUsedAt(value),
+    };
+    Ok(ClientKeyCursor {
+        sort: domain_sort(cursor.sort),
+        value,
+        id: client_key_id(cursor.id, "cursor")?,
+    })
+}
+
+fn wire_cursor(cursor: ClientKeyCursor) -> Result<ClientKeyCursorData, WireValidationError> {
+    let value = match cursor.value {
+        DomainCursorValue::Name(value) => ClientKeyCursorValue::Name(value),
+        DomainCursorValue::Enabled(value) => ClientKeyCursorValue::Enabled(value),
+        DomainCursorValue::CreatedAt(value) => ClientKeyCursorValue::CreatedAt(value),
+        DomainCursorValue::LastUsedAt(value) => ClientKeyCursorValue::LastUsedAt(value),
+    };
+    let cursor = ClientKeyCursorData {
+        sort: wire_sort(cursor.sort),
+        value,
+        id: cursor.id.to_string(),
+    };
+    validate_client_key_cursor(&cursor)?;
+    Ok(cursor)
+}
+
 fn validate_revision(value: u64) -> Result<(), WireValidationError> {
     if value == 0 {
         return Err(WireValidationError::new("expectedConfigRevision"));
     }
     Ok(())
+}
+
+fn revision(value: u64) -> Result<Revision, WireValidationError> {
+    validate_revision(value)?;
+    Revision::new(value).map_err(|_| WireValidationError::new("expectedConfigRevision"))
+}
+
+fn client_key_id(
+    value: String,
+    field: &'static str,
+) -> Result<ClientApiKeyId, WireValidationError> {
+    ClientApiKeyId::new(value).map_err(|_| WireValidationError::new(field))
 }
 
 fn validate_limit(value: u64, field: &'static str) -> Result<(), WireValidationError> {
@@ -554,59 +659,10 @@ fn contains_client_key_material(value: &str) -> bool {
     })
 }
 
-/// Client API Key 管理应用端口。
-#[async_trait]
-pub trait ClientKeyAdminService: Send + Sync {
-    async fn list(
-        &self,
-        query: ListClientKeysFields,
-    ) -> Result<ClientKeyListData, AdminServiceError>;
-
-    async fn create(
-        &self,
-        context: &AdminRequestContext,
-        fields: CreateClientKeyFields,
-    ) -> Result<CreatedClientKeyData, AdminServiceError>;
-
-    async fn reveal(&self, id: String) -> Result<RevealedClientKeyData, AdminServiceError>;
-
-    async fn update(
-        &self,
-        context: &AdminRequestContext,
-        fields: UpdateClientKeyFields,
-    ) -> Result<MutatedClientKeyData, AdminServiceError>;
-
-    async fn disable(
-        &self,
-        context: &AdminRequestContext,
-        id: String,
-        expected_config_revision: u64,
-    ) -> Result<MutatedClientKeyData, AdminServiceError>;
-
-    async fn enable(
-        &self,
-        context: &AdminRequestContext,
-        id: String,
-        expected_config_revision: u64,
-    ) -> Result<MutatedClientKeyData, AdminServiceError>;
-
-    async fn delete(
-        &self,
-        context: &AdminRequestContext,
-        id: String,
-        expected_config_revision: u64,
-    ) -> Result<MutatedClientKeyData, AdminServiceError>;
-}
-
-/// Client API Key HTTP module 所需最小 state。
-pub trait ClientKeyAdminState: AdminSessionState {
-    fn client_key_admin_service(&self) -> &dyn ClientKeyAdminService;
-}
-
 /// 构造固定 GET/POST 且 ID 仅位于 query/body 的 Client API Key 路由。
 pub fn router<S>() -> Router<S>
 where
-    S: ClientKeyAdminState + Clone + Send + Sync + 'static,
+    S: AdminSessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route(
@@ -638,14 +694,16 @@ async fn list_client_keys<S>(
     Query(query): Query<ListClientKeysQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: ClientKeyAdminState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
-    let fields = query.into_parts().map_err(map_wire_error)?;
-    let data = state
-        .client_key_admin_service()
-        .list(fields)
+    let result = state
+        .admin_services()
+        .client_keys()
+        .list(query.into_command().map_err(map_wire_error)?)
         .await
         .map_err(map_service_error)?;
+    let data = ClientKeyListData::try_from(result)
+        .map_err(|_| AdminError::internal("Failed to encode client key cursor"))?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
@@ -655,17 +713,18 @@ async fn create_client_key<S>(
     Json(payload): Json<CreateClientKeyRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: ClientKeyAdminState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
-    let fields = payload.into_fields().map_err(map_wire_error)?;
-    let data = state
-        .client_key_admin_service()
-        .create(auth.context(), fields)
+    let command = payload.into_command().map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .client_keys()
+        .create(&auth.context().mutation_context(), command)
         .await
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::CREATED,
-        AdminEnvelope::ok(data),
+        AdminEnvelope::ok(CreatedClientKeyData::from(result)),
     ))
 }
 
@@ -675,15 +734,20 @@ async fn reveal_client_key<S>(
     Query(query): Query<ClientKeyIdQuery>,
 ) -> Result<Response, AdminError>
 where
-    S: ClientKeyAdminState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
-    let id = query.into_id().map_err(map_wire_error)?;
-    let data = state
-        .client_key_admin_service()
-        .reveal(id)
+    let id = query.into_domain_id().map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .client_keys()
+        .reveal(&id)
         .await
         .map_err(map_service_error)?;
-    let mut response = AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)).into_response();
+    let mut response = AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(RevealedClientKeyData::from(result)),
+    )
+    .into_response();
     response
         .headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -696,13 +760,14 @@ async fn update_client_key<S>(
     Json(payload): Json<UpdateClientKeyRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: ClientKeyAdminState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
-    let fields = payload.into_fields().map_err(map_wire_error)?;
+    let command = payload.into_command().map_err(map_wire_error)?;
     mutation_response(
         state
-            .client_key_admin_service()
-            .update(auth.context(), fields)
+            .admin_services()
+            .client_keys()
+            .update(&auth.context().mutation_context(), command)
             .await,
     )
 }
@@ -713,13 +778,21 @@ async fn disable_client_key<S>(
     Json(payload): Json<ClientKeyRevisionRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: ClientKeyAdminState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
-    let (id, revision) = payload.into_parts().map_err(map_wire_error)?;
+    let (id, expected_config_revision) = payload.into_command_parts().map_err(map_wire_error)?;
     mutation_response(
         state
-            .client_key_admin_service()
-            .disable(auth.context(), id, revision)
+            .admin_services()
+            .client_keys()
+            .set_enabled(
+                &auth.context().mutation_context(),
+                SetClientKeyEnabled {
+                    expected_config_revision,
+                    id,
+                    enabled: false,
+                },
+            )
             .await,
     )
 }
@@ -730,13 +803,21 @@ async fn enable_client_key<S>(
     Json(payload): Json<ClientKeyRevisionRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: ClientKeyAdminState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
-    let (id, revision) = payload.into_parts().map_err(map_wire_error)?;
+    let (id, expected_config_revision) = payload.into_command_parts().map_err(map_wire_error)?;
     mutation_response(
         state
-            .client_key_admin_service()
-            .enable(auth.context(), id, revision)
+            .admin_services()
+            .client_keys()
+            .set_enabled(
+                &auth.context().mutation_context(),
+                SetClientKeyEnabled {
+                    expected_config_revision,
+                    id,
+                    enabled: true,
+                },
+            )
             .await,
     )
 }
@@ -747,27 +828,39 @@ async fn delete_client_key<S>(
     Json(payload): Json<ClientKeyRevisionRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: ClientKeyAdminState + Send + Sync,
+    S: AdminSessionState + Send + Sync,
 {
-    let (id, revision) = payload.into_parts().map_err(map_wire_error)?;
+    let (id, expected_config_revision) = payload.into_command_parts().map_err(map_wire_error)?;
     mutation_response(
         state
-            .client_key_admin_service()
-            .delete(auth.context(), id, revision)
+            .admin_services()
+            .client_keys()
+            .delete(
+                &auth.context().mutation_context(),
+                DeleteClientKey {
+                    expected_config_revision,
+                    id,
+                },
+            )
             .await,
     )
 }
 
 fn mutation_response(
-    result: Result<MutatedClientKeyData, AdminServiceError>,
+    result: Result<ClientKeyMutation, gateway_admin::model::AdminError>,
 ) -> Result<AdminResponse<AdminEnvelope<MutatedClientKeyData>>, AdminError> {
     let data = result.map_err(map_service_error)?;
-    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(MutatedClientKeyData::from(data)),
+    ))
 }
 
 fn map_wire_error(error: WireValidationError) -> AdminError {
     match error.field() {
         "cursor" => AdminError::bad_request("Invalid client key cursor"),
+        "clientKeyRevealNotFound" => AdminError::not_found("Client API key was not found"),
+        "clientKeyMutationNotFound" => AdminError::not_found("client API key was not found"),
         "expectedConfigRevision" => {
             AdminError::bad_request("expectedConfigRevision must be positive")
         }
@@ -775,14 +868,6 @@ fn map_wire_error(error: WireValidationError) -> AdminError {
     }
 }
 
-fn map_service_error(error: AdminServiceError) -> AdminError {
-    match error.kind() {
-        AdminServiceErrorKind::Invalid => AdminError::bad_request(error.to_string()),
-        AdminServiceErrorKind::NotFound => AdminError::not_found(error.to_string()),
-        AdminServiceErrorKind::Conflict => AdminError::conflict(error.to_string()),
-        AdminServiceErrorKind::Unavailable => {
-            AdminError::service_unavailable("Configuration repository unavailable")
-        }
-        AdminServiceErrorKind::Internal => AdminError::internal(error.to_string()),
-    }
+fn map_service_error(error: gateway_admin::model::AdminError) -> AdminError {
+    map_admin_service_error(error, "Configuration repository unavailable")
 }

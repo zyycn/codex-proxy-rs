@@ -1,6 +1,6 @@
 use gateway_core::engine::continuation::{
-    NativeClaim, NativeClaimState, NativeContinuationPin, NativeContinuationReuse,
-    PreviousResponseId,
+    ContinuationBinding, NativeClaim, NativeClaimState, NativeContinuationPin,
+    NativeContinuationReuse, PreviousResponseId,
 };
 use gateway_core::engine::credential::ProviderAccountId;
 use gateway_core::error::SafeUpstreamValue;
@@ -22,6 +22,15 @@ fn native_pin_debug_should_redact_previous_response_id() {
     let debug = format!("{:?}", pin());
     assert!(!debug.contains("response-private"));
     assert!(!debug.contains("upstream-private"));
+}
+
+#[test]
+fn external_binding_debug_should_redact_previous_response_id() {
+    let binding = ContinuationBinding::External(
+        PreviousResponseId::new("external-private").expect("valid response"),
+    );
+
+    assert!(!format!("{binding:?}").contains("external-private"));
 }
 
 #[test]

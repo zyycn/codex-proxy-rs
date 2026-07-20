@@ -1,7 +1,25 @@
+use gateway_core::engine::provider::UpstreamTransport;
 use gateway_core::event::{
     ContentItem, ContentKind, EventSequenceError, EventSequenceValidator, GatewayEvent,
-    ReasoningDelta, ResponseMeta, TextDelta, ToolCallDelta,
+    ProtocolWireEvent, ProviderEvent, ProviderResponseObservation, ReasoningDelta, ResponseMeta,
+    TextDelta, ToolCallDelta,
 };
+use serde_json::json;
+
+#[test]
+fn provider_event_keeps_large_wire_and_observation_payloads_behind_one_indirection() {
+    assert!(std::mem::size_of::<ProviderEvent>() <= 64);
+
+    let wire = ProviderEvent::wire(
+        ProtocolWireEvent::json("openai", None, json!({"type": "response.created"}))
+            .expect("wire event"),
+    );
+    let observation = ProviderEvent::observation(ProviderResponseObservation::new(
+        UpstreamTransport::new("http_sse").expect("transport"),
+    ));
+    assert!(wire.has_client_event());
+    assert!(!observation.has_client_event());
+}
 
 #[test]
 fn validator_should_accept_started_content_delta_completed_sequence() {

@@ -13,10 +13,11 @@ use gateway_core::routing::{ProviderInstanceId, ProviderKind};
 use secrecy::ExposeSecret;
 use thiserror::Error;
 
+use super::identity::CodexSignedIdentity;
 use super::security::{CodexCredentialCodec, CodexCredentialDataError, CodexRuntimeCredential};
 use super::types::{
-    CodexAccountProfile, CodexCredentialData, CreateCodexCredential, CredentialRecord,
-    RotateCodexCredential,
+    CodexAccountProfile, CodexCredentialData, CodexOAuthSecret, CreateCodexCredential,
+    CredentialRecord, RotateCodexCredential,
 };
 
 const PROVIDER_NAME: &str = "openai";
@@ -50,14 +51,11 @@ impl CodexCredentialRepository {
         let revision = CredentialRevision::new(1)
             .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
         let access_token_expires_at = required_time(input.account.access_token_expires_at)?;
-        let upstream_user_id = input
-            .account
-            .chatgpt_user_id
-            .clone()
-            .unwrap_or_else(|| input.account.chatgpt_account_id.clone());
-        let credential = CodexCredentialCodec::encode(&input.secret, Vec::new())?;
+        let upstream_user_id = input.account.chatgpt_user_id.clone();
+        let credential =
+            CodexCredentialCodec::encode_new(&input.secret, &input.account, Vec::new())?;
         let has_refresh_token = input.secret.refresh_token.is_some();
-        let next_refresh_at = optional_time(input.account.next_refresh_at);
+        let next_refresh_at = optional_time(input.next_refresh_at);
         let account = ProviderAccount::new(
             account_id.clone(),
             instance.clone(),
@@ -96,8 +94,8 @@ impl CodexCredentialRepository {
         let expected = CredentialRevision::new(input.expected_credential_revision)
             .map_err(|_| CredentialRepositoryError::InvalidInput("credential_revision"))?;
         let current = self.store.load_credential(&account_id, expected).await?;
-        verify_identity(&current, &input.verified_account)?;
         let mut data = CodexCredentialCodec::decode_complete(&current.credential)?;
+        verify_identity(&current, &data, &input.verified_account)?;
         data.access_token = input.secret.access_token.expose_secret().to_owned();
         data.refresh_token = input
             .secret
@@ -122,14 +120,89 @@ impl CodexCredentialRepository {
             credential,
             input.secret.refresh_token.is_some(),
             required_time(input.verified_account.access_token_expires_at)?,
-            optional_time(input.verified_account.next_refresh_at),
+            optional_time(input.next_refresh_at),
         )
         .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
-        let outcome = self.store.compare_and_swap_credential(update).await?;
-        match outcome {
-            CredentialCasOutcome::Updated(revision) => Ok(revision),
-            CredentialCasOutcome::Conflict => Err(CredentialRepositoryError::RevisionConflict),
+        cas_revision(self.store.compare_and_swap_credential(update).await?)
+    }
+
+    /// usage 暂时不可用时，只在签名 principal 与现有绑定完全一致后保存已轮换 token。
+    pub async fn rotate_signed_secret(
+        &self,
+        account: &ProviderAccount,
+        secret: CodexOAuthSecret,
+        signed: &CodexSignedIdentity,
+        next_refresh_at: SystemTime,
+    ) -> Result<CredentialRevision, CredentialRepositoryError> {
+        let current = self
+            .store
+            .load_credential(account.id(), account.revision())
+            .await?;
+        if current.account != *account {
+            return Err(CredentialRepositoryError::RevisionConflict);
         }
+        let mut data = CodexCredentialCodec::decode_complete(&current.credential)?;
+        if data.principal.oauth_subject != signed.oauth_subject()
+            || data.principal.poid.as_deref() != signed.poid()
+            || signed
+                .claimed_account_id()
+                .is_some_and(|value| account.upstream_account_id() != Some(value))
+            || signed
+                .claimed_user_id()
+                .is_some_and(|value| account.upstream_user_id() != value)
+        {
+            return Err(CredentialRepositoryError::IdentityMismatch);
+        }
+        data.access_token = secret.access_token.expose_secret().to_owned();
+        data.refresh_token = secret
+            .refresh_token
+            .as_ref()
+            .map(|value| value.expose_secret().to_owned());
+        data.id_token = secret
+            .id_token
+            .as_ref()
+            .map(|value| value.expose_secret().to_owned());
+        let credential = CodexCredentialCodec::encode_complete(data)?;
+        let update = CredentialCasUpdate::new(
+            account.id().clone(),
+            account.revision(),
+            unchanged_profile(account),
+            credential,
+            secret.refresh_token.is_some(),
+            SystemTime::from(signed.access_token_expires_at()),
+            Some(next_refresh_at),
+        )
+        .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
+        cas_revision(self.store.compare_and_swap_credential(update).await?)
+    }
+
+    /// token 签名边界不可用时，以相同 credential 推进持久刷新退避。
+    pub async fn defer_refresh(
+        &self,
+        account: &ProviderAccount,
+        next_refresh_at: SystemTime,
+    ) -> Result<CredentialRevision, CredentialRepositoryError> {
+        let current = self
+            .store
+            .load_credential(account.id(), account.revision())
+            .await?;
+        if current.account != *account {
+            return Err(CredentialRepositoryError::RevisionConflict);
+        }
+        let data = CodexCredentialCodec::decode_complete(&current.credential)?;
+        let has_refresh_token = data.refresh_token.is_some();
+        let credential = CodexCredentialCodec::encode_complete(data)?;
+        let update = CredentialCasUpdate::new(
+            account.id().clone(),
+            account.revision(),
+            unchanged_profile(account),
+            credential,
+            has_refresh_token,
+            account.access_token_expires_at(),
+            Some(next_refresh_at),
+        )
+        .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
+        cas_revision(self.store.compare_and_swap_credential(update).await?)
     }
 
     pub async fn list_for_instance(
@@ -192,11 +265,7 @@ impl CodexCredentialRepository {
             account.next_refresh_at(),
         )
         .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
-        let outcome = self.store.compare_and_swap_credential(update).await?;
-        match outcome {
-            CredentialCasOutcome::Updated(revision) => Ok(revision),
-            CredentialCasOutcome::Conflict => Err(CredentialRepositoryError::RevisionConflict),
-        }
+        cas_revision(self.store.compare_and_swap_credential(update).await?)
     }
 
     pub async fn apply_state(
@@ -221,15 +290,34 @@ impl CodexCredentialRepository {
     }
 }
 
+fn unchanged_profile(account: &ProviderAccount) -> ProviderAccountUpdate {
+    ProviderAccountUpdate {
+        account_id: account.id().clone(),
+        name: account.name().to_owned(),
+        email: account.email().map(str::to_owned),
+        plan_type: account.plan_type().map(str::to_owned),
+    }
+}
+
+fn cas_revision(
+    outcome: CredentialCasOutcome,
+) -> Result<CredentialRevision, CredentialRepositoryError> {
+    match outcome {
+        CredentialCasOutcome::Updated(revision) => Ok(revision),
+        CredentialCasOutcome::Conflict => Err(CredentialRepositoryError::RevisionConflict),
+    }
+}
+
 fn verify_identity(
     current: &LoadedCredential,
+    credential: &CodexCredentialData,
     verified: &CodexAccountProfile,
 ) -> Result<(), CredentialRepositoryError> {
-    if current.account.upstream_account_id() != Some(verified.chatgpt_account_id.as_str())
-        || verified
-            .chatgpt_user_id
-            .as_deref()
-            .is_some_and(|user| user != current.account.upstream_user_id())
+    if current.account.provider().as_str() != PROVIDER_NAME
+        || current.account.upstream_account_id() != Some(verified.chatgpt_account_id.as_str())
+        || verified.chatgpt_user_id != current.account.upstream_user_id()
+        || verified.oauth_subject != credential.principal.oauth_subject
+        || verified.poid != credential.principal.poid
     {
         return Err(CredentialRepositoryError::IdentityMismatch);
     }
@@ -261,8 +349,14 @@ pub enum CredentialRepositoryError {
 }
 
 impl From<gateway_core::error::StoreError> for CredentialRepositoryError {
-    fn from(_: gateway_core::error::StoreError) -> Self {
-        Self::Store
+    fn from(error: gateway_core::error::StoreError) -> Self {
+        match error.kind() {
+            gateway_core::error::StoreErrorKind::Conflict => Self::RevisionConflict,
+            gateway_core::error::StoreErrorKind::Unavailable
+            | gateway_core::error::StoreErrorKind::InvalidState
+            | gateway_core::error::StoreErrorKind::InvalidData => Self::Store,
+            _ => Self::Store,
+        }
     }
 }
 

@@ -12,7 +12,7 @@
 [![GHCR](https://img.shields.io/badge/GHCR-codex--proxy--rs-2496ED?logo=docker&logoColor=white&style=flat-square)](https://github.com/zyycn/codex-proxy-rs/pkgs/container/codex-proxy-rs)
 [![MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](https://opensource.org/license/mit)
 
-[快速开始](#快速开始) · [客户端接入](#客户端接入) · [运维](#运维) · [部署文档](deploy/README.md) · [架构](docs/architecture.md)
+[快速开始](#快速开始) · [客户端接入](#客户端接入) · [运维](#运维) · [部署文档](deploy/README.md) · [架构](docs/app-layer-refactor-architecture.md)
 
 </div>
 
@@ -21,14 +21,14 @@
 
 ## 能力
 
-| 领域     | 实现                                             |
-| -------- | ------------------------------------------------ |
-| 协议     | OpenAI Responses JSON/SSE 与模型目录                      |
-| Provider | Codex OAuth、xAI/Grok OAuth session                        |
-| 路由     | Provider instance、能力过滤、显式 fallback 与多 credential |
-| 延续     | Provider 原生 continuation 与加密 portable transcript      |
-| 管理     | Client Key、Provider、模型、Route、Target、价格与 OAuth     |
-| 计量     | Request/Attempt usage、版本价格、预算、聚合与恢复            |
+| 领域     | 实现                                                         |
+| -------- | ------------------------------------------------------------ |
+| 协议     | OpenAI Responses JSON、SSE、WebSocket 与模型目录              |
+| Provider | OpenAI OAuth、xAI OAuth，多账号隔离与自动刷新                  |
+| 路由     | Client Key 平台绑定、Provider instance、模型映射与安全 fallback |
+| 延续     | 客户端携带历史；Provider 原生 continuation 固定账号与连接     |
+| 管理     | Client Key、账号、模型目录、设置、观测、系统与 OAuth          |
+| 计量     | 模型请求 Token、费用、延迟、账号与 Provider 归因               |
 
 ## 快速开始
 
@@ -47,19 +47,21 @@ sudo chown "$(id -u):10001" deploy/config.yaml
 chmod 0640 deploy/config.yaml
 ```
 
-分别执行三次：
+生成并导出两个基础设施密码：
 
 ```bash
-openssl rand -hex 24
+export CPR_DATABASE_PASSWORD="$(openssl rand -hex 24)"
+export CPR_REDIS_PASSWORD="$(openssl rand -hex 24)"
 ```
 
-将结果写入 `deploy/config.yaml`：
+再生成一次管理员初始密码并写入 `deploy/config.yaml`：
 
-| 配置                           | 约束                     |
-| ------------------------------ | ------------------------ |
-| `x-cpr.database.password`      | 48 位十六进制            |
-| `x-cpr.redis.password`         | 48 位十六进制            |
-| `x-cpr.admin.default_password` | 至少 12 位，不能包含 `$` |
+| 配置                     | 约束                     |
+| ------------------------ | ------------------------ |
+| `admin.default_password` | 至少 12 位，不能包含 `$` |
+
+`CPR_DATABASE_PASSWORD` 与 `CPR_REDIS_PASSWORD` 必须是 48 位十六进制，并在每次 Compose
+命令的 shell 中可用。
 
 Linux 需要允许容器组写入运行目录：
 
@@ -83,9 +85,9 @@ curl -i http://127.0.0.1:8080/healthz
 ### 3. 初始化
 
 1. 使用 `admin@cpr.local` 与初始密码登录。
-2. 创建 Provider instance，并通过 OAuth 导入 Codex 或 xAI credential。
-3. 配置 Provider model、对外 Route/Target；严格预算场景同时发布价格版本。
-4. 创建 `sk_...` 客户端 Key，并设置模型 allowlist、速率、并发和预算策略。
+2. 创建 Provider instance，并通过 OAuth 或 JSON 导入 OpenAI、xAI 账号。
+3. 按平台配置客户端模型到上游模型的映射；未配置的模型名原样透传。
+4. 创建 `sk_...` 客户端 Key，绑定平台并设置模型范围、速率与并发限制。
 
 > [!IMPORTANT]
 > xAI 使用 OAuth session，不支持把 xAI API Key 作为上游 credential。
@@ -123,6 +125,8 @@ curl http://127.0.0.1:8080/v1/responses \
 | 路由                        | 用途                |
 | --------------------------- | ------------------- |
 | `POST /v1/responses`        | JSON 或 SSE 透明代理 |
+| `GET /v1/responses`         | WebSocket 透明代理   |
+| `POST /v1/responses/review` | OpenAI review 请求   |
 | `GET /v1/models`            | 启用的公开模型列表   |
 | `GET /v1/models/{model_id}` | 公开模型详情         |
 
@@ -146,7 +150,7 @@ docker compose -f deploy/compose.yaml up -d
 ```
 
 > [!IMPORTANT]
-> `.runtime/` 保存数据库、Redis、身份密钥和日志。删除该目录会永久清除运行状态。
+> `.runtime/` 保存 PostgreSQL、Redis、自更新状态和日志。删除该目录会永久清除运行状态。
 
 Compose 默认只绑定 `127.0.0.1`。公网接入应使用 HTTPS 反向代理，转发 WebSocket
 upgrade 与真实客户端 IP；不要暴露 PostgreSQL 或 Redis。
@@ -154,8 +158,8 @@ upgrade 与真实客户端 IP；不要暴露 PostgreSQL 或 Redis。
 ## 文档
 
 - [部署](deploy/README.md)
-- [架构](docs/architecture.md)
-- [多 Provider 目标架构](docs/multi-provider-architecture.md)
-- [终态数据模型](docs/multi-provider-database.md)
+- [终态代码架构](docs/app-layer-refactor-architecture.md)
+- [终态数据模型](docs/multi-provider-final-database.md)
+- [重构执行报告](docs/app-layer-refactor-execution-report.md)
 - [Release](https://github.com/zyycn/codex-proxy-rs/releases)
 - [容器镜像](https://github.com/zyycn/codex-proxy-rs/pkgs/container/codex-proxy-rs)

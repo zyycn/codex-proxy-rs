@@ -1,9 +1,14 @@
 use chrono::{TimeZone, Utc};
+use gateway_admin::model::{
+    Revision,
+    accounts::{AccountAvailability, AccountRecord},
+};
 use gateway_api::admin::xai::{
     AuthorizationStartData, CompleteAuthorizationRequest, NewCredentialRequest,
     StartAuthorizationRequest, XaiCredentialImportData, XaiCredentialImportDocumentRequest,
     XaiCredentialListData, XaiCredentialViewData,
 };
+use gateway_core::routing::{ProviderInstanceId, ProviderKind};
 use serde_json::{Value, json};
 
 fn valid_request() -> Value {
@@ -165,4 +170,39 @@ fn authorization_requests_require_server_owned_flow_and_full_callback_url() {
     }))
     .expect("deserialize callback completion");
     complete.validate().expect("callback completion is valid");
+}
+
+#[test]
+fn credential_result_should_map_to_the_existing_safe_wire_view() {
+    let timestamp = Utc
+        .with_ymd_and_hms(2026, 7, 18, 3, 0, 0)
+        .single()
+        .expect("valid fixture timestamp");
+    let view = XaiCredentialViewData::from(AccountRecord {
+        id: "acct_xai_safe".to_owned(),
+        provider_instance_id: ProviderInstanceId::new("inst_xai").expect("provider instance ID"),
+        provider_kind: ProviderKind::new("xai").expect("provider kind"),
+        name: "Grok OAuth".to_owned(),
+        email: Some("verified@example.com".to_owned()),
+        upstream_user_id: "subject_xai".to_owned(),
+        upstream_account_id: None,
+        plan_type: Some("pro".to_owned()),
+        credential_revision: Revision::new(2).expect("credential revision"),
+        has_refresh_token: true,
+        access_token_expires_at: timestamp,
+        next_refresh_at: Some(timestamp),
+        enabled: true,
+        availability: AccountAvailability::QuotaExhausted,
+        availability_reason: None,
+        cooldown_until: None,
+        availability_observed_at: timestamp,
+        quota_observed_at: None,
+        created_at: timestamp,
+        updated_at: timestamp,
+    });
+
+    let rendered = serde_json::to_value(view).expect("serialize safe credential view");
+    assert_eq!(rendered["availability"], "quota_exhausted");
+    assert_eq!(rendered["credentialRevision"], 2);
+    assert!(rendered.get("refreshToken").is_none());
 }

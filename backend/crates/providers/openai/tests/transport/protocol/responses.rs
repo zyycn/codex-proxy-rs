@@ -215,15 +215,21 @@ fn transport_should_require_exact_websocket_for_connection_local_continuation() 
 
 #[test]
 fn exact_continuation_should_remain_stricter_than_forced_websocket() {
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-test", "", Vec::new());
-    request.set_previous_response_id(Some("resp_local".to_owned()));
-    request.previous_response_scope = Some(PreviousResponseScope::ConnectionLocal);
-    request.force_websocket = true;
-
+    let mut preferred = CodexResponsesRequest::new_http_sse("gpt-test", "be brief", Vec::new());
+    preferred.use_websocket = true;
     assert_eq!(
-        transport_requirement(&request),
+        transport_requirement(&preferred),
+        TransportRequirement::NewChain
+    );
+    assert!(!transport_requirement(&preferred).requires_websocket());
+
+    preferred.set_previous_response_id(Some("resp_previous".to_owned()));
+    preferred.previous_response_scope = Some(PreviousResponseScope::ConnectionLocal);
+    assert_eq!(
+        transport_requirement(&preferred),
         TransportRequirement::ExactWebSocketContinuation
     );
+    assert!(transport_requirement(&preferred).requires_websocket());
 }
 
 #[test]

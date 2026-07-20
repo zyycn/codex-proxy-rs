@@ -1,18 +1,34 @@
 use std::time::{Duration, SystemTime};
 
 use chrono::{TimeDelta, Utc};
-use gateway_core::engine::credential::{
-    CredentialCasOutcome, CredentialCasUpdate, CredentialRevision, PlaintextCredential,
-    ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
+use gateway_admin::{
+    model::{
+        MutationActor, MutationContext, PageSize, Revision as AdminRevision,
+        accounts::{
+            AccountListQuery, AccountSort, AccountSortField, AccountStatus, DeleteAccount,
+            SetAccountEnabled as AdminSetAccountEnabled, SortDirection,
+        },
+        observability::TimeRange,
+        provider_credentials::{
+            CredentialAvailabilityFilter, CredentialListQuery, CredentialListWindow,
+        },
+    },
+    ports::store::{AccountStore, AdminStoreErrorKind},
 };
+use gateway_core::engine::credential::{
+    CredentialCasOutcome, CredentialCasUpdate, CredentialRevision, OpaqueProviderData,
+    PlaintextCredential, ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
+    QuotaObservation, QuotaWriteOutcome,
+};
+use gateway_core::routing::ProviderKind;
 use gateway_store::{
     ConflictKind, JsonObject, Revision, StoreError,
     postgres::{
         AdminAuditActorKind, AdminAuditEvent, DeleteProviderAccounts, ImportProviderAccounts,
-        NewProviderAccount, PgProviderAccountRepository, ProviderAccountAdminRepository,
-        ProviderAccountAdminScope, ProviderAccountAvailability, ProviderAccountObservation,
-        ProviderAccountRepository, ProviderCredentialUpdate, RotateProviderAccount,
-        SetProviderAccountEnabled, UpdateProviderAccount,
+        NewProviderAccount, PgAdminAccountStore, PgProviderAccountRepository,
+        ProviderAccountAdminRepository, ProviderAccountAdminScope, ProviderAccountAvailability,
+        ProviderAccountObservation, ProviderAccountRepository, ProviderCredentialUpdate,
+        RotateProviderAccount, SetProviderAccountEnabled, UpdateProviderAccount,
     },
 };
 use serde_json::json;
@@ -26,6 +42,491 @@ fn postgres_provider_account_adapter_implements_core_port() {
 
     fn assert_admin_port<T: ProviderAccountAdminRepository>() {}
     assert_admin_port::<PgProviderAccountRepository>();
+
+    fn assert_terminal_admin_port<T: AccountStore>() {}
+    assert_terminal_admin_port::<PgAdminAccountStore>();
+}
+
+#[tokio::test]
+async fn core_quota_batch_reads_only_observed_accounts_in_one_contract_call() {
+    let Some(database) = TestDatabase::create("provider_account_quota_batch").await else {
+        return;
+    };
+    seed_instance(&database.pool, "inst_openai_admin", "openai")
+        .await
+        .expect("seed OpenAI instance");
+    let repository = PgProviderAccountRepository::new(database.pool);
+    for id in ["acct_quota_a", "acct_quota_b", "acct_quota_empty"] {
+        repository
+            .insert_provider_account(account(id, &format!("user-{id}")))
+            .await
+            .expect("insert quota fixture");
+    }
+    let revision = CredentialRevision::new(1).expect("revision");
+    for (id, remaining) in [("acct_quota_a", 20), ("acct_quota_b", 80)] {
+        let outcome = repository
+            .compare_and_swap_quota(QuotaObservation {
+                account_id: ProviderAccountId::new(id).expect("account id"),
+                expected_revision: revision,
+                quota: Some(OpaqueProviderData::new(
+                    json!({"remaining": remaining})
+                        .as_object()
+                        .expect("quota object")
+                        .clone(),
+                )),
+                observed_at: Some(SystemTime::now()),
+            })
+            .await
+            .expect("persist quota");
+        assert_eq!(outcome, QuotaWriteOutcome::Updated);
+    }
+
+    let mut observations = repository
+        .get_quotas(&[
+            ProviderAccountId::new("acct_quota_b").expect("account id"),
+            ProviderAccountId::new("acct_quota_empty").expect("account id"),
+            ProviderAccountId::new("acct_quota_a").expect("account id"),
+        ])
+        .await
+        .expect("read quota batch");
+    observations.sort_by(|left, right| left.account_id.cmp(&right.account_id));
+
+    assert_eq!(observations.len(), 2);
+    assert_eq!(observations[0].account_id.as_str(), "acct_quota_a");
+    assert_eq!(observations[0].expected_revision, revision);
+    assert_eq!(
+        observations[0]
+            .quota
+            .as_ref()
+            .expect("quota")
+            .expose_to_provider()["remaining"],
+        20
+    );
+    assert!(observations.iter().all(|value| value.observed_at.is_some()));
+}
+
+#[tokio::test]
+async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_usage() {
+    let Some(database) = TestDatabase::create("provider_account_terminal_list").await else {
+        return;
+    };
+    seed_instance(&database.pool, "inst_openai_admin", "openai")
+        .await
+        .expect("seed OpenAI instance");
+    seed_instance(&database.pool, "inst_xai_admin", "xai")
+        .await
+        .expect("seed xAI instance");
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let now = Utc::now();
+
+    let mut alpha = account("acct_alpha", "user-alpha");
+    alpha.email = Some("alpha@example.invalid".to_owned());
+    let mut beta = account("acct_beta", "user-beta");
+    beta.provider_instance_id = "inst_xai_admin".to_owned();
+    beta.provider_kind = "xai".to_owned();
+    beta.email = Some("beta@example.invalid".to_owned());
+    beta.availability = ProviderAccountAvailability::Banned;
+    let mut charlie = account("acct_charlie", "user-charlie");
+    charlie.email = Some("charlie@example.invalid".to_owned());
+    let mut attention = account("acct_attention", "user-attention");
+    attention.email = Some("attention@example.invalid".to_owned());
+    attention.availability = ProviderAccountAvailability::Invalid;
+    for account in [alpha, beta, charlie, attention] {
+        repository
+            .insert_provider_account(account)
+            .await
+            .expect("insert account list fixture");
+    }
+
+    seed_model_request(
+        &database.pool,
+        ModelRequestSeed {
+            request_id: "req_alpha_recent",
+            account_id: "acct_alpha",
+            provider_instance_id: "inst_openai_admin",
+            provider_kind: "openai",
+            model: "gpt-list",
+            total_tokens: 10,
+            cost_amount: "0.10",
+            started_at: now - TimeDelta::minutes(20),
+        },
+    )
+    .await
+    .expect("seed alpha usage");
+    seed_model_request(
+        &database.pool,
+        ModelRequestSeed {
+            request_id: "req_beta_recent",
+            account_id: "acct_beta",
+            provider_instance_id: "inst_xai_admin",
+            provider_kind: "xai",
+            model: "grok-list",
+            total_tokens: 50,
+            cost_amount: "0.50",
+            started_at: now - TimeDelta::minutes(5),
+        },
+    )
+    .await
+    .expect("seed beta usage");
+    seed_model_request(
+        &database.pool,
+        ModelRequestSeed {
+            request_id: "req_beta_expired_retention",
+            account_id: "acct_beta",
+            provider_instance_id: "inst_xai_admin",
+            provider_kind: "xai",
+            model: "grok-list",
+            total_tokens: 500,
+            cost_amount: "5.00",
+            started_at: now - TimeDelta::days(40),
+        },
+    )
+    .await
+    .expect("seed expired beta usage");
+    seed_model_request(
+        &database.pool,
+        ModelRequestSeed {
+            request_id: "req_charlie_recent",
+            account_id: "acct_charlie",
+            provider_instance_id: "inst_openai_admin",
+            provider_kind: "openai",
+            model: "gpt-list",
+            total_tokens: 60,
+            cost_amount: "0.60",
+            started_at: now - TimeDelta::minutes(10),
+        },
+    )
+    .await
+    .expect("seed charlie usage");
+
+    let store = PgAdminAccountStore::new(database.pool.clone());
+    let usage_page = store
+        .list_accounts(AccountListQuery {
+            page: 1,
+            page_size: PageSize::new(2).expect("page size"),
+            provider_kind: None,
+            search: None,
+            status: None,
+            sort: Some(AccountSort {
+                field: AccountSortField::Usage,
+                direction: SortDirection::Desc,
+            }),
+        })
+        .await
+        .expect("sort accounts by retained usage");
+    assert_eq!(usage_page.config_revision.get(), 1);
+    assert_eq!(usage_page.total, 4);
+    assert_eq!(usage_page.summary.total, 4);
+    assert_eq!(usage_page.summary.active, 2);
+    assert_eq!(usage_page.summary.quota_exhausted, 0);
+    assert_eq!(usage_page.summary.attention, 2);
+    assert_eq!(
+        usage_page
+            .items
+            .iter()
+            .map(|account| account.id.as_str())
+            .collect::<Vec<_>>(),
+        ["acct_charlie", "acct_beta"]
+    );
+
+    let last_used_page = store
+        .list_accounts(AccountListQuery {
+            page: 1,
+            page_size: PageSize::new(2).expect("page size"),
+            provider_kind: None,
+            search: None,
+            status: None,
+            sort: Some(AccountSort {
+                field: AccountSortField::LastUsedAt,
+                direction: SortDirection::Desc,
+            }),
+        })
+        .await
+        .expect("sort accounts by retained last use");
+    assert_eq!(
+        last_used_page
+            .items
+            .iter()
+            .map(|account| account.id.as_str())
+            .collect::<Vec<_>>(),
+        ["acct_beta", "acct_charlie"]
+    );
+
+    let filtered = store
+        .list_accounts(AccountListQuery {
+            page: 1,
+            page_size: PageSize::new(10).expect("page size"),
+            provider_kind: Some(ProviderKind::new("openai").expect("Provider kind")),
+            search: Some("ALPHA@EXAMPLE".to_owned()),
+            status: Some(AccountStatus::Active),
+            sort: None,
+        })
+        .await
+        .expect("filter account directory");
+    assert_eq!(filtered.total, 1);
+    assert_eq!(filtered.summary, usage_page.summary);
+    assert_eq!(filtered.items[0].id, "acct_alpha");
+    assert_eq!(filtered.items[0].provider_kind.as_str(), "openai");
+
+    let banned = store
+        .list_accounts(AccountListQuery {
+            page: 1,
+            page_size: PageSize::new(10).expect("page size"),
+            provider_kind: None,
+            search: None,
+            status: Some(AccountStatus::Banned),
+            sort: None,
+        })
+        .await
+        .expect("filter banned accounts");
+    assert_eq!(banned.items[0].id, "acct_beta");
+    let attention = store
+        .list_accounts(AccountListQuery {
+            page: 1,
+            page_size: PageSize::new(10).expect("page size"),
+            provider_kind: None,
+            search: None,
+            status: Some(AccountStatus::Attention),
+            sort: None,
+        })
+        .await
+        .expect("filter attention accounts");
+    assert_eq!(attention.items[0].id, "acct_attention");
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn terminal_credential_list_preserves_grouped_filters_and_unpaged_collections() {
+    let Some(database) = TestDatabase::create("provider_credential_terminal_windows").await else {
+        return;
+    };
+    seed_instance(&database.pool, "inst_xai_admin", "xai")
+        .await
+        .expect("seed xAI instance");
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    for index in 0..205_u16 {
+        let mut credential = account(
+            &format!("acct_xai_{index:03}"),
+            &format!("user-xai-{index:03}"),
+        );
+        credential.provider_instance_id = "inst_xai_admin".to_owned();
+        credential.provider_kind = "xai".to_owned();
+        credential.availability = match index {
+            0 => ProviderAccountAvailability::Expired,
+            1 => ProviderAccountAvailability::Banned,
+            2 => ProviderAccountAvailability::Invalid,
+            _ => ProviderAccountAvailability::Ready,
+        };
+        repository
+            .insert_provider_account(credential)
+            .await
+            .expect("insert xAI credential fixture");
+    }
+
+    let store = PgAdminAccountStore::new(database.pool.clone());
+    let provider = ProviderKind::new("xai").expect("xAI Provider kind");
+    let complete = store
+        .list_credentials(
+            &provider,
+            CredentialListQuery {
+                provider_instance_id: None,
+                availability: None,
+                enabled: None,
+                window: CredentialListWindow::All,
+            },
+        )
+        .await
+        .expect("unpaged credential collection");
+    assert_eq!(complete.items.len(), 205);
+    assert!(complete.next_cursor.is_none());
+
+    let page = store
+        .list_credentials(
+            &provider,
+            CredentialListQuery {
+                provider_instance_id: None,
+                availability: None,
+                enabled: None,
+                window: CredentialListWindow::Page {
+                    cursor: None,
+                    page_size: PageSize::new(200).expect("page size"),
+                },
+            },
+        )
+        .await
+        .expect("paged credential collection");
+    assert_eq!(page.items.len(), 200);
+    assert!(page.next_cursor.is_some());
+
+    let invalid_group = store
+        .list_credentials(
+            &provider,
+            CredentialListQuery {
+                provider_instance_id: None,
+                availability: Some(CredentialAvailabilityFilter::AnyOf(vec![
+                    gateway_admin::model::accounts::AccountAvailability::Expired,
+                    gateway_admin::model::accounts::AccountAvailability::Banned,
+                    gateway_admin::model::accounts::AccountAvailability::Invalid,
+                ])),
+                enabled: None,
+                window: CredentialListWindow::All,
+            },
+        )
+        .await
+        .expect("grouped invalid credential filter");
+    assert_eq!(invalid_group.items.len(), 3);
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn terminal_admin_usage_chunks_large_selections_and_preserves_exact_costs() {
+    let Some(database) = TestDatabase::create("provider_account_terminal_usage").await else {
+        return;
+    };
+    seed_instance(&database.pool, "inst_openai_admin", "openai")
+        .await
+        .expect("seed OpenAI instance");
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    repository
+        .insert_provider_account(account("acct_usage_exact", "user-usage-exact"))
+        .await
+        .expect("insert exact usage account");
+    let now = Utc::now();
+    seed_model_request(
+        &database.pool,
+        ModelRequestSeed {
+            request_id: "req_usage_exact",
+            account_id: "acct_usage_exact",
+            provider_instance_id: "inst_openai_admin",
+            provider_kind: "openai",
+            model: "gpt-exact",
+            total_tokens: 18,
+            cost_amount: "1.2345678901",
+            started_at: now - TimeDelta::minutes(1),
+        },
+    )
+    .await
+    .expect("seed exact usage request");
+    let mut account_ids = vec!["acct_usage_exact".to_owned()];
+    account_ids.extend((0..200).map(|index| format!("missing_account_{index}")));
+
+    let usage = PgAdminAccountStore::new(database.pool.clone())
+        .load_account_usage(
+            TimeRange {
+                start: now - TimeDelta::hours(1),
+                end: now + TimeDelta::hours(1),
+            },
+            &account_ids,
+        )
+        .await
+        .expect("load account usage in bounded chunks");
+    assert_eq!(usage.len(), 1);
+    assert_eq!(usage[0].account_id, "acct_usage_exact");
+    assert_eq!(usage[0].request_count, 1);
+    assert_eq!(usage[0].success_count, 1);
+    assert_eq!(usage[0].total_tokens, Some(18));
+    assert_eq!(usage[0].costs[0].currency, "USD");
+    assert_eq!(usage[0].costs[0].amount.as_str(), "1.2345678901");
+    assert_eq!(usage[0].models.len(), 1);
+    assert_eq!(usage[0].models[0].model, "gpt-exact");
+    assert_eq!(usage[0].models[0].costs[0].amount.as_str(), "1.2345678901");
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
+    let Some(database) = TestDatabase::create("provider_account_terminal_mutation").await else {
+        return;
+    };
+    seed_instance(&database.pool, "inst_openai_admin", "openai")
+        .await
+        .expect("seed OpenAI instance");
+    PgProviderAccountRepository::new(database.pool.clone())
+        .insert_provider_account(account("acct_terminal_mutation", "user-terminal-mutation"))
+        .await
+        .expect("insert mutation account");
+    let store = PgAdminAccountStore::new(database.pool.clone());
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "request_terminal_mutation".to_owned(),
+    };
+
+    let revision = store
+        .set_account_enabled(
+            AdminSetAccountEnabled {
+                expected_config_revision: AdminRevision::new(1).expect("initial revision"),
+                account_id: "acct_terminal_mutation".to_owned(),
+                enabled: false,
+            },
+            &context,
+        )
+        .await
+        .expect("disable account atomically");
+    assert_eq!(revision.get(), 2);
+    let enabled: bool = sqlx::query_scalar(
+        "select enabled from provider_accounts where id = 'acct_terminal_mutation'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("read disabled state");
+    assert!(!enabled);
+
+    let error = store
+        .delete_account(
+            DeleteAccount {
+                expected_config_revision: AdminRevision::new(1).expect("stale revision"),
+                account_id: "acct_terminal_mutation".to_owned(),
+            },
+            &context,
+        )
+        .await
+        .expect_err("stale delete must roll back");
+    assert_eq!(error.kind(), AdminStoreErrorKind::StaleRevision);
+    assert_eq!(current_revision(&database.pool).await, 2);
+    assert_eq!(
+        account_count(&database.pool, "acct_terminal_mutation").await,
+        1
+    );
+    let audit_count: i64 = sqlx::query_scalar("select count(*) from admin_audit_events")
+        .fetch_one(&database.pool)
+        .await
+        .expect("count audit rows after rollback");
+    assert_eq!(audit_count, 1);
+
+    let revision = store
+        .delete_account(
+            DeleteAccount {
+                expected_config_revision: revision,
+                account_id: "acct_terminal_mutation".to_owned(),
+            },
+            &context,
+        )
+        .await
+        .expect("delete disabled account atomically");
+    assert_eq!(revision.get(), 3);
+    assert_eq!(
+        account_count(&database.pool, "acct_terminal_mutation").await,
+        0
+    );
+    let audit_rows: Vec<(String, i64, Vec<String>)> = sqlx::query_as(
+        "select action, config_revision, changed_fields
+         from admin_audit_events order by config_revision",
+    )
+    .fetch_all(&database.pool)
+    .await
+    .expect("load terminal account audits");
+    assert_eq!(
+        audit_rows,
+        vec![
+            ("disable".to_owned(), 2, vec!["enabled".to_owned()]),
+            ("delete".to_owned(), 3, Vec::new()),
+        ]
+    );
+
+    database.close().await;
 }
 
 #[tokio::test]
@@ -64,6 +565,8 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
     let mut updated = account("acct_admin_upsert", "user-admin-upsert");
     updated.name = "updated import".to_owned();
     updated.provider_credentials_json = credential_json("updated-import-secret");
+    updated.availability = ProviderAccountAvailability::Banned;
+    updated.availability_reason = Some("upstream_account_deactivated".to_owned());
     let revision = repository
         .import_provider_accounts(
             revision,
@@ -76,8 +579,16 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
         .await
         .expect("update the same imported identity");
     assert_eq!(revision.get(), 3);
-    let row: (String, serde_json::Value, i64, Option<serde_json::Value>) = sqlx::query_as(
-        "select name, provider_credentials_json, credential_revision, provider_quota_json
+    let row: (
+        String,
+        serde_json::Value,
+        i64,
+        Option<serde_json::Value>,
+        String,
+        Option<String>,
+    ) = sqlx::query_as(
+        "select name, provider_credentials_json, credential_revision, provider_quota_json,
+                availability, availability_reason
          from provider_accounts where id = 'acct_admin_upsert'",
     )
     .fetch_one(&database.pool)
@@ -90,6 +601,8 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
         row.3.is_none(),
         "credential replacement must clear stale quota"
     );
+    assert_eq!(row.4, "banned");
+    assert_eq!(row.5.as_deref(), Some("upstream_account_deactivated"));
 
     repository
         .import_provider_accounts(
@@ -132,6 +645,7 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
             next_refresh_at: None,
             enabled: true,
             availability: ProviderAccountAvailability::Ready,
+            availability_reason: None,
             cooldown_until: None,
             availability_observed_at: Utc::now(),
         })
@@ -423,6 +937,7 @@ fn account(id: &str, upstream_user_id: &str) -> NewProviderAccount {
         next_refresh_at: None,
         enabled: true,
         availability: ProviderAccountAvailability::Ready,
+        availability_reason: None,
         cooldown_until: None,
         availability_observed_at: Utc::now(),
     }
@@ -479,6 +994,52 @@ fn audit(id: &str, action: &str, entity_ref: &str) -> AdminAuditEvent {
         changed_fields: vec!["provider_account".to_owned()],
         created_at: Utc::now(),
     }
+}
+
+struct ModelRequestSeed<'a> {
+    request_id: &'a str,
+    account_id: &'a str,
+    provider_instance_id: &'a str,
+    provider_kind: &'a str,
+    model: &'a str,
+    total_tokens: i64,
+    cost_amount: &'a str,
+    started_at: chrono::DateTime<Utc>,
+}
+
+async fn seed_model_request(
+    pool: &sqlx::PgPool,
+    seed: ModelRequestSeed<'_>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "insert into model_requests (
+           id, client_api_key_ref, config_revision, protocol, operation, endpoint,
+           client_transport, requested_model_id, input_token_estimate,
+           provider_instance_id, provider_kind, provider_account_id,
+           provider_account_ref, upstream_model_id, upstream_transport, attempt_count,
+           upstream_send_state, outcome, client_status_code, upstream_status_code,
+           input_tokens, output_tokens, cached_tokens, cache_write_tokens, reasoning_tokens,
+           total_tokens, cost_source, cost_amount, cost_currency,
+           started_at, deadline_at, completed_at
+         ) values (
+           $1, 'key-provider-account-test', 1, 'openai', 'responses', '/v1/responses',
+           'http_sse', $5, 1, $3, $4, $2, $2, $5, 'http_sse', 1,
+           'sent', 'succeeded', 200, 200, $6, 0, 0, 0, 0,
+           $6, 'provider_reported', $7::numeric, 'USD', $8,
+           $8 + interval '5 minutes', $8 + interval '1 second'
+         )",
+    )
+    .bind(seed.request_id)
+    .bind(seed.account_id)
+    .bind(seed.provider_instance_id)
+    .bind(seed.provider_kind)
+    .bind(seed.model)
+    .bind(seed.total_tokens)
+    .bind(seed.cost_amount)
+    .bind(seed.started_at)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 async fn seed_instance(

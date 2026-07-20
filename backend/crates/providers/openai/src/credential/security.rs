@@ -5,7 +5,10 @@ use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 use thiserror::Error;
 
-use super::types::{CodexCookie, CodexCredentialData, CodexOAuthSecret, RuntimeCodexCookie};
+use super::types::{
+    CodexAccountProfile, CodexCookie, CodexCredentialData, CodexCredentialPrincipal,
+    CodexOAuthSecret, RuntimeCodexCookie,
+};
 
 const CODEX_CREDENTIAL_SCHEMA_VERSION: u32 = 1;
 const MAX_CREDENTIAL_BYTES: usize = 256 * 1024;
@@ -15,6 +18,8 @@ const MAX_COOKIES: usize = 128;
 /// 已解析且只在 Provider 内可见的认证材料。
 pub struct CodexRuntimeCredential {
     pub secret: CodexOAuthSecret,
+    pub principal: CodexCredentialPrincipal,
+    pub installation_id: String,
     pub cookies: Vec<RuntimeCodexCookie>,
     pub oauth_client_id: Option<String>,
     pub oauth_scope: Option<String>,
@@ -25,6 +30,8 @@ impl std::fmt::Debug for CodexRuntimeCredential {
         formatter
             .debug_struct("CodexRuntimeCredential")
             .field("secret", &self.secret)
+            .field("principal", &self.principal)
+            .field("installation_id", &"<pseudonymous>")
             .field("cookies", &self.cookies)
             .field("oauth_client_id", &self.oauth_client_id)
             .field("oauth_scope", &self.oauth_scope)
@@ -45,12 +52,18 @@ pub enum CodexCredentialDataError {
 pub struct CodexCredentialCodec;
 
 impl CodexCredentialCodec {
-    pub fn encode(
+    pub fn encode_new(
         secret: &CodexOAuthSecret,
+        account: &CodexAccountProfile,
         cookies: Vec<CodexCookie>,
     ) -> Result<PlaintextCredential, CodexCredentialDataError> {
         Self::encode_complete(CodexCredentialData {
             schema_version: CODEX_CREDENTIAL_SCHEMA_VERSION,
+            principal: CodexCredentialPrincipal {
+                oauth_subject: account.oauth_subject.clone(),
+                poid: account.poid.clone(),
+            },
+            installation_id: uuid::Uuid::new_v4().to_string(),
             access_token: secret.access_token.expose_secret().to_owned(),
             refresh_token: secret
                 .refresh_token
@@ -105,6 +118,8 @@ impl CodexCredentialCodec {
                 refresh_token: data.refresh_token.map(SecretString::from),
                 id_token: data.id_token.map(SecretString::from),
             },
+            principal: data.principal,
+            installation_id: data.installation_id,
             cookies: data
                 .cookies
                 .into_iter()
@@ -132,10 +147,30 @@ impl CodexCredentialCodec {
         validate(&data)?;
         Ok(data)
     }
+
+    pub fn preserve_installation_id(
+        incoming: &PlaintextCredential,
+        existing: &PlaintextCredential,
+    ) -> Result<PlaintextCredential, CodexCredentialDataError> {
+        let mut incoming = Self::decode_complete(incoming)?;
+        let existing = Self::decode_complete(existing)?;
+        if incoming.principal != existing.principal {
+            return Err(CodexCredentialDataError::Invalid);
+        }
+        incoming.installation_id = existing.installation_id;
+        Self::encode_complete(incoming)
+    }
 }
 
 fn validate(data: &CodexCredentialData) -> Result<(), CodexCredentialDataError> {
     if data.schema_version != CODEX_CREDENTIAL_SCHEMA_VERSION
+        || !valid_identity(&data.principal.oauth_subject)
+        || data
+            .principal
+            .poid
+            .as_deref()
+            .is_some_and(|value| !valid_identity(value))
+        || !valid_installation_id(&data.installation_id)
         || !valid_secret(&data.access_token)
         || data
             .refresh_token
@@ -160,6 +195,16 @@ fn validate(data: &CodexCredentialData) -> Result<(), CodexCredentialDataError> 
         return Err(CodexCredentialDataError::Invalid);
     }
     Ok(())
+}
+
+fn valid_identity(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 2_048 && !value.chars().any(char::is_control)
+}
+
+fn valid_installation_id(value: &str) -> bool {
+    uuid::Uuid::parse_str(value)
+        .ok()
+        .is_some_and(|uuid| uuid.get_version_num() == 4)
 }
 
 fn valid_secret(value: &str) -> bool {

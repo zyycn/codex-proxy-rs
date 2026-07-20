@@ -1,3 +1,4 @@
+use provider_openai::transport::CodexUpstreamSendPhase;
 use provider_openai::transport::{CodexBackendTransport, CodexClientError, CodexRequestContext};
 
 #[test]
@@ -11,6 +12,8 @@ fn upstream_error_formatting_should_redact_body() {
         set_cookie_headers: vec!["session=secret".to_owned()],
         rate_limit_headers: Vec::new(),
         transport: CodexBackendTransport::HttpSse,
+        transport_metrics: Box::default(),
+        send_phase: CodexUpstreamSendPhase::AfterPayload,
     };
 
     assert!(!format!("{error}").contains(secret));

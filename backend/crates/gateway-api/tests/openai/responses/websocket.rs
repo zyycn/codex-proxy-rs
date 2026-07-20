@@ -93,11 +93,12 @@ fn response_create_errors_should_not_retain_prompt_or_unknown_field_values() {
             "type": "response.create",
             "model": "smart-code",
             "input": prompt,
-            "metadata": {"secret": secret}
+            "metadata": {"secret": secret},
+            "stream": secret
         })
         .to_string(),
     )
-    .expect_err("unsupported field");
+    .expect_err("invalid stream field");
     let rendered = format!("{error:?}\n{error}");
 
     assert!(!rendered.contains(prompt));

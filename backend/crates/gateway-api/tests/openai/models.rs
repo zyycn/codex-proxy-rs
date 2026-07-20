@@ -1,116 +1,62 @@
-use std::collections::BTreeSet;
+use std::sync::Arc;
 
-use async_trait::async_trait;
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header::AUTHORIZATION},
 };
-use gateway_api::openai::{
-    ConnectionTask, DeliveryEvent, OpenAiApiState, OpenAiClientService, ResponseExecutionSession,
-    ResponsesTransport, StartedResponse, auth::ClientApiKeyAuthError,
-    responses::DecodedResponsesRequest,
+use futures::future::BoxFuture;
+use gateway_core::engine::execution::{
+    AuthenticatedClient, ClientAuthenticationError, ExecutionService, StartExecution,
+    StartedExecution,
 };
-use gateway_core::{
-    engine::EngineError,
-    error::{GatewayError, GatewayErrorKind},
-    event::GatewayEvent,
-    routing::PublicModelId,
-};
+use gateway_core::error::{GatewayError, GatewayErrorKind};
+use gateway_core::routing::PublicModelId;
 use tower::ServiceExt;
 
-#[derive(Clone)]
-struct ModelsState;
+use super::{api_router, authenticated_client};
 
-#[derive(Clone)]
-struct ModelsService;
-
-struct UnusedSession;
-
-#[async_trait]
-impl ResponseExecutionSession for UnusedSession {
-    async fn next_delivery_event(&mut self) -> Result<Option<DeliveryEvent>, EngineError> {
-        unreachable!("models endpoints do not start an execution")
-    }
-
-    async fn collect_uncommitted(&mut self) -> Result<Vec<GatewayEvent>, EngineError> {
-        unreachable!("models endpoints do not start an execution")
-    }
-
-    async fn commit_downstream(
-        &mut self,
-        _client_status_code: Option<u16>,
-    ) -> Result<(), EngineError> {
-        unreachable!("models endpoints do not start an execution")
-    }
-
-    async fn record_client_status(&mut self, _client_status_code: u16) -> Result<(), EngineError> {
-        unreachable!("models endpoints do not start an execution")
-    }
-
-    fn is_finalized(&self) -> bool {
-        true
-    }
-
-    fn cancel(&self) {}
-
-    fn detach_finalize(self) {}
+struct ModelsExecution {
+    client: AuthenticatedClient,
 }
 
-#[async_trait]
-impl OpenAiClientService for ModelsService {
-    type Client = ();
-    type Session = UnusedSession;
+impl ModelsExecution {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            client: authenticated_client("sk_models_test"),
+        })
+    }
+}
 
-    fn authenticate(&self, plaintext: &str) -> Result<Self::Client, ClientApiKeyAuthError> {
+impl ExecutionService for ModelsExecution {
+    fn authenticate(
+        &self,
+        plaintext: &str,
+    ) -> Result<AuthenticatedClient, ClientAuthenticationError> {
         if plaintext == "sk_models_test" {
-            Ok(())
+            Ok(self.client.clone())
         } else {
-            Err(ClientApiKeyAuthError::InvalidKey)
+            Err(ClientAuthenticationError::InvalidKey)
         }
     }
 
-    fn public_models(&self, _client: &Self::Client) -> Vec<String> {
-        vec!["model-a".to_owned(), "model-b".to_owned()]
+    fn public_models(&self, _: &AuthenticatedClient) -> Vec<PublicModelId> {
+        ["model-a", "model-b"]
+            .into_iter()
+            .map(|model| PublicModelId::new(model).expect("model"))
+            .collect()
     }
 
-    fn contains_public_model(&self, _client: &Self::Client, model: &PublicModelId) -> bool {
-        BTreeSet::from(["model-a", "model-b"]).contains(model.as_str())
+    fn contains_public_model(&self, _: &AuthenticatedClient, model: &PublicModelId) -> bool {
+        matches!(model.as_str(), "model-a" | "model-b")
     }
 
-    async fn start_response(
-        &self,
-        _client: Self::Client,
-        _request: DecodedResponsesRequest,
-        _transport: ResponsesTransport,
-    ) -> Result<StartedResponse<Self::Session>, GatewayError> {
-        Err(GatewayError::new(
-            GatewayErrorKind::Internal,
-            "models test must not start a response",
-        ))
-    }
-
-    fn is_shutting_down(&self) -> bool {
-        false
-    }
-
-    fn spawn_connection(&self, task: ConnectionTask) {
-        drop(task);
-    }
-
-    fn next_connection_id(&self) -> String {
-        "ws_models_test".to_owned()
-    }
-
-    fn next_request_id(&self) -> String {
-        "req_models_test".to_owned()
-    }
-}
-
-impl OpenAiApiState for ModelsState {
-    type Service = ModelsService;
-
-    fn openai_client_api(&self) -> Self::Service {
-        ModelsService
+    fn start(&self, _: StartExecution) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
+        Box::pin(async {
+            Err(GatewayError::new(
+                GatewayErrorKind::Internal,
+                "models test must not start a response",
+            ))
+        })
     }
 }
 
@@ -123,8 +69,8 @@ fn authorized_request(path: &str) -> Request<Body> {
 
 #[tokio::test]
 async fn models_should_encode_the_service_visible_catalog() {
-    let response = gateway_api::openai::router::<ModelsState>()
-        .with_state(ModelsState)
+    let response = api_router(ModelsExecution::new())
+        .await
         .oneshot(authorized_request("/v1/models"))
         .await
         .expect("list models response");
@@ -147,8 +93,8 @@ async fn models_should_encode_the_service_visible_catalog() {
 
 #[tokio::test]
 async fn model_detail_should_keep_the_official_path_id_contract() {
-    let response = gateway_api::openai::router::<ModelsState>()
-        .with_state(ModelsState)
+    let response = api_router(ModelsExecution::new())
+        .await
         .oneshot(authorized_request("/v1/models/model-a"))
         .await
         .expect("model detail response");
@@ -158,8 +104,8 @@ async fn model_detail_should_keep_the_official_path_id_contract() {
 
 #[tokio::test]
 async fn model_detail_should_hide_unknown_models() {
-    let response = gateway_api::openai::router::<ModelsState>()
-        .with_state(ModelsState)
+    let response = api_router(ModelsExecution::new())
+        .await
         .oneshot(authorized_request("/v1/models/model-private"))
         .await
         .expect("unknown model response");
@@ -169,8 +115,8 @@ async fn model_detail_should_hide_unknown_models() {
 
 #[tokio::test]
 async fn models_should_require_a_valid_bearer_client_key() {
-    let response = gateway_api::openai::router::<ModelsState>()
-        .with_state(ModelsState)
+    let response = api_router(ModelsExecution::new())
+        .await
         .oneshot(
             Request::get("/v1/models")
                 .body(Body::empty())

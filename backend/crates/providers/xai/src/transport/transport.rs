@@ -5,6 +5,8 @@ use std::time::Duration;
 
 use futures::Stream;
 use gateway_core::engine::UpstreamSendState;
+use gateway_core::error::SafeUpstreamValue;
+use gateway_core::event::UpstreamHttpVersion;
 use url::Url;
 use zeroize::Zeroizing;
 
@@ -81,13 +83,41 @@ pub type GrokInferenceChunkStream =
 /// [`GrokInferenceTransportError`] instead.
 pub struct GrokInferenceResponse {
     body: GrokInferenceChunkStream,
+    http_version: UpstreamHttpVersion,
+    status_code: u16,
+    request_id: Option<SafeUpstreamValue>,
 }
 
 impl GrokInferenceResponse {
     /// Wraps one accepted SSE response body.
     #[must_use]
-    pub fn new(body: GrokInferenceChunkStream) -> Self {
-        Self { body }
+    pub fn new(
+        body: GrokInferenceChunkStream,
+        http_version: UpstreamHttpVersion,
+        status_code: u16,
+        request_id: Option<SafeUpstreamValue>,
+    ) -> Self {
+        Self {
+            body,
+            http_version,
+            status_code,
+            request_id,
+        }
+    }
+
+    #[must_use]
+    pub const fn http_version(&self) -> UpstreamHttpVersion {
+        self.http_version
+    }
+
+    #[must_use]
+    pub const fn status_code(&self) -> u16 {
+        self.status_code
+    }
+
+    #[must_use]
+    pub const fn request_id(&self) -> Option<&SafeUpstreamValue> {
+        self.request_id.as_ref()
     }
 
     pub fn into_body(self) -> GrokInferenceChunkStream {
@@ -99,6 +129,9 @@ impl fmt::Debug for GrokInferenceResponse {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("GrokInferenceResponse")
+            .field("http_version", &self.http_version)
+            .field("status_code", &self.status_code)
+            .field("request_id", &self.request_id)
             .field("body", &"[SSE STREAM]")
             .finish()
     }
@@ -138,6 +171,8 @@ pub struct GrokInferenceTransportError {
     send_state: UpstreamSendState,
     status: Option<u16>,
     retry_after: Option<Duration>,
+    http_version: Option<UpstreamHttpVersion>,
+    request_id: Option<SafeUpstreamValue>,
     sensitive_context_redacted: bool,
 }
 
@@ -150,6 +185,8 @@ impl GrokInferenceTransportError {
             send_state,
             status: None,
             retry_after: None,
+            http_version: None,
+            request_id: None,
             sensitive_context_redacted: false,
         }
     }
@@ -167,6 +204,17 @@ impl GrokInferenceTransportError {
     #[must_use]
     pub const fn with_retry_after(mut self, retry_after: Duration) -> Self {
         self.retry_after = Some(retry_after);
+        self
+    }
+
+    #[must_use]
+    pub fn with_response_facts(
+        mut self,
+        http_version: UpstreamHttpVersion,
+        request_id: Option<SafeUpstreamValue>,
+    ) -> Self {
+        self.http_version = Some(http_version);
+        self.request_id = request_id;
         self
     }
 
@@ -201,6 +249,16 @@ impl GrokInferenceTransportError {
         self.retry_after
     }
 
+    #[must_use]
+    pub const fn http_version(&self) -> Option<UpstreamHttpVersion> {
+        self.http_version
+    }
+
+    #[must_use]
+    pub const fn request_id(&self) -> Option<&SafeUpstreamValue> {
+        self.request_id.as_ref()
+    }
+
     /// Reports whether a sensitive body was discarded.
     #[must_use]
     pub const fn sensitive_context_was_redacted(&self) -> bool {
@@ -216,6 +274,8 @@ impl fmt::Debug for GrokInferenceTransportError {
             .field("send_state", &self.send_state)
             .field("status", &self.status)
             .field("retry_after", &self.retry_after)
+            .field("http_version", &self.http_version)
+            .field("request_id", &self.request_id)
             .field(
                 "sensitive_context",
                 &self.sensitive_context_redacted.then_some("[REDACTED]"),

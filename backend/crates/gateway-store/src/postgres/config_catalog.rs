@@ -2,9 +2,31 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use gateway_admin::{
+    model::{
+        MutationContext,
+        catalog::{
+            CreateProviderInstance as AdminCreateProviderInstance,
+            DeleteProviderInstance as AdminDeleteProviderInstance,
+            ProviderInstance as AdminProviderInstance, ProviderInstanceCatalog,
+            ProviderInstanceDetail, ProviderInstanceMutation, SetProviderInstanceEnabled,
+            UpdateProviderInstance as AdminUpdateProviderInstance,
+        },
+    },
+    ports::store::{AdminStoreResult, CatalogStore},
+};
+use gateway_core::provider_ports::{
+    ProviderInstanceCatalogPort, ProviderInstanceConfig, ProviderStoreError, ProviderStoreErrorKind,
+};
+use gateway_core::routing::{ProviderInstanceId, ProviderKind};
 use sqlx::{PgPool, Postgres, Transaction};
 
-use crate::{StoreError, StoreResult, postgres_unavailable, require_nonempty};
+use crate::{
+    StoreError, StoreResult, admin_revision, admin_store_error, mutation_audit,
+    postgres_unavailable, require_nonempty, store_revision,
+};
+
+use super::{ControlPlaneRepository, PgControlPlaneRepository};
 
 const ENTITY: &str = "provider instance";
 
@@ -183,6 +205,271 @@ impl ConfigCatalogRepository for PgConfigCatalogRepository {
             .map_err(|_| postgres_unavailable("delete provider instance"))?;
         Ok(result.rows_affected() == 1)
     }
+}
+
+impl ProviderInstanceCatalogPort for PgConfigCatalogRepository {
+    fn list_instances<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        include_disabled: bool,
+    ) -> futures::future::BoxFuture<'a, Result<Vec<ProviderInstanceConfig>, ProviderStoreError>>
+    {
+        Box::pin(async move {
+            self.list_provider_instances(include_disabled)
+                .await
+                .map_err(|_| {
+                    ProviderStoreError::new(
+                        ProviderStoreErrorKind::Unavailable,
+                        "list Provider instances",
+                    )
+                })?
+                .into_iter()
+                .filter(|instance| instance.provider_kind == provider_kind.as_str())
+                .map(|instance| {
+                    let id = ProviderInstanceId::new(instance.id).map_err(|_| {
+                        ProviderStoreError::new(
+                            ProviderStoreErrorKind::InvalidData,
+                            "decode Provider instance ID",
+                        )
+                    })?;
+                    let kind = ProviderKind::new(instance.provider_kind).map_err(|_| {
+                        ProviderStoreError::new(
+                            ProviderStoreErrorKind::InvalidData,
+                            "decode Provider kind",
+                        )
+                    })?;
+                    Ok(ProviderInstanceConfig::new(
+                        id,
+                        kind,
+                        instance.base_url,
+                        instance.enabled,
+                    ))
+                })
+                .collect()
+        })
+    }
+}
+
+/// Admin 用例所需的 Provider instance 事务能力。
+#[derive(Clone)]
+pub struct PgAdminCatalogStore {
+    catalog: PgConfigCatalogRepository,
+    control_plane: PgControlPlaneRepository,
+}
+
+impl PgAdminCatalogStore {
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self {
+            catalog: PgConfigCatalogRepository::new(pool.clone()),
+            control_plane: PgControlPlaneRepository::new(pool),
+        }
+    }
+
+    async fn revision(&self) -> AdminStoreResult<gateway_admin::model::Revision> {
+        self.control_plane
+            .load_control_plane()
+            .await
+            .map_err(|error| admin_store_error("provider instance", error))
+            .and_then(|snapshot| admin_revision(snapshot.settings.config_revision))
+    }
+
+    async fn load_mutation(
+        &self,
+        revision: crate::Revision,
+        id: &ProviderInstanceId,
+    ) -> AdminStoreResult<ProviderInstanceMutation> {
+        let instance = self
+            .catalog
+            .get_provider_instance(id.as_str())
+            .await
+            .map_err(|error| admin_store_error("provider instance", error))?
+            .map(admin_provider_instance)
+            .transpose()?;
+        Ok(ProviderInstanceMutation {
+            config_revision: admin_revision(revision)?,
+            instance,
+        })
+    }
+}
+
+#[async_trait]
+impl CatalogStore for PgAdminCatalogStore {
+    async fn list_provider_instances(
+        &self,
+        include_disabled: bool,
+    ) -> AdminStoreResult<ProviderInstanceCatalog> {
+        let config_revision = self.revision().await?;
+        let items = self
+            .catalog
+            .list_provider_instances(include_disabled)
+            .await
+            .map_err(|error| admin_store_error("provider instance", error))?
+            .into_iter()
+            .map(admin_provider_instance)
+            .collect::<AdminStoreResult<Vec<_>>>()?;
+        Ok(ProviderInstanceCatalog {
+            config_revision,
+            items,
+        })
+    }
+
+    async fn load_provider_instance(
+        &self,
+        id: &ProviderInstanceId,
+    ) -> AdminStoreResult<Option<ProviderInstanceDetail>> {
+        let (revision, instance) = futures::try_join!(self.revision(), async {
+            self.catalog
+                .get_provider_instance(id.as_str())
+                .await
+                .map_err(|error| admin_store_error("provider instance", error))?
+                .map(admin_provider_instance)
+                .transpose()
+        },)?;
+        Ok(instance.map(|item| ProviderInstanceDetail {
+            config_revision: revision,
+            item,
+        }))
+    }
+
+    async fn create_provider_instance(
+        &self,
+        command: AdminCreateProviderInstance,
+        context: &MutationContext,
+    ) -> AdminStoreResult<ProviderInstanceMutation> {
+        let id = command.id;
+        let revision = self
+            .control_plane
+            .create_provider_instance(
+                store_revision(command.expected_config_revision)?,
+                NewProviderInstance {
+                    id: id.as_str().to_owned(),
+                    provider_kind: command.provider_kind.as_str().to_owned(),
+                    name: command.name,
+                    base_url: command.base_url,
+                },
+                mutation_audit(
+                    context,
+                    "create",
+                    "provider_instance",
+                    id.as_str(),
+                    vec![
+                        "provider_kind".to_owned(),
+                        "name".to_owned(),
+                        "base_url".to_owned(),
+                        "enabled".to_owned(),
+                    ],
+                ),
+            )
+            .await
+            .map_err(|error| admin_store_error("provider instance", error))?;
+        self.load_mutation(revision, &id).await
+    }
+
+    async fn update_provider_instance(
+        &self,
+        command: AdminUpdateProviderInstance,
+        context: &MutationContext,
+    ) -> AdminStoreResult<ProviderInstanceMutation> {
+        let id = command.id;
+        let revision = self
+            .control_plane
+            .update_provider_instance(
+                store_revision(command.expected_config_revision)?,
+                UpdateProviderInstanceDetails {
+                    id: id.as_str().to_owned(),
+                    name: command.name,
+                    base_url: command.base_url,
+                },
+                mutation_audit(
+                    context,
+                    "update",
+                    "provider_instance",
+                    id.as_str(),
+                    vec!["name".to_owned(), "base_url".to_owned()],
+                ),
+            )
+            .await
+            .map_err(|error| admin_store_error("provider instance", error))?;
+        self.load_mutation(revision, &id).await
+    }
+
+    async fn set_provider_instance_enabled(
+        &self,
+        command: SetProviderInstanceEnabled,
+        context: &MutationContext,
+    ) -> AdminStoreResult<ProviderInstanceMutation> {
+        let id = command.id;
+        let revision = self
+            .control_plane
+            .set_provider_instance_enabled(
+                store_revision(command.expected_config_revision)?,
+                id.as_str(),
+                command.enabled,
+                mutation_audit(
+                    context,
+                    if command.enabled { "enable" } else { "disable" },
+                    "provider_instance",
+                    id.as_str(),
+                    vec!["enabled".to_owned()],
+                ),
+            )
+            .await
+            .map_err(|error| admin_store_error("provider instance", error))?;
+        self.load_mutation(revision, &id).await
+    }
+
+    async fn delete_provider_instance(
+        &self,
+        command: AdminDeleteProviderInstance,
+        context: &MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::Revision> {
+        self.control_plane
+            .delete_provider_instance(
+                store_revision(command.expected_config_revision)?,
+                command.id.as_str(),
+                mutation_audit(
+                    context,
+                    "delete",
+                    "provider_instance",
+                    command.id.as_str(),
+                    Vec::new(),
+                ),
+            )
+            .await
+            .map_err(|error| admin_store_error("provider instance", error))
+            .and_then(admin_revision)
+    }
+}
+
+fn admin_provider_instance(
+    record: ProviderInstanceRecord,
+) -> AdminStoreResult<AdminProviderInstance> {
+    Ok(AdminProviderInstance {
+        id: ProviderInstanceId::new(record.id).map_err(|_| {
+            admin_store_error(
+                "provider instance",
+                StoreError::InvalidData {
+                    entity: ENTITY,
+                    message: "persisted instance ID is invalid".to_owned(),
+                },
+            )
+        })?,
+        provider_kind: ProviderKind::new(record.provider_kind).map_err(|_| {
+            admin_store_error(
+                "provider instance",
+                StoreError::InvalidData {
+                    entity: ENTITY,
+                    message: "persisted provider kind is invalid".to_owned(),
+                },
+            )
+        })?,
+        name: record.name,
+        base_url: record.base_url,
+        enabled: record.enabled,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+    })
 }
 
 pub(crate) async fn insert_provider_instance_in_transaction(

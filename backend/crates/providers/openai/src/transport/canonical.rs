@@ -1,18 +1,23 @@
 //! Codex Responses SSE 到核心 canonical event 的单一解码边界。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 use gateway_core::accounting::Usage;
 use gateway_core::engine::UpstreamSendState;
 use gateway_core::error::{ProviderError, ProviderErrorKind};
 use gateway_core::event::{
-    ContentItem, ContentKind, FinishReason, GatewayEvent, ReasoningDelta, ResponseMeta, TextDelta,
-    ToolCallDelta,
+    ContentItem, ContentKind, FinishReason, GatewayEvent, ProtocolWireEvent, ProviderEvent,
+    ReasoningDelta, ResponseMeta, TextDelta, ToolCallDelta,
 };
 use gateway_protocol::openai::events::{TokenUsage, extract_usage};
 use gateway_protocol::openai::sse::{SseEvent, SseEventDecoder};
 use serde_json::Value;
+use thiserror::Error;
 
+use super::protocol::responses::{ResponsesSseFailure, response_event_signals};
 use super::usage::openai_billing_breakdown;
 
 const CONTENTS_PER_OUTPUT: u32 = 1_024;
@@ -30,6 +35,83 @@ pub struct CodexCanonicalDecoder {
     content: BTreeMap<u32, ContentKind>,
     tool_arguments_seen: BTreeSet<u32>,
     usage_emitted: bool,
+    semantic_output_seen: bool,
+}
+
+/// 上游 Responses 事件的两类失败：协议损坏，或上游明确报告业务失败。
+#[derive(Error)]
+pub enum CodexCanonicalError {
+    /// SSE/JSON 违反了已知协议不变量。
+    #[error("invalid Codex Responses event")]
+    Protocol(#[source] ProviderError),
+    /// 上游在成功建立流后发送了明确的失败事件。
+    #[error("Codex upstream reported a failed response")]
+    Upstream(ResponsesSseFailure),
+}
+
+impl fmt::Debug for CodexCanonicalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Protocol(error) => formatter.debug_tuple("Protocol").field(error).finish(),
+            Self::Upstream(_) => formatter.write_str("Upstream(<redacted>)"),
+        }
+    }
+}
+
+impl From<ProviderError> for CodexCanonicalError {
+    fn from(error: ProviderError) -> Self {
+        Self::Protocol(error)
+    }
+}
+
+/// 单次增量解码的有序结果。
+///
+/// 上游失败不是解析异常：它与失败前已经产生的事件一起返回，Provider 因而可以
+/// 先保留真实输出，再把类型化失败交给 Core 收敛。
+pub enum CodexCanonicalOutcome {
+    /// 本批次只包含正常事件。
+    Events(Vec<ProviderEvent>),
+    /// 本批次在若干正常事件后到达失败边界。
+    Failed(CodexCanonicalFailure),
+}
+
+/// `response.failed` 或协议错误发生时的单一 typed outcome。
+pub struct CodexCanonicalFailure {
+    events: Vec<ProviderEvent>,
+    error: CodexCanonicalError,
+    semantic_output_seen: bool,
+}
+
+impl fmt::Debug for CodexCanonicalFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CodexCanonicalFailure")
+            .field("events", &self.events)
+            .field("error", &self.error)
+            .field("semantic_output_seen", &self.semantic_output_seen)
+            .finish()
+    }
+}
+
+impl CodexCanonicalFailure {
+    /// 失败前按上游顺序产生的事件。
+    pub fn events(&self) -> &[ProviderEvent] {
+        &self.events
+    }
+
+    /// 类型化失败；其 Debug/Display 不包含上游正文。
+    pub const fn error(&self) -> &CodexCanonicalError {
+        &self.error
+    }
+
+    /// 失败前是否已经出现客户端可消费的真实输出。
+    pub const fn semantic_output_seen(&self) -> bool {
+        self.semantic_output_seen
+    }
+
+    pub(crate) fn into_parts(self) -> (Vec<ProviderEvent>, CodexCanonicalError, bool) {
+        (self.events, self.error, self.semantic_output_seen)
+    }
 }
 
 impl CodexCanonicalDecoder {
@@ -43,37 +125,107 @@ impl CodexCanonicalDecoder {
             content: BTreeMap::new(),
             tool_arguments_seen: BTreeSet::new(),
             usage_emitted: false,
+            semantic_output_seen: false,
         }
     }
 
-    pub fn push(&mut self, chunk: &[u8]) -> Result<Vec<GatewayEvent>, ProviderError> {
-        let events = self.decoder.push(chunk).map_err(protocol_error)?;
+    pub fn push(&mut self, chunk: &[u8]) -> CodexCanonicalOutcome {
+        let events = match self.decoder.push(chunk) {
+            Ok(events) => events,
+            Err(error) => {
+                return self.failure(
+                    Vec::new(),
+                    CodexCanonicalError::Protocol(protocol_error(error)),
+                );
+            }
+        };
         self.decode(events)
     }
 
-    pub fn finish(&mut self) -> Result<Vec<GatewayEvent>, ProviderError> {
-        let events = self.decoder.finish().map_err(protocol_error)?;
+    pub fn finish(&mut self) -> CodexCanonicalOutcome {
+        let events = match self.decoder.finish() {
+            Ok(events) => events,
+            Err(error) => {
+                return self.failure(
+                    Vec::new(),
+                    CodexCanonicalError::Protocol(protocol_error(error)),
+                );
+            }
+        };
         self.decode(events)
     }
 
-    fn decode(&mut self, events: Vec<SseEvent>) -> Result<Vec<GatewayEvent>, ProviderError> {
-        let mut canonical = Vec::new();
+    fn decode(&mut self, events: Vec<SseEvent>) -> CodexCanonicalOutcome {
+        let mut output = Vec::new();
         for event in events {
             if event.data.trim() == "[DONE]" {
                 if !self.completed {
-                    return Err(protocol_error_marker());
+                    return self.failure(
+                        output,
+                        CodexCanonicalError::Protocol(protocol_error_marker()),
+                    );
                 }
                 continue;
             }
-            let value = serde_json::from_str::<Value>(&event.data).map_err(protocol_error)?;
-            let event_type = event
+            let value = match serde_json::from_str::<Value>(&event.data) {
+                Ok(value) => value,
+                Err(error) => {
+                    return self
+                        .failure(output, CodexCanonicalError::Protocol(protocol_error(error)));
+                }
+            };
+            let Some(event_type) = event
                 .event
                 .as_deref()
                 .or_else(|| value.get("type").and_then(Value::as_str))
-                .ok_or_else(protocol_error_marker)?;
-            self.decode_event(event_type, &value, &mut canonical)?;
+            else {
+                return self.failure(
+                    output,
+                    CodexCanonicalError::Protocol(protocol_error_marker()),
+                );
+            };
+            if matches!(event_type, "response.failed" | "error") {
+                return self.failure(
+                    output,
+                    CodexCanonicalError::Upstream(ResponsesSseFailure::from_event(
+                        event_type, &value,
+                    )),
+                );
+            }
+            let mut canonical = Vec::new();
+            if let Err(error) = self.decode_event(event_type, &value, &mut canonical) {
+                return self.failure(output, CodexCanonicalError::Protocol(error));
+            }
+            let semantic_output = response_event_signals(Some(event_type), &value).semantic_output;
+            let wire = match ProtocolWireEvent::json("openai", event.event, value) {
+                Ok(wire) => wire,
+                Err(_) => {
+                    return self.failure(
+                        output,
+                        CodexCanonicalError::Protocol(protocol_error_marker()),
+                    );
+                }
+            };
+            output.push(if canonical.is_empty() {
+                ProviderEvent::wire(wire)
+            } else {
+                ProviderEvent::canonical_with_wire(canonical, wire)
+            });
+            self.semantic_output_seen |= semantic_output;
         }
-        Ok(canonical)
+        CodexCanonicalOutcome::Events(output)
+    }
+
+    fn failure(
+        &self,
+        events: Vec<ProviderEvent>,
+        error: CodexCanonicalError,
+    ) -> CodexCanonicalOutcome {
+        CodexCanonicalOutcome::Failed(CodexCanonicalFailure {
+            events,
+            error,
+            semantic_output_seen: self.semantic_output_seen,
+        })
     }
 
     fn decode_event(
@@ -105,7 +257,7 @@ impl CodexCanonicalDecoder {
             "response.completed" | "response.incomplete" => {
                 self.complete(event_type, value, output)
             }
-            "response.failed" | "error" => Err(upstream_event_error(value)),
+            "response.failed" | "error" => Err(protocol_error_marker()),
             "response.output_text.done"
             | "response.refusal.done"
             | "response.reasoning_summary_text.done"
@@ -118,7 +270,7 @@ impl CodexCanonicalDecoder {
             | "response.rate_limits.updated"
             | "codex.rate_limits"
             | "response.metadata" => Ok(()),
-            _ => Err(unsupported_event_error()),
+            _ => Ok(()),
         }
     }
 
@@ -181,10 +333,8 @@ impl CodexCanonicalDecoder {
                 self.add_content(index, ContentKind::Reasoning, output)
             }
             Some("message") => Ok(()),
-            Some("image_generation_call" | "computer_call" | "web_search_call") => {
-                Err(unsupported_event_error())
-            }
-            _ => Err(unsupported_event_error()),
+            Some("image_generation_call" | "computer_call" | "web_search_call") => Ok(()),
+            _ => Ok(()),
         }
     }
 
@@ -252,7 +402,7 @@ impl CodexCanonicalDecoder {
         let kind = match part.get("type").and_then(Value::as_str) {
             Some("output_text" | "refusal") => ContentKind::Text,
             Some("summary_text" | "reasoning_text") => ContentKind::Reasoning,
-            _ => return Err(unsupported_event_error()),
+            _ => return Ok(()),
         };
         self.add_content(content_index(output_index, part_index)?, kind, output)
     }
@@ -501,33 +651,6 @@ fn incomplete_finish_reason(response: &Value) -> FinishReason {
     }
 }
 
-fn upstream_event_error(value: &Value) -> ProviderError {
-    let kind = match value
-        .pointer("/error/code")
-        .or_else(|| value.pointer("/response/error/code"))
-        .and_then(Value::as_str)
-    {
-        Some("invalid_request" | "invalid_prompt" | "cyber_policy") => {
-            ProviderErrorKind::InvalidRequest
-        }
-        Some("unsupported" | "unsupported_feature" | "model_not_supported") => {
-            ProviderErrorKind::Unsupported
-        }
-        Some(
-            "unauthorized"
-            | "invalid_api_key"
-            | "token_invalid"
-            | "token_invalidated"
-            | "access_token_expired",
-        ) => ProviderErrorKind::Unauthorized,
-        Some("permission_denied") => ProviderErrorKind::PermissionDenied,
-        Some("rate_limit_exceeded") => ProviderErrorKind::RateLimited,
-        Some("quota_exceeded" | "insufficient_quota") => ProviderErrorKind::QuotaExhausted,
-        _ => ProviderErrorKind::Unavailable,
-    };
-    ProviderError::new(kind, UpstreamSendState::Sent).redact_sensitive_context("upstream event")
-}
-
 fn protocol_error(_error: impl std::fmt::Debug) -> ProviderError {
     protocol_error_marker()
 }
@@ -535,9 +658,4 @@ fn protocol_error(_error: impl std::fmt::Debug) -> ProviderError {
 fn protocol_error_marker() -> ProviderError {
     ProviderError::new(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
         .redact_sensitive_context("invalid upstream event")
-}
-
-fn unsupported_event_error() -> ProviderError {
-    ProviderError::new(ProviderErrorKind::Unsupported, UpstreamSendState::Sent)
-        .redact_sensitive_context("unsupported upstream event")
 }

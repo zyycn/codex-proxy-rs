@@ -149,6 +149,8 @@ async fn core_adapter_should_persist_calculated_cost_exactly() {
             upstream_status_code: Some(200),
             upstream_request_id: None,
             upstream_response_id: None,
+            upstream_transport: Some("websocket".to_owned()),
+            http_version: Some("HTTP/2".to_owned()),
             error: None,
             provider_error_code: None,
             retry_after_ms: None,
@@ -162,8 +164,8 @@ async fn core_adapter_should_persist_calculated_cost_exactly() {
     )
     .await
     .expect("persist calculated cost");
-    let persisted: (String, String, String) = sqlx::query_as(
-        "select cost_source, cost_amount::text, cost_currency
+    let persisted: (String, String, String, String, String) = sqlx::query_as(
+        "select cost_source, cost_amount::text, cost_currency, upstream_transport, http_version
          from model_requests where id = 'req_calculated_cost'",
     )
     .fetch_one(&database.pool)
@@ -176,6 +178,8 @@ async fn core_adapter_should_persist_calculated_cost_exactly() {
             "calculated".to_owned(),
             "0.0000012345".to_owned(),
             "USD".to_owned(),
+            "websocket".to_owned(),
+            "HTTP/2".to_owned(),
         )
     );
     database.close().await;

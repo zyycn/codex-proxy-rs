@@ -1,6 +1,6 @@
 //! Responses WebSocket pre-send/post-send 与 pool/breaker 编排。
 
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use tokio::{sync::oneshot, time::timeout};
 
@@ -35,7 +35,6 @@ pub(crate) const WEBSOCKET_FAST_PATH_BUDGET: Duration = Duration::from_millis(80
 pub(crate) struct PreparedWebSocket {
     connection: PooledWebSocketConnection,
     binding: PoolBinding,
-    connection_local_continuation_expires_at: Option<SystemTime>,
     connect_elapsed: Option<Duration>,
     decision_wait_elapsed: Duration,
     initial_event_timeout: Option<Duration>,
@@ -145,8 +144,6 @@ pub(crate) async fn prepare_response_create_request_with_pool(
                     PreviousResponseUnavailableReason::LatestResponseMismatch,
                 ));
             }
-            let connection_local_continuation_expires_at =
-                pool.connection_expires_at(connection.created_at);
             Ok(PreparedWebSocket {
                 connection: *connection,
                 binding: PoolBinding::Pooled {
@@ -154,7 +151,6 @@ pub(crate) async fn prepare_response_create_request_with_pool(
                     reused: true,
                     decision: WebSocketPoolDecision::reuse(),
                 },
-                connection_local_continuation_expires_at,
                 connect_elapsed: None,
                 decision_wait_elapsed: decision_started_at.elapsed(),
                 initial_event_timeout: pool.initial_event_timeout(),
@@ -219,7 +215,6 @@ async fn prepare_unpooled_websocket(
     Ok(PreparedWebSocket {
         connection,
         binding: PoolBinding::Unpooled,
-        connection_local_continuation_expires_at: None,
         connect_elapsed: Some(connect_elapsed),
         decision_wait_elapsed: decision_started_at.elapsed(),
         initial_event_timeout,
@@ -249,8 +244,6 @@ async fn prepare_pooled_websocket(
         permit,
     );
     let handoff = waiter.wait(fast_path_budget).await?;
-    let connection_local_continuation_expires_at =
-        pool.connection_expires_at(handoff.connection.created_at);
     Ok(PreparedWebSocket {
         connection: *handoff.connection,
         binding: PoolBinding::Pooled {
@@ -258,7 +251,6 @@ async fn prepare_pooled_websocket(
             reused: false,
             decision: WebSocketPoolDecision::new(),
         },
-        connection_local_continuation_expires_at,
         connect_elapsed: Some(handoff.connect_elapsed),
         decision_wait_elapsed: decision_started_at.elapsed(),
         initial_event_timeout: pool.initial_event_timeout(),
@@ -508,7 +500,6 @@ pub(crate) async fn execute_prepared_response_create_request(
     let PreparedWebSocket {
         connection,
         binding,
-        connection_local_continuation_expires_at,
         initial_event_timeout,
         ..
     } = prepared;
@@ -523,10 +514,7 @@ pub(crate) async fn execute_prepared_response_create_request(
         discard_after_send(websocket, lease).await;
         return Err(post_send_ambiguous(error));
     }
-    let connection_local_continuation_expires_at = lease
-        .is_some()
-        .then_some(connection_local_continuation_expires_at)
-        .flatten();
+    let connection_local_available = lease.is_some();
     let collected = collect_websocket_response(
         websocket,
         metadata,
@@ -552,7 +540,7 @@ pub(crate) async fn execute_prepared_response_create_request(
         }
     };
     exchange.pool_decision = pool_decision;
-    exchange.connection_local_continuation_expires_at = connection_local_continuation_expires_at;
+    exchange.connection_local_continuation = connection_local_available;
     match (terminal, lease) {
         (WebSocketTerminalKind::Completed, Some(lease)) => {
             lease
@@ -580,7 +568,6 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
     let PreparedWebSocket {
         connection,
         binding,
-        connection_local_continuation_expires_at,
         initial_event_timeout,
         ..
     } = prepared;
@@ -595,10 +582,7 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
         discard_after_send(websocket, lease).await;
         return Err(post_send_ambiguous(error));
     }
-    let connection_local_continuation_expires_at = lease
-        .is_some()
-        .then_some(connection_local_continuation_expires_at)
-        .flatten();
+    let connection_local_available = lease.is_some();
     let pool_return = lease.map(|lease| WebSocketStreamPoolReturn {
         lease,
         created_at,
@@ -612,7 +596,7 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
         initial_event_timeout,
     );
     exchange.pool_decision = pool_decision;
-    exchange.connection_local_continuation_expires_at = connection_local_continuation_expires_at;
+    exchange.connection_local_continuation = connection_local_available;
     Ok(exchange)
 }
 

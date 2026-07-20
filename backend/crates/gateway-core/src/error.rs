@@ -174,6 +174,15 @@ impl ProviderErrorKind {
     }
 }
 
+/// Provider 对 previous-response 失败给出的稳定恢复语义。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ContinuationFailure {
+    /// 原生 continuation 正被同账号的另一请求占用。
+    Busy,
+    /// 原生 history 在当前连接或账号不可用，可由完整输入重放恢复。
+    HistoryUnavailable,
+}
+
 /// Adapter 已明确分类为非 bearer、可用于诊断的上游值。
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct SafeUpstreamValue(String);
@@ -218,6 +227,7 @@ pub struct ProviderError {
     upstream_request_id: Option<SafeUpstreamValue>,
     upstream_response_id: Option<SafeUpstreamValue>,
     retry_after: Option<Duration>,
+    continuation_failure: Option<ContinuationFailure>,
     replay_safe: bool,
     sensitive_context_redacted: bool,
 }
@@ -234,6 +244,7 @@ impl ProviderError {
             upstream_request_id: None,
             upstream_response_id: None,
             retry_after: None,
+            continuation_failure: None,
             replay_safe: false,
             sensitive_context_redacted: false,
         }
@@ -273,6 +284,13 @@ impl ProviderError {
     #[must_use]
     pub const fn with_retry_after(mut self, retry_after: Duration) -> Self {
         self.retry_after = Some(retry_after);
+        self
+    }
+
+    /// 附加 previous-response 的恢复语义。
+    #[must_use]
+    pub const fn with_continuation_failure(mut self, failure: ContinuationFailure) -> Self {
+        self.continuation_failure = Some(failure);
         self
     }
 
@@ -332,6 +350,12 @@ impl ProviderError {
         self.retry_after
     }
 
+    /// 返回 previous-response 的恢复语义。
+    #[must_use]
+    pub const fn continuation_failure(&self) -> Option<ContinuationFailure> {
+        self.continuation_failure
+    }
+
     /// 返回 Provider 是否已证明本次失败可安全重放。
     #[must_use]
     pub const fn replay_is_safe(&self) -> bool {
@@ -371,6 +395,7 @@ impl fmt::Debug for ProviderError {
                     .map(|_| "<classified-safe>"),
             )
             .field("retry_after", &self.retry_after)
+            .field("continuation_failure", &self.continuation_failure)
             .field("replay_safe", &self.replay_safe)
             .field(
                 "sensitive_context",
