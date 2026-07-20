@@ -24,7 +24,7 @@
     "es-toolkit": "^1.49.0",
     "gsap": "^3.15.0",
     "marked": "^18.0.6",
-    "pinia": "^3.0.4",
+    "pinia": "^4.0.2",
     "pinia-plugin-persistedstate": "^4.7.1",
     "vue": "^3.5.39",
     "vue-router": "^5.1.0"
