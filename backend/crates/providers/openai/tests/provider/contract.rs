@@ -804,7 +804,11 @@ fn context_with_exclusions(
     cancellation: CancellationToken,
 ) -> AttemptContext {
     AttemptContext::new(
-        ModelRequestId::new(request_id).expect("request id"),
+        gateway_core::engine::RequestAttemptContext::new(
+            ModelRequestId::new(request_id).expect("request id"),
+            gateway_core::policy::ClientApiKeyId::new("key_openai_contract")
+                .expect("client key id"),
+        ),
         attempt_index,
         SystemTime::now() + Duration::from_secs(30),
         account_policy(),

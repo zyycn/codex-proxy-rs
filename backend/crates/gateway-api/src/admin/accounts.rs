@@ -783,15 +783,13 @@ fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
         provider_instance_name,
         status,
         usage,
-        rolling_usage,
         quota,
     } = item;
     let status = account_status_name(status).to_owned();
     let expires_at = china_rfc3339(&account.access_token_expires_at);
     let added_at = china_rfc3339(&account.created_at);
     let updated_at = china_rfc3339(&account.updated_at);
-    let (quota, refresh_token_expires_at) =
-        account_quota_view(&account.provider_kind, quota, rolling_usage.as_ref(), now);
+    let (quota, refresh_token_expires_at) = account_quota_view(quota, now);
     AccountView {
         id: account.id.clone(),
         name: account.name,
@@ -826,9 +824,7 @@ fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
 }
 
 fn account_quota_view(
-    provider_kind: &ProviderKind,
     quota: ProviderQuota,
-    rolling_usage: Option<&AccountUsage>,
     now: DateTime<Utc>,
 ) -> (AccountQuotaView, Option<String>) {
     let refresh_token_expires_at = quota
@@ -837,11 +833,7 @@ fn account_quota_view(
     let refreshed_at_display = quota
         .observed_at
         .map_or_else(|| "—".to_owned(), |value| relative_time(value, now));
-    let windows = quota
-        .windows
-        .into_iter()
-        .map(|window| quota_window_view(provider_kind, window, rolling_usage))
-        .collect();
+    let windows = quota.windows.into_iter().map(quota_window_view).collect();
     (
         AccountQuotaView {
             refreshed_at_display,
@@ -851,107 +843,32 @@ fn account_quota_view(
     )
 }
 
-fn quota_window_view(
-    provider_kind: &ProviderKind,
-    window: ProviderQuotaWindow,
-    rolling_usage: Option<&AccountUsage>,
-) -> AccountQuotaWindowView {
+fn quota_window_view(window: ProviderQuotaWindow) -> AccountQuotaWindowView {
     let ProviderQuotaWindow {
         key,
         group,
-        source,
+        label,
+        source: _,
         window_seconds,
         used_percent,
         reset_at,
-        provider_data,
+        local_usage,
+        provider_data: _,
     } = window;
-    let local_usage = if provider_kind.as_str() == "xai" {
-        provider_data.map(provider_document_value).or_else(|| {
-            (key == "free-rolling-24h")
-                .then(|| rolling_usage.map(free_quota_local_usage))
-                .flatten()
-        })
-    } else {
-        None
-    };
     AccountQuotaWindowView {
-        label_display: quota_window_label(
-            provider_kind,
-            &key,
-            &group,
-            source.as_deref(),
-            window_seconds,
-        ),
+        label_display: label,
         key,
         group,
         window_seconds,
         used_percent,
         used_percent_display: used_percent
             .map_or_else(|| "—".to_owned(), |value| format!("{value:.1}%")),
-        local_usage,
+        local_usage: local_usage.as_ref().map(quota_local_usage),
         reset_at_display: reset_at.map_or_else(|| "—".to_owned(), |value| china_datetime(&value)),
     }
 }
 
-fn quota_window_label(
-    provider_kind: &ProviderKind,
-    key: &str,
-    group: &str,
-    source: Option<&str>,
-    window_seconds: Option<u64>,
-) -> String {
-    if provider_kind.as_str() == "xai" && key == "free-rolling-24h" {
-        return "24小时额度".to_owned();
-    }
-    let base = match (provider_kind.as_str(), group) {
-        (_, "monthly") => "月限额".to_owned(),
-        ("openai", "shortTerm") if window_seconds.is_some_and(|seconds| seconds > 86_400) => {
-            "周限额".to_owned()
-        }
-        ("openai", "shortTerm") => "5小时限额".to_owned(),
-        ("xai", "shortTerm") => "周限额".to_owned(),
-        _ => custom_quota_window_label(window_seconds),
-    };
-    if provider_kind.as_str() != "openai" {
-        return base;
-    }
-    let Some(source) = source else {
-        return base;
-    };
-    if matches!(source, "core" | "spend_control" | "monthly_limit") {
-        return base;
-    }
-    let source = if is_codex_review_limit(source) {
-        "代码审查"
-    } else {
-        source
-    };
-    format!("{source} · {base}")
-}
-
-fn custom_quota_window_label(window_seconds: Option<u64>) -> String {
-    let Some(seconds) = window_seconds.filter(|seconds| *seconds > 0) else {
-        return "额度".to_owned();
-    };
-    if seconds % 86_400 == 0 {
-        format!("{}天限额", seconds / 86_400)
-    } else if seconds % 3_600 == 0 {
-        format!("{}小时限额", seconds / 3_600)
-    } else {
-        format!("{}分钟限额", seconds.div_ceil(60))
-    }
-}
-
-fn is_codex_review_limit(value: &str) -> bool {
-    let normalized = value.trim().to_ascii_lowercase().replace(['-', ' '], "_");
-    matches!(
-        normalized.as_str(),
-        "review" | "code_review" | "codex_review" | "codex_code_review"
-    ) || normalized.contains("code_review")
-        || normalized.contains("codex_review")
-}
-
-fn free_quota_local_usage(usage: &AccountUsage) -> Value {
+fn quota_local_usage(usage: &AccountUsage) -> Value {
     let total_tokens = usage.total_tokens.unwrap_or_default();
     serde_json::json!({
         "requestCount": usage.request_count,

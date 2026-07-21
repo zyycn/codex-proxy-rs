@@ -212,6 +212,8 @@ pub struct ProtocolWireEvent {
     protocol: String,
     event_type: Option<String>,
     data: Value,
+    sse_id: Option<String>,
+    sse_retry: Option<u64>,
 }
 
 impl ProtocolWireEvent {
@@ -225,15 +227,38 @@ impl ProtocolWireEvent {
         event_type: Option<String>,
         data: Value,
     ) -> Result<Self, IdentifierError> {
+        Self::json_with_sse_metadata(protocol, event_type, data, None, None)
+    }
+
+    /// 创建携带原生 SSE 元数据的协议 JSON event。
+    ///
+    /// # Errors
+    ///
+    /// 协议名、显式事件名或 SSE ID 不满足 wire 安全约束时返回错误。
+    pub fn json_with_sse_metadata(
+        protocol: impl Into<String>,
+        event_type: Option<String>,
+        data: Value,
+        sse_id: Option<String>,
+        sse_retry: Option<u64>,
+    ) -> Result<Self, IdentifierError> {
         let protocol = protocol.into();
         validate_text(&protocol, 64, true, None)?;
         if let Some(event_type) = event_type.as_deref() {
             validate_text(event_type, 256, true, None)?;
         }
+        if sse_id
+            .as_deref()
+            .is_some_and(|id| id.contains(['\0', '\r', '\n']))
+        {
+            return Err(IdentifierError::ControlCharacter);
+        }
         Ok(Self {
             protocol,
             event_type,
             data,
+            sse_id,
+            sse_retry,
         })
     }
 
@@ -247,6 +272,18 @@ impl ProtocolWireEvent {
     #[must_use]
     pub fn event_type(&self) -> Option<&str> {
         self.event_type.as_deref()
+    }
+
+    /// 返回上游 SSE `id` 字段。
+    #[must_use]
+    pub fn sse_id(&self) -> Option<&str> {
+        self.sse_id.as_deref()
+    }
+
+    /// 返回上游 SSE `retry` 字段。
+    #[must_use]
+    pub const fn sse_retry(&self) -> Option<u64> {
+        self.sse_retry
     }
 
     /// 返回协议原生 JSON 数据。
@@ -268,6 +305,8 @@ impl fmt::Debug for ProtocolWireEvent {
             .debug_struct("ProtocolWireEvent")
             .field("protocol", &self.protocol)
             .field("event_type", &self.event_type)
+            .field("has_sse_id", &self.sse_id.is_some())
+            .field("sse_retry", &self.sse_retry)
             .field("data", &"<not included in Debug>")
             .finish()
     }

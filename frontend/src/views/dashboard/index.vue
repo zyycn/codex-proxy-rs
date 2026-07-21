@@ -23,7 +23,7 @@ const {
   trendSummary,
   healthTimeline,
   accountUsage,
-  wireProfile,
+  wireProfiles,
   usageRecords,
   poolSummary,
   capacityInfo,
@@ -72,7 +72,7 @@ const {
         :loading="trendLoading"
         @trend-change="loadTrend"
       />
-      <WireProfileCard :profile="wireProfile" />
+      <WireProfileCard :profiles="wireProfiles" />
     </section>
 
     <AccountOverviewCard

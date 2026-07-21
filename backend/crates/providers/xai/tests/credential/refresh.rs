@@ -13,10 +13,11 @@ use gateway_core::provider_ports::{
 };
 use provider_xai::{
     GrokCredentialAdmin, GrokCredentialCatalogCache, GrokCredentialCatalogService,
-    GrokCredentialRefreshError, GrokCredentialRefreshOutcome, GrokCredentialRefreshService,
-    GrokCredentialRefresher, GrokCredentialRepository, GrokModelCatalogRequest,
-    GrokModelCatalogTransport, GrokModelCatalogTransportFuture, GrokModelCatalogTransportResponse,
-    GrokRefreshFailure, GrokRefreshTokens, RotateManagedGrokCredential, SecretValue,
+    GrokCredentialRecovery, GrokCredentialRecoveryOutcome, GrokCredentialRefreshError,
+    GrokCredentialRefreshOutcome, GrokCredentialRefreshService, GrokCredentialRefresher,
+    GrokCredentialRepository, GrokModelCatalogRequest, GrokModelCatalogTransport,
+    GrokModelCatalogTransportFuture, GrokModelCatalogTransportResponse, GrokRefreshFailure,
+    GrokRefreshTokens, RotateManagedGrokCredential, SecretValue,
 };
 
 use crate::support::{
@@ -206,6 +207,40 @@ async fn successful_refresh_rotates_plaintext_tokens_once() {
     assert!(
         !credential_object(&credential).contains_key("refresh_token_expires_at"),
         "rotated RT has no authoritative expiry in the refresh response"
+    );
+}
+
+#[tokio::test]
+async fn unauthorized_recovery_forces_refresh_before_the_due_time() {
+    let input = create_input("unauthorized-recovery", "subject-unauthorized-recovery");
+    let id = input.account_id.clone();
+    let (store, _, refresher, service) =
+        fixture(input, [Ok(success_tokens(Some("rotated-refresh")))], true).await;
+
+    let outcome = service
+        .recover_unauthorized(&id, CredentialRevision::new(1).expect("revision"))
+        .await;
+
+    assert_eq!(outcome, GrokCredentialRecoveryOutcome::Recovered);
+    assert_eq!(refresher.prepare_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(store.account(&id).expect("account").revision().get(), 2);
+}
+
+#[tokio::test]
+async fn unauthorized_recovery_marks_a_permanently_rejected_refresh_expired() {
+    let input = create_input("unauthorized-expired", "subject-unauthorized-expired");
+    let id = input.account_id.clone();
+    let (store, _, _, service) =
+        fixture(input, [Err(GrokRefreshFailure::InvalidGrant)], true).await;
+
+    let outcome = service
+        .recover_unauthorized(&id, CredentialRevision::new(1).expect("revision"))
+        .await;
+
+    assert_eq!(outcome, GrokCredentialRecoveryOutcome::Rejected);
+    assert_eq!(
+        store.account(&id).expect("account").availability(),
+        AccountAvailability::Expired
     );
 }
 

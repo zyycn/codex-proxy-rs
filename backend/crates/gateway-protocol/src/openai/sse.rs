@@ -247,10 +247,30 @@ pub fn parse_sse_events(input: &str) -> Result<Vec<SseEvent>, SseError> {
 
 /// 编码单条 SSE 事件。
 pub fn encode_sse_event(event: &str, data: &str) -> String {
+    encode_sse_event_with_metadata(event, data, None, None)
+}
+
+/// 编码一条完整的 SSE 事件并保留上游 `id` 与 `retry` 元数据。
+pub fn encode_sse_event_with_metadata(
+    event: &str,
+    data: &str,
+    id: Option<&str>,
+    retry: Option<u64>,
+) -> String {
     let mut frame = String::new();
+    if let Some(id) = id {
+        frame.push_str("id: ");
+        frame.push_str(id);
+        frame.push('\n');
+    }
     if !event.is_empty() {
         frame.push_str("event: ");
         frame.push_str(event);
+        frame.push('\n');
+    }
+    if let Some(retry) = retry {
+        frame.push_str("retry: ");
+        frame.push_str(&retry.to_string());
         frame.push('\n');
     }
     for line in data.split('\n') {

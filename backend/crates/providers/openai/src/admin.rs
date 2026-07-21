@@ -9,8 +9,9 @@ use gateway_admin::model::accounts::{
     AccountAvailability as AdminAccountAvailability, AccountRecord,
 };
 use gateway_admin::model::observability::{
-    CalculatedBillingBreakdown, CurrencyCost, DashboardDesktopRelease, DashboardWireProfile,
-    DashboardWireTarget, DecimalAmount, DesktopReleaseStatus, ProviderBillingInput,
+    CalculatedBillingBreakdown, CurrencyCost, DashboardDesktopRelease, DashboardWireAttribute,
+    DashboardWireProfile, DashboardWireTarget, DecimalAmount, DesktopReleaseStatus,
+    ProviderBillingInput,
 };
 use gateway_admin::model::provider_credentials::{
     AuthorizationMutationTarget, AuthorizationOwner, AuthorizationOwnerBinding,
@@ -20,7 +21,7 @@ use gateway_admin::model::provider_credentials::{
     PreparedCredentialCreate, PreparedCredentialImport, PreparedCredentialRotation,
     PreparedCredentialRotationFacts, ProviderDocument, ProviderExport,
     ProviderExportCredentialInput, ProviderModel, ProviderModels, ProviderQuota,
-    ProviderQuotaWindow,
+    ProviderQuotaRequest, ProviderQuotaWindow,
 };
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind};
@@ -31,6 +32,10 @@ use gateway_core::engine::credential::{
     ProviderAccountStore,
 };
 use gateway_core::error::StoreErrorKind;
+use gateway_core::operation::{
+    ContentPart, GenerateRequest, Message, MessageRole, Operation, ProtocolPayload,
+    ResponsePersistence,
+};
 use gateway_core::provider_ports::{
     NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingFlowPort, OAuthPendingPutOutcome,
     OAuthPendingTakeOutcome, ProviderInstanceCatalogPort, ProviderRuntimePolicyPort,
@@ -198,16 +203,24 @@ impl ProviderAdmin for OpenAiAdminProvider {
         self.websocket_pool.evict_account(account_id.as_str()).await;
     }
 
+    fn connection_test_operation(
+        &self,
+        upstream_model: &UpstreamModelId,
+        input_text: &str,
+    ) -> Result<Operation, ProviderAdminError> {
+        build_connection_test_operation(upstream_model, input_text)
+    }
+
     fn dashboard_wire_profile(&self) -> Option<DashboardWireProfile> {
         let profile = self.profile.snapshot();
         let release = self.desktop_release.snapshot();
         let user_agent = profile.user_agent();
         let release = dashboard_desktop_release(&profile, release);
         Some(DashboardWireProfile {
-            originator: profile.originator,
-            codex_version: profile.codex_version,
-            desktop_version: profile.desktop_version,
-            desktop_build: profile.desktop_build,
+            provider: self.provider_kind.as_str().to_owned(),
+            product: profile.originator,
+            version: profile.desktop_version,
+            build: Some(profile.desktop_build),
             target: DashboardWireTarget {
                 os_type: profile.os_type,
                 os_version: profile.os_version,
@@ -215,8 +228,12 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 terminal: profile.terminal,
             },
             user_agent,
-            verified_at: profile.verified_at,
-            release,
+            attributes: vec![DashboardWireAttribute {
+                label: "Codex Core".to_owned(),
+                value: profile.codex_version,
+            }],
+            verified_at: Some(profile.verified_at),
+            release: Some(release),
         })
     }
 
@@ -439,21 +456,25 @@ impl ProviderAdmin for OpenAiAdminProvider {
 
     async fn quota(
         &self,
-        account_id: &ProviderAccountId,
-        refresh: bool,
+        request: ProviderQuotaRequest,
     ) -> Result<ProviderQuota, ProviderAdminError> {
-        let account = self.account(account_id).await?;
+        let ProviderQuotaRequest {
+            account_id,
+            refresh,
+            rolling_usage: _,
+        } = request;
+        let account = self.account(&account_id).await?;
         let snapshot = if refresh {
             let instance = self.instance(&account).await?;
             Some(
                 self.quota
-                    .refresh_account(&instance, account_id)
+                    .refresh_account(&instance, &account_id)
                     .await
                     .map_err(map_quota_error)?,
             )
         } else {
             self.quota
-                .read_account(account_id)
+                .read_account(&account_id)
                 .await
                 .map_err(map_quota_error)?
         };
@@ -800,10 +821,16 @@ fn project_quota(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota {
             ProviderQuotaWindow {
                 key: window.key().to_owned(),
                 group: quota_group(window.kind()).to_owned(),
+                label: codex_quota_window_label(
+                    window.kind(),
+                    window.source(),
+                    window.window_seconds(),
+                ),
                 source: Some(window.source().to_owned()),
                 window_seconds: window.window_seconds(),
                 used_percent: window.used_percent(),
                 reset_at: window.reset_at(),
+                local_usage: None,
                 provider_data: Some(ProviderDocument::new(OpaqueProviderData::new(data))),
             }
         })
@@ -832,6 +859,54 @@ const fn quota_role(role: CodexQuotaWindowRole) -> &'static str {
         CodexQuotaWindowRole::Secondary => "secondary",
         CodexQuotaWindowRole::Monthly => "monthly",
     }
+}
+
+fn codex_quota_window_label(
+    kind: CodexQuotaWindowKind,
+    source: &str,
+    window_seconds: Option<u64>,
+) -> String {
+    let base = match kind {
+        CodexQuotaWindowKind::Monthly => "月限额".to_owned(),
+        CodexQuotaWindowKind::Weekly => "周限额".to_owned(),
+        CodexQuotaWindowKind::ShortTerm => {
+            if window_seconds.is_some_and(|seconds| seconds > 86_400) {
+                "周限额".to_owned()
+            } else {
+                "5小时限额".to_owned()
+            }
+        }
+        CodexQuotaWindowKind::Other => custom_quota_window_label(window_seconds),
+    };
+    if matches!(source, "core" | "spend_control" | "monthly_limit") {
+        return base;
+    }
+    if is_codex_review_limit(source) {
+        return format!("代码审查 · {base}");
+    }
+    format!("{source} · {base}")
+}
+
+fn custom_quota_window_label(window_seconds: Option<u64>) -> String {
+    let Some(seconds) = window_seconds.filter(|seconds| *seconds > 0) else {
+        return "额度".to_owned();
+    };
+    if seconds % 86_400 == 0 {
+        format!("{}天限额", seconds / 86_400)
+    } else if seconds % 3_600 == 0 {
+        format!("{}小时限额", seconds / 3_600)
+    } else {
+        format!("{}分钟限额", seconds.div_ceil(60))
+    }
+}
+
+fn is_codex_review_limit(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+    matches!(
+        normalized.as_str(),
+        "review" | "code_review" | "codex_review" | "codex_code_review"
+    ) || normalized.contains("code_review")
+        || normalized.contains("codex_review")
 }
 
 /// 将 Provider-owned PKCE/OIDC 状态保存到 Store 提供的 Redis 原子端口。
@@ -1168,6 +1243,38 @@ fn binding(value: &str) -> Result<OAuthPendingBinding, CodexOAuthPendingStoreErr
 
 fn provider_admin_error(kind: ProviderAdminErrorKind) -> ProviderAdminError {
     ProviderAdminError::new(kind)
+}
+
+fn build_connection_test_operation(
+    upstream_model: &UpstreamModelId,
+    input_text: &str,
+) -> Result<Operation, ProviderAdminError> {
+    let message = Message::new(
+        MessageRole::User,
+        vec![ContentPart::Text(input_text.to_owned())],
+    )
+    .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
+    let mut body = Map::new();
+    body.insert(
+        "model".to_owned(),
+        Value::String(upstream_model.as_str().to_owned()),
+    );
+    body.insert(
+        "input".to_owned(),
+        serde_json::json!([{
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": input_text}]
+        }]),
+    );
+    body.insert("stream".to_owned(), Value::Bool(true));
+    body.insert("store".to_owned(), Value::Bool(false));
+    let payload = ProtocolPayload::json_object("openai", body)
+        .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
+    Ok(Operation::Generate(
+        GenerateRequest::from_protocol_payload(vec![message], payload)
+            .with_response_persistence(ResponsePersistence::DoNotStore),
+    ))
 }
 
 fn currency_cost(money: Money) -> Result<CurrencyCost, ProviderAdminError> {

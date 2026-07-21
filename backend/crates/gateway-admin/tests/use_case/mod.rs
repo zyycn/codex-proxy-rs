@@ -31,10 +31,10 @@ use gateway_admin::{
             NewClientKey, SetClientKeyEnabled, UpdateClientKey,
         },
         observability::{
-            DashboardDesktopRelease, DashboardObservation, DashboardWireProfile,
-            DashboardWireTarget, DesktopReleaseStatus, DiagnosticDimension, DiagnosticObservation,
-            OpsErrorPage, OpsErrorQuery, RequestMetricPoint, TimeRange, UsageDetail, UsageFilter,
-            UsageOverview, UsagePage, UsageQuery,
+            DashboardDesktopRelease, DashboardObservation, DashboardWireAttribute,
+            DashboardWireProfile, DashboardWireTarget, DesktopReleaseStatus, DiagnosticDimension,
+            DiagnosticObservation, OpsErrorPage, OpsErrorQuery, RequestMetricPoint, TimeRange,
+            UsageDetail, UsageFilter, UsageOverview, UsagePage, UsageQuery,
         },
         provider_credentials::{
             AuthorizationCommit, AuthorizationStarted, CompleteAuthorization, CredentialDetails,
@@ -533,6 +533,14 @@ impl ProviderAdmin for UnavailableProvider {
 
     async fn account_unavailable(&self, _: &ProviderAccountId) {}
 
+    fn connection_test_operation(
+        &self,
+        _: &gateway_core::routing::UpstreamModelId,
+        _: &str,
+    ) -> Result<gateway_core::operation::Operation, ProviderAdminError> {
+        Err(unsupported_provider())
+    }
+
     fn dashboard_wire_profile(&self) -> Option<DashboardWireProfile> {
         self.dashboard_profile.clone()
     }
@@ -584,8 +592,7 @@ impl ProviderAdmin for UnavailableProvider {
 
     async fn quota(
         &self,
-        _: &ProviderAccountId,
-        _: bool,
+        _: gateway_admin::model::provider_credentials::ProviderQuotaRequest,
     ) -> Result<ProviderQuota, ProviderAdminError> {
         Err(unsupported_provider())
     }
@@ -610,10 +617,10 @@ pub(super) fn dashboard_profile_provider() -> Arc<dyn ProviderAdmin> {
     Arc::new(UnavailableProvider {
         kind: ProviderKind::new("openai").expect("provider kind"),
         dashboard_profile: Some(DashboardWireProfile {
-            originator: "gateway-admin-test".to_owned(),
-            codex_version: "test".to_owned(),
-            desktop_version: "test".to_owned(),
-            desktop_build: "test".to_owned(),
+            provider: "openai".to_owned(),
+            product: "gateway-admin-test".to_owned(),
+            version: "test".to_owned(),
+            build: Some("test".to_owned()),
             target: DashboardWireTarget {
                 os_type: "linux".to_owned(),
                 os_version: "test".to_owned(),
@@ -621,8 +628,12 @@ pub(super) fn dashboard_profile_provider() -> Arc<dyn ProviderAdmin> {
                 terminal: "test".to_owned(),
             },
             user_agent: "gateway-admin-test".to_owned(),
-            verified_at: chrono::Utc::now(),
-            release: DashboardDesktopRelease {
+            attributes: vec![DashboardWireAttribute {
+                label: "Core".to_owned(),
+                value: "test".to_owned(),
+            }],
+            verified_at: Some(chrono::Utc::now()),
+            release: Some(DashboardDesktopRelease {
                 status: DesktopReleaseStatus::Unchecked,
                 checked_at: None,
                 latest_version: None,
@@ -634,7 +645,7 @@ pub(super) fn dashboard_profile_provider() -> Arc<dyn ProviderAdmin> {
                 download_size: None,
                 signature_present: None,
                 error: None,
-            },
+            }),
         }),
     })
 }

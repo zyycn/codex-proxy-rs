@@ -5,7 +5,11 @@ use url::Url;
 
 pub const XAI_PROVIDER_NAME: &str = "xai";
 pub const GROK_CLI_BASE_URL: &str = "https://cli-chat-proxy.grok.com/v1";
-pub const GROK_CLIENT_VERSION: &str = "0.2.101";
+pub const GROK_CLIENT_VERSION: &str = "0.2.106";
+pub const GROK_CLIENT_IDENTIFIER: &str = "grok-shell";
+pub const GROK_CLIENT_MODE: &str = "headless";
+pub const GROK_TARGET_OS: &str = "linux";
+pub const GROK_TARGET_ARCH: &str = "x86_64";
 
 const OFFICIAL_GROK_HOST: &str = "cli-chat-proxy.grok.com";
 const OFFICIAL_GROK_BASE_PATH: &str = "/v1";

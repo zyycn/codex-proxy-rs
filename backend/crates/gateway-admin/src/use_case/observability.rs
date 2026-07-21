@@ -121,10 +121,7 @@ impl ObservabilityService for DefaultObservabilityService {
         );
         let trend = trend(kind, observation.trend.clone())?;
         let health_timeline = health_timeline_at(&observation.trend, Utc::now());
-        let wire_profile = self
-            .providers
-            .dashboard_wire_profile()
-            .map_err(|error| map_provider_error(error, "dashboard wire profile"))?;
+        let wire_profiles = self.providers.dashboard_wire_profiles();
         let max_concurrent_per_account = u64::from(settings.max_concurrent_per_account);
         Ok(DashboardResult {
             capacity: DashboardCapacity {
@@ -145,7 +142,7 @@ impl ObservabilityService for DefaultObservabilityService {
             average_first_token_latency_ms,
             trend,
             health_timeline,
-            wire_profile,
+            wire_profiles,
         })
     }
 

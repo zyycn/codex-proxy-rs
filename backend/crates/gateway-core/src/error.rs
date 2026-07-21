@@ -229,6 +229,8 @@ pub struct ProviderError {
     retry_after: Option<Duration>,
     continuation_failure: Option<ContinuationFailure>,
     replay_safe: bool,
+    credential_recovery_required: bool,
+    retry_same_account: bool,
     sensitive_context_redacted: bool,
 }
 
@@ -246,6 +248,8 @@ impl ProviderError {
             retry_after: None,
             continuation_failure: None,
             replay_safe: false,
+            credential_recovery_required: false,
+            retry_same_account: false,
             sensitive_context_redacted: false,
         }
     }
@@ -298,6 +302,20 @@ impl ProviderError {
     #[must_use]
     pub const fn with_replay_safe(mut self) -> Self {
         self.replay_safe = true;
+        self
+    }
+
+    /// 要求 Core 在账号凭据已恢复后仅对原账号重放一次。
+    #[must_use]
+    pub const fn with_same_account_retry(mut self) -> Self {
+        self.retry_same_account = true;
+        self
+    }
+
+    /// 标记上游明确拒绝应先触发 OAuth 恢复，而不是直接废弃账号。
+    #[must_use]
+    pub const fn with_credential_recovery(mut self) -> Self {
+        self.credential_recovery_required = true;
         self
     }
 
@@ -362,6 +380,17 @@ impl ProviderError {
         self.replay_safe
     }
 
+    /// 返回 Provider 是否已完成凭据恢复并要求原账号重放。
+    #[must_use]
+    pub const fn retries_same_account(&self) -> bool {
+        self.retry_same_account
+    }
+
+    #[must_use]
+    pub const fn requires_credential_recovery(&self) -> bool {
+        self.credential_recovery_required
+    }
+
     /// 表示 adapter 是否丢弃过敏感错误正文。
     #[must_use]
     pub const fn sensitive_context_was_redacted(&self) -> bool {
@@ -397,6 +426,11 @@ impl fmt::Debug for ProviderError {
             .field("retry_after", &self.retry_after)
             .field("continuation_failure", &self.continuation_failure)
             .field("replay_safe", &self.replay_safe)
+            .field(
+                "credential_recovery_required",
+                &self.credential_recovery_required,
+            )
+            .field("retry_same_account", &self.retry_same_account)
             .field(
                 "sensitive_context",
                 &self.sensitive_context_redacted.then_some("<redacted>"),

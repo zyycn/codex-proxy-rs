@@ -242,6 +242,7 @@ pub struct AccountAttemptContext {
     excluded_accounts: BTreeSet<ProviderAccountId>,
     required_account: Option<ProviderAccountId>,
     state_owner: Option<ProviderAccountStateOwner>,
+    credential_recovery_attempted: bool,
 }
 
 impl AccountAttemptContext {
@@ -255,7 +256,15 @@ impl AccountAttemptContext {
             excluded_accounts,
             required_account,
             state_owner,
+            credential_recovery_attempted: false,
         }
+    }
+
+    /// 标记本请求已对即将选择的固定账号执行过一次凭据恢复。
+    #[must_use]
+    pub const fn with_credential_recovery_attempted(mut self, attempted: bool) -> Self {
+        self.credential_recovery_attempted = attempted;
+        self
     }
 
     #[must_use]
@@ -271,6 +280,11 @@ impl AccountAttemptContext {
     #[must_use]
     pub const fn state_owner(&self) -> Option<&ProviderAccountStateOwner> {
         self.state_owner.as_ref()
+    }
+
+    #[must_use]
+    pub const fn credential_recovery_attempted(&self) -> bool {
+        self.credential_recovery_attempted
     }
 }
 
@@ -349,8 +363,35 @@ pub enum ContinuationAttempt {
 
 /// Provider 每次执行可见的 request-local context。
 #[derive(Debug, Clone)]
-pub struct AttemptContext {
+pub struct RequestAttemptContext {
     request_id: ModelRequestId,
+    client_api_key_ref: ClientApiKeyId,
+}
+
+impl RequestAttemptContext {
+    #[must_use]
+    pub const fn new(request_id: ModelRequestId, client_api_key_ref: ClientApiKeyId) -> Self {
+        Self {
+            request_id,
+            client_api_key_ref,
+        }
+    }
+
+    #[must_use]
+    pub const fn request_id(&self) -> &ModelRequestId {
+        &self.request_id
+    }
+
+    #[must_use]
+    pub const fn client_api_key_ref(&self) -> &ClientApiKeyId {
+        &self.client_api_key_ref
+    }
+}
+
+/// Provider 每次执行可见的 request-local context。
+#[derive(Debug, Clone)]
+pub struct AttemptContext {
+    request: RequestAttemptContext,
     attempt_index: NonZeroU32,
     deadline: SystemTime,
     account_selection_policy: AccountSelectionPolicy,
@@ -363,7 +404,7 @@ pub struct AttemptContext {
 impl AttemptContext {
     #[must_use]
     pub const fn new(
-        request_id: ModelRequestId,
+        request: RequestAttemptContext,
         attempt_index: NonZeroU32,
         deadline: SystemTime,
         account_selection_policy: AccountSelectionPolicy,
@@ -377,7 +418,7 @@ impl AttemptContext {
             ContinuationAttempt::None
         };
         Self {
-            request_id,
+            request,
             attempt_index,
             deadline,
             account_selection_policy,
@@ -400,7 +441,13 @@ impl AttemptContext {
 
     #[must_use]
     pub const fn request_id(&self) -> &ModelRequestId {
-        &self.request_id
+        self.request.request_id()
+    }
+
+    /// 返回隔离 Provider 会话与缓存身份的下游租户引用。
+    #[must_use]
+    pub const fn client_api_key_ref(&self) -> &ClientApiKeyId {
+        self.request.client_api_key_ref()
     }
 
     #[must_use]
@@ -432,6 +479,12 @@ impl AttemptContext {
     #[must_use]
     pub const fn account_state_owner(&self) -> Option<&ProviderAccountStateOwner> {
         self.account.state_owner()
+    }
+
+    /// 同一请求是否已经为当前固定账号执行过一次 OAuth 恢复。
+    #[must_use]
+    pub const fn credential_recovery_attempted(&self) -> bool {
+        self.account.credential_recovery_attempted()
     }
 
     #[must_use]
