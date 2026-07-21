@@ -255,3 +255,104 @@ async fn usage_route_should_forward_a_bounded_unknown_outcome_filter() {
 
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn usage_route_should_return_the_recorded_endpoint_as_route() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode, header},
+    };
+    use chrono::Utc;
+    use gateway_admin::model::observability::{RequestOutcome, UsageRecord};
+    use gateway_api::admin::observability;
+    use tower::ServiceExt as _;
+
+    use super::{AdminTestFixture, AdminTestState};
+
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    fixture
+        .usage_records
+        .lock()
+        .expect("usage records")
+        .push(UsageRecord {
+            id: "request_endpoint".to_owned(),
+            client_api_key_ref: "key_endpoint".to_owned(),
+            config_revision: 1,
+            protocol: "openai".to_owned(),
+            operation: "generate".to_owned(),
+            endpoint: "/v1/responses".to_owned(),
+            client_transport: "http_sse".to_owned(),
+            requested_model_id: "grok-4.5".to_owned(),
+            input_token_estimate: 1,
+            provider_instance_id: None,
+            provider_kind: Some("xai".to_owned()),
+            provider_account_ref: None,
+            provider_account_name: None,
+            provider_account_email: None,
+            upstream_model_id: Some("grok-4.5".to_owned()),
+            upstream_transport: Some("http_sse".to_owned()),
+            http_version: Some("h2".to_owned()),
+            attempt_count: 1,
+            upstream_send_state: "sent".to_owned(),
+            downstream_committed_at: None,
+            outcome: RequestOutcome::Succeeded,
+            client_status_code: Some(200),
+            upstream_status_code: Some(200),
+            client_response_id: None,
+            upstream_request_id: None,
+            upstream_response_id: None,
+            error_kind: None,
+            provider_error_code: None,
+            error_message: None,
+            retry_after_ms: None,
+            input_tokens: Some(1),
+            output_tokens: Some(1),
+            cached_tokens: Some(0),
+            cache_write_tokens: Some(0),
+            reasoning_tokens: Some(0),
+            total_tokens: Some(2),
+            cost_source: "unavailable".to_owned(),
+            cost_amount: None,
+            cost_currency: None,
+            billing: None,
+            transport_decision_wait_ms: None,
+            connect_ms: None,
+            headers_ms: None,
+            first_event_ms: None,
+            first_reasoning_ms: None,
+            first_text_ms: None,
+            first_token_ms: None,
+            provider_processing_ms: None,
+            latency_ms: None,
+            client_ip: None,
+            user_agent: None,
+            reasoning_effort: None,
+            reasoning_preset: None,
+            request_kind: None,
+            subagent_kind: None,
+            compact: false,
+            started_at: Utc::now(),
+            deadline_at: Utc::now(),
+            completed_at: Some(Utc::now()),
+        });
+    let response = observability::router::<AdminTestState>()
+        .with_state(fixture.state())
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/usage/records")
+                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header("x-request-id", "req_usage_endpoint")
+                .body(Body::empty())
+                .expect("usage request"),
+        )
+        .await
+        .expect("usage response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("usage response body");
+    let value: serde_json::Value = serde_json::from_slice(&body).expect("usage response JSON");
+
+    assert_eq!(value["data"]["items"][0]["route"], "/v1/responses");
+}

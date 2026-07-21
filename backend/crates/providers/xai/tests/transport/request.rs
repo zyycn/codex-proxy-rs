@@ -442,6 +442,58 @@ fn tool_declarations_should_flatten_and_emulate_codex_tool_shapes() {
 }
 
 #[test]
+fn custom_apply_patch_declaration_should_use_patch_parameter() {
+    let request = raw_request(json!({
+        "model": "client",
+        "input": "edit",
+        "tools": [
+            {
+                "type": "custom",
+                "name": "apply_patch",
+                "description": "This is a FREEFORM tool, so do not wrap the patch in JSON."
+            },
+            {"type": "custom", "name": "render"},
+            {
+                "type": "function",
+                "name": "apply_patch",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}},
+                    "required": ["command"]
+                }
+            }
+        ]
+    }));
+
+    let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
+        .expect("custom apply_patch declaration");
+    let body = Value::Object(encoded.body().clone());
+
+    assert_eq!(
+        body.pointer("/tools/0/parameters/properties"),
+        Some(&json!({"patch": {"type": "string"}}))
+    );
+    assert_eq!(
+        body.pointer("/tools/0/parameters/required"),
+        Some(&json!(["patch"]))
+    );
+    assert_eq!(
+        body.pointer("/tools/0/description"),
+        Some(&json!(
+            "The apply_patch tool edits files using Codex patch format. Provide the complete raw patch text in the patch string field."
+        ))
+    );
+    assert_eq!(
+        body.pointer("/tools/1/parameters/properties"),
+        Some(&json!({"input": {"type": "string"}}))
+    );
+    assert_eq!(
+        body.pointer("/tools/2/parameters/properties"),
+        Some(&json!({"command": {"type": "string"}}))
+    );
+}
+
+#[test]
 fn hosted_tool_choice_should_narrow_visible_tools_and_require_the_selected_kind() {
     let request = raw_request(json!({
         "model": "client",
@@ -527,6 +579,118 @@ fn history_should_rebuild_codex_calls_outputs_shell_and_private_fields() {
     assert_eq!(body.pointer("/input/7/status"), None);
     assert_eq!(body.pointer("/input/7/summary/0/phase"), None);
     assert_eq!(body.pointer("/input/8/role"), Some(&json!("developer")));
+}
+
+#[test]
+fn custom_apply_patch_history_should_wrap_raw_input_in_patch_field() {
+    let patch = concat!(
+        "*** Begin Patch\n",
+        "*** Update File: src/lib.rs\n",
+        "@@\n",
+        "-let path = \"old\\\\name\";\n",
+        "+let path = \"new\\\\name\";\n",
+        "*** End Patch\n",
+    );
+    let request = raw_request(json!({
+        "model": "client",
+        "tools": [{"type": "custom", "name": "apply_patch"}],
+        "input": [
+            {
+                "type": "custom_tool_call",
+                "call_id": "patch_custom_1",
+                "name": "apply_patch",
+                "input": patch
+            },
+            {
+                "type": "custom_tool_call_output",
+                "call_id": "patch_custom_1",
+                "output": "Done!"
+            }
+        ]
+    }));
+
+    let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
+        .expect("custom apply_patch history");
+    let body = Value::Object(encoded.body().clone());
+    let arguments = body
+        .pointer("/input/0/arguments")
+        .and_then(Value::as_str)
+        .and_then(|arguments| serde_json::from_str::<Value>(arguments).ok())
+        .expect("function arguments");
+
+    assert_eq!(arguments, json!({"patch": patch}));
+    assert_eq!(
+        body.pointer("/input/1/type"),
+        Some(&json!("function_call_output"))
+    );
+}
+
+#[test]
+fn compaction_history_should_become_plaintext_user_continuation_in_place() {
+    let request = raw_request(json!({
+        "model": "client",
+        "input": [
+            {"type": "message", "role": "user", "content": "before compaction"},
+            {
+                "type": "compaction",
+                "id": "cmp_1",
+                "encrypted_content": "Repository state and pending work."
+            },
+            {"type": "message", "role": "user", "content": "continue"}
+        ]
+    }));
+
+    let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
+        .expect("compaction continuation");
+    let body = Value::Object(encoded.body().clone());
+
+    assert_eq!(
+        body.pointer("/input"),
+        Some(&json!([
+            {"type": "message", "role": "user", "content": "before compaction"},
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": concat!(
+                        "This session is being continued from a previous conversation that ran out of context. ",
+                        "The summary below covers the earlier portion of the conversation.\n\n",
+                        "Repository state and pending work."
+                    )
+                }]
+            },
+            {"type": "message", "role": "user", "content": "continue"}
+        ]))
+    );
+}
+
+#[test]
+fn compaction_history_should_reject_missing_empty_or_non_string_plaintext() {
+    for encrypted_content in [
+        None,
+        Some(json!(null)),
+        Some(json!("")),
+        Some(json!(" \n\t")),
+        Some(json!(42)),
+        Some(json!({"summary": "not a string"})),
+    ] {
+        let mut compaction =
+            Map::from_iter([("type".to_owned(), Value::String("compaction".to_owned()))]);
+        if let Some(encrypted_content) = encrypted_content {
+            compaction.insert("encrypted_content".to_owned(), encrypted_content);
+        }
+        let request = raw_request(json!({
+            "model": "client",
+            "input": [Value::Object(compaction)]
+        }));
+
+        assert_eq!(
+            GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
+                .expect_err("invalid compaction plaintext"),
+            GrokRequestEncodeError::InvalidRequestNormalization
+        );
+    }
 }
 
 #[test]

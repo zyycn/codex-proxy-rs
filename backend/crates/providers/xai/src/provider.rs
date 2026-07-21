@@ -9,7 +9,7 @@ use base64::Engine as _;
 use futures::{StreamExt, future::BoxFuture};
 use gateway_core::engine::continuation::ContinuationBinding;
 use gateway_core::engine::credential::{
-    AccountAvailability, ProviderAccount, ProviderAccountStore,
+    AccountAvailability, ProviderAccount, ProviderAccountId, ProviderAccountStore,
 };
 use gateway_core::engine::provider::{
     EventStream, Provider, ProviderCallMetadata, ProviderCatalogGeneration,
@@ -17,14 +17,17 @@ use gateway_core::engine::provider::{
 };
 use gateway_core::engine::{AttemptContext, ContinuationAttempt, UpstreamSendState};
 use gateway_core::error::{ContinuationFailure, ProviderError, ProviderErrorKind};
-use gateway_core::event::{GatewayEvent, ProviderEvent, ProviderResponseObservation};
+use gateway_core::event::{
+    CompactionOutput, GatewayEvent, ProviderEvent, ProviderResponseObservation, ResponseMeta,
+};
 use gateway_core::operation::{
-    Feature, GenerateRequest, Operation, OperationKind, ProviderSessionState,
+    CompactConversationRequest, Feature, GenerateRequest, Operation, OperationKind,
+    ProviderSessionState,
 };
 use gateway_core::provider_ports::ProviderInstanceCatalogPort;
 use gateway_core::routing::{
-    InstanceHealth, ModelCapabilities, ProviderInstance, ProviderKind, SupportLevel,
-    UpstreamModelId,
+    InstanceHealth, ModelCapabilities, ProviderCandidate, ProviderInstance, ProviderKind,
+    SupportLevel, UpstreamModelId,
 };
 use gateway_core::task::{
     ScheduledTask, WorkerContribution, WorkerCycleContext, WorkerDefinitionError, WorkerId,
@@ -43,13 +46,15 @@ use crate::credential::{
 };
 use crate::transport::canonical::GrokCanonicalDecoder;
 use crate::transport::config::XAI_PROVIDER_NAME;
-use crate::transport::headers::{GrokClientIdentity, build_grok_headers};
+use crate::transport::headers::{GrokClientIdentity, GrokHeader, build_grok_headers};
 use crate::transport::profile::{GROK_CLI_RELEASE_POLL_INTERVAL, GrokCliReleaseService};
 use crate::transport::{
-    GrokCredentialFailure, GrokInferenceRequest, GrokInferenceTransport,
-    GrokInferenceTransportError, GrokInferenceTransportErrorKind, GrokProviderConfigError,
-    GrokProviderInstanceConfig, GrokRequestEncodeError, GrokResponsesRequest, GrokSessionSelection,
-    GrokSessionSelector, GrokSessionSelectorError, SelectedGrokSession,
+    GrokCompactionDecodeError, GrokCompactionRequest, GrokCompactionSummaryDecoder,
+    GrokCredentialFailure, GrokInferenceChunkStream, GrokInferenceRequest, GrokInferenceResponse,
+    GrokInferenceTransport, GrokInferenceTransportError, GrokInferenceTransportErrorKind,
+    GrokProviderConfigError, GrokProviderInstanceConfig, GrokRequestEncodeError,
+    GrokResponsesRequest, GrokSessionAffinityKey, GrokSessionSelection, GrokSessionSelector,
+    GrokSessionSelectorError, SelectedGrokSession,
 };
 
 const HTTP_SSE_TRANSPORT: &str = "http_sse";
@@ -137,6 +142,7 @@ impl Provider for GrokBuildProvider {
                     == GrokCatalogCapabilityEvidence::DeclaredNative
                 {
                     operations.insert(OperationKind::Generate);
+                    operations.insert(OperationKind::CompactConversation);
                 }
                 let capabilities = ModelCapabilities::new(
                     operations,
@@ -188,12 +194,31 @@ impl Provider for GrokBuildProvider {
             .map_err(map_instance_config_error)?;
         preflight_context(&context)?;
 
-        let Operation::Generate(generate) = request.operation() else {
-            return Err(provider_error(
+        match request.operation() {
+            Operation::Generate(generate) => {
+                self.execute_generate(generate, candidate, instance, context)
+                    .await
+            }
+            Operation::CompactConversation(compact) => {
+                self.execute_compaction(compact, candidate, instance, context)
+                    .await
+            }
+            _ => Err(provider_error(
                 ProviderErrorKind::Unsupported,
                 UpstreamSendState::NotSent,
-            ));
-        };
+            )),
+        }
+    }
+}
+
+impl GrokBuildProvider {
+    async fn execute_generate(
+        &self,
+        generate: &GenerateRequest,
+        candidate: &ProviderCandidate,
+        instance: GrokProviderInstanceConfig,
+        context: AttemptContext,
+    ) -> Result<ProviderStream, ProviderError> {
         let previous_session = decode_xai_session_state(generate)?;
         let continuation_account =
             continuation_account(&context, candidate.instance(), previous_session.as_ref())?;
@@ -207,46 +232,14 @@ impl Provider for GrokBuildProvider {
         if let Some(previous) = previous_session.as_ref() {
             upstream_request.inherit_session(previous.session_id.as_deref());
         }
-        let selection = GrokSessionSelection::new(
-            candidate.instance().clone(),
-            candidate.upstream_model().clone(),
-            context.excluded_accounts().clone(),
-            context.required_account().cloned().or(continuation_account),
-            context.account_selection_policy(),
-            context.deadline(),
+        let selected = select_grok_session(
+            self.selector.as_ref(),
+            candidate,
+            &context,
+            continuation_account,
+            upstream_request.affinity().cloned(),
         )
-        .with_affinity(upstream_request.affinity().cloned());
-        let selection_deadline = remaining(context.deadline()).ok_or_else(|| {
-            provider_error(ProviderErrorKind::Timeout, UpstreamSendState::NotSent)
-        })?;
-        let cancellation = context.cancellation().clone();
-        let selected = tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => Err(provider_error(
-                ProviderErrorKind::Cancelled,
-                UpstreamSendState::NotSent,
-            )),
-            _ = tokio::time::sleep(selection_deadline) => Err(provider_error(
-                ProviderErrorKind::Timeout,
-                UpstreamSendState::NotSent,
-            )),
-            selected = self.selector.select(selection) => selected.map_err(map_selection_error),
-        }?;
-        if context.excluded_accounts().contains(selected.account_id()) {
-            return Err(provider_error(
-                ProviderErrorKind::Protocol,
-                UpstreamSendState::NotSent,
-            ));
-        }
-        if context
-            .required_account()
-            .is_some_and(|required| required != selected.account_id())
-        {
-            return Err(provider_error(
-                ProviderErrorKind::Protocol,
-                UpstreamSendState::NotSent,
-            ));
-        }
+        .await?;
         apply_continuation(
             &mut upstream_request,
             previous_session.as_ref(),
@@ -267,17 +260,7 @@ impl Provider for GrokBuildProvider {
             output_items: BTreeMap::new(),
         });
         let selected = Arc::new(selected);
-        let metadata = ProviderCallMetadata::new(
-            ProviderKind::new(XAI_PROVIDER_NAME).map_err(|_| {
-                provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
-            })?,
-            candidate.instance().clone(),
-            candidate.upstream_model().clone(),
-            selected.resource(),
-            UpstreamTransport::new(HTTP_SSE_TRANSPORT).map_err(|_| {
-                provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
-            })?,
-        );
+        let metadata = provider_call_metadata(candidate, &selected)?;
         let events = cold_http_sse_stream(
             Arc::clone(&self.selector),
             Arc::clone(&self.transport),
@@ -295,6 +278,123 @@ impl Provider for GrokBuildProvider {
         );
         Ok(ProviderStream::new(metadata, events, selected))
     }
+
+    async fn execute_compaction(
+        &self,
+        compact: &CompactConversationRequest,
+        candidate: &ProviderCandidate,
+        instance: GrokProviderInstanceConfig,
+        context: AttemptContext,
+    ) -> Result<ProviderStream, ProviderError> {
+        if context.continuation().is_some()
+            || context.continuation_attempt() != ContinuationAttempt::None
+        {
+            return Err(provider_error(
+                ProviderErrorKind::InvalidRequest,
+                UpstreamSendState::NotSent,
+            ));
+        }
+        let previous_session = decode_xai_session_state(compact.generation())?;
+        let operation_account = previous_session
+            .as_ref()
+            .map(|previous| ProviderAccountId::new(previous.account_id.clone()))
+            .transpose()
+            .map_err(|_| protocol_not_sent())?;
+        let upstream_session_id = previous_session
+            .as_ref()
+            .and_then(|previous| previous.session_id.clone());
+        let upstream_request = GrokCompactionRequest::encode(
+            compact,
+            candidate.upstream_model().as_str(),
+            context.client_api_key_ref(),
+        )
+        .map_err(map_request_error)?;
+        let selected = Arc::new(
+            select_grok_session(
+                self.selector.as_ref(),
+                candidate,
+                &context,
+                operation_account,
+                upstream_request.affinity().cloned(),
+            )
+            .await?,
+        );
+        let metadata = provider_call_metadata(candidate, &selected)?;
+        let events = cold_compaction_http_sse_stream(
+            Arc::clone(&self.selector),
+            Arc::clone(&self.transport),
+            GrokCompactionStreamAttempt {
+                client_identity: self.client_identity.clone(),
+                wire_profile: self.wire_profile.clone(),
+                credential_recovery: Arc::clone(&self.credential_recovery),
+                instance,
+                request: upstream_request,
+                upstream_model: candidate.upstream_model().clone(),
+                upstream_session_id,
+                context,
+                session: Arc::clone(&selected),
+            },
+        );
+        Ok(ProviderStream::new(metadata, events, selected))
+    }
+}
+
+async fn select_grok_session(
+    selector: &dyn GrokSessionSelector,
+    candidate: &ProviderCandidate,
+    context: &AttemptContext,
+    operation_account: Option<ProviderAccountId>,
+    affinity: Option<GrokSessionAffinityKey>,
+) -> Result<SelectedGrokSession, ProviderError> {
+    let required_account = context.required_account().cloned().or(operation_account);
+    let selection = GrokSessionSelection::new(
+        candidate.instance().clone(),
+        candidate.upstream_model().clone(),
+        context.excluded_accounts().clone(),
+        required_account.clone(),
+        context.account_selection_policy(),
+        context.deadline(),
+    )
+    .with_affinity(affinity);
+    let selection_deadline = remaining(context.deadline())
+        .ok_or_else(|| provider_error(ProviderErrorKind::Timeout, UpstreamSendState::NotSent))?;
+    let cancellation = context.cancellation().clone();
+    let selected = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => Err(provider_error(
+            ProviderErrorKind::Cancelled,
+            UpstreamSendState::NotSent,
+        )),
+        _ = tokio::time::sleep(selection_deadline) => Err(provider_error(
+            ProviderErrorKind::Timeout,
+            UpstreamSendState::NotSent,
+        )),
+        selected = selector.select(selection) => selected.map_err(map_selection_error),
+    }?;
+    if context.excluded_accounts().contains(selected.account_id())
+        || required_account
+            .as_ref()
+            .is_some_and(|required| required != selected.account_id())
+    {
+        return Err(provider_error(
+            ProviderErrorKind::Protocol,
+            UpstreamSendState::NotSent,
+        ));
+    }
+    Ok(selected)
+}
+
+fn provider_call_metadata(
+    candidate: &ProviderCandidate,
+    selected: &SelectedGrokSession,
+) -> Result<ProviderCallMetadata, ProviderError> {
+    Ok(ProviderCallMetadata::new(
+        ProviderKind::new(XAI_PROVIDER_NAME).map_err(|_| protocol_not_sent())?,
+        candidate.instance().clone(),
+        candidate.upstream_model().clone(),
+        selected.resource(),
+        UpstreamTransport::new(HTTP_SSE_TRANSPORT).map_err(|_| protocol_not_sent())?,
+    ))
 }
 
 fn support(evidence: GrokCatalogCapabilityEvidence) -> SupportLevel {
@@ -439,7 +539,7 @@ fn apply_continuation(
             let mut input = replay_input_for_account(previous, account.as_str(), true);
             input.reserve(current_input.len());
             input.extend(current_input.iter().cloned());
-            request.set_input(input);
+            request.set_replay_input(input).map_err(map_request_error)?;
             request.set_previous_response_id(None);
             request.inherit_session(None);
             Ok(())
@@ -699,6 +799,309 @@ struct GrokStreamAttempt {
     session_capture: Option<GrokSessionCapture>,
 }
 
+struct GrokCompactionStreamAttempt {
+    client_identity: GrokClientIdentity,
+    wire_profile: XaiWireProfileState,
+    credential_recovery: Arc<dyn GrokCredentialRecovery>,
+    instance: GrokProviderInstanceConfig,
+    request: GrokCompactionRequest,
+    upstream_model: UpstreamModelId,
+    upstream_session_id: Option<String>,
+    context: AttemptContext,
+    session: Arc<SelectedGrokSession>,
+}
+
+struct AcceptedGrokInference {
+    response: GrokInferenceResponse,
+    observation: ProviderResponseObservation,
+}
+
+struct GrokInferenceStartFailure {
+    observation: Option<ProviderResponseObservation>,
+    error: ProviderError,
+}
+
+async fn start_grok_inference(
+    selector: &dyn GrokSessionSelector,
+    transport: &dyn GrokInferenceTransport,
+    credential_recovery: &dyn GrokCredentialRecovery,
+    request: GrokInferenceRequest,
+    context: &AttemptContext,
+    session: &SelectedGrokSession,
+) -> Result<AcceptedGrokInference, GrokInferenceStartFailure> {
+    if context.cancellation().is_cancelled() {
+        return Err(GrokInferenceStartFailure {
+            observation: None,
+            error: provider_error(ProviderErrorKind::Cancelled, UpstreamSendState::NotSent),
+        });
+    }
+    let Some(handshake_deadline) = remaining(context.deadline()) else {
+        return Err(GrokInferenceStartFailure {
+            observation: None,
+            error: provider_error(ProviderErrorKind::Timeout, UpstreamSendState::NotSent),
+        });
+    };
+    let cancellation = context.cancellation().clone();
+    let boundary = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => InferenceBoundary::Cancelled,
+        _ = tokio::time::sleep(handshake_deadline) => InferenceBoundary::Deadline,
+        response = transport.execute(request) => InferenceBoundary::Response(response),
+    };
+    let response = match boundary {
+        InferenceBoundary::Cancelled => {
+            return Err(GrokInferenceStartFailure {
+                observation: None,
+                error: provider_error(ProviderErrorKind::Cancelled, UpstreamSendState::Ambiguous),
+            });
+        }
+        InferenceBoundary::Deadline => {
+            return Err(GrokInferenceStartFailure {
+                observation: None,
+                error: provider_error(ProviderErrorKind::Timeout, UpstreamSendState::Ambiguous),
+            });
+        }
+        InferenceBoundary::Response(Ok(response)) => response,
+        InferenceBoundary::Response(Err(error)) => {
+            let observation = xai_error_observation(&error).ok();
+            let error =
+                map_continuation_failure(context, map_transport_error_for_context(error, context));
+            let error = recover_or_record_failure(
+                selector,
+                credential_recovery,
+                session,
+                error,
+                context.credential_recovery_attempted(),
+            )
+            .await;
+            return Err(GrokInferenceStartFailure { observation, error });
+        }
+    };
+    let mut observation = ProviderResponseObservation::new(
+        UpstreamTransport::new(HTTP_SSE_TRANSPORT).map_err(|_| GrokInferenceStartFailure {
+            observation: None,
+            error: protocol_sent(),
+        })?,
+    )
+    .with_http_version(response.http_version())
+    .with_status_code(response.status_code());
+    if let Some(request_id) = response.request_id().cloned() {
+        observation = observation.with_request_id(request_id);
+    }
+    Ok(AcceptedGrokInference {
+        response,
+        observation,
+    })
+}
+
+async fn next_grok_chunk(
+    body: &mut GrokInferenceChunkStream,
+    selector: &dyn GrokSessionSelector,
+    session: &SelectedGrokSession,
+    context: &AttemptContext,
+) -> Result<Option<Vec<u8>>, ProviderError> {
+    let Some(stream_deadline) = remaining(context.deadline()) else {
+        return Err(provider_error(
+            ProviderErrorKind::Timeout,
+            UpstreamSendState::Sent,
+        ));
+    };
+    let cancellation = context.cancellation().clone();
+    tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => Err(provider_error(
+            ProviderErrorKind::Cancelled,
+            UpstreamSendState::Sent,
+        )),
+        _ = tokio::time::sleep(stream_deadline) => Err(provider_error(
+            ProviderErrorKind::Timeout,
+            UpstreamSendState::Sent,
+        )),
+        chunk = body.next() => match chunk {
+            Some(Ok(chunk)) => Ok(Some(chunk)),
+            Some(Err(error)) => {
+                let error = map_stream_error(error);
+                Err(record_stream_failure(selector, session, error).await)
+            }
+            None => Ok(None),
+        },
+    }
+}
+
+fn cold_compaction_http_sse_stream(
+    selector: Arc<dyn GrokSessionSelector>,
+    transport: Arc<dyn GrokInferenceTransport>,
+    attempt: GrokCompactionStreamAttempt,
+) -> EventStream {
+    let GrokCompactionStreamAttempt {
+        client_identity,
+        wire_profile,
+        credential_recovery,
+        instance,
+        request,
+        upstream_model,
+        upstream_session_id,
+        context,
+        session,
+    } = attempt;
+    Box::pin(async_stream::try_stream! {
+        let mut headers = build_grok_headers(
+            &wire_profile,
+            &session,
+            &client_identity,
+            context.request_id(),
+            upstream_session_id.as_deref(),
+            None,
+            &upstream_model,
+        );
+        if let Some(upstream_session_id) = upstream_session_id.as_deref() {
+            headers.push(GrokHeader::sensitive(
+                "x-grok-session-id",
+                crate::credential::SecretValue::new(upstream_session_id.to_owned()),
+            ));
+        }
+        let body = request.to_json_bytes().map_err(map_request_error)?;
+        let inference_request = GrokInferenceRequest::new(
+            instance.responses_url().clone(),
+            headers,
+            body,
+            session.binding().clone(),
+        );
+        let accepted = match start_grok_inference(
+            selector.as_ref(),
+            transport.as_ref(),
+            credential_recovery.as_ref(),
+            inference_request,
+            &context,
+            &session,
+        )
+        .await
+        {
+            Ok(accepted) => accepted,
+            Err(failure) => {
+                if let Some(observation) = failure.observation {
+                    yield ProviderEvent::observation(observation);
+                }
+                Err(mark_transient_compaction_failure(failure.error))?;
+                return;
+            }
+        };
+        yield ProviderEvent::observation(accepted.observation);
+
+        let mut body = accepted.response.into_body();
+        let mut canonical = GrokCanonicalDecoder::new(upstream_model.as_str());
+        let mut summary = GrokCompactionSummaryDecoder::new();
+        let mut started = None;
+        let mut completed = None;
+        let mut accounting = Vec::new();
+
+        'stream: while let Some(chunk) = next_grok_chunk(
+            &mut body,
+            selector.as_ref(),
+            &session,
+            &context,
+        )
+        .await
+        .map_err(mark_transient_compaction_failure)?
+        {
+            let events = canonical.push(&chunk).map_err(|error| {
+                mark_transient_compaction_failure(map_continuation_failure(&context, error))
+            })?;
+            for event in events {
+                summary.observe(&event).map_err(map_compaction_decode_error)?;
+                collect_compaction_facts(
+                    &event,
+                    &mut started,
+                    &mut completed,
+                    &mut accounting,
+                )?;
+                if completed.is_some() {
+                    break 'stream;
+                }
+            }
+        }
+
+        if completed.is_none() {
+            for event in canonical.finish_without_terminal().map_err(|error| {
+                mark_transient_compaction_failure(map_continuation_failure(&context, error))
+            })? {
+                summary.observe(&event).map_err(map_compaction_decode_error)?;
+                collect_compaction_facts(
+                    &event,
+                    &mut started,
+                    &mut completed,
+                    &mut accounting,
+                )?;
+                if completed.is_some() {
+                    break;
+                }
+            }
+        }
+
+        let summary = summary.finish().map_err(map_compaction_decode_error)?;
+        let started = started.ok_or_else(protocol_sent)?;
+        let completed = completed.unwrap_or_else(|| started.clone());
+        ensure_sent_context(&context)?;
+        yield ProviderEvent::canonical(GatewayEvent::Started(started));
+        yield ProviderEvent::canonical(GatewayEvent::CompactionOutput(
+            CompactionOutput::new(summary),
+        ));
+        for fact in accounting {
+            yield ProviderEvent::canonical(fact);
+        }
+        yield ProviderEvent::canonical(GatewayEvent::Completed(completed));
+    })
+}
+
+fn collect_compaction_facts(
+    event: &ProviderEvent,
+    started: &mut Option<ResponseMeta>,
+    completed: &mut Option<ResponseMeta>,
+    accounting: &mut Vec<GatewayEvent>,
+) -> Result<(), ProviderError> {
+    for fact in event.canonical_facts() {
+        match fact {
+            GatewayEvent::Started(meta) => {
+                if started.is_none() {
+                    *started = Some(meta.clone());
+                }
+            }
+            GatewayEvent::Completed(meta) => {
+                if completed.is_none() {
+                    *completed = Some(meta.clone());
+                }
+            }
+            GatewayEvent::Usage(_)
+            | GatewayEvent::CalculatedCost(_)
+            | GatewayEvent::ProviderCost(_) => accounting.push(fact.clone()),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn map_compaction_decode_error(error: GrokCompactionDecodeError) -> ProviderError {
+    match error {
+        GrokCompactionDecodeError::Degenerate => mark_transient_compaction_failure(protocol_sent()),
+        GrokCompactionDecodeError::InvalidSummary(_) => protocol_sent(),
+    }
+}
+
+fn mark_transient_compaction_failure(error: ProviderError) -> ProviderError {
+    if matches!(
+        error.kind(),
+        ProviderErrorKind::RateLimited
+            | ProviderErrorKind::Timeout
+            | ProviderErrorKind::Transport
+            | ProviderErrorKind::Protocol
+            | ProviderErrorKind::Unavailable
+    ) {
+        error.with_replay_safe().with_same_account_retry()
+    } else {
+        error
+    }
+}
+
 fn cold_http_sse_stream(
     selector: Arc<dyn GrokSessionSelector>,
     transport: Arc<dyn GrokInferenceTransport>,
@@ -828,6 +1231,7 @@ fn cold_http_sse_stream(
             let mut events = match decoder.push(&chunk) {
                 Ok(events) => events,
                 Err(error) => {
+                    let error = map_continuation_failure(&context, error);
                     let error = record_stream_failure(selector.as_ref(), &session, error).await;
                     Err(error)?;
                     return;
@@ -849,6 +1253,7 @@ fn cold_http_sse_stream(
         let mut final_events = match decoder.finish() {
             Ok(events) => events,
             Err(error) => {
+                let error = map_continuation_failure(&context, error);
                 let error = record_stream_failure(selector.as_ref(), &session, error).await;
                 Err(error)?;
                 return;

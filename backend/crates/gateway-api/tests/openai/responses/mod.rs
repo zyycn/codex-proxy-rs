@@ -9,8 +9,9 @@ use gateway_core::{
     accounting::{CalculatedCost, ProviderReportedCost, Usage},
     error::SafeUpstreamValue,
     event::{
-        ContentItem, ContentKind, EventSequenceError, FinishReason, GatewayEvent,
-        ProtocolWireEvent, ProviderEvent, ReasoningDelta, ResponseMeta, TextDelta, ToolCallDelta,
+        CompactionOutput, CompactionSummary, ContentItem, ContentKind, EventSequenceError,
+        FinishReason, GatewayEvent, ProtocolWireEvent, ProviderEvent, ReasoningDelta, ResponseMeta,
+        TextDelta, ToolCallDelta,
     },
     operation::{
         ContentPart, Feature, MessageRole, Operation, OutputFormat, ReasoningEffort,
@@ -202,6 +203,39 @@ fn decoder_should_map_string_input_to_user_text() {
         (message.role(), &message.content()[0]),
         (MessageRole::User, ContentPart::Text(text)) if text == "hello"
     ));
+}
+
+#[test]
+fn decoder_should_project_remote_compaction_v2_to_a_typed_operation() {
+    let decoded = decode_request(
+        &serde_json::to_vec(&json!({
+            "model": "smart-code",
+            "input": [
+                {"type": "message", "role": "user", "content": "history"},
+                {"type": "compaction_trigger"}
+            ],
+            "stream": true
+        }))
+        .expect("request JSON"),
+    )
+    .expect("remote compaction v2 request should decode");
+    let Operation::CompactConversation(request) = decoded.operation() else {
+        panic!("remote compaction v2 must use the typed compact operation");
+    };
+    let upstream_input = request
+        .generation()
+        .protocol_payload()
+        .expect("compaction should preserve the normalized OpenAI payload")
+        .body()
+        .get("input")
+        .and_then(Value::as_array)
+        .expect("compaction input should remain an array");
+
+    assert!(
+        upstream_input
+            .iter()
+            .all(|item| { item.get("type").and_then(Value::as_str) != Some("compaction_trigger") })
+    );
 }
 
 #[test]
@@ -1047,4 +1081,49 @@ fn openai_wire_event(canonical: Vec<GatewayEvent>, event_type: &str, data: Value
     } else {
         ProviderEvent::canonical_with_wire(canonical, wire)
     }
+}
+
+#[test]
+fn typed_compaction_output_should_encode_the_codex_remote_compaction_v2_contract() {
+    let events = [
+        GatewayEvent::Started(response_meta()),
+        GatewayEvent::CompactionOutput(CompactionOutput::new(
+            CompactionSummary::new("plain Grok conversation summary").expect("valid summary"),
+        )),
+        GatewayEvent::Completed(completed_meta()),
+    ];
+    let collected = ResponsesCollector::collect(1_700_000_000, &events)
+        .expect("typed compaction output should be representable as OpenAI Responses");
+    let parsed =
+        parse_sse_events(&collected.sse_frames().join("")).expect("compaction SSE should be valid");
+    let done_items = parsed
+        .iter()
+        .filter_map(|event| serde_json::from_str::<Value>(&event.data).ok())
+        .filter(|event| {
+            event.get("type").and_then(Value::as_str) == Some("response.output_item.done")
+        })
+        .filter_map(|event| event.get("item").cloned())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        (
+            done_items,
+            collected.response().pointer("/output").cloned(),
+            parsed
+                .last()
+                .and_then(|event| serde_json::from_str::<Value>(&event.data).ok())
+                .and_then(|event| event.get("type").cloned()),
+        ),
+        (
+            vec![json!({
+                "type": "compaction",
+                "encrypted_content": "plain Grok conversation summary",
+            })],
+            Some(json!([{
+                "type": "compaction",
+                "encrypted_content": "plain Grok conversation summary",
+            }])),
+            Some(json!("response.completed")),
+        )
+    );
 }

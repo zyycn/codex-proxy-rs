@@ -4,9 +4,9 @@ use std::{fmt, net::IpAddr};
 
 use axum::http::HeaderMap;
 use gateway_core::operation::{
-    ContentPart, ContinuationMode, Feature, GenerateRequest, ImageSource, JsonSchemaFormat,
-    Message, MessageRole, Operation, OutputFormat, ProtocolPayload, ProviderOptions,
-    ProviderSessionState, ReasoningEffort, ReasoningRequirement, ReasoningSummary,
+    CompactConversationRequest, ContentPart, ContinuationMode, Feature, GenerateRequest,
+    ImageSource, JsonSchemaFormat, Message, MessageRole, Operation, OutputFormat, ProtocolPayload,
+    ProviderOptions, ProviderSessionState, ReasoningEffort, ReasoningRequirement, ReasoningSummary,
     ResponsePersistence, ToolDefinition,
 };
 use gateway_protocol::openai::{
@@ -358,6 +358,7 @@ pub(super) fn decode_request_inner(
             field: "input".to_owned(),
         });
     }
+    let compact_conversation = consume_compaction_trigger(&mut object);
 
     let stream = optional_bool(&object, "stream", "stream")?.unwrap_or(true);
     let store = optional_bool(&object, "store", "store")?.unwrap_or(false);
@@ -462,8 +463,13 @@ pub(super) fn decode_request_inner(
         request = request.with_continuation(ContinuationMode::Native);
     }
 
+    let operation = if compact_conversation {
+        Operation::CompactConversation(CompactConversationRequest::new(request))
+    } else {
+        Operation::Generate(request)
+    };
     Ok(DecodedResponsesRequest {
-        operation: Operation::Generate(request),
+        operation,
         metadata: ResponsesRequestMetadata {
             requested_model: model.clone(),
             public_model: model,
@@ -684,6 +690,22 @@ fn contains_type(value: Option<&Value>, expected: &str) -> bool {
         }
         _ => false,
     }
+}
+
+fn consume_compaction_trigger(body: &mut Map<String, Value>) -> bool {
+    let Some(Value::Array(input)) = body.get_mut("input") else {
+        return false;
+    };
+    if input
+        .last()
+        .and_then(|item| item.get("type"))
+        .and_then(Value::as_str)
+        != Some("compaction_trigger")
+    {
+        return false;
+    }
+    input.pop();
+    true
 }
 
 fn valid_prompt_cache_key(key: &str) -> bool {

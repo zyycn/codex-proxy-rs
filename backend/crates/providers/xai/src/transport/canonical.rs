@@ -7,7 +7,7 @@ use gateway_core::accounting::{
     CurrencyCode, Decimal, Money, ProviderReportedCost, Usage,
 };
 use gateway_core::engine::UpstreamSendState;
-use gateway_core::error::{ProviderError, ProviderErrorKind};
+use gateway_core::error::{ProviderError, ProviderErrorKind, SafeUpstreamValue};
 use gateway_core::event::{
     ContentItem, ContentKind, FinishReason, GatewayEvent, ProtocolWireEvent, ProviderEvent,
     ReasoningDelta, ResponseMeta, TextDelta, ToolCallDelta,
@@ -178,6 +178,11 @@ impl GrokCanonicalDecoder {
             return Err(protocol_error_marker());
         }
         Ok(output)
+    }
+
+    pub(crate) fn finish_without_terminal(&mut self) -> Result<Vec<ProviderEvent>, ProviderError> {
+        let events = self.decoder.finish().map_err(protocol_error)?;
+        self.decode(events)
     }
 
     fn decode(&mut self, events: Vec<SseEvent>) -> Result<Vec<ProviderEvent>, ProviderError> {
@@ -749,12 +754,12 @@ fn incomplete_finish_reason(response: &Value) -> FinishReason {
 }
 
 fn upstream_event_error(value: &Value) -> ProviderError {
-    let kind = match value
+    let code = value
         .pointer("/error/code")
         .or_else(|| value.pointer("/response/error/code"))
         .or_else(|| value.get("code"))
-        .and_then(Value::as_str)
-    {
+        .and_then(Value::as_str);
+    let kind = match code {
         Some("invalid_request" | "invalid_prompt") => ProviderErrorKind::InvalidRequest,
         Some("unsupported" | "unsupported_feature") => ProviderErrorKind::Unsupported,
         Some("unauthorized" | "invalid_token") => ProviderErrorKind::Unauthorized,
@@ -763,7 +768,12 @@ fn upstream_event_error(value: &Value) -> ProviderError {
         Some("quota_exceeded" | "insufficient_quota") => ProviderErrorKind::QuotaExhausted,
         _ => ProviderErrorKind::Unavailable,
     };
-    ProviderError::new(kind, UpstreamSendState::Sent).redact_sensitive_context("upstream event")
+    let mut error = ProviderError::new(kind, UpstreamSendState::Sent)
+        .redact_sensitive_context("upstream event");
+    if let Some(code) = code.and_then(|code| SafeUpstreamValue::new(code.to_owned()).ok()) {
+        error = error.with_upstream_code(code);
+    }
+    error
 }
 
 fn protocol_error(_error: impl std::fmt::Debug) -> ProviderError {

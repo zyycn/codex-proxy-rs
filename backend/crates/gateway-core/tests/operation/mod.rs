@@ -2,10 +2,11 @@ use serde_json::{Map, Value};
 
 use gateway_core::error::OperationError;
 use gateway_core::operation::{
-    ContentPart, ContinuationMode, EmbedRequest, Feature, GenerateRequest, ImageRequest,
-    ImageSource, JsonSchemaFormat, Message, MessageRole, Operation, OperationKind, OutputFormat,
-    ProviderOptions, ReasoningEffort, ReasoningRequirement, ReasoningSummary, RerankRequest,
-    ResponsePersistence, RetrySafety, SpeechRequest, ToolDefinition,
+    CompactConversationRequest, ContentPart, ContinuationMode, EmbedRequest, Feature,
+    GenerateRequest, ImageRequest, ImageSource, JsonSchemaFormat, Message, MessageRole, Operation,
+    OperationKind, OutputFormat, ProviderOptions, ReasoningEffort, ReasoningRequirement,
+    ReasoningSummary, RerankRequest, ResponsePersistence, RetrySafety, SpeechRequest,
+    ToolDefinition,
 };
 
 fn text_message(role: MessageRole, text: &str) -> Message {
@@ -318,6 +319,16 @@ fn embed_and_rerank_operations_should_be_idempotent() {
 
     assert_eq!(embed.retry_safety(), RetrySafety::Idempotent);
     assert_eq!(rerank.retry_safety(), RetrySafety::Idempotent);
+}
+
+#[test]
+fn compact_conversation_should_inherit_generation_retry_safety() {
+    let generate = GenerateRequest::new(vec![text_message(MessageRole::User, "history")])
+        .expect("compaction history is valid");
+    assert_eq!(generate.retry_safety(), RetrySafety::NonIdempotent);
+    let compact = Operation::CompactConversation(CompactConversationRequest::new(generate));
+
+    assert_eq!(compact.retry_safety(), RetrySafety::NonIdempotent);
 }
 
 #[test]

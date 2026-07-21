@@ -203,6 +203,77 @@ impl fmt::Debug for ToolCallDelta {
     }
 }
 
+/// Provider 生成的明文对话摘要。
+#[derive(Clone, PartialEq, Eq)]
+pub struct CompactionSummary(String);
+
+impl CompactionSummary {
+    /// 创建非空明文摘要。
+    ///
+    /// # Errors
+    ///
+    /// 摘要为空时返回错误。
+    pub fn new(value: impl Into<String>) -> Result<Self, CompactionSummaryError> {
+        let value = value.into();
+        if value.is_empty() {
+            return Err(CompactionSummaryError::Empty);
+        }
+        Ok(Self(value))
+    }
+
+    /// 返回明文摘要。
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for CompactionSummary {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CompactionSummary")
+            .field("bytes", &self.0.len())
+            .finish()
+    }
+}
+
+/// 明文摘要不满足 canonical compaction 约束。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum CompactionSummaryError {
+    /// 摘要为空。
+    #[error("compaction summary is empty")]
+    Empty,
+}
+
+/// Provider 生成、等待客户端协议投影的明文压缩结果。
+#[derive(Clone, PartialEq, Eq)]
+pub struct CompactionOutput {
+    summary: CompactionSummary,
+}
+
+impl CompactionOutput {
+    /// 创建明文压缩输出。
+    #[must_use]
+    pub const fn new(summary: CompactionSummary) -> Self {
+        Self { summary }
+    }
+
+    /// 返回 Provider 生成的明文摘要。
+    #[must_use]
+    pub const fn summary(&self) -> &CompactionSummary {
+        &self.summary
+    }
+}
+
+impl fmt::Debug for CompactionOutput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CompactionOutput")
+            .field("summary", &self.summary)
+            .finish()
+    }
+}
+
 /// Provider 返回的协议原生 JSON event。
 ///
 /// Core 不解释 `data`，只把它与同一上游事件产生的 canonical facts 一起
@@ -500,6 +571,8 @@ pub enum GatewayEvent {
     ReasoningDelta(ReasoningDelta),
     /// 工具调用增量。
     ToolCallDelta(ToolCallDelta),
+    /// 对话压缩产生的明文摘要。
+    CompactionOutput(CompactionOutput),
     /// 规范化用量。
     Usage(Usage),
     /// Provider 域依据实际模型和终态用量计算的费用。
@@ -679,6 +752,7 @@ impl GatewayEvent {
             Self::TextDelta(_)
                 | Self::ReasoningDelta(_)
                 | Self::ToolCallDelta(_)
+                | Self::CompactionOutput(_)
                 | Self::Completed(_)
         )
     }
@@ -717,6 +791,9 @@ pub enum EventSequenceError {
         /// 重复索引。
         index: u32,
     },
+    /// 同一响应产生了多个压缩结果。
+    #[error("canonical stream contains more than one CompactionOutput event")]
+    DuplicateCompactionOutput,
     /// Delta 引用了不存在或类别错误的内容项。
     #[error("canonical delta does not match content index {index}")]
     InvalidDeltaTarget {
@@ -736,6 +813,7 @@ pub enum EventSequenceError {
 pub struct EventSequenceValidator {
     started: bool,
     completed: bool,
+    compaction_output: bool,
     content: BTreeMap<u32, ContentKind>,
 }
 
@@ -746,6 +824,7 @@ impl EventSequenceValidator {
         Self {
             started: false,
             completed: false,
+            compaction_output: false,
             content: BTreeMap::new(),
         }
     }
@@ -785,6 +864,12 @@ impl EventSequenceValidator {
             }
             GatewayEvent::ToolCallDelta(delta) => {
                 self.require_content(delta.content_index, ContentKind::ToolCall)?;
+            }
+            GatewayEvent::CompactionOutput(_) => {
+                if self.compaction_output {
+                    return Err(EventSequenceError::DuplicateCompactionOutput);
+                }
+                self.compaction_output = true;
             }
             GatewayEvent::Usage(_)
             | GatewayEvent::CalculatedCost(_)
