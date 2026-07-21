@@ -315,6 +315,12 @@ impl DefaultExecutionService {
                 .and_then(|reasoning| reasoning.effort)
                 .map(reasoning_effort_name)
                 .map(str::to_owned),
+            Operation::CompactConversation(compact) => compact
+                .generation()
+                .reasoning()
+                .and_then(|reasoning| reasoning.effort)
+                .map(reasoning_effort_name)
+                .map(str::to_owned),
             _ => None,
         };
         let new_request = NewModelRequest {

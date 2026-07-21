@@ -2,6 +2,7 @@
 
 pub(crate) mod canonical;
 pub(crate) mod catalog;
+pub(crate) mod compaction;
 pub(crate) mod config;
 pub(crate) mod headers;
 pub(crate) mod network;
@@ -26,6 +27,9 @@ pub use catalog::{
     GrokModelCatalogTransportError, GrokModelCatalogTransportErrorKind,
     GrokModelCatalogTransportFuture, GrokModelCatalogTransportResponse, MAX_GROK_BILLING_BYTES,
     MAX_GROK_MODEL_CATALOG_BYTES, parse_grok_billing, parse_grok_model_catalog,
+};
+pub use compaction::{
+    GrokCompactionDecodeError, GrokCompactionRequest, GrokCompactionSummaryDecoder,
 };
 pub use config::{
     GROK_CLI_BASE_URL, GrokProviderConfigError, GrokProviderInstanceConfig, GrokProviderTransport,

@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 
 use gateway_core::accounting::Usage;
 use gateway_core::event::{
-    ContentItem, ContentKind, EventSequenceValidator, FinishReason, GatewayEvent, ProviderEvent,
-    ReasoningDelta, ResponseMeta, TextDelta, ToolCallDelta,
+    CompactionOutput, ContentItem, ContentKind, EventSequenceValidator, FinishReason, GatewayEvent,
+    ProviderEvent, ReasoningDelta, ResponseMeta, TextDelta, ToolCallDelta,
 };
 use gateway_protocol::openai::sse::{encode_sse_event, encode_sse_event_with_metadata};
 use serde_json::{Map, Value, json};
@@ -344,6 +344,7 @@ impl ResponsesCollector {
             GatewayEvent::TextDelta(delta) => self.text_delta(delta),
             GatewayEvent::ReasoningDelta(delta) => self.reasoning_delta(delta),
             GatewayEvent::ToolCallDelta(delta) => self.tool_call_delta(delta),
+            GatewayEvent::CompactionOutput(output) => self.compaction_output(output),
             GatewayEvent::Usage(usage) => self.observe_usage(usage),
             GatewayEvent::CalculatedCost(_) | GatewayEvent::ProviderCost(_) => Ok(Vec::new()),
             GatewayEvent::Completed(meta) => self.completed(meta),
@@ -594,6 +595,26 @@ impl ResponsesCollector {
         Ok(frames)
     }
 
+    fn compaction_output(
+        &mut self,
+        output: &CompactionOutput,
+    ) -> Result<Vec<String>, ResponseEncodeError> {
+        let output_index = self.output.len();
+        let state = OutputState::Compaction {
+            encrypted_content: output.summary().as_str().to_owned(),
+        };
+        let item = state.completed_item()?;
+        self.output.push(state);
+        Ok(vec![sse_frame(
+            "response.output_item.done",
+            json!({
+                "type": "response.output_item.done",
+                "output_index": output_index,
+                "item": item,
+            }),
+        )])
+    }
+
     fn observe_usage(&mut self, usage: &Usage) -> Result<Vec<String>, ResponseEncodeError> {
         if self.usage.is_some() {
             return Err(ResponseEncodeError::DuplicateUsage);
@@ -678,6 +699,9 @@ enum OutputState {
         arguments: String,
         published: bool,
     },
+    Compaction {
+        encrypted_content: String,
+    },
 }
 
 impl OutputState {
@@ -724,6 +748,7 @@ impl OutputState {
                 ),
             ],
             Self::ToolCall { .. } => Vec::new(),
+            Self::Compaction { .. } => Vec::new(),
         }
     }
 
@@ -847,6 +872,7 @@ impl OutputState {
                 ));
                 Ok(frames)
             }
+            Self::Compaction { .. } => Ok(Vec::new()),
         }
     }
 
@@ -879,6 +905,7 @@ impl OutputState {
                 arguments,
                 "completed",
             )),
+            Self::Compaction { encrypted_content } => Ok(compaction_item(encrypted_content)),
         }
     }
 }
@@ -987,6 +1014,13 @@ fn reasoning_item_with_summary(id: &str, summary: Vec<Value>) -> Value {
         "id": id,
         "type": "reasoning",
         "summary": summary,
+    })
+}
+
+fn compaction_item(encrypted_content: &str) -> Value {
+    json!({
+        "type": "compaction",
+        "encrypted_content": encrypted_content,
     })
 }
 

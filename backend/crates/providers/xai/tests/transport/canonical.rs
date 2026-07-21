@@ -345,6 +345,62 @@ fn decoder_should_restore_namespace_custom_search_and_apply_patch_wire_events() 
 }
 
 #[test]
+fn decoder_should_restore_custom_apply_patch_arguments_as_raw_input() {
+    let patch = concat!(
+        "*** Begin Patch\n",
+        "*** Update File: src/lib.rs\n",
+        "@@\n",
+        "-let path = \"old\\\\name\";\n",
+        "+let path = \"new\\\\name\";\n",
+        "*** End Patch\n",
+    );
+    let request = tool_request(serde_json::json!({
+        "model": "client",
+        "input": "edit",
+        "tools": [{"type": "custom", "name": "apply_patch"}]
+    }));
+    let arguments =
+        serde_json::to_string(&serde_json::json!({"patch": patch})).expect("apply_patch arguments");
+    let arguments_json = serde_json::to_string(&arguments).expect("arguments JSON string");
+    let body = format!(
+        concat!(
+            "event: response.created\n",
+            "data: {{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_custom_patch\"}}}}\n\n",
+            "event: response.output_item.added\n",
+            "data: {{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{{\"id\":\"item_custom_patch\",\"type\":\"function_call\",\"call_id\":\"call_custom_patch\",\"name\":\"apply_patch\"}}}}\n\n",
+            "event: response.function_call_arguments.delta\n",
+            "data: {{\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"item_custom_patch\",\"call_id\":\"call_custom_patch\",\"output_index\":0,\"delta\":{arguments_json}}}\n\n",
+            "event: response.function_call_arguments.done\n",
+            "data: {{\"type\":\"response.function_call_arguments.done\",\"item_id\":\"item_custom_patch\",\"call_id\":\"call_custom_patch\",\"output_index\":0,\"arguments\":{arguments_json}}}\n\n",
+            "event: response.output_item.done\n",
+            "data: {{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{{\"id\":\"item_custom_patch\",\"type\":\"function_call\",\"call_id\":\"call_custom_patch\",\"name\":\"apply_patch\",\"arguments\":{arguments_json}}}}}\n\n",
+            "event: response.completed\n",
+            "data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_custom_patch\",\"status\":\"completed\"}}}}\n\n",
+        ),
+        arguments_json = arguments_json,
+    );
+
+    let events = GrokCanonicalDecoder::for_request("grok-4.5", &request)
+        .push(body.as_bytes())
+        .expect("custom apply_patch stream");
+    let wire = wire_events(&events);
+
+    assert!(wire.iter().any(|event| {
+        event.event_type() == Some("response.custom_tool_call_input.delta")
+            && event.data().pointer("/delta") == Some(&serde_json::json!(patch))
+    }));
+    assert!(wire.iter().any(|event| {
+        event.event_type() == Some("response.custom_tool_call_input.done")
+            && event.data().pointer("/input") == Some(&serde_json::json!(patch))
+    }));
+    assert!(wire.iter().any(|event| {
+        event.event_type() == Some("response.output_item.done")
+            && event.data().pointer("/item/type") == Some(&serde_json::json!("custom_tool_call"))
+            && event.data().pointer("/item/input") == Some(&serde_json::json!(patch))
+    }));
+}
+
+#[test]
 fn decoder_should_coalesce_reasoning_item_part_and_summary_index() {
     let body = concat!(
         "event: response.created\n",
@@ -496,6 +552,10 @@ fn decoder_should_classify_failed_event_without_retaining_body() {
     assert_eq!(
         error.kind(),
         gateway_core::error::ProviderErrorKind::RateLimited
+    );
+    assert_eq!(
+        error.upstream_code().map(|code| code.as_str()),
+        Some("rate_limit_exceeded")
     );
     assert!(!format!("{error:?}").contains("secret"));
 }

@@ -1,8 +1,8 @@
 use gateway_core::engine::provider::UpstreamTransport;
 use gateway_core::event::{
-    ContentItem, ContentKind, EventSequenceError, EventSequenceValidator, GatewayEvent,
-    ProtocolWireEvent, ProviderEvent, ProviderResponseObservation, ReasoningDelta, ResponseMeta,
-    TextDelta, ToolCallDelta,
+    CompactionOutput, CompactionSummary, ContentItem, ContentKind, EventSequenceError,
+    EventSequenceValidator, GatewayEvent, ProtocolWireEvent, ProviderEvent,
+    ProviderResponseObservation, ReasoningDelta, ResponseMeta, TextDelta, ToolCallDelta,
 };
 use serde_json::json;
 
@@ -273,4 +273,30 @@ fn validator_should_accept_reasoning_and_tool_call_stream() {
     }
 
     assert_eq!(validator.finish(), Ok(()));
+}
+
+#[test]
+fn validator_should_reject_duplicate_compaction_output() {
+    let mut validator = EventSequenceValidator::new();
+    validator
+        .observe(&GatewayEvent::Started(ResponseMeta::new(
+            "resp_1",
+            "smart-code",
+        )))
+        .expect("Started is valid");
+    validator
+        .observe(&GatewayEvent::CompactionOutput(compaction_output()))
+        .expect("first compaction output is valid");
+
+    let error = validator
+        .observe(&GatewayEvent::CompactionOutput(compaction_output()))
+        .expect_err("compaction output must be unique");
+
+    assert_eq!(error, EventSequenceError::DuplicateCompactionOutput);
+}
+
+fn compaction_output() -> CompactionOutput {
+    CompactionOutput::new(
+        CompactionSummary::new("plain Grok conversation summary").expect("valid summary"),
+    )
 }

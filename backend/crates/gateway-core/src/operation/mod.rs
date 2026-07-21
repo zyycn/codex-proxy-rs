@@ -17,6 +17,8 @@ use crate::error::{OperationError, validate_text};
 pub enum OperationKind {
     /// 文本、多模态和工具生成。
     Generate,
+    /// 对话历史压缩。
+    CompactConversation,
     /// 向量嵌入。
     Embed,
     /// 文档重排。
@@ -33,6 +35,7 @@ impl OperationKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Generate => "generate",
+            Self::CompactConversation => "compact_conversation",
             Self::Embed => "embed",
             Self::Rerank => "rerank",
             Self::GenerateImage => "generate_image",
@@ -886,7 +889,11 @@ impl GenerateRequest {
     }
 
     fn requirements(&self) -> CapabilityRequirements {
-        let mut requirements = CapabilityRequirements::new(OperationKind::Generate)
+        self.requirements_for(OperationKind::Generate)
+    }
+
+    fn requirements_for(&self, operation: OperationKind) -> CapabilityRequirements {
+        let mut requirements = CapabilityRequirements::new(operation)
             .with_minimum_context_tokens(self.estimated_context_tokens)
             .with_requested_output_tokens(self.max_output_tokens);
         for feature in &self.payload.required_features {
@@ -945,6 +952,54 @@ impl fmt::Debug for GenerateRequest {
             )
             .field("required_features", &self.payload.required_features)
             .field("protocol_payload", &self.payload.protocol_payload)
+            .finish()
+    }
+}
+
+/// 请求 Provider 将完整对话历史压缩为可在后续轮次继续使用的摘要。
+///
+/// 请求沿用生成调用的 canonical history、工具和推理约束，但作为独立 operation
+/// 路由，Provider 不得通过扫描客户端 wire payload 判断压缩语义。
+#[derive(Clone, PartialEq)]
+pub struct CompactConversationRequest {
+    generation: GenerateRequest,
+}
+
+impl CompactConversationRequest {
+    /// 从协议 adapter 已规范化的生成上下文创建压缩请求。
+    #[must_use]
+    pub const fn new(generation: GenerateRequest) -> Self {
+        Self { generation }
+    }
+
+    /// 返回需要压缩的 canonical 生成上下文。
+    #[must_use]
+    pub const fn generation(&self) -> &GenerateRequest {
+        &self.generation
+    }
+
+    /// 拆出需要压缩的 canonical 生成上下文。
+    #[must_use]
+    pub fn into_generation(self) -> GenerateRequest {
+        self.generation
+    }
+
+    fn with_provider_session_state(mut self, state: ProviderSessionState) -> Self {
+        self.generation = self.generation.with_provider_session_state(state);
+        self
+    }
+
+    fn requirements(&self) -> CapabilityRequirements {
+        self.generation
+            .requirements_for(OperationKind::CompactConversation)
+    }
+}
+
+impl fmt::Debug for CompactConversationRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CompactConversationRequest")
+            .field("generation", &self.generation)
             .finish()
     }
 }
@@ -1137,6 +1192,8 @@ impl fmt::Debug for SpeechRequest {
 pub enum Operation {
     /// 生成。
     Generate(GenerateRequest),
+    /// 对话历史压缩。
+    CompactConversation(CompactConversationRequest),
     /// Embedding。
     Embed(EmbedRequest),
     /// Rerank。
@@ -1153,6 +1210,9 @@ impl Operation {
     pub fn with_provider_session_state(self, state: ProviderSessionState) -> Self {
         match self {
             Self::Generate(request) => Self::Generate(request.with_provider_session_state(state)),
+            Self::CompactConversation(request) => {
+                Self::CompactConversation(request.with_provider_session_state(state))
+            }
             operation => operation,
         }
     }
@@ -1162,6 +1222,7 @@ impl Operation {
     pub const fn kind(&self) -> OperationKind {
         match self {
             Self::Generate(_) => OperationKind::Generate,
+            Self::CompactConversation(_) => OperationKind::CompactConversation,
             Self::Embed(_) => OperationKind::Embed,
             Self::Rerank(_) => OperationKind::Rerank,
             Self::GenerateImage(_) => OperationKind::GenerateImage,
@@ -1174,6 +1235,7 @@ impl Operation {
     pub fn capability_requirements(&self) -> CapabilityRequirements {
         match self {
             Self::Generate(request) => request.requirements(),
+            Self::CompactConversation(request) => request.requirements(),
             Self::Embed(_) => CapabilityRequirements::new(OperationKind::Embed),
             Self::Rerank(_) => CapabilityRequirements::new(OperationKind::Rerank),
             Self::GenerateImage(_) => CapabilityRequirements::new(OperationKind::GenerateImage),
@@ -1186,6 +1248,7 @@ impl Operation {
     pub const fn retry_safety(&self) -> RetrySafety {
         match self {
             Self::Generate(request) => request.retry_safety,
+            Self::CompactConversation(request) => request.generation.retry_safety,
             Self::Embed(_) | Self::Rerank(_) => RetrySafety::Idempotent,
             Self::GenerateImage(request) => request.retry_safety,
             Self::Speech(request) => request.retry_safety,
@@ -1197,6 +1260,9 @@ impl Operation {
     pub fn provider_options(&self, provider: &str) -> Option<&Map<String, Value>> {
         match self {
             Self::Generate(request) => request.provider_options().get(provider),
+            Self::CompactConversation(request) => {
+                request.generation.provider_options().get(provider)
+            }
             Self::Embed(_) | Self::Rerank(_) | Self::GenerateImage(_) | Self::Speech(_) => None,
         }
     }
@@ -1206,6 +1272,9 @@ impl Operation {
     pub fn provider_session_state(&self, provider: &str) -> Option<&ProviderSessionState> {
         match self {
             Self::Generate(request) => request.provider_session_state(provider),
+            Self::CompactConversation(request) => {
+                request.generation.provider_session_state(provider)
+            }
             Self::Embed(_) | Self::Rerank(_) | Self::GenerateImage(_) | Self::Speech(_) => None,
         }
     }
