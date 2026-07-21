@@ -30,7 +30,7 @@ use gateway_admin::{
         observability::{
             DashboardObservation, DiagnosticDimension, DiagnosticObservation, OpsErrorPage,
             OpsErrorQuery, RequestMetricPoint, TimeRange, UsageDetail, UsageFilter, UsageOverview,
-            UsagePage, UsageQuery,
+            UsagePage, UsageQuery, UsageRecord,
         },
         provider_credentials::{
             AuthorizationCommit, AuthorizationStarted, CompleteAuthorization, CredentialDetails,
@@ -88,6 +88,7 @@ pub(super) struct AdminTestFixture {
     pub services: AdminServices,
     pub auth: Arc<MemoryAuthStore>,
     pub settings: Arc<MemorySettingsStore>,
+    pub usage_records: Arc<Mutex<Vec<UsageRecord>>>,
 }
 
 impl AdminTestFixture {
@@ -96,7 +97,10 @@ impl AdminTestFixture {
         let auth = Arc::new(MemoryAuthStore::new(api_key.clone()));
         let settings = Arc::new(MemorySettingsStore::new(api_key));
         let client_keys = Arc::new(MemoryClientKeyStore);
-        let unused = Arc::new(UnusedStore);
+        let usage_records = Arc::new(Mutex::new(Vec::new()));
+        let unused = Arc::new(UnusedStore {
+            usage_records: Arc::clone(&usage_records),
+        });
         let stores = AdminStorePorts::new(
             unused.clone(),
             auth.clone(),
@@ -127,6 +131,7 @@ impl AdminTestFixture {
             services: bundle.services(),
             auth,
             settings,
+            usage_records,
         }
     }
 
@@ -424,7 +429,9 @@ impl ClientKeyStore for MemoryClientKeyStore {
     }
 }
 
-struct UnusedStore;
+struct UnusedStore {
+    usage_records: Arc<Mutex<Vec<UsageRecord>>>,
+}
 
 #[async_trait]
 impl AccountStore for UnusedStore {
@@ -590,9 +597,10 @@ impl ObservabilityStore for UnusedStore {
     }
 
     async fn list_usage_records(&self, _: UsageQuery) -> AdminStoreResult<UsagePage> {
+        let items = self.usage_records.lock().expect("usage records").clone();
         Ok(UsagePage {
-            items: Vec::new(),
-            total: 0,
+            total: items.len() as u64,
+            items,
             next_cursor: None,
         })
     }

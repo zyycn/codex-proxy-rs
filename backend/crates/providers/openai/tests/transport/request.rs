@@ -4,7 +4,45 @@ use gateway_core::operation::{
 };
 use serde_json::{Map, Value, json};
 
-use provider_openai::{CodexRequestEncodeError, codex_request_semantics, encode_generate_request};
+use provider_openai::{
+    CodexRequestEncodeError, codex_request_semantics, encode_compact_conversation_request,
+    encode_generate_request,
+};
+
+#[test]
+fn compact_encoder_should_append_one_terminal_trigger_and_force_streaming() {
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        json!({
+            "model": "client-model",
+            "input": [
+                {"role": "user", "content": "first turn"},
+                {"role": "assistant", "content": "first answer"}
+            ],
+            "stream": false
+        })
+        .as_object()
+        .cloned()
+        .expect("request object"),
+    )
+    .expect("OpenAI payload");
+    let request = GenerateRequest::from_protocol_payload(Vec::new(), payload);
+
+    let encoded =
+        encode_compact_conversation_request(&request, "gpt-routed").expect("compact request");
+    let triggers = encoded
+        .input()
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("compaction_trigger"))
+        .count();
+
+    assert!(encoded.stream());
+    assert_eq!(triggers, 1);
+    assert_eq!(
+        encoded.input().last(),
+        Some(&json!({"type": "compaction_trigger"}))
+    );
+}
 
 #[test]
 fn encoder_should_preserve_openai_wire_fields_without_deriving_accountless_pool_identity() {

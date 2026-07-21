@@ -112,8 +112,26 @@ impl GrokResponsesRequest {
         }
     }
 
-    pub(crate) fn set_input(&mut self, input: Vec<Value>) {
-        self.body.insert("input".to_owned(), Value::Array(input));
+    pub(crate) fn set_replay_input(
+        &mut self,
+        input: Vec<Value>,
+    ) -> Result<(), GrokRequestEncodeError> {
+        let mut normalizer = ToolNormalizer::for_replay(self.response_transform.clone());
+        let mut normalized = Vec::with_capacity(input.len());
+        for item in input {
+            match item {
+                Value::Object(item) if string_field(&item, "type") == "custom_tool_call" => {
+                    normalized.push(Value::Object(
+                        normalizer.normalize_custom_tool_call_input(&item)?,
+                    ));
+                }
+                item => normalized.push(item),
+            }
+        }
+        self.response_transform = normalizer.response;
+        self.body
+            .insert("input".to_owned(), Value::Array(normalized));
+        Ok(())
     }
 
     pub(crate) fn set_previous_response_id(&mut self, response_id: Option<String>) {
@@ -668,6 +686,18 @@ impl ToolIdentity {
             name: name.to_owned(),
         }
     }
+
+    fn is_root_custom_apply_patch(&self) -> bool {
+        self.kind == ToolKind::Custom && self.namespace.is_empty() && self.name == "apply_patch"
+    }
+
+    fn custom_argument_field(&self) -> &'static str {
+        if self.is_root_custom_apply_patch() {
+            "patch"
+        } else {
+            "input"
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -768,7 +798,7 @@ impl GrokResponseTransform {
                         .and_then(Value::as_str)
                         .filter(|arguments| !arguments.is_empty())
                         .unwrap_or(&state.arguments);
-                    let input = decode_custom_tool_input(arguments);
+                    let input = decode_custom_tool_input(&state.identity, arguments);
                     let mut output = Vec::with_capacity(2);
                     if let Some(delta) = state.last_delta.as_ref() {
                         output.push(GrokTransformedWireEvent {
@@ -929,7 +959,7 @@ impl GrokResponseTransform {
                         Value::String(identity.namespace.clone()),
                     );
                 }
-                let input = decode_custom_tool_input(string_field(call, "arguments"));
+                let input = decode_custom_tool_input(identity, string_field(call, "arguments"));
                 call.insert("input".to_owned(), Value::String(input));
                 call.remove("arguments");
             }
@@ -1044,12 +1074,12 @@ fn custom_tool_stream_payload(
     Value::Object(result)
 }
 
-fn decode_custom_tool_input(arguments: &str) -> String {
+fn decode_custom_tool_input(identity: &ToolIdentity, arguments: &str) -> String {
     serde_json::from_str::<Value>(arguments)
         .ok()
         .and_then(|value| {
             value
-                .get("input")
+                .get(identity.custom_argument_field())
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
         })
@@ -1144,6 +1174,23 @@ impl ToolNormalizer {
         Self {
             response: GrokResponseTransform::default(),
             identity_aliases: BTreeMap::new(),
+            deferred_surfaces: Vec::new(),
+            client_search_tool: None,
+            server_search_eager: false,
+            native_shell: false,
+            web_search_disabled: false,
+        }
+    }
+
+    fn for_replay(response: GrokResponseTransform) -> Self {
+        let identity_aliases = response
+            .aliases
+            .iter()
+            .map(|(alias, identity)| (identity.clone(), alias.clone()))
+            .collect();
+        Self {
+            response,
+            identity_aliases,
             deferred_surfaces: Vec::new(),
             client_search_tool: None,
             server_search_eager: false,
@@ -1375,12 +1422,19 @@ impl ToolNormalizer {
         if name.is_empty() || tool.get("format").is_some_and(|value| !value.is_object()) {
             return Err(GrokRequestEncodeError::InvalidRequestNormalization);
         }
-        let mut description = string_field(tool, "description").trim().to_owned();
-        if !description.is_empty() {
-            description.push('\n');
-        }
-        description.push_str("Provide the custom tool input in the input string field.");
-        let alias = self.alias(ToolIdentity::new(ToolKind::Custom, namespace, name));
+        let identity = ToolIdentity::new(ToolKind::Custom, namespace, name);
+        let argument_field = identity.custom_argument_field();
+        let description = if identity.is_root_custom_apply_patch() {
+            "The apply_patch tool edits files using Codex patch format. Provide the complete raw patch text in the patch string field.".to_owned()
+        } else {
+            let mut description = string_field(tool, "description").trim().to_owned();
+            if !description.is_empty() {
+                description.push('\n');
+            }
+            description.push_str("Provide the custom tool input in the input string field.");
+            description
+        };
+        let alias = self.alias(identity);
         Ok(vec![json_object([
             ("type", Value::String("function".to_owned())),
             ("name", Value::String(alias)),
@@ -1392,13 +1446,13 @@ impl ToolNormalizer {
                     (
                         "properties",
                         json_object([(
-                            "input",
+                            argument_field,
                             json_object([("type", Value::String("string".to_owned()))]),
                         )]),
                     ),
                     (
                         "required",
-                        Value::Array(vec![Value::String("input".to_owned())]),
+                        Value::Array(vec![Value::String(argument_field.to_owned())]),
                     ),
                     ("additionalProperties", Value::Bool(false)),
                 ]),
@@ -1959,11 +2013,13 @@ impl ToolNormalizer {
                 | "mcp_list_tools"
                 | "mcp_approval_request"
                 | "mcp_approval_response"
-                | "mcp_call"
-                | "compaction" => {
+                | "mcp_call" => {
                     rewritten.push(Value::Object(sanitize_native_history_input(
                         item, item_type,
                     )));
+                }
+                "compaction" => {
+                    rewritten.push(Value::Object(normalize_compaction_input(item)?));
                 }
                 "tool_search_call" => {
                     rewritten.push(Value::Object(self.normalize_tool_search_call(item)?));
@@ -2158,12 +2214,15 @@ impl ToolNormalizer {
             .get("input")
             .and_then(Value::as_str)
             .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
-        let arguments =
-            serde_json::to_string(&json_object([("input", Value::String(input.to_owned()))]))
-                .map_err(|_| GrokRequestEncodeError::InvalidRequestNormalization)?;
         let call_id = required_trimmed_string(item, "call_id")?;
         let namespace = string_field(item, "namespace").trim();
-        let alias = self.alias(ToolIdentity::new(ToolKind::Custom, namespace, name));
+        let identity = ToolIdentity::new(ToolKind::Custom, namespace, name);
+        let arguments = serde_json::to_string(&json_object([(
+            identity.custom_argument_field(),
+            Value::String(input.to_owned()),
+        )]))
+        .map_err(|_| GrokRequestEncodeError::InvalidRequestNormalization)?;
+        let alias = self.alias(identity);
         Ok(Map::from_iter([
             ("type".to_owned(), Value::String("function_call".to_owned())),
             ("call_id".to_owned(), Value::String(call_id.to_owned())),
@@ -2440,6 +2499,27 @@ fn sanitize_reasoning_input(item: &Map<String, Value>) -> Map<String, Value> {
     }
 }
 
+fn normalize_compaction_input(
+    item: &Map<String, Value>,
+) -> Result<Map<String, Value>, GrokRequestEncodeError> {
+    let summary = required_trimmed_string(item, "encrypted_content")?;
+    let continuation = format!(
+        "This session is being continued from a previous conversation that ran out of context. \
+         The summary below covers the earlier portion of the conversation.\n\n{summary}"
+    );
+    Ok(Map::from_iter([
+        ("type".to_owned(), Value::String("message".to_owned())),
+        ("role".to_owned(), Value::String("user".to_owned())),
+        (
+            "content".to_owned(),
+            Value::Array(vec![json_object([
+                ("type", Value::String("input_text".to_owned())),
+                ("text", Value::String(continuation)),
+            ])]),
+        ),
+    ]))
+}
+
 fn has_portable_reasoning_content(item: &Map<String, Value>) -> bool {
     item.get("encrypted_content")
         .and_then(Value::as_str)
@@ -2471,7 +2551,6 @@ fn sanitize_native_history_input(item: &Map<String, Value>, item_type: &str) -> 
             "output",
             "status",
         ],
-        "compaction" => &["id", "encrypted_content"],
         _ => &[],
     };
     let mut converted = copy_non_null_history_fields(item, fields);
