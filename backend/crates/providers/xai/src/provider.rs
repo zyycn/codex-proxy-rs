@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::GrokCatalogCapabilityEvidence;
+use crate::XaiWireProfileState;
 use crate::credential::{
     GrokCredentialCatalogService, GrokCredentialQuotaService, GrokCredentialRecovery,
     GrokCredentialRecoveryOutcome, GrokCredentialRefreshOutcome, GrokCredentialRefreshService,
@@ -43,6 +44,7 @@ use crate::credential::{
 use crate::transport::canonical::GrokCanonicalDecoder;
 use crate::transport::config::XAI_PROVIDER_NAME;
 use crate::transport::headers::{GrokClientIdentity, build_grok_headers};
+use crate::transport::profile::{GROK_CLI_RELEASE_POLL_INTERVAL, GrokCliReleaseService};
 use crate::transport::{
     GrokCredentialFailure, GrokInferenceRequest, GrokInferenceTransport,
     GrokInferenceTransportError, GrokInferenceTransportErrorKind, GrokProviderConfigError,
@@ -56,6 +58,7 @@ const XAI_SESSION_OUTPUT_LIMIT: usize = 4_096;
 const MIN_REASONING_CIPHERTEXT_BYTES: usize = 50;
 const MIN_REASONING_CIPHERTEXT_ENTROPY: f64 = 0.85;
 const REASONING_DECODE_FAILED_CODE: &str = "reasoning_decode_failed";
+const RESPONSE_NOT_FOUND_CODE: &str = "not_found";
 
 /// Official Grok Build provider with injected session selection and HTTP SSE
 /// transport ports.
@@ -69,6 +72,7 @@ pub struct GrokBuildProvider {
     catalog: Arc<GrokCredentialCatalogService>,
     credential_recovery: Arc<dyn GrokCredentialRecovery>,
     client_identity: GrokClientIdentity,
+    wire_profile: XaiWireProfileState,
 }
 
 impl GrokBuildProvider {
@@ -79,6 +83,7 @@ impl GrokBuildProvider {
         transport: Arc<dyn GrokInferenceTransport>,
         catalog: Arc<GrokCredentialCatalogService>,
         credential_recovery: Arc<dyn GrokCredentialRecovery>,
+        wire_profile: XaiWireProfileState,
     ) -> Self {
         Self {
             selector,
@@ -86,6 +91,7 @@ impl GrokBuildProvider {
             catalog,
             credential_recovery,
             client_identity: GrokClientIdentity::new(),
+            wire_profile,
         }
     }
 
@@ -277,6 +283,7 @@ impl Provider for GrokBuildProvider {
             Arc::clone(&self.transport),
             GrokStreamAttempt {
                 client_identity: self.client_identity.clone(),
+                wire_profile: self.wire_profile.clone(),
                 credential_recovery: Arc::clone(&self.credential_recovery),
                 instance,
                 request: upstream_request,
@@ -682,6 +689,7 @@ fn protocol_sent() -> ProviderError {
 
 struct GrokStreamAttempt {
     client_identity: GrokClientIdentity,
+    wire_profile: XaiWireProfileState,
     credential_recovery: Arc<dyn GrokCredentialRecovery>,
     instance: GrokProviderInstanceConfig,
     request: GrokResponsesRequest,
@@ -698,6 +706,7 @@ fn cold_http_sse_stream(
 ) -> EventStream {
     let GrokStreamAttempt {
         client_identity,
+        wire_profile,
         credential_recovery,
         instance,
         request,
@@ -714,7 +723,7 @@ fn cold_http_sse_stream(
             ))?;
         }
         let headers = build_grok_headers(
-            &instance,
+            &wire_profile,
             &session,
             &client_identity,
             context.request_id(),
@@ -945,7 +954,13 @@ fn map_continuation_failure(context: &AttemptContext, error: ProviderError) -> P
         && error
             .upstream_code()
             .is_some_and(|code| code.as_str() == REASONING_DECODE_FAILED_CODE);
-    if is_reasoning_decode_failure {
+    let is_missing_native_response = context.continuation_attempt() == ContinuationAttempt::Native
+        && error.kind() == ProviderErrorKind::InvalidRequest
+        && error.upstream_status() == Some(404)
+        && error
+            .upstream_code()
+            .is_some_and(|code| code.as_str() == RESPONSE_NOT_FOUND_CODE);
+    if is_reasoning_decode_failure || is_missing_native_response {
         error
             .with_continuation_failure(ContinuationFailure::HistoryUnavailable)
             .with_replay_safe()
@@ -1114,6 +1129,7 @@ const WORKER_LEASE_TTL: Duration = Duration::from_secs(15 * 60);
 const WORKER_LEASE_RENEWAL: Duration = Duration::from_secs(5 * 60);
 const OAUTH_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const QUOTA_CATALOG_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const CLI_RELEASE_WORKER_OWNER: &str = "xai-cli-release";
 
 pub(crate) fn worker_contributions(
     refresh: Arc<GrokCredentialRefreshService>,
@@ -1122,9 +1138,11 @@ pub(crate) fn worker_contributions(
     accounts: Arc<dyn ProviderAccountStore>,
     instances: Arc<dyn ProviderInstanceCatalogPort>,
     provider_kind: ProviderKind,
+    cli_release: Arc<GrokCliReleaseService>,
 ) -> Result<Vec<WorkerContribution>, WorkerDefinitionError> {
     let refresh_id = WorkerId::try_new(WorkerKind::OAuthRefresh, XAI_PROVIDER_NAME)?;
     let catalog_id = WorkerId::try_new(WorkerKind::QuotaCatalogHealth, XAI_PROVIDER_NAME)?;
+    let release_id = WorkerId::try_new(WorkerKind::QuotaCatalogHealth, CLI_RELEASE_WORKER_OWNER)?;
     Ok(vec![
         WorkerContribution::Registration(scheduled_registration(
             refresh_id,
@@ -1140,6 +1158,13 @@ pub(crate) fn worker_contributions(
                 quota,
                 catalog,
                 provider_kind,
+            }),
+        )?),
+        WorkerContribution::Registration(scheduled_registration(
+            release_id,
+            GROK_CLI_RELEASE_POLL_INTERVAL,
+            Box::new(XaiCliReleaseTask {
+                service: cli_release,
             }),
         )?),
     ])
@@ -1170,6 +1195,27 @@ fn scheduled_registration(
 
 struct XaiOAuthRefreshTask {
     service: Arc<GrokCredentialRefreshService>,
+}
+
+struct XaiCliReleaseTask {
+    service: Arc<GrokCliReleaseService>,
+}
+
+impl ScheduledTask for XaiCliReleaseTask {
+    fn run_cycle(&self, context: WorkerCycleContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+        Box::pin(async move {
+            let refresh = self.service.refresh();
+            tokio::pin!(refresh);
+            let result = tokio::select! {
+                () = context.cancellation().cancelled() => return Ok(()),
+                result = &mut refresh => result,
+            };
+            if let Err(error) = result {
+                tracing::warn!(error = %error, "xAI CLI release check failed");
+            }
+            Ok(())
+        })
+    }
 }
 
 impl ScheduledTask for XaiOAuthRefreshTask {

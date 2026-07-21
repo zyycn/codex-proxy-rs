@@ -261,6 +261,68 @@ fn explicit_session_should_be_tenant_isolated_and_stable_across_turns() {
 }
 
 #[test]
+fn explicit_session_should_enable_the_noop_native_cache_route() {
+    let request = raw_request(json!({
+        "model": "client",
+        "prompt_cache_key": "conversation-42",
+        "input": [{"role": "user", "content": "first"}]
+    }));
+
+    let encoded =
+        GrokResponsesRequest::encode(&request, "grok-4.5", &client_key()).expect("request");
+    let body = Value::Object(encoded.body().clone());
+
+    assert_eq!(
+        body.pointer("/tools"),
+        Some(&json!([{"type": "web_search"}, {"type": "x_search"}]))
+    );
+    assert_eq!(body.pointer("/tool_choice"), Some(&json!("none")));
+}
+
+#[test]
+fn explicit_session_should_preserve_a_client_tool_contract() {
+    let request = raw_request(json!({
+        "model": "client",
+        "prompt_cache_key": "conversation-42",
+        "input": [{"role": "user", "content": "first"}],
+        "tools": [{
+            "type": "function",
+            "name": "read_file",
+            "parameters": {"type": "object"}
+        }],
+        "tool_choice": "auto"
+    }));
+
+    let encoded =
+        GrokResponsesRequest::encode(&request, "grok-4.5", &client_key()).expect("request");
+    let body = Value::Object(encoded.body().clone());
+
+    assert_eq!(
+        body.pointer("/tools"),
+        Some(&json!([{
+            "type": "function",
+            "name": "read_file",
+            "parameters": {"type": "object"}
+        }]))
+    );
+    assert_eq!(body.pointer("/tool_choice"), Some(&json!("auto")));
+}
+
+#[test]
+fn soft_session_should_not_enable_the_native_cache_route() {
+    let request = raw_request(json!({
+        "model": "client",
+        "instructions": "stable system",
+        "input": [{"role": "user", "content": "first prompt"}]
+    }));
+
+    let encoded =
+        GrokResponsesRequest::encode(&request, "grok-4.5", &client_key()).expect("request");
+
+    assert!(!encoded.body().contains_key("tools"));
+}
+
+#[test]
 fn soft_session_should_follow_the_first_user_anchor() {
     let first = raw_request(json!({
         "model": "client",

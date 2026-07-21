@@ -24,7 +24,10 @@ use crate::credential::{
     CodexOAuthAdminService, CodexSignedIdentityVerifier, ReqwestCodexAuthenticatedAccountSource,
     ReqwestOpenAiJwksSource,
 };
-use crate::transport::profile::{CodexDesktopReleaseService, OfficialCodexDesktopReleaseTransport};
+use crate::transport::profile::{
+    CodexCliReleaseService, CodexDesktopReleaseService, OfficialCodexCliReleaseTransport,
+    OfficialCodexDesktopReleaseTransport,
+};
 use crate::transport::{CodexWebSocketPool, build_reqwest_client};
 
 pub use config::{CodexWireProfileConfig, OpenAiConfig, OpenAiConfigError};
@@ -73,6 +76,13 @@ pub async fn initialize(
         ),
     ));
     let desktop_release_status = desktop_release.status();
+    let cli_release = Arc::new(CodexCliReleaseService::new(
+        profile.clone(),
+        Arc::new(
+            OfficialCodexCliReleaseTransport::new()
+                .map_err(|_| OpenAiInitializeError::DesktopRelease)?,
+        ),
+    ));
     let repository = CodexCredentialRepository::new(Arc::clone(&accounts));
     let catalog = Arc::new(CodexCredentialCatalogService::new(
         repository.clone(),
@@ -165,6 +175,7 @@ pub async fn initialize(
         refresh,
         quota,
         catalog,
+        cli_release,
         desktop_release,
         instances,
         provider_kind,

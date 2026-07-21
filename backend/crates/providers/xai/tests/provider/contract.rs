@@ -28,14 +28,14 @@ use gateway_core::routing::{
     ProviderModel, PublicModelId, RoutingContext, RuntimeSnapshot, UpstreamModelId,
 };
 use provider_xai::{
-    GROK_CLI_BASE_URL, GrokBuildProvider, GrokCredentialCatalogCache, GrokCredentialCatalogService,
-    GrokCredentialFailure, GrokCredentialFeedbackFuture, GrokCredentialRecovery,
-    GrokCredentialRecoveryOutcome, GrokCredentialRepository, GrokInferenceRequest,
-    GrokInferenceResponse, GrokInferenceTransport, GrokInferenceTransportError,
-    GrokInferenceTransportErrorKind, GrokInferenceTransportFuture, GrokModelCatalogRequest,
-    GrokModelCatalogTransport, GrokModelCatalogTransportFuture, GrokModelCatalogTransportResponse,
-    GrokSessionBinding, GrokSessionSelection, GrokSessionSelector, GrokSessionSelectorError,
-    GrokSessionSelectorFuture, SecretValue, SelectedGrokSession,
+    GROK_CLI_BASE_URL, GrokBuildProvider, GrokCredentialCatalogCache, GrokCredentialFailure,
+    GrokCredentialFeedbackFuture, GrokCredentialRecovery, GrokCredentialRecoveryOutcome,
+    GrokCredentialRepository, GrokInferenceRequest, GrokInferenceResponse, GrokInferenceTransport,
+    GrokInferenceTransportError, GrokInferenceTransportErrorKind, GrokInferenceTransportFuture,
+    GrokModelCatalogRequest, GrokModelCatalogTransport, GrokModelCatalogTransportFuture,
+    GrokModelCatalogTransportResponse, GrokSessionBinding, GrokSessionSelection,
+    GrokSessionSelector, GrokSessionSelectorError, GrokSessionSelectorFuture, SecretValue,
+    SelectedGrokSession,
 };
 use serde_json::{Map, json};
 
@@ -335,12 +335,18 @@ async fn provider_with_catalog_transport(
     .await
     .expect("catalog account");
     let cache: Arc<dyn GrokCredentialCatalogCache> = MemoryGrokCatalogCache::shared();
-    let catalog = Arc::new(GrokCredentialCatalogService::new(
+    let catalog = Arc::new(crate::support::grok_catalog_service(
         repository,
         catalog_transport,
         cache,
     ));
-    GrokBuildProvider::new(selector, transport, catalog, recovery)
+    GrokBuildProvider::new(
+        selector,
+        transport,
+        catalog,
+        recovery,
+        crate::support::xai_wire_profile(),
+    )
 }
 
 async fn mapped_transport_error(
@@ -1057,6 +1063,62 @@ async fn connection_state_inherits_session_and_recovers_reasoning_on_pinned_acco
             .is_none()
     );
     assert_eq!(selector.calls.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn missing_native_response_should_be_replay_safe_for_the_same_account() {
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::InvalidRequest,
+            UpstreamSendState::Sent,
+        )
+        .with_status(404)
+        .with_upstream_code(SafeUpstreamValue::new("not_found").expect("safe code")),
+    );
+    let provider = provider(StubSelector::success(), transport).await;
+    let state = ProviderSessionState::new(
+        "xai",
+        Map::from_iter([
+            ("account_id".to_owned(), json!("acct_provider")),
+            ("session_id".to_owned(), json!("cache-session")),
+            ("transcript".to_owned(), json!([])),
+        ]),
+    )
+    .expect("session state");
+    let pin = NativeContinuationPin::new(
+        PreviousResponseId::new("resp_gateway_first").expect("response ID"),
+        SafeUpstreamValue::new("resp_upstream_first").expect("upstream response ID"),
+        ProviderKind::new("xai").expect("provider"),
+        instance_id(),
+        account_id("provider"),
+        NativeContinuationReuse::Reusable,
+    );
+    let operation = operation_with_state(
+        json!({
+            "model": "client-model",
+            "previous_response_id": "resp_gateway_first",
+            "input": [{"type":"message","role":"user","content":"second"}]
+        }),
+        state,
+    );
+    let mut stream = provider
+        .execute(
+            provider_request_with_operation("xai", operation),
+            context(
+                CancellationToken::new(),
+                Some(ContinuationBinding::Pinned(pin)),
+            ),
+        )
+        .await
+        .expect("native continuation stream");
+
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(
+        error.continuation_failure(),
+        Some(ContinuationFailure::HistoryUnavailable)
+    );
+    assert!(error.replay_is_safe());
 }
 
 #[tokio::test]

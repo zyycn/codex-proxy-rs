@@ -17,6 +17,8 @@ pub struct GatewayConfig {
     api: gateway_api::ApiConfig,
     openai: provider_openai::OpenAiConfig,
     xai: provider_xai::XaiConfig,
+    #[serde(default, rename = "services")]
+    _compose_services: Option<serde::de::IgnoredAny>,
 }
 
 impl LoadableConfig for GatewayConfig {
@@ -55,6 +57,7 @@ pub async fn run() -> Result<(), BootstrapError> {
         api,
         openai,
         xai,
+        _compose_services: _,
     } = config;
 
     let host = gateway_host::initialize(host).await?;

@@ -60,6 +60,7 @@ const SESSION_FIELDS: &[&str] = &[
 ];
 const FOREIGN_CLIENT_METADATA_FIELDS: &[&str] = &["x-openai-subagent"];
 const MAX_SESSION_SEED_BYTES: usize = 1_024;
+const GROK_CACHE_ROUTE_TOOLS: &[&str] = &["web_search", "x_search"];
 
 /// 保留客户端 OpenAI Responses object 的 xAI 上游请求。
 pub struct GrokResponsesRequest {
@@ -187,6 +188,7 @@ impl GrokResponsesRequest {
             .ok_or(GrokRequestEncodeError::InvalidProtocolPayload)?;
         let mut body = payload.body().clone();
         let session_seed = explicit_session_seed(request, &body);
+        let enable_cache_route = session_seed.is_some() && !has_client_tool_contract(&body);
         let identity = resolve_session_identity(
             client_api_key_ref.as_str(),
             upstream_model,
@@ -196,6 +198,9 @@ impl GrokResponsesRequest {
         sanitize_account_identity(&mut body);
         sanitize_foreign_client_metadata(&mut body);
         let response_transform = normalize_responses_request(&mut body)?;
+        if enable_cache_route {
+            enable_grok_prompt_cache_route(&mut body);
+        }
         let (session_id, affinity) = identity.map_or((None, None), |(session_id, affinity)| {
             (Some(session_id), Some(affinity))
         });
@@ -331,6 +336,30 @@ fn sanitize_foreign_client_metadata(body: &mut Map<String, Value>) {
     if metadata.is_empty() {
         body.remove("client_metadata");
     }
+}
+
+fn has_client_tool_contract(body: &Map<String, Value>) -> bool {
+    if body.contains_key("tools") || body.contains_key("tool_choice") {
+        return true;
+    }
+    body.get("input")
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| item.get("type").and_then(Value::as_str) == Some("additional_tools"))
+        })
+}
+
+fn enable_grok_prompt_cache_route(body: &mut Map<String, Value>) {
+    // xAI enables the reusable prompt-cache route only when native search tools
+    // are declared. `tool_choice: none` keeps that routing hint behavior-neutral.
+    let tools = GROK_CACHE_ROUTE_TOOLS
+        .iter()
+        .map(|tool| json_object([("type", Value::String((*tool).to_owned()))]))
+        .collect();
+    body.insert("tools".to_owned(), Value::Array(tools));
+    body.insert("tool_choice".to_owned(), Value::String("none".to_owned()));
 }
 
 fn explicit_session_seed(request: &GenerateRequest, body: &Map<String, Value>) -> Option<String> {

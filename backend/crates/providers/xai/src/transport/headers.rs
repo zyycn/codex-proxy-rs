@@ -4,11 +4,9 @@ use gateway_core::engine::ModelRequestId;
 use gateway_core::routing::UpstreamModelId;
 use uuid::Uuid;
 
-use crate::SecretValue;
+use crate::{SecretValue, XaiWireProfileState};
 
-use super::{
-    GROK_CLIENT_IDENTIFIER, GROK_CLIENT_MODE, GrokProviderInstanceConfig, SelectedGrokSession,
-};
+use super::SelectedGrokSession;
 
 /// 进程级 Grok Build 客户端身份；请求级身份在构造 headers 时单独生成。
 #[derive(Clone)]
@@ -108,7 +106,7 @@ impl GrokHeader {
 }
 
 pub fn build_grok_headers(
-    instance: &GrokProviderInstanceConfig,
+    profile: &XaiWireProfileState,
     session: &SelectedGrokSession,
     client_identity: &GrokClientIdentity,
     request_id: &ModelRequestId,
@@ -129,16 +127,10 @@ pub fn build_grok_headers(
         GrokHeader::public("X-XAI-Token-Auth", "xai-grok-cli"),
         GrokHeader::public("x-authenticateresponse", "authenticate-response"),
         GrokHeader::sensitive("x-grok-user-id", session.user_id().clone()),
-        GrokHeader::public("x-grok-client-version", instance.client_version()),
-        GrokHeader::public("x-grok-client-mode", GROK_CLIENT_MODE),
-        GrokHeader::public("x-grok-client-identifier", GROK_CLIENT_IDENTIFIER),
-        GrokHeader::public(
-            "user-agent",
-            format!(
-                "{GROK_CLIENT_IDENTIFIER}/{} (linux; x86_64)",
-                instance.client_version()
-            ),
-        ),
+        GrokHeader::public("x-grok-client-version", profile.client_version()),
+        GrokHeader::public("x-grok-client-mode", profile.client_mode()),
+        GrokHeader::public("x-grok-client-identifier", profile.client_identifier()),
+        GrokHeader::public("user-agent", profile.user_agent()),
         GrokHeader::public("content-type", "application/json"),
         GrokHeader::public("accept", "text/event-stream"),
         GrokHeader::public("accept-encoding", "identity"),
@@ -156,11 +148,11 @@ pub fn build_grok_headers(
             "x-grok-conv-id",
             SecretValue::new(upstream_session_id.to_owned()),
         ));
-        headers.push(GrokHeader::sensitive(
-            "x-grok-session-id",
-            SecretValue::new(upstream_session_id.to_owned()),
-        ));
         if let Some(turn_index) = turn_index {
+            headers.push(GrokHeader::sensitive(
+                "x-grok-session-id",
+                SecretValue::new(upstream_session_id.to_owned()),
+            ));
             headers.push(GrokHeader::public("x-grok-turn-idx", turn_index));
         }
     }

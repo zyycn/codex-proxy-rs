@@ -12,12 +12,12 @@ use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderStoreError,
 };
 use provider_xai::{
-    GrokCredentialAdmin, GrokCredentialCatalogCache, GrokCredentialCatalogService,
-    GrokCredentialRecovery, GrokCredentialRecoveryOutcome, GrokCredentialRefreshError,
-    GrokCredentialRefreshOutcome, GrokCredentialRefreshService, GrokCredentialRefresher,
-    GrokCredentialRepository, GrokModelCatalogRequest, GrokModelCatalogTransport,
-    GrokModelCatalogTransportFuture, GrokModelCatalogTransportResponse, GrokRefreshFailure,
-    GrokRefreshTokens, RotateManagedGrokCredential, SecretValue,
+    GrokCredentialAdmin, GrokCredentialCatalogCache, GrokCredentialRecovery,
+    GrokCredentialRecoveryOutcome, GrokCredentialRefreshError, GrokCredentialRefreshOutcome,
+    GrokCredentialRefreshService, GrokCredentialRefresher, GrokCredentialRepository,
+    GrokModelCatalogRequest, GrokModelCatalogTransport, GrokModelCatalogTransportFuture,
+    GrokModelCatalogTransportResponse, GrokRefreshFailure, GrokRefreshTokens,
+    RotateManagedGrokCredential, SecretValue,
 };
 
 use crate::support::{
@@ -162,7 +162,7 @@ async fn fixture_many(
     let refresher = QueueRefresher::new(responses);
     let refresher_port: Arc<dyn GrokCredentialRefresher> = refresher.clone();
     let cache: Arc<dyn GrokCredentialCatalogCache> = MemoryGrokCatalogCache::shared();
-    let catalog = Arc::new(GrokCredentialCatalogService::new(
+    let catalog = Arc::new(crate::support::grok_catalog_service(
         repository.clone(),
         Arc::new(StaticCatalogTransport),
         cache,

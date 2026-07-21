@@ -13,6 +13,7 @@ use crate::{
 #[derive(Clone)]
 pub struct GrokOAuthClient {
     config: GrokOAuthConfig,
+    wire_profile: crate::XaiWireProfileState,
     transport: Arc<dyn OAuthHttpTransport>,
     verifier: Arc<dyn TokenVerifier>,
 }
@@ -22,11 +23,13 @@ impl GrokOAuthClient {
     #[must_use]
     pub fn new(
         config: GrokOAuthConfig,
+        wire_profile: crate::XaiWireProfileState,
         transport: Arc<dyn OAuthHttpTransport>,
         verifier: Arc<dyn TokenVerifier>,
     ) -> Self {
         Self {
             config,
+            wire_profile,
             transport,
             verifier,
         }
@@ -268,7 +271,7 @@ impl GrokOAuthClient {
     }
 
     fn version_header(&self) -> HttpHeader {
-        HttpHeader::new("x-grok-client-version", self.config.client_version())
+        HttpHeader::new("x-grok-client-version", self.wire_profile.client_version())
     }
 }
 

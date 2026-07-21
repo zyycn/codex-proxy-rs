@@ -27,7 +27,7 @@ fn redirect_allowlist_should_reject_non_loopback_http_callback() {
 
 #[test]
 fn discovered_endpoint_should_reject_cross_origin_url() {
-    let config = GrokOAuthConfig::official("0.2.101").expect("fixture config is valid");
+    let config = GrokOAuthConfig::official().expect("fixture config is valid");
 
     let result = config.validate_discovered_endpoint("https://attacker.example/token");
 
@@ -39,7 +39,7 @@ fn discovered_endpoint_should_reject_cross_origin_url() {
 
 #[test]
 fn discovered_issuer_should_reject_query_components() {
-    let config = GrokOAuthConfig::official("0.2.101").expect("fixture config is valid");
+    let config = GrokOAuthConfig::official().expect("fixture config is valid");
 
     let result = config.validate_discovered_issuer("https://auth.x.ai?redirect=attacker");
 

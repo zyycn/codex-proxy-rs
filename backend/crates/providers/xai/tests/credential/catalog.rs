@@ -14,10 +14,10 @@ use provider_xai::{
     GROK_CLI_BASE_URL, GrokBillingRequest, GrokBillingTransport, GrokBillingTransportError,
     GrokBillingTransportErrorKind, GrokBillingTransportFuture, GrokBillingTransportResponse,
     GrokCredentialCatalogCache, GrokCredentialCatalogError, GrokCredentialCatalogSeed,
-    GrokCredentialCatalogService, GrokCredentialQuotaService, GrokCredentialRepository,
-    GrokModelCatalogRequest, GrokModelCatalogTransport, GrokModelCatalogTransportError,
-    GrokModelCatalogTransportErrorKind, GrokModelCatalogTransportFuture,
-    GrokModelCatalogTransportResponse, GrokQuotaError, SecretValue,
+    GrokCredentialRepository, GrokModelCatalogRequest, GrokModelCatalogTransport,
+    GrokModelCatalogTransportError, GrokModelCatalogTransportErrorKind,
+    GrokModelCatalogTransportFuture, GrokModelCatalogTransportResponse, GrokQuotaError,
+    SecretValue,
 };
 
 use crate::support::{
@@ -188,7 +188,7 @@ async fn concurrent_cold_scheduling_hydration_reads_quota_once() {
     let account = store
         .account(&account_id("quota-hydration"))
         .expect("created account");
-    let service = GrokCredentialQuotaService::new(repository, QueueBillingTransport::failure());
+    let service = crate::support::grok_quota_service(repository, QueueBillingTransport::failure());
 
     join_all((0..32).map(|_| service.prepare_scheduling(std::slice::from_ref(&account)))).await;
 
@@ -207,7 +207,7 @@ async fn synchronization_caches_each_account_and_returns_strict_union() {
         OFFICIAL_FIXTURE.to_vec(),
         OFFICIAL_FIXTURE.to_vec(),
     ]);
-    let service = GrokCredentialCatalogService::new(repository, transport, cache_port);
+    let service = crate::support::grok_catalog_service(repository, transport, cache_port);
     assert_eq!(service.catalog_generation().get(), 0);
     let snapshot = service
         .synchronize_instance(
@@ -246,13 +246,13 @@ async fn single_account_catalog_refresh_and_read_use_provider_cache_boundary() {
     let (_, repository) = repository_with_accounts(&[("account-models", "subject-models")]).await;
     let cache = MemoryGrokCatalogCache::shared();
     let cache_port: Arc<dyn GrokCredentialCatalogCache> = cache;
-    let service = GrokCredentialCatalogService::new(
+    let service = crate::support::grok_catalog_service(
         repository,
         QueueCatalogTransport::from_bodies([OFFICIAL_FIXTURE.to_vec()]),
         cache_port,
     );
     let refreshed = service
-        .refresh_account_catalog(&account_id("account-models"), "0.2.101")
+        .refresh_account_catalog(&account_id("account-models"))
         .await
         .expect("refresh one account catalog");
     assert_eq!(refreshed.seed().models(), ["grok-4.5"]);
@@ -272,7 +272,7 @@ async fn single_account_catalog_refresh_and_read_use_provider_cache_boundary() {
 async fn single_account_catalog_read_miss_does_not_call_upstream() {
     let (_, repository) =
         repository_with_accounts(&[("account-models-miss", "subject-models")]).await;
-    let service = GrokCredentialCatalogService::new(
+    let service = crate::support::grok_catalog_service(
         repository,
         QueueCatalogTransport::failure(),
         MemoryGrokCatalogCache::shared(),
@@ -297,7 +297,7 @@ async fn disabled_accounts_are_not_sent_to_catalog_transport() {
         .await
         .expect("disable");
     let cache_port: Arc<dyn GrokCredentialCatalogCache> = MemoryGrokCatalogCache::shared();
-    let service = GrokCredentialCatalogService::new(
+    let service = crate::support::grok_catalog_service(
         repository,
         QueueCatalogTransport::from_bodies([]),
         cache_port,
@@ -326,7 +326,7 @@ async fn quota_exhausted_account_remains_eligible_for_catalog_discovery() {
         })
         .await
         .expect("mark quota exhausted");
-    let service = GrokCredentialCatalogService::new(
+    let service = crate::support::grok_catalog_service(
         repository,
         QueueCatalogTransport::from_bodies([OFFICIAL_FIXTURE.to_vec()]),
         MemoryGrokCatalogCache::shared(),
@@ -344,8 +344,11 @@ async fn quota_exhausted_account_remains_eligible_for_catalog_discovery() {
 async fn one_upstream_failure_rejects_the_whole_catalog_cycle() {
     let (_, repository) = repository_with_accounts(&[("failed", "subject-failed")]).await;
     let cache_port: Arc<dyn GrokCredentialCatalogCache> = MemoryGrokCatalogCache::shared();
-    let service =
-        GrokCredentialCatalogService::new(repository, QueueCatalogTransport::failure(), cache_port);
+    let service = crate::support::grok_catalog_service(
+        repository,
+        QueueCatalogTransport::failure(),
+        cache_port,
+    );
     assert!(matches!(
         service
             .synchronize_instance(&instance(), ConfigRevision::new(1).expect("revision"))
@@ -361,7 +364,7 @@ async fn conflicting_facts_for_same_slug_fail_closed() {
     let mut conflicting: serde_json::Value =
         serde_json::from_slice(OFFICIAL_FIXTURE).expect("fixture JSON");
     conflicting["data"][0]["name"] = serde_json::json!("Different name");
-    let service = GrokCredentialCatalogService::new(
+    let service = crate::support::grok_catalog_service(
         repository,
         QueueCatalogTransport::from_bodies([
             OFFICIAL_FIXTURE.to_vec(),
@@ -392,7 +395,7 @@ fn seed_rejects_duplicates_and_supports_exact_membership() {
 #[tokio::test]
 async fn fetch_seed_rejects_non_header_safe_identity() {
     let (_, repository) = repository_with_accounts(&[]).await;
-    let service = GrokCredentialCatalogService::new(
+    let service = crate::support::grok_catalog_service(
         repository,
         QueueCatalogTransport::from_bodies([OFFICIAL_FIXTURE.to_vec()]),
         MemoryGrokCatalogCache::shared(),
@@ -403,7 +406,6 @@ async fn fetch_seed_rejects_non_header_safe_identity() {
                 SecretValue::new("access"),
                 SecretValue::new("非-ascii"),
                 None,
-                "0.2.101",
             )
             .await,
         Err(GrokCredentialCatalogError::InvalidCredentialData)
@@ -416,7 +418,7 @@ async fn quota_refresh_persists_dynamic_provider_document_and_projects_known_fie
     let transport = QueueBillingTransport::success(
         br#"{"config":{"creditUsagePercent":37.5,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-07-13T00:00:00Z","end":"2026-07-20T00:00:00Z"},"prepaidBalance":{"val":2500},"futureWindow":{"kind":"rolling"}}}"#,
     );
-    let service = GrokCredentialQuotaService::new(repository, transport.clone());
+    let service = crate::support::grok_quota_service(repository, transport.clone());
 
     let snapshot = service
         .refresh_account(&account_id("quota"))
@@ -461,7 +463,7 @@ async fn recovered_quota_refresh_releases_existing_quota_and_cooldown_isolation(
         let (store, repository) = repository_with_accounts(&[(suffix, suffix)]).await;
         let id = account_id(suffix);
         set_account_state(&store, &id, availability, cooldown_until).await;
-        GrokCredentialQuotaService::new(
+        crate::support::grok_quota_service(
             repository,
             QueueBillingTransport::success(br#"{"config":{"creditUsagePercent":25}}"#),
         )
@@ -482,7 +484,7 @@ async fn authoritative_exhaustion_preserves_quota_exhausted_state() {
     let id = account_id("still-exhausted");
     set_account_state(&store, &id, AccountAvailability::QuotaExhausted, None).await;
 
-    GrokCredentialQuotaService::new(
+    crate::support::grok_quota_service(
         repository,
         QueueBillingTransport::success(br#"{"config":{"creditUsagePercent":100}}"#),
     )
@@ -506,7 +508,7 @@ async fn recovered_quota_does_not_clear_terminal_account_states() {
         let (store, repository) = repository_with_accounts(&[(suffix, suffix)]).await;
         let id = account_id(suffix);
         set_account_state(&store, &id, availability, None).await;
-        GrokCredentialQuotaService::new(
+        crate::support::grok_quota_service(
             repository,
             QueueBillingTransport::success(br#"{"config":{"creditUsagePercent":10}}"#),
         )
@@ -541,7 +543,7 @@ async fn quota_refresh_does_not_overwrite_a_newer_cooldown() {
         body: br#"{"config":{"creditUsagePercent":10}}"#.to_vec(),
     });
 
-    GrokCredentialQuotaService::new(repository, transport)
+    crate::support::grok_quota_service(repository, transport)
         .refresh_account(&id)
         .await
         .expect("refresh around concurrent cooldown");
@@ -578,7 +580,7 @@ async fn quota_refresh_rejects_a_concurrent_credential_revision() {
     });
 
     assert!(matches!(
-        GrokCredentialQuotaService::new(repository, transport)
+        crate::support::grok_quota_service(repository, transport)
             .refresh_account(&id)
             .await,
         Err(GrokQuotaError::StaleCredentialSnapshot)
@@ -593,7 +595,7 @@ async fn quota_projection_falls_back_to_legacy_monthly_usage() {
     let transport = QueueBillingTransport::success(
         br#"{"config":{"monthlyLimit":{"val":10000},"used":{"val":2500},"billingPeriodStart":"2026-07-01T00:00:00Z","billingPeriodEnd":"2026-08-01T00:00:00Z"}}"#,
     );
-    let snapshot = GrokCredentialQuotaService::new(repository, transport)
+    let snapshot = crate::support::grok_quota_service(repository, transport)
         .refresh_account(&account_id("monthly-quota"))
         .await
         .expect("refresh monthly quota");
@@ -616,7 +618,7 @@ async fn quota_projection_preserves_unknown_period_for_dynamic_duration_fallback
     let transport = QueueBillingTransport::success(
         br#"{"config":{"creditUsagePercent":12.5,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_FORTNIGHT","start":"2026-07-01T00:00:00Z","end":"2026-07-15T00:00:00Z"}}}"#,
     );
-    let snapshot = GrokCredentialQuotaService::new(repository, transport)
+    let snapshot = crate::support::grok_quota_service(repository, transport)
         .refresh_account(&account_id("dynamic-quota"))
         .await
         .expect("refresh dynamic quota");
@@ -642,7 +644,7 @@ async fn weekly_period_without_reported_allowance_is_not_authoritative_quota() {
     let transport = QueueBillingTransport::success(
         br#"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-07-15T00:00:00Z","end":"2026-07-22T00:00:00Z"},"onDemandCap":{"val":0},"onDemandUsed":{"val":0},"prepaidBalance":{"val":0}}}"#,
     );
-    let snapshot = GrokCredentialQuotaService::new(repository, transport)
+    let snapshot = crate::support::grok_quota_service(repository, transport)
         .refresh_account(&account_id("free-quota"))
         .await
         .expect("refresh Free quota");
@@ -657,7 +659,7 @@ async fn reported_zero_percent_is_authoritative_quota() {
     let transport = QueueBillingTransport::success(
         br#"{"config":{"creditUsagePercent":0,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-07-15T00:00:00Z","end":"2026-07-22T00:00:00Z"}}}"#,
     );
-    let snapshot = GrokCredentialQuotaService::new(repository, transport)
+    let snapshot = crate::support::grok_quota_service(repository, transport)
         .refresh_account(&account_id("zero-percent"))
         .await
         .expect("refresh reported quota");
@@ -672,7 +674,7 @@ async fn positive_prepaid_balance_is_authoritative_quota() {
     let transport = QueueBillingTransport::success(
         br#"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-07-15T00:00:00Z","end":"2026-07-22T00:00:00Z"},"prepaidBalance":{"val":500}}}"#,
     );
-    let snapshot = GrokCredentialQuotaService::new(repository, transport)
+    let snapshot = crate::support::grok_quota_service(repository, transport)
         .refresh_account(&account_id("prepaid-quota"))
         .await
         .expect("refresh prepaid quota");
@@ -694,7 +696,7 @@ async fn quota_read_rejects_corrupt_provider_document() {
         })
         .await
         .expect("seed corrupt quota");
-    let service = GrokCredentialQuotaService::new(
+    let service = crate::support::grok_quota_service(
         repository,
         QueueBillingTransport::success(br#"{"config":null}"#),
     );
@@ -714,7 +716,7 @@ async fn disabled_account_quota_refresh_never_calls_upstream() {
         .await
         .expect("disable account");
     let transport = QueueBillingTransport::success(br#"{"config":null}"#);
-    let service = GrokCredentialQuotaService::new(repository, transport.clone());
+    let service = crate::support::grok_quota_service(repository, transport.clone());
 
     assert!(matches!(
         service.refresh_account(&account_id("disabled-quota")).await,
@@ -727,11 +729,11 @@ async fn disabled_account_quota_refresh_never_calls_upstream() {
 async fn failed_quota_refresh_does_not_replace_last_good_observation() {
     let (store, repository) = repository_with_accounts(&[("stable", "subject-stable")]).await;
     let good = QueueBillingTransport::success(br#"{"config":{"creditUsagePercent":10}}"#);
-    GrokCredentialQuotaService::new(repository.clone(), good)
+    crate::support::grok_quota_service(repository.clone(), good)
         .refresh_account(&account_id("stable"))
         .await
         .expect("seed good observation");
-    let service = GrokCredentialQuotaService::new(repository, QueueBillingTransport::failure());
+    let service = crate::support::grok_quota_service(repository, QueueBillingTransport::failure());
 
     assert!(matches!(
         service.refresh_account(&account_id("stable")).await,

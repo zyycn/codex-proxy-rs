@@ -363,7 +363,7 @@ async fn billing_transport_should_get_exact_credits_resource_without_redirect() 
         SecretValue::new("access-token".to_owned()),
         SecretValue::new("user-id".to_owned()),
         None,
-        "0.2.101",
+        crate::support::xai_wire_profile(),
     )
     .expect("billing session");
     GrokBillingClient::new(transport)
@@ -459,7 +459,8 @@ async fn official_oauth_transport_should_resolve_through_the_production_policy_w
         return;
     }
     let client = GrokOAuthClient::new(
-        GrokOAuthConfig::official("0.2.101").expect("official config"),
+        GrokOAuthConfig::official().expect("official config"),
+        crate::support::xai_wire_profile(),
         Arc::new(
             ReqwestOAuthTransport::new(Arc::new(OfficialGrokEndpointPolicy))
                 .expect("production OAuth transport"),

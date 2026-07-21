@@ -19,7 +19,7 @@ use tokio::sync::Mutex;
 
 use super::repository::{GrokCredentialRepository, LoadedGrokCredential};
 use super::types::{GrokCredentialAvailability, UpdateGrokCredentialState};
-use crate::transport::GROK_CLIENT_VERSION;
+use crate::XaiWireProfileState;
 use crate::transport::catalog::{MAX_CATALOG_MODELS, valid_model_slug, validate_etag};
 use crate::{
     GrokBillingClient, GrokBillingTransport, GrokBuildProvider, GrokCatalogModel,
@@ -193,6 +193,7 @@ pub struct GrokCredentialQuotaService {
     repository: GrokCredentialRepository,
     client: Arc<GrokBillingClient>,
     scheduling: GrokQuotaSchedulingProjection,
+    wire_profile: XaiWireProfileState,
 }
 
 #[derive(Clone, Default)]
@@ -362,11 +363,13 @@ impl GrokCredentialQuotaService {
     pub fn new(
         repository: GrokCredentialRepository,
         transport: Arc<dyn GrokBillingTransport>,
+        wire_profile: XaiWireProfileState,
     ) -> Self {
         Self {
             repository,
             client: Arc::new(GrokBillingClient::new(transport)),
             scheduling: GrokQuotaSchedulingProjection::default(),
+            wire_profile,
         }
     }
 
@@ -429,7 +432,7 @@ impl GrokCredentialQuotaService {
         {
             return Err(GrokQuotaError::AccountUnavailable);
         }
-        let session = billing_session(&loaded)?;
+        let session = billing_session(&loaded, &self.wire_profile)?;
         let billing = self
             .client
             .fetch(&session)
@@ -865,6 +868,7 @@ pub struct GrokCredentialCatalogService {
     client: Arc<GrokModelCatalogClient>,
     cache: Arc<dyn GrokCredentialCatalogCache>,
     published: Arc<RwLock<PublishedCatalogState>>,
+    wire_profile: XaiWireProfileState,
 }
 
 #[derive(Default)]
@@ -879,12 +883,14 @@ impl GrokCredentialCatalogService {
         repository: GrokCredentialRepository,
         transport: Arc<dyn GrokModelCatalogTransport>,
         cache: Arc<dyn GrokCredentialCatalogCache>,
+        wire_profile: XaiWireProfileState,
     ) -> Self {
         Self {
             repository,
             client: Arc::new(GrokModelCatalogClient::new(transport)),
             cache,
             published: Arc::new(RwLock::new(PublishedCatalogState::default())),
+            wire_profile,
         }
     }
 
@@ -902,10 +908,10 @@ impl GrokCredentialCatalogService {
         access_token: SecretValue,
         user_id: SecretValue,
         email: Option<SecretValue>,
-        client_version: impl Into<String>,
     ) -> Result<GrokCredentialCatalogSeed, GrokCredentialCatalogError> {
-        let session = GrokModelCatalogSession::new(access_token, user_id, email, client_version)
-            .map_err(|_| GrokCredentialCatalogError::InvalidCredentialData)?;
+        let session =
+            GrokModelCatalogSession::new(access_token, user_id, email, self.wire_profile.clone())
+                .map_err(|_| GrokCredentialCatalogError::InvalidCredentialData)?;
         let snapshot = self
             .client
             .fetch(&session)
@@ -935,7 +941,6 @@ impl GrokCredentialCatalogService {
     pub async fn refresh_account_catalog(
         &self,
         account_id: &ProviderAccountId,
-        client_version: impl Into<String>,
     ) -> Result<GrokAccountCatalog, GrokCredentialCatalogError> {
         let candidate = self
             .repository
@@ -954,7 +959,6 @@ impl GrokCredentialCatalogService {
                     .account
                     .email()
                     .map(|email| SecretValue::new(email.to_owned())),
-                client_version,
             )
             .await?;
         let catalog = GrokAccountCatalog::new(account_id.clone(), revision, Utc::now(), seed);
@@ -1019,11 +1023,11 @@ impl GrokCredentialCatalogService {
             return Err(GrokCredentialCatalogError::NoEligibleCredential);
         }
 
-        let client_version = instance_config.client_version().to_owned();
+        let wire_profile = self.wire_profile.clone();
         let mut fetched = stream::iter(candidates.into_iter().map(|candidate| {
             let client = Arc::clone(&self.client);
-            let client_version = client_version.clone();
-            async move { fetch_candidate_catalog(client, candidate, client_version).await }
+            let wire_profile = wire_profile.clone();
+            async move { fetch_candidate_catalog(client, candidate, wire_profile).await }
         }))
         .buffer_unordered(MAX_CONCURRENT_CATALOG_REQUESTS)
         .try_collect::<Vec<_>>()
@@ -1122,7 +1126,7 @@ fn eligible_catalog_candidate(candidate: &LoadedGrokCredential) -> bool {
 async fn fetch_candidate_catalog(
     client: Arc<GrokModelCatalogClient>,
     candidate: LoadedGrokCredential,
-    client_version: String,
+    wire_profile: XaiWireProfileState,
 ) -> Result<FetchedCredentialCatalog, GrokCredentialCatalogError> {
     let session = GrokModelCatalogSession::new(
         candidate.access_token,
@@ -1131,7 +1135,7 @@ async fn fetch_candidate_catalog(
             .account
             .email()
             .map(|value| SecretValue::new(value.to_owned())),
-        client_version,
+        wire_profile,
     )
     .map_err(|_| GrokCredentialCatalogError::InvalidCredentialData)?;
     let snapshot = client
@@ -1171,6 +1175,7 @@ fn strict_model_union(
 
 fn billing_session(
     loaded: &LoadedGrokCredential,
+    wire_profile: &XaiWireProfileState,
 ) -> Result<GrokModelCatalogSession, GrokQuotaError> {
     GrokModelCatalogSession::new(
         loaded.access_token.clone(),
@@ -1179,7 +1184,7 @@ fn billing_session(
             .account
             .email()
             .map(|value| SecretValue::new(value.to_owned())),
-        GROK_CLIENT_VERSION,
+        wire_profile.clone(),
     )
     .map_err(|_| GrokQuotaError::InvalidData)
 }

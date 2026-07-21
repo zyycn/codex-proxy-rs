@@ -20,13 +20,48 @@ use gateway_core::provider_ports::{
 use gateway_core::routing::ProviderInstanceId;
 use provider_xai::{
     CreateGrokCredential, GROK_BILLING_URL, GrokAccountCatalog, GrokAccountProfile,
-    GrokCatalogCacheError, GrokCredentialAdmin, GrokCredentialAvailability,
-    GrokCredentialCatalogCache, GrokCredentialRepositoryError, GrokEndpointPolicy, GrokOAuthSecret,
-    GrokReqwestTransportBuildError, SecretValue,
+    GrokBillingTransport, GrokCatalogCacheError, GrokCredentialAdmin, GrokCredentialAvailability,
+    GrokCredentialCatalogCache, GrokCredentialCatalogService, GrokCredentialQuotaService,
+    GrokCredentialRepository, GrokCredentialRepositoryError, GrokEndpointPolicy,
+    GrokModelCatalogTransport, GrokOAuthSecret, GrokReqwestTransportBuildError, SecretValue,
+    XaiConfig, XaiWireProfileState,
 };
 use reqwest::Client;
 use reqwest::redirect::Policy;
 use url::{Host, Url};
+
+pub fn xai_config() -> XaiConfig {
+    serde_json::from_value(serde_json::json!({
+        "wire_profile": {
+            "client_identifier": "grok-shell",
+            "client_version": "0.2.106",
+            "client_mode": "headless",
+            "target_os": "linux",
+            "target_arch": "x86_64",
+            "verified_at": "2026-07-21T00:00:00+08:00"
+        }
+    }))
+    .expect("valid xAI test config")
+}
+
+pub fn xai_wire_profile() -> XaiWireProfileState {
+    xai_config().wire_profile_state()
+}
+
+pub fn grok_catalog_service(
+    repository: GrokCredentialRepository,
+    transport: Arc<dyn GrokModelCatalogTransport>,
+    cache: Arc<dyn GrokCredentialCatalogCache>,
+) -> GrokCredentialCatalogService {
+    GrokCredentialCatalogService::new(repository, transport, cache, xai_wire_profile())
+}
+
+pub fn grok_quota_service(
+    repository: GrokCredentialRepository,
+    transport: Arc<dyn GrokBillingTransport>,
+) -> GrokCredentialQuotaService {
+    GrokCredentialQuotaService::new(repository, transport, xai_wire_profile())
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct LoopbackGrokEndpointPolicy {

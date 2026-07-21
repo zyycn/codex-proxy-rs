@@ -49,6 +49,7 @@ use sha2::{Digest as _, Sha256};
 use url::Url;
 use uuid::Uuid;
 
+use crate::XaiWireProfileState;
 use crate::credential::{
     AuthorizationCallback, FailureClass, GrokAccountProfile, GrokCredentialAdmin,
     GrokCredentialCatalogError, GrokCredentialCatalogService, GrokCredentialQuotaService,
@@ -59,17 +60,15 @@ use crate::credential::{
     PreparedGrokCredentialRotation, PreparedGrokCredentialRotationGuard, RedirectUriAllowlist,
     RotateManagedGrokCredential, SecretValue, VerifiedGrokAccount, VerifiedTokenSet,
 };
-use crate::transport::{
-    GROK_CLI_BASE_URL, GROK_CLIENT_IDENTIFIER, GROK_CLIENT_MODE, GROK_CLIENT_VERSION,
-    GROK_TARGET_ARCH, GROK_TARGET_OS, XAI_PROVIDER_NAME, grok_billing_breakdown,
-};
+use crate::transport::{GROK_CLI_BASE_URL, XAI_PROVIDER_NAME, grok_billing_breakdown};
 
 const PENDING_SCHEMA_VERSION: u64 = 1;
-const PENDING_TTL: TimeDelta = TimeDelta::minutes(10);
+const PENDING_TTL: TimeDelta = TimeDelta::minutes(30);
 const MAX_PENDING_TEXT_BYTES: usize = 512;
 
 pub(crate) struct XaiAdminProvider {
     provider_kind: ProviderKind,
+    wire_profile: XaiWireProfileState,
     accounts: Arc<dyn ProviderAccountStore>,
     repository: GrokCredentialRepository,
     oauth_config: GrokOAuthConfig,
@@ -96,11 +95,13 @@ impl XaiAdminProvider {
     #[must_use]
     pub(crate) fn new(
         provider_kind: ProviderKind,
+        wire_profile: XaiWireProfileState,
         accounts: Arc<dyn ProviderAccountStore>,
         services: XaiAdminServices,
     ) -> Self {
         Self {
             provider_kind,
+            wire_profile,
             accounts,
             repository: services.repository,
             oauth_config: services.oauth_config,
@@ -221,32 +222,30 @@ impl ProviderAdmin for XaiAdminProvider {
         Some(DashboardWireProfile {
             provider: self.provider_kind.as_str().to_owned(),
             product: "Grok Build".to_owned(),
-            version: GROK_CLIENT_VERSION.to_owned(),
+            version: self.wire_profile.client_version(),
             build: None,
             target: DashboardWireTarget {
-                os_type: GROK_TARGET_OS.to_owned(),
+                os_type: self.wire_profile.target_os(),
                 os_version: "—".to_owned(),
-                arch: GROK_TARGET_ARCH.to_owned(),
-                terminal: GROK_CLIENT_MODE.to_owned(),
+                arch: self.wire_profile.target_arch(),
+                terminal: self.wire_profile.client_mode(),
             },
-            user_agent: format!(
-                "{GROK_CLIENT_IDENTIFIER}/{GROK_CLIENT_VERSION} ({GROK_TARGET_OS}; {GROK_TARGET_ARCH})"
-            ),
+            user_agent: self.wire_profile.user_agent(),
             attributes: vec![
                 DashboardWireAttribute {
                     label: "客户端标识".to_owned(),
-                    value: GROK_CLIENT_IDENTIFIER.to_owned(),
+                    value: self.wire_profile.client_identifier(),
                 },
                 DashboardWireAttribute {
                     label: "运行模式".to_owned(),
-                    value: GROK_CLIENT_MODE.to_owned(),
+                    value: self.wire_profile.client_mode(),
                 },
                 DashboardWireAttribute {
                     label: "Token 认证".to_owned(),
                     value: "xai-grok-cli".to_owned(),
                 },
             ],
-            verified_at: None,
+            verified_at: Some(self.wire_profile.verified_at()),
             release: None,
         })
     }
@@ -601,7 +600,7 @@ impl ProviderAdmin for XaiAdminProvider {
         let catalog = if refresh {
             Some(
                 self.catalog
-                    .refresh_account_catalog(account_id, GROK_CLIENT_VERSION)
+                    .refresh_account_catalog(account_id)
                     .await
                     .map_err(map_catalog_error)?,
             )

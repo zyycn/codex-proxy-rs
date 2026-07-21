@@ -8,8 +8,9 @@ use gateway_core::provider_ports::{
 };
 use gateway_core::routing::ProviderKind;
 use redis::{Script, aio::ConnectionManager};
+use sha2::{Digest as _, Sha256};
 
-use super::{MAX_REDIS_EXACT_INTEGER, namespace, resource_fingerprint};
+use super::{MAX_REDIS_EXACT_INTEGER, namespace};
 use crate::{StoreError, StoreResult};
 
 const MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
@@ -21,20 +22,33 @@ end
 local clock = redis.call('TIME')
 local now_ms = (tonumber(clock[1]) * 1000) + math.floor(tonumber(clock[2]) / 1000)
 local expires_at_ms = now_ms + tonumber(ARGV[3])
+local expires_at_epoch_seconds = math.floor(expires_at_ms / 1000)
 redis.call('HSET', KEYS[1],
   'owner_fingerprint', ARGV[1],
-  'expires_at', expires_at_ms,
+  'expires_at_epoch_seconds', expires_at_epoch_seconds,
   'provider_payload', ARGV[2])
 redis.call('PEXPIREAT', KEYS[1], expires_at_ms)
 return 1
 "#;
 
 const TAKE_SCRIPT: &str = r#"
+local function equal_bytes(left, right)
+  local different = math.abs(string.len(left) - string.len(right))
+  local length = math.max(string.len(left), string.len(right))
+  for index = 1, length do
+    local left_byte = string.byte(left, index) or 0
+    local right_byte = string.byte(right, index) or 0
+    if left_byte ~= right_byte then
+      different = different + 1
+    end
+  end
+  return different == 0
+end
 local owner = redis.call('HGET', KEYS[1], 'owner_fingerprint')
 if owner == false then
   return {0, ''}
 end
-if owner ~= ARGV[1] then
+if not equal_bytes(owner, ARGV[1]) then
   return {-1, ''}
 end
 local payload = redis.call('HGET', KEYS[1], 'provider_payload')
@@ -60,13 +74,13 @@ impl RedisOAuthPendingFlowRepository {
         })
     }
 
-    fn key(&self, provider_kind: &ProviderKind, flow: &OAuthPendingBinding) -> StoreResult<String> {
-        let fingerprint = resource_fingerprint("OAuth pending flow", flow.expose_to_store())?;
-        Ok(format!(
+    fn key(&self, provider_kind: &ProviderKind, flow: &OAuthPendingBinding) -> String {
+        let fingerprint = provider_scoped_fingerprint(provider_kind, flow);
+        format!(
             "{}:{}:{fingerprint}",
             self.namespace,
             provider_kind.as_str()
-        ))
+        )
     }
 }
 
@@ -76,11 +90,8 @@ impl OAuthPendingFlowPort for RedisOAuthPendingFlowRepository {
         flow: NewOAuthPendingFlow,
     ) -> futures::future::BoxFuture<'_, Result<OAuthPendingPutOutcome, ProviderStoreError>> {
         Box::pin(async move {
-            let key = self
-                .key(flow.provider_kind(), flow.flow())
-                .map_err(|_| provider_invalid("encode OAuth pending key"))?;
-            let owner = resource_fingerprint("OAuth pending owner", flow.owner().expose_to_store())
-                .map_err(|_| provider_invalid("encode OAuth pending owner"))?;
+            let key = self.key(flow.provider_kind(), flow.flow());
+            let owner = provider_scoped_fingerprint(flow.provider_kind(), flow.owner());
             let payload = serde_json::to_vec(&serde_json::Value::Object(
                 flow.payload().expose_to_provider().clone(),
             ))
@@ -114,11 +125,8 @@ impl OAuthPendingFlowPort for RedisOAuthPendingFlowRepository {
         owner: &'a OAuthPendingBinding,
     ) -> futures::future::BoxFuture<'a, Result<OAuthPendingTakeOutcome, ProviderStoreError>> {
         Box::pin(async move {
-            let key = self
-                .key(provider_kind, flow)
-                .map_err(|_| provider_invalid("encode OAuth pending key"))?;
-            let owner = resource_fingerprint("OAuth pending owner", owner.expose_to_store())
-                .map_err(|_| provider_invalid("encode OAuth pending owner"))?;
+            let key = self.key(provider_kind, flow);
+            let owner = provider_scoped_fingerprint(provider_kind, owner);
             let mut connection = self.connection.clone();
             let (status, payload): (i64, Vec<u8>) = Script::new(TAKE_SCRIPT)
                 .key(key)
@@ -143,6 +151,17 @@ impl OAuthPendingFlowPort for RedisOAuthPendingFlowRepository {
             }
         })
     }
+}
+
+fn provider_scoped_fingerprint(
+    provider_kind: &ProviderKind,
+    binding: &OAuthPendingBinding,
+) -> String {
+    let mut digest = Sha256::new();
+    digest.update(provider_kind.as_str().as_bytes());
+    digest.update([0]);
+    digest.update(binding.expose_to_store().as_bytes());
+    hex::encode(digest.finalize())
 }
 
 fn ttl_millis(ttl: Duration) -> StoreResult<u64> {

@@ -62,8 +62,8 @@ const releaseStatus = computed(() => {
   const current = profile.value
   if (!current?.release) {
     return {
-      label: '官方固定画像',
-      title: '当前 Provider 使用官方客户端固定画像',
+      label: '当前生效',
+      title: '当前 Provider 请求正在使用此运行时画像',
       tone: 'bg-(--cp-info-bg) text-(--cp-info-text)',
       icon: ShieldCheck,
     }
@@ -73,7 +73,7 @@ const releaseStatus = computed(() => {
   if (status === 'aligned') {
     return {
       label: '制品一致',
-      title: '当前 Desktop 版本与官方发布一致',
+      title: '当前生效版本与官方最新发布一致',
       tone: 'bg-(--cp-success-bg) text-(--cp-success-text)',
       icon: CheckCircle2,
     }
@@ -89,14 +89,14 @@ const releaseStatus = computed(() => {
   if (status === 'check_failed') {
     return {
       label: '检查失败',
-      title: current.release.error || 'Desktop 发布检查失败',
+      title: current.release.error || '官方版本检查失败',
       tone: 'bg-(--cp-danger-bg) text-(--cp-danger-text)',
       icon: TriangleAlert,
     }
   }
   return {
     label: '待检查',
-    title: '尚未检查 Desktop 官方发布',
+    title: '尚未检查官方发布渠道',
     tone: 'bg-(--cp-normal-bg) text-(--cp-normal-text)',
     icon: RefreshCw,
   }

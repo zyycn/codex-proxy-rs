@@ -16,8 +16,8 @@ use provider_xai::{
     GrokAccountCatalog, GrokAccountSessionSelector, GrokBillingRequest, GrokBillingTransport,
     GrokBillingTransportError, GrokBillingTransportErrorKind, GrokBillingTransportFuture,
     GrokCredentialAdmin, GrokCredentialAvailability, GrokCredentialCatalogCache,
-    GrokCredentialCatalogSeed, GrokCredentialFailure, GrokCredentialQuotaService,
-    GrokCredentialRepository, GrokSessionSelection, GrokSessionSelector, GrokSessionSelectorError,
+    GrokCredentialCatalogSeed, GrokCredentialFailure, GrokCredentialRepository,
+    GrokSessionSelection, GrokSessionSelector, GrokSessionSelectorError,
     RotateManagedGrokCredential, UpdateGrokCredentialState,
 };
 
@@ -137,7 +137,7 @@ impl SelectorFixture {
         });
         let catalog_cache: Arc<dyn GrokCredentialCatalogCache> = cache.clone();
         let lease_port: Arc<dyn ProviderLeasePort> = coordinator.clone();
-        let quota = Arc::new(GrokCredentialQuotaService::new(
+        let quota = Arc::new(crate::support::grok_quota_service(
             repository.clone(),
             Arc::new(UnavailableBillingTransport),
         ));

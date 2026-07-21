@@ -31,11 +31,11 @@ store:
   database:
     # Docker 内由 CPR_DATABASE_URL 覆盖；密码不要写进 URL。
     url: 'postgres://codex_proxy@127.0.0.1:5432/codex_proxy'
-    password: ''
+    password: &postgres_password ''
   redis:
     # Docker 内由 CPR_REDIS_URL 覆盖；密码不要写进 URL。
     url: 'redis://127.0.0.1:6379/'
-    password: ''
+    password: &redis_password ''
 
 admin:
   session_ttl_minutes: 1440
@@ -54,13 +54,43 @@ openai:
   wire_profile:
     # 该画像来自 Desktop 制品与 bundled Codex Core 的联合审计。
     originator: 'Codex Desktop'
-    codex_version: '0.144.2'
-    desktop_version: '26.707.72221'
-    desktop_build: '5307'
+    codex_version: '0.144.6'
+    desktop_version: '26.715.61943'
+    desktop_build: '5628'
     os_type: 'Mac OS'
     os_version: '15.7.1'
     arch: 'arm64'
     terminal: 'unknown'
-    verified_at: '2026-07-15T02:25:50+08:00'
+    verified_at: '2026-07-21T00:00:00+08:00'
 
-xai: {}
+xai:
+  wire_profile:
+    # 对照 grok2api 当前推荐构建核验；更新前应重新抓包确认。
+    client_identifier: 'grok-shell'
+    client_version: '0.2.106'
+    client_mode: 'headless'
+    target_os: 'linux'
+    target_arch: 'x86_64'
+    verified_at: '2026-07-21T00:00:00+08:00'
+
+# Compose 凭据桥接区；密码仍只维护在 store 中。
+services:
+  postgres-credentials:
+    environment:
+      POSTGRES_PASSWORD: *postgres_password
+
+  redis-credentials:
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --requirepass
+      - *redis_password
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - --no-auth-warning
+        - -a
+        - *redis_password
+        - ping
