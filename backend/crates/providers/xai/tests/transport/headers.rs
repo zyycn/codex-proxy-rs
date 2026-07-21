@@ -1,12 +1,9 @@
 use gateway_core::engine::ModelRequestId;
 use gateway_core::engine::credential::{CredentialRevision, ProviderAccountId};
-use gateway_core::routing::{
-    InstanceHealth, ProviderInstance, ProviderInstanceId, ProviderKind, UpstreamModelId,
-};
+use gateway_core::routing::UpstreamModelId;
 
 use provider_xai::{
-    GrokClientIdentity, GrokProviderInstanceConfig, GrokSessionBinding, SecretValue,
-    SelectedGrokSession, build_grok_headers,
+    GrokClientIdentity, GrokSessionBinding, SecretValue, SelectedGrokSession, build_grok_headers,
 };
 use uuid::Uuid;
 
@@ -23,21 +20,10 @@ fn selected_session() -> SelectedGrokSession {
     .expect("selected session")
 }
 
-fn instance() -> GrokProviderInstanceConfig {
-    let instance = ProviderInstance::new(
-        ProviderInstanceId::new("inst_grok").expect("instance"),
-        ProviderKind::new("xai").expect("provider"),
-        "https://cli-chat-proxy.grok.com/v1".to_owned(),
-        true,
-        InstanceHealth::Healthy,
-    );
-    GrokProviderInstanceConfig::from_snapshot(&instance).expect("compiled instance")
-}
-
 #[test]
 fn header_debug_should_redact_oauth_and_identity_values() {
     let headers = build_grok_headers(
-        &instance(),
+        &crate::support::xai_wire_profile(),
         &selected_session(),
         &GrokClientIdentity::new(),
         &ModelRequestId::new("req_grok_test").expect("request ID"),
@@ -62,7 +48,7 @@ fn header_debug_should_redact_oauth_and_identity_values() {
 #[test]
 fn headers_should_bind_identity_to_the_selected_oauth_account() {
     let headers = build_grok_headers(
-        &instance(),
+        &crate::support::xai_wire_profile(),
         &selected_session(),
         &GrokClientIdentity::new(),
         &ModelRequestId::new("req_grok_identity").expect("request ID"),
@@ -105,9 +91,32 @@ fn headers_should_bind_identity_to_the_selected_oauth_account() {
 }
 
 #[test]
+fn headers_should_keep_openai_cache_requests_out_of_shell_session_mode() {
+    let headers = build_grok_headers(
+        &crate::support::xai_wire_profile(),
+        &selected_session(),
+        &GrokClientIdentity::new(),
+        &ModelRequestId::new("req_grok_cache_route").expect("request ID"),
+        Some("session-fixture"),
+        None,
+        &UpstreamModelId::new("grok-code-test").expect("model"),
+    );
+    let value = |name: &str| {
+        headers
+            .iter()
+            .find(|header| header.name().eq_ignore_ascii_case(name))
+            .map(|header| header.value().expose())
+    };
+
+    assert_eq!(value("x-grok-conv-id"), Some("session-fixture"));
+    assert_eq!(value("x-grok-session-id"), None);
+    assert_eq!(value("x-grok-turn-idx"), None);
+}
+
+#[test]
 fn headers_should_not_invent_session_identity_without_a_signal() {
     let headers = build_grok_headers(
-        &instance(),
+        &crate::support::xai_wire_profile(),
         &selected_session(),
         &GrokClientIdentity::new(),
         &ModelRequestId::new("req_grok_stateless").expect("request ID"),

@@ -25,7 +25,7 @@ fn callback_debug_should_redact_code_and_state() {
 
 #[test]
 fn pending_authorization_should_round_trip_only_through_server_state() {
-    let config = GrokOAuthConfig::official("0.2.101").expect("fixture config");
+    let config = GrokOAuthConfig::official().expect("fixture config");
     let discovery = DiscoveryDocument::parse(&config, include_bytes!("fixtures/discovery.json"))
         .expect("fixture discovery");
     let redirect = "https://gateway.example/admin/xai/callback";

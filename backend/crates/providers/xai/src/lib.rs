@@ -18,8 +18,10 @@ use gateway_core::routing::ProviderKind;
 use gateway_core::task::WorkerContribution;
 
 use crate::admin::{XaiAdminProvider, XaiAdminServices};
+use crate::transport::profile::{GrokCliReleaseService, OfficialGrokCliReleaseTransport};
 
-pub use config::{XaiConfig, XaiConfigError};
+pub use config::{XaiConfig, XaiConfigError, XaiWireProfileConfig};
+pub use transport::XaiWireProfileState;
 
 pub use credential::{
     AllowedRedirectUri, AuthorizationCallback, AuthorizationCodeGrant, CallbackRejection,
@@ -48,6 +50,7 @@ pub use credential::{
     VerifiedTokenSet, parse_oauth_error, parse_refresh_success,
 };
 pub use provider::GrokBuildProvider;
+pub use transport::profile::{GROK_CLI_RELEASE_URL, GrokCliReleaseError};
 pub use transport::{
     GROK_BILLING_URL, GROK_CLI_BASE_URL, GROK_MODEL_CATALOG_URL, GrokBillingClient,
     GrokBillingError, GrokBillingRequest, GrokBillingSnapshot, GrokBillingTransport,
@@ -88,7 +91,14 @@ pub async fn initialize(
     config
         .resolve_and_validate(Path::new("."))
         .map_err(XaiInitializeError::Config)?;
+    let profile = config.wire_profile_state();
     let oauth_config = config.oauth_config().map_err(XaiInitializeError::Config)?;
+    let cli_release = Arc::new(GrokCliReleaseService::new(
+        profile.clone(),
+        Arc::new(
+            OfficialGrokCliReleaseTransport::new().map_err(|_| XaiInitializeError::Transport)?,
+        ),
+    ));
     let provider_kind =
         ProviderKind::new(XAI_PROVIDER_NAME).map_err(|_| XaiInitializeError::ProviderKind)?;
     let accounts: Arc<dyn ProviderAccountStore> = ports.accounts();
@@ -112,10 +122,12 @@ pub async fn initialize(
         repository.clone(),
         catalog_transport,
         catalog_cache_port,
+        profile.clone(),
     ));
     let quota = Arc::new(GrokCredentialQuotaService::new(
         repository.clone(),
         billing_transport,
+        profile.clone(),
     ));
     let selector: Arc<dyn GrokSessionSelector> = Arc::new(GrokAccountSessionSelector::new(
         repository.clone(),
@@ -137,6 +149,7 @@ pub async fn initialize(
     );
     let oauth = Arc::new(GrokOAuthClient::new(
         oauth_config.clone(),
+        profile.clone(),
         oauth_transport,
         token_verifier,
     ));
@@ -155,9 +168,11 @@ pub async fn initialize(
         inference,
         Arc::clone(&catalog),
         credential_recovery,
+        profile.clone(),
     ));
     let admin_provider: Arc<dyn ProviderAdmin> = Arc::new(XaiAdminProvider::new(
         provider_kind.clone(),
+        profile,
         Arc::clone(&accounts),
         XaiAdminServices {
             repository,
@@ -170,9 +185,16 @@ pub async fn initialize(
             runtime_policy,
         },
     ));
-    let worker_contributions =
-        provider::worker_contributions(refresh, quota, catalog, accounts, instances, provider_kind)
-            .map_err(|_| XaiInitializeError::Worker)?;
+    let worker_contributions = provider::worker_contributions(
+        refresh,
+        quota,
+        catalog,
+        accounts,
+        instances,
+        provider_kind,
+        cli_release,
+    )
+    .map_err(|_| XaiInitializeError::Worker)?;
 
     Ok(ProviderBundle {
         core_provider,

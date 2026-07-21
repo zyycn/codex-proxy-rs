@@ -54,9 +54,6 @@ pub enum FailureClass {
 /// Configuration failures detected before any network request.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ConfigError {
-    /// Client version is empty, non-ASCII, or contains unsafe characters.
-    #[error("invalid Grok client version")]
-    InvalidClientVersion,
     /// Redirect URI is malformed, insecure, or contains forbidden components.
     #[error("invalid OAuth redirect URI")]
     InvalidRedirectUri,

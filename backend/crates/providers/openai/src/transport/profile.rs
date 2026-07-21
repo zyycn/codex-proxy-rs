@@ -13,6 +13,7 @@ use url::Url;
 /// Codex Desktop 官方 appcast 地址。
 pub const CODEX_DESKTOP_APPCAST_URL: &str =
     "https://persistent.oaistatic.com/codex-app-prod/appcast.xml";
+pub const CODEX_CLI_RELEASE_URL: &str = "https://registry.npmjs.org/@openai%2Fcodex/latest";
 /// 官方制品画像检查周期。
 pub const APPCAST_POLL_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -96,6 +97,112 @@ impl CodexWireProfileState {
         profile.desktop_version = desktop_version.to_owned();
         profile.desktop_build = desktop_build.to_owned();
     }
+
+    /// 使用官方 npm metadata 发布的 Codex CLI 版本更新运行时 Core 画像。
+    pub fn update_cli_release(&self, codex_version: &str) {
+        let mut profile = self
+            .profile
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if profile.codex_version != codex_version {
+            profile.codex_version = codex_version.to_owned();
+        }
+    }
+}
+
+pub trait CodexCliReleaseTransport: Send + Sync {
+    fn fetch(&self) -> BoxFuture<'_, Result<String, CodexCliReleaseError>>;
+}
+
+#[derive(Clone)]
+pub struct OfficialCodexCliReleaseTransport {
+    client: Client,
+    endpoint: Url,
+}
+
+impl OfficialCodexCliReleaseTransport {
+    pub fn new() -> Result<Self, CodexCliReleaseError> {
+        let endpoint =
+            Url::parse(CODEX_CLI_RELEASE_URL).map_err(|_| CodexCliReleaseError::InvalidEndpoint)?;
+        let client = Client::builder()
+            .https_only(true)
+            .no_proxy()
+            .redirect(Policy::none())
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(APPCAST_TIMEOUT)
+            .build()
+            .map_err(|_| CodexCliReleaseError::ClientInitialization)?;
+        Ok(Self { client, endpoint })
+    }
+}
+
+impl CodexCliReleaseTransport for OfficialCodexCliReleaseTransport {
+    fn fetch(&self) -> BoxFuture<'_, Result<String, CodexCliReleaseError>> {
+        Box::pin(async move {
+            let response = self.client.get(self.endpoint.clone()).send().await?;
+            if !response.status().is_success() {
+                return Err(CodexCliReleaseError::HttpStatus(response.status().as_u16()));
+            }
+            if response
+                .content_length()
+                .is_some_and(|size| size > 64 * 1024)
+            {
+                return Err(CodexCliReleaseError::ResponseTooLarge);
+            }
+            let bytes = response.bytes().await?;
+            if bytes.len() > 64 * 1024 {
+                return Err(CodexCliReleaseError::ResponseTooLarge);
+            }
+            let document: serde_json::Value = serde_json::from_slice(&bytes)
+                .map_err(|_| CodexCliReleaseError::InvalidDocument)?;
+            let version = document
+                .get("version")
+                .and_then(serde_json::Value::as_str)
+                .ok_or(CodexCliReleaseError::InvalidDocument)?;
+            semver::Version::parse(version).map_err(|_| CodexCliReleaseError::InvalidVersion)?;
+            Ok(version.to_owned())
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct CodexCliReleaseService {
+    transport: Arc<dyn CodexCliReleaseTransport>,
+    profile: CodexWireProfileState,
+}
+
+impl CodexCliReleaseService {
+    #[must_use]
+    pub fn new(
+        profile: CodexWireProfileState,
+        transport: Arc<dyn CodexCliReleaseTransport>,
+    ) -> Self {
+        Self { transport, profile }
+    }
+
+    pub async fn refresh(&self) -> Result<String, CodexCliReleaseError> {
+        let version = self.transport.fetch().await?;
+        self.profile.update_cli_release(&version);
+        Ok(version)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CodexCliReleaseError {
+    #[error("Codex CLI release client initialization failed")]
+    ClientInitialization,
+    #[error("Codex CLI release endpoint is invalid")]
+    InvalidEndpoint,
+    #[error("Codex CLI release request failed")]
+    Request(#[from] reqwest::Error),
+    #[error("Codex CLI release endpoint returned HTTP {0}")]
+    HttpStatus(u16),
+    #[error("Codex CLI release response exceeded the size limit")]
+    ResponseTooLarge,
+    #[error("Codex CLI release document is invalid")]
+    InvalidDocument,
+    #[error("Codex CLI release version is invalid")]
+    InvalidVersion,
 }
 
 /// 官方 appcast 中按顺序出现的首个完整 Desktop 制品。

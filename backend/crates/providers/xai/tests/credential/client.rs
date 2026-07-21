@@ -87,7 +87,12 @@ impl TokenVerifier for FixtureVerifier {
 #[tokio::test]
 async fn credential_import_should_require_exact_metadata_and_official_userinfo() {
     let transport = Arc::new(FixtureTransport::new(vec![response(200, DISCOVERY)]));
-    let client = GrokOAuthClient::new(config(), transport, Arc::new(FixtureVerifier));
+    let client = GrokOAuthClient::new(
+        config(),
+        crate::support::xai_wire_profile(),
+        transport,
+        Arc::new(FixtureVerifier),
+    );
     let discovery = client.discover().await.expect("discovery succeeds");
     let now = chrono::Utc::now();
     let candidate = GrokOAuthImportCandidate::new(
@@ -151,7 +156,12 @@ async fn expired_import_should_refresh_then_require_authoritative_userinfo() {
         response(200, DISCOVERY),
         response(200, REFRESH_SUCCESS),
     ]));
-    let client = GrokOAuthClient::new(config(), transport.clone(), Arc::new(FixtureVerifier));
+    let client = GrokOAuthClient::new(
+        config(),
+        crate::support::xai_wire_profile(),
+        transport.clone(),
+        Arc::new(FixtureVerifier),
+    );
     let discovery = client.discover().await.expect("discovery succeeds");
     let now = chrono::Utc::now();
     let candidate = GrokOAuthImportCandidate::new(
@@ -192,7 +202,12 @@ async fn expired_import_should_refresh_then_require_authoritative_userinfo() {
 #[tokio::test]
 async fn credential_import_should_reject_non_official_client_before_verification() {
     let transport = Arc::new(FixtureTransport::new(vec![response(200, DISCOVERY)]));
-    let client = GrokOAuthClient::new(config(), transport, Arc::new(FixtureVerifier));
+    let client = GrokOAuthClient::new(
+        config(),
+        crate::support::xai_wire_profile(),
+        transport,
+        Arc::new(FixtureVerifier),
+    );
     let discovery = client.discover().await.expect("discovery succeeds");
     let now = chrono::Utc::now();
     let candidate = GrokOAuthImportCandidate::new(
@@ -227,7 +242,7 @@ fn response(status: u16, body: &[u8]) -> Result<OAuthHttpResponse, TransportFail
 }
 
 fn config() -> GrokOAuthConfig {
-    GrokOAuthConfig::official("0.2.101").expect("fixture config is valid")
+    GrokOAuthConfig::official().expect("fixture config is valid")
 }
 
 fn state_from_authorization_url(pending: &provider_xai::PendingAuthorization) -> String {
@@ -244,7 +259,12 @@ async fn authorization_code_flow_should_verify_before_returning_tokens() {
         response(200, DISCOVERY),
         response(200, TOKEN_SUCCESS),
     ]));
-    let client = GrokOAuthClient::new(config(), transport.clone(), Arc::new(FixtureVerifier));
+    let client = GrokOAuthClient::new(
+        config(),
+        crate::support::xai_wire_profile(),
+        transport.clone(),
+        Arc::new(FixtureVerifier),
+    );
     let discovery = client.discover().await.expect("discovery succeeds");
     let allowlist = RedirectUriAllowlist::new(["https://gateway.example/oauth/grok/callback"])
         .expect("fixture allowlist is valid");
@@ -284,7 +304,12 @@ async fn authorization_code_flow_should_fail_closed_without_verifier() {
         response(200, DISCOVERY),
         response(200, TOKEN_SUCCESS),
     ]));
-    let client = GrokOAuthClient::new(config(), transport, Arc::new(FailClosedTokenVerifier));
+    let client = GrokOAuthClient::new(
+        config(),
+        crate::support::xai_wire_profile(),
+        transport,
+        Arc::new(FailClosedTokenVerifier),
+    );
     let discovery = client.discover().await.expect("discovery succeeds");
     let allowlist = RedirectUriAllowlist::new(["https://gateway.example/oauth/grok/callback"])
         .expect("fixture allowlist is valid");
@@ -318,7 +343,12 @@ async fn refresh_should_preserve_ambiguous_send_classification() {
         response(200, DISCOVERY),
         Err(TransportFailure::new(TransportFailureKind::Ambiguous)),
     ]));
-    let client = GrokOAuthClient::new(config(), transport, Arc::new(FailClosedTokenVerifier));
+    let client = GrokOAuthClient::new(
+        config(),
+        crate::support::xai_wire_profile(),
+        transport,
+        Arc::new(FailClosedTokenVerifier),
+    );
     let discovery = client.discover().await.expect("discovery succeeds");
     let grant = RefreshTokenGrant::new(SecretValue::new(
         "fixture-refresh-token-not-usable".to_owned(),
@@ -338,7 +368,12 @@ async fn refresh_should_return_rotated_token_without_id_token() {
         response(200, DISCOVERY),
         response(200, REFRESH_SUCCESS),
     ]));
-    let client = GrokOAuthClient::new(config(), transport, Arc::new(FailClosedTokenVerifier));
+    let client = GrokOAuthClient::new(
+        config(),
+        crate::support::xai_wire_profile(),
+        transport,
+        Arc::new(FailClosedTokenVerifier),
+    );
     let discovery = client.discover().await.expect("discovery succeeds");
     let grant = RefreshTokenGrant::new(SecretValue::new(
         "fixture-refresh-token-not-usable".to_owned(),

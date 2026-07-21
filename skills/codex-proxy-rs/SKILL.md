@@ -16,11 +16,10 @@ description: Codex Proxy RS 仓库开发指南。Use when changing or auditing i
 
 ## 边界
 
-- `v1/*` 使用 Request → Attempt → Stream 生命周期。功能规则只能留在唯一 owner 内。
-- `api` 解析和编码；`dispatch` 编排；`fleet` 管账号；`upstream` 管协议与传输；`telemetry` 保存确定事实。
-- transport 不选择账号，不解释账号状态，不在 payload 发送后重放。
-- PostgreSQL 是持久化权威；Redis 保存会话、租约、模型快照和短期状态。
-- 测试只放 `backend/tests/`。禁止在 `backend/src/` 写 test-only 代码。
+- `gateway-api` 只做协议适配；`gateway-core` 编排；Provider 独占 credential、catalog 与 transport；`gateway-store` 实现持久化端口。
+- Provider 每次调用只选择一个 credential，不隐藏换号、业务 retry 或跨 Provider fallback。
+- PostgreSQL 是持久化权威；Redis 只保存可恢复协调状态和 OAuth pending flow。
+- 测试放在各 package 的 `tests/`。禁止在生产 `src/` 写 test-only 代码。
 - Vue 使用 `<script setup lang="ts">`、现有基础组件和主题 token。
 - README 面向使用者，保持简短；长期架构只写入 `docs/architecture.md`。
 - 不添加兼容 shim、重复状态机、第二套配置或补丁式旁路。

@@ -135,7 +135,7 @@ fn config_loader_should_reject_removed_fingerprint_section() {
 
 #[test]
 fn config_loader_should_reject_invalid_codex_core_version() {
-    assert_rejected(valid_config().replace("codex_version: '0.144.2'", "codex_version: 'latest'"));
+    assert_rejected(valid_config().replace("codex_version: '0.144.6'", "codex_version: 'latest'"));
 }
 
 #[test]
@@ -154,7 +154,7 @@ fn config_loader_should_reject_zero_server_port() {
 
 #[test]
 fn config_loader_should_reject_invalid_desktop_profile_fields() {
-    assert_rejected(valid_config().replace("desktop_build: '5307'", "desktop_build: 'build'"));
+    assert_rejected(valid_config().replace("desktop_build: '5628'", "desktop_build: 'build'"));
 }
 
 fn assert_rejected(config: String) {
@@ -164,11 +164,15 @@ fn assert_rejected(config: String) {
 fn valid_config() -> String {
     CONFIG_EXAMPLE
         .replacen(
-            "password: ''",
-            &format!("password: '{POSTGRES_PASSWORD}'"),
+            "password: &postgres_password ''",
+            &format!("password: &postgres_password '{POSTGRES_PASSWORD}'"),
             1,
         )
-        .replacen("password: ''", &format!("password: '{REDIS_PASSWORD}'"), 1)
+        .replacen(
+            "password: &redis_password ''",
+            &format!("password: &redis_password '{REDIS_PASSWORD}'"),
+            1,
+        )
         .replace(
             "default_password: ''",
             &format!("default_password: '{ADMIN_PASSWORD}'"),

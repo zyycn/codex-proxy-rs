@@ -21,6 +21,7 @@ jsonwebtoken = { version = "=10.3.0", default-features = false, features = ["rus
 reqwest = { version = "=0.12.28", default-features = false, features = ["stream", "rustls-tls-native-roots", "gzip", "brotli", "zstd", "deflate", "http2"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+semver = "1.0.27"
 sha2 = "0.11.0"
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", default-features = false, features = ["macros", "net", "sync", "time"] }

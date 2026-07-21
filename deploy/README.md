@@ -27,12 +27,13 @@ openssl rand -hex 24
 
 把结果写入 `deploy/config.yaml`：
 
-- `x-cpr.database.password`
-- `x-cpr.redis.password`
-- `x-cpr.admin.default_password`
+- `store.database.password`
+- `store.redis.password`
+- `admin.default_password`
 
 PostgreSQL 与 Redis 密码必须是 48 位十六进制字符。管理员初始化密码至少 12 位、不能是
-常见弱口令且不能包含 `$`。三个密码不会通过环境变量覆盖，也不能嵌入连接 URL。
+常见弱口令且不能包含 `$`。Compose 通过 `config.yaml` 的凭据桥接区引用同一密码，三个密码
+都不需要额外导出为环境变量，也不能嵌入连接 URL。
 
 Linux 上应用容器以 `10001:10001` 运行，需要允许该组写入应用数据和日志目录：
 
@@ -88,9 +89,9 @@ Compose 使用以下绑定目录：
 
 普通 `docker compose down` 不会删除这些目录。删除 `.runtime` 会永久清除本地状态。
 
-本架构从全新的 `0001_initial.sql` 起步，不支持把旧版本数据库原地升级到当前结构，也不提供
-旧表或旧 Redis 数据的兼容读取。首次启动必须使用空的 PostgreSQL 数据库和空 Redis；需要保留
-旧环境时应独立保存其目录，不能让新旧二进制共享同一份数据目录。
+PostgreSQL 由 `0001_initial.sql` 创建当前业务结构，Redis 保存可丢失的协调状态。
+
+完整运行时、Provider、revision 与恢复边界见 [架构文档](../docs/architecture.md)。
 
 ## Credential 加密 keyring
 

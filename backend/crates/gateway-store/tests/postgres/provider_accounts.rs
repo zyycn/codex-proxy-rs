@@ -55,7 +55,7 @@ async fn core_quota_batch_reads_only_observed_accounts_in_one_contract_call() {
     seed_instance(&database.pool, "inst_openai_admin", "openai")
         .await
         .expect("seed OpenAI instance");
-    let repository = PgProviderAccountRepository::new(database.pool);
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
     for id in ["acct_quota_a", "acct_quota_b", "acct_quota_empty"] {
         repository
             .insert_provider_account(account(id, &format!("user-{id}")))
@@ -103,6 +103,13 @@ async fn core_quota_batch_reads_only_observed_accounts_in_one_contract_call() {
         20
     );
     assert!(observations.iter().all(|value| value.observed_at.is_some()));
+    assert_eq!(
+        current_revision(&database.pool).await,
+        1,
+        "quota observation is runtime state, not a global configuration mutation"
+    );
+
+    database.close().await;
 }
 
 #[tokio::test]
@@ -729,6 +736,11 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
     assert_eq!(unchanged.0, "after refresh");
     assert_eq!(unchanged.1["access_token"], "after-secret");
     assert_eq!(unchanged.2, 2);
+    assert_eq!(
+        current_revision(&database.pool).await,
+        1,
+        "credential refresh advances only credential_revision"
+    );
 
     database.close().await;
 }

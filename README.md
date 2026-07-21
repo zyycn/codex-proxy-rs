@@ -12,7 +12,7 @@
 [![GHCR](https://img.shields.io/badge/GHCR-codex--proxy--rs-2496ED?logo=docker&logoColor=white&style=flat-square)](https://github.com/zyycn/codex-proxy-rs/pkgs/container/codex-proxy-rs)
 [![MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](https://opensource.org/license/mit)
 
-[快速开始](#快速开始) · [客户端接入](#客户端接入) · [运维](#运维) · [部署文档](deploy/README.md) · [架构](docs/app-layer-refactor-architecture.md)
+[快速开始](#快速开始) · [客户端接入](#客户端接入) · [运维](#运维) · [部署文档](deploy/README.md) · [架构](docs/architecture.md)
 
 </div>
 
@@ -26,7 +26,7 @@
 | 协议     | OpenAI Responses JSON、SSE、WebSocket 与模型目录              |
 | Provider | OpenAI OAuth、xAI OAuth，多账号隔离与自动刷新                  |
 | 路由     | Client Key 平台绑定、Provider instance、模型映射与安全 fallback |
-| 延续     | 客户端携带历史；Provider 原生 continuation 固定账号与连接     |
+| 延续     | OpenAI native/replay continuation；xAI 客户端完整历史         |
 | 管理     | Client Key、账号、模型目录、设置、观测、系统与 OAuth          |
 | 计量     | 模型请求 Token、费用、延迟、账号与 Provider 归因               |
 
@@ -47,21 +47,24 @@ sudo chown "$(id -u):10001" deploy/config.yaml
 chmod 0640 deploy/config.yaml
 ```
 
-生成并导出两个基础设施密码：
+分别生成三个密码：
 
 ```bash
-export CPR_DATABASE_PASSWORD="$(openssl rand -hex 24)"
-export CPR_REDIS_PASSWORD="$(openssl rand -hex 24)"
+openssl rand -hex 24
+openssl rand -hex 24
+openssl rand -hex 24
 ```
 
-再生成一次管理员初始密码并写入 `deploy/config.yaml`：
+把结果写入 `deploy/config.yaml`：
 
-| 配置                     | 约束                     |
-| ------------------------ | ------------------------ |
-| `admin.default_password` | 至少 12 位，不能包含 `$` |
+| 配置                       | 约束                         |
+| -------------------------- | ---------------------------- |
+| `store.database.password`  | 48 位十六进制                 |
+| `store.redis.password`     | 48 位十六进制                 |
+| `admin.default_password`   | 至少 12 位，不能包含 `$`      |
 
-`CPR_DATABASE_PASSWORD` 与 `CPR_REDIS_PASSWORD` 必须是 48 位十六进制，并在每次 Compose
-命令的 shell 中可用。
+PostgreSQL、Redis 容器和应用通过同一份 `config.yaml` 使用这两个基础设施密码，不需要额外
+导出环境变量。
 
 Linux 需要允许容器组写入运行目录：
 
@@ -158,8 +161,6 @@ upgrade 与真实客户端 IP；不要暴露 PostgreSQL 或 Redis。
 ## 文档
 
 - [部署](deploy/README.md)
-- [终态代码架构](docs/app-layer-refactor-architecture.md)
-- [终态数据模型](docs/multi-provider-final-database.md)
-- [重构执行报告](docs/app-layer-refactor-execution-report.md)
+- [架构与数据边界](docs/architecture.md)
 - [Release](https://github.com/zyycn/codex-proxy-rs/releases)
 - [容器镜像](https://github.com/zyycn/codex-proxy-rs/pkgs/container/codex-proxy-rs)
