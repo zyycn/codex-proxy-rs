@@ -645,7 +645,6 @@ impl GrokCredentialRefreshService {
                 access_token,
                 SecretValue::new(subject),
                 email.map(SecretValue::new),
-                crate::transport::GROK_CLIENT_VERSION,
             )
             .await
         {

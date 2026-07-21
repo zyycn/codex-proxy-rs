@@ -85,7 +85,6 @@ impl RedirectUriAllowlist {
 #[derive(Clone)]
 pub struct GrokOAuthConfig {
     issuer: Url,
-    client_version: String,
 }
 
 impl GrokOAuthConfig {
@@ -93,24 +92,10 @@ impl GrokOAuthConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError::InvalidClientVersion`] when the version cannot be
-    /// safely emitted as a low-cardinality HTTP header.
-    pub fn official(client_version: impl Into<String>) -> Result<Self, ConfigError> {
-        let client_version = client_version.into();
-        if client_version.is_empty()
-            || client_version.len() > 64
-            || !client_version
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
-        {
-            return Err(ConfigError::InvalidClientVersion);
-        }
-
+    /// Returns an error when the fixed official issuer cannot be constructed.
+    pub fn official() -> Result<Self, ConfigError> {
         let issuer = Url::parse(OFFICIAL_ISSUER).map_err(|_| ConfigError::UntrustedIssuer)?;
-        Ok(Self {
-            issuer,
-            client_version,
-        })
+        Ok(Self { issuer })
     }
 
     /// Returns the fixed issuer URL.
@@ -129,12 +114,6 @@ impl GrokOAuthConfig {
     #[must_use]
     pub const fn scopes(&self) -> &'static [&'static str] {
         OFFICIAL_SCOPES
-    }
-
-    /// 返回已配置的官方客户端版本请求头。
-    #[must_use]
-    pub fn client_version(&self) -> &str {
-        &self.client_version
     }
 
     pub(crate) fn scope_string(&self) -> String {
@@ -184,7 +163,6 @@ impl fmt::Debug for GrokOAuthConfig {
             .field("issuer", &self.issuer)
             .field("client_id", &OFFICIAL_CLIENT_ID)
             .field("scopes", &OFFICIAL_SCOPES)
-            .field("client_version", &self.client_version)
             .finish()
     }
 }

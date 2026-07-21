@@ -115,7 +115,7 @@ async fn client_should_send_exact_oauth_headers_without_api_key() {
             Some("xai-grok-cli"),
             Some("verified-user"),
             Some("person@example.com"),
-            Some("0.1.12"),
+            Some("0.2.106"),
             Some("headless"),
             Some("application/json"),
             None,
@@ -480,7 +480,7 @@ fn session(email: Option<&str>) -> GrokModelCatalogSession {
         SecretValue::new("oauth-access".to_owned()),
         SecretValue::new("verified-user".to_owned()),
         email.map(|value| SecretValue::new(value.to_owned())),
-        "0.1.12",
+        crate::support::xai_wire_profile(),
     )
     .expect("valid OAuth fixture")
 }

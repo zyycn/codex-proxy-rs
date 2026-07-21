@@ -62,7 +62,8 @@ async fn expired_access_token_requires_official_refresh_before_identity_verifica
     let now = Utc::now();
     let transport = Arc::new(RejectingRefreshTransport::default());
     let client = GrokOAuthClient::new(
-        GrokOAuthConfig::official("0.2.101").expect("official config"),
+        GrokOAuthConfig::official().expect("official config"),
+        crate::support::xai_wire_profile(),
         transport.clone(),
         Arc::new(FailClosedTokenVerifier),
     );
@@ -120,7 +121,8 @@ async fn missing_required_scope_should_fail_closed() {
 async fn verified_import_inside_refresh_margin_should_schedule_immediate_refresh() {
     let now = Utc::now();
     let client = GrokOAuthClient::new(
-        GrokOAuthConfig::official("0.2.101").expect("official config"),
+        GrokOAuthConfig::official().expect("official config"),
+        crate::support::xai_wire_profile(),
         Arc::new(DiscoveryTransport),
         Arc::new(AcceptingUserInfoVerifier),
     );
@@ -332,7 +334,8 @@ async fn real_oauth_accounts_should_cross_the_official_verification_boundary() {
     let expected_accounts = entries.len();
     let endpoint_policy = Arc::new(OfficialGrokEndpointPolicy);
     let client = GrokOAuthClient::new(
-        GrokOAuthConfig::official("0.2.101").expect("official config"),
+        GrokOAuthConfig::official().expect("official config"),
+        crate::support::xai_wire_profile(),
         Arc::new(
             ReqwestOAuthTransport::new(endpoint_policy.clone())
                 .expect("production OAuth transport"),
@@ -373,7 +376,8 @@ async fn real_oauth_accounts_should_cross_the_official_verification_boundary() {
 
 async fn verify(candidate: GrokOAuthImportCandidate) -> GrokOAuthImportError {
     let client = GrokOAuthClient::new(
-        GrokOAuthConfig::official("0.2.101").expect("official config"),
+        GrokOAuthConfig::official().expect("official config"),
+        crate::support::xai_wire_profile(),
         Arc::new(DiscoveryTransport),
         Arc::new(FailClosedTokenVerifier),
     );

@@ -13,7 +13,7 @@ use serde_json::{Map, Value};
 use url::Url;
 use zeroize::Zeroizing;
 
-use crate::{GrokHeader, SecretValue};
+use crate::{GrokHeader, SecretValue, XaiWireProfileState};
 
 /// 官方 Grok CLI proxy 模型目录 URL。
 pub const GROK_MODEL_CATALOG_URL: &str = "https://cli-chat-proxy.grok.com/v1/models";
@@ -28,7 +28,6 @@ pub(crate) const MAX_CATALOG_MODELS: usize = 2_048;
 const MAX_DISPLAY_NAME_BYTES: usize = 256;
 const MAX_DESCRIPTION_BYTES: usize = 4 * 1024;
 const MAX_ETAG_BYTES: usize = 256;
-const CLIENT_MODE: &str = "headless";
 
 /// 构造模型目录 OAuth session 失败。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -44,7 +43,7 @@ pub struct GrokModelCatalogSession {
     access_token: SecretValue,
     user_id: SecretValue,
     email: Option<SecretValue>,
-    client_version: String,
+    wire_profile: XaiWireProfileState,
 }
 
 impl GrokModelCatalogSession {
@@ -57,15 +56,13 @@ impl GrokModelCatalogSession {
         access_token: SecretValue,
         user_id: SecretValue,
         email: Option<SecretValue>,
-        client_version: impl Into<String>,
+        wire_profile: XaiWireProfileState,
     ) -> Result<Self, GrokModelCatalogSessionError> {
-        let client_version = client_version.into();
         if !valid_secret_header(&access_token, 64 * 1024)
             || !valid_secret_header(&user_id, 1_024)
             || email
                 .as_ref()
                 .is_some_and(|value| !valid_secret_header(value, 1_024))
-            || !valid_header_atom(&client_version, 64)
         {
             return Err(GrokModelCatalogSessionError::InvalidHeaderData);
         }
@@ -73,7 +70,7 @@ impl GrokModelCatalogSession {
             access_token,
             user_id,
             email,
-            client_version,
+            wire_profile,
         })
     }
 }
@@ -85,7 +82,7 @@ impl fmt::Debug for GrokModelCatalogSession {
             .field("access_token", &"[REDACTED]")
             .field("user_id", &"[REDACTED]")
             .field("email", &self.email.as_ref().map(|_| "[REDACTED]"))
-            .field("client_version", &self.client_version)
+            .field("wire_profile", &self.wire_profile)
             .finish()
     }
 }
@@ -108,8 +105,11 @@ impl GrokModelCatalogRequest {
             ),
             GrokHeader::public("X-XAI-Token-Auth", "xai-grok-cli"),
             GrokHeader::sensitive("x-userid", session.user_id.clone()),
-            GrokHeader::public("x-grok-client-version", session.client_version.clone()),
-            GrokHeader::public("x-grok-client-mode", CLIENT_MODE),
+            GrokHeader::public(
+                "x-grok-client-version",
+                session.wire_profile.client_version(),
+            ),
+            GrokHeader::public("x-grok-client-mode", session.wire_profile.client_mode()),
             GrokHeader::public("accept", "application/json"),
         ];
         if let Some(email) = &session.email {
@@ -257,8 +257,11 @@ impl GrokBillingRequest {
             ),
             GrokHeader::public("X-XAI-Token-Auth", "xai-grok-cli"),
             GrokHeader::sensitive("x-userid", session.user_id.clone()),
-            GrokHeader::public("x-grok-client-version", session.client_version.clone()),
-            GrokHeader::public("x-grok-client-mode", CLIENT_MODE),
+            GrokHeader::public(
+                "x-grok-client-version",
+                session.wire_profile.client_version(),
+            ),
+            GrokHeader::public("x-grok-client-mode", session.wire_profile.client_mode()),
             GrokHeader::public("accept", "application/json"),
         ];
         if let Some(email) = &session.email {
@@ -1006,12 +1009,4 @@ fn valid_secret_header(value: &SecretValue, max_bytes: usize) -> bool {
             .expose()
             .bytes()
             .all(|byte| (0x20..=0x7e).contains(&byte))
-}
-
-fn valid_header_atom(value: &str, max_bytes: usize) -> bool {
-    !value.is_empty()
-        && value.len() <= max_bytes
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
 }

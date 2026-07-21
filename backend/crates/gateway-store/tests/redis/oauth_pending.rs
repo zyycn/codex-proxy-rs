@@ -10,11 +10,12 @@ use gateway_core::{
 };
 use gateway_store::redis::RedisOAuthPendingFlowRepository;
 use redis::aio::ConnectionManager;
+use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
 #[tokio::test]
 async fn codex_pending_flow_wrong_owner_does_not_consume_it() {
-    let Some(repository) = repository().await else {
+    let Some((repository, mut connection, namespace)) = repository().await else {
         return;
     };
     let provider = ProviderKind::new("openai").expect("provider kind");
@@ -45,6 +46,35 @@ async fn codex_pending_flow_wrong_owner_does_not_consume_it() {
             .expect("store pending flow"),
         OAuthPendingPutOutcome::Stored
     );
+    let fingerprint = scoped_fingerprint(&provider, &flow);
+    let key = format!("{namespace}:oauth-pending:v1:openai:{fingerprint}");
+    let mut fields: Vec<String> = redis::cmd("HKEYS")
+        .arg(&key)
+        .query_async(&mut connection)
+        .await
+        .expect("read pending fields");
+    fields.sort();
+    assert_eq!(
+        fields,
+        [
+            "expires_at_epoch_seconds",
+            "owner_fingerprint",
+            "provider_payload",
+        ]
+    );
+    let expires_at: i64 = redis::cmd("HGET")
+        .arg(&key)
+        .arg("expires_at_epoch_seconds")
+        .query_async(&mut connection)
+        .await
+        .expect("read pending expiry");
+    assert!(expires_at > chrono::Utc::now().timestamp());
+    let ttl: i64 = redis::cmd("PTTL")
+        .arg(&key)
+        .query_async(&mut connection)
+        .await
+        .expect("read pending TTL");
+    assert!(ttl > 0 && ttl <= 60_000);
     assert_eq!(
         repository
             .take_if_owner(&provider, &flow, &other_owner)
@@ -68,14 +98,52 @@ async fn codex_pending_flow_wrong_owner_does_not_consume_it() {
     );
 }
 
-async fn repository() -> Option<Arc<RedisOAuthPendingFlowRepository>> {
+#[tokio::test]
+async fn same_raw_flow_is_scoped_by_provider_kind() {
+    let Some((repository, _connection, _namespace)) = repository().await else {
+        return;
+    };
+    let flow =
+        OAuthPendingBinding::try_new(format!("flow-{}", Uuid::new_v4())).expect("flow binding");
+    let owner = OAuthPendingBinding::try_new("owner").expect("owner binding");
+    for provider_name in ["openai", "xai"] {
+        let provider = ProviderKind::new(provider_name).expect("provider kind");
+        assert_eq!(
+            repository
+                .put_if_absent(
+                    NewOAuthPendingFlow::try_new(
+                        provider,
+                        flow.clone(),
+                        owner.clone(),
+                        Duration::from_secs(60),
+                        OpaqueProviderData::new(serde_json::Map::new()),
+                    )
+                    .expect("pending flow"),
+                )
+                .await
+                .expect("store provider-scoped pending flow"),
+            OAuthPendingPutOutcome::Stored
+        );
+    }
+}
+
+async fn repository() -> Option<(
+    Arc<RedisOAuthPendingFlowRepository>,
+    ConnectionManager,
+    String,
+)> {
     let redis_url = std::env::var("CPR_TEST_REDIS_URL").ok()?;
     let client = redis::Client::open(redis_url).ok()?;
     let connection: ConnectionManager = client.get_connection_manager().await.ok()?;
-    RedisOAuthPendingFlowRepository::new(
-        connection,
-        &format!("gateway-store-test-{}", Uuid::new_v4()),
-    )
-    .ok()
-    .map(Arc::new)
+    let namespace = format!("gateway-store-test-{}", Uuid::new_v4());
+    let repository = RedisOAuthPendingFlowRepository::new(connection.clone(), &namespace).ok()?;
+    Some((Arc::new(repository), connection, namespace))
+}
+
+fn scoped_fingerprint(provider: &ProviderKind, flow: &OAuthPendingBinding) -> String {
+    let mut digest = Sha256::new();
+    digest.update(provider.as_str().as_bytes());
+    digest.update([0]);
+    digest.update(flow.expose_to_store().as_bytes());
+    hex::encode(digest.finalize())
 }
