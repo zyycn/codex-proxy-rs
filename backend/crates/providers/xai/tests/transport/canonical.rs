@@ -1,7 +1,10 @@
 use gateway_core::error::ProviderError;
 use gateway_core::event::{ContentKind, FinishReason, GatewayEvent, ProviderEvent};
+use gateway_core::operation::{GenerateRequest, ProtocolPayload};
+use gateway_core::policy::ClientApiKeyId;
+use serde_json::Value;
 
-use provider_xai::{GrokCanonicalDecoder, grok_billing_breakdown};
+use provider_xai::{GrokCanonicalDecoder, GrokResponsesRequest, grok_billing_breakdown};
 
 fn terminal_cost_events(
     model: &str,
@@ -45,6 +48,22 @@ fn wire_events(events: &[ProviderEvent]) -> Vec<&gateway_core::event::ProtocolWi
         .iter()
         .filter_map(ProviderEvent::wire_event)
         .collect()
+}
+
+fn tool_request(body: Value) -> GrokResponsesRequest {
+    let Value::Object(body) = body else {
+        panic!("request fixture must be an object");
+    };
+    let request = GenerateRequest::from_protocol_payload(
+        Vec::new(),
+        ProtocolPayload::json_object("openai", body).expect("OpenAI payload"),
+    );
+    GrokResponsesRequest::encode(
+        &request,
+        "grok-4.5",
+        &ClientApiKeyId::new("key_xai_canonical_tools").expect("client key"),
+    )
+    .expect("tool request")
 }
 
 fn calculated_cost_ticks(events: &[GatewayEvent]) -> Option<u128> {
@@ -253,6 +272,79 @@ fn decoder_should_normalize_function_call_and_tool_finish() {
 }
 
 #[test]
+fn decoder_should_restore_namespace_custom_search_and_apply_patch_wire_events() {
+    let request = tool_request(serde_json::json!({
+        "model": "client",
+        "input": "use tools",
+        "tools": [
+            {"type": "namespace", "name": "workspace", "tools": [{
+                "type": "function", "name": "read", "parameters": {"type": "object"}
+            }]},
+            {"type": "custom", "name": "render"},
+            {"type": "tool_search", "execution": "client"},
+            {"type": "apply_patch"}
+        ]
+    }));
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_tools\"}}\n\n",
+        "event: response.output_item.added\n",
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"item_fn\",\"type\":\"function_call\",\"call_id\":\"call_fn\",\"name\":\"workspace__read\"}}\n\n",
+        "event: response.output_item.done\n",
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"item_fn\",\"type\":\"function_call\",\"call_id\":\"call_fn\",\"name\":\"workspace__read\",\"arguments\":\"{\\\"path\\\":\\\"a.txt\\\"}\"}}\n\n",
+        "event: response.output_item.added\n",
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"item_custom\",\"type\":\"function_call\",\"call_id\":\"call_custom\",\"name\":\"render\"}}\n\n",
+        "event: response.function_call_arguments.delta\n",
+        "data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"item_custom\",\"call_id\":\"call_custom\",\"output_index\":1,\"delta\":\"{\\\"input\\\":\\\"raw\\\"}\"}\n\n",
+        "event: response.function_call_arguments.done\n",
+        "data: {\"type\":\"response.function_call_arguments.done\",\"item_id\":\"item_custom\",\"call_id\":\"call_custom\",\"output_index\":1,\"arguments\":\"{\\\"input\\\":\\\"raw\\\"}\"}\n\n",
+        "event: response.output_item.done\n",
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"item_custom\",\"type\":\"function_call\",\"call_id\":\"call_custom\",\"name\":\"render\",\"arguments\":\"{\\\"input\\\":\\\"raw\\\"}\"}}\n\n",
+        "event: response.output_item.added\n",
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":2,\"item\":{\"id\":\"item_search\",\"type\":\"function_call\",\"call_id\":\"call_search\",\"name\":\"xai_proxy_tool_search\"}}\n\n",
+        "event: response.output_item.done\n",
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":2,\"item\":{\"id\":\"item_search\",\"type\":\"function_call\",\"call_id\":\"call_search\",\"name\":\"xai_proxy_tool_search\",\"arguments\":\"{\\\"goal\\\":\\\"files\\\"}\"}}\n\n",
+        "event: response.output_item.added\n",
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":3,\"item\":{\"id\":\"item_patch\",\"type\":\"function_call\",\"call_id\":\"call_patch\",\"name\":\"xai_proxy_apply_patch\"}}\n\n",
+        "event: response.function_call_arguments.done\n",
+        "data: {\"type\":\"response.function_call_arguments.done\",\"item_id\":\"item_patch\",\"call_id\":\"call_patch\",\"output_index\":3,\"arguments\":\"{\\\"operation\\\":{\\\"type\\\":\\\"delete_file\\\",\\\"path\\\":\\\"old.txt\\\"}}\"}\n\n",
+        "event: response.output_item.done\n",
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":3,\"item\":{\"id\":\"item_patch\",\"type\":\"function_call\",\"call_id\":\"call_patch\",\"name\":\"xai_proxy_apply_patch\",\"arguments\":\"{\\\"operation\\\":{\\\"type\\\":\\\"delete_file\\\",\\\"path\\\":\\\"old.txt\\\"}}\"}}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_tools\",\"status\":\"completed\",\"tools\":[{\"type\":\"function\",\"name\":\"workspace__read\"}]}}\n\n",
+    );
+    let events = GrokCanonicalDecoder::for_request("grok-4.5", &request)
+        .push(body.as_bytes())
+        .expect("translated tool stream");
+    let wire = wire_events(&events);
+
+    assert!(wire.iter().any(|event| {
+        event.data().pointer("/item/name") == Some(&serde_json::json!("read"))
+            && event.data().pointer("/item/namespace") == Some(&serde_json::json!("workspace"))
+    }));
+    assert!(wire.iter().any(|event| {
+        event.event_type() == Some("response.custom_tool_call_input.done")
+            && event.data().pointer("/input") == Some(&serde_json::json!("raw"))
+    }));
+    assert!(wire.iter().any(|event| {
+        event.data().pointer("/item/type") == Some(&serde_json::json!("tool_search_call"))
+            && event.data().pointer("/item/arguments/goal") == Some(&serde_json::json!("files"))
+    }));
+    assert_eq!(
+        wire.iter()
+            .filter(|event| event.data().pointer("/item/type")
+                == Some(&serde_json::json!("apply_patch_call")))
+            .count(),
+        2
+    );
+    assert_eq!(
+        wire.last()
+            .and_then(|event| event.data().pointer("/response/tools/0/type")),
+        Some(&serde_json::json!("namespace"))
+    );
+}
+
+#[test]
 fn decoder_should_coalesce_reasoning_item_part_and_summary_index() {
     let body = concat!(
         "event: response.created\n",
@@ -283,7 +375,11 @@ fn decoder_should_preserve_unknown_events_as_openai_wire() {
     let body = concat!(
         "event: response.created\n",
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n",
+        "event: xai.internal.trace\n",
+        "data: {\"type\":\"xai.internal.trace\",\"secret\":\"must-not-reach-client\"}\n\n",
         "event: response.backend_tool_call.started\n",
+        "id: evt_future\n",
+        "retry: 1250\n",
         "data: {\"type\":\"response.backend_tool_call.started\",\"future\":{\"nested\":[1,true]}}\n\n",
         "event: response.completed\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\"}}\n\n",
@@ -299,6 +395,8 @@ fn decoder_should_preserve_unknown_events_as_openai_wire() {
         wire[1].event_type(),
         Some("response.backend_tool_call.started")
     );
+    assert_eq!(wire[1].sse_id(), Some("evt_future"));
+    assert_eq!(wire[1].sse_retry(), Some(1_250));
     assert_eq!(
         wire[1].data().pointer("/future/nested"),
         Some(&serde_json::json!([1, true]))

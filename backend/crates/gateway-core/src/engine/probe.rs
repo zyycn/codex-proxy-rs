@@ -2,15 +2,16 @@
 
 use futures::future::BoxFuture;
 
-use crate::engine::credential::ProviderAccountId;
 use crate::error::GatewayError;
 use crate::routing::{ProviderInstanceId, UpstreamModelId};
+use crate::{engine::credential::ProviderAccountId, operation::Operation};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AccountProbeRequest {
     pub account_id: ProviderAccountId,
     pub provider_instance_id: ProviderInstanceId,
     pub upstream_model: UpstreamModelId,
+    pub operation: Operation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

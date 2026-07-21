@@ -9,12 +9,13 @@ use gateway_core::engine::credential::{
 };
 use gateway_core::engine::provider::ProviderResource;
 use gateway_core::routing::{ProviderInstanceId, UpstreamModelId};
+use sha2::{Digest as _, Sha256};
 
 use crate::SecretValue;
 
 /// Opaque, pseudonymous egress/session key understood by the injected
 /// inference transport.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct GrokSessionBinding(String);
 
 impl GrokSessionBinding {
@@ -45,6 +46,32 @@ impl GrokSessionBinding {
 impl fmt::Debug for GrokSessionBinding {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("GrokSessionBinding([PSEUDONYM])")
+    }
+}
+
+/// 下游租户与显式会话共同派生的账号亲和键。
+#[derive(Clone, PartialEq, Eq)]
+pub struct GrokSessionAffinityKey([u8; 32]);
+
+impl GrokSessionAffinityKey {
+    pub(crate) const fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// 为候选账号计算稳定 rendezvous 分值，原始会话值不会离开 Provider。
+    pub(crate) fn score(&self, account_id: &ProviderAccountId) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(b"xai-account-affinity-v1\0");
+        hasher.update(self.0);
+        hasher.update(b"\0");
+        hasher.update(account_id.as_str().as_bytes());
+        hasher.finalize().into()
+    }
+}
+
+impl fmt::Debug for GrokSessionAffinityKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("GrokSessionAffinityKey([PSEUDONYM])")
     }
 }
 
@@ -167,6 +194,7 @@ pub struct GrokSessionSelection {
     excluded_accounts: BTreeSet<ProviderAccountId>,
     required_account: Option<ProviderAccountId>,
     account_selection_policy: AccountSelectionPolicy,
+    affinity: Option<GrokSessionAffinityKey>,
     deadline: SystemTime,
 }
 
@@ -187,8 +215,16 @@ impl GrokSessionSelection {
             excluded_accounts,
             required_account,
             account_selection_policy,
+            affinity: None,
             deadline,
         }
+    }
+
+    /// 附着仅由显式客户端会话派生的账号亲和键。
+    #[must_use]
+    pub fn with_affinity(mut self, affinity: Option<GrokSessionAffinityKey>) -> Self {
+        self.affinity = affinity;
+        self
     }
 
     /// Returns the frozen provider instance ID.
@@ -221,6 +257,12 @@ impl GrokSessionSelection {
         self.account_selection_policy
     }
 
+    /// 返回不含原始客户端会话值的账号亲和键。
+    #[must_use]
+    pub const fn affinity(&self) -> Option<&GrokSessionAffinityKey> {
+        self.affinity.as_ref()
+    }
+
     /// Returns the absolute deadline that bounds the scheduling lease.
     #[must_use]
     pub const fn deadline(&self) -> SystemTime {
@@ -245,6 +287,8 @@ pub enum GrokCredentialFailure {
     },
     /// The selected OAuth account exhausted its quota.
     QuotaExhausted,
+    /// A successful SSE response ended before a terminal Responses event.
+    StreamInterrupted,
 }
 
 /// Future returned after one best-effort credential feedback write.

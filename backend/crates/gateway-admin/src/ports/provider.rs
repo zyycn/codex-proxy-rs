@@ -3,7 +3,11 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
-use gateway_core::{engine::credential::ProviderAccountId, routing::ProviderKind};
+use gateway_core::{
+    engine::credential::ProviderAccountId,
+    operation::Operation,
+    routing::{ProviderKind, UpstreamModelId},
+};
 
 use crate::model::observability::{
     CalculatedBillingBreakdown, DashboardWireProfile, ProviderBillingInput,
@@ -13,6 +17,7 @@ use crate::model::provider_credentials::{
     PrepareCredentialImport, PrepareCredentialRefresh, PrepareCredentialRotation,
     PreparedAuthorizationCommit, PreparedCredentialImport, PreparedCredentialRotation,
     ProviderExport, ProviderExportCredentialInput, ProviderModels, ProviderQuota,
+    ProviderQuotaRequest,
 };
 
 /// Provider 管理失败的稳定分类。
@@ -59,7 +64,14 @@ pub trait ProviderAdmin: Send + Sync {
     /// 成功之后，不参与事务成败，也不得恢复或改写已经提交的账号状态。
     async fn account_unavailable(&self, account_id: &ProviderAccountId);
 
-    /// 返回该 Provider 实际持有的 Dashboard wire 画像；没有画像能力时返回 `None`。
+    /// 生成一次连接测试所需的 Provider-owned operation；Core 负责实际执行与落账。
+    fn connection_test_operation(
+        &self,
+        upstream_model: &UpstreamModelId,
+        input_text: &str,
+    ) -> Result<Operation, ProviderAdminError>;
+
+    /// 返回该 Provider 实际持有的 Dashboard 上游身份画像。
     fn dashboard_wire_profile(&self) -> Option<DashboardWireProfile>;
 
     /// 使用 Provider-owned 价格规则恢复持久请求的逐项费用。
@@ -95,8 +107,7 @@ pub trait ProviderAdmin: Send + Sync {
 
     async fn quota(
         &self,
-        account_id: &ProviderAccountId,
-        refresh: bool,
+        request: ProviderQuotaRequest,
     ) -> Result<ProviderQuota, ProviderAdminError>;
 
     async fn models(
@@ -148,23 +159,12 @@ impl ProviderAdminRegistry {
             .ok_or_else(|| ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
     }
 
-    /// 返回唯一注册的 Dashboard wire 画像。
-    ///
-    /// # Errors
-    ///
-    /// 没有 Provider 提供画像时返回 Unsupported；多个 Provider 同时声明画像时返回 Conflict。
-    pub fn dashboard_wire_profile(&self) -> Result<DashboardWireProfile, ProviderAdminError> {
-        let mut profiles = self
-            .providers
+    /// 返回所有已注册 Provider 的 Dashboard 上游身份画像。
+    pub fn dashboard_wire_profiles(&self) -> Vec<DashboardWireProfile> {
+        self.providers
             .values()
-            .filter_map(|provider| provider.dashboard_wire_profile());
-        let profile = profiles
-            .next()
-            .ok_or_else(|| ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))?;
-        if profiles.next().is_some() {
-            return Err(ProviderAdminError::new(ProviderAdminErrorKind::Conflict));
-        }
-        Ok(profile)
+            .filter_map(|provider| provider.dashboard_wire_profile())
+            .collect()
     }
 
     /// 动态分派 Provider-owned 费用规则，不含任何具体 Provider 分支。

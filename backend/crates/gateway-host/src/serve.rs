@@ -113,7 +113,7 @@ pub(crate) async fn serve_router(
     let listener = tokio::net::TcpListener::bind(format!("{host}:{port}"))
         .await
         .map_err(ServeError::Bind)?;
-    tracing::info!(host, port, "网关开始监听");
+    tracing::info!(target: "gateway_startup", host, port, "网关开始监听");
 
     let shutdown_cancellation = cancellation.clone();
     let shutdown_connections = Arc::clone(&connections);

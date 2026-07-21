@@ -27,10 +27,11 @@ pub use catalog::{
     MAX_GROK_MODEL_CATALOG_BYTES, parse_grok_billing, parse_grok_model_catalog,
 };
 pub use config::{
-    GROK_CLI_BASE_URL, GROK_CLIENT_VERSION, GrokProviderConfigError, GrokProviderInstanceConfig,
+    GROK_CLI_BASE_URL, GROK_CLIENT_IDENTIFIER, GROK_CLIENT_MODE, GROK_CLIENT_VERSION,
+    GROK_TARGET_ARCH, GROK_TARGET_OS, GrokProviderConfigError, GrokProviderInstanceConfig,
     GrokProviderTransport, XAI_PROVIDER_NAME,
 };
-pub use headers::{GrokHeader, GrokHeaderValue, build_grok_headers};
+pub use headers::{GrokClientIdentity, GrokHeader, GrokHeaderValue, build_grok_headers};
 pub use network::{
     GrokDnsResolutionError, GrokDnsResolutionPlan, GrokDnsResolutionPolicy, GrokEndpointPolicy,
     GrokReqwestTransportBuildError, OfficialGrokEndpointPolicy, ReqwestGrokInferenceTransport,
@@ -38,9 +39,9 @@ pub use network::{
 };
 pub use request::{GrokRequestEncodeError, GrokResponsesRequest};
 pub use session::{
-    GrokCredentialFailure, GrokCredentialFeedbackFuture, GrokSessionBinding, GrokSessionDataError,
-    GrokSessionLeaseGuard, GrokSessionSelection, GrokSessionSelector, GrokSessionSelectorError,
-    GrokSessionSelectorFuture, SelectedGrokSession,
+    GrokCredentialFailure, GrokCredentialFeedbackFuture, GrokSessionAffinityKey,
+    GrokSessionBinding, GrokSessionDataError, GrokSessionLeaseGuard, GrokSessionSelection,
+    GrokSessionSelector, GrokSessionSelectorError, GrokSessionSelectorFuture, SelectedGrokSession,
 };
 pub use transport::{
     GrokInferenceChunkStream, GrokInferenceRequest, GrokInferenceResponse, GrokInferenceTransport,

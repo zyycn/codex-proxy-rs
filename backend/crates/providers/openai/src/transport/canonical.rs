@@ -197,7 +197,13 @@ impl CodexCanonicalDecoder {
                 return self.failure(output, CodexCanonicalError::Protocol(error));
             }
             let semantic_output = response_event_signals(Some(event_type), &value).semantic_output;
-            let wire = match ProtocolWireEvent::json("openai", event.event, value) {
+            let wire = match ProtocolWireEvent::json_with_sse_metadata(
+                "openai",
+                event.event,
+                value,
+                event.id,
+                event.retry,
+            ) {
                 Ok(wire) => wire,
                 Err(_) => {
                     return self.failure(

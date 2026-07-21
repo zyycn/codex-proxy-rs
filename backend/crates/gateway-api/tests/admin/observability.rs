@@ -67,7 +67,8 @@ mod response {
     use chrono::{TimeZone, Utc};
     use gateway_admin::model::observability::DesktopReleaseStatus;
     use gateway_api::admin::observability::{
-        BillingView, CostCoverageView, CursorWire, DashboardDesktopReleaseStatusView, PageData,
+        BillingView, CostCoverageView, CursorWire, DashboardDesktopReleaseStatusView,
+        DashboardWireAttributeView, DashboardWireProfileView, DashboardWireTargetView, PageData,
         PageMeta, TokenDetailsView, TrendData, TrendKind, TrendPointView, TrendSummaryView,
     };
     use serde_json::json;
@@ -82,6 +83,36 @@ mod response {
         let value = serde_json::to_value(data).unwrap();
         assert_eq!(value["page"]["pageSize"], 50);
         assert_eq!(value["nextCursor"], "cursor");
+    }
+
+    #[test]
+    fn dashboard_wire_profiles_should_keep_provider_specific_attributes() {
+        let value = serde_json::to_value(DashboardWireProfileView {
+            provider: "xai".to_owned(),
+            product: "Grok Build".to_owned(),
+            version: "0.2.106".to_owned(),
+            build: None,
+            target: DashboardWireTargetView {
+                os_type: "linux".to_owned(),
+                os_version: "—".to_owned(),
+                arch: "x86_64".to_owned(),
+                terminal: "headless".to_owned(),
+            },
+            user_agent: "grok-shell/0.2.106 (linux; x86_64)".to_owned(),
+            attributes: vec![DashboardWireAttributeView {
+                label: "客户端标识".to_owned(),
+                value: "grok-shell".to_owned(),
+            }],
+            verified_at: None,
+            release: None,
+        })
+        .expect("dashboard profile");
+
+        assert_eq!(value["provider"], "xai");
+        assert_eq!(value["version"], "0.2.106");
+        assert_eq!(value["attributes"][0]["label"], "客户端标识");
+        assert!(value.get("release").is_none());
+        assert!(value.get("verifiedAt").is_none());
     }
 
     #[test]

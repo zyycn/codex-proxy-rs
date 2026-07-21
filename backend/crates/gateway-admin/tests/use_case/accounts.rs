@@ -127,6 +127,14 @@ impl ProviderAdmin for FakeProviderAdmin {
         self.record("provider.account_unavailable");
     }
 
+    fn connection_test_operation(
+        &self,
+        _: &gateway_core::routing::UpstreamModelId,
+        _: &str,
+    ) -> Result<gateway_core::operation::Operation, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
     fn dashboard_wire_profile(
         &self,
     ) -> Option<gateway_admin::model::observability::DashboardWireProfile> {
@@ -236,8 +244,7 @@ impl ProviderAdmin for FakeProviderAdmin {
 
     async fn quota(
         &self,
-        _: &ProviderAccountId,
-        _: bool,
+        _: gateway_admin::model::provider_credentials::ProviderQuotaRequest,
     ) -> Result<ProviderQuota, ProviderAdminError> {
         Ok(ProviderQuota {
             observed_at: None,

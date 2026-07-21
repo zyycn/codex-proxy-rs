@@ -3,21 +3,24 @@
 use std::cell::Cell;
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use futures::StreamExt;
 use gateway_core::engine::UpstreamSendState;
+use reqwest::Client;
+use serde_json::json;
 use url::Url;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use provider_xai::{
     FailClosedTokenVerifier, FormField, GrokBillingClient, GrokDnsResolutionPlan,
-    GrokDnsResolutionPolicy, GrokInferenceRequest, GrokInferenceTransport,
+    GrokDnsResolutionPolicy, GrokEndpointPolicy, GrokInferenceRequest, GrokInferenceTransport,
     GrokInferenceTransportErrorKind, GrokModelCatalogSession, GrokOAuthClient, GrokOAuthConfig,
-    GrokSessionBinding, HttpMethod, OAuthHttpRequest, OAuthHttpTransport,
-    OfficialGrokEndpointPolicy, ReqwestGrokInferenceTransport, ReqwestGrokModelCatalogTransport,
-    ReqwestOAuthTransport, SecretValue,
+    GrokReqwestTransportBuildError, GrokSessionBinding, HttpMethod, OAuthHttpRequest,
+    OAuthHttpTransport, OfficialGrokEndpointPolicy, ReqwestGrokInferenceTransport,
+    ReqwestGrokModelCatalogTransport, ReqwestOAuthTransport, SecretValue,
 };
 
 use crate::support::loopback_endpoint_policy;
@@ -87,6 +90,73 @@ async fn inference_transport_should_stream_one_official_shape_response() {
 }
 
 #[tokio::test]
+async fn inference_transport_should_reuse_one_client_only_within_the_same_binding() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw("data: [DONE]\n\n", "text/event-stream"),
+        )
+        .expect(3)
+        .mount(&server)
+        .await;
+    let origin = Url::parse(&server.uri()).expect("wiremock origin");
+    let client_builds = Arc::new(AtomicUsize::new(0));
+    let endpoint_policy: Arc<dyn GrokEndpointPolicy> = Arc::new(CountingEndpointPolicy {
+        inner: loopback_endpoint_policy(&origin),
+        inference_client_builds: Arc::clone(&client_builds),
+    });
+    let transport = ReqwestGrokInferenceTransport::new(endpoint_policy).expect("transport");
+
+    execute_inference(&transport, &origin, "account-a").await;
+    execute_inference(&transport, &origin, "account-a").await;
+    execute_inference(&transport, &origin, "account-b").await;
+
+    assert_eq!(client_builds.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn inference_transport_should_evict_the_least_recent_binding_at_the_fixed_capacity() {
+    let server = MockServer::start().await;
+    let distinct_bindings = ReqwestGrokInferenceTransport::MAX_CACHED_ACCOUNT_CLIENTS + 1;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw("data: [DONE]\n\n", "text/event-stream"),
+        )
+        .expect(distinct_bindings as u64 + 2)
+        .mount(&server)
+        .await;
+    let origin = Url::parse(&server.uri()).expect("wiremock origin");
+    let client_builds = Arc::new(AtomicUsize::new(0));
+    let endpoint_policy: Arc<dyn GrokEndpointPolicy> = Arc::new(CountingEndpointPolicy {
+        inner: loopback_endpoint_policy(&origin),
+        inference_client_builds: Arc::clone(&client_builds),
+    });
+    let transport = ReqwestGrokInferenceTransport::new(endpoint_policy).expect("transport");
+
+    for index in 0..distinct_bindings {
+        execute_inference(&transport, &origin, &format!("account-{index}")).await;
+    }
+    execute_inference(
+        &transport,
+        &origin,
+        &format!("account-{}", distinct_bindings - 1),
+    )
+    .await;
+    let builds_after_cached_binding = client_builds.load(Ordering::SeqCst);
+    execute_inference(&transport, &origin, "account-0").await;
+
+    assert_eq!(
+        (
+            builds_after_cached_binding,
+            client_builds.load(Ordering::SeqCst),
+        ),
+        (distinct_bindings, distinct_bindings + 1),
+    );
+}
+
+#[tokio::test]
 async fn inference_transport_should_classify_http_failures_without_retaining_bodies() {
     let cases = [
         (400, GrokInferenceTransportErrorKind::InvalidRequest),
@@ -136,6 +206,58 @@ async fn inference_transport_should_classify_http_failures_without_retaining_bod
 }
 
 #[tokio::test]
+async fn inference_transport_should_scope_forbidden_failures_from_safe_metadata() {
+    let cases = [
+        (
+            json!({"error": {"code": "invalid_token", "message": "token expired"}}),
+            GrokInferenceTransportErrorKind::Unauthorized,
+            true,
+            Some("invalid_token"),
+        ),
+        (
+            json!({"error": {"code": "usage_exhausted", "message": "used all the included free usage for model"}}),
+            GrokInferenceTransportErrorKind::QuotaExhausted,
+            false,
+            Some("usage_exhausted"),
+        ),
+        (
+            json!({"error": {"code": "permission_denied", "message": "access to the chat endpoint is denied"}}),
+            GrokInferenceTransportErrorKind::PermissionDenied,
+            true,
+            Some("permission_denied"),
+        ),
+        (
+            json!({"error": {"code": "policy_denied", "message": "request rejected"}}),
+            GrokInferenceTransportErrorKind::PermissionDenied,
+            false,
+            Some("policy_denied"),
+        ),
+    ];
+
+    for (body, expected_kind, expected_recovery, expected_code) in cases {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let origin = Url::parse(&server.uri()).expect("wiremock origin");
+        let error = inference_transport(&origin)
+            .execute(inference_request(&origin))
+            .await
+            .expect_err("forbidden response must be classified");
+
+        assert_eq!(error.kind(), expected_kind);
+        assert_eq!(error.requires_credential_recovery(), expected_recovery);
+        assert_eq!(
+            error.upstream_code().map(|code| code.as_str()),
+            expected_code
+        );
+    }
+}
+
+#[tokio::test]
 async fn inference_transport_should_bound_retry_after_to_the_safe_window() {
     for (header, expected) in [
         ("120", Some(Duration::from_secs(120))),
@@ -160,6 +282,38 @@ async fn inference_transport_should_bound_retry_after_to_the_safe_window() {
             .expect_err("rate limit response must fail");
 
         assert_eq!(error.retry_after(), expected);
+    }
+}
+
+#[tokio::test]
+async fn inference_transport_should_classify_reasoning_decode_rejections() {
+    for message in [
+        "could not decode the compaction blob",
+        "could not decrypt the provided encrypted_content",
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(
+                ResponseTemplate::new(400).set_body_json(json!({"error": {"message": message}})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let origin = Url::parse(&server.uri()).expect("wiremock origin");
+        let error = inference_transport(&origin)
+            .execute(inference_request(&origin))
+            .await
+            .expect_err("reasoning decode rejection must be classified");
+
+        assert_eq!(
+            error.kind(),
+            GrokInferenceTransportErrorKind::InvalidRequest
+        );
+        assert_eq!(
+            error.upstream_code().map(|code| code.as_str()),
+            Some("reasoning_decode_failed")
+        );
     }
 }
 
@@ -347,6 +501,70 @@ fn inference_request(origin: &Url) -> GrokInferenceRequest {
         br#"{"model":"grok-code-test","stream":true}"#.to_vec(),
         GrokSessionBinding::new("wiremock-binding").expect("binding"),
     )
+}
+
+async fn execute_inference(transport: &ReqwestGrokInferenceTransport, origin: &Url, binding: &str) {
+    let request = GrokInferenceRequest::new(
+        origin.join("v1/responses").expect("responses URL"),
+        Vec::new(),
+        br#"{"model":"grok-code-test","stream":true}"#.to_vec(),
+        GrokSessionBinding::new(binding).expect("binding"),
+    );
+    let chunks = transport
+        .execute(request)
+        .await
+        .expect("SSE response")
+        .into_body()
+        .collect::<Vec<_>>()
+        .await;
+    assert!(chunks.iter().all(Result::is_ok), "SSE body must be valid");
+}
+
+#[derive(Debug)]
+struct CountingEndpointPolicy {
+    inner: Arc<dyn GrokEndpointPolicy>,
+    inference_client_builds: Arc<AtomicUsize>,
+}
+
+impl GrokEndpointPolicy for CountingEndpointPolicy {
+    fn build_oauth_client(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<Client, GrokReqwestTransportBuildError> {
+        self.inner.build_oauth_client(timeout)
+    }
+
+    fn build_inference_client(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<Client, GrokReqwestTransportBuildError> {
+        self.inference_client_builds.fetch_add(1, Ordering::SeqCst);
+        self.inner.build_inference_client(timeout)
+    }
+
+    fn validate_oauth(&self, url: &Url) -> bool {
+        self.inner.validate_oauth(url)
+    }
+
+    fn validate_inference(&self, url: &Url) -> bool {
+        self.inner.validate_inference(url)
+    }
+
+    fn validate_model_catalog(&self, url: &Url) -> bool {
+        self.inner.validate_model_catalog(url)
+    }
+
+    fn route_billing(&self, url: &Url) -> Option<Url> {
+        self.inner.route_billing(url)
+    }
+
+    fn validate_jwks(&self, url: &Url) -> bool {
+        self.inner.validate_jwks(url)
+    }
+
+    fn validate_userinfo(&self, url: &Url) -> bool {
+        self.inner.validate_userinfo(url)
+    }
 }
 
 fn resolve_with_policy(

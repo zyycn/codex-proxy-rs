@@ -11,7 +11,8 @@ use gateway_admin::model::accounts::{
     AccountAvailability as AdminAccountAvailability, AccountRecord,
 };
 use gateway_admin::model::observability::{
-    CalculatedBillingBreakdown, CurrencyCost, DecimalAmount, ProviderBillingInput,
+    CalculatedBillingBreakdown, CurrencyCost, DashboardWireAttribute, DashboardWireProfile,
+    DashboardWireTarget, DecimalAmount, ProviderBillingInput,
 };
 use gateway_admin::model::provider_credentials::{
     AuthorizationMutationTarget, AuthorizationOwner, AuthorizationOwnerBinding,
@@ -21,7 +22,7 @@ use gateway_admin::model::provider_credentials::{
     PreparedCredentialCreate, PreparedCredentialImport, PreparedCredentialRotation,
     PreparedCredentialRotationFacts, ProviderDocument, ProviderExport,
     ProviderExportCredentialInput, ProviderModel, ProviderModels, ProviderQuota,
-    ProviderQuotaWindow,
+    ProviderQuotaRequest, ProviderQuotaWindow,
 };
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind};
@@ -32,6 +33,10 @@ use gateway_core::engine::credential::{
     ProviderAccountStore,
 };
 use gateway_core::error::StoreErrorKind;
+use gateway_core::operation::{
+    ContentPart, GenerateRequest, Message, MessageRole, Operation, ProtocolPayload,
+    ResponsePersistence,
+};
 use gateway_core::provider_ports::{
     NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingFlowPort, OAuthPendingPutOutcome,
     OAuthPendingTakeOutcome, ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError,
@@ -55,7 +60,8 @@ use crate::credential::{
     RotateManagedGrokCredential, SecretValue, VerifiedGrokAccount, VerifiedTokenSet,
 };
 use crate::transport::{
-    GROK_CLI_BASE_URL, GROK_CLIENT_VERSION, XAI_PROVIDER_NAME, grok_billing_breakdown,
+    GROK_CLI_BASE_URL, GROK_CLIENT_IDENTIFIER, GROK_CLIENT_MODE, GROK_CLIENT_VERSION,
+    GROK_TARGET_ARCH, GROK_TARGET_OS, XAI_PROVIDER_NAME, grok_billing_breakdown,
 };
 
 const PENDING_SCHEMA_VERSION: u64 = 1;
@@ -203,10 +209,46 @@ impl ProviderAdmin for XaiAdminProvider {
 
     async fn account_unavailable(&self, _account_id: &ProviderAccountId) {}
 
-    fn dashboard_wire_profile(
+    fn connection_test_operation(
         &self,
-    ) -> Option<gateway_admin::model::observability::DashboardWireProfile> {
-        None
+        upstream_model: &UpstreamModelId,
+        input_text: &str,
+    ) -> Result<Operation, ProviderAdminError> {
+        build_connection_test_operation(upstream_model, input_text)
+    }
+
+    fn dashboard_wire_profile(&self) -> Option<DashboardWireProfile> {
+        Some(DashboardWireProfile {
+            provider: self.provider_kind.as_str().to_owned(),
+            product: "Grok Build".to_owned(),
+            version: GROK_CLIENT_VERSION.to_owned(),
+            build: None,
+            target: DashboardWireTarget {
+                os_type: GROK_TARGET_OS.to_owned(),
+                os_version: "—".to_owned(),
+                arch: GROK_TARGET_ARCH.to_owned(),
+                terminal: GROK_CLIENT_MODE.to_owned(),
+            },
+            user_agent: format!(
+                "{GROK_CLIENT_IDENTIFIER}/{GROK_CLIENT_VERSION} ({GROK_TARGET_OS}; {GROK_TARGET_ARCH})"
+            ),
+            attributes: vec![
+                DashboardWireAttribute {
+                    label: "客户端标识".to_owned(),
+                    value: GROK_CLIENT_IDENTIFIER.to_owned(),
+                },
+                DashboardWireAttribute {
+                    label: "运行模式".to_owned(),
+                    value: GROK_CLIENT_MODE.to_owned(),
+                },
+                DashboardWireAttribute {
+                    label: "Token 认证".to_owned(),
+                    value: "xai-grok-cli".to_owned(),
+                },
+            ],
+            verified_at: None,
+            release: None,
+        })
     }
 
     fn calculated_billing(
@@ -517,31 +559,36 @@ impl ProviderAdmin for XaiAdminProvider {
 
     async fn quota(
         &self,
-        account_id: &ProviderAccountId,
-        refresh: bool,
+        request: ProviderQuotaRequest,
     ) -> Result<ProviderQuota, ProviderAdminError> {
-        self.account(account_id).await?;
+        let ProviderQuotaRequest {
+            account_id,
+            refresh,
+            rolling_usage,
+        } = request;
+        self.account(&account_id).await?;
         let lifecycle = self
             .repository
-            .read_lifecycle(account_id)
+            .read_lifecycle(&account_id)
             .await
             .map_err(map_repository_error)?;
         let snapshot = if refresh {
             Some(
                 self.quota
-                    .refresh_account(account_id)
+                    .refresh_account(&account_id)
                     .await
                     .map_err(map_quota_error)?,
             )
         } else {
             self.quota
-                .read_account(account_id)
+                .read_account(&account_id)
                 .await
                 .map_err(map_quota_error)?
         };
         Ok(project_quota(
             snapshot,
             lifecycle.refresh_token_expires_at().copied(),
+            rolling_usage,
         ))
     }
 
@@ -835,6 +882,7 @@ const fn core_availability(value: AdminAccountAvailability) -> AccountAvailabili
 fn project_quota(
     snapshot: Option<GrokQuotaSnapshot>,
     refresh_token_expires_at: Option<DateTime<Utc>>,
+    rolling_usage: Option<gateway_admin::model::accounts::AccountUsage>,
 ) -> ProviderQuota {
     let Some(snapshot) = snapshot else {
         return ProviderQuota {
@@ -846,6 +894,8 @@ fn project_quota(
     };
     let billing = snapshot.billing();
     let window = if billing.has_authoritative_quota() {
+        let period_kind = billing.period_kind();
+        let window_seconds = quota_window_seconds(billing.period_start(), billing.period_end());
         let mut data = Map::new();
         data.insert(
             "periodStart".to_owned(),
@@ -873,21 +923,25 @@ fn project_quota(
         }
         ProviderQuotaWindow {
             key: billing.period_type().unwrap_or("billing").to_owned(),
-            group: quota_group(billing.period_kind()).to_owned(),
+            group: quota_group(period_kind).to_owned(),
+            label: xai_quota_window_label(period_kind, window_seconds),
             source: None,
-            window_seconds: quota_window_seconds(billing.period_start(), billing.period_end()),
+            window_seconds,
             used_percent: billing.used_percent(),
             reset_at: billing.period_end().and_then(parse_utc),
+            local_usage: None,
             provider_data: Some(ProviderDocument::new(OpaqueProviderData::new(data))),
         }
     } else {
         ProviderQuotaWindow {
             key: "free-rolling-24h".to_owned(),
             group: "shortTerm".to_owned(),
+            label: "天限额".to_owned(),
             source: None,
             window_seconds: Some(crate::GROK_FREE_ROLLING_WINDOW_SECONDS),
             used_percent: None,
             reset_at: None,
+            local_usage: rolling_usage,
             provider_data: None,
         }
     };
@@ -904,6 +958,27 @@ const fn quota_group(kind: GrokQuotaPeriodKind) -> &'static str {
         GrokQuotaPeriodKind::Weekly => "shortTerm",
         GrokQuotaPeriodKind::Monthly => "monthly",
         GrokQuotaPeriodKind::Other => "other",
+    }
+}
+
+fn xai_quota_window_label(kind: GrokQuotaPeriodKind, window_seconds: Option<u64>) -> String {
+    match kind {
+        GrokQuotaPeriodKind::Weekly => "周限额".to_owned(),
+        GrokQuotaPeriodKind::Monthly => "月限额".to_owned(),
+        GrokQuotaPeriodKind::Other => custom_quota_window_label(window_seconds),
+    }
+}
+
+fn custom_quota_window_label(window_seconds: Option<u64>) -> String {
+    let Some(seconds) = window_seconds.filter(|seconds| *seconds > 0) else {
+        return "额度".to_owned();
+    };
+    if seconds % 86_400 == 0 {
+        format!("{}天限额", seconds / 86_400)
+    } else if seconds % 3_600 == 0 {
+        format!("{}小时限额", seconds / 3_600)
+    } else {
+        format!("{}分钟限额", seconds.div_ceil(60))
     }
 }
 
@@ -1221,6 +1296,38 @@ fn currency_cost(money: Money) -> Result<CurrencyCost, ProviderAdminError> {
 
 fn provider_error(kind: ProviderAdminErrorKind) -> ProviderAdminError {
     ProviderAdminError::new(kind)
+}
+
+fn build_connection_test_operation(
+    upstream_model: &UpstreamModelId,
+    input_text: &str,
+) -> Result<Operation, ProviderAdminError> {
+    let message = Message::new(
+        MessageRole::User,
+        vec![ContentPart::Text(input_text.to_owned())],
+    )
+    .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
+    let mut body = Map::new();
+    body.insert(
+        "model".to_owned(),
+        Value::String(upstream_model.as_str().to_owned()),
+    );
+    body.insert(
+        "input".to_owned(),
+        serde_json::json!([{
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": input_text}]
+        }]),
+    );
+    body.insert("stream".to_owned(), Value::Bool(true));
+    body.insert("store".to_owned(), Value::Bool(false));
+    let payload = ProtocolPayload::json_object("openai", body)
+        .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
+    Ok(Operation::Generate(
+        GenerateRequest::from_protocol_payload(vec![message], payload)
+            .with_response_persistence(ResponsePersistence::DoNotStore),
+    ))
 }
 
 fn map_failure_class(class: FailureClass) -> ProviderAdminError {

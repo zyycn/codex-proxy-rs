@@ -58,12 +58,17 @@ pub async fn run() -> Result<(), BootstrapError> {
     } = config;
 
     let host = gateway_host::initialize(host).await?;
+    host.report_startup_ready("Host");
     let mut store = gateway_store::initialize(store).await?;
+    host.report_startup_ready("Store");
     let provider_ports = store.provider_ports();
     let mut openai = provider_openai::initialize(openai, provider_ports.clone()).await?;
+    host.report_startup_ready("OpenAI Provider");
     let mut xai = provider_xai::initialize(xai, provider_ports).await?;
+    host.report_startup_ready("xAI Provider");
     let providers = ProviderRegistry::new([openai.core_provider(), xai.core_provider()])?;
     let mut core = gateway_core::initialize(store.core_ports(), providers).await?;
+    host.report_startup_ready("Core");
     let admin = gateway_admin::initialize(
         admin,
         store.admin_ports(),
@@ -73,6 +78,7 @@ pub async fn run() -> Result<(), BootstrapError> {
         host.system_operations(),
     )
     .await?;
+    host.report_startup_ready("Admin");
 
     let mut probes = store.health_probes();
     probes.extend(core.health_probes());
@@ -84,12 +90,14 @@ pub async fn run() -> Result<(), BootstrapError> {
         host.worker_health(),
         host.connection_lifecycle(),
     )?;
+    host.report_startup_ready("API");
 
     let mut plan = store.take_worker_contributions();
     plan.extend(core.take_worker_contributions());
     plan.extend(openai.take_worker_contributions());
     plan.extend(xai.take_worker_contributions());
     host.start_workers(plan, store.worker_leader_lease())?;
+    host.report_startup_ready("Workers");
     host.serve(api.router()).await?;
     Ok(())
 }

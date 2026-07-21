@@ -639,6 +639,14 @@ impl ProviderAdmin for UnusedProvider {
 
     async fn account_unavailable(&self, _: &ProviderAccountId) {}
 
+    fn connection_test_operation(
+        &self,
+        _: &gateway_core::routing::UpstreamModelId,
+        _: &str,
+    ) -> Result<gateway_core::operation::Operation, ProviderAdminError> {
+        Err(unsupported_provider())
+    }
+
     fn dashboard_wire_profile(
         &self,
     ) -> Option<gateway_admin::model::observability::DashboardWireProfile> {
@@ -692,8 +700,7 @@ impl ProviderAdmin for UnusedProvider {
 
     async fn quota(
         &self,
-        _: &ProviderAccountId,
-        _: bool,
+        _: gateway_admin::model::provider_credentials::ProviderQuotaRequest,
     ) -> Result<ProviderQuota, ProviderAdminError> {
         Err(unsupported_provider())
     }

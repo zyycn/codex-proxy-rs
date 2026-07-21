@@ -39,6 +39,7 @@ pub(super) struct OpenAiRequestHeaders {
 
     conversation_id: Option<String>,
     session_id: Option<String>,
+    prompt_cache_seed: Option<String>,
     thread_id: Option<String>,
     client_request_id: Option<String>,
     turn_id: Option<String>,
@@ -50,6 +51,19 @@ pub(super) struct OpenAiRequestHeaders {
 
 impl OpenAiRequestHeaders {
     pub(super) fn from_headers(headers: &HeaderMap) -> Self {
+        let prompt_cache_seed = [
+            "x-claude-code-session-id",
+            "x-session-id",
+            "session-id",
+            "session_id",
+            "x-conversation-id",
+            "conversation-id",
+            "conversation_id",
+            "x-client-session-id",
+        ]
+        .into_iter()
+        .find_map(|name| header_string(headers, name))
+        .and_then(|value| normalize_prompt_cache_seed(&value));
         Self {
             turn_state: header_string(headers, "x-codex-turn-state"),
             turn_metadata: header_string(headers, "x-codex-turn-metadata"),
@@ -62,6 +76,7 @@ impl OpenAiRequestHeaders {
                 .or_else(|| header_string(headers, "conversation_id")),
             session_id: header_string(headers, "session-id")
                 .or_else(|| header_string(headers, "session_id")),
+            prompt_cache_seed,
             thread_id: header_string(headers, "thread-id"),
             client_request_id: header_string(headers, "x-client-request-id"),
             turn_id: header_string(headers, "x-codex-turn-id"),
@@ -395,11 +410,12 @@ pub(super) fn decode_request_inner(
         .get("max_output_tokens")
         .and_then(Value::as_u64)
         .filter(|tokens| *tokens > 0);
-    let prompt_cache_key = object
-        .get("prompt_cache_key")
-        .and_then(Value::as_str)
-        .filter(|key| valid_prompt_cache_key(key))
-        .map(ToOwned::to_owned);
+    let prompt_cache_key = request_headers.prompt_cache_seed.clone().or_else(|| {
+        object
+            .get("prompt_cache_key")
+            .and_then(Value::as_str)
+            .and_then(normalize_prompt_cache_seed)
+    });
     let payload = ProtocolPayload::json_object(OPENAI_PROTOCOL, object).map_err(|_| {
         RequestDecodeError::CanonicalContract {
             field: "request".to_owned(),
@@ -677,6 +693,11 @@ fn valid_prompt_cache_key(key: &str) -> bool {
         && !key.chars().any(char::is_control)
 }
 
+fn normalize_prompt_cache_seed(value: &str) -> Option<String> {
+    let value = value.trim();
+    valid_prompt_cache_key(value).then(|| value.to_owned())
+}
+
 fn parse_provider_options(
     value: Option<&Value>,
     mut openai_fallback_options: Map<String, Value>,
@@ -685,13 +706,8 @@ fn parse_provider_options(
         if openai_fallback_options.is_empty() {
             return Ok(ProviderOptions::new());
         }
-        openai_fallback_options.insert("schema_version".to_owned(), Value::from(1));
         let mut options = ProviderOptions::new();
-        options
-            .insert(OPENAI_PROTOCOL, openai_fallback_options)
-            .map_err(|_| RequestDecodeError::CanonicalContract {
-                field: "provider_options.providers.openai".to_owned(),
-            })?;
+        insert_fallback_provider_options(&mut options, OPENAI_PROTOCOL, openai_fallback_options)?;
         return Ok(options);
     };
     let object = value
@@ -724,7 +740,7 @@ fn parse_provider_options(
             })?
             .clone();
         if provider == OPENAI_PROTOCOL {
-            merge_openai_fallbacks(&mut provider_options, &mut openai_fallback_options);
+            merge_provider_fallbacks(&mut provider_options, &mut openai_fallback_options);
         }
         options
             .insert(provider.clone(), provider_options)
@@ -732,18 +748,27 @@ fn parse_provider_options(
                 field: format!("provider_options.providers.{provider}"),
             })?;
     }
-    if !openai_fallback_options.is_empty() {
-        openai_fallback_options.insert("schema_version".to_owned(), Value::from(1));
-        options
-            .insert(OPENAI_PROTOCOL, openai_fallback_options)
-            .map_err(|_| RequestDecodeError::CanonicalContract {
-                field: "provider_options.providers.openai".to_owned(),
-            })?;
-    }
+    insert_fallback_provider_options(&mut options, OPENAI_PROTOCOL, openai_fallback_options)?;
     Ok(options)
 }
 
-fn merge_openai_fallbacks(
+fn insert_fallback_provider_options(
+    options: &mut ProviderOptions,
+    provider: &str,
+    mut fallback: Map<String, Value>,
+) -> Result<(), RequestDecodeError> {
+    if fallback.is_empty() {
+        return Ok(());
+    }
+    fallback.insert("schema_version".to_owned(), Value::from(1));
+    options
+        .insert(provider, fallback)
+        .map_err(|_| RequestDecodeError::CanonicalContract {
+            field: format!("provider_options.providers.{provider}"),
+        })
+}
+
+fn merge_provider_fallbacks(
     provider_options: &mut Map<String, Value>,
     fallback_options: &mut Map<String, Value>,
 ) {

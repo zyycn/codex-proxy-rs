@@ -10,7 +10,7 @@ use gateway_core::{
 
 use super::{
     MutationActor, MutationContext, PageSize, Revision,
-    accounts::{AccountAvailability, AccountRecord, AccountStatus, AccountSummary},
+    accounts::{AccountAvailability, AccountRecord, AccountStatus, AccountSummary, AccountUsage},
 };
 
 /// Provider-owned JSON；公共层只搬运且 Debug 不输出值。
@@ -538,11 +538,21 @@ impl fmt::Debug for RotateCredential {
 pub struct ProviderQuotaWindow {
     pub key: String,
     pub group: String,
+    pub label: String,
     pub source: Option<String>,
     pub window_seconds: Option<u64>,
     pub used_percent: Option<f64>,
     pub reset_at: Option<DateTime<Utc>>,
+    pub local_usage: Option<AccountUsage>,
     pub provider_data: Option<ProviderDocument>,
+}
+
+/// Provider 解释 quota 所需的公共请求事实。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderQuotaRequest {
+    pub account_id: ProviderAccountId,
+    pub refresh: bool,
+    pub rolling_usage: Option<AccountUsage>,
 }
 
 /// Provider 已解析的 quota 结果及其不透明差异字段。
@@ -606,7 +616,6 @@ pub struct AccountDirectoryItem {
     pub provider_instance_name: String,
     pub status: AccountStatus,
     pub usage: Option<super::accounts::AccountUsage>,
-    pub rolling_usage: Option<super::accounts::AccountUsage>,
     pub quota: ProviderQuota,
 }
 

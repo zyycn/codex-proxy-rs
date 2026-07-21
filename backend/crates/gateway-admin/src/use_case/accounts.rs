@@ -24,7 +24,7 @@ use crate::{
         observability::TimeRange,
         provider_credentials::{
             AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountRefreshResult,
-            PrepareCredentialRefresh, ProviderModels,
+            PrepareCredentialRefresh, ProviderModels, ProviderQuotaRequest,
         },
     },
     ports::{
@@ -164,7 +164,7 @@ impl DefaultAccountsService {
             end: now,
         };
         let ids = vec![account.id.clone()];
-        let (usage, rolling_usage, quota) = futures::try_join!(
+        let (usage, rolling_usage) = futures::try_join!(
             async {
                 self.accounts
                     .load_account_usage(retained_range, &ids)
@@ -177,18 +177,20 @@ impl DefaultAccountsService {
                     .await
                     .map_err(|error| map_store_error(error, "rolling account usage"))
             },
-            async {
-                provider
-                    .quota(account_id, refresh_quota)
-                    .await
-                    .map_err(|error| map_provider_error(error, "provider quota"))
-            },
         )?;
+        let rolling_usage = rolling_usage.into_iter().next();
+        let quota = provider
+            .quota(ProviderQuotaRequest {
+                account_id: account_id.clone(),
+                refresh: refresh_quota,
+                rolling_usage: rolling_usage.clone(),
+            })
+            .await
+            .map_err(|error| map_provider_error(error, "provider quota"))?;
         Ok(AccountDirectoryItem {
             provider_instance_name: instance.item.name,
             status: account_status(&account, now),
             usage: usage.into_iter().next(),
-            rolling_usage: rolling_usage.into_iter().next(),
             account,
             quota,
         })
@@ -241,7 +243,11 @@ impl AccountsService for DefaultAccountsService {
                 .require(&account.provider_kind)
                 .map_err(|error| map_provider_error(error, "provider quota"))?;
             provider
-                .quota(&account_id, false)
+                .quota(ProviderQuotaRequest {
+                    account_id,
+                    refresh: false,
+                    rolling_usage: rolling_usage.get(&account.id).cloned(),
+                })
                 .await
                 .map_err(|error| map_provider_error(error, "provider quota"))
         }))
@@ -265,7 +271,6 @@ impl AccountsService for DefaultAccountsService {
                     provider_instance_name: instance.name.clone(),
                     status: account_status(&account, now),
                     usage: usage.get(&account.id).cloned(),
-                    rolling_usage: rolling_usage.get(&account.id).cloned(),
                     account,
                     quota,
                 })
@@ -387,9 +392,12 @@ impl AccountsService for DefaultAccountsService {
         account_id: ProviderAccountId,
         upstream_model: UpstreamModelId,
     ) -> Result<AccountConnectionTestEventStream, AdminError> {
-        let account = self.load_account(&account_id).await?;
+        let (account, provider) = self.provider_for_account(&account_id).await?;
         let initial_status = account_status(&account, Utc::now());
         let model = upstream_model.as_str().to_owned();
+        let operation = provider
+            .connection_test_operation(&upstream_model, CONNECTION_TEST_INPUT)
+            .map_err(|error| map_provider_error(error, "provider connection test"))?;
         let initial = vec![
             AccountConnectionTestEvent::Started {
                 model: model.clone(),
@@ -410,6 +418,7 @@ impl AccountsService for DefaultAccountsService {
                     account_id,
                     provider_instance_id: account.provider_instance_id,
                     upstream_model,
+                    operation,
                 })
                 .await;
             let status = accounts

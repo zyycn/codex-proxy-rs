@@ -48,9 +48,9 @@ pub use import::{
 pub use oidc_verifier::ReqwestOidcTokenVerifier;
 pub use pkce::Pkce;
 pub use refresh::{
-    DueGrokCredential, GrokCredentialRefreshError, GrokCredentialRefreshOutcome,
-    GrokCredentialRefreshService, GrokCredentialRefresher, GrokOAuthRefreshClient,
-    GrokRefreshFailure, GrokRefreshTokens,
+    DueGrokCredential, GrokCredentialRecovery, GrokCredentialRecoveryOutcome,
+    GrokCredentialRefreshError, GrokCredentialRefreshOutcome, GrokCredentialRefreshService,
+    GrokCredentialRefresher, GrokOAuthRefreshClient, GrokRefreshFailure, GrokRefreshTokens,
 };
 pub use repository::{
     GrokAccountExport, GrokCredentialAdmin, GrokCredentialLifecycle, GrokCredentialRepository,

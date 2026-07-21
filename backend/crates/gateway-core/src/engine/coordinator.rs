@@ -17,7 +17,7 @@ use crate::engine::{
     CommitRequirement, ContinuationAttempt, CoordinatedEvent, EngineError, ExecutionOutcome,
     ExecutionStore, GatewayEngine, IntermediateFailure, ModelRequestFinalization, ModelRequestId,
     ModelRequestTimings, NewModelRequest, ProviderAccountStateOwner, ProviderAttemptOutcome,
-    UpstreamSendState,
+    RequestAttemptContext, UpstreamSendState,
 };
 use crate::error::{GatewayError, GatewayErrorKind, ProviderError, ProviderErrorKind};
 use crate::event::{
@@ -57,6 +57,7 @@ where
         cancellation: CancellationToken,
     ) -> Result<ResponseExecutionSession<S>, EngineError> {
         let request_id = request.id.clone();
+        let client_api_key_ref = request.client_api_key_ref.clone();
         let request_started_at = request.started_at;
         let deadline = request.deadline_at;
         self.engine.store().create_model_request(request).await?;
@@ -76,6 +77,7 @@ where
         let mut session = ResponseExecutionSession {
             engine: Arc::clone(&self.engine),
             request_id,
+            client_api_key_ref,
             request_started_at,
             deadline,
             operation,
@@ -90,6 +92,7 @@ where
             last_attempt_candidate_index: None,
             attempts: 0,
             excluded_accounts: BTreeSet::new(),
+            credential_recovery_attempted_accounts: BTreeSet::new(),
             current: None,
             downstream_committed_at: None,
             client_status_code: None,
@@ -151,6 +154,7 @@ enum StreamCommitPolicy {
 pub struct ResponseExecutionSession<S: ?Sized> {
     engine: Arc<GatewayEngine<S>>,
     request_id: ModelRequestId,
+    client_api_key_ref: crate::policy::ClientApiKeyId,
     request_started_at: SystemTime,
     deadline: SystemTime,
     operation: Operation,
@@ -165,6 +169,7 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     last_attempt_candidate_index: Option<usize>,
     attempts: u32,
     excluded_accounts: BTreeSet<crate::engine::credential::ProviderAccountId>,
+    credential_recovery_attempted_accounts: BTreeSet<crate::engine::credential::ProviderAccountId>,
     current: Option<CurrentAttempt>,
     downstream_committed_at: Option<SystemTime>,
     client_status_code: Option<u16>,
@@ -462,7 +467,10 @@ where
                 .and_then(NonZeroU32::new)
                 .ok_or(EngineError::EmptyRoutingPlan)?;
             let context = AttemptContext::new(
-                self.request_id.clone(),
+                RequestAttemptContext::new(
+                    self.request_id.clone(),
+                    self.client_api_key_ref.clone(),
+                ),
                 next_attempt,
                 self.deadline,
                 self.plan.account_selection_policy(),
@@ -470,6 +478,12 @@ where
                     self.excluded_accounts.clone(),
                     self.required_account.clone(),
                     self.account_state_owner.clone(),
+                )
+                .with_credential_recovery_attempted(
+                    self.required_account.as_ref().is_some_and(|account| {
+                        self.credential_recovery_attempted_accounts
+                            .contains(account)
+                    }),
                 ),
                 self.continuation.clone(),
                 self.cancellation.clone(),
@@ -765,10 +779,32 @@ where
             && (self.operation.retry_safety() == RetrySafety::Idempotent
                 || provider_proved_replay_safe)
             && self.attempts < self.plan.max_attempts().get();
-        let retryable = continuation_retry || ordinary_retry;
+        let same_account_retry = error.retries_same_account()
+            && provider_proved_replay_safe
+            && self.downstream_committed_at.is_none()
+            && !self.delivery_pending
+            && send_state != UpstreamSendState::Ambiguous
+            && self.attempts < self.plan.max_attempts().get()
+            && current
+                .metadata
+                .provider_account_id()
+                .is_some_and(|account| {
+                    !self
+                        .credential_recovery_attempted_accounts
+                        .contains(account)
+                });
+        let retryable = continuation_retry || same_account_retry || ordinary_retry;
 
         if retryable {
-            if !continuation_retry && let Some(account) = current.metadata.provider_account_id() {
+            if same_account_retry {
+                if let Some(account) = current.metadata.provider_account_id() {
+                    self.credential_recovery_attempted_accounts
+                        .insert(account.clone());
+                    self.required_account = Some(account.clone());
+                }
+            } else if !continuation_retry
+                && let Some(account) = current.metadata.provider_account_id()
+            {
                 self.excluded_accounts.insert(account.clone());
             }
             if error.kind() == ProviderErrorKind::Unsupported

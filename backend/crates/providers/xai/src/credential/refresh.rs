@@ -236,6 +236,26 @@ pub enum GrokCredentialRefreshOutcome {
     },
 }
 
+/// 一次 401 后的同账号 OAuth 恢复结论。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrokCredentialRecoveryOutcome {
+    /// AT/RT 已由 CAS 刷新，或并发刷新已先完成。
+    Recovered,
+    /// RT 或账号已被权威判定为不可恢复。
+    Rejected,
+    /// 临时错误或 lease 竞争，本次不改变账号认证状态。
+    Unavailable,
+}
+
+#[async_trait]
+pub trait GrokCredentialRecovery: Send + Sync {
+    async fn recover_unauthorized(
+        &self,
+        account_id: &ProviderAccountId,
+        credential_revision: CredentialRevision,
+    ) -> GrokCredentialRecoveryOutcome;
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum GrokCredentialRefreshError {
     #[error(transparent)]
@@ -284,6 +304,41 @@ impl GrokCredentialRefreshService {
             return Ok(Vec::new());
         }
         self.refresh_due_excluding(&[]).await
+    }
+
+    async fn refresh_rejected(
+        &self,
+        account_id: &ProviderAccountId,
+        credential_revision: CredentialRevision,
+    ) -> Result<GrokCredentialRefreshOutcome, GrokCredentialRefreshError> {
+        let loaded = match self.repository.load(account_id, credential_revision).await {
+            Ok(loaded) => loaded,
+            Err(error) if stale_repository_error(&error) => {
+                return Ok(GrokCredentialRefreshOutcome::Stale {
+                    account_id: account_id.clone(),
+                });
+            }
+            Err(error) => return Err(error.into()),
+        };
+        self.refresher
+            .prepare_cycle()
+            .await
+            .map_err(|_| GrokCredentialRefreshError::Preparation)?;
+        let policy = self.runtime_policy.load_refresh_policy().await?;
+        let credential = DueGrokCredential {
+            account_id: account_id.clone(),
+            provider_instance_id: loaded.account.instance().clone(),
+            credential_revision,
+            refresh_token: loaded.refresh_token,
+            id_token: loaded.id_token,
+            scope: loaded.scope,
+            subject: loaded.account.upstream_user_id().to_owned(),
+            email: loaded.account.email().map(str::to_owned),
+            upstream_account_id: loaded.account.upstream_account_id().map(str::to_owned),
+            plan_type: loaded.account.plan_type().map(str::to_owned),
+            refresh_token_expires_at: loaded.refresh_token_expires_at,
+        };
+        self.refresh_one_with_policy(credential, policy).await
     }
 
     pub async fn prepare_cycle_if_due(&self) -> Result<bool, GrokCredentialRefreshError> {
@@ -666,6 +721,33 @@ impl GrokCredentialRefreshService {
             Ok(()) => Ok(true),
             Err(error) if stale_repository_error(&error) => Ok(false),
             Err(error) => Err(error.into()),
+        }
+    }
+}
+
+#[async_trait]
+impl GrokCredentialRecovery for GrokCredentialRefreshService {
+    async fn recover_unauthorized(
+        &self,
+        account_id: &ProviderAccountId,
+        credential_revision: CredentialRevision,
+    ) -> GrokCredentialRecoveryOutcome {
+        match self.refresh_rejected(account_id, credential_revision).await {
+            Ok(
+                GrokCredentialRefreshOutcome::Refreshed { .. }
+                | GrokCredentialRefreshOutcome::Stale { .. },
+            ) => GrokCredentialRecoveryOutcome::Recovered,
+            Ok(
+                GrokCredentialRefreshOutcome::Invalidated { .. }
+                | GrokCredentialRefreshOutcome::Ambiguous { .. },
+            ) => GrokCredentialRecoveryOutcome::Rejected,
+            Ok(
+                GrokCredentialRefreshOutcome::Transient { .. }
+                | GrokCredentialRefreshOutcome::Rejected { .. }
+                | GrokCredentialRefreshOutcome::LeaseUnavailable { .. }
+                | GrokCredentialRefreshOutcome::Failed { .. },
+            )
+            | Err(_) => GrokCredentialRecoveryOutcome::Unavailable,
         }
     }
 }

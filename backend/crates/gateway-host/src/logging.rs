@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use tracing_appender::non_blocking::{NonBlockingBuilder, WorkerGuard};
 use tracing_subscriber::EnvFilter;
-use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
+use tracing_subscriber::{Layer as _, layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
 use crate::config::LoggingConfig;
 
@@ -34,7 +34,10 @@ pub enum LogError {
 /// 按自然日、单文件大小、保留天数和文件总数初始化结构化日志。
 pub fn initialize_logging(config: &LoggingConfig) -> Result<LogGuard, LogError> {
     let directive = env::var("RUST_LOG").unwrap_or_else(|_| config.level.clone());
-    let filter = EnvFilter::try_new(directive).map_err(|_| LogError::InvalidFilter)?;
+    let file_filter = EnvFilter::try_new(&directive).map_err(|_| LogError::InvalidFilter)?;
+    let stdout_filter =
+        EnvFilter::try_new(stdout_filter_directive(&directive, config.file.enabled))
+            .map_err(|_| LogError::InvalidFilter)?;
     let mut guards = Vec::new();
 
     let stdout_writer = config.stdout.then(|| {
@@ -69,8 +72,9 @@ pub fn initialize_logging(config: &LoggingConfig) -> Result<LogGuard, LogError> 
         tracing_subscriber::fmt::layer()
             .compact()
             .with_writer(writer)
-            .with_target(true)
+            .with_target(false)
             .with_ansi(false)
+            .with_filter(stdout_filter)
     });
     let file_layer = file_writer.map(|writer| {
         tracing_subscriber::fmt::layer()
@@ -83,14 +87,22 @@ pub fn initialize_logging(config: &LoggingConfig) -> Result<LogGuard, LogError> 
             .with_thread_names(true)
             .with_current_span(true)
             .with_span_list(true)
+            .with_filter(file_filter)
     });
     tracing_subscriber::registry()
-        .with(filter)
         .with(stdout_layer)
         .with(file_layer)
         .try_init()
         .map_err(|_| LogError::AlreadyInitialized)?;
     Ok(LogGuard { _writers: guards })
+}
+
+fn stdout_filter_directive(directive: &str, persistent_log_enabled: bool) -> String {
+    if !persistent_log_enabled {
+        directive.to_owned()
+    } else {
+        "off,gateway_startup=info".to_owned()
+    }
 }
 
 struct RotatingLogWriter {

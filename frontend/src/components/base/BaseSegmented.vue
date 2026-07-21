@@ -13,9 +13,11 @@ const props = withDefaults(
   defineProps<{
     options: SegmentedOption[]
     disabled?: boolean
+    iconOnly?: boolean
   }>(),
   {
     disabled: false,
+    iconOnly: false,
   },
 )
 
@@ -63,15 +65,18 @@ function selectOption(value: string) {
           ? 'text-(--cp-text-primary)'
           : 'text-(--cp-text-secondary) hover:text-(--cp-text-primary)',
         disabled ? 'cursor-not-allowed opacity-60 hover:text-(--cp-text-secondary)' : undefined,
+        iconOnly ? 'px-0' : undefined,
       ]"
       type="button"
       role="tab"
       :aria-selected="model === option.value"
+      :aria-label="iconOnly ? option.label : undefined"
+      :title="iconOnly ? option.label : undefined"
       :disabled="disabled"
       @click="selectOption(option.value)"
     >
       <component :is="option.icon" v-if="option.icon" class="size-3.5 shrink-0" />
-      {{ option.label }}
+      <span v-if="!iconOnly">{{ option.label }}</span>
     </button>
   </div>
 </template>

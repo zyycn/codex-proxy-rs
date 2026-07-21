@@ -161,6 +161,26 @@ fn decoder_should_preserve_roles_tools_reasoning_schema_and_provider_options() {
 }
 
 #[test]
+fn decoder_should_preserve_only_explicit_xai_provider_options() {
+    let decoded = generate_request(json!({
+        "model": "smart-code",
+        "input": "hello",
+        "provider_options": {
+            "version": "v1",
+            "providers": {
+                "xai": {"schema_version": 1, "turn_index": "7"}
+            }
+        }
+    }));
+    let request = generate_operation(&decoded);
+
+    assert_eq!(
+        request.provider_options().get("xai"),
+        json!({"schema_version": 1, "turn_index": "7"}).as_object()
+    );
+}
+
+#[test]
 fn decoder_should_preserve_a_bounded_prompt_cache_key_without_debug_exposure() {
     let decoded = generate_request(json!({
         "model": "smart-code",
@@ -971,14 +991,19 @@ fn openai_wire_encoder_should_preserve_unknown_media_events_and_hide_upstream_re
                 "response": {"id": upstream_id, "status": "in_progress"}
             }),
         ),
-        openai_wire_event(
-            Vec::new(),
-            "response.image_generation_call.partial_image",
-            json!({
-                "type": "response.image_generation_call.partial_image",
-                "response_id": upstream_id,
-                "partial_image_b64": "opaque-image-fragment"
-            }),
+        ProviderEvent::wire(
+            ProtocolWireEvent::json_with_sse_metadata(
+                "openai",
+                Some("response.image_generation_call.partial_image".to_owned()),
+                json!({
+                    "type": "response.image_generation_call.partial_image",
+                    "response_id": upstream_id,
+                    "partial_image_b64": "opaque-image-fragment"
+                }),
+                Some("evt_partial_image".to_owned()),
+                Some(2_000),
+            )
+            .expect("valid OpenAI wire event"),
         ),
         openai_wire_event(
             vec![GatewayEvent::Completed(completed)],
@@ -1002,6 +1027,8 @@ fn openai_wire_encoder_should_preserve_unknown_media_events_and_hide_upstream_re
     let parsed = parse_sse_events(&frames.join("")).expect("wire SSE should parse");
 
     assert_eq!(parsed.len(), 3);
+    assert_eq!(parsed[1].id.as_deref(), Some("evt_partial_image"));
+    assert_eq!(parsed[1].retry, Some(2_000));
     assert_eq!(
         serde_json::from_str::<Value>(&parsed[1].data)
             .expect("unknown event JSON")

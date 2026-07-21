@@ -308,6 +308,31 @@ async fn rate_limit_feedback_applies_bounded_cooldown() {
 }
 
 #[tokio::test]
+async fn interrupted_stream_feedback_applies_account_cooldown() {
+    let fixture = SelectorFixture::new(&["stream-interrupted"]).await;
+    let session = fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+        .expect("session");
+    fixture
+        .selector
+        .record_failure(&session, GrokCredentialFailure::StreamInterrupted)
+        .await;
+
+    let account = fixture
+        .store
+        .account(session.account_id())
+        .expect("account");
+    assert_eq!(account.availability(), AccountAvailability::Cooldown);
+    assert!(
+        account
+            .cooldown_until()
+            .is_some_and(|until| until > SystemTime::now())
+    );
+}
+
+#[tokio::test]
 async fn quota_feedback_uses_common_quota_exhausted_state() {
     let fixture = SelectorFixture::new(&["quota"]).await;
     let session = fixture

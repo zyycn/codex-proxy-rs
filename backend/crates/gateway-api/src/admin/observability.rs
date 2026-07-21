@@ -883,18 +883,29 @@ pub struct HealthTimelineView {
     pub points: Vec<HealthTimelinePointView>,
 }
 
-/// Dashboard 展示的实际 Codex 请求画像。
+/// Dashboard 展示的实际 Provider 上游请求身份。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DashboardWireProfileView {
-    pub originator: String,
-    pub codex_version: String,
-    pub desktop_version: String,
-    pub desktop_build: String,
+    pub provider: String,
+    pub product: String,
+    pub version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
     pub target: DashboardWireTargetView,
     pub user_agent: String,
-    pub verified_at: DateTime<Utc>,
-    pub release: DashboardDesktopReleaseView,
+    pub attributes: Vec<DashboardWireAttributeView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verified_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release: Option<DashboardDesktopReleaseView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardWireAttributeView {
+    pub label: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -961,7 +972,7 @@ pub struct DashboardDataView {
     pub cards: DashboardCardsView,
     pub trend: TrendData,
     pub health_timeline: HealthTimelineView,
-    pub wire_profile: DashboardWireProfileView,
+    pub wire_profiles: Vec<DashboardWireProfileView>,
     pub account_usage: Vec<DashboardAccountUsageView>,
     pub credential_usage: Vec<DashboardCredentialUsageView>,
     pub usage_records: Vec<UsageRecordView>,
@@ -1983,10 +1994,10 @@ fn health_timeline_view(timeline: domain::HealthTimeline) -> HealthTimelineView 
 
 fn wire_profile_view(profile: domain::DashboardWireProfile) -> DashboardWireProfileView {
     DashboardWireProfileView {
-        originator: profile.originator,
-        codex_version: profile.codex_version,
-        desktop_version: profile.desktop_version,
-        desktop_build: profile.desktop_build,
+        provider: profile.provider,
+        product: profile.product,
+        version: profile.version,
+        build: profile.build,
         target: DashboardWireTargetView {
             os_type: profile.target.os_type,
             os_version: profile.target.os_version,
@@ -1994,20 +2005,28 @@ fn wire_profile_view(profile: domain::DashboardWireProfile) -> DashboardWireProf
             terminal: profile.target.terminal,
         },
         user_agent: profile.user_agent,
+        attributes: profile
+            .attributes
+            .into_iter()
+            .map(|attribute| DashboardWireAttributeView {
+                label: attribute.label,
+                value: attribute.value,
+            })
+            .collect(),
         verified_at: profile.verified_at,
-        release: DashboardDesktopReleaseView {
-            status: profile.release.status.into(),
-            checked_at: profile.release.checked_at,
-            latest_version: profile.release.latest_version,
-            latest_build: profile.release.latest_build,
-            published_at: profile.release.published_at,
-            minimum_system_version: profile.release.minimum_system_version,
-            hardware_requirements: profile.release.hardware_requirements,
-            download_url: profile.release.download_url,
-            download_size: profile.release.download_size,
-            signature_present: profile.release.signature_present,
-            error: profile.release.error,
-        },
+        release: profile.release.map(|release| DashboardDesktopReleaseView {
+            status: release.status.into(),
+            checked_at: release.checked_at,
+            latest_version: release.latest_version,
+            latest_build: release.latest_build,
+            published_at: release.published_at,
+            minimum_system_version: release.minimum_system_version,
+            hardware_requirements: release.hardware_requirements,
+            download_url: release.download_url,
+            download_size: release.download_size,
+            signature_present: release.signature_present,
+            error: release.error,
+        }),
     }
 }
 
@@ -2054,7 +2073,7 @@ fn dashboard_view(result: domain::DashboardResult, kind: TrendKind) -> Dashboard
         average_first_token_latency_ms,
         trend,
         health_timeline,
-        wire_profile,
+        wire_profiles,
         capacity,
         rotation_strategy,
     } = result;
@@ -2135,7 +2154,7 @@ fn dashboard_view(result: domain::DashboardResult, kind: TrendKind) -> Dashboard
         },
         trend: trend_view(trend, kind),
         health_timeline: health_timeline_view(health_timeline),
-        wire_profile: wire_profile_view(wire_profile),
+        wire_profiles: wire_profiles.into_iter().map(wire_profile_view).collect(),
         account_usage: account_usage_views,
         credential_usage: credential_usage_views,
         usage_records: recent_requests.into_iter().map(usage_record_view).collect(),

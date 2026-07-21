@@ -15,6 +15,7 @@ use gateway_admin::model::provider_credentials::{
     AuthorizationMutationTarget, AuthorizationOwnerBinding, CompleteAuthorization,
     PendingAuthorizationMutation, PrepareCredentialImport, PrepareCredentialRefresh,
     PrepareCredentialRotation, ProviderDocument, ProviderExportCredentialInput,
+    ProviderQuotaRequest,
 };
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::ProviderAdminErrorKind;
@@ -33,7 +34,7 @@ use gateway_core::provider_ports::{
     ProviderInstanceCatalogPort, ProviderInstanceConfig, ProviderRefreshPolicy,
     ProviderRuntimePolicyPort, ProviderStoreError, ProviderStorePorts,
 };
-use gateway_core::routing::{ProviderInstanceId, ProviderKind};
+use gateway_core::routing::{ProviderInstanceId, ProviderKind, UpstreamModelId};
 use gateway_core::task::{WorkerContribution, WorkerKind, WorkerRunnable};
 use provider_openai::config::{CodexWireProfileConfig, OpenAiConfig};
 use provider_openai::credential::CreateCodexCredential;
@@ -96,8 +97,18 @@ async fn openai_admin_provider_exposes_live_wire_profile_and_validated_billing()
         .expect("OpenAI bundle");
     let admin = bundle.admin_provider();
     let profile = admin.dashboard_wire_profile().expect("wire profile");
-    assert_eq!(profile.codex_version, "0.102.0");
-    assert_eq!(profile.release.status, DesktopReleaseStatus::Unchecked);
+    assert_eq!(
+        profile
+            .attributes
+            .iter()
+            .find(|attribute| attribute.label == "Codex Core")
+            .map(|attribute| attribute.value.as_str()),
+        Some("0.102.0")
+    );
+    assert_eq!(
+        profile.release.as_ref().map(|release| release.status),
+        Some(DesktopReleaseStatus::Unchecked)
+    );
     let billing = admin
         .calculated_billing(&ProviderBillingInput {
             upstream_model_id: "gpt-4o".to_owned(),
@@ -253,8 +264,36 @@ async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export
     .await
     .expect("OpenAI bundle");
     let admin = bundle.admin_provider();
+
+    let operation = admin
+        .connection_test_operation(
+            &UpstreamModelId::new("gpt-5.4").expect("upstream model"),
+            "Reply with exactly OK.",
+        )
+        .expect("connection test operation");
+    let Operation::Generate(request) = operation else {
+        panic!("connection test must be a generate operation");
+    };
+    let encoded = provider_openai::encode_generate_request(&request, "gpt-5.4")
+        .expect("official OpenAI request");
+    assert_eq!(
+        encoded.body().get("model").and_then(Value::as_str),
+        Some("gpt-5.4")
+    );
+    assert_eq!(
+        encoded.body().get("stream").and_then(Value::as_bool),
+        Some(true)
+    );
+
     let account_id = account.id().clone();
-    let quota = admin.quota(&account_id, false).await.expect("cached quota");
+    let quota = admin
+        .quota(ProviderQuotaRequest {
+            account_id: account_id.clone(),
+            refresh: false,
+            rolling_usage: None,
+        })
+        .await
+        .expect("cached quota");
     assert!(quota.windows.is_empty());
     let models = admin
         .models(&account_id, false)

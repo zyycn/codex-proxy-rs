@@ -147,6 +147,8 @@ fn decoder_should_preserve_unknown_events_without_exposing_wire_data_in_debug() 
         "event: response.created\n",
         "data: {\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-test\"}}\n\n",
         "event: response.secret_future_event\n",
+        "id: evt_future\n",
+        "retry: 900\n",
         "data: {\"secret\":\"must-not-leak\"}\n\n",
     );
     let events = CodexCanonicalDecoder::new("fallback")
@@ -157,6 +159,8 @@ fn decoder_should_preserve_unknown_events_without_exposing_wire_data_in_debug() 
         .expect("unknown event should retain wire data");
 
     assert_eq!(unknown.event_type(), Some("response.secret_future_event"));
+    assert_eq!(unknown.sse_id(), Some("evt_future"));
+    assert_eq!(unknown.sse_retry(), Some(900));
     assert_eq!(
         unknown.data().get("secret"),
         Some(&serde_json::json!("must-not-leak"))

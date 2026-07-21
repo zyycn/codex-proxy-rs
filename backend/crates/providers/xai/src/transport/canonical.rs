@@ -16,6 +16,8 @@ use gateway_protocol::openai::events::{TokenUsage, extract_usage};
 use gateway_protocol::openai::sse::{SseEvent, SseEventDecoder};
 use serde_json::Value;
 
+use super::request::{GrokResponseTransform, GrokResponsesRequest};
+
 const CONTENTS_PER_OUTPUT: u32 = 1_024;
 const LONG_CONTEXT_THRESHOLD: u64 = 200_000;
 
@@ -129,6 +131,7 @@ fn usd_price_per_million(per_token_ticks: u128) -> Option<Money> {
 /// 每个上游 event 同时保留 OpenAI wire，并在可识别时附加 canonical facts。
 pub struct GrokCanonicalDecoder {
     decoder: SseEventDecoder,
+    response_transform: GrokResponseTransform,
     fallback_model: String,
     response_id: Option<String>,
     started: bool,
@@ -142,6 +145,7 @@ impl GrokCanonicalDecoder {
     pub fn new(fallback_model: impl Into<String>) -> Self {
         Self {
             decoder: SseEventDecoder::default(),
+            response_transform: GrokResponseTransform::default(),
             fallback_model: fallback_model.into(),
             response_id: None,
             started: false,
@@ -149,6 +153,16 @@ impl GrokCanonicalDecoder {
             content: BTreeMap::new(),
             tool_arguments_seen: BTreeSet::new(),
             usage_emitted: false,
+        }
+    }
+
+    /// Creates a decoder that restores request-scoped tool aliases before the
+    /// canonical and wire projections observe each upstream event.
+    #[must_use]
+    pub fn for_request(fallback_model: impl Into<String>, request: &GrokResponsesRequest) -> Self {
+        Self {
+            response_transform: request.response_transform(),
+            ..Self::new(fallback_model)
         }
     }
 
@@ -185,15 +199,38 @@ impl GrokCanonicalDecoder {
                 (None, Some(body)) => body,
                 (None, None) => return Err(protocol_error_marker()),
             };
-            let mut canonical = Vec::new();
-            self.decode_event(event_type, &value, &mut canonical)?;
-            let wire = ProtocolWireEvent::json("openai", event.event, value)
+            let event_type = event_type.to_owned();
+            let transformed = self
+                .response_transform
+                .rewrite_stream_event(&event_type, value)
+                .map_err(protocol_error)?;
+            for (index, transformed) in transformed.into_iter().enumerate() {
+                let transformed_type = transformed.event_type().to_owned();
+                if !client_visible_event(&transformed_type) {
+                    continue;
+                }
+                let value = transformed.into_value();
+                let mut canonical = Vec::new();
+                self.decode_event(&transformed_type, &value, &mut canonical)?;
+                let wire_event = if transformed_type == event_type {
+                    event.event.clone()
+                } else {
+                    Some(transformed_type)
+                };
+                let wire = ProtocolWireEvent::json_with_sse_metadata(
+                    "openai",
+                    wire_event,
+                    value,
+                    (index == 0).then(|| event.id.clone()).flatten(),
+                    (index == 0).then_some(event.retry).flatten(),
+                )
                 .map_err(|_| protocol_error_marker())?;
-            output.push(if canonical.is_empty() {
-                ProviderEvent::wire(wire)
-            } else {
-                ProviderEvent::canonical_with_wire(canonical, wire)
-            });
+                output.push(if canonical.is_empty() {
+                    ProviderEvent::wire(wire)
+                } else {
+                    ProviderEvent::canonical_with_wire(canonical, wire)
+                });
+            }
         }
         Ok(output)
     }
@@ -285,7 +322,9 @@ impl GrokCanonicalDecoder {
         let item = value.get("item").ok_or_else(protocol_error_marker)?;
         let output_index = event_index(value, "output_index")?;
         match item.get("type").and_then(Value::as_str) {
-            Some("function_call" | "custom_tool_call") => {
+            Some(
+                "function_call" | "custom_tool_call" | "tool_search_call" | "apply_patch_call",
+            ) => {
                 let index = content_index(output_index, 0)?;
                 self.add_content(index, ContentKind::ToolCall, output)?;
                 let call_id = item
@@ -325,7 +364,9 @@ impl GrokCanonicalDecoder {
         let item = value.get("item").ok_or_else(protocol_error_marker)?;
         match item.get("type").and_then(Value::as_str) {
             Some("message" | "reasoning") => return Ok(()),
-            Some("function_call" | "custom_tool_call") => {}
+            Some(
+                "function_call" | "custom_tool_call" | "tool_search_call" | "apply_patch_call",
+            ) => {}
             Some(_) | None => return Ok(()),
         }
         let output_index = event_index(value, "output_index")?;
@@ -522,6 +563,10 @@ impl GrokCanonicalDecoder {
             Err(protocol_error_marker())
         }
     }
+}
+
+fn client_visible_event(event_type: &str) -> bool {
+    event_type == "error" || event_type.starts_with("response.")
 }
 
 fn response_object(value: &Value) -> Option<&Value> {

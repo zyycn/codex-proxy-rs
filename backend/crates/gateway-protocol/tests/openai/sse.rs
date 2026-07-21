@@ -1,6 +1,6 @@
 use gateway_protocol::openai::sse::{
     DONE_SSE_FRAME, MAX_SSE_EVENT_BUFFER_BYTES, SseError, SseEvent, SseEventDecoder,
-    encode_sse_event, parse_sse_events, response_failed_sse_event,
+    encode_sse_event, encode_sse_event_with_metadata, parse_sse_events, response_failed_sse_event,
     response_failed_sse_event_with_id, sse_body_has_done, sse_frame_end, sse_frame_is_done,
 };
 
@@ -152,6 +152,26 @@ fn encoder_should_round_trip_multiline_data() {
             data: "first\nsecond".to_owned(),
             id: None,
             retry: None,
+        }]
+    );
+}
+
+#[test]
+fn encoder_should_round_trip_sse_id_and_retry() {
+    let frame = encode_sse_event_with_metadata(
+        "response.output_text.delta",
+        "first\nsecond",
+        Some("evt_42"),
+        Some(750),
+    );
+
+    assert_eq!(
+        parse_sse_events(&frame).expect("encoded SSE"),
+        vec![SseEvent {
+            event: Some("response.output_text.delta".to_owned()),
+            data: "first\nsecond".to_owned(),
+            id: Some("evt_42".to_owned()),
+            retry: Some(750),
         }]
     );
 }

@@ -796,17 +796,27 @@ pub struct DashboardDesktopRelease {
     pub error: Option<String>,
 }
 
-/// Provider 拥有并实际用于上游请求的 wire 画像快照。
+/// Provider 拥有并实际用于上游请求的身份画像快照。
+///
+/// `attributes` 承载 Provider 特有的可观测字段；公共控制面不解释其语义。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DashboardWireProfile {
-    pub originator: String,
-    pub codex_version: String,
-    pub desktop_version: String,
-    pub desktop_build: String,
+    pub provider: String,
+    pub product: String,
+    pub version: String,
+    pub build: Option<String>,
     pub target: DashboardWireTarget,
     pub user_agent: String,
-    pub verified_at: DateTime<Utc>,
-    pub release: DashboardDesktopRelease,
+    pub attributes: Vec<DashboardWireAttribute>,
+    pub verified_at: Option<DateTime<Utc>>,
+    pub release: Option<DashboardDesktopRelease>,
+}
+
+/// Provider 画像的差异字段；展示层只显示标签和值，不解释 Provider 语义。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DashboardWireAttribute {
+    pub label: String,
+    pub value: String,
 }
 
 /// 当前账号池的并发调度容量。
@@ -841,7 +851,7 @@ pub struct DashboardResult {
     pub average_first_token_latency_ms: Option<u64>,
     pub trend: Trend,
     pub health_timeline: HealthTimeline,
-    pub wire_profile: DashboardWireProfile,
+    pub wire_profiles: Vec<DashboardWireProfile>,
     pub capacity: DashboardCapacity,
     pub rotation_strategy: super::settings::RotationStrategy,
 }

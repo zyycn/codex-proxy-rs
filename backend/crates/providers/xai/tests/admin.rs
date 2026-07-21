@@ -13,6 +13,7 @@ use gateway_admin::model::observability::{CurrencyCost, ProviderBillingInput};
 use gateway_admin::model::provider_credentials::{
     CompleteAuthorization, PrepareCredentialImport, PrepareCredentialRefresh,
     PrepareCredentialRotation, ProviderDocument, ProviderExportCredentialInput,
+    ProviderQuotaRequest,
 };
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::ProviderAdminErrorKind;
@@ -20,6 +21,8 @@ use gateway_core::engine::credential::{
     AccountAvailability, CredentialRevision, OpaqueProviderData, ProviderAccount,
     ProviderAccountId, ProviderAccountStore,
 };
+use gateway_core::operation::Operation;
+use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
     NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingFlowPort, OAuthPendingPutOutcome,
     OAuthPendingTakeOutcome, ProviderCatalogCacheKey, ProviderCatalogCachePort,
@@ -28,7 +31,7 @@ use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshPolicy,
     ProviderRuntimePolicyPort, ProviderStoreError, ProviderStorePorts,
 };
-use gateway_core::routing::ProviderKind;
+use gateway_core::routing::{ProviderKind, UpstreamModelId};
 use gateway_core::task::WorkerKind;
 use provider_xai::{
     DiscoveryDocument, GrokOAuthConfig, PendingAuthorization, RedirectUriAllowlist, XaiConfig,
@@ -66,8 +69,15 @@ async fn xai_admin_provider_validates_known_billing_breakdown() {
     let bundle = provider_xai::initialize(XaiConfig::default(), provider_ports())
         .await
         .expect("xAI bundle");
-    let billing = bundle
-        .admin_provider()
+    let admin = bundle.admin_provider();
+    let profile = admin.dashboard_wire_profile().expect("wire profile");
+    assert_eq!(profile.provider, "xai");
+    assert_eq!(profile.product, "Grok Build");
+    assert_eq!(profile.version, "0.2.106");
+    assert_eq!(profile.user_agent, "grok-shell/0.2.106 (linux; x86_64)");
+    assert!(profile.release.is_none());
+
+    let billing = admin
         .calculated_billing(&ProviderBillingInput {
             upstream_model_id: "grok-4.5".to_owned(),
             input_tokens: Some(100),
@@ -204,8 +214,36 @@ async fn xai_admin_provider_projects_cached_quota_models_and_canonical_export() 
     .expect("xAI bundle");
     let admin = bundle.admin_provider();
 
+    let operation = admin
+        .connection_test_operation(
+            &UpstreamModelId::new("grok-4.5").expect("upstream model"),
+            "Reply with exactly OK.",
+        )
+        .expect("connection test operation");
+    let Operation::Generate(request) = operation else {
+        panic!("connection test must be a generate operation");
+    };
+    let encoded = provider_xai::GrokResponsesRequest::encode(
+        &request,
+        "grok-4.5",
+        &ClientApiKeyId::new("admin_connection_test").expect("client key"),
+    )
+    .expect("official xAI request");
+    assert_eq!(
+        encoded.body().get("model").and_then(Value::as_str),
+        Some("grok-4.5")
+    );
+    assert_eq!(
+        encoded.body().get("stream").and_then(Value::as_bool),
+        Some(true)
+    );
+
     let quota = admin
-        .quota(account.id(), false)
+        .quota(ProviderQuotaRequest {
+            account_id: account.id().clone(),
+            refresh: false,
+            rolling_usage: None,
+        })
         .await
         .expect("cached quota");
     assert!(quota.windows.is_empty());

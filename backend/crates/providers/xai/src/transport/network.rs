@@ -1,9 +1,10 @@
 //! 关闭 redirect、proxy 与业务重试的生产 reqwest transport。
 
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -12,6 +13,7 @@ use reqwest::header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG, RETRY_AFTER};
 use reqwest::redirect::Policy;
 use reqwest::{Client, Response, StatusCode};
 use serde::Deserialize;
+use serde_json::Value;
 use url::Url;
 
 use crate::credential::discovery::MAX_OAUTH_RESPONSE_BYTES;
@@ -22,14 +24,13 @@ use crate::{
     GrokInferenceTransportError, GrokInferenceTransportErrorKind, GrokInferenceTransportFuture,
     GrokModelCatalogRequest, GrokModelCatalogTransport, GrokModelCatalogTransportError,
     GrokModelCatalogTransportErrorKind, GrokModelCatalogTransportFuture,
-    GrokModelCatalogTransportResponse, HttpMethod, MAX_GROK_BILLING_BYTES,
+    GrokModelCatalogTransportResponse, GrokSessionBinding, HttpMethod, MAX_GROK_BILLING_BYTES,
     MAX_GROK_MODEL_CATALOG_BYTES, OAuthHttpRequest, OAuthHttpResponse, OAuthHttpTransport,
     TransportFailure, TransportFailureKind, TransportFuture,
 };
 use gateway_core::engine::UpstreamSendState;
 use gateway_core::error::SafeUpstreamValue;
 use gateway_core::event::UpstreamHttpVersion;
-use gateway_protocol::openai::sse::MAX_SSE_EVENT_BUFFER_BYTES;
 
 pub(crate) const OFFICIAL_OAUTH_HOST: &str = "auth.x.ai";
 const OFFICIAL_INFERENCE_HOST: &str = "cli-chat-proxy.grok.com";
@@ -40,8 +41,9 @@ pub(crate) const OFFICIAL_JWKS_PATH: &str = "/.well-known/jwks.json";
 pub(crate) const OFFICIAL_USERINFO_PATH: &str = "/oauth2/userinfo";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const OAUTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
+const MAX_INFERENCE_BODY_BYTES: usize = 256 * 1024 * 1024;
 const MAX_RETRY_AFTER_SECONDS: u64 = 120;
 const TRUSTED_DOH_HOST: &str = "dns.google";
 const TRUSTED_DOH_URL: &str = "https://dns.google/resolve";
@@ -293,11 +295,14 @@ impl OAuthHttpTransport for ReqwestOAuthTransport {
 
 /// 官方 Grok Responses HTTP SSE transport。
 pub struct ReqwestGrokInferenceTransport {
-    client: Client,
+    clients: Mutex<BoundInferenceClients>,
     endpoint_policy: Arc<dyn GrokEndpointPolicy>,
 }
 
 impl ReqwestGrokInferenceTransport {
+    /// 单个进程缓存的账号隔离推理连接池上限。
+    pub const MAX_CACHED_ACCOUNT_CLIENTS: usize = 64;
+
     /// 构建只允许官方 CLI proxy 的生产 transport。
     ///
     /// # Errors
@@ -306,11 +311,22 @@ impl ReqwestGrokInferenceTransport {
     pub fn new(
         endpoint_policy: Arc<dyn GrokEndpointPolicy>,
     ) -> Result<Self, GrokReqwestTransportBuildError> {
-        let client = endpoint_policy.build_inference_client(None)?;
+        let unbound_client = endpoint_policy.build_inference_client(None)?;
         Ok(Self {
-            client,
+            clients: Mutex::new(BoundInferenceClients::new(unbound_client)),
             endpoint_policy,
         })
+    }
+
+    fn client_for(
+        &self,
+        binding: &GrokSessionBinding,
+    ) -> Result<Client, GrokInferenceTransportError> {
+        self.clients
+            .lock()
+            .map_err(|_| inference_client_pool_unavailable())?
+            .get_or_insert(binding, self.endpoint_policy.as_ref())
+            .map_err(|_| inference_client_pool_unavailable())
     }
 }
 
@@ -318,7 +334,7 @@ impl fmt::Debug for ReqwestGrokInferenceTransport {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ReqwestGrokInferenceTransport")
-            .field("client", &"reqwest::Client")
+            .field("clients", &"account-isolated reqwest::Client pools")
             .field("endpoint_policy", &self.endpoint_policy)
             .finish()
     }
@@ -326,15 +342,14 @@ impl fmt::Debug for ReqwestGrokInferenceTransport {
 
 impl GrokInferenceTransport for ReqwestGrokInferenceTransport {
     fn execute(&self, request: GrokInferenceRequest) -> GrokInferenceTransportFuture<'_> {
-        let client = self.client.clone();
-        let endpoint_policy = self.endpoint_policy.clone();
         Box::pin(async move {
-            if !endpoint_policy.validate_inference(request.endpoint()) {
+            if !self.endpoint_policy.validate_inference(request.endpoint()) {
                 return Err(GrokInferenceTransportError::new(
                     GrokInferenceTransportErrorKind::Protocol,
                     UpstreamSendState::NotSent,
                 ));
             }
+            let client = self.client_for(request.binding())?;
             let mut builder = client
                 .post(request.endpoint().clone())
                 .body(request.body().to_vec());
@@ -357,13 +372,23 @@ impl GrokInferenceTransport for ReqwestGrokInferenceTransport {
             let http_version = upstream_http_version(response.version());
             let status_code = response.status().as_u16();
             let request_id = upstream_request_id(&response);
-            let body = response.bytes_stream().map(|chunk| match chunk {
-                Ok(chunk) if chunk.len() <= MAX_SSE_EVENT_BUFFER_BYTES => Ok(chunk.to_vec()),
-                Ok(_) => Err(GrokInferenceTransportError::new(
-                    GrokInferenceTransportErrorKind::Protocol,
-                    UpstreamSendState::Sent,
-                )),
-                Err(error) => Err(classify_inference_stream_error(&error)),
+            let body = response.bytes_stream().scan(0_usize, |observed, chunk| {
+                let item = match chunk {
+                    Ok(chunk)
+                        if observed
+                            .checked_add(chunk.len())
+                            .is_some_and(|total| total <= MAX_INFERENCE_BODY_BYTES) =>
+                    {
+                        *observed += chunk.len();
+                        Ok(chunk.to_vec())
+                    }
+                    Ok(_) => Err(GrokInferenceTransportError::new(
+                        GrokInferenceTransportErrorKind::Protocol,
+                        UpstreamSendState::Sent,
+                    )),
+                    Err(error) => Err(classify_inference_stream_error(&error)),
+                };
+                std::future::ready(Some(item))
             });
             Ok(GrokInferenceResponse::new(
                 Box::pin(body),
@@ -373,6 +398,67 @@ impl GrokInferenceTransport for ReqwestGrokInferenceTransport {
             ))
         })
     }
+}
+
+struct BoundInferenceClients {
+    by_binding: HashMap<GrokSessionBinding, Client>,
+    least_recently_used: VecDeque<GrokSessionBinding>,
+    unbound_client: Option<Client>,
+}
+
+impl BoundInferenceClients {
+    fn new(unbound_client: Client) -> Self {
+        Self {
+            by_binding: HashMap::with_capacity(
+                ReqwestGrokInferenceTransport::MAX_CACHED_ACCOUNT_CLIENTS,
+            ),
+            least_recently_used: VecDeque::with_capacity(
+                ReqwestGrokInferenceTransport::MAX_CACHED_ACCOUNT_CLIENTS,
+            ),
+            unbound_client: Some(unbound_client),
+        }
+    }
+
+    fn get_or_insert(
+        &mut self,
+        binding: &GrokSessionBinding,
+        endpoint_policy: &dyn GrokEndpointPolicy,
+    ) -> Result<Client, GrokReqwestTransportBuildError> {
+        if let Some(client) = self.by_binding.get(binding).cloned() {
+            self.record_use(binding);
+            return Ok(client);
+        }
+
+        let client = match self.unbound_client.take() {
+            Some(client) => client,
+            None => endpoint_policy.build_inference_client(None)?,
+        };
+        self.insert(binding.clone(), client.clone());
+        Ok(client)
+    }
+
+    fn insert(&mut self, binding: GrokSessionBinding, client: Client) {
+        if self.by_binding.len() == ReqwestGrokInferenceTransport::MAX_CACHED_ACCOUNT_CLIENTS
+            && let Some(expired_binding) = self.least_recently_used.pop_front()
+        {
+            self.by_binding.remove(&expired_binding);
+        }
+        self.least_recently_used.push_back(binding.clone());
+        self.by_binding.insert(binding, client);
+    }
+
+    fn record_use(&mut self, binding: &GrokSessionBinding) {
+        self.least_recently_used
+            .retain(|candidate| candidate != binding);
+        self.least_recently_used.push_back(binding.clone());
+    }
+}
+
+fn inference_client_pool_unavailable() -> GrokInferenceTransportError {
+    GrokInferenceTransportError::new(
+        GrokInferenceTransportErrorKind::Unavailable,
+        UpstreamSendState::NotSent,
+    )
 }
 
 /// 官方 Grok CLI proxy 模型目录 GET transport。
@@ -508,6 +594,8 @@ fn build_official_client(
         .no_proxy()
         .connect_timeout(CONNECT_TIMEOUT)
         .pool_idle_timeout(POOL_IDLE_TIMEOUT)
+        .pool_max_idle_per_host(128)
+        .http2_adaptive_window(true)
         .tcp_nodelay(true)
         .https_only(true)
         .dns_resolver(Arc::new(StrictDnsResolver::new(host)?));
@@ -804,6 +892,14 @@ async fn classify_inference_status(response: Response) -> GrokInferenceTransport
     let retry_after = retry_after(&response);
     let http_version = upstream_http_version(response.version());
     let request_id = upstream_request_id(&response);
+    let status_code = status.as_u16();
+    let body = match collect_bounded(response, MAX_ERROR_BODY_BYTES).await {
+        Ok(BoundedBody::Body(body)) => body,
+        Ok(BoundedBody::TooLarge) | Err(_) => Vec::new(),
+    };
+    let metadata = inference_error_metadata(&body);
+    let credential_recovery_required = status == StatusCode::UNAUTHORIZED
+        || (status == StatusCode::FORBIDDEN && forbidden_requires_recovery(&metadata));
     let kind = match status {
         StatusCode::BAD_REQUEST
         | StatusCode::NOT_FOUND
@@ -811,7 +907,7 @@ async fn classify_inference_status(response: Response) -> GrokInferenceTransport
         | StatusCode::UNPROCESSABLE_ENTITY => GrokInferenceTransportErrorKind::InvalidRequest,
         StatusCode::UNAUTHORIZED => GrokInferenceTransportErrorKind::Unauthorized,
         StatusCode::PAYMENT_REQUIRED => GrokInferenceTransportErrorKind::QuotaExhausted,
-        StatusCode::FORBIDDEN => GrokInferenceTransportErrorKind::PermissionDenied,
+        StatusCode::FORBIDDEN => classify_forbidden(&metadata),
         StatusCode::REQUEST_TIMEOUT | StatusCode::GATEWAY_TIMEOUT => {
             GrokInferenceTransportErrorKind::Timeout
         }
@@ -819,16 +915,140 @@ async fn classify_inference_status(response: Response) -> GrokInferenceTransport
         status if status.is_server_error() => GrokInferenceTransportErrorKind::Unavailable,
         _ => GrokInferenceTransportErrorKind::Protocol,
     };
-    let status = status.as_u16();
-    let _ = collect_bounded(response, MAX_ERROR_BODY_BYTES).await;
     let mut error = GrokInferenceTransportError::new(kind, UpstreamSendState::Sent)
-        .with_status(status)
+        .with_status(status_code)
         .with_response_facts(http_version, request_id)
         .redact_sensitive_context("upstream response body");
+    let upstream_code = if status == StatusCode::BAD_REQUEST && reasoning_decode_failed(&metadata) {
+        Some("reasoning_decode_failed".to_owned())
+    } else {
+        metadata.code.as_deref().and_then(normalize_failure_code)
+    };
+    if let Some(code) = upstream_code.and_then(|code| SafeUpstreamValue::new(code).ok()) {
+        error = error.with_upstream_code(code);
+    }
+    if credential_recovery_required {
+        error = error.with_credential_recovery();
+    }
     if let Some(retry_after) = retry_after {
         error = error.with_retry_after(retry_after);
     }
     error
+}
+
+#[derive(Default)]
+struct InferenceErrorMetadata {
+    code: Option<String>,
+    error_type: Option<String>,
+    message: Option<String>,
+}
+
+fn inference_error_metadata(body: &[u8]) -> InferenceErrorMetadata {
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        let message = String::from_utf8_lossy(body).trim().to_owned();
+        return InferenceErrorMetadata {
+            message: (!message.is_empty()).then_some(message),
+            ..InferenceErrorMetadata::default()
+        };
+    };
+    let Some(root) = value.as_object() else {
+        return InferenceErrorMetadata::default();
+    };
+    let nested = root.get("error").and_then(Value::as_object);
+    InferenceErrorMetadata {
+        code: nested
+            .and_then(|error| first_string(error, &["code", "error_code"]))
+            .or_else(|| first_string(root, &["code", "error_code"])),
+        error_type: nested
+            .and_then(|error| first_string(error, &["type", "error_type"]))
+            .or_else(|| first_string(root, &["type", "error_type"])),
+        message: nested
+            .and_then(|error| first_string(error, &["message", "error"]))
+            .or_else(|| first_string(root, &["message", "error"])),
+    }
+}
+
+fn first_string(object: &serde_json::Map<String, Value>, fields: &[&str]) -> Option<String> {
+    fields
+        .iter()
+        .find_map(|field| object.get(*field).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn classify_forbidden(metadata: &InferenceErrorMetadata) -> GrokInferenceTransportErrorKind {
+    let text = forbidden_metadata_text(metadata);
+    if credential_rejected(&text) {
+        GrokInferenceTransportErrorKind::Unauthorized
+    } else if contains_any(
+        &text,
+        &[
+            "subscription:free-usage-exhausted",
+            "used all the included free usage for model",
+            "personal-team-blocked:spending-limit",
+        ],
+    ) {
+        GrokInferenceTransportErrorKind::QuotaExhausted
+    } else {
+        GrokInferenceTransportErrorKind::PermissionDenied
+    }
+}
+
+fn forbidden_requires_recovery(metadata: &InferenceErrorMetadata) -> bool {
+    let text = forbidden_metadata_text(metadata);
+    credential_rejected(&text)
+        || text.contains("access to the chat endpoint is denied")
+        || text.trim_matches([' ', '.', '!', '\t', '\r', '\n']) == "access denied"
+}
+
+fn reasoning_decode_failed(metadata: &InferenceErrorMetadata) -> bool {
+    metadata.message.as_deref().is_some_and(|message| {
+        message.contains("could not decode the compaction blob")
+            || message.contains("could not decrypt the provided encrypted_content")
+    })
+}
+
+fn forbidden_metadata_text(metadata: &InferenceErrorMetadata) -> String {
+    [
+        metadata.code.as_deref().unwrap_or_default(),
+        metadata.error_type.as_deref().unwrap_or_default(),
+        metadata.message.as_deref().unwrap_or_default(),
+    ]
+    .join(" ")
+    .to_ascii_lowercase()
+}
+
+fn credential_rejected(value: &str) -> bool {
+    contains_any(
+        value,
+        &[
+            "authentication",
+            "unauthorized",
+            "invalid token",
+            "token expired",
+        ],
+    )
+}
+
+fn contains_any(value: &str, signals: &[&str]) -> bool {
+    signals.iter().any(|signal| value.contains(signal))
+}
+
+fn normalize_failure_code(value: &str) -> Option<String> {
+    let mut normalized = String::with_capacity(value.len().min(48));
+    for character in value.trim().to_ascii_lowercase().chars() {
+        if character.is_ascii_alphanumeric() {
+            normalized.push(character);
+        } else if matches!(character, '-' | '_' | '.' | ':') {
+            normalized.push('_');
+        }
+        if normalized.len() >= 48 {
+            break;
+        }
+    }
+    let normalized = normalized.trim_matches('_');
+    (!normalized.is_empty()).then(|| normalized.to_owned())
 }
 
 fn upstream_http_version(version: reqwest::Version) -> UpstreamHttpVersion {
