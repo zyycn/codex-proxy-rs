@@ -7,7 +7,7 @@ use gateway_core::event::{
     ContentItem, ContentKind, EventSequenceValidator, FinishReason, GatewayEvent, ProviderEvent,
     ReasoningDelta, ResponseMeta, TextDelta, ToolCallDelta,
 };
-use gateway_protocol::openai::sse::encode_sse_event;
+use gateway_protocol::openai::sse::{encode_sse_event, encode_sse_event_with_metadata};
 use serde_json::{Map, Value, json};
 
 use super::error::ResponseEncodeError;
@@ -21,6 +21,14 @@ enum ResponseRepresentation {
     OpenAiWire,
 }
 
+#[derive(Debug)]
+struct PendingWireEvent {
+    event_type: Option<String>,
+    data: Value,
+    sse_id: Option<String>,
+    sse_retry: Option<u64>,
+}
+
 /// Provider event 封套到 OpenAI Responses wire 的唯一表达边界。
 ///
 /// OpenAI Provider 带原生 wire 时只下发该 wire；其他 Provider 的 canonical
@@ -32,7 +40,7 @@ pub struct OpenAiResponsesEncoder {
     upstream_response_id: Option<String>,
     gateway_response_id: Option<String>,
     wire_terminal: Option<Value>,
-    pending_wire: Vec<(Option<String>, Value)>,
+    pending_wire: Vec<PendingWireEvent>,
     canonical_completed: bool,
 }
 
@@ -126,17 +134,25 @@ impl OpenAiResponsesEncoder {
             let Some(wire) = openai_wire else {
                 return Ok(Vec::new());
             };
-            self.pending_wire.push((
-                wire.event_type().map(ToOwned::to_owned),
-                wire.data().clone(),
-            ));
+            self.pending_wire.push(PendingWireEvent {
+                event_type: wire.event_type().map(ToOwned::to_owned),
+                data: wire.data().clone(),
+                sse_id: wire.sse_id().map(ToOwned::to_owned),
+                sse_retry: wire.sse_retry(),
+            });
             if self.gateway_response_id.is_none() {
                 return Ok(Vec::new());
             }
             let pending = std::mem::take(&mut self.pending_wire);
             return pending
                 .into_iter()
-                .map(|(event_type, mut data)| {
+                .map(|pending| {
+                    let PendingWireEvent {
+                        event_type,
+                        mut data,
+                        sse_id,
+                        sse_retry,
+                    } = pending;
                     self.rewrite_wire_identity(&mut data);
                     let effective_type = event_type
                         .as_deref()
@@ -148,9 +164,11 @@ impl OpenAiResponsesEncoder {
                         self.wire_terminal = data.get("response").cloned();
                     }
                     Ok(match encoding {
-                        WireEncoding::Sse => encode_sse_event(
+                        WireEncoding::Sse => encode_sse_event_with_metadata(
                             event_type.as_deref().unwrap_or_default(),
                             &data.to_string(),
+                            sse_id.as_deref(),
+                            sse_retry,
                         ),
                         WireEncoding::WebSocket => data.to_string(),
                     })

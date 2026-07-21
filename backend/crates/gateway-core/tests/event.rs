@@ -22,6 +22,22 @@ fn provider_event_keeps_large_wire_and_observation_payloads_behind_one_indirecti
 }
 
 #[test]
+fn protocol_wire_event_should_preserve_sse_metadata_without_exposing_id_in_debug() {
+    let wire = ProtocolWireEvent::json_with_sse_metadata(
+        "openai",
+        Some("response.created".to_owned()),
+        json!({"type": "response.created"}),
+        Some("upstream-event-id".to_owned()),
+        Some(1_500),
+    )
+    .expect("wire event");
+
+    assert_eq!(wire.sse_id(), Some("upstream-event-id"));
+    assert_eq!(wire.sse_retry(), Some(1_500));
+    assert!(!format!("{wire:?}").contains("upstream-event-id"));
+}
+
+#[test]
 fn validator_should_accept_started_content_delta_completed_sequence() {
     let mut validator = EventSequenceValidator::new();
     let events = [

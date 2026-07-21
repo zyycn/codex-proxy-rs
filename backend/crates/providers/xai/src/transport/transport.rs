@@ -173,6 +173,8 @@ pub struct GrokInferenceTransportError {
     retry_after: Option<Duration>,
     http_version: Option<UpstreamHttpVersion>,
     request_id: Option<SafeUpstreamValue>,
+    upstream_code: Option<SafeUpstreamValue>,
+    credential_recovery_required: bool,
     sensitive_context_redacted: bool,
 }
 
@@ -187,6 +189,8 @@ impl GrokInferenceTransportError {
             retry_after: None,
             http_version: None,
             request_id: None,
+            upstream_code: None,
+            credential_recovery_required: false,
             sensitive_context_redacted: false,
         }
     }
@@ -215,6 +219,19 @@ impl GrokInferenceTransportError {
     ) -> Self {
         self.http_version = Some(http_version);
         self.request_id = request_id;
+        self
+    }
+
+    /// 附着从错误 JSON 中提取并清洗后的稳定机器码。
+    #[must_use]
+    pub fn with_upstream_code(mut self, code: SafeUpstreamValue) -> Self {
+        self.upstream_code = Some(code);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_credential_recovery(mut self) -> Self {
+        self.credential_recovery_required = true;
         self
     }
 
@@ -259,6 +276,16 @@ impl GrokInferenceTransportError {
         self.request_id.as_ref()
     }
 
+    #[must_use]
+    pub const fn upstream_code(&self) -> Option<&SafeUpstreamValue> {
+        self.upstream_code.as_ref()
+    }
+
+    #[must_use]
+    pub const fn requires_credential_recovery(&self) -> bool {
+        self.credential_recovery_required
+    }
+
     /// Reports whether a sensitive body was discarded.
     #[must_use]
     pub const fn sensitive_context_was_redacted(&self) -> bool {
@@ -276,6 +303,11 @@ impl fmt::Debug for GrokInferenceTransportError {
             .field("retry_after", &self.retry_after)
             .field("http_version", &self.http_version)
             .field("request_id", &self.request_id)
+            .field("upstream_code", &self.upstream_code)
+            .field(
+                "credential_recovery_required",
+                &self.credential_recovery_required,
+            )
             .field(
                 "sensitive_context",
                 &self.sensitive_context_redacted.then_some("[REDACTED]"),

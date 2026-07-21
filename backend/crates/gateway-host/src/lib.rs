@@ -53,6 +53,11 @@ pub async fn initialize(config: HostConfig) -> Result<HostBundle, HostError> {
 }
 
 impl HostBundle {
+    /// 向启动控制台报告一个组装阶段已就绪。
+    pub fn report_startup_ready(&self, service: &'static str) {
+        tracing::info!(target: "gateway_startup", service, "服务启动正常");
+    }
+
     #[must_use]
     pub fn cancellation(&self) -> CancellationToken {
         self.cancellation.clone()

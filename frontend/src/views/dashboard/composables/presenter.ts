@@ -93,7 +93,7 @@ export function dashboardSnapshotView(summary: DashboardSummary | null) {
     metrics: metricCards(summary?.cards ?? emptyCards, trendPoints),
     healthTimeline: summary?.healthTimeline ?? emptyHealthTimeline,
     accountUsage: (summary?.accountUsage ?? []).map(accountUsageItem),
-    wireProfile: summary?.wireProfile ?? null,
+    wireProfiles: summary?.wireProfiles ?? [],
     usageRecords: summary?.usageRecords ?? [],
     poolSummary: summary?.poolSummary ?? null,
     capacityInfo: summary?.capacityInfo ?? emptyCapacityInfo,

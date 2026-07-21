@@ -104,6 +104,8 @@ struct CapturedClientContext {
     endpoint: String,
     client_metadata: Option<Value>,
     openai_options: Option<Value>,
+    xai_options: Option<Value>,
+    prompt_cache_key: Option<String>,
 }
 
 impl ExecutionService for ContextCaptureExecution {
@@ -131,26 +133,35 @@ impl ExecutionService for ContextCaptureExecution {
         request: StartExecution,
     ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
         Box::pin(async move {
-            let (client_metadata, openai_options) = match &request.operation {
-                Operation::Generate(generate) => (
-                    generate
-                        .protocol_payload()
-                        .and_then(|payload| payload.body().get("client_metadata"))
-                        .cloned(),
-                    generate
-                        .provider_options()
-                        .get("openai")
-                        .cloned()
-                        .map(Value::Object),
-                ),
-                _ => (None, None),
-            };
+            let (client_metadata, openai_options, xai_options, prompt_cache_key) =
+                match &request.operation {
+                    Operation::Generate(generate) => (
+                        generate
+                            .protocol_payload()
+                            .and_then(|payload| payload.body().get("client_metadata"))
+                            .cloned(),
+                        generate
+                            .provider_options()
+                            .get("openai")
+                            .cloned()
+                            .map(Value::Object),
+                        generate
+                            .provider_options()
+                            .get("xai")
+                            .cloned()
+                            .map(Value::Object),
+                        generate.prompt_cache_key().map(ToOwned::to_owned),
+                    ),
+                    _ => (None, None, None, None),
+                };
             *self.observed.lock().expect("context capture lock") = Some(CapturedClientContext {
                 client_ip: request.metadata.client_ip,
                 user_agent: request.metadata.user_agent,
                 endpoint: request.metadata.endpoint,
                 client_metadata,
                 openai_options,
+                xai_options,
+                prompt_cache_key,
             });
             Err(GatewayError::new(
                 GatewayErrorKind::Internal,
@@ -376,6 +387,8 @@ async fn request_context_should_resolve_forwarded_precedence_and_peer_fallback()
             endpoint: "/v1/responses".to_owned(),
             client_metadata: None,
             openai_options: None,
+            xai_options: None,
+            prompt_cache_key: None,
         }
     );
 
@@ -398,12 +411,13 @@ async fn request_context_should_resolve_forwarded_precedence_and_peer_fallback()
 }
 
 #[tokio::test]
-async fn http_request_should_forward_safe_codex_headers_into_provider_options() {
+async fn http_request_should_forward_safe_codex_headers_without_projecting_xai_headers() {
     let peer = "192.0.2.10:443".parse().expect("peer address");
     let mut headers = HeaderMap::new();
     headers.insert("x-codex-turn-state", "turn-state".parse().expect("header"));
     headers.insert("conversation-id", "conversation-1".parse().expect("header"));
     headers.insert("session-id", "session-1".parse().expect("header"));
+    headers.insert("x-grok-turn-idx", "7".parse().expect("header"));
     headers.insert("x-openai-subagent", "compact".parse().expect("header"));
     headers.insert(
         "x-openai-internal-codex-responses-lite",
@@ -423,6 +437,8 @@ async fn http_request_should_forward_safe_codex_headers_into_provider_options() 
     );
     assert_eq!(options.get("session_id"), Some(&json!("session-1")));
     assert_eq!(options.get("responses_lite"), Some(&json!("true")));
+    assert_eq!(captured.prompt_cache_key.as_deref(), Some("session-1"));
+    assert!(captured.xai_options.is_none());
     assert!(!options.contains_key("authorization"));
     assert_eq!(
         captured
@@ -431,6 +447,20 @@ async fn http_request_should_forward_safe_codex_headers_into_provider_options() 
             .and_then(|metadata| metadata.get("x-openai-subagent")),
         Some(&json!("compact"))
     );
+}
+
+#[tokio::test]
+async fn xai_private_headers_should_not_enter_openai_request_facts() {
+    let peer = "192.0.2.10:443".parse().expect("peer address");
+    let mut headers = HeaderMap::new();
+    headers.insert("x-grok-turn-idx", "7".parse().expect("header"));
+    headers.insert("x-grok-conv-id", "private-session".parse().expect("header"));
+
+    let captured = captured_client_context(headers, peer).await;
+
+    assert!(captured.openai_options.is_none());
+    assert!(captured.xai_options.is_none());
+    assert!(captured.prompt_cache_key.is_none());
 }
 
 #[tokio::test]
@@ -547,10 +577,12 @@ async fn streaming_commit_batch_encodes_pre_identity_wire_before_committing() {
         ResponseMeta::new("resp_gateway", "public-model").with_upstream_response_id(upstream_id);
     let events = vec![
         ProviderEvent::wire(
-            ProtocolWireEvent::json(
+            ProtocolWireEvent::json_with_sse_metadata(
                 "openai",
                 Some("response.future_metadata".to_owned()),
                 json!({"type":"response.future_metadata","opaque":true}),
+                Some("evt_before_identity".to_owned()),
+                Some(3_000),
             )
             .expect("future wire event"),
         ),
@@ -596,6 +628,8 @@ async fn streaming_commit_batch_encodes_pre_identity_wire_before_committing() {
     let created = body.find("response.created").expect("created event");
     let completed = body.find("response.completed").expect("completed event");
     assert!(future < created && created < completed);
+    assert!(body.contains("id: evt_before_identity\n"));
+    assert!(body.contains("retry: 3000\n"));
     assert!(body.contains("resp_gateway"));
     assert!(!body.contains("resp_upstream"));
     assert!(body.ends_with("data: [DONE]\n\n"));

@@ -9,8 +9,9 @@ use gateway_core::engine::credential::{
     AccountAvailability, AccountSelectionPolicy, ProviderAccountId, RotationStrategy,
 };
 use gateway_core::engine::{
-    AccountAttemptContext, AttemptContext, CancellationToken, ModelRequestId,
+    AccountAttemptContext, AttemptContext, CancellationToken, ModelRequestId, RequestAttemptContext,
 };
+use gateway_core::policy::ClientApiKeyId;
 use provider_openai::credential::{
     CodexAccountFailure, CodexCookiePolicy, CodexCredentialCatalogService, CodexCredentialCodec,
     CodexCredentialQuotaService, CodexCredentialSelector, CreateCodexCredential,
@@ -51,7 +52,10 @@ fn attempt_with_required(
     required_account: Option<ProviderAccountId>,
 ) -> AttemptContext {
     AttemptContext::new(
-        ModelRequestId::new("req_codex_contract").expect("request id"),
+        RequestAttemptContext::new(
+            ModelRequestId::new("req_codex_contract").expect("request id"),
+            ClientApiKeyId::new("key_codex_contract").expect("client key id"),
+        ),
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
         account_policy(),
@@ -63,7 +67,10 @@ fn attempt_with_required(
 
 fn round_robin_attempt() -> AttemptContext {
     AttemptContext::new(
-        ModelRequestId::new("req_codex_round_robin").expect("request id"),
+        RequestAttemptContext::new(
+            ModelRequestId::new("req_codex_round_robin").expect("request id"),
+            ClientApiKeyId::new("key_codex_contract").expect("client key id"),
+        ),
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
         AccountSelectionPolicy::new(

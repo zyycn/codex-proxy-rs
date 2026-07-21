@@ -24,7 +24,7 @@ export function useDashboard() {
   const metrics = computed(() => snapshot.value.metrics)
   const healthTimeline = computed(() => snapshot.value.healthTimeline)
   const accountUsage = computed(() => snapshot.value.accountUsage)
-  const wireProfile = computed(() => snapshot.value.wireProfile)
+  const wireProfiles = computed(() => snapshot.value.wireProfiles)
   const usageRecords = computed(() => snapshot.value.usageRecords)
   const poolSummary = computed(() => snapshot.value.poolSummary)
   const capacityInfo = computed(() => snapshot.value.capacityInfo)
@@ -129,7 +129,7 @@ export function useDashboard() {
     trendSummary,
     healthTimeline,
     accountUsage,
-    wireProfile,
+    wireProfiles,
     usageRecords,
     poolSummary,
     capacityInfo,

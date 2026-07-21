@@ -6,7 +6,8 @@ use std::time::{Duration, SystemTime};
 
 use chrono::Utc;
 use gateway_core::engine::credential::{
-    AccountCandidate, AccountSelectionContext, AccountSelector,
+    AccountCandidate, AccountSelectionContext, AccountSelectionPolicy, AccountSelector,
+    RotationStrategy,
 };
 use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
@@ -24,6 +25,7 @@ use crate::{
 
 const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 const MAX_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(24 * 60 * 60);
+const STREAM_INTERRUPTION_COOLDOWN: Duration = Duration::from_secs(30);
 
 /// 仅经 Core account port、TTL catalog cache 和 Redis lease 选择一个 OAuth session。
 pub struct GrokAccountSessionSelector {
@@ -102,13 +104,31 @@ impl GrokAccountSessionSelector {
             candidates.retain(|candidate| candidate.account.id() == required);
         }
 
+        let affinity_account = request.affinity().and_then(|affinity| {
+            candidates
+                .iter()
+                .filter(|candidate| !request.excluded_accounts().contains(candidate.account.id()))
+                .max_by_key(|candidate| affinity.score(candidate.account.id()))
+                .map(|candidate| candidate.account.id().clone())
+        });
+        let configured_policy = request.account_selection_policy();
+        let policy = if request.required_account().is_none() && affinity_account.is_some() {
+            AccountSelectionPolicy::new(
+                RotationStrategy::Sticky,
+                configured_policy.max_concurrent_per_account(),
+                configured_policy.request_interval(),
+            )
+        } else {
+            configured_policy
+        };
         let context = AccountSelectionContext {
-            policy: request.account_selection_policy(),
+            policy,
             now: SystemTime::now(),
             excluded_accounts: request.excluded_accounts().clone(),
             sticky_account: request
                 .required_account()
                 .cloned()
+                .or(affinity_account)
                 .or_else(|| scheduling.sticky_account().cloned()),
             round_robin_cursor: scheduling.round_robin_cursor(),
         };
@@ -226,6 +246,16 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
                     (
                         GrokCredentialAvailability::Cooldown,
                         "upstream_rate_limited",
+                        cooldown_until,
+                    )
+                }
+                GrokCredentialFailure::StreamInterrupted => {
+                    let cooldown_until = chrono::Duration::from_std(STREAM_INTERRUPTION_COOLDOWN)
+                        .ok()
+                        .and_then(|duration| observed_at.checked_add_signed(duration));
+                    (
+                        GrokCredentialAvailability::Cooldown,
+                        "upstream_stream_interrupted",
                         cooldown_until,
                     )
                 }

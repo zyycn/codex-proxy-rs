@@ -24,9 +24,7 @@ use crate::engine::{
 };
 use crate::error::{GatewayError, GatewayErrorKind, ProviderErrorKind};
 use crate::event::{GatewayEvent, ProviderEvent, ProviderResponseHeader};
-use crate::operation::{
-    ContentPart, GenerateRequest, Message, MessageRole, Operation, ReasoningEffort,
-};
+use crate::operation::{Operation, ReasoningEffort};
 use crate::policy::{ClientApiKeyId, ClientPolicy};
 use crate::routing::snapshot::RuntimeSnapshotHandle;
 use crate::routing::{ProviderInstanceId, PublicModelId, RoutingContext, RuntimeSnapshot};
@@ -423,6 +421,12 @@ impl DefaultExecutionService {
         &self,
         request: AccountProbeRequest,
     ) -> Result<AccountProbeResult, GatewayError> {
+        let AccountProbeRequest {
+            account_id,
+            provider_instance_id,
+            upstream_model,
+            operation,
+        } = request;
         let snapshot = self.snapshots.acquire().map_err(|_| {
             GatewayError::new(
                 GatewayErrorKind::Internal,
@@ -430,7 +434,7 @@ impl DefaultExecutionService {
             )
         })?;
         let provider_kind = snapshot
-            .provider_for_instance(&request.provider_instance_id)
+            .provider_for_instance(&provider_instance_id)
             .cloned()
             .ok_or_else(|| {
                 GatewayError::new(
@@ -438,29 +442,13 @@ impl DefaultExecutionService {
                     "Provider instance is unavailable",
                 )
             })?;
-        let message = Message::new(
-            MessageRole::User,
-            vec![ContentPart::Text("Reply with exactly OK.".to_owned())],
-        )
-        .map_err(|_| {
-            GatewayError::new(
-                GatewayErrorKind::Internal,
-                "connection test request is invalid",
-            )
-        })?;
-        let operation = Operation::Generate(GenerateRequest::new(vec![message]).map_err(|_| {
-            GatewayError::new(
-                GatewayErrorKind::Internal,
-                "connection test request is invalid",
-            )
-        })?);
         let public_model =
-            PublicModelId::new(request.upstream_model.as_str().to_owned()).map_err(|_| {
+            PublicModelId::new(upstream_model.as_str().to_owned()).map_err(|_| {
                 GatewayError::new(GatewayErrorKind::Unsupported, "requested model is invalid")
             })?;
         let routing_context = RoutingContext {
             provider_kind: Some(provider_kind),
-            allowed_instances: Some(BTreeSet::from([request.provider_instance_id.clone()])),
+            allowed_instances: Some(BTreeSet::from([provider_instance_id.clone()])),
             ..RoutingContext::default()
         };
         let plan = snapshot
@@ -503,7 +491,7 @@ impl DefaultExecutionService {
                 new_request,
                 operation,
                 plan,
-                Some(request.account_id),
+                Some(account_id),
                 None,
                 CancellationToken::new(),
             )

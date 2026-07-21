@@ -1306,6 +1306,51 @@ fn pre_commit_failure_excludes_account_and_retries_same_target() {
 }
 
 #[test]
+fn recovered_credential_retries_the_same_account_exactly_once() {
+    let operation = operation(RetrySafety::NonIdempotent);
+    let route_plan = plan(&operation, 2, 1);
+    let (coordinator, store, provider) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::Unauthorized,
+                UpstreamSendState::Sent,
+            )
+            .with_status(401)
+            .with_replay_safe()
+            .with_same_account_retry())],
+        },
+        Script::Stream {
+            account_id: "acct_first",
+            items: complete_stream(None),
+        },
+    ]);
+
+    let mut session = block_on(coordinator.start(
+        model_request(SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+    block_on(session.collect_uncommitted()).expect("recovered account succeeds");
+    block_on(session.commit_downstream(Some(200))).expect("commit response");
+
+    let contexts = provider.contexts.lock().expect("contexts lock");
+    let account = ProviderAccountId::new("acct_first").expect("account");
+    assert_eq!(contexts.len(), 2);
+    assert_eq!(contexts[1].required_account(), Some(&account));
+    assert!(!contexts[1].excluded_accounts().contains(&account));
+    assert!(contexts[1].credential_recovery_attempted());
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.attempts.len(), 2);
+    assert_eq!(state.intermediate_failures, 1);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
+}
+
+#[test]
 fn non_idempotent_explicit_429_rejection_rotates_account_before_output() {
     let operation = operation(RetrySafety::NonIdempotent);
     let route_plan = plan(&operation, 2, 1);

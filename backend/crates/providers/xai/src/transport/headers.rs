@@ -2,13 +2,40 @@ use std::fmt;
 
 use gateway_core::engine::ModelRequestId;
 use gateway_core::routing::UpstreamModelId;
+use uuid::Uuid;
 
 use crate::SecretValue;
 
-use super::{GrokProviderInstanceConfig, SelectedGrokSession};
+use super::{
+    GROK_CLIENT_IDENTIFIER, GROK_CLIENT_MODE, GrokProviderInstanceConfig, SelectedGrokSession,
+};
 
-const CLIENT_IDENTIFIER: &str = "codex-proxy-rs";
-const CLIENT_MODE: &str = "headless";
+/// 进程级 Grok Build 客户端身份；请求级身份在构造 headers 时单独生成。
+#[derive(Clone)]
+pub struct GrokClientIdentity(SecretValue);
+
+impl GrokClientIdentity {
+    #[must_use]
+    pub fn new() -> Self {
+        Self(SecretValue::new(Uuid::new_v4().hyphenated().to_string()))
+    }
+
+    const fn value(&self) -> &SecretValue {
+        &self.0
+    }
+}
+
+impl Default for GrokClientIdentity {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Debug for GrokClientIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("GrokClientIdentity([PSEUDONYM])")
+    }
+}
 
 /// Public or sensitive official Grok request header value.
 #[derive(Clone)]
@@ -83,10 +110,16 @@ impl GrokHeader {
 pub fn build_grok_headers(
     instance: &GrokProviderInstanceConfig,
     session: &SelectedGrokSession,
+    client_identity: &GrokClientIdentity,
     request_id: &ModelRequestId,
+    upstream_session_id: Option<&str>,
+    turn_index: Option<&str>,
     model: &UpstreamModelId,
 ) -> Vec<GrokHeader> {
-    let request_id = request_id.as_str();
+    let upstream_request_id = Uuid::new_v4().hyphenated().to_string();
+    let trace_id = Uuid::new_v4().simple().to_string();
+    let span_source = Uuid::new_v4().simple().to_string();
+    let traceparent = format!("00-{trace_id}-{}-01", &span_source[..16]);
 
     let mut headers = vec![
         GrokHeader::sensitive(
@@ -95,28 +128,41 @@ pub fn build_grok_headers(
         ),
         GrokHeader::public("X-XAI-Token-Auth", "xai-grok-cli"),
         GrokHeader::public("x-authenticateresponse", "authenticate-response"),
-        GrokHeader::sensitive("x-userid", session.user_id().clone()),
         GrokHeader::sensitive("x-grok-user-id", session.user_id().clone()),
         GrokHeader::public("x-grok-client-version", instance.client_version()),
-        GrokHeader::public("x-grok-client-mode", CLIENT_MODE),
-        GrokHeader::public("x-grok-client-identifier", CLIENT_IDENTIFIER),
+        GrokHeader::public("x-grok-client-mode", GROK_CLIENT_MODE),
+        GrokHeader::public("x-grok-client-identifier", GROK_CLIENT_IDENTIFIER),
         GrokHeader::public(
             "user-agent",
-            format!("{CLIENT_IDENTIFIER}/{}", env!("CARGO_PKG_VERSION")),
+            format!(
+                "{GROK_CLIENT_IDENTIFIER}/{} (linux; x86_64)",
+                instance.client_version()
+            ),
         ),
         GrokHeader::public("content-type", "application/json"),
         GrokHeader::public("accept", "text/event-stream"),
-        GrokHeader::sensitive("x-grok-conv-id", SecretValue::new(request_id.to_owned())),
-        GrokHeader::sensitive("x-grok-req-id", SecretValue::new(request_id.to_owned())),
-        GrokHeader::public("x-grok-model-override", model.as_str()),
-        GrokHeader::sensitive("x-grok-session-id", SecretValue::new(request_id.to_owned())),
+        GrokHeader::public("accept-encoding", "identity"),
+        GrokHeader::sensitive("x-grok-req-id", SecretValue::new(upstream_request_id)),
         GrokHeader::sensitive(
-            "x-grok-agent-id",
-            SecretValue::new(CLIENT_IDENTIFIER.to_owned()),
+            "idempotency-key",
+            SecretValue::new(request_id.as_str().to_owned()),
         ),
+        GrokHeader::public("traceparent", traceparent),
+        GrokHeader::public("x-grok-model-override", model.as_str()),
+        GrokHeader::sensitive("x-grok-agent-id", client_identity.value().clone()),
     ];
-    if let Some(email) = session.email() {
-        headers.push(GrokHeader::sensitive("x-email", email.clone()));
+    if let Some(upstream_session_id) = upstream_session_id {
+        headers.push(GrokHeader::sensitive(
+            "x-grok-conv-id",
+            SecretValue::new(upstream_session_id.to_owned()),
+        ));
+        headers.push(GrokHeader::sensitive(
+            "x-grok-session-id",
+            SecretValue::new(upstream_session_id.to_owned()),
+        ));
+        if let Some(turn_index) = turn_index {
+            headers.push(GrokHeader::public("x-grok-turn-idx", turn_index));
+        }
     }
     headers
 }

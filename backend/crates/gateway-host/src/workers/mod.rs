@@ -399,9 +399,16 @@ async fn supervise_scheduled(
                     .min(schedule.maximum_backoff())
             }
             ScheduledOutcome::Failed(error) => {
-                let failures = health.failed(&id, error);
-                tracing::warn!(worker = %id, failures, "后台任务周期失败");
-                take_backoff(&mut backoff, schedule.maximum_backoff())
+                let failures = health.failed(&id, error.clone());
+                let delay = take_backoff(&mut backoff, schedule.maximum_backoff());
+                tracing::warn!(
+                    worker = %id,
+                    failures,
+                    retry_after_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+                    error = %error,
+                    "后台任务周期失败"
+                );
+                delay
             }
             ScheduledOutcome::ShuttingDown => break,
         };
@@ -578,9 +585,15 @@ async fn supervise_daemon(
             Ok(Err(error)) => error.as_safe_str().to_owned(),
             Err(_) => "daemon panicked".to_owned(),
         };
-        let failures = health.failed(&id, error);
-        tracing::warn!(worker = %id, failures, "长驻任务将重启");
         let delay = take_backoff(&mut backoff, restart.maximum_backoff());
+        let failures = health.failed(&id, error.clone());
+        tracing::warn!(
+            worker = %id,
+            failures,
+            retry_after_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+            error = %error,
+            "长驻任务将重启"
+        );
         tokio::select! {
             () = cancellation.cancelled() => break,
             () = tokio::time::sleep(delay) => {}
