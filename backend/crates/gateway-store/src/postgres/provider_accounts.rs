@@ -243,6 +243,12 @@ pub struct ImportProviderAccounts {
     pub audit: AdminAuditEvent,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderAccountAdminImport {
+    pub config_revision: Revision,
+    pub account_ids: Vec<String>,
+}
+
 impl fmt::Debug for ImportProviderAccounts {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -447,7 +453,7 @@ pub trait ProviderAccountAdminRepository: Send + Sync {
         &self,
         expected_config_revision: Revision,
         command: ImportProviderAccounts,
-    ) -> StoreResult<Revision>;
+    ) -> StoreResult<ProviderAccountAdminImport>;
 
     async fn rotate_provider_account(
         &self,
@@ -760,7 +766,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
         &self,
         expected_config_revision: Revision,
         command: ImportProviderAccounts,
-    ) -> StoreResult<Revision> {
+    ) -> StoreResult<ProviderAccountAdminImport> {
         command.validate()?;
         let mut transaction = self
             .pool
@@ -771,12 +777,17 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
             let revision =
                 bump_config_revision_in_transaction(&mut transaction, expected_config_revision)
                     .await?;
+            let mut account_ids = Vec::with_capacity(command.accounts.len());
             for account in &command.accounts {
-                upsert_provider_account_in_transaction(&mut transaction, account).await?;
+                account_ids
+                    .push(upsert_provider_account_in_transaction(&mut transaction, account).await?);
             }
             append_admin_audit_event_in_transaction(&mut transaction, command.audit, revision)
                 .await?;
-            Ok(revision)
+            Ok(ProviderAccountAdminImport {
+                config_revision: revision,
+                account_ids,
+            })
         }
         .await;
         finish_admin_transaction(transaction, result, "provider account admin import").await
@@ -962,18 +973,13 @@ impl PgAdminAccountStore {
     ) -> AdminStoreResult<CredentialImportResult> {
         let provider_kind = prepared.provider_kind.as_str().to_owned();
         let provider_instance_id = prepared.provider_instance_id.as_str().to_owned();
-        let credential_ids = prepared
-            .credentials
-            .iter()
-            .map(|credential| credential.account_id.clone())
-            .collect::<Vec<_>>();
         let accounts = prepared
             .credentials
             .into_iter()
             .map(prepared_account)
             .collect::<StoreResult<Vec<_>>>()
             .map_err(|error| admin_store_error(ENTITY, error))?;
-        let revision = self
+        let imported = self
             .accounts
             .import_provider_accounts(
                 store_revision(expected_config_revision)?,
@@ -995,8 +1001,19 @@ impl PgAdminAccountStore {
             .await
             .map_err(|error| admin_store_error(ENTITY, error))?;
         Ok(CredentialImportResult {
-            config_revision: admin_revision(revision)?,
-            credential_ids,
+            config_revision: admin_revision(imported.config_revision)?,
+            credential_ids: imported
+                .account_ids
+                .into_iter()
+                .map(CoreProviderAccountId::new)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| {
+                    AdminStoreError::new(
+                        AdminStoreErrorKind::Unavailable,
+                        ENTITY,
+                        "provider account import returned an invalid account ID",
+                    )
+                })?,
         })
     }
 
@@ -1835,7 +1852,7 @@ fn admin_account_costs(costs: Vec<CurrencyCostTotal>) -> AdminStoreResult<Vec<Ac
 async fn upsert_provider_account_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     account: &NewProviderAccount,
-) -> StoreResult<()> {
+) -> StoreResult<String> {
     account.validate()?;
     let imported_id = sqlx::query_scalar::<_, String>(
         "insert into provider_accounts (
@@ -1848,7 +1865,11 @@ async fn upsert_provider_account_in_transaction(
            $1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12, $13,
            $14, $15, $16, null, $17, null, now(), greatest(now(), $17)
          )
-         on conflict (id) do update set
+         on conflict (
+           provider_kind,
+           upstream_user_id,
+           (coalesce(upstream_account_id, ''))
+         ) do update set
            name = excluded.name,
            email = excluded.email,
            plan_type = excluded.plan_type,
@@ -1866,9 +1887,6 @@ async fn upsert_provider_account_in_transaction(
            quota_observed_at = null,
            updated_at = greatest(now(), excluded.availability_observed_at)
          where provider_accounts.provider_instance_id = excluded.provider_instance_id
-           and provider_accounts.provider_kind = excluded.provider_kind
-           and provider_accounts.upstream_user_id = excluded.upstream_user_id
-           and provider_accounts.upstream_account_id is not distinct from excluded.upstream_account_id
          returning id",
     )
     .bind(&account.id)
@@ -1909,8 +1927,7 @@ async fn upsert_provider_account_in_transaction(
         id: account.id.clone(),
         kind: ConflictKind::InvalidTransition,
     })?;
-    debug_assert_eq!(imported_id, account.id);
-    Ok(())
+    Ok(imported_id)
 }
 
 async fn rotate_provider_account_in_transaction(
@@ -1984,7 +2001,7 @@ async fn delete_provider_accounts_in_transaction(
     let deleted = sqlx::query_scalar::<_, String>(
         "delete from provider_accounts
          where id = any($1::text[]) and provider_instance_id = $2
-           and provider_kind = $3 and not enabled
+           and provider_kind = $3
          returning id",
     )
     .bind(account_ids)
@@ -1999,7 +2016,7 @@ async fn delete_provider_accounts_in_transaction(
         Ok(())
     } else {
         Err(invalid(
-            "all deleted accounts must exist, match Provider scope, and be disabled",
+            "all deleted accounts must exist and match Provider scope",
         ))
     }
 }
