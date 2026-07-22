@@ -3,13 +3,13 @@
 use futures::future::BoxFuture;
 
 use crate::error::GatewayError;
-use crate::routing::{ProviderInstanceId, UpstreamModelId};
+use crate::routing::{ProviderKind, UpstreamModelId};
 use crate::{engine::credential::ProviderAccountId, operation::Operation};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountProbeRequest {
     pub account_id: ProviderAccountId,
-    pub provider_instance_id: ProviderInstanceId,
+    pub provider_kind: ProviderKind,
     pub upstream_model: UpstreamModelId,
     pub operation: Operation,
 }

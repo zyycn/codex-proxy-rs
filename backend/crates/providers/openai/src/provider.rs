@@ -1,8 +1,8 @@
 //! Codex 的 `gateway-core` Provider adapter。
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
@@ -22,11 +22,7 @@ use gateway_core::event::{
     ProviderResponseTimings, UpstreamHttpVersion, WebSocketPoolKind,
 };
 use gateway_core::operation::{GenerateRequest, Operation, OperationKind, ProviderSessionState};
-use gateway_core::provider_ports::ProviderInstanceCatalogPort;
-use gateway_core::routing::{
-    InstanceHealth, ModelCapabilities, ProviderInstance, ProviderInstanceId, ProviderKind,
-    UpstreamModelId,
-};
+use gateway_core::routing::{ModelCapabilities, ProviderKind, UpstreamModelId};
 use gateway_core::task::{
     DaemonRestartPolicy, DaemonTask, ScheduledTask, WorkerContribution, WorkerCycleContext,
     WorkerDefinitionError, WorkerId, WorkerKind, WorkerLeaseRequest, WorkerRegistration,
@@ -36,7 +32,7 @@ use reqwest::Client;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use url::{Host, Url};
+use url::Url;
 
 use crate::credential::{
     CodexAccountFailure, CodexCredentialCatalogService, CodexCredentialLease,
@@ -70,8 +66,8 @@ const PROVIDER_NAME: &str = "openai";
 const HTTP_SSE_TRANSPORT: &str = "http_sse";
 const WEBSOCKET_TRANSPORT: &str = "websocket";
 const MAX_COOKIE_HEADER_BYTES: usize = 16 * 1024;
-const OFFICIAL_CODEX_HOST: &str = "chatgpt.com";
 pub const OFFICIAL_CODEX_BASE_PATH: &str = "/backend-api";
+pub const OFFICIAL_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexProviderTransport {
@@ -89,92 +85,18 @@ impl CodexProviderTransport {
     }
 }
 
-/// Provider base URL 的显式信任边界。
-///
-/// 生产组装注入 [`OfficialCodexOriginPolicy`]；Provider 只依赖这个端口，
-/// 不包含部署环境或地址类型分支。
-pub trait CodexOriginPolicy: Send + Sync {
-    fn allows(&self, url: &Url) -> bool;
-}
-
-#[derive(Debug, Default)]
-pub struct OfficialCodexOriginPolicy;
-
-impl CodexOriginPolicy for OfficialCodexOriginPolicy {
-    fn allows(&self, url: &Url) -> bool {
-        url.scheme() == "https"
-            && matches!(url.host(), Some(Host::Domain(host)) if host == OFFICIAL_CODEX_HOST)
-            && url.port().is_none()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CodexProviderInstanceConfig {
-    id: ProviderInstanceId,
-    base_url: Url,
-    transport: CodexProviderTransport,
-}
-
-impl CodexProviderInstanceConfig {
-    pub fn from_snapshot(
-        instance: &ProviderInstance,
-        origin_policy: &dyn CodexOriginPolicy,
-    ) -> Result<Self, CodexProviderConfigError> {
-        if instance.provider().as_str() != PROVIDER_NAME {
-            return Err(CodexProviderConfigError::ProviderMismatch);
-        }
-        let mut base_url = Url::parse(instance.base_url())
-            .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
-        normalize_and_validate_base_url(&mut base_url, origin_policy)?;
-        Ok(Self {
-            id: instance.id().clone(),
-            base_url,
-            transport: CodexProviderTransport::PreferWebSocket,
-        })
-    }
-
-    #[must_use]
-    pub const fn id(&self) -> &ProviderInstanceId {
-        &self.id
-    }
-
-    #[must_use]
-    pub const fn base_url(&self) -> &Url {
-        &self.base_url
-    }
-
-    #[must_use]
-    pub const fn transport(&self) -> CodexProviderTransport {
-        self.transport
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CodexProviderConfigError {
-    #[error("provider instance does not belong to Codex")]
-    ProviderMismatch,
-    #[error("Codex provider base URL is invalid")]
+    #[error("official Codex provider URL is invalid")]
     InvalidBaseUrl,
-    #[error("Codex provider base URL is not allowed")]
-    UnsafeBaseUrl,
-}
-
-#[derive(Clone)]
-struct CompiledInstance {
-    config: CodexProviderInstanceConfig,
-    responses_url: Url,
-    client: CodexBackendClient,
 }
 
 pub struct CodexProvider {
     selector: Arc<CodexCredentialSelector>,
     catalog: Arc<CodexCredentialCatalogService>,
     quota: Arc<CodexCredentialQuotaService>,
-    http: Client,
-    profile: CodexWireProfileState,
-    origin_policy: Arc<dyn CodexOriginPolicy>,
-    websocket_pool: Arc<CodexWebSocketPool>,
-    compiled_instances: Mutex<HashMap<String, CompiledInstance>>,
+    client: CodexBackendClient,
+    responses_url: Url,
 }
 
 impl CodexProvider {
@@ -185,59 +107,19 @@ impl CodexProvider {
         http: Client,
         profile: CodexWireProfileState,
         websocket_pool: Arc<CodexWebSocketPool>,
-        origin_policy: Arc<dyn CodexOriginPolicy>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, CodexProviderConfigError> {
+        let responses_url =
+            Url::parse(&endpoint_url(OFFICIAL_CODEX_BASE_URL, CODEX_RESPONSES_PATH))
+                .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
+        let client = CodexBackendClient::new(http, OFFICIAL_CODEX_BASE_URL, profile)
+            .with_websocket_pool(websocket_pool);
+        Ok(Self {
             selector,
             catalog,
             quota,
-            http,
-            profile,
-            origin_policy,
-            websocket_pool,
-            compiled_instances: Mutex::new(HashMap::new()),
-        }
-    }
-
-    pub fn validate_instance(
-        instance: &ProviderInstance,
-    ) -> Result<CodexProviderInstanceConfig, CodexProviderConfigError> {
-        CodexProviderInstanceConfig::from_snapshot(instance, &OfficialCodexOriginPolicy)
-    }
-
-    fn compile_instance(
-        &self,
-        snapshot: &ProviderInstance,
-    ) -> Result<CompiledInstance, ProviderError> {
-        let config =
-            CodexProviderInstanceConfig::from_snapshot(snapshot, self.origin_policy.as_ref())
-                .map_err(map_instance_config_error)?;
-        let responses_url = Url::parse(&endpoint_url(
-            config.base_url.as_str(),
-            CODEX_RESPONSES_PATH,
-        ))
-        .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
-        let mut instances = self
-            .compiled_instances
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(compiled) = instances.get(config.id().as_str())
-            && compiled.config == config
-        {
-            return Ok(compiled.clone());
-        }
-        let compiled = CompiledInstance {
-            client: CodexBackendClient::new(
-                self.http.clone(),
-                config.base_url.as_str(),
-                self.profile.clone(),
-            )
-            .with_websocket_pool(Arc::clone(&self.websocket_pool)),
-            config,
+            client,
             responses_url,
-        };
-        instances.insert(compiled.config.id().as_str().to_owned(), compiled.clone());
-        Ok(compiled)
+        })
     }
 }
 
@@ -247,7 +129,6 @@ impl fmt::Debug for CodexProvider {
             .debug_struct("CodexProvider")
             .field("selector", &"<account-selector>")
             .field("catalog", &"<ttl-catalog>")
-            .field("origin_policy", &"[ORIGIN_POLICY]")
             .finish()
     }
 }
@@ -291,15 +172,10 @@ impl Provider for CodexProvider {
 
     async fn query_model_capabilities(
         &self,
-        instance: &ProviderInstance,
     ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
-        let snapshot = self
-            .catalog
-            .synchronize_instance(instance)
-            .await
-            .map_err(|_| {
-                provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
-            })?;
+        let snapshot = self.catalog.synchronize().await.map_err(|_| {
+            provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
+        })?;
         Ok(snapshot
             .models()
             .iter()
@@ -319,14 +195,6 @@ impl Provider for CodexProvider {
             ));
         }
         let candidate = request.candidate();
-        let instance_snapshot = candidate.instance_snapshot();
-        if instance_snapshot.id() != candidate.instance() {
-            return Err(provider_error(
-                ProviderErrorKind::Protocol,
-                UpstreamSendState::NotSent,
-            ));
-        }
-        let instance = self.compile_instance(instance_snapshot)?;
         if context.cancellation().is_cancelled() {
             return Err(provider_error(
                 ProviderErrorKind::Cancelled,
@@ -351,15 +219,14 @@ impl Provider for CodexProvider {
             encode_generate_request(generate, candidate.upstream_model().as_str())
                 .map_err(map_request_error)?;
         let request_input = upstream_request.input().to_vec();
-        let transport = selected_transport(&request, &instance.config)?;
+        let transport = selected_transport(&request)?;
         apply_transport(&mut upstream_request, transport);
 
         let lease = self
             .selector
             .select(&SelectCodexCredential {
-                provider_instance_id: candidate.instance(),
                 upstream_model: candidate.upstream_model().as_str(),
-                request_url: &instance.responses_url,
+                request_url: &self.responses_url,
                 attempt: &context,
             })
             .await
@@ -367,11 +234,12 @@ impl Provider for CodexProvider {
         let lease = Arc::new(lease);
         let provider_kind = ProviderKind::new(PROVIDER_NAME)
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
-        let cross_account = context.account_state_owner().is_some_and(|owner| {
-            !owner.matches(&provider_kind, candidate.instance(), lease.account_id())
-        }) || previous_session
-            .as_ref()
-            .is_some_and(|state| state.account_id != lease.account_id().as_str());
+        let cross_account = context
+            .account_state_owner()
+            .is_some_and(|owner| !owner.matches(&provider_kind, lease.account_id()))
+            || previous_session
+                .as_ref()
+                .is_some_and(|state| state.account_id != lease.account_id().as_str());
         let replay_previous_response = matches!(
             context.continuation_attempt(),
             ContinuationAttempt::ReplayOwner | ContinuationAttempt::ReplayAny
@@ -448,7 +316,6 @@ impl Provider for CodexProvider {
         }
         let metadata = ProviderCallMetadata::new(
             provider_kind,
-            candidate.instance().clone(),
             candidate.upstream_model().clone(),
             ProviderResource::Account {
                 id: lease.account_id().clone(),
@@ -469,8 +336,8 @@ impl Provider for CodexProvider {
                 continuation_scope: None,
             });
         let events = cold_response_stream(ColdResponse {
-            client: instance.client,
-            response_origin: instance.responses_url,
+            client: self.client.clone(),
+            response_origin: self.responses_url.clone(),
             request: upstream_request,
             upstream_model: candidate.upstream_model().clone(),
             transport_policy: transport,
@@ -478,7 +345,6 @@ impl Provider for CodexProvider {
             selector: Arc::clone(&self.selector),
             quota: Arc::clone(&self.quota),
             catalog: Arc::clone(&self.catalog),
-            provider_instance_id: candidate.instance().clone(),
             lease: Arc::clone(&lease),
             session_capture,
         });
@@ -496,7 +362,6 @@ struct ColdResponse {
     selector: Arc<CodexCredentialSelector>,
     quota: Arc<CodexCredentialQuotaService>,
     catalog: Arc<CodexCredentialCatalogService>,
-    provider_instance_id: ProviderInstanceId,
     lease: Arc<CodexCredentialLease>,
     session_capture: Option<OpenAiSessionCapture>,
 }
@@ -688,7 +553,6 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         selector,
         quota,
         catalog,
-        provider_instance_id,
         lease,
         mut session_capture,
     } = response;
@@ -764,10 +628,9 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         )?);
         synchronize_passive_quota(&quota, &lease, &response.rate_limit_headers).await;
         if let Some(etag) = response.response_metadata.models_etag.as_deref()
-            && let Err(error) = catalog.observe_response_etag(&provider_instance_id, etag)
+            && let Err(error) = catalog.observe_response_etag(etag)
         {
             tracing::warn!(
-                provider_instance_id = %provider_instance_id,
                 error = %error,
                 "OpenAI model ETag observation was rejected"
             );
@@ -1045,11 +908,8 @@ fn compile_model_capabilities(model: &CodexCatalogModel) -> ProviderModelCapabil
     ProviderModelCapabilities::new(model.request_model().clone(), capabilities)
 }
 
-fn selected_transport(
-    request: &ProviderRequest,
-    instance: &CodexProviderInstanceConfig,
-) -> Result<CodexProviderTransport, ProviderError> {
-    let mut transport = instance.transport();
+fn selected_transport(request: &ProviderRequest) -> Result<CodexProviderTransport, ProviderError> {
+    let mut transport = CodexProviderTransport::PreferWebSocket;
     if let Some(value) = request
         .operation()
         .provider_options(PROVIDER_NAME)
@@ -1189,16 +1049,6 @@ fn map_request_error(error: CodexRequestEncodeError) -> ProviderError {
         CodexRequestEncodeError::InvalidProviderOptions => ProviderErrorKind::InvalidRequest,
         CodexRequestEncodeError::UnsupportedProviderOption
         | CodexRequestEncodeError::UnsupportedContent => ProviderErrorKind::Unsupported,
-    };
-    provider_error(kind, UpstreamSendState::NotSent)
-}
-
-fn map_instance_config_error(error: CodexProviderConfigError) -> ProviderError {
-    let kind = match error {
-        CodexProviderConfigError::ProviderMismatch => ProviderErrorKind::InvalidRequest,
-        CodexProviderConfigError::InvalidBaseUrl | CodexProviderConfigError::UnsafeBaseUrl => {
-            ProviderErrorKind::Protocol
-        }
     };
     provider_error(kind, UpstreamSendState::NotSent)
 }
@@ -1584,30 +1434,6 @@ fn remaining(deadline: SystemTime) -> Option<Duration> {
         .filter(|remaining| !remaining.is_zero())
 }
 
-fn normalize_and_validate_base_url(
-    url: &mut Url,
-    origin_policy: &dyn CodexOriginPolicy,
-) -> Result<(), CodexProviderConfigError> {
-    if url.cannot_be_a_base()
-        || url.host().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(CodexProviderConfigError::UnsafeBaseUrl);
-    }
-    if !origin_policy.allows(url) {
-        return Err(CodexProviderConfigError::UnsafeBaseUrl);
-    }
-    let normalized_path = url.path().trim_end_matches('/');
-    if normalized_path != OFFICIAL_CODEX_BASE_PATH {
-        return Err(CodexProviderConfigError::UnsafeBaseUrl);
-    }
-    url.set_path(OFFICIAL_CODEX_BASE_PATH);
-    Ok(())
-}
-
 const WORKER_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const WORKER_MAXIMUM_BACKOFF: Duration = Duration::from_secs(60);
 const WORKER_LEASE_TTL: Duration = Duration::from_secs(15 * 60);
@@ -1624,8 +1450,6 @@ pub(crate) fn worker_contributions(
     catalog: Arc<CodexCredentialCatalogService>,
     cli_release: Arc<CodexCliReleaseService>,
     desktop_release: Arc<CodexDesktopReleaseService>,
-    instances: Arc<dyn ProviderInstanceCatalogPort>,
-    provider_kind: ProviderKind,
 ) -> Result<Vec<WorkerContribution>, WorkerDefinitionError> {
     let refresh_id = WorkerId::try_new(WorkerKind::OAuthRefresh, PROVIDER_NAME)?;
     let quota_id = WorkerId::try_new(WorkerKind::QuotaCatalogHealth, PROVIDER_NAME)?;
@@ -1643,11 +1467,7 @@ pub(crate) fn worker_contributions(
         WorkerContribution::Registration(scheduled_registration(
             quota_id,
             QUOTA_REFRESH_INTERVAL,
-            Box::new(OpenAiQuotaTask {
-                instances: Arc::clone(&instances),
-                quota,
-                provider_kind: provider_kind.clone(),
-            }),
+            Box::new(OpenAiQuotaTask { quota }),
         )?),
         WorkerContribution::Registration(WorkerRegistration::try_new(
             etag_id,
@@ -1656,11 +1476,7 @@ pub(crate) fn worker_contributions(
                     WORKER_INITIAL_BACKOFF,
                     WORKER_MAXIMUM_BACKOFF,
                 )?,
-                task: Box::new(OpenAiCatalogEtagTask {
-                    instances,
-                    catalog,
-                    provider_kind,
-                }),
+                task: Box::new(OpenAiCatalogEtagTask { catalog }),
             },
         )?),
         WorkerContribution::Registration(scheduled_registration(
@@ -1741,15 +1557,11 @@ impl ScheduledTask for OpenAiOAuthRefreshTask {
 }
 
 struct OpenAiQuotaTask {
-    instances: Arc<dyn ProviderInstanceCatalogPort>,
     quota: Arc<CodexCredentialQuotaService>,
-    provider_kind: ProviderKind,
 }
 
 struct OpenAiCatalogEtagTask {
-    instances: Arc<dyn ProviderInstanceCatalogPort>,
     catalog: Arc<CodexCredentialCatalogService>,
-    provider_kind: ProviderKind,
 }
 
 struct OpenAiDesktopReleaseTask {
@@ -1799,48 +1611,16 @@ impl ScheduledTask for OpenAiDesktopReleaseTask {
 impl ScheduledTask for OpenAiQuotaTask {
     fn run_cycle(&self, context: WorkerCycleContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
-            let instances = self
-                .instances
-                .list_instances(&self.provider_kind, false)
-                .await
-                .map_err(|_| WorkerTaskError::safe("OpenAI Provider instances unavailable"))?;
-            let mut failures = 0_u64;
-            for config in instances {
-                if context.cancellation().is_cancelled() {
-                    return Ok(());
-                }
-                if !config.enabled() || config.provider_kind() != &self.provider_kind {
-                    failures = failures.saturating_add(1);
-                    continue;
-                }
-                let instance = ProviderInstance::new(
-                    config.id().clone(),
-                    config.provider_kind().clone(),
-                    config.base_url().to_owned(),
-                    config.enabled(),
-                    InstanceHealth::Healthy,
-                );
-                match self.quota.synchronize_instance(&instance).await {
-                    Ok(summary) if summary.has_operational_failures() => {
-                        tracing::warn!(
-                            provider_instance_id = %instance.id(),
-                            "OpenAI quota cycle contained operational failures"
-                        );
-                    }
-                    Ok(_) => {}
-                    Err(_) => {
-                        failures = failures.saturating_add(1);
-                        tracing::warn!(
-                            provider_instance_id = %instance.id(),
-                            "OpenAI quota synchronization failed"
-                        );
-                    }
-                }
+            if context.cancellation().is_cancelled() {
+                return Ok(());
             }
-            if failures == 0 {
-                Ok(())
-            } else {
-                Err(WorkerTaskError::safe("OpenAI quota synchronization failed"))
+            match self.quota.synchronize().await {
+                Ok(summary) if summary.has_operational_failures() => {
+                    tracing::warn!("OpenAI quota cycle contained operational failures");
+                    Ok(())
+                }
+                Ok(_) => Ok(()),
+                Err(_) => Err(WorkerTaskError::safe("OpenAI quota synchronization failed")),
             }
         })
     }
@@ -1853,43 +1633,15 @@ impl DaemonTask for OpenAiCatalogEtagTask {
     ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
             loop {
-                let changed = tokio::select! {
+                tokio::select! {
                     () = cancellation.cancelled() => return Ok(()),
-                    changed = self.catalog.wait_for_etag_refresh() => changed,
+                    () = self.catalog.wait_for_etag_refresh() => {},
                 };
-                let instances = self
-                    .instances
-                    .list_instances(&self.provider_kind, false)
-                    .await
-                    .map_err(|_| {
-                        WorkerTaskError::safe(
-                            "OpenAI Provider instances unavailable for model ETag refresh",
-                        )
-                    })?;
-                for config in instances {
-                    if cancellation.is_cancelled() {
-                        return Ok(());
-                    }
-                    if !changed.contains(config.id())
-                        || !config.enabled()
-                        || config.provider_kind() != &self.provider_kind
-                    {
-                        continue;
-                    }
-                    let instance = ProviderInstance::new(
-                        config.id().clone(),
-                        config.provider_kind().clone(),
-                        config.base_url().to_owned(),
-                        true,
-                        InstanceHealth::Healthy,
+                if let Err(error) = self.catalog.refresh().await {
+                    tracing::warn!(
+                        error = %error,
+                        "OpenAI model catalog ETag refresh failed"
                     );
-                    if let Err(error) = self.catalog.refresh_instance(&instance).await {
-                        tracing::warn!(
-                            provider_instance_id = %instance.id(),
-                            error = %error,
-                            "OpenAI model catalog ETag refresh failed"
-                        );
-                    }
                 }
             }
         })

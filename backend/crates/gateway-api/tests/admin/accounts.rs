@@ -102,19 +102,23 @@ mod response {
 }
 
 mod actions {
-    use gateway_admin::model::accounts::{
-        AccountConnectionTestEvent as DomainConnectionTestEvent, AccountStatus,
+    use gateway_admin::model::{
+        Revision,
+        accounts::{AccountConnectionTestEvent as DomainConnectionTestEvent, AccountStatus},
+        provider_credentials::{CredentialDeletionResult, CredentialImportResult},
     };
     use gateway_api::admin::accounts::{
-        AccountActionRequest, AccountConnectionTestEvent, AccountExportData, AccountExportQuery,
-        AccountIdQuery, AccountRefreshRequest, AccountTestQuery,
+        AccountActionRequest, AccountConnectionTestEvent, AccountDeletionData,
+        AccountDeletionRequest, AccountExportData, AccountExportQuery, AccountIdQuery,
+        AccountImportData, AccountImportRequest, AccountRefreshRequest, AccountTestQuery,
     };
+    use gateway_core::engine::credential::ProviderAccountId;
     use serde_json::json;
 
     #[test]
     fn export_should_require_explicit_unique_ids_and_confirmation() {
         let valid: AccountExportQuery = serde_json::from_value(json!({
-            "ids": "acct_1,acct_2",
+            "accountIds": "acct_1,acct_2",
             "confirm": "export_sensitive_accounts"
         }))
         .expect("decode export query");
@@ -129,9 +133,9 @@ mod actions {
         );
 
         for query in [
-            json!({ "ids": "", "confirm": "export_sensitive_accounts" }),
-            json!({ "ids": "acct_1,acct_1", "confirm": "export_sensitive_accounts" }),
-            json!({ "ids": "acct_1", "confirm": "yes" }),
+            json!({ "accountIds": "", "confirm": "export_sensitive_accounts" }),
+            json!({ "accountIds": "acct_1,acct_1", "confirm": "export_sensitive_accounts" }),
+            json!({ "accountIds": "acct_1", "confirm": "yes" }),
         ] {
             assert!(
                 serde_json::from_value::<AccountExportQuery>(query)
@@ -145,13 +149,13 @@ mod actions {
     #[test]
     fn account_actions_should_require_frozen_account_ids_and_revision() {
         let id: AccountIdQuery =
-            serde_json::from_value(json!({ "id": "acct_1" })).expect("decode ID query");
+            serde_json::from_value(json!({ "accountId": "acct_1" })).expect("decode ID query");
         assert!(id.validate().is_ok());
         let action: AccountActionRequest =
-            serde_json::from_value(json!({ "id": "legacy-id" })).expect("decode action");
-        assert_eq!(action.validate().unwrap_err().field(), "id");
+            serde_json::from_value(json!({ "accountId": "legacy-id" })).expect("decode action");
+        assert_eq!(action.validate().unwrap_err().field(), "accountId");
         let refresh: AccountRefreshRequest = serde_json::from_value(json!({
-            "id": "acct_1",
+            "accountId": "acct_1",
             "expectedConfigRevision": 0
         }))
         .expect("decode refresh");
@@ -162,9 +166,90 @@ mod actions {
     }
 
     #[test]
+    fn account_import_should_use_provider_and_opaque_data_fields() {
+        let valid: AccountImportRequest = serde_json::from_value(json!({
+            "provider": "openai",
+            "expectedConfigRevision": 7,
+            "data": {
+                "providerOwnedUnknownField": {"nested": [1, 2, 3]},
+                "accounts": [{"credentials": {"access_token": "provider-validates-this"}}]
+            }
+        }))
+        .expect("decode account import");
+        assert!(valid.validate().is_ok());
+
+        let invalid: AccountImportRequest = serde_json::from_value(json!({
+            "provider": "xai",
+            "expectedConfigRevision": 7,
+            "data": []
+        }))
+        .expect("decode invalid account import");
+        assert_eq!(invalid.validate().unwrap_err().field(), "data");
+        assert!(
+            serde_json::from_value::<AccountImportRequest>(json!({
+                "provider": "openai",
+                "expectedConfigRevision": 7,
+                "document": {}
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn account_deletion_should_validate_one_provider_batch_and_emit_account_ids() {
+        let request: AccountDeletionRequest = serde_json::from_value(json!({
+            "provider": "xai",
+            "accountIds": ["acct_1", "acct_2"],
+            "expectedConfigRevision": 8
+        }))
+        .expect("decode account deletion");
+        assert!(request.validate().is_ok());
+
+        let duplicate: AccountDeletionRequest = serde_json::from_value(json!({
+            "provider": "xai",
+            "accountIds": ["acct_1", "acct_1"],
+            "expectedConfigRevision": 8
+        }))
+        .expect("decode duplicate account deletion");
+        assert_eq!(duplicate.validate().unwrap_err().field(), "accountIds");
+
+        let response = AccountDeletionData::from(CredentialDeletionResult {
+            config_revision: Revision::new(9).expect("revision"),
+            account_ids: vec![
+                ProviderAccountId::new("acct_1").expect("account ID"),
+                ProviderAccountId::new("acct_2").expect("account ID"),
+            ],
+        });
+        assert_eq!(
+            serde_json::to_value(response).expect("serialize account deletion"),
+            json!({
+                "configRevision": 9,
+                "deletedCount": 2,
+                "accountIds": ["acct_1", "acct_2"]
+            })
+        );
+    }
+
+    #[test]
+    fn account_import_response_should_emit_account_ids() {
+        let response = AccountImportData::from(CredentialImportResult {
+            config_revision: Revision::new(8).expect("revision"),
+            credential_ids: vec![ProviderAccountId::new("acct_imported").expect("account ID")],
+        });
+        assert_eq!(
+            serde_json::to_value(response).expect("serialize account import"),
+            json!({
+                "configRevision": 8,
+                "importedCount": 1,
+                "accountIds": ["acct_imported"]
+            })
+        );
+    }
+
+    #[test]
     fn connection_test_should_require_model_in_query() {
         let query: AccountTestQuery = serde_json::from_value(json!({
-            "id": "acct_1",
+            "accountId": "acct_1",
             "modelId": " "
         }))
         .expect("decode connection test query");

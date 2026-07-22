@@ -24,10 +24,8 @@ use gateway_core::operation::{
     CompactConversationRequest, Feature, GenerateRequest, Operation, OperationKind,
     ProviderSessionState,
 };
-use gateway_core::provider_ports::ProviderInstanceCatalogPort;
 use gateway_core::routing::{
-    InstanceHealth, ModelCapabilities, ProviderCandidate, ProviderInstance, ProviderKind,
-    SupportLevel, UpstreamModelId,
+    ModelCapabilities, ProviderCandidate, ProviderKind, SupportLevel, UpstreamModelId,
 };
 use gateway_core::task::{
     ScheduledTask, WorkerContribution, WorkerCycleContext, WorkerDefinitionError, WorkerId,
@@ -36,6 +34,7 @@ use gateway_core::task::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use url::Url;
 
 use crate::GrokCatalogCapabilityEvidence;
 use crate::XaiWireProfileState;
@@ -49,12 +48,12 @@ use crate::transport::config::XAI_PROVIDER_NAME;
 use crate::transport::headers::{GrokClientIdentity, GrokHeader, build_grok_headers};
 use crate::transport::profile::{GROK_CLI_RELEASE_POLL_INTERVAL, GrokCliReleaseService};
 use crate::transport::{
-    GrokCompactionDecodeError, GrokCompactionRequest, GrokCompactionSummaryDecoder,
-    GrokCredentialFailure, GrokInferenceChunkStream, GrokInferenceRequest, GrokInferenceResponse,
-    GrokInferenceTransport, GrokInferenceTransportError, GrokInferenceTransportErrorKind,
-    GrokProviderConfigError, GrokProviderInstanceConfig, GrokRequestEncodeError,
-    GrokResponsesRequest, GrokSessionAffinityKey, GrokSessionSelection, GrokSessionSelector,
-    GrokSessionSelectorError, SelectedGrokSession,
+    GROK_RESPONSES_URL, GrokCompactionDecodeError, GrokCompactionRequest,
+    GrokCompactionSummaryDecoder, GrokCredentialFailure, GrokInferenceChunkStream,
+    GrokInferenceRequest, GrokInferenceResponse, GrokInferenceTransport,
+    GrokInferenceTransportError, GrokInferenceTransportErrorKind, GrokProviderConfigError,
+    GrokRequestEncodeError, GrokResponsesRequest, GrokSessionAffinityKey, GrokSessionSelection,
+    GrokSessionSelector, GrokSessionSelectorError, SelectedGrokSession,
 };
 
 const HTTP_SSE_TRANSPORT: &str = "http_sse";
@@ -78,38 +77,29 @@ pub struct GrokBuildProvider {
     credential_recovery: Arc<dyn GrokCredentialRecovery>,
     client_identity: GrokClientIdentity,
     wire_profile: XaiWireProfileState,
+    responses_url: Url,
 }
 
 impl GrokBuildProvider {
     /// Creates a provider over explicit session and transport boundaries.
-    #[must_use]
     pub fn new(
         selector: Arc<dyn GrokSessionSelector>,
         transport: Arc<dyn GrokInferenceTransport>,
         catalog: Arc<GrokCredentialCatalogService>,
         credential_recovery: Arc<dyn GrokCredentialRecovery>,
         wire_profile: XaiWireProfileState,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, GrokProviderConfigError> {
+        let responses_url = Url::parse(GROK_RESPONSES_URL)
+            .map_err(|_| GrokProviderConfigError::InvalidResponsesUrl)?;
+        Ok(Self {
             selector,
             transport,
             catalog,
             credential_recovery,
             client_identity: GrokClientIdentity::new(),
             wire_profile,
-        }
-    }
-
-    /// Validates an instance before publishing its runtime snapshot.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error unless the instance uses the exact official Grok CLI
-    /// proxy endpoint and v1 HTTP SSE option schema.
-    pub fn validate_instance(
-        instance: &ProviderInstance,
-    ) -> Result<GrokProviderInstanceConfig, GrokProviderConfigError> {
-        GrokProviderInstanceConfig::from_snapshot(instance)
+            responses_url,
+        })
     }
 }
 
@@ -125,15 +115,10 @@ impl Provider for GrokBuildProvider {
 
     async fn query_model_capabilities(
         &self,
-        instance: &ProviderInstance,
     ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
-        let models = self
-            .catalog
-            .query_instance_models(instance)
-            .await
-            .map_err(|_| {
-                provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
-            })?;
+        let models = self.catalog.query_models().await.map_err(|_| {
+            provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
+        })?;
         Ok(models
             .into_iter()
             .map(|model| {
@@ -183,25 +168,14 @@ impl Provider for GrokBuildProvider {
                 UpstreamSendState::NotSent,
             ));
         }
-        let instance_snapshot = candidate.instance_snapshot();
-        if instance_snapshot.id() != candidate.instance() {
-            return Err(provider_error(
-                ProviderErrorKind::Protocol,
-                UpstreamSendState::NotSent,
-            ));
-        }
-        let instance = GrokProviderInstanceConfig::from_snapshot(instance_snapshot)
-            .map_err(map_instance_config_error)?;
         preflight_context(&context)?;
 
         match request.operation() {
             Operation::Generate(generate) => {
-                self.execute_generate(generate, candidate, instance, context)
-                    .await
+                self.execute_generate(generate, candidate, context).await
             }
             Operation::CompactConversation(compact) => {
-                self.execute_compaction(compact, candidate, instance, context)
-                    .await
+                self.execute_compaction(compact, candidate, context).await
             }
             _ => Err(provider_error(
                 ProviderErrorKind::Unsupported,
@@ -216,12 +190,10 @@ impl GrokBuildProvider {
         &self,
         generate: &GenerateRequest,
         candidate: &ProviderCandidate,
-        instance: GrokProviderInstanceConfig,
         context: AttemptContext,
     ) -> Result<ProviderStream, ProviderError> {
         let previous_session = decode_xai_session_state(generate)?;
-        let continuation_account =
-            continuation_account(&context, candidate.instance(), previous_session.as_ref())?;
+        let continuation_account = continuation_account(&context, previous_session.as_ref())?;
         let mut upstream_request = GrokResponsesRequest::encode(
             generate,
             candidate.upstream_model().as_str(),
@@ -244,7 +216,6 @@ impl GrokBuildProvider {
             &mut upstream_request,
             previous_session.as_ref(),
             &context,
-            candidate.instance(),
             selected.account_id(),
             request_input.as_slice(),
         )?;
@@ -268,7 +239,7 @@ impl GrokBuildProvider {
                 client_identity: self.client_identity.clone(),
                 wire_profile: self.wire_profile.clone(),
                 credential_recovery: Arc::clone(&self.credential_recovery),
-                instance,
+                responses_url: self.responses_url.clone(),
                 request: upstream_request,
                 upstream_model: candidate.upstream_model().clone(),
                 context,
@@ -283,7 +254,6 @@ impl GrokBuildProvider {
         &self,
         compact: &CompactConversationRequest,
         candidate: &ProviderCandidate,
-        instance: GrokProviderInstanceConfig,
         context: AttemptContext,
     ) -> Result<ProviderStream, ProviderError> {
         if context.continuation().is_some()
@@ -327,7 +297,7 @@ impl GrokBuildProvider {
                 client_identity: self.client_identity.clone(),
                 wire_profile: self.wire_profile.clone(),
                 credential_recovery: Arc::clone(&self.credential_recovery),
-                instance,
+                responses_url: self.responses_url.clone(),
                 request: upstream_request,
                 upstream_model: candidate.upstream_model().clone(),
                 upstream_session_id,
@@ -348,7 +318,6 @@ async fn select_grok_session(
 ) -> Result<SelectedGrokSession, ProviderError> {
     let required_account = context.required_account().cloned().or(operation_account);
     let selection = GrokSessionSelection::new(
-        candidate.instance().clone(),
         candidate.upstream_model().clone(),
         context.excluded_accounts().clone(),
         required_account.clone(),
@@ -390,7 +359,6 @@ fn provider_call_metadata(
 ) -> Result<ProviderCallMetadata, ProviderError> {
     Ok(ProviderCallMetadata::new(
         ProviderKind::new(XAI_PROVIDER_NAME).map_err(|_| protocol_not_sent())?,
-        candidate.instance().clone(),
         candidate.upstream_model().clone(),
         selected.resource(),
         UpstreamTransport::new(HTTP_SSE_TRANSPORT).map_err(|_| protocol_not_sent())?,
@@ -479,7 +447,6 @@ fn encode_xai_session_state(
 
 fn continuation_account(
     context: &AttemptContext,
-    instance: &gateway_core::routing::ProviderInstanceId,
     previous_session: Option<&XaiSessionState>,
 ) -> Result<Option<gateway_core::engine::credential::ProviderAccountId>, ProviderError> {
     let Some(continuation) = context.continuation() else {
@@ -487,7 +454,7 @@ fn continuation_account(
     };
     match (context.continuation_attempt(), continuation) {
         (ContinuationAttempt::Native, ContinuationBinding::Pinned(pin)) => {
-            if pin.provider().as_str() != XAI_PROVIDER_NAME || pin.instance() != instance {
+            if pin.provider().as_str() != XAI_PROVIDER_NAME {
                 return Err(invalid_continuation());
             }
             Ok(Some(pin.account().clone()))
@@ -510,7 +477,6 @@ fn apply_continuation(
     request: &mut GrokResponsesRequest,
     previous_session: Option<&XaiSessionState>,
     context: &AttemptContext,
-    instance: &gateway_core::routing::ProviderInstanceId,
     account: &gateway_core::engine::credential::ProviderAccountId,
     current_input: &[Value],
 ) -> Result<(), ProviderError> {
@@ -523,7 +489,7 @@ fn apply_continuation(
                 return Err(invalid_continuation());
             };
             let provider = ProviderKind::new(XAI_PROVIDER_NAME).map_err(|_| protocol_not_sent())?;
-            if !pin.matches(&provider, instance, account) {
+            if !pin.matches(&provider, account) {
                 return Err(invalid_continuation());
             }
             request.set_previous_response_id(Some(pin.upstream_response_id().as_str().to_owned()));
@@ -791,7 +757,7 @@ struct GrokStreamAttempt {
     client_identity: GrokClientIdentity,
     wire_profile: XaiWireProfileState,
     credential_recovery: Arc<dyn GrokCredentialRecovery>,
-    instance: GrokProviderInstanceConfig,
+    responses_url: Url,
     request: GrokResponsesRequest,
     upstream_model: UpstreamModelId,
     context: AttemptContext,
@@ -803,7 +769,7 @@ struct GrokCompactionStreamAttempt {
     client_identity: GrokClientIdentity,
     wire_profile: XaiWireProfileState,
     credential_recovery: Arc<dyn GrokCredentialRecovery>,
-    instance: GrokProviderInstanceConfig,
+    responses_url: Url,
     request: GrokCompactionRequest,
     upstream_model: UpstreamModelId,
     upstream_session_id: Option<String>,
@@ -937,7 +903,7 @@ fn cold_compaction_http_sse_stream(
         client_identity,
         wire_profile,
         credential_recovery,
-        instance,
+        responses_url,
         request,
         upstream_model,
         upstream_session_id,
@@ -962,7 +928,7 @@ fn cold_compaction_http_sse_stream(
         }
         let body = request.to_json_bytes().map_err(map_request_error)?;
         let inference_request = GrokInferenceRequest::new(
-            instance.responses_url().clone(),
+            responses_url,
             headers,
             body,
             session.binding().clone(),
@@ -1111,7 +1077,7 @@ fn cold_http_sse_stream(
         client_identity,
         wire_profile,
         credential_recovery,
-        instance,
+        responses_url,
         request,
         upstream_model,
         context,
@@ -1136,7 +1102,7 @@ fn cold_http_sse_stream(
         );
         let body = request.to_json_bytes().map_err(map_request_error)?;
         let inference_request = GrokInferenceRequest::new(
-            instance.responses_url().clone(),
+            responses_url,
             headers,
             body,
             session.binding().clone(),
@@ -1417,16 +1383,6 @@ fn map_request_error(error: GrokRequestEncodeError) -> ProviderError {
     provider_error(kind, UpstreamSendState::NotSent)
 }
 
-fn map_instance_config_error(error: GrokProviderConfigError) -> ProviderError {
-    let kind = match error {
-        GrokProviderConfigError::ProviderMismatch => ProviderErrorKind::InvalidRequest,
-        GrokProviderConfigError::InvalidBaseUrl | GrokProviderConfigError::UnsafeBaseUrl => {
-            ProviderErrorKind::Protocol
-        }
-    };
-    provider_error(kind, UpstreamSendState::NotSent)
-}
-
 fn map_selection_error(error: GrokSessionSelectorError) -> ProviderError {
     match error {
         GrokSessionSelectorError::CapacityUnavailable { retry_after } => {
@@ -1541,7 +1497,6 @@ pub(crate) fn worker_contributions(
     quota: Arc<GrokCredentialQuotaService>,
     catalog: Arc<GrokCredentialCatalogService>,
     accounts: Arc<dyn ProviderAccountStore>,
-    instances: Arc<dyn ProviderInstanceCatalogPort>,
     provider_kind: ProviderKind,
     cli_release: Arc<GrokCliReleaseService>,
 ) -> Result<Vec<WorkerContribution>, WorkerDefinitionError> {
@@ -1559,7 +1514,6 @@ pub(crate) fn worker_contributions(
             QUOTA_CATALOG_INTERVAL,
             Box::new(XaiQuotaCatalogTask {
                 accounts,
-                instances,
                 quota,
                 catalog,
                 provider_kind,
@@ -1655,7 +1609,6 @@ impl ScheduledTask for XaiOAuthRefreshTask {
 
 struct XaiQuotaCatalogTask {
     accounts: Arc<dyn ProviderAccountStore>,
-    instances: Arc<dyn ProviderInstanceCatalogPort>,
     quota: Arc<GrokCredentialQuotaService>,
     catalog: Arc<GrokCredentialCatalogService>,
     provider_kind: ProviderKind,
@@ -1664,48 +1617,27 @@ struct XaiQuotaCatalogTask {
 impl ScheduledTask for XaiQuotaCatalogTask {
     fn run_cycle(&self, context: WorkerCycleContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
-            let instances = self
-                .instances
-                .list_instances(&self.provider_kind, false)
+            let accounts = self
+                .accounts
+                .list_for_provider(&self.provider_kind)
                 .await
-                .map_err(|_| WorkerTaskError::safe("xAI Provider instances unavailable"))?;
+                .map_err(|_| WorkerTaskError::safe("xAI Provider accounts unavailable"))?;
             let mut failures = 0_u64;
-            for config in instances {
+            let now = SystemTime::now();
+            for account in accounts
+                .into_iter()
+                .filter(|account| eligible_quota_worker_account(account, now))
+            {
                 if context.cancellation().is_cancelled() {
                     return Ok(());
                 }
-                if !config.enabled() || config.provider_kind() != &self.provider_kind {
-                    failures = failures.saturating_add(1);
-                    continue;
-                }
-                let instance = ProviderInstance::new(
-                    config.id().clone(),
-                    config.provider_kind().clone(),
-                    config.base_url().to_owned(),
-                    true,
-                    InstanceHealth::Healthy,
-                );
-                match self.accounts.list_for_instance(instance.id()).await {
-                    Ok(accounts) => {
-                        let now = SystemTime::now();
-                        for account in accounts
-                            .into_iter()
-                            .filter(|account| eligible_quota_worker_account(account, now))
-                        {
-                            if context.cancellation().is_cancelled() {
-                                return Ok(());
-                            }
-                            match self.quota.refresh_account(account.id()).await {
-                                Ok(_) | Err(GrokQuotaError::AccountUnavailable) => {}
-                                Err(_) => failures = failures.saturating_add(1),
-                            }
-                        }
-                    }
+                match self.quota.refresh_account(account.id()).await {
+                    Ok(_) | Err(GrokQuotaError::AccountUnavailable) => {}
                     Err(_) => failures = failures.saturating_add(1),
                 }
-                if self.catalog.query_instance_models(&instance).await.is_err() {
-                    failures = failures.saturating_add(1);
-                }
+            }
+            if self.catalog.query_models().await.is_err() {
+                failures = failures.saturating_add(1);
             }
             if failures == 0 {
                 Ok(())

@@ -14,7 +14,7 @@ use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeaseGuard, ProviderLeasePort, ProviderLeaseRequest,
     ProviderSchedulingLeaseRequest, ProviderStoreError,
 };
-use gateway_core::routing::ProviderInstanceId;
+use gateway_core::routing::ProviderKind;
 use secrecy::ExposeSecret;
 use thiserror::Error;
 use url::Url;
@@ -25,7 +25,6 @@ use super::quota::CodexCredentialQuotaService;
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
 use super::types::{CodexCookie, CodexCookieCaptureOutcome, CodexOAuthSecret, RuntimeCodexCookie};
 
-const PROVIDER_NAME: &str = "openai";
 const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 const CLOUDFLARE_PATH_BLOCK_COOLDOWN: Duration = Duration::from_secs(30);
 const CLOUDFLARE_RECOVERY_STALE_AFTER: Duration = Duration::from_secs(60 * 60);
@@ -76,13 +75,13 @@ enum CookieRecovery {
 }
 
 pub struct SelectCodexCredential<'a> {
-    pub provider_instance_id: &'a ProviderInstanceId,
     pub upstream_model: &'a str,
     pub request_url: &'a Url,
     pub attempt: &'a AttemptContext,
 }
 
 pub struct CodexCredentialSelector {
+    provider_kind: ProviderKind,
     repository: CodexCredentialRepository,
     leases: Arc<dyn ProviderLeasePort>,
     catalog: Arc<CodexCredentialCatalogService>,
@@ -94,6 +93,7 @@ pub struct CodexCredentialSelector {
 impl CodexCredentialSelector {
     #[must_use]
     pub fn new(
+        provider_kind: ProviderKind,
         repository: CodexCredentialRepository,
         leases: Arc<dyn ProviderLeasePort>,
         catalog: Arc<CodexCredentialCatalogService>,
@@ -101,6 +101,7 @@ impl CodexCredentialSelector {
         cookie_policy: CodexCookiePolicy,
     ) -> Self {
         Self {
+            provider_kind,
             repository,
             leases,
             catalog,
@@ -114,18 +115,13 @@ impl CodexCredentialSelector {
         &self,
         request: &SelectCodexCredential<'_>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
-        let accounts = self
-            .repository
-            .list_for_instance(request.provider_instance_id)
-            .await?;
+        let accounts = self.repository.list_for_provider().await?;
         let accounts = accounts
             .into_iter()
             .filter(|account| {
-                account.provider().as_str() == PROVIDER_NAME
-                    && account.instance() == request.provider_instance_id
+                account.provider() == &self.provider_kind
                     && !matches!(
                         self.catalog.observed_model_support(
-                            request.provider_instance_id,
                             account.id(),
                             account.revision(),
                             request.upstream_model,
@@ -141,7 +137,7 @@ impl CodexCredentialSelector {
             .collect::<Vec<_>>();
         let scheduling = self
             .leases
-            .load_state(request.provider_instance_id, &account_ids)
+            .load_state(&self.provider_kind, &account_ids)
             .await?;
         let round_robin_cursor = scheduling.round_robin_cursor();
         let candidates = accounts
@@ -171,10 +167,7 @@ impl CodexCredentialSelector {
             ContinuationAttempt::ReplayOwner => request
                 .attempt
                 .account_state_owner()
-                .filter(|owner| {
-                    owner.provider().as_str() == PROVIDER_NAME
-                        && owner.instance() == request.provider_instance_id
-                })
+                .filter(|owner| owner.provider() == &self.provider_kind)
                 .map(|owner| owner.account().clone()),
             ContinuationAttempt::None | ContinuationAttempt::ReplayAny => None,
         };
@@ -219,7 +212,7 @@ impl CodexCredentialSelector {
                 .leases
                 .try_acquire(ProviderLeaseRequest::Scheduling(
                     ProviderSchedulingLeaseRequest::new(
-                        request.provider_instance_id.clone(),
+                        self.provider_kind.clone(),
                         account.id().clone(),
                         account.revision(),
                         policy.max_concurrent_per_account(),

@@ -8,14 +8,6 @@ export function getAccounts(data: object) {
   })
 }
 
-export function getProviderInstances(data: object) {
-  return request({
-    url: '/api/admin/provider-instances',
-    method: 'GET',
-    params: data,
-  })
-}
-
 export function exportAccounts(data: object) {
   return request({
     url: '/api/admin/accounts/export',
@@ -64,97 +56,49 @@ export function refreshAccountModels(data: object) {
   })
 }
 
-export function importCodexCredentialsDocument(data: object) {
+export function importAccounts(data: object) {
   return request({
-    url: '/api/admin/openai/credentials/import-document',
+    url: '/api/admin/accounts/import',
     method: 'POST',
     data,
   })
 }
 
-export function enableCodexCredential(data: object) {
+export function enableAccount(data: object) {
   return request({
-    url: '/api/admin/openai/credentials/enable',
+    url: '/api/admin/accounts/enable',
     method: 'POST',
     data,
   })
 }
 
-export function disableCodexCredential(data: object) {
+export function disableAccount(data: object) {
   return request({
-    url: '/api/admin/openai/credentials/disable',
+    url: '/api/admin/accounts/disable',
     method: 'POST',
     data,
   })
 }
 
-export function deleteCodexCredential(data: object) {
+export function deleteAccounts(data: object) {
   return request({
-    url: '/api/admin/openai/credentials/delete',
+    url: '/api/admin/accounts/delete',
     method: 'POST',
     data,
   })
 }
 
-export function startCodexOAuthAuthorization(data: object) {
+export function startAccountOAuth(data: object) {
   return request({
-    url: '/api/admin/openai/oauth/authorization/start',
+    url: '/api/admin/accounts/oauth/start',
     method: 'POST',
     data,
   })
 }
 
-export function completeCodexOAuthAuthorization(data: object) {
+export function completeAccountOAuth(data: object) {
   return request({
-    url: '/api/admin/openai/oauth/authorization/complete',
-    method: 'POST',
-    data,
-  })
-}
-
-export function importXaiCredentialsDocument(data: object) {
-  return request({
-    url: '/api/admin/xai/credentials/import-document',
-    method: 'POST',
-    data,
-  })
-}
-
-export function startXaiOAuthAuthorization(data: object) {
-  return request({
-    url: '/api/admin/xai/oauth/authorization/start',
-    method: 'POST',
-    data,
-  })
-}
-
-export function completeXaiOAuthAuthorization(data: object) {
-  return request({
-    url: '/api/admin/xai/oauth/authorization/complete',
-    method: 'POST',
-    data,
-  })
-}
-
-export function enableXaiCredential(data: object) {
-  return request({
-    url: '/api/admin/xai/credentials/enable',
-    method: 'POST',
-    data,
-  })
-}
-
-export function disableXaiCredential(data: object) {
-  return request({
-    url: '/api/admin/xai/credentials/disable',
-    method: 'POST',
-    data,
-  })
-}
-
-export function deleteXaiCredential(data: object) {
-  return request({
-    url: '/api/admin/xai/credentials/delete',
+    url: '/api/admin/accounts/oauth/complete',
     method: 'POST',
     data,
   })

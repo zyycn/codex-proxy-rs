@@ -9,7 +9,7 @@ use gateway_core::{
         probe::{AccountProbe, AccountProbeRequest, AccountProbeResult},
     },
     error::GatewayError,
-    routing::{ProviderInstanceId, ProviderKind},
+    routing::ProviderKind,
 };
 
 use gateway_admin::{
@@ -18,12 +18,7 @@ use gateway_admin::{
         MutationContext, Revision,
         accounts::{
             AccountAvailability, AccountListQuery, AccountPage, AccountRecord, AccountSummary,
-            AccountUsage, DeleteAccount, SetAccountEnabled,
-        },
-        catalog::{
-            CreateProviderInstance, DeleteProviderInstance, ProviderInstance,
-            ProviderInstanceCatalog, ProviderInstanceDetail, ProviderInstanceMutation,
-            SetProviderInstanceEnabled, UpdateProviderInstance,
+            AccountUsage, DeleteAccounts, SetAccountEnabled,
         },
         observability::TimeRange,
         provider_credentials::{
@@ -47,8 +42,7 @@ use gateway_admin::{
             ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind, ProviderAdminRegistry,
         },
         store::{
-            AccountStore, AdminStoreError, AdminStoreErrorKind, AdminStoreResult, CatalogStore,
-            SettingsStore,
+            AccountStore, AdminStoreError, AdminStoreErrorKind, AdminStoreResult, SettingsStore,
         },
     },
 };
@@ -101,7 +95,6 @@ impl FakeProviderAdmin {
         PreparedCredentialRotation::new(
             PreparedCredentialRotationFacts {
                 account_id: ProviderAccountId::new(account.id.clone()).expect("account ID"),
-                provider_instance_id: account.provider_instance_id.clone(),
                 provider_kind: account.provider_kind.clone(),
                 expected_credential_revision: account.credential_revision,
                 name: account.name.clone(),
@@ -153,18 +146,13 @@ impl ProviderAdmin for FakeProviderAdmin {
 
     async fn prepare_import(
         &self,
-        command: PrepareCredentialImport,
+        _command: PrepareCredentialImport,
     ) -> Result<PreparedCredentialImport, ProviderAdminError> {
         self.record("provider.prepare_import");
         self.require_available()?;
         Ok(PreparedCredentialImport {
             provider_kind: self.kind.clone(),
-            provider_instance_id: command.provider_instance_id.clone(),
-            credentials: vec![prepared_create(
-                self.kind.clone(),
-                command.provider_instance_id,
-                "prepared-import",
-            )],
+            credentials: vec![prepared_create(self.kind.clone(), "prepared-import")],
         })
     }
 
@@ -198,22 +186,15 @@ impl ProviderAdmin for FakeProviderAdmin {
             return Err(ProviderAdminError::new(ProviderAdminErrorKind::NotFound));
         }
         let credential = match pending.target() {
-            AuthorizationMutationTarget::Create {
-                provider_instance_id,
-                name,
-            } => PreparedAuthorizationCredential::Create(prepared_create(
-                self.kind.clone(),
-                provider_instance_id.clone(),
-                name,
-            )),
+            AuthorizationMutationTarget::Create { name } => {
+                PreparedAuthorizationCredential::Create(prepared_create(self.kind.clone(), name))
+            }
             AuthorizationMutationTarget::Reauthorize {
-                provider_instance_id,
                 account_id,
                 expected_credential_revision,
             } => {
                 let mut account = account_record(self.kind.as_str());
                 account.id = account_id.as_str().to_owned();
-                account.provider_instance_id = provider_instance_id.clone();
                 account.credential_revision = *expected_credential_revision;
                 PreparedAuthorizationCredential::Reauthorize(self.prepared_rotation(&account))
             }
@@ -502,9 +483,9 @@ impl AccountStore for FakeAccountStore {
         Ok(revision(2))
     }
 
-    async fn delete_account(
+    async fn delete_accounts(
         &self,
-        _: DeleteAccount,
+        _: DeleteAccounts,
         context: &MutationContext,
     ) -> AdminStoreResult<Revision> {
         self.record("store.delete");
@@ -570,62 +551,6 @@ impl SettingsStore for StaticSettingsStore {
         _: Revision,
         _: &MutationContext,
     ) -> AdminStoreResult<AdminApiKeyMutation> {
-        Err(store_unavailable())
-    }
-}
-
-struct StaticCatalogStore {
-    instance: ProviderInstance,
-}
-
-#[async_trait]
-impl CatalogStore for StaticCatalogStore {
-    async fn list_provider_instances(&self, _: bool) -> AdminStoreResult<ProviderInstanceCatalog> {
-        Ok(ProviderInstanceCatalog {
-            config_revision: revision(1),
-            items: vec![self.instance.clone()],
-        })
-    }
-
-    async fn load_provider_instance(
-        &self,
-        id: &ProviderInstanceId,
-    ) -> AdminStoreResult<Option<ProviderInstanceDetail>> {
-        Ok((id == &self.instance.id).then(|| ProviderInstanceDetail {
-            config_revision: revision(1),
-            item: self.instance.clone(),
-        }))
-    }
-
-    async fn create_provider_instance(
-        &self,
-        _: CreateProviderInstance,
-        _: &MutationContext,
-    ) -> AdminStoreResult<ProviderInstanceMutation> {
-        Err(store_unavailable())
-    }
-
-    async fn update_provider_instance(
-        &self,
-        _: UpdateProviderInstance,
-        _: &MutationContext,
-    ) -> AdminStoreResult<ProviderInstanceMutation> {
-        Err(store_unavailable())
-    }
-
-    async fn set_provider_instance_enabled(
-        &self,
-        _: SetProviderInstanceEnabled,
-        _: &MutationContext,
-    ) -> AdminStoreResult<ProviderInstanceMutation> {
-        Err(store_unavailable())
-    }
-
-    async fn delete_provider_instance(
-        &self,
-        _: DeleteProviderInstance,
-        _: &MutationContext,
-    ) -> AdminStoreResult<Revision> {
         Err(store_unavailable())
     }
 }
@@ -731,7 +656,7 @@ async fn accounts_refresh_should_keep_guard_through_store_commit() {
         .await
         .expect("refresh credential");
     assert_eq!(result.config_revision, revision(2));
-    assert_eq!(result.account.provider_instance_name, "Test Provider");
+    assert_eq!(result.account.account.provider_kind.as_str(), "openai");
     assert_eq!(
         result.account.status,
         gateway_admin::model::accounts::AccountStatus::Active
@@ -771,7 +696,7 @@ async fn accounts_list_should_return_complete_directory_semantics() {
     assert_eq!(page.summary.total, 1);
     assert_eq!(page.summary.active, 1);
     let account = page.items.first().expect("account item");
-    assert_eq!(account.provider_instance_name, "Test Provider");
+    assert_eq!(account.account.provider_kind.as_str(), "openai");
     assert_eq!(
         account.status,
         gateway_admin::model::accounts::AccountStatus::Active
@@ -856,7 +781,6 @@ pub(super) fn account_record(kind: &str) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
         id: "acct_test".to_owned(),
-        provider_instance_id: ProviderInstanceId::new(format!("inst_{kind}")).expect("instance ID"),
         provider_kind: ProviderKind::new(kind).expect("provider kind"),
         name: "test account".to_owned(),
         email: Some("test@example.invalid".to_owned()),
@@ -882,15 +806,10 @@ pub(super) fn revision(value: u64) -> Revision {
     Revision::new(value).expect("positive revision")
 }
 
-fn prepared_create(
-    provider_kind: ProviderKind,
-    provider_instance_id: ProviderInstanceId,
-    name: &str,
-) -> PreparedCredentialCreate {
+fn prepared_create(provider_kind: ProviderKind, name: &str) -> PreparedCredentialCreate {
     let now = Utc::now();
     PreparedCredentialCreate {
         account_id: ProviderAccountId::new("acct_prepared").expect("prepared account ID"),
-        provider_instance_id,
         provider_kind,
         name: name.to_owned(),
         email: Some("prepared@example.invalid".to_owned()),
@@ -923,19 +842,8 @@ async fn accounts_service(
     provider: Arc<FakeProviderAdmin>,
     store: Arc<FakeAccountStore>,
 ) -> AdminServices {
-    let now = Utc::now();
-    let instance = ProviderInstance {
-        id: store.account.provider_instance_id.clone(),
-        provider_kind: store.account.provider_kind.clone(),
-        name: "Test Provider".to_owned(),
-        base_url: "https://example.invalid".to_owned(),
-        enabled: true,
-        created_at: now,
-        updated_at: now,
-    };
     super::AdminHarness::new()
         .accounts(store)
-        .catalog(Arc::new(StaticCatalogStore { instance }))
         .settings(Arc::new(StaticSettingsStore))
         .provider(provider)
         .probe(Arc::new(SuccessfulAccountProbe))

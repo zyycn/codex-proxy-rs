@@ -2,7 +2,6 @@ mod canonical;
 mod catalog;
 mod compaction;
 mod config;
-mod failure_feedback;
 mod headers;
 mod network;
 mod request;

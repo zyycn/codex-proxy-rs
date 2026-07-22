@@ -1,4 +1,4 @@
-//! Provider 平台、实例、模型目录、精确模型映射与请求级候选计划。
+//! Provider、模型目录、精确模型映射与请求级候选计划。
 
 pub mod snapshot;
 
@@ -14,30 +14,6 @@ use crate::error::{IdentifierError, RoutingError, validate_text};
 use crate::operation::{CapabilityRequirements, Feature, OperationKind};
 
 const MAX_REQUEST_ATTEMPTS: u32 = 32;
-
-/// 一个具体 Provider endpoint 的 ID。
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ProviderInstanceId(String);
-
-impl ProviderInstanceId {
-    /// 校验并创建 Provider instance ID。
-    pub fn new(value: impl Into<String>) -> Result<Self, IdentifierError> {
-        let value = value.into();
-        validate_text(&value, 128, false, Some("inst_"))?;
-        Ok(Self(value))
-    }
-
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for ProviderInstanceId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
 
 /// 编译进二进制的 Provider adapter slug。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -214,53 +190,26 @@ impl ModelCapabilities {
     }
 }
 
-/// Provider instance 的可重建运行健康状态。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum InstanceHealth {
-    Healthy,
-    Degraded,
-    Unavailable,
-    CircuitOpen,
-    Saturated,
-}
-
-impl InstanceHealth {
-    const fn is_routable(self, allow_degraded: bool) -> bool {
-        matches!(self, Self::Healthy) || (allow_degraded && matches!(self, Self::Degraded))
-    }
-}
-
-/// `provider_instances` 与实时健康状态组成的只读快照。
+/// 一个 Provider 实时发现的上游模型能力。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderInstance {
-    id: ProviderInstanceId,
+pub struct ProviderModel {
     provider: ProviderKind,
-    base_url: String,
-    enabled: bool,
-    health: InstanceHealth,
+    upstream_model: UpstreamModelId,
+    capabilities: ModelCapabilities,
 }
 
-impl ProviderInstance {
+impl ProviderModel {
     #[must_use]
     pub const fn new(
-        id: ProviderInstanceId,
         provider: ProviderKind,
-        base_url: String,
-        enabled: bool,
-        health: InstanceHealth,
+        upstream_model: UpstreamModelId,
+        capabilities: ModelCapabilities,
     ) -> Self {
         Self {
-            id,
             provider,
-            base_url,
-            enabled,
-            health,
+            upstream_model,
+            capabilities,
         }
-    }
-
-    #[must_use]
-    pub const fn id(&self) -> &ProviderInstanceId {
-        &self.id
     }
 
     #[must_use]
@@ -269,96 +218,31 @@ impl ProviderInstance {
     }
 
     #[must_use]
-    pub fn base_url(&self) -> &str {
-        &self.base_url
-    }
-
-    #[must_use]
-    pub const fn enabled(&self) -> bool {
-        self.enabled
-    }
-
-    #[must_use]
-    pub const fn health(&self) -> InstanceHealth {
-        self.health
-    }
-}
-
-/// 一个 instance 实时发现的上游模型能力。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderModel {
-    instance: ProviderInstanceId,
-    upstream_model: UpstreamModelId,
-    capabilities: ModelCapabilities,
-}
-
-impl ProviderModel {
-    #[must_use]
-    pub const fn new(
-        instance: ProviderInstanceId,
-        upstream_model: UpstreamModelId,
-        capabilities: ModelCapabilities,
-    ) -> Self {
-        Self {
-            instance,
-            upstream_model,
-            capabilities,
-        }
-    }
-
-    #[must_use]
-    pub const fn instance(&self) -> &ProviderInstanceId {
-        &self.instance
-    }
-
-    #[must_use]
     pub const fn upstream_model(&self) -> &UpstreamModelId {
         &self.upstream_model
     }
 }
 
-/// Provider circuit 的 request-scoped observation fence。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProviderInstanceObservationToken {
-    pub epoch: u64,
-    pub fencing_token: u64,
-    pub probe_fencing_token: Option<u64>,
-}
-
-/// 本次请求选择 Provider instance 时使用的动态过滤事实。
+/// 本次请求选择 Provider 时使用的动态过滤事实。
 #[derive(Debug, Clone, Default)]
 pub struct RoutingContext {
     /// 已认证 Client API Key 绑定的平台；模型名称不参与平台猜测。
     pub provider_kind: Option<ProviderKind>,
-    pub allowed_instances: Option<BTreeSet<ProviderInstanceId>>,
-    pub allow_degraded: bool,
-    pub blocked_instances: BTreeSet<ProviderInstanceId>,
-    pub provider_observation_tokens: BTreeMap<ProviderInstanceId, ProviderInstanceObservationToken>,
+    pub blocked_providers: BTreeSet<ProviderKind>,
 }
 
-/// 已绑定 Provider、instance 与真实上游模型的请求候选。
+/// 已绑定 Provider 与真实上游模型的请求候选。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCandidate {
-    instance: ProviderInstance,
+    provider: ProviderKind,
     upstream_model: UpstreamModelId,
     emulated_features: BTreeSet<Feature>,
-    observation_token: Option<ProviderInstanceObservationToken>,
 }
 
 impl ProviderCandidate {
     #[must_use]
-    pub const fn instance_snapshot(&self) -> &ProviderInstance {
-        &self.instance
-    }
-
-    #[must_use]
-    pub const fn instance(&self) -> &ProviderInstanceId {
-        self.instance.id()
-    }
-
-    #[must_use]
     pub const fn provider(&self) -> &ProviderKind {
-        self.instance.provider()
+        &self.provider
     }
 
     #[must_use]
@@ -370,14 +254,9 @@ impl ProviderCandidate {
     pub const fn emulated_features(&self) -> &BTreeSet<Feature> {
         &self.emulated_features
     }
-
-    #[must_use]
-    pub const fn observation_token(&self) -> Option<ProviderInstanceObservationToken> {
-        self.observation_token
-    }
 }
 
-/// 一次请求冻结的平台内 Provider instance 尝试顺序。
+/// 一次请求冻结的 Provider 尝试顺序。
 #[derive(Debug, Clone)]
 pub struct RoutingPlan {
     config_revision: ConfigRevision,

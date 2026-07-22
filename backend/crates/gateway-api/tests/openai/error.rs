@@ -128,7 +128,7 @@ fn local_provider_capacity_exhaustion_should_map_to_service_unavailable() {
         gateway_error_from_engine(&error),
         GatewayError::new(
             GatewayErrorKind::NoAvailableProvider,
-            "no upstream Provider instance or account is currently available"
+            "no upstream provider is currently available for this request"
         )
     );
 }

@@ -5,7 +5,7 @@ use std::pin::Pin;
 use chrono::{DateTime, Utc};
 use futures::Stream;
 
-use gateway_core::routing::{ProviderInstanceId, ProviderKind};
+use gateway_core::routing::ProviderKind;
 
 use super::{PageSize, Revision};
 
@@ -72,7 +72,6 @@ pub struct AccountListQuery {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountRecord {
     pub id: String,
-    pub provider_instance_id: ProviderInstanceId,
     pub provider_kind: ProviderKind,
     pub name: String,
     pub email: Option<String>,
@@ -169,11 +168,11 @@ pub struct SetAccountEnabled {
     pub enabled: bool,
 }
 
-/// 账号删除命令。
+/// 账号批量删除命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeleteAccount {
+pub struct DeleteAccounts {
     pub expected_config_revision: Revision,
-    pub account_id: String,
+    pub account_ids: Vec<String>,
 }
 
 /// 账号连接测试的语义事件。

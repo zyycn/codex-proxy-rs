@@ -2,7 +2,7 @@ import request from '../request'
 
 export function login(data: object) {
   return request({
-    url: '/api/admin/login',
+    url: '/api/admin/auth/login',
     method: 'POST',
     data,
   })
@@ -17,7 +17,7 @@ export function getAuthStatus() {
 
 export function logout() {
   return request({
-    url: '/api/admin/logout',
+    url: '/api/admin/auth/logout',
     method: 'POST',
   })
 }

@@ -17,10 +17,7 @@ use crate::error::{
 };
 use crate::event::{EventSequenceValidator, ProviderEvent};
 use crate::operation::Operation;
-use crate::routing::{
-    ModelCapabilities, ProviderCandidate, ProviderInstance, ProviderInstanceId, ProviderKind,
-    UpstreamModelId,
-};
+use crate::routing::{ModelCapabilities, ProviderCandidate, ProviderKind, UpstreamModelId};
 
 /// Box 只出现在 Provider Registry 的统一 event envelope 边界。
 pub type EventStream =
@@ -121,7 +118,6 @@ impl UpstreamTransport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCallMetadata {
     provider: ProviderKind,
-    instance: ProviderInstanceId,
     upstream_model: UpstreamModelId,
     resource: ProviderResource,
     upstream_request_id: Option<SafeUpstreamValue>,
@@ -133,14 +129,12 @@ impl ProviderCallMetadata {
     #[must_use]
     pub const fn new(
         provider: ProviderKind,
-        instance: ProviderInstanceId,
         upstream_model: UpstreamModelId,
         resource: ProviderResource,
         transport: UpstreamTransport,
     ) -> Self {
         Self {
             provider,
-            instance,
             upstream_model,
             resource,
             upstream_request_id: None,
@@ -159,12 +153,6 @@ impl ProviderCallMetadata {
     #[must_use]
     pub const fn provider(&self) -> &ProviderKind {
         &self.provider
-    }
-
-    /// 返回 instance。
-    #[must_use]
-    pub const fn instance(&self) -> &ProviderInstanceId {
-        &self.instance
     }
 
     /// 返回实际模型；必须与冻结 target 一致。
@@ -206,9 +194,7 @@ impl ProviderCallMetadata {
     /// 确认 metadata 没有替换请求计划中冻结的 Provider 候选。
     #[must_use]
     pub fn confirms(&self, candidate: &ProviderCandidate) -> bool {
-        candidate.provider() == &self.provider
-            && candidate.instance() == &self.instance
-            && candidate.upstream_model() == &self.upstream_model
+        candidate.provider() == &self.provider && candidate.upstream_model() == &self.upstream_model
     }
 }
 
@@ -386,7 +372,6 @@ impl fmt::Debug for ProviderRequest {
             .debug_struct("ProviderRequest")
             .field("operation", &self.operation)
             .field("provider", self.candidate.provider())
-            .field("instance", self.candidate.instance())
             .field("upstream_model", self.candidate.upstream_model())
             .finish()
     }
@@ -410,14 +395,13 @@ pub trait Provider: Send + Sync {
         ProviderRequestObservation::default()
     }
 
-    /// 查询 instance 的实时模型目录，并由 Provider 自己编译能力事实。
+    /// 查询当前 Provider 的实时模型目录，并由 Provider 自己编译能力事实。
     ///
     /// # Errors
     ///
     /// 目录 transport、认证或 Provider 协议失败时返回稳定错误。
     async fn query_model_capabilities(
         &self,
-        instance: &ProviderInstance,
     ) -> Result<Vec<ProviderModelCapabilities>, ProviderError>;
 
     /// 选择一个未被排除的资源并返回 cold [`ProviderStream`]。
@@ -525,6 +509,11 @@ impl ProviderRegistry {
         self.providers.get(provider)
     }
 
+    /// 返回全部已注册 Provider。
+    pub fn provider_kinds(&self) -> impl Iterator<Item = &ProviderKind> {
+        self.providers.keys()
+    }
+
     #[must_use]
     pub fn request_observation(
         &self,
@@ -547,22 +536,22 @@ impl ProviderRegistry {
             .collect()
     }
 
-    /// 通过编译期 Provider adapter 查询并编译 instance 的实时能力目录。
+    /// 通过编译期 Provider adapter 查询并编译实时能力目录。
     ///
     /// # Errors
     ///
     /// Provider 未注册或目录查询失败时返回错误。
     pub async fn query_model_capabilities(
         &self,
-        instance: &ProviderInstance,
+        provider_kind: &ProviderKind,
     ) -> Result<Vec<ProviderModelCapabilities>, ProviderCatalogError> {
-        let provider = self.providers.get(instance.provider()).ok_or_else(|| {
+        let provider = self.providers.get(provider_kind).ok_or_else(|| {
             ProviderCatalogError::NotRegistered {
-                provider: instance.provider().as_str().to_owned(),
+                provider: provider_kind.as_str().to_owned(),
             }
         })?;
         provider
-            .query_model_capabilities(instance)
+            .query_model_capabilities()
             .await
             .map_err(ProviderCatalogError::Query)
     }

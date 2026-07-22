@@ -17,7 +17,7 @@ use gateway_core::error::{StoreError, StoreErrorKind};
 use gateway_core::provider_ports::{
     ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError,
 };
-use gateway_core::routing::ProviderInstanceId;
+use gateway_core::routing::ProviderKind;
 use provider_xai::{
     CreateGrokCredential, GROK_BILLING_URL, GrokAccountCatalog, GrokAccountProfile,
     GrokBillingTransport, GrokCatalogCacheError, GrokCredentialAdmin, GrokCredentialAvailability,
@@ -257,13 +257,13 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
             .collect())
     }
 
-    async fn list_for_instance(
+    async fn list_for_provider(
         &self,
-        instance: &ProviderInstanceId,
+        provider: &ProviderKind,
     ) -> Result<Vec<ProviderAccount>, StoreError> {
         Ok(lock(&self.accounts)
             .values()
-            .filter(|stored| stored.account.instance() == instance)
+            .filter(|stored| stored.account.provider() == provider)
             .map(|stored| stored.account.clone())
             .collect())
     }
@@ -442,7 +442,6 @@ struct AccountReplacement {
 fn rebuild_account(previous: &ProviderAccount, replacement: AccountReplacement) -> ProviderAccount {
     ProviderAccount::new(
         previous.id().clone(),
-        previous.instance().clone(),
         previous.provider().clone(),
         replacement.name,
         previous.upstream_user_id().to_owned(),
@@ -506,10 +505,6 @@ pub fn account_id(suffix: &str) -> ProviderAccountId {
     ProviderAccountId::new(format!("acct_{suffix}")).expect("valid test account ID")
 }
 
-pub fn instance_id() -> ProviderInstanceId {
-    ProviderInstanceId::new("inst_xai").expect("valid test instance ID")
-}
-
 pub fn profile(subject: &str) -> GrokAccountProfile {
     let now = Utc::now();
     GrokAccountProfile {
@@ -526,7 +521,6 @@ pub fn create_input(suffix: &str, subject: &str) -> CreateGrokCredential {
     let now = Utc::now();
     CreateGrokCredential {
         account_id: account_id(suffix),
-        provider_instance_id: instance_id(),
         name: format!("xAI {suffix}"),
         secret: GrokOAuthSecret {
             access_token: SecretValue::new(format!("access-{suffix}")),

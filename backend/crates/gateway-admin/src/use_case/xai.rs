@@ -9,17 +9,17 @@ use crate::{
     model::{
         AdminError,
         provider_credentials::{
-            AuthorizationStarted, CompleteAuthorization, CredentialImportCommit,
-            CredentialImportResult, CredentialListQuery, CredentialMutation,
-            CredentialMutationResult, CredentialPage, ImportCredentials, PrepareCredentialImport,
-            StartAuthorization,
+            AuthorizationStarted, CompleteAuthorization, CredentialDeletion,
+            CredentialDeletionResult, CredentialImportCommit, CredentialImportResult,
+            CredentialListQuery, CredentialMutation, CredentialMutationResult, CredentialPage,
+            ImportCredentials, PrepareCredentialImport, StartAuthorization,
         },
     },
     ports::{provider::ProviderAdmin, store::AccountStore},
 };
 
 use super::{
-    commit_authorization, delete_credential, map_provider_error, map_store_error,
+    commit_authorization, delete_credentials, map_provider_error, map_store_error,
     pending_authorization, publish_committed, set_credential_enabled,
     validate_authorization_commit, validate_prepared_import,
 };
@@ -50,8 +50,8 @@ pub trait XaiService: Send + Sync {
     ) -> Result<CredentialMutationResult, AdminError>;
     async fn delete(
         &self,
-        command: CredentialMutation,
-    ) -> Result<CredentialMutationResult, AdminError>;
+        command: CredentialDeletion,
+    ) -> Result<CredentialDeletionResult, AdminError>;
 }
 
 pub(crate) struct DefaultXaiService {
@@ -90,18 +90,15 @@ impl XaiService for DefaultXaiService {
     ) -> Result<CredentialImportResult, AdminError> {
         let context = command.context;
         let expected_config_revision = command.expected_config_revision;
-        let provider_instance_id = command.provider_instance_id;
         let prepared = self
             .provider
             .prepare_import(PrepareCredentialImport {
-                provider_instance_id: provider_instance_id.clone(),
                 document: command.document,
             })
             .await
             .map_err(|error| map_provider_error(error, "xAI credential import"))?;
         validate_prepared_import(
             self.provider.provider_kind(),
-            &provider_instance_id,
             &prepared,
             "xAI credential import",
         )?;
@@ -198,9 +195,9 @@ impl XaiService for DefaultXaiService {
 
     async fn delete(
         &self,
-        command: CredentialMutation,
-    ) -> Result<CredentialMutationResult, AdminError> {
-        let result = delete_credential(
+        command: CredentialDeletion,
+    ) -> Result<CredentialDeletionResult, AdminError> {
+        let result = delete_credentials(
             self.accounts.as_ref(),
             self.provider.as_ref(),
             command,

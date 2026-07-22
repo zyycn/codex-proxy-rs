@@ -9,7 +9,6 @@ use gateway_core::engine::credential::{
     AccountAvailability, AccountQuotaSignals, CredentialRevision, OpaqueProviderData,
     ProviderAccount, ProviderAccountId, ProviderAccountStore, QuotaObservation, QuotaWriteOutcome,
 };
-use gateway_core::routing::ProviderInstance;
 use gateway_protocol::openai::events::{
     ParsedRateLimits, RateLimitDetails, RateLimitWindow, parse_rate_limit_headers,
 };
@@ -20,7 +19,7 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::provider::{CodexOriginPolicy, CodexProviderInstanceConfig};
+use crate::provider::OFFICIAL_CODEX_BASE_URL;
 use crate::transport::profile::CodexWireProfileState;
 use crate::transport::{CodexBackendClient, CodexClientError, CodexRequestContext};
 
@@ -173,8 +172,6 @@ impl CodexQuotaSyncSummary {
 
 #[derive(Debug, Error)]
 pub enum CodexCredentialQuotaError {
-    #[error("Codex quota instance is invalid")]
-    InvalidInstance,
     #[error("Codex quota response is invalid")]
     InvalidCredentialData,
     #[error(transparent)]
@@ -200,7 +197,6 @@ pub struct CodexCredentialQuotaService {
     store: Arc<dyn ProviderAccountStore>,
     profile: CodexWireProfileState,
     http: Client,
-    origin_policy: Arc<dyn CodexOriginPolicy>,
     scheduling: CodexQuotaSchedulingProjection,
 }
 
@@ -377,14 +373,12 @@ impl CodexCredentialQuotaService {
         repository: CodexCredentialRepository,
         profile: CodexWireProfileState,
         http: Client,
-        origin_policy: Arc<dyn CodexOriginPolicy>,
     ) -> Self {
         Self {
             store: Arc::clone(repository.store()),
             repository,
             profile,
             http,
-            origin_policy,
             scheduling: CodexQuotaSchedulingProjection::default(),
         }
     }
@@ -433,19 +427,13 @@ impl CodexCredentialQuotaService {
         self.scheduling.signals(account)
     }
 
-    pub async fn synchronize_instance(
-        &self,
-        instance: &gateway_core::routing::ProviderInstance,
-    ) -> Result<CodexQuotaSyncSummary, CodexCredentialQuotaError> {
-        let config =
-            CodexProviderInstanceConfig::from_snapshot(instance, self.origin_policy.as_ref())
-                .map_err(|_| CodexCredentialQuotaError::InvalidInstance)?;
+    pub async fn synchronize(&self) -> Result<CodexQuotaSyncSummary, CodexCredentialQuotaError> {
         let client = CodexBackendClient::new(
             self.http.clone(),
-            config.base_url().as_str(),
+            OFFICIAL_CODEX_BASE_URL,
             self.profile.clone(),
         );
-        let accounts = self.repository.list_for_instance(config.id()).await?;
+        let accounts = self.repository.list_for_provider().await?;
         let mut summary = CodexQuotaSyncSummary::default();
         let now = SystemTime::now();
         for account in accounts
@@ -677,24 +665,18 @@ impl CodexCredentialQuotaService {
     /// 只刷新指定账号，revision-fenced 写入动态 Provider JSON 后返回解析快照。
     pub async fn refresh_account(
         &self,
-        instance: &ProviderInstance,
         account_id: &ProviderAccountId,
     ) -> Result<CodexAccountQuotaSnapshot, CodexCredentialQuotaError> {
-        let config =
-            CodexProviderInstanceConfig::from_snapshot(instance, self.origin_policy.as_ref())
-                .map_err(|_| CodexCredentialQuotaError::InvalidInstance)?;
         let account = self
             .store
             .get_account(account_id)
             .await?
-            .filter(|account| {
-                account.provider().as_str() == "openai" && account.instance() == config.id()
-            })
+            .filter(|account| account.provider().as_str() == "openai")
             .ok_or(CodexCredentialQuotaError::NotFound)?;
         let runtime = self.repository.load_runtime_credential(&account).await?;
         let client = CodexBackendClient::new(
             self.http.clone(),
-            config.base_url().as_str(),
+            OFFICIAL_CODEX_BASE_URL,
             self.profile.clone(),
         );
         let request_id = format!("quota_{}", Uuid::now_v7().simple());

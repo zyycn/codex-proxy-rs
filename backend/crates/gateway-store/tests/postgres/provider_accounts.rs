@@ -5,7 +5,7 @@ use gateway_admin::{
     model::{
         MutationActor, MutationContext, PageSize, Revision as AdminRevision,
         accounts::{
-            AccountListQuery, AccountSort, AccountSortField, AccountStatus, DeleteAccount,
+            AccountListQuery, AccountSort, AccountSortField, AccountStatus, DeleteAccounts,
             SetAccountEnabled as AdminSetAccountEnabled, SortDirection,
         },
         observability::TimeRange,
@@ -52,9 +52,6 @@ async fn core_quota_batch_reads_only_observed_accounts_in_one_contract_call() {
     let Some(database) = TestDatabase::create("provider_account_quota_batch").await else {
         return;
     };
-    seed_instance(&database.pool, "inst_openai_admin", "openai")
-        .await
-        .expect("seed OpenAI instance");
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     for id in ["acct_quota_a", "acct_quota_b", "acct_quota_empty"] {
         repository
@@ -117,19 +114,12 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     let Some(database) = TestDatabase::create("provider_account_terminal_list").await else {
         return;
     };
-    seed_instance(&database.pool, "inst_openai_admin", "openai")
-        .await
-        .expect("seed OpenAI instance");
-    seed_instance(&database.pool, "inst_xai_admin", "xai")
-        .await
-        .expect("seed xAI instance");
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     let now = Utc::now();
 
     let mut alpha = account("acct_alpha", "user-alpha");
     alpha.email = Some("alpha@example.invalid".to_owned());
     let mut beta = account("acct_beta", "user-beta");
-    beta.provider_instance_id = "inst_xai_admin".to_owned();
     beta.provider_kind = "xai".to_owned();
     beta.email = Some("beta@example.invalid".to_owned());
     beta.availability = ProviderAccountAvailability::Banned;
@@ -150,7 +140,6 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
         ModelRequestSeed {
             request_id: "req_alpha_recent",
             account_id: "acct_alpha",
-            provider_instance_id: "inst_openai_admin",
             provider_kind: "openai",
             model: "gpt-list",
             total_tokens: 10,
@@ -165,7 +154,6 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
         ModelRequestSeed {
             request_id: "req_beta_recent",
             account_id: "acct_beta",
-            provider_instance_id: "inst_xai_admin",
             provider_kind: "xai",
             model: "grok-list",
             total_tokens: 50,
@@ -180,7 +168,6 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
         ModelRequestSeed {
             request_id: "req_beta_expired_retention",
             account_id: "acct_beta",
-            provider_instance_id: "inst_xai_admin",
             provider_kind: "xai",
             model: "grok-list",
             total_tokens: 500,
@@ -195,7 +182,6 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
         ModelRequestSeed {
             request_id: "req_charlie_recent",
             account_id: "acct_charlie",
-            provider_instance_id: "inst_openai_admin",
             provider_kind: "openai",
             model: "gpt-list",
             total_tokens: 60,
@@ -308,16 +294,12 @@ async fn terminal_credential_list_preserves_grouped_filters_and_unpaged_collecti
     let Some(database) = TestDatabase::create("provider_credential_terminal_windows").await else {
         return;
     };
-    seed_instance(&database.pool, "inst_xai_admin", "xai")
-        .await
-        .expect("seed xAI instance");
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     for index in 0..205_u16 {
         let mut credential = account(
             &format!("acct_xai_{index:03}"),
             &format!("user-xai-{index:03}"),
         );
-        credential.provider_instance_id = "inst_xai_admin".to_owned();
         credential.provider_kind = "xai".to_owned();
         credential.availability = match index {
             0 => ProviderAccountAvailability::Expired,
@@ -337,7 +319,6 @@ async fn terminal_credential_list_preserves_grouped_filters_and_unpaged_collecti
         .list_credentials(
             &provider,
             CredentialListQuery {
-                provider_instance_id: None,
                 availability: None,
                 enabled: None,
                 window: CredentialListWindow::All,
@@ -352,7 +333,6 @@ async fn terminal_credential_list_preserves_grouped_filters_and_unpaged_collecti
         .list_credentials(
             &provider,
             CredentialListQuery {
-                provider_instance_id: None,
                 availability: None,
                 enabled: None,
                 window: CredentialListWindow::Page {
@@ -370,7 +350,6 @@ async fn terminal_credential_list_preserves_grouped_filters_and_unpaged_collecti
         .list_credentials(
             &provider,
             CredentialListQuery {
-                provider_instance_id: None,
                 availability: Some(CredentialAvailabilityFilter::AnyOf(vec![
                     gateway_admin::model::accounts::AccountAvailability::Expired,
                     gateway_admin::model::accounts::AccountAvailability::Banned,
@@ -392,9 +371,6 @@ async fn terminal_admin_usage_chunks_large_selections_and_preserves_exact_costs(
     let Some(database) = TestDatabase::create("provider_account_terminal_usage").await else {
         return;
     };
-    seed_instance(&database.pool, "inst_openai_admin", "openai")
-        .await
-        .expect("seed OpenAI instance");
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     repository
         .insert_provider_account(account("acct_usage_exact", "user-usage-exact"))
@@ -406,7 +382,6 @@ async fn terminal_admin_usage_chunks_large_selections_and_preserves_exact_costs(
         ModelRequestSeed {
             request_id: "req_usage_exact",
             account_id: "acct_usage_exact",
-            provider_instance_id: "inst_openai_admin",
             provider_kind: "openai",
             model: "gpt-exact",
             total_tokens: 18,
@@ -448,9 +423,6 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
     let Some(database) = TestDatabase::create("provider_account_terminal_mutation").await else {
         return;
     };
-    seed_instance(&database.pool, "inst_openai_admin", "openai")
-        .await
-        .expect("seed OpenAI instance");
     PgProviderAccountRepository::new(database.pool.clone())
         .insert_provider_account(account("acct_terminal_mutation", "user-terminal-mutation"))
         .await
@@ -482,10 +454,10 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
     assert!(!enabled);
 
     let error = store
-        .delete_account(
-            DeleteAccount {
+        .delete_accounts(
+            DeleteAccounts {
                 expected_config_revision: AdminRevision::new(1).expect("stale revision"),
-                account_id: "acct_terminal_mutation".to_owned(),
+                account_ids: vec!["acct_terminal_mutation".to_owned()],
             },
             &context,
         )
@@ -504,10 +476,10 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
     assert_eq!(audit_count, 1);
 
     let revision = store
-        .delete_account(
-            DeleteAccount {
+        .delete_accounts(
+            DeleteAccounts {
                 expected_config_revision: revision,
-                account_id: "acct_terminal_mutation".to_owned(),
+                account_ids: vec!["acct_terminal_mutation".to_owned()],
             },
             &context,
         )
@@ -537,23 +509,29 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
 }
 
 #[tokio::test]
-async fn terminal_admin_delete_removes_an_enabled_account_atomically() {
+async fn terminal_admin_delete_removes_enabled_accounts_in_one_transaction() {
     let Some(database) = TestDatabase::create("provider_account_enabled_delete").await else {
         return;
     };
-    seed_instance(&database.pool, "inst_openai_admin", "openai")
-        .await
-        .expect("seed OpenAI instance");
-    PgProviderAccountRepository::new(database.pool.clone())
-        .insert_provider_account(account("acct_enabled_delete", "user-enabled-delete"))
-        .await
-        .expect("insert enabled account");
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    for (account_id, upstream_user_id) in [
+        ("acct_enabled_delete_a", "user-enabled-delete-a"),
+        ("acct_enabled_delete_b", "user-enabled-delete-b"),
+    ] {
+        repository
+            .insert_provider_account(account(account_id, upstream_user_id))
+            .await
+            .expect("insert enabled account");
+    }
 
     let revision = PgAdminAccountStore::new(database.pool.clone())
-        .delete_account(
-            DeleteAccount {
+        .delete_accounts(
+            DeleteAccounts {
                 expected_config_revision: AdminRevision::new(1).expect("initial revision"),
-                account_id: "acct_enabled_delete".to_owned(),
+                account_ids: vec![
+                    "acct_enabled_delete_a".to_owned(),
+                    "acct_enabled_delete_b".to_owned(),
+                ],
             },
             &MutationContext {
                 actor: MutationActor::System,
@@ -565,7 +543,8 @@ async fn terminal_admin_delete_removes_an_enabled_account_atomically() {
 
     assert_eq!(revision.get(), 2);
     assert_eq!(
-        account_count(&database.pool, "acct_enabled_delete").await,
+        account_count(&database.pool, "acct_enabled_delete_a").await
+            + account_count(&database.pool, "acct_enabled_delete_b").await,
         0
     );
     database.close().await;
@@ -576,13 +555,9 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
     let Some(database) = TestDatabase::create("provider_account_admin_upsert").await else {
         return;
     };
-    seed_instance(&database.pool, "inst_openai_admin", "openai")
-        .await
-        .expect("seed Codex instance");
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     let scope = ProviderAccountAdminScope {
         provider_kind: "openai".to_owned(),
-        provider_instance_id: "inst_openai_admin".to_owned(),
     };
     let imported = repository
         .import_provider_accounts(
@@ -671,14 +646,10 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
     let Some(database) = TestDatabase::create("provider_account_core_refresh").await else {
         return;
     };
-    seed_instance(&database.pool, "inst_xai_refresh", "xai")
-        .await
-        .expect("seed xAI instance");
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     repository
         .insert_provider_account(NewProviderAccount {
             id: "acct_core_refresh".to_owned(),
-            provider_instance_id: "inst_xai_refresh".to_owned(),
             provider_kind: "xai".to_owned(),
             name: "before refresh".to_owned(),
             email: Some("before@example.invalid".to_owned()),
@@ -789,16 +760,9 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
     let Some(database) = TestDatabase::create("provider_account_admin").await else {
         return;
     };
-    seed_instance(&database.pool, "inst_openai_admin", "openai")
-        .await
-        .expect("seed Codex instance");
-    seed_instance(&database.pool, "inst_xai_admin", "xai")
-        .await
-        .expect("seed xAI instance");
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     let scope = ProviderAccountAdminScope {
         provider_kind: "openai".to_owned(),
-        provider_instance_id: "inst_openai_admin".to_owned(),
     };
 
     let mut cooldown_account = account("acct_admin_b", "user-admin-b");
@@ -862,7 +826,6 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 
     let wrong_scope = ProviderAccountAdminScope {
         provider_kind: "xai".to_owned(),
-        provider_instance_id: "inst_xai_admin".to_owned(),
     };
     let wrong_scope_error = repository
         .rotate_provider_account(
@@ -949,7 +912,6 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 fn account(id: &str, upstream_user_id: &str) -> NewProviderAccount {
     NewProviderAccount {
         id: id.to_owned(),
-        provider_instance_id: "inst_openai_admin".to_owned(),
         provider_kind: "openai".to_owned(),
         name: id.to_owned(),
         email: Some(format!("{id}@example.invalid")),
@@ -1024,7 +986,6 @@ fn audit(id: &str, action: &str, entity_ref: &str) -> AdminAuditEvent {
 struct ModelRequestSeed<'a> {
     request_id: &'a str,
     account_id: &'a str,
-    provider_instance_id: &'a str,
     provider_kind: &'a str,
     model: &'a str,
     total_tokens: i64,
@@ -1040,7 +1001,7 @@ async fn seed_model_request(
         "insert into model_requests (
            id, client_api_key_ref, config_revision, protocol, operation, endpoint,
            client_transport, requested_model_id, input_token_estimate,
-           provider_instance_id, provider_kind, provider_account_id,
+           provider_kind, provider_account_id,
            provider_account_ref, upstream_model_id, upstream_transport, attempt_count,
            upstream_send_state, outcome, client_status_code, upstream_status_code,
            input_tokens, output_tokens, cached_tokens, cache_write_tokens, reasoning_tokens,
@@ -1048,37 +1009,19 @@ async fn seed_model_request(
            started_at, deadline_at, completed_at
          ) values (
            $1, 'key-provider-account-test', 1, 'openai', 'responses', '/v1/responses',
-           'http_sse', $5, 1, $3, $4, $2, $2, $5, 'http_sse', 1,
-           'sent', 'succeeded', 200, 200, $6, 0, 0, 0, 0,
-           $6, 'provider_reported', $7::numeric, 'USD', $8,
-           $8 + interval '5 minutes', $8 + interval '1 second'
+           'http_sse', $4, 1, $3, $2, $2, $4, 'http_sse', 1,
+           'sent', 'succeeded', 200, 200, $5, 0, 0, 0, 0,
+           $5, 'provider_reported', $6::numeric, 'USD', $7,
+           $7 + interval '5 minutes', $7 + interval '1 second'
          )",
     )
     .bind(seed.request_id)
     .bind(seed.account_id)
-    .bind(seed.provider_instance_id)
     .bind(seed.provider_kind)
     .bind(seed.model)
     .bind(seed.total_tokens)
     .bind(seed.cost_amount)
     .bind(seed.started_at)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-async fn seed_instance(
-    pool: &sqlx::PgPool,
-    id: &str,
-    provider_kind: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "insert into provider_instances (
-           id, provider_kind, name, base_url, enabled, created_at, updated_at
-         ) values ($1, $2, $1, 'https://example.invalid', true, now(), now())",
-    )
-    .bind(id)
-    .bind(provider_kind)
     .execute(pool)
     .await?;
     Ok(())

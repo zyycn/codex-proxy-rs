@@ -13,7 +13,7 @@ use gateway_core::{
         QuotaObservation, QuotaWriteOutcome,
     },
     error::{StoreError as CoreStoreError, StoreErrorKind},
-    routing::{ProviderInstanceId, ProviderKind},
+    routing::ProviderKind,
 };
 use gateway_store::{
     Revision, StoreBackend, StoreError, StoreResult,
@@ -58,11 +58,11 @@ impl ProviderAccountStore for CooldownTestAccountStore {
         Ok(self.accounts.clone())
     }
 
-    async fn list_for_instance(
+    async fn list_for_provider(
         &self,
-        _instance: &ProviderInstanceId,
+        _provider: &ProviderKind,
     ) -> Result<Vec<ProviderAccount>, CoreStoreError> {
-        unreachable!("cooldown tests do not list one instance")
+        unreachable!("cooldown tests do not list one provider")
     }
 
     async fn load_credential(
@@ -377,7 +377,6 @@ fn ready_test_account(account_id: &str) -> ProviderAccount {
 fn test_provider_account(account_id: &str) -> ProviderAccount {
     ProviderAccount::new(
         ProviderAccountId::new(account_id).expect("valid account ID"),
-        ProviderInstanceId::new("inst_cooldown_test").expect("valid instance ID"),
         ProviderKind::new("openai").expect("valid provider kind"),
         "Cooldown test".to_owned(),
         "upstream-user".to_owned(),

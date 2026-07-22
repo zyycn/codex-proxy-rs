@@ -24,9 +24,8 @@ use crate::task::{
 };
 
 use super::{
-    ConfigRevision, InstanceHealth, ModelCapabilities, ProviderCandidate, ProviderInstance,
-    ProviderInstanceId, ProviderKind, ProviderModel, PublicModelId, RoutingContext, RoutingPlan,
-    UpstreamModelId,
+    ConfigRevision, ModelCapabilities, ProviderCandidate, ProviderKind, ProviderModel,
+    PublicModelId, RoutingContext, RoutingPlan, UpstreamModelId,
 };
 
 const RECONCILIATION_INTERVAL: Duration = Duration::from_secs(5);
@@ -58,32 +57,6 @@ impl SnapshotSettingsFacts {
             request_interval_ms,
             rotation_strategy: rotation_strategy.into(),
             provider_model_mappings,
-        }
-    }
-}
-
-/// Store 读取到的一个 Provider instance 配置事实。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SnapshotProviderInstanceFacts {
-    id: String,
-    provider_kind: String,
-    base_url: String,
-    enabled: bool,
-}
-
-impl SnapshotProviderInstanceFacts {
-    #[must_use]
-    pub fn new(
-        id: impl Into<String>,
-        provider_kind: impl Into<String>,
-        base_url: impl Into<String>,
-        enabled: bool,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            provider_kind: provider_kind.into(),
-            base_url: base_url.into(),
-            enabled,
         }
     }
 }
@@ -120,7 +93,6 @@ pub struct SnapshotFacts {
     config_revision: ConfigRevision,
     observed_current_revision: ConfigRevision,
     settings: SnapshotSettingsFacts,
-    provider_instances: Vec<SnapshotProviderInstanceFacts>,
     client_policies: Vec<SnapshotClientPolicyFacts>,
 }
 
@@ -130,14 +102,12 @@ impl SnapshotFacts {
         config_revision: ConfigRevision,
         observed_current_revision: ConfigRevision,
         settings: SnapshotSettingsFacts,
-        provider_instances: Vec<SnapshotProviderInstanceFacts>,
         client_policies: Vec<SnapshotClientPolicyFacts>,
     ) -> Self {
         Self {
             config_revision,
             observed_current_revision,
             settings,
-            provider_instances,
             client_policies,
         }
     }
@@ -226,7 +196,7 @@ impl RuntimeSnapshotCompiler {
         Self { store, providers }
     }
 
-    /// 读取一个 revision，并为 instance 查询实时模型目录。
+    /// 读取一个 revision，并为已注册 Provider 查询实时模型目录。
     pub async fn compile(&self) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
         for _ in 0..MAXIMUM_CATALOG_STABILITY_ATTEMPTS {
             let catalog_generations = self.providers.catalog_generations();
@@ -252,32 +222,17 @@ async fn compile_runtime_snapshot(
     facts: SnapshotFacts,
     providers: &ProviderRegistry,
 ) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
-    let mut instances_by_id = BTreeMap::new();
-    for record in facts.provider_instances {
-        let id = ProviderInstanceId::new(record.id)
-            .map_err(|_| RuntimeSnapshotCompileError::InvalidData)?;
-        let instance = ProviderInstance::new(
-            id.clone(),
-            ProviderKind::new(record.provider_kind)
-                .map_err(|_| RuntimeSnapshotCompileError::InvalidData)?,
-            record.base_url,
-            record.enabled,
-            InstanceHealth::Healthy,
-        );
-        if instances_by_id.insert(id, instance).is_some() {
-            return Err(RuntimeSnapshotCompileError::InvalidData);
-        }
-    }
+    let provider_kinds = providers.provider_kinds().cloned().collect::<Vec<_>>();
 
-    // 实时目录只提供公开模型与能力提示；查询失败时保留 instance 透传语义。
+    // 实时目录只提供公开模型与能力提示；查询失败时保留 Provider 透传语义。
     let mut provider_models = Vec::new();
-    for instance in instances_by_id.values() {
-        let Ok(models) = providers.query_model_capabilities(instance).await else {
+    for provider in &provider_kinds {
+        let Ok(models) = providers.query_model_capabilities(provider).await else {
             continue;
         };
         provider_models.extend(models.into_iter().map(|model| {
             ProviderModel::new(
-                instance.id().clone(),
+                provider.clone(),
                 model.upstream_model().clone(),
                 model.capabilities().clone(),
             )
@@ -326,7 +281,7 @@ async fn compile_runtime_snapshot(
     RuntimeSnapshot::new(
         facts.config_revision,
         selection_policy,
-        instances_by_id.into_values().collect(),
+        provider_kinds,
         provider_models,
         client_policies,
     )
@@ -339,44 +294,42 @@ async fn compile_runtime_snapshot(
 pub struct RuntimeSnapshot {
     revision: ConfigRevision,
     account_selection_policy: AccountSelectionPolicy,
-    instances: Arc<BTreeMap<ProviderInstanceId, ProviderInstance>>,
-    provider_models:
-        Arc<BTreeMap<ProviderInstanceId, BTreeMap<UpstreamModelId, ModelCapabilities>>>,
+    providers: Arc<BTreeSet<ProviderKind>>,
+    provider_models: Arc<BTreeMap<ProviderKind, BTreeMap<UpstreamModelId, ModelCapabilities>>>,
     provider_model_mappings: Arc<BTreeMap<ProviderKind, BTreeMap<String, String>>>,
     provider_catalog_generations: Arc<BTreeMap<ProviderKind, ProviderCatalogGeneration>>,
     client_policies: Arc<BTreeMap<ClientApiKeyId, ClientPolicy>>,
 }
 
 impl RuntimeSnapshot {
-    /// 校验 instance、实时模型目录和 Client API Key，并构建快照。
+    /// 校验 Provider、实时模型目录和 Client API Key，并构建快照。
     pub fn new(
         revision: ConfigRevision,
         account_selection_policy: AccountSelectionPolicy,
-        instances: Vec<ProviderInstance>,
+        providers: Vec<ProviderKind>,
         provider_models: Vec<ProviderModel>,
         client_policies: Vec<ClientPolicy>,
     ) -> Result<Self, RoutingError> {
-        let mut instance_map = BTreeMap::new();
-        for instance in instances {
-            let id = instance.id().clone();
-            if instance_map.insert(id.clone(), instance).is_some() {
+        let mut provider_set = BTreeSet::new();
+        for provider in providers {
+            if !provider_set.insert(provider.clone()) {
                 return Err(RoutingError::DuplicateEntity {
-                    entity: "provider instance",
-                    id: id.to_string(),
+                    entity: "provider",
+                    id: provider.to_string(),
                 });
             }
         }
 
         let mut model_map =
-            BTreeMap::<ProviderInstanceId, BTreeMap<UpstreamModelId, ModelCapabilities>>::new();
+            BTreeMap::<ProviderKind, BTreeMap<UpstreamModelId, ModelCapabilities>>::new();
         for model in provider_models {
-            if !instance_map.contains_key(model.instance()) {
+            if !provider_set.contains(model.provider()) {
                 return Err(RoutingError::NotFound {
-                    entity: "provider instance",
-                    id: model.instance().to_string(),
+                    entity: "provider",
+                    id: model.provider().to_string(),
                 });
             }
-            let models = model_map.entry(model.instance).or_default();
+            let models = model_map.entry(model.provider).or_default();
             let upstream_model = model.upstream_model;
             if models
                 .insert(upstream_model.clone(), model.capabilities)
@@ -404,7 +357,7 @@ impl RuntimeSnapshot {
         Ok(Self {
             revision,
             account_selection_policy,
-            instances: Arc::new(instance_map),
+            providers: Arc::new(provider_set),
             provider_models: Arc::new(model_map),
             provider_model_mappings: Arc::new(BTreeMap::new()),
             provider_catalog_generations: Arc::new(BTreeMap::new()),
@@ -446,13 +399,7 @@ impl RuntimeSnapshot {
     #[must_use]
     pub fn public_models_for_provider(&self, provider: &ProviderKind) -> Vec<PublicModelId> {
         let mut models = BTreeSet::new();
-        for (instance_id, discovered) in self.provider_models.iter() {
-            let Some(instance) = self.instances.get(instance_id) else {
-                continue;
-            };
-            if !instance.enabled || instance.provider() != provider {
-                continue;
-            }
+        if let Some(discovered) = self.provider_models.get(provider) {
             models.extend(
                 discovered
                     .keys()
@@ -471,12 +418,7 @@ impl RuntimeSnapshot {
 
     #[must_use]
     pub fn public_models(&self) -> Vec<PublicModelId> {
-        let providers = self
-            .instances
-            .values()
-            .map(|instance| instance.provider().clone())
-            .collect::<BTreeSet<_>>();
-        providers
+        self.providers
             .iter()
             .flat_map(|provider| self.public_models_for_provider(provider))
             .collect::<BTreeSet<_>>()
@@ -484,36 +426,14 @@ impl RuntimeSnapshot {
             .collect()
     }
 
-    /// 透明代理不以目录白名单拒绝模型；只要求该平台至少有一个启用 instance。
+    /// 透明代理不以目录白名单拒绝模型；只要求该 Provider 已注册。
     #[must_use]
     pub fn contains_public_model_for_provider(
         &self,
         _public_model: &PublicModelId,
         provider: &ProviderKind,
     ) -> bool {
-        self.instances
-            .values()
-            .any(|instance| instance.enabled && instance.provider() == provider)
-    }
-
-    #[must_use]
-    pub fn instance_ids_for_provider(
-        &self,
-        provider: &ProviderKind,
-    ) -> BTreeSet<ProviderInstanceId> {
-        self.instances
-            .iter()
-            .filter_map(|(id, instance)| {
-                (instance.enabled && instance.provider() == provider).then_some(id.clone())
-            })
-            .collect()
-    }
-
-    #[must_use]
-    pub fn provider_for_instance(&self, instance_id: &ProviderInstanceId) -> Option<&ProviderKind> {
-        self.instances
-            .get(instance_id)
-            .map(ProviderInstance::provider)
+        self.providers.contains(provider)
     }
 
     #[must_use]
@@ -535,22 +455,24 @@ impl RuntimeSnapshot {
         operation: &Operation,
         context: &RoutingContext,
     ) -> Result<RoutingPlan, RoutingError> {
-        let upstream_model = context.provider_kind.as_ref().map_or_else(
-            || public_model.as_str().to_owned(),
-            |provider| self.mapped_model(provider, public_model.as_str()),
-        );
-        let upstream_model =
-            UpstreamModelId::new(upstream_model).map_err(|_| RoutingError::InvalidIdentifier)?;
         let requirements = operation.capability_requirements();
         let mut candidates = Vec::new();
 
-        for instance in self.instances.values() {
-            if !self.instance_is_eligible(instance, context) {
+        for provider in self.providers.iter() {
+            if context
+                .provider_kind
+                .as_ref()
+                .is_some_and(|expected| expected != provider)
+                || context.blocked_providers.contains(provider)
+            {
                 continue;
             }
+            let upstream_model =
+                UpstreamModelId::new(self.mapped_model(provider, public_model.as_str()))
+                    .map_err(|_| RoutingError::InvalidIdentifier)?;
             let emulated_features = match self
                 .provider_models
-                .get(instance.id())
+                .get(provider)
                 .and_then(|models| models.get(&upstream_model))
             {
                 Some(capabilities) => {
@@ -562,13 +484,9 @@ impl RuntimeSnapshot {
                 None => BTreeSet::new(),
             };
             candidates.push(ProviderCandidate {
-                instance: instance.clone(),
-                upstream_model: upstream_model.clone(),
+                provider: provider.clone(),
+                upstream_model,
                 emulated_features,
-                observation_token: context
-                    .provider_observation_tokens
-                    .get(instance.id())
-                    .copied(),
             });
         }
 
@@ -587,20 +505,6 @@ impl RuntimeSnapshot {
                 .expect("constant request attempt limit is non-zero"),
             candidates: Arc::from(candidates),
         })
-    }
-
-    fn instance_is_eligible(&self, instance: &ProviderInstance, context: &RoutingContext) -> bool {
-        instance.enabled
-            && instance.health.is_routable(context.allow_degraded)
-            && context
-                .provider_kind
-                .as_ref()
-                .is_none_or(|provider| instance.provider() == provider)
-            && !context.blocked_instances.contains(instance.id())
-            && context
-                .allowed_instances
-                .as_ref()
-                .is_none_or(|allowed| allowed.contains(instance.id()))
     }
 }
 

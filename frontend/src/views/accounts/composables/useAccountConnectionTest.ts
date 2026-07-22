@@ -289,7 +289,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     loadingConnectionTestModels.value = true
     connectionTestError.value = ''
     try {
-      const result = await getAccountModels({ id: account.id })
+      const result = await getAccountModels({ accountId: account.id })
       applyConnectionTestModels(result)
       if (!connectionTestSelectedModel.value) {
         connectionTestError.value = '没有可测试模型'
@@ -327,7 +327,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     refreshingConnectionTestModels.value = true
     connectionTestError.value = ''
     try {
-      const result = await refreshAccountModels({ id: account.id })
+      const result = await refreshAccountModels({ accountId: account.id })
       applyConnectionTestModels(result, true)
       toast.success(`已刷新 ${connectionTestModelOptions.value.length} 个上游模型`)
     }
@@ -371,11 +371,11 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
               resolve,
             }
             const params = new URLSearchParams({
-              id: account.id,
+              accountId: account.id,
               modelId: connectionTestSelectedModel.value,
             })
             connectionTestStreamUrl.value
-              = `${API_BASE_URL}/api/admin/accounts/test?${params}`
+              = `${API_BASE_URL}/api/admin/accounts/connection-test?${params}`
             openConnectionTestEventSource()
             if (!connectionTestEventSource.value)
               failConnectionTest('当前浏览器不支持连接测试')

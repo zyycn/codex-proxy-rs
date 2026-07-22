@@ -8,7 +8,7 @@ use gateway_core::engine::credential::{
     AccountSelectionPolicy, CredentialRevision, ProviderAccountId,
 };
 use gateway_core::engine::provider::ProviderResource;
-use gateway_core::routing::{ProviderInstanceId, UpstreamModelId};
+use gateway_core::routing::UpstreamModelId;
 use sha2::{Digest as _, Sha256};
 
 use crate::SecretValue;
@@ -189,7 +189,6 @@ impl fmt::Debug for SelectedGrokSession {
 /// Input to one selector call. It owns a frozen, secret-free attempt view.
 #[derive(Debug, Clone)]
 pub struct GrokSessionSelection {
-    provider_instance_id: ProviderInstanceId,
     upstream_model: UpstreamModelId,
     excluded_accounts: BTreeSet<ProviderAccountId>,
     required_account: Option<ProviderAccountId>,
@@ -202,7 +201,6 @@ impl GrokSessionSelection {
     /// Creates the immutable selection request.
     #[must_use]
     pub fn new(
-        provider_instance_id: ProviderInstanceId,
         upstream_model: UpstreamModelId,
         excluded_accounts: BTreeSet<ProviderAccountId>,
         required_account: Option<ProviderAccountId>,
@@ -210,7 +208,6 @@ impl GrokSessionSelection {
         deadline: SystemTime,
     ) -> Self {
         Self {
-            provider_instance_id,
             upstream_model,
             excluded_accounts,
             required_account,
@@ -225,12 +222,6 @@ impl GrokSessionSelection {
     pub fn with_affinity(mut self, affinity: Option<GrokSessionAffinityKey>) -> Self {
         self.affinity = affinity;
         self
-    }
-
-    /// Returns the frozen provider instance ID.
-    #[must_use]
-    pub const fn provider_instance_id(&self) -> &ProviderInstanceId {
-        &self.provider_instance_id
     }
 
     /// Returns the frozen upstream model.

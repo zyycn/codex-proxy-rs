@@ -15,7 +15,7 @@ use gateway_core::{
     provider_ports::{
         ProviderCooldown, ProviderCooldownPort, ProviderStoreError, ProviderStoreErrorKind,
     },
-    routing::ProviderInstanceId,
+    routing::ProviderKind,
 };
 use redis::{Script, aio::ConnectionManager};
 
@@ -331,11 +331,11 @@ impl ProviderAccountStore for CooldownCachingProviderAccountStore {
         self.authoritative.list_accounts().await
     }
 
-    async fn list_for_instance(
+    async fn list_for_provider(
         &self,
-        instance: &ProviderInstanceId,
+        provider: &ProviderKind,
     ) -> Result<Vec<ProviderAccount>, CoreStoreError> {
-        self.authoritative.list_for_instance(instance).await
+        self.authoritative.list_for_provider(provider).await
     }
 
     async fn load_credential(

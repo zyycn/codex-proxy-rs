@@ -665,9 +665,10 @@ where
     S: AdminSessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
+        .route("/api/admin/client-keys", get(list_client_keys::<S>))
         .route(
-            "/api/admin/client-keys",
-            get(list_client_keys::<S>).post(create_client_key::<S>),
+            "/api/admin/client-keys/create",
+            post(create_client_key::<S>),
         )
         .route("/api/admin/client-keys/reveal", get(reveal_client_key::<S>))
         .route(

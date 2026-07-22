@@ -11,5 +11,6 @@ mod pkce;
 mod refresh;
 mod repository;
 mod secret;
+mod selector;
 mod token;
 mod verification;

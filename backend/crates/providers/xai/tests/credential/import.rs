@@ -13,7 +13,7 @@ use provider_xai::{
     TransportFuture, VerificationEvidence, VerificationFuture, VerifiedGrokAccount,
 };
 
-use crate::support::{account_id, instance_id, refresh_policy};
+use crate::support::{account_id, refresh_policy};
 
 const DISCOVERY: &[u8] = include_bytes!("fixtures/discovery.json");
 const INVALID_GRANT: &[u8] = include_bytes!("fixtures/invalid_grant.json");
@@ -144,7 +144,6 @@ async fn verified_import_inside_refresh_margin_should_schedule_immediate_refresh
         .prepare_verified_account(
             &VerifiedGrokAccount {
                 account_id: account_id("refresh-window-import"),
-                provider_instance_id: instance_id(),
                 name: "refresh-window-import".to_owned(),
                 email: None,
                 upstream_account_id: None,
@@ -357,7 +356,6 @@ async fn real_oauth_accounts_should_cross_the_official_verification_boundary() {
             .prepare_verified_account(
                 &VerifiedGrokAccount {
                     account_id: account_id(&suffix),
-                    provider_instance_id: instance_id(),
                     name: suffix,
                     email: None,
                     upstream_account_id: None,

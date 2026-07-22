@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gateway_core::{engine::credential::ProviderAccountId, routing::ProviderInstanceId};
+use gateway_core::engine::credential::ProviderAccountId;
 
 use gateway_admin::{
     AdminServices,
@@ -47,7 +47,6 @@ async fn xai_import_should_prepare_before_atomic_store_commit() {
         .import_document(ImportCredentials {
             context: context("import-xai"),
             expected_config_revision: revision(3),
-            provider_instance_id: ProviderInstanceId::new("inst_xai").expect("instance ID"),
             document: document(),
         })
         .await

@@ -207,9 +207,9 @@ where
     S: AdminSessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/api/admin/login", post(login::<S>))
+        .route("/api/admin/auth/login", post(login::<S>))
         .route("/api/admin/auth/status", get(session_status::<S>))
-        .route("/api/admin/logout", post(logout::<S>))
+        .route("/api/admin/auth/logout", post(logout::<S>))
 }
 
 async fn login<S>(

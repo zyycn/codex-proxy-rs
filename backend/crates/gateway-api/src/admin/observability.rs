@@ -642,7 +642,6 @@ pub struct UsageAttemptView {
     pub attempt_index: u32,
     pub trigger: String,
     pub provider: String,
-    pub provider_instance_id: String,
     pub model: String,
     pub transport: String,
     pub send_state: String,
@@ -1183,7 +1182,6 @@ pub struct OpsErrorMetadataView {
     pub source: String,
     pub component: String,
     pub attempt_id: Option<String>,
-    pub provider_instance_id: Option<String>,
     pub account_label: Option<String>,
 }
 
@@ -1204,14 +1202,14 @@ where
             get(usage_records_summary::<S>),
         )
         .route(
-            "/api/admin/usage/records/insights/overview",
+            "/api/admin/usage/insights/overview",
             get(usage_insights_overview::<S>),
         )
         .route(
-            "/api/admin/usage/records/insights/diagnostics",
+            "/api/admin/usage/insights/diagnostics",
             get(usage_insights_diagnostics::<S>),
         )
-        .route("/api/admin/ops/errors", get(ops_errors::<S>))
+        .route("/api/admin/operations/errors", get(ops_errors::<S>))
 }
 
 async fn dashboard_summary<S>(
@@ -1744,9 +1742,6 @@ fn usage_attempt_view(attempt: domain::UsageAttempt) -> UsageAttemptView {
         provider: attempt
             .provider_kind
             .unwrap_or_else(|| "unknown".to_owned()),
-        provider_instance_id: attempt
-            .provider_instance_id
-            .unwrap_or_else(|| "unknown".to_owned()),
         model: attempt
             .upstream_model_id
             .unwrap_or_else(|| "unknown".to_owned()),
@@ -1843,7 +1838,6 @@ fn ops_error_view(error: domain::OpsError) -> OpsErrorView {
             source: error.source,
             component: error.component,
             attempt_id: None,
-            provider_instance_id: error.provider_instance_id,
             account_label: None,
         },
         created_at: error.occurred_at,

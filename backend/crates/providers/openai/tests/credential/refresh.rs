@@ -17,7 +17,7 @@ use provider_openai::credential::{
 };
 use secrecy::{ExposeSecret, SecretString};
 
-use crate::support::{MemoryAccountStore, instance_id, profile, runtime_policy, secret};
+use crate::support::{MemoryAccountStore, profile, runtime_policy, secret};
 
 struct Refresher {
     outcomes: Mutex<VecDeque<Result<TokenPair, RefreshFailure>>>,
@@ -177,7 +177,7 @@ impl CodexAccountIdentityVerifier for SignedOnlyIdentity {
 impl ProviderLeasePort for RefreshLeases {
     fn load_state<'a>(
         &'a self,
-        _: &'a gateway_core::routing::ProviderInstanceId,
+        _: &'a gateway_core::routing::ProviderKind,
         _: &'a [gateway_core::engine::credential::ProviderAccountId],
     ) -> BoxFuture<
         'a,
@@ -227,7 +227,6 @@ async fn setup(
     store
         .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: "acct_refresh".to_owned(),
-            provider_instance_id: instance_id().to_string(),
             name: "refresh".to_owned(),
             secret: secret("old-access"),
             verified_account: profile("chatgpt-acct_refresh"),
@@ -361,7 +360,6 @@ async fn unavailable_usage_preserves_rotated_tokens_and_persists_backoff() {
     store
         .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: "acct_signed_only".to_owned(),
-            provider_instance_id: instance_id().to_string(),
             name: "signed only".to_owned(),
             secret: secret("old-access"),
             verified_account: account_profile,
@@ -535,7 +533,6 @@ async fn malformed_account_refresh_does_not_stop_later_accounts() {
         store
             .seed_oauth_credential(ImportCodexOAuthCredential {
                 account_id: account_id.to_owned(),
-                provider_instance_id: instance_id().to_string(),
                 name: account_id.to_owned(),
                 secret: secret(account_id),
                 verified_account: profile(&format!("chatgpt-{account_id}")),

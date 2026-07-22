@@ -9,14 +9,13 @@ use gateway_core::engine::credential::{
     AccountAvailability, CredentialRevision, ProviderAccount, ProviderAccountId,
 };
 use gateway_core::engine::provider::ProviderCatalogGeneration;
-use gateway_core::routing::{ProviderInstance, ProviderInstanceId};
 use secrecy::ExposeSecret;
 use thiserror::Error;
 use tokio::sync::Notify;
 use uuid::Uuid;
 
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
-use crate::provider::{CodexOriginPolicy, CodexProviderInstanceConfig};
+use crate::provider::OFFICIAL_CODEX_BASE_URL;
 use crate::transport::profile::CodexWireProfileState;
 use crate::transport::{CodexBackendClient, CodexCatalogModel, CodexRequestContext};
 
@@ -24,7 +23,6 @@ const MAX_RESPONSE_ETAG_BYTES: usize = 256;
 
 #[derive(Clone)]
 pub struct CodexCredentialCatalogSnapshot {
-    provider_instance_id: ProviderInstanceId,
     observed_at: SystemTime,
     models: Vec<CodexCatalogModel>,
     account_models: BTreeMap<ProviderAccountId, CodexAccountEntitlement>,
@@ -37,11 +35,6 @@ struct CodexAccountEntitlement {
 }
 
 impl CodexCredentialCatalogSnapshot {
-    #[must_use]
-    pub const fn provider_instance_id(&self) -> &ProviderInstanceId {
-        &self.provider_instance_id
-    }
-
     #[must_use]
     pub const fn observed_at(&self) -> SystemTime {
         self.observed_at
@@ -69,7 +62,6 @@ impl fmt::Debug for CodexCredentialCatalogSnapshot {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CodexCredentialCatalogSnapshot")
-            .field("provider_instance_id", &self.provider_instance_id)
             .field("observed_at", &self.observed_at)
             .field("model_count", &self.models.len())
             .field("account_count", &self.account_models.len())
@@ -79,8 +71,6 @@ impl fmt::Debug for CodexCredentialCatalogSnapshot {
 
 #[derive(Debug, Error)]
 pub enum CodexCredentialCatalogError {
-    #[error("Codex model catalog instance is invalid")]
-    InvalidInstance,
     #[error("Codex model catalog has no eligible account")]
     NoEligibleCredential,
     #[error("Codex model catalog account data is invalid")]
@@ -99,16 +89,16 @@ pub enum CodexCredentialCatalogError {
 
 #[derive(Default)]
 struct CatalogEtagState {
-    applied: BTreeMap<ProviderInstanceId, String>,
-    pending: BTreeMap<ProviderInstanceId, String>,
-    inflight: BTreeMap<ProviderInstanceId, String>,
+    applied: Option<String>,
+    pending: Option<String>,
+    inflight: Option<String>,
 }
 
 #[derive(Default)]
 struct CatalogCacheState {
     revision: u64,
     generation: u64,
-    snapshots: BTreeMap<ProviderInstanceId, CodexCredentialCatalogSnapshot>,
+    snapshot: Option<CodexCredentialCatalogSnapshot>,
 }
 
 struct FetchedAccountModels {
@@ -116,7 +106,7 @@ struct FetchedAccountModels {
     etag: Option<String>,
 }
 
-struct FetchedInstanceCatalog {
+struct FetchedCatalog {
     snapshot: CodexCredentialCatalogSnapshot,
     etags: Vec<String>,
 }
@@ -132,7 +122,6 @@ pub struct CodexCredentialCatalogService {
     repository: CodexCredentialRepository,
     profile: CodexWireProfileState,
     http: reqwest::Client,
-    origin_policy: Arc<dyn CodexOriginPolicy>,
     cache: Arc<RwLock<CatalogCacheState>>,
     etags: Arc<Mutex<CatalogEtagState>>,
     etag_notification: Arc<Notify>,
@@ -143,13 +132,11 @@ impl CodexCredentialCatalogService {
         repository: CodexCredentialRepository,
         profile: CodexWireProfileState,
         http: reqwest::Client,
-        origin_policy: Arc<dyn CodexOriginPolicy>,
     ) -> Self {
         Self {
             repository,
             profile,
             http,
-            origin_policy,
             cache: Arc::new(RwLock::new(CatalogCacheState::default())),
             etags: Arc::new(Mutex::new(CatalogEtagState::default())),
             etag_notification: Arc::new(Notify::new()),
@@ -167,25 +154,23 @@ impl CodexCredentialCatalogService {
 
     pub fn cached(
         &self,
-        instance: &ProviderInstanceId,
     ) -> Result<Option<CodexCredentialCatalogSnapshot>, CodexCredentialCatalogError> {
         Ok(self
             .cache
             .read()
             .map_err(|_| CodexCredentialCatalogError::Cache)?
-            .snapshots
-            .get(instance)
+            .snapshot
+            .as_ref()
             .cloned())
     }
 
     /// 读取单账号当前仍新鲜的模型 entitlement；不触发网络。
     pub fn cached_account_models(
         &self,
-        instance: &ProviderInstanceId,
         account_id: &ProviderAccountId,
         revision: CredentialRevision,
     ) -> Result<Option<Vec<String>>, CodexCredentialCatalogError> {
-        Ok(self.cached(instance)?.and_then(|snapshot| {
+        Ok(self.cached()?.and_then(|snapshot| {
             snapshot
                 .account_models(account_id, revision)
                 .map(<[String]>::to_vec)
@@ -194,12 +179,11 @@ impl CodexCredentialCatalogService {
 
     pub fn observed_model_support(
         &self,
-        instance: &ProviderInstanceId,
         account_id: &ProviderAccountId,
         revision: CredentialRevision,
         model: &str,
     ) -> Result<Option<bool>, CodexCredentialCatalogError> {
-        Ok(self.cached(instance)?.and_then(|snapshot| {
+        Ok(self.cached()?.and_then(|snapshot| {
             snapshot
                 .account_models(account_id, revision)
                 .map(|models| models.iter().any(|candidate| candidate == model))
@@ -209,25 +193,19 @@ impl CodexCredentialCatalogService {
     /// 只刷新指定账号的 realtime catalog，并以本地 revision 原子合并账号事实。
     pub async fn synchronize_account(
         &self,
-        instance: &ProviderInstance,
         account_id: &ProviderAccountId,
     ) -> Result<Vec<String>, CodexCredentialCatalogError> {
-        let config =
-            CodexProviderInstanceConfig::from_snapshot(instance, self.origin_policy.as_ref())
-                .map_err(|_| CodexCredentialCatalogError::InvalidInstance)?;
         let account = self
             .repository
             .store()
             .get_account(account_id)
             .await
             .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?
-            .filter(|account| {
-                account.provider().as_str() == "openai" && account.instance() == config.id()
-            })
+            .filter(|account| account.provider().as_str() == "openai")
             .ok_or(CodexCredentialCatalogError::NoEligibleCredential)?;
         let client = CodexBackendClient::new(
             self.http.clone(),
-            config.base_url().as_str(),
+            OFFICIAL_CODEX_BASE_URL,
             self.profile.clone(),
         );
         let cache_revision = self.cache_revision()?;
@@ -239,36 +217,28 @@ impl CodexCredentialCatalogService {
             .collect::<Vec<_>>();
         self.replace_account_cache(
             cache_revision,
-            config.id(),
             account_id,
             account.revision(),
             fetched.models,
             entitlement.clone(),
         )?;
-        self.record_applied_catalog_etags(config.id(), fetched.etag)?;
+        self.record_applied_catalog_etags(fetched.etag)?;
         Ok(entitlement)
     }
 
-    pub async fn synchronize_instance(
+    pub async fn synchronize(
         &self,
-        instance: &ProviderInstance,
     ) -> Result<CodexCredentialCatalogSnapshot, CodexCredentialCatalogError> {
-        if let Some(cached) = self.cached(instance.id())? {
+        if let Some(cached) = self.cached()? {
             return Ok(cached);
         }
         let cache_revision = self.cache_revision()?;
-        let fetched = self.fetch_instance_catalog(instance).await?;
-        self.commit_instance_catalog(cache_revision, fetched)
+        let fetched = self.fetch_catalog().await?;
+        self.commit_catalog(cache_revision, fetched)
     }
 
-    async fn fetch_instance_catalog(
-        &self,
-        instance: &ProviderInstance,
-    ) -> Result<FetchedInstanceCatalog, CodexCredentialCatalogError> {
-        let config =
-            CodexProviderInstanceConfig::from_snapshot(instance, self.origin_policy.as_ref())
-                .map_err(|_| CodexCredentialCatalogError::InvalidInstance)?;
-        let accounts = self.repository.list_for_instance(config.id()).await?;
+    async fn fetch_catalog(&self) -> Result<FetchedCatalog, CodexCredentialCatalogError> {
+        let accounts = self.repository.list_for_provider().await?;
         let now = SystemTime::now();
         let accounts = accounts
             .into_iter()
@@ -279,7 +249,7 @@ impl CodexCredentialCatalogService {
         }
         let client = CodexBackendClient::new(
             self.http.clone(),
-            config.base_url().as_str(),
+            OFFICIAL_CODEX_BASE_URL,
             self.profile.clone(),
         );
         let mut union = BTreeMap::<String, CodexCatalogModel>::new();
@@ -314,7 +284,6 @@ impl CodexCredentialCatalogService {
         }
         let observed_at = SystemTime::now();
         let snapshot = CodexCredentialCatalogSnapshot {
-            provider_instance_id: config.id().clone(),
             observed_at,
             models: union_order
                 .into_iter()
@@ -322,7 +291,7 @@ impl CodexCredentialCatalogService {
                 .collect(),
             account_models,
         };
-        Ok(FetchedInstanceCatalog { snapshot, etags })
+        Ok(FetchedCatalog { snapshot, etags })
     }
 
     async fn fetch_account_models(
@@ -363,7 +332,6 @@ impl CodexCredentialCatalogService {
     fn replace_account_cache(
         &self,
         expected_cache_revision: u64,
-        instance: &ProviderInstanceId,
         account_id: &ProviderAccountId,
         revision: CredentialRevision,
         models: Vec<CodexCatalogModel>,
@@ -379,7 +347,7 @@ impl CodexCredentialCatalogService {
         let mut union = BTreeMap::<String, CodexCatalogModel>::new();
         let mut union_order = Vec::new();
         let mut account_models = BTreeMap::new();
-        if let Some(existing) = cache.snapshots.get(instance) {
+        if let Some(existing) = cache.snapshot.as_ref() {
             for model in &existing.models {
                 let id = model.request_model().as_str().to_owned();
                 union_order.push(id.clone());
@@ -414,7 +382,6 @@ impl CodexCredentialCatalogService {
         });
         union_order.retain(|id| union.contains_key(id));
         let snapshot = CodexCredentialCatalogSnapshot {
-            provider_instance_id: instance.clone(),
             observed_at: SystemTime::now(),
             models: union_order
                 .into_iter()
@@ -423,10 +390,10 @@ impl CodexCredentialCatalogService {
             account_models,
         };
         let changed = cache
-            .snapshots
-            .get(instance)
+            .snapshot
+            .as_ref()
             .is_none_or(|existing| !same_catalog(existing, &snapshot));
-        cache.snapshots.insert(instance.clone(), snapshot);
+        cache.snapshot = Some(snapshot);
         cache.revision = cache.revision.saturating_add(1);
         if changed {
             cache.generation = cache.generation.saturating_add(1);
@@ -434,15 +401,12 @@ impl CodexCredentialCatalogService {
         Ok(())
     }
 
-    pub fn invalidate(
-        &self,
-        instance: &ProviderInstanceId,
-    ) -> Result<(), CodexCredentialCatalogError> {
+    pub fn invalidate(&self) -> Result<(), CodexCredentialCatalogError> {
         let mut cache = self
             .cache
             .write()
             .map_err(|_| CodexCredentialCatalogError::Cache)?;
-        if cache.snapshots.remove(instance).is_some() {
+        if cache.snapshot.take().is_some() {
             cache.revision = cache.revision.saturating_add(1);
             cache.generation = cache.generation.saturating_add(1);
         }
@@ -450,33 +414,20 @@ impl CodexCredentialCatalogService {
     }
 
     /// 记录普通 Responses 响应声明的目录版本；相同版本只触发一次。
-    pub fn observe_response_etag(
-        &self,
-        instance: &ProviderInstanceId,
-        etag: &str,
-    ) -> Result<bool, CodexCredentialCatalogError> {
+    pub fn observe_response_etag(&self, etag: &str) -> Result<bool, CodexCredentialCatalogError> {
         validate_response_etag(etag)?;
         let changed = {
             let mut state = self
                 .etags
                 .lock()
                 .map_err(|_| CodexCredentialCatalogError::Cache)?;
-            let already_observed = state
-                .applied
-                .get(instance)
-                .is_some_and(|value| value == etag)
-                || state
-                    .pending
-                    .get(instance)
-                    .is_some_and(|value| value == etag)
-                || state
-                    .inflight
-                    .get(instance)
-                    .is_some_and(|value| value == etag);
+            let already_observed = state.applied.as_deref() == Some(etag)
+                || state.pending.as_deref() == Some(etag)
+                || state.inflight.as_deref() == Some(etag);
             if already_observed {
                 false
             } else {
-                state.pending.insert(instance.clone(), etag.to_owned());
+                state.pending = Some(etag.to_owned());
                 true
             }
         };
@@ -486,39 +437,35 @@ impl CodexCredentialCatalogService {
         Ok(changed)
     }
 
-    /// 等待并合并一批需要强制刷新的 Provider instance。
-    pub async fn wait_for_etag_refresh(&self) -> Vec<ProviderInstanceId> {
+    /// 等待并认领一次需要强制刷新的 Provider 目录。
+    pub async fn wait_for_etag_refresh(&self) {
         loop {
-            let pending = self.begin_pending_etag_refreshes();
-            if !pending.is_empty() {
-                return pending;
+            if self.begin_pending_etag_refresh() {
+                return;
             }
             self.etag_notification.notified().await;
         }
     }
 
     /// 忽略当前 cache，按 ETag 变化强制生成一份完整新快照。
-    pub async fn refresh_instance(
+    pub async fn refresh(
         &self,
-        instance: &ProviderInstance,
     ) -> Result<CodexCredentialCatalogSnapshot, CodexCredentialCatalogError> {
-        let result = self.refresh_instance_inner(instance).await;
-        self.finish_etag_refresh(instance.id(), result.is_ok())?;
+        let result = self.refresh_inner().await;
+        self.finish_etag_refresh(result.is_ok())?;
         result
     }
 
-    async fn refresh_instance_inner(
+    async fn refresh_inner(
         &self,
-        instance: &ProviderInstance,
     ) -> Result<CodexCredentialCatalogSnapshot, CodexCredentialCatalogError> {
         let cache_revision = self.cache_revision()?;
-        let fetched = self.fetch_instance_catalog(instance).await?;
-        self.commit_instance_catalog(cache_revision, fetched)
+        let fetched = self.fetch_catalog().await?;
+        self.commit_catalog(cache_revision, fetched)
     }
 
     fn record_applied_catalog_etags(
         &self,
-        instance: &ProviderInstanceId,
         etags: impl IntoIterator<Item = String>,
     ) -> Result<(), CodexCredentialCatalogError> {
         let mut distinct = etags.into_iter().collect::<std::collections::BTreeSet<_>>();
@@ -532,39 +479,37 @@ impl CodexCredentialCatalogService {
         self.etags
             .lock()
             .map_err(|_| CodexCredentialCatalogError::Cache)?
-            .applied
-            .insert(instance.clone(), etag);
+            .applied = Some(etag);
         Ok(())
     }
 
-    fn begin_pending_etag_refreshes(&self) -> Vec<ProviderInstanceId> {
+    fn begin_pending_etag_refresh(&self) -> bool {
         let Ok(mut state) = self.etags.lock() else {
-            return Vec::new();
+            return false;
         };
-        let pending = std::mem::take(&mut state.pending);
-        let instances = pending.keys().cloned().collect();
-        state.inflight.extend(pending);
-        instances
+        let Some(pending) = state.pending.take() else {
+            return false;
+        };
+        state.inflight = Some(pending);
+        true
     }
 
-    fn finish_etag_refresh(
-        &self,
-        instance: &ProviderInstanceId,
-        succeeded: bool,
-    ) -> Result<(), CodexCredentialCatalogError> {
+    fn finish_etag_refresh(&self, succeeded: bool) -> Result<(), CodexCredentialCatalogError> {
         let should_retry = {
             let mut state = self
                 .etags
                 .lock()
                 .map_err(|_| CodexCredentialCatalogError::Cache)?;
-            let Some(etag) = state.inflight.remove(instance) else {
+            let Some(etag) = state.inflight.take() else {
                 return Ok(());
             };
             if succeeded {
-                state.applied.insert(instance.clone(), etag);
+                state.applied = Some(etag);
                 false
             } else {
-                state.pending.entry(instance.clone()).or_insert(etag);
+                if state.pending.is_none() {
+                    state.pending = Some(etag);
+                }
                 true
             }
         };
@@ -581,12 +526,11 @@ impl CodexCredentialCatalogService {
             .map_err(|_| CodexCredentialCatalogError::Cache)
     }
 
-    fn commit_instance_catalog(
+    fn commit_catalog(
         &self,
         expected_cache_revision: u64,
-        fetched: FetchedInstanceCatalog,
+        fetched: FetchedCatalog,
     ) -> Result<CodexCredentialCatalogSnapshot, CodexCredentialCatalogError> {
-        let instance = fetched.snapshot.provider_instance_id.clone();
         let snapshot = fetched.snapshot;
         let mut cache = self
             .cache
@@ -596,16 +540,16 @@ impl CodexCredentialCatalogService {
             return Err(CodexCredentialCatalogError::ConcurrentUpdate);
         }
         let changed = cache
-            .snapshots
-            .get(&instance)
+            .snapshot
+            .as_ref()
             .is_none_or(|existing| !same_catalog(existing, &snapshot));
-        cache.snapshots.insert(instance.clone(), snapshot.clone());
+        cache.snapshot = Some(snapshot.clone());
         cache.revision = cache.revision.saturating_add(1);
         if changed {
             cache.generation = cache.generation.saturating_add(1);
         }
         drop(cache);
-        self.record_applied_catalog_etags(&instance, fetched.etags)?;
+        self.record_applied_catalog_etags(fetched.etags)?;
         Ok(snapshot)
     }
 }
@@ -614,9 +558,7 @@ fn same_catalog(
     left: &CodexCredentialCatalogSnapshot,
     right: &CodexCredentialCatalogSnapshot,
 ) -> bool {
-    left.provider_instance_id == right.provider_instance_id
-        && left.models == right.models
-        && left.account_models == right.account_models
+    left.models == right.models && left.account_models == right.account_models
 }
 
 fn validate_response_etag(etag: &str) -> Result<(), CodexCredentialCatalogError> {

@@ -31,15 +31,14 @@ use gateway_core::operation::{Operation, OperationKind};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
     NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingFlowPort, OAuthPendingPutOutcome,
-    OAuthPendingTakeOutcome, ProviderCatalogCacheKey, ProviderCatalogCachePort,
-    ProviderCatalogPorts, ProviderCooldown, ProviderCooldownPort, ProviderCredentialState,
-    ProviderCredentialStatePort, ProviderInstanceCatalogPort, ProviderInstanceConfig,
+    OAuthPendingTakeOutcome, ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCooldown,
+    ProviderCooldownPort, ProviderCredentialState, ProviderCredentialStatePort,
     ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshPolicy,
     ProviderRuntimePolicyPort, ProviderStoreError, ProviderStorePorts,
 };
 use gateway_core::routing::{
-    ConfigRevision, InstanceHealth, ModelCapabilities, ProviderInstance, ProviderKind,
-    ProviderModel, PublicModelId, RoutingContext, RuntimeSnapshot, UpstreamModelId,
+    ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RoutingContext,
+    RuntimeSnapshot, UpstreamModelId,
 };
 use gateway_core::task::WorkerKind;
 use provider_xai::{
@@ -48,9 +47,7 @@ use provider_xai::{
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 
-use crate::support::{
-    MemoryProviderAccountStore, create_input, instance_id, seed_input, xai_config,
-};
+use crate::support::{MemoryProviderAccountStore, create_input, seed_input, xai_config};
 
 #[tokio::test]
 #[ignore = "requires XAI_REAL_ACCOUNT_FIXTURE and consumes live xAI quota; refresh token may rotate"]
@@ -77,7 +74,6 @@ async fn real_xai_conversation_crosses_production_provider_boundaries() {
     let prepared = bundle
         .admin_provider()
         .prepare_import(PrepareCredentialImport {
-            provider_instance_id: instance_id(),
             document: ProviderDocument::new(OpaqueProviderData::new(document)),
         })
         .await
@@ -89,16 +85,9 @@ async fn real_xai_conversation_crosses_production_provider_boundaries() {
             .expect("seed verified xAI account");
     }
 
-    let instance = ProviderInstance::new(
-        instance_id(),
-        ProviderKind::new("xai").expect("provider"),
-        provider_xai::GROK_CLI_BASE_URL.to_owned(),
-        true,
-        InstanceHealth::Healthy,
-    );
     let models = bundle
         .core_provider()
-        .query_model_capabilities(&instance)
+        .query_model_capabilities()
         .await
         .expect("query live xAI catalog");
     let model = models.first().expect("one live generation model");
@@ -106,7 +95,7 @@ async fn real_xai_conversation_crosses_production_provider_boundaries() {
         .admin_provider()
         .connection_test_operation(model.upstream_model(), "Reply with exactly CPR_REAL_OK.")
         .expect("real connection operation");
-    let request = real_planned_request(instance, model.upstream_model().clone(), operation);
+    let request = real_planned_request(model.upstream_model().clone(), operation);
     let mut stream = bundle
         .core_provider()
         .execute(request, real_xai_attempt_context())
@@ -135,7 +124,6 @@ fn real_prepared_account(
 ) -> NewProviderAccount {
     let account = ProviderAccount::new(
         value.account_id,
-        value.provider_instance_id,
         value.provider_kind,
         value.name,
         value.upstream_user_id,
@@ -156,18 +144,15 @@ fn real_prepared_account(
     }
 }
 
-fn real_planned_request(
-    instance: ProviderInstance,
-    upstream_model: UpstreamModelId,
-    operation: Operation,
-) -> ProviderRequest {
+fn real_planned_request(upstream_model: UpstreamModelId, operation: Operation) -> ProviderRequest {
+    let provider = ProviderKind::new("xai").expect("provider");
     let public_model = PublicModelId::new(upstream_model.as_str()).expect("public model");
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
         real_selection_policy(),
-        vec![instance.clone()],
+        vec![provider.clone()],
         vec![ProviderModel::new(
-            instance.id().clone(),
+            provider,
             upstream_model,
             ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), 1_000_000, None),
         )],
@@ -453,7 +438,6 @@ async fn xai_admin_provider_rejects_unprepared_mutations_before_store_commit() {
 
     let import_error = admin
         .prepare_import(PrepareCredentialImport {
-            provider_instance_id: instance_id(),
             document: ProviderDocument::new(OpaqueProviderData::new(Map::new())),
         })
         .await
@@ -506,7 +490,6 @@ fn pending_payload(flow_id: &str, owner_ref: &str) -> OpaqueProviderData {
             "provider_kind": "xai",
             "target": {
                 "kind": "create",
-                "provider_instance_id": instance_id().to_string(),
                 "name": "OAuth account"
             },
             "owner": {
@@ -540,10 +523,7 @@ fn provider_ports_with(
     ProviderStorePorts::new(
         accounts,
         Arc::new(TestLeases),
-        ProviderCatalogPorts::new(
-            Arc::new(TestInstanceCatalog),
-            Arc::new(TestCatalogCache::default()),
-        ),
+        Arc::new(TestCatalogCache::default()),
         Arc::new(TestCredentialState),
         Arc::new(TestCooldown),
         Arc::new(TestRuntimePolicy),
@@ -555,7 +535,6 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
         id: account.id().to_string(),
-        provider_instance_id: account.instance().clone(),
         provider_kind: account.provider().clone(),
         name: account.name().to_owned(),
         email: account.email().map(str::to_owned),
@@ -594,7 +573,7 @@ struct TestLeases;
 impl ProviderLeasePort for TestLeases {
     fn load_state<'a>(
         &'a self,
-        _: &'a gateway_core::routing::ProviderInstanceId,
+        _: &'a gateway_core::routing::ProviderKind,
         accounts: &'a [ProviderAccountId],
     ) -> BoxFuture<
         'a,
@@ -627,25 +606,6 @@ impl ProviderLeasePort for TestLeases {
         _request: ProviderLeaseRequest,
     ) -> BoxFuture<'_, Result<ProviderLeaseAcquisition, ProviderStoreError>> {
         Box::pin(async { Ok(ProviderLeaseAcquisition::Acquired(Box::new(()))) })
-    }
-}
-
-struct TestInstanceCatalog;
-
-impl ProviderInstanceCatalogPort for TestInstanceCatalog {
-    fn list_instances<'a>(
-        &'a self,
-        provider_kind: &'a ProviderKind,
-        _include_disabled: bool,
-    ) -> BoxFuture<'a, Result<Vec<ProviderInstanceConfig>, ProviderStoreError>> {
-        Box::pin(async move {
-            Ok(vec![ProviderInstanceConfig::new(
-                instance_id(),
-                provider_kind.clone(),
-                provider_xai::GROK_CLI_BASE_URL.to_owned(),
-                true,
-            )])
-        })
     }
 }
 

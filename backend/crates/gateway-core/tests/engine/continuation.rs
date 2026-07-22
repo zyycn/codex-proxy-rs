@@ -3,14 +3,13 @@ use gateway_core::engine::continuation::{
 };
 use gateway_core::engine::credential::ProviderAccountId;
 use gateway_core::error::SafeUpstreamValue;
-use gateway_core::routing::{ProviderInstanceId, ProviderKind};
+use gateway_core::routing::ProviderKind;
 
 fn pin() -> NativeContinuationPin {
     NativeContinuationPin::new(
         PreviousResponseId::new("response-private").expect("valid response"),
         SafeUpstreamValue::new("upstream-private").expect("valid upstream response"),
         ProviderKind::new("openai").expect("valid provider"),
-        ProviderInstanceId::new("inst_openai").expect("valid instance"),
         ProviderAccountId::new("acct_codex").expect("valid account"),
     )
 }
@@ -35,7 +34,6 @@ fn external_binding_debug_should_redact_previous_response_id() {
 fn native_pin_should_reject_different_account() {
     assert!(!pin().matches(
         &ProviderKind::new("openai").expect("valid provider"),
-        &ProviderInstanceId::new("inst_openai").expect("valid instance"),
         &ProviderAccountId::new("acct_other").expect("valid account"),
     ));
 }
