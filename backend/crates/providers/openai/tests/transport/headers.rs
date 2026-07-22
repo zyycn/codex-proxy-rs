@@ -1,63 +1,7 @@
-use chrono::{TimeZone, Utc};
-use provider_openai::transport::build_codex_headers;
-use provider_openai::transport::profile::CodexWireProfile;
 use provider_openai::transport::websocket::CodexWebSocketConnection;
 use serde_json::Value;
 
 use super::*;
-
-#[test]
-fn codex_http_headers_should_use_the_wire_profile_without_browser_metadata() {
-    let profile = CodexWireProfile {
-        originator: "Codex Desktop".to_owned(),
-        codex_version: "0.144.2".to_owned(),
-        desktop_version: "26.707.72221".to_owned(),
-        desktop_build: "72221".to_owned(),
-        os_type: "Mac OS".to_owned(),
-        os_version: "15.7.1".to_owned(),
-        arch: "arm64".to_owned(),
-        terminal: "unknown".to_owned(),
-        verified_at: Utc
-            .with_ymd_and_hms(2026, 7, 18, 0, 0, 0)
-            .single()
-            .expect("valid fixture time"),
-    };
-
-    let headers = build_codex_headers(
-        &profile,
-        "access-token",
-        Some("acct-1"),
-        Some("turn-1"),
-        "req-1",
-    )
-    .expect("valid profile headers");
-    let value = |name: &str| headers.get(name).and_then(|value| value.to_str().ok());
-
-    assert_eq!(value("authorization"), Some("Bearer access-token"));
-    assert_eq!(value("chatgpt-account-id"), Some("acct-1"));
-    assert_eq!(value("originator"), Some("Codex Desktop"));
-    assert_eq!(
-        value("user-agent"),
-        Some("Codex Desktop/0.144.2 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.707.72221)")
-    );
-    assert_eq!(value("x-client-request-id"), Some("req-1"));
-    assert_eq!(value("x-codex-turn-state"), Some("turn-1"));
-    assert_eq!(value("accept"), Some("text/event-stream"));
-    for browser_header in [
-        "sec-ch-ua",
-        "sec-ch-ua-mobile",
-        "sec-ch-ua-platform",
-        "sec-fetch-site",
-        "sec-fetch-mode",
-        "sec-fetch-dest",
-        "accept-language",
-    ] {
-        assert!(
-            headers.get(browser_header).is_none(),
-            "sent {browser_header}"
-        );
-    }
-}
 
 #[test]
 fn websocket_connection_should_preserve_endpoint_and_header_order() {
@@ -200,11 +144,11 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
             .expect("send terminal event");
         payload
     });
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-test", "be brief", Vec::new());
+    let mut request =
+        codex_request_with_prompt_cache_key("gpt-test", "be brief", Vec::new(), "client-thread");
     request.use_websocket = true;
     request.responses_lite = Some("true".to_owned());
     request.memgen_request = Some("true".to_owned());
-    request.set_prompt_cache_key(Some("client-thread".to_owned()));
     request.set_client_metadata(Some(json!({
         "safe": "yes",
         "x-openai-subagent": "review",
@@ -306,7 +250,7 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
         write_completed_sse_response(&mut stream).await;
         request
     });
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-test", "", Vec::new());
+    let mut request = codex_request("gpt-test", "", Vec::new());
     request.force_http_sse = true;
     request.turn_metadata = Some("turn-meta".to_owned());
     request.beta_features = Some("beta-a".to_owned());
@@ -314,13 +258,15 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
     request.version = Some("26.707.51957".to_owned());
     request.codex_window_id = Some("cw_1".to_owned());
     request.parent_thread_id = Some("parent-1".to_owned());
+    let profile = test_wire_profile();
+    let expected_user_agent = profile.snapshot().user_agent();
     let client = CodexBackendClient::new(
         reqwest::Client::builder()
             .no_proxy()
             .build()
             .expect("HTTP client"),
         format!("http://{address}"),
-        test_wire_profile(),
+        profile,
     );
 
     client
@@ -350,6 +296,28 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
 
     let raw_request = server.await.expect("HTTP header server task");
     let header_names = read_header_names(&raw_request);
+    assert_eq!(
+        (
+            read_header_value(&raw_request, "authorization"),
+            read_header_value(&raw_request, "chatgpt-account-id"),
+            read_header_value(&raw_request, "originator"),
+            read_header_value(&raw_request, "user-agent"),
+            read_header_value(&raw_request, "accept"),
+            read_header_value(&raw_request, "x-openai-internal-codex-residency"),
+            read_header_value(&raw_request, "x-client-request-id"),
+            read_header_value(&raw_request, "x-codex-turn-state"),
+        ),
+        (
+            Some("Bearer access-token"),
+            Some("chatgpt-account"),
+            Some("codex_cli_rs"),
+            Some(expected_user_agent.as_str()),
+            Some("text/event-stream"),
+            Some("us"),
+            Some("req_order"),
+            Some("turn-state"),
+        )
+    );
     for required in [
         "authorization",
         "chatgpt-account-id",
@@ -469,7 +437,7 @@ async fn websocket_should_keep_an_exact_chain_while_new_connections_adopt_the_la
         profile.clone(),
     )
     .with_websocket_pool(pool);
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-test", "", Vec::new());
+    let mut request = codex_request("gpt-test", "", Vec::new());
     request.use_websocket = true;
     request.local_conversation_id = Some("profile-rotation".to_owned());
 

@@ -1,10 +1,12 @@
 use provider_openai::transport::protocol::responses::CodexResponsesRequest;
 use provider_openai::transport::protocol::websocket::{
-    OpeningAuditSnapshot, is_terminal_websocket_event, websocket_audit_artifact_from_attempt,
-    websocket_event_to_sse_frame, websocket_metadata_turn_state, websocket_payload_audit_snapshot,
+    OpeningAuditSnapshot, websocket_audit_artifact_from_attempt, websocket_event_to_sse_frame,
+    websocket_metadata_turn_state, websocket_payload_audit_snapshot,
     websocket_response_completed_id, websocket_response_create_payload_text,
 };
 use serde_json::json;
+
+use super::super::{codex_request, codex_request_with_prompt_cache_key};
 
 #[test]
 fn websocket_payload_audit_should_redact_sensitive_content_and_preserve_key_order() {
@@ -14,13 +16,13 @@ fn websocket_payload_audit_should_redact_sensitive_content_and_preserve_key_orde
             "instructions": "private instructions",
             "input": [{"role": "user", "content": "private prompt"}],
             "tools": [{"type": "function", "name": "private-tool"}],
-            "service_tier": "flex"
+            "service_tier": "flex",
+            "prompt_cache_key": "cache-secret"
         })
         .as_object()
         .expect("request object")
         .clone(),
     );
-    request.set_prompt_cache_key(Some("cache-secret".to_owned()));
     request.set_client_metadata(Some(json!({"thread_id": "thread-secret"})));
 
     let snapshot = websocket_payload_audit_snapshot(&request);
@@ -53,12 +55,12 @@ fn websocket_payload_audit_should_redact_sensitive_content_and_preserve_key_orde
 
 #[test]
 fn websocket_response_create_payload_should_preserve_transparent_body_order() {
-    let mut request = CodexResponsesRequest::new_http_sse(
+    let mut request = codex_request_with_prompt_cache_key(
         "gpt-test",
         "capture instructions",
         vec![json!({"role": "user", "content": "capture prompt"})],
+        "session-1",
     );
-    request.set_prompt_cache_key(Some("session-1".to_owned()));
     request.set_client_metadata(Some(json!({"thread_id": "capture-thread"})));
 
     let payload = websocket_response_create_payload_text(&request).expect("serialize payload");
@@ -81,7 +83,7 @@ fn websocket_response_create_payload_should_preserve_transparent_body_order() {
 
 #[test]
 fn websocket_response_create_payload_should_keep_explicit_empty_instructions() {
-    let request = CodexResponsesRequest::new_http_sse("gpt-test", "", Vec::new());
+    let request = codex_request("gpt-test", "", Vec::new());
     let payload = websocket_response_create_payload_text(&request).expect("serialize payload");
     let value = serde_json::from_str::<serde_json::Value>(&payload).expect("payload JSON");
 
@@ -146,19 +148,6 @@ fn websocket_metadata_turn_state_should_accept_case_insensitive_header() {
 }
 
 #[test]
-fn websocket_terminal_event_should_cover_all_current_terminal_types() {
-    for event in [
-        "response.completed",
-        "response.incomplete",
-        "response.failed",
-        "error",
-    ] {
-        assert!(is_terminal_websocket_event(event));
-    }
-    assert!(!is_terminal_websocket_event("response.output_text.delta"));
-}
-
-#[test]
 fn websocket_completed_id_should_validate_the_official_shape() {
     let valid = json!({
         "type": "response.completed",
@@ -204,7 +193,7 @@ fn websocket_typed_events_should_remain_transparent_without_schema_filtering() {
 
 #[test]
 fn websocket_audit_artifact_should_record_opening_and_redacted_payload() {
-    let mut request = CodexResponsesRequest::new_http_sse(
+    let mut request = codex_request(
         "gpt-test",
         "private instructions",
         vec![json!({"role": "user", "content": "private prompt"})],

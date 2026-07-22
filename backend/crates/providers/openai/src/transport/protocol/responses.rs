@@ -290,41 +290,6 @@ pub fn response_event_signals(event_type: Option<&str>, value: &Value) -> Respon
     signals
 }
 
-/// 判断已收到的 Responses SSE 内容是否包含首个完整的语义输出事件。
-pub fn response_body_has_semantic_output(body_bytes: &[u8]) -> bool {
-    response_body_signals(body_bytes).semantic_output
-}
-
-fn response_body_signals(body_bytes: &[u8]) -> ResponseEventSignals {
-    let body = String::from_utf8_lossy(body_bytes);
-    let Some(complete_body) = complete_sse_body_prefix(&body) else {
-        return ResponseEventSignals::default();
-    };
-    let Ok(events) = parse_sse_events(complete_body) else {
-        return ResponseEventSignals::default();
-    };
-    events
-        .iter()
-        .fold(ResponseEventSignals::default(), |mut signals, event| {
-            let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
-                return signals;
-            };
-            let event_type = event.event.as_deref().or_else(|| {
-                value
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.trim().is_empty())
-            });
-            merge_event_signals(&mut signals, response_event_signals(event_type, &value));
-            signals
-        })
-}
-
-fn merge_event_signals(target: &mut ResponseEventSignals, source: ResponseEventSignals) {
-    target.protocol_progress |= source.protocol_progress;
-    merge_output_signals(target, source);
-}
-
 fn merge_output_signals(target: &mut ResponseEventSignals, source: ResponseEventSignals) {
     target.semantic_output |= source.semantic_output;
     target.reasoning_output |= source.reasoning_output;
@@ -398,16 +363,6 @@ fn is_tool_execution_event(event_type: &str) -> bool {
             phase,
             "in_progress" | "searching" | "interpreting" | "completed" | "failed"
         )
-}
-
-fn complete_sse_body_prefix(body: &str) -> Option<&str> {
-    let lf_end = body.rfind("\n\n").map(|index| index + 2);
-    let crlf_end = body.rfind("\r\n\r\n").map(|index| index + 4);
-    lf_end
-        .into_iter()
-        .chain(crlf_end)
-        .max()
-        .map(|end| &body[..end])
 }
 
 /// 从 Codex SSE 收集出的非流式 Responses 结果。
@@ -704,22 +659,6 @@ impl CodexResponsesRequest {
         }
     }
 
-    /// 构造默认的 HTTP SSE 请求（测试与内部构造用）。
-    pub fn new_http_sse(
-        model: impl Into<String>,
-        instructions: impl Into<String>,
-        input: Vec<Value>,
-    ) -> Self {
-        let mut body = Map::new();
-        body.insert("model".to_string(), Value::String(model.into()));
-        body.insert(
-            "instructions".to_string(),
-            Value::String(instructions.into()),
-        );
-        body.insert("input".to_string(), Value::Array(input));
-        Self::from_body(body)
-    }
-
     /// 上游 body 的只读视图。
     pub fn body(&self) -> &Map<String, Value> {
         &self.body
@@ -796,11 +735,6 @@ impl CodexResponsesRequest {
             .unwrap_or(true)
     }
 
-    /// 设置上游存储标志。
-    pub fn set_store(&mut self, store: bool) {
-        self.body.insert("store".to_string(), Value::Bool(store));
-    }
-
     /// reasoning 配置（透传，不规整）。
     pub fn reasoning(&self) -> Option<&Value> {
         self.body.get("reasoning")
@@ -849,19 +783,6 @@ impl CodexResponsesRequest {
     /// 提示缓存键。
     pub fn prompt_cache_key(&self) -> Option<&str> {
         self.body.get("prompt_cache_key").and_then(Value::as_str)
-    }
-
-    /// 设置提示缓存键。
-    pub fn set_prompt_cache_key(&mut self, prompt_cache_key: Option<String>) {
-        match prompt_cache_key {
-            Some(value) => {
-                self.body
-                    .insert("prompt_cache_key".to_string(), Value::String(value));
-            }
-            None => {
-                self.body.remove("prompt_cache_key");
-            }
-        }
     }
 
     /// client metadata（透传原值）。

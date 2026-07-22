@@ -9,7 +9,7 @@ use gateway_core::engine::credential::{
 };
 use gateway_core::routing::{InstanceHealth, ProviderInstance, ProviderKind};
 use provider_openai::credential::{
-    CodexCredentialCatalogError, CodexCredentialCatalogService, CreateCodexCredential,
+    CodexCredentialCatalogError, CodexCredentialCatalogService, ImportCodexOAuthCredential,
 };
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use wiremock::matchers::{header, method, path};
@@ -46,18 +46,16 @@ fn instance(base_url: &str) -> ProviderInstance {
 
 async fn create(store: &Arc<MemoryAccountStore>, id: &str, token: &str) {
     store
-        .repository()
-        .create_oauth_credential(CreateCodexCredential {
+        .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: id.to_owned(),
             provider_instance_id: instance_id().to_string(),
             name: id.to_owned(),
             secret: secret(token),
-            account: profile(&format!("chatgpt-{id}")),
+            verified_account: profile(&format!("chatgpt-{id}")),
             next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
-        .await
-        .expect("create account");
+        .await;
 }
 
 fn service(store: &Arc<MemoryAccountStore>) -> CodexCredentialCatalogService {

@@ -23,7 +23,8 @@ use gateway_core::provider_ports::{
 use gateway_core::routing::{ProviderInstanceId, ProviderKind};
 use provider_openai::CodexOriginPolicy;
 use provider_openai::credential::{
-    CodexAccountProfile, CodexCredentialRepository, CodexOAuthSecret,
+    CodexAccountProfile, CodexCredentialAdmin, CodexCredentialRepository, CodexOAuthSecret,
+    ImportCodexOAuthCredential,
 };
 use secrecy::SecretString;
 use url::{Host, Url};
@@ -44,6 +45,15 @@ pub(crate) struct MemoryAccountStore {
 impl MemoryAccountStore {
     pub(crate) fn repository(self: &Arc<Self>) -> CodexCredentialRepository {
         CodexCredentialRepository::new(self.clone())
+    }
+
+    pub(crate) async fn seed_oauth_credential(&self, input: ImportCodexOAuthCredential) {
+        let account = CodexCredentialAdmin
+            .prepare_import(input)
+            .expect("prepare test OAuth credential");
+        self.create_account(account)
+            .await
+            .expect("seed test OAuth credential");
     }
 
     pub(crate) fn account(&self, id: &str) -> Option<ProviderAccount> {

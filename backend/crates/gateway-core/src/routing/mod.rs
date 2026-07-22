@@ -389,13 +389,6 @@ pub struct RoutingPlan {
 }
 
 impl RoutingPlan {
-    /// 冻结本请求允许的最大上游调用次数。
-    #[must_use]
-    pub fn with_max_attempts(mut self, max_attempts: NonZeroU32) -> Self {
-        self.max_attempts = max_attempts;
-        self
-    }
-
     #[must_use]
     pub const fn config_revision(&self) -> ConfigRevision {
         self.config_revision

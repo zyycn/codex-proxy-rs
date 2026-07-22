@@ -16,22 +16,6 @@ pub fn endpoint_url(base_url: &str, endpoint_path: &str) -> String {
     )
 }
 
-/// 计算请求层路径。
-pub fn endpoint_request_path(base_url: &str, endpoint_path: &str) -> String {
-    let endpoint_path = endpoint_path.trim_start_matches('/');
-    let base_path = reqwest::Url::parse(base_url)
-        .ok()
-        .map(|url| url.path().trim_end_matches('/').to_string())
-        .filter(|path| !path.is_empty())
-        .unwrap_or_default();
-
-    if base_path.is_empty() {
-        format!("/{endpoint_path}")
-    } else {
-        format!("{base_path}/{endpoint_path}")
-    }
-}
-
 /// 返回 usage 相关 endpoint 的完整 URL 列表。
 pub fn usage_endpoint_urls(base_url: &str) -> Vec<String> {
     usage_endpoint_paths(base_url)

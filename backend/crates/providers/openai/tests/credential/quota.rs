@@ -9,7 +9,7 @@ use gateway_core::engine::credential::{
 use gateway_core::routing::{InstanceHealth, ProviderInstance, ProviderKind};
 use provider_openai::credential::{
     CodexCredentialQuotaService, CodexQuotaSyncSummary, CodexQuotaWindowKind,
-    CreateCodexCredential, parse_codex_quota_usage,
+    ImportCodexOAuthCredential, parse_codex_quota_usage,
 };
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use serde_json::json;
@@ -149,18 +149,16 @@ fn quota_service(store: &Arc<MemoryAccountStore>) -> CodexCredentialQuotaService
 async fn concurrent_cold_scheduling_hydration_reads_quota_once() {
     let store = Arc::new(MemoryAccountStore::default());
     store
-        .repository()
-        .create_oauth_credential(CreateCodexCredential {
+        .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: "acct_hydration".to_owned(),
             provider_instance_id: instance_id().to_string(),
             name: "hydration".to_owned(),
             secret: secret("hydration-token"),
-            account: profile("chatgpt-acct_hydration"),
+            verified_account: profile("chatgpt-acct_hydration"),
             next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
-        .await
-        .expect("create account");
+        .await;
     let account = store.account("acct_hydration").expect("created account");
     let service = quota_service(&store);
 
@@ -206,18 +204,16 @@ async fn quota_service_stores_raw_provider_json_and_projects_common_state() {
         .await;
     let store = Arc::new(MemoryAccountStore::default());
     store
-        .repository()
-        .create_oauth_credential(CreateCodexCredential {
+        .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: "acct_quota".to_owned(),
             provider_instance_id: instance_id().to_string(),
             name: "quota".to_owned(),
             secret: secret("quota-token"),
-            account: profile("chatgpt-acct_quota"),
+            verified_account: profile("chatgpt-acct_quota"),
             next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
-        .await
-        .expect("create account");
+        .await;
     let service = quota_service(&store);
     let instance = ProviderInstance::new(
         instance_id(),
@@ -290,18 +286,16 @@ async fn quota_refresh_success_must_not_clear_newer_future_cooldown() {
         .await;
     let store = Arc::new(MemoryAccountStore::default());
     store
-        .repository()
-        .create_oauth_credential(CreateCodexCredential {
+        .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: "acct_quota_cooldown".to_owned(),
             provider_instance_id: instance_id().to_string(),
             name: "quota cooldown".to_owned(),
             secret: secret("quota-cooldown-token"),
-            account: profile("chatgpt-acct_quota_cooldown"),
+            verified_account: profile("chatgpt-acct_quota_cooldown"),
             next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
-        .await
-        .expect("create account");
+        .await;
     let account = store.account("acct_quota_cooldown").expect("quota account");
     let service = quota_service(&store);
     let instance = ProviderInstance::new(
@@ -362,18 +356,16 @@ async fn non_exhausted_quota_refresh_should_restore_quota_exhausted_account() {
 async fn passive_rate_limit_headers_update_quota_and_account_state_with_revision_fence() {
     let store = Arc::new(MemoryAccountStore::default());
     store
-        .repository()
-        .create_oauth_credential(CreateCodexCredential {
+        .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: "acct_passive_quota".to_owned(),
             provider_instance_id: instance_id().to_string(),
             name: "passive quota".to_owned(),
             secret: secret("passive-quota-token"),
-            account: profile("chatgpt-acct_passive_quota"),
+            verified_account: profile("chatgpt-acct_passive_quota"),
             next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
-        .await
-        .expect("create account");
+        .await;
     let account = store.account("acct_passive_quota").expect("account");
     let service = quota_service(&store);
     let reset_at = 1_900_000_000_i64;
@@ -500,18 +492,16 @@ async fn synchronize_account_from_state(
         .await;
     let store = Arc::new(MemoryAccountStore::default());
     store
-        .repository()
-        .create_oauth_credential(CreateCodexCredential {
+        .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: account_id.to_owned(),
             provider_instance_id: instance_id().to_string(),
             name: account_id.to_owned(),
             secret: secret(&format!("token-{account_id}")),
-            account: profile(&format!("chatgpt-{account_id}")),
+            verified_account: profile(&format!("chatgpt-{account_id}")),
             next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
-        .await
-        .expect("create quota account");
+        .await;
     let account = store.account(account_id).expect("quota account");
     store
         .apply_state_change(AccountStateChange {

@@ -29,7 +29,7 @@ use gateway_core::routing::{
 use provider_openai::CodexProvider;
 use provider_openai::credential::{
     CodexCookie, CodexCookiePolicy, CodexCredentialCatalogService, CodexCredentialQuotaService,
-    CodexCredentialSelector, CreateCodexCredential, RotateCodexCredential,
+    CodexCredentialSelector, ImportCodexOAuthCredential, RotateCodexCredential,
 };
 use provider_openai::transport::CodexWebSocketPool;
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
@@ -61,34 +61,30 @@ fn wire_profile() -> CodexWireProfileState {
 
 async fn create_account(store: &Arc<MemoryAccountStore>) {
     store
-        .repository()
-        .create_oauth_credential(CreateCodexCredential {
+        .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: "acct_provider".to_owned(),
             provider_instance_id: instance_id().to_string(),
             name: "provider".to_owned(),
             secret: secret("provider-access"),
-            account: profile("chatgpt-acct_provider"),
+            verified_account: profile("chatgpt-acct_provider"),
             next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
-        .await
-        .expect("create account");
+        .await;
 }
 
 async fn create_other_account(store: &Arc<MemoryAccountStore>) {
     store
-        .repository()
-        .create_oauth_credential(CreateCodexCredential {
+        .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: "acct_provider_other".to_owned(),
             provider_instance_id: instance_id().to_string(),
             name: "provider-other".to_owned(),
             secret: secret("provider-other-access"),
-            account: profile("chatgpt-acct_provider_other"),
+            verified_account: profile("chatgpt-acct_provider_other"),
             next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
-        .await
-        .expect("create other account");
+        .await;
 }
 
 async fn attach_cookie(store: &Arc<MemoryAccountStore>, account_id: &str, value: &str) {

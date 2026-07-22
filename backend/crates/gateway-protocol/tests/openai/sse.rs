@@ -1,8 +1,24 @@
 use gateway_protocol::openai::sse::{
     DONE_SSE_FRAME, MAX_SSE_EVENT_BUFFER_BYTES, SseError, SseEvent, SseEventDecoder,
     encode_sse_event, encode_sse_event_with_metadata, parse_sse_events, response_failed_sse_event,
-    response_failed_sse_event_with_id, sse_body_has_done, sse_frame_end, sse_frame_is_done,
+    response_failed_sse_event_with_id, sse_frame_end,
 };
+
+fn sse_frame_is_done(frame: &str) -> bool {
+    let mut data = frame.lines().filter_map(|raw_line| {
+        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+        let (field, value) = line.split_once(':').map_or((line, ""), |(field, value)| {
+            (field, value.strip_prefix(' ').unwrap_or(value))
+        });
+        (field == "data").then_some(value)
+    });
+    matches!((data.next(), data.next()), (Some("[DONE]"), None))
+}
+
+fn sse_body_has_done(body: &str) -> bool {
+    body.trim_end_matches(['\r', '\n'])
+        .ends_with(DONE_SSE_FRAME.trim_end_matches(['\r', '\n']))
+}
 
 #[test]
 fn parser_should_preserve_multiline_data_id_and_retry() {

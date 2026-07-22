@@ -1,6 +1,8 @@
-use gateway_api::openai::responses::{ResponseCreateFrameError, decode_response_create};
+use gateway_api::openai::responses::ResponseCreateFrameError;
 use gateway_core::operation::Operation;
 use serde_json::json;
+
+use super::decode_response_create;
 
 #[test]
 fn response_create_should_default_to_the_websocket_streaming_contract() {

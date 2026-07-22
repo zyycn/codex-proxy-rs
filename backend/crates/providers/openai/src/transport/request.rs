@@ -8,7 +8,7 @@ use gateway_core::operation::{
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::transport::protocol::responses::{CodexRequestSemantics, CodexResponsesRequest};
+use crate::transport::protocol::responses::CodexResponsesRequest;
 
 const CODEX_OPTION_FIELDS: &[&str] = &[
     "beta_features",
@@ -189,14 +189,6 @@ pub fn encode_generate_request(
         apply_codex_options(&mut encoded, options)?;
     }
     Ok(encoded)
-}
-
-/// 复用正式 Codex 编码规则提取请求诊断语义；编码失败时不伪造 Provider 事实。
-#[must_use]
-pub fn codex_request_semantics(request: &GenerateRequest) -> CodexRequestSemantics {
-    encode_generate_request(request, "observability")
-        .map(|request| request.semantics())
-        .unwrap_or_default()
 }
 
 fn encode_messages(request: &GenerateRequest) -> Result<Vec<Value>, CodexRequestEncodeError> {

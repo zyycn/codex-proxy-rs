@@ -270,33 +270,6 @@ fn rewrite_response_identity(value: &mut Value, upstream: &str, gateway: &str) {
     }
 }
 
-/// 同一 canonical event 流生成的两种 Responses 表达。
-#[derive(Debug, Clone, PartialEq)]
-pub struct CollectedResponses {
-    response: Value,
-    sse_frames: Vec<String>,
-}
-
-impl CollectedResponses {
-    /// 返回非流式 Responses JSON。
-    #[must_use]
-    pub const fn response(&self) -> &Value {
-        &self.response
-    }
-
-    /// 返回按事件边界编码的 SSE frame。
-    #[must_use]
-    pub fn sse_frames(&self) -> &[String] {
-        &self.sse_frames
-    }
-
-    /// 拆分两种表达。
-    #[must_use]
-    pub fn into_parts(self) -> (Value, Vec<String>) {
-        (self.response, self.sse_frames)
-    }
-}
-
 /// OpenAI Responses event collector。
 ///
 /// Collector 只做协议编码；它不拥有 commit、retry 或 Provider 生命周期。
@@ -352,31 +325,6 @@ impl ResponsesCollector {
         }
     }
 
-    /// 消费一个 canonical event，并返回 Responses WebSocket 文本消息。
-    ///
-    /// WebSocket 与 SSE 共用同一状态机和事件 JSON；这里只移除 SSE framing，
-    /// 避免两个下游 transport 各自维护一套协议投影。
-    ///
-    /// # Errors
-    ///
-    /// 继承 [`Self::push`] 的 canonical 编码错误；内部 SSE framing 若不满足编码器
-    /// 自身的不变量则返回 [`ResponseEncodeError::InvalidEventEncoding`]。
-    pub fn push_websocket_events(
-        &mut self,
-        event: &GatewayEvent,
-    ) -> Result<Vec<String>, ResponseEncodeError> {
-        self.push(event)?
-            .into_iter()
-            .map(|frame| {
-                frame
-                    .lines()
-                    .find_map(|line| line.strip_prefix("data: "))
-                    .map(ToOwned::to_owned)
-                    .ok_or(ResponseEncodeError::InvalidEventEncoding)
-            })
-            .collect()
-    }
-
     /// 校验终态并返回非流式 JSON。
     ///
     /// # Errors
@@ -386,27 +334,6 @@ impl ResponsesCollector {
         self.validator.finish()?;
         self.final_response
             .ok_or_else(|| gateway_core::event::EventSequenceError::MissingCompleted.into())
-    }
-
-    /// 一次性收集完整事件序列，同时保留 stateful collector 的相同实现路径。
-    ///
-    /// # Errors
-    ///
-    /// 任意事件无法编码或序列不完整时返回错误。
-    pub fn collect<'a>(
-        created_at: u64,
-        events: impl IntoIterator<Item = &'a GatewayEvent>,
-    ) -> Result<CollectedResponses, ResponseEncodeError> {
-        let mut collector = Self::new(created_at);
-        let mut sse_frames = Vec::new();
-        for event in events {
-            sse_frames.extend(collector.push(event)?);
-        }
-        let response = collector.finish()?;
-        Ok(CollectedResponses {
-            response,
-            sse_frames,
-        })
     }
 
     fn started(&mut self, meta: &ResponseMeta) -> Result<Vec<String>, ResponseEncodeError> {

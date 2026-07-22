@@ -181,14 +181,6 @@ pub fn websocket_response_completed_id(raw: &str) -> Result<Option<String>, Stri
     Ok(Some(completed.id))
 }
 
-/// 判断 WebSocket 事件是否会结束当前响应流。
-pub fn is_terminal_websocket_event(event: &str) -> bool {
-    matches!(
-        event,
-        "response.completed" | "response.incomplete" | "response.failed" | "error"
-    )
-}
-
 /// 生成 Responses WebSocket payload 审计快照。
 pub fn websocket_payload_audit_snapshot(request: &CodexResponsesRequest) -> PayloadAuditSnapshot {
     let body = websocket_response_create_payload(request);

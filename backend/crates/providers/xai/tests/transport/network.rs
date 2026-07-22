@@ -374,6 +374,7 @@ async fn billing_transport_should_get_exact_credits_resource_without_redirect() 
 
 #[test]
 fn endpoint_policy_should_reject_private_and_documentation_addresses() {
+    let policy = GrokDnsResolutionPolicy::official_oauth();
     for address in [
         "127.0.0.1",
         "10.0.0.1",
@@ -382,11 +383,19 @@ fn endpoint_policy_should_reject_private_and_documentation_addresses() {
         "2001:db8::1",
         "::1",
     ] {
+        let address = address.parse().expect("fixture address");
+        assert_eq!(
+            policy
+                .plan_system_resolution("auth.x.ai", &[address])
+                .expect("official host"),
+            GrokDnsResolutionPlan::TrustedDoh,
+            "{address} must require trusted fallback"
+        );
         assert!(
-            !OfficialGrokEndpointPolicy::accepts_resolved_address(
-                address.parse().expect("fixture address")
-            ),
-            "{address} must be rejected"
+            policy
+                .validate_trusted_doh_resolution("auth.x.ai", &[address])
+                .is_err(),
+            "{address} must be rejected after trusted resolution"
         );
     }
 }

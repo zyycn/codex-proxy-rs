@@ -48,7 +48,7 @@ use gateway_core::routing::{
 };
 use gateway_core::task::{WorkerContribution, WorkerKind, WorkerRunnable};
 use provider_openai::config::{CodexWireProfileConfig, OpenAiConfig};
-use provider_openai::credential::CreateCodexCredential;
+use provider_openai::credential::ImportCodexOAuthCredential;
 use provider_openai::transport::profile::APPCAST_POLL_INTERVAL;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
@@ -399,18 +399,16 @@ async fn openai_admin_provider_persists_the_full_pending_envelope_and_binds_owne
 async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export() {
     let store = Arc::new(MemoryAccountStore::default());
     store
-        .repository()
-        .create_oauth_credential(CreateCodexCredential {
+        .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: "acct_admin_projection".to_owned(),
             provider_instance_id: instance_id().to_string(),
             name: "admin projection".to_owned(),
             secret: secret("admin-projection-access"),
-            account: profile("chatgpt-admin-projection"),
+            verified_account: profile("chatgpt-admin-projection"),
             next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
-        .await
-        .expect("create account");
+        .await;
     let account = store
         .account("acct_admin_projection")
         .expect("stored account");
@@ -487,18 +485,16 @@ async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export
 async fn openai_admin_provider_rejects_unprepared_mutations_before_store_commit() {
     let store = Arc::new(MemoryAccountStore::default());
     store
-        .repository()
-        .create_oauth_credential(CreateCodexCredential {
+        .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: "acct_admin_invalid".to_owned(),
             provider_instance_id: instance_id().to_string(),
             name: "admin invalid".to_owned(),
             secret: secret("admin-invalid-access"),
-            account: profile("chatgpt-admin-invalid"),
+            verified_account: profile("chatgpt-admin-invalid"),
             next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
-        .await
-        .expect("create account");
+        .await;
     let account = store.account("acct_admin_invalid").expect("stored account");
     let record = account_record(&account);
     let bundle = provider_openai::initialize(

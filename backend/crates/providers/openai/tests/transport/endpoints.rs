@@ -1,16 +1,10 @@
-use provider_openai::transport::{endpoint_request_path, endpoint_url, usage_endpoint_urls};
+use provider_openai::transport::{endpoint_url, usage_endpoint_urls};
 
 #[test]
 fn endpoints_should_join_origin_and_backend_paths_without_double_slashes() {
     assert_eq!(
-        (
-            endpoint_url("https://api.example.com/", "/codex/responses"),
-            endpoint_request_path("https://api.example.com/backend-api", "/codex/usage"),
-        ),
-        (
-            "https://api.example.com/codex/responses".to_owned(),
-            "/backend-api/codex/usage".to_owned(),
-        )
+        endpoint_url("https://api.example.com/", "/codex/responses"),
+        "https://api.example.com/codex/responses"
     );
 }
 

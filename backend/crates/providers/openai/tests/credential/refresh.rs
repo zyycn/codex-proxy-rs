@@ -13,7 +13,7 @@ use provider_openai::credential::token_client::{RefreshFailure, TokenPair, Token
 use provider_openai::credential::{
     CodexAccountIdentityVerifier, CodexCredentialRefreshOutcome, CodexCredentialRefreshService,
     CodexIdentityExpectation, CodexIdentityVerification, CodexIdentityVerificationError,
-    CodexOAuthSecret, CodexSignedIdentity, CreateCodexCredential, RotateCodexCredential,
+    CodexOAuthSecret, CodexSignedIdentity, ImportCodexOAuthCredential, RotateCodexCredential,
 };
 use secrecy::{ExposeSecret, SecretString};
 
@@ -225,18 +225,16 @@ async fn setup(
 ) {
     let store = Arc::new(MemoryAccountStore::default());
     store
-        .repository()
-        .create_oauth_credential(CreateCodexCredential {
+        .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: "acct_refresh".to_owned(),
             provider_instance_id: instance_id().to_string(),
             name: "refresh".to_owned(),
             secret: secret("old-access"),
-            account: profile("chatgpt-acct_refresh"),
+            verified_account: profile("chatgpt-acct_refresh"),
             next_refresh_at: Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
             enabled: true,
         })
-        .await
-        .expect("create account");
+        .await;
     let refresher = Arc::new(Refresher::new(outcome));
     let service = CodexCredentialRefreshService::new(
         store.repository(),
@@ -361,18 +359,16 @@ async fn unavailable_usage_preserves_rotated_tokens_and_persists_backoff() {
     account_profile.poid = signed.poid().map(str::to_owned);
     account_profile.chatgpt_user_id = "user-signed".to_owned();
     store
-        .repository()
-        .create_oauth_credential(CreateCodexCredential {
+        .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: "acct_signed_only".to_owned(),
             provider_instance_id: instance_id().to_string(),
             name: "signed only".to_owned(),
             secret: secret("old-access"),
-            account: account_profile,
+            verified_account: account_profile,
             next_refresh_at: Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
             enabled: true,
         })
-        .await
-        .expect("create account");
+        .await;
     let service = CodexCredentialRefreshService::new(
         store.repository(),
         Arc::new(Refresher::new(Ok(success_tokens()))),
@@ -537,18 +533,16 @@ async fn malformed_account_refresh_does_not_stop_later_accounts() {
     let store = Arc::new(MemoryAccountStore::default());
     for account_id in ["acct_bad", "acct_good"] {
         store
-            .repository()
-            .create_oauth_credential(CreateCodexCredential {
+            .seed_oauth_credential(ImportCodexOAuthCredential {
                 account_id: account_id.to_owned(),
                 provider_instance_id: instance_id().to_string(),
                 name: account_id.to_owned(),
                 secret: secret(account_id),
-                account: profile(&format!("chatgpt-{account_id}")),
+                verified_account: profile(&format!("chatgpt-{account_id}")),
                 next_refresh_at: Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
                 enabled: true,
             })
-            .await
-            .expect("create account");
+            .await;
     }
     let refresher = Arc::new(Refresher::scripted([
         Ok(TokenPair {

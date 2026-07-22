@@ -22,16 +22,6 @@ pub const MAX_SSE_EVENT_BUFFER_BYTES: usize = 64 * 1024 * 1024;
 /// SSE 流结束标记帧。
 pub const DONE_SSE_FRAME: &str = "data: [DONE]\n\n";
 
-/// 判断一个完整 SSE frame 是否为传输层 `[DONE]` 控制帧。
-pub fn sse_frame_is_done(frame: &str) -> bool {
-    let mut data = frame.lines().filter_map(|raw_line| {
-        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
-        let (field, value) = split_sse_field(line);
-        (field == "data").then_some(value)
-    });
-    matches!((data.next(), data.next()), (Some("[DONE]"), None))
-}
-
 /// 用于处理任意分块边界的增量 SSE 解码器。
 #[derive(Debug, Default)]
 pub struct SseEventDecoder {
@@ -119,12 +109,6 @@ pub fn response_failed_sse_data_with_id(
         },
         "error": error,
     })
-}
-
-/// 判断 SSE 文本是否已经包含结束标记。
-pub fn sse_body_has_done(body: &str) -> bool {
-    body.trim_end_matches(['\r', '\n'])
-        .ends_with(DONE_SSE_FRAME.trim_end_matches(['\r', '\n']))
 }
 
 /// 返回下一个完整 SSE 帧结束位置（含分隔符）。

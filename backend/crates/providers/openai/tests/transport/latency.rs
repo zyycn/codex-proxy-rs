@@ -9,7 +9,7 @@ use provider_openai::transport::{
 use super::*;
 
 fn new_chain_request(conversation_id: &str) -> CodexResponsesRequest {
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let mut request = codex_request("gpt-5.5", "be brief", Vec::new());
     request.use_websocket = true;
     request.local_conversation_id = Some(conversation_id.to_string());
     request
@@ -955,7 +955,6 @@ async fn origin_breaker_should_open_then_allow_only_one_half_open_probe() {
     else {
         panic!("expired open state should allow one probe");
     };
-    assert!(probe.is_half_open_probe());
     assert!(matches!(
         breaker.try_acquire("https://example.test:443"),
         WebSocketOriginBreakerDecision::HalfOpenBusy
@@ -1026,7 +1025,10 @@ async fn cancelled_half_open_opening_should_allow_another_probe() {
     else {
         panic!("cancelled half-open probe should release its ownership");
     };
-    assert!(next_probe.is_half_open_probe());
+    assert!(matches!(
+        breaker.try_acquire(&origin_key),
+        WebSocketOriginBreakerDecision::HalfOpenBusy
+    ));
     next_probe.succeed();
     pool.shutdown().await;
 }

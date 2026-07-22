@@ -181,10 +181,6 @@ impl WebSocketOriginBreakerPermit {
         }
     }
 
-    pub fn is_half_open_probe(&self) -> bool {
-        self.probe_id.is_some()
-    }
-
     /// 创建可跨前台预算与后台 opening 生命周期共享的快路径观察器。
     pub(crate) fn fast_path_reporter(&self) -> WebSocketOriginFastPathReporter {
         WebSocketOriginFastPathReporter {

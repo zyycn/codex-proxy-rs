@@ -180,11 +180,6 @@ impl PreparedGrokCredentialRotation {
         self
     }
 
-    #[must_use]
-    pub const fn holds_refresh_lease(&self) -> bool {
-        self.refresh_guards.is_some()
-    }
-
     /// 将 command 与 lease 一起交给 App；返回的 guard 必须活到 CAS 提交结束。
     #[must_use]
     pub fn into_parts(
