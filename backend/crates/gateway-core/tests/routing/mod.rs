@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use gateway_core::engine::credential::{AccountSelectionPolicy, RotationStrategy};
 use gateway_core::operation::{
-    ContentPart, GenerateRequest, Message, MessageRole, Operation, OperationKind,
+    CapabilityRequirements, ContentPart, Feature, GenerateRequest, Message, MessageRole, Operation,
+    OperationKind,
 };
 use gateway_core::policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits};
 use gateway_core::routing::{
@@ -234,7 +235,7 @@ fn blocked_instance_should_be_filtered() {
 }
 
 #[test]
-fn known_unsupported_capability_should_not_be_bypassed() {
+fn known_unsupported_operation_should_not_be_bypassed() {
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
         scheduling(),
@@ -259,6 +260,35 @@ fn known_unsupported_capability_should_not_be_bypassed() {
                 },
             )
             .is_err()
+    );
+}
+
+#[test]
+fn upstream_feature_validation_should_preserve_operation_and_limit_gates() {
+    let capabilities = ModelCapabilities::new(
+        BTreeSet::from([OperationKind::Generate]),
+        128_000,
+        Some(16_000),
+    )
+    .with_feature(
+        Feature::Tools,
+        gateway_core::routing::SupportLevel::Unsupported,
+    )
+    .with_upstream_feature_validation();
+    let wire_features = CapabilityRequirements::new(OperationKind::Generate)
+        .require(Feature::Tools)
+        .require(Feature::JsonSchema);
+    let oversized =
+        CapabilityRequirements::new(OperationKind::Generate).with_minimum_context_tokens(128_001);
+    let unsupported_operation = CapabilityRequirements::new(OperationKind::CompactConversation);
+
+    assert_eq!(
+        (
+            capabilities.match_requirements(&wire_features),
+            capabilities.match_requirements(&oversized),
+            capabilities.match_requirements(&unsupported_operation),
+        ),
+        (Some(BTreeSet::new()), None, None)
     );
 }
 

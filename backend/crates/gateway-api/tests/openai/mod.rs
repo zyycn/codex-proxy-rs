@@ -58,8 +58,15 @@ pub(super) async fn api_router(execution: Arc<dyn ExecutionService>) -> axum::Ro
 }
 
 pub(super) fn authenticated_client(plaintext: &str) -> AuthenticatedClient {
+    authenticated_client_for_provider(plaintext, "openai")
+}
+
+pub(super) fn authenticated_client_for_provider(
+    plaintext: &str,
+    provider_name: &str,
+) -> AuthenticatedClient {
     let source = DefaultExecutionService::new(
-        RuntimeSnapshotHandle::new(snapshot(plaintext)),
+        RuntimeSnapshotHandle::new(snapshot(plaintext, provider_name)),
         Arc::new(UnusedExecutionStore),
         ProviderRegistry::default(),
         Arc::new(UnusedAdmissions),
@@ -71,9 +78,10 @@ pub(super) fn authenticated_client(plaintext: &str) -> AuthenticatedClient {
         .expect("authenticated client")
 }
 
-fn snapshot(plaintext: &str) -> RuntimeSnapshot {
-    let provider = ProviderKind::new("openai").expect("provider");
-    let instance_id = ProviderInstanceId::new("inst_openai_api_test").expect("instance");
+fn snapshot(plaintext: &str, provider_name: &str) -> RuntimeSnapshot {
+    let provider = ProviderKind::new(provider_name).expect("provider");
+    let instance_id =
+        ProviderInstanceId::new(format!("inst_{provider_name}_api_test")).expect("instance");
     let capabilities = ModelCapabilities::new(
         BTreeSet::from([gateway_core::operation::OperationKind::Generate]),
         128_000,

@@ -21,13 +21,11 @@ use gateway_core::event::{
     GatewayEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseObservation,
     ProviderResponseTimings, UpstreamHttpVersion,
 };
-use gateway_core::operation::{
-    Feature, GenerateRequest, Operation, OperationKind, ProviderSessionState,
-};
+use gateway_core::operation::{GenerateRequest, Operation, OperationKind, ProviderSessionState};
 use gateway_core::provider_ports::ProviderInstanceCatalogPort;
 use gateway_core::routing::{
     InstanceHealth, ModelCapabilities, ProviderInstance, ProviderInstanceId, ProviderKind,
-    SupportLevel, UpstreamModelId,
+    UpstreamModelId,
 };
 use gateway_core::task::{
     DaemonRestartPolicy, DaemonTask, ScheduledTask, WorkerContribution, WorkerCycleContext,
@@ -1032,24 +1030,9 @@ fn compile_model_capabilities(model: &CodexCatalogModel) -> ProviderModelCapabil
         .context_window_tokens()
         .or_else(|| model.limits().max_context_window_tokens())
         .map_or(0, std::num::NonZeroU64::get);
-    let mut capabilities = ModelCapabilities::new(operations, context_window, None);
-    capabilities = capabilities.with_feature(
-        Feature::NativeContinuation,
-        support(evidence.responses_api()),
-    );
-    capabilities = capabilities.with_feature(Feature::Reasoning, support(evidence.reasoning()));
-    capabilities =
-        capabilities.with_feature(Feature::Tools, support(evidence.parallel_tool_calls()));
-    capabilities = capabilities.with_feature(Feature::Vision, support(evidence.image_input()));
+    let capabilities =
+        ModelCapabilities::new(operations, context_window, None).with_upstream_feature_validation();
     ProviderModelCapabilities::new(model.request_model().clone(), capabilities)
-}
-
-const fn support(evidence: CodexCatalogCapabilityEvidence) -> SupportLevel {
-    match evidence {
-        CodexCatalogCapabilityEvidence::DeclaredNative => SupportLevel::Native,
-        CodexCatalogCapabilityEvidence::DeclaredUnsupported => SupportLevel::Unsupported,
-        CodexCatalogCapabilityEvidence::Unknown => SupportLevel::Unknown,
-    }
 }
 
 fn selected_transport(

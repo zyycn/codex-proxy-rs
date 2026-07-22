@@ -142,6 +142,7 @@ pub struct ModelCapabilities {
     features: BTreeMap<Feature, SupportLevel>,
     context_window_tokens: u64,
     max_output_tokens: Option<u64>,
+    upstream_validates_features: bool,
 }
 
 impl ModelCapabilities {
@@ -156,12 +157,20 @@ impl ModelCapabilities {
             features: BTreeMap::new(),
             context_window_tokens,
             max_output_tokens,
+            upstream_validates_features: false,
         }
     }
 
     #[must_use]
     pub fn with_feature(mut self, feature: Feature, support: SupportLevel) -> Self {
         self.features.insert(feature, support);
+        self
+    }
+
+    /// 将请求形态 feature 的最终合法性判断交给上游 wire API。
+    #[must_use]
+    pub const fn with_upstream_feature_validation(mut self) -> Self {
+        self.upstream_validates_features = true;
         self
     }
 
@@ -180,6 +189,10 @@ impl ModelCapabilities {
                 })
         {
             return None;
+        }
+
+        if self.upstream_validates_features {
+            return Some(BTreeSet::new());
         }
 
         let mut emulated = BTreeSet::new();

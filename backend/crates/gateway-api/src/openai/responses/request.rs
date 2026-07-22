@@ -9,6 +9,7 @@ use gateway_core::operation::{
     ProviderOptions, ProviderSessionState, ReasoningEffort, ReasoningRequirement, ReasoningSummary,
     ResponsePersistence, ToolDefinition,
 };
+use gateway_core::routing::ProviderKind;
 use gateway_protocol::openai::{
     X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER, X_OPENAI_MEMGEN_REQUEST_HEADER,
 };
@@ -20,6 +21,7 @@ use super::error::RequestDecodeError;
 pub const PROVIDER_OPTIONS_VERSION: &str = "v1";
 
 const OPENAI_PROTOCOL: &str = "openai";
+const XAI_PROVIDER: &str = "xai";
 const OPENAI_TRANSPORT_OPTION: &str = "transport";
 const HTTP_SSE_TRANSPORT: &str = "http_sse";
 const WEBSOCKET_TRANSPORT: &str = "websocket";
@@ -311,29 +313,42 @@ impl fmt::Debug for DecodedResponsesRequest {
 ///
 /// JSON 非法、顶层不是 object，或网关必须解释的路由字段无效时返回安全错误。
 pub fn decode_request(body: &[u8]) -> Result<DecodedResponsesRequest, RequestDecodeError> {
-    decode_request_inner(body, false, &OpenAiRequestHeaders::default())
+    decode_request_inner(body, false, &OpenAiRequestHeaders::default(), None)
 }
 
 /// 使用下游 OpenAI/Codex 请求头解码 `POST /v1/responses`。
 pub(super) fn decode_request_with_headers(
     body: &[u8],
     headers: &HeaderMap,
+    provider_kind: &ProviderKind,
 ) -> Result<DecodedResponsesRequest, RequestDecodeError> {
-    decode_request_inner(body, false, &OpenAiRequestHeaders::from_headers(headers))
+    decode_request_inner(
+        body,
+        false,
+        &OpenAiRequestHeaders::from_headers(headers),
+        Some(provider_kind),
+    )
 }
 
 /// 解码 `POST /v1/responses/review` 请求并冻结 review subagent 语义。
 pub(super) fn decode_review_request_with_headers(
     body: &[u8],
     headers: &HeaderMap,
+    provider_kind: &ProviderKind,
 ) -> Result<DecodedResponsesRequest, RequestDecodeError> {
-    decode_request_inner(body, true, &OpenAiRequestHeaders::from_headers(headers))
+    decode_request_inner(
+        body,
+        true,
+        &OpenAiRequestHeaders::from_headers(headers),
+        Some(provider_kind),
+    )
 }
 
 pub(super) fn decode_request_inner(
     body: &[u8],
     review: bool,
     request_headers: &OpenAiRequestHeaders,
+    provider_kind: Option<&ProviderKind>,
 ) -> Result<DecodedResponsesRequest, RequestDecodeError> {
     let input_token_estimate =
         u64::try_from(body.len()).map_err(|_| RequestDecodeError::InvalidValue {
@@ -358,7 +373,9 @@ pub(super) fn decode_request_inner(
             field: "input".to_owned(),
         });
     }
-    let compact_conversation = consume_compaction_trigger(&mut object);
+    let compact_conversation = provider_kind
+        .is_some_and(|provider| provider.as_str() == XAI_PROVIDER)
+        && consume_compaction_trigger(&mut object);
 
     let stream = optional_bool(&object, "stream", "stream")?.unwrap_or(true);
     let store = optional_bool(&object, "store", "store")?.unwrap_or(false);

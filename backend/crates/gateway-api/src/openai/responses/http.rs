@@ -69,9 +69,9 @@ async fn handle_responses(
         Err(error) => return authentication_error_response(error),
     };
     let decoded = match if review {
-        decode_review_request_with_headers(&body, &headers)
+        decode_review_request_with_headers(&body, &headers, client.policy().provider_kind())
     } else {
-        decode_request_with_headers(&body, &headers)
+        decode_request_with_headers(&body, &headers, client.policy().provider_kind())
     } {
         Ok(decoded) => decoded,
         Err(error) => {
