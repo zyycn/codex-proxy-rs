@@ -12,7 +12,10 @@ fn encoder_should_preserve_openai_wire_fields_without_deriving_accountless_pool_
         ("model".to_owned(), json!("client-model")),
         (
             "input".to_owned(),
-            json!([{"role":"user","content":"private stable prompt"}]),
+            json!([
+                {"role":"user","content":"private stable prompt"},
+                {"type":"compaction_trigger"}
+            ]),
         ),
         ("include".to_owned(), json!(["reasoning.encrypted_content"])),
         ("tool_choice".to_owned(), json!("auto")),
@@ -42,6 +45,10 @@ fn encoder_should_preserve_openai_wire_fields_without_deriving_accountless_pool_
     );
     assert!(encoded.local_conversation_id.is_none());
     assert!(!format!("{encoded:?}").contains("private stable prompt"));
+    assert_eq!(
+        Value::Object(encoded.body().clone()).pointer("/input/1/type"),
+        Some(&json!("compaction_trigger"))
+    );
 }
 
 #[test]

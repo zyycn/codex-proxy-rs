@@ -19,7 +19,7 @@ use gateway_core::engine::{
 use gateway_core::error::{ProviderError, ProviderErrorKind, SafeUpstreamValue};
 use gateway_core::event::{GatewayEvent, UpstreamHttpVersion};
 use gateway_core::operation::{
-    CompactConversationRequest, ContentPart, ContinuationMode, GenerateRequest, Message,
+    CompactConversationRequest, ContentPart, ContinuationMode, Feature, GenerateRequest, Message,
     MessageRole, Operation, OperationKind, ProtocolPayload, ProviderOptions,
 };
 use gateway_core::routing::{
@@ -2510,7 +2510,7 @@ async fn permission_denied_failure_keeps_every_account_ready() {
 }
 
 #[tokio::test]
-async fn capability_query_compiles_only_explicit_catalog_evidence() {
+async fn capability_query_keeps_model_gates_while_delegating_wire_features() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/backend-api/codex/models"))
@@ -2559,6 +2559,26 @@ async fn capability_query_compiles_only_explicit_catalog_evidence() {
             .capabilities()
             .match_requirements(&continuation.capability_requirements())
             .is_some()
+    );
+    let wire_features =
+        gateway_core::operation::CapabilityRequirements::new(OperationKind::Generate)
+            .require(Feature::Tools)
+            .require(Feature::Vision)
+            .require(Feature::Reasoning)
+            .require(Feature::JsonSchema);
+    assert!(
+        capabilities[0]
+            .capabilities()
+            .match_requirements(&wire_features)
+            .is_some()
+    );
+    let oversized = gateway_core::operation::CapabilityRequirements::new(OperationKind::Generate)
+        .with_minimum_context_tokens(128_001);
+    assert!(
+        capabilities[0]
+            .capabilities()
+            .match_requirements(&oversized)
+            .is_none()
     );
     let compact = Operation::CompactConversation(CompactConversationRequest::new(
         GenerateRequest::new(vec![

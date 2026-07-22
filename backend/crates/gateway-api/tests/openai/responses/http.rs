@@ -23,14 +23,14 @@ use gateway_core::event::{
     ContentItem, ContentKind, GatewayEvent, ProtocolWireEvent, ProviderEvent,
     ProviderResponseHeader, ResponseMeta, TextDelta,
 };
-use gateway_core::operation::Operation;
+use gateway_core::operation::{Operation, OperationKind};
 use gateway_core::routing::PublicModelId;
 use serde_json::{Value, json};
 
 use gateway_api::openai::responses::{collect_execution_response, stream_execution_response};
 use tower::ServiceExt;
 
-use crate::openai::{api_router, authenticated_client};
+use crate::openai::{api_router, authenticated_client, authenticated_client_for_provider};
 
 #[derive(Default)]
 struct Trace {
@@ -102,6 +102,8 @@ struct CapturedClientContext {
     client_ip: Option<IpAddr>,
     user_agent: Option<String>,
     endpoint: String,
+    operation_kind: OperationKind,
+    input: Option<Value>,
     client_metadata: Option<Value>,
     openai_options: Option<Value>,
     xai_options: Option<Value>,
@@ -133,31 +135,42 @@ impl ExecutionService for ContextCaptureExecution {
         request: StartExecution,
     ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
         Box::pin(async move {
-            let (client_metadata, openai_options, xai_options, prompt_cache_key) =
-                match &request.operation {
-                    Operation::Generate(generate) => (
-                        generate
+            let operation_kind = request.operation.kind();
+            let generation = match &request.operation {
+                Operation::Generate(generation) => Some(generation),
+                Operation::CompactConversation(compaction) => Some(compaction.generation()),
+                _ => None,
+            };
+            let (client_metadata, openai_options, xai_options, prompt_cache_key, input) =
+                generation.map_or((None, None, None, None, None), |generation| {
+                    (
+                        generation
                             .protocol_payload()
                             .and_then(|payload| payload.body().get("client_metadata"))
                             .cloned(),
-                        generate
+                        generation
                             .provider_options()
                             .get("openai")
                             .cloned()
                             .map(Value::Object),
-                        generate
+                        generation
                             .provider_options()
                             .get("xai")
                             .cloned()
                             .map(Value::Object),
-                        generate.prompt_cache_key().map(ToOwned::to_owned),
-                    ),
-                    _ => (None, None, None, None),
-                };
+                        generation.prompt_cache_key().map(ToOwned::to_owned),
+                        generation
+                            .protocol_payload()
+                            .and_then(|payload| payload.body().get("input"))
+                            .cloned(),
+                    )
+                });
             *self.observed.lock().expect("context capture lock") = Some(CapturedClientContext {
                 client_ip: request.metadata.client_ip,
                 user_agent: request.metadata.user_agent,
                 endpoint: request.metadata.endpoint,
+                operation_kind,
+                input,
                 client_metadata,
                 openai_options,
                 xai_options,
@@ -337,8 +350,23 @@ fn delivery(event: GatewayEvent, commit_requirement: CommitRequirement) -> Coord
 }
 
 async fn captured_client_context(
-    mut headers: HeaderMap,
+    headers: HeaderMap,
     peer_address: SocketAddr,
+) -> CapturedClientContext {
+    captured_http_request(
+        "openai",
+        json!({"model": "smart-code", "input": "hello"}),
+        headers,
+        Some(peer_address),
+    )
+    .await
+}
+
+async fn captured_http_request(
+    provider_name: &str,
+    body: Value,
+    mut headers: HeaderMap,
+    peer_address: Option<SocketAddr>,
 ) -> CapturedClientContext {
     headers.insert(
         AUTHORIZATION,
@@ -347,13 +375,15 @@ async fn captured_client_context(
     let observed = Arc::new(Mutex::new(None));
     let execution = Arc::new(ContextCaptureExecution {
         observed: Arc::clone(&observed),
-        client: authenticated_client("sk_context_test"),
+        client: authenticated_client_for_provider("sk_context_test", provider_name),
     });
     let mut request = Request::post("/v1/responses")
-        .body(Body::from(r#"{"model":"smart-code","input":"hello"}"#))
+        .body(Body::from(body.to_string()))
         .expect("context request");
     *request.headers_mut() = headers;
-    request.extensions_mut().insert(ConnectInfo(peer_address));
+    if let Some(peer_address) = peer_address {
+        request.extensions_mut().insert(ConnectInfo(peer_address));
+    }
     let response = api_router(execution)
         .await
         .oneshot(request)
@@ -365,6 +395,54 @@ async fn captured_client_context(
         .expect("context capture lock")
         .clone()
         .expect("captured request context")
+}
+
+async fn captured_http_compaction(provider_name: &str) -> CapturedClientContext {
+    captured_http_request(
+        provider_name,
+        json!({
+            "model": "smart-code",
+            "input": [
+                {"type": "message", "role": "user", "content": "history"},
+                {"type": "compaction_trigger"}
+            ],
+            "stream": true
+        }),
+        HeaderMap::new(),
+        None,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn openai_http_should_preserve_compaction_trigger_as_generate() {
+    let captured = captured_http_compaction("openai").await;
+
+    assert_eq!(
+        (captured.operation_kind, captured.input),
+        (
+            OperationKind::Generate,
+            Some(json!([
+                {"type": "message", "role": "user", "content": "history"},
+                {"type": "compaction_trigger"}
+            ])),
+        )
+    );
+}
+
+#[tokio::test]
+async fn xai_http_should_consume_compaction_trigger_as_typed_operation() {
+    let captured = captured_http_compaction("xai").await;
+
+    assert_eq!(
+        (captured.operation_kind, captured.input),
+        (
+            OperationKind::CompactConversation,
+            Some(json!([
+                {"type": "message", "role": "user", "content": "history"}
+            ])),
+        )
+    );
 }
 
 #[tokio::test]
@@ -385,6 +463,8 @@ async fn request_context_should_resolve_forwarded_precedence_and_peer_fallback()
             client_ip: Some("198.51.100.1".parse().expect("expected IP")),
             user_agent: Some("Codex-CLI/1.0".to_owned()),
             endpoint: "/v1/responses".to_owned(),
+            operation_kind: OperationKind::Generate,
+            input: Some(json!("hello")),
             client_metadata: None,
             openai_options: None,
             xai_options: None,
