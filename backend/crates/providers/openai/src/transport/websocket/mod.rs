@@ -21,9 +21,8 @@ pub use self::{
     },
     error::{CodexWebSocketExchangeError, CodexWebSocketUpstreamError},
     exchange::{
-        CodexWebSocketExchange, CodexWebSocketRateLimitHeaderUpdates, CodexWebSocketSseStream,
+        CodexWebSocketRateLimitHeaderUpdates, CodexWebSocketSseStream,
         CodexWebSocketStreamingExchange, CodexWebSocketTurnStateUpdate,
-        execute_response_create_request,
     },
     handshake::responses_websocket_endpoint,
     model::{
@@ -37,7 +36,7 @@ pub use self::{
 };
 pub(crate) use self::{
     coordinator::{
-        PreparedWebSocket, WEBSOCKET_FAST_PATH_BUDGET, execute_prepared_response_create_request,
+        PreparedWebSocket, WEBSOCKET_FAST_PATH_BUDGET,
         execute_prepared_response_create_request_stream, post_send_ambiguous,
         prepare_response_create_request_with_pool,
     },

@@ -1,10 +1,15 @@
 //! Worker leader lease 通过 StoreBundle 的中立能力进行集成验证。
 
 use std::collections::BTreeSet;
+use std::str::FromStr;
 use std::time::Duration;
 
 use gateway_core::task::{WorkerId, WorkerKind, WorkerLeaseAcquisition, WorkerLeaseRequest};
 use gateway_store::{StoreConfig, initialize};
+use sqlx::{
+    ConnectOptions as _, PgPool,
+    postgres::{PgConnectOptions, PgPoolOptions},
+};
 use uuid::Uuid;
 
 #[tokio::test]
@@ -15,7 +20,8 @@ async fn store_bundle_worker_plan_and_leader_lease_are_single_use_and_fenced() {
     ) else {
         return;
     };
-    let config = store_config(&database_url, &redis_url);
+    let database = TestDatabase::create(&database_url).await;
+    let config = store_config(&database.url, &redis_url);
     let mut first = initialize(config.clone())
         .await
         .expect("first Store bundle");
@@ -29,7 +35,6 @@ async fn store_bundle_worker_plan_and_leader_lease_are_single_use_and_fenced() {
     assert_eq!(
         kinds,
         BTreeSet::from([
-            WorkerKind::NativeClaimRecovery,
             WorkerKind::StaleModelRequestRecovery,
             WorkerKind::Retention,
             WorkerKind::OpsFlush,
@@ -75,6 +80,48 @@ async fn store_bundle_worker_plan_and_leader_lease_are_single_use_and_fenced() {
     };
     assert!(second_guard.fencing_token() > first_token);
     second_guard.release().await.expect("second lease release");
+
+    drop(first);
+    drop(second);
+    database.close().await;
+}
+
+struct TestDatabase {
+    admin: PgPool,
+    name: String,
+    url: String,
+}
+
+impl TestDatabase {
+    async fn create(database_url: &str) -> Self {
+        let name = format!("cpr_store_worker_{}", Uuid::new_v4().simple());
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(database_url)
+            .await
+            .expect("connect test PostgreSQL");
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("create database \"{name}\"")))
+            .execute(&admin)
+            .await
+            .expect("create worker test database");
+        let url = PgConnectOptions::from_str(database_url)
+            .expect("parse test PostgreSQL URL")
+            .database(&name)
+            .to_url_lossy()
+            .to_string();
+        Self { admin, name, url }
+    }
+
+    async fn close(self) {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "drop database \"{}\" with (force)",
+            self.name
+        )))
+        .execute(&self.admin)
+        .await
+        .expect("drop worker test database");
+        self.admin.close().await;
+    }
 }
 
 fn store_config(database_url: &str, redis_url: &str) -> StoreConfig {

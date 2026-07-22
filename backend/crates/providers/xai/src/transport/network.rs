@@ -177,14 +177,14 @@ impl GrokEndpointPolicy for OfficialGrokEndpointPolicy {
         &self,
         timeout: Option<Duration>,
     ) -> Result<Client, GrokReqwestTransportBuildError> {
-        build_official_client(OFFICIAL_OAUTH_HOST, timeout)
+        build_official_client(GrokDnsResolutionPolicy::official_oauth(), timeout)
     }
 
     fn build_inference_client(
         &self,
         timeout: Option<Duration>,
     ) -> Result<Client, GrokReqwestTransportBuildError> {
-        build_official_client(OFFICIAL_INFERENCE_HOST, timeout)
+        build_official_client(GrokDnsResolutionPolicy::official_inference(), timeout)
     }
 
     fn validate_oauth(&self, url: &Url) -> bool {
@@ -579,7 +579,7 @@ impl GrokBillingTransport for ReqwestGrokModelCatalogTransport {
 }
 
 fn build_official_client(
-    host: &'static str,
+    dns_policy: GrokDnsResolutionPolicy,
     timeout: Option<Duration>,
 ) -> Result<Client, GrokReqwestTransportBuildError> {
     let mut builder = Client::builder()
@@ -591,7 +591,7 @@ fn build_official_client(
         .http2_adaptive_window(true)
         .tcp_nodelay(true)
         .https_only(true)
-        .dns_resolver(Arc::new(StrictDnsResolver::new(host)?));
+        .dns_resolver(Arc::new(StrictDnsResolver::new(dns_policy)?));
     if let Some(timeout) = timeout {
         builder = builder.timeout(timeout);
     }
@@ -633,9 +633,9 @@ struct StrictDnsResolver {
 }
 
 impl StrictDnsResolver {
-    fn new(allowed_host: &'static str) -> Result<Self, GrokReqwestTransportBuildError> {
+    fn new(policy: GrokDnsResolutionPolicy) -> Result<Self, GrokReqwestTransportBuildError> {
         Ok(Self {
-            policy: GrokDnsResolutionPolicy { allowed_host },
+            policy,
             trusted_doh: TrustedDohResolver::new()?,
         })
     }

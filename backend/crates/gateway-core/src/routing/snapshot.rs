@@ -529,11 +529,6 @@ impl RuntimeSnapshot {
         self.client_policies.values()
     }
 
-    #[must_use]
-    pub fn client_policy(&self, key_id: &ClientApiKeyId) -> Option<&ClientPolicy> {
-        self.client_policies.get(key_id)
-    }
-
     pub fn plan(
         &self,
         public_model: &PublicModelId,

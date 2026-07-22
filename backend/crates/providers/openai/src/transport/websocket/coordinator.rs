@@ -11,9 +11,7 @@ use super::{
     },
     error::CodexWebSocketExchangeError,
     exchange::{
-        CodexWebSocketExchange, CodexWebSocketStreamingExchange, CollectedWebSocket,
-        WebSocketStreamPoolReturn, WebSocketTerminalKind, collect_websocket_response,
-        reusable_websocket_metadata, stream_websocket_response,
+        CodexWebSocketStreamingExchange, WebSocketStreamPoolReturn, stream_websocket_response,
     },
     handshake::{connect_pumped_websocket, send_websocket_request, websocket_connection_metadata},
     model::{
@@ -489,76 +487,6 @@ fn continuation_unavailable(
     reason: PreviousResponseUnavailableReason,
 ) -> CodexWebSocketExchangeError {
     CodexWebSocketExchangeError::ContinuationUnavailable { reason }
-}
-
-/// 发送 payload 后只等待该次 exchange；此边界之后不允许 transport fallback。
-pub(crate) async fn execute_prepared_response_create_request(
-    request: &CodexWebSocketRequest,
-    prepared: PreparedWebSocket,
-    started_at: Instant,
-) -> Result<CodexWebSocketExchange, CodexWebSocketExchangeError> {
-    let PreparedWebSocket {
-        connection,
-        binding,
-        initial_event_timeout,
-        ..
-    } = prepared;
-    let (lease, reused, pool_decision) = binding.into_parts();
-    let PooledWebSocketConnection {
-        websocket,
-        metadata,
-        continuation,
-        created_at,
-    } = connection;
-    if let Err(error) = send_websocket_request(&websocket, request.payload_text()).await {
-        discard_after_send(websocket, lease).await;
-        return Err(post_send_ambiguous(error));
-    }
-    let connection_local_available = lease.is_some();
-    let collected = collect_websocket_response(
-        websocket,
-        metadata,
-        continuation,
-        reused,
-        started_at,
-        initial_event_timeout,
-    )
-    .await;
-    let CollectedWebSocket {
-        mut exchange,
-        websocket,
-        metadata,
-        continuation,
-        terminal,
-    } = match collected {
-        Ok(collected) => collected,
-        Err(error) => {
-            if let Some(lease) = lease {
-                lease.discard().await;
-            }
-            return Err(post_send_ambiguous(error));
-        }
-    };
-    exchange.pool_decision = pool_decision;
-    exchange.connection_local_continuation = connection_local_available;
-    match (terminal, lease) {
-        (WebSocketTerminalKind::Completed, Some(lease)) => {
-            lease
-                .put(PooledWebSocketConnection {
-                    websocket,
-                    metadata: reusable_websocket_metadata(metadata),
-                    continuation,
-                    created_at,
-                })
-                .await;
-        }
-        (_, Some(lease)) => {
-            lease.discard().await;
-            websocket.close().await;
-        }
-        (_, None) => websocket.close().await,
-    }
-    Ok(exchange)
 }
 
 pub(crate) async fn execute_prepared_response_create_request_stream(

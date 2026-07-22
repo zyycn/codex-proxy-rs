@@ -1,13 +1,9 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{sync::Arc, time::Instant};
 
 use futures::{StreamExt, TryStreamExt};
 use gateway_protocol::openai::{
     X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER, X_OPENAI_MEMGEN_REQUEST_HEADER,
-    events::{extract_sse_usage, retry_after_seconds_from_body},
-    sse::SseEventDecoder,
+    events::retry_after_seconds_from_body,
 };
 use reqwest::{
     Client, Response as ReqwestResponse,
@@ -34,9 +30,9 @@ use crate::transport::{
     websocket::{
         CodexWebSocketConnection, CodexWebSocketPool, CodexWebSocketPoolKey,
         DEFAULT_INITIAL_EVENT_TIMEOUT, WEBSOCKET_FAST_PATH_BUDGET, WebSocketOriginBreaker,
-        WebSocketPoolDecision, execute_prepared_response_create_request,
-        execute_prepared_response_create_request_stream, post_send_ambiguous,
-        prepare_response_create_request_with_pool, write_websocket_audit_artifact_from_env,
+        WebSocketPoolDecision, execute_prepared_response_create_request_stream,
+        post_send_ambiguous, prepare_response_create_request_with_pool,
+        write_websocket_audit_artifact_from_env,
     },
 };
 
@@ -56,25 +52,8 @@ impl CodexBackendClient {
             base_url,
             profile,
             websocket_pool: None,
-            websocket_initial_event_timeout: Some(DEFAULT_INITIAL_EVENT_TIMEOUT),
-            websocket_fast_path_budget: WEBSOCKET_FAST_PATH_BUDGET,
             websocket_origin_breaker: WebSocketOriginBreaker::default(),
         }
-    }
-
-    pub fn with_websocket_initial_event_timeout(mut self, timeout: Option<Duration>) -> Self {
-        self.websocket_initial_event_timeout = timeout.filter(|timeout| !timeout.is_zero());
-        self
-    }
-
-    pub fn with_websocket_fast_path_budget(mut self, budget: Duration) -> Self {
-        self.websocket_fast_path_budget = budget.max(Duration::from_millis(1));
-        self
-    }
-
-    pub fn with_websocket_origin_breaker(mut self, breaker: WebSocketOriginBreaker) -> Self {
-        self.websocket_origin_breaker = breaker;
-        self
     }
 
     /// 为 Responses WebSocket 请求启用连接池。
@@ -88,97 +67,6 @@ impl CodexBackendClient {
         if let Some(pool) = &self.websocket_pool {
             pool.evict_account(account_id).await;
         }
-    }
-
-    /// 发送 Responses SSE 请求并读取完整响应。
-    /// HTTP POST + SSE fallback (when WebSocket pool is disabled).
-    async fn create_response_http_sse(
-        &self,
-        upstream_request: &CodexResponsesRequest,
-        context: CodexRequestContext<'_>,
-        started_at: Instant,
-    ) -> CodexClientResult<CodexBackendResponse> {
-        let headers = self.request_headers_for_http_response(upstream_request, context)?;
-        let headers_started_at = Instant::now();
-        let response = self
-            .client
-            .post(endpoint_url(&self.base_url, CODEX_RESPONSES_PATH))
-            .headers(headers)
-            .json(&upstream_request)
-            .send()
-            .await?;
-        let upstream_headers_ms = elapsed_duration_millis(headers_started_at.elapsed());
-        let http_version = http_version_name(response.version()).to_string();
-        let status = response.status();
-        let diagnostics = response_meta::diagnostics(Some(status.as_u16()), response.headers());
-        let turn_state = response_meta::turn_state(response.headers());
-        let set_cookie_headers = response_meta::set_cookie_headers(response.headers());
-        let rate_limit_headers = response_meta::rate_limit_headers(response.headers());
-        let response_metadata = response_meta::response_metadata(response.headers());
-        let retry_after_seconds = retry_after_seconds(response.headers(), None);
-
-        if !status.is_success() {
-            let body = read_capped_error_body(response).await?;
-            return Err(CodexClientError::Upstream {
-                status,
-                retry_after_seconds: retry_after_seconds
-                    .or_else(|| retry_after_seconds_from_body(&body)),
-                body,
-                diagnostics: Box::new(diagnostics),
-                set_cookie_headers,
-                rate_limit_headers,
-                transport: CodexBackendTransport::HttpSse,
-                transport_metrics: Box::new(CodexTransportMetrics {
-                    upstream_headers_ms: Some(upstream_headers_ms),
-                    http_version: Some(http_version),
-                    ..CodexTransportMetrics::default()
-                }),
-                send_phase: CodexUpstreamSendPhase::AfterPayload,
-            });
-        }
-
-        let mut body_bytes = Vec::new();
-        let mut first_token_ms = None;
-        let mut first_reasoning_ms = None;
-        let mut first_text_ms = None;
-        let mut first_event_ms = None;
-        let mut output_decoder = SseEventDecoder::default();
-        let mut stream = http_sse_stream(response);
-        while let Some(chunk) = stream.try_next().await? {
-            first_event_ms.get_or_insert_with(|| elapsed_duration_millis(started_at.elapsed()));
-            body_bytes.extend_from_slice(&chunk);
-            response_meta::update_response_timing_ms(
-                started_at,
-                &mut output_decoder,
-                &chunk,
-                &mut first_token_ms,
-                &mut first_reasoning_ms,
-                &mut first_text_ms,
-            );
-        }
-        let body = String::from_utf8_lossy(&body_bytes).into_owned();
-        let usage = extract_sse_usage(&body).map_err(CodexClientError::InvalidSse)?;
-        Ok(CodexBackendResponse {
-            body,
-            transport: CodexBackendTransport::HttpSse,
-            usage,
-            turn_state,
-            set_cookie_headers,
-            rate_limit_headers,
-            first_token_ms,
-            first_reasoning_ms,
-            first_text_ms,
-            websocket_pool_decision: None,
-            diagnostics,
-            response_metadata,
-            transport_metrics: CodexTransportMetrics {
-                upstream_headers_ms: Some(upstream_headers_ms),
-                first_event_ms,
-                http_version: Some(http_version),
-                ..CodexTransportMetrics::default()
-            },
-            connection_local_continuation: false,
-        })
     }
 
     /// 发送 Responses SSE 请求并返回 live SSE 流（HTTP SSE fallback）。
@@ -246,49 +134,6 @@ impl CodexBackendClient {
         })
     }
 
-    pub async fn create_response(
-        &self,
-        request: &CodexResponsesRequest,
-        context: CodexRequestContext<'_>,
-    ) -> CodexClientResult<CodexBackendResponse> {
-        self.create_response_started_at(request, context, Instant::now())
-            .await
-    }
-
-    pub async fn create_response_started_at(
-        &self,
-        request: &CodexResponsesRequest,
-        context: CodexRequestContext<'_>,
-        started_at: Instant,
-    ) -> CodexClientResult<CodexBackendResponse> {
-        self.create_response_with_pool_account_started_at(request, context, None, started_at)
-            .await
-    }
-
-    pub async fn create_response_with_pool_account_started_at(
-        &self,
-        request: &CodexResponsesRequest,
-        context: CodexRequestContext<'_>,
-        pool_account_id: Option<&str>,
-        started_at: Instant,
-    ) -> CodexClientResult<CodexBackendResponse> {
-        let prepared = self
-            .prepare_response_transport_with_pool_account(request, context, pool_account_id)
-            .await?;
-        self.create_response_with_prepared(request, context, prepared, started_at)
-            .await
-    }
-
-    /// 发送 Responses SSE 请求并返回 live SSE 流。
-    pub async fn create_response_stream(
-        &self,
-        request: &CodexResponsesRequest,
-        context: CodexRequestContext<'_>,
-    ) -> CodexClientResult<CodexBackendStreamingResponse> {
-        self.create_response_stream_with_pool_account(request, context, None)
-            .await
-    }
-
     pub async fn create_response_stream_with_pool_account(
         &self,
         request: &CodexResponsesRequest,
@@ -347,7 +192,7 @@ impl CodexBackendClient {
         let fast_path_budget = match requirement {
             TransportRequirement::PersistedContinuation
             | TransportRequirement::ExternalUnknown
-            | TransportRequirement::NewChain => Some(self.websocket_fast_path_budget),
+            | TransportRequirement::NewChain => Some(WEBSOCKET_FAST_PATH_BUDGET),
             TransportRequirement::ExplicitWebSocketWarmup
             | TransportRequirement::ExactWebSocketContinuation => None,
             TransportRequirement::HttpRequired => None,
@@ -360,7 +205,7 @@ impl CodexBackendClient {
             &self.websocket_origin_key,
             fast_path_budget,
             requirement.requires_websocket(),
-            self.websocket_initial_event_timeout,
+            Some(DEFAULT_INITIAL_EVENT_TIMEOUT),
         )
         .await;
         let prepared = match prepared {
@@ -426,64 +271,6 @@ impl CodexBackendClient {
                 prepared,
             })),
             metrics,
-        })
-    }
-
-    #[doc(hidden)]
-    pub(crate) async fn create_response_with_prepared(
-        &self,
-        request: &CodexResponsesRequest,
-        context: CodexRequestContext<'_>,
-        prepared: PreparedResponseTransport,
-        started_at: Instant,
-    ) -> CodexClientResult<CodexBackendResponse> {
-        let PreparedResponseTransport {
-            requirement,
-            route,
-            metrics,
-        } = prepared;
-        let result = match route {
-            PreparedResponseRoute::Http => self
-                .create_response_http_sse(request, context, started_at)
-                .await
-                .map(|mut response| {
-                    merge_preparation_metrics(&mut response.transport_metrics, metrics);
-                    response
-                }),
-            PreparedResponseRoute::WebSocket(route) => {
-                let PreparedWebSocketRoute { request, prepared } = *route;
-                execute_prepared_response_create_request(&request, prepared, started_at)
-                    .await
-                    .map_err(websocket_exchange_error_to_client_error)
-                    .map(|exchange| CodexBackendResponse {
-                        body: exchange.body,
-                        transport: CodexBackendTransport::WebSocket,
-                        usage: exchange.usage,
-                        turn_state: exchange.turn_state,
-                        set_cookie_headers: exchange.set_cookie_headers,
-                        rate_limit_headers: exchange.rate_limit_headers,
-                        first_token_ms: exchange.first_token_ms,
-                        first_reasoning_ms: exchange.first_reasoning_ms,
-                        first_text_ms: exchange.first_text_ms,
-                        websocket_pool_decision: exchange.pool_decision,
-                        diagnostics: exchange.diagnostics,
-                        response_metadata: exchange.response_metadata,
-                        transport_metrics: CodexTransportMetrics {
-                            first_event_ms: exchange.first_event_ms,
-                            ..metrics
-                        },
-                        connection_local_continuation: exchange.connection_local_continuation,
-                    })
-            }
-        };
-        result.inspect_err(|error| {
-            tracing::warn!(
-                request_id = %context.request_id,
-                transport_requirement = requirement.as_str(),
-                failure_phase = "post_send_or_explicit_response",
-                error = %error,
-                "Responses transport failed after preparation; automatic fallback is disabled"
-            );
         })
     }
 

@@ -18,8 +18,7 @@ use provider_openai::credential::{
     CodexCredentialAdminError, CodexCredentialAdminService, CodexCredentialCodec,
     CodexIdentityExpectation, CodexIdentityVerification, CodexIdentityVerificationError,
     CodexJwtIdentityVerifier, ExportManagedCodexCredential, ImportCodexOAuthCredential,
-    ImportCodexOAuthCredentialBatch, ReqwestCodexAuthenticatedAccountSource,
-    ReqwestOpenAiJwksSource, RotateManagedCodexCredential,
+    ReqwestCodexAuthenticatedAccountSource, ReqwestOpenAiJwksSource, RotateManagedCodexCredential,
 };
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use secrecy::{ExposeSecret, SecretString};
@@ -60,31 +59,6 @@ fn prepare_import_returns_core_account_with_plaintext_json() {
             .and_then(serde_json::Value::as_str),
         Some("access-import")
     );
-}
-
-#[test]
-fn prepare_batch_rejects_duplicate_ids_before_store_mutation() {
-    let error = CodexCredentialAdmin
-        .prepare_import_batch(ImportCodexOAuthCredentialBatch {
-            items: vec![
-                import("acct_duplicate", "first"),
-                import("acct_duplicate", "second"),
-            ],
-        })
-        .expect_err("duplicate IDs must fail");
-    assert_eq!(error, CodexCredentialAdminError::InvalidInput);
-}
-
-#[test]
-fn prepare_batch_is_all_or_nothing_validation() {
-    let mut invalid = import("acct_invalid", "second");
-    invalid.provider_instance_id.clear();
-    let error = CodexCredentialAdmin
-        .prepare_import_batch(ImportCodexOAuthCredentialBatch {
-            items: vec![import("acct_valid", "first"), invalid],
-        })
-        .expect_err("invalid item must reject the whole prepared batch");
-    assert_eq!(error, CodexCredentialAdminError::InvalidInput);
 }
 
 #[test]

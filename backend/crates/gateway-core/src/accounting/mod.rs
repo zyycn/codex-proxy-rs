@@ -152,7 +152,7 @@ impl Money {
     }
 }
 
-/// `model_requests` 的六个公共 Token 事实。
+/// `model_requests` 的公共 Token 事实。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Usage {
     pub input_tokens: Option<u64>,
@@ -160,6 +160,8 @@ pub struct Usage {
     pub cached_tokens: Option<u64>,
     pub cache_write_tokens: Option<u64>,
     pub reasoning_tokens: Option<u64>,
+    pub image_input_tokens: Option<u64>,
+    pub image_output_tokens: Option<u64>,
     /// Provider/协议报告的独立事实，不从其他列相加推导。
     pub total_tokens: Option<u64>,
 }
@@ -173,6 +175,8 @@ impl Usage {
             cached_tokens: None,
             cache_write_tokens: None,
             reasoning_tokens: None,
+            image_input_tokens: None,
+            image_output_tokens: None,
             total_tokens: None,
         }
     }
@@ -193,6 +197,12 @@ impl Usage {
         }
         if newer.reasoning_tokens.is_some() {
             self.reasoning_tokens = newer.reasoning_tokens;
+        }
+        if newer.image_input_tokens.is_some() {
+            self.image_input_tokens = newer.image_input_tokens;
+        }
+        if newer.image_output_tokens.is_some() {
+            self.image_output_tokens = newer.image_output_tokens;
         }
         if newer.total_tokens.is_some() {
             self.total_tokens = newer.total_tokens;
@@ -223,7 +233,6 @@ impl CostSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CostEstimateStatus {
     Known,
-    Partial,
     Unknown,
 }
 
@@ -232,7 +241,6 @@ impl CostEstimateStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Known => "known",
-            Self::Partial => "partial",
             Self::Unknown => "unknown",
         }
     }
@@ -484,28 +492,6 @@ impl CostEstimate {
             source: CostSource::Unavailable,
             total: None,
         }
-    }
-
-    /// 创建有金额的 known/partial 结果。
-    ///
-    /// # Errors
-    ///
-    /// `Unavailable` 不能携带金额，`Unknown` 不能伪装成可信金额。
-    pub fn priced(
-        status: CostEstimateStatus,
-        source: CostSource,
-        total: Money,
-    ) -> Result<Self, AccountingError> {
-        if source == CostSource::Unavailable || status == CostEstimateStatus::Unknown {
-            return Err(AccountingError::InvalidCostEstimate {
-                status: status.as_str(),
-            });
-        }
-        Ok(Self {
-            status,
-            source,
-            total: Some(total),
-        })
     }
 
     #[must_use]

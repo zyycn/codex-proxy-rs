@@ -53,12 +53,6 @@ impl GrokHeaderValue {
             Self::Sensitive(value) => value.expose(),
         }
     }
-
-    /// Reports whether the value must be excluded from logs and diagnostics.
-    #[must_use]
-    pub const fn is_sensitive(&self) -> bool {
-        matches!(self, Self::Sensitive(_))
-    }
 }
 
 impl fmt::Debug for GrokHeaderValue {

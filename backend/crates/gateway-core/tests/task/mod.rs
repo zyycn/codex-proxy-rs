@@ -4,9 +4,9 @@ use std::time::Duration;
 use futures::future::BoxFuture;
 use gateway_core::engine::CancellationToken;
 use gateway_core::task::{
-    DaemonRestartPolicy, DaemonTask, ScheduledTask, WorkerContribution, WorkerCycleContext,
-    WorkerDefinitionError, WorkerDisabledReason, WorkerFencingToken, WorkerId, WorkerKind,
-    WorkerLeaseRequest, WorkerRegistration, WorkerRunnable, WorkerSchedule, WorkerTaskError,
+    DaemonRestartPolicy, DaemonTask, ScheduledTask, WorkerCycleContext, WorkerDefinitionError,
+    WorkerFencingToken, WorkerId, WorkerKind, WorkerLeaseRequest, WorkerRegistration,
+    WorkerRunnable, WorkerSchedule, WorkerTaskError,
 };
 
 struct NoopScheduledTask;
@@ -114,19 +114,6 @@ fn registration_rejects_lease_ttl_that_differs_from_schedule() {
         WorkerRegistration::try_new(id, runnable),
         Err(WorkerDefinitionError::LeaseTtlMismatch)
     ));
-}
-
-#[test]
-fn disabled_contribution_rejects_reason_for_another_kind() {
-    let contribution = WorkerContribution::Disabled {
-        kind: WorkerKind::OpsFlush,
-        reason: WorkerDisabledReason::NoPersistentNativeClaimState,
-    };
-
-    assert_eq!(
-        contribution.validate(),
-        Err(WorkerDefinitionError::DisabledReasonMismatch)
-    );
 }
 
 #[test]

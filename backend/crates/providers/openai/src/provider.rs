@@ -19,7 +19,7 @@ use gateway_core::error::{
 };
 use gateway_core::event::{
     GatewayEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseObservation,
-    ProviderResponseTimings, UpstreamHttpVersion,
+    ProviderResponseTimings, UpstreamHttpVersion, WebSocketPoolKind,
 };
 use gateway_core::operation::{GenerateRequest, Operation, OperationKind, ProviderSessionState};
 use gateway_core::provider_ports::ProviderInstanceCatalogPort;
@@ -760,6 +760,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             &response.diagnostics,
             &response.response_metadata,
             &response.transport_metrics,
+            response.websocket_pool_decision,
         )?);
         synchronize_passive_quota(&quota, &lease, &response.rate_limit_headers).await;
         if let Some(etag) = response.response_metadata.models_etag.as_deref()
@@ -910,6 +911,7 @@ fn codex_response_observation(
     diagnostics: &CodexUpstreamDiagnostics,
     response_metadata: &CodexResponseMetadata,
     metrics: &CodexTransportMetrics,
+    websocket_pool_decision: Option<crate::transport::WebSocketPoolDecision>,
 ) -> Result<ProviderResponseObservation, ProviderError> {
     let mut observation = ProviderResponseObservation::new(
         UpstreamTransport::new(actual_transport_name(transport))
@@ -927,6 +929,13 @@ fn codex_response_observation(
         .and_then(UpstreamHttpVersion::parse)
     {
         observation = observation.with_http_version(version);
+    }
+    if let Some(decision) = websocket_pool_decision {
+        observation = observation.with_websocket_pool(if decision.is_reuse() {
+            WebSocketPoolKind::Reuse
+        } else {
+            WebSocketPoolKind::New
+        });
     }
     if let Some(status_code) = diagnostics.status_code {
         observation = observation.with_status_code(status_code);
@@ -968,6 +977,7 @@ fn codex_error_observation(error: &CodexClientError) -> Option<ProviderResponseO
                 diagnostics,
                 &CodexResponseMetadata::default(),
                 transport_metrics,
+                None,
             )
             .ok()?
             .with_status_code(status.as_u16());

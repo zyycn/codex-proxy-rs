@@ -396,39 +396,3 @@ fn oauth_secret_debug_never_exposes_plaintext() {
     assert!(debug.contains("REDACTED"));
     assert!(!debug.contains("visible-only-to-provider"));
 }
-
-#[test]
-fn admin_batch_preparation_is_all_or_nothing_and_rejects_duplicate_ids() {
-    let valid = [
-        create_input("batch-a", "subject-batch-a"),
-        create_input("batch-b", "subject-batch-b"),
-    ];
-    let prepared = GrokCredentialAdmin
-        .prepare_import_batch(&valid)
-        .expect("valid batch");
-    assert_eq!(prepared.len(), 2);
-
-    let duplicate = [
-        create_input("batch-duplicate", "subject-one"),
-        create_input("batch-duplicate", "subject-two"),
-    ];
-    assert!(matches!(
-        GrokCredentialAdmin.prepare_import_batch(&duplicate),
-        Err(GrokCredentialRepositoryError::InvalidInput("account_id"))
-    ));
-}
-
-#[test]
-fn admin_batch_preparation_enforces_empty_and_upper_boundaries() {
-    assert!(matches!(
-        GrokCredentialAdmin.prepare_import_batch(&[]),
-        Err(GrokCredentialRepositoryError::InvalidInput("batch"))
-    ));
-    let oversized = (0..201)
-        .map(|index| create_input(&format!("batch-{index}"), &format!("subject-{index}")))
-        .collect::<Vec<_>>();
-    assert!(matches!(
-        GrokCredentialAdmin.prepare_import_batch(&oversized),
-        Err(GrokCredentialRepositoryError::InvalidInput("batch"))
-    ));
-}

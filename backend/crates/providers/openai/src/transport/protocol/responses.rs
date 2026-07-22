@@ -1,10 +1,6 @@
-use std::{collections::BTreeSet, fmt};
+use std::fmt;
 
-use gateway_protocol::openai::{
-    events,
-    schema::reconvert_tuple_values,
-    sse::{SseError, SseEvent, parse_sse_events},
-};
+use gateway_protocol::openai::events;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -24,8 +20,6 @@ const PROACTIVE_MULTI_AGENT_MODE_PREFIX: &str = "Proactive multi-agent delegatio
 pub struct CodexResponsesRequest {
     /// 上游请求体（唯一真相源）。
     body: Map<String, Value>,
-    /// tuple schema 原始定义，仅供响应重构时使用。
-    pub tuple_schema: Option<Value>,
     /// 是否由客户端显式提供了 prompt cache key。
     pub explicit_prompt_cache_key: bool,
     /// 客户端会话 ID。
@@ -79,7 +73,6 @@ impl fmt::Debug for CodexResponsesRequest {
         formatter
             .debug_struct("CodexResponsesRequest")
             .field("body", &"<not included in Debug>")
-            .field("has_tuple_schema", &self.tuple_schema.is_some())
             .field("explicit_prompt_cache_key", &self.explicit_prompt_cache_key)
             .field(
                 "has_local_conversation_id",
@@ -424,164 +417,6 @@ impl ResponsesSseFailure {
     }
 }
 
-/// 从完成 SSE 中提取会话亲和性和 replay 元数据。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CompletedResponseMetadata {
-    /// 上游 response id。
-    pub response_id: String,
-    /// 完成响应中的 function call ids。
-    pub function_call_ids: Vec<String>,
-    /// 完成响应的完整 output items。
-    pub output: Vec<Value>,
-}
-
-/// 从 Codex Responses SSE 中提取完成响应元数据。
-pub fn completed_response_metadata(
-    body: &str,
-) -> Result<Option<CompletedResponseMetadata>, SseError> {
-    let events = parse_sse_events(body)?;
-    let mut response_id = None;
-    let mut function_call_ids = BTreeSet::new();
-    let mut output = Vec::new();
-    let mut completed_items = Vec::new();
-
-    for event in events {
-        let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
-            continue;
-        };
-        match event.event.as_deref() {
-            Some("response.output_item.done") => {
-                if let Some(item) = value.get("item") {
-                    completed_items.push(item.clone());
-                }
-                if let Some(call_id) = value.pointer("/item/call_id").and_then(Value::as_str) {
-                    function_call_ids.insert(call_id.to_string());
-                }
-            }
-            Some("response.completed") => {
-                response_id = value
-                    .pointer("/response/id")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string);
-                collect_response_function_call_ids(&value, &mut function_call_ids);
-                if let Some(completed_output) =
-                    value.pointer("/response/output").and_then(Value::as_array)
-                {
-                    completed_output.clone_into(&mut output);
-                }
-                if output.is_empty() {
-                    output.clone_from(&completed_items);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    Ok(response_id.map(|response_id| CompletedResponseMetadata {
-        response_id,
-        function_call_ids: function_call_ids.into_iter().collect(),
-        output,
-    }))
-}
-
-/// 对单个 Responses SSE 事件的数据执行 tuple schema 回转换。
-pub fn reconvert_responses_sse_event_tuple_values(
-    event_name: Option<&str>,
-    mut data: Value,
-    tuple_schema: &Value,
-) -> Value {
-    match responses_event_type(event_name, Some(&data)) {
-        Some("response.output_text.delta") => {
-            reconvert_output_text_delta_tuple_values(&mut data, tuple_schema);
-        }
-        Some("response.output_item.done") => {
-            if let Some(item) = data.get_mut("item") {
-                reconvert_output_item_tuple_values(item, tuple_schema);
-            }
-        }
-        Some("response.completed" | "response.incomplete") => {
-            if let Some(response) = data.get_mut("response") {
-                reconvert_completed_response_tuple_values(response, Some(tuple_schema));
-            }
-        }
-        _ => {}
-    }
-    data
-}
-
-/// 判断 Responses SSE 事件是否为终止事件。
-pub fn response_sse_event_is_terminal(event: &SseEvent) -> bool {
-    let value = serde_json::from_str::<Value>(&event.data).ok();
-    matches!(
-        responses_event_type(event.event.as_deref(), value.as_ref()),
-        Some("response.completed" | "response.incomplete" | "response.failed" | "error")
-    )
-}
-
-fn responses_event_type<'a>(
-    event_name: Option<&'a str>,
-    data: Option<&'a Value>,
-) -> Option<&'a str> {
-    event_name.or_else(|| {
-        data.and_then(|data| data.get("type"))
-            .and_then(Value::as_str)
-    })
-}
-
-fn reconvert_output_text_delta_tuple_values(data: &mut Value, tuple_schema: &Value) {
-    let Some(delta) = data.get("delta").and_then(Value::as_str) else {
-        return;
-    };
-    let Ok(parsed) = serde_json::from_str::<Value>(delta) else {
-        return;
-    };
-    let reconverted = reconvert_tuple_values(parsed, tuple_schema);
-    data["delta"] = Value::String(reconverted.to_string());
-}
-
-fn reconvert_completed_response_tuple_values(response: &mut Value, tuple_schema: Option<&Value>) {
-    let Some(tuple_schema) = tuple_schema else {
-        return;
-    };
-    let Some(items) = response.get_mut("output").and_then(Value::as_array_mut) else {
-        return;
-    };
-    for item in items {
-        reconvert_output_item_tuple_values(item, tuple_schema);
-    }
-}
-
-fn reconvert_output_item_tuple_values(item: &mut Value, tuple_schema: &Value) {
-    let Some(content) = item.get_mut("content").and_then(Value::as_array_mut) else {
-        return;
-    };
-    for part in content {
-        let part_type = part.get("type").and_then(Value::as_str);
-        if !matches!(part_type, Some("output_text" | "text")) {
-            continue;
-        }
-        let Some(text) = part.get("text").and_then(Value::as_str) else {
-            continue;
-        };
-        let Ok(parsed) = serde_json::from_str::<Value>(text) else {
-            continue;
-        };
-        let reconverted = reconvert_tuple_values(parsed, tuple_schema);
-        part["text"] = Value::String(reconverted.to_string());
-    }
-}
-
-fn collect_response_function_call_ids(value: &Value, function_call_ids: &mut BTreeSet<String>) {
-    let Some(output) = value.pointer("/response/output").and_then(Value::as_array) else {
-        return;
-    };
-    for item in output {
-        if let Some(call_id) = item.get("call_id").and_then(Value::as_str) {
-            function_call_ids.insert(call_id.to_string());
-        }
-    }
-}
-
 fn failure_message(value: &Value) -> Option<String> {
     value
         .pointer("/response/error/message")
@@ -632,7 +467,6 @@ impl CodexResponsesRequest {
     pub fn from_body(body: Map<String, Value>) -> Self {
         Self {
             body,
-            tuple_schema: None,
             explicit_prompt_cache_key: false,
             client_conversation_id: None,
             client_session_id: None,
@@ -679,12 +513,6 @@ impl CodexResponsesRequest {
             .unwrap_or_default()
     }
 
-    /// 设置模型名（模型后缀路由归一）。
-    pub fn set_model(&mut self, model: impl Into<String>) {
-        self.body
-            .insert("model".to_string(), Value::String(model.into()));
-    }
-
     /// 指令文本（缺省空串）。
     pub fn instructions(&self) -> &str {
         self.body
@@ -712,11 +540,6 @@ impl CodexResponsesRequest {
             .get("stream")
             .and_then(Value::as_bool)
             .unwrap_or(true)
-    }
-
-    /// 设置流式标志。
-    pub fn set_stream(&mut self, stream: bool) {
-        self.body.insert("stream".to_string(), Value::Bool(stream));
     }
 
     /// 是否要求上游存储响应。
@@ -846,15 +669,6 @@ impl CodexResponsesRequest {
                 self.body.remove(key);
             }
         }
-    }
-
-    /// 判断请求是否声明了图片生成工具。
-    pub fn expects_image_generation(&self) -> bool {
-        self.tools().is_some_and(|tools| {
-            tools
-                .iter()
-                .any(|tool| tool.get("type").and_then(Value::as_str) == Some("image_generation"))
-        })
     }
 }
 

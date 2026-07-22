@@ -69,32 +69,17 @@ impl OAuthPrincipal {
 #[derive(Clone)]
 pub struct RefreshTokenGrant {
     refresh_token: SecretValue,
-    principal: Option<OAuthPrincipal>,
 }
 
 impl RefreshTokenGrant {
     /// Creates a refresh grant for an existing verified credential.
     #[must_use]
     pub fn new(refresh_token: SecretValue) -> Self {
-        Self {
-            refresh_token,
-            principal: None,
-        }
-    }
-
-    /// Attaches optional team principal metadata.
-    #[must_use]
-    pub fn with_principal(mut self, principal: OAuthPrincipal) -> Self {
-        self.principal = Some(principal);
-        self
+        Self { refresh_token }
     }
 
     pub(crate) fn refresh_token(&self) -> &SecretValue {
         &self.refresh_token
-    }
-
-    pub(crate) fn principal(&self) -> Option<&OAuthPrincipal> {
-        self.principal.as_ref()
     }
 }
 
@@ -103,7 +88,6 @@ impl fmt::Debug for RefreshTokenGrant {
         formatter
             .debug_struct("RefreshTokenGrant")
             .field("refresh_token", &"[REDACTED]")
-            .field("principal", &self.principal)
             .finish()
     }
 }

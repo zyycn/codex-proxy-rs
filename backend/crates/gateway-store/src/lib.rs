@@ -346,10 +346,6 @@ fn store_worker_contributions(
     let retention_id =
         WorkerId::try_new(WorkerKind::Retention, "postgres").map_err(worker_definition_error)?;
     Ok(vec![
-        WorkerContribution::Disabled {
-            kind: WorkerKind::NativeClaimRecovery,
-            reason: WorkerDisabledReason::NoPersistentNativeClaimState,
-        },
         WorkerContribution::Registration(scheduled_worker(
             stale_id,
             Duration::from_secs(30),

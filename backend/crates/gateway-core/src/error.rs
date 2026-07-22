@@ -115,12 +115,6 @@ pub enum AccountingError {
     /// 货币代码无效。
     #[error("currency must be a three-letter uppercase ASCII code")]
     InvalidCurrency,
-    /// 价格估算状态与金额字段不一致。
-    #[error("cost estimate fields do not match status `{status}`")]
-    InvalidCostEstimate {
-        /// 估算状态。
-        status: &'static str,
-    },
 }
 
 /// 跨 Provider 稳定的上游失败分类。

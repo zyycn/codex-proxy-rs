@@ -64,12 +64,6 @@ impl FormValue {
             Self::Secret(value) => value.expose(),
         }
     }
-
-    /// Reports whether debug and telemetry layers must redact this value.
-    #[must_use]
-    pub const fn is_secret(&self) -> bool {
-        matches!(self, Self::Secret(_))
-    }
 }
 
 impl fmt::Debug for FormValue {

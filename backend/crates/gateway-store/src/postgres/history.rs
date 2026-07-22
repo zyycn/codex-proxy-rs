@@ -6,10 +6,7 @@ use gateway_core::engine::continuation::{NativeContinuationPort, NativeContinuat
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::{
     engine::{
-        continuation::{
-            NativeContinuationPin, NativeContinuationReuse, NativeContinuationScope,
-            PreviousResponseId,
-        },
+        continuation::{NativeContinuationPin, NativeContinuationScope, PreviousResponseId},
         credential::ProviderAccountId,
     },
     error::SafeUpstreamValue,
@@ -52,7 +49,6 @@ pub trait ModelRequestHistoryRepository: Send + Sync {
         &self,
         client_response_id: &str,
         caller_client_api_key_ref: &str,
-        reuse: NativeContinuationReuse,
     ) -> StoreResult<Option<NativeContinuationPin>>;
 }
 
@@ -105,7 +101,6 @@ impl ModelRequestHistoryRepository for PgHistoryRepository {
         &self,
         client_response_id: &str,
         caller_client_api_key_ref: &str,
-        reuse: NativeContinuationReuse,
     ) -> StoreResult<Option<NativeContinuationPin>> {
         require_nonempty(
             "native continuation",
@@ -139,7 +134,7 @@ impl ModelRequestHistoryRepository for PgHistoryRepository {
         .fetch_optional(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("resolve native continuation pin"))?;
-        row.map(|row| native_pin_from_row(client_response_id, row, reuse))
+        row.map(|row| native_pin_from_row(client_response_id, row))
             .transpose()
     }
 }
@@ -157,7 +152,6 @@ impl NativeContinuationPort for PgHistoryRepository {
             self.resolve_native_continuation_pin(
                 previous_response_id.as_str(),
                 client_api_key_id.as_str(),
-                NativeContinuationReuse::Reusable,
             )
             .await
             .map_err(|_| NativeContinuationStoreError)
@@ -245,7 +239,6 @@ fn history_from_row(row: HistoryRow) -> ModelRequestHistoryRecord {
 fn native_pin_from_row(
     client_response_id: &str,
     row: (String, String, String, String),
-    reuse: NativeContinuationReuse,
 ) -> StoreResult<NativeContinuationPin> {
     let previous_response_id = PreviousResponseId::new(client_response_id.to_owned())
         .map_err(|_| invalid_native_pin("invalid client response ID"))?;
@@ -263,7 +256,6 @@ fn native_pin_from_row(
         provider,
         instance,
         account,
-        reuse,
     )
     .with_scope(NativeContinuationScope::Persisted))
 }

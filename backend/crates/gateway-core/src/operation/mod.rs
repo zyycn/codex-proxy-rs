@@ -656,7 +656,7 @@ pub struct GenerateRequest {
     continuation: Option<ContinuationMode>,
     max_output_tokens: Option<u64>,
     estimated_context_tokens: u64,
-    retry_safety: RetrySafety,
+    image_generation_requested: bool,
     response_persistence: ResponsePersistence,
 }
 
@@ -713,7 +713,7 @@ impl GenerateRequest {
             continuation: None,
             max_output_tokens: None,
             estimated_context_tokens: 0,
-            retry_safety: RetrySafety::NonIdempotent,
+            image_generation_requested: false,
             response_persistence: ResponsePersistence::Store,
         }
     }
@@ -767,10 +767,10 @@ impl GenerateRequest {
         self
     }
 
-    /// 显式声明重放安全性。
+    /// 记录协议 adapter 已识别的图片生成工具意图。
     #[must_use]
-    pub const fn with_retry_safety(mut self, retry_safety: RetrySafety) -> Self {
-        self.retry_safety = retry_safety;
+    pub const fn with_image_generation_requested(mut self, requested: bool) -> Self {
+        self.image_generation_requested = requested;
         self
     }
 
@@ -855,10 +855,10 @@ impl GenerateRequest {
         self.estimated_context_tokens
     }
 
-    /// 返回显式重放安全性。
+    /// 返回客户端是否请求了图片生成工具。
     #[must_use]
-    pub const fn retry_safety(&self) -> RetrySafety {
-        self.retry_safety
+    pub const fn image_generation_requested(&self) -> bool {
+        self.image_generation_requested
     }
 
     /// 返回客户端的响应持久化意图。
@@ -939,7 +939,10 @@ impl fmt::Debug for GenerateRequest {
                 &self.payload.prompt_cache_key.as_ref().map(|_| "<present>"),
             )
             .field("estimated_context_tokens", &self.estimated_context_tokens)
-            .field("retry_safety", &self.retry_safety)
+            .field(
+                "image_generation_requested",
+                &self.image_generation_requested,
+            )
             .field("response_persistence", &self.response_persistence)
             .field("provider_options", &self.payload.provider_options)
             .field(
@@ -1104,7 +1107,6 @@ impl fmt::Debug for RerankRequest {
 pub struct ImageRequest {
     prompt: String,
     count: u32,
-    retry_safety: RetrySafety,
 }
 
 impl ImageRequest {
@@ -1118,11 +1120,7 @@ impl ImageRequest {
         if prompt.is_empty() {
             return Err(OperationError::EmptyField { field: "prompt" });
         }
-        Ok(Self {
-            prompt,
-            count: 1,
-            retry_safety: RetrySafety::NonIdempotent,
-        })
+        Ok(Self { prompt, count: 1 })
     }
 
     /// 设置图像数量。
@@ -1139,7 +1137,6 @@ impl fmt::Debug for ImageRequest {
             .debug_struct("ImageRequest")
             .field("prompt", &"<not included in Debug>")
             .field("count", &self.count)
-            .field("retry_safety", &self.retry_safety)
             .finish()
     }
 }
@@ -1149,7 +1146,6 @@ impl fmt::Debug for ImageRequest {
 pub struct SpeechRequest {
     input: String,
     voice: String,
-    retry_safety: RetrySafety,
 }
 
 impl SpeechRequest {
@@ -1167,11 +1163,7 @@ impl SpeechRequest {
         if voice.is_empty() {
             return Err(OperationError::EmptyField { field: "voice" });
         }
-        Ok(Self {
-            input,
-            voice,
-            retry_safety: RetrySafety::NonIdempotent,
-        })
+        Ok(Self { input, voice })
     }
 }
 
@@ -1181,7 +1173,6 @@ impl fmt::Debug for SpeechRequest {
             .debug_struct("SpeechRequest")
             .field("input", &"<not included in Debug>")
             .field("voice", &self.voice)
-            .field("retry_safety", &self.retry_safety)
             .finish()
     }
 }
@@ -1247,11 +1238,24 @@ impl Operation {
     #[must_use]
     pub const fn retry_safety(&self) -> RetrySafety {
         match self {
-            Self::Generate(request) => request.retry_safety,
-            Self::CompactConversation(request) => request.generation.retry_safety,
             Self::Embed(_) | Self::Rerank(_) => RetrySafety::Idempotent,
-            Self::GenerateImage(request) => request.retry_safety,
-            Self::Speech(request) => request.retry_safety,
+            Self::Generate(_)
+            | Self::CompactConversation(_)
+            | Self::GenerateImage(_)
+            | Self::Speech(_) => RetrySafety::NonIdempotent,
+        }
+    }
+
+    /// 返回该 operation 是否代表一次图片生成请求。
+    #[must_use]
+    pub const fn image_generation_requested(&self) -> bool {
+        match self {
+            Self::Generate(request) => request.image_generation_requested(),
+            Self::CompactConversation(_)
+            | Self::Embed(_)
+            | Self::Rerank(_)
+            | Self::GenerateImage(_)
+            | Self::Speech(_) => false,
         }
     }
 

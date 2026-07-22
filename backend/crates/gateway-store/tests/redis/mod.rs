@@ -4,7 +4,6 @@ mod credential_leases;
 mod credential_state;
 mod oauth_pending;
 mod provider_circuit;
-mod runtime_change;
 mod worker_lease;
 
 use chrono::Utc;

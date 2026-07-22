@@ -78,33 +78,6 @@ fn unknown_cost_should_not_fabricate_zero() {
 }
 
 #[test]
-fn provider_reported_cost_should_preserve_exact_total() {
-    let total = Money::new(
-        Decimal::from_str("0.00125").expect("valid amount"),
-        CurrencyCode::new("USD").expect("valid currency"),
-    );
-    let estimate = CostEstimate::priced(
-        CostEstimateStatus::Known,
-        CostSource::ProviderReported,
-        total,
-    )
-    .expect("reported total is valid");
-
-    assert_eq!(estimate.total(), Some(total));
-}
-
-#[test]
-fn unavailable_source_should_reject_amount() {
-    let total = Money::new(
-        Decimal::ZERO,
-        CurrencyCode::new("USD").expect("valid currency"),
-    );
-    assert!(
-        CostEstimate::priced(CostEstimateStatus::Known, CostSource::Unavailable, total).is_err()
-    );
-}
-
-#[test]
 fn usage_total_should_remain_independent() {
     let usage = Usage {
         input_tokens: Some(10),

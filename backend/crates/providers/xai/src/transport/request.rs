@@ -168,33 +168,6 @@ impl GrokResponsesRequest {
         self.turn_index = None;
     }
 
-    pub fn strip_reasoning_encrypted_content(&mut self) -> bool {
-        let Some(items) = self.body.get_mut("input").and_then(Value::as_array_mut) else {
-            return false;
-        };
-        let original_len = items.len();
-        let mut changed = false;
-        items.retain_mut(|item| {
-            let Some(item) = item.as_object_mut() else {
-                return true;
-            };
-            if string_field(item, "type") != "reasoning" {
-                return true;
-            }
-            for field in ["encrypted_content", "id", "status"] {
-                changed |= item.remove(field).is_some();
-            }
-            let portable = ["summary", "content"].into_iter().any(|field| {
-                item.get(field)
-                    .and_then(Value::as_array)
-                    .is_some_and(|values| !values.is_empty())
-            });
-            changed |= !portable;
-            portable
-        });
-        changed || items.len() != original_len
-    }
-
     pub fn encode(
         request: &GenerateRequest,
         upstream_model: &str,

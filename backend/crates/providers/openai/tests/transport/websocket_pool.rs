@@ -1068,8 +1068,7 @@ async fn concurrent_pool_transport_counts(
         format!("http://{addr}"),
         test_wire_profile(),
     )
-    .with_websocket_pool(Arc::clone(&pool))
-    .with_websocket_fast_path_budget(Duration::from_secs(5));
+    .with_websocket_pool(Arc::clone(&pool));
     let start = Arc::new(tokio::sync::Barrier::new(REQUEST_COUNT + 1));
     let mut requests = Vec::new();
     for index in 0..REQUEST_COUNT {

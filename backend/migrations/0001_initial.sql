@@ -244,6 +244,7 @@ create table model_requests (
   provider_account_ref text,
   upstream_transport text,
   http_version text,
+  websocket_pool text,
   attempt_count integer not null default 0,
   upstream_send_state text not null default 'not_sent',
   downstream_committed_at timestamptz,
@@ -262,7 +263,10 @@ create table model_requests (
   cached_tokens bigint,
   cache_write_tokens bigint,
   reasoning_tokens bigint,
+  image_input_tokens bigint,
+  image_output_tokens bigint,
   total_tokens bigint,
+  image_generation_succeeded boolean,
   cost_source text not null default 'unavailable',
   cost_amount numeric(20, 10),
   cost_currency text,
@@ -282,6 +286,7 @@ create table model_requests (
   request_kind text,
   subagent_kind text,
   compact boolean not null default false,
+  image_generation_requested boolean not null default false,
   started_at timestamptz not null,
   deadline_at timestamptz not null,
   completed_at timestamptz,
@@ -326,7 +331,25 @@ create table model_requests (
     and (cached_tokens is null or cached_tokens >= 0)
     and (cache_write_tokens is null or cache_write_tokens >= 0)
     and (reasoning_tokens is null or reasoning_tokens >= 0)
+    and (image_input_tokens is null or image_input_tokens >= 0)
+    and (image_output_tokens is null or image_output_tokens >= 0)
     and (total_tokens is null or total_tokens >= 0)
+  ),
+  constraint model_requests_image_generation_ck check (
+    (
+      not image_generation_requested
+      and image_generation_succeeded is null
+    )
+    or (
+      image_generation_requested
+      and (
+        (outcome = 'running' and image_generation_succeeded is null)
+        or (outcome <> 'running' and image_generation_succeeded is not null)
+      )
+    )
+  ),
+  constraint model_requests_websocket_pool_ck check (
+    websocket_pool is null or websocket_pool in ('new', 'reuse')
   ),
   constraint model_requests_cost_ck check (
     cost_source in ('provider_reported', 'calculated', 'unavailable')

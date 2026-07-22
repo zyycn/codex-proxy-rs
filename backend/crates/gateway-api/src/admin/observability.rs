@@ -521,12 +521,16 @@ pub struct TokenDetailsView {
     pub cached_tokens: Option<u64>,
     pub cache_write_tokens: Option<u64>,
     pub reasoning_tokens: Option<u64>,
+    pub image_input_tokens: Option<u64>,
+    pub image_output_tokens: Option<u64>,
     pub total_tokens: Option<u64>,
     pub input_tokens_display: String,
     pub output_tokens_display: String,
     pub cached_tokens_display: String,
     pub cache_write_tokens_display: String,
     pub reasoning_tokens_display: String,
+    pub image_input_tokens_display: String,
+    pub image_output_tokens_display: String,
     pub total_tokens_display: String,
 }
 
@@ -595,6 +599,8 @@ pub struct UsageRecordView {
     pub cached_tokens: Option<u64>,
     pub cache_write_tokens: Option<u64>,
     pub reasoning_tokens: Option<u64>,
+    pub image_input_tokens: Option<u64>,
+    pub image_output_tokens: Option<u64>,
     pub message: String,
     pub metadata: UsageRecordMetadataView,
     pub created_at: DateTime<Utc>,
@@ -623,6 +629,9 @@ pub struct UsageRecordMetadataView {
     pub protocol: String,
     pub logical_outcome: String,
     pub attempt_count: u64,
+    pub websocket_pool: Option<String>,
+    pub image_generation_requested: bool,
+    pub image_generation_succeeded: Option<bool>,
 }
 
 /// 单次上游尝试展示。
@@ -1520,6 +1529,8 @@ fn token_details(record: &domain::UsageRecord) -> TokenDetailsView {
         cached_tokens: record.cached_tokens,
         cache_write_tokens: record.cache_write_tokens,
         reasoning_tokens: record.reasoning_tokens,
+        image_input_tokens: record.image_input_tokens,
+        image_output_tokens: record.image_output_tokens,
         total_tokens: record.total_tokens,
         input_tokens_display: record
             .input_tokens
@@ -1535,6 +1546,12 @@ fn token_details(record: &domain::UsageRecord) -> TokenDetailsView {
             .map_or_else(|| "-".to_owned(), format_compact_number),
         reasoning_tokens_display: record
             .reasoning_tokens
+            .map_or_else(|| "-".to_owned(), format_number),
+        image_input_tokens_display: record
+            .image_input_tokens
+            .map_or_else(|| "-".to_owned(), format_number),
+        image_output_tokens_display: record
+            .image_output_tokens
             .map_or_else(|| "-".to_owned(), format_number),
         total_tokens_display: record
             .total_tokens
@@ -1687,11 +1704,16 @@ fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView {
         cached_tokens: record.cached_tokens,
         cache_write_tokens: record.cache_write_tokens,
         reasoning_tokens: record.reasoning_tokens,
+        image_input_tokens: record.image_input_tokens,
+        image_output_tokens: record.image_output_tokens,
         message,
         metadata: UsageRecordMetadataView {
             protocol: record.protocol,
             logical_outcome: outcome.clone(),
             attempt_count: u64::from(record.attempt_count),
+            websocket_pool: record.websocket_pool,
+            image_generation_requested: record.image_generation_requested,
+            image_generation_succeeded: record.image_generation_succeeded,
         },
         created_at: record.started_at,
         created_at_display: china_datetime(&record.started_at),

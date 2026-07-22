@@ -228,21 +228,11 @@ impl GrokOAuthClient {
         discovery: &DiscoveryDocument,
         grant: &RefreshTokenGrant,
     ) -> Result<RefreshedTokenSet, OAuthError> {
-        let mut form = vec![
+        let form = vec![
             FormField::public("grant_type", "refresh_token"),
             FormField::secret("refresh_token", grant.refresh_token().clone()),
             FormField::public("client_id", self.config.client_id()),
         ];
-        if let Some(principal) = grant.principal() {
-            form.push(FormField::public(
-                "principal_type",
-                principal.principal_type(),
-            ));
-            form.push(FormField::secret(
-                "principal_id",
-                crate::SecretValue::new(principal.principal_id().to_owned()),
-            ));
-        }
         let response = self
             .execute(
                 OAuthOperation::RefreshToken,

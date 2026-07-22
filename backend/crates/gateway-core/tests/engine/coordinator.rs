@@ -10,7 +10,7 @@ use futures::executor::block_on;
 
 use gateway_core::accounting::{CalculatedCost, CostSource, ProviderReportedCost, Usage};
 use gateway_core::engine::continuation::{
-    ContinuationBinding, NativeContinuationPin, NativeContinuationReuse, PreviousResponseId,
+    ContinuationBinding, NativeContinuationPin, PreviousResponseId,
 };
 use gateway_core::engine::credential::{
     AccountSelectionPolicy, CredentialRevision, ProviderAccountId, RotationStrategy,
@@ -30,10 +30,10 @@ use gateway_core::error::{
 };
 use gateway_core::event::{
     GatewayEvent, ProtocolWireEvent, ProviderEvent, ProviderResponseObservation,
-    ProviderResponseTimings, ResponseMeta, UpstreamHttpVersion,
+    ProviderResponseTimings, ResponseMeta, UpstreamHttpVersion, WebSocketPoolKind,
 };
 use gateway_core::operation::{
-    ContentPart, GenerateRequest, Message, MessageRole, Operation, OperationKind,
+    ContentPart, EmbedRequest, GenerateRequest, Message, MessageRole, Operation,
     ProviderSessionState, RetrySafety,
 };
 use gateway_core::policy::ClientApiKeyId;
@@ -52,6 +52,9 @@ struct FinalState {
     committed: bool,
     client_status_code: Option<u16>,
     total_tokens: Option<u64>,
+    image_input_tokens: Option<u64>,
+    image_output_tokens: Option<u64>,
+    image_generation_succeeded: Option<bool>,
     provider_error_code: Option<String>,
     retry_after_ms: Option<u64>,
     latency_ms: Option<u64>,
@@ -59,6 +62,7 @@ struct FinalState {
     upstream_response_id: Option<String>,
     upstream_transport: Option<String>,
     http_version: Option<String>,
+    websocket_pool: Option<String>,
     upstream_request_id: Option<String>,
     upstream_status_code: Option<u16>,
     transport_decision_wait_ms: Option<u64>,
@@ -172,6 +176,9 @@ impl ExecutionStore for FakeStore {
                 committed: finalization.downstream_committed_at.is_some(),
                 client_status_code: finalization.client_status_code,
                 total_tokens: finalization.usage.total_tokens,
+                image_input_tokens: finalization.usage.image_input_tokens,
+                image_output_tokens: finalization.usage.image_output_tokens,
+                image_generation_succeeded: finalization.image_generation_succeeded,
                 provider_error_code: finalization.provider_error_code,
                 retry_after_ms: finalization.retry_after_ms,
                 latency_ms: finalization.timings.latency_ms,
@@ -179,6 +186,7 @@ impl ExecutionStore for FakeStore {
                 upstream_response_id: finalization.upstream_response_id,
                 upstream_transport: finalization.upstream_transport,
                 http_version: finalization.http_version,
+                websocket_pool: finalization.websocket_pool,
                 upstream_request_id: finalization.upstream_request_id,
                 upstream_status_code: finalization.upstream_status_code,
                 transport_decision_wait_ms: finalization.timings.transport_decision_wait_ms,
@@ -304,16 +312,28 @@ impl Provider for ScriptedProvider {
 }
 
 fn operation(retry_safety: RetrySafety) -> Operation {
+    if retry_safety == RetrySafety::Idempotent {
+        return Operation::Embed(
+            EmbedRequest::new(vec!["hello".to_owned()]).expect("embedding request"),
+        );
+    }
+    generate_operation()
+}
+
+fn generate_operation() -> Operation {
     let message = Message::new(
         MessageRole::User,
         vec![ContentPart::Text("hello".to_owned())],
     )
     .expect("message");
-    Operation::Generate(
-        GenerateRequest::new(vec![message])
-            .expect("generate request")
-            .with_retry_safety(retry_safety),
-    )
+    Operation::Generate(GenerateRequest::new(vec![message]).expect("generate request"))
+}
+
+fn image_generate_operation() -> Operation {
+    let Operation::Generate(request) = generate_operation() else {
+        unreachable!("generate_operation must return Generate")
+    };
+    Operation::Generate(request.with_image_generation_requested(true))
 }
 
 fn complete_stream(total_tokens: Option<u64>) -> Vec<Result<GatewayEvent, ProviderError>> {
@@ -335,14 +355,31 @@ fn complete_stream(total_tokens: Option<u64>) -> Vec<Result<GatewayEvent, Provid
     events
 }
 
+fn image_stream(image_output_tokens: Option<u64>) -> Vec<Result<GatewayEvent, ProviderError>> {
+    let mut usage = Usage::new();
+    usage.input_tokens = Some(12);
+    usage.output_tokens = Some(5);
+    usage.image_input_tokens = Some(31);
+    usage.image_output_tokens = image_output_tokens;
+    usage.total_tokens = Some(17);
+    vec![
+        Ok(GatewayEvent::Started(ResponseMeta::new(
+            "response-image",
+            "gpt-5",
+        ))),
+        Ok(GatewayEvent::Usage(usage)),
+        Ok(GatewayEvent::Completed(ResponseMeta::new(
+            "response-image",
+            "gpt-5",
+        ))),
+    ]
+}
+
 fn plan(operation: &Operation, instance_count: u32) -> RoutingPlan {
     let provider = ProviderKind::new("openai").expect("provider");
     let public_model = PublicModelId::new("gpt-5").expect("public model");
-    let capabilities = ModelCapabilities::new(
-        BTreeSet::from([OperationKind::Generate]),
-        128_000,
-        Some(32_000),
-    );
+    let capabilities =
+        ModelCapabilities::new(BTreeSet::from([operation.kind()]), 128_000, Some(32_000));
     let mut instances = Vec::new();
     let mut provider_models = Vec::new();
     for index in 1..=instance_count {
@@ -384,7 +421,7 @@ fn plan(operation: &Operation, instance_count: u32) -> RoutingPlan {
     .expect("routing plan")
 }
 
-fn model_request(deadline: SystemTime) -> NewModelRequest {
+fn model_request(operation: &Operation, deadline: SystemTime) -> NewModelRequest {
     let client_key = ClientApiKeyId::new("key_client_1").expect("client key id");
     NewModelRequest {
         id: ModelRequestId::new("req_core_1").expect("request id"),
@@ -392,7 +429,7 @@ fn model_request(deadline: SystemTime) -> NewModelRequest {
         client_api_key_ref: client_key,
         config_revision: ConfigRevision::new(1).expect("config revision"),
         protocol: "openai".to_owned(),
-        operation: OperationKind::Generate,
+        operation: operation.kind(),
         endpoint: "responses".to_owned(),
         client_transport: "http_sse".to_owned(),
         requested_model: PublicModelId::new("gpt-5").expect("model"),
@@ -404,6 +441,7 @@ fn model_request(deadline: SystemTime) -> NewModelRequest {
         request_kind: Some("responses".to_owned()),
         subagent_kind: None,
         compact: false,
+        image_generation_requested: operation.image_generation_requested(),
         started_at: SystemTime::now(),
         deadline_at: deadline,
     }
@@ -443,7 +481,7 @@ fn terminal_non_idempotent_failure(
         },
     ]);
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -469,7 +507,7 @@ fn success_updates_one_model_request_and_persists_usage() {
     }]);
 
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -521,6 +559,78 @@ fn success_updates_one_model_request_and_persists_usage() {
     );
 }
 
+fn finalized_image_request(image_output_tokens: Option<u64>) -> FinalState {
+    let operation = image_generate_operation();
+    let route_plan = plan(&operation, 1);
+    let (coordinator, store, _) = coordinator(vec![Script::Stream {
+        account_id: "acct_image",
+        items: image_stream(image_output_tokens),
+    }]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start image execution");
+    block_on(session.collect_uncommitted()).expect("collect image response");
+    block_on(session.commit_downstream(Some(200))).expect("commit image response");
+
+    store.state.lock().expect("store lock").finalizations[0].clone()
+}
+
+#[test]
+fn image_request_with_output_should_persist_success_and_image_tokens() {
+    let finalization = finalized_image_request(Some(9));
+
+    assert_eq!(
+        (
+            finalization.image_generation_succeeded,
+            finalization.image_input_tokens,
+            finalization.image_output_tokens,
+        ),
+        (Some(true), Some(31), Some(9))
+    );
+}
+
+#[test]
+fn image_request_without_output_should_persist_failure() {
+    let finalization = finalized_image_request(None);
+
+    assert_eq!(finalization.image_generation_succeeded, Some(false));
+}
+
+#[test]
+fn failed_image_request_should_persist_failure() {
+    let operation = image_generate_operation();
+    let route_plan = plan(&operation, 1);
+    let (coordinator, store, _) = coordinator(vec![Script::Stream {
+        account_id: "acct_image",
+        items: vec![Err(ProviderError::new(
+            ProviderErrorKind::Protocol,
+            UpstreamSendState::Sent,
+        ))],
+    }]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start image execution");
+    block_on(session.collect_uncommitted()).expect_err("image request should fail");
+    let state = store.state.lock().expect("store lock");
+
+    assert_eq!(
+        state.finalizations[0].image_generation_succeeded,
+        Some(false)
+    );
+}
+
 #[test]
 fn response_observation_is_persisted_but_never_delivered() {
     let operation = operation(RetrySafety::Idempotent);
@@ -529,6 +639,7 @@ fn response_observation_is_persisted_but_never_delivered() {
         UpstreamTransport::new("http_sse").expect("actual transport"),
     )
     .with_http_version(UpstreamHttpVersion::Http2)
+    .with_websocket_pool(WebSocketPoolKind::New)
     .with_status_code(200)
     .with_request_id(SafeUpstreamValue::new("upstream-observed").expect("request id"))
     .with_timings(ProviderResponseTimings {
@@ -548,7 +659,7 @@ fn response_observation_is_persisted_but_never_delivered() {
         items,
     }]);
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -565,6 +676,7 @@ fn response_observation_is_persisted_but_never_delivered() {
     let finalization = &state.finalizations[0];
     assert_eq!(finalization.upstream_transport.as_deref(), Some("http_sse"));
     assert_eq!(finalization.http_version.as_deref(), Some("HTTP/2"));
+    assert_eq!(finalization.websocket_pool.as_deref(), Some("new"));
     assert_eq!(
         finalization.upstream_request_id.as_deref(),
         Some("upstream-observed")
@@ -603,7 +715,7 @@ fn unknown_wire_event_before_response_identity_is_discarded_with_retried_attempt
         },
     ]);
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -667,7 +779,7 @@ fn discarded_attempt_observation_does_not_leak_into_retry_result() {
         },
     ]);
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -712,7 +824,7 @@ fn websocket_success_keeps_client_http_status_absent() {
         items: complete_stream(None),
     }]);
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -731,7 +843,7 @@ fn websocket_success_keeps_client_http_status_absent() {
 
 #[test]
 fn authenticated_native_continuation_reaches_every_attempt_context() {
-    let operation = operation(RetrySafety::Idempotent);
+    let operation = generate_operation();
     let route_plan = plan(&operation, 1);
     let (coordinator, _, provider) = coordinator(vec![Script::Stream {
         account_id: "acct_one",
@@ -743,11 +855,10 @@ fn authenticated_native_continuation_reaches_every_attempt_context() {
         ProviderKind::new("openai").expect("provider"),
         ProviderInstanceId::new("inst_openai_1").expect("instance"),
         ProviderAccountId::new("acct_one").expect("account"),
-        NativeContinuationReuse::Reusable,
     );
 
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -791,7 +902,7 @@ fn authenticated_native_continuation_reaches_every_attempt_context() {
 
 #[test]
 fn native_continuation_replays_owner_before_safely_switching_account() {
-    let Operation::Generate(generate) = operation(RetrySafety::Idempotent) else {
+    let Operation::Generate(generate) = generate_operation() else {
         panic!("generate operation");
     };
     let mut payload = Map::new();
@@ -834,11 +945,10 @@ fn native_continuation_replays_owner_before_safely_switching_account() {
         ProviderKind::new("openai").expect("provider"),
         ProviderInstanceId::new("inst_openai_1").expect("instance"),
         ProviderAccountId::new("acct_one").expect("account"),
-        NativeContinuationReuse::Reusable,
     );
 
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -880,7 +990,7 @@ fn required_account_reaches_provider_and_matching_metadata_succeeds() {
     }]);
     let required = ProviderAccountId::new("acct_required").expect("account id");
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         Some(required.clone()),
@@ -911,7 +1021,7 @@ fn provider_metadata_for_another_account_fails_closed() {
         },
     ]);
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         Some(ProviderAccountId::new("acct_required").expect("account id")),
@@ -949,7 +1059,7 @@ fn required_account_disables_instance_fallback_before_stream() {
     ]);
     let required = ProviderAccountId::new("acct_required").expect("account id");
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         Some(required.clone()),
@@ -988,7 +1098,7 @@ fn local_selection_failure_falls_back_without_instance_failure_observation() {
         },
     ]);
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -1034,7 +1144,7 @@ fn required_account_disables_account_retry_after_stream_creation() {
         },
     ]);
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         Some(ProviderAccountId::new("acct_required").expect("account id")),
@@ -1089,7 +1199,7 @@ fn latest_provider_reported_cost_is_persisted_as_known_usd_total() {
         items: events,
     }]);
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -1129,7 +1239,7 @@ fn calculated_cost_is_persisted_when_provider_does_not_report_cost() {
         items: events,
     }]);
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -1173,7 +1283,7 @@ fn provider_reported_cost_should_not_be_replaced_by_calculated_cost() {
         items: events,
     }]);
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -1224,7 +1334,7 @@ fn discarded_attempt_cost_never_leaks_into_retry_result() {
         },
     ]);
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -1264,7 +1374,7 @@ fn pre_commit_failure_excludes_account_and_retries_same_target() {
     ]);
 
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -1326,7 +1436,7 @@ fn recovered_credential_retries_the_same_account_exactly_once() {
     ]);
 
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -1370,7 +1480,7 @@ fn non_idempotent_explicit_429_rejection_rotates_account_before_output() {
     ]);
 
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -1454,7 +1564,7 @@ fn explicit_429_after_structural_event_should_retry_before_commit() {
         },
     ]);
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -1481,7 +1591,6 @@ fn native_continuation_explicit_429_is_not_retried() {
         ProviderKind::new("openai").expect("provider"),
         ProviderInstanceId::new("inst_openai_1").expect("instance"),
         ProviderAccountId::new("acct_first").expect("account"),
-        NativeContinuationReuse::Reusable,
     );
     let (store, provider) = terminal_non_idempotent_failure(
         vec![Err(ProviderError::new(
@@ -1539,7 +1648,7 @@ fn non_idempotent_not_sent_failure_can_fallback_target() {
     ]);
 
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -1581,7 +1690,7 @@ fn ambiguous_send_state_stops_retry() {
     ]);
 
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -1633,7 +1742,7 @@ fn structural_event_before_replay_safe_failure_should_switch_account_before_comm
     ]);
 
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -1676,7 +1785,7 @@ fn cancellation_before_pending_delivery_commit_reaches_terminal_state() {
         items: complete_stream(None),
     }]);
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -1712,7 +1821,7 @@ fn local_unavailability_before_stream_does_not_create_attempt_or_instance_failur
     )]);
 
     let mut session = block_on(coordinator.start(
-        model_request(SystemTime::now() + Duration::from_secs(30)),
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
         None,
@@ -1745,7 +1854,7 @@ fn expired_deadline_finalizes_without_calling_provider() {
     let (coordinator, store, provider) = coordinator(vec![]);
 
     let error = match block_on(coordinator.start(
-        model_request(SystemTime::UNIX_EPOCH),
+        model_request(&operation, SystemTime::UNIX_EPOCH),
         operation,
         route_plan,
         None,

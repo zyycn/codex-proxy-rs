@@ -344,10 +344,10 @@ async fn registry_composes_multiple_owners_but_rejects_duplicate_identity() {
 }
 
 #[tokio::test]
-async fn only_database_fact_reasons_can_disable_the_two_nonexistent_workers() {
+async fn only_database_fact_reasons_can_disable_nonexistent_workers() {
     let mut plan = complete_plan(Vec::new());
     plan.push(WorkerContribution::Registration(registration_value(
-        WorkerKind::NativeClaimRecovery,
+        WorkerKind::OpsFlush,
         "store",
         CountingTask::new(0),
         test_schedule(),
@@ -356,9 +356,7 @@ async fn only_database_fact_reasons_can_disable_the_two_nonexistent_workers() {
 
     assert!(matches!(
         supervisor().start(plan, Arc::new(FakeLeasePort::default())),
-        Err(WorkerStartError::KindDisabled(
-            WorkerKind::NativeClaimRecovery
-        ))
+        Err(WorkerStartError::KindDisabled(WorkerKind::OpsFlush))
     ));
 }
 
@@ -386,15 +384,15 @@ async fn disabled_database_facts_never_execute_or_acquire_a_lease() {
     let snapshot = supervisor.health_source().snapshot();
 
     assert!(snapshot.iter().any(|state| {
-        state.key == WorkerHealthKey::Disabled(WorkerKind::NativeClaimRecovery)
+        state.key == WorkerHealthKey::Disabled(WorkerKind::OpsFlush)
             && state.state == WorkerRuntimeState::Disabled
     }));
-    assert!(leases.requests().iter().all(|request| {
-        !matches!(
-            request.worker().kind(),
-            WorkerKind::NativeClaimRecovery | WorkerKind::OpsFlush
-        )
-    }));
+    assert!(
+        leases
+            .requests()
+            .iter()
+            .all(|request| { request.worker().kind() != WorkerKind::OpsFlush })
+    );
     supervisor.shutdown(Duration::from_secs(1)).await;
 }
 
@@ -705,10 +703,6 @@ fn complete_plan(mut custom: Vec<WorkerContribution>) -> Vec<WorkerContribution>
         }
     }
     custom.push(WorkerContribution::Disabled {
-        kind: WorkerKind::NativeClaimRecovery,
-        reason: WorkerDisabledReason::NoPersistentNativeClaimState,
-    });
-    custom.push(WorkerContribution::Disabled {
         kind: WorkerKind::OpsFlush,
         reason: WorkerDisabledReason::NoBufferedOpsEvents,
     });
@@ -733,10 +727,6 @@ fn all_active_plan(task: impl ScheduledTask + Clone + 'static) -> Vec<WorkerCont
         .into_iter()
         .map(|kind| registration(kind, kind.as_str(), task.clone(), test_schedule(), true))
         .collect::<Vec<_>>();
-    plan.push(WorkerContribution::Disabled {
-        kind: WorkerKind::NativeClaimRecovery,
-        reason: WorkerDisabledReason::NoPersistentNativeClaimState,
-    });
     plan.push(WorkerContribution::Disabled {
         kind: WorkerKind::OpsFlush,
         reason: WorkerDisabledReason::NoBufferedOpsEvents,

@@ -6,7 +6,6 @@
 use std::fmt;
 
 use futures::future::BoxFuture;
-use thiserror::Error;
 
 use crate::engine::credential::ProviderAccountId;
 use crate::error::{IdentifierError, SafeUpstreamValue, validate_text};
@@ -35,13 +34,6 @@ impl PreviousResponseId {
     }
 }
 
-/// Provider 声明的 native handle 复用方式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeContinuationReuse {
-    Reusable,
-    SingleUse,
-}
-
 /// Provider 原生 response handle 的续接范围。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeContinuationScope {
@@ -64,7 +56,6 @@ pub struct NativeContinuationPin {
     provider: ProviderKind,
     instance: ProviderInstanceId,
     account: ProviderAccountId,
-    reuse: NativeContinuationReuse,
     scope: NativeContinuationScope,
 }
 
@@ -76,7 +67,6 @@ impl NativeContinuationPin {
         provider: ProviderKind,
         instance: ProviderInstanceId,
         account: ProviderAccountId,
-        reuse: NativeContinuationReuse,
     ) -> Self {
         Self {
             previous_response_id,
@@ -84,7 +74,6 @@ impl NativeContinuationPin {
             provider,
             instance,
             account,
-            reuse,
             scope: NativeContinuationScope::ConnectionLocal,
         }
     }
@@ -123,11 +112,6 @@ impl NativeContinuationPin {
     }
 
     #[must_use]
-    pub const fn reuse(&self) -> NativeContinuationReuse {
-        self.reuse
-    }
-
-    #[must_use]
     pub const fn scope(&self) -> NativeContinuationScope {
         self.scope
     }
@@ -153,7 +137,6 @@ impl fmt::Debug for NativeContinuationPin {
             .field("provider", &self.provider)
             .field("instance", &self.instance)
             .field("account", &self.account)
-            .field("reuse", &self.reuse)
             .field("scope", &self.scope)
             .finish()
     }
@@ -197,82 +180,6 @@ impl fmt::Debug for ContinuationBinding {
                 .finish(),
         }
     }
-}
-
-/// Request-local 的 single-use claim 状态。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeClaimState {
-    Available,
-    Claimed,
-    Consumed,
-    Ambiguous,
-}
-
-/// 不落库的 native claim 状态机。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NativeClaim {
-    reuse: NativeContinuationReuse,
-    state: NativeClaimState,
-}
-
-impl NativeClaim {
-    #[must_use]
-    pub const fn new(reuse: NativeContinuationReuse) -> Self {
-        Self {
-            reuse,
-            state: NativeClaimState::Available,
-        }
-    }
-
-    #[must_use]
-    pub const fn state(self) -> NativeClaimState {
-        self.state
-    }
-
-    /// 在发送前领取 handle。
-    ///
-    /// # Errors
-    ///
-    /// Single-use handle 已经被领取或终结时返回错误。
-    pub fn claim(&mut self) -> Result<(), ContinuationError> {
-        if self.reuse == NativeContinuationReuse::Reusable {
-            return Ok(());
-        }
-        if self.state != NativeClaimState::Available {
-            return Err(ContinuationError::AlreadyClaimed);
-        }
-        self.state = NativeClaimState::Claimed;
-        Ok(())
-    }
-
-    /// 明确未发送时释放 single-use claim。
-    pub fn release_not_sent(&mut self) {
-        if self.reuse == NativeContinuationReuse::SingleUse
-            && self.state == NativeClaimState::Claimed
-        {
-            self.state = NativeClaimState::Available;
-        }
-    }
-
-    /// 上游明确接收后消费 handle。
-    pub fn consume(&mut self) {
-        if self.reuse == NativeContinuationReuse::SingleUse {
-            self.state = NativeClaimState::Consumed;
-        }
-    }
-
-    /// 发送结果不确定时禁止再次使用 handle。
-    pub fn mark_ambiguous(&mut self) {
-        if self.reuse == NativeContinuationReuse::SingleUse {
-            self.state = NativeClaimState::Ambiguous;
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum ContinuationError {
-    #[error("native continuation handle is already claimed or terminal")]
-    AlreadyClaimed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]

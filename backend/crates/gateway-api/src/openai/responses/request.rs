@@ -411,6 +411,15 @@ pub(super) fn decode_request_inner(
         .get("tools")
         .and_then(Value::as_array)
         .is_some_and(|tools| !tools.is_empty());
+    let image_generation_requested =
+        object
+            .get("tools")
+            .and_then(Value::as_array)
+            .is_some_and(|tools| {
+                tools.iter().any(|tool| {
+                    tool.get("type").and_then(Value::as_str) == Some("image_generation")
+                })
+            });
     let vision_requested = contains_type(object.get("input"), "input_image");
     let reasoning = canonical_reasoning(&object);
     let reasoning_requested = object.get("reasoning").is_some_and(Value::is_object);
@@ -438,6 +447,7 @@ pub(super) fn decode_request_inner(
     })?;
     let mut request = GenerateRequest::from_protocol_payload(messages, payload)
         .with_estimated_context_tokens(input_token_estimate)
+        .with_image_generation_requested(image_generation_requested)
         .with_provider_options(provider_options)
         .with_response_persistence(if store {
             ResponsePersistence::Store
