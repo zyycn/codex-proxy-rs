@@ -117,7 +117,7 @@ async fn settings_post_should_replace_provider_scoped_model_mappings() {
     let response = app(fixture.state())
         .oneshot(request(
             Method::POST,
-            "/api/admin/settings",
+            "/api/admin/settings/update",
             Some(update_body()),
         ))
         .await
@@ -196,7 +196,7 @@ async fn admin_key_delete_should_use_fixed_post_path() {
     let response = app(fixture.state())
         .oneshot(request(
             Method::POST,
-            "/api/admin/settings/admin-api-key",
+            "/api/admin/settings/admin-api-key/delete",
             None,
         ))
         .await

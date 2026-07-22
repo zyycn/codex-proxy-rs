@@ -9,9 +9,9 @@ use gateway_core::engine::credential::{
     OpaqueProviderData, ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
     QuotaObservation,
 };
-use gateway_core::routing::{ConfigRevision, InstanceHealth, ProviderInstance, ProviderKind};
+use gateway_core::routing::ConfigRevision;
 use provider_xai::{
-    GROK_CLI_BASE_URL, GrokBillingRequest, GrokBillingTransport, GrokBillingTransportError,
+    GrokBillingRequest, GrokBillingTransport, GrokBillingTransportError,
     GrokBillingTransportErrorKind, GrokBillingTransportFuture, GrokBillingTransportResponse,
     GrokCredentialCatalogCache, GrokCredentialCatalogError, GrokCredentialCatalogSeed,
     GrokCredentialRepository, GrokModelCatalogRequest, GrokModelCatalogTransport,
@@ -21,8 +21,7 @@ use provider_xai::{
 };
 
 use crate::support::{
-    MemoryGrokCatalogCache, MemoryProviderAccountStore, account_id, create_input, instance_id,
-    seed_input,
+    MemoryGrokCatalogCache, MemoryProviderAccountStore, account_id, create_input, seed_input,
 };
 
 const OFFICIAL_FIXTURE: &[u8] =
@@ -138,16 +137,6 @@ impl GrokBillingTransport for MutatingBillingTransport {
     }
 }
 
-fn instance() -> ProviderInstance {
-    ProviderInstance::new(
-        instance_id(),
-        ProviderKind::new("xai").expect("provider"),
-        GROK_CLI_BASE_URL.to_owned(),
-        true,
-        InstanceHealth::Healthy,
-    )
-}
-
 async fn repository_with_accounts(
     suffixes: &[(&str, &str)],
 ) -> (Arc<MemoryProviderAccountStore>, GrokCredentialRepository) {
@@ -210,17 +199,11 @@ async fn synchronization_caches_each_account_and_returns_strict_union() {
     let service = crate::support::grok_catalog_service(repository, transport, cache_port);
     assert_eq!(service.catalog_generation().get(), 0);
     let snapshot = service
-        .synchronize_instance(
-            &instance(),
-            ConfigRevision::new(7).expect("config revision"),
-        )
+        .synchronize(ConfigRevision::new(7).expect("config revision"))
         .await
         .expect("catalog sync");
     assert_eq!(service.catalog_generation().get(), 1);
-    service
-        .query_instance_models(&instance())
-        .await
-        .expect("same catalog sync");
+    service.query_models().await.expect("same catalog sync");
     assert_eq!(service.catalog_generation().get(), 1);
 
     assert_eq!(snapshot.accounts().len(), 2);
@@ -304,7 +287,7 @@ async fn disabled_accounts_are_not_sent_to_catalog_transport() {
     );
     assert!(matches!(
         service
-            .synchronize_instance(&instance(), ConfigRevision::new(1).expect("revision"))
+            .synchronize(ConfigRevision::new(1).expect("revision"))
             .await,
         Err(GrokCredentialCatalogError::NoEligibleCredential)
     ));
@@ -333,7 +316,7 @@ async fn quota_exhausted_account_remains_eligible_for_catalog_discovery() {
     );
 
     let snapshot = service
-        .synchronize_instance(&instance(), ConfigRevision::new(1).expect("revision"))
+        .synchronize(ConfigRevision::new(1).expect("revision"))
         .await
         .expect("discover catalog through quota exhausted account");
 
@@ -351,7 +334,7 @@ async fn one_upstream_failure_rejects_the_whole_catalog_cycle() {
     );
     assert!(matches!(
         service
-            .synchronize_instance(&instance(), ConfigRevision::new(1).expect("revision"))
+            .synchronize(ConfigRevision::new(1).expect("revision"))
             .await,
         Err(GrokCredentialCatalogError::Upstream)
     ));
@@ -374,7 +357,7 @@ async fn conflicting_facts_for_same_slug_fail_closed() {
     );
     assert!(matches!(
         service
-            .synchronize_instance(&instance(), ConfigRevision::new(1).expect("revision"))
+            .synchronize(ConfigRevision::new(1).expect("revision"))
             .await,
         Err(GrokCredentialCatalogError::ConflictingModelFacts)
     ));

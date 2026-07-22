@@ -42,7 +42,7 @@ use gateway_core::provider_ports::{
     OAuthPendingTakeOutcome, ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError,
     ProviderStoreErrorKind,
 };
-use gateway_core::routing::{ProviderInstanceId, ProviderKind, UpstreamModelId};
+use gateway_core::routing::{ProviderKind, UpstreamModelId};
 use serde::Deserialize;
 use serde_json::{Map, Number, Value};
 use sha2::{Digest as _, Sha256};
@@ -62,7 +62,7 @@ use crate::credential::{
 };
 use crate::transport::{GROK_CLI_BASE_URL, XAI_PROVIDER_NAME, grok_billing_breakdown};
 
-const PENDING_SCHEMA_VERSION: u64 = 1;
+const PENDING_SCHEMA_VERSION: u64 = 2;
 const PENDING_TTL: TimeDelta = TimeDelta::minutes(30);
 const MAX_PENDING_TEXT_BYTES: usize = 512;
 
@@ -325,7 +325,6 @@ impl ProviderAdmin for XaiAdminProvider {
                             Uuid::now_v7().simple()
                         ))
                         .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?,
-                        provider_instance_id: command.provider_instance_id.clone(),
                         name,
                         email,
                         upstream_account_id: None,
@@ -340,7 +339,6 @@ impl ProviderAdmin for XaiAdminProvider {
         }
         Ok(PreparedCredentialImport {
             provider_kind: self.provider_kind.clone(),
-            provider_instance_id: command.provider_instance_id,
             credentials,
         })
     }
@@ -353,7 +351,6 @@ impl ProviderAdmin for XaiAdminProvider {
             return Err(provider_error(ProviderAdminErrorKind::Invalid));
         }
         if let AuthorizationMutationTarget::Reauthorize {
-            provider_instance_id,
             account_id,
             expected_credential_revision,
         } = pending.target()
@@ -365,9 +362,7 @@ impl ProviderAdmin for XaiAdminProvider {
                 .load_credential(account_id, revision)
                 .await
                 .map_err(map_store_error)?;
-            if current.account.provider() != &self.provider_kind
-                || current.account.instance() != provider_instance_id
-            {
+            if current.account.provider() != &self.provider_kind {
                 return Err(provider_error(ProviderAdminErrorKind::NotFound));
             }
         }
@@ -410,10 +405,7 @@ impl ProviderAdmin for XaiAdminProvider {
             .await
             .map_err(map_provider_store_error)?;
         let credential = match stored.mutation.target() {
-            AuthorizationMutationTarget::Create {
-                provider_instance_id,
-                name,
-            } => {
+            AuthorizationMutationTarget::Create { name } => {
                 let prepared = GrokCredentialAdmin
                     .prepare_verified_account(
                         &VerifiedGrokAccount {
@@ -422,7 +414,6 @@ impl ProviderAdmin for XaiAdminProvider {
                                 Uuid::now_v7().simple()
                             ))
                             .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?,
-                            provider_instance_id: provider_instance_id.clone(),
                             name: name.clone(),
                             email: None,
                             upstream_account_id: None,
@@ -436,7 +427,6 @@ impl ProviderAdmin for XaiAdminProvider {
                 PreparedAuthorizationCredential::Create(prepared_create(prepared, Utc::now())?)
             }
             AuthorizationMutationTarget::Reauthorize {
-                provider_instance_id,
                 account_id,
                 expected_credential_revision,
             } => {
@@ -447,15 +437,12 @@ impl ProviderAdmin for XaiAdminProvider {
                     .load_credential(account_id, revision)
                     .await
                     .map_err(map_store_error)?;
-                if current.account.provider() != &self.provider_kind
-                    || current.account.instance() != provider_instance_id
-                {
+                if current.account.provider() != &self.provider_kind {
                     return Err(provider_error(ProviderAdminErrorKind::NotFound));
                 }
                 let prepared = verified_rotation(current, tokens, policy)?;
                 PreparedAuthorizationCredential::Reauthorize(prepared_rotation(
                     prepared,
-                    provider_instance_id.clone(),
                     self.provider_kind.clone(),
                 )?)
             }
@@ -524,11 +511,7 @@ impl ProviderAdmin for XaiAdminProvider {
             .await
             .map_err(map_provider_store_error)?;
         let prepared = verified_rotation(current, tokens, policy)?;
-        prepared_rotation(
-            prepared,
-            command.account.provider_instance_id,
-            command.account.provider_kind,
-        )
+        prepared_rotation(prepared, command.account.provider_kind)
     }
 
     async fn prepare_refresh(
@@ -549,11 +532,7 @@ impl ProviderAdmin for XaiAdminProvider {
             .prepare_manual_refresh(&account_id, revision)
             .await
             .map_err(map_refresh_error)?;
-        prepared_rotation(
-            prepared,
-            command.account.provider_instance_id,
-            command.account.provider_kind,
-        )
+        prepared_rotation(prepared, command.account.provider_kind)
     }
 
     async fn quota(
@@ -735,7 +714,6 @@ fn prepared_create(
     } = prepared;
     Ok(PreparedCredentialCreate {
         account_id: account.id().clone(),
-        provider_instance_id: account.instance().clone(),
         provider_kind: account.provider().clone(),
         name: account.name().to_owned(),
         email: account.email().map(str::to_owned),
@@ -756,7 +734,6 @@ fn prepared_create(
 
 fn prepared_rotation(
     prepared: PreparedGrokCredentialRotation,
-    provider_instance_id: ProviderInstanceId,
     provider_kind: ProviderKind,
 ) -> Result<PreparedCredentialRotation, ProviderAdminError> {
     let (profile, credential, guard) = prepared.into_parts();
@@ -775,7 +752,6 @@ fn prepared_rotation(
     Ok(PreparedCredentialRotation::new(
         PreparedCredentialRotationFacts {
             account_id,
-            provider_instance_id,
             provider_kind,
             expected_credential_revision: Revision::new(expected_revision.get())
                 .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?,
@@ -812,7 +788,6 @@ fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, Provi
         .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
     Ok(ProviderAccount::new(
         account_id,
-        account.provider_instance_id.clone(),
         account.provider_kind.clone(),
         account.name.clone(),
         account.upstream_user_id.clone(),
@@ -837,7 +812,6 @@ fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, Provi
 
 fn account_matches_record(account: &ProviderAccount, record: &AccountRecord) -> bool {
     account.id().as_str() == record.id
-        && account.instance() == &record.provider_instance_id
         && account.provider() == &record.provider_kind
         && account.revision().get() == record.credential_revision.get()
         && account.name() == record.name
@@ -1029,11 +1003,9 @@ struct PendingMutationDocument {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum PendingTargetDocument {
     Create {
-        provider_instance_id: String,
         name: String,
     },
     Reauthorize {
-        provider_instance_id: String,
         account_id: String,
         expected_credential_revision: u64,
     },
@@ -1101,27 +1073,15 @@ fn encode_mutation(mutation: &PendingAuthorizationMutation) -> Map<String, Value
 fn encode_target(target: &AuthorizationMutationTarget) -> Map<String, Value> {
     let mut document = Map::new();
     match target {
-        AuthorizationMutationTarget::Create {
-            provider_instance_id,
-            name,
-        } => {
+        AuthorizationMutationTarget::Create { name } => {
             document.insert("kind".to_owned(), Value::String("create".to_owned()));
-            document.insert(
-                "provider_instance_id".to_owned(),
-                Value::String(provider_instance_id.to_string()),
-            );
             document.insert("name".to_owned(), Value::String(name.clone()));
         }
         AuthorizationMutationTarget::Reauthorize {
-            provider_instance_id,
             account_id,
             expected_credential_revision,
         } => {
             document.insert("kind".to_owned(), Value::String("reauthorize".to_owned()));
-            document.insert(
-                "provider_instance_id".to_owned(),
-                Value::String(provider_instance_id.to_string()),
-            );
             document.insert(
                 "account_id".to_owned(),
                 Value::String(account_id.to_string()),
@@ -1194,21 +1154,11 @@ fn decode_mutation(
     let provider_kind = ProviderKind::new(document.provider_kind)
         .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
     let target = match document.target {
-        PendingTargetDocument::Create {
-            provider_instance_id,
-            name,
-        } => AuthorizationMutationTarget::Create {
-            provider_instance_id: ProviderInstanceId::new(provider_instance_id)
-                .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?,
-            name,
-        },
+        PendingTargetDocument::Create { name } => AuthorizationMutationTarget::Create { name },
         PendingTargetDocument::Reauthorize {
-            provider_instance_id,
             account_id,
             expected_credential_revision,
         } => AuthorizationMutationTarget::Reauthorize {
-            provider_instance_id: ProviderInstanceId::new(provider_instance_id)
-                .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?,
             account_id: ProviderAccountId::new(account_id)
                 .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?,
             expected_credential_revision: Revision::new(expected_credential_revision)
@@ -1410,7 +1360,7 @@ fn map_quota_error(error: GrokQuotaError) -> ProviderAdminError {
 fn map_catalog_error(error: GrokCredentialCatalogError) -> ProviderAdminError {
     use GrokCredentialCatalogError as Error;
     provider_error(match error {
-        Error::InvalidInstance | Error::InvalidCredentialData | Error::ConflictingModelFacts => {
+        Error::InvalidCredentialData | Error::ConflictingModelFacts => {
             ProviderAdminErrorKind::Invalid
         }
         Error::NoEligibleCredential => ProviderAdminErrorKind::NotFound,

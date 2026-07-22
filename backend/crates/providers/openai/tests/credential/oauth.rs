@@ -24,7 +24,7 @@ use secrecy::{ExposeSecret, SecretString};
 use sha2::{Digest as _, Sha256};
 use url::Url;
 
-use crate::support::{MemoryAccountStore, instance_id, profile, runtime_policy, secret};
+use crate::support::{MemoryAccountStore, profile, runtime_policy, secret};
 
 #[derive(Default)]
 struct PendingStore {
@@ -45,7 +45,6 @@ impl CodexOAuthPendingStore for PendingStore {
             flow_id: pending.flow_id().to_owned(),
             owner_ref: pending.owner_ref().to_owned(),
             started_request_ref: pending.started_request_ref().to_owned(),
-            provider_instance_id: pending.provider_instance_id().to_owned(),
             name: pending.name().to_owned(),
             expires_at: pending.expires_at(),
             state: pending.state().clone(),
@@ -176,7 +175,6 @@ fn create_mutation(request_id: &str) -> PendingAuthorizationMutation {
         Revision::new(1).expect("revision"),
         ProviderKind::new("openai").expect("provider"),
         AuthorizationMutationTarget::Create {
-            provider_instance_id: instance_id(),
             name: "OAuth Account".to_owned(),
         },
         AuthorizationOwnerBinding::from_context(&context),
@@ -189,7 +187,6 @@ fn reauthorization_mutation(request_id: &str, account_id: &str) -> PendingAuthor
         Revision::new(1).expect("revision"),
         ProviderKind::new("openai").expect("provider"),
         AuthorizationMutationTarget::Reauthorize {
-            provider_instance_id: instance_id(),
             account_id: ProviderAccountId::new(account_id).expect("account id"),
             expected_credential_revision: Revision::new(1).expect("revision"),
         },
@@ -317,7 +314,6 @@ async fn reauthorization_binds_account_revision_and_returns_only_prepared_rotati
     store
         .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: "acct_oauth_reauth".to_owned(),
-            provider_instance_id: instance_id().to_string(),
             name: "reauthorize".to_owned(),
             secret: secret("old-oauth-access"),
             verified_account: profile("chatgpt-oauth"),
@@ -414,7 +410,6 @@ async fn reauthorization_rejects_identity_rebinding() {
     store
         .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: "acct_oauth_rebind".to_owned(),
-            provider_instance_id: instance_id().to_string(),
             name: "reauthorize".to_owned(),
             secret: secret("old-oauth-access"),
             verified_account: profile("chatgpt-oauth"),

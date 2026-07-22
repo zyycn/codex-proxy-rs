@@ -1,4 +1,4 @@
-//! 唯一的账号重试、Provider instance 切换、发送与下游 commit barrier owner。
+//! 唯一的账号重试、发送与下游 commit barrier owner。
 
 use std::collections::{BTreeSet, VecDeque};
 use std::num::NonZeroU32;
@@ -89,8 +89,6 @@ where
             commit_policy,
             account_state_owner,
             cancellation,
-            candidate_index: 0,
-            last_attempt_candidate_index: None,
             attempts: 0,
             excluded_accounts: BTreeSet::new(),
             credential_recovery_attempted_accounts: BTreeSet::new(),
@@ -151,7 +149,7 @@ enum StreamCommitPolicy {
 
 /// API 可逐事件消费的 Core 执行会话。
 ///
-/// API 只能提交下游 delivery 边界；账号重试、Provider instance 切换、断流终结与
+/// API 只能提交下游 delivery 边界；账号重试、断流终结与
 /// `model_requests` 写回均留在本类型内。
 pub struct ResponseExecutionSession<S: ?Sized> {
     engine: Arc<GatewayEngine<S>>,
@@ -167,8 +165,6 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     commit_policy: StreamCommitPolicy,
     account_state_owner: Option<ProviderAccountStateOwner>,
     cancellation: CancellationToken,
-    candidate_index: usize,
-    last_attempt_candidate_index: Option<usize>,
     attempts: u32,
     excluded_accounts: BTreeSet<crate::engine::credential::ProviderAccountId>,
     credential_recovery_attempted_accounts: BTreeSet<crate::engine::credential::ProviderAccountId>,
@@ -443,220 +439,199 @@ where
     }
 
     async fn prepare_attempt(&mut self) -> Result<(), EngineError> {
-        loop {
-            if self.attempts >= self.plan.max_attempts().get() {
-                return Err(EngineError::EmptyRoutingPlan);
-            }
-            let Some(candidate) = self.plan.candidates().get(self.candidate_index).cloned() else {
-                let error = GatewayError::new(
-                    GatewayErrorKind::NoAvailableProvider,
-                    "no upstream account or Provider instance is available",
-                );
-                self.finish_failure(FailureFinalization {
-                    outcome: ExecutionOutcome::Failed,
-                    send_state: self.current_send_state(),
-                    error,
-                    upstream_status_code: None,
-                    provider_error_code: None,
-                    retry_after_ms: None,
-                    provider_response_id: None,
-                })
-                .await?;
-                return Err(EngineError::EmptyRoutingPlan);
-            };
-            let next_attempt = self
-                .attempts
-                .checked_add(1)
-                .and_then(NonZeroU32::new)
-                .ok_or(EngineError::EmptyRoutingPlan)?;
-            let context = AttemptContext::new(
-                RequestAttemptContext::new(
-                    self.request_id.clone(),
-                    self.client_api_key_ref.clone(),
-                ),
-                next_attempt,
-                self.deadline,
-                self.plan.account_selection_policy(),
-                AccountAttemptContext::new(
-                    self.excluded_accounts.clone(),
-                    self.required_account.clone(),
-                    self.account_state_owner.clone(),
-                )
-                .with_credential_recovery_attempted(
-                    self.required_account.as_ref().is_some_and(|account| {
-                        self.credential_recovery_attempted_accounts
-                            .contains(account)
-                    }),
-                ),
-                self.continuation.clone(),
-                self.cancellation.clone(),
-            )
-            .with_continuation_attempt(self.continuation_attempt);
-            let trigger = if self.attempts == 0 {
-                AttemptTrigger::Initial
-            } else if self.last_attempt_candidate_index == Some(self.candidate_index) {
-                AttemptTrigger::AccountRetry
-            } else {
-                AttemptTrigger::InstanceFallback
-            };
-            let provider = self
-                .engine
-                .providers()
-                .get(candidate.provider())
-                .cloned()
-                .ok_or_else(|| EngineError::ProviderNotRegistered {
-                    provider: candidate.provider().as_str().to_owned(),
-                })?;
-            let provider_request = ProviderRequest::new(self.operation.clone(), candidate.clone());
-            let stream = match poll_provider(
-                provider,
-                provider_request,
-                context,
-                self.cancellation.clone(),
-                self.deadline,
-            )
-            .await
-            {
-                ProviderBoundary::Cancelled => {
-                    self.finish_interruption(EngineError::Cancelled).await?;
-                    return Err(EngineError::Cancelled);
-                }
-                ProviderBoundary::Deadline => {
-                    self.record_provider_failure(
-                        candidate.instance().clone(),
-                        ProviderErrorKind::Timeout,
-                    );
-                    self.finish_interruption(EngineError::Deadline).await?;
-                    return Err(EngineError::Deadline);
-                }
-                ProviderBoundary::Result(result) => match *result {
-                    Ok(stream) => stream,
-                    Err(error) => {
-                        if error.kind() != ProviderErrorKind::Unavailable
-                            || error.send_state() != UpstreamSendState::NotSent
-                        {
-                            self.record_provider_failure(
-                                candidate.instance().clone(),
-                                error.kind(),
-                            );
-                        }
-                        let provider_proved_replay_safe = provider_proved_replay_safe(&error);
-                        if self.can_fallback_instance(provider_proved_replay_safe) {
-                            self.candidate_index += 1;
-                            continue;
-                        }
-                        let engine_error = provider_engine_error(&error);
-                        self.finish_provider_error(&error).await?;
-                        return Err(engine_error);
-                    }
-                },
-            };
-            if !stream.metadata().confirms(&candidate) {
-                self.record_provider_failure(
-                    candidate.instance().clone(),
-                    ProviderErrorKind::Protocol,
-                );
-                let error = GatewayError::new(
-                    GatewayErrorKind::Internal,
-                    "provider metadata did not match the frozen candidate",
-                );
-                self.finish_failure(FailureFinalization {
-                    outcome: ExecutionOutcome::Failed,
-                    send_state: self.current_send_state(),
-                    error,
-                    upstream_status_code: None,
-                    provider_error_code: None,
-                    retry_after_ms: None,
-                    provider_response_id: None,
-                })
-                .await?;
-                return Err(EngineError::ProviderMetadataMismatch);
-            }
-
-            let metadata = stream.metadata().clone();
-            if self
-                .required_account
-                .as_ref()
-                .is_some_and(|required| metadata.provider_account_id() != Some(required))
-            {
-                let error = GatewayError::new(
-                    GatewayErrorKind::Internal,
-                    "provider did not use the required account",
-                );
-                self.finish_failure(FailureFinalization {
-                    outcome: ExecutionOutcome::Failed,
-                    send_state: self.current_send_state(),
-                    error,
-                    upstream_status_code: None,
-                    provider_error_code: None,
-                    retry_after_ms: None,
-                    provider_response_id: None,
-                })
-                .await?;
-                return Err(EngineError::RequiredAccountMismatch);
-            }
-            if let Some(pin) = self
-                .continuation
-                .as_ref()
-                .and_then(ContinuationBinding::pinned)
-                && self.continuation_attempt == ContinuationAttempt::Native
-                && !metadata.provider_account_id().is_some_and(|account| {
-                    pin.matches(metadata.provider(), metadata.instance(), account)
-                })
-            {
-                let error = GatewayError::new(
-                    GatewayErrorKind::Internal,
-                    "native continuation binding did not match selected account",
-                );
-                self.finish_failure(FailureFinalization {
-                    outcome: ExecutionOutcome::Failed,
-                    send_state: self.current_send_state(),
-                    error,
-                    upstream_status_code: None,
-                    provider_error_code: None,
-                    retry_after_ms: None,
-                    provider_response_id: None,
-                })
-                .await?;
-                return Err(EngineError::ContinuationPinMismatch);
-            }
-            if self.account_state_owner.is_none()
-                && let Some(account) = metadata.provider_account_id()
-            {
-                self.account_state_owner = Some(ProviderAccountStateOwner::new(
-                    metadata.provider().clone(),
-                    metadata.instance().clone(),
-                    account.clone(),
-                ));
-            }
-            self.engine
-                .store()
-                .record_attempt(AttemptRecord {
-                    request_id: self.request_id.clone(),
-                    attempt_count: next_attempt,
-                    trigger,
-                    provider_instance_id: metadata.instance().clone(),
-                    provider_kind: metadata.provider().clone(),
-                    provider_account_id: metadata.provider_account_id().cloned(),
-                    provider_account_ref: metadata.provider_account_id().cloned(),
-                    upstream_model_id: metadata.upstream_model().clone(),
-                    upstream_transport: metadata.transport().as_str().to_owned(),
-                    http_version: None,
-                })
-                .await?;
-            self.attempts = next_attempt.get();
-            self.last_attempt_candidate_index = Some(self.candidate_index);
-            self.current = Some(CurrentAttempt {
-                stream,
-                metadata,
-                trigger,
-                index: next_attempt,
-                started_at: SystemTime::now(),
-                send_observed: false,
-                response_observation: None,
-            });
-            return Ok(());
+        if self.attempts >= self.plan.max_attempts().get() {
+            return Err(EngineError::EmptyRoutingPlan);
         }
+        let Some(candidate) = self.plan.candidates().first().cloned() else {
+            let error = GatewayError::new(
+                GatewayErrorKind::NoAvailableProvider,
+                "no upstream Provider is available",
+            );
+            self.finish_failure(FailureFinalization {
+                outcome: ExecutionOutcome::Failed,
+                send_state: self.current_send_state(),
+                error,
+                upstream_status_code: None,
+                provider_error_code: None,
+                retry_after_ms: None,
+                provider_response_id: None,
+            })
+            .await?;
+            return Err(EngineError::EmptyRoutingPlan);
+        };
+        let next_attempt = self
+            .attempts
+            .checked_add(1)
+            .and_then(NonZeroU32::new)
+            .ok_or(EngineError::EmptyRoutingPlan)?;
+        let context = AttemptContext::new(
+            RequestAttemptContext::new(self.request_id.clone(), self.client_api_key_ref.clone()),
+            next_attempt,
+            self.deadline,
+            self.plan.account_selection_policy(),
+            AccountAttemptContext::new(
+                self.excluded_accounts.clone(),
+                self.required_account.clone(),
+                self.account_state_owner.clone(),
+            )
+            .with_credential_recovery_attempted(
+                self.required_account.as_ref().is_some_and(|account| {
+                    self.credential_recovery_attempted_accounts
+                        .contains(account)
+                }),
+            ),
+            self.continuation.clone(),
+            self.cancellation.clone(),
+        )
+        .with_continuation_attempt(self.continuation_attempt);
+        let trigger = if self.attempts == 0 {
+            AttemptTrigger::Initial
+        } else {
+            AttemptTrigger::AccountRetry
+        };
+        let provider = self
+            .engine
+            .providers()
+            .get(candidate.provider())
+            .cloned()
+            .ok_or_else(|| EngineError::ProviderNotRegistered {
+                provider: candidate.provider().as_str().to_owned(),
+            })?;
+        let provider_request = ProviderRequest::new(self.operation.clone(), candidate.clone());
+        let stream = match poll_provider(
+            provider,
+            provider_request,
+            context,
+            self.cancellation.clone(),
+            self.deadline,
+        )
+        .await
+        {
+            ProviderBoundary::Cancelled => {
+                self.finish_interruption(EngineError::Cancelled).await?;
+                return Err(EngineError::Cancelled);
+            }
+            ProviderBoundary::Deadline => {
+                self.record_provider_failure(
+                    candidate.provider().clone(),
+                    ProviderErrorKind::Timeout,
+                );
+                self.finish_interruption(EngineError::Deadline).await?;
+                return Err(EngineError::Deadline);
+            }
+            ProviderBoundary::Result(result) => match *result {
+                Ok(stream) => stream,
+                Err(error) => {
+                    if error.kind() != ProviderErrorKind::Unavailable
+                        || error.send_state() != UpstreamSendState::NotSent
+                    {
+                        self.record_provider_failure(candidate.provider().clone(), error.kind());
+                    }
+                    let engine_error = provider_engine_error(&error);
+                    self.finish_provider_error(&error).await?;
+                    return Err(engine_error);
+                }
+            },
+        };
+        if !stream.metadata().confirms(&candidate) {
+            self.record_provider_failure(candidate.provider().clone(), ProviderErrorKind::Protocol);
+            let error = GatewayError::new(
+                GatewayErrorKind::Internal,
+                "provider metadata did not match the frozen candidate",
+            );
+            self.finish_failure(FailureFinalization {
+                outcome: ExecutionOutcome::Failed,
+                send_state: self.current_send_state(),
+                error,
+                upstream_status_code: None,
+                provider_error_code: None,
+                retry_after_ms: None,
+                provider_response_id: None,
+            })
+            .await?;
+            return Err(EngineError::ProviderMetadataMismatch);
+        }
+
+        let metadata = stream.metadata().clone();
+        if self
+            .required_account
+            .as_ref()
+            .is_some_and(|required| metadata.provider_account_id() != Some(required))
+        {
+            let error = GatewayError::new(
+                GatewayErrorKind::Internal,
+                "provider did not use the required account",
+            );
+            self.finish_failure(FailureFinalization {
+                outcome: ExecutionOutcome::Failed,
+                send_state: self.current_send_state(),
+                error,
+                upstream_status_code: None,
+                provider_error_code: None,
+                retry_after_ms: None,
+                provider_response_id: None,
+            })
+            .await?;
+            return Err(EngineError::RequiredAccountMismatch);
+        }
+        if let Some(pin) = self
+            .continuation
+            .as_ref()
+            .and_then(ContinuationBinding::pinned)
+            && self.continuation_attempt == ContinuationAttempt::Native
+            && !metadata
+                .provider_account_id()
+                .is_some_and(|account| pin.matches(metadata.provider(), account))
+        {
+            let error = GatewayError::new(
+                GatewayErrorKind::Internal,
+                "native continuation binding did not match selected account",
+            );
+            self.finish_failure(FailureFinalization {
+                outcome: ExecutionOutcome::Failed,
+                send_state: self.current_send_state(),
+                error,
+                upstream_status_code: None,
+                provider_error_code: None,
+                retry_after_ms: None,
+                provider_response_id: None,
+            })
+            .await?;
+            return Err(EngineError::ContinuationPinMismatch);
+        }
+        if self.account_state_owner.is_none()
+            && let Some(account) = metadata.provider_account_id()
+        {
+            self.account_state_owner = Some(ProviderAccountStateOwner::new(
+                metadata.provider().clone(),
+                account.clone(),
+            ));
+        }
+        self.engine
+            .store()
+            .record_attempt(AttemptRecord {
+                request_id: self.request_id.clone(),
+                attempt_count: next_attempt,
+                trigger,
+                provider_kind: metadata.provider().clone(),
+                provider_account_id: metadata.provider_account_id().cloned(),
+                provider_account_ref: metadata.provider_account_id().cloned(),
+                upstream_model_id: metadata.upstream_model().clone(),
+                upstream_transport: metadata.transport().as_str().to_owned(),
+                http_version: None,
+            })
+            .await?;
+        self.attempts = next_attempt.get();
+        self.current = Some(CurrentAttempt {
+            stream,
+            metadata,
+            trigger,
+            index: next_attempt,
+            started_at: SystemTime::now(),
+            send_observed: false,
+            response_observation: None,
+        });
+        Ok(())
     }
 
     async fn observe_event(&mut self, event: &GatewayEvent) -> Result<(), EngineError> {
@@ -757,7 +732,7 @@ where
     /// 返回 `true` 表示调用方必须丢弃本 attempt 已收集的未提交事件。
     async fn handle_stream_error(&mut self, error: ProviderError) -> Result<bool, EngineError> {
         let current = self.current.take().ok_or(EngineError::EmptyRoutingPlan)?;
-        self.record_provider_failure(current.metadata.instance().clone(), error.kind());
+        self.record_provider_failure(current.metadata.provider().clone(), error.kind());
         let send_state = if current.send_observed {
             UpstreamSendState::Sent
         } else {
@@ -810,18 +785,12 @@ where
             {
                 self.excluded_accounts.insert(account.clone());
             }
-            if error.kind() == ProviderErrorKind::Unsupported
-                && self.can_fallback_instance(provider_proved_replay_safe)
-            {
-                self.candidate_index += 1;
-            }
             self.engine
                 .store()
                 .record_intermediate_failure(IntermediateFailure {
                     request_id: self.request_id.clone(),
                     attempt_index: current.index,
                     trigger: current.trigger,
-                    instance_id: current.metadata.instance().clone(),
                     provider_kind: current.metadata.provider().clone(),
                     account_id: current.metadata.provider_account_id().cloned(),
                     upstream_model_id: current.metadata.upstream_model().clone(),
@@ -905,29 +874,6 @@ where
         self.timings.first_token_ms = None;
         self.upstream_complete = false;
         self.before_commit.clear();
-    }
-
-    fn can_fallback_instance(&self, provider_proved_replay_safe: bool) -> bool {
-        if self.required_account.is_some()
-            || self.candidate_index + 1 >= self.plan.candidates().len()
-        {
-            return false;
-        }
-        let next = &self.plan.candidates()[self.candidate_index + 1];
-        match self.continuation_attempt {
-            ContinuationAttempt::None => {
-                self.operation.retry_safety() == RetrySafety::Idempotent
-                    || provider_proved_replay_safe
-            }
-            ContinuationAttempt::ReplayAny => {
-                provider_proved_replay_safe
-                    && self
-                        .operation
-                        .provider_session_state(next.provider().as_str())
-                        .is_some()
-            }
-            ContinuationAttempt::Native | ContinuationAttempt::ReplayOwner => false,
-        }
     }
 
     async fn finish_success(&mut self) -> Result<(), EngineError> {
@@ -1172,36 +1118,34 @@ where
     }
 
     fn record_current_provider_success(&mut self) {
-        let instance_id = self
+        let provider_kind = self
             .current
             .as_ref()
-            .map(|current| current.metadata.instance().clone());
-        if let Some(instance_id) = instance_id {
+            .map(|current| current.metadata.provider().clone());
+        if let Some(provider_kind) = provider_kind {
             self.provider_attempt_outcomes
-                .push(ProviderAttemptOutcome::Succeeded {
-                    provider_instance_id: instance_id,
-                });
+                .push(ProviderAttemptOutcome::Succeeded { provider_kind });
         }
     }
 
     fn record_current_provider_failure(&mut self, error_kind: ProviderErrorKind) {
-        let instance_id = self
+        let provider_kind = self
             .current
             .as_ref()
-            .map(|current| current.metadata.instance().clone());
-        if let Some(instance_id) = instance_id {
-            self.record_provider_failure(instance_id, error_kind);
+            .map(|current| current.metadata.provider().clone());
+        if let Some(provider_kind) = provider_kind {
+            self.record_provider_failure(provider_kind, error_kind);
         }
     }
 
     fn record_provider_failure(
         &mut self,
-        provider_instance_id: crate::routing::ProviderInstanceId,
+        provider_kind: crate::routing::ProviderKind,
         error_kind: ProviderErrorKind,
     ) {
         self.provider_attempt_outcomes
             .push(ProviderAttemptOutcome::Failed {
-                provider_instance_id,
+                provider_kind,
                 error_kind,
             });
     }

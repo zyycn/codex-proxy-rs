@@ -12,9 +12,7 @@ use gateway_admin::{
         provider_credentials::{CredentialCommitGuard, ProviderDocument},
         settings::AdminApiKey,
     },
-    ports::store::{
-        AccountStore, AuthStore, CatalogStore, ClientKeyStore, ObservabilityStore, SettingsStore,
-    },
+    ports::store::{AccountStore, AuthStore, ClientKeyStore, ObservabilityStore, SettingsStore},
 };
 
 mod use_case;
@@ -98,7 +96,6 @@ fn all_store_capability_traits_should_be_object_safe() {
 
     assert_object_safe::<dyn AccountStore>();
     assert_object_safe::<dyn AuthStore>();
-    assert_object_safe::<dyn CatalogStore>();
     assert_object_safe::<dyn ClientKeyStore>();
     assert_object_safe::<dyn ObservabilityStore>();
     assert_object_safe::<dyn SettingsStore>();

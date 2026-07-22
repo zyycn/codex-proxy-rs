@@ -77,7 +77,7 @@ pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {
         {
             GatewayError::new(
                 GatewayErrorKind::NoAvailableProvider,
-                "no upstream Provider instance or account is currently available",
+                "no upstream provider is currently available for this request",
             )
         }
         EngineError::Provider(error) => GatewayError::from_provider(error),
@@ -90,7 +90,7 @@ pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {
         EngineError::ProviderNotRegistered { .. } | EngineError::EmptyRoutingPlan => {
             GatewayError::new(
                 GatewayErrorKind::NoAvailableProvider,
-                "no upstream Provider instance or account is currently available",
+                "no upstream provider is currently available for this request",
             )
         }
         EngineError::Store(_)

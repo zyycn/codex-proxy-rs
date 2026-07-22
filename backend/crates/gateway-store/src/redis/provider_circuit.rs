@@ -1,4 +1,4 @@
-//! Provider instance 的可重建 Redis circuit。
+//! Provider 的可重建 Redis circuit。
 
 use std::num::NonZeroU32;
 use std::time::Duration;
@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use gateway_core::engine::execution::{
     ProviderCircuitDecision as CoreCircuitDecision, ProviderCircuitError, ProviderCircuitPort,
 };
-use gateway_core::routing::ProviderInstanceId;
+use gateway_core::routing::ProviderKind;
 use redis::{Script, aio::ConnectionManager};
 
 use crate::{StoreError, StoreResult, redis_unavailable, require_nonempty};
@@ -68,13 +68,13 @@ pub struct ProviderCircuitObservation {
 pub trait ProviderCircuitRepository: Send + Sync {
     async fn provider_circuit_decision(
         &self,
-        provider_instance_id: &str,
+        provider_kind: &str,
     ) -> StoreResult<ProviderCircuitDecision>;
     async fn observe_provider_failure(
         &self,
-        provider_instance_id: &str,
+        provider_kind: &str,
     ) -> StoreResult<ProviderCircuitObservation>;
-    async fn observe_provider_success(&self, provider_instance_id: &str) -> StoreResult<()>;
+    async fn observe_provider_success(&self, provider_kind: &str) -> StoreResult<()>;
 }
 
 #[derive(Clone)]
@@ -100,9 +100,9 @@ impl RedisProviderCircuitRepository {
         })
     }
 
-    fn key(&self, provider_instance_id: &str) -> StoreResult<String> {
-        let fingerprint = resource_fingerprint("provider circuit", provider_instance_id)?;
-        Ok(format!("{}:instance:{fingerprint}:circuit", self.namespace))
+    fn key(&self, provider_kind: &str) -> StoreResult<String> {
+        let fingerprint = resource_fingerprint("provider circuit", provider_kind)?;
+        Ok(format!("{}:provider:{fingerprint}:circuit", self.namespace))
     }
 }
 
@@ -110,16 +110,12 @@ impl RedisProviderCircuitRepository {
 impl ProviderCircuitRepository for RedisProviderCircuitRepository {
     async fn provider_circuit_decision(
         &self,
-        provider_instance_id: &str,
+        provider_kind: &str,
     ) -> StoreResult<ProviderCircuitDecision> {
-        require_nonempty(
-            "provider circuit",
-            "provider_instance_id",
-            provider_instance_id,
-        )?;
+        require_nonempty("provider circuit", "provider_kind", provider_kind)?;
         let mut connection = self.connection.clone();
         let (allow, until): (i64, String) = Script::new(DECISION_SCRIPT)
-            .key(self.key(provider_instance_id)?)
+            .key(self.key(provider_kind)?)
             .invoke_async(&mut connection)
             .await
             .map_err(|_| redis_unavailable("read provider circuit"))?;
@@ -132,18 +128,14 @@ impl ProviderCircuitRepository for RedisProviderCircuitRepository {
 
     async fn observe_provider_failure(
         &self,
-        provider_instance_id: &str,
+        provider_kind: &str,
     ) -> StoreResult<ProviderCircuitObservation> {
-        require_nonempty(
-            "provider circuit",
-            "provider_instance_id",
-            provider_instance_id,
-        )?;
+        require_nonempty("provider circuit", "provider_kind", provider_kind)?;
         let duration_ms = u64::try_from(self.policy.open_duration.as_millis())
             .map_err(|_| invalid("open duration is too large"))?;
         let mut connection = self.connection.clone();
         let (failures, until): (String, String) = Script::new(FAILURE_SCRIPT)
-            .key(self.key(provider_instance_id)?)
+            .key(self.key(provider_kind)?)
             .arg(self.policy.failure_threshold.get())
             .arg(duration_ms)
             .invoke_async(&mut connection)
@@ -163,15 +155,11 @@ impl ProviderCircuitRepository for RedisProviderCircuitRepository {
         })
     }
 
-    async fn observe_provider_success(&self, provider_instance_id: &str) -> StoreResult<()> {
-        require_nonempty(
-            "provider circuit",
-            "provider_instance_id",
-            provider_instance_id,
-        )?;
+    async fn observe_provider_success(&self, provider_kind: &str) -> StoreResult<()> {
+        require_nonempty("provider circuit", "provider_kind", provider_kind)?;
         let mut connection = self.connection.clone();
         redis::cmd("DEL")
-            .arg(self.key(provider_instance_id)?)
+            .arg(self.key(provider_kind)?)
             .query_async::<i64>(&mut connection)
             .await
             .map_err(|_| redis_unavailable("reset provider circuit"))?;
@@ -182,10 +170,10 @@ impl ProviderCircuitRepository for RedisProviderCircuitRepository {
 impl ProviderCircuitPort for RedisProviderCircuitRepository {
     fn decision<'a>(
         &'a self,
-        provider_instance_id: &'a ProviderInstanceId,
+        provider_kind: &'a ProviderKind,
     ) -> futures::future::BoxFuture<'a, Result<CoreCircuitDecision, ProviderCircuitError>> {
         Box::pin(async move {
-            self.provider_circuit_decision(provider_instance_id.as_str())
+            self.provider_circuit_decision(provider_kind.as_str())
                 .await
                 .map(|decision| match decision {
                     ProviderCircuitDecision::Allow => CoreCircuitDecision::Allow,
@@ -199,10 +187,10 @@ impl ProviderCircuitPort for RedisProviderCircuitRepository {
 
     fn observe_failure<'a>(
         &'a self,
-        provider_instance_id: &'a ProviderInstanceId,
+        provider_kind: &'a ProviderKind,
     ) -> futures::future::BoxFuture<'a, Result<(), ProviderCircuitError>> {
         Box::pin(async move {
-            self.observe_provider_failure(provider_instance_id.as_str())
+            self.observe_provider_failure(provider_kind.as_str())
                 .await
                 .map(|_| ())
                 .map_err(|_| ProviderCircuitError)
@@ -211,10 +199,10 @@ impl ProviderCircuitPort for RedisProviderCircuitRepository {
 
     fn observe_success<'a>(
         &'a self,
-        provider_instance_id: &'a ProviderInstanceId,
+        provider_kind: &'a ProviderKind,
     ) -> futures::future::BoxFuture<'a, Result<(), ProviderCircuitError>> {
         Box::pin(async move {
-            self.observe_provider_success(provider_instance_id.as_str())
+            self.observe_provider_success(provider_kind.as_str())
                 .await
                 .map_err(|_| ProviderCircuitError)
         })

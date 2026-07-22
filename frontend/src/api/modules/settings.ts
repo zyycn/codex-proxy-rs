@@ -9,7 +9,7 @@ export function getSettings() {
 
 export function updateSettings(data: object) {
   return request({
-    url: '/api/admin/settings',
+    url: '/api/admin/settings/update',
     method: 'POST',
     data,
   })
@@ -31,7 +31,7 @@ export function regenerateAdminApiKey() {
 
 export function deleteAdminApiKey() {
   return request({
-    url: '/api/admin/settings/admin-api-key',
+    url: '/api/admin/settings/admin-api-key/delete',
     method: 'POST',
   })
 }

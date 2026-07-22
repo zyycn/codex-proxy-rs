@@ -14,7 +14,7 @@ use gateway_core::engine::credential::{
 };
 use gateway_core::engine::provider::ProviderCatalogGeneration;
 use gateway_core::provider_ports::{ProviderCatalogCacheKey, ProviderCatalogCachePort};
-use gateway_core::routing::{ConfigRevision, ProviderInstance, ProviderKind};
+use gateway_core::routing::{ConfigRevision, ProviderKind};
 use tokio::sync::Mutex;
 
 use super::repository::{GrokCredentialRepository, LoadedGrokCredential};
@@ -22,9 +22,9 @@ use super::types::{GrokCredentialAvailability, UpdateGrokCredentialState};
 use crate::XaiWireProfileState;
 use crate::transport::catalog::{MAX_CATALOG_MODELS, valid_model_slug, validate_etag};
 use crate::{
-    GrokBillingClient, GrokBillingTransport, GrokBuildProvider, GrokCatalogModel,
-    GrokModelCatalogClient, GrokModelCatalogSession, GrokModelCatalogSnapshot,
-    GrokModelCatalogTransport, SecretValue, parse_grok_billing,
+    GrokBillingClient, GrokBillingTransport, GrokCatalogModel, GrokModelCatalogClient,
+    GrokModelCatalogSession, GrokModelCatalogSnapshot, GrokModelCatalogTransport, SecretValue,
+    parse_grok_billing,
 };
 
 const MAX_CONCURRENT_CATALOG_REQUESTS: usize = 8;
@@ -805,11 +805,10 @@ pub enum GrokCatalogCacheError {
     InvalidData,
 }
 
-/// 一次 instance 同步得到的账号目录和严格模型并集。
+/// 一次 Provider 同步得到的账号目录和严格模型并集。
 #[derive(Clone, Debug)]
 pub struct GrokCredentialCatalogSnapshot {
     config_revision: ConfigRevision,
-    provider_instance_id: String,
     observed_at: DateTime<Utc>,
     accounts: Vec<GrokAccountCatalog>,
     models: Vec<GrokCatalogModel>,
@@ -819,11 +818,6 @@ impl GrokCredentialCatalogSnapshot {
     #[must_use]
     pub const fn config_revision(&self) -> ConfigRevision {
         self.config_revision
-    }
-
-    #[must_use]
-    pub fn provider_instance_id(&self) -> &str {
-        &self.provider_instance_id
     }
 
     #[must_use]
@@ -844,8 +838,6 @@ impl GrokCredentialCatalogSnapshot {
 
 #[derive(Debug, thiserror::Error)]
 pub enum GrokCredentialCatalogError {
-    #[error("Grok model catalog instance configuration is invalid")]
-    InvalidInstance,
     #[error("Grok model catalog has no eligible OAuth account")]
     NoEligibleCredential,
     #[error("Grok model catalog credential snapshot is stale")]
@@ -874,7 +866,7 @@ pub struct GrokCredentialCatalogService {
 #[derive(Default)]
 struct PublishedCatalogState {
     generation: u64,
-    models: BTreeMap<String, Vec<GrokCatalogModel>>,
+    models: Vec<GrokCatalogModel>,
 }
 
 impl GrokCredentialCatalogService {
@@ -982,15 +974,13 @@ impl GrokCredentialCatalogService {
     }
 
     /// 实时拉取全部 eligible OAuth account；结果只写可重建 TTL cache，不写 PostgreSQL。
-    pub async fn synchronize_instance(
+    pub async fn synchronize(
         &self,
-        instance: &ProviderInstance,
         config_revision: ConfigRevision,
     ) -> Result<GrokCredentialCatalogSnapshot, GrokCredentialCatalogError> {
-        let catalog = self.fetch_and_cache(instance).await?;
+        let catalog = self.fetch_and_cache().await?;
         Ok(GrokCredentialCatalogSnapshot {
             config_revision,
-            provider_instance_id: catalog.provider_instance_id,
             observed_at: catalog.observed_at,
             accounts: catalog.accounts,
             models: catalog.models,
@@ -998,22 +988,14 @@ impl GrokCredentialCatalogService {
     }
 
     /// Provider Registry 构建 RuntimeSnapshot 时使用的实时能力目录。
-    pub async fn query_instance_models(
-        &self,
-        instance: &ProviderInstance,
-    ) -> Result<Vec<GrokCatalogModel>, GrokCredentialCatalogError> {
-        Ok(self.fetch_and_cache(instance).await?.models)
+    pub async fn query_models(&self) -> Result<Vec<GrokCatalogModel>, GrokCredentialCatalogError> {
+        Ok(self.fetch_and_cache().await?.models)
     }
 
-    async fn fetch_and_cache(
-        &self,
-        instance: &ProviderInstance,
-    ) -> Result<FetchedInstanceCatalog, GrokCredentialCatalogError> {
-        let instance_config = GrokBuildProvider::validate_instance(instance)
-            .map_err(|_| GrokCredentialCatalogError::InvalidInstance)?;
+    async fn fetch_and_cache(&self) -> Result<FetchedProviderCatalog, GrokCredentialCatalogError> {
         let candidates = self
             .repository
-            .list_loaded_for_instance(instance_config.id())
+            .list_loaded_for_provider()
             .await
             .map_err(|_| GrokCredentialCatalogError::Store)?
             .into_iter()
@@ -1050,31 +1032,24 @@ impl GrokCredentialCatalogService {
                 .await
                 .map_err(|_| GrokCredentialCatalogError::Cache)?;
         }
-        self.publish_models(instance_config.id().as_str(), &models);
+        self.publish_models(&models);
 
-        Ok(FetchedInstanceCatalog {
-            provider_instance_id: instance_config.id().as_str().to_owned(),
+        Ok(FetchedProviderCatalog {
             observed_at,
             accounts,
             models,
         })
     }
 
-    fn publish_models(&self, instance: &str, models: &[GrokCatalogModel]) {
+    fn publish_models(&self, models: &[GrokCatalogModel]) {
         let mut published = self
             .published
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if published
-            .models
-            .get(instance)
-            .is_some_and(|current| current == models)
-        {
+        if published.models == models {
             return;
         }
-        published
-            .models
-            .insert(instance.to_owned(), models.to_vec());
+        published.models = models.to_vec();
         published.generation = published.generation.saturating_add(1);
     }
 }
@@ -1097,8 +1072,7 @@ struct FetchedCredentialCatalog {
     seed: GrokCredentialCatalogSeed,
 }
 
-struct FetchedInstanceCatalog {
-    provider_instance_id: String,
+struct FetchedProviderCatalog {
     observed_at: DateTime<Utc>,
     accounts: Vec<GrokAccountCatalog>,
     models: Vec<GrokCatalogModel>,

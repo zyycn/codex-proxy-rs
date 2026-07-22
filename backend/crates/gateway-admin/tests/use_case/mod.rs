@@ -1,6 +1,5 @@
 mod accounts;
 mod auth;
-mod catalog;
 mod client_keys;
 mod observability;
 mod openai;
@@ -17,15 +16,10 @@ use gateway_admin::{
     model::{
         MutationContext, Revision,
         accounts::{
-            AccountListQuery, AccountPage, AccountRecord, AccountUsage, DeleteAccount,
+            AccountListQuery, AccountPage, AccountRecord, AccountUsage, DeleteAccounts,
             SetAccountEnabled,
         },
         auth::{AdminAuditEvent, AdminSession},
-        catalog::{
-            CreateProviderInstance, DeleteProviderInstance, ProviderInstanceCatalog,
-            ProviderInstanceDetail, ProviderInstanceMutation, SetProviderInstanceEnabled,
-            UpdateProviderInstance,
-        },
         client_keys::{
             ClientKeyListQuery, ClientKeyPage, ClientKeyRecord, ClientKeySecret, DeleteClientKey,
             NewClientKey, SetClientKeyEnabled, UpdateClientKey,
@@ -52,7 +46,7 @@ use gateway_admin::{
         provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind},
         store::{
             AccountStore, AdminStoreError, AdminStoreErrorKind, AdminStorePorts, AdminStoreResult,
-            AuthStore, CatalogStore, ClientKeyStore, ObservabilityStore, SettingsStore,
+            AuthStore, ClientKeyStore, ObservabilityStore, SettingsStore,
         },
         system::{
             SystemOperationError, SystemOperationErrorKind, SystemOperations,
@@ -67,14 +61,13 @@ use gateway_core::{
     },
     error::{GatewayError, GatewayErrorKind},
     policy::ClientApiKeyId,
-    routing::{ConfigRevision, ProviderInstanceId, ProviderKind, snapshot::SnapshotControl},
+    routing::{ConfigRevision, ProviderKind, snapshot::SnapshotControl},
 };
 
 pub(super) struct AdminHarness {
     default_password: String,
     accounts: Arc<dyn AccountStore>,
     auth: Arc<dyn AuthStore>,
-    catalog: Arc<dyn CatalogStore>,
     client_keys: Arc<dyn ClientKeyStore>,
     observability: Arc<dyn ObservabilityStore>,
     settings: Arc<dyn SettingsStore>,
@@ -90,7 +83,6 @@ impl AdminHarness {
             default_password: "strong-test-password".to_owned(),
             accounts: unavailable.clone(),
             auth: Arc::new(BootstrapAuthStore::default()),
-            catalog: unavailable.clone(),
             client_keys: unavailable.clone(),
             observability: unavailable.clone(),
             settings: unavailable,
@@ -115,11 +107,6 @@ impl AdminHarness {
 
     pub(super) fn auth(mut self, store: Arc<dyn AuthStore>) -> Self {
         self.auth = store;
-        self
-    }
-
-    pub(super) fn catalog(mut self, store: Arc<dyn CatalogStore>) -> Self {
-        self.catalog = store;
         self
     }
 
@@ -165,7 +152,6 @@ impl AdminHarness {
             AdminStorePorts::new(
                 self.accounts,
                 self.auth,
-                self.catalog,
                 self.client_keys,
                 self.observability,
                 self.settings,
@@ -322,9 +308,9 @@ impl AccountStore for UnavailableStore {
         Err(unavailable("account enabled"))
     }
 
-    async fn delete_account(
+    async fn delete_accounts(
         &self,
-        _: DeleteAccount,
+        _: DeleteAccounts,
         _: &MutationContext,
     ) -> AdminStoreResult<Revision> {
         Err(unavailable("account delete"))
@@ -336,52 +322,6 @@ impl AccountStore for UnavailableStore {
         _: &MutationContext,
     ) -> AdminStoreResult<()> {
         Err(unavailable("credential export audit"))
-    }
-}
-
-#[async_trait]
-impl CatalogStore for UnavailableStore {
-    async fn list_provider_instances(&self, _: bool) -> AdminStoreResult<ProviderInstanceCatalog> {
-        Err(unavailable("provider catalog"))
-    }
-
-    async fn load_provider_instance(
-        &self,
-        _: &ProviderInstanceId,
-    ) -> AdminStoreResult<Option<ProviderInstanceDetail>> {
-        Err(unavailable("provider instance"))
-    }
-
-    async fn create_provider_instance(
-        &self,
-        _: CreateProviderInstance,
-        _: &MutationContext,
-    ) -> AdminStoreResult<ProviderInstanceMutation> {
-        Err(unavailable("provider create"))
-    }
-
-    async fn update_provider_instance(
-        &self,
-        _: UpdateProviderInstance,
-        _: &MutationContext,
-    ) -> AdminStoreResult<ProviderInstanceMutation> {
-        Err(unavailable("provider update"))
-    }
-
-    async fn set_provider_instance_enabled(
-        &self,
-        _: SetProviderInstanceEnabled,
-        _: &MutationContext,
-    ) -> AdminStoreResult<ProviderInstanceMutation> {
-        Err(unavailable("provider enabled"))
-    }
-
-    async fn delete_provider_instance(
-        &self,
-        _: DeleteProviderInstance,
-        _: &MutationContext,
-    ) -> AdminStoreResult<Revision> {
-        Err(unavailable("provider delete"))
     }
 }
 

@@ -14,8 +14,8 @@ use provider_xai::{
 };
 
 use crate::support::{
-    MemoryProviderAccountStore, account_id, create_input, credential_object, instance_id,
-    prepare_input, profile, seed_input,
+    MemoryProviderAccountStore, account_id, create_input, credential_object, prepare_input,
+    profile, seed_input,
 };
 
 fn repository() -> (Arc<MemoryProviderAccountStore>, GrokCredentialRepository) {
@@ -277,7 +277,6 @@ async fn repository_rejects_account_owned_by_another_provider() {
     let revision = CredentialRevision::new(1).expect("revision");
     let account = ProviderAccount::new(
         id.clone(),
-        instance_id(),
         ProviderKind::new("openai").expect("provider"),
         "other".to_owned(),
         "subject".to_owned(),

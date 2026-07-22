@@ -289,7 +289,6 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
             client_transport: "http_sse".to_owned(),
             requested_model_id: "grok-4.5".to_owned(),
             input_token_estimate: 1,
-            provider_instance_id: None,
             provider_kind: Some("xai".to_owned()),
             provider_account_ref: None,
             provider_account_name: None,

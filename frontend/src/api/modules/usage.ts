@@ -10,7 +10,7 @@ export function getUsageRecords(data: object) {
 
 export function getOpsErrors(data: object) {
   return request({
-    url: '/api/admin/ops/errors',
+    url: '/api/admin/operations/errors',
     method: 'GET',
     params: data,
   })
@@ -34,7 +34,7 @@ export function getUsageRecordSummary(data: object) {
 
 export function getUsageRecordInsightsOverview(data: object) {
   return request({
-    url: '/api/admin/usage/records/insights/overview',
+    url: '/api/admin/usage/insights/overview',
     method: 'GET',
     params: data,
   })
@@ -42,7 +42,7 @@ export function getUsageRecordInsightsOverview(data: object) {
 
 export function getUsageRecordInsightsDiagnostics(data: object) {
   return request({
-    url: '/api/admin/usage/records/insights/diagnostics',
+    url: '/api/admin/usage/insights/diagnostics',
     method: 'GET',
     params: data,
   })

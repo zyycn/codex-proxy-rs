@@ -216,13 +216,13 @@ where
 {
     Router::new()
         .route("/api/admin/system/version", get(version::<S>))
-        .route("/api/admin/system/update-detail", get(update_detail::<S>))
+        .route("/api/admin/system/update/detail", get(update_detail::<S>))
         .route(
-            "/api/admin/system/update-events",
+            "/api/admin/system/update/events",
             get(update_event_stream::<S>),
         )
         .route("/api/admin/system/update", post(perform_update::<S>))
-        .route("/api/admin/system/update-status", get(update_status::<S>))
+        .route("/api/admin/system/update/status", get(update_status::<S>))
         .route("/api/admin/system/rollback", post(rollback::<S>))
         .route("/api/admin/system/restart", post(restart::<S>))
 }

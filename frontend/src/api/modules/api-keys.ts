@@ -10,7 +10,7 @@ export function getApiKeys(data: object) {
 
 export function createApiKey(data: object) {
   return request({
-    url: '/api/admin/client-keys',
+    url: '/api/admin/client-keys/create',
     method: 'POST',
     data,
   })

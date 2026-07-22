@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
 use gateway_core::engine::credential::ProviderAccountId;
-use gateway_core::routing::ProviderInstanceId;
 
 use gateway_admin::{
     AdminServices,
     model::provider_credentials::{
-        AuthorizationMutationTarget, CompleteAuthorization, CredentialMutation, ImportCredentials,
-        ReauthorizationTarget, StartAuthorization,
+        AuthorizationMutationTarget, CompleteAuthorization, CredentialDeletion, CredentialMutation,
+        ImportCredentials, ReauthorizationTarget, StartAuthorization,
     },
     ports::provider::ProviderAdminErrorKind,
 };
@@ -69,7 +68,7 @@ async fn openai_delete_should_commit_then_release_provider_resources() {
 
     services
         .openai()
-        .delete(mutation("acct_test"))
+        .delete(deletion("acct_test"))
         .await
         .expect("delete credential");
 
@@ -116,7 +115,6 @@ async fn openai_import_should_prepare_before_atomic_store_commit() {
         .import_document(ImportCredentials {
             context: context("import-openai"),
             expected_config_revision: revision(1),
-            provider_instance_id: instance(),
             document: document(),
         })
         .await
@@ -142,7 +140,6 @@ async fn openai_import_provider_error_should_not_touch_store_transaction() {
         .import_document(ImportCredentials {
             context: context("import-openai-error"),
             expected_config_revision: revision(1),
-            provider_instance_id: instance(),
             document: document(),
         })
         .await
@@ -162,7 +159,6 @@ async fn openai_reauthorization_should_restore_pending_envelope_and_hold_guard_t
         .start_authorization(StartAuthorization {
             context: context("oauth-start-openai"),
             expected_config_revision: revision(7),
-            provider_instance_id: instance(),
             name: "reauthorize".to_owned(),
             reauthorization: Some(ReauthorizationTarget {
                 account_id: ProviderAccountId::new("acct_test").expect("account ID"),
@@ -182,11 +178,9 @@ async fn openai_reauthorization_should_restore_pending_envelope_and_hold_guard_t
     assert!(matches!(
         pending.target(),
         AuthorizationMutationTarget::Reauthorize {
-            provider_instance_id,
             account_id,
             expected_credential_revision,
-        } if provider_instance_id == &instance()
-            && account_id.as_str() == "acct_test"
+        } if account_id.as_str() == "acct_test"
             && *expected_credential_revision == revision(1)
     ));
     assert!(!format!("{pending:?}").contains("admin-test"));
@@ -231,6 +225,10 @@ fn mutation(account_id: &str) -> CredentialMutation {
     }
 }
 
-fn instance() -> ProviderInstanceId {
-    ProviderInstanceId::new("inst_openai").expect("instance ID")
+fn deletion(account_id: &str) -> CredentialDeletion {
+    CredentialDeletion {
+        context: context("request-openai"),
+        expected_config_revision: revision(1),
+        account_ids: vec![ProviderAccountId::new(account_id).expect("account ID")],
+    }
 }

@@ -10,7 +10,7 @@ use futures::future::BoxFuture;
 use crate::engine::credential::ProviderAccountId;
 use crate::error::{IdentifierError, SafeUpstreamValue, validate_text};
 use crate::policy::ClientApiKeyId;
-use crate::routing::{ProviderInstanceId, ProviderKind};
+use crate::routing::ProviderKind;
 
 /// 客户端传入的 previous response ID。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -46,7 +46,7 @@ pub enum NativeContinuationScope {
 /// 外层已解析并认证的 native previous-response pin。
 ///
 /// 该值不代表数据库 transcript；它只阻止 native handle 被发送到错误的
-/// Provider、instance 或账号。
+/// Provider 或账号。
 #[derive(Clone, PartialEq, Eq)]
 pub struct NativeContinuationPin {
     /// 客户端提交、仅供 Store 在调用方隔离下查找的网关 response ID。
@@ -54,7 +54,6 @@ pub struct NativeContinuationPin {
     /// Store 从已提交成功请求解析出的 Provider 原生 response handle。
     upstream_response_id: SafeUpstreamValue,
     provider: ProviderKind,
-    instance: ProviderInstanceId,
     account: ProviderAccountId,
     scope: NativeContinuationScope,
 }
@@ -65,14 +64,12 @@ impl NativeContinuationPin {
         previous_response_id: PreviousResponseId,
         upstream_response_id: SafeUpstreamValue,
         provider: ProviderKind,
-        instance: ProviderInstanceId,
         account: ProviderAccountId,
     ) -> Self {
         Self {
             previous_response_id,
             upstream_response_id,
             provider,
-            instance,
             account,
             scope: NativeContinuationScope::ConnectionLocal,
         }
@@ -102,11 +99,6 @@ impl NativeContinuationPin {
     }
 
     #[must_use]
-    pub const fn instance(&self) -> &ProviderInstanceId {
-        &self.instance
-    }
-
-    #[must_use]
     pub const fn account(&self) -> &ProviderAccountId {
         &self.account
     }
@@ -118,13 +110,8 @@ impl NativeContinuationPin {
 
     /// 校验本次 route/account 选择没有破坏 native pin。
     #[must_use]
-    pub fn matches(
-        &self,
-        provider: &ProviderKind,
-        instance: &ProviderInstanceId,
-        account: &ProviderAccountId,
-    ) -> bool {
-        self.provider == *provider && self.instance == *instance && self.account == *account
+    pub fn matches(&self, provider: &ProviderKind, account: &ProviderAccountId) -> bool {
+        self.provider == *provider && self.account == *account
     }
 }
 
@@ -135,7 +122,6 @@ impl fmt::Debug for NativeContinuationPin {
             .field("previous_response_id", &"<redacted>")
             .field("upstream_response_id", &"<redacted>")
             .field("provider", &self.provider)
-            .field("instance", &self.instance)
             .field("account", &self.account)
             .field("scope", &self.scope)
             .finish()

@@ -131,7 +131,6 @@ pub struct CodexPendingAuthorization {
     flow_id: String,
     owner_ref: String,
     started_request_ref: String,
-    provider_instance_id: String,
     name: String,
     expires_at: DateTime<Utc>,
     state: SecretString,
@@ -145,7 +144,6 @@ pub struct StoredCodexPendingAuthorization {
     pub flow_id: String,
     pub owner_ref: String,
     pub started_request_ref: String,
-    pub provider_instance_id: String,
     pub name: String,
     pub expires_at: DateTime<Utc>,
     pub state: SecretString,
@@ -177,7 +175,6 @@ impl CodexPendingAuthorization {
             flow_id: input.flow_id,
             owner_ref: input.owner_ref,
             started_request_ref: input.started_request_ref,
-            provider_instance_id: input.provider_instance_id,
             name: input.name,
             expires_at: input.expires_at,
             state: input.state,
@@ -189,7 +186,6 @@ impl CodexPendingAuthorization {
         if !valid_text(&pending.flow_id)
             || !valid_text(&pending.owner_ref)
             || !valid_text(&pending.started_request_ref)
-            || !valid_text(&pending.provider_instance_id)
             || !valid_text(&pending.name)
             || pending.expires_at <= Utc::now()
             || !valid_secret(pending.state.expose_secret())
@@ -215,11 +211,6 @@ impl CodexPendingAuthorization {
     #[must_use]
     pub fn started_request_ref(&self) -> &str {
         &self.started_request_ref
-    }
-
-    #[must_use]
-    pub fn provider_instance_id(&self) -> &str {
-        &self.provider_instance_id
     }
 
     #[must_use]
@@ -265,7 +256,6 @@ impl fmt::Debug for CodexPendingAuthorization {
             .field("flow_id", &"<redacted>")
             .field("owner_ref", &"<redacted>")
             .field("started_request_ref", &"<redacted>")
-            .field("provider_instance_id", &self.provider_instance_id)
             .field("name", &self.name)
             .field("expires_at", &self.expires_at)
             .field("state", &"<redacted>")
@@ -372,13 +362,9 @@ impl CodexOAuthAdmin for CodexOAuthAdminService {
         &self,
         command: StartCodexOAuthAuthorization,
     ) -> Result<CodexOAuthAuthorizationStarted, CodexOAuthAdminError> {
-        let (provider_instance_id, name, reauthorization) = match command.mutation.target() {
-            AuthorizationMutationTarget::Create {
-                provider_instance_id,
-                name,
-            } => (provider_instance_id.to_string(), name.clone(), None),
+        let (name, reauthorization) = match command.mutation.target() {
+            AuthorizationMutationTarget::Create { name } => (name.clone(), None),
             AuthorizationMutationTarget::Reauthorize {
-                provider_instance_id,
                 account_id,
                 expected_credential_revision,
             } => {
@@ -391,12 +377,10 @@ impl CodexOAuthAdmin for CodexOAuthAdminService {
                     .map_err(map_store_error)?;
                 if current.account.provider().as_str() != "openai"
                     || current.account.id() != account_id
-                    || current.account.instance() != provider_instance_id
                 {
                     return Err(CodexOAuthAdminError::NotFound);
                 }
                 (
-                    current.account.instance().to_string(),
                     current.account.name().to_owned(),
                     Some(CodexOAuthReauthorizationTarget {
                         account_id: account_id.clone(),
@@ -405,13 +389,8 @@ impl CodexOAuthAdmin for CodexOAuthAdminService {
                 )
             }
         };
-        self.start_pending(
-            command.mutation,
-            provider_instance_id,
-            name,
-            reauthorization,
-        )
-        .await
+        self.start_pending(command.mutation, name, reauthorization)
+            .await
     }
 
     async fn complete_authorization(
@@ -487,7 +466,6 @@ impl CodexOAuthAdmin for CodexOAuthAdminService {
                 self.credentials
                     .prepare_import(ImportCodexOAuthCredential {
                         account_id,
-                        provider_instance_id: pending.provider_instance_id,
                         name: pending.name,
                         secret,
                         verified_account: profile,
@@ -508,11 +486,10 @@ impl CodexOAuthAdminService {
     async fn start_pending(
         &self,
         mutation: PendingAuthorizationMutation,
-        provider_instance_id: String,
         name: String,
         reauthorization: Option<CodexOAuthReauthorizationTarget>,
     ) -> Result<CodexOAuthAuthorizationStarted, CodexOAuthAdminError> {
-        if !valid_text(&provider_instance_id) || !valid_text(&name) {
+        if !valid_text(&name) {
             return Err(CodexOAuthAdminError::InvalidInput);
         }
         let expires_at = Utc::now()
@@ -524,7 +501,6 @@ impl CodexOAuthAdminService {
             flow_id: random_secret()?,
             owner_ref,
             started_request_ref,
-            provider_instance_id,
             name,
             expires_at,
             state: SecretString::from(random_secret()?),
@@ -699,23 +675,15 @@ fn pending_mutation_matches(pending: &CodexPendingAuthorization) -> bool {
         return false;
     }
     match (pending.mutation.target(), pending.reauthorization.as_ref()) {
-        (
-            AuthorizationMutationTarget::Create {
-                provider_instance_id,
-                name,
-            },
-            None,
-        ) => provider_instance_id.as_str() == pending.provider_instance_id && name == &pending.name,
+        (AuthorizationMutationTarget::Create { name }, None) => name == &pending.name,
         (
             AuthorizationMutationTarget::Reauthorize {
-                provider_instance_id,
                 account_id,
                 expected_credential_revision,
             },
             Some(target),
         ) => {
-            provider_instance_id.as_str() == pending.provider_instance_id
-                && account_id == target.account_id()
+            account_id == target.account_id()
                 && expected_credential_revision.get() == target.credential_revision().get()
         }
         _ => false,

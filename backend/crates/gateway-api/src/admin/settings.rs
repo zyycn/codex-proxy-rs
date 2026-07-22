@@ -174,13 +174,15 @@ where
     S: AdminSessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route(
-            "/api/admin/settings",
-            get(settings::<S>).post(update_settings::<S>),
-        )
+        .route("/api/admin/settings", get(settings::<S>))
+        .route("/api/admin/settings/update", post(update_settings::<S>))
         .route(
             "/api/admin/settings/admin-api-key",
-            get(admin_api_key_status::<S>).post(delete_admin_api_key::<S>),
+            get(admin_api_key_status::<S>),
+        )
+        .route(
+            "/api/admin/settings/admin-api-key/delete",
+            post(delete_admin_api_key::<S>),
         )
         .route(
             "/api/admin/settings/admin-api-key/regenerate",

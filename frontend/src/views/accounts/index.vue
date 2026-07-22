@@ -62,11 +62,9 @@ const {
   deletingAccount,
   creatingAccount,
   authorizingOAuth,
-  loadingProviderInstances,
   batchDeleting,
   exportingAccounts,
   reauthorizingAccount,
-  providerInstanceOptions,
   createForm,
   handleCreate,
   handleAuthorizeOAuth,
@@ -322,9 +320,7 @@ const {
       v-model="showCreateModal"
       v-model:form="createForm"
       :account="reauthorizingAccount"
-      :loading-provider-instances="loadingProviderInstances"
       :oauth-loading="authorizingOAuth"
-      :provider-instance-options="providerInstanceOptions"
       :reauthorizing="Boolean(reauthorizingAccount)"
       :saving="creatingAccount"
       @create="handleCreate"

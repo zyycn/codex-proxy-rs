@@ -9,15 +9,10 @@ use async_trait::async_trait;
 use crate::model::{
     MutationContext, Revision,
     accounts::{
-        AccountListQuery, AccountPage, AccountRecord, AccountUsage, DeleteAccount,
+        AccountListQuery, AccountPage, AccountRecord, AccountUsage, DeleteAccounts,
         SetAccountEnabled,
     },
     auth::{AdminAuditEvent, AdminSession},
-    catalog::{
-        CreateProviderInstance, DeleteProviderInstance, ProviderInstanceCatalog,
-        ProviderInstanceDetail, ProviderInstanceMutation, SetProviderInstanceEnabled,
-        UpdateProviderInstance,
-    },
     client_keys::{
         ClientKeyListQuery, ClientKeyPage, ClientKeyRecord, ClientKeySecret, DeleteClientKey,
         NewClientKey, SetClientKeyEnabled, UpdateClientKey,
@@ -142,9 +137,9 @@ pub trait AccountStore: Send + Sync {
         context: &MutationContext,
     ) -> AdminStoreResult<Revision>;
 
-    async fn delete_account(
+    async fn delete_accounts(
         &self,
-        command: DeleteAccount,
+        command: DeleteAccounts,
         context: &MutationContext,
     ) -> AdminStoreResult<Revision>;
 
@@ -192,44 +187,6 @@ pub trait AuthStore: Send + Sync {
     async fn clear_login_failures(&self, source: &str) -> AdminStoreResult<()>;
 
     async fn append_audit_event(&self, event: AdminAuditEvent) -> AdminStoreResult<()>;
-}
-
-/// Provider instance 目录与 revision CAS 写入。
-#[async_trait]
-pub trait CatalogStore: Send + Sync {
-    async fn list_provider_instances(
-        &self,
-        include_disabled: bool,
-    ) -> AdminStoreResult<ProviderInstanceCatalog>;
-
-    async fn load_provider_instance(
-        &self,
-        id: &gateway_core::routing::ProviderInstanceId,
-    ) -> AdminStoreResult<Option<ProviderInstanceDetail>>;
-
-    async fn create_provider_instance(
-        &self,
-        command: CreateProviderInstance,
-        context: &MutationContext,
-    ) -> AdminStoreResult<ProviderInstanceMutation>;
-
-    async fn update_provider_instance(
-        &self,
-        command: UpdateProviderInstance,
-        context: &MutationContext,
-    ) -> AdminStoreResult<ProviderInstanceMutation>;
-
-    async fn set_provider_instance_enabled(
-        &self,
-        command: SetProviderInstanceEnabled,
-        context: &MutationContext,
-    ) -> AdminStoreResult<ProviderInstanceMutation>;
-
-    async fn delete_provider_instance(
-        &self,
-        command: DeleteProviderInstance,
-        context: &MutationContext,
-    ) -> AdminStoreResult<Revision>;
 }
 
 /// Client API Key 管理及其 revision CAS 写入。
@@ -334,7 +291,6 @@ pub trait SettingsStore: Send + Sync {
 pub struct AdminStorePorts {
     accounts: Arc<dyn AccountStore>,
     auth: Arc<dyn AuthStore>,
-    catalog: Arc<dyn CatalogStore>,
     client_keys: Arc<dyn ClientKeyStore>,
     observability: Arc<dyn ObservabilityStore>,
     settings: Arc<dyn SettingsStore>,
@@ -345,7 +301,6 @@ impl AdminStorePorts {
     pub fn new(
         accounts: Arc<dyn AccountStore>,
         auth: Arc<dyn AuthStore>,
-        catalog: Arc<dyn CatalogStore>,
         client_keys: Arc<dyn ClientKeyStore>,
         observability: Arc<dyn ObservabilityStore>,
         settings: Arc<dyn SettingsStore>,
@@ -353,7 +308,6 @@ impl AdminStorePorts {
         Self {
             accounts,
             auth,
-            catalog,
             client_keys,
             observability,
             settings,
@@ -368,11 +322,6 @@ impl AdminStorePorts {
     #[must_use]
     pub fn auth(&self) -> Arc<dyn AuthStore> {
         self.auth.clone()
-    }
-
-    #[must_use]
-    pub fn catalog(&self) -> Arc<dyn CatalogStore> {
-        self.catalog.clone()
     }
 
     #[must_use]

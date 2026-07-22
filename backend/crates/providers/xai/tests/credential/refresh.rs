@@ -80,7 +80,7 @@ struct TestRefreshLeases {
 impl ProviderLeasePort for TestRefreshLeases {
     fn load_state<'a>(
         &'a self,
-        _: &'a gateway_core::routing::ProviderInstanceId,
+        _: &'a gateway_core::routing::ProviderKind,
         _: &'a [gateway_core::engine::credential::ProviderAccountId],
     ) -> futures::future::BoxFuture<
         'a,

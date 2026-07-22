@@ -38,9 +38,8 @@ use gateway_core::operation::{
 };
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::{
-    ConfigRevision, InstanceHealth, ModelCapabilities, ProviderInstance, ProviderInstanceId,
-    ProviderKind, ProviderModel, PublicModelId, RoutingContext, RoutingPlan, RuntimeSnapshot,
-    UpstreamModelId,
+    ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RoutingContext,
+    RoutingPlan, RuntimeSnapshot, UpstreamModelId,
 };
 use serde_json::{Map, Value};
 
@@ -245,7 +244,6 @@ impl Provider for ScriptedProvider {
 
     async fn query_model_capabilities(
         &self,
-        _instance: &ProviderInstance,
     ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
         Ok(Vec::new())
     }
@@ -268,7 +266,6 @@ impl Provider for ScriptedProvider {
                 let candidate = request.candidate();
                 let metadata = ProviderCallMetadata::new(
                     candidate.provider().clone(),
-                    candidate.instance().clone(),
                     candidate.upstream_model().clone(),
                     ProviderResource::Account {
                         id: ProviderAccountId::new(account_id).expect("account id"),
@@ -293,7 +290,6 @@ impl Provider for ScriptedProvider {
                 let candidate = request.candidate();
                 let metadata = ProviderCallMetadata::new(
                     candidate.provider().clone(),
-                    candidate.instance().clone(),
                     candidate.upstream_model().clone(),
                     ProviderResource::Account {
                         id: ProviderAccountId::new(account_id).expect("account id"),
@@ -375,29 +371,11 @@ fn image_stream(image_output_tokens: Option<u64>) -> Vec<Result<GatewayEvent, Pr
     ]
 }
 
-fn plan(operation: &Operation, instance_count: u32) -> RoutingPlan {
+fn plan(operation: &Operation) -> RoutingPlan {
     let provider = ProviderKind::new("openai").expect("provider");
     let public_model = PublicModelId::new("gpt-5").expect("public model");
     let capabilities =
         ModelCapabilities::new(BTreeSet::from([operation.kind()]), 128_000, Some(32_000));
-    let mut instances = Vec::new();
-    let mut provider_models = Vec::new();
-    for index in 1..=instance_count {
-        let instance_id =
-            ProviderInstanceId::new(format!("inst_openai_{index}")).expect("instance id");
-        instances.push(ProviderInstance::new(
-            instance_id.clone(),
-            provider.clone(),
-            format!("https://openai-{index}.example"),
-            true,
-            InstanceHealth::Healthy,
-        ));
-        provider_models.push(ProviderModel::new(
-            instance_id,
-            UpstreamModelId::new("gpt-5").expect("upstream model"),
-            capabilities.clone(),
-        ));
-    }
     RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("config revision"),
         AccountSelectionPolicy::new(
@@ -405,8 +383,12 @@ fn plan(operation: &Operation, instance_count: u32) -> RoutingPlan {
             NonZeroU32::new(2).expect("account concurrency"),
             Duration::from_millis(50),
         ),
-        instances,
-        provider_models,
+        vec![provider.clone()],
+        vec![ProviderModel::new(
+            provider.clone(),
+            UpstreamModelId::new("gpt-5").expect("upstream model"),
+            capabilities,
+        )],
         Vec::new(),
     )
     .expect("snapshot")
@@ -469,7 +451,7 @@ fn terminal_non_idempotent_failure(
     continuation: Option<ContinuationBinding>,
 ) -> (Arc<FakeStore>, Arc<ScriptedProvider>) {
     let operation = operation(RetrySafety::NonIdempotent);
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let (coordinator, store, provider) = coordinator(vec![
         Script::Stream {
             account_id: "acct_first",
@@ -500,7 +482,7 @@ fn terminal_non_idempotent_failure(
 #[test]
 fn success_updates_one_model_request_and_persists_usage() {
     let operation = operation(RetrySafety::Idempotent);
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let (coordinator, store, _) = coordinator(vec![Script::Stream {
         account_id: "acct_one",
         items: complete_stream(Some(12)),
@@ -535,7 +517,7 @@ fn success_updates_one_model_request_and_persists_usage() {
     assert_eq!(
         session.provider_attempt_outcomes(),
         &[ProviderAttemptOutcome::Succeeded {
-            provider_instance_id: ProviderInstanceId::new("inst_openai_1").expect("instance"),
+            provider_kind: ProviderKind::new("openai").expect("provider"),
         }]
     );
     let state = store.state.lock().expect("store lock");
@@ -561,7 +543,7 @@ fn success_updates_one_model_request_and_persists_usage() {
 
 fn finalized_image_request(image_output_tokens: Option<u64>) -> FinalState {
     let operation = image_generate_operation();
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let (coordinator, store, _) = coordinator(vec![Script::Stream {
         account_id: "acct_image",
         items: image_stream(image_output_tokens),
@@ -605,7 +587,7 @@ fn image_request_without_output_should_persist_failure() {
 #[test]
 fn failed_image_request_should_persist_failure() {
     let operation = image_generate_operation();
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let (coordinator, store, _) = coordinator(vec![Script::Stream {
         account_id: "acct_image",
         items: vec![Err(ProviderError::new(
@@ -634,7 +616,7 @@ fn failed_image_request_should_persist_failure() {
 #[test]
 fn response_observation_is_persisted_but_never_delivered() {
     let operation = operation(RetrySafety::Idempotent);
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let observation = ProviderResponseObservation::new(
         UpstreamTransport::new("http_sse").expect("actual transport"),
     )
@@ -691,7 +673,7 @@ fn response_observation_is_persisted_but_never_delivered() {
 #[test]
 fn unknown_wire_event_before_response_identity_is_discarded_with_retried_attempt() {
     let operation = operation(RetrySafety::Idempotent);
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let unknown = ProtocolWireEvent::json(
         "openai",
         Some("response.future_event".to_owned()),
@@ -737,7 +719,7 @@ fn unknown_wire_event_before_response_identity_is_discarded_with_retried_attempt
 #[test]
 fn discarded_attempt_observation_does_not_leak_into_retry_result() {
     let operation = operation(RetrySafety::Idempotent);
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let first_observation = ProviderResponseObservation::new(
         UpstreamTransport::new("websocket").expect("first transport"),
     )
@@ -818,7 +800,7 @@ fn discarded_attempt_observation_does_not_leak_into_retry_result() {
 #[test]
 fn websocket_success_keeps_client_http_status_absent() {
     let operation = operation(RetrySafety::Idempotent);
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let (coordinator, store, _) = coordinator(vec![Script::Stream {
         account_id: "acct_one",
         items: complete_stream(None),
@@ -844,7 +826,7 @@ fn websocket_success_keeps_client_http_status_absent() {
 #[test]
 fn authenticated_native_continuation_reaches_every_attempt_context() {
     let operation = generate_operation();
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let (coordinator, _, provider) = coordinator(vec![Script::Stream {
         account_id: "acct_one",
         items: complete_stream(None),
@@ -853,7 +835,6 @@ fn authenticated_native_continuation_reaches_every_attempt_context() {
         PreviousResponseId::new("previous-secret-id").expect("previous response"),
         SafeUpstreamValue::new("provider-native-id").expect("upstream response"),
         ProviderKind::new("openai").expect("provider"),
-        ProviderInstanceId::new("inst_openai_1").expect("instance"),
         ProviderAccountId::new("acct_one").expect("account"),
     );
 
@@ -895,7 +876,6 @@ fn authenticated_native_continuation_reaches_every_attempt_context() {
         .expect("continuation account-state owner");
     assert!(owner.matches(
         &ProviderKind::new("openai").expect("provider"),
-        &ProviderInstanceId::new("inst_openai_1").expect("instance"),
         &ProviderAccountId::new("acct_one").expect("account"),
     ));
 }
@@ -910,7 +890,7 @@ fn native_continuation_replays_owner_before_safely_switching_account() {
     let operation = Operation::Generate(generate.with_provider_session_state(
         ProviderSessionState::new("openai", payload).expect("provider session state"),
     ));
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let (coordinator, _, provider) = coordinator(vec![
         Script::Stream {
             account_id: "acct_one",
@@ -943,7 +923,6 @@ fn native_continuation_replays_owner_before_safely_switching_account() {
         PreviousResponseId::new("previous-secret-id").expect("previous response"),
         SafeUpstreamValue::new("provider-native-id").expect("upstream response"),
         ProviderKind::new("openai").expect("provider"),
-        ProviderInstanceId::new("inst_openai_1").expect("instance"),
         ProviderAccountId::new("acct_one").expect("account"),
     );
 
@@ -983,7 +962,7 @@ fn native_continuation_replays_owner_before_safely_switching_account() {
 #[test]
 fn required_account_reaches_provider_and_matching_metadata_succeeds() {
     let operation = operation(RetrySafety::Idempotent);
-    let route_plan = plan(&operation, 2);
+    let route_plan = plan(&operation);
     let (coordinator, _, provider) = coordinator(vec![Script::Stream {
         account_id: "acct_required",
         items: complete_stream(None),
@@ -1009,7 +988,7 @@ fn required_account_reaches_provider_and_matching_metadata_succeeds() {
 #[test]
 fn provider_metadata_for_another_account_fails_closed() {
     let operation = operation(RetrySafety::Idempotent);
-    let route_plan = plan(&operation, 2);
+    let route_plan = plan(&operation);
     let (coordinator, store, provider) = coordinator(vec![
         Script::Stream {
             account_id: "acct_wrong",
@@ -1044,92 +1023,9 @@ fn provider_metadata_for_another_account_fails_closed() {
 }
 
 #[test]
-fn required_account_disables_instance_fallback_before_stream() {
-    let operation = operation(RetrySafety::Idempotent);
-    let route_plan = plan(&operation, 2);
-    let (coordinator, store, provider) = coordinator(vec![
-        Script::Error(ProviderError::new(
-            ProviderErrorKind::Unavailable,
-            UpstreamSendState::NotSent,
-        )),
-        Script::Stream {
-            account_id: "acct_required",
-            items: complete_stream(None),
-        },
-    ]);
-    let required = ProviderAccountId::new("acct_required").expect("account id");
-    let mut session = block_on(coordinator.start(
-        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
-        operation,
-        route_plan,
-        Some(required.clone()),
-        None,
-        CancellationToken::new(),
-    ))
-    .expect("start execution");
-    let error = block_on(session.collect_uncommitted())
-        .expect_err("required account must not switch targets");
-
-    assert!(matches!(
-        error,
-        gateway_core::engine::EngineError::Provider(_)
-    ));
-    let contexts = provider.contexts.lock().expect("contexts lock");
-    assert_eq!(contexts.len(), 1);
-    assert_eq!(contexts[0].required_account(), Some(&required));
-    assert_eq!(provider.scripts.lock().expect("scripts lock").len(), 1);
-    let state = store.state.lock().expect("store lock");
-    assert!(state.attempts.is_empty());
-    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Failed);
-}
-
-#[test]
-fn local_selection_failure_falls_back_without_instance_failure_observation() {
-    let operation = operation(RetrySafety::Idempotent);
-    let route_plan = plan(&operation, 2);
-    let (coordinator, store, provider) = coordinator(vec![
-        Script::Error(ProviderError::new(
-            ProviderErrorKind::Unavailable,
-            UpstreamSendState::NotSent,
-        )),
-        Script::Stream {
-            account_id: "acct_second",
-            items: complete_stream(None),
-        },
-    ]);
-    let mut session = block_on(coordinator.start(
-        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
-        operation,
-        route_plan,
-        None,
-        None,
-        CancellationToken::new(),
-    ))
-    .expect("start execution");
-
-    block_on(session.collect_uncommitted()).expect("fallback response");
-    block_on(session.commit_downstream(Some(200))).expect("commit response");
-
-    assert_eq!(provider.contexts.lock().expect("contexts lock").len(), 2);
-    assert_eq!(
-        session.provider_attempt_outcomes(),
-        &[ProviderAttemptOutcome::Succeeded {
-            provider_instance_id: ProviderInstanceId::new("inst_openai_2")
-                .expect("second instance"),
-        }]
-    );
-    let state = store.state.lock().expect("store lock");
-    assert_eq!(state.attempts.len(), 1);
-    assert_eq!(
-        state.attempts[0].provider_instance_id,
-        ProviderInstanceId::new("inst_openai_2").expect("second instance")
-    );
-}
-
-#[test]
 fn required_account_disables_account_retry_after_stream_creation() {
     let operation = operation(RetrySafety::Idempotent);
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let (coordinator, store, provider) = coordinator(vec![
         Script::Stream {
             account_id: "acct_required",
@@ -1162,7 +1058,7 @@ fn required_account_disables_account_retry_after_stream_creation() {
     assert_eq!(
         session.provider_attempt_outcomes(),
         &[ProviderAttemptOutcome::Failed {
-            provider_instance_id: ProviderInstanceId::new("inst_openai_1").expect("instance"),
+            provider_kind: ProviderKind::new("openai").expect("provider"),
             error_kind: ProviderErrorKind::Unavailable,
         }]
     );
@@ -1177,7 +1073,7 @@ fn required_account_disables_account_retry_after_stream_creation() {
 #[test]
 fn latest_provider_reported_cost_is_persisted_as_known_usd_total() {
     let operation = operation(RetrySafety::Idempotent);
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let events = vec![
         Ok(GatewayEvent::Started(ResponseMeta::new(
             "native-cost",
@@ -1220,7 +1116,7 @@ fn latest_provider_reported_cost_is_persisted_as_known_usd_total() {
 #[test]
 fn calculated_cost_is_persisted_when_provider_does_not_report_cost() {
     let operation = operation(RetrySafety::Idempotent);
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let events = vec![
         Ok(GatewayEvent::Started(ResponseMeta::new(
             "calculated-cost",
@@ -1258,7 +1154,7 @@ fn calculated_cost_is_persisted_when_provider_does_not_report_cost() {
 #[test]
 fn provider_reported_cost_should_not_be_replaced_by_calculated_cost() {
     let operation = operation(RetrySafety::Idempotent);
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let events = vec![
         Ok(GatewayEvent::Started(ResponseMeta::new(
             "reported-cost",
@@ -1307,7 +1203,7 @@ fn provider_reported_cost_should_not_be_replaced_by_calculated_cost() {
 #[test]
 fn discarded_attempt_cost_never_leaks_into_retry_result() {
     let operation = operation(RetrySafety::Idempotent);
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let (coordinator, store, _) = coordinator(vec![
         Script::Stream {
             account_id: "acct_first",
@@ -1352,7 +1248,7 @@ fn discarded_attempt_cost_never_leaks_into_retry_result() {
 #[test]
 fn pre_commit_failure_excludes_account_and_retries_same_target() {
     let operation = operation(RetrySafety::Idempotent);
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let (coordinator, store, provider) = coordinator(vec![
         Script::Stream {
             account_id: "acct_first",
@@ -1394,7 +1290,6 @@ fn pre_commit_failure_excludes_account_and_retries_same_target() {
             .account_state_owner()
             .is_some_and(|owner| owner.matches(
                 &ProviderKind::new("openai").expect("provider"),
-                &ProviderInstanceId::new("inst_openai_1").expect("instance"),
                 &ProviderAccountId::new("acct_first").expect("account"),
             ))
     );
@@ -1417,7 +1312,7 @@ fn pre_commit_failure_excludes_account_and_retries_same_target() {
 #[test]
 fn recovered_credential_retries_the_same_account_exactly_once() {
     let operation = operation(RetrySafety::NonIdempotent);
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let (coordinator, store, provider) = coordinator(vec![
         Script::Stream {
             account_id: "acct_first",
@@ -1462,7 +1357,7 @@ fn recovered_credential_retries_the_same_account_exactly_once() {
 #[test]
 fn non_idempotent_explicit_429_rejection_rotates_account_before_output() {
     let operation = operation(RetrySafety::NonIdempotent);
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let (coordinator, store, provider) = coordinator(vec![
         Script::Stream {
             account_id: "acct_first",
@@ -1542,7 +1437,7 @@ fn explicit_429_with_ambiguous_send_state_is_not_retried() {
 #[test]
 fn explicit_429_after_structural_event_should_retry_before_commit() {
     let operation = operation(RetrySafety::NonIdempotent);
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let (coordinator, store, provider) = coordinator(vec![
         Script::Stream {
             account_id: "acct_first",
@@ -1589,7 +1484,6 @@ fn native_continuation_explicit_429_is_not_retried() {
         PreviousResponseId::new("previous-secret-id").expect("previous response"),
         SafeUpstreamValue::new("provider-native-id").expect("upstream response"),
         ProviderKind::new("openai").expect("provider"),
-        ProviderInstanceId::new("inst_openai_1").expect("instance"),
         ProviderAccountId::new("acct_first").expect("account"),
     );
     let (store, provider) = terminal_non_idempotent_failure(
@@ -1633,48 +1527,9 @@ fn external_continuation_explicit_429_is_not_retried() {
 }
 
 #[test]
-fn non_idempotent_not_sent_failure_can_fallback_target() {
-    let operation = operation(RetrySafety::NonIdempotent);
-    let route_plan = plan(&operation, 2);
-    let (coordinator, store, provider) = coordinator(vec![
-        Script::Error(ProviderError::new(
-            ProviderErrorKind::Unavailable,
-            UpstreamSendState::NotSent,
-        )),
-        Script::Stream {
-            account_id: "acct_second",
-            items: complete_stream(None),
-        },
-    ]);
-
-    let mut session = block_on(coordinator.start(
-        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
-        operation,
-        route_plan,
-        None,
-        None,
-        CancellationToken::new(),
-    ))
-    .expect("start execution");
-    block_on(session.collect_uncommitted()).expect("safe instance fallback succeeds");
-    block_on(session.commit_downstream(Some(200))).expect("commit response");
-
-    let contexts = provider.contexts.lock().expect("contexts lock");
-    assert_eq!(contexts.len(), 2);
-    assert!(contexts[0].account_state_owner().is_none());
-    assert!(contexts[1].account_state_owner().is_none());
-    let state = store.state.lock().expect("store lock");
-    assert_eq!(state.attempts.len(), 1);
-    assert_eq!(
-        state.attempts[0].provider_instance_id,
-        ProviderInstanceId::new("inst_openai_2").expect("second instance")
-    );
-}
-
-#[test]
 fn ambiguous_send_state_stops_retry() {
     let operation = operation(RetrySafety::Idempotent);
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let (coordinator, store, provider) = coordinator(vec![
         Script::Stream {
             account_id: "acct_first",
@@ -1720,7 +1575,7 @@ fn ambiguous_send_state_stops_retry() {
 #[test]
 fn structural_event_before_replay_safe_failure_should_switch_account_before_commit() {
     let operation = operation(RetrySafety::Idempotent);
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let (coordinator, store, provider) = coordinator(vec![
         Script::Stream {
             account_id: "acct_first",
@@ -1763,7 +1618,7 @@ fn structural_event_before_replay_safe_failure_should_switch_account_before_comm
     assert_eq!(
         session.provider_attempt_outcomes(),
         &[ProviderAttemptOutcome::Failed {
-            provider_instance_id: ProviderInstanceId::new("inst_openai_1").expect("instance"),
+            provider_kind: ProviderKind::new("openai").expect("provider"),
             error_kind: ProviderErrorKind::Transport,
         }]
     );
@@ -1779,7 +1634,7 @@ fn structural_event_before_replay_safe_failure_should_switch_account_before_comm
 #[test]
 fn cancellation_before_pending_delivery_commit_reaches_terminal_state() {
     let operation = operation(RetrySafety::Idempotent);
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let (coordinator, store, _) = coordinator(vec![Script::Stream {
         account_id: "acct_first",
         items: complete_stream(None),
@@ -1811,9 +1666,9 @@ fn cancellation_before_pending_delivery_commit_reaches_terminal_state() {
 }
 
 #[test]
-fn local_unavailability_before_stream_does_not_create_attempt_or_instance_failure() {
+fn local_unavailability_before_stream_does_not_create_attempt_or_provider_failure() {
     let operation = operation(RetrySafety::Idempotent);
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let (coordinator, store, _) = coordinator(vec![Script::Error(
         ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
             .with_upstream_code(SafeUpstreamValue::new("overloaded").expect("provider code"))
@@ -1850,7 +1705,7 @@ fn local_unavailability_before_stream_does_not_create_attempt_or_instance_failur
 #[test]
 fn expired_deadline_finalizes_without_calling_provider() {
     let operation = operation(RetrySafety::Idempotent);
-    let route_plan = plan(&operation, 1);
+    let route_plan = plan(&operation);
     let (coordinator, store, provider) = coordinator(vec![]);
 
     let error = match block_on(coordinator.start(
