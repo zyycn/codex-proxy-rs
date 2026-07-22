@@ -22,8 +22,7 @@ use provider_xai::{
 };
 
 use crate::support::{
-    MemoryGrokCatalogCache, MemoryProviderAccountStore, account_id, create_input, instance_id,
-    seed_input,
+    MemoryGrokCatalogCache, MemoryProviderAccountStore, account_id, create_input, seed_input,
 };
 
 struct SchedulingCoordinator {
@@ -46,7 +45,7 @@ impl GrokBillingTransport for UnavailableBillingTransport {
 impl ProviderLeasePort for SchedulingCoordinator {
     fn load_state<'a>(
         &'a self,
-        _: &'a gateway_core::routing::ProviderInstanceId,
+        _: &'a gateway_core::routing::ProviderKind,
         _: &'a [ProviderAccountId],
     ) -> futures::future::BoxFuture<'a, Result<ProviderSchedulingState, ProviderStoreError>> {
         Box::pin(async move {
@@ -141,8 +140,13 @@ impl SelectorFixture {
             repository.clone(),
             Arc::new(UnavailableBillingTransport),
         ));
-        let selector =
-            GrokAccountSessionSelector::new(repository.clone(), catalog_cache, quota, lease_port);
+        let selector = GrokAccountSessionSelector::new(
+            gateway_core::routing::ProviderKind::new("xai").expect("provider"),
+            repository.clone(),
+            catalog_cache,
+            quota,
+            lease_port,
+        );
         Self {
             store,
             cache,
@@ -170,7 +174,6 @@ impl SelectorFixture {
         strategy: RotationStrategy,
     ) -> GrokSessionSelection {
         GrokSessionSelection::new(
-            instance_id(),
             gateway_core::routing::UpstreamModelId::new("grok-4.5").expect("model"),
             excluded,
             required_account,

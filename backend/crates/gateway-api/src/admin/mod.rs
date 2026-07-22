@@ -9,14 +9,11 @@ use axum::{
 
 pub mod accounts;
 pub mod auth;
-pub mod catalog;
 pub mod client_keys;
 pub mod observability;
-pub mod openai;
 pub mod settings;
 pub mod system;
 pub mod wire;
-pub mod xai;
 
 pub use auth::{AdminAuth, AdminSessionState};
 pub use wire::{
@@ -32,13 +29,10 @@ where
     Router::new()
         .merge(accounts::router::<S>())
         .merge(auth::router::<S>())
-        .merge(catalog::router::<S>())
         .merge(client_keys::router::<S>())
-        .merge(openai::router::<S>())
         .merge(observability::router::<S>())
         .merge(settings::router::<S>())
         .merge(system::router::<S>())
-        .merge(xai::router::<S>())
         .layer(middleware::map_response(no_store))
 }
 

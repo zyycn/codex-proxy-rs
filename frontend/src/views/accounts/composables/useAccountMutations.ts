@@ -5,12 +5,9 @@ import type { BaseTableSort } from '@/components/base/BaseTable/columns'
 import dayjs from 'dayjs'
 import { ref, watch } from 'vue'
 import {
-  deleteCodexCredential,
-  deleteXaiCredential,
-  disableCodexCredential,
-  disableXaiCredential,
-  enableCodexCredential,
-  enableXaiCredential,
+  deleteAccounts,
+  disableAccount,
+  enableAccount,
   exportAccounts,
   getAccountQuota,
   refreshAccount,
@@ -96,7 +93,7 @@ export function useAccountMutations(options: {
 
     await deletingAccountAction.run(
       async () => {
-        await mutateCredential(account, 'delete')
+        await deleteAccountBatch([account])
         const remaining = new Set(options.selectedIds.value)
         remaining.delete(account.id)
         options.selectedIds.value = remaining
@@ -117,11 +114,13 @@ export function useAccountMutations(options: {
     await batchDeletingAction.run(
       async () => {
         const selected = accountsById([...options.selectedIds.value])
-        for (const account of selected) {
-          await mutateCredential(account, 'delete')
-          deletedCount += 1
+        for (const accounts of accountDeletionGroups(selected)) {
+          await deleteAccountBatch(accounts)
+          deletedCount += accounts.length
+          const deletedIds = new Set(accounts.map(account => account.id))
           const remaining = new Set(options.selectedIds.value)
-          remaining.delete(account.id)
+          for (const accountId of deletedIds)
+            remaining.delete(accountId)
           options.selectedIds.value = remaining
         }
         showDeleteModal.value = false
@@ -154,7 +153,7 @@ export function useAccountMutations(options: {
     await exportingAccountsAction.run(
       async () => {
         const payload = await exportAccounts({
-          ids: selected.join(','),
+          accountIds: selected.join(','),
           confirm: 'export_sensitive_accounts',
         })
         const fileName = `cpr-accounts-selected-${selected.length}-${dayjs().format('YYYY-MM-DD')}.json`
@@ -170,7 +169,7 @@ export function useAccountMutations(options: {
       try {
         const result = await withMinimumDuration(() =>
           refreshAccount({
-            id: accountId,
+            accountId,
             expectedConfigRevision: options.configRevision.value,
           }),
         )
@@ -196,8 +195,8 @@ export function useAccountMutations(options: {
     await refreshingQuotaAccounts.run(accountId, async () => {
       try {
         await withMinimumDuration(async () => {
-          await refreshAccountQuota({ id: accountId })
-          const result = await getAccountQuota({ id: accountId })
+          await refreshAccountQuota({ accountId })
+          const result = await getAccountQuota({ accountId })
           options.accounts.value = options.accounts.value.map(account =>
             account.id === accountId ? { ...account, ...result.account } : account,
           )
@@ -302,46 +301,62 @@ export function useAccountMutations(options: {
     return accounts
   }
 
-  async function mutateCredential(account: AccountRow, action: 'enable' | 'disable' | 'delete') {
+  async function mutateCredential(account: AccountRow, action: 'enable' | 'disable') {
     const payload = {
-      credentialId: account.id,
+      provider: account.provider,
+      accountId: account.id,
       expectedConfigRevision: await onboarding.requireConfigRevision(),
     }
     try {
-      const result = account.provider === 'openai'
-        ? await mutateCodexCredential(action, payload)
-        : account.provider === 'xai'
-          ? await mutateXaiCredential(action, payload)
-          : undefined
+      const result = action === 'enable'
+        ? await enableAccount(payload)
+        : await disableAccount(payload)
       if (!result)
         throw new Error(`不支持的 Provider：${account.provider}`)
       onboarding.commitConfigRevision(result.configRevision)
     }
     catch (error) {
       if (error instanceof ApiError && error.status === 409) {
-        await Promise.allSettled([
-          onboarding.loadProviderInstances(),
-          loadAccounts(),
-        ])
+        await loadAccounts()
       }
       throw error
     }
   }
 
-  function mutateCodexCredential(action: 'enable' | 'disable' | 'delete', payload: object) {
-    if (action === 'enable')
-      return enableCodexCredential(payload)
-    if (action === 'disable')
-      return disableCodexCredential(payload)
-    return deleteCodexCredential(payload)
+  async function deleteAccountBatch(accounts: AccountRow[]) {
+    const account = accounts[0]
+    if (!account)
+      return
+    const payload = {
+      provider: account.provider,
+      accountIds: accounts.map(account => account.id),
+      expectedConfigRevision: await onboarding.requireConfigRevision(),
+    }
+    try {
+      const result = await deleteAccounts(payload)
+      if (!result)
+        throw new Error(`不支持的 Provider：${account.provider}`)
+      onboarding.commitConfigRevision(result.configRevision)
+    }
+    catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        await loadAccounts()
+      }
+      throw error
+    }
   }
 
-  function mutateXaiCredential(action: 'enable' | 'disable' | 'delete', payload: object) {
-    if (action === 'enable')
-      return enableXaiCredential(payload)
-    if (action === 'disable')
-      return disableXaiCredential(payload)
-    return deleteXaiCredential(payload)
+  function accountDeletionGroups(accounts: AccountRow[]) {
+    const groups = new Map<string, AccountRow[]>()
+    for (const account of accounts) {
+      const key = account.provider
+      const group = groups.get(key)
+      if (group)
+        group.push(account)
+      else
+        groups.set(key, [account])
+    }
+    return groups.values()
   }
 
   return {

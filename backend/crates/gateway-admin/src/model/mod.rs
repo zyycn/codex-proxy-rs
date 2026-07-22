@@ -4,7 +4,6 @@ use std::num::{NonZeroU16, NonZeroU64};
 
 pub mod accounts;
 pub mod auth;
-pub mod catalog;
 pub mod client_keys;
 pub mod observability;
 pub mod provider_credentials;

@@ -31,9 +31,7 @@ use crate::error::{
 use crate::event::ProviderEvent;
 use crate::operation::OperationKind;
 use crate::policy::ClientApiKeyId;
-use crate::routing::{
-    ConfigRevision, ProviderInstanceId, ProviderKind, PublicModelId, UpstreamModelId,
-};
+use crate::routing::{ConfigRevision, ProviderKind, PublicModelId, UpstreamModelId};
 
 /// `model_requests.id`。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -105,7 +103,6 @@ impl ExecutionOutcome {
 pub enum AttemptTrigger {
     Initial,
     AccountRetry,
-    InstanceFallback,
 }
 
 impl AttemptTrigger {
@@ -114,39 +111,30 @@ impl AttemptTrigger {
         match self {
             Self::Initial => "initial",
             Self::AccountRetry => "account_retry",
-            Self::InstanceFallback => "instance_fallback",
         }
     }
 }
 
-/// 一次实际上游调用对 Provider instance 健康度产生的事实。
+/// 一次实际上游调用对 Provider 健康度产生的事实。
 ///
 /// 该事实只描述调用结果，不在 Core 中定义 circuit 策略或持久化方式。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderAttemptOutcome {
     /// 上游流自然完成且通过 canonical event 序列校验。
-    Succeeded {
-        provider_instance_id: ProviderInstanceId,
-    },
+    Succeeded { provider_kind: ProviderKind },
     /// 上游打开或流式阶段返回了稳定 Provider 错误。
     Failed {
-        provider_instance_id: ProviderInstanceId,
+        provider_kind: ProviderKind,
         error_kind: ProviderErrorKind,
     },
 }
 
 impl ProviderAttemptOutcome {
-    /// 返回本次调用实际归属的 Provider instance。
+    /// 返回本次调用实际归属的 Provider。
     #[must_use]
-    pub const fn provider_instance_id(&self) -> &ProviderInstanceId {
+    pub const fn provider_kind(&self) -> &ProviderKind {
         match self {
-            Self::Succeeded {
-                provider_instance_id,
-            }
-            | Self::Failed {
-                provider_instance_id,
-                ..
-            } => provider_instance_id,
+            Self::Succeeded { provider_kind } | Self::Failed { provider_kind, .. } => provider_kind,
         }
     }
 
@@ -290,56 +278,33 @@ impl AccountAttemptContext {
 
 /// 请求中 Provider 账号绑定状态的唯一归属。
 ///
-/// `turn_state` 等 opaque 状态只能发送给创建它的 Provider、instance 与账号；
+/// `turn_state` 等 opaque 状态只能发送给创建它的 Provider 与账号；
 /// Core 在首次真实选号后冻结该事实，Provider 据此决定是否清理跨账号状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccountStateOwner {
     provider: ProviderKind,
-    instance: ProviderInstanceId,
     account: ProviderAccountId,
 }
 
 impl ProviderAccountStateOwner {
     #[must_use]
-    pub const fn new(
-        provider: ProviderKind,
-        instance: ProviderInstanceId,
-        account: ProviderAccountId,
-    ) -> Self {
-        Self {
-            provider,
-            instance,
-            account,
-        }
+    pub const fn new(provider: ProviderKind, account: ProviderAccountId) -> Self {
+        Self { provider, account }
     }
 
     #[must_use]
     pub fn from_continuation(pin: &NativeContinuationPin) -> Self {
-        Self::new(
-            pin.provider().clone(),
-            pin.instance().clone(),
-            pin.account().clone(),
-        )
+        Self::new(pin.provider().clone(), pin.account().clone())
     }
 
     #[must_use]
-    pub fn matches(
-        &self,
-        provider: &ProviderKind,
-        instance: &ProviderInstanceId,
-        account: &ProviderAccountId,
-    ) -> bool {
-        self.provider == *provider && self.instance == *instance && self.account == *account
+    pub fn matches(&self, provider: &ProviderKind, account: &ProviderAccountId) -> bool {
+        self.provider == *provider && self.account == *account
     }
 
     #[must_use]
     pub const fn provider(&self) -> &ProviderKind {
         &self.provider
-    }
-
-    #[must_use]
-    pub const fn instance(&self) -> &ProviderInstanceId {
-        &self.instance
     }
 
     #[must_use]
@@ -534,7 +499,6 @@ pub struct AttemptRecord {
     pub request_id: ModelRequestId,
     pub attempt_count: NonZeroU32,
     pub trigger: AttemptTrigger,
-    pub provider_instance_id: ProviderInstanceId,
     pub provider_kind: ProviderKind,
     pub provider_account_id: Option<ProviderAccountId>,
     pub provider_account_ref: Option<ProviderAccountId>,
@@ -543,13 +507,12 @@ pub struct AttemptRecord {
     pub http_version: Option<String>,
 }
 
-/// 需要解释换号或 Provider instance 切换的中间失败。
+/// 需要解释换号的中间失败。
 #[derive(Debug)]
 pub struct IntermediateFailure {
     pub request_id: ModelRequestId,
     pub attempt_index: NonZeroU32,
     pub trigger: AttemptTrigger,
-    pub instance_id: ProviderInstanceId,
     pub provider_kind: ProviderKind,
     pub account_id: Option<ProviderAccountId>,
     pub upstream_model_id: UpstreamModelId,
@@ -695,7 +658,7 @@ pub enum EngineError {
     Store(#[from] StoreError),
     #[error("provider `{provider}` is not registered")]
     ProviderNotRegistered { provider: String },
-    #[error("provider metadata did not match the selected Provider instance and account")]
+    #[error("provider metadata did not match the selected Provider and account")]
     ProviderMetadataMismatch,
     #[error("native continuation pin did not match the selected account")]
     ContinuationPinMismatch,

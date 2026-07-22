@@ -67,14 +67,13 @@ pub use transport::{
     GrokModelCatalogSessionError, GrokModelCatalogSnapshot, GrokModelCatalogTransport,
     GrokModelCatalogTransportError, GrokModelCatalogTransportErrorKind,
     GrokModelCatalogTransportFuture, GrokModelCatalogTransportResponse, GrokProviderConfigError,
-    GrokProviderInstanceConfig, GrokProviderTransport, GrokRequestEncodeError,
-    GrokReqwestTransportBuildError, GrokResponsesRequest, GrokSessionAffinityKey,
-    GrokSessionBinding, GrokSessionDataError, GrokSessionLeaseGuard, GrokSessionSelection,
-    GrokSessionSelector, GrokSessionSelectorError, GrokSessionSelectorFuture,
-    MAX_GROK_BILLING_BYTES, MAX_GROK_MODEL_CATALOG_BYTES, OfficialGrokEndpointPolicy,
-    ReqwestGrokInferenceTransport, ReqwestGrokModelCatalogTransport, ReqwestOAuthTransport,
-    SelectedGrokSession, XAI_PROVIDER_NAME, build_grok_headers, grok_billing_breakdown,
-    parse_grok_billing, parse_grok_model_catalog,
+    GrokProviderTransport, GrokRequestEncodeError, GrokReqwestTransportBuildError,
+    GrokResponsesRequest, GrokSessionAffinityKey, GrokSessionBinding, GrokSessionDataError,
+    GrokSessionLeaseGuard, GrokSessionSelection, GrokSessionSelector, GrokSessionSelectorError,
+    GrokSessionSelectorFuture, MAX_GROK_BILLING_BYTES, MAX_GROK_MODEL_CATALOG_BYTES,
+    OfficialGrokEndpointPolicy, ReqwestGrokInferenceTransport, ReqwestGrokModelCatalogTransport,
+    ReqwestOAuthTransport, SelectedGrokSession, XAI_PROVIDER_NAME, build_grok_headers,
+    grok_billing_breakdown, parse_grok_billing, parse_grok_model_catalog,
 };
 
 /// xAI 初始化后交给组装根的最小能力集。
@@ -105,7 +104,6 @@ pub async fn initialize(
     let accounts: Arc<dyn ProviderAccountStore> = ports.accounts();
     let leases = ports.leases();
     let runtime_policy = ports.runtime_policy();
-    let instances = ports.instances();
     let repository = GrokCredentialRepository::new(Arc::clone(&accounts));
     let endpoint_policy: Arc<dyn GrokEndpointPolicy> = Arc::new(OfficialGrokEndpointPolicy);
 
@@ -131,6 +129,7 @@ pub async fn initialize(
         profile.clone(),
     ));
     let selector: Arc<dyn GrokSessionSelector> = Arc::new(GrokAccountSessionSelector::new(
+        provider_kind.clone(),
         repository.clone(),
         catalog_cache,
         Arc::clone(&quota),
@@ -164,13 +163,16 @@ pub async fn initialize(
         Arc::clone(&runtime_policy),
     ));
     let credential_recovery: Arc<dyn GrokCredentialRecovery> = refresh.clone();
-    let core_provider: Arc<dyn Provider> = Arc::new(GrokBuildProvider::new(
-        selector,
-        inference,
-        Arc::clone(&catalog),
-        credential_recovery,
-        profile.clone(),
-    ));
+    let core_provider: Arc<dyn Provider> = Arc::new(
+        GrokBuildProvider::new(
+            selector,
+            inference,
+            Arc::clone(&catalog),
+            credential_recovery,
+            profile.clone(),
+        )
+        .map_err(|_| XaiInitializeError::Transport)?,
+    );
     let admin_provider: Arc<dyn ProviderAdmin> = Arc::new(XaiAdminProvider::new(
         provider_kind.clone(),
         profile,
@@ -191,7 +193,6 @@ pub async fn initialize(
         quota,
         catalog,
         accounts,
-        instances,
         provider_kind,
         cli_release,
     )

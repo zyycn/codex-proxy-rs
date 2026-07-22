@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 
 use crate::error::{IdentifierError, StoreError, validate_text};
-use crate::routing::{ProviderInstanceId, ProviderKind};
+use crate::routing::ProviderKind;
 
 /// `provider_accounts.id` 的核心值对象。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -192,7 +192,6 @@ impl AccountAvailability {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccount {
     id: ProviderAccountId,
-    instance: ProviderInstanceId,
     provider: ProviderKind,
     name: String,
     email: Option<String>,
@@ -209,11 +208,10 @@ pub struct ProviderAccount {
 }
 
 impl ProviderAccount {
-    /// 创建账号快照；Provider 身份一致性由数据库复合 FK 保证。
+    /// 创建账号快照。
     #[must_use]
     pub const fn new(
         id: ProviderAccountId,
-        instance: ProviderInstanceId,
         provider: ProviderKind,
         name: String,
         upstream_user_id: String,
@@ -222,7 +220,6 @@ impl ProviderAccount {
     ) -> Self {
         Self {
             id,
-            instance,
             provider,
             name,
             email: None,
@@ -279,11 +276,6 @@ impl ProviderAccount {
     #[must_use]
     pub const fn id(&self) -> &ProviderAccountId {
         &self.id
-    }
-
-    #[must_use]
-    pub const fn instance(&self) -> &ProviderInstanceId {
-        &self.instance
     }
 
     #[must_use]
@@ -585,9 +577,9 @@ pub trait ProviderAccountStore: Send + Sync {
 
     async fn list_accounts(&self) -> Result<Vec<ProviderAccount>, StoreError>;
 
-    async fn list_for_instance(
+    async fn list_for_provider(
         &self,
-        instance: &ProviderInstanceId,
+        provider: &ProviderKind,
     ) -> Result<Vec<ProviderAccount>, StoreError>;
 
     async fn load_credential(

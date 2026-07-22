@@ -1,32 +1,11 @@
-use gateway_core::routing::{InstanceHealth, ProviderInstance, ProviderInstanceId, ProviderKind};
-
-use provider_xai::{GROK_CLI_BASE_URL, GrokProviderConfigError, GrokProviderInstanceConfig};
-
-fn instance(base_url: &str) -> ProviderInstance {
-    ProviderInstance::new(
-        ProviderInstanceId::new("inst_grok").expect("valid instance"),
-        ProviderKind::new("xai").expect("valid provider"),
-        base_url.to_owned(),
-        true,
-        InstanceHealth::Healthy,
-    )
-}
+use provider_xai::GROK_CLI_BASE_URL;
+use provider_xai::transport::GROK_RESPONSES_URL;
 
 #[test]
-fn official_instance_should_compile_to_responses_endpoint() {
-    let config = GrokProviderInstanceConfig::from_snapshot(&instance(GROK_CLI_BASE_URL))
-        .expect("official endpoint is valid");
-
+fn official_grok_build_endpoints_are_fixed_to_the_cli_origin() {
+    assert_eq!(GROK_CLI_BASE_URL, "https://cli-chat-proxy.grok.com/v1");
     assert_eq!(
-        config.responses_url().as_str(),
+        GROK_RESPONSES_URL,
         "https://cli-chat-proxy.grok.com/v1/responses"
     );
-}
-
-#[test]
-fn instance_should_reject_cross_origin_endpoint() {
-    let error = GrokProviderInstanceConfig::from_snapshot(&instance("https://api.x.ai/v1"))
-        .expect_err("public API fallback must fail");
-
-    assert_eq!(error, GrokProviderConfigError::UnsafeBaseUrl);
 }

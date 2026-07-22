@@ -10,7 +10,6 @@ fn request_scoped_ops_event_requires_attempt_index() {
         level: OpsEventLevel::Warning,
         component: "routing".to_owned(),
         operation: "fallback".to_owned(),
-        provider_instance_id: None,
         provider_kind: None,
         provider_account_id: None,
         provider_account_ref: None,

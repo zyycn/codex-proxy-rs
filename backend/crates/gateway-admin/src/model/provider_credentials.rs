@@ -5,7 +5,7 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 use gateway_core::{
     engine::credential::{OpaqueProviderData, ProviderAccountId},
-    routing::{ProviderInstanceId, ProviderKind, UpstreamModelId},
+    routing::{ProviderKind, UpstreamModelId},
 };
 
 use super::{
@@ -51,7 +51,6 @@ pub struct CredentialCursor {
 /// Provider credential 列表查询。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialListQuery {
-    pub provider_instance_id: Option<ProviderInstanceId>,
     pub availability: Option<CredentialAvailabilityFilter>,
     pub enabled: Option<bool>,
     pub window: CredentialListWindow,
@@ -103,7 +102,6 @@ pub struct CredentialDetails {
 pub struct ImportCredentials {
     pub context: MutationContext,
     pub expected_config_revision: Revision,
-    pub provider_instance_id: ProviderInstanceId,
     pub document: ProviderDocument,
 }
 
@@ -113,7 +111,6 @@ impl fmt::Debug for ImportCredentials {
             .debug_struct("ImportCredentials")
             .field("context", &self.context)
             .field("expected_config_revision", &self.expected_config_revision)
-            .field("provider_instance_id", &self.provider_instance_id)
             .field("document", &self.document)
             .finish()
     }
@@ -126,9 +123,8 @@ pub struct CredentialImportResult {
     pub credential_ids: Vec<ProviderAccountId>,
 }
 
-/// Provider 解析导入文档时只接收实例与不透明文档，不接触 revision 或审计上下文。
+/// Provider 解析导入文档时只接收不透明文档，不接触 revision 或审计上下文。
 pub struct PrepareCredentialImport {
-    pub provider_instance_id: ProviderInstanceId,
     pub document: ProviderDocument,
 }
 
@@ -136,7 +132,6 @@ impl fmt::Debug for PrepareCredentialImport {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PrepareCredentialImport")
-            .field("provider_instance_id", &self.provider_instance_id)
             .field("document", &self.document)
             .finish()
     }
@@ -146,7 +141,6 @@ impl fmt::Debug for PrepareCredentialImport {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedCredentialCreate {
     pub account_id: ProviderAccountId,
-    pub provider_instance_id: ProviderInstanceId,
     pub provider_kind: ProviderKind,
     pub name: String,
     pub email: Option<String>,
@@ -168,7 +162,6 @@ pub struct PreparedCredentialCreate {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedCredentialImport {
     pub provider_kind: ProviderKind,
-    pub provider_instance_id: ProviderInstanceId,
     pub credentials: Vec<PreparedCredentialCreate>,
 }
 
@@ -249,11 +242,9 @@ impl fmt::Debug for AuthorizationOwnerBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthorizationMutationTarget {
     Create {
-        provider_instance_id: ProviderInstanceId,
         name: String,
     },
     Reauthorize {
-        provider_instance_id: ProviderInstanceId,
         account_id: ProviderAccountId,
         expected_credential_revision: Revision,
     },
@@ -310,7 +301,6 @@ impl PendingAuthorizationMutation {
 pub struct StartAuthorization {
     pub context: MutationContext,
     pub expected_config_revision: Revision,
-    pub provider_instance_id: ProviderInstanceId,
     pub name: String,
     pub reauthorization: Option<ReauthorizationTarget>,
 }
@@ -427,6 +417,21 @@ pub struct CredentialMutationResult {
     pub credential_revision: Option<Revision>,
 }
 
+/// 同一 Provider 管理范围内的 credential 批量删除。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CredentialDeletion {
+    pub context: MutationContext,
+    pub expected_config_revision: Revision,
+    pub account_ids: Vec<ProviderAccountId>,
+}
+
+/// Credential 批量删除提交结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CredentialDeletionResult {
+    pub config_revision: Revision,
+    pub account_ids: Vec<ProviderAccountId>,
+}
+
 /// Provider-owned token 轮换命令。
 pub struct RotateCredential {
     pub mutation: CredentialMutation,
@@ -459,7 +464,6 @@ impl fmt::Debug for PrepareCredentialRotation {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedCredentialRotationFacts {
     pub account_id: ProviderAccountId,
-    pub provider_instance_id: ProviderInstanceId,
     pub provider_kind: ProviderKind,
     pub expected_credential_revision: Revision,
     pub name: String,
@@ -613,7 +617,6 @@ impl fmt::Debug for ProviderExport {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountDirectoryItem {
     pub account: AccountRecord,
-    pub provider_instance_name: String,
     pub status: AccountStatus,
     pub usage: Option<super::accounts::AccountUsage>,
     pub quota: ProviderQuota,

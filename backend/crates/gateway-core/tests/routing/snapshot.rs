@@ -20,13 +20,12 @@ use gateway_core::policy::{ClientApiKeyId, PlaintextClientApiKey, RateLimits};
 use gateway_core::routing::snapshot::{
     RuntimeSnapshotCompileError, RuntimeSnapshotCompiler, RuntimeSnapshotHandle,
     RuntimeSnapshotPublisher, SnapshotClientPolicyFacts, SnapshotControl, SnapshotFacts,
-    SnapshotProviderInstanceFacts, SnapshotRevisionStream, SnapshotSettingsFacts,
-    SnapshotStoreError, SnapshotStorePort, SnapshotSubscriptionError, SnapshotSubscriptionPort,
-    runtime_revision_needs_refresh,
+    SnapshotRevisionStream, SnapshotSettingsFacts, SnapshotStoreError, SnapshotStorePort,
+    SnapshotSubscriptionError, SnapshotSubscriptionPort, runtime_revision_needs_refresh,
 };
 use gateway_core::routing::{
-    ConfigRevision, ModelCapabilities, ProviderInstance, ProviderKind, PublicModelId,
-    RuntimeSnapshot, UpstreamModelId,
+    ConfigRevision, ModelCapabilities, ProviderKind, PublicModelId, RuntimeSnapshot,
+    UpstreamModelId,
 };
 use gateway_core::task::WorkerKind;
 
@@ -87,6 +86,39 @@ struct PublishingCatalogProvider {
     queries: AtomicUsize,
 }
 
+struct UnavailableCatalogProvider;
+
+#[async_trait]
+impl Provider for UnavailableCatalogProvider {
+    fn name(&self) -> &'static str {
+        "alpha"
+    }
+
+    fn catalog_generation(&self) -> ProviderCatalogGeneration {
+        ProviderCatalogGeneration::new(0)
+    }
+
+    async fn query_model_capabilities(
+        &self,
+    ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
+        Err(ProviderError::new(
+            ProviderErrorKind::Unavailable,
+            UpstreamSendState::NotSent,
+        ))
+    }
+
+    async fn execute(
+        &self,
+        _: ProviderRequest,
+        _: AttemptContext,
+    ) -> Result<ProviderStream, ProviderError> {
+        Err(ProviderError::new(
+            ProviderErrorKind::Unavailable,
+            UpstreamSendState::NotSent,
+        ))
+    }
+}
+
 #[async_trait]
 impl Provider for PublishingCatalogProvider {
     fn name(&self) -> &'static str {
@@ -99,7 +131,6 @@ impl Provider for PublishingCatalogProvider {
 
     async fn query_model_capabilities(
         &self,
-        _: &ProviderInstance,
     ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
         if self.queries.fetch_add(1, Ordering::SeqCst) == 0 {
             self.generation.store(1, Ordering::SeqCst);
@@ -146,7 +177,11 @@ fn compiler_should_reject_revision_changed_during_consistent_read() {
 
 #[test]
 fn compiler_should_preserve_passthrough_when_provider_catalog_is_unavailable() {
-    let compiler = compiler(Arc::new(TestSnapshotStore::new(Ok(facts(3, 3)))));
+    let providers =
+        ProviderRegistry::new([Arc::new(UnavailableCatalogProvider) as Arc<dyn Provider>])
+            .expect("provider registry");
+    let compiler =
+        RuntimeSnapshotCompiler::new(Arc::new(TestSnapshotStore::new(Ok(facts(3, 3)))), providers);
 
     let snapshot = block_on(compiler.compile()).expect("compile snapshot");
     let provider = ProviderKind::new("alpha").expect("provider");
@@ -302,12 +337,6 @@ fn facts(config_revision: u64, observed_current_revision: u64) -> SnapshotFacts 
                 BTreeMap::from([("public-model".to_owned(), "upstream-model".to_owned())]),
             )]),
         ),
-        vec![SnapshotProviderInstanceFacts::new(
-            "inst_alpha",
-            "alpha",
-            "https://alpha.example.invalid",
-            true,
-        )],
         vec![SnapshotClientPolicyFacts::new(
             ClientApiKeyId::new("key_one").expect("key ID"),
             PlaintextClientApiKey::new("sk_test").expect("plaintext key"),

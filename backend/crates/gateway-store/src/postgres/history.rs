@@ -10,7 +10,7 @@ use gateway_core::{
         credential::ProviderAccountId,
     },
     error::SafeUpstreamValue,
-    routing::{ProviderInstanceId, ProviderKind},
+    routing::ProviderKind,
 };
 use sqlx::PgPool;
 
@@ -22,7 +22,6 @@ pub struct ModelRequestHistoryRecord {
     pub client_api_key_ref: String,
     pub requested_model_id: String,
     pub provider_kind: Option<String>,
-    pub provider_instance_id: Option<String>,
     pub provider_account_ref: Option<String>,
     pub upstream_model_id: Option<String>,
     pub outcome: String,
@@ -112,16 +111,11 @@ impl ModelRequestHistoryRepository for PgHistoryRepository {
             "caller_client_api_key_ref",
             caller_client_api_key_ref,
         )?;
-        let row = sqlx::query_as::<_, (String, String, String, String)>(
-            "select mr.provider_kind, mr.provider_instance_id,
-                    mr.provider_account_id, mr.upstream_response_id
+        let row = sqlx::query_as::<_, (String, String, String)>(
+            "select mr.provider_kind, mr.provider_account_id, mr.upstream_response_id
              from model_requests mr
-             join provider_instances instance
-               on instance.id = mr.provider_instance_id
-              and instance.provider_kind = mr.provider_kind
              join provider_accounts account
                on account.id = mr.provider_account_id
-              and account.provider_instance_id = mr.provider_instance_id
               and account.provider_kind = mr.provider_kind
              where mr.client_response_id = $1
                and mr.client_api_key_ref = $2
@@ -168,8 +162,8 @@ async fn fetch_history(
         "id" => {
             sqlx::query_as::<_, HistoryRow>(
                 "select id, client_api_key_ref, requested_model_id, provider_kind,
-                    provider_instance_id, provider_account_ref,
-                    upstream_model_id, outcome, client_response_id, upstream_response_id,
+                    provider_account_ref, upstream_model_id, outcome,
+                    client_response_id, upstream_response_id,
                     started_at, completed_at
              from model_requests where id = $1",
             )
@@ -190,8 +184,8 @@ async fn fetch_history_by_client_response(
 ) -> StoreResult<Option<ModelRequestHistoryRecord>> {
     let row = sqlx::query_as::<_, HistoryRow>(
         "select id, client_api_key_ref, requested_model_id, provider_kind,
-                provider_instance_id, provider_account_ref,
-                upstream_model_id, outcome, client_response_id, upstream_response_id,
+                provider_account_ref, upstream_model_id, outcome,
+                client_response_id, upstream_response_id,
                 started_at, completed_at
          from model_requests
          where client_response_id = $1 and client_api_key_ref = $2",
@@ -211,7 +205,6 @@ type HistoryRow = (
     Option<String>,
     Option<String>,
     Option<String>,
-    Option<String>,
     String,
     Option<String>,
     Option<String>,
@@ -225,36 +218,32 @@ fn history_from_row(row: HistoryRow) -> ModelRequestHistoryRecord {
         client_api_key_ref: row.1,
         requested_model_id: row.2,
         provider_kind: row.3,
-        provider_instance_id: row.4,
-        provider_account_ref: row.5,
-        upstream_model_id: row.6,
-        outcome: row.7,
-        client_response_id: row.8,
-        upstream_response_id: row.9,
-        started_at: row.10,
-        completed_at: row.11,
+        provider_account_ref: row.4,
+        upstream_model_id: row.5,
+        outcome: row.6,
+        client_response_id: row.7,
+        upstream_response_id: row.8,
+        started_at: row.9,
+        completed_at: row.10,
     }
 }
 
 fn native_pin_from_row(
     client_response_id: &str,
-    row: (String, String, String, String),
+    row: (String, String, String),
 ) -> StoreResult<NativeContinuationPin> {
     let previous_response_id = PreviousResponseId::new(client_response_id.to_owned())
         .map_err(|_| invalid_native_pin("invalid client response ID"))?;
     let provider =
         ProviderKind::new(row.0).map_err(|_| invalid_native_pin("invalid provider kind"))?;
-    let upstream_response_id = SafeUpstreamValue::new(row.3)
+    let upstream_response_id = SafeUpstreamValue::new(row.2)
         .map_err(|_| invalid_native_pin("invalid upstream response ID"))?;
-    let instance = ProviderInstanceId::new(row.1)
-        .map_err(|_| invalid_native_pin("invalid provider instance ID"))?;
-    let account = ProviderAccountId::new(row.2)
+    let account = ProviderAccountId::new(row.1)
         .map_err(|_| invalid_native_pin("invalid provider account ID"))?;
     Ok(NativeContinuationPin::new(
         previous_response_id,
         upstream_response_id,
         provider,
-        instance,
         account,
     )
     .with_scope(NativeContinuationScope::Persisted))

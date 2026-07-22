@@ -2,7 +2,6 @@
 
 pub mod accounts;
 pub mod auth;
-pub mod catalog;
 pub mod client_keys;
 pub mod observability;
 pub mod openai;
@@ -13,12 +12,13 @@ pub mod xai;
 use crate::{
     model::{
         AdminError, AdminErrorKind, MutationContext,
-        accounts::{DeleteAccount, SetAccountEnabled},
+        accounts::{DeleteAccounts, SetAccountEnabled},
         provider_credentials::{
-            AuthorizationMutationTarget, CredentialDetails, CredentialMutation,
-            CredentialMutationResult, CredentialRotationCommit, PendingAuthorizationMutation,
-            PreparedAuthorizationCommit, PreparedAuthorizationCredential, PreparedCredentialImport,
-            PreparedCredentialRotation, StartAuthorization,
+            AuthorizationMutationTarget, CredentialDeletion, CredentialDeletionResult,
+            CredentialDetails, CredentialMutation, CredentialMutationResult,
+            CredentialRotationCommit, PendingAuthorizationMutation, PreparedAuthorizationCommit,
+            PreparedAuthorizationCredential, PreparedCredentialImport, PreparedCredentialRotation,
+            StartAuthorization,
         },
     },
     ports::{
@@ -93,21 +93,17 @@ async fn pending_authorization(
         Some(target) => {
             let details =
                 required_credential(accounts, provider_kind, &target.account_id, resource).await?;
-            if details.credential.provider_instance_id != command.provider_instance_id
-                || details.credential.credential_revision != target.credential_revision
-            {
+            if details.credential.credential_revision != target.credential_revision {
                 return Err(AdminError::conflict(format!(
                     "{resource} reauthorization target is stale"
                 )));
             }
             AuthorizationMutationTarget::Reauthorize {
-                provider_instance_id: command.provider_instance_id.clone(),
                 account_id: target.account_id.clone(),
                 expected_credential_revision: target.credential_revision,
             }
         }
         None => AuthorizationMutationTarget::Create {
-            provider_instance_id: command.provider_instance_id.clone(),
             name: command.name.clone(),
         },
     };
@@ -123,16 +119,14 @@ async fn pending_authorization(
 
 fn validate_prepared_import(
     provider_kind: &ProviderKind,
-    provider_instance_id: &gateway_core::routing::ProviderInstanceId,
     prepared: &PreparedCredentialImport,
     resource: &'static str,
 ) -> Result<(), AdminError> {
     if prepared.provider_kind != *provider_kind
-        || prepared.provider_instance_id != *provider_instance_id
-        || prepared.credentials.iter().any(|credential| {
-            credential.provider_kind != *provider_kind
-                || credential.provider_instance_id != *provider_instance_id
-        })
+        || prepared
+            .credentials
+            .iter()
+            .any(|credential| credential.provider_kind != *provider_kind)
     {
         return Err(AdminError::conflict(format!(
             "{resource} prepared facts do not match the requested Provider scope"
@@ -149,7 +143,6 @@ fn validate_prepared_rotation(
     let facts = prepared.facts();
     if facts.account_id.as_str() != account.id.as_str()
         || facts.provider_kind != account.provider_kind
-        || facts.provider_instance_id != account.provider_instance_id
         || facts.expected_credential_revision != account.credential_revision
     {
         return Err(AdminError::conflict(format!(
@@ -174,18 +167,11 @@ fn validate_authorization_commit(
     }
     let matches_target = match (prepared.pending.target(), &prepared.credential) {
         (
-            AuthorizationMutationTarget::Create {
-                provider_instance_id,
-                ..
-            },
+            AuthorizationMutationTarget::Create { .. },
             PreparedAuthorizationCredential::Create(credential),
-        ) => {
-            credential.provider_kind == *provider_kind
-                && credential.provider_instance_id == *provider_instance_id
-        }
+        ) => credential.provider_kind == *provider_kind,
         (
             AuthorizationMutationTarget::Reauthorize {
-                provider_instance_id,
                 account_id,
                 expected_credential_revision,
             },
@@ -193,7 +179,6 @@ fn validate_authorization_commit(
         ) => {
             let facts = credential.facts();
             facts.provider_kind == *provider_kind
-                && facts.provider_instance_id == *provider_instance_id
                 && facts.account_id == *account_id
                 && facts.expected_credential_revision == *expected_credential_revision
         }
@@ -322,34 +307,34 @@ async fn set_credential_enabled(
     })
 }
 
-async fn delete_credential(
+async fn delete_credentials(
     accounts: &dyn AccountStore,
     provider: &dyn ProviderAdmin,
-    command: CredentialMutation,
+    command: CredentialDeletion,
     resource: &'static str,
-) -> Result<CredentialMutationResult, AdminError> {
-    required_credential(
-        accounts,
-        provider.provider_kind(),
-        &command.account_id,
-        resource,
-    )
-    .await?;
-    let account_id = command.account_id;
+) -> Result<CredentialDeletionResult, AdminError> {
+    for account_id in &command.account_ids {
+        required_credential(accounts, provider.provider_kind(), account_id, resource).await?;
+    }
+    let account_ids = command.account_ids;
     let revision = accounts
-        .delete_account(
-            DeleteAccount {
+        .delete_accounts(
+            DeleteAccounts {
                 expected_config_revision: command.expected_config_revision,
-                account_id: account_id.as_str().to_owned(),
+                account_ids: account_ids
+                    .iter()
+                    .map(|account_id| account_id.as_str().to_owned())
+                    .collect(),
             },
             &command.context,
         )
         .await
         .map_err(|error| map_store_error(error, resource))?;
-    provider.account_unavailable(&account_id).await;
-    Ok(CredentialMutationResult {
+    for account_id in &account_ids {
+        provider.account_unavailable(account_id).await;
+    }
+    Ok(CredentialDeletionResult {
         config_revision: revision,
-        account_id,
-        credential_revision: None,
+        account_ids,
     })
 }

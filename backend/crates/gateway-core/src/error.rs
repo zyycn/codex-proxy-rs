@@ -87,8 +87,8 @@ pub enum RoutingError {
         /// 实体 ID。
         id: String,
     },
-    /// 固定平台内没有可执行本次请求的 Provider instance。
-    #[error("no provider instance can execute model `{model}`")]
+    /// 固定平台内没有可执行本次请求的 Provider。
+    #[error("no provider can execute model `{model}`")]
     NoCapableProvider {
         /// 客户端提交的模型名称。
         model: String,

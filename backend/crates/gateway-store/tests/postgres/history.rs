@@ -12,7 +12,6 @@ fn history_contains_no_payload_field() {
         client_api_key_ref: "key-1".to_owned(),
         requested_model_id: "coding".to_owned(),
         provider_kind: None,
-        provider_instance_id: None,
         provider_account_ref: None,
         upstream_model_id: None,
         outcome: "failed".to_owned(),
@@ -143,23 +142,13 @@ async fn native_pin_requires_committed_success_but_not_a_specific_transport() {
 
 async fn seed_native_history(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "insert into provider_instances (
-           id, provider_kind, name, base_url, enabled, created_at, updated_at
-         ) values (
-           'inst_history', 'openai', 'history', 'https://example.invalid',
-           true, now(), now()
-         )",
-    )
-    .execute(pool)
-    .await?;
-    sqlx::query(
         "insert into provider_accounts (
-           id, provider_instance_id, provider_kind, name, upstream_user_id,
+           id, provider_kind, name, upstream_user_id,
            provider_credentials_json, credential_revision, has_refresh_token,
            access_token_expires_at, enabled, availability, availability_observed_at,
            created_at, updated_at
          ) values (
-           'acct_history', 'inst_history', 'openai', 'history', 'user-history',
+           'acct_history', 'openai', 'history', 'user-history',
            '{}'::jsonb, 1, false, now() + interval '1 day', true, 'ready',
            now(), now(), now()
          )",
@@ -170,14 +159,14 @@ async fn seed_native_history(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         "insert into model_requests (
            id, client_api_key_ref, config_revision, protocol, operation, endpoint,
            client_transport, requested_model_id, input_token_estimate,
-           provider_instance_id, provider_kind, provider_account_id,
+           provider_kind, provider_account_id,
            provider_account_ref, upstream_model_id, upstream_transport, attempt_count,
            upstream_send_state, downstream_committed_at, outcome, client_status_code,
            upstream_status_code, client_response_id, upstream_response_id,
            cost_source, started_at, deadline_at, completed_at
          ) values (
            'req_history', 'key_owner', 1, 'openai', 'responses', '/v1/responses',
-           'http_sse', 'history-model', 1, 'inst_history', 'openai', 'acct_history',
+           'http_sse', 'history-model', 1, 'openai', 'acct_history',
            'acct_history', 'history-upstream',
            'websocket', 1, 'sent', now(), 'succeeded', 200, 200,
            'resp_gateway_visible', 'resp_upstream_native', 'unavailable',

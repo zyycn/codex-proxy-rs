@@ -29,7 +29,7 @@ use crate::{
     },
     ports::{
         provider::ProviderAdminRegistry,
-        store::{AccountStore, CatalogStore, SettingsStore},
+        store::{AccountStore, SettingsStore},
     },
 };
 
@@ -79,7 +79,6 @@ pub trait AccountsService: Send + Sync {
 
 pub(crate) struct DefaultAccountsService {
     accounts: Arc<dyn AccountStore>,
-    catalog: Arc<dyn CatalogStore>,
     settings: Arc<dyn SettingsStore>,
     providers: ProviderAdminRegistry,
     snapshot: Arc<dyn SnapshotControl>,
@@ -90,7 +89,6 @@ impl DefaultAccountsService {
     #[must_use]
     pub(crate) const fn new(
         accounts: Arc<dyn AccountStore>,
-        catalog: Arc<dyn CatalogStore>,
         settings: Arc<dyn SettingsStore>,
         providers: ProviderAdminRegistry,
         snapshot: Arc<dyn SnapshotControl>,
@@ -98,7 +96,6 @@ impl DefaultAccountsService {
     ) -> Self {
         Self {
             accounts,
-            catalog,
             settings,
             providers,
             snapshot,
@@ -146,17 +143,6 @@ impl DefaultAccountsService {
             .load_runtime_settings()
             .await
             .map_err(|error| map_store_error(error, "runtime settings"))?;
-        let instance = self
-            .catalog
-            .load_provider_instance(&account.provider_instance_id)
-            .await
-            .map_err(|error| map_store_error(error, "Provider instance"))?
-            .ok_or_else(|| AdminError::not_found("Provider instance was not found"))?;
-        if instance.item.provider_kind != account.provider_kind {
-            return Err(AdminError::invalid(
-                "Provider account and instance kinds do not match",
-            ));
-        }
         let now = Utc::now();
         let retained_range = retained_usage_range(now, settings.usage_retention_days);
         let rolling_range = TimeRange {
@@ -188,7 +174,6 @@ impl DefaultAccountsService {
             .await
             .map_err(|error| map_provider_error(error, "provider quota"))?;
         Ok(AccountDirectoryItem {
-            provider_instance_name: instance.item.name,
             status: account_status(&account, now),
             usage: usage.into_iter().next(),
             account,
@@ -200,10 +185,9 @@ impl DefaultAccountsService {
 #[async_trait]
 impl AccountsService for DefaultAccountsService {
     async fn list(&self, query: AccountListQuery) -> Result<AccountDirectoryPage, AdminError> {
-        let (page, settings, instances) = futures::try_join!(
+        let (page, settings) = futures::try_join!(
             self.accounts.list_accounts(query),
             self.settings.load_runtime_settings(),
-            self.catalog.list_provider_instances(true),
         )
         .map_err(|error| map_store_error(error, "account directory"))?;
         let now = Utc::now();
@@ -230,11 +214,6 @@ impl AccountsService for DefaultAccountsService {
             .into_iter()
             .map(|usage| (usage.account_id.clone(), usage))
             .collect::<BTreeMap<_, _>>();
-        let instances = instances
-            .items
-            .into_iter()
-            .map(|instance| (instance.id.clone(), instance))
-            .collect::<BTreeMap<_, _>>();
         let quotas = futures::future::join_all(page.items.iter().map(|account| async {
             let account_id = ProviderAccountId::new(account.id.clone())
                 .map_err(|_| AdminError::invalid("Invalid provider account ID"))?;
@@ -258,24 +237,13 @@ impl AccountsService for DefaultAccountsService {
             .items
             .into_iter()
             .zip(quotas)
-            .map(|(account, quota)| {
-                let instance = instances
-                    .get(&account.provider_instance_id)
-                    .ok_or_else(|| AdminError::not_found("Provider instance was not found"))?;
-                if instance.provider_kind != account.provider_kind {
-                    return Err(AdminError::invalid(
-                        "Provider account and instance kinds do not match",
-                    ));
-                }
-                Ok(AccountDirectoryItem {
-                    provider_instance_name: instance.name.clone(),
-                    status: account_status(&account, now),
-                    usage: usage.get(&account.id).cloned(),
-                    account,
-                    quota,
-                })
+            .map(|(account, quota)| AccountDirectoryItem {
+                status: account_status(&account, now),
+                usage: usage.get(&account.id).cloned(),
+                account,
+                quota,
             })
-            .collect::<Result<Vec<_>, AdminError>>()?;
+            .collect();
         Ok(AccountDirectoryPage {
             config_revision: page.config_revision,
             items,
@@ -416,7 +384,7 @@ impl AccountsService for DefaultAccountsService {
             let result = probe
                 .probe(AccountProbeRequest {
                     account_id,
-                    provider_instance_id: account.provider_instance_id,
+                    provider_kind: account.provider_kind,
                     upstream_model,
                     operation,
                 })

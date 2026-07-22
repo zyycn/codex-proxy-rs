@@ -20,14 +20,12 @@ use gateway_core::provider_ports::{
     ProviderRuntimePolicyPort, ProviderSchedulingLeaseRequest, ProviderSchedulingState,
     ProviderStoreError,
 };
-use gateway_core::routing::{ProviderInstanceId, ProviderKind};
-use provider_openai::CodexOriginPolicy;
+use gateway_core::routing::ProviderKind;
 use provider_openai::credential::{
     CodexAccountProfile, CodexCredentialAdmin, CodexCredentialRepository, CodexOAuthSecret,
     ImportCodexOAuthCredential,
 };
 use secrecy::SecretString;
-use url::{Host, Url};
 
 #[derive(Clone)]
 struct StoredAccount {
@@ -110,16 +108,16 @@ impl ProviderAccountStore for MemoryAccountStore {
             .collect())
     }
 
-    async fn list_for_instance(
+    async fn list_for_provider(
         &self,
-        instance: &ProviderInstanceId,
+        provider: &ProviderKind,
     ) -> Result<Vec<ProviderAccount>, StoreError> {
         Ok(self
             .accounts
             .lock()
             .expect("account store lock")
             .values()
-            .filter(|stored| stored.account.instance() == instance)
+            .filter(|stored| stored.account.provider() == provider)
             .map(|stored| stored.account.clone())
             .collect())
     }
@@ -294,21 +292,6 @@ const fn store_error(kind: StoreErrorKind) -> StoreError {
     StoreError::new(kind)
 }
 
-#[derive(Debug)]
-pub(crate) struct LoopbackCodexOriginPolicy;
-
-impl CodexOriginPolicy for LoopbackCodexOriginPolicy {
-    fn allows(&self, url: &Url) -> bool {
-        url.scheme() == "http"
-            && matches!(url.host(), Some(Host::Ipv4(host)) if host.is_loopback())
-            && url.port().is_some()
-    }
-}
-
-pub(crate) fn loopback_origin_policy() -> Arc<dyn CodexOriginPolicy> {
-    Arc::new(LoopbackCodexOriginPolicy)
-}
-
 struct AccountRebuild {
     revision: CredentialRevision,
     enabled: bool,
@@ -330,7 +313,6 @@ fn rebuild_account(current: &ProviderAccount, rebuild: AccountRebuild) -> Provid
     });
     ProviderAccount::new(
         current.id().clone(),
-        current.instance().clone(),
         current.provider().clone(),
         name,
         current.upstream_user_id().to_owned(),
@@ -360,7 +342,7 @@ pub(crate) struct TestLeaseCoordinator {
 impl ProviderLeasePort for TestLeaseCoordinator {
     fn load_state<'a>(
         &'a self,
-        _provider_instance_id: &'a ProviderInstanceId,
+        _provider_kind: &'a ProviderKind,
         accounts: &'a [ProviderAccountId],
     ) -> BoxFuture<'a, Result<ProviderSchedulingState, ProviderStoreError>> {
         Box::pin(async move {
@@ -460,14 +442,9 @@ pub(crate) fn account_policy() -> gateway_core::engine::credential::AccountSelec
     )
 }
 
-pub(crate) fn instance_id() -> ProviderInstanceId {
-    ProviderInstanceId::new("inst_openai_primary").expect("instance id")
-}
-
 pub(crate) fn codex_account(id: &str) -> ProviderAccount {
     ProviderAccount::new(
         ProviderAccountId::new(id).expect("account id"),
-        instance_id(),
         ProviderKind::new("openai").expect("provider"),
         id.to_owned(),
         format!("user-chatgpt-{id}"),

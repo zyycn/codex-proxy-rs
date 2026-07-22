@@ -32,7 +32,6 @@ pub struct OpsEvent {
     pub level: OpsEventLevel,
     pub component: String,
     pub operation: String,
-    pub provider_instance_id: Option<String>,
     pub provider_kind: Option<String>,
     pub provider_account_id: Option<String>,
     pub provider_account_ref: Option<String>,
@@ -110,13 +109,12 @@ impl OpsEventRepository for PgOpsEventRepository {
         sqlx::query(
             "insert into ops_events (
                id, model_request_id, attempt_index, level, component, operation,
-               provider_instance_id, provider_kind,
-               provider_account_id, provider_account_ref, upstream_model_id,
+               provider_kind, provider_account_id, provider_account_ref, upstream_model_id,
                failure_kind, status_code, provider_error_code, retry_after_ms,
                upstream_request_id, latency_ms, message, occurrence_count, created_at
              ) values (
                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-               $14, $15, $16, $17, $18, $19, $20
+               $14, $15, $16, $17, $18, $19
              )",
         )
         .bind(event.id)
@@ -131,7 +129,6 @@ impl OpsEventRepository for PgOpsEventRepository {
         .bind(event.level.as_str())
         .bind(event.component)
         .bind(event.operation)
-        .bind(event.provider_instance_id)
         .bind(event.provider_kind)
         .bind(event.provider_account_id)
         .bind(event.provider_account_ref)

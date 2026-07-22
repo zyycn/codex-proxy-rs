@@ -10,7 +10,6 @@ use uuid::Uuid;
 mod admin_security_audit;
 mod admission_recovery;
 mod client_keys;
-mod config_catalog;
 mod execution;
 mod history;
 mod observability;

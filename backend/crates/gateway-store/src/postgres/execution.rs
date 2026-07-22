@@ -129,7 +129,6 @@ impl NewModelRequest {
 pub struct ModelRequestAttemptStart {
     pub model_request_id: String,
     pub attempt_count: u32,
-    pub provider_instance_id: String,
     pub provider_kind: String,
     pub provider_account_id: Option<String>,
     pub provider_account_ref: Option<String>,
@@ -142,7 +141,6 @@ impl ModelRequestAttemptStart {
     pub fn validate(&self) -> StoreResult<()> {
         for (field, value) in [
             ("model_request_id", self.model_request_id.as_str()),
-            ("provider_instance_id", self.provider_instance_id.as_str()),
             ("provider_kind", self.provider_kind.as_str()),
             ("upstream_model_id", self.upstream_model_id.as_str()),
             ("upstream_transport", self.upstream_transport.as_str()),
@@ -388,21 +386,19 @@ impl ModelRequestRepository for PgExecutionStore {
         attempt.validate()?;
         let count = sqlx::query_scalar::<_, i32>(
             "update model_requests
-             set provider_instance_id = $2,
-                 provider_kind = $3,
-                 provider_account_id = $4,
-                 provider_account_ref = $5,
-                 upstream_model_id = $6,
-                 upstream_transport = $7,
-                 http_version = $8,
-                 attempt_count = $9,
+             set provider_kind = $2,
+                 provider_account_id = $3,
+                 provider_account_ref = $4,
+                 upstream_model_id = $5,
+                 upstream_transport = $6,
+                 http_version = $7,
+                 attempt_count = $8,
                  upstream_send_state = 'not_sent'
              where id = $1 and outcome = 'running' and downstream_committed_at is null
-               and $9 = attempt_count + 1
+               and $8 = attempt_count + 1
              returning attempt_count",
         )
         .bind(&attempt.model_request_id)
-        .bind(attempt.provider_instance_id)
         .bind(attempt.provider_kind)
         .bind(attempt.provider_account_id)
         .bind(attempt.provider_account_ref)
@@ -665,7 +661,6 @@ impl ExecutionStore for PgExecutionStore {
             .begin_model_request_attempt(ModelRequestAttemptStart {
                 model_request_id: attempt.request_id.as_str().to_owned(),
                 attempt_count: expected_count,
-                provider_instance_id: attempt.provider_instance_id.as_str().to_owned(),
                 provider_kind: attempt.provider_kind.as_str().to_owned(),
                 provider_account_id: attempt
                     .provider_account_id
@@ -751,7 +746,6 @@ impl ExecutionStore for PgExecutionStore {
                 level: super::OpsEventLevel::Warning,
                 component: "routing".to_owned(),
                 operation: failure.trigger.as_str().to_owned(),
-                provider_instance_id: Some(failure.instance_id.as_str().to_owned()),
                 provider_kind: Some(failure.provider_kind.as_str().to_owned()),
                 provider_account_id: failure.account_id.as_ref().map(|id| id.as_str().to_owned()),
                 provider_account_ref: failure.account_id.as_ref().map(|id| id.as_str().to_owned()),

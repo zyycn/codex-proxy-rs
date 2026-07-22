@@ -9,7 +9,7 @@ use gateway_core::engine::credential::{
     CredentialRevision, LoadedCredential, ProviderAccount, ProviderAccountId, ProviderAccountStore,
     ProviderAccountUpdate,
 };
-use gateway_core::routing::ProviderInstanceId;
+use gateway_core::routing::ProviderKind;
 use secrecy::ExposeSecret;
 use thiserror::Error;
 
@@ -157,12 +157,13 @@ impl CodexCredentialRepository {
         cas_revision(self.store.compare_and_swap_credential(update).await?)
     }
 
-    pub async fn list_for_instance(
+    pub async fn list_for_provider(
         &self,
-        instance: &ProviderInstanceId,
     ) -> Result<Vec<ProviderAccount>, CredentialRepositoryError> {
+        let provider = ProviderKind::new(PROVIDER_NAME)
+            .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
         self.store
-            .list_for_instance(instance)
+            .list_for_provider(&provider)
             .await
             .map_err(Into::into)
     }

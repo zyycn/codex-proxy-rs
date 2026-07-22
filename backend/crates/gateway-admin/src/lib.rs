@@ -16,9 +16,9 @@ pub mod ports;
 mod use_case;
 
 pub use use_case::{
-    accounts::AccountsService, auth::AuthService, catalog::CatalogService,
-    client_keys::ClientKeyService, observability::ObservabilityService, openai::OpenAiService,
-    settings::SettingsService, system::SystemService, xai::XaiService,
+    accounts::AccountsService, auth::AuthService, client_keys::ClientKeyService,
+    observability::ObservabilityService, openai::OpenAiService, settings::SettingsService,
+    system::SystemService, xai::XaiService,
 };
 
 use model::{AdminError, AdminErrorKind};
@@ -28,7 +28,7 @@ use ports::{
     system::SystemOperations,
 };
 use use_case::{
-    accounts::DefaultAccountsService, auth::DefaultAuthService, catalog::DefaultCatalogService,
+    accounts::DefaultAccountsService, auth::DefaultAuthService,
     client_keys::DefaultClientKeyService, observability::DefaultObservabilityService,
     openai::DefaultOpenAiService, settings::DefaultSettingsService, system::DefaultSystemService,
     xai::DefaultXaiService,
@@ -140,7 +140,6 @@ pub enum AdminConfigError {
 pub struct AdminServices {
     auth: Arc<dyn AuthService>,
     accounts: Arc<dyn AccountsService>,
-    catalog: Arc<dyn CatalogService>,
     client_keys: Arc<dyn ClientKeyService>,
     observability: Arc<dyn ObservabilityService>,
     settings: Arc<dyn SettingsService>,
@@ -158,11 +157,6 @@ impl AdminServices {
     #[must_use]
     pub fn accounts(&self) -> &dyn AccountsService {
         self.accounts.as_ref()
-    }
-
-    #[must_use]
-    pub fn catalog(&self) -> &dyn CatalogService {
-        self.catalog.as_ref()
     }
 
     #[must_use]
@@ -242,7 +236,6 @@ pub async fn initialize(
 
     let accounts = Arc::new(DefaultAccountsService::new(
         store.accounts(),
-        store.catalog(),
         store.settings(),
         registry.clone(),
         snapshot.clone(),
@@ -251,10 +244,6 @@ pub async fn initialize(
     let services = AdminServices {
         auth,
         accounts,
-        catalog: Arc::new(DefaultCatalogService::new(
-            store.catalog(),
-            snapshot.clone(),
-        )),
         client_keys: Arc::new(DefaultClientKeyService::new(
             store.client_keys(),
             snapshot.clone(),

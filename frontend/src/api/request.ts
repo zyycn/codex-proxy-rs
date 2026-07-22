@@ -38,7 +38,7 @@ export function resetUnauthorizedHandling() {
 }
 
 function isAuthenticationRequest(url?: string) {
-  return Boolean(url?.includes('/api/admin/login') || url?.includes('/api/admin/auth/status'))
+  return Boolean(url?.includes('/api/admin/auth/login') || url?.includes('/api/admin/auth/status'))
 }
 
 function handleUnauthorizedOnce() {

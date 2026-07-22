@@ -32,7 +32,7 @@ pub use compaction::{
     GrokCompactionDecodeError, GrokCompactionRequest, GrokCompactionSummaryDecoder,
 };
 pub use config::{
-    GROK_CLI_BASE_URL, GrokProviderConfigError, GrokProviderInstanceConfig, GrokProviderTransport,
+    GROK_CLI_BASE_URL, GROK_RESPONSES_URL, GrokProviderConfigError, GrokProviderTransport,
     XAI_PROVIDER_NAME,
 };
 pub use headers::{GrokClientIdentity, GrokHeader, GrokHeaderValue, build_grok_headers};

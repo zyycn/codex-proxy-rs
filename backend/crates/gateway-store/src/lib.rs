@@ -1,6 +1,6 @@
 //! 多 Provider 网关的 PostgreSQL 持久化与 Redis 协调 adapter。
 //!
-//! 业务规则与 port 由 `gateway-core` 拥有。本 crate 只负责把终态的八张业务表
+//! 业务规则与 port 由 `gateway-core` 拥有。本 crate 只负责把终态的七张业务表
 //! 和可丢失 Redis 状态映射为明确的基础设施操作。
 
 use std::sync::Arc;
@@ -19,7 +19,7 @@ use gateway_admin::ports::store::{
 };
 use gateway_core::CoreStorePorts;
 use gateway_core::health::{HealthProbe, HealthState};
-use gateway_core::provider_ports::{ProviderCatalogPorts, ProviderStorePorts};
+use gateway_core::provider_ports::ProviderStorePorts;
 use gateway_core::task::{
     ScheduledTask, WorkerContribution, WorkerCycleContext, WorkerDisabledReason, WorkerId,
     WorkerKind, WorkerLeaderLeasePort, WorkerLeaseRequest, WorkerRegistration, WorkerRunnable,
@@ -256,10 +256,6 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         redis_connection.clone(),
         REDIS_NAMESPACE,
     )?);
-    let provider_catalog = ProviderCatalogPorts::new(
-        Arc::new(postgres::PgConfigCatalogRepository::new(pool.clone())),
-        credential_state.clone(),
-    );
     let runtime_policy = Arc::new(postgres::PgRuntimeSettingsRepository::new(pool.clone()));
     let oauth_pending = Arc::new(redis::RedisOAuthPendingFlowRepository::new(
         redis_connection.clone(),
@@ -276,7 +272,6 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
                 REDIS_NAMESPACE,
             )?,
         }),
-        Arc::new(postgres::PgAdminCatalogStore::new(pool.clone())),
         Arc::new(postgres::PgAdminClientKeyStore::new(pool.clone())),
         Arc::new(postgres::PgAdminObservabilityStore::new(pool.clone())),
         Arc::new(AdminSettingsStoreAdapter {
@@ -311,7 +306,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
     let provider_ports = ProviderStorePorts::new(
         account_store,
         provider_leases,
-        provider_catalog,
+        credential_state.clone(),
         credential_state,
         cooldowns,
         runtime_policy,

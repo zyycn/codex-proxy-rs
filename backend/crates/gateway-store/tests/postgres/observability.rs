@@ -518,24 +518,13 @@ async fn seed_observability_facts(
     now: chrono::DateTime<Utc>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "insert into provider_instances (
-           id, provider_kind, name, base_url, enabled, created_at, updated_at
-         ) values (
-           'inst_observe', 'openai', 'observability', 'https://example.invalid',
-           true, $1, $1
-         )",
-    )
-    .bind(now)
-    .execute(pool)
-    .await?;
-    sqlx::query(
         "insert into provider_accounts (
-           id, provider_instance_id, provider_kind, name, email, upstream_user_id,
+           id, provider_kind, name, email, upstream_user_id,
            upstream_account_id, plan_type, provider_credentials_json, credential_revision,
            has_refresh_token, access_token_expires_at, enabled, availability,
            availability_observed_at, created_at, updated_at
          ) values (
-           'acct_observe', 'inst_observe', 'openai', 'primary', 'account@example.invalid',
+           'acct_observe', 'openai', 'primary', 'account@example.invalid',
            'user-observe', null, 'pro', '{}'::jsonb, 1, false, $1 + interval '1 day',
            true, 'ready', $1, $1, $1
          )",
@@ -547,7 +536,7 @@ async fn seed_observability_facts(
         "insert into model_requests (
            id, client_api_key_ref, config_revision, protocol, operation, endpoint,
            client_transport, requested_model_id, input_token_estimate,
-           provider_instance_id, provider_kind, provider_account_id,
+           provider_kind, provider_account_id,
            provider_account_ref, upstream_model_id, upstream_transport, websocket_pool,
            attempt_count,
            upstream_send_state, downstream_committed_at, outcome, client_status_code,
@@ -559,7 +548,7 @@ async fn seed_observability_facts(
            started_at, deadline_at, completed_at
          ) values (
            'req_observe_success', 'key_observe', 1, 'openai', 'responses', '/v1/responses',
-           'http_sse', 'public-model', 100, 'inst_observe', 'openai', 'acct_observe',
+           'http_sse', 'public-model', 100, 'openai', 'acct_observe',
            'acct_observe', 'upstream-model',
            'http_sse', 'reuse', 1, 'sent', $1 - interval '19 minutes', 'succeeded', 200, 200,
            'resp_observe_success', 'upstream_req_success', 'upstream_resp_success',
@@ -575,7 +564,7 @@ async fn seed_observability_facts(
         "insert into model_requests (
            id, client_api_key_ref, config_revision, protocol, operation, endpoint,
            client_transport, requested_model_id, input_token_estimate,
-           provider_instance_id, provider_kind, provider_account_id,
+           provider_kind, provider_account_id,
            provider_account_ref, upstream_model_id, upstream_transport, attempt_count,
            upstream_send_state, outcome, client_status_code, upstream_status_code,
            error_kind, provider_error_code, error_message, retry_after_ms,
@@ -584,7 +573,7 @@ async fn seed_observability_facts(
            started_at, deadline_at, completed_at
          ) values (
            'req_observe_failed', 'key_observe', 1, 'openai', 'responses', '/v1/responses',
-           'http_sse', 'public-model', 80, 'inst_observe', 'openai', 'acct_observe',
+           'http_sse', 'public-model', 80, 'openai', 'acct_observe',
            'acct_observe', 'upstream-model',
            'http_sse', 2, 'sent', 'failed', 502, 429, 'rate_limited', 'rate_limit',
            'upstream limited', 1000, 0, 0, true, false, 'unavailable', 700,
@@ -597,12 +586,12 @@ async fn seed_observability_facts(
     sqlx::query(
         "insert into ops_events (
            id, model_request_id, attempt_index, level, component, operation,
-           provider_instance_id, provider_kind, provider_account_id,
+           provider_kind, provider_account_id,
            provider_account_ref, upstream_model_id, failure_kind, status_code,
            provider_error_code, retry_after_ms, latency_ms, message, occurrence_count, created_at
          ) values (
            'ops_observe_retry', 'req_observe_failed', 1, 'warning', 'routing', 'responses',
-           'inst_observe', 'openai', 'acct_observe', 'acct_observe',
+           'openai', 'acct_observe', 'acct_observe',
            'upstream-model', 'rate_limited', 429, 'rate_limit', 1000, 300,
            'first account was limited', 1, $1 - interval '9 minutes 30 seconds'
          )",

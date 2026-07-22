@@ -377,7 +377,6 @@ pub struct ProviderAccountMetrics {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccountUsageObservation {
     pub account_id: String,
-    pub provider_instance_id: String,
     pub provider_kind: String,
     pub name: String,
     pub email: Option<String>,
@@ -479,7 +478,6 @@ pub struct UsageRecord {
     pub client_transport: String,
     pub requested_model_id: String,
     pub input_token_estimate: u64,
-    pub provider_instance_id: Option<String>,
     pub provider_kind: Option<String>,
     pub provider_account_ref: Option<String>,
     pub provider_account_name: Option<String>,
@@ -549,7 +547,6 @@ pub struct UsageAttemptObservation {
     pub attempt_index: u32,
     pub component: String,
     pub operation: String,
-    pub provider_instance_id: Option<String>,
     pub provider_kind: Option<String>,
     pub provider_account_ref: Option<String>,
     pub upstream_model_id: Option<String>,
@@ -621,7 +618,6 @@ pub struct OpsErrorRecord {
     pub client_api_key_ref: Option<String>,
     pub component: String,
     pub operation: String,
-    pub provider_instance_id: Option<String>,
     pub provider_kind: Option<String>,
     pub provider_account_ref: Option<String>,
     pub upstream_model_id: Option<String>,
@@ -1189,7 +1185,6 @@ fn admin_dashboard_account_usage(
 ) -> AdminStoreResult<admin_observability::DashboardAccountUsage> {
     Ok(admin_observability::DashboardAccountUsage {
         account_id: usage.account_id,
-        provider_instance_id: usage.provider_instance_id,
         provider_kind: usage.provider_kind,
         name: usage.name,
         email: usage.email,
@@ -1310,7 +1305,6 @@ fn admin_usage_record(record: UsageRecord) -> AdminStoreResult<admin_observabili
         client_transport: record.client_transport,
         requested_model_id: record.requested_model_id,
         input_token_estimate: record.input_token_estimate,
-        provider_instance_id: record.provider_instance_id,
         provider_kind: record.provider_kind,
         provider_account_ref: record.provider_account_ref,
         provider_account_name: record.provider_account_name,
@@ -1399,7 +1393,6 @@ fn admin_usage_attempt(
         attempt_index: attempt.attempt_index,
         component: attempt.component,
         operation: attempt.operation,
-        provider_instance_id: attempt.provider_instance_id,
         provider_kind: attempt.provider_kind,
         provider_account_ref: attempt.provider_account_ref,
         upstream_model_id: attempt.upstream_model_id,
@@ -1487,7 +1480,6 @@ fn admin_ops_error(error: OpsErrorRecord) -> admin_observability::OpsError {
         client_api_key_ref: error.client_api_key_ref,
         component: error.component,
         operation: error.operation,
-        provider_instance_id: error.provider_instance_id,
         provider_kind: error.provider_kind,
         provider_account_ref: error.provider_account_ref,
         upstream_model_id: error.upstream_model_id,
@@ -2046,7 +2038,7 @@ async fn provider_account_usage(
     }
 
     let mut statement = QueryBuilder::<Postgres>::new(
-        "select pa.id, pa.provider_instance_id, pa.provider_kind, pa.name, pa.email,
+        "select pa.id, pa.provider_kind, pa.name, pa.email,
                 pa.plan_type, pa.enabled, pa.availability,
                 count(mr.id)::bigint as request_count,
                 count(mr.id) filter (where mr.outcome = 'succeeded')::bigint as success_count,
@@ -2082,7 +2074,7 @@ async fn provider_account_usage(
         statement.push("::text[])");
     }
     statement.push(
-        " group by pa.id, pa.provider_instance_id, pa.provider_kind, pa.name, pa.email,
+        " group by pa.id, pa.provider_kind, pa.name, pa.email,
                    pa.plan_type, pa.enabled, pa.availability
           order by max(mr.started_at) desc nulls last, pa.name, pa.id limit ",
     );
@@ -2262,7 +2254,6 @@ fn provider_account_from_row(
 ) -> StoreResult<ProviderAccountUsageObservation> {
     Ok(ProviderAccountUsageObservation {
         account_id: get(row, "id")?,
-        provider_instance_id: get(row, "provider_instance_id")?,
         provider_kind: get(row, "provider_kind")?,
         name: get(row, "name")?,
         email: get(row, "email")?,
@@ -2291,7 +2282,7 @@ fn provider_account_from_row(
 const USAGE_RECORD_SELECT: &str =
     "select mr.id, mr.client_api_key_ref, mr.config_revision, mr.protocol, mr.operation,
             mr.endpoint, mr.client_transport, mr.requested_model_id,
-            mr.input_token_estimate,             mr.provider_instance_id, mr.provider_kind, mr.provider_account_ref,
+            mr.input_token_estimate, mr.provider_kind, mr.provider_account_ref,
             pa.name as provider_account_name, pa.email as provider_account_email,
             mr.upstream_model_id, mr.upstream_transport, mr.http_version, mr.websocket_pool,
             mr.attempt_count, mr.upstream_send_state, mr.downstream_committed_at,
@@ -2405,7 +2396,7 @@ async fn usage_record_detail(pool: &PgPool, request_id: &str) -> StoreResult<Usa
     let request = usage_record_from_row(&row)?;
     let rows = sqlx::query(
         "select id, attempt_index, component, operation,
-                provider_instance_id, provider_kind, provider_account_ref, upstream_model_id,
+                provider_kind, provider_account_ref, upstream_model_id,
                 failure_kind, status_code, provider_error_code, retry_after_ms,
                 upstream_request_id, latency_ms, message, created_at
          from ops_events where model_request_id = $1
@@ -2434,7 +2425,6 @@ fn intermediate_attempt_from_row(
         attempt_index: to_u32(get(row, "attempt_index")?)?,
         component: get(row, "component")?,
         operation: get(row, "operation")?,
-        provider_instance_id: get(row, "provider_instance_id")?,
         provider_kind: get(row, "provider_kind")?,
         provider_account_ref: get(row, "provider_account_ref")?,
         upstream_model_id: get(row, "upstream_model_id")?,
@@ -2469,7 +2459,6 @@ fn final_attempt_from_request(request: &UsageRecord) -> UsageAttemptObservation 
         attempt_index: request.attempt_count,
         component: "model_request".to_owned(),
         operation: request.operation.clone(),
-        provider_instance_id: request.provider_instance_id.clone(),
         provider_kind: request.provider_kind.clone(),
         provider_account_ref: request.provider_account_ref.clone(),
         upstream_model_id: request.upstream_model_id.clone(),
@@ -2622,7 +2611,7 @@ const OPS_ERRORS_CTE: &str = "with errors as (
               mr.id as event_id, mr.id as request_id,
               nullif(mr.attempt_count, 0) as attempt_index,
               mr.client_api_key_ref, 'model_request'::text as component, mr.operation,
-              mr.provider_instance_id, mr.provider_kind,
+              mr.provider_kind,
               mr.provider_account_ref, mr.upstream_model_id, mr.upstream_transport,
               coalesce(mr.error_kind, 'failed') as failure_kind,
               coalesce(mr.upstream_status_code, mr.client_status_code) as status_code,
@@ -2635,7 +2624,7 @@ const OPS_ERRORS_CTE: &str = "with errors as (
        union all
        select 'ops_event'::text, oe.id, oe.model_request_id, oe.attempt_index,
               mr.client_api_key_ref, oe.component, oe.operation,
-              oe.provider_instance_id, oe.provider_kind, oe.provider_account_ref,
+              oe.provider_kind, oe.provider_account_ref,
               oe.upstream_model_id, null::text, oe.failure_kind, oe.status_code,
               oe.provider_error_code, mr.client_response_id, oe.upstream_request_id,
               oe.latency_ms, oe.message, oe.occurrence_count, oe.created_at,
@@ -2649,8 +2638,8 @@ async fn list_ops_errors(pool: &PgPool, query: OpsErrorQuery) -> StoreResult<Ops
     let mut statement = QueryBuilder::<Postgres>::new(OPS_ERRORS_CTE);
     statement.push(
         " select source, event_id, request_id, attempt_index, client_api_key_ref,
-                 component, operation, provider_instance_id,
-                 provider_kind, provider_account_ref, upstream_model_id, upstream_transport,
+                 component, operation, provider_kind, provider_account_ref,
+                 upstream_model_id, upstream_transport,
                  failure_kind, status_code, provider_error_code, client_response_id,
                  upstream_request_id, latency_ms, message, occurrence_count, occurred_at,
                  stable_sort_id
@@ -2775,7 +2764,6 @@ fn usage_record_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<UsageRecord
         client_transport: get(row, "client_transport")?,
         requested_model_id: get(row, "requested_model_id")?,
         input_token_estimate: unsigned(row, "input_token_estimate")?,
-        provider_instance_id: get(row, "provider_instance_id")?,
         provider_kind: get(row, "provider_kind")?,
         provider_account_ref: get(row, "provider_account_ref")?,
         provider_account_name: get(row, "provider_account_name")?,
@@ -2843,7 +2831,6 @@ fn ops_error_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<OpsErrorRecord
         client_api_key_ref: get(row, "client_api_key_ref")?,
         component: get(row, "component")?,
         operation: get(row, "operation")?,
-        provider_instance_id: get(row, "provider_instance_id")?,
         provider_kind: get(row, "provider_kind")?,
         provider_account_ref: get(row, "provider_account_ref")?,
         upstream_model_id: get(row, "upstream_model_id")?,

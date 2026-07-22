@@ -38,12 +38,9 @@ use gateway_core::operation::{
 };
 use gateway_core::provider_ports::{
     NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingFlowPort, OAuthPendingPutOutcome,
-    OAuthPendingTakeOutcome, ProviderInstanceCatalogPort, ProviderRuntimePolicyPort,
-    ProviderStoreError, ProviderStoreErrorKind,
+    OAuthPendingTakeOutcome, ProviderRuntimePolicyPort, ProviderStoreError, ProviderStoreErrorKind,
 };
-use gateway_core::routing::{
-    InstanceHealth, ProviderInstance, ProviderInstanceId, ProviderKind, UpstreamModelId,
-};
+use gateway_core::routing::{ProviderKind, UpstreamModelId};
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Deserialize;
 use serde_json::{Map, Number, Value};
@@ -68,7 +65,7 @@ use crate::transport::profile::{
 };
 
 const PROVIDER_NAME: &str = "openai";
-const PENDING_DOCUMENT_SCHEMA_VERSION: u64 = 1;
+const PENDING_DOCUMENT_SCHEMA_VERSION: u64 = 2;
 const MAX_ACCESS_TOKEN_BYTES: usize = 16 * 1024;
 const MAX_REFRESH_TOKEN_BYTES: usize = 64 * 1024;
 
@@ -77,7 +74,6 @@ pub(crate) struct OpenAiAdminProvider {
     provider_kind: ProviderKind,
     profile: CodexWireProfileState,
     accounts: Arc<dyn ProviderAccountStore>,
-    instances: Arc<dyn ProviderInstanceCatalogPort>,
     credentials: Arc<CodexCredentialAdminService>,
     verifier: Arc<dyn CodexAccountIdentityVerifier>,
     oauth: Arc<dyn CodexOAuthAdmin>,
@@ -103,7 +99,6 @@ impl OpenAiAdminProvider {
         provider_kind: ProviderKind,
         profile: CodexWireProfileState,
         accounts: Arc<dyn ProviderAccountStore>,
-        instances: Arc<dyn ProviderInstanceCatalogPort>,
         services: OpenAiAdminServices,
         websocket_pool: Arc<CodexWebSocketPool>,
         desktop_release: CodexDesktopReleaseStatus,
@@ -112,7 +107,6 @@ impl OpenAiAdminProvider {
             provider_kind,
             profile,
             accounts,
-            instances,
             credentials: services.credentials,
             verifier: services.verifier,
             oauth: services.oauth,
@@ -136,30 +130,6 @@ impl OpenAiAdminProvider {
             .ok_or_else(|| provider_admin_error(ProviderAdminErrorKind::NotFound))
     }
 
-    async fn instance(
-        &self,
-        account: &ProviderAccount,
-    ) -> Result<ProviderInstance, ProviderAdminError> {
-        let instance = self
-            .instances
-            .list_instances(&self.provider_kind, true)
-            .await
-            .map_err(map_provider_store_error)?
-            .into_iter()
-            .find(|instance| instance.id() == account.instance())
-            .ok_or_else(|| provider_admin_error(ProviderAdminErrorKind::NotFound))?;
-        if instance.provider_kind() != &self.provider_kind {
-            return Err(provider_admin_error(ProviderAdminErrorKind::Internal));
-        }
-        Ok(ProviderInstance::new(
-            instance.id().clone(),
-            instance.provider_kind().clone(),
-            instance.base_url().to_owned(),
-            instance.enabled(),
-            InstanceHealth::Healthy,
-        ))
-    }
-
     async fn preserve_existing_installation_id(
         &self,
         mut incoming: NewProviderAccount,
@@ -173,7 +143,6 @@ impl OpenAiAdminProvider {
             return Ok(incoming);
         };
         if existing.provider() != incoming.account.provider()
-            || existing.instance() != incoming.account.instance()
             || existing.upstream_user_id() != incoming.account.upstream_user_id()
             || existing.upstream_account_id() != incoming.account.upstream_account_id()
         {
@@ -283,10 +252,9 @@ impl ProviderAdmin for OpenAiAdminProvider {
     ) -> Result<PreparedCredentialImport, ProviderAdminError> {
         let prepared = self
             .credentials
-            .prepare_import_document(
-                command.provider_instance_id.clone(),
-                Value::Object(command.document.into_provider_data().into_inner()),
-            )
+            .prepare_import_document(Value::Object(
+                command.document.into_provider_data().into_inner(),
+            ))
             .await
             .map_err(map_credential_admin_error)?;
         let observed_at = Utc::now();
@@ -297,7 +265,6 @@ impl ProviderAdmin for OpenAiAdminProvider {
         }
         Ok(PreparedCredentialImport {
             provider_kind: self.provider_kind.clone(),
-            provider_instance_id: command.provider_instance_id,
             credentials,
         })
     }
@@ -340,21 +307,16 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 PreparedAuthorizationCredential::Create(prepared_create(credential, Utc::now())?)
             }
             CompletedCodexOAuthCredential::Reauthorize(credential) => {
-                let (provider_instance_id, provider_kind) = match completed.mutation.target() {
-                    AuthorizationMutationTarget::Reauthorize {
-                        provider_instance_id,
-                        ..
-                    } => (
-                        provider_instance_id.clone(),
-                        completed.mutation.provider_kind().clone(),
-                    ),
+                let provider_kind = match completed.mutation.target() {
+                    AuthorizationMutationTarget::Reauthorize { .. } => {
+                        completed.mutation.provider_kind().clone()
+                    }
                     AuthorizationMutationTarget::Create { .. } => {
                         return Err(provider_admin_error(ProviderAdminErrorKind::Internal));
                     }
                 };
                 PreparedAuthorizationCredential::Reauthorize(prepared_rotation(
                     credential,
-                    provider_instance_id,
                     provider_kind,
                 )?)
             }
@@ -426,11 +388,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 next_refresh_at,
             })
             .map_err(map_credential_admin_error)?;
-        prepared_rotation(
-            prepared,
-            command.account.provider_instance_id,
-            command.account.provider_kind,
-        )
+        prepared_rotation(prepared, command.account.provider_kind)
     }
 
     async fn prepare_refresh(
@@ -447,11 +405,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
             .manual_refresh(account_id, revision)
             .await
             .map_err(map_credential_admin_error)?;
-        prepared_rotation(
-            prepared,
-            command.account.provider_instance_id,
-            command.account.provider_kind,
-        )
+        prepared_rotation(prepared, command.account.provider_kind)
     }
 
     async fn quota(
@@ -463,12 +417,11 @@ impl ProviderAdmin for OpenAiAdminProvider {
             refresh,
             rolling_usage: _,
         } = request;
-        let account = self.account(&account_id).await?;
+        self.account(&account_id).await?;
         let snapshot = if refresh {
-            let instance = self.instance(&account).await?;
             Some(
                 self.quota
-                    .refresh_account(&instance, &account_id)
+                    .refresh_account(&account_id)
                     .await
                     .map_err(map_quota_error)?,
             )
@@ -487,21 +440,20 @@ impl ProviderAdmin for OpenAiAdminProvider {
         refresh: bool,
     ) -> Result<ProviderModels, ProviderAdminError> {
         let account = self.account(account_id).await?;
-        let instance = self.instance(&account).await?;
         let models = if refresh {
             self.catalog
-                .synchronize_account(&instance, account_id)
+                .synchronize_account(account_id)
                 .await
                 .map_err(map_catalog_error)?
         } else {
             self.catalog
-                .cached_account_models(instance.id(), account_id, account.revision())
+                .cached_account_models(account_id, account.revision())
                 .map_err(map_catalog_error)?
                 .unwrap_or_default()
         };
         let observed_at = self
             .catalog
-            .cached(instance.id())
+            .cached()
             .map_err(map_catalog_error)?
             .map(|snapshot| DateTime::<Utc>::from(snapshot.observed_at()));
         let models = models
@@ -573,7 +525,6 @@ fn prepared_create(
     let availability = admin_availability(account.availability());
     Ok(PreparedCredentialCreate {
         account_id: account.id().clone(),
-        provider_instance_id: account.instance().clone(),
         provider_kind: account.provider().clone(),
         name: account.name().to_owned(),
         email: account.email().map(str::to_owned),
@@ -594,7 +545,6 @@ fn prepared_create(
 
 fn prepared_rotation(
     prepared: crate::credential::PreparedCodexCredentialRotation,
-    provider_instance_id: ProviderInstanceId,
     provider_kind: ProviderKind,
 ) -> Result<PreparedCredentialRotation, ProviderAdminError> {
     let (profile, credential, guard) = prepared.into_parts();
@@ -615,7 +565,6 @@ fn prepared_rotation(
     Ok(PreparedCredentialRotation::new(
         PreparedCredentialRotationFacts {
             account_id,
-            provider_instance_id,
             provider_kind,
             expected_credential_revision,
             name: profile.name,
@@ -678,7 +627,6 @@ fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, Provi
         .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
     Ok(ProviderAccount::new(
         account_id,
-        account.provider_instance_id.clone(),
         account.provider_kind.clone(),
         account.name.clone(),
         account.upstream_user_id.clone(),
@@ -742,7 +690,6 @@ fn dashboard_desktop_release(
 
 fn account_matches_record(account: &ProviderAccount, record: &AccountRecord) -> bool {
     account.id().as_str() == record.id
-        && account.instance() == &record.provider_instance_id
         && account.provider() == &record.provider_kind
         && account.revision().get() == record.credential_revision.get()
         && account.name() == record.name
@@ -981,7 +928,6 @@ struct PendingDocument {
     flow_id: String,
     owner_ref: String,
     started_request_ref: String,
-    provider_instance_id: String,
     name: String,
     expires_at: DateTime<Utc>,
     state: String,
@@ -1007,11 +953,9 @@ struct PendingMutationDocument {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum PendingTargetDocument {
     Create {
-        provider_instance_id: String,
         name: String,
     },
     Reauthorize {
-        provider_instance_id: String,
         account_id: String,
         expected_credential_revision: u64,
     },
@@ -1038,10 +982,6 @@ fn encode_pending(pending: &CodexPendingAuthorization) -> Map<String, Value> {
     document.insert(
         "started_request_ref".to_owned(),
         Value::String(pending.started_request_ref().to_owned()),
-    );
-    document.insert(
-        "provider_instance_id".to_owned(),
-        Value::String(pending.provider_instance_id().to_owned()),
     );
     document.insert("name".to_owned(), Value::String(pending.name().to_owned()));
     document.insert(
@@ -1111,27 +1051,15 @@ fn encode_mutation(mutation: &PendingAuthorizationMutation) -> Map<String, Value
 fn encode_target(target: &AuthorizationMutationTarget) -> Map<String, Value> {
     let mut document = Map::new();
     match target {
-        AuthorizationMutationTarget::Create {
-            provider_instance_id,
-            name,
-        } => {
+        AuthorizationMutationTarget::Create { name } => {
             document.insert("kind".to_owned(), Value::String("create".to_owned()));
-            document.insert(
-                "provider_instance_id".to_owned(),
-                Value::String(provider_instance_id.to_string()),
-            );
             document.insert("name".to_owned(), Value::String(name.clone()));
         }
         AuthorizationMutationTarget::Reauthorize {
-            provider_instance_id,
             account_id,
             expected_credential_revision,
         } => {
             document.insert("kind".to_owned(), Value::String("reauthorize".to_owned()));
-            document.insert(
-                "provider_instance_id".to_owned(),
-                Value::String(provider_instance_id.to_string()),
-            );
             document.insert(
                 "account_id".to_owned(),
                 Value::String(account_id.to_string()),
@@ -1174,7 +1102,6 @@ fn decode_pending(
         flow_id: document.flow_id,
         owner_ref: document.owner_ref,
         started_request_ref: document.started_request_ref,
-        provider_instance_id: document.provider_instance_id,
         name: document.name,
         expires_at: document.expires_at,
         state: SecretString::from(document.state),
@@ -1197,21 +1124,11 @@ fn decode_mutation(
     let provider_kind = ProviderKind::new(document.provider_kind)
         .map_err(|_| CodexOAuthPendingStoreError::InvalidValue)?;
     let target = match document.target {
-        PendingTargetDocument::Create {
-            provider_instance_id,
-            name,
-        } => AuthorizationMutationTarget::Create {
-            provider_instance_id: ProviderInstanceId::new(provider_instance_id)
-                .map_err(|_| CodexOAuthPendingStoreError::InvalidValue)?,
-            name,
-        },
+        PendingTargetDocument::Create { name } => AuthorizationMutationTarget::Create { name },
         PendingTargetDocument::Reauthorize {
-            provider_instance_id,
             account_id,
             expected_credential_revision,
         } => AuthorizationMutationTarget::Reauthorize {
-            provider_instance_id: ProviderInstanceId::new(provider_instance_id)
-                .map_err(|_| CodexOAuthPendingStoreError::InvalidValue)?,
             account_id: ProviderAccountId::new(account_id)
                 .map_err(|_| CodexOAuthPendingStoreError::InvalidValue)?,
             expected_credential_revision: Revision::new(expected_credential_revision)
@@ -1352,7 +1269,7 @@ fn map_oauth_error(error: CodexOAuthAdminError) -> ProviderAdminError {
 fn map_quota_error(error: CodexCredentialQuotaError) -> ProviderAdminError {
     use CodexCredentialQuotaError as Error;
     provider_admin_error(match error {
-        Error::InvalidInstance | Error::InvalidCredentialData => ProviderAdminErrorKind::Invalid,
+        Error::InvalidCredentialData => ProviderAdminErrorKind::Invalid,
         Error::NotFound => ProviderAdminErrorKind::NotFound,
         Error::RevisionConflict => ProviderAdminErrorKind::Conflict,
         Error::Repository(_) | Error::Store | Error::Upstream => {
@@ -1364,10 +1281,9 @@ fn map_quota_error(error: CodexCredentialQuotaError) -> ProviderAdminError {
 fn map_catalog_error(error: CodexCredentialCatalogError) -> ProviderAdminError {
     use CodexCredentialCatalogError as Error;
     provider_admin_error(match error {
-        Error::InvalidInstance
-        | Error::InvalidCredentialData
-        | Error::ConflictingModelFacts
-        | Error::InvalidEtag => ProviderAdminErrorKind::Invalid,
+        Error::InvalidCredentialData | Error::ConflictingModelFacts | Error::InvalidEtag => {
+            ProviderAdminErrorKind::Invalid
+        }
         Error::NoEligibleCredential => ProviderAdminErrorKind::NotFound,
         Error::ConcurrentUpdate => ProviderAdminErrorKind::Conflict,
         Error::Upstream | Error::Cache => ProviderAdminErrorKind::Unavailable,

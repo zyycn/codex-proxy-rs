@@ -13,7 +13,7 @@ use gateway_core::engine::credential::{
 };
 use gateway_core::error::StoreErrorKind;
 use gateway_core::provider_ports::ProviderRefreshPolicy;
-use gateway_core::routing::{ProviderInstanceId, ProviderKind};
+use gateway_core::routing::ProviderKind;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -36,7 +36,6 @@ const MAX_IMPORT_BATCH: usize = 200;
 /// 已跨过官方 OAuth/OIDC 验证边界、等待转为 Core 创建命令的账号。
 pub struct VerifiedGrokAccount {
     pub account_id: ProviderAccountId,
-    pub provider_instance_id: ProviderInstanceId,
     pub name: String,
     pub email: Option<String>,
     pub upstream_account_id: Option<String>,
@@ -50,7 +49,6 @@ impl std::fmt::Debug for VerifiedGrokAccount {
         formatter
             .debug_struct("VerifiedGrokAccount")
             .field("account_id", &self.account_id)
-            .field("provider_instance_id", &self.provider_instance_id)
             .field("name", &self.name)
             .field("email", &self.email.as_ref().map(|_| "[REDACTED]"))
             .field(
@@ -157,7 +155,6 @@ impl GrokCredentialAdmin {
             .map_err(|_| GrokCredentialRepositoryError::InvalidInput("provider_kind"))?;
         let account = ProviderAccount::new(
             input.account_id.clone(),
-            input.provider_instance_id.clone(),
             provider,
             input.name.clone(),
             input.account.subject.clone(),
@@ -204,7 +201,6 @@ impl GrokCredentialAdmin {
             .map_err(|_| GrokCredentialRepositoryError::InvalidInput("next_refresh_at"))?;
         self.prepare_import(&CreateGrokCredential {
             account_id: input.account_id.clone(),
-            provider_instance_id: input.provider_instance_id.clone(),
             name: input.name.clone(),
             secret: GrokOAuthSecret {
                 access_token: input.tokens.access_token().clone(),
@@ -379,7 +375,6 @@ impl GrokCredentialRepository {
 
         Ok(GrokCredentialRecord {
             account_id: input.account_id.clone(),
-            provider_instance_id: current.account.instance().clone(),
             credential_revision: revision,
         })
     }
@@ -476,14 +471,15 @@ impl GrokCredentialRepository {
         Ok(loaded)
     }
 
-    /// 读取 instance 下的全部 xAI account；credential 逐行按 revision fence 加载。
-    pub(crate) async fn list_loaded_for_instance(
+    /// 读取 xAI Provider 的全部账号；credential 逐行按 revision fence 加载。
+    pub(crate) async fn list_loaded_for_provider(
         &self,
-        instance: &ProviderInstanceId,
     ) -> Result<Vec<LoadedGrokCredential>, GrokCredentialRepositoryError> {
+        let provider = ProviderKind::new(XAI_PROVIDER_KIND)
+            .map_err(|_| GrokCredentialRepositoryError::InvalidCredentialData)?;
         let accounts = self
             .store
-            .list_for_instance(instance)
+            .list_for_provider(&provider)
             .await
             .map_err(map_store_error)?;
         let mut loaded = Vec::with_capacity(accounts.len());
@@ -495,13 +491,14 @@ impl GrokCredentialRepository {
         Ok(loaded)
     }
 
-    pub(crate) async fn list_accounts_for_instance(
+    pub(crate) async fn list_accounts_for_provider(
         &self,
-        instance: &ProviderInstanceId,
     ) -> Result<Vec<ProviderAccount>, GrokCredentialRepositoryError> {
+        let provider = ProviderKind::new(XAI_PROVIDER_KIND)
+            .map_err(|_| GrokCredentialRepositoryError::InvalidCredentialData)?;
         let accounts = self
             .store
-            .list_for_instance(instance)
+            .list_for_provider(&provider)
             .await
             .map_err(map_store_error)?;
         for account in &accounts {

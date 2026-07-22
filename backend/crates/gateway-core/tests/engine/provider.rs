@@ -13,10 +13,7 @@ use gateway_core::engine::provider::{
 use gateway_core::engine::{AttemptContext, UpstreamSendState};
 use gateway_core::error::{IdentifierError, ProviderError, ProviderErrorKind};
 use gateway_core::operation::OperationKind;
-use gateway_core::routing::{
-    InstanceHealth, ModelCapabilities, ProviderInstance, ProviderInstanceId, ProviderKind,
-    UpstreamModelId,
-};
+use gateway_core::routing::{ModelCapabilities, ProviderKind, UpstreamModelId};
 
 struct NamedProvider(&'static str);
 
@@ -32,7 +29,6 @@ impl Provider for NamedProvider {
 
     async fn query_model_capabilities(
         &self,
-        _instance: &ProviderInstance,
     ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
         Ok(vec![ProviderModelCapabilities::new(
             UpstreamModelId::new("live-model").expect("model"),
@@ -78,15 +74,8 @@ fn registry_should_query_provider_compiled_model_capabilities() {
         .register(Arc::new(NamedProvider("openai")))
         .expect("provider");
     let registry = builder.build();
-    let instance = ProviderInstance::new(
-        ProviderInstanceId::new("inst_openai").expect("instance"),
-        ProviderKind::new("openai").expect("provider kind"),
-        "https://api.example".to_owned(),
-        true,
-        InstanceHealth::Healthy,
-    );
-
-    let models = futures::executor::block_on(registry.query_model_capabilities(&instance))
+    let provider = ProviderKind::new("openai").expect("provider kind");
+    let models = futures::executor::block_on(registry.query_model_capabilities(&provider))
         .expect("live catalog");
 
     assert_eq!(models[0].upstream_model().as_str(), "live-model");
@@ -113,7 +102,6 @@ fn provider_stream_should_release_owned_lease_on_drop() {
     let released = Arc::new(AtomicBool::new(false));
     let metadata = ProviderCallMetadata::new(
         ProviderKind::new("openai").expect("valid provider"),
-        ProviderInstanceId::new("inst_openai").expect("valid instance"),
         UpstreamModelId::new("gpt-5").expect("valid model"),
         ProviderResource::Anonymous(ResourceId::none()),
         UpstreamTransport::new("http_sse").expect("valid transport"),

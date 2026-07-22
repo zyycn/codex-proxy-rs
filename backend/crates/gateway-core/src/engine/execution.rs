@@ -19,15 +19,16 @@ use crate::engine::coordinator::ResponseExecutionSession;
 use crate::engine::probe::{AccountProbe, AccountProbeRequest, AccountProbeResult};
 use crate::engine::provider::ProviderRegistry;
 use crate::engine::{
-    AttemptCoordinator, CancellationToken, CommitRequirement, CoordinatedEvent, EngineError,
-    ExecutionStore, GatewayEngine, ModelRequestId, NewModelRequest, ProviderAttemptOutcome,
+    AttemptCoordinator, AttemptRecord, CancellationToken, CommitRequirement, CoordinatedEvent,
+    EngineError, ExecutionStore, GatewayEngine, IntermediateFailure, ModelRequestFinalization,
+    ModelRequestId, NewModelRequest, ProviderAttemptOutcome, RecoveryReport, UpstreamSendState,
 };
-use crate::error::{GatewayError, GatewayErrorKind, ProviderErrorKind};
+use crate::error::{GatewayError, GatewayErrorKind, ProviderErrorKind, StoreError};
 use crate::event::{GatewayEvent, ProviderEvent, ProviderResponseHeader};
 use crate::operation::{Operation, ReasoningEffort};
 use crate::policy::{ClientApiKeyId, ClientPolicy};
 use crate::routing::snapshot::RuntimeSnapshotHandle;
-use crate::routing::{ProviderInstanceId, PublicModelId, RoutingContext, RuntimeSnapshot};
+use crate::routing::{ProviderKind, PublicModelId, RoutingContext, RuntimeSnapshot};
 
 const MODEL_REQUEST_DEADLINE: Duration = Duration::from_secs(10 * 60);
 
@@ -156,21 +157,22 @@ pub struct ProviderCircuitError;
 pub trait ProviderCircuitPort: Send + Sync {
     fn decision<'a>(
         &'a self,
-        provider_instance_id: &'a ProviderInstanceId,
+        provider_kind: &'a ProviderKind,
     ) -> BoxFuture<'a, Result<ProviderCircuitDecision, ProviderCircuitError>>;
     fn observe_failure<'a>(
         &'a self,
-        provider_instance_id: &'a ProviderInstanceId,
+        provider_kind: &'a ProviderKind,
     ) -> BoxFuture<'a, Result<(), ProviderCircuitError>>;
     fn observe_success<'a>(
         &'a self,
-        provider_instance_id: &'a ProviderInstanceId,
+        provider_kind: &'a ProviderKind,
     ) -> BoxFuture<'a, Result<(), ProviderCircuitError>>;
 }
 
 pub struct DefaultExecutionService {
     snapshots: RuntimeSnapshotHandle,
     coordinator: Arc<AttemptCoordinator<dyn ExecutionStore>>,
+    probe_coordinator: Arc<AttemptCoordinator<dyn ExecutionStore>>,
     providers: ProviderRegistry,
     admissions: Arc<dyn ClientAdmissionPort>,
     circuits: Arc<dyn ProviderCircuitPort>,
@@ -188,9 +190,12 @@ impl DefaultExecutionService {
         continuation: Arc<dyn NativeContinuationPort>,
     ) -> Self {
         let engine = GatewayEngine::<dyn ExecutionStore>::new(execution, providers.clone());
+        let transient: Arc<dyn ExecutionStore> = Arc::new(TransientExecutionStore);
+        let probe_engine = GatewayEngine::<dyn ExecutionStore>::new(transient, providers.clone());
         Self {
             snapshots,
             coordinator: Arc::new(AttemptCoordinator::new(engine)),
+            probe_coordinator: Arc::new(AttemptCoordinator::new(probe_engine)),
             providers,
             admissions,
             circuits,
@@ -210,12 +215,7 @@ impl DefaultExecutionService {
             })?;
         let request_id = new_request_id()?;
         let routing_context = self
-            .route_context(
-                &request.client.snapshot,
-                request.client.policy.provider_kind(),
-                &request.public_model,
-                &request.operation,
-            )
+            .route_context(request.client.policy.provider_kind())
             .await?;
         let plan = request
             .client
@@ -377,50 +377,20 @@ impl DefaultExecutionService {
 
     async fn route_context(
         &self,
-        snapshot: &RuntimeSnapshot,
-        provider_kind: &crate::routing::ProviderKind,
-        model: &PublicModelId,
-        operation: &Operation,
+        provider_kind: &ProviderKind,
     ) -> Result<RoutingContext, GatewayError> {
-        let allowed_instances = snapshot.instance_ids_for_provider(provider_kind);
-        let preliminary = snapshot
-            .plan(
-                model,
-                operation,
-                &RoutingContext {
-                    provider_kind: Some(provider_kind.clone()),
-                    allowed_instances: Some(allowed_instances.clone()),
-                    ..RoutingContext::default()
-                },
+        let blocked_providers = match self.circuits.decision(provider_kind).await.map_err(|_| {
+            GatewayError::new(
+                GatewayErrorKind::NoAvailableProvider,
+                "provider health state is temporarily unavailable",
             )
-            .map_err(map_routing_error)?;
-        let mut blocked_instances = BTreeSet::new();
-        let mut checked = BTreeSet::new();
-        for candidate in preliminary.candidates() {
-            if !checked.insert(candidate.instance().clone()) {
-                continue;
-            }
-            match self
-                .circuits
-                .decision(candidate.instance())
-                .await
-                .map_err(|_| {
-                    GatewayError::new(
-                        GatewayErrorKind::NoAvailableProvider,
-                        "provider health state is temporarily unavailable",
-                    )
-                })? {
-                ProviderCircuitDecision::Allow => {}
-                ProviderCircuitDecision::BlockedUntil(_) => {
-                    blocked_instances.insert(candidate.instance().clone());
-                }
-            }
-        }
+        })? {
+            ProviderCircuitDecision::Allow => BTreeSet::new(),
+            ProviderCircuitDecision::BlockedUntil(_) => BTreeSet::from([provider_kind.clone()]),
+        };
         Ok(RoutingContext {
             provider_kind: Some(provider_kind.clone()),
-            allowed_instances: Some(allowed_instances),
-            blocked_instances,
-            ..RoutingContext::default()
+            blocked_providers,
         })
     }
 
@@ -430,7 +400,7 @@ impl DefaultExecutionService {
     ) -> Result<AccountProbeResult, GatewayError> {
         let AccountProbeRequest {
             account_id,
-            provider_instance_id,
+            provider_kind,
             upstream_model,
             operation,
         } = request;
@@ -440,22 +410,12 @@ impl DefaultExecutionService {
                 "runtime snapshot is unavailable",
             )
         })?;
-        let provider_kind = snapshot
-            .provider_for_instance(&provider_instance_id)
-            .cloned()
-            .ok_or_else(|| {
-                GatewayError::new(
-                    GatewayErrorKind::Unsupported,
-                    "Provider instance is unavailable",
-                )
-            })?;
         let public_model =
             PublicModelId::new(upstream_model.as_str().to_owned()).map_err(|_| {
                 GatewayError::new(GatewayErrorKind::Unsupported, "requested model is invalid")
             })?;
         let routing_context = RoutingContext {
             provider_kind: Some(provider_kind),
-            allowed_instances: Some(BTreeSet::from([provider_instance_id.clone()])),
             ..RoutingContext::default()
         };
         let plan = snapshot
@@ -478,7 +438,7 @@ impl DefaultExecutionService {
             config_revision: plan.config_revision(),
             protocol: "admin_connection_test".to_owned(),
             operation: operation.kind(),
-            endpoint: "/api/admin/accounts/test".to_owned(),
+            endpoint: "/api/admin/accounts/connection-test".to_owned(),
             client_transport: ClientTransport::InternalProbe.as_str().to_owned(),
             requested_model: public_model,
             input_token_estimate,
@@ -494,7 +454,7 @@ impl DefaultExecutionService {
             deadline_at,
         };
         let mut session = self
-            .coordinator
+            .probe_coordinator
             .start(
                 new_request,
                 operation,
@@ -526,6 +486,52 @@ impl DefaultExecutionService {
                 })
                 .collect(),
         })
+    }
+}
+
+struct TransientExecutionStore;
+
+#[async_trait::async_trait]
+impl ExecutionStore for TransientExecutionStore {
+    async fn create_model_request(&self, _: NewModelRequest) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn record_attempt(&self, _: AttemptRecord) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn mark_send_state(
+        &self,
+        _: &ModelRequestId,
+        _: UpstreamSendState,
+    ) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn mark_downstream_committed(
+        &self,
+        _: &ModelRequestId,
+        _: SystemTime,
+        _: Option<u16>,
+    ) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn record_client_status(&self, _: &ModelRequestId, _: u16) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn record_intermediate_failure(&self, _: IntermediateFailure) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn finalize_model_request(&self, _: ModelRequestFinalization) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn recover_expired(&self, _: SystemTime) -> Result<RecoveryReport, StoreError> {
+        Ok(RecoveryReport::default())
     }
 }
 
@@ -758,15 +764,9 @@ async fn publish_provider_attempt_outcomes(
 ) {
     for outcome in outcomes {
         let result = match outcome.error_kind() {
-            None => {
-                circuits
-                    .observe_success(outcome.provider_instance_id())
-                    .await
-            }
+            None => circuits.observe_success(outcome.provider_kind()).await,
             Some(kind) if provider_failure_affects_circuit(kind) => {
-                circuits
-                    .observe_failure(outcome.provider_instance_id())
-                    .await
+                circuits.observe_failure(outcome.provider_kind()).await
             }
             Some(_) => continue,
         };
@@ -806,7 +806,7 @@ fn map_routing_error(error: crate::error::RoutingError) -> GatewayError {
     match error {
         crate::error::RoutingError::NoCapableProvider { .. } => GatewayError::new(
             GatewayErrorKind::NoAvailableProvider,
-            "no Provider instance can execute this request",
+            "no provider can execute this request",
         ),
         _ => GatewayError::new(
             GatewayErrorKind::Internal,
@@ -827,7 +827,7 @@ pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {
         EngineError::EmptyRoutingPlan | EngineError::ProviderNotRegistered { .. } => {
             GatewayError::new(
                 GatewayErrorKind::NoAvailableProvider,
-                "no Provider instance is available",
+                "no provider is available",
             )
         }
         _ => GatewayError::new(GatewayErrorKind::Internal, "request execution failed"),

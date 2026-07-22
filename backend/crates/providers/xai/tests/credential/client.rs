@@ -15,7 +15,7 @@ use provider_xai::{
     VerifiedGrokAccount,
 };
 
-use crate::support::{account_id, instance_id, refresh_policy};
+use crate::support::{account_id, refresh_policy};
 
 const DISCOVERY: &[u8] = include_bytes!("fixtures/discovery.json");
 const TOKEN_SUCCESS: &[u8] = include_bytes!("fixtures/token_success.json");
@@ -121,7 +121,6 @@ async fn credential_import_should_require_exact_metadata_and_official_userinfo()
         .prepare_verified_account(
             &VerifiedGrokAccount {
                 account_id: account_id("verified-import"),
-                provider_instance_id: instance_id(),
                 name: "verified import".to_owned(),
                 email: Some("verified@example.com".to_owned()),
                 upstream_account_id: None,

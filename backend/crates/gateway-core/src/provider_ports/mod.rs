@@ -12,7 +12,7 @@ use crate::engine::credential::{
     AccountAvailability, AccountRuntimeSignals, CredentialRevision, OpaqueProviderData,
     ProviderAccountId, ProviderAccountStore,
 };
-use crate::routing::{ProviderInstanceId, ProviderKind};
+use crate::routing::ProviderKind;
 
 const MAX_PENDING_FLOW_TTL: Duration = Duration::from_secs(30 * 60);
 
@@ -44,7 +44,7 @@ impl ProviderStoreError {
     }
 }
 
-/// 一次 Provider instance 的完整可重建调度状态。
+/// 一个 Provider 的完整可重建调度状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderSchedulingState {
     signals: BTreeMap<ProviderAccountId, AccountRuntimeSignals>,
@@ -85,7 +85,7 @@ impl ProviderSchedulingState {
 /// 请求级账号 lease 的全部中立事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderSchedulingLeaseRequest {
-    provider_instance_id: ProviderInstanceId,
+    provider_kind: ProviderKind,
     account_id: ProviderAccountId,
     credential_revision: CredentialRevision,
     max_concurrent: NonZeroU32,
@@ -96,7 +96,7 @@ pub struct ProviderSchedulingLeaseRequest {
 impl ProviderSchedulingLeaseRequest {
     #[must_use]
     pub const fn new(
-        provider_instance_id: ProviderInstanceId,
+        provider_kind: ProviderKind,
         account_id: ProviderAccountId,
         credential_revision: CredentialRevision,
         max_concurrent: NonZeroU32,
@@ -104,7 +104,7 @@ impl ProviderSchedulingLeaseRequest {
         deadline: SystemTime,
     ) -> Self {
         Self {
-            provider_instance_id,
+            provider_kind,
             account_id,
             credential_revision,
             max_concurrent,
@@ -114,8 +114,8 @@ impl ProviderSchedulingLeaseRequest {
     }
 
     #[must_use]
-    pub const fn provider_instance_id(&self) -> &ProviderInstanceId {
-        &self.provider_instance_id
+    pub const fn provider_kind(&self) -> &ProviderKind {
+        &self.provider_kind
     }
 
     #[must_use]
@@ -177,7 +177,7 @@ pub enum ProviderLeaseRequest {
 pub trait ProviderLeasePort: Send + Sync {
     fn load_state<'a>(
         &'a self,
-        provider_instance_id: &'a ProviderInstanceId,
+        provider_kind: &'a ProviderKind,
         accounts: &'a [ProviderAccountId],
     ) -> BoxFuture<'a, Result<ProviderSchedulingState, ProviderStoreError>>;
 
@@ -187,7 +187,7 @@ pub trait ProviderLeasePort: Send + Sync {
     ) -> BoxFuture<'_, Result<ProviderLeaseAcquisition, ProviderStoreError>>;
 }
 
-/// 所有 Provider、所有实例共享的 OAuth refresh 并发容量。
+/// 所有 Provider 共享的 OAuth refresh 并发容量。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderRefreshCapacityRequest {
     max_concurrent: NonZeroU32,
@@ -284,96 +284,6 @@ pub trait ProviderCatalogCachePort: Send + Sync {
         &'a self,
         key: &'a ProviderCatalogCacheKey,
     ) -> BoxFuture<'a, Result<Option<OpaqueProviderData>, ProviderStoreError>>;
-}
-
-/// Provider worker 读取的中立 instance 事实。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderInstanceConfig {
-    id: ProviderInstanceId,
-    provider_kind: ProviderKind,
-    base_url: String,
-    enabled: bool,
-}
-
-impl ProviderInstanceConfig {
-    #[must_use]
-    pub const fn new(
-        id: ProviderInstanceId,
-        provider_kind: ProviderKind,
-        base_url: String,
-        enabled: bool,
-    ) -> Self {
-        Self {
-            id,
-            provider_kind,
-            base_url,
-            enabled,
-        }
-    }
-
-    #[must_use]
-    pub const fn id(&self) -> &ProviderInstanceId {
-        &self.id
-    }
-
-    #[must_use]
-    pub const fn provider_kind(&self) -> &ProviderKind {
-        &self.provider_kind
-    }
-
-    #[must_use]
-    pub fn base_url(&self) -> &str {
-        &self.base_url
-    }
-
-    #[must_use]
-    pub const fn enabled(&self) -> bool {
-        self.enabled
-    }
-}
-
-pub trait ProviderInstanceCatalogPort: Send + Sync {
-    fn list_instances<'a>(
-        &'a self,
-        provider_kind: &'a ProviderKind,
-        include_disabled: bool,
-    ) -> BoxFuture<'a, Result<Vec<ProviderInstanceConfig>, ProviderStoreError>>;
-}
-
-/// Provider 的两种目录能力：instance 事实与 provider-owned model cache。
-#[derive(Clone)]
-pub struct ProviderCatalogPorts {
-    instances: Arc<dyn ProviderInstanceCatalogPort>,
-    model_cache: Arc<dyn ProviderCatalogCachePort>,
-}
-
-impl ProviderCatalogPorts {
-    #[must_use]
-    pub fn new(
-        instances: Arc<dyn ProviderInstanceCatalogPort>,
-        model_cache: Arc<dyn ProviderCatalogCachePort>,
-    ) -> Self {
-        Self {
-            instances,
-            model_cache,
-        }
-    }
-
-    #[must_use]
-    pub fn instances(&self) -> Arc<dyn ProviderInstanceCatalogPort> {
-        Arc::clone(&self.instances)
-    }
-
-    #[must_use]
-    pub fn model_cache(&self) -> Arc<dyn ProviderCatalogCachePort> {
-        Arc::clone(&self.model_cache)
-    }
-}
-
-impl fmt::Debug for ProviderCatalogPorts {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("ProviderCatalogPorts([CAPABILITIES])")
-    }
 }
 
 /// Redis 中可重建的账号状态投影。
@@ -745,7 +655,7 @@ pub trait OAuthPendingFlowPort: Send + Sync {
 pub struct ProviderStorePorts {
     accounts: Arc<dyn ProviderAccountStore>,
     leases: Arc<dyn ProviderLeasePort>,
-    catalog: ProviderCatalogPorts,
+    catalog_cache: Arc<dyn ProviderCatalogCachePort>,
     credential_state: Arc<dyn ProviderCredentialStatePort>,
     cooldowns: Arc<dyn ProviderCooldownPort>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
@@ -757,7 +667,7 @@ impl ProviderStorePorts {
     pub fn new(
         accounts: Arc<dyn ProviderAccountStore>,
         leases: Arc<dyn ProviderLeasePort>,
-        catalog: ProviderCatalogPorts,
+        catalog_cache: Arc<dyn ProviderCatalogCachePort>,
         credential_state: Arc<dyn ProviderCredentialStatePort>,
         cooldowns: Arc<dyn ProviderCooldownPort>,
         runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
@@ -766,7 +676,7 @@ impl ProviderStorePorts {
         Self {
             accounts,
             leases,
-            catalog,
+            catalog_cache,
             credential_state,
             cooldowns,
             runtime_policy,
@@ -785,13 +695,8 @@ impl ProviderStorePorts {
     }
 
     #[must_use]
-    pub fn instances(&self) -> Arc<dyn ProviderInstanceCatalogPort> {
-        self.catalog.instances()
-    }
-
-    #[must_use]
     pub fn catalog_cache(&self) -> Arc<dyn ProviderCatalogCachePort> {
-        self.catalog.model_cache()
+        Arc::clone(&self.catalog_cache)
     }
 
     #[must_use]

@@ -19,7 +19,7 @@ use gateway_core::provider_ports::{
     ProviderRefreshCapacityRequest, ProviderRefreshLeaseRequest, ProviderRefreshPolicy,
     ProviderRuntimePolicyPort,
 };
-use gateway_core::routing::{ProviderInstanceId, ProviderKind};
+use gateway_core::routing::ProviderKind;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
 use serde_json::Value;
@@ -65,7 +65,6 @@ const CPR_ACCOUNT_KEYS: &[&str] = &[
 
 pub struct ImportCodexOAuthCredential {
     pub account_id: String,
-    pub provider_instance_id: String,
     pub name: String,
     pub secret: CodexOAuthSecret,
     pub verified_account: CodexAccountProfile,
@@ -78,7 +77,6 @@ impl std::fmt::Debug for ImportCodexOAuthCredential {
         formatter
             .debug_struct("ImportCodexOAuthCredential")
             .field("account_id", &self.account_id)
-            .field("provider_instance_id", &self.provider_instance_id)
             .field("name", &self.name)
             .field("secret", &"<redacted>")
             .field("verified_account", &self.verified_account)
@@ -346,8 +344,6 @@ impl CodexCredentialAdmin {
     ) -> Result<NewProviderAccount, CodexCredentialAdminError> {
         let account_id = ProviderAccountId::new(input.account_id)
             .map_err(|_| CodexCredentialAdminError::InvalidInput)?;
-        let instance = ProviderInstanceId::new(input.provider_instance_id)
-            .map_err(|_| CodexCredentialAdminError::InvalidInput)?;
         let provider = ProviderKind::new(PROVIDER_NAME)
             .map_err(|_| CodexCredentialAdminError::InvalidInput)?;
         if input.name.trim().is_empty() {
@@ -363,7 +359,6 @@ impl CodexCredentialAdmin {
                 .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
         let account = ProviderAccount::new(
             account_id,
-            instance,
             provider,
             input.name,
             upstream_user_id,
@@ -626,7 +621,6 @@ impl CodexCredentialAdminService {
     /// 按文档结构严格判别账号布局，并归一到唯一 `NewProviderAccount` 写入路径。
     pub async fn prepare_import_document(
         &self,
-        provider_instance_id: ProviderInstanceId,
         payload: Value,
     ) -> Result<PreparedCodexAccountImport, CodexCredentialAdminError> {
         if serde_json::to_vec(&payload)
@@ -673,7 +667,6 @@ impl CodexCredentialAdminService {
             )?;
             let mut prepared = CodexCredentialAdmin.prepare_import(ImportCodexOAuthCredential {
                 account_id,
-                provider_instance_id: provider_instance_id.to_string(),
                 name: candidate
                     .name
                     .filter(|name| !name.trim().is_empty())

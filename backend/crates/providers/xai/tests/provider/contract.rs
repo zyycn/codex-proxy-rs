@@ -25,11 +25,11 @@ use gateway_core::operation::{
     ProtocolPayload, ProviderSessionState,
 };
 use gateway_core::routing::{
-    ConfigRevision, InstanceHealth, ModelCapabilities, ProviderInstance, ProviderKind,
-    ProviderModel, PublicModelId, RoutingContext, RuntimeSnapshot, UpstreamModelId,
+    ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RoutingContext,
+    RuntimeSnapshot, UpstreamModelId,
 };
 use provider_xai::{
-    GROK_CLI_BASE_URL, GrokBuildProvider, GrokCredentialCatalogCache, GrokCredentialFailure,
+    GrokBuildProvider, GrokCredentialCatalogCache, GrokCredentialFailure,
     GrokCredentialFeedbackFuture, GrokCredentialRecovery, GrokCredentialRecoveryOutcome,
     GrokCredentialRepository, GrokInferenceRequest, GrokInferenceResponse, GrokInferenceTransport,
     GrokInferenceTransportError, GrokInferenceTransportErrorKind, GrokInferenceTransportFuture,
@@ -41,8 +41,7 @@ use provider_xai::{
 use serde_json::{Map, json};
 
 use crate::support::{
-    MemoryGrokCatalogCache, MemoryProviderAccountStore, account_id, create_input, instance_id,
-    seed_input,
+    MemoryGrokCatalogCache, MemoryProviderAccountStore, account_id, create_input, seed_input,
 };
 
 const MODEL: &str = "grok-4.5";
@@ -433,6 +432,7 @@ async fn provider_with_catalog_transport(
         recovery,
         crate::support::xai_wire_profile(),
     )
+    .expect("official xAI provider configuration")
 }
 
 async fn mapped_transport_error(
@@ -537,23 +537,14 @@ fn compaction_operation_with_state(state: ProviderSessionState) -> Operation {
     ))
 }
 
-fn instance(provider: &str) -> ProviderInstance {
-    ProviderInstance::new(
-        instance_id(),
-        ProviderKind::new(provider).expect("provider"),
-        GROK_CLI_BASE_URL.to_owned(),
-        true,
-        InstanceHealth::Healthy,
-    )
-}
-
 fn provider_request(provider_kind: &str) -> ProviderRequest {
     provider_request_with_operation(provider_kind, operation())
 }
 
 fn provider_request_with_operation(provider_kind: &str, operation: Operation) -> ProviderRequest {
+    let provider = ProviderKind::new(provider_kind).expect("provider");
     let provider_model = ProviderModel::new(
-        instance_id(),
+        provider.clone(),
         UpstreamModelId::new(MODEL).expect("model"),
         ModelCapabilities::new(
             BTreeSet::from([OperationKind::Generate, OperationKind::CompactConversation]),
@@ -564,7 +555,7 @@ fn provider_request_with_operation(provider_kind: &str, operation: Operation) ->
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
         selection_policy(),
-        vec![instance(provider_kind)],
+        vec![provider],
         vec![provider_model],
         vec![],
     )
@@ -1152,7 +1143,6 @@ async fn native_previous_response_is_rejected_before_selection() {
         PreviousResponseId::new("resp_previous").expect("response ID"),
         SafeUpstreamValue::new("resp_upstream_previous").expect("upstream response ID"),
         ProviderKind::new("openai").expect("provider"),
-        instance_id(),
         account_id("provider"),
     );
     let error = match provider
@@ -1186,7 +1176,6 @@ async fn native_previous_response_pins_account_and_sends_upstream_handle() {
         PreviousResponseId::new("resp_previous").expect("response ID"),
         SafeUpstreamValue::new("resp_upstream_previous").expect("upstream response ID"),
         ProviderKind::new("xai").expect("provider"),
-        instance_id(),
         account_id("provider"),
     );
     let mut stream = provider
@@ -1232,7 +1221,6 @@ async fn native_previous_response_does_not_allow_quota_or_rate_limit_account_rot
         PreviousResponseId::new("resp_previous").expect("response ID"),
         SafeUpstreamValue::new("resp_upstream_previous").expect("upstream response ID"),
         ProviderKind::new("xai").expect("provider"),
-        instance_id(),
         account_id("provider"),
     );
     let mut stream = provider
@@ -1325,7 +1313,6 @@ async fn connection_state_inherits_session_and_recovers_reasoning_on_pinned_acco
         PreviousResponseId::new("resp_gateway_first").expect("response ID"),
         SafeUpstreamValue::new("resp_state").expect("upstream response ID"),
         ProviderKind::new("xai").expect("provider"),
-        instance_id(),
         account_id("provider"),
     );
     let continued_operation = operation_with_state(
@@ -1451,7 +1438,6 @@ async fn replay_owner_should_reencode_custom_apply_patch_call_for_grok() {
         PreviousResponseId::new("resp_gateway_patch").expect("response ID"),
         SafeUpstreamValue::new("resp_custom_patch").expect("upstream response ID"),
         ProviderKind::new("xai").expect("provider"),
-        instance_id(),
         account_id("provider"),
     );
     let replay_operation = operation_with_state(
@@ -1527,7 +1513,6 @@ async fn missing_native_response_should_be_replay_safe_for_the_same_account() {
         PreviousResponseId::new("resp_gateway_first").expect("response ID"),
         SafeUpstreamValue::new("resp_upstream_first").expect("upstream response ID"),
         ProviderKind::new("xai").expect("provider"),
-        instance_id(),
         account_id("provider"),
     );
     let operation = operation_with_state(
@@ -1599,7 +1584,7 @@ async fn provider_rejects_target_owned_by_other_provider() {
 async fn provider_compiles_realtime_catalog_capabilities() {
     let provider = provider(StubSelector::success(), StubInferenceTransport::success()).await;
     let capabilities = provider
-        .query_model_capabilities(&instance("xai"))
+        .query_model_capabilities()
         .await
         .expect("capabilities");
     assert_eq!(capabilities.len(), 1);
@@ -1624,7 +1609,7 @@ async fn missing_catalog_tool_metadata_keeps_build_tools_routable() {
     )
     .await;
     let capabilities = provider
-        .query_model_capabilities(&instance("xai"))
+        .query_model_capabilities()
         .await
         .expect("capabilities");
     assert!(

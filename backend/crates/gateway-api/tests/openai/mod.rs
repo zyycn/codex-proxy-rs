@@ -34,8 +34,8 @@ use gateway_core::lifecycle::{ConnectionDraining, ConnectionGuard, ConnectionLif
 use gateway_core::policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits};
 use gateway_core::routing::snapshot::RuntimeSnapshotHandle;
 use gateway_core::routing::{
-    ConfigRevision, InstanceHealth, ModelCapabilities, ProviderInstance, ProviderInstanceId,
-    ProviderKind, ProviderModel, RuntimeSnapshot, UpstreamModelId,
+    ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, RuntimeSnapshot,
+    UpstreamModelId,
 };
 
 pub(super) async fn api_router(execution: Arc<dyn ExecutionService>) -> axum::Router {
@@ -80,8 +80,6 @@ pub(super) fn authenticated_client_for_provider(
 
 fn snapshot(plaintext: &str, provider_name: &str) -> RuntimeSnapshot {
     let provider = ProviderKind::new(provider_name).expect("provider");
-    let instance_id =
-        ProviderInstanceId::new(format!("inst_{provider_name}_api_test")).expect("instance");
     let capabilities = ModelCapabilities::new(
         BTreeSet::from([gateway_core::operation::OperationKind::Generate]),
         128_000,
@@ -94,18 +92,12 @@ fn snapshot(plaintext: &str, provider_name: &str) -> RuntimeSnapshot {
             NonZeroU32::new(2).expect("concurrency"),
             Duration::from_millis(1),
         ),
-        vec![ProviderInstance::new(
-            instance_id.clone(),
-            provider.clone(),
-            "https://api.example.invalid".to_owned(),
-            true,
-            InstanceHealth::Healthy,
-        )],
+        vec![provider.clone()],
         ["model-a", "model-b"]
             .into_iter()
             .map(|model| {
                 ProviderModel::new(
-                    instance_id.clone(),
+                    provider.clone(),
                     UpstreamModelId::new(model).expect("model"),
                     capabilities.clone(),
                 )
@@ -230,21 +222,21 @@ struct UnusedCircuits;
 impl ProviderCircuitPort for UnusedCircuits {
     fn decision<'a>(
         &'a self,
-        _: &'a ProviderInstanceId,
+        _: &'a ProviderKind,
     ) -> BoxFuture<'a, Result<ProviderCircuitDecision, ProviderCircuitError>> {
         Box::pin(async { unreachable!("authentication fixture does not execute") })
     }
 
     fn observe_failure<'a>(
         &'a self,
-        _: &'a ProviderInstanceId,
+        _: &'a ProviderKind,
     ) -> BoxFuture<'a, Result<(), ProviderCircuitError>> {
         Box::pin(async { unreachable!("authentication fixture does not execute") })
     }
 
     fn observe_success<'a>(
         &'a self,
-        _: &'a ProviderInstanceId,
+        _: &'a ProviderKind,
     ) -> BoxFuture<'a, Result<(), ProviderCircuitError>> {
         Box::pin(async { unreachable!("authentication fixture does not execute") })
     }

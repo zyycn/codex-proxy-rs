@@ -18,24 +18,19 @@ import { accountProviderModeOptions } from '../composables/useAccountOnboarding'
 
 type AccountOnboarding = ReturnType<typeof useAccountOnboarding>
 type CreateForm = AccountOnboarding['createForm']['value']
-type ProviderInstanceOptions = AccountOnboarding['providerInstanceOptions']['value']
 
 const props = withDefaults(
   defineProps<{
     saving?: boolean
     oauthLoading?: boolean
-    loadingProviderInstances?: boolean
     reauthorizing?: boolean
     account?: AccountRow | null
-    providerInstanceOptions?: ProviderInstanceOptions
   }>(),
   {
     saving: false,
     oauthLoading: false,
-    loadingProviderInstances: false,
     reauthorizing: false,
     account: null,
-    providerInstanceOptions: () => [],
   },
 )
 
@@ -67,13 +62,6 @@ const provider = computed({
       return
     form.value = { ...form.value, provider: value }
     fileError.value = ''
-  },
-})
-
-const providerInstanceId = computed({
-  get: () => form.value.providerInstanceId,
-  set: (value: string) => {
-    form.value = { ...form.value, providerInstanceId: value }
   },
 })
 
@@ -132,12 +120,11 @@ const oauthPanelDescription = computed(() => {
 
 const canGenerateOauth = computed(() =>
   !props.saving
-  && !props.oauthLoading
-  && Boolean(providerInstanceId.value),
+  && !props.oauthLoading,
 )
 
 const canSubmit = computed(() => {
-  if (props.saving || props.oauthLoading || !providerInstanceId.value)
+  if (props.saving || props.oauthLoading)
     return false
   if (mode.value === 'oauth') {
     if (!form.value.oauthFlowId || !oauthAuthUrl.value)
@@ -206,26 +193,13 @@ async function copyText(value: string, successText: string) {
   >
     <div class="flex flex-col gap-4">
       <BaseForm v-if="!reauthorizing">
-        <div
-          class="grid gap-4"
-          :class="providerInstanceOptions.length > 1 ? 'sm:grid-cols-2' : 'sm:grid-cols-1'"
-        >
+        <div class="grid gap-4">
           <BaseFormItem label="平台" required>
             <BaseSelect
               v-model="provider"
               :options="providerOptions"
               :disabled="saving || oauthLoading"
               aria-label="平台"
-            />
-          </BaseFormItem>
-          <BaseFormItem v-if="providerInstanceOptions.length > 1" label="上游实例" required>
-            <BaseSelect
-              v-model="providerInstanceId"
-              :options="providerInstanceOptions"
-              :disabled="saving || oauthLoading || loadingProviderInstances"
-              :placeholder="loadingProviderInstances ? '加载中...' : '选择上游实例'"
-              empty-text="没有可用的上游实例"
-              aria-label="上游实例"
             />
           </BaseFormItem>
         </div>

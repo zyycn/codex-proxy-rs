@@ -112,28 +112,8 @@ create table runtime_settings (
   )
 );
 
-create table provider_instances (
-  id text primary key,
-  provider_kind text not null,
-  name text not null,
-  base_url text not null,
-  enabled boolean not null default true,
-  created_at timestamptz not null,
-  updated_at timestamptz not null,
-  constraint provider_instances_kind_name_uq unique (provider_kind, name),
-  constraint provider_instances_id_kind_uq unique (id, provider_kind),
-  constraint provider_instances_kind_ck check (
-    provider_kind ~ '^[a-z][a-z0-9]*(-[a-z0-9]+)*$'
-  ),
-  constraint provider_instances_time_ck check (created_at <= updated_at)
-);
-
-create index provider_instances_runtime_idx
-  on provider_instances (provider_kind, enabled, id);
-
 create table provider_accounts (
   id text primary key,
-  provider_instance_id text not null,
   provider_kind text not null,
   name text not null,
   email text,
@@ -154,12 +134,6 @@ create table provider_accounts (
   quota_observed_at timestamptz,
   created_at timestamptz not null,
   updated_at timestamptz not null,
-  constraint provider_accounts_instance_name_uq unique (provider_instance_id, name),
-  constraint provider_accounts_id_instance_kind_uq unique (
-    id,
-    provider_instance_id,
-    provider_kind
-  ),
   constraint provider_accounts_revision_ck check (credential_revision > 0),
   constraint provider_accounts_credentials_ck check (
     jsonb_typeof(provider_credentials_json) = 'object'
@@ -196,25 +170,19 @@ create table provider_accounts (
     created_at <= updated_at
     and availability_observed_at <= updated_at
     and (quota_observed_at is null or quota_observed_at <= updated_at)
-  ),
-  constraint provider_accounts_instance_fk foreign key (
-    provider_instance_id,
-    provider_kind
-  ) references provider_instances (id, provider_kind)
-    on update restrict
-    on delete cascade
+  )
 );
 
+create unique index provider_accounts_id_kind_uq
+  on provider_accounts (id, provider_kind);
 create unique index provider_accounts_upstream_identity_uq
   on provider_accounts (
     provider_kind,
     upstream_user_id,
     coalesce(upstream_account_id, '')
   );
-create index provider_accounts_instance_kind_idx
-  on provider_accounts (provider_instance_id, provider_kind);
 create index provider_accounts_runtime_idx
-  on provider_accounts (provider_instance_id, enabled, id);
+  on provider_accounts (provider_kind, enabled, id);
 create index provider_accounts_availability_idx
   on provider_accounts (availability, cooldown_until, id);
 create index provider_accounts_access_expiry_idx
@@ -237,7 +205,6 @@ create table model_requests (
   client_transport text not null,
   requested_model_id text not null,
   input_token_estimate bigint not null,
-  provider_instance_id text,
   provider_kind text,
   upstream_model_id text,
   provider_account_id text,
@@ -295,9 +262,6 @@ create table model_requests (
   ),
   constraint model_requests_account_ref_ck check (
     provider_account_id is null or provider_account_id = provider_account_ref
-  ),
-  constraint model_requests_instance_presence_ck check (
-    provider_instance_id is null or provider_kind is not null
   ),
   constraint model_requests_revision_estimate_ck check (
     config_revision > 0 and input_token_estimate >= 0 and attempt_count >= 0
@@ -406,36 +370,17 @@ create table model_requests (
     references client_api_keys (id)
     on update restrict
     on delete set null,
-  constraint model_requests_instance_fk foreign key (
-    provider_instance_id,
-    provider_kind
-  ) references provider_instances (id, provider_kind)
-    on update restrict
-    on delete set null (provider_instance_id),
   constraint model_requests_account_fk foreign key (provider_account_id)
     references provider_accounts (id)
     on update restrict
-    on delete set null,
-  constraint model_requests_account_consistency_fk foreign key (
-    provider_account_id,
-    provider_instance_id,
-    provider_kind
-  ) references provider_accounts (
-    id,
-    provider_instance_id,
-    provider_kind
-  ) on update restrict
-    on delete no action
+    on delete set null
 );
 
 create index model_requests_client_idx
   on model_requests (client_api_key_id, started_at desc, id desc);
-create index model_requests_instance_idx
-  on model_requests (provider_instance_id, provider_kind, started_at desc, id desc);
 create index model_requests_account_idx
   on model_requests (
     provider_account_id,
-    provider_instance_id,
     provider_kind,
     started_at desc,
     id desc
@@ -471,7 +416,6 @@ create table ops_events (
   level text not null,
   component text not null,
   operation text not null,
-  provider_instance_id text,
   provider_kind text,
   provider_account_id text,
   provider_account_ref text,
@@ -503,9 +447,6 @@ create table ops_events (
     and (latency_ms is null or latency_ms >= 0)
     and occurrence_count > 0
   ),
-  constraint ops_events_instance_presence_ck check (
-    provider_instance_id is null or provider_kind is not null
-  ),
   constraint ops_events_account_ref_ck check (
     provider_account_id is null or provider_account_id = provider_account_ref
   ),
@@ -513,36 +454,17 @@ create table ops_events (
     references model_requests (id)
     on update restrict
     on delete cascade,
-  constraint ops_events_instance_fk foreign key (
-    provider_instance_id,
-    provider_kind
-  ) references provider_instances (id, provider_kind)
-    on update restrict
-    on delete set null (provider_instance_id),
   constraint ops_events_account_fk foreign key (provider_account_id)
     references provider_accounts (id)
     on update restrict
-    on delete set null,
-  constraint ops_events_account_consistency_fk foreign key (
-    provider_account_id,
-    provider_instance_id,
-    provider_kind
-  ) references provider_accounts (
-    id,
-    provider_instance_id,
-    provider_kind
-  ) on update restrict
-    on delete no action
+    on delete set null
 );
 
 create index ops_events_request_idx
   on ops_events (model_request_id, attempt_index, id);
-create index ops_events_instance_idx
-  on ops_events (provider_instance_id, provider_kind, created_at desc, id desc);
 create index ops_events_account_idx
   on ops_events (
     provider_account_id,
-    provider_instance_id,
     provider_kind,
     created_at desc,
     id desc

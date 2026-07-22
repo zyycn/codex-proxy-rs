@@ -8,7 +8,6 @@ use crate::{Revision, StoreBackend, StoreError, StoreResult, postgres_unavailabl
 mod admin_security_audit;
 mod admission_recovery;
 mod client_keys;
-mod config_catalog;
 mod execution;
 mod history;
 mod observability;
@@ -21,7 +20,6 @@ mod snapshot;
 pub use admin_security_audit::*;
 pub use admission_recovery::*;
 pub use client_keys::*;
-pub use config_catalog::*;
 pub use execution::*;
 pub use history::*;
 pub use observability::*;
@@ -72,35 +70,6 @@ pub trait ControlPlaneRepository: Send + Sync {
         expected_revision: Revision,
         replacement: ControlPlaneReplacement,
     ) -> StoreResult<ControlPlaneSnapshot>;
-
-    async fn create_provider_instance(
-        &self,
-        expected_revision: Revision,
-        instance: NewProviderInstance,
-        audit: AdminAuditEvent,
-    ) -> StoreResult<Revision>;
-
-    async fn update_provider_instance(
-        &self,
-        expected_revision: Revision,
-        instance: UpdateProviderInstanceDetails,
-        audit: AdminAuditEvent,
-    ) -> StoreResult<Revision>;
-
-    async fn set_provider_instance_enabled(
-        &self,
-        expected_revision: Revision,
-        id: &str,
-        enabled: bool,
-        audit: AdminAuditEvent,
-    ) -> StoreResult<Revision>;
-
-    async fn delete_provider_instance(
-        &self,
-        expected_revision: Revision,
-        id: &str,
-        audit: AdminAuditEvent,
-    ) -> StoreResult<Revision>;
 
     async fn create_client_api_key(
         &self,
@@ -205,66 +174,6 @@ impl ControlPlaneRepository for PgControlPlaneRepository {
         }
     }
 
-    async fn create_provider_instance(
-        &self,
-        expected_revision: Revision,
-        instance: NewProviderInstance,
-        audit: AdminAuditEvent,
-    ) -> StoreResult<Revision> {
-        self.apply_targeted_mutation(
-            expected_revision,
-            ControlPlaneMutation::CreateProviderInstance(instance),
-            audit,
-        )
-        .await
-    }
-
-    async fn update_provider_instance(
-        &self,
-        expected_revision: Revision,
-        instance: UpdateProviderInstanceDetails,
-        audit: AdminAuditEvent,
-    ) -> StoreResult<Revision> {
-        self.apply_targeted_mutation(
-            expected_revision,
-            ControlPlaneMutation::UpdateProviderInstance(instance),
-            audit,
-        )
-        .await
-    }
-
-    async fn set_provider_instance_enabled(
-        &self,
-        expected_revision: Revision,
-        id: &str,
-        enabled: bool,
-        audit: AdminAuditEvent,
-    ) -> StoreResult<Revision> {
-        self.apply_targeted_mutation(
-            expected_revision,
-            ControlPlaneMutation::SetProviderInstanceEnabled {
-                id: id.to_owned(),
-                enabled,
-            },
-            audit,
-        )
-        .await
-    }
-
-    async fn delete_provider_instance(
-        &self,
-        expected_revision: Revision,
-        id: &str,
-        audit: AdminAuditEvent,
-    ) -> StoreResult<Revision> {
-        self.apply_targeted_mutation(
-            expected_revision,
-            ControlPlaneMutation::DeleteProviderInstance(id.to_owned()),
-            audit,
-        )
-        .await
-    }
-
     async fn create_client_api_key(
         &self,
         expected_revision: Revision,
@@ -327,10 +236,6 @@ impl ControlPlaneRepository for PgControlPlaneRepository {
 }
 
 enum ControlPlaneMutation {
-    CreateProviderInstance(NewProviderInstance),
-    UpdateProviderInstance(UpdateProviderInstanceDetails),
-    SetProviderInstanceEnabled { id: String, enabled: bool },
-    DeleteProviderInstance(String),
     CreateClientApiKey(NewClientApiKey),
     UpdateClientApiKey(UpdateClientApiKeyDetails),
     SetClientApiKeyEnabled { id: String, enabled: bool },
@@ -353,19 +258,6 @@ impl PgControlPlaneRepository {
             let revision =
                 bump_config_revision_in_transaction(&mut transaction, expected_revision).await?;
             match mutation {
-                ControlPlaneMutation::CreateProviderInstance(instance) => {
-                    insert_provider_instance_in_transaction(&mut transaction, &instance).await?;
-                }
-                ControlPlaneMutation::UpdateProviderInstance(instance) => {
-                    update_provider_instance_in_transaction(&mut transaction, &instance).await?;
-                }
-                ControlPlaneMutation::SetProviderInstanceEnabled { id, enabled } => {
-                    set_provider_instance_enabled_in_transaction(&mut transaction, &id, enabled)
-                        .await?;
-                }
-                ControlPlaneMutation::DeleteProviderInstance(id) => {
-                    delete_provider_instance_in_transaction(&mut transaction, &id).await?;
-                }
                 ControlPlaneMutation::CreateClientApiKey(key) => {
                     insert_client_api_key_in_transaction(&mut transaction, &key).await?;
                 }

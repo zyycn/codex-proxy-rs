@@ -10,12 +10,11 @@ use gateway_core::engine::credential::{
     CredentialRevision, OpaqueProviderData, PlaintextCredential, ProviderAccount,
     ProviderAccountId, ProviderAccountUpdate, RotationStrategy,
 };
-use gateway_core::routing::{ProviderInstanceId, ProviderKind};
+use gateway_core::routing::ProviderKind;
 
 fn account(id: &str) -> ProviderAccount {
     ProviderAccount::new(
         ProviderAccountId::new(id).expect("valid account"),
-        ProviderInstanceId::new("inst_test").expect("valid instance"),
         ProviderKind::new("openai").expect("valid provider"),
         id.to_owned(),
         format!("user-{id}"),

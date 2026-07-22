@@ -40,7 +40,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     eventSource: updateEventSource,
     open: openUpdateEventSource,
     close: closeUpdateEventSource,
-  } = useEventSource(`${API_BASE_URL}/api/admin/system/update-events`, ['update'], {
+  } = useEventSource(`${API_BASE_URL}/api/admin/system/update/events`, ['update'], {
     autoConnect: false,
     immediate: false,
     withCredentials: true,

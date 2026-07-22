@@ -16,7 +16,6 @@ use gateway_core::provider_ports::{
     ProviderRefreshCapacityRequest, ProviderRefreshLeaseRequest, ProviderRefreshPolicy,
     ProviderRuntimePolicyPort, ProviderStoreError, provider_refresh_retry_at,
 };
-use gateway_core::routing::ProviderInstanceId;
 
 use super::catalog::GrokCredentialCatalogService;
 use super::repository::{
@@ -41,7 +40,6 @@ const REFRESH_RETRY_DELAY: Duration = Duration::from_secs(10 * 60);
 /// 一个到期且已按 revision 读取明文 RT 的 xAI account。
 pub struct DueGrokCredential {
     account_id: ProviderAccountId,
-    provider_instance_id: ProviderInstanceId,
     credential_revision: CredentialRevision,
     refresh_token: SecretValue,
     id_token: Option<SecretValue>,
@@ -75,7 +73,6 @@ impl fmt::Debug for DueGrokCredential {
         formatter
             .debug_struct("DueGrokCredential")
             .field("account_id", &self.account_id)
-            .field("provider_instance_id", &self.provider_instance_id)
             .field("credential_revision", &self.credential_revision)
             .field("refresh_token", &"[REDACTED]")
             .field("id_token", &self.id_token.as_ref().map(|_| "[REDACTED]"))
@@ -327,7 +324,6 @@ impl GrokCredentialRefreshService {
         let policy = self.runtime_policy.load_refresh_policy().await?;
         let credential = DueGrokCredential {
             account_id: account_id.clone(),
-            provider_instance_id: loaded.account.instance().clone(),
             credential_revision,
             refresh_token: loaded.refresh_token,
             id_token: loaded.id_token,
@@ -801,7 +797,6 @@ impl GrokCredentialRepository {
             };
             due.push(DueGrokCredential {
                 account_id: account.id().clone(),
-                provider_instance_id: account.instance().clone(),
                 credential_revision: account.revision(),
                 refresh_token: loaded.refresh_token,
                 id_token: loaded.id_token,

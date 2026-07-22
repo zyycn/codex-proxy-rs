@@ -37,14 +37,13 @@ use gateway_core::operation::{
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
     NewOAuthPendingFlow, OAuthPendingFlowPort, OAuthPendingPutOutcome, OAuthPendingTakeOutcome,
-    ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCatalogPorts, ProviderCooldown,
-    ProviderCooldownPort, ProviderCredentialState, ProviderCredentialStatePort,
-    ProviderInstanceCatalogPort, ProviderInstanceConfig, ProviderRefreshPolicy,
+    ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCooldown, ProviderCooldownPort,
+    ProviderCredentialState, ProviderCredentialStatePort, ProviderRefreshPolicy,
     ProviderRuntimePolicyPort, ProviderStoreError, ProviderStorePorts,
 };
 use gateway_core::routing::{
-    ConfigRevision, InstanceHealth, ModelCapabilities, ProviderInstance, ProviderInstanceId,
-    ProviderKind, ProviderModel, PublicModelId, RoutingContext, RuntimeSnapshot, UpstreamModelId,
+    ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RoutingContext,
+    RuntimeSnapshot, UpstreamModelId,
 };
 use gateway_core::task::{WorkerContribution, WorkerKind, WorkerRunnable};
 use provider_openai::config::{CodexWireProfileConfig, OpenAiConfig};
@@ -53,7 +52,7 @@ use provider_openai::transport::profile::APPCAST_POLL_INTERVAL;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 
-use crate::support::{MemoryAccountStore, TestLeaseCoordinator, instance_id, profile, secret};
+use crate::support::{MemoryAccountStore, TestLeaseCoordinator, profile, secret};
 
 #[tokio::test]
 #[ignore = "requires CODEX_REAL_ACCOUNT_FIXTURE and consumes live OpenAI quota"]
@@ -75,7 +74,6 @@ async fn real_openai_conversation_crosses_production_provider_boundaries() {
     let prepared = bundle
         .admin_provider()
         .prepare_import(PrepareCredentialImport {
-            provider_instance_id: instance_id(),
             document: ProviderDocument::new(OpaqueProviderData::new(document)),
         })
         .await
@@ -87,16 +85,9 @@ async fn real_openai_conversation_crosses_production_provider_boundaries() {
             .expect("seed verified OpenAI account");
     }
 
-    let instance = ProviderInstance::new(
-        instance_id(),
-        ProviderKind::new("openai").expect("provider"),
-        "https://chatgpt.com/backend-api".to_owned(),
-        true,
-        InstanceHealth::Healthy,
-    );
     let models = bundle
         .core_provider()
-        .query_model_capabilities(&instance)
+        .query_model_capabilities()
         .await
         .expect("query live OpenAI catalog");
     let model = models.first().expect("one live generation model");
@@ -104,7 +95,7 @@ async fn real_openai_conversation_crosses_production_provider_boundaries() {
         .admin_provider()
         .connection_test_operation(model.upstream_model(), "Reply with exactly CPR_REAL_OK.")
         .expect("real connection operation");
-    let request = planned_real_request(instance, model.upstream_model().clone(), operation);
+    let request = planned_real_request(model.upstream_model().clone(), operation);
     let mut stream = bundle
         .core_provider()
         .execute(request, real_attempt_context())
@@ -133,7 +124,6 @@ fn prepared_account(
 ) -> NewProviderAccount {
     let account = ProviderAccount::new(
         value.account_id,
-        value.provider_instance_id,
         value.provider_kind,
         value.name,
         value.upstream_user_id,
@@ -154,11 +144,8 @@ fn prepared_account(
     }
 }
 
-fn planned_real_request(
-    instance: ProviderInstance,
-    upstream_model: UpstreamModelId,
-    operation: Operation,
-) -> ProviderRequest {
+fn planned_real_request(upstream_model: UpstreamModelId, operation: Operation) -> ProviderRequest {
+    let provider = ProviderKind::new("openai").expect("provider");
     let public_model = PublicModelId::new(upstream_model.as_str()).expect("public model");
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
@@ -167,9 +154,9 @@ fn planned_real_request(
             NonZeroU32::new(1).expect("concurrency"),
             Duration::ZERO,
         ),
-        vec![instance.clone()],
+        vec![provider.clone()],
         vec![ProviderModel::new(
-            instance.id().clone(),
+            provider,
             upstream_model,
             ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), 1_000_000, None),
         )],
@@ -351,7 +338,6 @@ async fn openai_admin_provider_persists_the_full_pending_envelope_and_binds_owne
             Revision::new(7).expect("revision"),
             ProviderKind::new("openai").expect("provider"),
             AuthorizationMutationTarget::Create {
-                provider_instance_id: instance_id(),
                 name: "OAuth account".to_owned(),
             },
             AuthorizationOwnerBinding::from_context(&start_context),
@@ -401,7 +387,6 @@ async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export
     store
         .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: "acct_admin_projection".to_owned(),
-            provider_instance_id: instance_id().to_string(),
             name: "admin projection".to_owned(),
             secret: secret("admin-projection-access"),
             verified_account: profile("chatgpt-admin-projection"),
@@ -487,7 +472,6 @@ async fn openai_admin_provider_rejects_unprepared_mutations_before_store_commit(
     store
         .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: "acct_admin_invalid".to_owned(),
-            provider_instance_id: instance_id().to_string(),
             name: "admin invalid".to_owned(),
             secret: secret("admin-invalid-access"),
             verified_account: profile("chatgpt-admin-invalid"),
@@ -506,7 +490,6 @@ async fn openai_admin_provider_rejects_unprepared_mutations_before_store_commit(
     let admin = bundle.admin_provider();
     let import_error = admin
         .prepare_import(PrepareCredentialImport {
-            provider_instance_id: instance_id(),
             document: ProviderDocument::new(OpaqueProviderData::new(Map::new())),
         })
         .await
@@ -544,10 +527,7 @@ fn provider_ports_with(
     ProviderStorePorts::new(
         accounts,
         Arc::new(TestLeaseCoordinator::default()),
-        ProviderCatalogPorts::new(
-            Arc::new(TestInstanceCatalog),
-            Arc::new(TestCatalogCache::default()),
-        ),
+        Arc::new(TestCatalogCache::default()),
         Arc::new(TestCredentialState),
         Arc::new(TestCooldown),
         Arc::new(TestRuntimePolicy),
@@ -559,7 +539,6 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
         id: account.id().to_string(),
-        provider_instance_id: account.instance().clone(),
         provider_kind: account.provider().clone(),
         name: account.name().to_owned(),
         email: account.email().map(str::to_owned),
@@ -597,25 +576,6 @@ fn valid_config() -> OpenAiConfig {
                 .single()
                 .expect("valid test time"),
         },
-    }
-}
-
-struct TestInstanceCatalog;
-
-impl ProviderInstanceCatalogPort for TestInstanceCatalog {
-    fn list_instances<'a>(
-        &'a self,
-        provider_kind: &'a ProviderKind,
-        _include_disabled: bool,
-    ) -> BoxFuture<'a, Result<Vec<ProviderInstanceConfig>, ProviderStoreError>> {
-        Box::pin(async move {
-            Ok(vec![ProviderInstanceConfig::new(
-                ProviderInstanceId::new("inst_openai_primary").expect("instance"),
-                provider_kind.clone(),
-                "https://chatgpt.com/backend-api".to_owned(),
-                true,
-            )])
-        })
     }
 }
 

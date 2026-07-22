@@ -16,7 +16,7 @@ use gateway_admin::{
             AccountListQuery as AdminAccountListQuery, AccountModelUsage, AccountPage,
             AccountRecord, AccountSort as AdminAccountSort,
             AccountSortField as AdminAccountSortField, AccountStatus as AdminAccountStatus,
-            AccountSummary, AccountUsage, DeleteAccount, SetAccountEnabled,
+            AccountSummary, AccountUsage, DeleteAccounts, SetAccountEnabled,
             SortDirection as AdminSortDirection,
         },
         observability::{
@@ -43,7 +43,7 @@ use gateway_core::engine::credential::{
     QuotaWriteOutcome,
 };
 use gateway_core::error::{StoreError as CoreStoreError, StoreErrorKind as CoreStoreErrorKind};
-use gateway_core::routing::{ProviderInstanceId, ProviderKind};
+use gateway_core::routing::ProviderKind;
 
 use crate::{
     ConflictKind, JsonObject, Revision, StoreError, StoreResult, admin_revision, admin_store_error,
@@ -67,18 +67,15 @@ const ADMIN_USAGE_CHUNK_SIZE: usize = 200;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccountAdminScope {
     pub provider_kind: String,
-    pub provider_instance_id: String,
 }
 
 impl ProviderAccountAdminScope {
     pub fn validate(&self) -> StoreResult<()> {
-        require_nonempty(ENTITY, "provider_kind", &self.provider_kind)?;
-        require_nonempty(ENTITY, "provider_instance_id", &self.provider_instance_id)
+        require_nonempty(ENTITY, "provider_kind", &self.provider_kind)
     }
 
     fn contains(&self, account: &NewProviderAccount) -> bool {
         account.provider_kind == self.provider_kind
-            && account.provider_instance_id == self.provider_instance_id
     }
 }
 
@@ -124,7 +121,6 @@ impl ProviderAccountAvailability {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccountSummary {
     pub id: String,
-    pub provider_instance_id: String,
     pub provider_kind: String,
     pub name: String,
     pub email: Option<String>,
@@ -169,7 +165,6 @@ impl fmt::Debug for ProviderAccountRecord {
 #[derive(Clone)]
 pub struct NewProviderAccount {
     pub id: String,
-    pub provider_instance_id: String,
     pub provider_kind: String,
     pub name: String,
     pub email: Option<String>,
@@ -200,7 +195,6 @@ impl fmt::Debug for NewProviderAccount {
         formatter
             .debug_struct("NewProviderAccount")
             .field("id", &self.id)
-            .field("provider_instance_id", &self.provider_instance_id)
             .field("provider_kind", &self.provider_kind)
             .field("name", &self.name)
             .field("enabled", &self.enabled)
@@ -214,7 +208,6 @@ impl fmt::Debug for NewProviderAccount {
 impl NewProviderAccount {
     pub fn validate(&self) -> StoreResult<()> {
         require_nonempty(ENTITY, "id", &self.id)?;
-        require_nonempty(ENTITY, "provider_instance_id", &self.provider_instance_id)?;
         require_nonempty(ENTITY, "provider_kind", &self.provider_kind)?;
         require_nonempty(ENTITY, "name", &self.name)?;
         require_nonempty(ENTITY, "upstream_user_id", &self.upstream_user_id)?;
@@ -413,7 +406,7 @@ pub trait ProviderAccountRepository: Send + Sync {
     async fn load_provider_account(&self, id: &str) -> StoreResult<Option<ProviderAccountRecord>>;
     async fn list_provider_accounts(
         &self,
-        provider_instance_id: Option<&str>,
+        provider_kind: Option<&str>,
         include_disabled: bool,
     ) -> StoreResult<Vec<ProviderAccountSummary>>;
     async fn insert_provider_account(&self, account: NewProviderAccount) -> StoreResult<()>;
@@ -500,20 +493,20 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
 
     async fn list_provider_accounts(
         &self,
-        provider_instance_id: Option<&str>,
+        provider_kind: Option<&str>,
         include_disabled: bool,
     ) -> StoreResult<Vec<ProviderAccountSummary>> {
         let rows = sqlx::query(
-            "select id, provider_instance_id, provider_kind, name, email, upstream_user_id,
+            "select id, provider_kind, name, email, upstream_user_id,
                     upstream_account_id, plan_type, credential_revision, has_refresh_token,
                     access_token_expires_at, next_refresh_at, enabled, availability,
                     availability_reason, cooldown_until, availability_observed_at,
                     quota_observed_at, created_at, updated_at
              from provider_accounts
-             where ($1::text is null or provider_instance_id = $1) and ($2 or enabled)
-             order by provider_kind, provider_instance_id, name, id",
+             where ($1::text is null or provider_kind = $1) and ($2 or enabled)
+             order by provider_kind, name, id",
         )
-        .bind(provider_instance_id)
+        .bind(provider_kind)
         .bind(include_disabled)
         .fetch_all(&self.pool)
         .await
@@ -525,18 +518,17 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         account.validate()?;
         sqlx::query(
             "insert into provider_accounts (
-               id, provider_instance_id, provider_kind, name, email, upstream_user_id,
+               id, provider_kind, name, email, upstream_user_id,
                upstream_account_id, plan_type, provider_credentials_json, credential_revision,
                has_refresh_token, access_token_expires_at, next_refresh_at, enabled,
                availability, availability_reason, cooldown_until, provider_quota_json,
                availability_observed_at, quota_observed_at, created_at, updated_at
              ) values (
-               $1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12, $13,
-               $14, null, $15, null, $16, null, now(), greatest(now(), $16)
+               $1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11, $12,
+               $13, null, $14, null, $15, null, now(), greatest(now(), $15)
              )",
         )
         .bind(account.id)
-        .bind(account.provider_instance_id)
         .bind(account.provider_kind)
         .bind(account.name)
         .bind(account.email)
@@ -734,7 +726,6 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
         validate_admin_account_ids(&account_ids)?;
         let rows = sqlx::query(ACCOUNT_SELECT_BY_IDS)
             .bind(&account_ids)
-            .bind(&scope.provider_instance_id)
             .bind(&scope.provider_kind)
             .fetch_all(&self.pool)
             .await
@@ -960,7 +951,6 @@ impl PgAdminAccountStore {
             })?;
         Ok(ProviderAccountAdminScope {
             provider_kind: record.summary.provider_kind,
-            provider_instance_id: record.summary.provider_instance_id,
         })
     }
 
@@ -972,7 +962,6 @@ impl PgAdminAccountStore {
         action: &str,
     ) -> AdminStoreResult<CredentialImportResult> {
         let provider_kind = prepared.provider_kind.as_str().to_owned();
-        let provider_instance_id = prepared.provider_instance_id.as_str().to_owned();
         let accounts = prepared
             .credentials
             .into_iter()
@@ -985,15 +974,14 @@ impl PgAdminAccountStore {
                 store_revision(expected_config_revision)?,
                 ImportProviderAccounts {
                     scope: ProviderAccountAdminScope {
-                        provider_kind,
-                        provider_instance_id: provider_instance_id.clone(),
+                        provider_kind: provider_kind.clone(),
                     },
                     accounts,
                     audit: mutation_audit(
                         context,
                         action,
                         "provider_account",
-                        &provider_instance_id,
+                        &provider_kind,
                         vec!["credentials".to_owned()],
                     ),
                 },
@@ -1027,7 +1015,6 @@ impl PgAdminAccountStore {
         let account_id = prepared.account_id.clone();
         let scope = ProviderAccountAdminScope {
             provider_kind: prepared.provider_kind.as_str().to_owned(),
-            provider_instance_id: prepared.provider_instance_id.as_str().to_owned(),
         };
         let rotation = self
             .accounts
@@ -1171,14 +1158,10 @@ impl AccountStore for PgAdminAccountStore {
         provider_kind: &ProviderKind,
         query: CredentialListQuery,
     ) -> AdminStoreResult<CredentialPage> {
-        let provider_instance_id = query
-            .provider_instance_id
-            .as_ref()
-            .map(ProviderInstanceId::as_str);
         let (control_plane, accounts) = futures::try_join!(
             self.control_plane.load_control_plane(),
             self.accounts
-                .list_provider_accounts(provider_instance_id, true),
+                .list_provider_accounts(Some(provider_kind.as_str()), true),
         )
         .map_err(|error| admin_store_error(ENTITY, error))?;
         let mut accounts = accounts
@@ -1340,7 +1323,6 @@ impl AccountStore for PgAdminAccountStore {
                         expected_config_revision,
                         PreparedCredentialImport {
                             provider_kind: credential.provider_kind.clone(),
-                            provider_instance_id: credential.provider_instance_id.clone(),
                             credentials: vec![credential],
                         },
                         context,
@@ -1433,23 +1415,35 @@ impl AccountStore for PgAdminAccountStore {
             .and_then(admin_revision)
     }
 
-    async fn delete_account(
+    async fn delete_accounts(
         &self,
-        command: DeleteAccount,
+        command: DeleteAccounts,
         context: &MutationContext,
     ) -> AdminStoreResult<AdminRevision> {
-        let scope = self.required_scope(&command.account_id).await?;
+        let first_account_id = command.account_ids.first().ok_or_else(|| {
+            AdminStoreError::new(
+                AdminStoreErrorKind::Invalid,
+                ENTITY,
+                "account deletion requires at least one account ID",
+            )
+        })?;
+        let scope = self.required_scope(first_account_id).await?;
+        let audit_target = if command.account_ids.len() == 1 {
+            first_account_id.clone()
+        } else {
+            "provider_accounts".to_owned()
+        };
         self.accounts
             .delete_provider_accounts_admin(
                 store_revision(command.expected_config_revision)?,
                 DeleteProviderAccounts {
                     scope,
-                    account_ids: vec![command.account_id.clone()],
+                    account_ids: command.account_ids,
                     audit: mutation_audit(
                         context,
                         "delete",
                         "provider_account",
-                        &command.account_id,
+                        &audit_target,
                         Vec::new(),
                     ),
                 },
@@ -1677,15 +1671,6 @@ const fn admin_account_status_name(status: AdminAccountStatus) -> &'static str {
 fn admin_account_record(summary: ProviderAccountSummary) -> AdminStoreResult<AccountRecord> {
     Ok(AccountRecord {
         id: summary.id,
-        provider_instance_id: ProviderInstanceId::new(summary.provider_instance_id).map_err(
-            |_| {
-                AdminStoreError::new(
-                    AdminStoreErrorKind::Invalid,
-                    ENTITY,
-                    "persisted Provider instance ID is invalid",
-                )
-            },
-        )?,
         provider_kind: ProviderKind::new(summary.provider_kind).map_err(|_| {
             AdminStoreError::new(
                 AdminStoreErrorKind::Invalid,
@@ -1716,7 +1701,6 @@ fn admin_account_record(summary: ProviderAccountSummary) -> AdminStoreResult<Acc
 fn prepared_account(credential: PreparedCredentialCreate) -> StoreResult<NewProviderAccount> {
     Ok(NewProviderAccount {
         id: credential.account_id.as_str().to_owned(),
-        provider_instance_id: credential.provider_instance_id.as_str().to_owned(),
         provider_kind: credential.provider_kind.as_str().to_owned(),
         name: credential.name,
         email: credential.email,
@@ -1856,14 +1840,14 @@ async fn upsert_provider_account_in_transaction(
     account.validate()?;
     let imported_id = sqlx::query_scalar::<_, String>(
         "insert into provider_accounts (
-           id, provider_instance_id, provider_kind, name, email, upstream_user_id,
+           id, provider_kind, name, email, upstream_user_id,
            upstream_account_id, plan_type, provider_credentials_json, credential_revision,
            has_refresh_token, access_token_expires_at, next_refresh_at, enabled,
            availability, availability_reason, cooldown_until, provider_quota_json,
            availability_observed_at, quota_observed_at, created_at, updated_at
          ) values (
-           $1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12, $13,
-           $14, $15, $16, null, $17, null, now(), greatest(now(), $17)
+           $1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11, $12,
+           $13, $14, $15, null, $16, null, now(), greatest(now(), $16)
          )
          on conflict (
            provider_kind,
@@ -1886,11 +1870,9 @@ async fn upsert_provider_account_in_transaction(
            availability_observed_at = excluded.availability_observed_at,
            quota_observed_at = null,
            updated_at = greatest(now(), excluded.availability_observed_at)
-         where provider_accounts.provider_instance_id = excluded.provider_instance_id
          returning id",
     )
     .bind(&account.id)
-    .bind(&account.provider_instance_id)
     .bind(&account.provider_kind)
     .bind(&account.name)
     .bind(&account.email)
@@ -1938,21 +1920,20 @@ async fn rotate_provider_account_in_transaction(
 ) -> StoreResult<Revision> {
     let next = sqlx::query_scalar::<_, i64>(
         "update provider_accounts
-         set name = $5,
-             email = $6,
-             plan_type = $7,
-             provider_credentials_json = $8,
+         set name = $4,
+             email = $5,
+             plan_type = $6,
+             provider_credentials_json = $7,
              credential_revision = credential_revision + 1,
-             has_refresh_token = $9,
-             access_token_expires_at = $10,
-             next_refresh_at = $11,
+             has_refresh_token = $8,
+             access_token_expires_at = $9,
+             next_refresh_at = $10,
              updated_at = now()
-         where id = $1 and provider_instance_id = $2 and provider_kind = $3
-           and credential_revision = $4
+         where id = $1 and provider_kind = $2
+           and credential_revision = $3
          returning credential_revision",
     )
     .bind(&update.account_id)
-    .bind(&scope.provider_instance_id)
     .bind(&scope.provider_kind)
     .bind(to_i64(update.expected_revision.get())?)
     .bind(&profile.name)
@@ -1980,11 +1961,10 @@ async fn set_provider_account_enabled_in_transaction(
     enabled: bool,
 ) -> StoreResult<()> {
     let result = sqlx::query(
-        "update provider_accounts set enabled = $4, updated_at = now()
-         where id = $1 and provider_instance_id = $2 and provider_kind = $3",
+        "update provider_accounts set enabled = $3, updated_at = now()
+         where id = $1 and provider_kind = $2",
     )
     .bind(account_id)
-    .bind(&scope.provider_instance_id)
     .bind(&scope.provider_kind)
     .bind(enabled)
     .execute(&mut **transaction)
@@ -2000,12 +1980,10 @@ async fn delete_provider_accounts_in_transaction(
 ) -> StoreResult<()> {
     let deleted = sqlx::query_scalar::<_, String>(
         "delete from provider_accounts
-         where id = any($1::text[]) and provider_instance_id = $2
-           and provider_kind = $3
+         where id = any($1::text[]) and provider_kind = $2
          returning id",
     )
     .bind(account_ids)
-    .bind(&scope.provider_instance_id)
     .bind(&scope.provider_kind)
     .fetch_all(&mut **transaction)
     .await
@@ -2098,7 +2076,6 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         .map_err(core_store_error)?;
         self.insert_provider_account(NewProviderAccount {
             id: account.account.id().as_str().to_owned(),
-            provider_instance_id: account.account.instance().as_str().to_owned(),
             provider_kind: account.account.provider().as_str().to_owned(),
             name: account.account.name().to_owned(),
             email: account.account.email().map(str::to_owned),
@@ -2141,11 +2118,11 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             .collect()
     }
 
-    async fn list_for_instance(
+    async fn list_for_provider(
         &self,
-        instance: &ProviderInstanceId,
+        provider: &ProviderKind,
     ) -> Result<Vec<CoreProviderAccount>, CoreStoreError> {
-        self.list_provider_accounts(Some(instance.as_str()), false)
+        self.list_provider_accounts(Some(provider.as_str()), false)
             .await
             .map_err(core_store_error)?
             .into_iter()
@@ -2365,22 +2342,20 @@ impl ProviderAccountStore for PgProviderAccountRepository {
     }
 }
 
-const ACCOUNT_SELECT: &str =
-    "select id, provider_instance_id, provider_kind, name, email, upstream_user_id,
+const ACCOUNT_SELECT: &str = "select id, provider_kind, name, email, upstream_user_id,
             upstream_account_id, plan_type, provider_credentials_json, credential_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, availability,
             availability_reason, cooldown_until, provider_quota_json,
             availability_observed_at, quota_observed_at, created_at, updated_at
      from provider_accounts where id = $1";
 
-const ACCOUNT_SELECT_BY_IDS: &str =
-    "select id, provider_instance_id, provider_kind, name, email, upstream_user_id,
+const ACCOUNT_SELECT_BY_IDS: &str = "select id, provider_kind, name, email, upstream_user_id,
             upstream_account_id, plan_type, provider_credentials_json, credential_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, availability,
             availability_reason, cooldown_until, provider_quota_json,
             availability_observed_at, quota_observed_at, created_at, updated_at
      from provider_accounts
-     where id = any($1::text[]) and provider_instance_id = $2 and provider_kind = $3
+     where id = any($1::text[]) and provider_kind = $2
      order by id";
 
 fn account_record_from_row(row: sqlx::postgres::PgRow) -> StoreResult<ProviderAccountRecord> {
@@ -2407,15 +2382,12 @@ fn core_account_from_summary(
 ) -> Result<CoreProviderAccount, CoreStoreError> {
     let id = CoreProviderAccountId::new(summary.id)
         .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
-    let instance = ProviderInstanceId::new(summary.provider_instance_id)
-        .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
     let provider = ProviderKind::new(summary.provider_kind)
         .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
     let revision = CoreCredentialRevision::new(summary.credential_revision.get())
         .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
     Ok(CoreProviderAccount::new(
         id,
-        instance,
         provider,
         summary.name,
         summary.upstream_user_id,
@@ -2490,7 +2462,6 @@ fn account_summary_from_row(row: sqlx::postgres::PgRow) -> StoreResult<ProviderA
         .map_err(|_| invalid("invalid availability"))?;
     Ok(ProviderAccountSummary {
         id: get(&row, "id")?,
-        provider_instance_id: get(&row, "provider_instance_id")?,
         provider_kind: get(&row, "provider_kind")?,
         name: get(&row, "name")?,
         email: get(&row, "email")?,

@@ -457,7 +457,6 @@ pub struct DashboardAccountModelUsage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DashboardAccountUsage {
     pub account_id: String,
-    pub provider_instance_id: String,
     pub provider_kind: String,
     pub name: String,
     pub email: Option<String>,
@@ -506,7 +505,6 @@ pub struct UsageRecord {
     pub client_transport: String,
     pub requested_model_id: String,
     pub input_token_estimate: u64,
-    pub provider_instance_id: Option<String>,
     pub provider_kind: Option<String>,
     pub provider_account_ref: Option<String>,
     pub provider_account_name: Option<String>,
@@ -579,7 +577,6 @@ pub struct UsageAttempt {
     pub attempt_index: u32,
     pub component: String,
     pub operation: String,
-    pub provider_instance_id: Option<String>,
     pub provider_kind: Option<String>,
     pub provider_account_ref: Option<String>,
     pub upstream_model_id: Option<String>,
@@ -663,7 +660,6 @@ pub struct OpsError {
     pub client_api_key_ref: Option<String>,
     pub component: String,
     pub operation: String,
-    pub provider_instance_id: Option<String>,
     pub provider_kind: Option<String>,
     pub provider_account_ref: Option<String>,
     pub upstream_model_id: Option<String>,

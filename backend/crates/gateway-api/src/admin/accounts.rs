@@ -12,6 +12,7 @@ use axum::{
     },
     routing::{get, post},
 };
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::{Stream, StreamExt as _};
 use gateway_admin::model::{
@@ -23,15 +24,18 @@ use gateway_admin::model::{
     },
     provider_credentials::{
         AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountRefreshResult,
+        AuthorizationStarted, CompleteAuthorization, CredentialDeletion, CredentialDeletionResult,
+        CredentialImportResult, CredentialMutation, CredentialMutationResult, ImportCredentials,
         ProviderDocument, ProviderModels, ProviderQuota, ProviderQuotaWindow,
+        ReauthorizationTarget, RotateCredential, StartAuthorization,
     },
 };
 use gateway_core::{
-    engine::credential::ProviderAccountId,
+    engine::credential::{OpaqueProviderData, ProviderAccountId},
     routing::{ProviderKind, UpstreamModelId},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::{
     AdminAuth, AdminEnvelope, AdminError, AdminResponse, AdminSessionState, PageMeta,
@@ -41,6 +45,13 @@ use super::{
 const DEFAULT_PAGE_SIZE: u32 = 50;
 const MAX_PAGE_SIZE: u32 = 200;
 const MAX_SEARCH_BYTES: usize = 256;
+const MAX_ID_BYTES: usize = 256;
+const MAX_NAME_BYTES: usize = 512;
+const MAX_IMPORT_DATA_BYTES: usize = 64 * 1024 * 1024;
+const MAX_ACCESS_TOKEN_BYTES: usize = 16 * 1024;
+const MAX_REFRESH_TOKEN_BYTES: usize = 64 * 1024;
+const MAX_CALLBACK_URL_BYTES: usize = 64 * 1024;
+const MAX_ACCOUNT_DELETE_BATCH: usize = 200;
 
 /// 账号列表查询参数。
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -173,8 +184,6 @@ pub struct AccountView {
     pub id: String,
     pub name: String,
     pub provider: String,
-    pub provider_instance_id: String,
-    pub provider_instance_name: String,
     pub resource_ref: String,
     pub email: Option<String>,
     pub account_id: Option<String>,
@@ -307,27 +316,27 @@ pub struct CurrencyCostView {
 
 /// 账号详情类 GET 的固定 ID query。
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountIdQuery {
-    pub id: String,
+    pub account_id: String,
 }
 
 impl AccountIdQuery {
     pub fn validate(&self) -> Result<(), WireValidationError> {
-        require_account_id(&self.id)
+        require_account_id(&self.account_id, "accountId")
     }
 
     fn into_id(self) -> Result<ProviderAccountId, WireValidationError> {
         self.validate()?;
-        ProviderAccountId::new(self.id).map_err(|_| WireValidationError::new("id"))
+        ProviderAccountId::new(self.account_id).map_err(|_| WireValidationError::new("accountId"))
     }
 }
 
 /// 敏感导出的固定 query；IDs 使用逗号分隔，禁止隐式导出全部账号。
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountExportQuery {
-    pub ids: String,
+    pub account_ids: String,
     pub confirm: String,
 }
 
@@ -337,41 +346,47 @@ impl AccountExportQuery {
             return Err(WireValidationError::new("confirm"));
         }
         let ids = self
-            .ids
+            .account_ids
             .split(',')
             .map(str::trim)
             .filter(|id| !id.is_empty())
             .map(ToOwned::to_owned)
             .collect::<Vec<_>>();
-        if ids.is_empty() || ids.len() > 200 || ids.iter().any(|id| require_account_id(id).is_err())
+        if ids.is_empty()
+            || ids.len() > 200
+            || ids
+                .iter()
+                .any(|id| require_account_id(id, "accountIds").is_err())
         {
-            return Err(WireValidationError::new("ids"));
+            return Err(WireValidationError::new("accountIds"));
         }
         let unique = ids.iter().collect::<BTreeSet<_>>();
         if unique.len() != ids.len() {
-            return Err(WireValidationError::new("ids"));
+            return Err(WireValidationError::new("accountIds"));
         }
         ids.into_iter()
-            .map(|id| ProviderAccountId::new(id).map_err(|_| WireValidationError::new("ids")))
+            .map(|id| {
+                ProviderAccountId::new(id).map_err(|_| WireValidationError::new("accountIds"))
+            })
             .collect()
     }
 }
 
 /// 账号运行期动作。
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountActionRequest {
-    pub id: String,
+    pub account_id: String,
 }
 
 impl AccountActionRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
-        require_account_id(&self.id)
+        require_account_id(&self.account_id, "accountId")
     }
 
     fn into_id(self) -> Result<ProviderAccountId, WireValidationError> {
         self.validate()?;
-        ProviderAccountId::new(self.id).map_err(|_| WireValidationError::new("id"))
+        ProviderAccountId::new(self.account_id).map_err(|_| WireValidationError::new("accountId"))
     }
 }
 
@@ -379,13 +394,13 @@ impl AccountActionRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountRefreshRequest {
-    pub id: String,
+    pub account_id: String,
     pub expected_config_revision: u64,
 }
 
 impl AccountRefreshRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
-        require_account_id(&self.id)?;
+        require_account_id(&self.account_id, "accountId")?;
         if self.expected_config_revision == 0 {
             return Err(WireValidationError::new("expectedConfigRevision"));
         }
@@ -397,7 +412,8 @@ impl AccountRefreshRequest {
         Ok((
             Revision::new(self.expected_config_revision)
                 .map_err(|_| WireValidationError::new("expectedConfigRevision"))?,
-            ProviderAccountId::new(self.id).map_err(|_| WireValidationError::new("id"))?,
+            ProviderAccountId::new(self.account_id)
+                .map_err(|_| WireValidationError::new("accountId"))?,
         ))
     }
 }
@@ -406,13 +422,13 @@ impl AccountRefreshRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountTestQuery {
-    pub id: String,
+    pub account_id: String,
     pub model_id: String,
 }
 
 impl AccountTestQuery {
     pub fn validate(&self) -> Result<(), WireValidationError> {
-        require_account_id(&self.id)?;
+        require_account_id(&self.account_id, "accountId")?;
         if self.model_id.trim().is_empty() || self.model_id.chars().any(char::is_control) {
             return Err(WireValidationError::new("modelId"));
         }
@@ -422,7 +438,8 @@ impl AccountTestQuery {
     fn into_command(self) -> Result<(ProviderAccountId, UpstreamModelId), WireValidationError> {
         self.validate()?;
         Ok((
-            ProviderAccountId::new(self.id).map_err(|_| WireValidationError::new("id"))?,
+            ProviderAccountId::new(self.account_id)
+                .map_err(|_| WireValidationError::new("accountId"))?,
             UpstreamModelId::new(self.model_id).map_err(|_| WireValidationError::new("modelId"))?,
         ))
     }
@@ -536,26 +553,413 @@ impl From<DomainConnectionTestEvent> for AccountConnectionTestEvent {
     }
 }
 
-fn require_account_id(value: &str) -> Result<(), WireValidationError> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AccountProvider {
+    OpenAi,
+    Xai,
+}
+
+impl AccountProvider {
+    fn parse(value: &str) -> Result<Self, WireValidationError> {
+        match value.trim() {
+            "openai" => Ok(Self::OpenAi),
+            "xai" => Ok(Self::Xai),
+            _ => Err(WireValidationError::new("provider")),
+        }
+    }
+}
+
+/// Provider-owned 账号导入请求；公共 API 不解释 `data` 内部字段。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountImportRequest {
+    pub provider: String,
+    pub expected_config_revision: u64,
+    pub data: Value,
+}
+
+impl AccountImportRequest {
+    pub fn validate(&self) -> Result<(), WireValidationError> {
+        AccountProvider::parse(&self.provider)?;
+        require_positive(self.expected_config_revision, "expectedConfigRevision")?;
+        if !self.data.is_object()
+            || serde_json::to_vec(&self.data)
+                .map_or(true, |encoded| encoded.len() > MAX_IMPORT_DATA_BYTES)
+        {
+            return Err(WireValidationError::new("data"));
+        }
+        Ok(())
+    }
+
+    fn into_command(
+        self,
+        context: gateway_admin::model::MutationContext,
+    ) -> Result<(AccountProvider, ImportCredentials), WireValidationError> {
+        self.validate()?;
+        let provider = AccountProvider::parse(&self.provider)?;
+        Ok((
+            provider,
+            ImportCredentials {
+                context,
+                expected_config_revision: revision(
+                    self.expected_config_revision,
+                    "expectedConfigRevision",
+                )?,
+                document: provider_document(self.data, "data")?,
+            },
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StartAccountAuthorizationRequest {
+    pub provider: String,
+    pub expected_config_revision: u64,
+    pub name: String,
+    pub account_id: Option<String>,
+    pub expected_credential_revision: Option<u64>,
+}
+
+impl StartAccountAuthorizationRequest {
+    pub fn validate(&self) -> Result<(), WireValidationError> {
+        AccountProvider::parse(&self.provider)?;
+        require_positive(self.expected_config_revision, "expectedConfigRevision")?;
+        require_text(&self.name, MAX_NAME_BYTES, "name")?;
+        match (
+            self.account_id.as_deref(),
+            self.expected_credential_revision,
+        ) {
+            (None, None) => Ok(()),
+            (Some(account_id), Some(credential_revision)) => {
+                require_account_id(account_id, "accountId")?;
+                require_positive(credential_revision, "expectedCredentialRevision")
+            }
+            _ => Err(WireValidationError::new("reauthorization")),
+        }
+    }
+
+    fn into_command(
+        self,
+        context: gateway_admin::model::MutationContext,
+    ) -> Result<(AccountProvider, StartAuthorization), WireValidationError> {
+        self.validate()?;
+        let provider = AccountProvider::parse(&self.provider)?;
+        let reauthorization = match (self.account_id, self.expected_credential_revision) {
+            (None, None) => None,
+            (Some(account_id), Some(credential_revision)) => Some(ReauthorizationTarget {
+                account_id: ProviderAccountId::new(account_id)
+                    .map_err(|_| WireValidationError::new("accountId"))?,
+                credential_revision: revision(credential_revision, "expectedCredentialRevision")?,
+            }),
+            _ => return Err(WireValidationError::new("reauthorization")),
+        };
+        Ok((
+            provider,
+            StartAuthorization {
+                context,
+                expected_config_revision: revision(
+                    self.expected_config_revision,
+                    "expectedConfigRevision",
+                )?,
+                name: self.name,
+                reauthorization,
+            },
+        ))
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompleteAccountAuthorizationRequest {
+    pub provider: String,
+    pub flow_id: String,
+    pub callback_url: String,
+}
+
+impl CompleteAccountAuthorizationRequest {
+    pub fn validate(&self) -> Result<(), WireValidationError> {
+        let provider = AccountProvider::parse(&self.provider)?;
+        match provider {
+            AccountProvider::OpenAi => {
+                if !URL_SAFE_NO_PAD
+                    .decode(&self.flow_id)
+                    .is_ok_and(|decoded| decoded.len() == 32)
+                {
+                    return Err(WireValidationError::new("flowId"));
+                }
+            }
+            AccountProvider::Xai => require_wire_id(&self.flow_id, "flowId")?,
+        }
+        require_text(&self.callback_url, MAX_CALLBACK_URL_BYTES, "callbackUrl")
+    }
+
+    fn into_command(
+        self,
+        context: gateway_admin::model::MutationContext,
+    ) -> Result<(AccountProvider, CompleteAuthorization), WireValidationError> {
+        self.validate()?;
+        let provider = AccountProvider::parse(&self.provider)?;
+        Ok((
+            provider,
+            CompleteAuthorization {
+                context,
+                flow_id: self.flow_id,
+                callback_url: self.callback_url,
+            },
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountMutationRequest {
+    pub provider: String,
+    pub account_id: String,
+    pub expected_config_revision: u64,
+}
+
+impl AccountMutationRequest {
+    pub fn validate(&self) -> Result<(), WireValidationError> {
+        AccountProvider::parse(&self.provider)?;
+        require_account_id(&self.account_id, "accountId")?;
+        require_positive(self.expected_config_revision, "expectedConfigRevision")
+    }
+
+    fn into_command(
+        self,
+        context: gateway_admin::model::MutationContext,
+    ) -> Result<(AccountProvider, CredentialMutation), WireValidationError> {
+        self.validate()?;
+        let provider = AccountProvider::parse(&self.provider)?;
+        Ok((
+            provider,
+            CredentialMutation {
+                context,
+                expected_config_revision: revision(
+                    self.expected_config_revision,
+                    "expectedConfigRevision",
+                )?,
+                account_id: ProviderAccountId::new(self.account_id)
+                    .map_err(|_| WireValidationError::new("accountId"))?,
+            },
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountDeletionRequest {
+    pub provider: String,
+    pub account_ids: Vec<String>,
+    pub expected_config_revision: u64,
+}
+
+impl AccountDeletionRequest {
+    pub fn validate(&self) -> Result<(), WireValidationError> {
+        AccountProvider::parse(&self.provider)?;
+        if self.account_ids.is_empty() || self.account_ids.len() > MAX_ACCOUNT_DELETE_BATCH {
+            return Err(WireValidationError::new("accountIds"));
+        }
+        let mut unique = BTreeSet::new();
+        for account_id in &self.account_ids {
+            require_account_id(account_id, "accountIds")?;
+            if !unique.insert(account_id.as_str()) {
+                return Err(WireValidationError::new("accountIds"));
+            }
+        }
+        require_positive(self.expected_config_revision, "expectedConfigRevision")
+    }
+
+    fn into_command(
+        self,
+        context: gateway_admin::model::MutationContext,
+    ) -> Result<(AccountProvider, CredentialDeletion), WireValidationError> {
+        self.validate()?;
+        let provider = AccountProvider::parse(&self.provider)?;
+        Ok((
+            provider,
+            CredentialDeletion {
+                context,
+                expected_config_revision: revision(
+                    self.expected_config_revision,
+                    "expectedConfigRevision",
+                )?,
+                account_ids: self
+                    .account_ids
+                    .into_iter()
+                    .map(ProviderAccountId::new)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|_| WireValidationError::new("accountIds"))?,
+            },
+        ))
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RotateAccountRequest {
+    pub provider: String,
+    pub account_id: String,
+    pub expected_config_revision: u64,
+    pub expected_credential_revision: u64,
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+}
+
+impl RotateAccountRequest {
+    pub fn validate(&self) -> Result<(), WireValidationError> {
+        if AccountProvider::parse(&self.provider)? != AccountProvider::OpenAi {
+            return Err(WireValidationError::new("provider"));
+        }
+        require_account_id(&self.account_id, "accountId")?;
+        require_positive(self.expected_config_revision, "expectedConfigRevision")?;
+        require_positive(
+            self.expected_credential_revision,
+            "expectedCredentialRevision",
+        )?;
+        validate_oauth_material(&self.access_token, self.refresh_token.as_deref())
+    }
+
+    fn into_command(
+        self,
+        context: gateway_admin::model::MutationContext,
+    ) -> Result<RotateCredential, WireValidationError> {
+        self.validate()?;
+        let mut material = Map::new();
+        material.insert("access_token".to_owned(), Value::String(self.access_token));
+        material.insert(
+            "refresh_token".to_owned(),
+            self.refresh_token.map_or(Value::Null, Value::String),
+        );
+        Ok(RotateCredential {
+            mutation: CredentialMutation {
+                context,
+                expected_config_revision: revision(
+                    self.expected_config_revision,
+                    "expectedConfigRevision",
+                )?,
+                account_id: ProviderAccountId::new(self.account_id)
+                    .map_err(|_| WireValidationError::new("accountId"))?,
+            },
+            expected_credential_revision: revision(
+                self.expected_credential_revision,
+                "expectedCredentialRevision",
+            )?,
+            provider_material: ProviderDocument::new(OpaqueProviderData::new(material)),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountImportData {
+    pub config_revision: u64,
+    pub imported_count: usize,
+    pub account_ids: Vec<String>,
+}
+
+impl From<CredentialImportResult> for AccountImportData {
+    fn from(result: CredentialImportResult) -> Self {
+        let account_ids = result
+            .credential_ids
+            .into_iter()
+            .map(|account_id| account_id.to_string())
+            .collect::<Vec<_>>();
+        Self {
+            config_revision: result.config_revision.get(),
+            imported_count: account_ids.len(),
+            account_ids,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountAuthorizationData {
+    pub flow_id: String,
+    pub authorization_url: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+impl From<AuthorizationStarted> for AccountAuthorizationData {
+    fn from(started: AuthorizationStarted) -> Self {
+        Self {
+            flow_id: started.flow_id,
+            authorization_url: started.authorization_url,
+            expires_at: started.expires_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountMutationData {
+    pub config_revision: u64,
+    pub account_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_revision: Option<u64>,
+}
+
+impl From<CredentialMutationResult> for AccountMutationData {
+    fn from(result: CredentialMutationResult) -> Self {
+        Self {
+            config_revision: result.config_revision.get(),
+            account_id: result.account_id.to_string(),
+            credential_revision: result.credential_revision.map(Revision::get),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountDeletionData {
+    pub config_revision: u64,
+    pub deleted_count: usize,
+    pub account_ids: Vec<String>,
+}
+
+impl From<CredentialDeletionResult> for AccountDeletionData {
+    fn from(result: CredentialDeletionResult) -> Self {
+        let account_ids = result
+            .account_ids
+            .into_iter()
+            .map(|account_id| account_id.to_string())
+            .collect::<Vec<_>>();
+        Self {
+            config_revision: result.config_revision.get(),
+            deleted_count: account_ids.len(),
+            account_ids,
+        }
+    }
+}
+
+fn require_account_id(value: &str, field: &'static str) -> Result<(), WireValidationError> {
     if value.trim().is_empty()
         || value.len() > 128
         || value.chars().any(char::is_control)
         || !value.starts_with("acct_")
     {
-        return Err(WireValidationError::new("id"));
+        return Err(WireValidationError::new(field));
     }
     Ok(())
 }
 
-/// 构造固定 GET 账号目录路由。
+/// 构造统一账号管理路由。
 pub fn router<S>() -> Router<S>
 where
     S: AdminSessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route("/api/admin/accounts", get(list_accounts::<S>))
+        .route("/api/admin/accounts/detail", get(account_detail::<S>))
         .route("/api/admin/accounts/export", get(export_accounts::<S>))
+        .route("/api/admin/accounts/import", post(import_accounts::<S>))
         .route("/api/admin/accounts/refresh", post(refresh_account::<S>))
+        .route("/api/admin/accounts/rotate", post(rotate_account::<S>))
+        .route("/api/admin/accounts/enable", post(enable_account::<S>))
+        .route("/api/admin/accounts/disable", post(disable_account::<S>))
+        .route("/api/admin/accounts/delete", post(delete_accounts::<S>))
         .route("/api/admin/accounts/quota", get(account_quota::<S>))
         .route(
             "/api/admin/accounts/quota/refresh",
@@ -567,8 +971,16 @@ where
             post(refresh_account_models::<S>),
         )
         .route(
-            "/api/admin/accounts/test",
+            "/api/admin/accounts/connection-test",
             get(test_account_connection::<S>),
+        )
+        .route(
+            "/api/admin/accounts/oauth/start",
+            post(start_account_authorization::<S>),
+        )
+        .route(
+            "/api/admin/accounts/oauth/complete",
+            post(complete_account_authorization::<S>),
         )
 }
 
@@ -593,6 +1005,27 @@ where
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
+async fn account_detail<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+    Query(query): Query<AccountIdQuery>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let account_id = query.into_id().map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .accounts()
+        .quota(&account_id, false)
+        .await
+        .map_err(map_service_error)?;
+    let data = AccountQuotaData {
+        account: account_view(result, Utc::now()),
+    };
+    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
+}
+
 async fn export_accounts<S>(
     auth: AdminAuth,
     State(state): State<S>,
@@ -614,6 +1047,208 @@ where
         .headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
+}
+
+async fn import_accounts<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    Json(request): Json<AccountImportRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let (provider, command) = request
+        .into_command(auth.context().mutation_context())
+        .map_err(map_wire_error)?;
+    let result = match provider {
+        AccountProvider::OpenAi => {
+            state
+                .admin_services()
+                .openai()
+                .import_document(command)
+                .await
+        }
+        AccountProvider::Xai => state.admin_services().xai().import_document(command).await,
+    }
+    .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::CREATED,
+        AdminEnvelope::ok(AccountImportData::from(result)),
+    ))
+}
+
+async fn start_account_authorization<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    Json(request): Json<StartAccountAuthorizationRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let (provider, command) = request
+        .into_command(auth.context().mutation_context())
+        .map_err(map_wire_error)?;
+    let result = match provider {
+        AccountProvider::OpenAi => {
+            state
+                .admin_services()
+                .openai()
+                .start_authorization(command)
+                .await
+        }
+        AccountProvider::Xai => {
+            state
+                .admin_services()
+                .xai()
+                .start_authorization(command)
+                .await
+        }
+    }
+    .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::CREATED,
+        AdminEnvelope::ok(AccountAuthorizationData::from(result)),
+    ))
+}
+
+async fn complete_account_authorization<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    Json(request): Json<CompleteAccountAuthorizationRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let (provider, command) = request
+        .into_command(auth.context().mutation_context())
+        .map_err(map_wire_error)?;
+    let result = match provider {
+        AccountProvider::OpenAi => {
+            state
+                .admin_services()
+                .openai()
+                .complete_authorization(command)
+                .await
+        }
+        AccountProvider::Xai => {
+            state
+                .admin_services()
+                .xai()
+                .complete_authorization(command)
+                .await
+        }
+    }
+    .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::CREATED,
+        AdminEnvelope::ok(AccountMutationData::from(result)),
+    ))
+}
+
+async fn rotate_account<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    Json(request): Json<RotateAccountRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let command = request
+        .into_command(auth.context().mutation_context())
+        .map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .openai()
+        .rotate(command)
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(AccountMutationData::from(result)),
+    ))
+}
+
+async fn enable_account<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    Json(request): Json<AccountMutationRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    mutate_account(auth, state, request, AccountMutationAction::Enable).await
+}
+
+async fn disable_account<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    Json(request): Json<AccountMutationRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    mutate_account(auth, state, request, AccountMutationAction::Disable).await
+}
+
+#[derive(Clone, Copy)]
+enum AccountMutationAction {
+    Enable,
+    Disable,
+}
+
+async fn mutate_account<S>(
+    auth: AdminAuth,
+    state: S,
+    request: AccountMutationRequest,
+    action: AccountMutationAction,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let (provider, command) = request
+        .into_command(auth.context().mutation_context())
+        .map_err(map_wire_error)?;
+    let result = match (provider, action) {
+        (AccountProvider::OpenAi, AccountMutationAction::Enable) => {
+            state.admin_services().openai().enable(command).await
+        }
+        (AccountProvider::OpenAi, AccountMutationAction::Disable) => {
+            state.admin_services().openai().disable(command).await
+        }
+        (AccountProvider::Xai, AccountMutationAction::Enable) => {
+            state.admin_services().xai().enable(command).await
+        }
+        (AccountProvider::Xai, AccountMutationAction::Disable) => {
+            state.admin_services().xai().disable(command).await
+        }
+    }
+    .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(AccountMutationData::from(result)),
+    ))
+}
+
+async fn delete_accounts<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    Json(request): Json<AccountDeletionRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let (provider, command) = request
+        .into_command(auth.context().mutation_context())
+        .map_err(map_wire_error)?;
+    let result = match provider {
+        AccountProvider::OpenAi => state.admin_services().openai().delete(command).await,
+        AccountProvider::Xai => state.admin_services().xai().delete(command).await,
+    }
+    .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(AccountDeletionData::from(result)),
+    ))
 }
 
 async fn refresh_account<S>(
@@ -796,7 +1431,6 @@ fn account_models_data(result: ProviderModels) -> AccountModelsData {
 fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
     let AccountDirectoryItem {
         account,
-        provider_instance_name,
         status,
         usage,
         quota,
@@ -810,8 +1444,6 @@ fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
         id: account.id.clone(),
         name: account.name,
         provider: account.provider_kind.to_string(),
-        provider_instance_id: account.provider_instance_id.to_string(),
-        provider_instance_name,
         resource_ref: account.id,
         email: account.email,
         account_id: account.upstream_account_id,
@@ -1067,6 +1699,83 @@ fn empty_account_usage() -> AccountUsageView {
         costs: Vec::new(),
         models: Vec::new(),
     }
+}
+
+fn revision(value: u64, field: &'static str) -> Result<Revision, WireValidationError> {
+    Revision::new(value).map_err(|_| WireValidationError::new(field))
+}
+
+fn provider_document(
+    value: Value,
+    field: &'static str,
+) -> Result<ProviderDocument, WireValidationError> {
+    match value {
+        Value::Object(document) => Ok(ProviderDocument::new(OpaqueProviderData::new(document))),
+        _ => Err(WireValidationError::new(field)),
+    }
+}
+
+fn require_wire_id(value: &str, field: &'static str) -> Result<(), WireValidationError> {
+    require_text(value, MAX_ID_BYTES, field)?;
+    if value.starts_with("__")
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':'))
+    {
+        return Err(WireValidationError::new(field));
+    }
+    Ok(())
+}
+
+fn require_text(
+    value: &str,
+    max_bytes: usize,
+    field: &'static str,
+) -> Result<(), WireValidationError> {
+    if value.trim().is_empty() || value.len() > max_bytes || value.chars().any(char::is_control) {
+        return Err(WireValidationError::new(field));
+    }
+    Ok(())
+}
+
+fn require_positive(value: u64, field: &'static str) -> Result<(), WireValidationError> {
+    if value == 0 || i64::try_from(value).is_err() {
+        return Err(WireValidationError::new(field));
+    }
+    Ok(())
+}
+
+fn validate_oauth_material(
+    access_token: &str,
+    refresh_token: Option<&str>,
+) -> Result<(), WireValidationError> {
+    if access_token.len() > MAX_ACCESS_TOKEN_BYTES
+        || !valid_visible_ascii(access_token)
+        || !valid_compact_jwt_shape(access_token)
+    {
+        return Err(WireValidationError::new("accessToken"));
+    }
+    if refresh_token.is_some_and(|token| {
+        token.len() > MAX_REFRESH_TOKEN_BYTES
+            || !valid_visible_ascii(token)
+            || token == access_token
+    }) {
+        return Err(WireValidationError::new("refreshToken"));
+    }
+    Ok(())
+}
+
+fn valid_compact_jwt_shape(value: &str) -> bool {
+    let mut segments = value.split('.');
+    matches!(
+        (segments.next(), segments.next(), segments.next(), segments.next()),
+        (Some(header), Some(payload), Some(signature), None)
+            if !header.is_empty() && !payload.is_empty() && !signature.is_empty()
+    )
+}
+
+fn valid_visible_ascii(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
 }
 
 fn provider_document_value(document: ProviderDocument) -> Value {

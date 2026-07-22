@@ -7,18 +7,15 @@ use chrono::{DateTime, Utc};
 use gateway_core::routing::{
     ConfigRevision,
     snapshot::{
-        SnapshotClientPolicyFacts, SnapshotFacts, SnapshotProviderInstanceFacts,
-        SnapshotSettingsFacts, SnapshotStoreError, SnapshotStorePort,
+        SnapshotClientPolicyFacts, SnapshotFacts, SnapshotSettingsFacts, SnapshotStoreError,
+        SnapshotStorePort,
     },
 };
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::{Revision, StoreError, StoreResult, postgres_unavailable};
 
-use super::{
-    ClientApiKeySnapshot, ProviderAccountAvailability, ProviderAccountSummary,
-    ProviderInstanceRecord,
-};
+use super::ClientApiKeySnapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotRuntimeSettings {
@@ -43,8 +40,6 @@ pub struct RuntimeSnapshotData {
     pub config_revision: Revision,
     pub observed_current_revision: Revision,
     pub settings: SnapshotRuntimeSettings,
-    pub provider_instances: Vec<ProviderInstanceRecord>,
-    pub provider_accounts: Vec<ProviderAccountSummary>,
     pub client_api_keys: Vec<ClientApiKeySnapshot>,
 }
 
@@ -81,8 +76,6 @@ impl RuntimeSnapshotRepository for PgRuntimeSnapshotRepository {
             .map_err(|_| postgres_unavailable("configure runtime snapshot transaction"))?;
 
         let (config_revision, settings) = load_settings(&mut transaction).await?;
-        let provider_instances = load_instances(&mut transaction).await?;
-        let provider_accounts = load_accounts(&mut transaction).await?;
         let client_api_keys = load_client_keys(&mut transaction).await?;
         transaction
             .commit()
@@ -95,8 +88,6 @@ impl RuntimeSnapshotRepository for PgRuntimeSnapshotRepository {
             config_revision,
             observed_current_revision,
             settings,
-            provider_instances,
-            provider_accounts,
             client_api_keys,
         })
     }
@@ -153,18 +144,6 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                 data.settings.rotation_strategy,
                 data.settings.provider_model_mappings,
             );
-            let provider_instances = data
-                .provider_instances
-                .into_iter()
-                .map(|instance| {
-                    SnapshotProviderInstanceFacts::new(
-                        instance.id,
-                        instance.provider_kind,
-                        instance.base_url,
-                        instance.enabled,
-                    )
-                })
-                .collect();
             let client_policies = data
                 .client_api_keys
                 .into_iter()
@@ -181,7 +160,6 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                 config_revision,
                 observed_current_revision,
                 settings,
-                provider_instances,
                 client_policies,
             ))
         })
@@ -243,84 +221,6 @@ async fn load_settings(
     ))
 }
 
-async fn load_instances(
-    transaction: &mut Transaction<'_, Postgres>,
-) -> StoreResult<Vec<ProviderInstanceRecord>> {
-    let rows = sqlx::query_as::<
-        _,
-        (
-            String,
-            String,
-            String,
-            String,
-            bool,
-            DateTime<Utc>,
-            DateTime<Utc>,
-        ),
-    >(
-        "select id, provider_kind, name, base_url, enabled, created_at, updated_at
-         from provider_instances where enabled order by provider_kind, name, id",
-    )
-    .fetch_all(&mut **transaction)
-    .await
-    .map_err(|_| postgres_unavailable("load snapshot provider instances"))?;
-    Ok(rows
-        .into_iter()
-        .map(|row| ProviderInstanceRecord {
-            id: row.0,
-            provider_kind: row.1,
-            name: row.2,
-            base_url: row.3,
-            enabled: row.4,
-            created_at: row.5,
-            updated_at: row.6,
-        })
-        .collect())
-}
-
-async fn load_accounts(
-    transaction: &mut Transaction<'_, Postgres>,
-) -> StoreResult<Vec<ProviderAccountSummary>> {
-    let rows = sqlx::query(
-        "select id, provider_instance_id, provider_kind, name, email, upstream_user_id,
-                upstream_account_id, plan_type, credential_revision, has_refresh_token,
-                access_token_expires_at, next_refresh_at, enabled, availability,
-                availability_reason, cooldown_until, availability_observed_at,
-                quota_observed_at, created_at, updated_at
-         from provider_accounts where enabled order by provider_kind, provider_instance_id, id",
-    )
-    .fetch_all(&mut **transaction)
-    .await
-    .map_err(|_| postgres_unavailable("load snapshot provider accounts"))?;
-    rows.into_iter()
-        .map(|row| {
-            let availability: String = snapshot_get(&row, "availability")?;
-            Ok(ProviderAccountSummary {
-                id: snapshot_get(&row, "id")?,
-                provider_instance_id: snapshot_get(&row, "provider_instance_id")?,
-                provider_kind: snapshot_get(&row, "provider_kind")?,
-                name: snapshot_get(&row, "name")?,
-                email: snapshot_get(&row, "email")?,
-                upstream_user_id: snapshot_get(&row, "upstream_user_id")?,
-                upstream_account_id: snapshot_get(&row, "upstream_account_id")?,
-                plan_type: snapshot_get(&row, "plan_type")?,
-                credential_revision: revision_from_i64(snapshot_get(&row, "credential_revision")?)?,
-                has_refresh_token: snapshot_get(&row, "has_refresh_token")?,
-                access_token_expires_at: snapshot_get(&row, "access_token_expires_at")?,
-                next_refresh_at: snapshot_get(&row, "next_refresh_at")?,
-                enabled: snapshot_get(&row, "enabled")?,
-                availability: parse_availability(&availability)?,
-                availability_reason: snapshot_get(&row, "availability_reason")?,
-                cooldown_until: snapshot_get(&row, "cooldown_until")?,
-                availability_observed_at: snapshot_get(&row, "availability_observed_at")?,
-                quota_observed_at: snapshot_get(&row, "quota_observed_at")?,
-                created_at: snapshot_get(&row, "created_at")?,
-                updated_at: snapshot_get(&row, "updated_at")?,
-            })
-        })
-        .collect()
-}
-
 async fn load_client_keys(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<Vec<ClientApiKeySnapshot>> {
@@ -334,26 +234,6 @@ async fn load_client_keys(
     rows.into_iter()
         .map(|row| ClientApiKeySnapshot::from_persisted(row.0, row.1, row.2, row.3, row.4, row.5))
         .collect()
-}
-
-fn parse_availability(value: &str) -> StoreResult<ProviderAccountAvailability> {
-    match value {
-        "unknown" => Ok(ProviderAccountAvailability::Unknown),
-        "ready" => Ok(ProviderAccountAvailability::Ready),
-        "cooldown" => Ok(ProviderAccountAvailability::Cooldown),
-        "quota_exhausted" => Ok(ProviderAccountAvailability::QuotaExhausted),
-        "expired" => Ok(ProviderAccountAvailability::Expired),
-        "banned" => Ok(ProviderAccountAvailability::Banned),
-        "invalid" => Ok(ProviderAccountAvailability::Invalid),
-        _ => Err(invalid("unknown provider account availability")),
-    }
-}
-
-fn snapshot_get<'r, T>(row: &'r sqlx::postgres::PgRow, column: &'static str) -> StoreResult<T>
-where
-    T: sqlx::Decode<'r, sqlx::Postgres> + sqlx::Type<sqlx::Postgres>,
-{
-    row.try_get(column).map_err(|_| invalid(column))
 }
 
 fn revision_from_i64(value: i64) -> StoreResult<Revision> {

@@ -32,8 +32,8 @@ use crate::transport::{CodexWebSocketPool, build_reqwest_client};
 
 pub use config::{CodexWireProfileConfig, OpenAiConfig, OpenAiConfigError};
 pub use provider::{
-    CodexOriginPolicy, CodexProvider, CodexProviderConfigError, CodexProviderInstanceConfig,
-    CodexProviderTransport, OFFICIAL_CODEX_BASE_PATH, OfficialCodexOriginPolicy,
+    CodexProvider, CodexProviderConfigError, CodexProviderTransport, OFFICIAL_CODEX_BASE_PATH,
+    OFFICIAL_CODEX_BASE_URL,
 };
 
 pub mod credential;
@@ -64,10 +64,8 @@ pub async fn initialize(
     let accounts: Arc<dyn ProviderAccountStore> = ports.accounts();
     let leases = ports.leases();
     let runtime_policy = ports.runtime_policy();
-    let instances = ports.instances();
     let profile = config.wire_profile_state();
     let http = build_reqwest_client().map_err(|_| OpenAiInitializeError::Transport)?;
-    let origin_policy: Arc<dyn CodexOriginPolicy> = Arc::new(OfficialCodexOriginPolicy);
     let desktop_release = Arc::new(CodexDesktopReleaseService::new(
         profile.clone(),
         Arc::new(
@@ -88,15 +86,14 @@ pub async fn initialize(
         repository.clone(),
         profile.clone(),
         http.clone(),
-        Arc::clone(&origin_policy),
     ));
     let quota = Arc::new(CodexCredentialQuotaService::new(
         repository.clone(),
         profile.clone(),
         http.clone(),
-        Arc::clone(&origin_policy),
     ));
     let selector = Arc::new(CodexCredentialSelector::new(
+        provider_kind.clone(),
         repository.clone(),
         Arc::clone(&leases),
         Arc::clone(&catalog),
@@ -104,15 +101,17 @@ pub async fn initialize(
         CodexCookiePolicy::official().map_err(|_| OpenAiInitializeError::CookiePolicy)?,
     ));
     let websocket_pool = Arc::new(CodexWebSocketPool::default());
-    let core_provider: Arc<dyn Provider> = Arc::new(CodexProvider::new(
-        selector,
-        Arc::clone(&catalog),
-        Arc::clone(&quota),
-        http,
-        profile.clone(),
-        Arc::clone(&websocket_pool),
-        origin_policy,
-    ));
+    let core_provider: Arc<dyn Provider> = Arc::new(
+        CodexProvider::new(
+            selector,
+            Arc::clone(&catalog),
+            Arc::clone(&quota),
+            http,
+            profile.clone(),
+            Arc::clone(&websocket_pool),
+        )
+        .map_err(OpenAiInitializeError::Provider)?,
+    );
 
     let token_client = Arc::new(
         credential::token_client::official_openai_token_client()
@@ -156,10 +155,9 @@ pub async fn initialize(
         CodexCredentialAdmin,
     ));
     let admin_provider: Arc<dyn ProviderAdmin> = Arc::new(OpenAiAdminProvider::new(
-        provider_kind.clone(),
+        provider_kind,
         profile,
         accounts,
-        Arc::clone(&instances),
         OpenAiAdminServices {
             credentials: credential_admin,
             verifier: identity,
@@ -171,16 +169,9 @@ pub async fn initialize(
         websocket_pool,
         desktop_release_status,
     ));
-    let worker_contributions = provider::worker_contributions(
-        refresh,
-        quota,
-        catalog,
-        cli_release,
-        desktop_release,
-        instances,
-        provider_kind,
-    )
-    .map_err(|_| OpenAiInitializeError::Worker)?;
+    let worker_contributions =
+        provider::worker_contributions(refresh, quota, catalog, cli_release, desktop_release)
+            .map_err(|_| OpenAiInitializeError::Worker)?;
 
     Ok(ProviderBundle {
         core_provider,
@@ -217,6 +208,8 @@ pub enum OpenAiInitializeError {
     InvalidProviderKind,
     #[error("OpenAI transport could not initialize")]
     Transport,
+    #[error(transparent)]
+    Provider(CodexProviderConfigError),
     #[error("OpenAI cookie policy could not initialize")]
     CookiePolicy,
     #[error("OpenAI token client could not initialize")]

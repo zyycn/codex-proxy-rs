@@ -10,7 +10,7 @@ export function getSystemVersion(timeout = 0) {
 
 export function getSystemUpdateDetail(data: object) {
   return request({
-    url: '/api/admin/system/update-detail',
+    url: '/api/admin/system/update/detail',
     method: 'GET',
     params: data,
   })

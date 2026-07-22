@@ -13,6 +13,7 @@ use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
     ProviderSchedulingLeaseRequest,
 };
+use gateway_core::routing::ProviderKind;
 
 use super::catalog::{GrokCredentialCatalogCache, GrokCredentialQuotaService};
 use super::repository::GrokCredentialRepository;
@@ -29,6 +30,7 @@ const STREAM_INTERRUPTION_COOLDOWN: Duration = Duration::from_secs(30);
 
 /// 仅经 Core account port、TTL catalog cache 和 Redis lease 选择一个 OAuth session。
 pub struct GrokAccountSessionSelector {
+    provider_kind: ProviderKind,
     repository: GrokCredentialRepository,
     catalog_cache: Arc<dyn GrokCredentialCatalogCache>,
     quota: Arc<GrokCredentialQuotaService>,
@@ -38,12 +40,14 @@ pub struct GrokAccountSessionSelector {
 impl GrokAccountSessionSelector {
     #[must_use]
     pub fn new(
+        provider_kind: ProviderKind,
         repository: GrokCredentialRepository,
         catalog_cache: Arc<dyn GrokCredentialCatalogCache>,
         quota: Arc<GrokCredentialQuotaService>,
         scheduling: Arc<dyn ProviderLeasePort>,
     ) -> Self {
         Self {
+            provider_kind,
             repository,
             catalog_cache,
             quota,
@@ -57,7 +61,7 @@ impl GrokAccountSessionSelector {
     ) -> Result<SelectedGrokSession, GrokSessionSelectorError> {
         let accounts = self
             .repository
-            .list_accounts_for_instance(request.provider_instance_id())
+            .list_accounts_for_provider()
             .await
             .map_err(|_| GrokSessionSelectorError::Unavailable)?;
         self.quota.prepare_scheduling(&accounts).await;
@@ -85,7 +89,7 @@ impl GrokAccountSessionSelector {
             .collect::<Vec<_>>();
         let scheduling = self
             .scheduling
-            .load_state(request.provider_instance_id(), &account_ids)
+            .load_state(&self.provider_kind, &account_ids)
             .await
             .map_err(|_| GrokSessionSelectorError::Unavailable)?;
         let mut candidates = catalog_eligible
@@ -141,7 +145,7 @@ impl GrokAccountSessionSelector {
                 .scheduling
                 .try_acquire(ProviderLeaseRequest::Scheduling(
                     ProviderSchedulingLeaseRequest::new(
-                        request.provider_instance_id().clone(),
+                        self.provider_kind.clone(),
                         selected_id.clone(),
                         selected_revision,
                         request

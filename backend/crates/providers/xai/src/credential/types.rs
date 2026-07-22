@@ -8,7 +8,6 @@ use gateway_core::engine::credential::{
     ProviderAccountUpdate,
 };
 use gateway_core::provider_ports::ProviderLeaseGuard;
-use gateway_core::routing::ProviderInstanceId;
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -77,7 +76,6 @@ pub enum GrokCredentialAvailability {
 /// 创建一个明文 OAuth Provider account。
 pub struct CreateGrokCredential {
     pub account_id: ProviderAccountId,
-    pub provider_instance_id: ProviderInstanceId,
     pub name: String,
     pub secret: GrokOAuthSecret,
     pub account: GrokAccountProfile,
@@ -93,7 +91,6 @@ impl fmt::Debug for CreateGrokCredential {
         formatter
             .debug_struct("CreateGrokCredential")
             .field("account_id", &self.account_id)
-            .field("provider_instance_id", &self.provider_instance_id)
             .field("name", &self.name)
             .field("secret", &"[REDACTED]")
             .field("account", &self.account)
@@ -237,7 +234,6 @@ pub struct UpdateGrokCredentialState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GrokCredentialRecord {
     pub account_id: ProviderAccountId,
-    pub provider_instance_id: ProviderInstanceId,
     pub credential_revision: CredentialRevision,
 }
 
