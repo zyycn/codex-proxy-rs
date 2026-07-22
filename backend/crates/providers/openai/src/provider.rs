@@ -58,8 +58,8 @@ use crate::transport::profile::{
 };
 use crate::transport::protocol::responses::{CodexResponsesRequest, PreviousResponseScope};
 use crate::transport::request::{
-    CodexRequestEncodeError, encode_compact_conversation_request, encode_generate_request,
-    sanitize_cross_account_item, scope_request_to_account,
+    CodexRequestEncodeError, encode_generate_request, sanitize_cross_account_item,
+    scope_request_to_account,
 };
 use crate::transport::websocket::{CodexWebSocketExchangeError, PreviousResponseUnavailableReason};
 use crate::transport::{
@@ -265,17 +265,10 @@ impl Provider for CodexProvider {
     }
 
     fn request_observation(&self, operation: &Operation) -> ProviderRequestObservation {
-        let (request, compact) = match operation {
-            Operation::Generate(request) => (request, false),
-            Operation::CompactConversation(request) => (request.generation(), true),
-            _ => return ProviderRequestObservation::default(),
+        let Operation::Generate(request) = operation else {
+            return ProviderRequestObservation::default();
         };
-        let encoded = if compact {
-            encode_compact_conversation_request(request, "observability")
-        } else {
-            encode_generate_request(request, "observability")
-        };
-        let semantics = encoded
+        let semantics = encode_generate_request(request, "observability")
             .map(|mut encoded| {
                 if let Ok(Some(previous)) = decode_openai_session_state(request) {
                     let mut input = previous
@@ -348,32 +341,18 @@ impl Provider for CodexProvider {
                 UpstreamSendState::NotSent,
             ));
         }
-        let (generate, compact) = match request.operation() {
-            Operation::Generate(generate) => (generate, false),
-            Operation::CompactConversation(compact) => (compact.generation(), true),
-            _ => {
-                return Err(provider_error(
-                    ProviderErrorKind::Unsupported,
-                    UpstreamSendState::NotSent,
-                ));
-            }
+        let Operation::Generate(generate) = request.operation() else {
+            return Err(provider_error(
+                ProviderErrorKind::Unsupported,
+                UpstreamSendState::NotSent,
+            ));
         };
         let previous_session = decode_openai_session_state(generate)?;
         let continuation_requested = generate.continuation().is_some();
-        let mut upstream_request = if compact {
-            encode_compact_conversation_request(generate, candidate.upstream_model().as_str())
-        } else {
+        let mut upstream_request =
             encode_generate_request(generate, candidate.upstream_model().as_str())
-        }
-        .map_err(map_request_error)?;
+                .map_err(map_request_error)?;
         let request_input = upstream_request.input().to_vec();
-        let session_request_input = if compact {
-            request_input
-                .split_last()
-                .map_or_else(Vec::new, |(_, history)| history.to_vec())
-        } else {
-            request_input.clone()
-        };
         let transport = selected_transport(&request, &instance.config)?;
         apply_transport(&mut upstream_request, transport);
 
@@ -485,7 +464,7 @@ impl Provider for CodexProvider {
         let session_capture =
             (!continuation_requested || previous_session.is_some()).then(|| OpenAiSessionCapture {
                 previous: previous_session,
-                request_input: session_request_input,
+                request_input,
                 account_id: lease.account_id().as_str().to_owned(),
                 conversation_id: upstream_request.local_conversation_id.clone(),
                 response_store,
@@ -1047,7 +1026,6 @@ fn compile_model_capabilities(model: &CodexCatalogModel) -> ProviderModelCapabil
     let mut operations = BTreeSet::new();
     if evidence.responses_api() == CodexCatalogCapabilityEvidence::DeclaredNative {
         operations.insert(OperationKind::Generate);
-        operations.insert(OperationKind::CompactConversation);
     }
     let context_window = model
         .limits()
@@ -1456,10 +1434,11 @@ fn map_upstream_failure(
     if let Some(retry_after) = failure.retry_after_seconds.map(Duration::from_secs) {
         error = error.with_retry_after(retry_after);
     }
-    if let Some(code) = failure.persistable_code()
-        && let Ok(safe_code) = SafeUpstreamValue::new(code.to_owned())
+    if let Some(code) = failure
+        .persistable_code()
+        .and_then(|code| SafeUpstreamValue::new(code.to_owned()).ok())
     {
-        error = error.with_upstream_code(safe_code);
+        error = error.with_upstream_code(code);
     }
     if let Some(request_id) = failure
         .request_id
