@@ -454,35 +454,6 @@ fn http_operation() -> Operation {
     )
 }
 
-fn compact_http_operation() -> Operation {
-    let payload = ProtocolPayload::json_object(
-        "openai",
-        json!({
-            "model": "gpt-5.4",
-            "input": [{"type": "message", "role": "user", "content": "history"}],
-            "stream": false,
-            "store": false
-        })
-        .as_object()
-        .cloned()
-        .expect("compact request body"),
-    )
-    .expect("OpenAI payload");
-    let mut options = ProviderOptions::new();
-    options
-        .insert(
-            "openai",
-            Map::from_iter([
-                ("schema_version".to_owned(), Value::from(1)),
-                ("transport".to_owned(), Value::String("http_sse".to_owned())),
-            ]),
-        )
-        .expect("provider options");
-    Operation::CompactConversation(CompactConversationRequest::new(
-        GenerateRequest::from_protocol_payload(Vec::new(), payload).with_provider_options(options),
-    ))
-}
-
 fn preferred_operation() -> Operation {
     let message = Message::new(
         MessageRole::User,
@@ -771,7 +742,7 @@ async fn rejected_websocket_opening(
 fn planned_request(base_url: &str, operation: &Operation) -> ProviderRequest {
     let public_model = PublicModelId::new("gpt-5.4").expect("public model");
     let capabilities = ModelCapabilities::new(
-        BTreeSet::from([OperationKind::Generate, OperationKind::CompactConversation]),
+        BTreeSet::from([OperationKind::Generate]),
         128_000,
         Some(32_000),
     );
@@ -792,100 +763,6 @@ fn planned_request(base_url: &str, operation: &Operation) -> ProviderRequest {
         .plan(&public_model, operation, &RoutingContext::default())
         .expect("routing plan");
     ProviderRequest::new(operation.clone(), plan.candidates()[0].clone())
-}
-
-#[tokio::test]
-async fn compact_operation_preserves_native_openai_wire_and_excludes_trigger_from_session() {
-    let server = MockServer::start().await;
-    let compaction_item = json!({
-        "type": "compaction",
-        "encrypted_content": "opaque-native-ciphertext"
-    });
-    let output_done = json!({
-        "type": "response.output_item.done",
-        "output_index": 0,
-        "item": compaction_item
-    });
-    let completed_event = json!({
-        "type": "response.completed",
-        "response": {
-            "id": "resp_compact_native",
-            "model": "gpt-5.4",
-            "status": "completed",
-            "output": [compaction_item],
-            "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11}
-        }
-    });
-    let body = format!(
-        "event: response.created\ndata: {}\n\nevent: response.output_item.done\ndata: {output_done}\n\nevent: response.completed\ndata: {completed_event}\n\n",
-        created("resp_compact_native")
-    );
-    Mock::given(method("POST"))
-        .and(path("/backend-api/codex/responses"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_string(body),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store).await;
-    let provider = provider(&store);
-    let operation = compact_http_operation();
-    assert!(provider.request_observation(&operation).compact);
-    let mut stream = provider
-        .execute(
-            planned_request(&format!("{}/backend-api", server.uri()), &operation),
-            context("req_native_compaction", None, CancellationToken::new()),
-        )
-        .await
-        .expect("provider stream");
-    let mut wire_events = Vec::new();
-    let mut session_update = None;
-    while let Some(event) = stream.next().await {
-        let mut event = event.expect("native compaction event");
-        if let Some(wire) = event.wire_event() {
-            wire_events.push((wire.event_type().map(str::to_owned), wire.data().clone()));
-        }
-        session_update = event.take_session_update().or(session_update);
-    }
-
-    assert_eq!(
-        wire_events[1].0.as_deref(),
-        Some("response.output_item.done")
-    );
-    assert_eq!(wire_events[1].1, output_done);
-    assert_eq!(wire_events[2].0.as_deref(), Some("response.completed"));
-    assert_eq!(wire_events[2].1, completed_event);
-    let session_update = session_update.expect("compaction session update");
-    let transcript = session_update
-        .payload()
-        .get("transcript")
-        .and_then(Value::as_array)
-        .expect("session transcript");
-    assert!(!transcript.iter().any(|item| {
-        item.pointer("/client_input/type").and_then(Value::as_str) == Some("compaction_trigger")
-    }));
-
-    let requests = server
-        .received_requests()
-        .await
-        .expect("received compact request");
-    let upstream_body: Value =
-        serde_json::from_slice(&requests[0].body).expect("upstream compact JSON");
-    let input = upstream_body["input"].as_array().expect("upstream input");
-    assert_eq!(upstream_body["stream"], true);
-    assert_eq!(input.last(), Some(&json!({"type": "compaction_trigger"})));
-    assert_eq!(
-        input
-            .iter()
-            .filter(|item| item.get("type").and_then(Value::as_str) == Some("compaction_trigger"))
-            .count(),
-        1
-    );
 }
 
 async fn next_provider_error(
@@ -2697,6 +2574,6 @@ async fn capability_query_compiles_only_explicit_catalog_evidence() {
         capabilities[0]
             .capabilities()
             .match_requirements(&compact.capability_requirements())
-            .is_some()
+            .is_none()
     );
 }

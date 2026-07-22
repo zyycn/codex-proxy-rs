@@ -191,19 +191,6 @@ pub fn encode_generate_request(
     Ok(encoded)
 }
 
-/// 将类型化压缩 operation 编码为 OpenAI 原生 Responses compaction 请求。
-pub fn encode_compact_conversation_request(
-    request: &GenerateRequest,
-    upstream_model: &str,
-) -> Result<CodexResponsesRequest, CodexRequestEncodeError> {
-    let mut encoded = encode_generate_request(request, upstream_model)?;
-    let mut input = encoded.input().to_vec();
-    input.push(json!({"type": "compaction_trigger"}));
-    encoded.set_input(input);
-    encoded.set_stream(true);
-    Ok(encoded)
-}
-
 /// 复用正式 Codex 编码规则提取请求诊断语义；编码失败时不伪造 Provider 事实。
 #[must_use]
 pub fn codex_request_semantics(request: &GenerateRequest) -> CodexRequestSemantics {
