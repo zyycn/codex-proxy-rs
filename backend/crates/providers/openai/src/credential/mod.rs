@@ -56,6 +56,6 @@ pub use selector::{
 };
 pub use types::{
     CodexAccountProfile, CodexCookie, CodexCookieCaptureOutcome, CodexCredentialData,
-    CodexCredentialPrincipal, CodexOAuthSecret, CreateCodexCredential, CredentialRecord,
-    RotateCodexCredential, RuntimeCodexCookie, UpsertCodexCookie,
+    CodexCredentialPrincipal, CodexOAuthSecret, RotateCodexCredential, RuntimeCodexCookie,
+    UpsertCodexCookie,
 };

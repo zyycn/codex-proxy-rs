@@ -255,7 +255,6 @@ async fn manual_refresh_returns_prepared_rotation_without_writing_store() {
         .prepare_manual_refresh(&id, CredentialRevision::new(1).expect("revision"))
         .await
         .expect("prepare manual refresh");
-    assert!(prepared.holds_refresh_lease());
     assert_eq!(store.account(&id).expect("account").revision().get(), 1);
     assert_eq!(refresher.prepare_calls.load(Ordering::SeqCst), 1);
     let (_profile, credential, guard) = prepared.into_parts();

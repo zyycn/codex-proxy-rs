@@ -32,10 +32,10 @@ pub use self::{
     diagnostics::{CodexUpstreamDiagnostics, CodexUpstreamSendPhase},
     endpoints::{
         CODEX_RESPONSES_PATH, CODEX_USAGE_API_PATH, CODEX_USAGE_PATH, WHAM_USAGE_PATH,
-        endpoint_request_path, endpoint_url, usage_endpoint_urls,
+        endpoint_url, usage_endpoint_urls,
     },
-    headers::{build_codex_base_headers, build_codex_headers},
-    request::{CodexRequestEncodeError, codex_request_semantics, encode_generate_request},
+    headers::build_codex_base_headers,
+    request::{CodexRequestEncodeError, encode_generate_request},
     response_meta::CodexResponseMetadata,
     usage::{MAX_CODEX_USAGE_BODY_BYTES, openai_billing_breakdown},
     websocket::{

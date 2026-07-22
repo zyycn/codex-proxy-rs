@@ -172,13 +172,6 @@ pub trait GrokEndpointPolicy: fmt::Debug + Send + Sync {
 #[derive(Debug, Default)]
 pub struct OfficialGrokEndpointPolicy;
 
-impl OfficialGrokEndpointPolicy {
-    #[must_use]
-    pub fn accepts_resolved_address(address: IpAddr) -> bool {
-        is_public_ip(address)
-    }
-}
-
 impl GrokEndpointPolicy for OfficialGrokEndpointPolicy {
     fn build_oauth_client(
         &self,

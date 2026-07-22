@@ -21,7 +21,7 @@ use provider_openai::transport::{
     CodexBackendClient, CodexBackendTransport, CodexClientError, CodexRequestContext,
     CodexTransportDecision, CodexWebSocketPool, CodexWebSocketPoolConfig,
 };
-use serde_json::json;
+use serde_json::{Map, Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -146,8 +146,45 @@ fn request_context<'a>(
     }
 }
 
+fn codex_request(
+    model: impl Into<String>,
+    instructions: impl Into<String>,
+    input: Vec<Value>,
+) -> CodexResponsesRequest {
+    CodexResponsesRequest::from_body(codex_request_body(model, instructions, input))
+}
+
+fn codex_request_with_prompt_cache_key(
+    model: impl Into<String>,
+    instructions: impl Into<String>,
+    input: Vec<Value>,
+    prompt_cache_key: impl Into<String>,
+) -> CodexResponsesRequest {
+    let mut body = codex_request_body(model, instructions, input);
+    body.insert(
+        "prompt_cache_key".to_owned(),
+        Value::String(prompt_cache_key.into()),
+    );
+    CodexResponsesRequest::from_body(body)
+}
+
+fn codex_request_body(
+    model: impl Into<String>,
+    instructions: impl Into<String>,
+    input: Vec<Value>,
+) -> Map<String, Value> {
+    Map::from_iter([
+        ("model".to_owned(), Value::String(model.into())),
+        (
+            "instructions".to_owned(),
+            Value::String(instructions.into()),
+        ),
+        ("input".to_owned(), Value::Array(input)),
+    ])
+}
+
 fn prepared_websocket_request(base_url: &str) -> CodexWebSocketRequest {
-    let request = CodexResponsesRequest::new_http_sse("gpt-test", "be brief", Vec::new());
+    let request = codex_request("gpt-test", "be brief", Vec::new());
     CodexWebSocketConnection::responses_create_request(
         base_url,
         "dGhlIHNhbXBsZSBub25jZQ==",
@@ -158,10 +195,10 @@ fn prepared_websocket_request(base_url: &str) -> CodexWebSocketRequest {
 }
 
 fn pooled_websocket_request(conversation_id: &str) -> CodexResponsesRequest {
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-test", "be brief", Vec::new());
+    let mut request =
+        codex_request_with_prompt_cache_key("gpt-test", "be brief", Vec::new(), conversation_id);
     request.set_previous_response_id(Some("resp_previous".to_owned()));
     request.previous_response_scope = Some(PreviousResponseScope::Persisted);
-    request.set_prompt_cache_key(Some(conversation_id.to_owned()));
     request.local_conversation_id = Some(conversation_id.to_owned());
     request
 }
@@ -199,6 +236,16 @@ fn read_header_names(request: &str) -> Vec<String> {
                 .map(|(name, _)| name.to_ascii_lowercase())
         })
         .collect()
+}
+
+fn read_header_value<'a>(request: &'a str, name: &str) -> Option<&'a str> {
+    request
+        .lines()
+        .skip(1)
+        .take_while(|line| !line.is_empty())
+        .filter_map(|line| line.split_once(':'))
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.trim())
 }
 
 async fn read_http_request(stream: &mut TcpStream) -> String {

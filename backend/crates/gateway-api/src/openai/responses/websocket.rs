@@ -522,7 +522,7 @@ async fn next_active_input(
     }
 }
 
-/// 解码一个官方 `response.create` 文本帧。
+/// 使用连接级请求头和 Provider 上下文解码官方 `response.create` 文本帧。
 ///
 /// 缺省 `stream` 等价于 WebSocket 固有的流式语义；显式 `false` 会被拒绝。
 ///
@@ -530,13 +530,7 @@ async fn next_active_input(
 ///
 /// 帧不是合法 JSON object、消息类型错误、显式关闭 stream，或 Responses 请求
 /// 无法映射到 canonical operation 时返回不包含正文内容的稳定错误。
-pub fn decode_response_create(
-    payload: &str,
-) -> Result<DecodedResponsesRequest, ResponseCreateFrameError> {
-    decode_response_create_inner(payload, &OpenAiRequestHeaders::default(), None)
-}
-
-fn decode_response_create_with_context(
+pub fn decode_response_create_with_context(
     payload: &str,
     request_headers: &OpenAiRequestHeaders,
     provider_kind: &ProviderKind,

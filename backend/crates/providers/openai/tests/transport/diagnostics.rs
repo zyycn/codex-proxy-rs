@@ -2,6 +2,14 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use provider_openai::transport::CodexUpstreamDiagnostics;
 use reqwest::header::{HeaderMap, HeaderValue};
 
+fn trace_header<'a>(diagnostics: &'a CodexUpstreamDiagnostics, name: &str) -> Option<&'a str> {
+    diagnostics
+        .trace_headers
+        .iter()
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+}
+
 #[test]
 fn diagnostics_should_extract_request_id_and_trace_headers() {
     let mut headers = HeaderMap::new();
@@ -14,7 +22,7 @@ fn diagnostics_should_extract_request_id_and_trace_headers() {
         (
             diagnostics.status_code,
             diagnostics.request_id.as_deref(),
-            diagnostics.cf_ray(),
+            trace_header(&diagnostics, "cf-ray"),
         ),
         (Some(429), Some("req_1"), Some("ray_1"))
     );
@@ -28,7 +36,10 @@ fn diagnostics_should_not_treat_cf_ray_as_a_request_id() {
     let diagnostics = CodexUpstreamDiagnostics::from_headers(Some(403), &headers);
 
     assert_eq!(
-        (diagnostics.request_id.as_deref(), diagnostics.cf_ray()),
+        (
+            diagnostics.request_id.as_deref(),
+            trace_header(&diagnostics, "cf-ray"),
+        ),
         (None, Some("ray_1"))
     );
 }

@@ -17,9 +17,9 @@ use provider_openai::credential::{
     CodexAccountIdentityService, CodexAccountIdentityVerifier, CodexCredentialAdmin,
     CodexCredentialAdminError, CodexCredentialAdminService, CodexCredentialCodec,
     CodexIdentityExpectation, CodexIdentityVerification, CodexIdentityVerificationError,
-    CodexJwtIdentityVerifier, CreateCodexCredential, ExportManagedCodexCredential,
-    ImportCodexOAuthCredential, ImportCodexOAuthCredentialBatch,
-    ReqwestCodexAuthenticatedAccountSource, ReqwestOpenAiJwksSource, RotateManagedCodexCredential,
+    CodexJwtIdentityVerifier, ExportManagedCodexCredential, ImportCodexOAuthCredential,
+    ImportCodexOAuthCredentialBatch, ReqwestCodexAuthenticatedAccountSource,
+    ReqwestOpenAiJwksSource, RotateManagedCodexCredential,
 };
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use secrecy::{ExposeSecret, SecretString};
@@ -345,18 +345,16 @@ async fn manual_refresh_fixture(
 ) {
     let store = Arc::new(MemoryAccountStore::default());
     store
-        .repository()
-        .create_oauth_credential(CreateCodexCredential {
+        .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: "acct_manual_refresh".to_owned(),
             provider_instance_id: instance_id().to_string(),
             name: "manual refresh".to_owned(),
             secret: secret("old-access"),
-            account: profile("chatgpt-acct_manual_refresh"),
+            verified_account: profile("chatgpt-acct_manual_refresh"),
             next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
-        .await
-        .expect("create account");
+        .await;
     let refresher = Arc::new(ManualRefresher {
         outcome: Mutex::new(Some(outcome)),
         seen: Mutex::new(Vec::new()),
@@ -397,7 +395,6 @@ async fn manual_refresh_prepares_revision_fenced_rotation_without_store_mutation
         .await
         .expect("manual refresh");
 
-    assert!(prepared.holds_refresh_lease());
     assert_eq!(prepared.credential.account_id(), &account_id);
     assert_eq!(prepared.credential.expected_revision().get(), 1);
     let runtime = CodexCredentialCodec::decode(prepared.credential.credential())

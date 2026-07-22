@@ -1,8 +1,35 @@
+use gateway_protocol::openai::sse::parse_sse_events;
 use provider_openai::transport::protocol::responses::{
-    CodexResponsesRequest, PreviousResponseScope, TransportRequirement,
-    response_body_has_semantic_output, response_event_signals, transport_requirement,
+    CodexResponsesRequest, PreviousResponseScope, TransportRequirement, response_event_signals,
+    transport_requirement,
 };
-use serde_json::json;
+use serde_json::{Value, json};
+
+use super::super::codex_request;
+
+fn response_body_has_semantic_output(body_bytes: &[u8]) -> bool {
+    let body = String::from_utf8_lossy(body_bytes);
+    let lf_end = body.rfind("\n\n").map(|index| index + 2);
+    let crlf_end = body.rfind("\r\n\r\n").map(|index| index + 4);
+    let Some(end) = lf_end.into_iter().chain(crlf_end).max() else {
+        return false;
+    };
+    let Ok(events) = parse_sse_events(&body[..end]) else {
+        return false;
+    };
+    events.iter().any(|event| {
+        let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
+            return false;
+        };
+        let event_type = event.event.as_deref().or_else(|| {
+            value
+                .get("type")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+        });
+        response_event_signals(event_type, &value).semantic_output
+    })
+}
 
 #[test]
 fn semantic_output_should_detect_a_text_delta() {
@@ -165,7 +192,7 @@ fn semantic_output_should_accept_crlf_frame_boundaries() {
 
 #[test]
 fn transport_should_prefer_websocket_when_requested_without_history() {
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-test", "be brief", Vec::new());
+    let mut request = codex_request("gpt-test", "be brief", Vec::new());
     request.use_websocket = true;
 
     assert_eq!(
@@ -177,7 +204,7 @@ fn transport_should_prefer_websocket_when_requested_without_history() {
 
 #[test]
 fn transport_should_mark_unknown_previous_response_as_external() {
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-test", "be brief", Vec::new());
+    let mut request = codex_request("gpt-test", "be brief", Vec::new());
     request.set_previous_response_id(Some("resp_previous".to_owned()));
 
     assert_eq!(
@@ -189,7 +216,7 @@ fn transport_should_mark_unknown_previous_response_as_external() {
 
 #[test]
 fn transport_should_allow_forced_http_sse() {
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-test", "be brief", Vec::new());
+    let mut request = codex_request("gpt-test", "be brief", Vec::new());
     request.set_previous_response_id(Some("resp_previous".to_owned()));
     request.use_websocket = true;
     request.force_http_sse = true;
@@ -202,7 +229,7 @@ fn transport_should_allow_forced_http_sse() {
 
 #[test]
 fn transport_should_require_exact_websocket_for_connection_local_continuation() {
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-test", "be brief", Vec::new());
+    let mut request = codex_request("gpt-test", "be brief", Vec::new());
     request.set_previous_response_id(Some("resp_previous".to_owned()));
     request.previous_response_scope = Some(PreviousResponseScope::ConnectionLocal);
 
@@ -215,7 +242,7 @@ fn transport_should_require_exact_websocket_for_connection_local_continuation() 
 
 #[test]
 fn exact_continuation_should_remain_stricter_than_forced_websocket() {
-    let mut preferred = CodexResponsesRequest::new_http_sse("gpt-test", "be brief", Vec::new());
+    let mut preferred = codex_request("gpt-test", "be brief", Vec::new());
     preferred.use_websocket = true;
     assert_eq!(
         transport_requirement(&preferred),

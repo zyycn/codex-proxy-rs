@@ -10,12 +10,12 @@ pub use error::{ProtocolErrorBody, RequestDecodeError, ResponseEncodeError};
 pub use http::{collect_execution_response, stream_execution_response};
 pub(crate) use http::{responses, review_responses};
 pub use request::{
-    ContinuationIntent, DecodedResponsesRequest, PROVIDER_OPTIONS_VERSION,
-    ResponsesRequestMetadata, decode_request,
+    ContinuationIntent, DecodedResponsesRequest, OpenAiRequestHeaders, PROVIDER_OPTIONS_VERSION,
+    ResponsesRequestMetadata, decode_request_with_headers,
 };
-pub use response::{CollectedResponses, OpenAiResponsesEncoder, ResponsesCollector};
+pub use response::{OpenAiResponsesEncoder, ResponsesCollector};
 pub(crate) use websocket::responses_websocket;
-pub use websocket::{ResponseCreateFrameError, decode_response_create};
+pub use websocket::{ResponseCreateFrameError, decode_response_create_with_context};
 
 pub(super) fn safe_response_header_name(name: &str) -> Option<&'static str> {
     match name {

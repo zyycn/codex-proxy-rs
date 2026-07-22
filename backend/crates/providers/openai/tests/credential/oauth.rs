@@ -17,7 +17,7 @@ use provider_openai::credential::{
     CodexIdentityVerification, CodexIdentityVerificationError, CodexOAuthAdmin,
     CodexOAuthAdminError, CodexOAuthAdminService, CodexOAuthPendingStore,
     CodexOAuthPendingStoreError, CodexOAuthSecret, CodexPendingAuthorization,
-    CompleteCodexOAuthAuthorization, CompletedCodexOAuthCredential, CreateCodexCredential,
+    CompleteCodexOAuthAuthorization, CompletedCodexOAuthCredential, ImportCodexOAuthCredential,
     StartCodexOAuthAuthorization, StoredCodexPendingAuthorization,
 };
 use secrecy::{ExposeSecret, SecretString};
@@ -315,18 +315,16 @@ fn oauth_command_debug_redacts_owner_flow_and_callback() {
 async fn reauthorization_binds_account_revision_and_returns_only_prepared_rotation() {
     let store = Arc::new(MemoryAccountStore::default());
     store
-        .repository()
-        .create_oauth_credential(CreateCodexCredential {
+        .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: "acct_oauth_reauth".to_owned(),
             provider_instance_id: instance_id().to_string(),
             name: "reauthorize".to_owned(),
             secret: secret("old-oauth-access"),
-            account: profile("chatgpt-oauth"),
+            verified_account: profile("chatgpt-oauth"),
             next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
-        .await
-        .expect("create account");
+        .await;
     let original_account = store
         .account("acct_oauth_reauth")
         .expect("original account");
@@ -414,18 +412,16 @@ impl CodexAccountIdentityVerifier for RebindingVerifier {
 async fn reauthorization_rejects_identity_rebinding() {
     let store = Arc::new(MemoryAccountStore::default());
     store
-        .repository()
-        .create_oauth_credential(CreateCodexCredential {
+        .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: "acct_oauth_rebind".to_owned(),
             provider_instance_id: instance_id().to_string(),
             name: "reauthorize".to_owned(),
             secret: secret("old-oauth-access"),
-            account: profile("chatgpt-oauth"),
+            verified_account: profile("chatgpt-oauth"),
             next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
-        .await
-        .expect("create account");
+        .await;
     let service = service_with_store(store, Arc::new(RebindingVerifier));
     let started = service
         .start_authorization(StartCodexOAuthAuthorization {
