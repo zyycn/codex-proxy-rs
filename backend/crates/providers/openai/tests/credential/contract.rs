@@ -14,8 +14,8 @@ use gateway_core::engine::{
 use gateway_core::policy::ClientApiKeyId;
 use provider_openai::credential::{
     CodexAccountFailure, CodexCookiePolicy, CodexCredentialCatalogService, CodexCredentialCodec,
-    CodexCredentialQuotaService, CodexCredentialSelector, CreateCodexCredential,
-    CredentialSelectionError, SelectCodexCredential,
+    CodexCredentialQuotaService, CodexCredentialSelector, CredentialSelectionError,
+    ImportCodexOAuthCredential, SelectCodexCredential,
 };
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use provider_openai::{CodexOriginPolicy, OfficialCodexOriginPolicy};
@@ -27,20 +27,15 @@ use crate::support::{
 };
 
 fn create_account(store: &Arc<MemoryAccountStore>, id: &str, token: &str) {
-    block_on(
-        store
-            .repository()
-            .create_oauth_credential(CreateCodexCredential {
-                account_id: id.to_owned(),
-                provider_instance_id: instance_id().to_string(),
-                name: id.to_owned(),
-                secret: secret(token),
-                account: profile(&format!("chatgpt-{id}")),
-                next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
-                enabled: true,
-            }),
-    )
-    .expect("create account");
+    block_on(store.seed_oauth_credential(ImportCodexOAuthCredential {
+        account_id: id.to_owned(),
+        provider_instance_id: instance_id().to_string(),
+        name: id.to_owned(),
+        secret: secret(token),
+        verified_account: profile(&format!("chatgpt-{id}")),
+        next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
+        enabled: true,
+    }));
 }
 
 fn attempt(excluded_accounts: BTreeSet<ProviderAccountId>) -> AttemptContext {

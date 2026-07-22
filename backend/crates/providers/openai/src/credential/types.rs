@@ -141,32 +141,6 @@ impl fmt::Debug for CodexCredentialData {
     }
 }
 
-/// Admin/OAuth 导入一个统一 Provider 账号。
-pub struct CreateCodexCredential {
-    pub account_id: String,
-    pub provider_instance_id: String,
-    pub name: String,
-    pub secret: CodexOAuthSecret,
-    pub account: CodexAccountProfile,
-    pub next_refresh_at: Option<DateTime<Utc>>,
-    pub enabled: bool,
-}
-
-impl fmt::Debug for CreateCodexCredential {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CreateCodexCredential")
-            .field("account_id", &self.account_id)
-            .field("provider_instance_id", &self.provider_instance_id)
-            .field("name", &self.name)
-            .field("secret", &self.secret)
-            .field("account", &self.account)
-            .field("next_refresh_at", &self.next_refresh_at)
-            .field("enabled", &self.enabled)
-            .finish()
-    }
-}
-
 /// 刷新成功后的 CAS 输入。
 pub struct RotateCodexCredential {
     pub account_id: String,
@@ -190,13 +164,6 @@ impl fmt::Debug for RotateCodexCredential {
             .field("next_refresh_at", &self.next_refresh_at)
             .finish()
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CredentialRecord {
-    pub account_id: String,
-    pub provider_instance_id: String,
-    pub credential_revision: u64,
 }
 
 /// 运行时使用的 Cookie；值受 `secrecy` 保护。

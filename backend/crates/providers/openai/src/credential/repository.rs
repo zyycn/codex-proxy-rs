@@ -6,18 +6,17 @@ use std::time::SystemTime;
 use chrono::{DateTime, Utc};
 use gateway_core::engine::credential::{
     AccountAvailability, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
-    CredentialRevision, LoadedCredential, NewProviderAccount, ProviderAccount, ProviderAccountId,
-    ProviderAccountStore, ProviderAccountUpdate,
+    CredentialRevision, LoadedCredential, ProviderAccount, ProviderAccountId, ProviderAccountStore,
+    ProviderAccountUpdate,
 };
-use gateway_core::routing::{ProviderInstanceId, ProviderKind};
+use gateway_core::routing::ProviderInstanceId;
 use secrecy::ExposeSecret;
 use thiserror::Error;
 
 use super::identity::CodexSignedIdentity;
 use super::security::{CodexCredentialCodec, CodexCredentialDataError, CodexRuntimeCredential};
 use super::types::{
-    CodexAccountProfile, CodexCredentialData, CodexOAuthSecret, CreateCodexCredential,
-    CredentialRecord, RotateCodexCredential,
+    CodexAccountProfile, CodexCredentialData, CodexOAuthSecret, RotateCodexCredential,
 };
 
 const PROVIDER_NAME: &str = "openai";
@@ -36,53 +35,6 @@ impl CodexCredentialRepository {
     #[must_use]
     pub fn store(&self) -> &Arc<dyn ProviderAccountStore> {
         &self.store
-    }
-
-    pub async fn create_oauth_credential(
-        &self,
-        input: CreateCodexCredential,
-    ) -> Result<CredentialRecord, CredentialRepositoryError> {
-        let account_id = ProviderAccountId::new(input.account_id)
-            .map_err(|_| CredentialRepositoryError::InvalidInput("account_id"))?;
-        let instance = ProviderInstanceId::new(input.provider_instance_id)
-            .map_err(|_| CredentialRepositoryError::InvalidInput("provider_instance_id"))?;
-        let provider = ProviderKind::new(PROVIDER_NAME)
-            .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
-        let revision = CredentialRevision::new(1)
-            .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
-        let access_token_expires_at = required_time(input.account.access_token_expires_at)?;
-        let upstream_user_id = input.account.chatgpt_user_id.clone();
-        let credential =
-            CodexCredentialCodec::encode_new(&input.secret, &input.account, Vec::new())?;
-        let has_refresh_token = input.secret.refresh_token.is_some();
-        let next_refresh_at = optional_time(input.next_refresh_at);
-        let account = ProviderAccount::new(
-            account_id.clone(),
-            instance.clone(),
-            provider,
-            input.name,
-            upstream_user_id,
-            revision,
-            access_token_expires_at,
-        )
-        .with_profile(
-            input.account.email,
-            Some(input.account.chatgpt_account_id),
-            input.account.plan_type,
-        )
-        .with_runtime_state(input.enabled, AccountAvailability::Ready, None)
-        .with_refresh_schedule(has_refresh_token, next_refresh_at);
-        self.store
-            .create_account(NewProviderAccount {
-                account,
-                credential,
-            })
-            .await?;
-        Ok(CredentialRecord {
-            account_id: account_id.to_string(),
-            provider_instance_id: instance.to_string(),
-            credential_revision: revision.get(),
-        })
     }
 
     pub async fn rotate_oauth_secret(

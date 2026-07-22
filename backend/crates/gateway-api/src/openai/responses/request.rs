@@ -30,7 +30,7 @@ const OPENAI_SUBAGENT_KEY: &str = "x-openai-subagent";
 const MAX_PROMPT_CACHE_KEY_BYTES: usize = 1_024;
 
 #[derive(Clone, Default)]
-pub(super) struct OpenAiRequestHeaders {
+pub struct OpenAiRequestHeaders {
     turn_state: Option<String>,
     turn_metadata: Option<String>,
     beta_features: Option<String>,
@@ -52,7 +52,9 @@ pub(super) struct OpenAiRequestHeaders {
 }
 
 impl OpenAiRequestHeaders {
-    pub(super) fn from_headers(headers: &HeaderMap) -> Self {
+    /// 提取 OpenAI/Codex 连接级请求头上下文。
+    #[must_use]
+    pub fn from_headers(headers: &HeaderMap) -> Self {
         let prompt_cache_seed = [
             "x-claude-code-session-id",
             "x-session-id",
@@ -307,17 +309,12 @@ impl fmt::Debug for DecodedResponsesRequest {
     }
 }
 
-/// 解码普通 `POST /v1/responses` 请求。
+/// 使用下游 OpenAI/Codex 请求头解码 `POST /v1/responses`。
 ///
 /// # Errors
 ///
 /// JSON 非法、顶层不是 object，或网关必须解释的路由字段无效时返回安全错误。
-pub fn decode_request(body: &[u8]) -> Result<DecodedResponsesRequest, RequestDecodeError> {
-    decode_request_inner(body, false, &OpenAiRequestHeaders::default(), None)
-}
-
-/// 使用下游 OpenAI/Codex 请求头解码 `POST /v1/responses`。
-pub(super) fn decode_request_with_headers(
+pub fn decode_request_with_headers(
     body: &[u8],
     headers: &HeaderMap,
     provider_kind: &ProviderKind,

@@ -133,7 +133,7 @@ async fn codex_backend_client_should_decode_permessage_deflate_context_takeover_
         test_wire_profile(),
     )
     .with_websocket_pool(pool);
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let mut request = codex_request("gpt-5.5", "be brief", Vec::new());
     request.set_previous_response_id(Some("resp_previous".to_string()));
     request.previous_response_scope = Some(PreviousResponseScope::Persisted);
 
@@ -156,7 +156,7 @@ async fn codex_backend_client_should_decode_permessage_deflate_context_takeover_
 
 #[test]
 fn websocket_connection_should_prepare_response_create_payload_text() {
-    let request = CodexResponsesRequest::new_http_sse(
+    let request = codex_request(
         "gpt-5.5",
         "be brief",
         vec![json!({
@@ -192,15 +192,15 @@ fn websocket_connection_should_prepare_response_create_payload_text() {
 
 #[test]
 fn websocket_connection_should_prepare_capture_payload_with_canonical_field_order() {
-    let mut request = CodexResponsesRequest::new_http_sse(
+    let mut request = codex_request_with_prompt_cache_key(
         "gpt-5.5",
         "private capture instructions",
         vec![json!({
             "role": "user",
             "content": "private capture prompt",
         })],
+        "session-1",
     );
-    request.set_prompt_cache_key(Some("session-1".to_string()));
     request.set_client_metadata(Some(json!({
         "thread_id": "capture-thread-secret",
         "safe": "capture",
@@ -263,7 +263,7 @@ async fn websocket_execute_response_create_request_should_collect_completed_sse(
         websocket.close(None).await.unwrap();
         payload
     });
-    let request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let request = codex_request("gpt-5.5", "be brief", Vec::new());
     let prepared = CodexWebSocketConnection::responses_create_request(
         &format!("http://{addr}"),
         "dGhlIHNhbXBsZSBub25jZQ==",
@@ -313,7 +313,7 @@ async fn websocket_execute_response_create_request_should_return_business_coded_
             .unwrap();
         websocket.close(None).await.unwrap();
     });
-    let request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let request = codex_request("gpt-5.5", "be brief", Vec::new());
     let prepared = CodexWebSocketConnection::responses_create_request(
         &format!("http://{addr}"),
         "dGhlIHNhbXBsZSBub25jZQ==",
@@ -565,7 +565,7 @@ async fn websocket_execute_response_create_request_should_forward_typed_events_w
             .unwrap();
         websocket.close(None).await.unwrap();
     });
-    let request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let request = codex_request("gpt-5.5", "be brief", Vec::new());
     let prepared = CodexWebSocketConnection::responses_create_request(
         &format!("http://{addr}"),
         "dGhlIHNhbXBsZSBub25jZQ==",
@@ -767,7 +767,7 @@ async fn websocket_execute_response_create_request_should_forward_incomplete_res
             .unwrap();
         websocket.close(None).await.unwrap();
     });
-    let request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let request = codex_request("gpt-5.5", "be brief", Vec::new());
     let prepared = CodexWebSocketConnection::responses_create_request(
         &format!("http://{addr}"),
         "dGhlIHNhbXBsZSBub25jZQ==",
@@ -817,7 +817,7 @@ async fn websocket_execute_response_create_request_should_reject_invalid_complet
             .unwrap();
         websocket.close(None).await.unwrap();
     });
-    let request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let request = codex_request("gpt-5.5", "be brief", Vec::new());
     let prepared = CodexWebSocketConnection::responses_create_request(
         &format!("http://{addr}"),
         "dGhlIHNhbXBsZSBub25jZQ==",
@@ -860,7 +860,7 @@ async fn websocket_execute_response_create_request_should_reject_completed_witho
             .unwrap();
         websocket.close(None).await.unwrap();
     });
-    let request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let request = codex_request("gpt-5.5", "be brief", Vec::new());
     let prepared = CodexWebSocketConnection::responses_create_request(
         &format!("http://{addr}"),
         "dGhlIHNhbXBsZSBub25jZQ==",
@@ -909,7 +909,7 @@ async fn websocket_execute_response_create_request_should_return_error_terminal_
             .unwrap();
         websocket.close(None).await.unwrap();
     });
-    let request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let request = codex_request("gpt-5.5", "be brief", Vec::new());
     let prepared = CodexWebSocketConnection::responses_create_request(
         &format!("http://{addr}"),
         "dGhlIHNhbXBsZSBub25jZQ==",
@@ -951,7 +951,7 @@ async fn codex_backend_client_should_timeout_when_upstream_is_silent() {
         test_wire_profile(),
     )
     .with_websocket_initial_event_timeout(Some(Duration::from_millis(30)));
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let mut request = codex_request("gpt-5.5", "be brief", Vec::new());
     request.set_previous_response_id(Some("resp_previous".to_string()));
     request.previous_response_scope = Some(PreviousResponseScope::Persisted);
 
@@ -1061,7 +1061,7 @@ async fn websocket_execute_response_create_request_should_reply_to_server_ping_b
             .unwrap();
         websocket.close(None).await.unwrap();
     });
-    let request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let request = codex_request("gpt-5.5", "be brief", Vec::new());
     let prepared = CodexWebSocketConnection::responses_create_request(
         &format!("http://{addr}"),
         "dGhlIHNhbXBsZSBub25jZQ==",
@@ -1097,7 +1097,7 @@ async fn codex_backend_client_stream_should_reject_binary_websocket_event() {
             .unwrap();
         websocket.close(None).await.unwrap();
     });
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let mut request = codex_request("gpt-5.5", "be brief", Vec::new());
     request.set_previous_response_id(Some("resp_previous".to_string()));
     request.previous_response_scope = Some(PreviousResponseScope::Persisted);
     request.force_http_sse = false;
@@ -1230,7 +1230,7 @@ async fn codex_backend_client_stream_should_error_when_websocket_closes_before_t
             .unwrap();
         websocket.close(None).await.unwrap();
     });
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let mut request = codex_request("gpt-5.5", "be brief", Vec::new());
     request.set_previous_response_id(Some("resp_previous".to_string()));
     request.previous_response_scope = Some(PreviousResponseScope::Persisted);
     request.force_http_sse = false;
@@ -1475,7 +1475,7 @@ async fn codex_backend_client_stream_should_wait_for_terminal_after_active_webso
             .unwrap();
         websocket.close(None).await.unwrap();
     });
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let mut request = codex_request("gpt-5.5", "be brief", Vec::new());
     request.set_previous_response_id(Some("resp_previous".to_string()));
     request.previous_response_scope = Some(PreviousResponseScope::Persisted);
     request.force_http_sse = false;
@@ -1537,7 +1537,7 @@ async fn codex_backend_client_stream_should_timeout_when_active_websocket_stalls
             .unwrap();
         futures::future::pending::<()>().await;
     });
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let mut request = codex_request("gpt-5.5", "be brief", Vec::new());
     request.set_previous_response_id(Some("resp_previous".to_string()));
     request.previous_response_scope = Some(PreviousResponseScope::Persisted);
     request.force_http_sse = false;
@@ -1632,7 +1632,7 @@ async fn codex_backend_client_should_use_websocket_when_previous_response_id_is_
         websocket.close(None).await.unwrap();
         payload
     });
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let mut request = codex_request("gpt-5.5", "be brief", Vec::new());
     request.set_previous_response_id(Some("resp_previous".to_string()));
     request.previous_response_scope = Some(PreviousResponseScope::Persisted);
     let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));

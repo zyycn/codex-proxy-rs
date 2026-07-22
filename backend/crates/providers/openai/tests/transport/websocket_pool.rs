@@ -42,10 +42,10 @@ async fn codex_backend_client_should_reuse_pooled_websocket_for_same_account_and
         test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let mut request =
+        codex_request_with_prompt_cache_key("gpt-5.5", "be brief", Vec::new(), "conversation-pool");
     request.set_previous_response_id(Some("resp_previous".to_string()));
     request.previous_response_scope = Some(PreviousResponseScope::Persisted);
-    request.set_prompt_cache_key(Some("conversation-pool".to_string()));
 
     let first = backend
         .create_response(
@@ -98,8 +98,7 @@ async fn exact_continuation_reuses_owning_socket_after_connection_profile_update
         profile.clone(),
     )
     .with_websocket_pool(Arc::new(CodexWebSocketPool::new(1, Duration::from_mins(1))));
-    let mut first_request = pooled_websocket_request("wire-profile-continuation");
-    first_request.set_store(false);
+    let first_request = pooled_websocket_request("wire-profile-continuation");
     let first = backend
         .create_response(
             &first_request,
@@ -180,10 +179,14 @@ async fn codex_backend_client_should_open_fresh_socket_when_idle_pooled_websocke
         test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let mut request = codex_request_with_prompt_cache_key(
+        "gpt-5.5",
+        "be brief",
+        Vec::new(),
+        "conversation-pool-silent",
+    );
     request.set_previous_response_id(Some("resp_previous".to_string()));
     request.previous_response_scope = Some(PreviousResponseScope::Persisted);
-    request.set_prompt_cache_key(Some("conversation-pool-silent".to_string()));
 
     let first = backend
         .create_response(
@@ -471,10 +474,10 @@ async fn codex_backend_client_should_not_reuse_pooled_websocket_across_local_acc
         test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let mut request =
+        codex_request_with_prompt_cache_key("gpt-5.5", "be brief", Vec::new(), "conversation-pool");
     request.set_previous_response_id(Some("resp_previous".to_string()));
     request.previous_response_scope = Some(PreviousResponseScope::Persisted);
-    request.set_prompt_cache_key(Some("conversation-pool".to_string()));
 
     let first = backend
         .create_response_with_pool_account_started_at(
@@ -1448,10 +1451,14 @@ async fn codex_backend_client_should_keep_idle_pooled_websocket_alive_across_rep
         test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let mut request = codex_request_with_prompt_cache_key(
+        "gpt-5.5",
+        "be brief",
+        Vec::new(),
+        "conversation-pool-background",
+    );
     request.set_previous_response_id(Some("resp_previous".to_string()));
     request.previous_response_scope = Some(PreviousResponseScope::Persisted);
-    request.set_prompt_cache_key(Some("conversation-pool-background".to_string()));
 
     let first = backend
         .create_response(
@@ -1611,10 +1618,14 @@ async fn codex_backend_client_should_close_idle_pooled_websocket_when_account_is
         test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let mut request = codex_request_with_prompt_cache_key(
+        "gpt-5.5",
+        "be brief",
+        Vec::new(),
+        "conversation-pool-evict",
+    );
     request.set_previous_response_id(Some("resp_previous".to_string()));
     request.previous_response_scope = Some(PreviousResponseScope::Persisted);
-    request.set_prompt_cache_key(Some("conversation-pool-evict".to_string()));
 
     let first = backend
         .create_response(
@@ -1691,10 +1702,14 @@ async fn codex_backend_client_should_stop_reusing_pooled_websockets_after_shutdo
         test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let mut request = codex_request_with_prompt_cache_key(
+        "gpt-5.5",
+        "be brief",
+        Vec::new(),
+        "conversation-pool-shutdown",
+    );
     request.set_previous_response_id(Some("resp_previous".to_string()));
     request.previous_response_scope = Some(PreviousResponseScope::Persisted);
-    request.set_prompt_cache_key(Some("conversation-pool-shutdown".to_string()));
 
     let first = backend
         .create_response(
@@ -1800,10 +1815,14 @@ async fn codex_backend_client_should_close_idle_pooled_websocket_after_liveness_
         test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let mut request = codex_request_with_prompt_cache_key(
+        "gpt-5.5",
+        "be brief",
+        Vec::new(),
+        "conversation-pool-liveness",
+    );
     request.set_previous_response_id(Some("resp_previous".to_string()));
     request.previous_response_scope = Some(PreviousResponseScope::Persisted);
-    request.set_prompt_cache_key(Some("conversation-pool-liveness".to_string()));
 
     let first = backend
         .create_response(
@@ -1894,10 +1913,10 @@ async fn codex_backend_client_should_discard_pooled_websocket_after_error_termin
         test_wire_profile(),
     )
     .with_websocket_pool(pool);
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
+    let mut request =
+        codex_request_with_prompt_cache_key("gpt-5.5", "be brief", Vec::new(), "conversation-pool");
     request.set_previous_response_id(Some("resp_previous".to_string()));
     request.previous_response_scope = Some(PreviousResponseScope::Persisted);
-    request.set_prompt_cache_key(Some("conversation-pool".to_string()));
 
     let first = backend
         .create_response(

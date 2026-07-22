@@ -4,7 +4,7 @@ use gateway_core::operation::{
 };
 use serde_json::{Map, Value, json};
 
-use provider_openai::{CodexRequestEncodeError, codex_request_semantics, encode_generate_request};
+use provider_openai::{CodexRequestEncodeError, encode_generate_request};
 
 #[test]
 fn encoder_should_preserve_openai_wire_fields_without_deriving_accountless_pool_identity() {
@@ -291,7 +291,9 @@ fn observability_semantics_should_reuse_codex_turn_metadata() {
         .expect("generate")
         .with_provider_options(providers);
 
-    let semantics = codex_request_semantics(&request);
+    let semantics = encode_generate_request(&request, "observability")
+        .expect("observability request should encode")
+        .semantics();
 
     assert_eq!(semantics.request_kind.as_deref(), Some("compaction"));
     assert_eq!(semantics.subagent_kind.as_deref(), Some("review"));
@@ -324,7 +326,9 @@ fn observability_semantics_should_use_the_transparent_openai_payload() {
     .expect("OpenAI payload");
     let request = GenerateRequest::from_protocol_payload(Vec::new(), payload);
 
-    let semantics = codex_request_semantics(&request);
+    let semantics = encode_generate_request(&request, "observability")
+        .expect("transparent OpenAI request should encode")
+        .semantics();
 
     assert_eq!(semantics.reasoning_preset, Some("ultra"));
     assert!(semantics.compact);

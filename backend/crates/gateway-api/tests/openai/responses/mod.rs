@@ -1,9 +1,11 @@
 mod http;
 mod websocket;
 
+use axum::http::HeaderMap;
 use gateway_api::openai::responses::{
-    ContinuationIntent, OpenAiResponsesEncoder, RequestDecodeError, ResponseEncodeError,
-    ResponsesCollector, decode_request, decode_response_create,
+    ContinuationIntent, DecodedResponsesRequest, OpenAiRequestHeaders, OpenAiResponsesEncoder,
+    RequestDecodeError, ResponseCreateFrameError, ResponseEncodeError, ResponsesCollector,
+    decode_request_with_headers, decode_response_create_with_context,
 };
 use gateway_core::{
     accounting::{CalculatedCost, ProviderReportedCost, Usage},
@@ -17,9 +19,28 @@ use gateway_core::{
         ContentPart, Feature, MessageRole, Operation, OutputFormat, ReasoningEffort,
         ReasoningSummary, ResponsePersistence,
     },
+    routing::ProviderKind,
 };
 use gateway_protocol::openai::sse::parse_sse_events;
 use serde_json::{Value, json};
+
+fn openai_provider() -> ProviderKind {
+    ProviderKind::new("openai").expect("OpenAI provider kind")
+}
+
+fn decode_request(body: &[u8]) -> Result<DecodedResponsesRequest, RequestDecodeError> {
+    decode_request_with_headers(body, &HeaderMap::new(), &openai_provider())
+}
+
+fn decode_response_create(
+    payload: &str,
+) -> Result<DecodedResponsesRequest, ResponseCreateFrameError> {
+    decode_response_create_with_context(
+        payload,
+        &OpenAiRequestHeaders::default(),
+        &openai_provider(),
+    )
+}
 
 fn generate_request(body: Value) -> gateway_api::openai::responses::DecodedResponsesRequest {
     decode_request(body.to_string().as_bytes()).expect("test request should decode")
@@ -59,6 +80,36 @@ fn usage() -> Usage {
     usage.reasoning_tokens = Some(1);
     usage.total_tokens = Some(14);
     usage
+}
+
+struct CollectedResponses {
+    response: Value,
+    sse_frames: Vec<String>,
+}
+
+impl CollectedResponses {
+    fn response(&self) -> &Value {
+        &self.response
+    }
+
+    fn sse_frames(&self) -> &[String] {
+        &self.sse_frames
+    }
+}
+
+fn collect_responses(
+    created_at: u64,
+    events: &[GatewayEvent],
+) -> Result<CollectedResponses, ResponseEncodeError> {
+    let mut collector = ResponsesCollector::new(created_at);
+    let mut sse_frames = Vec::new();
+    for event in events {
+        sse_frames.extend(collector.push(event)?);
+    }
+    Ok(CollectedResponses {
+        response: collector.finish()?,
+        sse_frames,
+    })
 }
 
 fn text_events() -> Vec<GatewayEvent> {
@@ -706,8 +757,8 @@ fn request_errors_should_not_disclose_prompt_or_raw_body() {
 #[test]
 fn stream_terminal_response_should_equal_non_stream_response() {
     let events = text_events();
-    let collected = ResponsesCollector::collect(1_700_000_000, &events)
-        .expect("canonical events should encode");
+    let collected =
+        collect_responses(1_700_000_000, &events).expect("canonical events should encode");
     let sse = collected.sse_frames().join("");
     let parsed = parse_sse_events(&sse).expect("generated SSE should parse");
     let terminal = parsed
@@ -722,13 +773,16 @@ fn stream_terminal_response_should_equal_non_stream_response() {
 #[test]
 fn websocket_events_should_reuse_the_exact_sse_event_json() {
     let events = text_events();
-    let mut sse_collector = ResponsesCollector::new(1_700_000_000);
-    let mut websocket_collector = ResponsesCollector::new(1_700_000_000);
+    let mut sse_encoder = OpenAiResponsesEncoder::new(1_700_000_000);
+    let mut websocket_encoder = OpenAiResponsesEncoder::new(1_700_000_000);
 
     for event in &events {
-        let sse_frames = sse_collector.push(event).expect("SSE event encoding");
-        let websocket_events = websocket_collector
-            .push_websocket_events(event)
+        let provider_event = ProviderEvent::canonical(event.clone());
+        let sse_frames = sse_encoder
+            .push_sse(&provider_event)
+            .expect("SSE event encoding");
+        let websocket_events = websocket_encoder
+            .push_websocket(&provider_event)
             .expect("WebSocket event encoding");
         let parsed = parse_sse_events(&sse_frames.join(""))
             .expect("generated SSE frames remain parseable")
@@ -743,8 +797,8 @@ fn websocket_events_should_reuse_the_exact_sse_event_json() {
 #[test]
 fn stream_should_emit_first_terminal_and_usage_once() {
     let events = text_events();
-    let collected = ResponsesCollector::collect(1_700_000_000, &events)
-        .expect("canonical events should encode");
+    let collected =
+        collect_responses(1_700_000_000, &events).expect("canonical events should encode");
     let parsed =
         parse_sse_events(&collected.sse_frames().join("")).expect("generated SSE should parse");
     let first = parsed
@@ -786,7 +840,7 @@ fn collector_should_encode_reasoning_and_whole_function_call() {
         }),
         GatewayEvent::Completed(response_meta().with_finish_reason(FinishReason::ToolCall)),
     ];
-    let collected = ResponsesCollector::collect(1_700_000_000, &events)
+    let collected = collect_responses(1_700_000_000, &events)
         .expect("reasoning and function call should encode");
 
     assert_eq!(
@@ -810,10 +864,8 @@ fn collector_should_encode_reasoning_and_whole_function_call() {
 #[test]
 fn collector_should_generate_deterministic_output_ids() {
     let events = text_events();
-    let first =
-        ResponsesCollector::collect(1_700_000_000, &events).expect("first encoding should work");
-    let second =
-        ResponsesCollector::collect(1_700_000_000, &events).expect("second encoding should work");
+    let first = collect_responses(1_700_000_000, &events).expect("first encoding should work");
+    let second = collect_responses(1_700_000_000, &events).expect("second encoding should work");
 
     assert_eq!(
         first.response().pointer("/output/0/id"),
@@ -826,8 +878,8 @@ fn collector_should_encode_length_termination_as_incomplete() {
     let mut events = text_events();
     let terminal = events.last_mut().expect("terminal event");
     *terminal = GatewayEvent::Completed(response_meta().with_finish_reason(FinishReason::Length));
-    let collected = ResponsesCollector::collect(1_700_000_000, &events)
-        .expect("length termination should encode");
+    let collected =
+        collect_responses(1_700_000_000, &events).expect("length termination should encode");
     let parsed =
         parse_sse_events(&collected.sse_frames().join("")).expect("generated SSE should parse");
 
@@ -872,7 +924,7 @@ fn collector_should_keep_accounting_costs_out_of_the_responses_wire() {
         GatewayEvent::ProviderCost(cost),
         GatewayEvent::Completed(completed_meta()),
     ];
-    let collected = ResponsesCollector::collect(1_700_000_000, &events)
+    let collected = collect_responses(1_700_000_000, &events)
         .expect("provider cost is accounting-only metadata");
 
     assert!(collected.response().get("cost").is_none());
@@ -1085,7 +1137,7 @@ fn typed_compaction_output_should_encode_the_codex_remote_compaction_v2_contract
         )),
         GatewayEvent::Completed(completed_meta()),
     ];
-    let collected = ResponsesCollector::collect(1_700_000_000, &events)
+    let collected = collect_responses(1_700_000_000, &events)
         .expect("typed compaction output should be representable as OpenAI Responses");
     let parsed =
         parse_sse_events(&collected.sse_frames().join("")).expect("compaction SSE should be valid");

@@ -24,13 +24,6 @@ fn endpoints_should_join_backend_paths() {
         provider_openai::transport::endpoint_url("https://api.example.com/", "/codex/responses"),
         "https://api.example.com/codex/responses"
     );
-    assert_eq!(
-        provider_openai::transport::endpoint_request_path(
-            "https://api.example.com/backend-api",
-            "/codex/usage"
-        ),
-        "/backend-api/codex/usage"
-    );
 }
 
 #[test]
@@ -124,7 +117,7 @@ async fn codex_backend_client_should_bound_and_redact_oversized_error_body() {
         server.uri(),
         test_wire_profile(),
     );
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "", Vec::new());
+    let mut request = codex_request("gpt-5.5", "", Vec::new());
     request.force_http_sse = true;
 
     let result = client
@@ -176,7 +169,7 @@ async fn codex_backend_client_should_parse_retry_after_from_rate_limit_error_bod
         server.uri(),
         test_wire_profile(),
     );
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "", Vec::new());
+    let mut request = codex_request("gpt-5.5", "", Vec::new());
     request.force_http_sse = true;
 
     let result = client
@@ -235,7 +228,7 @@ async fn codex_backend_http_sse_should_fail_after_five_minutes_without_stream_da
         base_url,
         test_wire_profile(),
     );
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "", Vec::new());
+    let mut request = codex_request("gpt-5.5", "", Vec::new());
     request.force_http_sse = true;
 
     let mut response = client
@@ -281,7 +274,7 @@ async fn codex_backend_client_should_capture_only_safe_response_metadata() {
         server.uri(),
         test_wire_profile(),
     );
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "", Vec::new());
+    let mut request = codex_request("gpt-5.5", "", Vec::new());
     request.force_http_sse = true;
 
     let response = client

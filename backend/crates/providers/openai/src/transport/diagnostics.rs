@@ -314,13 +314,6 @@ impl CodexUpstreamDiagnostics {
             && self.identity_error_code.is_none()
             && self.trace_headers.is_empty()
     }
-
-    pub fn cf_ray(&self) -> Option<&str> {
-        self.trace_headers
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case("cf-ray"))
-            .map(|(_, value)| value.as_str())
-    }
 }
 
 fn pair_value(headers: &[(String, String)], name: &str) -> Option<String> {
