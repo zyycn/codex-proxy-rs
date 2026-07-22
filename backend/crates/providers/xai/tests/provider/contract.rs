@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use futures::{StreamExt, stream};
 use gateway_core::engine::continuation::{
-    ContinuationBinding, NativeContinuationPin, NativeContinuationReuse, PreviousResponseId,
+    ContinuationBinding, NativeContinuationPin, PreviousResponseId,
 };
 use gateway_core::engine::credential::{
     AccountSelectionPolicy, CredentialRevision, ProviderAccountStore, RotationStrategy,
@@ -1154,7 +1154,6 @@ async fn native_previous_response_is_rejected_before_selection() {
         ProviderKind::new("openai").expect("provider"),
         instance_id(),
         account_id("provider"),
-        NativeContinuationReuse::Reusable,
     );
     let error = match provider
         .execute(
@@ -1189,7 +1188,6 @@ async fn native_previous_response_pins_account_and_sends_upstream_handle() {
         ProviderKind::new("xai").expect("provider"),
         instance_id(),
         account_id("provider"),
-        NativeContinuationReuse::Reusable,
     );
     let mut stream = provider
         .execute(
@@ -1236,7 +1234,6 @@ async fn native_previous_response_does_not_allow_quota_or_rate_limit_account_rot
         ProviderKind::new("xai").expect("provider"),
         instance_id(),
         account_id("provider"),
-        NativeContinuationReuse::Reusable,
     );
     let mut stream = provider
         .execute(
@@ -1330,7 +1327,6 @@ async fn connection_state_inherits_session_and_recovers_reasoning_on_pinned_acco
         ProviderKind::new("xai").expect("provider"),
         instance_id(),
         account_id("provider"),
-        NativeContinuationReuse::Reusable,
     );
     let continued_operation = operation_with_state(
         json!({
@@ -1457,7 +1453,6 @@ async fn replay_owner_should_reencode_custom_apply_patch_call_for_grok() {
         ProviderKind::new("xai").expect("provider"),
         instance_id(),
         account_id("provider"),
-        NativeContinuationReuse::Reusable,
     );
     let replay_operation = operation_with_state(
         json!({
@@ -1534,7 +1529,6 @@ async fn missing_native_response_should_be_replay_safe_for_the_same_account() {
         ProviderKind::new("xai").expect("provider"),
         instance_id(),
         account_id("provider"),
-        NativeContinuationReuse::Reusable,
     );
     let operation = operation_with_state(
         json!({

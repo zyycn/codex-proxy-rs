@@ -95,6 +95,7 @@ pub struct NewModelRequest {
     pub request_kind: Option<String>,
     pub subagent_kind: Option<String>,
     pub compact: bool,
+    pub image_generation_requested: bool,
     pub started_at: DateTime<Utc>,
     pub deadline_at: DateTime<Utc>,
 }
@@ -171,6 +172,8 @@ pub struct ModelRequestUsage {
     pub cached_tokens: Option<u64>,
     pub cache_write_tokens: Option<u64>,
     pub reasoning_tokens: Option<u64>,
+    pub image_input_tokens: Option<u64>,
+    pub image_output_tokens: Option<u64>,
     pub total_tokens: Option<u64>,
 }
 
@@ -222,11 +225,13 @@ pub struct ModelRequestFinalization {
     pub upstream_response_id: Option<String>,
     pub upstream_transport: Option<String>,
     pub http_version: Option<String>,
+    pub websocket_pool: Option<String>,
     pub error_kind: Option<String>,
     pub provider_error_code: Option<String>,
     pub error_message: Option<String>,
     pub retry_after_ms: Option<u64>,
     pub usage: ModelRequestUsage,
+    pub image_generation_succeeded: Option<bool>,
     pub cost_source: CostSource,
     pub cost_amount: Option<DecimalAmount>,
     pub cost_currency: Option<String>,
@@ -264,6 +269,13 @@ impl ModelRequestFinalization {
             if let Some(value) = value {
                 require_nonempty(ENTITY, field, value)?;
             }
+        }
+        if self
+            .websocket_pool
+            .as_deref()
+            .is_some_and(|kind| !matches!(kind, "new" | "reuse"))
+        {
+            return Err(invalid("websocket pool must be new or reuse"));
         }
         self.timings.validate()
     }
@@ -333,11 +345,11 @@ impl ModelRequestRepository for PgExecutionStore {
                id, client_api_key_id, client_api_key_ref, config_revision, protocol,
                operation, endpoint, client_transport, requested_model_id,
                input_token_estimate, client_ip, user_agent, reasoning_effort,
-               reasoning_preset, request_kind, subagent_kind, compact, started_at,
-               deadline_at
+               reasoning_preset, request_kind, subagent_kind, compact,
+               image_generation_requested, started_at, deadline_at
              ) values (
                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::inet, $12, $13,
-               $14, $15, $16, $17, $18, $19
+               $14, $15, $16, $17, $18, $19, $20
              )",
         )
         .bind(request.id)
@@ -360,6 +372,7 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(request.request_kind)
         .bind(request.subagent_kind)
         .bind(request.compact)
+        .bind(request.image_generation_requested)
         .bind(request.started_at)
         .bind(request.deadline_at)
         .execute(&self.pool)
@@ -486,13 +499,15 @@ impl ModelRequestRepository for PgExecutionStore {
                  error_kind = $11, provider_error_code = $12, error_message = $13,
                  retry_after_ms = $14, input_tokens = $15, output_tokens = $16,
                  cached_tokens = $17, cache_write_tokens = $18, reasoning_tokens = $19,
-                 total_tokens = $20, cost_source = $21, cost_amount = $22::numeric,
-                 cost_currency = $23, transport_decision_wait_ms = $24, connect_ms = $25,
-                 headers_ms = $26, first_event_ms = $27, first_reasoning_ms = $28,
-                 first_text_ms = $29, first_token_ms = $30, provider_processing_ms = $31,
-                 latency_ms = $32, completed_at = $33,
-                 upstream_transport = coalesce($34, upstream_transport),
-                 http_version = coalesce($35, http_version)
+                 image_input_tokens = $20, image_output_tokens = $21, total_tokens = $22,
+                 image_generation_succeeded = $23, cost_source = $24,
+                 cost_amount = $25::numeric, cost_currency = $26,
+                 transport_decision_wait_ms = $27, connect_ms = $28,
+                 headers_ms = $29, first_event_ms = $30, first_reasoning_ms = $31,
+                 first_text_ms = $32, first_token_ms = $33, provider_processing_ms = $34,
+                 latency_ms = $35, completed_at = $36,
+                 upstream_transport = coalesce($37, upstream_transport),
+                 http_version = coalesce($38, http_version), websocket_pool = $39
              where id = $1 and outcome = 'running'",
         )
         .bind(&finalization.model_request_id)
@@ -533,9 +548,18 @@ impl ModelRequestRepository for PgExecutionStore {
             "reasoning_tokens",
         )?)
         .bind(optional_i64(
+            finalization.usage.image_input_tokens,
+            "image_input_tokens",
+        )?)
+        .bind(optional_i64(
+            finalization.usage.image_output_tokens,
+            "image_output_tokens",
+        )?)
+        .bind(optional_i64(
             finalization.usage.total_tokens,
             "total_tokens",
         )?)
+        .bind(finalization.image_generation_succeeded)
         .bind(finalization.cost_source.as_str())
         .bind(finalization.cost_amount.map(|amount| amount.to_string()))
         .bind(finalization.cost_currency)
@@ -569,6 +593,7 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(finalization.completed_at)
         .bind(finalization.upstream_transport)
         .bind(finalization.http_version)
+        .bind(finalization.websocket_pool)
         .execute(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("finalize model request"))?;
@@ -582,7 +607,11 @@ impl ModelRequestRepository for PgExecutionStore {
         let result = sqlx::query(
             "update model_requests
              set outcome = 'incomplete', error_kind = 'process_interrupted',
-                 error_message = 'request did not reach a terminal state', completed_at = $1
+                 error_message = 'request did not reach a terminal state',
+                 image_generation_succeeded = case
+                   when image_generation_requested then false else null
+                 end,
+                 completed_at = $1
              where outcome = 'running' and deadline_at <= $1",
         )
         .bind(now)
@@ -622,6 +651,7 @@ impl ExecutionStore for PgExecutionStore {
             request_kind: request.request_kind,
             subagent_kind: request.subagent_kind,
             compact: request.compact,
+            image_generation_requested: request.image_generation_requested,
             started_at: DateTime::<Utc>::from(request.started_at),
             deadline_at: DateTime::<Utc>::from(request.deadline_at),
         })
@@ -790,11 +820,13 @@ impl ExecutionStore for PgExecutionStore {
                 upstream_response_id: finalization.upstream_response_id,
                 upstream_transport: finalization.upstream_transport,
                 http_version: finalization.http_version,
+                websocket_pool: finalization.websocket_pool,
                 error_kind,
                 provider_error_code: finalization.provider_error_code,
                 error_message,
                 retry_after_ms: finalization.retry_after_ms,
                 usage: usage_from_core(finalization.usage),
+                image_generation_succeeded: finalization.image_generation_succeeded,
                 cost_source,
                 cost_amount,
                 cost_currency,
@@ -838,6 +870,8 @@ fn usage_from_core(usage: CoreUsage) -> ModelRequestUsage {
         cached_tokens: usage.cached_tokens,
         cache_write_tokens: usage.cache_write_tokens,
         reasoning_tokens: usage.reasoning_tokens,
+        image_input_tokens: usage.image_input_tokens,
+        image_output_tokens: usage.image_output_tokens,
         total_tokens: usage.total_tokens,
     }
 }

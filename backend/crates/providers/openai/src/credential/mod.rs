@@ -19,7 +19,7 @@ pub(crate) use oauth::oauth_owner_ref;
 pub use admin::{
     CodexCprExportDocument, CodexCredentialAdmin, CodexCredentialAdminError,
     CodexCredentialAdminService, ExportManagedCodexCredential, ImportCodexOAuthCredential,
-    ImportCodexOAuthCredentialBatch, PreparedCodexAccountImport, PreparedCodexCredentialRotation,
+    PreparedCodexAccountImport, PreparedCodexCredentialRotation,
     PreparedCodexCredentialRotationGuard, RotateManagedCodexCredential,
 };
 pub use catalog::{

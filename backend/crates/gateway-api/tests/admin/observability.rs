@@ -172,12 +172,16 @@ mod response {
             cached_tokens: None,
             cache_write_tokens: None,
             reasoning_tokens: None,
+            image_input_tokens: None,
+            image_output_tokens: None,
             total_tokens: Some(3),
             input_tokens_display: "1".to_owned(),
             output_tokens_display: "2".to_owned(),
             cached_tokens_display: "-".to_owned(),
             cache_write_tokens_display: "-".to_owned(),
             reasoning_tokens_display: "-".to_owned(),
+            image_input_tokens_display: "-".to_owned(),
+            image_output_tokens_display: "-".to_owned(),
             total_tokens_display: "3".to_owned(),
         };
         let cursor = CursorWire {
@@ -257,7 +261,7 @@ async fn usage_route_should_forward_a_bounded_unknown_outcome_filter() {
 }
 
 #[tokio::test]
-async fn usage_route_should_return_the_recorded_endpoint_as_route() {
+async fn usage_route_should_expose_image_and_websocket_facts() {
     use axum::{
         body::{Body, to_bytes},
         http::{Request, StatusCode, header},
@@ -293,6 +297,7 @@ async fn usage_route_should_return_the_recorded_endpoint_as_route() {
             upstream_model_id: Some("grok-4.5".to_owned()),
             upstream_transport: Some("http_sse".to_owned()),
             http_version: Some("h2".to_owned()),
+            websocket_pool: Some("reuse".to_owned()),
             attempt_count: 1,
             upstream_send_state: "sent".to_owned(),
             downstream_committed_at: None,
@@ -311,6 +316,8 @@ async fn usage_route_should_return_the_recorded_endpoint_as_route() {
             cached_tokens: Some(0),
             cache_write_tokens: Some(0),
             reasoning_tokens: Some(0),
+            image_input_tokens: Some(31),
+            image_output_tokens: Some(9),
             total_tokens: Some(2),
             cost_source: "unavailable".to_owned(),
             cost_amount: None,
@@ -332,6 +339,8 @@ async fn usage_route_should_return_the_recorded_endpoint_as_route() {
             request_kind: None,
             subagent_kind: None,
             compact: false,
+            image_generation_requested: true,
+            image_generation_succeeded: Some(true),
             started_at: Utc::now(),
             deadline_at: Utc::now(),
             completed_at: Some(Utc::now()),
@@ -354,5 +363,22 @@ async fn usage_route_should_return_the_recorded_endpoint_as_route() {
         .expect("usage response body");
     let value: serde_json::Value = serde_json::from_slice(&body).expect("usage response JSON");
 
-    assert_eq!(value["data"]["items"][0]["route"], "/v1/responses");
+    assert_eq!(
+        serde_json::json!({
+            "route": value["data"]["items"][0]["route"],
+            "imageInputTokens": value["data"]["items"][0]["tokenDetails"]["imageInputTokens"],
+            "imageOutputTokens": value["data"]["items"][0]["tokenDetails"]["imageOutputTokens"],
+            "websocketPool": value["data"]["items"][0]["metadata"]["websocketPool"],
+            "imageGenerationRequested": value["data"]["items"][0]["metadata"]["imageGenerationRequested"],
+            "imageGenerationSucceeded": value["data"]["items"][0]["metadata"]["imageGenerationSucceeded"],
+        }),
+        serde_json::json!({
+            "route": "/v1/responses",
+            "imageInputTokens": 31,
+            "imageOutputTokens": 9,
+            "websocketPool": "reuse",
+            "imageGenerationRequested": true,
+            "imageGenerationSucceeded": true,
+        })
+    );
 }

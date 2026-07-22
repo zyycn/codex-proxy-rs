@@ -10,7 +10,6 @@ use std::{
     time::Duration,
 };
 
-use serde_json::{Value, json};
 use tokio::{sync::Semaphore, time::Instant};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use uuid::Uuid;
@@ -393,8 +392,8 @@ impl WebSocketPoolDecision {
         self.kind.as_str()
     }
 
-    pub fn metadata_value(self) -> Value {
-        json!({ "kind": self.kind() })
+    pub const fn is_reuse(self) -> bool {
+        matches!(self.kind, WebSocketPoolDecisionKind::Reuse)
     }
 }
 

@@ -181,26 +181,6 @@ impl GrokCredentialAdmin {
         })
     }
 
-    /// 批量验证 OAuth account；任一输入失败或 ID 重复时整批拒绝。
-    pub fn prepare_import_batch(
-        &self,
-        inputs: &[CreateGrokCredential],
-    ) -> Result<Vec<NewProviderAccount>, GrokCredentialRepositoryError> {
-        if inputs.is_empty() || inputs.len() > MAX_IMPORT_BATCH {
-            return Err(GrokCredentialRepositoryError::InvalidInput("batch"));
-        }
-        let mut ids = BTreeSet::new();
-        let mut prepared = Vec::with_capacity(inputs.len());
-        for input in inputs {
-            let account = self.prepare_import(input)?;
-            if !ids.insert(account.account.id().clone()) {
-                return Err(GrokCredentialRepositoryError::InvalidInput("account_id"));
-            }
-            prepared.push(account);
-        }
-        Ok(prepared)
-    }
-
     /// 把已验证 token 的 Provider 生命周期事实一次性投影为 Core 创建命令。
     pub fn prepare_verified_account(
         &self,

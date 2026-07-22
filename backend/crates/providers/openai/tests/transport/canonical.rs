@@ -82,6 +82,29 @@ fn decoder_should_normalize_text_usage_and_completion() {
 }
 
 #[test]
+fn decoder_should_preserve_image_tool_tokens_in_canonical_usage() {
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_image_usage\",\"model\":\"gpt-test\"}}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_image_usage\",\"model\":\"gpt-test\",\"status\":\"completed\",\"usage\":{\"input_tokens\":12,\"output_tokens\":5,\"total_tokens\":17},\"tool_usage\":{\"image_gen\":{\"input_tokens\":31,\"output_tokens\":9}}}}\n\n",
+    );
+    let events = CodexCanonicalDecoder::new("fallback")
+        .push(body.as_bytes())
+        .expect("canonical image usage response");
+    let image_usage = canonical_facts(&events)
+        .into_iter()
+        .find_map(|event| match event {
+            GatewayEvent::Usage(usage) => {
+                Some((usage.image_input_tokens, usage.image_output_tokens))
+            }
+            _ => None,
+        });
+
+    assert_eq!(image_usage, Some((Some(31), Some(9))));
+}
+
+#[test]
 fn decoder_should_accept_official_codex_metadata_lifecycle_events() {
     let body = concat!(
         "event: codex.rate_limits\n",

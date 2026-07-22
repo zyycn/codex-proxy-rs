@@ -1,5 +1,5 @@
 use chrono::{Duration, Utc};
-use gateway_core::accounting::{CalculatedCost, Usage};
+use gateway_core::accounting::{CalculatedCost, CostEstimate, Usage};
 use gateway_core::engine::{
     ExecutionOutcome, ExecutionStore, ModelRequestFinalization as CoreModelRequestFinalization,
     ModelRequestId, ModelRequestTimings as CoreModelRequestTimings, UpstreamSendState,
@@ -35,6 +35,7 @@ fn model_request_rejects_mismatched_client_key_live_id() {
         request_kind: None,
         subagent_kind: None,
         compact: false,
+        image_generation_requested: false,
         started_at,
         deadline_at: started_at + Duration::seconds(30),
     };
@@ -136,36 +137,17 @@ async fn core_adapter_should_persist_calculated_cost_exactly() {
     .expect("seed model request attempt");
     let repository = PgExecutionStore::new(database.pool.clone());
 
-    ExecutionStore::finalize_model_request(
-        &repository,
-        CoreModelRequestFinalization {
-            request_id: ModelRequestId::new("req_calculated_cost").expect("request id"),
-            outcome: ExecutionOutcome::Succeeded,
-            send_state: UpstreamSendState::Sent,
-            attempt_count: 1,
-            downstream_committed_at: None,
-            client_status_code: Some(200),
-            client_response_id: None,
-            upstream_status_code: Some(200),
-            upstream_request_id: None,
-            upstream_response_id: None,
-            upstream_transport: Some("websocket".to_owned()),
-            http_version: Some("HTTP/2".to_owned()),
-            error: None,
-            provider_error_code: None,
-            retry_after_ms: None,
-            usage: Usage::new(),
-            cost: CalculatedCost::from_usd_ticks(12_345)
-                .expect("calculated cost")
-                .into_estimate(),
-            timings: CoreModelRequestTimings::default(),
-            completed_at: std::time::SystemTime::now(),
-        },
-    )
-    .await
-    .expect("persist calculated cost");
-    let persisted: (String, String, String, String, String) = sqlx::query_as(
-        "select cost_source, cost_amount::text, cost_currency, upstream_transport, http_version
+    let mut finalization = successful_core_finalization("req_calculated_cost");
+    finalization.websocket_pool = Some("reuse".to_owned());
+    finalization.cost = CalculatedCost::from_usd_ticks(12_345)
+        .expect("calculated cost")
+        .into_estimate();
+    ExecutionStore::finalize_model_request(&repository, finalization)
+        .await
+        .expect("persist calculated cost");
+    let persisted: (String, String, String, String, String, String) = sqlx::query_as(
+        "select cost_source, cost_amount::text, cost_currency, upstream_transport, http_version,
+                websocket_pool
          from model_requests where id = 'req_calculated_cost'",
     )
     .fetch_one(&database.pool)
@@ -180,9 +162,118 @@ async fn core_adapter_should_persist_calculated_cost_exactly() {
             "USD".to_owned(),
             "websocket".to_owned(),
             "HTTP/2".to_owned(),
+            "reuse".to_owned(),
         )
     );
     database.close().await;
+}
+
+#[tokio::test]
+async fn core_adapter_should_persist_image_result_and_new_websocket_pool() {
+    let Some(database) = TestDatabase::create("execution_image_usage").await else {
+        return;
+    };
+    seed_running_request(&database.pool, "req_image_usage")
+        .await
+        .expect("seed image request");
+    sqlx::query(
+        "update model_requests
+         set image_generation_requested = true, provider_kind = 'openai',
+             provider_account_ref = 'acct_openai', upstream_model_id = 'gpt-image',
+             upstream_transport = 'websocket', attempt_count = 1
+         where id = 'req_image_usage'",
+    )
+    .execute(&database.pool)
+    .await
+    .expect("seed image attempt");
+    let repository = PgExecutionStore::new(database.pool.clone());
+    let mut usage = Usage::new();
+    usage.image_input_tokens = Some(31);
+    usage.image_output_tokens = Some(9);
+    let mut finalization = successful_core_finalization("req_image_usage");
+    finalization.usage = usage;
+    finalization.image_generation_succeeded = Some(true);
+    finalization.websocket_pool = Some("new".to_owned());
+
+    ExecutionStore::finalize_model_request(&repository, finalization)
+        .await
+        .expect("persist image usage");
+    let persisted: (bool, Option<i64>, Option<i64>, Option<bool>, Option<String>) = sqlx::query_as(
+        "select image_generation_requested, image_input_tokens, image_output_tokens,
+                    image_generation_succeeded, websocket_pool
+             from model_requests where id = 'req_image_usage'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("load image usage");
+
+    assert_eq!(
+        persisted,
+        (true, Some(31), Some(9), Some(true), Some("new".to_owned()))
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn expired_image_request_should_be_recovered_as_failed() {
+    let Some(database) = TestDatabase::create("execution_expired_image").await else {
+        return;
+    };
+    seed_running_request(&database.pool, "req_expired_image")
+        .await
+        .expect("seed image request");
+    sqlx::query(
+        "update model_requests
+         set image_generation_requested = true,
+             started_at = now() - interval '2 seconds',
+             deadline_at = now() - interval '1 second'
+         where id = 'req_expired_image'",
+    )
+    .execute(&database.pool)
+    .await
+    .expect("expire image request");
+    let repository = PgExecutionStore::new(database.pool.clone());
+
+    repository
+        .recover_expired_model_requests(Utc::now())
+        .await
+        .expect("recover expired image request");
+    let persisted: (String, Option<bool>) = sqlx::query_as(
+        "select outcome, image_generation_succeeded
+         from model_requests where id = 'req_expired_image'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("load recovered image request");
+
+    assert_eq!(persisted, ("incomplete".to_owned(), Some(false)));
+    database.close().await;
+}
+
+fn successful_core_finalization(id: &str) -> CoreModelRequestFinalization {
+    CoreModelRequestFinalization {
+        request_id: ModelRequestId::new(id).expect("request id"),
+        outcome: ExecutionOutcome::Succeeded,
+        send_state: UpstreamSendState::Sent,
+        attempt_count: 1,
+        downstream_committed_at: None,
+        client_status_code: Some(200),
+        client_response_id: None,
+        upstream_status_code: Some(200),
+        upstream_request_id: None,
+        upstream_response_id: None,
+        upstream_transport: Some("websocket".to_owned()),
+        http_version: Some("HTTP/2".to_owned()),
+        websocket_pool: None,
+        error: None,
+        provider_error_code: None,
+        retry_after_ms: None,
+        usage: Usage::new(),
+        image_generation_succeeded: None,
+        cost: CostEstimate::unavailable(),
+        timings: CoreModelRequestTimings::default(),
+        completed_at: std::time::SystemTime::now(),
+    }
 }
 
 async fn seed_running_request(pool: &sqlx::PgPool, id: &str) -> Result<(), sqlx::Error> {

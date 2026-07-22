@@ -322,10 +322,13 @@ fn embed_and_rerank_operations_should_be_idempotent() {
 }
 
 #[test]
-fn compact_conversation_should_inherit_generation_retry_safety() {
+fn generate_and_compact_conversation_should_be_non_idempotent() {
     let generate = GenerateRequest::new(vec![text_message(MessageRole::User, "history")])
         .expect("compaction history is valid");
-    assert_eq!(generate.retry_safety(), RetrySafety::NonIdempotent);
+    assert_eq!(
+        Operation::Generate(generate.clone()).retry_safety(),
+        RetrySafety::NonIdempotent
+    );
     let compact = Operation::CompactConversation(CompactConversationRequest::new(generate));
 
     assert_eq!(compact.retry_safety(), RetrySafety::NonIdempotent);

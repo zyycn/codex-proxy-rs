@@ -4,22 +4,24 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use chrono::Utc;
 use futures::{SinkExt, StreamExt};
+use gateway_protocol::openai::events::{TokenUsage, extract_sse_usage};
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use provider_openai::transport::protocol::responses::{
     CodexResponsesRequest, PreviousResponseScope,
 };
 use provider_openai::transport::websocket::{
     CodexWebSocketConnection, CodexWebSocketExchangeError, CodexWebSocketRequest,
-    execute_response_create_request, responses_websocket_endpoint,
+    responses_websocket_endpoint,
 };
 use provider_openai::transport::{
-    CodexBackendClient, CodexBackendTransport, CodexClientError, CodexRequestContext,
-    CodexTransportDecision, CodexWebSocketPool, CodexWebSocketPoolConfig,
+    CodexBackendClient, CodexBackendStreamingResponse, CodexBackendTransport, CodexClientError,
+    CodexClientResult, CodexRequestContext, CodexResponseMetadata, CodexTransportDecision,
+    CodexTransportMetrics, CodexWebSocketPool, CodexWebSocketPoolConfig, WebSocketPoolDecision,
 };
 use serde_json::{Map, Value, json};
 use tokio::{
@@ -144,6 +146,155 @@ fn request_context<'a>(
         client_request_id: None,
         turn_id: None,
     }
+}
+
+#[derive(Debug)]
+struct CollectedBackendResponse {
+    body: String,
+    transport: CodexBackendTransport,
+    usage: Option<TokenUsage>,
+    turn_state: Option<String>,
+    set_cookie_headers: Vec<String>,
+    rate_limit_headers: Vec<(String, String)>,
+    websocket_pool_decision: Option<WebSocketPoolDecision>,
+    response_metadata: CodexResponseMetadata,
+    transport_metrics: CodexTransportMetrics,
+    connection_local_continuation: bool,
+}
+
+trait CodexBackendClientTestExt {
+    async fn create_response(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<CollectedBackendResponse>;
+
+    async fn create_response_stream(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<CodexBackendStreamingResponse>;
+
+    async fn create_response_with_pool_account_started_at(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+        pool_account_id: Option<&str>,
+        started_at: Instant,
+    ) -> CodexClientResult<CollectedBackendResponse>;
+}
+
+impl CodexBackendClientTestExt for CodexBackendClient {
+    async fn create_response(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<CollectedBackendResponse> {
+        let started_at = Instant::now();
+        let response = self
+            .create_response_stream_with_pool_account(request, context, None)
+            .await?;
+        collect_backend_response(response, started_at).await
+    }
+
+    async fn create_response_stream(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<CodexBackendStreamingResponse> {
+        self.create_response_stream_with_pool_account(request, context, None)
+            .await
+    }
+
+    async fn create_response_with_pool_account_started_at(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+        pool_account_id: Option<&str>,
+        started_at: Instant,
+    ) -> CodexClientResult<CollectedBackendResponse> {
+        let response = self
+            .create_response_stream_with_pool_account(request, context, pool_account_id)
+            .await?;
+        collect_backend_response(response, started_at).await
+    }
+}
+
+async fn collect_backend_response(
+    response: CodexBackendStreamingResponse,
+    started_at: Instant,
+) -> CodexClientResult<CollectedBackendResponse> {
+    let CodexBackendStreamingResponse {
+        mut body,
+        transport,
+        mut turn_state,
+        set_cookie_headers,
+        mut rate_limit_headers,
+        rate_limit_header_updates,
+        turn_state_update,
+        websocket_pool_decision,
+        diagnostics: _,
+        response_metadata,
+        mut transport_metrics,
+        connection_local_continuation,
+    } = response;
+    let mut body_bytes = Vec::new();
+    while let Some(chunk) = body.next().await {
+        let chunk = chunk?;
+        transport_metrics.first_event_ms.get_or_insert_with(|| {
+            i64::try_from(started_at.elapsed().as_millis())
+                .unwrap_or(i64::MAX)
+                .max(1)
+        });
+        body_bytes.extend_from_slice(&chunk);
+    }
+    if let Some(updates) = rate_limit_header_updates {
+        rate_limit_headers.extend(updates.lock().await.iter().cloned());
+    }
+    if let Some(update) = turn_state_update {
+        turn_state = update.lock().await.clone().or(turn_state);
+    }
+    let body = String::from_utf8_lossy(&body_bytes).into_owned();
+    let usage = extract_sse_usage(&body).map_err(CodexClientError::InvalidSse)?;
+    Ok(CollectedBackendResponse {
+        body,
+        transport,
+        usage,
+        turn_state,
+        set_cookie_headers,
+        rate_limit_headers,
+        websocket_pool_decision,
+        response_metadata,
+        transport_metrics,
+        connection_local_continuation,
+    })
+}
+
+async fn execute_response_create_request(
+    request: &CodexWebSocketRequest,
+) -> CodexClientResult<CollectedBackendResponse> {
+    let endpoint = request.connection().endpoint();
+    let base_url = endpoint
+        .strip_suffix("/codex/responses")
+        .unwrap_or(endpoint)
+        .replacen("ws://", "http://", 1)
+        .replacen("wss://", "https://", 1);
+    let mut body = serde_json::from_str::<Map<String, Value>>(request.payload_text())
+        .expect("test WebSocket payload should be valid JSON");
+    body.remove("type");
+    let mut upstream_request = CodexResponsesRequest::from_body(body);
+    upstream_request.use_websocket = true;
+    let client = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        base_url,
+        test_wire_profile(),
+    );
+    client
+        .create_response(
+            &upstream_request,
+            request_context("req_test_websocket", Some("chatgpt-account")),
+        )
+        .await
 }
 
 fn codex_request(

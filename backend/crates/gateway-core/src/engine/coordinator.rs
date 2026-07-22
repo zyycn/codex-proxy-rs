@@ -68,6 +68,7 @@ where
             .map(ProviderAccountStateOwner::from_continuation);
         let continuation_attempt =
             initial_continuation_attempt(&operation, &plan, continuation.as_ref());
+        let image_generation_requested = operation.image_generation_requested();
         let commit_policy = if continuation_attempt == ContinuationAttempt::None {
             StreamCommitPolicy::FirstCanonicalEvent
         } else {
@@ -100,6 +101,7 @@ where
             upstream_complete: false,
             finalized: false,
             usage: Usage::new(),
+            image_generation_requested,
             cost: CostEstimate::unavailable(),
             timings: ModelRequestTimings::default(),
             gateway_response_id,
@@ -177,6 +179,7 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     upstream_complete: bool,
     finalized: bool,
     usage: Usage,
+    image_generation_requested: bool,
     cost: CostEstimate,
     timings: ModelRequestTimings,
     gateway_response_id: String,
@@ -955,7 +958,8 @@ where
             .and_then(|current| current.response_observation.as_ref())
             .and_then(ProviderResponseObservation::status_code)
             .or(Some(200));
-        let (upstream_transport, http_version) = self.current_transport_observation();
+        let (upstream_transport, http_version, websocket_pool) =
+            self.current_transport_observation();
         self.engine
             .store()
             .finalize_model_request(ModelRequestFinalization {
@@ -971,10 +975,12 @@ where
                 upstream_response_id: self.upstream_response_id.clone(),
                 upstream_transport,
                 http_version,
+                websocket_pool,
                 error: None,
                 provider_error_code: None,
                 retry_after_ms: None,
                 usage: self.usage.clone(),
+                image_generation_succeeded: self.image_generation_succeeded(),
                 cost: self.cost.clone(),
                 timings: self.timings.clone(),
                 completed_at,
@@ -1094,7 +1100,8 @@ where
             .as_ref()
             .and_then(|current| current.response_observation.as_ref())
             .and_then(ProviderResponseObservation::status_code);
-        let (upstream_transport, http_version) = self.current_transport_observation();
+        let (upstream_transport, http_version, websocket_pool) =
+            self.current_transport_observation();
         self.engine
             .store()
             .finalize_model_request(ModelRequestFinalization {
@@ -1112,10 +1119,12 @@ where
                     .or_else(|| self.upstream_response_id.clone()),
                 upstream_transport,
                 http_version,
+                websocket_pool,
                 error: Some(finalization.error),
                 provider_error_code: finalization.provider_error_code,
                 retry_after_ms: finalization.retry_after_ms,
                 usage: self.usage.clone(),
+                image_generation_succeeded: self.image_generation_succeeded(),
                 cost: self.cost.clone(),
                 timings: self.timings.clone(),
                 completed_at,
@@ -1125,19 +1134,27 @@ where
         Ok(())
     }
 
-    fn current_transport_observation(&self) -> (Option<String>, Option<String>) {
+    fn current_transport_observation(&self) -> (Option<String>, Option<String>, Option<String>) {
         let Some(current) = self.current.as_ref() else {
-            return (None, None);
+            return (None, None, None);
         };
         let Some(observation) = current.response_observation.as_ref() else {
-            return (None, None);
+            return (None, None, None);
         };
         (
             Some(observation.transport().as_str().to_owned()),
             observation
                 .http_version()
                 .map(|version| version.as_str().to_owned()),
+            observation
+                .websocket_pool()
+                .map(|kind| kind.as_str().to_owned()),
         )
+    }
+
+    fn image_generation_succeeded(&self) -> Option<bool> {
+        self.image_generation_requested
+            .then(|| self.usage.image_output_tokens.unwrap_or_default() > 0)
     }
 
     fn current_send_state(&self) -> UpstreamSendState {

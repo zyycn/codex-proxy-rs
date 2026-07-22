@@ -12,8 +12,7 @@ use crate::transport::profile::CodexWireProfileState;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use gateway_protocol::openai::{
-    WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY,
-    events::{TokenUsage, retry_after_seconds_from_body},
+    WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY, events::retry_after_seconds_from_body,
     sse::SseError,
 };
 use reqwest::{
@@ -303,39 +302,6 @@ impl fmt::Debug for CodexRequestContext<'_> {
     }
 }
 
-/// Codex Responses 上游响应。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CodexBackendResponse {
-    /// 完整 SSE 文本。
-    pub body: String,
-    /// 实际使用的上游传输。
-    pub transport: CodexBackendTransport,
-    /// 从 SSE 中提取出的最终 usage。
-    pub usage: Option<TokenUsage>,
-    /// 响应头里的最新 turn state。
-    pub turn_state: Option<String>,
-    /// 上游透传的 `set-cookie` 列表。
-    pub set_cookie_headers: Vec<String>,
-    /// 上游透传的限流头。
-    pub rate_limit_headers: Vec<(String, String)>,
-    /// 首个有效上游 SSE/WebSocket 事件到达代理的耗时。
-    pub first_token_ms: Option<i64>,
-    /// 首个 reasoning 输出事件到达代理的耗时。
-    pub first_reasoning_ms: Option<i64>,
-    /// 首个正文输出事件到达代理的耗时。
-    pub first_text_ms: Option<i64>,
-    /// WebSocket 连接池决策。
-    pub websocket_pool_decision: Option<WebSocketPoolDecision>,
-    /// 上游诊断元数据。
-    pub diagnostics: CodexUpstreamDiagnostics,
-    /// 安全响应元数据。
-    pub response_metadata: CodexResponseMetadata,
-    /// 传输选择与低延迟阶段耗时。
-    pub transport_metrics: CodexTransportMetrics,
-    /// 当前响应是否由池中 WebSocket 保留 connection-local continuation。
-    pub connection_local_continuation: bool,
-}
-
 /// Codex Responses 实际使用的上游传输。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexBackendTransport {
@@ -431,8 +397,6 @@ pub struct CodexBackendClient {
     pub(super) base_url: String,
     pub(super) profile: CodexWireProfileState,
     pub(super) websocket_pool: Option<Arc<CodexWebSocketPool>>,
-    pub(super) websocket_initial_event_timeout: Option<Duration>,
-    pub(super) websocket_fast_path_budget: Duration,
     pub(super) websocket_origin_breaker: WebSocketOriginBreaker,
     pub(super) websocket_origin_key: String,
 }

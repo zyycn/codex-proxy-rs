@@ -406,6 +406,17 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
     assert_eq!(account_usage[0].cost_coverage.provider_reported_count, 1);
     assert_eq!(account_usage[0].cost_coverage.unavailable_count, 1);
     assert_eq!(account_usage[0].costs[0].amount.as_str(), "1.25");
+    assert_eq!(
+        (
+            account_usage[0].image_input_tokens,
+            account_usage[0].image_output_tokens,
+            account_usage[0].image_request_count,
+            account_usage[0].image_request_failed_count,
+            account_usage[0].models[0].image_request_count,
+            account_usage[0].models[0].image_request_failed_count,
+        ),
+        (Some(31), Some(9), 1, 1, 1, 1)
+    );
 
     let usage_page = repository
         .list_usage_records(UsageRecordQuery {
@@ -421,6 +432,21 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
         .await
         .expect("usage records");
     assert_eq!(usage_page.total, 2);
+    let successful_image = usage_page
+        .items
+        .iter()
+        .find(|record| record.id == "req_observe_success")
+        .expect("successful image usage record");
+    assert_eq!(
+        (
+            successful_image.websocket_pool.as_deref(),
+            successful_image.image_input_tokens,
+            successful_image.image_output_tokens,
+            successful_image.image_generation_requested,
+            successful_image.image_generation_succeeded,
+        ),
+        (Some("reuse"), Some(31), Some(9), true, Some(true))
+    );
 
     let detail = repository
         .usage_record_detail("req_observe_failed")
@@ -522,19 +548,22 @@ async fn seed_observability_facts(
            id, client_api_key_ref, config_revision, protocol, operation, endpoint,
            client_transport, requested_model_id, input_token_estimate,
            provider_instance_id, provider_kind, provider_account_id,
-           provider_account_ref, upstream_model_id, upstream_transport, attempt_count,
+           provider_account_ref, upstream_model_id, upstream_transport, websocket_pool,
+           attempt_count,
            upstream_send_state, downstream_committed_at, outcome, client_status_code,
            upstream_status_code, client_response_id, upstream_request_id, upstream_response_id,
            input_tokens, output_tokens, cached_tokens, cache_write_tokens, reasoning_tokens,
-           total_tokens, cost_source, cost_amount, cost_currency, first_token_ms, latency_ms,
+           image_input_tokens, image_output_tokens, total_tokens,
+           image_generation_requested, image_generation_succeeded,
+           cost_source, cost_amount, cost_currency, first_token_ms, latency_ms,
            started_at, deadline_at, completed_at
          ) values (
            'req_observe_success', 'key_observe', 1, 'openai', 'responses', '/v1/responses',
            'http_sse', 'public-model', 100, 'inst_observe', 'openai', 'acct_observe',
            'acct_observe', 'upstream-model',
-           'http_sse', 1, 'sent', $1 - interval '19 minutes', 'succeeded', 200, 200,
+           'http_sse', 'reuse', 1, 'sent', $1 - interval '19 minutes', 'succeeded', 200, 200,
            'resp_observe_success', 'upstream_req_success', 'upstream_resp_success',
-           100, 20, 40, 3, 5, 120,
+           100, 20, 40, 3, 5, 31, 9, 120, true, true,
            'provider_reported', 1.25, 'USD', 120, 900,
            $1 - interval '20 minutes', $1 + interval '10 minutes', $1 - interval '19 minutes'
          )",
@@ -550,14 +579,15 @@ async fn seed_observability_facts(
            provider_account_ref, upstream_model_id, upstream_transport, attempt_count,
            upstream_send_state, outcome, client_status_code, upstream_status_code,
            error_kind, provider_error_code, error_message, retry_after_ms,
-           input_tokens, cached_tokens, cost_source, latency_ms,
+           input_tokens, cached_tokens, image_generation_requested,
+           image_generation_succeeded, cost_source, latency_ms,
            started_at, deadline_at, completed_at
          ) values (
            'req_observe_failed', 'key_observe', 1, 'openai', 'responses', '/v1/responses',
            'http_sse', 'public-model', 80, 'inst_observe', 'openai', 'acct_observe',
            'acct_observe', 'upstream-model',
            'http_sse', 2, 'sent', 'failed', 502, 429, 'rate_limited', 'rate_limit',
-           'upstream limited', 1000, 0, 0, 'unavailable', 700,
+           'upstream limited', 1000, 0, 0, true, false, 'unavailable', 700,
            $1 - interval '10 minutes', $1 + interval '20 minutes', $1 - interval '9 minutes'
          )",
     )

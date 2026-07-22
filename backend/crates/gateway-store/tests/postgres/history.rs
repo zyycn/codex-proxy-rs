@@ -1,5 +1,4 @@
 use chrono::Utc;
-use gateway_core::engine::continuation::NativeContinuationReuse;
 use gateway_store::postgres::{
     ModelRequestHistoryRecord, ModelRequestHistoryRepository, PgHistoryRepository,
 };
@@ -36,11 +35,7 @@ async fn native_pin_is_caller_scoped_and_uses_live_account_and_upstream_handle()
     let repository = PgHistoryRepository::new(database.pool.clone());
 
     let pin = repository
-        .resolve_native_continuation_pin(
-            "resp_gateway_visible",
-            "key_owner",
-            NativeContinuationReuse::Reusable,
-        )
+        .resolve_native_continuation_pin("resp_gateway_visible", "key_owner")
         .await
         .expect("resolve native pin")
         .expect("eligible pin");
@@ -52,11 +47,7 @@ async fn native_pin_is_caller_scoped_and_uses_live_account_and_upstream_handle()
     assert!(!debug.contains("resp_upstream_native"));
 
     let other_client = repository
-        .resolve_native_continuation_pin(
-            "resp_gateway_visible",
-            "key_other",
-            NativeContinuationReuse::Reusable,
-        )
+        .resolve_native_continuation_pin("resp_gateway_visible", "key_other")
         .await
         .expect("resolve other caller");
     assert!(other_client.is_none());
@@ -66,11 +57,7 @@ async fn native_pin_is_caller_scoped_and_uses_live_account_and_upstream_handle()
         .await
         .expect("delete live account while preserving historical ref");
     let deleted_account = repository
-        .resolve_native_continuation_pin(
-            "resp_gateway_visible",
-            "key_owner",
-            NativeContinuationReuse::Reusable,
-        )
+        .resolve_native_continuation_pin("resp_gateway_visible", "key_owner")
         .await
         .expect("resolve deleted account");
     assert!(deleted_account.is_none());
@@ -103,11 +90,7 @@ async fn native_pin_requires_committed_success_but_not_a_specific_transport() {
     .expect("clear downstream commit");
     assert!(
         repository
-            .resolve_native_continuation_pin(
-                "resp_gateway_visible",
-                "key_owner",
-                NativeContinuationReuse::Reusable,
-            )
+            .resolve_native_continuation_pin("resp_gateway_visible", "key_owner",)
             .await
             .expect("resolve uncommitted request")
             .is_none()
@@ -123,11 +106,7 @@ async fn native_pin_requires_committed_success_but_not_a_specific_transport() {
     .expect("mark request failed");
     assert!(
         repository
-            .resolve_native_continuation_pin(
-                "resp_gateway_visible",
-                "key_owner",
-                NativeContinuationReuse::Reusable,
-            )
+            .resolve_native_continuation_pin("resp_gateway_visible", "key_owner",)
             .await
             .expect("resolve failed request")
             .is_none()
@@ -139,11 +118,7 @@ async fn native_pin_requires_committed_success_but_not_a_specific_transport() {
         .expect("restore successful request");
     assert!(
         repository
-            .resolve_native_continuation_pin(
-                "resp_gateway_visible",
-                "key_owner",
-                NativeContinuationReuse::Reusable,
-            )
+            .resolve_native_continuation_pin("resp_gateway_visible", "key_owner",)
             .await
             .expect("resolve restored request")
             .is_some()
@@ -157,11 +132,7 @@ async fn native_pin_requires_committed_success_but_not_a_specific_transport() {
     .expect("mark response connection-independent");
     assert!(
         repository
-            .resolve_native_continuation_pin(
-                "resp_gateway_visible",
-                "key_owner",
-                NativeContinuationReuse::Reusable,
-            )
+            .resolve_native_continuation_pin("resp_gateway_visible", "key_owner",)
             .await
             .expect("resolve HTTP response")
             .is_some()

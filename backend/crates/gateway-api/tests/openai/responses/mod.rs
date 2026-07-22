@@ -213,6 +213,17 @@ fn decoder_should_preserve_roles_tools_reasoning_schema_and_provider_options() {
 }
 
 #[test]
+fn decoder_should_mark_image_generation_tool_intent() {
+    let decoded = generate_request(json!({
+        "model": "smart-code",
+        "input": "draw a circuit diagram",
+        "tools": [{"type": "image_generation"}]
+    }));
+
+    assert!(generate_operation(&decoded).image_generation_requested());
+}
+
+#[test]
 fn decoder_should_preserve_only_explicit_xai_provider_options() {
     let decoded = generate_request(json!({
         "model": "smart-code",

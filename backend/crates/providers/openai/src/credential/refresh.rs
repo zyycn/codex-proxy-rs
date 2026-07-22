@@ -140,14 +140,6 @@ impl CodexCredentialRefreshService {
         Ok(outcomes)
     }
 
-    pub async fn refresh_one(
-        &self,
-        due: DueCodexCredential,
-    ) -> Result<CodexCredentialRefreshOutcome, CodexCredentialRefreshError> {
-        let policy = self.runtime_policy.load_refresh_policy().await?;
-        self.refresh_one_with_policy(due, policy).await
-    }
-
     async fn refresh_one_with_policy(
         &self,
         due: DueCodexCredential,

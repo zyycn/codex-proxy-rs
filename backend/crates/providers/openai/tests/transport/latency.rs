@@ -27,7 +27,45 @@ fn explicit_websocket_warmup_request(conversation_id: &str) -> CodexResponsesReq
     request
 }
 
-#[tokio::test]
+async fn reject_websocket_openings(listener: &TcpListener, attempts: usize) {
+    for _ in 0..attempts {
+        let (mut opening, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut opening).await;
+        assert!(request.starts_with("GET /codex/responses HTTP/1.1"));
+        opening
+            .write_all(
+                b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+    }
+}
+
+async fn record_websocket_origin_failures(
+    backend: &CodexBackendClient,
+    attempts: usize,
+    scenario: &str,
+) {
+    for attempt in 0..attempts {
+        let conversation_id = format!("conversation-{scenario}-{attempt}");
+        let request_id = format!("req_{scenario}_{attempt}");
+        let error = backend
+            .create_response(
+                &explicit_websocket_warmup_request(&conversation_id),
+                request_context(&request_id, Some("chatgpt-account")),
+            )
+            .await
+            .expect_err("seed WebSocket opening should fail");
+        match error {
+            CodexClientError::Upstream { status, .. }
+                if status == reqwest::StatusCode::SERVICE_UNAVAILABLE => {}
+            error => panic!("{scenario} opening {attempt} failed unexpectedly: {error}"),
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn cold_websocket_should_fall_back_without_recording_a_successful_connect() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -47,8 +85,7 @@ async fn cold_websocket_should_fall_back_without_recording_a_successful_connect(
         format!("http://{addr}"),
         test_wire_profile(),
     )
-    .with_websocket_pool(Arc::clone(&pool))
-    .with_websocket_fast_path_budget(Duration::from_millis(30));
+    .with_websocket_pool(Arc::clone(&pool));
 
     let response = backend
         .create_response(
@@ -70,7 +107,7 @@ async fn cold_websocket_should_fall_back_without_recording_a_successful_connect(
     pool.shutdown().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn timed_out_websocket_should_finish_in_background_and_serve_the_next_request() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -78,7 +115,7 @@ async fn timed_out_websocket_should_finish_in_background_and_serve_the_next_requ
     let server = tokio::spawn(async move {
         let (websocket_stream, _) = listener.accept().await.unwrap();
         let websocket_server = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(60)).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
             let mut websocket = accept_codex_test_websocket(websocket_stream).await;
             websocket_ready_tx.send(()).unwrap();
             let _payload = websocket.next().await.unwrap().unwrap();
@@ -102,8 +139,7 @@ async fn timed_out_websocket_should_finish_in_background_and_serve_the_next_requ
         format!("http://{addr}"),
         test_wire_profile(),
     )
-    .with_websocket_pool(Arc::clone(&pool))
-    .with_websocket_fast_path_budget(Duration::from_millis(30));
+    .with_websocket_pool(Arc::clone(&pool));
     let request = new_chain_request("conversation-background-ready");
 
     let first = backend
@@ -157,8 +193,7 @@ async fn shared_websocket_opening_should_keep_the_original_fast_path_deadline() 
         format!("http://{addr}"),
         test_wire_profile(),
     )
-    .with_websocket_pool(Arc::clone(&pool))
-    .with_websocket_fast_path_budget(Duration::from_millis(200));
+    .with_websocket_pool(Arc::clone(&pool));
     let request = new_chain_request("conversation-original-deadline");
 
     let first = backend
@@ -168,20 +203,23 @@ async fn shared_websocket_opening_should_keep_the_original_fast_path_deadline() 
         )
         .await
         .expect("first request should use HTTP after the opening budget");
-    let second = timeout(
-        Duration::from_millis(100),
-        backend.create_response(
+    let second_started_at = tokio::time::Instant::now();
+    let second = backend
+        .create_response(
             &request,
             request_context("req_original_deadline_second", Some("chatgpt-account")),
-        ),
-    )
-    .await
-    .expect("shared opening must not grant the second request another full budget")
-    .expect("second request should use HTTP");
+        )
+        .await
+        .expect("second request should use HTTP");
+    let second_elapsed = second_started_at.elapsed();
     server.await.unwrap();
 
     assert_eq!(first.transport, CodexBackendTransport::HttpSse);
     assert_eq!(second.transport, CodexBackendTransport::HttpSse);
+    assert!(
+        second_elapsed < Duration::from_millis(400),
+        "shared opening waited for a new budget: {second_elapsed:?}"
+    );
     assert_eq!(
         second.transport_metrics.decision,
         Some(CodexTransportDecision::Http2WebSocketBudgetExhausted)
@@ -204,10 +242,7 @@ async fn account_eviction_should_cancel_a_background_websocket_opening() {
         write_completed_sse_response(&mut http).await;
 
         let mut byte = [0_u8; 1];
-        let read = timeout(Duration::from_secs(1), stale_opening.read(&mut byte))
-            .await
-            .expect("account eviction should close the opening socket")
-            .unwrap();
+        let read = stale_opening.read(&mut byte).await.unwrap();
         assert_eq!(read, 0);
 
         let (fresh_stream, _) = listener.accept().await.unwrap();
@@ -226,8 +261,7 @@ async fn account_eviction_should_cancel_a_background_websocket_opening() {
         format!("http://{addr}"),
         test_wire_profile(),
     )
-    .with_websocket_pool(Arc::clone(&pool))
-    .with_websocket_fast_path_budget(Duration::from_millis(30));
+    .with_websocket_pool(Arc::clone(&pool));
     let request = new_chain_request("conversation-evict-opening");
 
     let first = backend
@@ -238,33 +272,23 @@ async fn account_eviction_should_cancel_a_background_websocket_opening() {
         .await
         .expect("first request should use HTTP after the opening budget");
     pool.evict_account("chatgpt-account").await;
-    let second = timeout(
-        Duration::from_secs(2),
-        backend
-            .clone()
-            .with_websocket_fast_path_budget(Duration::from_millis(500))
-            .create_response(
-                &request,
-                request_context("req_evict_opening_second", Some("chatgpt-account")),
-            ),
-    )
-    .await
-    .expect("fresh websocket request should finish")
-    .expect("the next request should build a fresh websocket");
-    timeout(Duration::from_secs(2), server)
+    let second = backend
+        .clone()
+        .create_response(
+            &request,
+            request_context("req_evict_opening_second", Some("chatgpt-account")),
+        )
         .await
-        .expect("test server should finish")
-        .unwrap();
+        .expect("the next request should build a fresh websocket");
+    server.await.unwrap();
 
     assert_eq!(first.transport, CodexBackendTransport::HttpSse);
     assert_eq!(second.transport, CodexBackendTransport::WebSocket);
     assert!(second.body.contains("resp_after_eviction"));
-    timeout(Duration::from_secs(2), pool.shutdown())
-        .await
-        .expect("pool shutdown should finish");
+    pool.shutdown().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn pool_shutdown_should_cancel_and_join_a_background_websocket_opening() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -291,8 +315,7 @@ async fn pool_shutdown_should_cancel_and_join_a_background_websocket_opening() {
         format!("http://{addr}"),
         test_wire_profile(),
     )
-    .with_websocket_pool(Arc::clone(&pool))
-    .with_websocket_fast_path_budget(Duration::from_millis(30));
+    .with_websocket_pool(Arc::clone(&pool));
 
     backend
         .create_response(
@@ -851,10 +874,7 @@ async fn concurrent_same_key_should_singleflight_websocket_opening() {
         format!("http://{addr}"),
         test_wire_profile(),
     )
-    .with_websocket_pool(Arc::new(CodexWebSocketPool::default()))
-    // 该用例验证 same-key singleflight，不验证 200ms deadline。并行全套测试下
-    // 调度停顿可能让首请求也越过 200ms，制造两个 HTTP fallback 的假失败。
-    .with_websocket_fast_path_budget(Duration::from_secs(2));
+    .with_websocket_pool(Arc::new(CodexWebSocketPool::default()));
     let request = new_chain_request("conversation-singleflight");
     let first_backend = backend.clone();
     let first_request = request.clone();
@@ -970,19 +990,12 @@ async fn origin_breaker_should_open_then_allow_only_one_half_open_probe() {
 async fn cancelled_half_open_opening_should_allow_another_probe() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let origin_key = format!("http://{addr}");
-    let breaker = WebSocketOriginBreaker::with_config(WebSocketOriginBreakerConfig {
-        failure_threshold: 1,
-        failure_window: Duration::from_secs(1),
-        open_duration: Duration::ZERO,
-    });
-    let WebSocketOriginBreakerDecision::Allowed(permit) = breaker.try_acquire(&origin_key) else {
-        panic!("closed breaker should grant the initial permit");
-    };
-    permit.fast_timeout();
+    let breaker_config = WebSocketOriginBreakerConfig::default();
 
     let (opening_started_tx, opening_started_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
+        reject_websocket_openings(&listener, breaker_config.failure_threshold).await;
+
         let (mut opening, _) = listener.accept().await.unwrap();
         let request = read_http_request(&mut opening).await;
         assert!(request.starts_with("GET /codex/responses HTTP/1.1"));
@@ -994,17 +1007,37 @@ async fn cancelled_half_open_opening_should_allow_another_probe() {
             .expect("account eviction should close the half-open probe")
             .unwrap();
         assert_eq!(read, 0);
+
+        let (fresh_stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_codex_test_websocket(fresh_stream).await;
+        let _payload = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_after_cancelled_probe", 2, 1).into(),
+            ))
+            .await
+            .unwrap();
     });
     let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
-        origin_key.clone(),
+        format!("http://{addr}"),
         test_wire_profile(),
     )
-    .with_websocket_pool(Arc::clone(&pool))
-    .with_websocket_origin_breaker(breaker.clone());
+    .with_websocket_pool(Arc::clone(&pool));
+    record_websocket_origin_failures(
+        &backend,
+        breaker_config.failure_threshold,
+        "cancelled-half-open-seed",
+    )
+    .await;
+    tokio::time::pause();
+    tokio::time::advance(breaker_config.open_duration).await;
+    tokio::time::resume();
+
+    let probe_backend = backend.clone();
     let attempt = tokio::spawn(async move {
-        backend
+        probe_backend
             .create_response(
                 &explicit_websocket_warmup_request("conversation-cancelled-half-open"),
                 request_context("req_cancelled_half_open", Some("chatgpt-account")),
@@ -1019,17 +1052,18 @@ async fn cancelled_half_open_opening_should_allow_another_probe() {
         .expect("cancelled request should finish")
         .unwrap()
         .expect_err("cancelled half-open opening should fail the request");
+
+    let response = backend
+        .create_response(
+            &explicit_websocket_warmup_request("conversation-next-half-open-probe"),
+            request_context("req_next_half_open_probe", Some("chatgpt-account")),
+        )
+        .await
+        .expect("cancelled half-open opening should allow another probe");
     server.await.unwrap();
 
-    let WebSocketOriginBreakerDecision::Allowed(next_probe) = breaker.try_acquire(&origin_key)
-    else {
-        panic!("cancelled half-open probe should release its ownership");
-    };
-    assert!(matches!(
-        breaker.try_acquire(&origin_key),
-        WebSocketOriginBreakerDecision::HalfOpenBusy
-    ));
-    next_probe.succeed();
+    assert_eq!(response.transport, CodexBackendTransport::WebSocket);
+    assert!(response.body.contains("resp_after_cancelled_probe"));
     pool.shutdown().await;
 }
 
@@ -1057,14 +1091,19 @@ fn origin_breaker_should_count_hard_opening_failures() {
 async fn fast_path_miss_and_late_failure_should_count_as_one_breaker_failure() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let breaker_config = WebSocketOriginBreakerConfig::default();
+    assert!(breaker_config.failure_threshold >= 3);
+    let seed_failures = breaker_config.failure_threshold - 2;
     let (late_failure_tx, late_failure_rx) = tokio::sync::oneshot::channel();
     let (second_used_websocket_tx, second_used_websocket_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
+        reject_websocket_openings(&listener, seed_failures).await;
+
         let (mut delayed_opening, _) = listener.accept().await.unwrap();
         let opening = read_http_request(&mut delayed_opening).await;
         assert!(opening.starts_with("GET /codex/responses HTTP/1.1"));
         let delayed_failure = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(80)).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
             delayed_opening
                 .write_all(
                     b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
@@ -1114,20 +1153,14 @@ async fn fast_path_miss_and_late_failure_should_count_as_one_breaker_failure() {
             write_completed_sse_response(&mut second_http).await;
         }
     });
-    let breaker = WebSocketOriginBreaker::with_config(WebSocketOriginBreakerConfig {
-        failure_threshold: 2,
-        failure_window: Duration::from_secs(1),
-        open_duration: Duration::from_secs(1),
-    });
     let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
         test_wire_profile(),
     )
-    .with_websocket_pool(Arc::clone(&pool))
-    .with_websocket_fast_path_budget(Duration::from_millis(30))
-    .with_websocket_origin_breaker(breaker);
+    .with_websocket_pool(Arc::clone(&pool));
+    record_websocket_origin_failures(&backend, seed_failures, "late-failure-seed").await;
 
     let first = backend
         .create_response(
@@ -1136,58 +1169,34 @@ async fn fast_path_miss_and_late_failure_should_count_as_one_breaker_failure() {
         )
         .await
         .expect("first request should use HTTP after the opening budget");
-    timeout(Duration::from_secs(2), late_failure_rx)
-        .await
-        .expect("delayed opening should receive its 503 response")
-        .unwrap();
+    late_failure_rx.await.unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await;
-    let second = timeout(
-        Duration::from_secs(2),
-        backend
-            .clone()
-            .with_websocket_fast_path_budget(Duration::from_millis(500))
-            .create_response(
-                &new_chain_request("conversation-late-failure-second"),
-                request_context("req_late_failure_second", Some("chatgpt-account")),
-            ),
-    )
-    .await
-    .expect("second request should finish")
-    .expect("one degraded opening must not open a threshold-two breaker");
-    let second_used_websocket = timeout(Duration::from_secs(2), second_used_websocket_rx)
+    let second = backend
+        .create_response(
+            &new_chain_request("conversation-late-failure-second"),
+            request_context("req_late_failure_second", Some("chatgpt-account")),
+        )
         .await
-        .expect("test server should observe the second transport")
-        .unwrap();
-    timeout(Duration::from_secs(2), server)
-        .await
-        .expect("test server should finish")
-        .unwrap();
+        .expect("one degraded opening must not open the default breaker");
+    let second_used_websocket = second_used_websocket_rx.await.unwrap();
+    server.await.unwrap();
 
     assert_eq!(first.transport, CodexBackendTransport::HttpSse);
     assert!(second_used_websocket);
     assert_eq!(second.transport, CodexBackendTransport::WebSocket);
     assert!(second.body.contains("resp_after_late_failure"));
-    timeout(Duration::from_secs(2), pool.shutdown())
-        .await
-        .expect("pool shutdown should finish");
+    pool.shutdown().await;
 }
 
 #[tokio::test]
 async fn half_open_upstream_response_should_close_origin_breaker() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let origin_key = format!("http://{addr}");
-    let breaker = WebSocketOriginBreaker::with_config(WebSocketOriginBreakerConfig {
-        failure_threshold: 1,
-        failure_window: Duration::from_secs(1),
-        open_duration: Duration::ZERO,
-    });
-    let WebSocketOriginBreakerDecision::Allowed(permit) = breaker.try_acquire(&origin_key) else {
-        panic!("closed breaker should grant the initial permit");
-    };
-    permit.fast_timeout();
+    let breaker_config = WebSocketOriginBreakerConfig::default();
 
     let server = tokio::spawn(async move {
+        reject_websocket_openings(&listener, breaker_config.failure_threshold).await;
+
         let (mut probe, _) = listener.accept().await.unwrap();
         let opening = read_http_request(&mut probe).await;
         assert!(opening.starts_with("GET /codex/responses HTTP/1.1"));
@@ -1197,15 +1206,33 @@ async fn half_open_upstream_response_should_close_origin_breaker() {
             )
             .await
             .unwrap();
+
+        let (next_stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_codex_test_websocket(next_stream).await;
+        let _payload = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_after_half_open_success", 2, 1).into(),
+            ))
+            .await
+            .unwrap();
     });
+    let pool = Arc::new(CodexWebSocketPool::default());
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
-        origin_key.clone(),
+        format!("http://{addr}"),
         test_wire_profile(),
     )
-    .with_websocket_pool(Arc::new(CodexWebSocketPool::default()))
-    .with_websocket_fast_path_budget(Duration::from_secs(1))
-    .with_websocket_origin_breaker(breaker.clone());
+    .with_websocket_pool(Arc::clone(&pool));
+    record_websocket_origin_failures(
+        &backend,
+        breaker_config.failure_threshold,
+        "half-open-response-seed",
+    )
+    .await;
+    tokio::time::pause();
+    tokio::time::advance(breaker_config.open_duration).await;
+    tokio::time::resume();
 
     let error = backend
         .create_response(
@@ -1214,7 +1241,6 @@ async fn half_open_upstream_response_should_close_origin_breaker() {
         )
         .await
         .expect_err("half-open account response should remain explicit");
-    server.await.unwrap();
 
     std::assert_matches!(
         error,
@@ -1224,8 +1250,16 @@ async fn half_open_upstream_response_should_close_origin_breaker() {
             ..
         } if status == reqwest::StatusCode::UNAUTHORIZED
     );
-    assert!(matches!(
-        breaker.try_acquire(&origin_key),
-        WebSocketOriginBreakerDecision::Allowed(_)
-    ));
+    let response = backend
+        .create_response(
+            &explicit_websocket_warmup_request("conversation-after-half-open-response"),
+            request_context("req_after_half_open_response", Some("chatgpt-account")),
+        )
+        .await
+        .expect("half-open upstream response should close the origin breaker");
+    server.await.unwrap();
+
+    assert_eq!(response.transport, CodexBackendTransport::WebSocket);
+    assert!(response.body.contains("resp_after_half_open_success"));
+    pool.shutdown().await;
 }

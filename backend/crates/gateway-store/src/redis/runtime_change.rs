@@ -11,34 +11,13 @@ use gateway_core::routing::{
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 
-use crate::{Revision, StoreError, StoreResult, redis_unavailable, require_nonempty};
+use crate::{Revision, StoreError, StoreResult, redis_unavailable};
 
-use super::{namespace, resource_fingerprint};
+use super::namespace;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeChange {
-    SnapshotPublished {
-        config_revision: Revision,
-    },
-    ProviderAccountChanged {
-        provider_account_fingerprint: String,
-        credential_revision: Revision,
-    },
-}
-
-impl RuntimeChange {
-    pub fn provider_account_changed(
-        provider_account_id: &str,
-        credential_revision: Revision,
-    ) -> StoreResult<Self> {
-        Ok(Self::ProviderAccountChanged {
-            provider_account_fingerprint: resource_fingerprint(
-                "runtime change",
-                provider_account_id,
-            )?,
-            credential_revision,
-        })
-    }
+    SnapshotPublished { config_revision: Revision },
 }
 
 pub type RuntimeChangeSubscription =
@@ -134,7 +113,6 @@ impl SnapshotSubscriptionPort for RedisRuntimeChangeRepository {
                             ConfigRevision::new(config_revision.get())
                                 .map_err(|_| SnapshotSubscriptionError::unavailable()),
                         ),
-                        Ok(RuntimeChange::ProviderAccountChanged { .. }) => None,
                         Err(_) => Some(Err(SnapshotSubscriptionError::unavailable())),
                     }
                 });
@@ -147,7 +125,6 @@ impl SnapshotSubscriptionPort for RedisRuntimeChangeRepository {
 struct RuntimeChangeWire {
     kind: String,
     revision: u64,
-    account: Option<String>,
 }
 
 impl From<&RuntimeChange> for RuntimeChangeWire {
@@ -156,15 +133,6 @@ impl From<&RuntimeChange> for RuntimeChangeWire {
             RuntimeChange::SnapshotPublished { config_revision } => Self {
                 kind: "snapshot".to_owned(),
                 revision: config_revision.get(),
-                account: None,
-            },
-            RuntimeChange::ProviderAccountChanged {
-                provider_account_fingerprint,
-                credential_revision,
-            } => Self {
-                kind: "provider_account".to_owned(),
-                revision: credential_revision.get(),
-                account: Some(provider_account_fingerprint.clone()),
             },
         }
     }
@@ -176,19 +144,9 @@ impl TryFrom<RuntimeChangeWire> for RuntimeChange {
     fn try_from(value: RuntimeChangeWire) -> Result<Self, Self::Error> {
         let revision = Revision::new(value.revision)?;
         match value.kind.as_str() {
-            "snapshot" if value.account.is_none() => Ok(Self::SnapshotPublished {
+            "snapshot" => Ok(Self::SnapshotPublished {
                 config_revision: revision,
             }),
-            "provider_account" => {
-                let account = value
-                    .account
-                    .ok_or_else(|| invalid("provider account fingerprint is missing"))?;
-                require_nonempty("runtime change", "account", &account)?;
-                Ok(Self::ProviderAccountChanged {
-                    provider_account_fingerprint: account,
-                    credential_revision: revision,
-                })
-            }
             _ => Err(invalid("runtime change kind is invalid")),
         }
     }
