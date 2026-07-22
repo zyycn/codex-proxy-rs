@@ -18,19 +18,17 @@ pub enum WorkerKind {
     QuotaCatalogHealth,
     RuntimeSnapshotReconciliation,
     RuntimeChangeSubscription,
-    NativeClaimRecovery,
     StaleModelRequestRecovery,
     Retention,
     OpsFlush,
 }
 
 impl WorkerKind {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 7] = [
         Self::OAuthRefresh,
         Self::QuotaCatalogHealth,
         Self::RuntimeSnapshotReconciliation,
         Self::RuntimeChangeSubscription,
-        Self::NativeClaimRecovery,
         Self::StaleModelRequestRecovery,
         Self::Retention,
         Self::OpsFlush,
@@ -43,7 +41,6 @@ impl WorkerKind {
             Self::QuotaCatalogHealth => "quota_catalog_health",
             Self::RuntimeSnapshotReconciliation => "runtime_snapshot_reconciliation",
             Self::RuntimeChangeSubscription => "runtime_change_subscription",
-            Self::NativeClaimRecovery => "native_claim_recovery",
             Self::StaleModelRequestRecovery => "stale_model_request_recovery",
             Self::Retention => "retention",
             Self::OpsFlush => "ops_flush",
@@ -402,10 +399,9 @@ impl WorkerRegistration {
     }
 }
 
-/// Final DB 明确没有相应持久化状态时允许的两种禁用原因。
+/// Final DB 明确没有相应持久化状态时允许的禁用原因。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum WorkerDisabledReason {
-    NoPersistentNativeClaimState,
     NoBufferedOpsEvents,
 }
 
@@ -413,7 +409,6 @@ impl WorkerDisabledReason {
     #[must_use]
     pub const fn kind(self) -> WorkerKind {
         match self {
-            Self::NoPersistentNativeClaimState => WorkerKind::NativeClaimRecovery,
             Self::NoBufferedOpsEvents => WorkerKind::OpsFlush,
         }
     }
@@ -421,9 +416,6 @@ impl WorkerDisabledReason {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::NoPersistentNativeClaimState => {
-                "native continuation has no persistent claim state"
-            }
             Self::NoBufferedOpsEvents => "ops events have no flush buffer",
         }
     }

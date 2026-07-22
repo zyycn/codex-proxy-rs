@@ -409,12 +409,18 @@ async fn websocket_execute_response_create_request_should_preserve_opening_error
         .expect_err("failed opening should surface upstream status");
     server.await.unwrap();
 
-    let CodexWebSocketExchangeError::Upstream(error) = error else {
+    let CodexClientError::Upstream {
+        status,
+        retry_after_seconds,
+        body,
+        ..
+    } = error
+    else {
         panic!("expected upstream opening error");
     };
-    assert_eq!(error.status_code, 429);
-    assert_eq!(error.retry_after_seconds, Some(33));
-    assert!(error.body.contains("rate limited"));
+    assert_eq!(status, reqwest::StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(retry_after_seconds, Some(33));
+    assert!(body.contains("rate limited"));
 }
 
 #[tokio::test]
@@ -438,14 +444,14 @@ async fn websocket_execute_response_create_request_should_reject_binary_event() 
         .expect_err("binary websocket events should be rejected");
     server.await.unwrap();
 
-    assert_eq!(
-        std::error::Error::source(&error).map(ToString::to_string),
-        Some("unexpected binary websocket event".to_string())
-    );
     std::assert_matches!(
         error,
-        CodexWebSocketExchangeError::PostSendAmbiguous { message, .. }
+        CodexClientError::WebSocket(CodexWebSocketExchangeError::PostSendAmbiguous {
+            message,
+            source: Some(source),
+        })
             if message.contains("unexpected binary websocket event")
+                && matches!(*source, CodexWebSocketExchangeError::UnexpectedBinaryEvent)
     );
 }
 
@@ -834,7 +840,10 @@ async fn websocket_execute_response_create_request_should_reject_invalid_complet
         .expect_err("invalid response.completed should be rejected");
     server.await.unwrap();
 
-    let CodexWebSocketExchangeError::PostSendAmbiguous { message, .. } = error else {
+    let CodexClientError::WebSocket(CodexWebSocketExchangeError::PostSendAmbiguous {
+        message, ..
+    }) = error
+    else {
         panic!("expected post-send ambiguous websocket response");
     };
     assert!(message.contains("failed to parse ResponseCompleted"));
@@ -879,7 +888,10 @@ async fn websocket_execute_response_create_request_should_reject_completed_witho
 
     std::assert_matches!(
         error,
-        CodexWebSocketExchangeError::PostSendAmbiguous { message, .. }
+        CodexClientError::WebSocket(CodexWebSocketExchangeError::PostSendAmbiguous {
+            message,
+            ..
+        })
             if message.contains("response.completed is missing response")
     );
 }
@@ -931,7 +943,7 @@ async fn websocket_execute_response_create_request_should_return_error_terminal_
     assert!(response.body.contains("No tool output found"));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn codex_backend_client_should_timeout_when_upstream_is_silent() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -949,8 +961,7 @@ async fn codex_backend_client_should_timeout_when_upstream_is_silent() {
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
         test_wire_profile(),
-    )
-    .with_websocket_initial_event_timeout(Some(Duration::from_millis(30)));
+    );
     let mut request = codex_request("gpt-5.5", "be brief", Vec::new());
     request.set_previous_response_id(Some("resp_previous".to_string()));
     request.previous_response_scope = Some(PreviousResponseScope::Persisted);
@@ -970,11 +981,11 @@ async fn codex_backend_client_should_timeout_when_upstream_is_silent() {
             message,
             ..
         })
-            if message.contains("30ms")
+            if message.contains("20s")
     );
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn websocket_response_created_should_switch_to_active_stream_idle_timeout() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -1009,8 +1020,9 @@ async fn websocket_response_created_should_switch_to_active_stream_idle_timeout(
         tokio::spawn(async move { execute_response_create_request(&prepared).await });
 
     created_rx.await.unwrap();
-    tokio::time::advance(Duration::from_secs(30)).await;
     tokio::task::yield_now().await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(30)).await;
     let response = response_task
         .await
         .expect("websocket task should finish")
@@ -1132,7 +1144,7 @@ async fn codex_backend_client_stream_should_reject_binary_websocket_event() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn codex_backend_client_stream_should_keep_socket_after_structural_activity() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -1158,7 +1170,7 @@ async fn codex_backend_client_stream_should_keep_socket_after_structural_activit
             .await
             .unwrap();
 
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::time::sleep(Duration::from_secs(30)).await;
         first_websocket
             .send(Message::Text(
                 json!({
@@ -1182,8 +1194,7 @@ async fn codex_backend_client_stream_should_keep_socket_after_structural_activit
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
         test_wire_profile(),
-    )
-    .with_websocket_initial_event_timeout(Some(Duration::from_millis(30)));
+    );
     let request = pooled_websocket_request("conversation-structural-no-pool");
 
     let response = backend

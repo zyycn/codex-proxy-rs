@@ -479,14 +479,6 @@ impl GrokCredentialRefreshService {
         Ok(outcomes)
     }
 
-    pub async fn refresh_one(
-        &self,
-        credential: DueGrokCredential,
-    ) -> Result<GrokCredentialRefreshOutcome, GrokCredentialRefreshError> {
-        let policy = self.runtime_policy.load_refresh_policy().await?;
-        self.refresh_one_with_policy(credential, policy).await
-    }
-
     async fn refresh_one_with_policy(
         &self,
         credential: DueGrokCredential,

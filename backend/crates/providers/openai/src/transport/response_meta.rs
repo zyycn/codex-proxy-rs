@@ -1,11 +1,7 @@
 //! 上游响应元数据提取辅助。
 
-use std::time::Instant;
-
-use gateway_protocol::openai::{events::is_rate_limit_header_name, sse::SseEventDecoder};
+use gateway_protocol::openai::events::is_rate_limit_header_name;
 use reqwest::header::{HeaderMap, SET_COOKIE};
-
-use crate::transport::protocol::responses::response_event_signals;
 
 use super::diagnostics::CodexUpstreamDiagnostics;
 
@@ -115,43 +111,5 @@ fn upsert_client_header(headers: &mut Vec<(String, String)>, header: (String, St
         *existing = header;
     } else {
         headers.push(header);
-    }
-}
-
-pub(super) fn update_response_timing_ms(
-    started_at: Instant,
-    decoder: &mut SseEventDecoder,
-    chunk: &[u8],
-    first_token_ms: &mut Option<i64>,
-    first_reasoning_ms: &mut Option<i64>,
-    first_text_ms: &mut Option<i64>,
-) {
-    let Ok(events) = decoder.push(chunk) else {
-        return;
-    };
-    for event in events {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&event.data) else {
-            continue;
-        };
-        let event_type = event.event.as_deref().or_else(|| {
-            value
-                .get("type")
-                .and_then(serde_json::Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-        });
-        let signals = response_event_signals(event_type, &value);
-        if !signals.semantic_output {
-            continue;
-        }
-        let elapsed_ms = crate::transport::time::elapsed_millis_i64(started_at).max(1);
-        if first_token_ms.is_none() {
-            *first_token_ms = Some(elapsed_ms);
-        }
-        if signals.reasoning_output && first_reasoning_ms.is_none() {
-            *first_reasoning_ms = Some(elapsed_ms);
-        }
-        if signals.text_output && first_text_ms.is_none() {
-            *first_text_ms = Some(elapsed_ms);
-        }
     }
 }

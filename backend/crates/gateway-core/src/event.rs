@@ -45,16 +45,6 @@ impl ResponseMeta {
         &self.response_id
     }
 
-    /// 以客户端协议层冻结的网关 response ID 替换 Provider 临时 ID。
-    ///
-    /// Provider ID 只用于当前 attempt 内校验事件关联；跨请求 continuation 必须
-    /// 使用网关拥有且可按调用方隔离解析的 ID。
-    #[must_use]
-    pub fn with_gateway_response_id(mut self, response_id: impl Into<String>) -> Self {
-        self.response_id = response_id.into();
-        self
-    }
-
     /// 返回对客户端公开的模型名。
     #[must_use]
     pub fn model(&self) -> &str {
@@ -477,6 +467,7 @@ impl fmt::Debug for ProviderResponseHeader {
 pub struct ProviderResponseObservation {
     transport: UpstreamTransport,
     http_version: Option<UpstreamHttpVersion>,
+    websocket_pool: Option<WebSocketPoolKind>,
     status_code: Option<u16>,
     request_id: Option<SafeUpstreamValue>,
     timings: ProviderResponseTimings,
@@ -489,6 +480,7 @@ impl ProviderResponseObservation {
         Self {
             transport,
             http_version: None,
+            websocket_pool: None,
             status_code: None,
             request_id: None,
             timings: ProviderResponseTimings::default(),
@@ -499,6 +491,12 @@ impl ProviderResponseObservation {
     #[must_use]
     pub const fn with_http_version(mut self, version: UpstreamHttpVersion) -> Self {
         self.http_version = Some(version);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_websocket_pool(mut self, kind: WebSocketPoolKind) -> Self {
+        self.websocket_pool = Some(kind);
         self
     }
 
@@ -537,6 +535,11 @@ impl ProviderResponseObservation {
     }
 
     #[must_use]
+    pub const fn websocket_pool(&self) -> Option<WebSocketPoolKind> {
+        self.websocket_pool
+    }
+
+    #[must_use]
     pub const fn status_code(&self) -> Option<u16> {
         self.status_code
     }
@@ -554,6 +557,23 @@ impl ProviderResponseObservation {
     #[must_use]
     pub fn client_headers(&self) -> &[ProviderResponseHeader] {
         &self.client_headers
+    }
+}
+
+/// WebSocket 请求使用新连接或复用池中连接的事实。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WebSocketPoolKind {
+    New,
+    Reuse,
+}
+
+impl WebSocketPoolKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Reuse => "reuse",
+        }
     }
 }
 
@@ -638,13 +658,6 @@ impl ProviderEvent {
             observation: Some(Box::new(observation)),
             session_update: None,
         }
-    }
-
-    /// 附着只由同协议客户端连接保存、并在下一轮原样交还 Provider 的状态。
-    #[must_use]
-    pub fn with_session_update(mut self, state: ProviderSessionState) -> Self {
-        self.session_update = Some(Box::new(state));
-        self
     }
 
     /// 把本事件标记为 Provider 连接内状态的提交边界。
@@ -732,15 +745,6 @@ impl From<GatewayEvent> for ProviderEvent {
 }
 
 impl GatewayEvent {
-    /// Canonical event 均为客户端 encoder 可交付事件。
-    ///
-    /// Attempt Coordinator 会把首个事件标记为 downstream commit 候选，
-    /// adapter 可以先编码，但在 commit 持久化成功前不得把结果交给客户端。
-    #[must_use]
-    pub const fn is_downstream_deliverable(&self) -> bool {
-        true
-    }
-
     /// 返回该 fact 是否足以冻结下游 commit barrier。
     ///
     /// 生命周期、结构与结算 facts 可以在换号前安全丢弃；首个可见增量或

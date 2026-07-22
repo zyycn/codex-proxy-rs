@@ -12,16 +12,15 @@ use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderStoreError,
 };
 use provider_xai::{
-    GrokCredentialAdmin, GrokCredentialCatalogCache, GrokCredentialRecovery,
-    GrokCredentialRecoveryOutcome, GrokCredentialRefreshError, GrokCredentialRefreshOutcome,
-    GrokCredentialRefreshService, GrokCredentialRefresher, GrokCredentialRepository,
-    GrokModelCatalogRequest, GrokModelCatalogTransport, GrokModelCatalogTransportFuture,
-    GrokModelCatalogTransportResponse, GrokRefreshFailure, GrokRefreshTokens,
-    RotateManagedGrokCredential, SecretValue,
+    GrokCredentialCatalogCache, GrokCredentialRecovery, GrokCredentialRecoveryOutcome,
+    GrokCredentialRefreshError, GrokCredentialRefreshOutcome, GrokCredentialRefreshService,
+    GrokCredentialRefresher, GrokCredentialRepository, GrokModelCatalogRequest,
+    GrokModelCatalogTransport, GrokModelCatalogTransportFuture, GrokModelCatalogTransportResponse,
+    GrokRefreshFailure, GrokRefreshTokens, SecretValue,
 };
 
 use crate::support::{
-    MemoryGrokCatalogCache, MemoryProviderAccountStore, create_input, credential_object, profile,
+    MemoryGrokCatalogCache, MemoryProviderAccountStore, create_input, credential_object,
     runtime_policy, seed_input,
 };
 
@@ -418,48 +417,6 @@ async fn pre_send_transient_failure_applies_bounded_cooldown() {
             .next_refresh_at()
             .is_some_and(|retry| retry > std::time::SystemTime::now())
     );
-}
-
-#[tokio::test]
-async fn stale_due_snapshot_cannot_overwrite_newer_revision() {
-    let input = due_input("stale");
-    let id = input.account_id.clone();
-    let (store, repository, _, service) =
-        fixture(input, [Err(GrokRefreshFailure::InvalidGrant)], true).await;
-    let due = repository
-        .list_due_refresh()
-        .await
-        .expect("due list")
-        .pop()
-        .expect("due account");
-    let current = store
-        .load_credential(&id, CredentialRevision::new(1).expect("revision"))
-        .await
-        .expect("current credential");
-    let prepared = GrokCredentialAdmin
-        .prepare_rotation(&RotateManagedGrokCredential {
-            current,
-            secret: provider_xai::GrokOAuthSecret {
-                access_token: SecretValue::new("admin-access"),
-                refresh_token: SecretValue::new("admin-refresh"),
-                id_token: None,
-                scope: provider_xai::OFFICIAL_SCOPES.join(" "),
-            },
-            verified_account: profile("subject-stale"),
-            next_refresh_at: chrono::Utc::now() + chrono::Duration::minutes(30),
-        })
-        .expect("admin rotation");
-    assert!(matches!(
-        store
-            .compare_and_swap_credential(prepared.credential)
-            .await
-            .expect("persist admin rotation"),
-        CredentialCasOutcome::Updated(revision) if revision.get() == 2
-    ));
-    assert!(matches!(
-        service.refresh_one(due).await.expect("stale outcome"),
-        GrokCredentialRefreshOutcome::Stale { account_id } if account_id == id
-    ));
 }
 
 #[tokio::test]

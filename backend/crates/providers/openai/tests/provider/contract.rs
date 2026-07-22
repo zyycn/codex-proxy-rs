@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 use chrono::Utc;
 use futures::{SinkExt, StreamExt};
 use gateway_core::engine::continuation::{
-    ContinuationBinding, NativeContinuationPin, NativeContinuationReuse, PreviousResponseId,
+    ContinuationBinding, NativeContinuationPin, PreviousResponseId,
 };
 use gateway_core::engine::credential::{
     AccountAvailability, ProviderAccountId, ProviderAccountStore,
@@ -1714,7 +1714,6 @@ async fn native_continuation_sends_upstream_handle_never_gateway_client_id() {
         ProviderKind::new("openai").expect("provider"),
         instance_id(),
         ProviderAccountId::new("acct_provider").expect("account id"),
-        NativeContinuationReuse::Reusable,
     );
     let second_operation = identity_tainted_operation();
     let mut second = provider
@@ -1810,7 +1809,6 @@ async fn connection_replay_restores_full_input_without_reusing_native_handle() {
         ProviderKind::new("openai").expect("provider"),
         instance_id(),
         ProviderAccountId::new("acct_provider").expect("account id"),
-        NativeContinuationReuse::Reusable,
     );
     let second_operation = identity_tainted_operation()
         .with_provider_session_state(provider_state.expect("connection replay state"));

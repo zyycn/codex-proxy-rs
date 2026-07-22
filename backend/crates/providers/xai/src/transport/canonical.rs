@@ -638,6 +638,8 @@ fn core_usage(usage: TokenUsage) -> Usage {
     normalized.cached_tokens = Some(usage.cached_tokens);
     normalized.cache_write_tokens = Some(usage.cache_write_tokens);
     normalized.reasoning_tokens = Some(usage.reasoning_tokens);
+    normalized.image_input_tokens = Some(usage.image_input_tokens);
+    normalized.image_output_tokens = Some(usage.image_output_tokens);
     normalized.total_tokens = Some(usage.total_tokens);
     normalized
 }

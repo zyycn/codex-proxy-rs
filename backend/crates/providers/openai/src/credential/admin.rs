@@ -88,10 +88,6 @@ impl std::fmt::Debug for ImportCodexOAuthCredential {
     }
 }
 
-pub struct ImportCodexOAuthCredentialBatch {
-    pub items: Vec<ImportCodexOAuthCredential>,
-}
-
 /// Provider-owned 文档归一后的唯一 Core 写入批次。
 pub struct PreparedCodexAccountImport {
     accounts: Vec<NewProviderAccount>,
@@ -388,25 +384,6 @@ impl CodexCredentialAdmin {
             account,
             credential,
         })
-    }
-
-    pub fn prepare_import_batch(
-        &self,
-        batch: ImportCodexOAuthCredentialBatch,
-    ) -> Result<Vec<NewProviderAccount>, CodexCredentialAdminError> {
-        if batch.items.is_empty() || batch.items.len() > MAX_BATCH {
-            return Err(CodexCredentialAdminError::InvalidInput);
-        }
-        let mut ids = BTreeSet::new();
-        let mut prepared = Vec::with_capacity(batch.items.len());
-        for item in batch.items {
-            let account = self.prepare_import(item)?;
-            if !ids.insert(account.account.id().clone()) {
-                return Err(CodexCredentialAdminError::InvalidInput);
-            }
-            prepared.push(account);
-        }
-        Ok(prepared)
     }
 
     /// 严格输出可被旧 CPR import 直接读取的 canonical 文档。

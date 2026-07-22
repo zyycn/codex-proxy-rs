@@ -6,9 +6,10 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
+use tokio::time::Instant;
 use uuid::Uuid;
 
 const DEFAULT_FAILURE_THRESHOLD: usize = 3;

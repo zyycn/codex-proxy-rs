@@ -341,6 +341,7 @@ impl DefaultExecutionService {
             request_kind: observation.request_kind,
             subagent_kind: observation.subagent_kind,
             compact: observation.compact,
+            image_generation_requested: request.operation.image_generation_requested(),
             started_at,
             deadline_at,
         };
@@ -488,6 +489,7 @@ impl DefaultExecutionService {
             request_kind: Some("account_connection_test".to_owned()),
             subagent_kind: None,
             compact: false,
+            image_generation_requested: false,
             started_at,
             deadline_at,
         };
