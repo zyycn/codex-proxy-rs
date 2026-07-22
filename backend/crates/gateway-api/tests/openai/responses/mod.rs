@@ -206,7 +206,7 @@ fn decoder_should_map_string_input_to_user_text() {
 }
 
 #[test]
-fn decoder_should_project_remote_compaction_v2_to_a_typed_operation() {
+fn decoder_should_preserve_remote_compaction_trigger_for_openai() {
     let decoded = decode_request(
         &serde_json::to_vec(&json!({
             "model": "smart-code",
@@ -219,22 +219,15 @@ fn decoder_should_project_remote_compaction_v2_to_a_typed_operation() {
         .expect("request JSON"),
     )
     .expect("remote compaction v2 request should decode");
-    let Operation::CompactConversation(request) = decoded.operation() else {
-        panic!("remote compaction v2 must use the typed compact operation");
-    };
-    let upstream_input = request
-        .generation()
-        .protocol_payload()
-        .expect("compaction should preserve the normalized OpenAI payload")
-        .body()
+    let upstream_input = openai_wire_body(&decoded)
         .get("input")
         .and_then(Value::as_array)
-        .expect("compaction input should remain an array");
+        .expect("OpenAI input should remain an array");
 
     assert!(
         upstream_input
             .iter()
-            .all(|item| { item.get("type").and_then(Value::as_str) != Some("compaction_trigger") })
+            .any(|item| { item.get("type").and_then(Value::as_str) == Some("compaction_trigger") })
     );
 }
 

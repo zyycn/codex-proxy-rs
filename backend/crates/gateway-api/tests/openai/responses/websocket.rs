@@ -52,6 +52,33 @@ fn response_create_should_preserve_current_provider_options() {
 }
 
 #[test]
+fn response_create_should_preserve_compaction_trigger_for_openai() {
+    let decoded = decode_response_create(
+        &json!({
+            "type": "response.create",
+            "model": "smart-code",
+            "input": [
+                {"type": "message", "role": "user", "content": "history"},
+                {"type": "compaction_trigger"}
+            ]
+        })
+        .to_string(),
+    )
+    .expect("decode OpenAI response.create");
+    let Operation::Generate(request) = decoded.operation() else {
+        panic!("OpenAI response.create must remain Generate");
+    };
+
+    assert_eq!(
+        request
+            .protocol_payload()
+            .and_then(|payload| payload.body().get("input"))
+            .and_then(|input| input.pointer("/1/type")),
+        Some(&json!("compaction_trigger"))
+    );
+}
+
+#[test]
 fn response_create_should_reject_explicit_non_streaming_requests() {
     let error = decode_response_create(
         &json!({

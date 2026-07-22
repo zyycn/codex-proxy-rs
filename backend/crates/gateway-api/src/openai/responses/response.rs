@@ -31,8 +31,8 @@ struct PendingWireEvent {
 
 /// Provider event 封套到 OpenAI Responses wire 的唯一表达边界。
 ///
-/// OpenAI Provider 带原生 wire 时只下发该 wire；其他 Provider 的 canonical
-/// facts 仍由 [`ResponsesCollector`] 表达。同一响应不能在两种模式之间切换。
+/// Provider 已提供 OpenAI wire 时只下发该 wire；否则由 [`ResponsesCollector`]
+/// 表达 canonical facts。同一响应不能在两种模式之间切换。
 #[derive(Debug)]
 pub struct OpenAiResponsesEncoder {
     canonical: ResponsesCollector,
