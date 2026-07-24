@@ -130,7 +130,7 @@ credential 更新使用 `credential_revision` CAS。认证永久失败、封禁�
 | `admin_audit_events` | 管理 mutation 审计 |
 | `client_api_keys` | 客户端鉴权、限额与授权范围 |
 | `runtime_settings` | 全局配置与 `config_revision` |
-| `provider_accounts` | 账号资料、加密 credential、revision、quota、cooldown |
+| `provider_accounts` | 账号资料、Provider-owned 明文 credential JSON、revision、quota、cooldown |
 | `model_requests` | 请求、attempt、计费、交付与恢复事实 |
 | `ops_events` | 脱敏运行事件 |
 
@@ -138,7 +138,8 @@ credential 更新使用 `credential_revision` CAS。认证永久失败、封禁�
 
 - 一个事实只存一次；可表达关系使用真实 FK 与支持索引。
 - Provider 差异只进入受 schema/version 校验的 JSONB 边界。
-- secret 只保存加密 envelope；日志、Debug、API 和 audit 不输出 secret。
+- credential JSON 以 Provider 自己的 schema 明文保存在 `provider_credentials_json`；日志、Debug、API 和 audit
+  不输出其中的 secret，Provider 只在需要发往上游时把值包装为运行时 secret。
 - stale recovery 只把超时 `running` 请求收敛为 `incomplete`，不重放业务请求。
 - `ops_events` 当前逐条同步持久化，`occurrence_count=1`；OpsFlush 可禁用，不存在隐藏内存聚合权威。
 - retention 只删除已满足保留规则的历史事实，不改变运行中请求。

@@ -19,9 +19,13 @@ description: Codex Proxy RS 仓库开发指南。Use when changing or auditing i
 - `gateway-api` 只做协议适配；`gateway-core` 编排；Provider 独占 credential、catalog 与 transport；`gateway-store` 实现持久化端口。
 - Provider 每次调用只选择一个 credential，不隐藏换号、业务 retry 或跨 Provider fallback。
 - PostgreSQL 是持久化权威；Redis 只保存可恢复协调状态和 OAuth pending flow。
+- 当前只有 `openai` 与 `xai` 两个 Provider；账号归属 Provider，不存在 Provider Instance 层。
+- OpenAI 的 OAuth 与 Agent Identity credential 由 `providers/openai` 独占解析；账号导出使用 CPR 文档，Agent Identity
+  只输出运行所需身份材料，不伪造 OAuth 字段。
 - 测试放在各 package 的 `tests/`。禁止在生产 `src/` 写 test-only 代码。
 - Vue 使用 `<script setup lang="ts">`、现有基础组件和主题 token。
 - README 面向使用者，保持简短；长期架构只写入 `docs/architecture.md`。
+- 完整 HTTP/Admin 路由与敏感导入/导出格式写入 `docs/api.md`。
 - 不添加兼容 shim、重复状态机、第二套配置或补丁式旁路。
 
 ## 工作流
@@ -54,4 +58,5 @@ docker compose -f deploy/compose.yaml config --quiet
 - 提交前检查 `git status --short`、cached/unstaged diff 和 `git diff --check`。
 - 提交带 `Co-authored-by: Codex <noreply@openai.com>`。
 - 发布以 `release/version.yaml` 和带注释的 `vX.Y.Z` tag 为准。
+- 正式发布使用 `release/publish <version>`，不要手工绕过发布脚本。
 - 发布完成后核对远端 `main`、tag、Actions、Release asset 与 GHCR。
