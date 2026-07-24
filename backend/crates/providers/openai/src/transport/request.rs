@@ -1,6 +1,7 @@
 //! 核心 Generate operation 到 Codex Responses wire request 的严格编码。
 
 use gateway_core::operation::GenerateRequest;
+use gateway_protocol::openai::WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -127,64 +128,37 @@ struct ExtractedRequestContext {
 impl ExtractedRequestContext {
     fn from_body(body: &Map<String, Value>) -> Self {
         Self {
-            turn_state: body_or_metadata_string(
-                body,
-                &["turnState", "turn_state", "x-codex-turn-state"],
-            ),
-            turn_metadata: body_or_metadata_string(
-                body,
-                &["turnMetadata", "turn_metadata", "x-codex-turn-metadata"],
-            ),
-            beta_features: body_or_metadata_string(body, &["betaFeatures", "beta_features"]),
-            version: body_or_metadata_string(body, &["version"]),
-            include_timing_metrics: body_or_metadata_string(
-                body,
-                &["includeTimingMetrics", "include_timing_metrics"],
-            ),
-            codex_window_id: body_or_metadata_string(
-                body,
-                &["codexWindowId", "codex_window_id", "x-codex-window-id"],
-            ),
-            parent_thread_id: body_or_metadata_string(
-                body,
-                &[
-                    "parentThreadId",
-                    "parent_thread_id",
-                    "x-codex-parent-thread-id",
-                ],
-            ),
-            conversation_id: body_or_metadata_string(body, &["conversation_id", "conversationId"]),
-            session_id: body_or_metadata_string(body, &["session_id", "sessionId"]),
-            thread_id: body_or_metadata_string(body, &["thread_id", "threadId"]),
-            client_request_id: body_or_metadata_string(
-                body,
-                &[
-                    "x-client-request-id",
-                    "client_request_id",
-                    "clientRequestId",
-                ],
-            ),
-            turn_id: body_or_metadata_string(body, &["turn_id", "turnId", "x-codex-turn-id"]),
-            responses_lite: body_or_metadata_string(
-                body,
-                &["ws_request_header_x_openai_internal_codex_responses_lite"],
-            ),
-            memgen_request: body_or_metadata_string(
-                body,
-                &["x-openai-memgen-request", "memgen_request"],
-            ),
+            turn_state: body_string(body, "turnState"),
+            turn_metadata: body_string(body, "turnMetadata"),
+            beta_features: body_string(body, "betaFeatures"),
+            version: body_string(body, "version"),
+            include_timing_metrics: body_string(body, "includeTimingMetrics"),
+            codex_window_id: body_string(body, "codexWindowId"),
+            parent_thread_id: body_string(body, "parentThreadId"),
+            conversation_id: body_string(body, "conversation_id"),
+            session_id: body_string(body, "session_id"),
+            thread_id: body_string(body, "thread_id"),
+            client_request_id: body_string(body, "x-client-request-id"),
+            turn_id: body_string(body, "turn_id"),
+            // Responses Lite 在 WebSocket body 中的这个键是官方 header 投影，
+            // 不是普通上下文字段的 metadata 回退。
+            responses_lite: body
+                .get("client_metadata")
+                .and_then(Value::as_object)
+                .and_then(|metadata| {
+                    non_empty_string(
+                        metadata.get(WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY),
+                    )
+                }),
+            // Memory consolidation 只由官方请求头提供；body 中同名字段不参与
+            // transport 事实提取。
+            memgen_request: None,
         }
     }
 }
 
-fn body_or_metadata_string(body: &Map<String, Value>, keys: &[&str]) -> Option<String> {
-    keys.iter()
-        .find_map(|key| non_empty_string(body.get(*key)))
-        .or_else(|| {
-            let metadata = body.get("client_metadata")?.as_object()?;
-            keys.iter()
-                .find_map(|key| non_empty_string(metadata.get(*key)))
-        })
+fn body_string(body: &Map<String, Value>, key: &str) -> Option<String> {
+    non_empty_string(body.get(key))
 }
 
 fn non_empty_string(value: Option<&Value>) -> Option<String> {
@@ -528,10 +502,12 @@ fn apply_protocol_context(request: &mut CodexResponsesRequest, context: &Map<Str
         .parent_thread_id
         .take()
         .or_else(|| context_string(context, "parent_thread_id"));
+    let prompt_cache_key = request.prompt_cache_key().map(ToOwned::to_owned);
     request.client_conversation_id = request
         .client_conversation_id
         .take()
-        .or_else(|| context_string(context, "conversation_id"));
+        .or_else(|| context_string(context, "conversation_id"))
+        .or(prompt_cache_key);
     request.client_session_id = request
         .client_session_id
         .take()

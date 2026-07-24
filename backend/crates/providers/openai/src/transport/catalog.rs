@@ -165,6 +165,9 @@ pub enum CodexCatalogVisibility {
     Hide,
     /// 不进入 picker。
     None,
+    /// 上游新增的可见性值；保留模型条目但不作本地可见性判断。
+    #[serde(other)]
+    Unknown,
 }
 
 /// 一个已完整校验的 Codex 真实模型。

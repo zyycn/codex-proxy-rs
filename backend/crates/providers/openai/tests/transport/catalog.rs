@@ -1,9 +1,9 @@
 use chrono::{TimeZone, Utc};
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use provider_openai::transport::{
-    CodexBackendClient, CodexCatalogCapabilityEvidence, CodexClientError, CodexModelCatalogError,
-    CodexRequestContext, MAX_CODEX_MODEL_CATALOG_BYTES, build_reqwest_client,
-    parse_codex_model_catalog,
+    CodexBackendClient, CodexCatalogCapabilityEvidence, CodexCatalogVisibility, CodexClientError,
+    CodexModelCatalogError, CodexRequestContext, MAX_CODEX_MODEL_CATALOG_BYTES,
+    build_reqwest_client, parse_codex_model_catalog,
 };
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -169,6 +169,20 @@ fn unknown_input_modality_should_degrade_capability_evidence_to_unknown() {
             CodexCatalogCapabilityEvidence::Unknown,
             CodexCatalogCapabilityEvidence::Unknown
         )
+    );
+}
+
+#[test]
+fn unknown_visibility_should_degrade_without_rejecting_the_snapshot() {
+    let snapshot = parse_codex_model_catalog(
+        br#"{"models":[{"slug":"gpt-future","display_name":"Future","visibility":"preview_only"}]}"#,
+        None,
+    )
+    .expect("future visibility should not reject the snapshot");
+
+    assert_eq!(
+        snapshot.models()[0].metadata().visibility(),
+        Some(CodexCatalogVisibility::Unknown)
     );
 }
 
