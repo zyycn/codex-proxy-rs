@@ -253,9 +253,15 @@ struct UnusedContinuation;
 impl NativeContinuationPort for UnusedContinuation {
     fn resolve<'a>(
         &'a self,
-        _: &'a ClientApiKeyId,
         _: &'a PreviousResponseId,
     ) -> BoxFuture<'a, Result<Option<NativeContinuationPin>, NativeContinuationStoreError>> {
+        Box::pin(async { unreachable!("authentication fixture does not execute") })
+    }
+
+    fn record<'a>(
+        &'a self,
+        _: NativeContinuationPin,
+    ) -> BoxFuture<'a, Result<(), NativeContinuationStoreError>> {
         Box::pin(async { unreachable!("authentication fixture does not execute") })
     }
 }

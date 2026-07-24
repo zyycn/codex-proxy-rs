@@ -13,7 +13,7 @@ use gateway_core::engine::{AttemptContext, ContinuationAttempt};
 use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeaseGuard, ProviderLeasePort, ProviderLeaseRequest,
     ProviderSchedulingLeaseRequest, ProviderSessionAffinityKey, ProviderSessionAffinityPort,
-    ProviderStoreError,
+    ProviderSessionExclusionPort, ProviderSessionExclusions, ProviderStoreError,
 };
 use gateway_core::routing::ProviderKind;
 use secrecy::ExposeSecret;
@@ -41,8 +41,9 @@ const CLOUDFLARE_CHALLENGE_BACKOFF: [Duration; 4] = [
     Duration::from_secs(120),
 ];
 const CLOUDFLARE_PATH_BLOCK_THRESHOLD: u32 = 3;
-const SESSION_AFFINITY_TTL: Duration = Duration::from_secs(60 * 60);
+const SESSION_AFFINITY_TTL: Duration = Duration::from_secs(4 * 60 * 60);
 const SESSION_AFFINITY_TIMEOUT: Duration = Duration::from_millis(100);
+const CYBER_POLICY_SESSION_TTL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexAccountFailure {
@@ -89,17 +90,25 @@ pub struct SelectCodexCredential<'a> {
     pub session_affinity_key: Option<&'a ProviderSessionAffinityKey>,
 }
 
+#[derive(Clone)]
+pub(crate) struct CodexCyberPolicyScope {
+    key: ProviderSessionAffinityKey,
+    state: Option<ProviderSessionExclusions>,
+}
+
 pub struct CodexCredentialSelector {
     provider_kind: ProviderKind,
     repository: CodexCredentialRepository,
     leases: Arc<dyn ProviderLeasePort>,
     session_affinity: Arc<dyn ProviderSessionAffinityPort>,
+    session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
     catalog: Arc<CodexCredentialCatalogService>,
     quota: Arc<CodexCredentialQuotaService>,
     agent_identity: Arc<CodexAgentIdentityTaskService>,
     cookie_policy: CodexCookiePolicy,
     risk_recovery: Mutex<HashMap<String, RiskRecoveryState>>,
     account_feedback: Arc<AccountFeedbackStats>,
+    skip_exhausted: bool,
 }
 
 enum SessionAffinityLookup {
@@ -117,29 +126,41 @@ impl CodexCredentialSelector {
         repository: CodexCredentialRepository,
         leases: Arc<dyn ProviderLeasePort>,
         session_affinity: Arc<dyn ProviderSessionAffinityPort>,
+        session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
         catalog: Arc<CodexCredentialCatalogService>,
         quota: Arc<CodexCredentialQuotaService>,
         agent_identity: Arc<CodexAgentIdentityTaskService>,
         account_feedback: Arc<AccountFeedbackStats>,
         cookie_policy: CodexCookiePolicy,
+        skip_exhausted: bool,
     ) -> Self {
         Self {
             provider_kind,
             repository,
             leases,
             session_affinity,
+            session_exclusions,
             catalog,
             quota,
             agent_identity,
             cookie_policy,
             risk_recovery: Mutex::new(HashMap::new()),
             account_feedback,
+            skip_exhausted,
         }
     }
 
     pub async fn select(
         &self,
         request: &SelectCodexCredential<'_>,
+    ) -> Result<CodexCredentialLease, CredentialSelectionError> {
+        self.select_with_cyber_policy(request, None).await
+    }
+
+    pub(crate) async fn select_with_cyber_policy(
+        &self,
+        request: &SelectCodexCredential<'_>,
+        cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let accounts = self.repository.list_for_provider().await?;
         let accounts = accounts
@@ -189,10 +210,23 @@ impl CodexCredentialSelector {
                 AccountCandidate { account, signals }
             })
             .collect::<Vec<_>>();
+        // 旧版开关只影响“候选资格”。保留原始账号供 revision-fenced 凭据加载，
+        // 用影子候选承载放宽后的资格，避免伪造已持久化账号的运行状态。
+        let quota_exhausted_candidates = (!self.skip_exhausted).then(|| {
+            candidates
+                .iter()
+                .cloned()
+                .map(|mut candidate| {
+                    candidate.account = quota_exhausted_scheduling_projection(&candidate.account);
+                    candidate
+                })
+                .collect::<Vec<_>>()
+        });
+        let scheduling_candidates = quota_exhausted_candidates.as_deref().unwrap_or(&candidates);
         let affinity_account = match request.session_affinity_key {
             Some(key) => match self.lookup_session_affinity(key).await {
                 SessionAffinityLookup::Bound(account_id)
-                    if candidates.iter().any(|candidate| {
+                    if scheduling_candidates.iter().any(|candidate| {
                         candidate.account.id() == &account_id
                             && candidate.account.is_schedulable(SystemTime::now())
                     }) =>
@@ -207,7 +241,16 @@ impl CodexCredentialSelector {
             },
             None => None,
         };
+        let cyber_policy_scope = self
+            .prepare_cyber_policy_scope(cyber_policy_session_key)
+            .await;
         let mut excluded = request.attempt.excluded_accounts().clone();
+        if let Some(state) = cyber_policy_scope
+            .as_ref()
+            .and_then(|scope| scope.state.as_ref())
+        {
+            excluded.extend(state.excluded_accounts().iter().cloned());
+        }
         let continuation_account = match request.attempt.continuation_attempt() {
             ContinuationAttempt::Native => request
                 .attempt
@@ -248,7 +291,7 @@ impl CodexCredentialSelector {
                 preferred_account: preferred.clone(),
                 round_robin_cursor,
             };
-            let Some(selected) = AccountSelector.select(&candidates, &context) else {
+            let Some(selected) = AccountSelector.select(scheduling_candidates, &context) else {
                 return match shortest_retry {
                     Some(retry_after) => Err(CredentialSelectionError::CapacityUnavailable {
                         retry_after: Some(retry_after),
@@ -256,7 +299,11 @@ impl CodexCredentialSelector {
                     None => Err(CredentialSelectionError::NoEligibleCredential),
                 };
             };
-            let account = selected.account.clone();
+            let account = candidates
+                .iter()
+                .find(|candidate| candidate.account.id() == selected.account.id())
+                .map(|candidate| candidate.account.clone())
+                .ok_or(CredentialSelectionError::InvalidCredential)?;
             let policy = request.attempt.account_selection_policy();
             match self
                 .leases
@@ -311,6 +358,7 @@ impl CodexCredentialSelector {
                         account,
                         authentication: runtime.authentication,
                         cookies,
+                        cyber_policy_scope,
                         _guard: guard,
                     });
                 }
@@ -359,6 +407,97 @@ impl CodexCredentialSelector {
                 tracing::warn!(
                     timeout_ms = SESSION_AFFINITY_TIMEOUT.as_millis(),
                     "OpenAI stale session affinity clear timed out"
+                );
+            }
+        }
+    }
+
+    async fn prepare_cyber_policy_scope(
+        &self,
+        key: Option<&ProviderSessionAffinityKey>,
+    ) -> Option<CodexCyberPolicyScope> {
+        let key = key?.clone();
+        let state = match tokio::time::timeout(
+            SESSION_AFFINITY_TIMEOUT,
+            self.session_exclusions.load(&self.provider_kind, &key),
+        )
+        .await
+        {
+            Ok(Ok(state)) => state,
+            Ok(Err(error)) => {
+                tracing::warn!(error = %error, "OpenAI cyber policy state read failed open");
+                None
+            }
+            Err(_) => {
+                tracing::warn!(
+                    timeout_ms = SESSION_AFFINITY_TIMEOUT.as_millis(),
+                    "OpenAI cyber policy state read timed out"
+                );
+                None
+            }
+        };
+        Some(CodexCyberPolicyScope { key, state })
+    }
+
+    pub(crate) async fn record_cyber_policy_failure(
+        &self,
+        scope: Option<&CodexCyberPolicyScope>,
+        account: &ProviderAccount,
+    ) {
+        let Some(scope) = scope else {
+            return;
+        };
+        match tokio::time::timeout(
+            SESSION_AFFINITY_TIMEOUT,
+            self.session_exclusions.record_failure(
+                &self.provider_kind,
+                &scope.key,
+                account.id(),
+                CYBER_POLICY_SESSION_TTL,
+            ),
+        )
+        .await
+        {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(
+                    account_id = %account.id(),
+                    error = %error,
+                    "OpenAI cyber policy exclusion write failed open"
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    account_id = %account.id(),
+                    timeout_ms = SESSION_AFFINITY_TIMEOUT.as_millis(),
+                    "OpenAI cyber policy exclusion write timed out"
+                );
+            }
+        }
+    }
+
+    pub(crate) async fn observe_cyber_policy_success(&self, scope: Option<&CodexCyberPolicyScope>) {
+        let Some(scope) = scope.filter(|scope| scope.state.is_some()) else {
+            return;
+        };
+        let Some(state) = scope.state.as_ref() else {
+            return;
+        };
+        match tokio::time::timeout(
+            SESSION_AFFINITY_TIMEOUT,
+            self.session_exclusions
+                .clear(&self.provider_kind, &scope.key, state.revision()),
+        )
+        .await
+        {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(error = %error, "OpenAI cyber policy exclusion clear failed open");
+            }
+            Err(_) => {
+                tracing::warn!(
+                    timeout_ms = SESSION_AFFINITY_TIMEOUT.as_millis(),
+                    "OpenAI cyber policy exclusion clear timed out"
                 );
             }
         }
@@ -452,12 +591,11 @@ impl CodexCredentialSelector {
         let Some(key) = session_affinity_key else {
             return;
         };
-        match self.lookup_session_affinity(key).await {
-            SessionAffinityLookup::Bound(bound_account) if &bound_account != account.id() => {
-                return;
-            }
-            SessionAffinityLookup::Unavailable => return,
-            SessionAffinityLookup::Missing | SessionAffinityLookup::Bound(_) => {}
+        if matches!(
+            self.lookup_session_affinity(key).await,
+            SessionAffinityLookup::Unavailable
+        ) {
+            return;
         }
         match tokio::time::timeout(
             SESSION_AFFINITY_TIMEOUT,
@@ -615,6 +753,17 @@ impl CodexCredentialSelector {
     }
 }
 
+fn quota_exhausted_scheduling_projection(account: &ProviderAccount) -> ProviderAccount {
+    if account.availability() == AccountAvailability::QuotaExhausted {
+        return account.clone().with_runtime_state(
+            account.enabled(),
+            AccountAvailability::Ready,
+            account.cooldown_until(),
+        );
+    }
+    account.clone()
+}
+
 fn active_risk_recovery<'a>(
     recovery: &'a mut HashMap<String, RiskRecoveryState>,
     account_id: &str,
@@ -651,6 +800,7 @@ pub struct CodexCredentialLease {
     authentication: CodexRuntimeAuthentication,
     cookies: Vec<RuntimeCodexCookie>,
     installation_id: String,
+    cyber_policy_scope: Option<CodexCyberPolicyScope>,
     _guard: Box<dyn ProviderLeaseGuard>,
 }
 
@@ -678,6 +828,11 @@ impl CodexCredentialLease {
     #[must_use]
     pub fn installation_id(&self) -> &str {
         &self.installation_id
+    }
+
+    #[must_use]
+    pub(crate) const fn cyber_policy_scope(&self) -> Option<&CodexCyberPolicyScope> {
+        self.cyber_policy_scope.as_ref()
     }
 }
 

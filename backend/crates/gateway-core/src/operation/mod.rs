@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::error::{OperationError, validate_text};
@@ -135,7 +136,7 @@ impl CapabilityRequirements {
 ///
 /// Core 只在重试和路由过程中保持该值；协议层只能把 Provider 返回的状态原样带入
 /// 下一轮，不能读取或改写正文。
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderSessionState {
     provider: String,
     payload: Map<String, Value>,

@@ -18,7 +18,8 @@ use gateway_core::error::{StoreError, StoreErrorKind};
 use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshPolicy,
     ProviderRuntimePolicyPort, ProviderSchedulingLeaseRequest, ProviderSchedulingState,
-    ProviderSessionAffinityKey, ProviderSessionAffinityPort, ProviderStoreError,
+    ProviderSessionAffinityKey, ProviderSessionAffinityPort, ProviderSessionExclusionPort,
+    ProviderSessionExclusions, ProviderStoreError,
 };
 use gateway_core::routing::ProviderKind;
 use provider_openai::credential::{
@@ -497,6 +498,83 @@ impl ProviderSessionAffinityPort for MemorySessionAffinity {
                     key.expose_to_store().to_owned(),
                 ))
                 .is_some())
+        })
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct MemorySessionExclusions {
+    states: Mutex<BTreeMap<(String, String), ProviderSessionExclusions>>,
+    revision: AtomicUsize,
+}
+
+impl ProviderSessionExclusionPort for MemorySessionExclusions {
+    fn load<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+    ) -> BoxFuture<'a, Result<Option<ProviderSessionExclusions>, ProviderStoreError>> {
+        Box::pin(async move {
+            Ok(self
+                .states
+                .lock()
+                .expect("session exclusion lock")
+                .get(&(
+                    provider_kind.as_str().to_owned(),
+                    key.expose_to_store().to_owned(),
+                ))
+                .cloned())
+        })
+    }
+
+    fn record_failure<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+        account_id: &'a ProviderAccountId,
+        _ttl: Duration,
+    ) -> BoxFuture<'a, Result<ProviderSessionExclusions, ProviderStoreError>> {
+        Box::pin(async move {
+            let key = (
+                provider_kind.as_str().to_owned(),
+                key.expose_to_store().to_owned(),
+            );
+            let mut states = self.states.lock().expect("session exclusion lock");
+            let mut excluded_accounts = states
+                .get(&key)
+                .map(|state| state.excluded_accounts().clone())
+                .unwrap_or_default();
+            excluded_accounts.insert(account_id.clone());
+            let state = ProviderSessionExclusions::new(
+                excluded_accounts,
+                self.revision.fetch_add(1, Ordering::SeqCst).to_string(),
+            );
+            states.insert(key, state.clone());
+            Ok(state)
+        })
+    }
+
+    fn clear<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+        expected_revision: &'a str,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            let key = (
+                provider_kind.as_str().to_owned(),
+                key.expose_to_store().to_owned(),
+            );
+            let mut states = self.states.lock().expect("session exclusion lock");
+            if states
+                .get(&key)
+                .is_some_and(|state| state.revision() == expected_revision)
+            {
+                states.remove(&key);
+                Ok(true)
+            } else {
+                Ok(false)
+            }
         })
     }
 }

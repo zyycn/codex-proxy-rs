@@ -42,7 +42,6 @@ const MAX_TOKEN_LIFETIME_SECONDS: u64 = 366 * 24 * 60 * 60;
 const JWKS_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const OFFICIAL_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api";
 
 /// OAuth identity verification 的稳定失败分类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -339,6 +338,8 @@ pub struct CodexJwtIdentityVerifier {
     jwks_source: Box<dyn CodexJwksSource>,
     cache: Mutex<JwksCache>,
     cache_ttl: Duration,
+    api_audience: String,
+    oauth_client_id: String,
 }
 
 impl CodexJwtIdentityVerifier {
@@ -348,7 +349,15 @@ impl CodexJwtIdentityVerifier {
             jwks_source,
             cache: Mutex::new(JwksCache::default()),
             cache_ttl: JWKS_CACHE_TTL,
+            api_audience: OFFICIAL_OPENAI_API_AUDIENCE.to_owned(),
+            oauth_client_id: OFFICIAL_CODEX_OAUTH_CLIENT_ID.to_owned(),
         }
+    }
+
+    #[must_use]
+    pub fn with_oauth_client_id(mut self, oauth_client_id: impl Into<String>) -> Self {
+        self.oauth_client_id = oauth_client_id.into();
+        self
     }
 
     async fn decoding_key(
@@ -391,7 +400,7 @@ impl CodexJwtIdentityVerifier {
             .as_deref()
             .ok_or(CodexIdentityVerificationError::Rejected)?;
         let decoding_key = self.decoding_key(key_id).await?;
-        let mut validation = official_validation(OFFICIAL_OPENAI_API_AUDIENCE);
+        let mut validation = official_validation(&self.api_audience);
         validation.set_required_spec_claims(&["sub", "iss", "aud", "exp", "iat"]);
         Ok(
             decode::<AccessTokenClaims>(access_token, &decoding_key, &validation)
@@ -421,7 +430,7 @@ impl CodexJwtIdentityVerifier {
             .as_deref()
             .ok_or(CodexIdentityVerificationError::Rejected)?;
         let decoding_key = self.decoding_key(key_id).await?;
-        let mut validation = official_validation(OFFICIAL_CODEX_OAUTH_CLIENT_ID);
+        let mut validation = official_validation(&self.oauth_client_id);
         validation.set_required_spec_claims(&["sub", "iss", "aud", "exp", "iat", "nonce"]);
         Ok(
             decode::<IdTokenClaims>(id_token, &decoding_key, &validation)
@@ -449,7 +458,7 @@ impl CodexSignedIdentityVerifier for CodexJwtIdentityVerifier {
     ) -> Result<CodexSignedIdentity, CodexIdentityVerificationError> {
         self.decode_access_token(secret)
             .await?
-            .into_signed_identity()
+            .into_signed_identity(&self.api_audience)
     }
 
     async fn verify_authorization(
@@ -460,24 +469,31 @@ impl CodexSignedIdentityVerifier for CodexJwtIdentityVerifier {
     ) -> Result<CodexSignedIdentity, CodexIdentityVerificationError> {
         let access = self.decode_access_token(secret).await?;
         let id = self.decode_id_token(id_token).await?;
-        if access.sub != id.sub || !id.valid_for_nonce(expected_nonce.expose_secret()) {
+        if access.sub != id.sub
+            || !id.valid_for_nonce(expected_nonce.expose_secret(), &self.oauth_client_id)
+        {
             return Err(CodexIdentityVerificationError::Rejected);
         }
-        access.into_signed_identity()
+        access.into_signed_identity(&self.api_audience)
     }
 }
 
 /// 官方 `/wham/usage` 账号身份 source。
 pub struct ReqwestCodexAuthenticatedAccountSource {
     client: CodexBackendClient,
+    base_url: String,
 }
 
 impl ReqwestCodexAuthenticatedAccountSource {
-    pub fn new(profile: CodexWireProfileState) -> Result<Self, CodexIdentityVerificationError> {
+    pub fn new(
+        profile: CodexWireProfileState,
+        base_url: String,
+    ) -> Result<Self, CodexIdentityVerificationError> {
         let http =
             build_reqwest_client().map_err(|_| CodexIdentityVerificationError::Unavailable)?;
         Ok(Self {
-            client: CodexBackendClient::new(http, OFFICIAL_CODEX_BASE_URL, profile),
+            client: CodexBackendClient::new(http, base_url.clone(), profile),
+            base_url,
         })
     }
 }
@@ -486,7 +502,7 @@ impl fmt::Debug for ReqwestCodexAuthenticatedAccountSource {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ReqwestCodexAuthenticatedAccountSource")
-            .field("endpoint", &OFFICIAL_CODEX_BASE_URL)
+            .field("endpoint", &self.base_url)
             .finish_non_exhaustive()
     }
 }
@@ -648,10 +664,10 @@ struct IdTokenClaims {
 }
 
 impl IdTokenClaims {
-    fn valid_for_nonce(&self, expected_nonce: &str) -> bool {
+    fn valid_for_nonce(&self, expected_nonce: &str, oauth_client_id: &str) -> bool {
         let now = get_current_timestamp();
         self.iss == OFFICIAL_OPENAI_ISSUER
-            && self.aud.is_exact(OFFICIAL_CODEX_OAUTH_CLIENT_ID)
+            && self.aud.is_exact(oauth_client_id)
             && self.exp > now
             && self.iat <= now
             && self.iat < self.exp
@@ -666,10 +682,13 @@ impl IdTokenClaims {
 }
 
 impl AccessTokenClaims {
-    fn into_signed_identity(self) -> Result<CodexSignedIdentity, CodexIdentityVerificationError> {
+    fn into_signed_identity(
+        self,
+        api_audience: &str,
+    ) -> Result<CodexSignedIdentity, CodexIdentityVerificationError> {
         let now = get_current_timestamp();
         if self.iss != OFFICIAL_OPENAI_ISSUER
-            || !self.aud.is_exact(OFFICIAL_OPENAI_API_AUDIENCE)
+            || !self.aud.is_exact(api_audience)
             || self.exp <= now
             || self.iat > now
             || self.iat >= self.exp

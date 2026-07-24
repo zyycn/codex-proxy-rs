@@ -19,7 +19,6 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::provider::OFFICIAL_CODEX_BASE_URL;
 use crate::transport::profile::CodexWireProfileState;
 use crate::transport::{CodexBackendClient, CodexClientError, CodexRequestContext};
 
@@ -31,6 +30,27 @@ const MAX_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60 * 60);
 const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);
 const QUOTA_HYDRATION_FAILURE_TTL: Duration = Duration::from_secs(5);
 const QUOTA_PERIODIC_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(30 * 60);
+
+/// OpenAI Provider 主动额度刷新的调度策略。
+///
+/// 账号筛选仍由 core 的可调度状态统一处理；该策略只控制 Provider 自己的
+/// quota worker 频率，避免把 OpenAI 额度语义泄漏到公共调度层。
+#[derive(Debug, Clone, Copy)]
+pub struct CodexQuotaRefreshPolicy {
+    interval: Duration,
+}
+
+impl CodexQuotaRefreshPolicy {
+    #[must_use]
+    pub const fn new(interval: Duration) -> Self {
+        Self { interval }
+    }
+
+    #[must_use]
+    pub const fn interval(self) -> Duration {
+        self.interval
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CodexQuotaFact {
@@ -199,6 +219,7 @@ pub struct CodexCredentialQuotaService {
     store: Arc<dyn ProviderAccountStore>,
     profile: CodexWireProfileState,
     http: Client,
+    base_url: String,
     agent_identity: Arc<CodexAgentIdentityTaskService>,
     scheduling: CodexQuotaSchedulingProjection,
 }
@@ -436,6 +457,7 @@ impl CodexCredentialQuotaService {
         repository: CodexCredentialRepository,
         profile: CodexWireProfileState,
         http: Client,
+        base_url: String,
         agent_identity: Arc<CodexAgentIdentityTaskService>,
     ) -> Self {
         Self {
@@ -443,6 +465,7 @@ impl CodexCredentialQuotaService {
             repository,
             profile,
             http,
+            base_url,
             agent_identity,
             scheduling: CodexQuotaSchedulingProjection::default(),
         }
@@ -502,7 +525,7 @@ impl CodexCredentialQuotaService {
         }
         let client = CodexBackendClient::new(
             self.http.clone(),
-            OFFICIAL_CODEX_BASE_URL,
+            self.base_url.clone(),
             self.profile.clone(),
         );
         for account in accounts {
@@ -721,7 +744,7 @@ impl CodexCredentialQuotaService {
             .ok_or(CodexCredentialQuotaError::NotFound)?;
         let client = CodexBackendClient::new(
             self.http.clone(),
-            OFFICIAL_CODEX_BASE_URL,
+            self.base_url.clone(),
             self.profile.clone(),
         );
         let observed_at = SystemTime::now();

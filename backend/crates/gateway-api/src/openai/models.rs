@@ -66,11 +66,71 @@ pub(crate) async fn model_detail(
         .into_response()
 }
 
+/// `GET /v1/models/catalog`。
+///
+/// 新架构的目录由 core 按客户端 Provider 范围裁剪；这里不读取或重建任一
+/// Provider 的 wire catalog，只恢复 Codex 客户端依赖的稳定展示合同。
+pub(crate) async fn model_catalog(State(state): State<ApiState>, headers: HeaderMap) -> Response {
+    let service = state.openai();
+    let client = match authenticate_client(service, &headers) {
+        Ok(client) => client,
+        Err(error) => return authentication_error_response(error),
+    };
+    let models = service
+        .public_models(&client)
+        .into_iter()
+        .map(|model| catalog_model_json(model.as_str()))
+        .collect::<Vec<_>>();
+
+    (StatusCode::OK, Json(models)).into_response()
+}
+
+/// `GET /v1/models/{model_id}/info`。
+pub(crate) async fn model_info(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(model_id): Path<String>,
+) -> Response {
+    let service = state.openai();
+    let client = match authenticate_client(service, &headers) {
+        Ok(client) => client,
+        Err(error) => return authentication_error_response(error),
+    };
+    let Ok(public_model) = PublicModelId::new(model_id) else {
+        return model_not_found_response().into_response();
+    };
+    if !service.contains_public_model(&client, &public_model) {
+        return model_not_found_response().into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(catalog_model_json(public_model.as_str())),
+    )
+        .into_response()
+}
+
 fn openai_model_json(id: &str) -> Value {
     json!({
         "id": id,
         "object": "model",
         "created": MODEL_CREATED_TIMESTAMP,
         "owned_by": "gateway",
+    })
+}
+
+fn catalog_model_json(id: &str) -> Value {
+    json!({
+        "id": id,
+        "displayName": id,
+        "description": "",
+        "isDefault": false,
+        "supportedReasoningEfforts": [],
+        "defaultReasoningEffort": "",
+        "inputModalities": ["text"],
+        "outputModalities": ["text"],
+        "supportsPersonality": false,
+        "upgrade": Value::Null,
+        "source": "gateway",
     })
 }

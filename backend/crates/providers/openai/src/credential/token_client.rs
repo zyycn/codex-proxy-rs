@@ -139,25 +139,29 @@ impl OpenAiTokenClient {
     }
 }
 
-/// 构建固定官方 endpoint、禁止 redirect 且无自动重试的 Codex token client。
+/// 构建禁止 redirect 且无自动重试的 Codex token client。
 ///
 /// # Errors
 ///
 /// 本地 TLS/HTTP client 初始化失败时返回脱敏错误。
-pub fn official_openai_token_client() -> Result<OpenAiTokenClient, TokenClientBuildError> {
+pub fn openai_token_client(
+    config: TokenClientConfig,
+) -> Result<OpenAiTokenClient, TokenClientBuildError> {
     let client = Client::builder()
         .redirect(Policy::none())
         .connect_timeout(TOKEN_CONNECT_TIMEOUT)
         .timeout(TOKEN_REQUEST_TIMEOUT)
         .build()
         .map_err(|_| TokenClientBuildError)?;
-    Ok(OpenAiTokenClient::new(
-        client,
-        TokenClientConfig {
-            client_id: OFFICIAL_CODEX_OAUTH_CLIENT_ID.to_owned(),
-            token_endpoint: OFFICIAL_CODEX_TOKEN_ENDPOINT.to_owned(),
-        },
-    ))
+    Ok(OpenAiTokenClient::new(client, config))
+}
+
+/// 构建固定官方 endpoint 的 Codex token client。
+pub fn official_openai_token_client() -> Result<OpenAiTokenClient, TokenClientBuildError> {
+    openai_token_client(TokenClientConfig {
+        client_id: OFFICIAL_CODEX_OAUTH_CLIENT_ID.to_owned(),
+        token_endpoint: OFFICIAL_CODEX_TOKEN_ENDPOINT.to_owned(),
+    })
 }
 
 #[derive(Deserialize)]

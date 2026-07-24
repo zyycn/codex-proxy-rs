@@ -304,7 +304,10 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
             REDIS_NAMESPACE,
             redis::ProviderCircuitPolicy::default(),
         )?),
-        Arc::new(postgres::PgHistoryRepository::new(pool.clone())),
+        Arc::new(redis::RedisNativeContinuationRepository::new(
+            redis_connection.clone(),
+            REDIS_NAMESPACE,
+        )?),
         (
             Arc::new(postgres::PgRuntimeSnapshotRepository::new(pool.clone())),
             Arc::new(redis::RedisRuntimeChangeRepository::new(
@@ -319,6 +322,10 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         account_store,
         provider_leases,
         provider_session_affinity,
+        Arc::new(redis::RedisProviderSessionExclusionRepository::new(
+            redis_connection.clone(),
+            REDIS_NAMESPACE,
+        )?),
         credential_state.clone(),
         credential_state,
         cooldowns,

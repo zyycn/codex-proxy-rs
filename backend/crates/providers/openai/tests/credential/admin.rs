@@ -12,6 +12,7 @@ use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshLeaseRequest,
     ProviderStoreError,
 };
+use provider_openai::OFFICIAL_CODEX_BASE_URL;
 use provider_openai::credential::token_client::{RefreshFailure, TokenPair, TokenRefresher};
 use provider_openai::credential::{
     CodexAccountIdentityService, CodexAccountIdentityVerifier, CodexCredentialAdmin,
@@ -741,7 +742,7 @@ async fn real_cpr_fixture_import_contract() {
             .expect("fixture time"),
     });
     let accounts = Arc::new(
-        ReqwestCodexAuthenticatedAccountSource::new(profile)
+        ReqwestCodexAuthenticatedAccountSource::new(profile, OFFICIAL_CODEX_BASE_URL.to_owned())
             .expect("official authenticated account source"),
     );
     let verifier = Arc::new(CodexAccountIdentityService::new(signed, accounts));

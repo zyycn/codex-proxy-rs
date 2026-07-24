@@ -6,14 +6,15 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use futures::future::BoxFuture;
+use futures::{FutureExt, future::BoxFuture, pin_mut, select_biased};
+use futures_timer::Delay;
 use uuid::Uuid;
 
 use crate::engine::admission::{
     ClientAdmissionDecision, ClientAdmissionPort, ClientAdmissionRejection, ClientAdmissionRequest,
 };
 use crate::engine::continuation::{
-    ContinuationBinding, NativeContinuationPort, PreviousResponseId,
+    ContinuationBinding, NativeContinuationPin, NativeContinuationPort, PreviousResponseId,
 };
 use crate::engine::coordinator::ResponseExecutionSession;
 use crate::engine::probe::{AccountProbe, AccountProbeRequest, AccountProbeResult};
@@ -25,12 +26,13 @@ use crate::engine::{
 };
 use crate::error::{GatewayError, GatewayErrorKind, ProviderErrorKind, StoreError};
 use crate::event::{GatewayEvent, ProviderEvent, ProviderResponseHeader};
-use crate::operation::Operation;
+use crate::operation::{Operation, ProviderSessionState};
 use crate::policy::{ClientApiKeyId, ClientPolicy};
 use crate::routing::snapshot::RuntimeSnapshotHandle;
 use crate::routing::{ProviderKind, PublicModelId, RoutingContext, RuntimeSnapshot};
 
 const MODEL_REQUEST_DEADLINE: Duration = Duration::from_secs(10 * 60);
+const CONTINUATION_AFFINITY_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientTransport {
@@ -213,10 +215,22 @@ impl DefaultExecutionService {
         }
     }
 
-    async fn start_inner(&self, request: StartExecution) -> Result<StartedExecution, GatewayError> {
+    async fn start_inner(
+        &self,
+        mut request: StartExecution,
+    ) -> Result<StartedExecution, GatewayError> {
         request.client.policy.authorize().map_err(|_| {
             GatewayError::new(GatewayErrorKind::PolicyDenied, "client API key is disabled")
         })?;
+        if !request.client.snapshot.contains_public_model_for_provider(
+            &request.public_model,
+            request.client.policy.provider_kind(),
+        ) {
+            return Err(GatewayError::new(
+                GatewayErrorKind::ModelNotFound,
+                "requested model was not found",
+            ));
+        }
         let started_at = SystemTime::now();
         let deadline_at = started_at
             .checked_add(MODEL_REQUEST_DEADLINE)
@@ -233,19 +247,22 @@ impl DefaultExecutionService {
             .plan(&request.public_model, &request.operation, &routing_context)
             .map_err(map_routing_error)?;
         let continuation = match request.metadata.previous_response_id.as_ref() {
-            Some(previous) => match self
-                .continuation
-                .resolve(request.client.policy.key_id(), previous)
-                .await
-                .map_err(|_| {
-                    GatewayError::new(
-                        GatewayErrorKind::Internal,
-                        "previous response history is temporarily unavailable",
-                    )
-                })? {
-                Some(pin) => ContinuationBinding::Pinned(pin),
-                None => ContinuationBinding::External(previous.clone()),
-            },
+            Some(previous) => {
+                let resolve = self.continuation.resolve(previous).fuse();
+                let timeout = Delay::new(CONTINUATION_AFFINITY_TIMEOUT).fuse();
+                pin_mut!(resolve, timeout);
+                let pin = select_biased! {
+                    result = resolve => result.ok().flatten(),
+                    _ = timeout => None,
+                };
+                match pin {
+                    Some(pin) => {
+                        attach_continuation_session_state(&mut request.operation, &pin);
+                        ContinuationBinding::Pinned(pin)
+                    }
+                    None => ContinuationBinding::External(previous.clone()),
+                }
+            }
             None => {
                 return self
                     .start_without_continuation(
@@ -361,6 +378,7 @@ impl DefaultExecutionService {
                 core,
                 admission,
                 Arc::clone(&self.circuits),
+                Arc::clone(&self.continuation),
             )),
         })
     }
@@ -592,7 +610,9 @@ struct DefaultExecutionSession {
     core: Option<ResponseExecutionSession<dyn ExecutionStore>>,
     admission: Option<AdmissionLease>,
     circuits: Arc<dyn ProviderCircuitPort>,
+    continuation: Arc<dyn NativeContinuationPort>,
     observed_provider_outcomes: usize,
+    continuation_recorded: bool,
 }
 
 impl DefaultExecutionSession {
@@ -600,12 +620,15 @@ impl DefaultExecutionSession {
         core: ResponseExecutionSession<dyn ExecutionStore>,
         admission: AdmissionLease,
         circuits: Arc<dyn ProviderCircuitPort>,
+        continuation: Arc<dyn NativeContinuationPort>,
     ) -> Self {
         Self {
             core: Some(core),
             admission: Some(admission),
             circuits,
+            continuation,
             observed_provider_outcomes: 0,
+            continuation_recorded: false,
         }
     }
 
@@ -639,6 +662,30 @@ impl DefaultExecutionSession {
         publish_provider_attempt_outcomes(self.circuits.as_ref(), &new_outcomes).await;
     }
 
+    async fn record_continuation(&mut self, state: Option<&ProviderSessionState>) {
+        if self.continuation_recorded {
+            return;
+        }
+        let Some(state) = state else {
+            return;
+        };
+        let Some(pin) = self
+            .core
+            .as_ref()
+            .and_then(|core| core.native_continuation_pin(state))
+        else {
+            return;
+        };
+        self.continuation_recorded = true;
+        let record = self.continuation.record(pin).fuse();
+        let timeout = Delay::new(CONTINUATION_AFFINITY_TIMEOUT).fuse();
+        pin_mut!(record, timeout);
+        select_biased! {
+            _ = record => {},
+            _ = timeout => {},
+        }
+    }
+
     async fn finalize_detached(&mut self) {
         let Some(mut core) = self.core.take() else {
             return;
@@ -670,6 +717,9 @@ impl ExecutionSession for DefaultExecutionSession {
     fn next_event(&mut self) -> BoxFuture<'_, Result<Option<CoordinatedEvent>, EngineError>> {
         Box::pin(async move {
             let result = self.core_mut()?.next_event().await;
+            if let Ok(Some(event)) = result.as_ref() {
+                self.record_continuation(event.session_update()).await;
+            }
             self.observe_provider_outcomes().await;
             self.settle_if_finalized().await;
             result
@@ -679,6 +729,10 @@ impl ExecutionSession for DefaultExecutionSession {
     fn collect_uncommitted(&mut self) -> BoxFuture<'_, Result<Vec<ProviderEvent>, EngineError>> {
         Box::pin(async move {
             let result = self.core_mut()?.collect_uncommitted().await;
+            if let Ok(events) = result.as_ref() {
+                let state = events.iter().find_map(ProviderEvent::session_update);
+                self.record_continuation(state).await;
+            }
             self.observe_provider_outcomes().await;
             self.settle_if_finalized().await;
             result
@@ -792,6 +846,18 @@ fn map_routing_error(error: crate::error::RoutingError) -> GatewayError {
             "runtime routing configuration is invalid",
         ),
     }
+}
+
+fn attach_continuation_session_state(operation: &mut Operation, pin: &NativeContinuationPin) {
+    let Some(state) = pin.session_state() else {
+        return;
+    };
+    if state.provider() != pin.provider().as_str()
+        || operation.provider_session_state(state.provider()).is_some()
+    {
+        return;
+    }
+    *operation = operation.clone().with_provider_session_state(state.clone());
 }
 
 pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {

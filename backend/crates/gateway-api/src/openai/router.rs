@@ -7,7 +7,7 @@ use axum::{
 };
 
 use super::{
-    models::{model_detail, models},
+    models::{model_catalog, model_detail, model_info, models},
     responses::{responses, responses_websocket, review_responses},
 };
 
@@ -22,6 +22,8 @@ pub(crate) fn router() -> Router<ApiState> {
         .route("/v1/responses", get(responses_websocket).post(responses))
         .route("/v1/responses/review", post(review_responses))
         .route("/v1/models", get(models))
+        .route("/v1/models/catalog", get(model_catalog))
+        .route("/v1/models/{model_id}/info", get(model_info))
         // 官方 OpenAI 模型详情合同使用 path ID；它不属于 Admin API 约束。
         .route("/v1/models/{model_id}", get(model_detail))
         .layer(DefaultBodyLimit::max(MAX_CLIENT_REQUEST_BODY_BYTES))

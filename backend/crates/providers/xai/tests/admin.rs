@@ -50,7 +50,8 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 
 use crate::support::{
-    MemoryProviderAccountStore, TestSessionAffinity, create_input, seed_input, xai_config,
+    MemoryProviderAccountStore, TestSessionAffinity, TestSessionExclusions, create_input,
+    seed_input, xai_config,
 };
 
 #[tokio::test]
@@ -582,6 +583,7 @@ fn provider_ports_with(
         accounts,
         Arc::new(TestLeases),
         Arc::new(TestSessionAffinity),
+        Arc::new(TestSessionExclusions),
         Arc::new(TestCatalogCache::default()),
         Arc::new(TestCredentialState),
         Arc::new(TestCooldown),

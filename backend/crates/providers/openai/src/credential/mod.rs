@@ -16,7 +16,9 @@ pub mod token_client;
 mod types;
 
 pub(crate) use admin::refresh_time;
-pub(crate) use affinity::derive_codex_session_affinity_key;
+pub(crate) use affinity::{
+    derive_codex_cyber_policy_session_key, derive_codex_session_affinity_key,
+};
 pub(crate) use oauth::oauth_owner_ref;
 
 pub use agent_identity::{
@@ -50,8 +52,8 @@ pub use oauth::{
 };
 pub use quota::{
     CodexAccountQuotaSnapshot, CodexCredentialQuotaError, CodexCredentialQuotaService,
-    CodexQuotaFact, CodexQuotaSyncSummary, CodexQuotaWindow, CodexQuotaWindowKind,
-    CodexQuotaWindowRole, parse_codex_quota_usage,
+    CodexQuotaFact, CodexQuotaRefreshPolicy, CodexQuotaSyncSummary, CodexQuotaWindow,
+    CodexQuotaWindowKind, CodexQuotaWindowRole, parse_codex_quota_usage,
 };
 pub use refresh::{
     CodexCredentialRefreshError, CodexCredentialRefreshOutcome, CodexCredentialRefreshService,
@@ -62,6 +64,7 @@ pub use security::{
     CodexCredentialCodec, CodexCredentialDataError, CodexRuntimeAuthentication,
     CodexRuntimeCredential,
 };
+pub(crate) use selector::CodexCyberPolicyScope;
 pub use selector::{
     CodexAccountFailure, CodexCredentialLease, CodexCredentialSelector, CredentialSelectionError,
     SelectCodexCredential,

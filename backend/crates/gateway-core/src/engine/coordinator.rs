@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use crate::accounting::{CostEstimate, CostSource, Usage};
-use crate::engine::continuation::ContinuationBinding;
+use crate::engine::continuation::{
+    ContinuationBinding, NativeContinuationPin, NativeContinuationScope, PreviousResponseId,
+};
 use crate::engine::provider::{Provider, ProviderCallMetadata, ProviderRequest, ProviderStream};
 use crate::engine::{
     AccountAttemptContext, AttemptContext, AttemptRecord, AttemptTrigger, CancellationToken,
@@ -19,7 +21,7 @@ use crate::error::{GatewayError, GatewayErrorKind, ProviderError, ProviderErrorK
 use crate::event::{
     GatewayEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseObservation,
 };
-use crate::operation::{Operation, RetrySafety};
+use crate::operation::{Operation, ProviderSessionState, RetrySafety};
 use crate::routing::RoutingPlan;
 use futures::{FutureExt, StreamExt, pin_mut, select_biased};
 use futures_timer::Delay;
@@ -346,6 +348,36 @@ where
             .and_then(|current| current.response_observation.as_ref())
             .map(ProviderResponseObservation::client_headers)
             .unwrap_or_default()
+    }
+
+    /// 将已完成响应的账号事实与 Provider 私有状态封装为可丢失的亲和记录。
+    ///
+    /// Core 不读取 `state` 内容；Provider 将在后续同账号 continuation 时自行解释。
+    #[must_use]
+    pub fn native_continuation_pin(
+        &self,
+        state: &ProviderSessionState,
+    ) -> Option<NativeContinuationPin> {
+        let current = self.current.as_ref()?;
+        let provider = current.metadata.provider().clone();
+        if state.provider() != provider.as_str() {
+            return None;
+        }
+        let account = current.metadata.provider_account_id()?.clone();
+        let response_id = self.upstream_response_id.as_deref()?;
+        let previous_response_id = PreviousResponseId::new(response_id.to_owned()).ok()?;
+        let upstream_response_id =
+            crate::error::SafeUpstreamValue::new(response_id.to_owned()).ok()?;
+        Some(
+            NativeContinuationPin::new(
+                previous_response_id,
+                upstream_response_id,
+                provider,
+                account,
+            )
+            .with_scope(NativeContinuationScope::Persisted)
+            .with_session_state(state.clone()),
+        )
     }
 
     /// 请求取消；实际终态在下一次会话 poll 时由 Core 持久化。

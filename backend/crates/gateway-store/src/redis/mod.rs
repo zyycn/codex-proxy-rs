@@ -11,9 +11,11 @@ mod client_admission;
 mod credential_cooldown;
 mod credential_leases;
 mod credential_state;
+mod native_continuation;
 mod oauth_pending;
 mod provider_circuit;
 mod provider_session_affinity;
+mod provider_session_exclusion;
 mod runtime_change;
 pub(crate) mod worker_lease;
 
@@ -21,9 +23,11 @@ pub use client_admission::*;
 pub use credential_cooldown::*;
 pub use credential_leases::*;
 pub use credential_state::*;
+pub use native_continuation::*;
 pub use oauth_pending::*;
 pub use provider_circuit::*;
 pub use provider_session_affinity::*;
+pub use provider_session_exclusion::*;
 pub use runtime_change::*;
 
 use crate::{StoreError, StoreResult, redis_unavailable, require_nonempty};

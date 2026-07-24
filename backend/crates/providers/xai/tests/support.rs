@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -16,7 +16,8 @@ use gateway_core::engine::credential::{
 use gateway_core::error::{StoreError, StoreErrorKind};
 use gateway_core::provider_ports::{
     ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderSessionAffinityKey,
-    ProviderSessionAffinityPort, ProviderStoreError,
+    ProviderSessionAffinityPort, ProviderSessionExclusionPort, ProviderSessionExclusions,
+    ProviderStoreError,
 };
 use gateway_core::routing::ProviderKind;
 use provider_xai::{
@@ -551,6 +552,8 @@ pub struct StaticRuntimePolicy;
 
 pub struct TestSessionAffinity;
 
+pub struct TestSessionExclusions;
+
 impl ProviderSessionAffinityPort for TestSessionAffinity {
     fn load<'a>(
         &'a self,
@@ -574,6 +577,41 @@ impl ProviderSessionAffinityPort for TestSessionAffinity {
         &'a self,
         _provider_kind: &'a ProviderKind,
         _key: &'a ProviderSessionAffinityKey,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+}
+
+impl ProviderSessionExclusionPort for TestSessionExclusions {
+    fn load<'a>(
+        &'a self,
+        _provider_kind: &'a ProviderKind,
+        _key: &'a ProviderSessionAffinityKey,
+    ) -> futures::future::BoxFuture<'a, Result<Option<ProviderSessionExclusions>, ProviderStoreError>>
+    {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn record_failure<'a>(
+        &'a self,
+        _provider_kind: &'a ProviderKind,
+        _key: &'a ProviderSessionAffinityKey,
+        _account_id: &'a ProviderAccountId,
+        _ttl: Duration,
+    ) -> futures::future::BoxFuture<'a, Result<ProviderSessionExclusions, ProviderStoreError>> {
+        Box::pin(async {
+            Ok(ProviderSessionExclusions::new(
+                BTreeSet::new(),
+                String::new(),
+            ))
+        })
+    }
+
+    fn clear<'a>(
+        &'a self,
+        _provider_kind: &'a ProviderKind,
+        _key: &'a ProviderSessionAffinityKey,
+        _expected_revision: &'a str,
     ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
         Box::pin(async { Ok(false) })
     }

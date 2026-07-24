@@ -20,18 +20,18 @@ use gateway_core::routing::{
     ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RoutingContext,
     RuntimeSnapshot, UpstreamModelId,
 };
-use provider_openai::CodexProvider;
 use provider_openai::credential::{
     CodexCookiePolicy, CodexCredentialCatalogService, CodexCredentialQuotaService,
     CodexCredentialSelector, ImportCodexOAuthCredential,
 };
 use provider_openai::transport::CodexWebSocketPool;
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
+use provider_openai::{CodexProvider, OFFICIAL_CODEX_BASE_URL};
 use serde_json::{Map, json};
 
 use crate::support::{
-    MemoryAccountStore, MemorySessionAffinity, TestLeaseCoordinator, account_policy,
-    agent_identity_service_with_pool, profile, secret,
+    MemoryAccountStore, MemorySessionAffinity, MemorySessionExclusions, TestLeaseCoordinator,
+    account_policy, agent_identity_service_with_pool, profile, secret,
 };
 
 fn wire_profile() -> CodexWireProfileState {
@@ -67,12 +67,14 @@ fn provider_with_affinity(
         store.repository(),
         profile.clone(),
         http.clone(),
+        OFFICIAL_CODEX_BASE_URL.to_owned(),
         Arc::clone(&agent_identity),
     ));
     let quota = Arc::new(CodexCredentialQuotaService::new(
         store.repository(),
         profile.clone(),
         http.clone(),
+        OFFICIAL_CODEX_BASE_URL.to_owned(),
         Arc::clone(&agent_identity),
     ));
     let account_feedback = Arc::new(AccountFeedbackStats::default());
@@ -81,11 +83,13 @@ fn provider_with_affinity(
         store.repository(),
         Arc::new(TestLeaseCoordinator::default()),
         session_affinity,
+        Arc::new(MemorySessionExclusions::default()),
         Arc::clone(&catalog),
         Arc::clone(&quota),
         Arc::clone(&agent_identity),
         Arc::clone(&account_feedback),
         CodexCookiePolicy::official().expect("cookie policy"),
+        true,
     ));
 
     CodexProvider::new(
@@ -96,6 +100,7 @@ fn provider_with_affinity(
         account_feedback,
         http,
         profile,
+        OFFICIAL_CODEX_BASE_URL.to_owned(),
         websocket_pool,
     )
     .expect("official OpenAI provider")

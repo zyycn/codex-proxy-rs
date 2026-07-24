@@ -1,6 +1,6 @@
 //! Provider 运行时所需的中立存储能力。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -232,6 +232,62 @@ pub trait ProviderSessionAffinityPort: Send + Sync {
         &'a self,
         provider_kind: &'a ProviderKind,
         key: &'a ProviderSessionAffinityKey,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>>;
+}
+
+/// Provider 会话内已失败账号的可丢失排除集。
+///
+/// Provider 自行派生会话键并决定何时写入或清理；Core 只承载调度所需的账号 ID
+/// 与 compare-and-swap revision，不解释任一 Provider 协议字段。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderSessionExclusions {
+    excluded_accounts: BTreeSet<ProviderAccountId>,
+    revision: String,
+}
+
+impl ProviderSessionExclusions {
+    #[must_use]
+    pub const fn new(excluded_accounts: BTreeSet<ProviderAccountId>, revision: String) -> Self {
+        Self {
+            excluded_accounts,
+            revision,
+        }
+    }
+
+    #[must_use]
+    pub const fn excluded_accounts(&self) -> &BTreeSet<ProviderAccountId> {
+        &self.excluded_accounts
+    }
+
+    #[must_use]
+    pub fn revision(&self) -> &str {
+        &self.revision
+    }
+}
+
+/// 可丢失的 Provider 会话级账号排除状态。
+///
+/// 该端口不接收协议正文；Provider 只能以不可逆会话键、账号 ID 和固定 TTL 操作。
+pub trait ProviderSessionExclusionPort: Send + Sync {
+    fn load<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+    ) -> BoxFuture<'a, Result<Option<ProviderSessionExclusions>, ProviderStoreError>>;
+
+    fn record_failure<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+        account_id: &'a ProviderAccountId,
+        ttl: Duration,
+    ) -> BoxFuture<'a, Result<ProviderSessionExclusions, ProviderStoreError>>;
+
+    fn clear<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+        expected_revision: &'a str,
     ) -> BoxFuture<'a, Result<bool, ProviderStoreError>>;
 }
 
@@ -704,6 +760,7 @@ pub struct ProviderStorePorts {
     accounts: Arc<dyn ProviderAccountStore>,
     leases: Arc<dyn ProviderLeasePort>,
     session_affinity: Arc<dyn ProviderSessionAffinityPort>,
+    session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
     account_feedback: Arc<AccountFeedbackStats>,
     catalog_cache: Arc<dyn ProviderCatalogCachePort>,
     credential_state: Arc<dyn ProviderCredentialStatePort>,
@@ -720,6 +777,7 @@ impl ProviderStorePorts {
         accounts: Arc<dyn ProviderAccountStore>,
         leases: Arc<dyn ProviderLeasePort>,
         session_affinity: Arc<dyn ProviderSessionAffinityPort>,
+        session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
         catalog_cache: Arc<dyn ProviderCatalogCachePort>,
         credential_state: Arc<dyn ProviderCredentialStatePort>,
         cooldowns: Arc<dyn ProviderCooldownPort>,
@@ -730,6 +788,7 @@ impl ProviderStorePorts {
             accounts,
             leases,
             session_affinity,
+            session_exclusions,
             account_feedback: Arc::new(AccountFeedbackStats::default()),
             catalog_cache,
             credential_state,
@@ -752,6 +811,11 @@ impl ProviderStorePorts {
     #[must_use]
     pub fn session_affinity(&self) -> Arc<dyn ProviderSessionAffinityPort> {
         Arc::clone(&self.session_affinity)
+    }
+
+    #[must_use]
+    pub fn session_exclusions(&self) -> Arc<dyn ProviderSessionExclusionPort> {
+        Arc::clone(&self.session_exclusions)
     }
 
     #[must_use]

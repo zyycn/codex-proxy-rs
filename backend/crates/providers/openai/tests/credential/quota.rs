@@ -7,6 +7,7 @@ use gateway_core::engine::credential::{
     AccountAvailability, AccountStateChange, OpaqueProviderData, ProviderAccountStore as _,
     QuotaObservation, QuotaWriteOutcome,
 };
+use provider_openai::OFFICIAL_CODEX_BASE_URL;
 use provider_openai::credential::{
     CodexCredentialQuotaService, CodexQuotaSyncSummary, CodexQuotaWindowKind,
     ImportCodexOAuthCredential, parse_codex_quota_usage,
@@ -153,6 +154,7 @@ fn quota_service_with_http(
         store.repository(),
         wire_profile(),
         http,
+        OFFICIAL_CODEX_BASE_URL.to_owned(),
         crate::support::agent_identity_service(store),
     )
 }
