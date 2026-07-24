@@ -215,7 +215,7 @@ impl fmt::Debug for ExportManagedCodexCredential {
     }
 }
 
-/// CPR canonical 账号导出文档；只允许显式序列化，Debug 永不输出 token。
+/// CPR canonical 账号导出文档；只允许显式序列化，Debug 永不输出 credential secret。
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexCprExportDocument {
@@ -252,19 +252,45 @@ impl fmt::Debug for CodexCprExportDocument {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CodexCprExportAccount {
+struct CodexCprExportCommon {
     id: String,
     email: Option<String>,
     account_id: Option<String>,
     user_id: Option<String>,
     label: Option<String>,
     plan_type: Option<String>,
-    token: String,
-    refresh_token: Option<String>,
-    access_token_expires_at: Option<String>,
     status: &'static str,
     added_at: String,
     updated_at: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexCprOAuthExportAccount {
+    #[serde(flatten)]
+    common: CodexCprExportCommon,
+    token: String,
+    refresh_token: Option<String>,
+    access_token_expires_at: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexCprAgentIdentityExportAccount {
+    #[serde(flatten)]
+    common: CodexCprExportCommon,
+    auth_mode: &'static str,
+    agent_runtime_id: String,
+    agent_private_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_id: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum CodexCprExportAccount {
+    OAuth(CodexCprOAuthExportAccount),
+    AgentIdentity(CodexCprAgentIdentityExportAccount),
 }
 
 /// App 已从 Store 读取的当前账号、revision 与明文 Provider JSON。
@@ -444,31 +470,51 @@ impl CodexCredentialAdmin {
             }
             let data = CodexCredentialCodec::decode_complete(&item.current.credential)
                 .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
-            let CodexCredentialData::OAuth(data) = data else {
-                return Err(CodexCredentialAdminError::InvalidCredential);
-            };
-            if account.authentication_kind() != CODEX_AUTHENTICATION_KIND_OAUTH
-                || account.has_refresh_token() != data.refresh_token.is_some()
-            {
-                return Err(CodexCredentialAdminError::InvalidCredential);
-            }
-            accounts.push(CodexCprExportAccount {
+            let common = CodexCprExportCommon {
                 id: account.id().as_str().to_owned(),
                 email: account.email().map(str::to_owned),
                 account_id: account.upstream_account_id().map(str::to_owned),
                 user_id: Some(account.upstream_user_id().to_owned()),
                 label: Some(account.name().to_owned()),
                 plan_type: account.plan_type().map(str::to_owned),
-                token: data.access_token,
-                refresh_token: data.refresh_token,
-                access_token_expires_at: account
-                    .access_token_expires_at()
-                    .map(DateTime::<Utc>::from)
-                    .map(|value| value.to_rfc3339()),
                 status: cpr_status(&account),
                 added_at: china_rfc3339(item.added_at),
                 updated_at: china_rfc3339(item.updated_at),
-            });
+            };
+            let exported = match data {
+                CodexCredentialData::OAuth(data) => {
+                    if account.authentication_kind() != CODEX_AUTHENTICATION_KIND_OAUTH
+                        || account.has_refresh_token() != data.refresh_token.is_some()
+                    {
+                        return Err(CodexCredentialAdminError::InvalidCredential);
+                    }
+                    CodexCprExportAccount::OAuth(CodexCprOAuthExportAccount {
+                        common,
+                        token: data.access_token,
+                        refresh_token: data.refresh_token,
+                        access_token_expires_at: account
+                            .access_token_expires_at()
+                            .map(DateTime::<Utc>::from)
+                            .map(|value| value.to_rfc3339()),
+                    })
+                }
+                CodexCredentialData::AgentIdentity(data) => {
+                    if account.authentication_kind() != CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY
+                        || account.has_refresh_token()
+                        || account.access_token_expires_at().is_some()
+                    {
+                        return Err(CodexCredentialAdminError::InvalidCredential);
+                    }
+                    CodexCprExportAccount::AgentIdentity(CodexCprAgentIdentityExportAccount {
+                        common,
+                        auth_mode: "agentIdentity",
+                        agent_runtime_id: data.agent_runtime_id,
+                        agent_private_key: data.agent_private_key,
+                        task_id: data.task_id,
+                    })
+                }
+            };
+            accounts.push(exported);
         }
         Ok(CodexCprExportDocument {
             source_format: "cpr",
@@ -1034,7 +1080,25 @@ fn parse_import_document(
     let values = import_account_values(payload)?;
     let mut accounts = Vec::new();
     for value in values {
-        let parsed = match shape {
+        // CPR 导出允许 OAuth 与 Agent Identity 共存；按账号选择 Provider
+        // 解析器，避免一个 Agent Identity 条目把整份文档误判成单一格式。
+        let account_shape = if looks_like_agent_identity_account(value) {
+            ImportDocumentShape::AgentIdentity
+        } else if shape == ImportDocumentShape::AgentIdentity {
+            if value.get("credentials").is_some() || value.get("tokens").is_some() {
+                ImportDocumentShape::CredentialBundle
+            } else if value
+                .as_object()
+                .is_some_and(auth_document_provider_is_openai)
+            {
+                ImportDocumentShape::AuthDocument
+            } else {
+                ImportDocumentShape::Native
+            }
+        } else {
+            shape
+        };
+        let parsed = match account_shape {
             ImportDocumentShape::Native => Some(parse_native_account(value)?),
             ImportDocumentShape::AgentIdentity => Some(parse_agent_identity_account(value)?),
             ImportDocumentShape::CredentialBundle => parse_credential_bundle_account(value)?,
@@ -1076,26 +1140,37 @@ fn parse_agent_identity_account(
         .get("agent_identity")
         .or_else(|| value.get("credentials"))
         .unwrap_or(value);
-    let auth_mode =
-        first_string(value, &["auth_mode"]).or_else(|| first_string(identity, &["auth_mode"]));
+    let auth_mode = first_string(value, &["auth_mode", "authMode"])
+        .or_else(|| first_string(identity, &["auth_mode", "authMode"]));
     if auth_mode.as_deref() != Some("agentIdentity") {
         return Err(CodexCredentialAdminError::InvalidCredential);
     }
-    let runtime_id = first_string(identity, &["agent_runtime_id"])
+    let runtime_id = first_string(identity, &["agent_runtime_id", "agentRuntimeId"])
         .ok_or(CodexCredentialAdminError::InvalidCredential)?;
-    let private_key = first_string(identity, &["agent_private_key"])
+    let private_key = first_string(identity, &["agent_private_key", "agentPrivateKey"])
         .ok_or(CodexCredentialAdminError::InvalidCredential)?;
     Ok(ParsedCodexImportAccount {
         id: first_string(value, &["id"]),
         name: first_string(value, &["name", "label"]),
         email: first_string(identity, &["email"]),
-        plan_type: first_string(identity, &["plan_type"]),
-        chatgpt_account_id: first_string(identity, &["chatgpt_account_id", "account_id"]),
-        chatgpt_user_id: first_string(identity, &["chatgpt_user_id"]),
+        plan_type: first_string(identity, &["plan_type", "planType"]),
+        chatgpt_account_id: first_string(
+            identity,
+            &[
+                "chatgpt_account_id",
+                "chatgptAccountId",
+                "account_id",
+                "accountId",
+            ],
+        ),
+        chatgpt_user_id: first_string(
+            identity,
+            &["chatgpt_user_id", "chatgptUserId", "user_id", "userId"],
+        ),
         authentication: ParsedCodexAuthentication::AgentIdentity {
             runtime_id,
             private_key,
-            task_id: first_string(identity, &["task_id"]),
+            task_id: first_string(identity, &["task_id", "taskId"]),
         },
         status: first_string(value, &["status"]),
     })
@@ -1379,22 +1454,21 @@ fn looks_like_credential_bundle(value: &Value) -> bool {
 
 fn looks_like_agent_identity_document(value: &Value) -> bool {
     import_account_values(value).is_ok_and(|accounts| {
-        accounts.iter().any(|account| {
-            account
-                .get("auth_mode")
-                .and_then(Value::as_str)
-                .is_some_and(|mode| mode == "agentIdentity")
-                || account
-                    .get("agent_identity")
-                    .and_then(|identity| identity.get("agent_runtime_id"))
-                    .is_some()
-                || account
-                    .get("credentials")
-                    .and_then(|credentials| credentials.get("auth_mode"))
-                    .and_then(Value::as_str)
-                    .is_some_and(|mode| mode == "agentIdentity")
-        })
+        accounts
+            .iter()
+            .any(|account| looks_like_agent_identity_account(account))
     })
+}
+
+fn looks_like_agent_identity_account(value: &Value) -> bool {
+    let identity = value
+        .get("agent_identity")
+        .or_else(|| value.get("credentials"))
+        .unwrap_or(value);
+    first_string(value, &["auth_mode", "authMode"])
+        .or_else(|| first_string(identity, &["auth_mode", "authMode"]))
+        .is_some_and(|mode| mode == "agentIdentity")
+        || first_string(identity, &["agent_runtime_id", "agentRuntimeId"]).is_some()
 }
 
 fn looks_like_auth_document(value: &Value) -> bool {
