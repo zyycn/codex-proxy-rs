@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use bytes::Bytes;
 use gateway_core::accounting::Usage;
 use gateway_core::event::{
     CompactionOutput, ContentItem, ContentKind, EventSequenceValidator, FinishReason, GatewayEvent,
@@ -21,14 +22,6 @@ enum ResponseRepresentation {
     OpenAiWire,
 }
 
-#[derive(Debug)]
-struct PendingWireEvent {
-    event_type: Option<String>,
-    data: Value,
-    sse_id: Option<String>,
-    sse_retry: Option<u64>,
-}
-
 /// Provider event 封套到 OpenAI Responses wire 的唯一表达边界。
 ///
 /// Provider 已提供 OpenAI wire 时只下发该 wire；否则由 [`ResponsesCollector`]
@@ -37,10 +30,9 @@ struct PendingWireEvent {
 pub struct OpenAiResponsesEncoder {
     canonical: ResponsesCollector,
     representation: ResponseRepresentation,
-    upstream_response_id: Option<String>,
-    gateway_response_id: Option<String>,
+    response_id: Option<String>,
     wire_terminal: Option<Value>,
-    pending_wire: Vec<PendingWireEvent>,
+    wire_failure: bool,
     canonical_completed: bool,
 }
 
@@ -51,10 +43,9 @@ impl OpenAiResponsesEncoder {
         Self {
             canonical: ResponsesCollector::new(created_at),
             representation: ResponseRepresentation::Undecided,
-            upstream_response_id: None,
-            gateway_response_id: None,
+            response_id: None,
             wire_terminal: None,
-            pending_wire: Vec::new(),
+            wire_failure: false,
             canonical_completed: false,
         }
     }
@@ -64,8 +55,29 @@ impl OpenAiResponsesEncoder {
     /// # Errors
     ///
     /// canonical 顺序无效、响应身份变化或表达模式混用时返回错误。
-    pub fn push_sse(&mut self, event: &ProviderEvent) -> Result<Vec<String>, ResponseEncodeError> {
-        self.push(event, WireEncoding::Sse)
+    pub fn push_sse(&mut self, event: &ProviderEvent) -> Result<Vec<Bytes>, ResponseEncodeError> {
+        let openai_wire = self.select_representation(event)?;
+        if self.representation == ResponseRepresentation::OpenAiWire {
+            let Some(wire) = openai_wire else {
+                return Ok(Vec::new());
+            };
+            self.observe_wire_terminal(wire);
+            if let Some(raw_sse_frame) = wire.raw_sse_frame() {
+                return Ok(vec![raw_sse_frame.clone()]);
+            }
+            return Ok(vec![Bytes::from(encode_sse_event_with_metadata(
+                wire.event_type().unwrap_or_default(),
+                &wire.data().to_string(),
+                wire.sse_id(),
+                wire.sse_retry(),
+            ))]);
+        }
+
+        Ok(self
+            .push_canonical(event)?
+            .into_iter()
+            .map(Bytes::from)
+            .collect())
     }
 
     /// 消费一个 Provider event，并返回 WebSocket JSON messages。
@@ -77,7 +89,28 @@ impl OpenAiResponsesEncoder {
         &mut self,
         event: &ProviderEvent,
     ) -> Result<Vec<String>, ResponseEncodeError> {
-        self.push(event, WireEncoding::WebSocket)
+        let openai_wire = self.select_representation(event)?;
+        if self.representation == ResponseRepresentation::OpenAiWire {
+            let Some(wire) = openai_wire else {
+                return Ok(Vec::new());
+            };
+            if !wire.has_json_data() {
+                return Ok(Vec::new());
+            }
+            self.observe_wire_terminal(wire);
+            return Ok(vec![wire.data().to_string()]);
+        }
+
+        self.push_canonical(event)?
+            .into_iter()
+            .map(|frame| {
+                frame
+                    .lines()
+                    .find_map(|line| line.strip_prefix("data: "))
+                    .map(ToOwned::to_owned)
+                    .ok_or(ResponseEncodeError::InvalidEventEncoding)
+            })
+            .collect()
     }
 
     /// 返回是否已经观察到 canonical 或 wire 终态。
@@ -87,10 +120,16 @@ impl OpenAiResponsesEncoder {
             || self.canonical.final_response.is_some()
     }
 
-    /// 返回 Core 冻结并已写入客户端事件的网关响应 ID。
+    /// 返回是否已把 Provider 原生失败 event 交付给客户端。
     #[must_use]
-    pub fn gateway_response_id(&self) -> Option<&str> {
-        self.gateway_response_id.as_deref()
+    pub const fn has_wire_failure(&self) -> bool {
+        self.wire_failure
+    }
+
+    /// 返回 Core 已观察到的客户端可见 Provider 原生响应 ID。
+    #[must_use]
+    pub fn response_id(&self) -> Option<&str> {
+        self.response_id.as_deref()
     }
 
     /// 校验完整响应并返回非流式 JSON。
@@ -110,11 +149,10 @@ impl OpenAiResponsesEncoder {
         }
     }
 
-    fn push(
+    fn select_representation<'event>(
         &mut self,
-        event: &ProviderEvent,
-        encoding: WireEncoding,
-    ) -> Result<Vec<String>, ResponseEncodeError> {
+        event: &'event ProviderEvent,
+    ) -> Result<Option<&'event gateway_core::event::ProtocolWireEvent>, ResponseEncodeError> {
         self.observe_identity(event)?;
         let openai_wire = event
             .wire_event()
@@ -130,70 +168,18 @@ impl OpenAiResponsesEncoder {
             self.representation = ResponseRepresentation::Canonical;
         }
 
-        if self.representation == ResponseRepresentation::OpenAiWire {
-            let Some(wire) = openai_wire else {
-                return Ok(Vec::new());
-            };
-            self.pending_wire.push(PendingWireEvent {
-                event_type: wire.event_type().map(ToOwned::to_owned),
-                data: wire.data().clone(),
-                sse_id: wire.sse_id().map(ToOwned::to_owned),
-                sse_retry: wire.sse_retry(),
-            });
-            if self.gateway_response_id.is_none() {
-                return Ok(Vec::new());
-            }
-            let pending = std::mem::take(&mut self.pending_wire);
-            return pending
-                .into_iter()
-                .map(|pending| {
-                    let PendingWireEvent {
-                        event_type,
-                        mut data,
-                        sse_id,
-                        sse_retry,
-                    } = pending;
-                    self.rewrite_wire_identity(&mut data);
-                    let effective_type = event_type
-                        .as_deref()
-                        .or_else(|| data.get("type").and_then(Value::as_str));
-                    if matches!(
-                        effective_type,
-                        Some("response.completed" | "response.incomplete")
-                    ) {
-                        self.wire_terminal = data.get("response").cloned();
-                    }
-                    Ok(match encoding {
-                        WireEncoding::Sse => encode_sse_event_with_metadata(
-                            event_type.as_deref().unwrap_or_default(),
-                            &data.to_string(),
-                            sse_id.as_deref(),
-                            sse_retry,
-                        ),
-                        WireEncoding::WebSocket => data.to_string(),
-                    })
-                })
-                .collect();
-        }
+        Ok(openai_wire)
+    }
 
+    fn push_canonical(
+        &mut self,
+        event: &ProviderEvent,
+    ) -> Result<Vec<String>, ResponseEncodeError> {
         let mut canonical_frames = Vec::new();
         for fact in event.canonical_facts() {
             canonical_frames.extend(self.canonical.push(fact)?);
         }
-
-        match encoding {
-            WireEncoding::Sse => Ok(canonical_frames),
-            WireEncoding::WebSocket => canonical_frames
-                .into_iter()
-                .map(|frame| {
-                    frame
-                        .lines()
-                        .find_map(|line| line.strip_prefix("data: "))
-                        .map(ToOwned::to_owned)
-                        .ok_or(ResponseEncodeError::InvalidEventEncoding)
-                })
-                .collect(),
-        }
+        Ok(canonical_frames)
     }
 
     fn observe_identity(&mut self, event: &ProviderEvent) -> Result<(), ResponseEncodeError> {
@@ -206,67 +192,33 @@ impl OpenAiResponsesEncoder {
                 }
                 _ => continue,
             };
-            let Some(upstream) = metadata.upstream_response_id() else {
-                continue;
-            };
             if self
-                .upstream_response_id
+                .response_id
                 .as_deref()
-                .is_some_and(|current| current != upstream.as_str())
-                || self
-                    .gateway_response_id
-                    .as_deref()
-                    .is_some_and(|current| current != metadata.response_id())
+                .is_some_and(|current| current != metadata.response_id())
             {
                 return Err(ResponseEncodeError::WireIdentityChanged);
             }
-            self.upstream_response_id = Some(upstream.as_str().to_owned());
-            self.gateway_response_id = Some(metadata.response_id().to_owned());
+            self.response_id = Some(metadata.response_id().to_owned());
         }
         Ok(())
     }
 
-    fn rewrite_wire_identity(&self, data: &mut Value) {
-        let (Some(upstream), Some(gateway)) = (
-            self.upstream_response_id.as_deref(),
-            self.gateway_response_id.as_deref(),
-        ) else {
+    fn observe_wire_terminal(&mut self, wire: &gateway_core::event::ProtocolWireEvent) {
+        if !wire.has_json_data() {
             return;
-        };
-        rewrite_response_identity(data, upstream, gateway);
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum WireEncoding {
-    Sse,
-    WebSocket,
-}
-
-fn rewrite_response_identity(value: &mut Value, upstream: &str, gateway: &str) {
-    match value {
-        Value::Array(values) => {
-            for value in values {
-                rewrite_response_identity(value, upstream, gateway);
-            }
         }
-        Value::Object(object) => {
-            if let Some(Value::String(response_id)) = object.get_mut("response_id")
-                && response_id == upstream
-            {
-                *response_id = gateway.to_owned();
-            }
-            if let Some(Value::Object(response)) = object.get_mut("response")
-                && let Some(Value::String(response_id)) = response.get_mut("id")
-                && response_id == upstream
-            {
-                *response_id = gateway.to_owned();
-            }
-            for value in object.values_mut() {
-                rewrite_response_identity(value, upstream, gateway);
-            }
+        let effective_type = wire
+            .event_type()
+            .or_else(|| wire.data().get("type").and_then(Value::as_str));
+        if matches!(
+            effective_type,
+            Some("response.completed" | "response.incomplete")
+        ) {
+            self.wire_terminal = wire.data().get("response").cloned();
+        } else if matches!(effective_type, Some("response.failed" | "error")) {
+            self.wire_failure = true;
         }
-        _ => {}
     }
 }
 

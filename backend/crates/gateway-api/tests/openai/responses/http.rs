@@ -10,6 +10,7 @@ use axum::{
     extract::connect_info::ConnectInfo,
     http::{HeaderMap, Request, StatusCode, header::AUTHORIZATION},
 };
+use bytes::Bytes;
 use futures::future::{BoxFuture, pending};
 use gateway_core::engine::execution::{
     AuthenticatedClient, ClientAuthenticationError, ExecutionService, ExecutionSession,
@@ -642,17 +643,19 @@ async fn streaming_response_forwards_only_allowlisted_provider_headers() {
 }
 
 #[tokio::test]
-async fn streaming_commit_batch_encodes_pre_identity_wire_before_committing() {
+async fn streaming_commit_batch_preserves_pre_identity_wire_before_committing() {
     let trace = Arc::new(Trace::default());
-    let upstream_id = SafeUpstreamValue::new("resp_upstream").expect("upstream response ID");
-    let metadata =
-        ResponseMeta::new("resp_gateway", "public-model").with_upstream_response_id(upstream_id);
+    let metadata = ResponseMeta::new("resp_upstream", "public-model");
+    let raw_future = Bytes::from_static(
+        b"id: evt_before_identity\r\nevent: response.future_metadata\r\nretry: 3000\r\ndata: { \"type\": \"response.future_metadata\", \"opaque\": true }\r\n\r\n",
+    );
     let events = vec![
         ProviderEvent::wire(
-            ProtocolWireEvent::json_with_sse_metadata(
+            ProtocolWireEvent::json_with_raw_sse_metadata(
                 "openai",
                 Some("response.future_metadata".to_owned()),
                 json!({"type":"response.future_metadata","opaque":true}),
+                raw_future.clone(),
                 Some("evt_before_identity".to_owned()),
                 Some(3_000),
             )
@@ -700,10 +703,8 @@ async fn streaming_commit_batch_encodes_pre_identity_wire_before_committing() {
     let created = body.find("response.created").expect("created event");
     let completed = body.find("response.completed").expect("completed event");
     assert!(future < created && created < completed);
-    assert!(body.contains("id: evt_before_identity\n"));
-    assert!(body.contains("retry: 3000\n"));
-    assert!(body.contains("resp_gateway"));
-    assert!(!body.contains("resp_upstream"));
+    assert!(body.as_bytes().starts_with(raw_future.as_ref()));
+    assert!(body.contains("resp_upstream"));
     assert!(body.ends_with("data: [DONE]\n\n"));
     assert_eq!(trace.client_statuses(), vec![200]);
     assert_eq!(trace.snapshot(), vec!["next_event", "commit", "next_end"]);
@@ -919,6 +920,90 @@ async fn streaming_error_should_emit_client_visible_upstream_details() {
     assert!(body.contains("\"code\":\"quota_exhausted\""));
     assert!(body.contains("\"type\":\"rate_limit_error\""));
     assert!(body.ends_with("data: [DONE]\n\n"));
+}
+
+#[tokio::test]
+async fn streaming_upstream_wire_failure_should_not_be_rewritten_as_a_gateway_error() {
+    let trace = Arc::new(Trace::default());
+    let raw_failure = Bytes::from_static(
+        b"event: response.failed\r\ndata: { \"type\": \"response.failed\", \"response\": { \"id\": \"resp_test\", \"status\": \"failed\", \"error\": { \"code\": \"rate_limit_exceeded\", \"message\": \"upstream raw failure marker\" } } }\r\n\r\n",
+    );
+    let wire_failure = ProviderEvent::wire(
+        ProtocolWireEvent::json_with_raw_sse_metadata(
+            "openai",
+            Some("response.failed".to_owned()),
+            json!({
+                "type": "response.failed",
+                "response": {
+                    "id": "resp_test",
+                    "status": "failed",
+                    "error": {
+                        "code": "rate_limit_exceeded",
+                        "message": "upstream raw failure marker"
+                    }
+                }
+            }),
+            raw_failure.clone(),
+            None,
+            None,
+        )
+        .expect("valid upstream failure wire"),
+    );
+    let started_wire = ProviderEvent::canonical_with_wire(
+        vec![started()],
+        ProtocolWireEvent::json(
+            "openai",
+            Some("response.created".to_owned()),
+            json!({
+                "type": "response.created",
+                "response": {
+                    "id": "resp_test",
+                    "model": "public-model",
+                    "status": "in_progress"
+                }
+            }),
+        )
+        .expect("valid upstream started wire"),
+    );
+    let session = FakeSession::streaming(
+        Arc::clone(&trace),
+        vec![
+            NextStep::Event(CoordinatedEvent::single(
+                started_wire,
+                CommitRequirement::CommitBeforeDelivery,
+            )),
+            NextStep::Event(CoordinatedEvent::single(
+                wire_failure,
+                CommitRequirement::AlreadyCommitted,
+            )),
+            NextStep::Error(EngineError::Provider(ProviderError::new(
+                ProviderErrorKind::RateLimited,
+                UpstreamSendState::Sent,
+            ))),
+        ],
+    );
+
+    let response = stream_execution_response(Box::new(session), 1, None).await;
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read SSE body");
+
+    assert!(
+        body.windows(raw_failure.len())
+            .any(|frame| frame == raw_failure.as_ref())
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&body)
+            .matches("upstream raw failure marker")
+            .count(),
+        1
+    );
+    assert!(!String::from_utf8_lossy(&body).contains("resp_proxy_"));
+    assert!(String::from_utf8_lossy(&body).ends_with("data: [DONE]\n\n"));
+    assert_eq!(
+        trace.snapshot(),
+        vec!["next_event", "commit", "next_event", "next_error"]
+    );
 }
 
 #[tokio::test]

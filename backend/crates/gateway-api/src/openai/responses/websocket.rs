@@ -428,6 +428,10 @@ async fn forward_execution(
                 return send_gateway_error(socket, &error, &request_id).await;
             }
             ActiveInput::Event(Err(error)) => {
+                if encoder.has_wire_failure() {
+                    execution.disarm();
+                    return ForwardOutcome::Continue;
+                }
                 let error = gateway_error_from_engine(&error);
                 return send_gateway_error(socket, &error, &request_id).await;
             }
@@ -446,7 +450,7 @@ fn commit_connection_replay(
     encoder: &OpenAiResponsesEncoder,
     provider_state: Option<ProviderSessionState>,
 ) -> Result<(), GatewayError> {
-    let response_id = encoder.gateway_response_id().ok_or_else(|| {
+    let response_id = encoder.response_id().ok_or_else(|| {
         GatewayError::new(
             GatewayErrorKind::Internal,
             "gateway completed a response without an identity",

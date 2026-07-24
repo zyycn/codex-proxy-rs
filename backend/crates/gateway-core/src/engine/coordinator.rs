@@ -5,10 +5,6 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use futures::{FutureExt, StreamExt, pin_mut, select_biased};
-use futures_timer::Delay;
-use uuid::Uuid;
-
 use crate::accounting::{CostEstimate, CostSource, Usage};
 use crate::engine::continuation::ContinuationBinding;
 use crate::engine::provider::{Provider, ProviderCallMetadata, ProviderRequest, ProviderStream};
@@ -25,6 +21,8 @@ use crate::event::{
 };
 use crate::operation::{Operation, RetrySafety};
 use crate::routing::RoutingPlan;
+use futures::{FutureExt, StreamExt, pin_mut, select_biased};
+use futures_timer::Delay;
 
 /// Request 级协调器；不会创建或写入 `request_attempts`。
 pub struct AttemptCoordinator<S: ?Sized> {
@@ -60,7 +58,6 @@ where
         let client_api_key_ref = request.client_api_key_ref.clone();
         let request_started_at = request.started_at;
         let deadline = request.deadline_at;
-        let gateway_response_id = format!("resp_{}", Uuid::now_v7().simple());
         let account_state_owner = continuation
             .as_ref()
             .and_then(ContinuationBinding::pinned)
@@ -103,7 +100,6 @@ where
             image_generation_requested,
             cost: CostEstimate::unavailable(),
             timings: ModelRequestTimings::default(),
-            gateway_response_id,
             client_response_id: None,
             upstream_response_id: None,
             last_account_exhaustion: None,
@@ -182,7 +178,6 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     image_generation_requested: bool,
     cost: CostEstimate,
     timings: ModelRequestTimings,
-    gateway_response_id: String,
     client_response_id: Option<String>,
     upstream_response_id: Option<String>,
     last_account_exhaustion: Option<ProviderError>,
@@ -408,8 +403,8 @@ where
                         continue;
                     }
                     let mut identity_error = None;
-                    for fact in event.canonical_facts_mut() {
-                        if let Err(error) = self.freeze_response_identity(fact) {
+                    for fact in event.canonical_facts() {
+                        if let Err(error) = self.observe_response_identity(fact) {
                             identity_error = Some(error);
                             break;
                         }
@@ -735,27 +730,32 @@ where
         Ok(())
     }
 
-    fn freeze_response_identity(&mut self, event: &mut GatewayEvent) -> Result<(), ProviderError> {
-        let upstream_response_id = event
-            .freeze_gateway_response_id(&self.gateway_response_id)
-            .map_err(|_| {
-                ProviderError::new(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
-            })?;
-        let Some(upstream_response_id) = upstream_response_id else {
-            return Ok(());
+    fn observe_response_identity(&mut self, event: &GatewayEvent) -> Result<(), ProviderError> {
+        let metadata = match event {
+            GatewayEvent::Started(metadata) | GatewayEvent::Completed(metadata) => metadata,
+            _ => return Ok(()),
         };
+        let response_id = crate::error::SafeUpstreamValue::new(metadata.response_id().to_owned())
+            .map_err(|_| {
+            ProviderError::new(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
+        })?;
+        let response_id = response_id.as_str();
+        if response_id.is_empty() {
+            return Ok(());
+        }
         if self
             .upstream_response_id
             .as_deref()
-            .is_some_and(|expected| expected != upstream_response_id)
+            .is_some_and(|expected| expected != response_id)
         {
             return Err(ProviderError::new(
                 ProviderErrorKind::Protocol,
                 UpstreamSendState::Sent,
             ));
         }
-        self.client_response_id = Some(self.gateway_response_id.clone());
-        self.upstream_response_id = Some(upstream_response_id);
+        let response_id = response_id.to_owned();
+        self.client_response_id = Some(response_id.clone());
+        self.upstream_response_id = Some(response_id);
         Ok(())
     }
 

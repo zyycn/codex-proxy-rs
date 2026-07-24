@@ -343,11 +343,10 @@ fn complete_stream(total_tokens: Option<u64>) -> Vec<Result<GatewayEvent, Provid
             ..Usage::new()
         })));
     }
-    events.push(Ok(GatewayEvent::Completed(
-        ResponseMeta::new("response-1", "gpt-5").with_upstream_response_id(
-            SafeUpstreamValue::new("upstream-response").expect("safe response id"),
-        ),
-    )));
+    events.push(Ok(GatewayEvent::Completed(ResponseMeta::new(
+        "response-1",
+        "gpt-5",
+    ))));
     events
 }
 
@@ -505,9 +504,8 @@ fn success_updates_one_model_request_and_persists_usage() {
         GatewayEvent::Completed(metadata) => metadata.response_id(),
         event => panic!("unexpected final event: {event:?}"),
     };
-    assert!(started_id.starts_with("resp_"));
+    assert_eq!(started_id, "response-1");
     assert_eq!(started_id, completed_id);
-    assert_ne!(started_id, "response-1");
     assert!(!session.is_finalized());
     block_on(session.commit_downstream(Some(200))).expect("commit response");
 

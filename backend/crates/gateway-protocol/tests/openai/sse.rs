@@ -1,19 +1,8 @@
 use gateway_protocol::openai::sse::{
     DONE_SSE_FRAME, MAX_SSE_EVENT_BUFFER_BYTES, SseError, SseEvent, SseEventDecoder,
     encode_sse_event, encode_sse_event_with_metadata, parse_sse_events, response_failed_sse_event,
-    response_failed_sse_event_with_id, sse_frame_end,
+    response_failed_sse_event_with_id, sse_frame_end, sse_frame_is_done,
 };
-
-fn sse_frame_is_done(frame: &str) -> bool {
-    let mut data = frame.lines().filter_map(|raw_line| {
-        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
-        let (field, value) = line.split_once(':').map_or((line, ""), |(field, value)| {
-            (field, value.strip_prefix(' ').unwrap_or(value))
-        });
-        (field == "data").then_some(value)
-    });
-    matches!((data.next(), data.next()), (Some("[DONE]"), None))
-}
 
 fn sse_body_has_done(body: &str) -> bool {
     body.trim_end_matches(['\r', '\n'])
@@ -116,6 +105,69 @@ fn incremental_decoder_should_decode_across_arbitrary_chunk_boundaries() {
             .collect::<Vec<_>>(),
         vec![Some("response.created"), Some("response.completed")]
     );
+}
+
+#[test]
+fn raw_frame_decoder_should_preserve_exact_frame_across_chunk_boundaries() {
+    let raw = b": keep-alive\r\nid: evt_1\r\nevent: response.future\r\nretry: 250\r\ndata: { \"type\": \"response.future\", \"opaque\": true }\r\n\r\n";
+    let mut decoder = SseEventDecoder::default();
+
+    assert!(
+        decoder
+            .push_frames(&raw[..37])
+            .expect("partial raw frame")
+            .is_empty()
+    );
+    let frames = decoder.push_frames(&raw[37..]).expect("complete raw frame");
+
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].raw(), raw);
+    assert_eq!(
+        frames[0].events()[0].event.as_deref(),
+        Some("response.future")
+    );
+    assert_eq!(
+        frames[0].events()[0].data,
+        r#"{ "type": "response.future", "opaque": true }"#
+    );
+}
+
+#[test]
+fn raw_frame_decoder_should_preserve_unparseable_frames_for_transparent_transport() {
+    let invalid_retry = b"retry: later\ndata: opaque\n\n";
+    let non_utf8 = b"data: \xff\n\n";
+    let mut decoder = SseEventDecoder::default();
+
+    let frames = decoder
+        .push_frames(invalid_retry)
+        .expect("raw frame remains deliverable");
+    assert_eq!(frames[0].raw(), invalid_retry);
+    assert!(frames[0].events().is_empty());
+
+    let frames = decoder
+        .push_frames(non_utf8)
+        .expect("non-UTF-8 raw frame remains deliverable");
+    assert_eq!(frames[0].raw(), non_utf8);
+    assert!(frames[0].events().is_empty());
+}
+
+#[test]
+fn raw_frame_decoder_finish_should_preserve_unparseable_trailing_frame() {
+    let raw = b"retry: later\ndata: opaque";
+    let mut decoder = SseEventDecoder::default();
+
+    assert!(
+        decoder
+            .push_frames(raw)
+            .expect("unfinished raw frame remains buffered")
+            .is_empty()
+    );
+    let frames = decoder
+        .finish_frames()
+        .expect("trailing raw frame remains deliverable");
+
+    assert_eq!(frames[0].raw(), raw);
+    assert!(frames[0].events().is_empty());
 }
 
 #[test]
