@@ -87,7 +87,6 @@ pub struct NewModelRequest {
     pub endpoint: String,
     pub client_transport: String,
     pub requested_model_id: String,
-    pub input_token_estimate: u64,
     pub client_ip: Option<String>,
     pub user_agent: Option<String>,
     pub reasoning_effort: Option<String>,
@@ -342,12 +341,12 @@ impl ModelRequestRepository for PgExecutionStore {
             "insert into model_requests (
                id, client_api_key_id, client_api_key_ref, config_revision, protocol,
                operation, endpoint, client_transport, requested_model_id,
-               input_token_estimate, client_ip, user_agent, reasoning_effort,
+               client_ip, user_agent, reasoning_effort,
                reasoning_preset, request_kind, subagent_kind, compact,
                image_generation_requested, started_at, deadline_at
              ) values (
-               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::inet, $12, $13,
-               $14, $15, $16, $17, $18, $19, $20
+               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::inet, $11, $12,
+               $13, $14, $15, $16, $17, $18, $19
              )",
         )
         .bind(request.id)
@@ -359,10 +358,6 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(request.endpoint)
         .bind(request.client_transport)
         .bind(request.requested_model_id)
-        .bind(to_i64(
-            request.input_token_estimate,
-            "input_token_estimate",
-        )?)
         .bind(request.client_ip)
         .bind(request.user_agent)
         .bind(request.reasoning_effort)
@@ -639,7 +634,6 @@ impl ExecutionStore for PgExecutionStore {
             endpoint: request.endpoint,
             client_transport: request.client_transport,
             requested_model_id: request.requested_model.as_str().to_owned(),
-            input_token_estimate: request.input_token_estimate,
             client_ip: request.client_ip.map(|address| address.to_string()),
             user_agent: request.user_agent,
             reasoning_effort: request.reasoning_effort,

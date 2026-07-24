@@ -147,9 +147,10 @@ pub struct PreparedCredentialCreate {
     pub upstream_user_id: String,
     pub upstream_account_id: Option<String>,
     pub plan_type: Option<String>,
+    pub authentication_kind: String,
     pub provider_material: ProviderDocument,
     pub has_refresh_token: bool,
-    pub access_token_expires_at: DateTime<Utc>,
+    pub access_token_expires_at: Option<DateTime<Utc>>,
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
     pub availability: AccountAvailability,
@@ -471,7 +472,7 @@ pub struct PreparedCredentialRotationFacts {
     pub plan_type: Option<String>,
     pub provider_material: ProviderDocument,
     pub has_refresh_token: bool,
-    pub access_token_expires_at: DateTime<Utc>,
+    pub access_token_expires_at: Option<DateTime<Utc>>,
     pub next_refresh_at: Option<DateTime<Utc>>,
 }
 
@@ -566,6 +567,49 @@ pub struct ProviderQuota {
     pub refresh_token_expires_at: Option<DateTime<Utc>>,
     pub windows: Vec<ProviderQuotaWindow>,
     pub provider_data: Option<ProviderDocument>,
+}
+
+impl ProviderQuota {
+    /// 返回 Dashboard 使用的代表性额度比例。
+    ///
+    /// 优先使用短周期窗口，再依次使用周、月和其它窗口；同一优先级取较高的已用比例。
+    /// 这里只解释跨 Provider 共享的窗口语义，绝不读取 Provider 私有 JSON。
+    #[must_use]
+    pub fn representative_used_percent(&self) -> Option<f64> {
+        self.windows
+            .iter()
+            .filter_map(|window| {
+                let used_percent = window
+                    .used_percent
+                    .filter(|value| value.is_finite())
+                    .map(|value| value.clamp(0.0, 100.0))?;
+                Some((quota_usage_priority(window), used_percent))
+            })
+            .fold(None::<(u8, f64)>, |selected, candidate| match selected {
+                Some(current)
+                    if current.0 < candidate.0
+                        || (current.0 == candidate.0 && current.1 >= candidate.1) =>
+                {
+                    Some(current)
+                }
+                _ => Some(candidate),
+            })
+            .map(|(_, used_percent)| used_percent)
+    }
+}
+
+fn quota_usage_priority(window: &ProviderQuotaWindow) -> u8 {
+    match window.group.as_str() {
+        "shortTerm" if window.window_seconds.is_some_and(is_week_window) => 1,
+        "shortTerm" => 0,
+        "monthly" => 2,
+        _ => 3,
+    }
+}
+
+fn is_week_window(seconds: u64) -> bool {
+    const WEEK_SECONDS: u64 = 7 * 24 * 60 * 60;
+    seconds > 0 && seconds.abs_diff(WEEK_SECONDS) <= WEEK_SECONDS / 20
 }
 
 /// Provider 实时模型目录的一项。

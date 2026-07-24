@@ -1,7 +1,7 @@
 use chrono::Utc;
 use provider_openai::credential::{
     CodexAccountProfile, CodexCookie, CodexCredentialData, CodexCredentialPrincipal,
-    CodexOAuthSecret,
+    CodexOAuthCredentialData, CodexOAuthSecret,
 };
 use secrecy::SecretString;
 
@@ -38,7 +38,7 @@ fn account_profile_debug_redacts_identity_fields() {
 
 #[test]
 fn plaintext_provider_schema_round_trips_dynamic_cookie_data() {
-    let data = CodexCredentialData {
+    let data = CodexCredentialData::OAuth(CodexOAuthCredentialData {
         schema_version: 1,
         principal: CodexCredentialPrincipal {
             oauth_subject: "subject-private".to_owned(),
@@ -59,12 +59,12 @@ fn plaintext_provider_schema_round_trips_dynamic_cookie_data() {
             secure: true,
             expires_at: None,
         }],
-    };
+    });
     let encoded = serde_json::to_value(&data).expect("serialize provider JSON");
     let decoded: CodexCredentialData =
         serde_json::from_value(encoded).expect("deserialize provider JSON");
-    assert_eq!(decoded.schema_version, 1);
-    assert_eq!(decoded.cookies[0].name, "oai-did");
+    assert_eq!(decoded.oauth().expect("OAuth data").schema_version, 1);
+    assert_eq!(decoded.cookies()[0].name, "oai-did");
     assert!(!format!("{decoded:?}").contains("cookie-private"));
 }
 

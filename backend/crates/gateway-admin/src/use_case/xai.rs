@@ -12,7 +12,7 @@ use crate::{
             AuthorizationStarted, CompleteAuthorization, CredentialDeletion,
             CredentialDeletionResult, CredentialImportCommit, CredentialImportResult,
             CredentialListQuery, CredentialMutation, CredentialMutationResult, CredentialPage,
-            ImportCredentials, PrepareCredentialImport, StartAuthorization,
+            ImportCredentials, PrepareCredentialImport, ProviderQuotaRequest, StartAuthorization,
         },
     },
     ports::{provider::ProviderAdmin, store::AccountStore},
@@ -114,6 +114,17 @@ impl XaiService for DefaultXaiService {
             .await
             .map_err(|error| map_store_error(error, "xAI credential import"))?;
         publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
+        // 导入已经提交，额度属于可重建观察事实；单个账号查询失败由周期任务重试。
+        for account_id in &result.credential_ids {
+            let _ = self
+                .provider
+                .quota(ProviderQuotaRequest {
+                    account_id: account_id.clone(),
+                    refresh: true,
+                    rolling_usage: None,
+                })
+                .await;
+        }
         Ok(result)
     }
 

@@ -11,10 +11,7 @@ export function useSettingsForm() {
   const loading = shallowRef(true)
   const saving = shallowRef(false)
   const error = shallowRef('')
-  const mappings = ref<Record<string, Array<{ requestedModel: string, upstreamModel: string }>>>({
-    openai: [],
-    xai: [],
-  })
+  const mappings = ref<Array<{ requestedModel: string, upstreamModel: string }>>([])
   const form = reactive({
     configRevision: 0,
     refreshMarginSeconds: null as number | null,
@@ -56,15 +53,10 @@ export function useSettingsForm() {
     form.usageRetentionDays = data.usageRetentionDays
     form.opsEventRetentionDays = data.opsEventRetentionDays
     form.auditRetentionDays = data.auditRetentionDays
-    mappings.value = Object.fromEntries(
-      ['openai', 'xai'].map(provider => [
-        provider,
-        Object.entries(data.providerModelMappings?.[provider] || {}).map(([requestedModel, upstreamModel]) => ({
-          requestedModel,
-          upstreamModel: String(upstreamModel),
-        })),
-      ]),
-    )
+    mappings.value = Object.entries(data.modelMappings || {}).map(([requestedModel, upstreamModel]) => ({
+      requestedModel,
+      upstreamModel: String(upstreamModel),
+    }))
   }
 
   async function loadSettings() {
@@ -82,43 +74,36 @@ export function useSettingsForm() {
     }
   }
 
-  function addMapping(provider: string) {
-    mappings.value = {
-      ...mappings.value,
-      [provider]: [...(mappings.value[provider] || []), { requestedModel: '', upstreamModel: '' }],
-    }
+  function addMapping() {
+    mappings.value = [...mappings.value, { requestedModel: '', upstreamModel: '' }]
   }
 
-  function updateMapping(provider: string, index: number, key: string, value: string) {
-    const rows = [...(mappings.value[provider] || [])]
+  function updateMapping(index: number, key: 'requestedModel' | 'upstreamModel', value: string) {
+    const rows = [...mappings.value]
     if (!rows[index])
       return
     rows[index] = { ...rows[index], [key]: value }
-    mappings.value = { ...mappings.value, [provider]: rows }
+    mappings.value = rows
   }
 
-  function removeMapping(provider: string, index: number) {
-    const rows = [...(mappings.value[provider] || [])]
+  function removeMapping(index: number) {
+    const rows = [...mappings.value]
     rows.splice(index, 1)
-    mappings.value = { ...mappings.value, [provider]: rows }
+    mappings.value = rows
   }
 
   function mappingPayload() {
-    const payload: Record<string, Record<string, string>> = {}
-    for (const provider of ['openai', 'xai']) {
-      const entries: Record<string, string> = {}
-      for (const row of mappings.value[provider] || []) {
-        const requested = row.requestedModel.trim()
-        const upstream = row.upstreamModel.trim()
-        if (!requested || !upstream)
-          throw new Error('请完整填写模型映射')
-        if (entries[requested])
-          throw new Error(`${provider} 存在重复的客户端模型：${requested}`)
-        entries[requested] = upstream
-      }
-      payload[provider] = entries
+    const entries: Record<string, string> = {}
+    for (const row of mappings.value) {
+      const requested = row.requestedModel.trim()
+      const upstream = row.upstreamModel.trim()
+      if (!requested || !upstream)
+        throw new Error('请完整填写模型映射')
+      if (entries[requested])
+        throw new Error(`存在重复的客户端模型：${requested}`)
+      entries[requested] = upstream
     }
-    return payload
+    return entries
   }
 
   async function saveSettings() {
@@ -133,7 +118,7 @@ export function useSettingsForm() {
       saving.value = true
       const result = await updateSettings({
         expectedConfigRevision: form.configRevision,
-        providerModelMappings: mappingPayload(),
+        modelMappings: mappingPayload(),
         refreshMarginSeconds,
         refreshConcurrency,
         maxConcurrentPerAccount,

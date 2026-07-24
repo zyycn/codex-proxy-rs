@@ -480,7 +480,6 @@ pub struct NewModelRequest {
     pub endpoint: String,
     pub client_transport: String,
     pub requested_model: PublicModelId,
-    pub input_token_estimate: u64,
     pub client_ip: Option<IpAddr>,
     pub user_agent: Option<String>,
     pub reasoning_effort: Option<String>,

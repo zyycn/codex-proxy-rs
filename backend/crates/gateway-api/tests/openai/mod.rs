@@ -20,8 +20,8 @@ use gateway_core::engine::continuation::{
 };
 use gateway_core::engine::credential::{AccountSelectionPolicy, RotationStrategy};
 use gateway_core::engine::execution::{
-    AuthenticatedClient, DefaultExecutionService, ExecutionService, ProviderCircuitDecision,
-    ProviderCircuitError, ProviderCircuitPort,
+    AuthenticatedClient, ClientApiKeyUsageSink, DefaultExecutionService, ExecutionService,
+    ProviderCircuitDecision, ProviderCircuitError, ProviderCircuitPort,
 };
 use gateway_core::engine::provider::ProviderRegistry;
 use gateway_core::engine::{
@@ -72,17 +72,23 @@ pub(super) fn authenticated_client_for_provider(
         Arc::new(UnusedAdmissions),
         Arc::new(UnusedCircuits),
         Arc::new(UnusedContinuation),
+        Arc::new(IgnoredClientApiKeyUsage),
     );
     source
         .authenticate(plaintext)
         .expect("authenticated client")
 }
 
+struct IgnoredClientApiKeyUsage;
+
+impl ClientApiKeyUsageSink for IgnoredClientApiKeyUsage {
+    fn record_used(&self, _: &ClientApiKeyId) {}
+}
+
 fn snapshot(plaintext: &str, provider_name: &str) -> RuntimeSnapshot {
     let provider = ProviderKind::new(provider_name).expect("provider");
     let capabilities = ModelCapabilities::new(
         BTreeSet::from([gateway_core::operation::OperationKind::Generate]),
-        128_000,
         Some(16_000),
     );
     RuntimeSnapshot::new(

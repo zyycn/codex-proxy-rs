@@ -34,6 +34,8 @@ pub struct CodexCanonicalDecoder {
     completed: bool,
     content: BTreeMap<u32, ContentKind>,
     tool_arguments_seen: BTreeSet<u32>,
+    text_output_seen: BTreeSet<u32>,
+    reasoning_output_seen: BTreeSet<u32>,
     usage_emitted: bool,
     semantic_output_seen: bool,
 }
@@ -124,6 +126,8 @@ impl CodexCanonicalDecoder {
             completed: false,
             content: BTreeMap::new(),
             tool_arguments_seen: BTreeSet::new(),
+            text_output_seen: BTreeSet::new(),
+            reasoning_output_seen: BTreeSet::new(),
             usage_emitted: false,
             semantic_output_seen: false,
         }
@@ -260,22 +264,22 @@ impl CodexCanonicalDecoder {
             "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta" => {
                 self.tool_delta(value, output)
             }
+            "response.output_text.done" | "response.refusal.done" => self.text_done(value, output),
+            "response.reasoning_summary_text.done" | "response.reasoning_text.done" => {
+                self.reasoning_done(value, output)
+            }
+            "response.function_call_arguments.done" | "response.custom_tool_call_input.done" => {
+                self.tool_done(value, output)
+            }
+            "response.content_part.done" => self.content_part_done(value, output),
+            "response.reasoning_summary_part.done" | "response.reasoning_part.done" => {
+                self.reasoning_part_done(value, output)
+            }
             "response.completed" | "response.incomplete" => {
                 self.complete(event_type, value, output)
             }
             "response.failed" | "error" => Err(protocol_error_marker()),
-            "response.output_text.done"
-            | "response.refusal.done"
-            | "response.reasoning_summary_text.done"
-            | "response.reasoning_text.done"
-            | "response.function_call_arguments.done"
-            | "response.custom_tool_call_input.done"
-            | "response.content_part.done"
-            | "response.reasoning_summary_part.done"
-            | "response.reasoning_part.done"
-            | "response.rate_limits.updated"
-            | "codex.rate_limits"
-            | "response.metadata" => Ok(()),
+            "response.rate_limits.updated" | "codex.rate_limits" | "response.metadata" => Ok(()),
             _ => Ok(()),
         }
     }
@@ -351,13 +355,35 @@ impl CodexCanonicalDecoder {
     ) -> Result<(), ProviderError> {
         self.require_started()?;
         let item = value.get("item").ok_or_else(protocol_error_marker)?;
-        if !matches!(
-            item.get("type").and_then(Value::as_str),
-            Some("function_call" | "custom_tool_call")
-        ) {
-            return Ok(());
-        }
         let output_index = event_index(value, "output_index")?;
+        self.complete_output_item(item, output_index, output)
+    }
+
+    fn complete_output_item(
+        &mut self,
+        item: &Value,
+        output_index: u32,
+        output: &mut Vec<GatewayEvent>,
+    ) -> Result<(), ProviderError> {
+        match item.get("type").and_then(Value::as_str) {
+            Some("function_call" | "custom_tool_call") => {
+                self.tool_item_done(item, output_index, output)
+            }
+            Some("message") => self.message_item_done(item, output_index, output),
+            Some("reasoning") => self.reasoning_item_done(item, output_index, output),
+            Some("output_text" | "text" | "refusal") => {
+                self.text_item_done(item, content_index(output_index, 0)?, output)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn tool_item_done(
+        &mut self,
+        item: &Value,
+        output_index: u32,
+        output: &mut Vec<GatewayEvent>,
+    ) -> Result<(), ProviderError> {
         let index = content_index(output_index, 0)?;
         if self.tool_arguments_seen.contains(&index) {
             return Ok(());
@@ -393,6 +419,177 @@ impl CodexCanonicalDecoder {
         Ok(())
     }
 
+    fn message_item_done(
+        &mut self,
+        item: &Value,
+        output_index: u32,
+        output: &mut Vec<GatewayEvent>,
+    ) -> Result<(), ProviderError> {
+        let Some(parts) = item.get("content").and_then(Value::as_array) else {
+            return self.text_item_done(item, content_index(output_index, 0)?, output);
+        };
+        for (part_index, part) in parts.iter().enumerate() {
+            let part_index = u32::try_from(part_index).map_err(|_| protocol_error_marker())?;
+            let index = content_index(output_index, part_index)?;
+            if let Some("output_text" | "text" | "refusal") =
+                part.get("type").and_then(Value::as_str)
+            {
+                self.text_item_done(part, index, output)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn reasoning_item_done(
+        &mut self,
+        item: &Value,
+        output_index: u32,
+        output: &mut Vec<GatewayEvent>,
+    ) -> Result<(), ProviderError> {
+        let parts = item
+            .get("summary")
+            .and_then(Value::as_array)
+            .or_else(|| item.get("content").and_then(Value::as_array));
+        let Some(parts) = parts else {
+            return self.reasoning_item_text_done(item, content_index(output_index, 0)?, output);
+        };
+        for (part_index, part) in parts.iter().enumerate() {
+            let part_index = u32::try_from(part_index).map_err(|_| protocol_error_marker())?;
+            let index = content_index(output_index, part_index)?;
+            self.reasoning_item_text_done(part, index, output)?;
+        }
+        Ok(())
+    }
+
+    fn content_part_done(
+        &mut self,
+        value: &Value,
+        output: &mut Vec<GatewayEvent>,
+    ) -> Result<(), ProviderError> {
+        self.require_started()?;
+        let part = value.get("part").ok_or_else(protocol_error_marker)?;
+        let index = event_content_index(value)?;
+        match part.get("type").and_then(Value::as_str) {
+            Some("output_text" | "text" | "refusal") => self.text_item_done(part, index, output),
+            _ => Ok(()),
+        }
+    }
+
+    fn reasoning_part_done(
+        &mut self,
+        value: &Value,
+        output: &mut Vec<GatewayEvent>,
+    ) -> Result<(), ProviderError> {
+        self.require_started()?;
+        let part = value
+            .get("part")
+            .or_else(|| value.get("summary_part"))
+            .ok_or_else(protocol_error_marker)?;
+        self.reasoning_item_text_done(part, event_content_index(value)?, output)
+    }
+
+    fn text_done(
+        &mut self,
+        value: &Value,
+        output: &mut Vec<GatewayEvent>,
+    ) -> Result<(), ProviderError> {
+        self.require_started()?;
+        self.text_item_done(value, event_content_index(value)?, output)
+    }
+
+    fn reasoning_done(
+        &mut self,
+        value: &Value,
+        output: &mut Vec<GatewayEvent>,
+    ) -> Result<(), ProviderError> {
+        self.require_started()?;
+        self.reasoning_item_text_done(value, event_content_index(value)?, output)
+    }
+
+    fn tool_done(
+        &mut self,
+        value: &Value,
+        output: &mut Vec<GatewayEvent>,
+    ) -> Result<(), ProviderError> {
+        self.require_started()?;
+        let output_index = event_index(value, "output_index")?;
+        let index = content_index(output_index, 0)?;
+        if self.tool_arguments_seen.contains(&index) {
+            return Ok(());
+        }
+        let arguments = value
+            .get("arguments")
+            .or_else(|| value.get("input"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty());
+        let Some(arguments) = arguments else {
+            return Ok(());
+        };
+        let call_id = value
+            .get("call_id")
+            .or_else(|| value.get("item_id"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(protocol_error_marker)?;
+        self.ensure_content(index, ContentKind::ToolCall, output)?;
+        self.tool_arguments_seen.insert(index);
+        output.push(GatewayEvent::ToolCallDelta(ToolCallDelta {
+            content_index: index,
+            call_id: call_id.to_owned(),
+            name: None,
+            arguments_delta: arguments.to_owned(),
+        }));
+        Ok(())
+    }
+
+    fn text_item_done(
+        &mut self,
+        value: &Value,
+        index: u32,
+        output: &mut Vec<GatewayEvent>,
+    ) -> Result<(), ProviderError> {
+        let text = value
+            .get("text")
+            .or_else(|| value.get("refusal"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty());
+        let Some(text) = text else {
+            return Ok(());
+        };
+        self.ensure_content(index, ContentKind::Text, output)?;
+        if self.text_output_seen.insert(index) {
+            output.push(GatewayEvent::TextDelta(TextDelta {
+                content_index: index,
+                text: text.to_owned(),
+            }));
+        }
+        Ok(())
+    }
+
+    fn reasoning_item_text_done(
+        &mut self,
+        value: &Value,
+        index: u32,
+        output: &mut Vec<GatewayEvent>,
+    ) -> Result<(), ProviderError> {
+        let text = value
+            .get("text")
+            .or_else(|| value.get("summary"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty());
+        let Some(text) = text else {
+            return Ok(());
+        };
+        self.ensure_content(index, ContentKind::Reasoning, output)?;
+        if self.reasoning_output_seen.insert(index) {
+            output.push(GatewayEvent::ReasoningDelta(ReasoningDelta {
+                content_index: index,
+                text: text.to_owned(),
+            }));
+        }
+        Ok(())
+    }
+
     fn content_part_added(
         &mut self,
         value: &Value,
@@ -422,6 +619,7 @@ impl CodexCanonicalDecoder {
         let index = event_content_index(value)?;
         self.ensure_content(index, ContentKind::Text, output)?;
         let text = required_text(value, "delta")?;
+        self.text_output_seen.insert(index);
         output.push(GatewayEvent::TextDelta(TextDelta {
             content_index: index,
             text,
@@ -438,6 +636,7 @@ impl CodexCanonicalDecoder {
         let index = event_content_index(value)?;
         self.ensure_content(index, ContentKind::Reasoning, output)?;
         let text = required_text(value, "delta")?;
+        self.reasoning_output_seen.insert(index);
         output.push(GatewayEvent::ReasoningDelta(ReasoningDelta {
             content_index: index,
             text,
@@ -482,6 +681,13 @@ impl CodexCanonicalDecoder {
         let response_id = required_text(response, "id")?;
         if self.response_id.as_deref() != Some(response_id.as_str()) {
             return Err(protocol_error_marker());
+        }
+        if let Some(items) = response.get("output").and_then(Value::as_array) {
+            for (output_index, item) in items.iter().enumerate() {
+                let output_index =
+                    u32::try_from(output_index).map_err(|_| protocol_error_marker())?;
+                self.complete_output_item(item, output_index, output)?;
+            }
         }
         let usage = extract_usage(response);
         if !self.usage_emitted
@@ -594,7 +800,9 @@ fn event_index(value: &Value, field: &str) -> Result<u32, ProviderError> {
 fn event_content_index(value: &Value) -> Result<u32, ProviderError> {
     content_index(
         event_index(value, "output_index")?,
-        optional_event_index(value, "content_index")?.unwrap_or_default(),
+        optional_event_index(value, "content_index")?
+            .or(optional_event_index(value, "summary_index")?)
+            .unwrap_or_default(),
     )
 }
 

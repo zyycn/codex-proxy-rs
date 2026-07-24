@@ -296,15 +296,13 @@ fn capability_requirements_should_distinguish_native_continuation() {
 }
 
 #[test]
-fn capability_requirements_should_preserve_context_and_output_bounds() {
+fn capability_requirements_should_preserve_output_bound() {
     let request = GenerateRequest::new(vec![text_message(MessageRole::User, "bounded")])
         .expect("request is valid")
-        .with_estimated_context_tokens(4_096)
         .with_max_output_tokens(1_024);
 
     let requirements = Operation::Generate(request).capability_requirements();
 
-    assert_eq!(requirements.minimum_context_tokens(), 4_096);
     assert_eq!(requirements.requested_output_tokens(), Some(1_024));
 }
 

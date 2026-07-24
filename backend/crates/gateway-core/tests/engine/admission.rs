@@ -26,7 +26,6 @@ fn client_admission_startup_recovery_should_preserve_order_and_exact_facts() {
             recent_requests: vec![RecentAdmissionFact {
                 model_request_id: request.clone(),
                 started_at: now - Duration::from_secs(2),
-                input_token_estimate: 31,
             }],
             running_requests: vec![RunningAdmissionFact {
                 model_request_id: request,

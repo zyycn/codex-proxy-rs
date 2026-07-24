@@ -7,7 +7,7 @@ use gateway_core::engine::credential::{
 };
 use gateway_core::provider_ports::{
     NewOAuthPendingFlow, OAuthPendingBinding, ProviderRefreshPolicy, ProviderSchedulingState,
-    ProviderStoreErrorKind,
+    ProviderSessionAffinityKey, ProviderStoreErrorKind,
 };
 use gateway_core::routing::ProviderKind;
 
@@ -16,6 +16,13 @@ fn oauth_pending_binding_debug_redacts_raw_value() {
     let binding = OAuthPendingBinding::try_new("must-not-appear").expect("valid binding");
 
     assert_eq!(format!("{binding:?}"), "OAuthPendingBinding([REDACTED])");
+}
+
+#[test]
+fn provider_session_affinity_key_debug_is_opaque() {
+    let key = ProviderSessionAffinityKey::try_new("opaque-session-key").expect("valid key");
+
+    assert_eq!(format!("{key:?}"), "ProviderSessionAffinityKey([OPAQUE])");
 }
 
 #[test]
@@ -100,12 +107,17 @@ fn scheduling_state_preserves_provider_neutral_signals() {
             last_started_at: None,
             quota_reset_at: None,
             quota_remaining_rank: Some(7),
+            failure_rate_basis_points: Some(125),
+            first_output_latency_ms: Some(250),
         },
     )]);
-    let state = ProviderSchedulingState::new(signals, Some(account.clone()), 9);
+    let state = ProviderSchedulingState::new(signals, 9);
 
     assert_eq!(state.signals()[&account].in_flight, 2);
-    assert_eq!(state.sticky_account(), Some(&account));
+    assert_eq!(
+        state.signals()[&account].failure_rate_basis_points,
+        Some(125)
+    );
     assert_eq!(state.round_robin_cursor(), 9);
     assert_eq!(
         CredentialRevision::new(1).expect("positive revision").get(),

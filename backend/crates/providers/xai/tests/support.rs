@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -15,7 +15,8 @@ use gateway_core::engine::credential::{
 };
 use gateway_core::error::{StoreError, StoreErrorKind};
 use gateway_core::provider_ports::{
-    ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError,
+    ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderSessionAffinityKey,
+    ProviderSessionAffinityPort, ProviderStoreError,
 };
 use gateway_core::routing::ProviderKind;
 use provider_xai::{
@@ -197,6 +198,7 @@ struct StoredAccount {
 pub struct MemoryProviderAccountStore {
     accounts: Mutex<BTreeMap<ProviderAccountId, StoredAccount>>,
     quota_reads: AtomicUsize,
+    fail_provider_listing: AtomicBool,
 }
 
 impl MemoryProviderAccountStore {
@@ -222,6 +224,10 @@ impl MemoryProviderAccountStore {
 
     pub fn quota_reads(&self) -> usize {
         self.quota_reads.load(Ordering::SeqCst)
+    }
+
+    pub fn fail_provider_listing(&self) {
+        self.fail_provider_listing.store(true, Ordering::SeqCst);
     }
 }
 
@@ -261,6 +267,9 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
         &self,
         provider: &ProviderKind,
     ) -> Result<Vec<ProviderAccount>, StoreError> {
+        if self.fail_provider_listing.load(Ordering::SeqCst) {
+            return Err(invalid());
+        }
         Ok(lock(&self.accounts)
             .values()
             .filter(|stored| stored.account.provider() == provider)
@@ -428,7 +437,7 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
 
 struct AccountReplacement {
     revision: CredentialRevision,
-    access_token_expires_at: SystemTime,
+    access_token_expires_at: Option<SystemTime>,
     availability: AccountAvailability,
     cooldown_until: Option<SystemTime>,
     enabled: bool,
@@ -445,6 +454,7 @@ fn rebuild_account(previous: &ProviderAccount, replacement: AccountReplacement) 
         previous.provider().clone(),
         replacement.name,
         previous.upstream_user_id().to_owned(),
+        previous.authentication_kind().to_owned(),
         replacement.revision,
         replacement.access_token_expires_at,
     )
@@ -538,6 +548,36 @@ pub fn create_input(suffix: &str, subject: &str) -> CreateGrokCredential {
 }
 
 pub struct StaticRuntimePolicy;
+
+pub struct TestSessionAffinity;
+
+impl ProviderSessionAffinityPort for TestSessionAffinity {
+    fn load<'a>(
+        &'a self,
+        _provider_kind: &'a ProviderKind,
+        _key: &'a ProviderSessionAffinityKey,
+    ) -> futures::future::BoxFuture<'a, Result<Option<ProviderAccountId>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn bind<'a>(
+        &'a self,
+        _provider_kind: &'a ProviderKind,
+        _key: &'a ProviderSessionAffinityKey,
+        _account_id: &'a ProviderAccountId,
+        _ttl: Duration,
+    ) -> futures::future::BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn clear<'a>(
+        &'a self,
+        _provider_kind: &'a ProviderKind,
+        _key: &'a ProviderSessionAffinityKey,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+}
 
 impl ProviderRuntimePolicyPort for StaticRuntimePolicy {
     fn load_refresh_policy(

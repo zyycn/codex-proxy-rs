@@ -24,11 +24,7 @@ fn scheduling() -> AccountSelectionPolicy {
 }
 
 fn capabilities() -> ModelCapabilities {
-    ModelCapabilities::new(
-        BTreeSet::from([OperationKind::Generate]),
-        128_000,
-        Some(16_000),
-    )
+    ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), Some(16_000))
 }
 
 fn model(provider: &str, name: &str, capabilities: ModelCapabilities) -> ProviderModel {
@@ -73,15 +69,9 @@ fn snapshot() -> RuntimeSnapshot {
         Vec::new(),
     )
     .expect("snapshot")
-    .with_provider_model_mappings(BTreeMap::from([
-        (
-            ProviderKind::new("openai").expect("provider"),
-            BTreeMap::from([("gpt-5.4".to_owned(), "gpt-5.5".to_owned())]),
-        ),
-        (
-            ProviderKind::new("xai").expect("provider"),
-            BTreeMap::from([("grok-latest".to_owned(), "grok-4.5".to_owned())]),
-        ),
+    .with_model_mappings(BTreeMap::from([
+        ("gpt-5.4".to_owned(), "gpt-5.5".to_owned()),
+        ("grok-latest".to_owned(), "grok-4.5".to_owned()),
     ]))
 }
 
@@ -140,7 +130,7 @@ fn snapshot_should_reject_duplicate_provider_model() {
 }
 
 #[test]
-fn platform_is_selected_before_model_mapping() {
+fn selected_provider_should_use_global_model_mapping() {
     let snapshot = snapshot();
     let plan = snapshot
         .plan(
@@ -159,7 +149,7 @@ fn platform_is_selected_before_model_mapping() {
 }
 
 #[test]
-fn mapping_must_not_cross_provider_boundary() {
+fn global_mapping_should_apply_to_every_provider() {
     let snapshot = snapshot();
     let plan = snapshot
         .plan(
@@ -173,7 +163,7 @@ fn mapping_must_not_cross_provider_boundary() {
         .expect("transparent plan");
 
     assert_eq!(plan.candidates()[0].provider().as_str(), "xai");
-    assert_eq!(plan.candidates()[0].upstream_model().as_str(), "gpt-5.4");
+    assert_eq!(plan.candidates()[0].upstream_model().as_str(), "gpt-5.5");
 }
 
 #[test]
@@ -225,7 +215,7 @@ fn known_unsupported_operation_should_not_be_bypassed() {
         vec![model(
             "openai",
             "gpt-known-unsupported",
-            ModelCapabilities::new(BTreeSet::new(), 0, None),
+            ModelCapabilities::new(BTreeSet::new(), None),
         )],
         Vec::new(),
     )
@@ -247,27 +237,24 @@ fn known_unsupported_operation_should_not_be_bypassed() {
 
 #[test]
 fn upstream_feature_validation_should_preserve_operation_and_limit_gates() {
-    let capabilities = ModelCapabilities::new(
-        BTreeSet::from([OperationKind::Generate]),
-        128_000,
-        Some(16_000),
-    )
-    .with_feature(
-        Feature::Tools,
-        gateway_core::routing::SupportLevel::Unsupported,
-    )
-    .with_upstream_feature_validation();
+    let capabilities =
+        ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), Some(16_000))
+            .with_feature(
+                Feature::Tools,
+                gateway_core::routing::SupportLevel::Unsupported,
+            )
+            .with_upstream_feature_validation();
     let wire_features = CapabilityRequirements::new(OperationKind::Generate)
         .require(Feature::Tools)
         .require(Feature::JsonSchema);
-    let oversized =
-        CapabilityRequirements::new(OperationKind::Generate).with_minimum_context_tokens(128_001);
+    let oversized_output = CapabilityRequirements::new(OperationKind::Generate)
+        .with_requested_output_tokens(Some(16_001));
     let unsupported_operation = CapabilityRequirements::new(OperationKind::CompactConversation);
 
     assert_eq!(
         (
             capabilities.match_requirements(&wire_features),
-            capabilities.match_requirements(&oversized),
+            capabilities.match_requirements(&oversized_output),
             capabilities.match_requirements(&unsupported_operation),
         ),
         (Some(BTreeSet::new()), None, None)
@@ -283,7 +270,7 @@ fn public_catalog_should_include_discovered_models_and_aliases() {
         .map(PublicModelId::as_str)
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(names, BTreeSet::from(["gpt-5.4", "gpt-5.5"]));
+    assert_eq!(names, BTreeSet::from(["gpt-5.4", "gpt-5.5", "grok-latest"]));
 }
 
 #[test]

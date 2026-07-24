@@ -1,6 +1,14 @@
 //! 明文 `client_api_keys` 的 PostgreSQL owner。
 
-use std::fmt;
+use std::{
+    collections::BTreeMap,
+    fmt,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -19,8 +27,11 @@ use gateway_admin::{
     },
     ports::store::{AdminStoreResult, ClientKeyStore},
 };
-use gateway_core::policy::{ClientApiKeyId, PlaintextClientApiKey, RateLimits};
 use gateway_core::routing::ProviderKind;
+use gateway_core::{
+    engine::execution::ClientApiKeyUsageSink,
+    policy::{ClientApiKeyId, PlaintextClientApiKey, RateLimits},
+};
 use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
 
 use crate::{
@@ -32,6 +43,7 @@ use super::{ControlPlaneRepository, PgControlPlaneRepository};
 
 const ENTITY: &str = "client API key";
 const KEY_LENGTH: usize = 46;
+const CLIENT_API_KEY_LAST_USED_FLUSH_DELAY: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientApiKeySnapshot {
@@ -48,7 +60,6 @@ impl ClientApiKeySnapshot {
         provider_kind: String,
         max_concurrency: i64,
         requests_per_minute: i64,
-        tokens_per_minute: i64,
     ) -> StoreResult<Self> {
         Ok(Self {
             id: ClientApiKeyId::new(id).map_err(|_| invalid("persisted key ID is invalid"))?,
@@ -58,7 +69,6 @@ impl ClientApiKeySnapshot {
             limits: RateLimits {
                 max_concurrency: to_u64(max_concurrency)?,
                 requests_per_minute: to_u64(requests_per_minute)?,
-                tokens_per_minute: to_u64(tokens_per_minute)?,
             },
         })
     }
@@ -72,7 +82,6 @@ pub struct ClientApiKeySecret {
     pub enabled: bool,
     pub max_concurrency: u64,
     pub requests_per_minute: u64,
-    pub tokens_per_minute: u64,
 }
 
 impl fmt::Debug for ClientApiKeySecret {
@@ -96,7 +105,6 @@ pub struct ClientApiKeyRecord {
     pub enabled: bool,
     pub max_concurrency: u64,
     pub requests_per_minute: u64,
-    pub tokens_per_minute: u64,
     pub last_used_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -246,7 +254,6 @@ pub struct NewClientApiKey {
     pub key: String,
     pub max_concurrency: u64,
     pub requests_per_minute: u64,
-    pub tokens_per_minute: u64,
 }
 
 impl fmt::Debug for NewClientApiKey {
@@ -278,7 +285,6 @@ pub struct UpdateClientApiKey {
     pub enabled: bool,
     pub max_concurrency: u64,
     pub requests_per_minute: u64,
-    pub tokens_per_minute: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -289,7 +295,6 @@ pub struct UpdateClientApiKeyDetails {
     pub provider_kind: String,
     pub max_concurrency: u64,
     pub requests_per_minute: u64,
-    pub tokens_per_minute: u64,
 }
 
 impl UpdateClientApiKeyDetails {
@@ -299,7 +304,6 @@ impl UpdateClientApiKeyDetails {
         require_nonempty(ENTITY, "provider_kind", &self.provider_kind)?;
         to_i64(self.max_concurrency)?;
         to_i64(self.requests_per_minute)?;
-        to_i64(self.tokens_per_minute)?;
         Ok(())
     }
 }
@@ -318,7 +322,10 @@ pub trait ClientApiKeyRepository: Send + Sync {
     async fn reveal_client_api_key(&self, id: &str) -> StoreResult<Option<ClientApiKeySecret>>;
     async fn insert_client_api_key(&self, key: NewClientApiKey) -> StoreResult<()>;
     async fn update_client_api_key(&self, key: UpdateClientApiKey) -> StoreResult<bool>;
-    async fn touch_client_api_keys(&self, ids: &[String]) -> StoreResult<u64>;
+    async fn touch_client_api_keys(
+        &self,
+        touched_at: &BTreeMap<String, DateTime<Utc>>,
+    ) -> StoreResult<u64>;
 }
 
 #[derive(Clone)]
@@ -340,8 +347,8 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         key: &str,
     ) -> StoreResult<Option<ClientApiKeySecret>> {
         validate_key(key)?;
-        let row = sqlx::query_as::<_, (String, String, String, bool, i64, i64, i64)>(
-            "select id, key, provider_kind, enabled, max_concurrency, requests_per_minute, tokens_per_minute
+        let row = sqlx::query_as::<_, (String, String, String, bool, i64, i64)>(
+            "select id, key, provider_kind, enabled, max_concurrency, requests_per_minute
              from client_api_keys where key = $1",
         )
         .bind(key)
@@ -359,7 +366,7 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         let total = count_client_api_keys(&self.pool, query.search.as_deref()).await?;
         let mut statement = QueryBuilder::<Postgres>::new(
             "select id, name, label, provider_kind, left(key, 10) as prefix, enabled, max_concurrency,
-                    requests_per_minute, tokens_per_minute, last_used_at, created_at, updated_at
+                    requests_per_minute, last_used_at, created_at, updated_at
              from client_api_keys where true",
         );
         push_client_key_search(&mut statement, query.search.as_deref());
@@ -398,8 +405,8 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
 
     async fn reveal_client_api_key(&self, id: &str) -> StoreResult<Option<ClientApiKeySecret>> {
         require_nonempty(ENTITY, "id", id)?;
-        sqlx::query_as::<_, (String, String, String, bool, i64, i64, i64)>(
-            "select id, key, provider_kind, enabled, max_concurrency, requests_per_minute, tokens_per_minute
+        sqlx::query_as::<_, (String, String, String, bool, i64, i64)>(
+            "select id, key, provider_kind, enabled, max_concurrency, requests_per_minute
              from client_api_keys where id = $1",
         )
         .bind(id)
@@ -414,7 +421,7 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         require_nonempty(ENTITY, "id", id)?;
         sqlx::query_as::<_, ClientRecordRow>(
             "select id, name, label, provider_kind, left(key, 10) as prefix, enabled, max_concurrency,
-                    requests_per_minute, tokens_per_minute, last_used_at, created_at, updated_at
+                    requests_per_minute, last_used_at, created_at, updated_at
              from client_api_keys where id = $1",
         )
         .bind(id)
@@ -430,8 +437,8 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         sqlx::query(
             "insert into client_api_keys (
                id, name, label, provider_kind, key, enabled, max_concurrency, requests_per_minute,
-               tokens_per_minute, last_used_at, created_at, updated_at
-             ) values ($1, $2, $3, $4, $5, true, $6, $7, $8, null, now(), now())",
+               last_used_at, created_at, updated_at
+             ) values ($1, $2, $3, $4, $5, true, $6, $7, null, now(), now())",
         )
         .bind(key.id)
         .bind(key.name)
@@ -440,7 +447,6 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         .bind(key.key)
         .bind(to_i64(key.max_concurrency)?)
         .bind(to_i64(key.requests_per_minute)?)
-        .bind(to_i64(key.tokens_per_minute)?)
         .execute(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("insert client API key"))?;
@@ -453,7 +459,7 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         let result = sqlx::query(
             "update client_api_keys
              set name = $2, label = $3, provider_kind = $4, enabled = $5, max_concurrency = $6,
-                 requests_per_minute = $7, tokens_per_minute = $8, updated_at = now()
+                 requests_per_minute = $7, updated_at = now()
              where id = $1",
         )
         .bind(key.id)
@@ -463,26 +469,118 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         .bind(key.enabled)
         .bind(to_i64(key.max_concurrency)?)
         .bind(to_i64(key.requests_per_minute)?)
-        .bind(to_i64(key.tokens_per_minute)?)
         .execute(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("update client API key"))?;
         Ok(result.rows_affected() == 1)
     }
 
-    async fn touch_client_api_keys(&self, ids: &[String]) -> StoreResult<u64> {
-        if ids.is_empty() {
+    async fn touch_client_api_keys(
+        &self,
+        touched_at: &BTreeMap<String, DateTime<Utc>>,
+    ) -> StoreResult<u64> {
+        if touched_at.is_empty() {
             return Ok(0);
         }
+        let ids = touched_at.keys().cloned().collect::<Vec<_>>();
+        let timestamps = touched_at.values().copied().collect::<Vec<_>>();
         let result = sqlx::query(
-            "update client_api_keys set last_used_at = now(), updated_at = greatest(updated_at, now())
-             where id = any($1)",
+            "update client_api_keys as keys
+             set last_used_at = greatest(coalesce(keys.last_used_at, touched.used_at), touched.used_at)
+             from unnest($1::text[], $2::timestamptz[]) as touched(id, used_at)
+             where keys.id = touched.id",
         )
         .bind(ids)
+        .bind(timestamps)
         .execute(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("touch client API keys"))?;
         Ok(result.rows_affected())
+    }
+}
+
+/// 认证成功后按一秒窗口合并写回 API Key 最后使用时间。
+///
+/// 该 adapter 仅记录稳定 Key ID；认证材料从不进入异步队列或日志。
+#[derive(Clone)]
+pub struct PgClientApiKeyUsageSink {
+    repository: PgClientApiKeyRepository,
+    pending: Arc<Mutex<BTreeMap<String, DateTime<Utc>>>>,
+    flush_scheduled: Arc<AtomicBool>,
+}
+
+impl PgClientApiKeyUsageSink {
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self {
+            repository: PgClientApiKeyRepository::new(pool),
+            pending: Arc::new(Mutex::new(BTreeMap::new())),
+            flush_scheduled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn queue(&self, key_id: &ClientApiKeyId) {
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(key_id.as_str().to_owned(), Utc::now());
+        self.schedule_flush();
+    }
+
+    fn schedule_flush(&self) {
+        if self
+            .flush_scheduled
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            self.flush_scheduled.store(false, Ordering::Release);
+            return;
+        };
+        let sink = self.clone();
+        drop(runtime.spawn(async move {
+            tokio::time::sleep(CLIENT_API_KEY_LAST_USED_FLUSH_DELAY).await;
+            sink.flush_pending().await;
+        }));
+    }
+
+    async fn flush_pending(&self) {
+        let updates = std::mem::take(
+            &mut *self
+                .pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        if let Err(error) = self.repository.touch_client_api_keys(&updates).await {
+            tracing::error!(error = %error, "Failed to flush client API key last-used batch");
+            let mut pending = self
+                .pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for (key_id, used_at) in updates {
+                pending
+                    .entry(key_id)
+                    .and_modify(|pending_at| *pending_at = (*pending_at).max(used_at))
+                    .or_insert(used_at);
+            }
+        }
+        self.flush_scheduled.store(false, Ordering::Release);
+        if !self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
+        {
+            self.schedule_flush();
+        }
+    }
+}
+
+impl ClientApiKeyUsageSink for PgClientApiKeyUsageSink {
+    fn record_used(&self, key_id: &ClientApiKeyId) {
+        self.queue(key_id);
     }
 }
 
@@ -586,7 +684,6 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                     key: command.plaintext,
                     max_concurrency: command.limits.max_concurrency,
                     requests_per_minute: command.limits.requests_per_minute,
-                    tokens_per_minute: command.limits.tokens_per_minute,
                 },
                 mutation_audit(
                     context,
@@ -601,7 +698,6 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                         "enabled",
                         "max_concurrency",
                         "requests_per_minute",
-                        "tokens_per_minute",
                     ]
                     .into_iter()
                     .map(str::to_owned)
@@ -630,7 +726,6 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                     provider_kind: command.provider_kind.as_str().to_owned(),
                     max_concurrency: command.limits.max_concurrency,
                     requests_per_minute: command.limits.requests_per_minute,
-                    tokens_per_minute: command.limits.tokens_per_minute,
                 },
                 mutation_audit(
                     context,
@@ -643,7 +738,6 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                         "provider_kind",
                         "max_concurrency",
                         "requests_per_minute",
-                        "tokens_per_minute",
                     ]
                     .into_iter()
                     .map(str::to_owned)
@@ -787,7 +881,6 @@ fn admin_client_key_record(record: ClientApiKeyRecord) -> AdminStoreResult<Admin
         limits: RateLimits {
             max_concurrency: record.max_concurrency,
             requests_per_minute: record.requests_per_minute,
-            tokens_per_minute: record.tokens_per_minute,
         },
         last_used_at: record.last_used_at,
         created_at: record.created_at,
@@ -803,8 +896,8 @@ pub(crate) async fn insert_client_api_key_in_transaction(
     sqlx::query(
         "insert into client_api_keys (
            id, name, label, provider_kind, key, enabled, max_concurrency, requests_per_minute,
-           tokens_per_minute, last_used_at, created_at, updated_at
-         ) values ($1, $2, $3, $4, $5, true, $6, $7, $8, null, now(), now())",
+           last_used_at, created_at, updated_at
+         ) values ($1, $2, $3, $4, $5, true, $6, $7, null, now(), now())",
     )
     .bind(&key.id)
     .bind(&key.name)
@@ -813,7 +906,6 @@ pub(crate) async fn insert_client_api_key_in_transaction(
     .bind(&key.key)
     .bind(to_i64(key.max_concurrency)?)
     .bind(to_i64(key.requests_per_minute)?)
-    .bind(to_i64(key.tokens_per_minute)?)
     .execute(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("insert client API key in transaction"))?;
@@ -828,7 +920,7 @@ pub(crate) async fn update_client_api_key_in_transaction(
     let result = sqlx::query(
         "update client_api_keys
          set name = $2, label = $3, provider_kind = $4, max_concurrency = $5,
-             requests_per_minute = $6, tokens_per_minute = $7, updated_at = now()
+             requests_per_minute = $6, updated_at = now()
          where id = $1",
     )
     .bind(&key.id)
@@ -837,7 +929,6 @@ pub(crate) async fn update_client_api_key_in_transaction(
     .bind(&key.provider_kind)
     .bind(to_i64(key.max_concurrency)?)
     .bind(to_i64(key.requests_per_minute)?)
-    .bind(to_i64(key.tokens_per_minute)?)
     .execute(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update client API key in transaction"))?;
@@ -900,7 +991,7 @@ fn validate_key(key: &str) -> StoreResult<()> {
 }
 
 fn client_secret_from_row(
-    row: (String, String, String, bool, i64, i64, i64),
+    row: (String, String, String, bool, i64, i64),
 ) -> StoreResult<ClientApiKeySecret> {
     Ok(ClientApiKeySecret {
         id: row.0,
@@ -909,7 +1000,6 @@ fn client_secret_from_row(
         enabled: row.3,
         max_concurrency: to_u64(row.4)?,
         requests_per_minute: to_u64(row.5)?,
-        tokens_per_minute: to_u64(row.6)?,
     })
 }
 
@@ -920,7 +1010,6 @@ type ClientRecordRow = (
     String,
     String,
     bool,
-    i64,
     i64,
     i64,
     Option<DateTime<Utc>>,
@@ -938,10 +1027,9 @@ fn client_record_from_row(row: ClientRecordRow) -> StoreResult<ClientApiKeyRecor
         enabled: row.5,
         max_concurrency: to_u64(row.6)?,
         requests_per_minute: to_u64(row.7)?,
-        tokens_per_minute: to_u64(row.8)?,
-        last_used_at: row.9,
-        created_at: row.10,
-        updated_at: row.11,
+        last_used_at: row.8,
+        created_at: row.9,
+        updated_at: row.10,
     })
 }
 

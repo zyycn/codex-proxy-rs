@@ -108,8 +108,7 @@ fn client_key_mutations_should_validate_revision_text_limits_and_unknown_fields(
         "label": "production",
         "providerKind": "openai",
         "maxConcurrency": 2,
-        "requestsPerMinute": 60,
-        "tokensPerMinute": 100000
+        "requestsPerMinute": 60
     }))
     .expect("deserialize create")
     .into_command()
@@ -123,8 +122,7 @@ fn client_key_mutations_should_validate_revision_text_limits_and_unknown_fields(
                 "name": "key",
                 "providerKind": "openai",
                 "maxConcurrency": 0,
-                "requestsPerMinute": 0,
-                "tokensPerMinute": 0
+                "requestsPerMinute": 0
             }),
             "expectedConfigRevision",
         ),
@@ -134,8 +132,7 @@ fn client_key_mutations_should_validate_revision_text_limits_and_unknown_fields(
                 "name": " ",
                 "providerKind": "openai",
                 "maxConcurrency": 0,
-                "requestsPerMinute": 0,
-                "tokensPerMinute": 0
+                "requestsPerMinute": 0
             }),
             "name",
         ),
@@ -145,8 +142,7 @@ fn client_key_mutations_should_validate_revision_text_limits_and_unknown_fields(
                 "name": "key",
                 "providerKind": "openai",
                 "maxConcurrency": u64::MAX,
-                "requestsPerMinute": 0,
-                "tokensPerMinute": 0
+                "requestsPerMinute": 0
             }),
             "maxConcurrency",
         ),
@@ -170,8 +166,7 @@ fn client_key_mutations_should_validate_revision_text_limits_and_unknown_fields(
             "providerKind": "openai",
             "maxConcurrency": 0,
             "requestsPerMinute": 0,
-            "tokensPerMinute": 0,
-            "plaintextKey": "must-not-be-accepted"
+            "tokensPerMinute": 0
         }))
         .is_err()
     );
@@ -225,7 +220,6 @@ fn client_key_responses_should_keep_shape_and_redact_creation_debug() {
         limits: gateway_core::policy::RateLimits {
             max_concurrency: 2,
             requests_per_minute: 60,
-            tokens_per_minute: 100_000,
         },
         created_at,
         updated_at: created_at,
@@ -239,7 +233,7 @@ fn client_key_responses_should_keep_shape_and_redact_creation_debug() {
     assert_eq!(list["items"][0]["providerKind"], "openai");
     assert_eq!(list["items"][0]["maxConcurrency"], 2);
     assert_eq!(list["items"][0]["requestsPerMinute"], 60);
-    assert_eq!(list["items"][0]["tokensPerMinute"], 100_000);
+    assert!(list["items"][0].get("tokensPerMinute").is_none());
     assert!(list["items"][0].get("policyJson").is_none());
     assert_eq!(
         DateTime::parse_from_rfc3339(

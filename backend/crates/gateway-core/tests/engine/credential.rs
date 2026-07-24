@@ -5,10 +5,11 @@ use std::time::{Duration, SystemTime};
 use serde_json::{Map, Value};
 
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountCandidate, AccountQuotaSignals, AccountRuntimeSignals,
-    AccountSelectionContext, AccountSelectionPolicy, AccountSelector, CredentialCasUpdate,
-    CredentialRevision, OpaqueProviderData, PlaintextCredential, ProviderAccount,
-    ProviderAccountId, ProviderAccountUpdate, RotationStrategy,
+    AccountAttemptFeedback, AccountAvailability, AccountCandidate, AccountFeedbackStats,
+    AccountQuotaSignals, AccountRuntimeSignals, AccountSelectionContext, AccountSelectionPolicy,
+    AccountSelector, CredentialCasUpdate, CredentialRevision, OpaqueProviderData,
+    PlaintextCredential, ProviderAccount, ProviderAccountId, ProviderAccountUpdate,
+    RotationStrategy,
 };
 use gateway_core::routing::ProviderKind;
 
@@ -18,8 +19,9 @@ fn account(id: &str) -> ProviderAccount {
         ProviderKind::new("openai").expect("valid provider"),
         id.to_owned(),
         format!("user-{id}"),
+        "oauth".to_owned(),
         CredentialRevision::new(1).expect("valid revision"),
-        SystemTime::now() + Duration::from_secs(3600),
+        Some(SystemTime::now() + Duration::from_secs(3600)),
     )
     .with_runtime_state(true, AccountAvailability::Ready, None)
 }
@@ -32,6 +34,8 @@ fn candidate(id: &str, in_flight: u32, remaining: Option<u64>) -> AccountCandida
             last_started_at: None,
             quota_reset_at: None,
             quota_remaining_rank: remaining,
+            failure_rate_basis_points: None,
+            first_output_latency_ms: None,
         },
     }
 }
@@ -45,7 +49,7 @@ fn context(strategy: RotationStrategy) -> AccountSelectionContext {
         ),
         now: SystemTime::now(),
         excluded_accounts: BTreeSet::new(),
-        sticky_account: None,
+        preferred_account: None,
         round_robin_cursor: 0,
     }
 }
@@ -119,6 +123,97 @@ fn smart_selector_should_prefer_lower_inflight_count() {
 }
 
 #[test]
+fn smart_selector_should_balance_signals_instead_of_using_lexicographic_load() {
+    let mut healthy = candidate("acct_healthy", 1, Some(100));
+    healthy.signals.failure_rate_basis_points = Some(0);
+    healthy.signals.first_output_latency_ms = Some(100);
+    let mut unhealthy = candidate("acct_unhealthy", 0, Some(0));
+    unhealthy.signals.failure_rate_basis_points = Some(10_000);
+    unhealthy.signals.first_output_latency_ms = Some(10_000);
+    let candidates = vec![healthy, unhealthy];
+
+    let selected = AccountSelector
+        .select(&candidates, &context(RotationStrategy::Smart))
+        .expect("candidate available");
+
+    assert_eq!(selected.account.id().as_str(), "acct_healthy");
+}
+
+#[test]
+fn smart_selector_should_keep_healthy_preferred_account_at_escape_boundary() {
+    let fallback = candidate("acct_fallback", 0, Some(100));
+    let mut preferred = candidate("acct_preferred", 0, Some(1));
+    preferred.signals.failure_rate_basis_points = Some(5_000);
+    preferred.signals.first_output_latency_ms = Some(15_000);
+    let preferred_id = preferred.account.id().clone();
+    let mut selection = context(RotationStrategy::Smart);
+    selection.preferred_account = Some(preferred_id);
+    let candidates = vec![fallback, preferred];
+
+    let selected = AccountSelector
+        .select(&candidates, &selection)
+        .expect("candidate available");
+
+    assert_eq!(selected.account.id().as_str(), "acct_preferred");
+}
+
+#[test]
+fn smart_selector_should_escape_preferred_account_after_failure_threshold() {
+    let mut fallback = candidate("acct_fallback", 0, Some(100));
+    fallback.signals.failure_rate_basis_points = Some(0);
+    fallback.signals.first_output_latency_ms = Some(100);
+    let mut preferred = candidate("acct_preferred", 0, Some(100));
+    preferred.signals.failure_rate_basis_points = Some(5_001);
+    preferred.signals.first_output_latency_ms = Some(100);
+    let preferred_id = preferred.account.id().clone();
+    let mut selection = context(RotationStrategy::Smart);
+    selection.preferred_account = Some(preferred_id);
+    let candidates = vec![fallback, preferred];
+
+    let selected = AccountSelector
+        .select(&candidates, &selection)
+        .expect("fallback candidate available");
+
+    assert_eq!(selected.account.id().as_str(), "acct_fallback");
+}
+
+#[test]
+fn smart_selector_should_escape_preferred_account_after_latency_threshold() {
+    let mut fallback = candidate("acct_fallback", 0, Some(100));
+    fallback.signals.failure_rate_basis_points = Some(0);
+    fallback.signals.first_output_latency_ms = Some(100);
+    let mut preferred = candidate("acct_preferred", 0, Some(100));
+    preferred.signals.failure_rate_basis_points = Some(0);
+    preferred.signals.first_output_latency_ms = Some(15_001);
+    let preferred_id = preferred.account.id().clone();
+    let mut selection = context(RotationStrategy::Smart);
+    selection.preferred_account = Some(preferred_id);
+    let candidates = vec![fallback, preferred];
+
+    let selected = AccountSelector
+        .select(&candidates, &selection)
+        .expect("fallback candidate available");
+
+    assert_eq!(selected.account.id().as_str(), "acct_fallback");
+}
+
+#[test]
+fn smart_selector_should_escape_preferred_account_at_concurrency_limit() {
+    let preferred = candidate("acct_preferred", 3, Some(100));
+    let fallback = candidate("acct_fallback", 0, Some(1));
+    let preferred_id = preferred.account.id().clone();
+    let mut selection = context(RotationStrategy::Smart);
+    selection.preferred_account = Some(preferred_id);
+    let candidates = vec![preferred, fallback];
+
+    let selected = AccountSelector
+        .select(&candidates, &selection)
+        .expect("fallback candidate available");
+
+    assert_eq!(selected.account.id().as_str(), "acct_fallback");
+}
+
+#[test]
 fn provider_quota_overlay_should_preserve_store_concurrency_facts() {
     let reset_at = SystemTime::now() + Duration::from_secs(60);
     let last_started_at = SystemTime::now();
@@ -127,6 +222,8 @@ fn provider_quota_overlay_should_preserve_store_concurrency_facts() {
         last_started_at: Some(last_started_at),
         quota_reset_at: None,
         quota_remaining_rank: None,
+        failure_rate_basis_points: None,
+        first_output_latency_ms: None,
     }
     .with_provider_quota(Some(AccountQuotaSignals::new(Some(reset_at), Some(75))));
 
@@ -138,6 +235,54 @@ fn provider_quota_overlay_should_preserve_store_concurrency_facts() {
             signals.quota_remaining_rank,
         ),
         (2, Some(last_started_at), Some(reset_at), Some(75))
+    );
+}
+
+#[test]
+fn account_feedback_should_be_shared_by_strategy_but_isolated_by_provider() {
+    let feedback = AccountFeedbackStats::default();
+    let openai = ProviderKind::new("openai").expect("provider");
+    let xai = ProviderKind::new("xai").expect("provider");
+    let account = ProviderAccountId::new("acct_shared_id").expect("account");
+
+    feedback.report(
+        &openai,
+        &account,
+        AccountAttemptFeedback::Failed {
+            first_output_ms: Some(1_200),
+        },
+    );
+
+    assert_eq!(
+        feedback.scheduling_signals(&openai, &account),
+        (Some(2_000), Some(1_200))
+    );
+    assert_eq!(feedback.scheduling_signals(&xai, &account), (None, None));
+}
+
+#[test]
+fn account_feedback_should_decay_failure_rate_after_success() {
+    let feedback = AccountFeedbackStats::default();
+    let provider = ProviderKind::new("openai").expect("provider");
+    let account = ProviderAccountId::new("acct_feedback").expect("account");
+    feedback.report(
+        &provider,
+        &account,
+        AccountAttemptFeedback::Failed {
+            first_output_ms: None,
+        },
+    );
+    feedback.report(
+        &provider,
+        &account,
+        AccountAttemptFeedback::Succeeded {
+            first_output_ms: Some(800),
+        },
+    );
+
+    assert_eq!(
+        feedback.scheduling_signals(&provider, &account),
+        (Some(1_600), Some(800))
     );
 }
 
@@ -226,7 +371,7 @@ fn sticky_selector_should_fall_back_when_requested_account_is_excluded() {
     ];
     let mut context = context(RotationStrategy::Sticky);
     let sticky = ProviderAccountId::new("acct_sticky").expect("valid account");
-    context.sticky_account = Some(sticky.clone());
+    context.preferred_account = Some(sticky.clone());
     context.excluded_accounts.insert(sticky);
     let selected = AccountSelector
         .select(&candidates, &context)
@@ -281,7 +426,7 @@ fn sticky_selector_should_prefer_requested_account() {
         candidate("acct_second", 0, None),
     ];
     let mut context = context(RotationStrategy::Sticky);
-    context.sticky_account =
+    context.preferred_account =
         Some(ProviderAccountId::new("acct_second").expect("valid sticky account"));
     let selected = AccountSelector
         .select(&candidates, &context)
@@ -336,7 +481,7 @@ fn credential_cas_should_reject_profile_for_another_account() {
             profile,
             PlaintextCredential::new(Map::new()),
             false,
-            SystemTime::now() + Duration::from_secs(60),
+            Some(SystemTime::now() + Duration::from_secs(60)),
             None,
         )
         .is_err()
@@ -359,7 +504,7 @@ fn credential_cas_should_reject_refresh_schedule_without_refresh_token() {
             profile,
             PlaintextCredential::new(Map::new()),
             false,
-            SystemTime::now() + Duration::from_secs(60),
+            Some(SystemTime::now() + Duration::from_secs(60)),
             Some(SystemTime::now() + Duration::from_secs(30)),
         )
         .is_err()

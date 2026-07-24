@@ -443,7 +443,7 @@ impl CodexBackendClient {
     ) -> CodexClientResult<HeaderMap> {
         let request_id = context.client_request_id.unwrap_or(context.request_id);
         let mut headers =
-            build_codex_base_headers(profile, context.access_token, context.account_id)?;
+            build_codex_base_headers(profile, context.authorization, context.account_id)?;
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         insert_optional_header(&mut headers, "cookie", context.cookie_header)?;
         headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
@@ -492,7 +492,7 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<HeaderMap> {
         let mut headers =
-            build_codex_base_headers(profile, context.access_token, context.account_id)?;
+            build_codex_base_headers(profile, context.authorization, context.account_id)?;
         if let Some(cookie_header) = context.cookie_header {
             headers.insert(COOKIE, HeaderValue::from_str(cookie_header)?);
         }
@@ -512,10 +512,7 @@ impl CodexBackendClient {
         let profile = self.profile.snapshot();
         let mut headers = HeaderMap::new();
         headers.insert(USER_AGENT, HeaderValue::from_str(&profile.user_agent())?);
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {}", context.access_token))?,
-        );
+        headers.insert(AUTHORIZATION, HeaderValue::from_str(context.authorization)?);
         headers.insert(
             HeaderName::from_static("originator"),
             HeaderValue::from_str(&profile.originator)?,

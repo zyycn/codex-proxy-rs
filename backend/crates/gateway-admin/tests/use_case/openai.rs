@@ -6,7 +6,7 @@ use gateway_admin::{
     AdminServices,
     model::provider_credentials::{
         AuthorizationMutationTarget, CompleteAuthorization, CredentialDeletion, CredentialMutation,
-        ImportCredentials, ReauthorizationTarget, StartAuthorization,
+        ImportCredentials, ProviderQuotaRequest, ReauthorizationTarget, StartAuthorization,
     },
     ports::provider::ProviderAdminErrorKind,
 };
@@ -108,7 +108,7 @@ async fn openai_import_should_prepare_before_atomic_store_commit() {
     let events = events();
     let provider = FakeProviderAdmin::new("openai", events.clone());
     let store = FakeAccountStore::new("openai", events.clone());
-    let services = service(provider, store.clone()).await;
+    let services = service(provider.clone(), store.clone()).await;
 
     services
         .openai()
@@ -122,9 +122,88 @@ async fn openai_import_should_prepare_before_atomic_store_commit() {
 
     assert_eq!(
         recorded(&events),
-        ["provider.prepare_import", "store.commit_import"]
+        [
+            "provider.prepare_import",
+            "store.commit_import",
+            "provider.quota",
+        ]
+    );
+    assert_eq!(
+        provider.quota_requests(),
+        [ProviderQuotaRequest {
+            account_id: ProviderAccountId::new("acct_prepared").expect("account ID"),
+            refresh: true,
+            rolling_usage: None,
+        }]
     );
     assert_eq!(store.audit_requests(), ["import-openai"]);
+}
+
+#[tokio::test]
+async fn openai_import_should_refresh_quota_for_every_imported_account() {
+    let events = events();
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    provider.set_import_account_ids(&["acct_first", "acct_second"]);
+    let store = FakeAccountStore::new("openai", events);
+    let services = service(provider.clone(), store).await;
+
+    let result = services
+        .openai()
+        .import_document(ImportCredentials {
+            context: context("import-openai-batch"),
+            expected_config_revision: revision(1),
+            document: document(),
+        })
+        .await
+        .expect("import credentials");
+
+    assert_eq!(
+        result.credential_ids,
+        [
+            ProviderAccountId::new("acct_first").expect("first account ID"),
+            ProviderAccountId::new("acct_second").expect("second account ID"),
+        ]
+    );
+    assert_eq!(
+        provider.quota_requests(),
+        [
+            ProviderQuotaRequest {
+                account_id: ProviderAccountId::new("acct_first").expect("first account ID"),
+                refresh: true,
+                rolling_usage: None,
+            },
+            ProviderQuotaRequest {
+                account_id: ProviderAccountId::new("acct_second").expect("second account ID"),
+                refresh: true,
+                rolling_usage: None,
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn openai_import_should_remain_successful_when_quota_refresh_fails() {
+    let events = events();
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    provider.fail_next_quota(ProviderAdminErrorKind::Unavailable);
+    let store = FakeAccountStore::new("openai", events);
+    let services = service(provider.clone(), store).await;
+
+    let result = services
+        .openai()
+        .import_document(ImportCredentials {
+            context: context("import-openai-quota-failure"),
+            expected_config_revision: revision(1),
+            document: document(),
+        })
+        .await
+        .expect("committed import remains successful");
+
+    assert_eq!(
+        result.credential_ids,
+        [ProviderAccountId::new("acct_prepared").expect("account ID")]
+    );
+    assert_eq!(provider.quota_requests().len(), 1);
 }
 
 #[tokio::test]

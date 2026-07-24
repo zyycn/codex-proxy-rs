@@ -6,8 +6,7 @@ use axum::http::HeaderMap;
 use gateway_core::operation::{
     CompactConversationRequest, ContentPart, ContinuationMode, Feature, GenerateRequest,
     ImageSource, JsonSchemaFormat, Message, MessageRole, Operation, OutputFormat, ProtocolPayload,
-    ProviderOptions, ProviderSessionState, ReasoningEffort, ReasoningRequirement, ReasoningSummary,
-    ResponsePersistence, ToolDefinition,
+    ProviderOptions, ProviderSessionState, ResponsePersistence, ToolDefinition,
 };
 use gateway_core::routing::ProviderKind;
 use gateway_protocol::openai::{
@@ -347,10 +346,6 @@ pub(super) fn decode_request_inner(
     request_headers: &OpenAiRequestHeaders,
     provider_kind: Option<&ProviderKind>,
 ) -> Result<DecodedResponsesRequest, RequestDecodeError> {
-    let input_token_estimate =
-        u64::try_from(body.len()).map_err(|_| RequestDecodeError::InvalidValue {
-            field: "input".to_owned(),
-        })?;
     let value =
         serde_json::from_slice::<Value>(body).map_err(|_| RequestDecodeError::MalformedJson)?;
     let Value::Object(mut object) = value else {
@@ -421,7 +416,6 @@ pub(super) fn decode_request_inner(
                 })
             });
     let vision_requested = contains_type(object.get("input"), "input_image");
-    let reasoning = canonical_reasoning(&object);
     let reasoning_requested = object.get("reasoning").is_some_and(Value::is_object);
     let output_format = canonical_output_format(&object);
     let json_schema_requested = object
@@ -446,7 +440,6 @@ pub(super) fn decode_request_inner(
         }
     })?;
     let mut request = GenerateRequest::from_protocol_payload(messages, payload)
-        .with_estimated_context_tokens(input_token_estimate)
         .with_image_generation_requested(image_generation_requested)
         .with_provider_options(provider_options)
         .with_response_persistence(if store {
@@ -464,11 +457,7 @@ pub(super) fn decode_request_inner(
     if vision_requested {
         request = request.require_feature(Feature::Vision);
     }
-    if let Some(reasoning) = reasoning {
-        request = request
-            .with_reasoning(reasoning)
-            .require_feature(Feature::Reasoning);
-    } else if reasoning_requested {
+    if reasoning_requested {
         request = request.require_feature(Feature::Reasoning);
     }
     if json_schema_requested {
@@ -650,32 +639,6 @@ fn canonical_function_tools(body: &Map<String, Value>) -> Vec<ToolDefinition> {
             })
         })
         .collect()
-}
-
-fn canonical_reasoning(body: &Map<String, Value>) -> Option<ReasoningRequirement> {
-    let reasoning = body.get("reasoning")?.as_object()?;
-    let effort = reasoning
-        .get("effort")
-        .and_then(Value::as_str)
-        .and_then(|value| match value {
-            "minimal" => Some(ReasoningEffort::Minimal),
-            "low" => Some(ReasoningEffort::Low),
-            "medium" => Some(ReasoningEffort::Medium),
-            "high" => Some(ReasoningEffort::High),
-            "xhigh" => Some(ReasoningEffort::ExtraHigh),
-            _ => None,
-        });
-    let summary = reasoning
-        .get("summary")
-        .and_then(Value::as_str)
-        .and_then(|value| match value {
-            "auto" => Some(ReasoningSummary::Auto),
-            "concise" => Some(ReasoningSummary::Concise),
-            "detailed" => Some(ReasoningSummary::Detailed),
-            "none" => Some(ReasoningSummary::None),
-            _ => None,
-        });
-    (effort.is_some() || summary.is_some()).then_some(ReasoningRequirement { effort, summary })
 }
 
 fn canonical_output_format(body: &Map<String, Value>) -> Option<OutputFormat> {

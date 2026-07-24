@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CalendarDays, Eye, Minimize2 } from '@lucide/vue'
+import { Eye, Minimize2 } from '@lucide/vue'
 import { shallowRef, watch } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -8,7 +8,8 @@ import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
-import ProviderBadge from '@/components/ProviderBadge.vue'
+import ProviderFilterSegmented from '@/components/ProviderFilterSegmented.vue'
+import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import OpsErrorPanel from './components/OpsErrorPanel.vue'
 import UsageBillingCell from './components/UsageBillingCell.vue'
 import UsageClientIpCell from './components/UsageClientIpCell.vue'
@@ -25,6 +26,7 @@ import { useUsageRecordsTable } from './composables/useUsageRecordsTable'
 import { useUsageTimeRange } from './composables/useUsageTimeRange'
 import {
   usageAccountText,
+  usageAuthenticationKind,
   usageIsCompact,
   usageRecordColumns,
   usageRecordType,
@@ -66,7 +68,7 @@ const { showDetailModal, selectedUsageRecord, handleViewDetail } = useUsageRecor
 watch(timeRange, () => {
   refreshTimeRangeEnd()
   page.value = 1
-  void loadUsageRecords('all')
+  void loadUsageRecords()
 })
 </script>
 
@@ -74,8 +76,12 @@ watch(timeRange, () => {
   <div class="w-full">
     <BasePageHeader title="使用统计" description="查看请求用量、性能趋势与调用错误记录">
       <template #actions>
-        <CalendarDays class="size-4 text-(--cp-text-muted)" />
         <BaseSelect v-model="timeRange" :options="usageTimeRangeOptions" class="w-34" />
+        <ProviderFilterSegmented
+          v-model="providerQuery"
+          :disabled="refreshingList"
+          class="w-31 shrink-0"
+        />
       </template>
     </BasePageHeader>
 
@@ -116,7 +122,6 @@ watch(timeRange, () => {
         >
           <UsageFilters
             v-model:search="searchQuery"
-            v-model:provider="providerQuery"
             :loading="loading"
             :refreshing="refreshingList"
             @refresh="refreshUsageRecords"
@@ -134,7 +139,10 @@ watch(timeRange, () => {
             @page-size-change="handlePageSizeChange"
           >
             <template #provider="{ row }">
-              <ProviderBadge :provider="String(row.provider || '')" />
+              <ProviderIconGroup
+                :provider="String(row.provider || '')"
+                :authentication-kind="usageAuthenticationKind(row)"
+              />
             </template>
 
             <template #accountEmail="{ row }">

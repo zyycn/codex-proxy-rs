@@ -4,6 +4,24 @@ use gateway_host::config::{FileLoggingConfig, HostConfig, ListenConfig, LoggingC
 use gateway_host::system_update::SystemUpdateConfig;
 
 #[test]
+fn system_update_defaults_should_use_host_build_metadata_and_official_repository() {
+    let config = SystemUpdateConfig::default();
+
+    assert_eq!(
+        (
+            config.version.as_str(),
+            config.build_type.as_str(),
+            config.update_repository.as_deref(),
+        ),
+        (
+            env!("CPR_VERSION"),
+            env!("CPR_BUILD_TYPE"),
+            Some("zyycn/codex-proxy-rs"),
+        )
+    );
+}
+
+#[test]
 fn host_config_resolves_only_host_owned_relative_paths() {
     let mut config = valid_config();
     config

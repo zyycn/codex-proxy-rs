@@ -16,13 +16,12 @@ use gateway_core::{
 };
 use sqlx::PgPool;
 
-use crate::{StoreError, StoreResult, postgres_unavailable};
+use crate::{StoreResult, postgres_unavailable};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientAdmissionRecentRequest {
     pub model_request_id: String,
     pub started_at: DateTime<Utc>,
-    pub input_token_estimate: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,28 +63,18 @@ impl ClientAdmissionRecoveryRepository for PgClientAdmissionRecoveryRepository {
         &self,
         window_started_at: DateTime<Utc>,
     ) -> StoreResult<Vec<ClientAdmissionRecovery>> {
-        let rows =
-            sqlx::query_as::<_, (String, String, i64, DateTime<Utc>, DateTime<Utc>, String)>(
-                "select client_api_key_ref, id, input_token_estimate, started_at,
-                    deadline_at, outcome
+        let rows = sqlx::query_as::<_, (String, String, DateTime<Utc>, DateTime<Utc>, String)>(
+            "select client_api_key_ref, id, started_at, deadline_at, outcome
              from model_requests
              where started_at >= $1 or outcome = 'running'
              order by client_api_key_ref, started_at, id",
-            )
-            .bind(window_started_at)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|_| postgres_unavailable("load client admission recovery"))?;
+        )
+        .bind(window_started_at)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| postgres_unavailable("load client admission recovery"))?;
         let mut recoveries = BTreeMap::<String, ClientAdmissionRecovery>::new();
-        for (
-            client_api_key_ref,
-            model_request_id,
-            input_token_estimate,
-            started_at,
-            deadline_at,
-            outcome,
-        ) in rows
-        {
+        for (client_api_key_ref, model_request_id, started_at, deadline_at, outcome) in rows {
             let recovery = recoveries
                 .entry(client_api_key_ref.clone())
                 .or_insert_with(|| ClientAdmissionRecovery {
@@ -97,7 +86,6 @@ impl ClientAdmissionRecoveryRepository for PgClientAdmissionRecoveryRepository {
                 recovery.recent_requests.push(ClientAdmissionRecentRequest {
                     model_request_id: model_request_id.clone(),
                     started_at,
-                    input_token_estimate: to_u64(input_token_estimate)?,
                 });
             }
             if outcome == "running" {
@@ -135,7 +123,6 @@ impl ClientAdmissionRecoveryPort for PgClientAdmissionRecoveryRepository {
                                 model_request_id: ModelRequestId::new(request.model_request_id)
                                     .map_err(|_| ClientAdmissionError)?,
                                 started_at: request.started_at.into(),
-                                input_token_estimate: request.input_token_estimate,
                             })
                         })
                         .collect::<Result<Vec<_>, ClientAdmissionError>>()?;
@@ -159,11 +146,4 @@ impl ClientAdmissionRecoveryPort for PgClientAdmissionRecoveryRepository {
                 .collect()
         })
     }
-}
-
-fn to_u64(value: i64) -> StoreResult<u64> {
-    u64::try_from(value).map_err(|_| StoreError::InvalidData {
-        entity: "client admission recovery",
-        message: "input token estimate is negative".to_owned(),
-    })
 }

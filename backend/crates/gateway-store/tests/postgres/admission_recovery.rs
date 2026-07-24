@@ -20,7 +20,6 @@ async fn recovery_loads_precise_window_and_running_request_facts() {
         "old-running",
         now - Duration::seconds(120),
         now + Duration::seconds(30),
-        300,
         "running",
     )
     .await;
@@ -29,7 +28,6 @@ async fn recovery_loads_precise_window_and_running_request_facts() {
         "old-complete",
         now - Duration::seconds(90),
         now - Duration::seconds(30),
-        200,
         "succeeded",
     )
     .await;
@@ -38,7 +36,6 @@ async fn recovery_loads_precise_window_and_running_request_facts() {
         "recent-complete",
         now - Duration::seconds(20),
         now + Duration::seconds(10),
-        120,
         "succeeded",
     )
     .await;
@@ -47,7 +44,6 @@ async fn recovery_loads_precise_window_and_running_request_facts() {
         "recent-running",
         now - Duration::seconds(10),
         now + Duration::seconds(40),
-        80,
         "running",
     )
     .await;
@@ -63,12 +59,10 @@ async fn recovery_loads_precise_window_and_running_request_facts() {
             ClientAdmissionRecentRequest {
                 model_request_id: "recent-complete".to_owned(),
                 started_at: now - Duration::seconds(20),
-                input_token_estimate: 120,
             },
             ClientAdmissionRecentRequest {
                 model_request_id: "recent-running".to_owned(),
                 started_at: now - Duration::seconds(10),
-                input_token_estimate: 80,
             },
         ],
         running_requests: vec![
@@ -92,22 +86,20 @@ async fn seed_request(
     id: &str,
     started_at: DateTime<Utc>,
     deadline_at: DateTime<Utc>,
-    input_token_estimate: i64,
     outcome: &str,
 ) {
     let completed_at = (outcome != "running").then_some(started_at + Duration::seconds(1));
     sqlx::query(
         "insert into model_requests (
            id, client_api_key_ref, config_revision, protocol, operation, endpoint,
-           client_transport, requested_model_id, input_token_estimate, outcome,
+           client_transport, requested_model_id, outcome,
            started_at, deadline_at, completed_at
          ) values (
            $1, 'key-recovery', 1, 'openai', 'responses', '/v1/responses',
-           'http_sse', 'coding', $2, $3, $4, $5, $6
+           'http_sse', 'coding', $2, $3, $4, $5
          )",
     )
     .bind(id)
-    .bind(input_token_estimate)
     .bind(outcome)
     .bind(started_at)
     .bind(deadline_at)

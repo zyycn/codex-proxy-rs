@@ -51,8 +51,11 @@ impl GrokCompactionRequest {
         upstream_model: &str,
         client_api_key_ref: &ClientApiKeyId,
     ) -> Result<Self, GrokRequestEncodeError> {
-        let normalized =
-            GrokResponsesRequest::encode(request.generation(), upstream_model, client_api_key_ref)?;
+        let normalized = GrokResponsesRequest::encode_compaction_source(
+            request.generation(),
+            upstream_model,
+            client_api_key_ref,
+        )?;
         let mut body = normalized.body().clone();
         let mut input = normalized.input_items();
         input.push(summary_prompt_item());

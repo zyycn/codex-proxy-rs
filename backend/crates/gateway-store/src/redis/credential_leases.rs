@@ -512,6 +512,8 @@ impl RedisProviderLeaseCoordinator {
                         last_started_at: signal.last_started_at.map(Into::into),
                         quota_reset_at: None,
                         quota_remaining_rank: None,
+                        failure_rate_basis_points: None,
+                        first_output_latency_ms: None,
                     },
                 ))
             })
@@ -592,11 +594,7 @@ impl ProviderLeasePort for RedisProviderLeaseCoordinator {
         Box::pin(async move {
             let signals = self.load_signals(accounts).await?;
             let round_robin_cursor = self.next_scheduling_cursor(provider_kind).await?;
-            Ok(ProviderSchedulingState::new(
-                signals,
-                None,
-                round_robin_cursor,
-            ))
+            Ok(ProviderSchedulingState::new(signals, round_robin_cursor))
         })
     }
 

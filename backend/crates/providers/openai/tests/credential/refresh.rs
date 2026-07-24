@@ -186,7 +186,6 @@ impl ProviderLeasePort for RefreshLeases {
         Box::pin(async {
             Ok(gateway_core::provider_ports::ProviderSchedulingState::new(
                 Default::default(),
-                None,
                 0,
             ))
         })
@@ -281,7 +280,15 @@ async fn successful_refresh_uses_redis_lease_and_cas_rotates_plaintext_tokens() 
         .load_runtime_credential(&account)
         .await
         .expect("rotated runtime credential");
-    assert_eq!(runtime.secret.access_token.expose_secret(), "new-access");
+    assert_eq!(
+        runtime
+            .authentication
+            .oauth()
+            .expect("OAuth credential")
+            .access_token
+            .expose_secret(),
+        "new-access"
+    );
     assert_eq!(runtime.installation_id, original_installation_id);
     assert_eq!(
         refresher.seen.lock().expect("seen tokens lock").as_slice(),
@@ -397,7 +404,15 @@ async fn unavailable_usage_preserves_rotated_tokens_and_persists_backoff() {
         .load_runtime_credential(&account)
         .await
         .expect("rotated credential");
-    assert_eq!(runtime.secret.access_token.expose_secret(), "new-access");
+    assert_eq!(
+        runtime
+            .authentication
+            .oauth()
+            .expect("OAuth credential")
+            .access_token
+            .expose_secret(),
+        "new-access"
+    );
 }
 
 #[tokio::test]

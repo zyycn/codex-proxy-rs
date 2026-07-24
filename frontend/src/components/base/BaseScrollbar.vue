@@ -26,6 +26,8 @@ const emit = defineEmits<{
   scroll: [payload: { scrollTop: number, scrollLeft: number }]
 }>()
 
+const overflowTolerance = 1
+
 const rootRef = useTemplateRef<HTMLDivElement>('root')
 const wrapRef = useTemplateRef<HTMLDivElement>('wrap')
 const viewRef = useTemplateRef<HTMLElement>('view')
@@ -174,7 +176,8 @@ function updateVerticalScrollbar(wrap: HTMLElement) {
 
   const scrollRange = maxScrollTop(wrap)
   const availableTrackHeight = trackHeight(wrap)
-  if (scrollRange <= 0 || availableTrackHeight <= 0) {
+  if (scrollRange <= overflowTolerance || availableTrackHeight <= 0) {
+    wrap.scrollTop = 0
     thumbHeight.value = 0
     thumbTop.value = 0
     return
@@ -193,7 +196,8 @@ function updateHorizontalScrollbar(wrap: HTMLElement) {
 
   const scrollRange = maxScrollLeft(wrap)
   const availableTrackWidth = trackWidth(wrap)
-  if (scrollRange <= 0 || availableTrackWidth <= 0) {
+  if (scrollRange <= overflowTolerance || availableTrackWidth <= 0) {
+    wrap.scrollLeft = 0
     horizontalThumbWidth.value = 0
     horizontalThumbLeft.value = 0
     return

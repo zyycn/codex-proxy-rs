@@ -205,9 +205,11 @@ onBeforeUnmount(() => {
             <span
               v-if="variant !== 'default'"
               class="inline-flex size-11 items-center justify-center rounded-(--cp-icon-button-radius)"
-              :class="variantClasses[variant].iconBg"
+              :class="$slots.icon ? 'bg-(--cp-bg-subtle)' : variantClasses[variant].iconBg"
             >
-              <component :is="iconMap[variant]" :size="18" :class="variantClasses[variant].icon" />
+              <slot name="icon">
+                <component :is="iconMap[variant]" :size="18" :class="variantClasses[variant].icon" />
+              </slot>
             </span>
             <div class="min-w-0" :class="variant === 'default' ? 'col-span-2' : ''">
               <h2 class="m-0 text-lg leading-[1.15] font-[760] text-(--cp-text-primary)">

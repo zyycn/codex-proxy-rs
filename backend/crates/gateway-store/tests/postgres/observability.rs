@@ -74,7 +74,7 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
     let range =
         admin_observability::TimeRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
             .expect("admin observability range");
-    let store = PgAdminObservabilityStore::new(database.pool.clone());
+    let store = PgAdminObservabilityStore::new(database.pool.clone(), None);
 
     let dashboard = store
         .dashboard_summary(range)
@@ -91,6 +91,16 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
     assert_eq!(dashboard.attempts.cost_coverage.unavailable_count, 1);
     assert_eq!(dashboard.attempts.costs[0].amount.as_str(), "1.25");
     assert_eq!(dashboard.provider_accounts.total, 1);
+    assert_eq!(dashboard.account_usage[0].request_count, 2);
+    assert_eq!(dashboard.account_usage[0].request_buckets.len(), 24);
+    assert_eq!(
+        dashboard.account_usage[0]
+            .request_buckets
+            .iter()
+            .map(|bucket| bucket.request_count)
+            .sum::<u64>(),
+        2,
+    );
     assert_eq!(dashboard.recent_requests.len(), 1);
     assert_eq!(
         dashboard.recent_requests[0].outcome,
@@ -383,6 +393,16 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
         120.0
     );
     assert_eq!(dashboard.provider_accounts.total, 1);
+    assert_eq!(dashboard.account_usage[0].request_count, 2);
+    assert_eq!(dashboard.account_usage[0].request_buckets.len(), 24);
+    assert_eq!(
+        dashboard.account_usage[0]
+            .request_buckets
+            .iter()
+            .map(|bucket| bucket.request_count)
+            .sum::<u64>(),
+        2,
+    );
     assert_eq!(dashboard.recent_requests.len(), 1);
     assert_eq!(dashboard.recent_requests[0].id, "req_observe_success");
     assert_eq!(
@@ -397,15 +417,26 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
     let account_usage = repository
         .provider_account_usage(
             ProviderAccountUsageQuery::for_accounts(range, vec!["acct_observe".to_owned()])
-                .expect("account usage query"),
+                .expect("account usage query")
+                .with_hourly_request_buckets()
+                .expect("account request timeline"),
         )
         .await
         .expect("provider account usage");
     assert_eq!(account_usage[0].request_count, 2);
+    assert_eq!(account_usage[0].authentication_kind, "oauth");
     assert_eq!(account_usage[0].models[0].request_count, 2);
     assert_eq!(account_usage[0].cost_coverage.provider_reported_count, 1);
     assert_eq!(account_usage[0].cost_coverage.unavailable_count, 1);
     assert_eq!(account_usage[0].costs[0].amount.as_str(), "1.25");
+    assert_eq!(
+        account_usage[0]
+            .request_buckets
+            .iter()
+            .map(|bucket| bucket.request_count)
+            .collect::<Vec<_>>(),
+        vec![2, 0],
+    );
     assert_eq!(
         (
             account_usage[0].image_input_tokens,
@@ -440,12 +471,22 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
     assert_eq!(
         (
             successful_image.websocket_pool.as_deref(),
+            successful_image
+                .provider_account_authentication_kind
+                .as_deref(),
             successful_image.image_input_tokens,
             successful_image.image_output_tokens,
             successful_image.image_generation_requested,
             successful_image.image_generation_succeeded,
         ),
-        (Some("reuse"), Some(31), Some(9), true, Some(true))
+        (
+            Some("reuse"),
+            Some("oauth"),
+            Some(31),
+            Some(9),
+            true,
+            Some(true)
+        )
     );
 
     let detail = repository
@@ -520,12 +561,13 @@ async fn seed_observability_facts(
     sqlx::query(
         "insert into provider_accounts (
            id, provider_kind, name, email, upstream_user_id,
-           upstream_account_id, plan_type, provider_credentials_json, credential_revision,
+           upstream_account_id, plan_type, authentication_kind,
+           provider_credentials_json, credential_revision,
            has_refresh_token, access_token_expires_at, enabled, availability,
            availability_observed_at, created_at, updated_at
          ) values (
            'acct_observe', 'openai', 'primary', 'account@example.invalid',
-           'user-observe', null, 'pro', '{}'::jsonb, 1, false, $1 + interval '1 day',
+           'user-observe', null, 'pro', 'oauth', '{}'::jsonb, 1, false, $1 + interval '1 day',
            true, 'ready', $1, $1, $1
          )",
     )
@@ -535,7 +577,7 @@ async fn seed_observability_facts(
     sqlx::query(
         "insert into model_requests (
            id, client_api_key_ref, config_revision, protocol, operation, endpoint,
-           client_transport, requested_model_id, input_token_estimate,
+           client_transport, requested_model_id,
            provider_kind, provider_account_id,
            provider_account_ref, upstream_model_id, upstream_transport, websocket_pool,
            attempt_count,
@@ -548,7 +590,7 @@ async fn seed_observability_facts(
            started_at, deadline_at, completed_at
          ) values (
            'req_observe_success', 'key_observe', 1, 'openai', 'responses', '/v1/responses',
-           'http_sse', 'public-model', 100, 'openai', 'acct_observe',
+           'http_sse', 'public-model', 'openai', 'acct_observe',
            'acct_observe', 'upstream-model',
            'http_sse', 'reuse', 1, 'sent', $1 - interval '19 minutes', 'succeeded', 200, 200,
            'resp_observe_success', 'upstream_req_success', 'upstream_resp_success',
@@ -563,7 +605,7 @@ async fn seed_observability_facts(
     sqlx::query(
         "insert into model_requests (
            id, client_api_key_ref, config_revision, protocol, operation, endpoint,
-           client_transport, requested_model_id, input_token_estimate,
+           client_transport, requested_model_id,
            provider_kind, provider_account_id,
            provider_account_ref, upstream_model_id, upstream_transport, attempt_count,
            upstream_send_state, outcome, client_status_code, upstream_status_code,
@@ -573,7 +615,7 @@ async fn seed_observability_facts(
            started_at, deadline_at, completed_at
          ) values (
            'req_observe_failed', 'key_observe', 1, 'openai', 'responses', '/v1/responses',
-           'http_sse', 'public-model', 80, 'openai', 'acct_observe',
+           'http_sse', 'public-model', 'openai', 'acct_observe',
            'acct_observe', 'upstream-model',
            'http_sse', 2, 'sent', 'failed', 502, 429, 'rate_limited', 'rate_limit',
            'upstream limited', 1000, 0, 0, true, false, 'unavailable', 700,

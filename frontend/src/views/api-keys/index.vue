@@ -8,7 +8,7 @@ import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import { toast } from '@/components/base/BaseToast'
-import ProviderBadge from '@/components/ProviderBadge.vue'
+import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { usePageSelection } from '@/composables/usePageSelection'
 import { errorMessage } from '@/utils/async'
 import ApiKeyActions from './components/ApiKeyActions.vue'
@@ -46,6 +46,7 @@ const {
   showKeyModal,
   createdKey,
   createdKeyName,
+  createdKeyProviderKind,
   pendingDeleteKey,
   creatingKey,
   deletingKey,
@@ -99,6 +100,7 @@ function importCreatedKeyToCcs() {
     apiKey: createdKey.value,
     baseUrl: openAiBaseUrl.value,
     providerName: createdKeyName.value || 'codex-proxy-rs',
+    providerKind: createdKeyProviderKind.value,
   })
 }
 
@@ -120,6 +122,7 @@ async function importToCcs(apiKey: (typeof apiKeys.value)[number]) {
       apiKey: key,
       baseUrl: openAiBaseUrl.value,
       providerName: apiKey.name || apiKey.prefix || 'codex-proxy-rs',
+      providerKind: apiKey.providerKind,
     })
   }
   catch (error: unknown) {
@@ -202,7 +205,7 @@ watch(showUseKeyModal, (open) => {
           </template>
 
           <template #providerKind="{ row }">
-            <ProviderBadge :provider="row.providerKind" />
+            <ProviderIconGroup :provider="row.providerKind" />
           </template>
 
           <template #enabled="{ row }">

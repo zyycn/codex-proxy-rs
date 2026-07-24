@@ -9,7 +9,9 @@ use gateway_admin::{
         auth::LoginCommand,
         client_keys::ClientKeyPageSize,
         observability::{DecimalAmount, RequestOutcome, TimeRange},
-        provider_credentials::{CredentialCommitGuard, ProviderDocument},
+        provider_credentials::{
+            CredentialCommitGuard, ProviderDocument, ProviderQuota, ProviderQuotaWindow,
+        },
         settings::AdminApiKey,
     },
     ports::store::{AccountStore, AuthStore, ClientKeyStore, ObservabilityStore, SettingsStore},
@@ -111,4 +113,39 @@ fn provider_document_debug_should_not_expose_opaque_material() {
         format!("{document:?}"),
         "ProviderDocument([PROVIDER_OWNED])"
     );
+}
+
+#[test]
+fn representative_quota_should_prefer_short_window_and_highest_usage() {
+    let quota = ProviderQuota {
+        observed_at: None,
+        refresh_token_expires_at: None,
+        windows: vec![
+            quota_window("monthly", Some(2_592_000), Some(99.0)),
+            quota_window("shortTerm", Some(604_800), Some(80.0)),
+            quota_window("shortTerm", Some(18_000), Some(30.0)),
+            quota_window("shortTerm", Some(14_400), Some(45.0)),
+        ],
+        provider_data: None,
+    };
+
+    assert_eq!(quota.representative_used_percent(), Some(45.0));
+}
+
+fn quota_window(
+    group: &str,
+    window_seconds: Option<u64>,
+    used_percent: Option<f64>,
+) -> ProviderQuotaWindow {
+    ProviderQuotaWindow {
+        key: group.to_owned(),
+        group: group.to_owned(),
+        label: group.to_owned(),
+        source: None,
+        window_seconds,
+        used_percent,
+        reset_at: None,
+        local_usage: None,
+        provider_data: None,
+    }
 }

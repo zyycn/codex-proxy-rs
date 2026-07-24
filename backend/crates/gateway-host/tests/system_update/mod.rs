@@ -138,16 +138,19 @@ async fn update_detail_should_reject_untrusted_github_api_base() {
 }
 
 #[tokio::test]
-async fn update_detail_should_report_source_build_as_unsupported() {
+async fn update_detail_should_check_release_for_source_build_without_enabling_update() {
+    let server = MockServer::start().await;
     let fixture = Fixture::new();
-    let mut config = fixture.config("https://api.github.com/repos");
+    fixture.mount_release_once(&server, TARGET_VERSION).await;
+    let mut config = fixture.config(&format!("{}/repos", server.uri()));
     config.build_type = "source".to_owned();
-    config.update_repository = None;
     let service = ProcessSystemOperations::new(CancellationToken::new(), config);
 
-    let detail = service.update_detail(false).await.expect("detail");
-    assert_eq!(detail.latest_version, "1.0.0");
-    assert!(!detail.update_supported);
+    let detail = service.update_detail(true).await.expect("detail");
+    assert_eq!(
+        (detail.latest_version, detail.update_supported),
+        (TARGET_VERSION.to_owned(), false)
+    );
 }
 
 #[tokio::test]

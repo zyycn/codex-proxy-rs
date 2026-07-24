@@ -14,10 +14,16 @@ const props = withDefaults(
     account: AccountIdentity
     size?: 'md' | 'lg'
     showPlan?: boolean
+    showAvatar?: boolean
+    titleMode?: 'local-part' | 'email'
+    metaPosition?: 'title' | 'secondary'
   }>(),
   {
     size: 'md',
     showPlan: false,
+    showAvatar: true,
+    titleMode: 'local-part',
+    metaPosition: 'title',
   },
 )
 
@@ -30,9 +36,13 @@ const emailText = computed(() => {
   return String(props.account.id)
 })
 
-const displayTitle = computed(() => emailText.value.split('@')[0])
+const displayTitle = computed(() =>
+  props.titleMode === 'email' ? emailText.value : emailText.value.split('@')[0],
+)
 
-const secondaryText = emailText
+const secondaryText = computed(() =>
+  props.titleMode === 'email' ? null : emailText.value,
+)
 
 const initial = computed(() => displayTitle.value.slice(0, 1).toUpperCase())
 
@@ -62,6 +72,7 @@ const avatarClass = computed(() => {
 <template>
   <div class="flex min-w-0 items-center gap-3">
     <span
+      v-if="showAvatar"
       class="inline-flex shrink-0 items-center justify-center rounded-lg font-[820]"
       :class="[avatarSizeClass, avatarClass]"
     >
@@ -72,9 +83,22 @@ const avatarClass = computed(() => {
         <span class="min-w-0 flex-1 truncate text-[14px] font-[760] text-(--cp-text-primary)">
           {{ displayTitle }}
         </span>
+        <span
+          v-if="metaPosition === 'title' && (showPlan || $slots.meta)"
+          class="inline-flex shrink-0 items-center justify-end gap-1.5"
+        >
+          <slot name="meta" />
+          <AccountPlanBadge v-if="showPlan" :plan-type="account.planType" size="sm" />
+        </span>
+      </div>
+      <div
+        v-if="metaPosition === 'secondary' && (showPlan || $slots.meta)"
+        class="mt-1 inline-flex min-w-0 items-center gap-1.5"
+      >
+        <slot name="meta" />
         <AccountPlanBadge v-if="showPlan" :plan-type="account.planType" size="sm" />
       </div>
-      <div class="truncate font-[650]" :class="secondaryClass">
+      <div v-else-if="secondaryText" class="truncate font-[650]" :class="secondaryClass">
         {{ secondaryText }}
       </div>
     </div>

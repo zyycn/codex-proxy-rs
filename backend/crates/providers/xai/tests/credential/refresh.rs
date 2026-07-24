@@ -89,7 +89,6 @@ impl ProviderLeasePort for TestRefreshLeases {
         Box::pin(async {
             Ok(gateway_core::provider_ports::ProviderSchedulingState::new(
                 Default::default(),
-                None,
                 0,
             ))
         })

@@ -15,11 +15,8 @@ use gateway_core::{
         FinishReason, GatewayEvent, ProtocolWireEvent, ProviderEvent, ReasoningDelta, ResponseMeta,
         TextDelta, ToolCallDelta,
     },
-    operation::{
-        ContentPart, Feature, MessageRole, Operation, OutputFormat, ReasoningEffort,
-        ReasoningSummary, ResponsePersistence,
-    },
-    routing::ProviderKind,
+    operation::{ContentPart, Feature, MessageRole, Operation, OutputFormat, ResponsePersistence},
+    routing::{ProviderKind, PublicModelId, RoutingContext},
 };
 use gateway_protocol::openai::sse::parse_sse_events;
 use serde_json::{Value, json};
@@ -150,7 +147,7 @@ fn decoder_should_preserve_roles_tools_reasoning_schema_and_provider_options() {
             "schema": {"type": "object"},
             "strict": true
         }},
-        "reasoning": {"effort": "xhigh", "summary": "detailed"},
+        "reasoning": {"effort": "future-value", "summary": "future-summary"},
         "max_output_tokens": 512,
         "stream": true,
         "store": false,
@@ -165,7 +162,6 @@ fn decoder_should_preserve_roles_tools_reasoning_schema_and_provider_options() {
         .iter()
         .map(|message| message.role())
         .collect::<Vec<_>>();
-    let reasoning = request.reasoning().expect("reasoning should be present");
     let OutputFormat::JsonSchema(format) = request.output_format() else {
         panic!("json schema should be preserved")
     };
@@ -177,8 +173,9 @@ fn decoder_should_preserve_roles_tools_reasoning_schema_and_provider_options() {
             format.name(),
             format.description(),
             format.strict(),
-            reasoning.effort,
-            reasoning.summary,
+            request
+                .protocol_payload()
+                .and_then(|payload| payload.body().get("reasoning")),
             request.max_output_tokens(),
             request.response_persistence(),
             decoded.metadata().stream(),
@@ -197,8 +194,7 @@ fn decoder_should_preserve_roles_tools_reasoning_schema_and_provider_options() {
             "weather_result",
             Some("Structured weather"),
             true,
-            Some(ReasoningEffort::ExtraHigh),
-            Some(ReasoningSummary::Detailed),
+            Some(&json!({"effort": "future-value", "summary": "future-summary"})),
             Some(512),
             ResponsePersistence::DoNotStore,
             true,
@@ -471,17 +467,30 @@ fn decoder_should_require_vision_capability_for_input_image() {
 }
 
 #[test]
-fn decoder_should_freeze_a_conservative_input_token_estimate() {
-    let body = json!({"model": "smart-code", "input": "hello"}).to_string();
-    let decoded = decode_request(body.as_bytes()).expect("valid request");
+fn decoder_should_route_a_large_wire_body_without_local_context_rejection_for_each_provider() {
+    let body = json!({
+        "model": "model-a",
+        "input": "x".repeat(128_001)
+    })
+    .to_string();
 
-    assert_eq!(
-        decoded
-            .operation()
-            .capability_requirements()
-            .minimum_context_tokens(),
-        u64::try_from(body.len()).expect("body length fits u64")
-    );
+    for provider_name in ["openai", "xai"] {
+        let provider = ProviderKind::new(provider_name).expect("provider");
+        let decoded = decode_request_with_headers(body.as_bytes(), &HeaderMap::new(), &provider)
+            .expect("large request should decode");
+        let plan = super::snapshot("sk_context_test", provider_name)
+            .plan(
+                &PublicModelId::new(decoded.metadata().public_model()).expect("public model"),
+                decoded.operation(),
+                &RoutingContext {
+                    provider_kind: Some(provider),
+                    ..RoutingContext::default()
+                },
+            )
+            .expect("large wire body should not be locally context-gated");
+
+        assert_eq!(plan.candidates()[0].upstream_model().as_str(), "model-a");
+    }
 }
 
 #[test]

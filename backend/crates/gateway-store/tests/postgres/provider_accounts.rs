@@ -411,6 +411,15 @@ async fn terminal_admin_usage_chunks_large_selections_and_preserves_exact_costs(
     assert_eq!(usage[0].total_tokens, Some(18));
     assert_eq!(usage[0].costs[0].currency, "USD");
     assert_eq!(usage[0].costs[0].amount.as_str(), "1.2345678901");
+    assert_eq!(usage[0].request_buckets.len(), 2);
+    assert_eq!(
+        usage[0]
+            .request_buckets
+            .iter()
+            .map(|bucket| bucket.request_count)
+            .sum::<u64>(),
+        1,
+    );
     assert_eq!(usage[0].models.len(), 1);
     assert_eq!(usage[0].models[0].model, "gpt-exact");
     assert_eq!(usage[0].models[0].costs[0].amount.as_str(), "1.2345678901");
@@ -656,9 +665,10 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
             upstream_user_id: "upstream-core-refresh".to_owned(),
             upstream_account_id: None,
             plan_type: Some("free".to_owned()),
+            authentication_kind: "oauth".to_owned(),
             provider_credentials_json: credential_json("before-secret"),
             has_refresh_token: false,
-            access_token_expires_at: Utc::now() + TimeDelta::minutes(5),
+            access_token_expires_at: Some(Utc::now() + TimeDelta::minutes(5)),
             next_refresh_at: None,
             enabled: true,
             availability: ProviderAccountAvailability::Ready,
@@ -681,7 +691,7 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
         },
         plaintext_credential("after-secret"),
         true,
-        SystemTime::now() + Duration::from_secs(3_600),
+        Some(SystemTime::now() + Duration::from_secs(3_600)),
         Some(SystemTime::now() + Duration::from_secs(1_800)),
     )
     .expect("valid refresh update");
@@ -725,7 +735,7 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
         },
         plaintext_credential("must-not-persist"),
         false,
-        SystemTime::now() + Duration::from_secs(3_600),
+        Some(SystemTime::now() + Duration::from_secs(3_600)),
         None,
     )
     .expect("valid stale update");
@@ -918,9 +928,10 @@ fn account(id: &str, upstream_user_id: &str) -> NewProviderAccount {
         upstream_user_id: upstream_user_id.to_owned(),
         upstream_account_id: None,
         plan_type: Some("pro".to_owned()),
+        authentication_kind: "oauth".to_owned(),
         provider_credentials_json: credential_json("initial-secret"),
         has_refresh_token: false,
-        access_token_expires_at: Utc::now() + TimeDelta::hours(1),
+        access_token_expires_at: Some(Utc::now() + TimeDelta::hours(1)),
         next_refresh_at: None,
         enabled: true,
         availability: ProviderAccountAvailability::Ready,
@@ -936,7 +947,7 @@ fn credential_update(account_id: &str, revision: u64, marker: &str) -> ProviderC
         expected_revision: Revision::new(revision).expect("credential revision"),
         provider_credentials_json: credential_json(marker),
         has_refresh_token: false,
-        access_token_expires_at: Utc::now() + TimeDelta::hours(2),
+        access_token_expires_at: Some(Utc::now() + TimeDelta::hours(2)),
         next_refresh_at: None,
     }
 }
@@ -1000,7 +1011,7 @@ async fn seed_model_request(
     sqlx::query(
         "insert into model_requests (
            id, client_api_key_ref, config_revision, protocol, operation, endpoint,
-           client_transport, requested_model_id, input_token_estimate,
+           client_transport, requested_model_id,
            provider_kind, provider_account_id,
            provider_account_ref, upstream_model_id, upstream_transport, attempt_count,
            upstream_send_state, outcome, client_status_code, upstream_status_code,
@@ -1009,7 +1020,7 @@ async fn seed_model_request(
            started_at, deadline_at, completed_at
          ) values (
            $1, 'key-provider-account-test', 1, 'openai', 'responses', '/v1/responses',
-           'http_sse', $4, 1, $3, $2, $2, $4, 'http_sse', 1,
+           'http_sse', $4, $3, $2, $2, $4, 'http_sse', 1,
            'sent', 'succeeded', 200, 200, $5, 0, 0, 0, 0,
            $5, 'provider_reported', $6::numeric, 'USD', $7,
            $7 + interval '5 minutes', $7 + interval '1 second'

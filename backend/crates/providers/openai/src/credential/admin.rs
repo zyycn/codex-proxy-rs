@@ -31,9 +31,14 @@ use super::identity::{
 use super::repository::CodexCredentialRepository;
 use super::security::CodexCredentialCodec;
 use super::token_client::{RefreshFailure, TokenRefresher};
-use super::types::{CodexAccountProfile, CodexOAuthSecret};
+use super::types::{
+    CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY, CODEX_AUTHENTICATION_KIND_OAUTH, CodexAccountProfile,
+    CodexAgentIdentityAuthMode, CodexAgentIdentityCredentialData, CodexCredentialData,
+    CodexOAuthSecret,
+};
 
 const PROVIDER_NAME: &str = "openai";
+const CODEX_CREDENTIAL_SCHEMA_VERSION: u32 = 1;
 const MAX_BATCH: usize = 200;
 const MAX_IMPORT_DOCUMENT_BYTES: usize = 64 * 1024 * 1024;
 
@@ -116,12 +121,55 @@ impl fmt::Debug for PreparedCodexAccountImport {
 struct ParsedCodexImportAccount {
     id: Option<String>,
     name: Option<String>,
+    email: Option<String>,
+    plan_type: Option<String>,
     chatgpt_account_id: Option<String>,
     chatgpt_user_id: Option<String>,
-    access_token: Option<String>,
-    refresh_token: Option<String>,
-    id_token: Option<String>,
+    authentication: ParsedCodexAuthentication,
     status: Option<String>,
+}
+
+enum ParsedCodexAuthentication {
+    OAuth {
+        access_token: Option<String>,
+        refresh_token: Option<String>,
+        id_token: Option<String>,
+    },
+    AgentIdentity {
+        runtime_id: String,
+        private_key: String,
+        task_id: Option<String>,
+    },
+}
+
+impl fmt::Debug for ParsedCodexAuthentication {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OAuth {
+                access_token,
+                refresh_token,
+                id_token,
+            } => formatter
+                .debug_struct("OAuth")
+                .field("access_token", &access_token.as_ref().map(|_| "<redacted>"))
+                .field(
+                    "refresh_token",
+                    &refresh_token.as_ref().map(|_| "<redacted>"),
+                )
+                .field("id_token", &id_token.as_ref().map(|_| "<redacted>"))
+                .finish(),
+            Self::AgentIdentity {
+                runtime_id: _,
+                private_key: _,
+                task_id,
+            } => formatter
+                .debug_struct("AgentIdentity")
+                .field("runtime_id", &"<redacted>")
+                .field("private_key", &"<redacted>")
+                .field("task_id", &task_id.as_ref().map(|_| "<redacted>"))
+                .finish(),
+        }
+    }
 }
 
 impl fmt::Debug for ParsedCodexImportAccount {
@@ -130,6 +178,8 @@ impl fmt::Debug for ParsedCodexImportAccount {
             .debug_struct("ParsedCodexImportAccount")
             .field("id", &self.id)
             .field("name", &self.name)
+            .field("email", &self.email.as_ref().map(|_| "<redacted>"))
+            .field("plan_type", &self.plan_type)
             .field(
                 "chatgpt_account_id",
                 &self.chatgpt_account_id.as_ref().map(|_| "<redacted>"),
@@ -138,15 +188,7 @@ impl fmt::Debug for ParsedCodexImportAccount {
                 "chatgpt_user_id",
                 &self.chatgpt_user_id.as_ref().map(|_| "<redacted>"),
             )
-            .field(
-                "access_token",
-                &self.access_token.as_ref().map(|_| "<redacted>"),
-            )
-            .field(
-                "refresh_token",
-                &self.refresh_token.as_ref().map(|_| "<redacted>"),
-            )
-            .field("id_token", &self.id_token.as_ref().map(|_| "<redacted>"))
+            .field("authentication", &self.authentication)
             .field("status", &self.status)
             .finish()
     }
@@ -173,7 +215,7 @@ impl fmt::Debug for ExportManagedCodexCredential {
     }
 }
 
-/// 旧 CPR canonical 账号导出文档；只允许显式序列化，Debug 永不输出 token。
+/// CPR canonical 账号导出文档；只允许显式序列化，Debug 永不输出 token。
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexCprExportDocument {
@@ -362,8 +404,9 @@ impl CodexCredentialAdmin {
             provider,
             input.name,
             upstream_user_id,
+            CODEX_AUTHENTICATION_KIND_OAUTH.to_owned(),
             revision,
-            access_token_expires_at,
+            Some(access_token_expires_at),
         )
         .with_profile(
             input.verified_account.email,
@@ -381,7 +424,7 @@ impl CodexCredentialAdmin {
         })
     }
 
-    /// 严格输出可被旧 CPR import 直接读取的 canonical 文档。
+    /// 严格输出可被 CPR 导入逻辑直接读取的 canonical 文档。
     pub fn format_cpr_export(
         &self,
         items: Vec<ExportManagedCodexCredential>,
@@ -401,7 +444,12 @@ impl CodexCredentialAdmin {
             }
             let data = CodexCredentialCodec::decode_complete(&item.current.credential)
                 .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
-            if account.has_refresh_token() != data.refresh_token.is_some() {
+            let CodexCredentialData::OAuth(data) = data else {
+                return Err(CodexCredentialAdminError::InvalidCredential);
+            };
+            if account.authentication_kind() != CODEX_AUTHENTICATION_KIND_OAUTH
+                || account.has_refresh_token() != data.refresh_token.is_some()
+            {
                 return Err(CodexCredentialAdminError::InvalidCredential);
             }
             accounts.push(CodexCprExportAccount {
@@ -413,9 +461,10 @@ impl CodexCredentialAdmin {
                 plan_type: account.plan_type().map(str::to_owned),
                 token: data.access_token,
                 refresh_token: data.refresh_token,
-                access_token_expires_at: Some(
-                    DateTime::<Utc>::from(account.access_token_expires_at()).to_rfc3339(),
-                ),
+                access_token_expires_at: account
+                    .access_token_expires_at()
+                    .map(DateTime::<Utc>::from)
+                    .map(|value| value.to_rfc3339()),
                 status: cpr_status(&account),
                 added_at: china_rfc3339(item.added_at),
                 updated_at: china_rfc3339(item.updated_at),
@@ -435,22 +484,26 @@ impl CodexCredentialAdmin {
             required_time(input.verified_account.access_token_expires_at)?;
         let mut data = CodexCredentialCodec::decode_complete(&input.current.credential)
             .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
+        let oauth = data
+            .oauth_mut()
+            .ok_or(CodexCredentialAdminError::IdentityMismatch)?;
         if input.current.account.provider().as_str() != PROVIDER_NAME
+            || input.current.account.authentication_kind() != CODEX_AUTHENTICATION_KIND_OAUTH
             || input.current.account.upstream_account_id()
                 != Some(input.verified_account.chatgpt_account_id.as_str())
             || input.current.account.upstream_user_id() != input.verified_account.chatgpt_user_id
-            || data.principal.oauth_subject != input.verified_account.oauth_subject
-            || data.principal.poid != input.verified_account.poid
+            || oauth.principal.oauth_subject != input.verified_account.oauth_subject
+            || oauth.principal.poid != input.verified_account.poid
         {
             return Err(CodexCredentialAdminError::IdentityMismatch);
         }
-        data.access_token = input.secret.access_token.expose_secret().to_owned();
-        data.refresh_token = input
+        oauth.access_token = input.secret.access_token.expose_secret().to_owned();
+        oauth.refresh_token = input
             .secret
             .refresh_token
             .as_ref()
             .map(|value| value.expose_secret().to_owned());
-        data.id_token = input
+        oauth.id_token = input
             .secret
             .id_token
             .as_ref()
@@ -469,7 +522,7 @@ impl CodexCredentialAdmin {
             profile.clone(),
             credential,
             input.secret.refresh_token.is_some(),
-            access_token_expires_at,
+            Some(access_token_expires_at),
             optional_time(input.next_refresh_at),
         )
         .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
@@ -541,8 +594,11 @@ impl CodexCredentialAdminService {
         let runtime = CodexCredentialCodec::decode(&current.credential)
             .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
         let expectation = current_identity_expectation(&current.account, &runtime)?;
-        let refresh_token = runtime
-            .secret
+        let oauth = runtime
+            .authentication
+            .oauth()
+            .ok_or(CodexCredentialAdminError::MissingRefreshToken)?;
+        let refresh_token = oauth
             .refresh_token
             .as_ref()
             .ok_or(CodexCredentialAdminError::MissingRefreshToken)?;
@@ -590,8 +646,8 @@ impl CodexCredentialAdminService {
             refresh_token: tokens
                 .refresh_token
                 .map(SecretString::from)
-                .or(runtime.secret.refresh_token),
-            id_token: runtime.secret.id_token,
+                .or_else(|| oauth.refresh_token.clone()),
+            id_token: oauth.id_token.clone(),
         };
         let verified_account = self
             .verifier
@@ -637,45 +693,74 @@ impl CodexCredentialAdminService {
         let mut account_ids = BTreeSet::new();
         let mut upstream_identities = BTreeSet::new();
         let mut accounts = Vec::with_capacity(candidates.len());
-        let policy = self
-            .runtime_policy
-            .load_refresh_policy()
-            .await
-            .map_err(|_| CodexCredentialAdminError::RefreshUnavailable)?;
+        let mut policy = None;
         for candidate in candidates {
-            let (secret, verified_account) = self.verify_import_candidate(&candidate).await?;
-            if !upstream_identities.insert((
-                verified_account.chatgpt_user_id.clone(),
-                verified_account.chatgpt_account_id.clone(),
-            )) {
-                return Err(CodexCredentialAdminError::InvalidInput);
-            }
             let account_id = candidate
                 .id
+                .clone()
                 .filter(|id| ProviderAccountId::new(id.clone()).is_ok())
                 .unwrap_or_else(|| format!("acct_{}", uuid::Uuid::now_v7().simple()));
             if !account_ids.insert(account_id.clone()) {
                 return Err(CodexCredentialAdminError::InvalidInput);
             }
             let (enabled, availability) = import_runtime_state(candidate.status.as_deref())?;
-            let next_refresh_at = refresh_time(
-                policy,
-                &ProviderAccountId::new(account_id.clone())
-                    .map_err(|_| CodexCredentialAdminError::InvalidInput)?,
-                verified_account.access_token_expires_at,
-                secret.refresh_token.is_some(),
-            )?;
-            let mut prepared = CodexCredentialAdmin.prepare_import(ImportCodexOAuthCredential {
-                account_id,
-                name: candidate
-                    .name
-                    .filter(|name| !name.trim().is_empty())
-                    .unwrap_or_else(|| "Codex OAuth".to_owned()),
-                secret,
-                verified_account,
-                next_refresh_at,
-                enabled,
-            })?;
+            let mut prepared = match &candidate.authentication {
+                ParsedCodexAuthentication::OAuth { .. } => {
+                    let (secret, verified_account) =
+                        self.verify_import_candidate(&candidate).await?;
+                    if !upstream_identities.insert((
+                        verified_account.chatgpt_user_id.clone(),
+                        verified_account.chatgpt_account_id.clone(),
+                    )) {
+                        return Err(CodexCredentialAdminError::InvalidInput);
+                    }
+                    let refresh_policy = if let Some(policy) = policy {
+                        policy
+                    } else {
+                        let loaded = self
+                            .runtime_policy
+                            .load_refresh_policy()
+                            .await
+                            .map_err(|_| CodexCredentialAdminError::RefreshUnavailable)?;
+                        policy = Some(loaded);
+                        loaded
+                    };
+                    let next_refresh_at = refresh_time(
+                        refresh_policy,
+                        &ProviderAccountId::new(account_id.clone())
+                            .map_err(|_| CodexCredentialAdminError::InvalidInput)?,
+                        verified_account.access_token_expires_at,
+                        secret.refresh_token.is_some(),
+                    )?;
+                    CodexCredentialAdmin.prepare_import(ImportCodexOAuthCredential {
+                        account_id,
+                        name: candidate
+                            .name
+                            .clone()
+                            .filter(|name| !name.trim().is_empty())
+                            .unwrap_or_else(|| "Codex OAuth".to_owned()),
+                        secret,
+                        verified_account,
+                        next_refresh_at,
+                        enabled,
+                    })?
+                }
+                ParsedCodexAuthentication::AgentIdentity { .. } => {
+                    let account =
+                        self.prepare_agent_identity_import(&candidate, account_id, enabled)?;
+                    if !upstream_identities.insert((
+                        account.account.upstream_user_id().to_owned(),
+                        account
+                            .account
+                            .upstream_account_id()
+                            .ok_or(CodexCredentialAdminError::InvalidInput)?
+                            .to_owned(),
+                    )) {
+                        return Err(CodexCredentialAdminError::InvalidInput);
+                    }
+                    account
+                }
+            };
             prepared.account = prepared
                 .account
                 .with_runtime_state(enabled, availability, None);
@@ -688,18 +773,23 @@ impl CodexCredentialAdminService {
         &self,
         candidate: &ParsedCodexImportAccount,
     ) -> Result<(CodexOAuthSecret, CodexAccountProfile), CodexCredentialAdminError> {
-        let access_token = candidate
-            .access_token
+        let ParsedCodexAuthentication::OAuth {
+            access_token,
+            refresh_token,
+            id_token,
+        } = &candidate.authentication
+        else {
+            return Err(CodexCredentialAdminError::InvalidCredential);
+        };
+        let access_token = access_token
             .as_deref()
             .map(normalize_bearer)
             .filter(|token| !token.is_empty());
-        let refresh_token = candidate
-            .refresh_token
+        let refresh_token = refresh_token
             .as_deref()
             .map(normalize_bearer)
             .filter(|token| !token.is_empty());
-        let id_token = candidate
-            .id_token
+        let id_token = id_token
             .as_deref()
             .map(normalize_bearer)
             .filter(|token| !token.is_empty());
@@ -751,6 +841,73 @@ impl CodexCredentialAdminService {
             .map_err(map_identity_error)?;
         Ok((secret, profile))
     }
+
+    fn prepare_agent_identity_import(
+        &self,
+        candidate: &ParsedCodexImportAccount,
+        account_id: String,
+        enabled: bool,
+    ) -> Result<NewProviderAccount, CodexCredentialAdminError> {
+        let ParsedCodexAuthentication::AgentIdentity {
+            runtime_id,
+            private_key,
+            task_id,
+        } = &candidate.authentication
+        else {
+            return Err(CodexCredentialAdminError::InvalidCredential);
+        };
+        let upstream_account_id = candidate
+            .chatgpt_account_id
+            .clone()
+            .ok_or(CodexCredentialAdminError::InvalidInput)?;
+        let upstream_user_id = candidate
+            .chatgpt_user_id
+            .clone()
+            .ok_or(CodexCredentialAdminError::InvalidInput)?;
+        let account_id = ProviderAccountId::new(account_id)
+            .map_err(|_| CodexCredentialAdminError::InvalidInput)?;
+        let provider = ProviderKind::new(PROVIDER_NAME)
+            .map_err(|_| CodexCredentialAdminError::InvalidInput)?;
+        let revision =
+            CredentialRevision::new(1).map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
+        let credential =
+            CodexCredentialCodec::encode_agent_identity(CodexAgentIdentityCredentialData {
+                schema_version: CODEX_CREDENTIAL_SCHEMA_VERSION,
+                auth_mode: CodexAgentIdentityAuthMode::AgentIdentity,
+                installation_id: uuid::Uuid::new_v4().to_string(),
+                agent_runtime_id: runtime_id.clone(),
+                agent_private_key: private_key.clone(),
+                task_id: task_id.clone(),
+                cookies: Vec::new(),
+            })
+            .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
+        let name = candidate
+            .name
+            .clone()
+            .or_else(|| candidate.email.clone())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| "OpenAI Agent Identity".to_owned());
+        let account = ProviderAccount::new(
+            account_id,
+            provider,
+            name,
+            upstream_user_id,
+            CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY.to_owned(),
+            revision,
+            None,
+        )
+        .with_profile(
+            candidate.email.clone(),
+            Some(upstream_account_id),
+            candidate.plan_type.clone(),
+        )
+        .with_runtime_state(enabled, AccountAvailability::Ready, None)
+        .with_refresh_schedule(false, None);
+        Ok(NewProviderAccount {
+            account,
+            credential,
+        })
+    }
 }
 
 fn current_identity_expectation(
@@ -760,9 +917,13 @@ fn current_identity_expectation(
     let account_id = account
         .upstream_account_id()
         .ok_or(CodexCredentialAdminError::InvalidCredential)?;
+    let principal = credential
+        .principal
+        .as_ref()
+        .ok_or(CodexCredentialAdminError::InvalidCredential)?;
     CodexIdentityExpectation::current(
-        credential.principal.oauth_subject.clone(),
-        credential.principal.poid.clone(),
+        principal.oauth_subject.clone(),
+        principal.poid.clone(),
         account_id.to_owned(),
         account.upstream_user_id().to_owned(),
         credential.installation_id.clone(),
@@ -851,7 +1012,9 @@ const fn map_identity_error(error: CodexIdentityVerificationError) -> CodexCrede
 fn parse_import_document(
     payload: &Value,
 ) -> Result<Vec<ParsedCodexImportAccount>, CodexCredentialAdminError> {
-    let shape = if looks_like_credential_bundle(payload) {
+    let shape = if looks_like_agent_identity_document(payload) {
+        ImportDocumentShape::AgentIdentity
+    } else if looks_like_credential_bundle(payload) {
         ImportDocumentShape::CredentialBundle
     } else if looks_like_auth_document(payload) {
         ImportDocumentShape::AuthDocument
@@ -873,6 +1036,7 @@ fn parse_import_document(
     for value in values {
         let parsed = match shape {
             ImportDocumentShape::Native => Some(parse_native_account(value)?),
+            ImportDocumentShape::AgentIdentity => Some(parse_agent_identity_account(value)?),
             ImportDocumentShape::CredentialBundle => parse_credential_bundle_account(value)?,
             ImportDocumentShape::AuthDocument => parse_auth_document_account(value)?,
         };
@@ -886,8 +1050,55 @@ fn parse_import_document(
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ImportDocumentShape {
     Native,
+    AgentIdentity,
     CredentialBundle,
     AuthDocument,
+}
+
+fn parse_agent_identity_account(
+    value: &Value,
+) -> Result<ParsedCodexImportAccount, CodexCredentialAdminError> {
+    let account = value
+        .as_object()
+        .ok_or(CodexCredentialAdminError::InvalidInput)?;
+    if account
+        .get("platform")
+        .and_then(Value::as_str)
+        .is_some_and(|platform| !platform.eq_ignore_ascii_case("openai"))
+        || account
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| !kind.eq_ignore_ascii_case("oauth"))
+    {
+        return Err(CodexCredentialAdminError::InvalidInput);
+    }
+    let identity = value
+        .get("agent_identity")
+        .or_else(|| value.get("credentials"))
+        .unwrap_or(value);
+    let auth_mode =
+        first_string(value, &["auth_mode"]).or_else(|| first_string(identity, &["auth_mode"]));
+    if auth_mode.as_deref() != Some("agentIdentity") {
+        return Err(CodexCredentialAdminError::InvalidCredential);
+    }
+    let runtime_id = first_string(identity, &["agent_runtime_id"])
+        .ok_or(CodexCredentialAdminError::InvalidCredential)?;
+    let private_key = first_string(identity, &["agent_private_key"])
+        .ok_or(CodexCredentialAdminError::InvalidCredential)?;
+    Ok(ParsedCodexImportAccount {
+        id: first_string(value, &["id"]),
+        name: first_string(value, &["name", "label"]),
+        email: first_string(identity, &["email"]),
+        plan_type: first_string(identity, &["plan_type"]),
+        chatgpt_account_id: first_string(identity, &["chatgpt_account_id", "account_id"]),
+        chatgpt_user_id: first_string(identity, &["chatgpt_user_id"]),
+        authentication: ParsedCodexAuthentication::AgentIdentity {
+            runtime_id,
+            private_key,
+            task_id: first_string(identity, &["task_id"]),
+        },
+        status: first_string(value, &["status"]),
+    })
 }
 
 fn import_account_values(payload: &Value) -> Result<Vec<&Value>, CodexCredentialAdminError> {
@@ -926,11 +1137,15 @@ fn parse_native_account(
     Ok(ParsedCodexImportAccount {
         id: first_string(value, &["id"]),
         name: first_string(value, &["label", "email"]),
+        email: first_string(value, &["email"]),
+        plan_type: first_string(value, &["planType", "plan_type"]),
         chatgpt_account_id: first_string(value, &["accountId", "account_id"]),
         chatgpt_user_id: first_string(value, &["userId", "user_id"]),
-        access_token,
-        refresh_token,
-        id_token: None,
+        authentication: ParsedCodexAuthentication::OAuth {
+            access_token,
+            refresh_token,
+            id_token: None,
+        },
         status: first_string(value, &["status"]),
     })
 }
@@ -981,6 +1196,11 @@ fn parse_credential_bundle_account(
         return Ok(Some(ParsedCodexImportAccount {
             id: first_string(value, &["id"]),
             name: first_string(value, &["label", "name"]),
+            email: first_path_string(credentials, &[&["email"], &["user", "email"]]),
+            plan_type: first_path_string(
+                credentials,
+                &[&["plan_type"], &["planType"], &["plan", "type"]],
+            ),
             chatgpt_account_id: first_path_string(
                 credentials,
                 &[
@@ -1004,9 +1224,11 @@ fn parse_credential_bundle_account(
                     &["account", "user_id"],
                 ],
             ),
-            access_token,
-            refresh_token,
-            id_token: first_path_string(credentials, &[&["id_token"], &["idToken"]]),
+            authentication: ParsedCodexAuthentication::OAuth {
+                access_token,
+                refresh_token,
+                id_token: first_path_string(credentials, &[&["id_token"], &["idToken"]]),
+            },
             status: first_string(value, &["status"]),
         }));
     }
@@ -1039,6 +1261,8 @@ fn parse_credential_bundle_account(
     Ok(Some(ParsedCodexImportAccount {
         id: first_string(value, &["id"]),
         name: first_path_string(value, &[&["label"], &["name"], &["user", "name"]]),
+        email: first_path_string(value, &[&["email"], &["user", "email"]]),
+        plan_type: first_path_string(value, &[&["plan_type"], &["planType"], &["plan", "type"]]),
         chatgpt_account_id: first_path_string(
             value,
             &[
@@ -1062,12 +1286,14 @@ fn parse_credential_bundle_account(
                 &["account", "user_id"],
             ],
         ),
-        access_token,
-        refresh_token,
-        id_token: first_path_string(
-            value,
-            &[&["tokens", "id_token"], &["id_token"], &["idToken"]],
-        ),
+        authentication: ParsedCodexAuthentication::OAuth {
+            access_token,
+            refresh_token,
+            id_token: first_path_string(
+                value,
+                &[&["tokens", "id_token"], &["id_token"], &["idToken"]],
+            ),
+        },
         status: first_string(value, &["status"]),
     }))
 }
@@ -1110,6 +1336,8 @@ fn parse_auth_document_account(
     Ok(Some(ParsedCodexImportAccount {
         id: None,
         name: first_string(value, &["label", "name", "email"]),
+        email: first_string(value, &["email"]),
+        plan_type: first_string(value, &["plan_type", "planType"]),
         chatgpt_account_id: first_string(
             value,
             &[
@@ -1123,9 +1351,11 @@ fn parse_auth_document_account(
             value,
             &["chatgpt_user_id", "chatgptUserId", "user_id", "userId"],
         ),
-        access_token,
-        refresh_token,
-        id_token: first_string(value, &["id_token", "idToken"]),
+        authentication: ParsedCodexAuthentication::OAuth {
+            access_token,
+            refresh_token,
+            id_token: first_string(value, &["id_token", "idToken"]),
+        },
         status: account
             .get("disabled")
             .and_then(Value::as_bool)
@@ -1147,6 +1377,26 @@ fn looks_like_credential_bundle(value: &Value) -> bool {
         })
 }
 
+fn looks_like_agent_identity_document(value: &Value) -> bool {
+    import_account_values(value).is_ok_and(|accounts| {
+        accounts.iter().any(|account| {
+            account
+                .get("auth_mode")
+                .and_then(Value::as_str)
+                .is_some_and(|mode| mode == "agentIdentity")
+                || account
+                    .get("agent_identity")
+                    .and_then(|identity| identity.get("agent_runtime_id"))
+                    .is_some()
+                || account
+                    .get("credentials")
+                    .and_then(|credentials| credentials.get("auth_mode"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|mode| mode == "agentIdentity")
+        })
+    })
+}
+
 fn looks_like_auth_document(value: &Value) -> bool {
     import_account_values(value).is_ok_and(|accounts| {
         accounts.iter().any(|account| {
@@ -1163,7 +1413,11 @@ fn auth_document_provider_is_openai(account: &serde_json::Map<String, Value>) ->
         .or_else(|| account.get("provider"))
         .and_then(Value::as_str)
         .map(str::trim)
-        .is_some_and(|provider| provider.eq_ignore_ascii_case("openai"))
+        .is_some_and(|provider| {
+            provider.eq_ignore_ascii_case("openai")
+                // CLIProxyAPI 的 OpenAI Codex OAuth 文件使用 `type: codex`。
+                || provider.eq_ignore_ascii_case("codex")
+        })
 }
 
 fn first_string(value: &Value, keys: &[&str]) -> Option<String> {

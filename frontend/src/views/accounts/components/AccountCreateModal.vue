@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { useAccountOnboarding } from '../composables/useAccountOnboarding'
 import type { AccountRow } from '../constants'
+import { Openai, Xai } from '@boxicons/vue'
 import { Copy, KeyRound, Upload } from '@lucide/vue'
 
 import { useClipboard, useFileDialog } from '@vueuse/core'
@@ -11,10 +12,10 @@ import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
-import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { toast } from '@/components/base/BaseToast'
 import { accountProviderModeOptions } from '../composables/useAccountOnboarding'
+import AccountProviderChooser from './AccountProviderChooser.vue'
 
 type AccountOnboarding = ReturnType<typeof useAccountOnboarding>
 type CreateForm = AccountOnboarding['createForm']['value']
@@ -49,11 +50,9 @@ const { open: openImportFile, onChange: onImportFileChange } = useFileDialog({
   reset: true,
 })
 
-const providerOptions = [
-  { label: 'OpenAI', value: 'openai' },
-  { label: 'xAI', value: 'xai' },
-]
 const modeOptions = computed(() => accountProviderModeOptions(form.value.provider))
+const isProviderSelected = computed(() => form.value.provider === 'openai' || form.value.provider === 'xai')
+const isChoosingProvider = computed(() => !props.reauthorizing && !isProviderSelected.value)
 
 const provider = computed({
   get: () => form.value.provider,
@@ -75,13 +74,6 @@ const mode = computed({
   },
 })
 
-const tokenText = computed({
-  get: () => form.value.tokenText,
-  set: (value: string) => {
-    form.value = { ...form.value, tokenText: value }
-  },
-})
-
 const importText = computed({
   get: () => form.value.importText,
   set: (value: string) => {
@@ -99,12 +91,20 @@ const oauthCallback = computed({
 
 const oauthAuthUrl = computed(() => form.value.oauthAuthUrl || '')
 const isXai = computed(() => form.value.provider === 'xai')
+const importFileLabel = computed(() => mode.value === 'agent_identity' ? 'Agent 身份文件' : '账号文件')
+const importFilePlaceholder = computed(() => mode.value === 'agent_identity'
+  ? '粘贴 Agent 身份文件内容'
+  : '粘贴 CPR、Sub2API 或 CPA 账号文件内容')
 
 const accountName = computed(() => {
   return props.account?.email || props.account?.accountId || props.account?.id || '该账号'
 })
 
-const modalTitle = computed(() => (props.reauthorizing ? '重新授权账号' : '添加账号'))
+const modalTitle = computed(() => {
+  if (props.reauthorizing)
+    return '重新授权账号'
+  return isChoosingProvider.value ? '选择账号平台' : '导入账号'
+})
 
 const oauthPanelTitle = computed(() => {
   if (props.reauthorizing)
@@ -119,37 +119,42 @@ const oauthPanelDescription = computed(() => {
 })
 
 const canGenerateOauth = computed(() =>
-  !props.saving
+  isProviderSelected.value
+  && !props.saving
   && !props.oauthLoading,
 )
 
 const canSubmit = computed(() => {
-  if (props.saving || props.oauthLoading)
+  if (!isProviderSelected.value || props.saving || props.oauthLoading)
     return false
   if (mode.value === 'oauth') {
     if (!form.value.oauthFlowId || !oauthAuthUrl.value)
       return false
     return oauthCallback.value.trim().length > 0
   }
-  if (mode.value === 'token')
-    return tokenText.value.trim().length > 0
   return importText.value.trim().length > 0
 })
 
-const description = computed(() => {
+const description = computed<string | undefined>(() => {
+  if (isChoosingProvider.value)
+    return undefined
   if (props.reauthorizing)
     return '完成授权后粘贴回调地址，系统会更新账号凭据'
   if (isXai.value) {
     return mode.value === 'oauth'
       ? '复制 xAI 授权链接，完成后粘贴回调地址，不使用 xAI API Key'
-      : '导入 Grok OAuth 账号 JSON，已存在账号会更新'
+      : '导入 xAI 账号文件，已存在账号会更新'
   }
-  if (mode.value === 'token')
-    return '一行一个 Access Token 或 Refresh Token，Access Token 会直接补全账号信息'
   if (mode.value === 'oauth')
     return '复制 OpenAI 授权链接，完成后粘贴回调地址，系统会自动写入或更新账号'
-  return '导入 OpenAI OAuth 账号 JSON，系统会按文档结构自动识别'
+  if (mode.value === 'agent_identity')
+    return '导入 Agent 身份文件，系统会按身份信息写入或更新账号'
+  return '导入 CPR、Sub2API 或 CPA 账号文件，已存在账号会更新'
 })
+
+function selectProvider(value: 'openai' | 'xai') {
+  provider.value = value
+}
 
 async function loadImportFile(files: FileList | null) {
   fileError.value = ''
@@ -187,39 +192,26 @@ async function copyText(value: string, successText: string) {
     v-model="open"
     :title="modalTitle"
     :description="description"
-    variant="info"
-    width="620px"
+    :variant="isChoosingProvider ? 'default' : 'info'"
+    :width="isChoosingProvider ? '420px' : '620px'"
     :close-disabled="saving"
+    :hide-footer="isChoosingProvider"
   >
-    <div class="flex flex-col gap-4">
-      <BaseForm v-if="!reauthorizing">
-        <div class="grid gap-4">
-          <BaseFormItem label="平台" required>
-            <BaseSelect
-              v-model="provider"
-              :options="providerOptions"
-              :disabled="saving || oauthLoading"
-              aria-label="平台"
-            />
-          </BaseFormItem>
-        </div>
-      </BaseForm>
+    <template #icon>
+      <Xai v-if="isXai" class="text-(--cp-text-primary)" aria-hidden="true" :width="20" :height="20" />
+      <Openai v-else class="text-(--cp-text-primary)" aria-hidden="true" :width="20" :height="20" />
+    </template>
 
+    <AccountProviderChooser
+      v-if="isChoosingProvider"
+      :disabled="saving || oauthLoading"
+      @select="selectProvider"
+    />
+
+    <div v-else class="flex flex-col gap-4">
       <BaseSegmented v-if="!reauthorizing" v-model="mode" :options="modeOptions" class="w-full" />
 
-      <BaseForm v-if="mode === 'token'">
-        <BaseFormItem label="Token" required>
-          <BaseTextarea
-            v-model="tokenText"
-            aria-label="Token"
-            size="md"
-            placeholder="eyJ...&#10;rt_..."
-            :disabled="saving"
-          />
-        </BaseFormItem>
-      </BaseForm>
-
-      <div v-else-if="mode === 'oauth'" class="flex flex-col gap-4">
+      <div v-if="mode === 'oauth'" class="flex flex-col gap-4">
         <div class="rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-4 py-3">
           <div class="flex items-start gap-3">
             <div
@@ -290,7 +282,7 @@ async function copyText(value: string, successText: string) {
 
       <BaseForm v-else>
         <BaseFormItem
-          label="JSON 内容"
+          :label="importFileLabel"
           required
           :error="fileError || undefined"
         >
@@ -304,9 +296,9 @@ async function copyText(value: string, successText: string) {
           </template>
           <BaseTextarea
             v-model="importText"
-            aria-label="JSON 内容"
+            :aria-label="importFileLabel"
             size="lg"
-            placeholder="{&quot;accounts&quot;:[...]}"
+            :placeholder="importFilePlaceholder"
             :disabled="saving"
           />
         </BaseFormItem>
@@ -318,6 +310,7 @@ async function copyText(value: string, successText: string) {
         取消
       </BaseButton>
       <BaseButton
+        v-if="!isChoosingProvider"
         variant="primary"
         :loading="saving"
         :disabled="!canSubmit"

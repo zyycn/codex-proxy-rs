@@ -1,6 +1,6 @@
 //! Codex quota 原始观察、Provider-owned 解析与账号状态投影。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -23,12 +23,14 @@ use crate::provider::OFFICIAL_CODEX_BASE_URL;
 use crate::transport::profile::CodexWireProfileState;
 use crate::transport::{CodexBackendClient, CodexClientError, CodexRequestContext};
 
+use super::agent_identity::{CodexAgentIdentityTaskService, PreparedCodexRuntimeCredential};
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
 
 const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 const MAX_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60 * 60);
 const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);
 const QUOTA_HYDRATION_FAILURE_TTL: Duration = Duration::from_secs(5);
+const QUOTA_PERIODIC_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CodexQuotaFact {
@@ -197,6 +199,7 @@ pub struct CodexCredentialQuotaService {
     store: Arc<dyn ProviderAccountStore>,
     profile: CodexWireProfileState,
     http: Client,
+    agent_identity: Arc<CodexAgentIdentityTaskService>,
     scheduling: CodexQuotaSchedulingProjection,
 }
 
@@ -210,6 +213,7 @@ struct CodexQuotaSchedulingProjection {
 struct CodexQuotaProjectionState {
     next_version: u64,
     entries: BTreeMap<ProviderAccountId, CodexQuotaSchedulingEntry>,
+    last_periodic_refresh_at: BTreeMap<ProviderAccountId, Instant>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -224,6 +228,25 @@ struct CodexQuotaSchedulingEntry {
 struct CodexQuotaHydrationTarget {
     account: ProviderAccount,
     expected_version: Option<u64>,
+}
+
+struct FetchedCodexQuota {
+    account: ProviderAccount,
+    value: Value,
+}
+
+enum CodexQuotaFetchAttemptError {
+    InvalidCredential,
+    Upstream(CodexClientError),
+}
+
+enum CodexQuotaFetchError {
+    InvalidCredential,
+    Recovery,
+    Upstream {
+        account: Box<ProviderAccount>,
+        error: CodexClientError,
+    },
 }
 
 impl CodexQuotaSchedulingProjection {
@@ -347,6 +370,46 @@ impl CodexQuotaSchedulingProjection {
             })
             .and_then(|entry| entry.signals)
     }
+
+    fn reserve_periodic_refreshes(
+        &self,
+        accounts: Vec<ProviderAccount>,
+        now: SystemTime,
+    ) -> Vec<ProviderAccount> {
+        let candidates = accounts
+            .into_iter()
+            .filter(|account| eligible_quota_sync_account(account, now))
+            .collect::<Vec<_>>();
+        let candidate_ids = candidates
+            .iter()
+            .map(|account| account.id().clone())
+            .collect::<BTreeSet<_>>();
+        let now = Instant::now();
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state
+            .last_periodic_refresh_at
+            .retain(|account_id, _| candidate_ids.contains(account_id));
+        candidates
+            .into_iter()
+            .filter(|account| {
+                let due = state
+                    .last_periodic_refresh_at
+                    .get(account.id())
+                    .is_none_or(|last| {
+                        now.saturating_duration_since(*last) >= QUOTA_PERIODIC_REFRESH_MIN_INTERVAL
+                    });
+                if due {
+                    state
+                        .last_periodic_refresh_at
+                        .insert(account.id().clone(), now);
+                }
+                due
+            })
+            .collect()
+    }
 }
 
 fn insert_projection_entry(
@@ -373,12 +436,14 @@ impl CodexCredentialQuotaService {
         repository: CodexCredentialRepository,
         profile: CodexWireProfileState,
         http: Client,
+        agent_identity: Arc<CodexAgentIdentityTaskService>,
     ) -> Self {
         Self {
             store: Arc::clone(repository.store()),
             repository,
             profile,
             http,
+            agent_identity,
             scheduling: CodexQuotaSchedulingProjection::default(),
         }
     }
@@ -428,47 +493,22 @@ impl CodexCredentialQuotaService {
     }
 
     pub async fn synchronize(&self) -> Result<CodexQuotaSyncSummary, CodexCredentialQuotaError> {
+        let accounts = self.repository.list_for_provider().await?;
+        let mut summary = CodexQuotaSyncSummary::default();
+        let now = SystemTime::now();
+        let accounts = self.scheduling.reserve_periodic_refreshes(accounts, now);
+        if accounts.is_empty() {
+            return Ok(summary);
+        }
         let client = CodexBackendClient::new(
             self.http.clone(),
             OFFICIAL_CODEX_BASE_URL,
             self.profile.clone(),
         );
-        let accounts = self.repository.list_for_provider().await?;
-        let mut summary = CodexQuotaSyncSummary::default();
-        let now = SystemTime::now();
-        for account in accounts
-            .into_iter()
-            .filter(|account| eligible_quota_sync_account(account, now))
-        {
-            let runtime = match self.repository.load_runtime_credential(&account).await {
-                Ok(runtime) => runtime,
-                Err(_) => {
-                    summary.stale += 1;
-                    continue;
-                }
-            };
-            let request_id = format!("quota_{}", Uuid::now_v7().simple());
-            let context = CodexRequestContext {
-                access_token: runtime.secret.access_token.expose_secret(),
-                account_id: account.upstream_account_id(),
-                request_id: &request_id,
-                turn_state: None,
-                turn_metadata: None,
-                beta_features: None,
-                include_timing_metrics: None,
-                version: None,
-                codex_window_id: None,
-                parent_thread_id: None,
-                cookie_header: None,
-                installation_id: None,
-                session_id: None,
-                thread_id: None,
-                client_request_id: None,
-                turn_id: None,
-            };
+        for account in accounts {
             let observed_at = SystemTime::now();
-            match client.fetch_usage(context).await {
-                Ok(value) => {
+            match self.fetch_usage_with_recovery(&client, &account).await {
+                Ok(FetchedCodexQuota { account, value }) => {
                     let fact = parse_codex_quota_usage(&value)?;
                     let object = value
                         .as_object()
@@ -524,7 +564,13 @@ impl CodexCredentialQuotaService {
                             .await;
                     }
                 }
-                Err(error) => {
+                Err(CodexQuotaFetchError::InvalidCredential) => {
+                    summary.stale += 1;
+                }
+                Err(CodexQuotaFetchError::Recovery) => {
+                    summary.transient += 1;
+                }
+                Err(CodexQuotaFetchError::Upstream { account, error }) => {
                     let (availability, reason, cooldown) = classify_error(&error, observed_at);
                     match availability {
                         Some(AccountAvailability::Invalid | AccountAvailability::Banned) => {
@@ -673,51 +719,38 @@ impl CodexCredentialQuotaService {
             .await?
             .filter(|account| account.provider().as_str() == "openai")
             .ok_or(CodexCredentialQuotaError::NotFound)?;
-        let runtime = self.repository.load_runtime_credential(&account).await?;
         let client = CodexBackendClient::new(
             self.http.clone(),
             OFFICIAL_CODEX_BASE_URL,
             self.profile.clone(),
         );
-        let request_id = format!("quota_{}", Uuid::now_v7().simple());
-        let context = CodexRequestContext {
-            access_token: runtime.secret.access_token.expose_secret(),
-            account_id: account.upstream_account_id(),
-            request_id: &request_id,
-            turn_state: None,
-            turn_metadata: None,
-            beta_features: None,
-            include_timing_metrics: None,
-            version: None,
-            codex_window_id: None,
-            parent_thread_id: None,
-            cookie_header: None,
-            installation_id: None,
-            session_id: None,
-            thread_id: None,
-            client_request_id: None,
-            turn_id: None,
-        };
         let observed_at = SystemTime::now();
-        let value = match client.fetch_usage(context).await {
-            Ok(value) => value,
-            Err(error) => {
-                let (availability, reason, cooldown) = classify_error(&error, observed_at);
-                if let Some(availability) = availability {
-                    let _ = self
-                        .repository
-                        .apply_state(
-                            &account,
-                            availability,
-                            reason.map(str::to_owned),
-                            cooldown,
-                            observed_at,
-                        )
-                        .await;
+        let FetchedCodexQuota { account, value } =
+            match self.fetch_usage_with_recovery(&client, &account).await {
+                Ok(fetched) => fetched,
+                Err(CodexQuotaFetchError::InvalidCredential) => {
+                    return Err(CodexCredentialQuotaError::InvalidCredentialData);
                 }
-                return Err(CodexCredentialQuotaError::Upstream);
-            }
-        };
+                Err(CodexQuotaFetchError::Recovery) => {
+                    return Err(CodexCredentialQuotaError::Upstream);
+                }
+                Err(CodexQuotaFetchError::Upstream { account, error }) => {
+                    let (availability, reason, cooldown) = classify_error(&error, observed_at);
+                    if let Some(availability) = availability {
+                        let _ = self
+                            .repository
+                            .apply_state(
+                                &account,
+                                availability,
+                                reason.map(str::to_owned),
+                                cooldown,
+                                observed_at,
+                            )
+                            .await;
+                    }
+                    return Err(CodexCredentialQuotaError::Upstream);
+                }
+            };
         let snapshot = parse_account_quota_snapshot(
             account.id().clone(),
             account.revision(),
@@ -776,20 +809,77 @@ impl CodexCredentialQuotaService {
         }
         Ok(snapshot)
     }
+
+    async fn fetch_usage_with_recovery(
+        &self,
+        client: &CodexBackendClient,
+        account: &ProviderAccount,
+    ) -> Result<FetchedCodexQuota, CodexQuotaFetchError> {
+        let mut prepared = self
+            .agent_identity
+            .prepare(account)
+            .await
+            .map_err(|_| CodexQuotaFetchError::InvalidCredential)?;
+        let mut result = fetch_usage_once(client, &prepared).await;
+        if let Err(CodexQuotaFetchAttemptError::Upstream(error)) = &result
+            && let Some(recovered) = self
+                .agent_identity
+                .recover_after_rejected_task(
+                    prepared.account.id(),
+                    &prepared.credential.authentication,
+                    error,
+                )
+                .await
+                .map_err(|_| CodexQuotaFetchError::Recovery)?
+        {
+            prepared = recovered;
+            result = fetch_usage_once(client, &prepared).await;
+        }
+        match result {
+            Ok(value) => Ok(FetchedCodexQuota {
+                account: prepared.account,
+                value,
+            }),
+            Err(CodexQuotaFetchAttemptError::InvalidCredential) => {
+                Err(CodexQuotaFetchError::InvalidCredential)
+            }
+            Err(CodexQuotaFetchAttemptError::Upstream(error)) => {
+                Err(CodexQuotaFetchError::Upstream {
+                    account: Box::new(prepared.account),
+                    error,
+                })
+            }
+        }
+    }
+}
+
+async fn fetch_usage_once(
+    client: &CodexBackendClient,
+    prepared: &PreparedCodexRuntimeCredential,
+) -> Result<Value, CodexQuotaFetchAttemptError> {
+    let authorization = prepared
+        .credential
+        .authentication
+        .authorization_header(Utc::now())
+        .map_err(|_| CodexQuotaFetchAttemptError::InvalidCredential)?;
+    let request_id = format!("quota_{}", Uuid::now_v7().simple());
+    client
+        .fetch_usage(CodexRequestContext::auxiliary(
+            authorization.expose_secret(),
+            prepared.account.upstream_account_id(),
+            &request_id,
+            None,
+        ))
+        .await
+        .map_err(CodexQuotaFetchAttemptError::Upstream)
 }
 
 fn eligible_quota_sync_account(account: &ProviderAccount, now: SystemTime) -> bool {
     account.enabled()
-        && account.access_token_expires_at() > now
-        && match account.availability() {
-            AccountAvailability::Unknown
-            | AccountAvailability::Ready
-            | AccountAvailability::Cooldown
-            | AccountAvailability::QuotaExhausted => true,
-            AccountAvailability::Expired
-            | AccountAvailability::Banned
-            | AccountAvailability::Invalid => false,
-        }
+        && account
+            .access_token_expires_at()
+            .is_none_or(|expires_at| expires_at > now)
+        && account.availability() == AccountAvailability::QuotaExhausted
 }
 
 fn merge_passive_quota(
@@ -1013,25 +1103,8 @@ pub fn parse_codex_quota_usage(usage: &Value) -> Result<CodexQuotaFact, CodexCre
         .as_object()
         .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
     let mut aggregate = QuotaAggregate::default();
-    if let Some(rate_limit) = object.get("rate_limit") {
+    for rate_limit in canonical_rate_limits(object)?.into_values() {
         aggregate.observe_rate_limit(rate_limit)?;
-    }
-    if let Some(additional) = object
-        .get("additional_rate_limits")
-        .filter(|value| !value.is_null())
-    {
-        for item in additional
-            .as_array()
-            .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?
-        {
-            if let Some(rate_limit) = item
-                .as_object()
-                .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?
-                .get("rate_limit")
-            {
-                aggregate.observe_rate_limit(rate_limit)?;
-            }
-        }
     }
     if let Some(spend_control) = object.get("spend_control") {
         aggregate.observe_exhaustion_object(spend_control, "reached")?;
@@ -1105,35 +1178,8 @@ fn parse_account_quota_snapshot(
         .as_object()
         .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
     let mut windows = Vec::new();
-    if let Some(rate_limit) = object.get("rate_limit") {
-        parse_rate_limit_windows("core", rate_limit, &mut windows)?;
-    }
-    if let Some(additional) = object
-        .get("additional_rate_limits")
-        .filter(|value| !value.is_null())
-    {
-        for (index, value) in additional
-            .as_array()
-            .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?
-            .iter()
-            .enumerate()
-        {
-            let item = value
-                .as_object()
-                .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
-            let source = item
-                .get("limit_name")
-                .or_else(|| item.get("metered_feature"))
-                .and_then(Value::as_str)
-                .filter(|value| {
-                    !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
-                })
-                .map(str::to_owned)
-                .unwrap_or_else(|| format!("additional-{index}"));
-            if let Some(rate_limit) = item.get("rate_limit") {
-                parse_rate_limit_windows(&source, rate_limit, &mut windows)?;
-            }
-        }
+    for (source, rate_limit) in canonical_rate_limits(object)? {
+        parse_rate_limit_windows(&source, rate_limit, &mut windows)?;
     }
     if let Some(spend_control) = object.get("spend_control").filter(|value| !value.is_null()) {
         parse_spend_control_window(spend_control, &mut windows)?;
@@ -1149,6 +1195,53 @@ fn parse_account_quota_snapshot(
         fact,
         windows,
     })
+}
+
+fn canonical_rate_limits(
+    object: &Map<String, Value>,
+) -> Result<BTreeMap<String, &Value>, CodexCredentialQuotaError> {
+    let mut limits = BTreeMap::new();
+    if let Some(rate_limit) = object.get("rate_limit") {
+        limits.insert("core".to_owned(), rate_limit);
+    }
+    let Some(additional) = object
+        .get("additional_rate_limits")
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(limits);
+    };
+    for (index, value) in additional
+        .as_array()
+        .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?
+        .iter()
+        .enumerate()
+    {
+        let item = value
+            .as_object()
+            .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
+        let source = canonical_rate_limit_source(item, index);
+        if let Some(rate_limit) = item.get("rate_limit") {
+            limits.insert(source, rate_limit);
+        }
+    }
+    Ok(limits)
+}
+
+fn canonical_rate_limit_source(item: &Map<String, Value>, index: usize) -> String {
+    let source = item
+        .get("metered_feature")
+        .or_else(|| item.get("limit_name"))
+        .and_then(Value::as_str)
+        .filter(|value| {
+            !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
+        })
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("additional-{index}"));
+    if source.trim().to_ascii_lowercase().replace(['-', ' '], "_") == "codex" {
+        "core".to_owned()
+    } else {
+        source
+    }
 }
 
 fn parse_rate_limit_windows(

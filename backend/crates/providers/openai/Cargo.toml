@@ -14,6 +14,8 @@ base64 = "0.22.1"
 bytes = "1.11.1"
 chrono = { version = "0.4.45", features = ["clock", "serde"] }
 cookie = "0.18.1"
+crypto_box = { version = "0.9.1", features = ["seal"] }
+ed25519-dalek = { version = "2.2.0", features = ["pkcs8"] }
 futures = "0.3.32"
 gateway-admin = { path = "../../gateway-admin" }
 gateway-core = { path = "../../gateway-core" }

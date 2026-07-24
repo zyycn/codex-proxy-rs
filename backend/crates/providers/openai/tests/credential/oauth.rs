@@ -365,7 +365,12 @@ async fn reauthorization_binds_account_revision_and_returns_only_prepared_rotati
         provider_openai::credential::CodexCredentialCodec::decode(prepared.credential.credential())
             .expect("prepared credential");
     assert_eq!(
-        runtime.secret.access_token.expose_secret(),
+        runtime
+            .authentication
+            .oauth()
+            .expect("OAuth credential")
+            .access_token
+            .expose_secret(),
         "oauth-access-token"
     );
     assert_eq!(runtime.installation_id, original_installation_id);

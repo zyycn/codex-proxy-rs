@@ -356,7 +356,7 @@ fn credential_update() -> CredentialCasUpdate {
         },
         PlaintextCredential::new(serde_json::Map::new()),
         false,
-        SystemTime::now() + StdDuration::from_secs(3_600),
+        Some(SystemTime::now() + StdDuration::from_secs(3_600)),
         None,
     )
     .expect("valid credential update")
@@ -380,8 +380,9 @@ fn test_provider_account(account_id: &str) -> ProviderAccount {
         ProviderKind::new("openai").expect("valid provider kind"),
         "Cooldown test".to_owned(),
         "upstream-user".to_owned(),
+        "oauth".to_owned(),
         CredentialRevision::new(7).expect("positive revision"),
-        SystemTime::now() + StdDuration::from_secs(3_600),
+        Some(SystemTime::now() + StdDuration::from_secs(3_600)),
     )
 }
 

@@ -1,6 +1,8 @@
 //! Codex credential domain exports。
 
 mod admin;
+mod affinity;
+mod agent_identity;
 mod catalog;
 mod cookie;
 mod identity;
@@ -14,7 +16,14 @@ pub mod token_client;
 mod types;
 
 pub(crate) use admin::refresh_time;
+pub(crate) use affinity::derive_codex_session_affinity_key;
 pub(crate) use oauth::oauth_owner_ref;
+
+pub use agent_identity::{
+    CodexAgentIdentityError, CodexAgentIdentitySecret, CodexAgentIdentityTaskRegistrar,
+    CodexAgentIdentityTaskService, OfficialCodexAgentIdentityTaskRegistrar,
+    PreparedCodexRuntimeCredential, is_agent_identity_task_invalid_response,
+};
 
 pub use admin::{
     CodexCprExportDocument, CodexCredentialAdmin, CodexCredentialAdminError,
@@ -49,13 +58,18 @@ pub use refresh::{
     DueCodexCredential,
 };
 pub use repository::{CodexCredentialRepository, CredentialRepositoryError};
-pub use security::{CodexCredentialCodec, CodexCredentialDataError, CodexRuntimeCredential};
+pub use security::{
+    CodexCredentialCodec, CodexCredentialDataError, CodexRuntimeAuthentication,
+    CodexRuntimeCredential,
+};
 pub use selector::{
     CodexAccountFailure, CodexCredentialLease, CodexCredentialSelector, CredentialSelectionError,
     SelectCodexCredential,
 };
 pub use types::{
-    CodexAccountProfile, CodexCookie, CodexCookieCaptureOutcome, CodexCredentialData,
-    CodexCredentialPrincipal, CodexOAuthSecret, RotateCodexCredential, RuntimeCodexCookie,
+    CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY, CODEX_AUTHENTICATION_KIND_OAUTH, CodexAccountProfile,
+    CodexAgentIdentityAuthMode, CodexAgentIdentityCredentialData, CodexCookie,
+    CodexCookieCaptureOutcome, CodexCredentialData, CodexCredentialPrincipal,
+    CodexOAuthCredentialData, CodexOAuthSecret, RotateCodexCredential, RuntimeCodexCookie,
     UpsertCodexCookie,
 };

@@ -160,16 +160,7 @@ export function useAccountOnboarding(options: {
   }
 
   async function importAccountDocument() {
-    const data = createForm.value.provider === 'openai' && createForm.value.mode === 'token'
-      ? {
-          sourceFormat: 'cpr',
-          accounts: createForm.value.tokenText
-            .split(/\r?\n/)
-            .map(token => token.trim())
-            .filter(Boolean)
-            .map(token => token.startsWith('rt_') ? { refreshToken: token } : { token }),
-        }
-      : parseImportJson(createForm.value.importText)
+    const data = parseImportJson(createForm.value.importText)
     if (Array.isArray(data) || typeof data !== 'object' || data === null)
       throw new Error('导入文件必须是 JSON object')
     const expectedConfigRevision = await requireConfigRevision()
@@ -230,10 +221,9 @@ export function useAccountOnboarding(options: {
 
 function emptyCreateForm() {
   return {
-    provider: 'openai',
+    provider: '',
     name: '',
     mode: 'oauth',
-    tokenText: '',
     importText: '',
     oauthFlowId: '',
     oauthAuthUrl: '',
@@ -245,13 +235,15 @@ export function accountProviderModeOptions(provider: string) {
   if (provider === 'xai') {
     return [
       { label: 'OAuth', value: 'oauth' },
-      { label: 'JSON', value: 'json' },
+      { label: '账号文件', value: 'json' },
     ]
   }
+  if (provider !== 'openai')
+    return []
   return [
     { label: 'OAuth', value: 'oauth' },
-    { label: 'Token', value: 'token' },
-    { label: 'JSON', value: 'json' },
+    { label: '账号文件', value: 'json' },
+    { label: 'Agent 身份', value: 'agent_identity' },
   ]
 }
 

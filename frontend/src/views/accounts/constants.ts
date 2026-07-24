@@ -5,6 +5,19 @@ import { clamp } from 'es-toolkit'
 export type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 export type AccountQuotaWindow = AccountRow['quota']['windows'][number]
 
+export interface AccountRequestBucket {
+  bucketStart: string
+  requestCount: number
+}
+
+export interface AccountLocalUsage {
+  requestCount?: number
+  requestCountDisplay?: string
+  totalTokens?: number
+  totalTokensDisplay?: string
+  requestBuckets?: AccountRequestBucket[]
+}
+
 const summaryGroupOrder = new Map([
   ['shortTerm', 0],
   ['monthly', 1],
@@ -42,15 +55,16 @@ export const accountColumns = [
     label: '邮箱',
     sortable: true,
     sortKey: 'email',
-    width: '340px',
-    minWidth: '340px',
+    width: '270px',
+    minWidth: '270px',
     cellClass: relaxedCellClass,
   },
   {
     key: 'provider',
-    label: '平台',
-    width: '100px',
-    minWidth: '100px',
+    label: '平台/类型',
+    width: '120px',
+    minWidth: '120px',
+    align: 'center' as const,
     format: value => accountProviderLabel(typeof value === 'string' ? value : null),
     cellClass: `${relaxedCellClass} text-(--cp-text-secondary)`,
   },
@@ -174,14 +188,6 @@ export function quotaWindowPercentTextClass(window: AccountQuotaWindow) {
   if (window.usedPercent >= 80)
     return 'text-(--cp-warning-text)'
   return 'text-(--cp-success-text)'
-}
-
-export function quotaWindowLocalUsageDisplay(window: AccountQuotaWindow) {
-  return window.localUsage?.totalTokensDisplay || '-'
-}
-
-export function shouldShowQuotaWindowLocalUsage(window: AccountQuotaWindow) {
-  return (window.localUsage?.totalTokens ?? 0) > 0
 }
 
 function groupOrder(window: AccountQuotaWindow, order: Map<string, number>) {

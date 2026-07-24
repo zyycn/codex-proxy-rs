@@ -6,24 +6,30 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountCandidate, AccountRuntimeSignals, AccountSelectionContext,
-    AccountSelector, ProviderAccount, ProviderAccountId,
+    AccountAvailability, AccountCandidate, AccountFeedbackStats, AccountRuntimeSignals,
+    AccountSelectionContext, AccountSelector, ProviderAccount, ProviderAccountId,
 };
 use gateway_core::engine::{AttemptContext, ContinuationAttempt};
 use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeaseGuard, ProviderLeasePort, ProviderLeaseRequest,
-    ProviderSchedulingLeaseRequest, ProviderStoreError,
+    ProviderSchedulingLeaseRequest, ProviderSessionAffinityKey, ProviderSessionAffinityPort,
+    ProviderStoreError,
 };
 use gateway_core::routing::ProviderKind;
 use secrecy::ExposeSecret;
 use thiserror::Error;
 use url::Url;
 
+use super::agent_identity::CodexAgentIdentityTaskService;
 use super::catalog::CodexCredentialCatalogService;
 use super::cookie::CodexCookiePolicy;
 use super::quota::CodexCredentialQuotaService;
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
-use super::types::{CodexCookie, CodexCookieCaptureOutcome, CodexOAuthSecret, RuntimeCodexCookie};
+use super::security::CodexRuntimeAuthentication;
+use super::types::{
+    CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY, CodexCookie, CodexCookieCaptureOutcome,
+    RuntimeCodexCookie,
+};
 
 const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 const CLOUDFLARE_PATH_BLOCK_COOLDOWN: Duration = Duration::from_secs(30);
@@ -35,6 +41,8 @@ const CLOUDFLARE_CHALLENGE_BACKOFF: [Duration; 4] = [
     Duration::from_secs(120),
 ];
 const CLOUDFLARE_PATH_BLOCK_THRESHOLD: u32 = 3;
+const SESSION_AFFINITY_TTL: Duration = Duration::from_secs(60 * 60);
+const SESSION_AFFINITY_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexAccountFailure {
@@ -78,36 +86,54 @@ pub struct SelectCodexCredential<'a> {
     pub upstream_model: &'a str,
     pub request_url: &'a Url,
     pub attempt: &'a AttemptContext,
+    pub session_affinity_key: Option<&'a ProviderSessionAffinityKey>,
 }
 
 pub struct CodexCredentialSelector {
     provider_kind: ProviderKind,
     repository: CodexCredentialRepository,
     leases: Arc<dyn ProviderLeasePort>,
+    session_affinity: Arc<dyn ProviderSessionAffinityPort>,
     catalog: Arc<CodexCredentialCatalogService>,
     quota: Arc<CodexCredentialQuotaService>,
+    agent_identity: Arc<CodexAgentIdentityTaskService>,
     cookie_policy: CodexCookiePolicy,
     risk_recovery: Mutex<HashMap<String, RiskRecoveryState>>,
+    account_feedback: Arc<AccountFeedbackStats>,
+}
+
+enum SessionAffinityLookup {
+    Missing,
+    Bound(ProviderAccountId),
+    Unavailable,
 }
 
 impl CodexCredentialSelector {
     #[must_use]
+    // 选择器显式持有各能力边界，避免把 Provider 私有服务重新包装成通用容器。
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         provider_kind: ProviderKind,
         repository: CodexCredentialRepository,
         leases: Arc<dyn ProviderLeasePort>,
+        session_affinity: Arc<dyn ProviderSessionAffinityPort>,
         catalog: Arc<CodexCredentialCatalogService>,
         quota: Arc<CodexCredentialQuotaService>,
+        agent_identity: Arc<CodexAgentIdentityTaskService>,
+        account_feedback: Arc<AccountFeedbackStats>,
         cookie_policy: CodexCookiePolicy,
     ) -> Self {
         Self {
             provider_kind,
             repository,
             leases,
+            session_affinity,
             catalog,
             quota,
+            agent_identity,
             cookie_policy,
             risk_recovery: Mutex::new(HashMap::new()),
+            account_feedback,
         }
     }
 
@@ -143,6 +169,9 @@ impl CodexCredentialSelector {
         let candidates = accounts
             .into_iter()
             .map(|account| {
+                let health = self
+                    .account_feedback
+                    .scheduling_signals(&self.provider_kind, account.id());
                 let signals = scheduling
                     .signals()
                     .get(account.id())
@@ -152,11 +181,32 @@ impl CodexCredentialSelector {
                         last_started_at: None,
                         quota_reset_at: None,
                         quota_remaining_rank: None,
+                        failure_rate_basis_points: None,
+                        first_output_latency_ms: None,
                     })
-                    .with_provider_quota(self.quota.scheduling_signals(&account));
+                    .with_provider_quota(self.quota.scheduling_signals(&account))
+                    .with_runtime_health(health.0, health.1);
                 AccountCandidate { account, signals }
             })
             .collect::<Vec<_>>();
+        let affinity_account = match request.session_affinity_key {
+            Some(key) => match self.lookup_session_affinity(key).await {
+                SessionAffinityLookup::Bound(account_id)
+                    if candidates.iter().any(|candidate| {
+                        candidate.account.id() == &account_id
+                            && candidate.account.is_schedulable(SystemTime::now())
+                    }) =>
+                {
+                    Some(account_id)
+                }
+                SessionAffinityLookup::Bound(_) => {
+                    self.clear_session_affinity(key).await;
+                    None
+                }
+                SessionAffinityLookup::Missing | SessionAffinityLookup::Unavailable => None,
+            },
+            None => None,
+        };
         let mut excluded = request.attempt.excluded_accounts().clone();
         let continuation_account = match request.attempt.continuation_attempt() {
             ContinuationAttempt::Native => request
@@ -187,7 +237,7 @@ impl CodexCredentialSelector {
                 }
             }
         }
-        let sticky = pinned_account.or_else(|| scheduling.sticky_account().cloned());
+        let preferred = pinned_account.or(affinity_account);
         let mut shortest_retry = None;
 
         loop {
@@ -195,7 +245,7 @@ impl CodexCredentialSelector {
                 policy: request.attempt.account_selection_policy(),
                 now: SystemTime::now(),
                 excluded_accounts: excluded.clone(),
-                sticky_account: sticky.clone(),
+                preferred_account: preferred.clone(),
                 round_robin_cursor,
             };
             let Some(selected) = AccountSelector.select(&candidates, &context) else {
@@ -227,7 +277,19 @@ impl CodexCredentialSelector {
                     excluded.insert(account.id().clone());
                 }
                 ProviderLeaseAcquisition::Acquired(guard) => {
-                    let runtime = self.repository.load_runtime_credential(&account).await?;
+                    let (account, runtime) = if account.authentication_kind()
+                        == CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY
+                    {
+                        let prepared = self
+                            .agent_identity
+                            .prepare(&account)
+                            .await
+                            .map_err(|_| CredentialSelectionError::InvalidCredential)?;
+                        (prepared.account, prepared.credential)
+                    } else {
+                        let runtime = self.repository.load_runtime_credential(&account).await?;
+                        (account, runtime)
+                    };
                     let cookies = runtime
                         .cookies
                         .into_iter()
@@ -247,7 +309,7 @@ impl CodexCredentialSelector {
                     return Ok(CodexCredentialLease {
                         installation_id: runtime.installation_id,
                         account,
-                        secret: runtime.secret,
+                        authentication: runtime.authentication,
                         cookies,
                         _guard: guard,
                     });
@@ -256,9 +318,55 @@ impl CodexCredentialSelector {
         }
     }
 
+    async fn lookup_session_affinity(
+        &self,
+        key: &ProviderSessionAffinityKey,
+    ) -> SessionAffinityLookup {
+        match tokio::time::timeout(
+            SESSION_AFFINITY_TIMEOUT,
+            self.session_affinity.load(&self.provider_kind, key),
+        )
+        .await
+        {
+            Ok(Ok(Some(account_id))) => SessionAffinityLookup::Bound(account_id),
+            Ok(Ok(None)) => SessionAffinityLookup::Missing,
+            Ok(Err(error)) => {
+                tracing::warn!(error = %error, "OpenAI session affinity read failed open");
+                SessionAffinityLookup::Unavailable
+            }
+            Err(_) => {
+                tracing::warn!(
+                    timeout_ms = SESSION_AFFINITY_TIMEOUT.as_millis(),
+                    "OpenAI session affinity read timed out"
+                );
+                SessionAffinityLookup::Unavailable
+            }
+        }
+    }
+
+    async fn clear_session_affinity(&self, key: &ProviderSessionAffinityKey) {
+        match tokio::time::timeout(
+            SESSION_AFFINITY_TIMEOUT,
+            self.session_affinity.clear(&self.provider_kind, key),
+        )
+        .await
+        {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(error = %error, "OpenAI stale session affinity clear failed open");
+            }
+            Err(_) => {
+                tracing::warn!(
+                    timeout_ms = SESSION_AFFINITY_TIMEOUT.as_millis(),
+                    "OpenAI stale session affinity clear timed out"
+                );
+            }
+        }
+    }
+
     pub async fn record_failure(
         &self,
-        lease: &CodexCredentialLease,
+        account: &ProviderAccount,
         failure: CodexAccountFailure,
     ) -> Result<(), CredentialSelectionError> {
         let now = SystemTime::now();
@@ -290,14 +398,14 @@ impl CodexCredentialSelector {
             CodexAccountFailure::RateLimited { retry_after } => {
                 let until = now.checked_add(retry_after.unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN));
                 (
-                    AccountAvailability::Cooldown,
+                    AccountAvailability::QuotaExhausted,
                     Some("rate_limited".to_owned()),
                     until,
                     CookieRecovery::None,
                 )
             }
             CodexAccountFailure::CloudflareChallenge { retry_after } => {
-                let delay = self.cloudflare_challenge_delay(lease.account_id(), now, retry_after);
+                let delay = self.cloudflare_challenge_delay(account.id(), now, retry_after);
                 let cooldown_until = now.checked_add(delay);
                 (
                     AccountAvailability::Cooldown,
@@ -307,7 +415,7 @@ impl CodexCredentialSelector {
                 )
             }
             CodexAccountFailure::CloudflarePathBlocked => {
-                let blocked = self.record_cloudflare_path_block(lease.account_id(), now);
+                let blocked = self.record_cloudflare_path_block(account.id(), now);
                 if blocked >= CLOUDFLARE_PATH_BLOCK_THRESHOLD {
                     (
                         AccountAvailability::Invalid,
@@ -326,28 +434,81 @@ impl CodexCredentialSelector {
             }
         };
         self.repository
-            .apply_state(&lease.account, availability, reason, cooldown_until, now)
+            .apply_state(account, availability, reason, cooldown_until, now)
             .await?;
-        self.apply_cookie_recovery(lease, cookie_recovery).await?;
+        self.apply_cookie_recovery(account, cookie_recovery).await?;
         Ok(())
     }
 
-    pub fn record_success(&self, lease: &CodexCredentialLease) {
+    pub async fn record_success(
+        &self,
+        account: &ProviderAccount,
+        session_affinity_key: Option<&ProviderSessionAffinityKey>,
+    ) {
         self.risk_recovery
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(lease.account_id().as_str());
+            .remove(account.id().as_str());
+        let Some(key) = session_affinity_key else {
+            return;
+        };
+        match self.lookup_session_affinity(key).await {
+            SessionAffinityLookup::Bound(bound_account) if &bound_account != account.id() => {
+                return;
+            }
+            SessionAffinityLookup::Unavailable => return,
+            SessionAffinityLookup::Missing | SessionAffinityLookup::Bound(_) => {}
+        }
+        match tokio::time::timeout(
+            SESSION_AFFINITY_TIMEOUT,
+            self.session_affinity.bind(
+                &self.provider_kind,
+                key,
+                account.id(),
+                SESSION_AFFINITY_TTL,
+            ),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(
+                    account_id = %account.id(),
+                    error = %error,
+                    "OpenAI session affinity write failed open"
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    account_id = %account.id(),
+                    timeout_ms = SESSION_AFFINITY_TIMEOUT.as_millis(),
+                    "OpenAI session affinity write timed out"
+                );
+            }
+        }
+    }
+
+    pub async fn current_account(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<ProviderAccount, CredentialSelectionError> {
+        self.repository
+            .store()
+            .get_account(account_id)
+            .await
+            .map_err(|_| CredentialSelectionError::Store)?
+            .ok_or(CredentialSelectionError::InvalidCredential)
     }
 
     pub async fn capture_response_cookies(
         &self,
-        lease: &CodexCredentialLease,
+        account: &ProviderAccount,
         response_origin: &Url,
         headers: &[String],
     ) -> Result<CodexCookieCaptureOutcome, CredentialSelectionError> {
         let parsed = self.cookie_policy.parse_response_headers(
-            lease.account.id().as_str(),
-            lease.account.revision().get(),
+            account.id().as_str(),
+            account.revision().get(),
             response_origin,
             headers,
             chrono::Utc::now(),
@@ -358,7 +519,8 @@ impl CodexCredentialSelector {
                 rejected: parsed.rejected,
             });
         }
-        let mut data = self.repository.load_complete_data(&lease.account).await?;
+        let mut data = self.repository.load_complete_data(account).await?;
+        let cookies = data.cookies_mut();
         for input in parsed.inputs {
             let scope = self.cookie_policy.validate_capture(
                 &input.response_origin,
@@ -366,13 +528,13 @@ impl CodexCredentialSelector {
                 &input.name,
                 &input.path,
             )?;
-            data.cookies.retain(|cookie| {
+            cookies.retain(|cookie| {
                 !(cookie.name == input.name
                     && cookie.domain == scope.domain
                     && cookie.path == input.path)
             });
             if !input.delete {
-                data.cookies.push(CodexCookie {
+                cookies.push(CodexCookie {
                     name: input.name,
                     value: input.value.expose_secret().to_owned(),
                     domain: scope.domain,
@@ -383,10 +545,7 @@ impl CodexCredentialSelector {
                 });
             }
         }
-        let revision = self
-            .repository
-            .compare_and_swap_data(&lease.account, data)
-            .await?;
+        let revision = self.repository.compare_and_swap_data(account, data).await?;
         Ok(CodexCookieCaptureOutcome {
             credential_revision: Some(revision.get()),
             rejected: parsed.rejected,
@@ -427,21 +586,21 @@ impl CodexCredentialSelector {
 
     async fn apply_cookie_recovery(
         &self,
-        lease: &CodexCredentialLease,
+        account: &ProviderAccount,
         recovery: CookieRecovery,
     ) -> Result<(), CredentialSelectionError> {
         if matches!(recovery, CookieRecovery::None) {
             return Ok(());
         }
-        let mut data = self.repository.load_complete_data(&lease.account).await?;
-        if data.cookies.is_empty() {
+        let mut data = self.repository.load_complete_data(account).await?;
+        if data.cookies().is_empty() {
             return Ok(());
         }
         match recovery {
             CookieRecovery::None => return Ok(()),
             CookieRecovery::ExpireAt(expires_at) => {
                 let expires_at = chrono::DateTime::<chrono::Utc>::from(expires_at);
-                for cookie in &mut data.cookies {
+                for cookie in data.cookies_mut() {
                     cookie.expires_at = Some(
                         cookie
                             .expires_at
@@ -449,11 +608,9 @@ impl CodexCredentialSelector {
                     );
                 }
             }
-            CookieRecovery::Clear => data.cookies.clear(),
+            CookieRecovery::Clear => data.cookies_mut().clear(),
         }
-        self.repository
-            .compare_and_swap_data(&lease.account, data)
-            .await?;
+        self.repository.compare_and_swap_data(account, data).await?;
         Ok(())
     }
 }
@@ -491,7 +648,7 @@ impl fmt::Debug for CodexCredentialSelector {
 
 pub struct CodexCredentialLease {
     account: ProviderAccount,
-    secret: CodexOAuthSecret,
+    authentication: CodexRuntimeAuthentication,
     cookies: Vec<RuntimeCodexCookie>,
     installation_id: String,
     _guard: Box<dyn ProviderLeaseGuard>,
@@ -509,8 +666,8 @@ impl CodexCredentialLease {
     }
 
     #[must_use]
-    pub const fn secret(&self) -> &CodexOAuthSecret {
-        &self.secret
+    pub const fn authentication(&self) -> &CodexRuntimeAuthentication {
+        &self.authentication
     }
 
     #[must_use]
@@ -529,7 +686,7 @@ impl fmt::Debug for CodexCredentialLease {
         formatter
             .debug_struct("CodexCredentialLease")
             .field("account", &self.account)
-            .field("secret", &"<redacted>")
+            .field("authentication", &"<redacted>")
             .field("cookies", &self.cookies)
             .field("installation_id", &"<pseudonymous>")
             .finish()

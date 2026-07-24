@@ -116,22 +116,16 @@ pub enum SupportLevel {
 pub struct ModelCapabilities {
     operations: BTreeSet<OperationKind>,
     features: BTreeMap<Feature, SupportLevel>,
-    context_window_tokens: u64,
     max_output_tokens: Option<u64>,
     upstream_validates_features: bool,
 }
 
 impl ModelCapabilities {
     #[must_use]
-    pub fn new(
-        operations: BTreeSet<OperationKind>,
-        context_window_tokens: u64,
-        max_output_tokens: Option<u64>,
-    ) -> Self {
+    pub fn new(operations: BTreeSet<OperationKind>, max_output_tokens: Option<u64>) -> Self {
         Self {
             operations,
             features: BTreeMap::new(),
-            context_window_tokens,
             max_output_tokens,
             upstream_validates_features: false,
         }
@@ -156,7 +150,6 @@ impl ModelCapabilities {
         requirements: &CapabilityRequirements,
     ) -> Option<BTreeSet<Feature>> {
         if !self.operations.contains(&requirements.operation())
-            || self.context_window_tokens < requirements.minimum_context_tokens()
             || requirements
                 .requested_output_tokens()
                 .is_some_and(|requested| {

@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeSet,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, SystemTime},
@@ -20,8 +20,8 @@ use gateway_core::engine::credential::{
     AccountSelectionPolicy, ProviderAccountId, RotationStrategy,
 };
 use gateway_core::engine::execution::{
-    DefaultExecutionService, ProviderCircuitDecision, ProviderCircuitError, ProviderCircuitPort,
-    provider_failure_affects_circuit,
+    ClientApiKeyUsageSink, DefaultExecutionService, ExecutionService, ProviderCircuitDecision,
+    ProviderCircuitError, ProviderCircuitPort, provider_failure_affects_circuit,
 };
 use gateway_core::engine::probe::{AccountProbe, AccountProbeRequest};
 use gateway_core::engine::provider::ProviderRegistry;
@@ -33,7 +33,7 @@ use gateway_core::error::{GatewayErrorKind, ProviderErrorKind, StoreError};
 use gateway_core::operation::{
     ContentPart, GenerateRequest, Message, MessageRole, Operation, OperationKind,
 };
-use gateway_core::policy::ClientApiKeyId;
+use gateway_core::policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits};
 use gateway_core::routing::snapshot::RuntimeSnapshotHandle;
 use gateway_core::routing::{
     ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, RuntimeSnapshot,
@@ -64,6 +64,7 @@ fn account_probe_should_not_write_to_the_persistent_execution_store() {
         Arc::new(UnusedAdmissions),
         Arc::new(UnusedCircuits),
         Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
     );
 
     let error = block_on(service.probe(AccountProbeRequest {
@@ -76,6 +77,46 @@ fn account_probe_should_not_write_to_the_persistent_execution_store() {
 
     assert_eq!(error.kind(), GatewayErrorKind::NoAvailableProvider);
     assert!(!store.touched.load(Ordering::SeqCst));
+}
+
+#[test]
+fn successful_authentication_should_record_client_key_usage() {
+    let usage = Arc::new(RecordingClientApiKeyUsage::default());
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(client_snapshot()),
+        Arc::new(TrackingExecutionStore::default()),
+        ProviderRegistry::default(),
+        Arc::new(UnusedAdmissions),
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        usage.clone(),
+    );
+
+    service
+        .authenticate("sk_usage_test")
+        .expect("successful authentication");
+
+    assert_eq!(usage.recorded(), vec!["key_usage_test".to_owned()]);
+}
+
+#[derive(Default)]
+struct RecordingClientApiKeyUsage {
+    ids: Mutex<Vec<String>>,
+}
+
+impl RecordingClientApiKeyUsage {
+    fn recorded(&self) -> Vec<String> {
+        self.ids.lock().expect("recorded API Key IDs").clone()
+    }
+}
+
+impl ClientApiKeyUsageSink for RecordingClientApiKeyUsage {
+    fn record_used(&self, key_id: &ClientApiKeyId) {
+        self.ids
+            .lock()
+            .expect("recorded API Key IDs")
+            .push(key_id.as_str().to_owned());
+    }
 }
 
 #[derive(Default)]
@@ -206,11 +247,8 @@ impl NativeContinuationPort for UnusedContinuation {
 
 fn probe_snapshot() -> RuntimeSnapshot {
     let provider = ProviderKind::new("openai").expect("provider kind");
-    let capabilities = ModelCapabilities::new(
-        BTreeSet::from([OperationKind::Generate]),
-        128_000,
-        Some(16_000),
-    );
+    let capabilities =
+        ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), Some(16_000));
     RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("config revision"),
         AccountSelectionPolicy::new(
@@ -227,6 +265,28 @@ fn probe_snapshot() -> RuntimeSnapshot {
         Vec::new(),
     )
     .expect("probe snapshot")
+}
+
+fn client_snapshot() -> RuntimeSnapshot {
+    let provider = ProviderKind::new("openai").expect("provider kind");
+    RuntimeSnapshot::new(
+        ConfigRevision::new(1).expect("config revision"),
+        AccountSelectionPolicy::new(
+            RotationStrategy::Smart,
+            std::num::NonZeroU32::new(1).expect("concurrency"),
+            Duration::from_millis(1),
+        ),
+        vec![provider.clone()],
+        Vec::new(),
+        vec![ClientPolicy::new(
+            ClientApiKeyId::new("key_usage_test").expect("client API key ID"),
+            PlaintextClientApiKey::new("sk_usage_test").expect("plaintext client API key"),
+            provider,
+            true,
+            RateLimits::unlimited(),
+        )],
+    )
+    .expect("client snapshot")
 }
 
 fn probe_operation() -> Operation {

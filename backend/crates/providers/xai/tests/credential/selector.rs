@@ -4,9 +4,9 @@ use std::time::{Duration, SystemTime};
 
 use chrono::Utc;
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountRuntimeSignals, AccountSelectionPolicy, CredentialCasOutcome,
-    CredentialRevision, OpaqueProviderData, ProviderAccountId, ProviderAccountStore,
-    QuotaObservation, QuotaWriteOutcome, RotationStrategy,
+    AccountAttemptFeedback, AccountAvailability, AccountFeedbackStats, AccountRuntimeSignals,
+    AccountSelectionPolicy, CredentialCasOutcome, CredentialRevision, OpaqueProviderData,
+    ProviderAccountId, ProviderAccountStore, QuotaObservation, QuotaWriteOutcome, RotationStrategy,
 };
 use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderSchedulingState,
@@ -51,7 +51,6 @@ impl ProviderLeasePort for SchedulingCoordinator {
         Box::pin(async move {
             Ok(ProviderSchedulingState::new(
                 self.signals.lock().expect("signals").clone(),
-                None,
                 0,
             ))
         })
@@ -88,6 +87,7 @@ struct SelectorFixture {
     cache: Arc<MemoryGrokCatalogCache>,
     selector: GrokAccountSessionSelector,
     coordinator: Arc<SchedulingCoordinator>,
+    feedback: Arc<AccountFeedbackStats>,
 }
 
 impl SelectorFixture {
@@ -127,6 +127,8 @@ impl SelectorFixture {
                     last_started_at: None,
                     quota_reset_at: None,
                     quota_remaining_rank: None,
+                    failure_rate_basis_points: None,
+                    first_output_latency_ms: None,
                 },
             );
         }
@@ -140,18 +142,21 @@ impl SelectorFixture {
             repository.clone(),
             Arc::new(UnavailableBillingTransport),
         ));
+        let feedback = Arc::new(AccountFeedbackStats::default());
         let selector = GrokAccountSessionSelector::new(
             gateway_core::routing::ProviderKind::new("xai").expect("provider"),
             repository.clone(),
             catalog_cache,
             quota,
             lease_port,
+            Arc::clone(&feedback),
         );
         Self {
             store,
             cache,
             selector,
             coordinator,
+            feedback,
         }
     }
 
@@ -488,6 +493,30 @@ async fn smart_strategy_uses_fresh_provider_quota_after_load_ties() {
         .expect("quota-ranked account");
 
     assert_eq!(session.account_id(), &account_id("zzz-high-quota"));
+}
+
+#[tokio::test]
+async fn smart_strategy_uses_common_account_health_feedback() {
+    let fixture = SelectorFixture::new(&["aaa-unhealthy", "zzz-healthy"]).await;
+    let provider = gateway_core::routing::ProviderKind::new("xai").expect("provider");
+    let unhealthy = account_id("aaa-unhealthy");
+    for _ in 0..4 {
+        fixture.feedback.report(
+            &provider,
+            &unhealthy,
+            AccountAttemptFeedback::Failed {
+                first_output_ms: None,
+            },
+        );
+    }
+
+    let session = fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+        .expect("healthy account");
+
+    assert_eq!(session.account_id(), &account_id("zzz-healthy"));
 }
 
 #[tokio::test]

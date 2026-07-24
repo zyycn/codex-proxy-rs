@@ -14,7 +14,6 @@ fn snapshot_client_policy_contains_only_common_limits() {
         limits: RateLimits {
             max_concurrency: 3,
             requests_per_minute: 60,
-            tokens_per_minute: 10_000,
         },
     };
     assert_eq!(policy.limits.max_concurrency, 3);
@@ -31,8 +30,8 @@ async fn runtime_snapshot_loads_enabled_plaintext_key_without_debug_exposure() {
     sqlx::query(
         "insert into client_api_keys (
            id, name, provider_kind, key, enabled, max_concurrency, requests_per_minute,
-           tokens_per_minute, created_at, updated_at
-         ) values ('key_snapshot', 'snapshot', 'xai', $1, true, 2, 60, 10000, now(), now())",
+           created_at, updated_at
+         ) values ('key_snapshot', 'snapshot', 'xai', $1, true, 2, 60, now(), now())",
     )
     .bind(&plaintext)
     .execute(&database.pool)

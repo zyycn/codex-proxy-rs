@@ -280,7 +280,7 @@ fn explicit_session_should_enable_the_noop_native_cache_route() {
 }
 
 #[test]
-fn explicit_session_should_preserve_a_client_tool_contract() {
+fn explicit_session_should_merge_client_tools_into_the_native_cache_route() {
     let request = raw_request(json!({
         "model": "client",
         "prompt_cache_key": "conversation-42",
@@ -299,13 +299,85 @@ fn explicit_session_should_preserve_a_client_tool_contract() {
 
     assert_eq!(
         body.pointer("/tools"),
-        Some(&json!([{
-            "type": "function",
-            "name": "read_file",
-            "parameters": {"type": "object"}
-        }]))
+        Some(&json!([
+            {
+                "type": "function",
+                "name": "read_file",
+                "parameters": {"type": "object"}
+            },
+            {"type": "web_search"},
+            {"type": "x_search"}
+        ]))
     );
     assert_eq!(body.pointer("/tool_choice"), Some(&json!("auto")));
+}
+
+#[test]
+fn explicit_session_should_enable_cache_after_codex_additional_tools_normalization() {
+    let request = raw_request(json!({
+        "model": "client",
+        "prompt_cache_key": "conversation-42",
+        "tool_choice": "auto",
+        "input": [
+            {
+                "type": "additional_tools",
+                "role": "developer",
+                "tools": [
+                    {"type": "custom", "name": "apply_patch"},
+                    {
+                        "type": "function",
+                        "name": "read_file",
+                        "parameters": {"type": "object"}
+                    }
+                ]
+            },
+            {"type": "message", "role": "user", "content": "first"}
+        ]
+    }));
+
+    let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
+        .expect("Codex additional tools");
+    let body = Value::Object(encoded.body().clone());
+
+    assert_eq!(body.pointer("/input/0/type"), Some(&json!("message")));
+    assert_eq!(body.pointer("/tools/0/name"), Some(&json!("apply_patch")));
+    assert_eq!(
+        body.pointer("/tools/0/parameters/required"),
+        Some(&json!(["patch"]))
+    );
+    assert_eq!(body.pointer("/tools/1/name"), Some(&json!("read_file")));
+    assert_eq!(body.pointer("/tools/2/type"), Some(&json!("web_search")));
+    assert_eq!(body.pointer("/tools/3/type"), Some(&json!("x_search")));
+    assert_eq!(body.pointer("/tool_choice"), Some(&json!("auto")));
+}
+
+#[test]
+fn explicit_session_should_not_duplicate_existing_native_cache_tools() {
+    let request = raw_request(json!({
+        "model": "client",
+        "prompt_cache_key": "conversation-42",
+        "input": "first",
+        "tools": [
+            {"type": "web_search", "filters": {"allowed_domains": ["example.com"]}},
+            {"type": "x_search"},
+            {
+                "type": "function",
+                "name": "read_file",
+                "parameters": {"type": "object"}
+            }
+        ],
+        "tool_choice": "required"
+    }));
+
+    let encoded =
+        GrokResponsesRequest::encode(&request, "grok-4.5", &client_key()).expect("request");
+    let body = Value::Object(encoded.body().clone());
+
+    assert_eq!(body.pointer("/tools/0/type"), Some(&json!("web_search")));
+    assert_eq!(body.pointer("/tools/1/type"), Some(&json!("x_search")));
+    assert_eq!(body.pointer("/tools/2/name"), Some(&json!("read_file")));
+    assert_eq!(body.pointer("/tools/3"), None);
+    assert_eq!(body.pointer("/tool_choice"), Some(&json!("required")));
 }
 
 #[test]

@@ -4,12 +4,12 @@ use std::{collections::BTreeMap, fmt};
 
 use chrono::{DateTime, Utc};
 
-use gateway_core::routing::{ProviderKind, PublicModelId, UpstreamModelId};
+use gateway_core::routing::{PublicModelId, UpstreamModelId};
 
 use super::Revision;
 
-/// Provider → 客户端模型 → 上游模型的精确映射。
-pub type ProviderModelMappings = BTreeMap<ProviderKind, BTreeMap<PublicModelId, UpstreamModelId>>;
+/// 客户端模型到上游模型的全局精确映射。
+pub type ModelMappings = BTreeMap<PublicModelId, UpstreamModelId>;
 
 /// 账号调度策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,7 +24,7 @@ pub enum RotationStrategy {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
     pub config_revision: Revision,
-    pub provider_model_mappings: ProviderModelMappings,
+    pub model_mappings: ModelMappings,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
     pub max_concurrent_per_account: u32,
@@ -40,7 +40,7 @@ pub struct RuntimeSettings {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplaceRuntimeSettings {
     pub expected_config_revision: Revision,
-    pub provider_model_mappings: ProviderModelMappings,
+    pub model_mappings: ModelMappings,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
     pub max_concurrent_per_account: u32,

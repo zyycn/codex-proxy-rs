@@ -42,11 +42,11 @@ where
         }
     }
 
-    /// 先创建唯一请求行，再返回由 Core 完整拥有 retry/commit 的流式会话。
+    /// 账号选择成功后创建唯一请求行，再返回由 Core 完整拥有 retry/commit 的流式会话。
     ///
     /// # Errors
     ///
-    /// 初始持久化、取消或已过 deadline 时返回稳定错误。
+    /// 账号选择后的持久化、取消或已过 deadline 时返回稳定错误。
     pub async fn start(
         &self,
         request: NewModelRequest,
@@ -60,7 +60,6 @@ where
         let client_api_key_ref = request.client_api_key_ref.clone();
         let request_started_at = request.started_at;
         let deadline = request.deadline_at;
-        self.engine.store().create_model_request(request).await?;
         let gateway_response_id = format!("resp_{}", Uuid::now_v7().simple());
         let account_state_owner = continuation
             .as_ref()
@@ -81,6 +80,8 @@ where
             client_api_key_ref,
             request_started_at,
             deadline,
+            pending_request: Some(request),
+            request_persisted: false,
             operation,
             plan,
             required_account,
@@ -105,6 +106,7 @@ where
             gateway_response_id,
             client_response_id: None,
             upstream_response_id: None,
+            last_account_exhaustion: None,
             provider_attempt_outcomes: Vec::new(),
             before_commit: VecDeque::new(),
         };
@@ -157,6 +159,8 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     client_api_key_ref: crate::policy::ClientApiKeyId,
     request_started_at: SystemTime,
     deadline: SystemTime,
+    pending_request: Option<NewModelRequest>,
+    request_persisted: bool,
     operation: Operation,
     plan: RoutingPlan,
     required_account: Option<crate::engine::credential::ProviderAccountId>,
@@ -181,6 +185,7 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     gateway_response_id: String,
     client_response_id: Option<String>,
     upstream_response_id: Option<String>,
+    last_account_exhaustion: Option<ProviderError>,
     provider_attempt_outcomes: Vec<ProviderAttemptOutcome>,
     before_commit: VecDeque<ProviderEvent>,
 }
@@ -315,10 +320,12 @@ where
         if self.client_status_code.is_some() {
             return Err(EngineError::InvalidDeliveryState);
         }
-        self.engine
-            .store()
-            .record_client_status(&self.request_id, client_status_code)
-            .await?;
+        if self.request_persisted {
+            self.engine
+                .store()
+                .record_client_status(&self.request_id, client_status_code)
+                .await?;
+        }
         self.client_status_code = Some(client_status_code);
         Ok(())
     }
@@ -522,8 +529,17 @@ where
             ProviderBoundary::Result(result) => match *result {
                 Ok(stream) => stream,
                 Err(error) => {
-                    if error.kind() != ProviderErrorKind::Unavailable
-                        || error.send_state() != UpstreamSendState::NotSent
+                    if error.kind() == ProviderErrorKind::NoEligibleAccount
+                        && let Some(exhaustion) = self.last_account_exhaustion.clone()
+                    {
+                        let engine_error = provider_engine_error(&exhaustion);
+                        self.finish_provider_error(&exhaustion).await?;
+                        return Err(engine_error);
+                    }
+                    if !(matches!(
+                        error.kind(),
+                        ProviderErrorKind::Unavailable | ProviderErrorKind::NoEligibleAccount
+                    ) && error.send_state() == UpstreamSendState::NotSent)
                     {
                         self.record_provider_failure(candidate.provider().clone(), error.kind());
                     }
@@ -607,6 +623,7 @@ where
                 account.clone(),
             ));
         }
+        self.persist_request().await?;
         self.engine
             .store()
             .record_attempt(AttemptRecord {
@@ -631,6 +648,19 @@ where
             send_observed: false,
             response_observation: None,
         });
+        Ok(())
+    }
+
+    async fn persist_request(&mut self) -> Result<(), EngineError> {
+        if self.request_persisted {
+            return Ok(());
+        }
+        let request = self
+            .pending_request
+            .take()
+            .ok_or(EngineError::InvalidDeliveryState)?;
+        self.engine.store().create_model_request(request).await?;
+        self.request_persisted = true;
         Ok(())
     }
 
@@ -732,6 +762,12 @@ where
     /// 返回 `true` 表示调用方必须丢弃本 attempt 已收集的未提交事件。
     async fn handle_stream_error(&mut self, error: ProviderError) -> Result<bool, EngineError> {
         let current = self.current.take().ok_or(EngineError::EmptyRoutingPlan)?;
+        if matches!(
+            error.kind(),
+            ProviderErrorKind::RateLimited | ProviderErrorKind::QuotaExhausted
+        ) {
+            self.last_account_exhaustion = Some(error.clone());
+        }
         self.record_provider_failure(current.metadata.provider().clone(), error.kind());
         let send_state = if current.send_observed {
             UpstreamSendState::Sent
@@ -1023,6 +1059,10 @@ where
         if self.finalized {
             return Ok(());
         }
+        if !self.request_persisted {
+            self.finalized = true;
+            return Ok(());
+        }
         let completed_at = SystemTime::now();
         self.timings.latency_ms = Some(elapsed_ms(self.request_started_at, completed_at));
         let upstream_request_id = self.current.as_ref().and_then(|current| {
@@ -1233,7 +1273,7 @@ fn provider_engine_error(error: &ProviderError) -> EngineError {
     if error.kind() == ProviderErrorKind::Cancelled {
         EngineError::Cancelled
     } else {
-        EngineError::Provider(ProviderError::new(error.kind(), error.send_state()))
+        EngineError::Provider(error.clone())
     }
 }
 

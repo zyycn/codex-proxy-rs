@@ -21,6 +21,7 @@ use super::types::{
     CreateGrokCredential, GrokAccountProfile, GrokCredentialAvailability, GrokCredentialRecord,
     GrokOAuthSecret, GrokOAuthSecretWire, OwnedGrokOAuthSecretWire, PreparedGrokCredentialRotation,
     RotateGrokCredential, RotateManagedGrokCredential, UpdateGrokCredentialState,
+    XAI_AUTHENTICATION_KIND_OAUTH,
 };
 use crate::{GROK_CLI_BASE_URL, OFFICIAL_CLIENT_ID, SecretValue, VerifiedTokenSet};
 
@@ -158,8 +159,9 @@ impl GrokCredentialAdmin {
             provider,
             input.name.clone(),
             input.account.subject.clone(),
+            XAI_AUTHENTICATION_KIND_OAUTH.to_owned(),
             revision,
-            to_system_time(input.account.access_token_expires_at),
+            Some(to_system_time(input.account.access_token_expires_at)),
         )
         .with_profile(
             input.account.email.clone(),
@@ -253,7 +255,12 @@ impl GrokCredentialAdmin {
             credentials.insert(
                 "expires_at".to_owned(),
                 Value::String(
-                    DateTime::<Utc>::from(loaded.account.access_token_expires_at()).to_rfc3339(),
+                    loaded
+                        .account
+                        .access_token_expires_at()
+                        .map(DateTime::<Utc>::from)
+                        .ok_or(GrokCredentialRepositoryError::InvalidCredentialData)?
+                        .to_rfc3339(),
                 ),
             );
             credentials.insert(
@@ -683,7 +690,7 @@ fn prepare_rotation(
         profile.clone(),
         encode_secret(&merged_secret, verified_account)?,
         true,
-        to_system_time(verified_account.access_token_expires_at),
+        Some(to_system_time(verified_account.access_token_expires_at)),
         Some(to_system_time(next_refresh_at)),
     )
     .map_err(|_| GrokCredentialRepositoryError::InvalidCredentialData)?;
@@ -845,7 +852,10 @@ fn availability(value: GrokCredentialAvailability) -> AccountAvailability {
 }
 
 fn ensure_xai(account: &ProviderAccount) -> Result<(), GrokCredentialRepositoryError> {
-    if account.provider().as_str() == XAI_PROVIDER_KIND {
+    if account.provider().as_str() == XAI_PROVIDER_KIND
+        && account.authentication_kind() == XAI_AUTHENTICATION_KIND_OAUTH
+        && account.access_token_expires_at().is_some()
+    {
         Ok(())
     } else {
         Err(GrokCredentialRepositoryError::WrongProviderKind)

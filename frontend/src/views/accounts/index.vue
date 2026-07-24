@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronDown, Download, Plus, Search, Trash2 } from '@lucide/vue'
+import { ChevronDown, Download, Search, Trash2, Upload } from '@lucide/vue'
 import { ref } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -10,7 +10,8 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
-import ProviderBadge from '@/components/ProviderBadge.vue'
+import ProviderFilterSegmented from '@/components/ProviderFilterSegmented.vue'
+import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import AccountConnectionTestModal from './components/AccountConnectionTestModal.vue'
 import AccountCreateModal from './components/AccountCreateModal.vue'
 import AccountIdentityCell from './components/AccountIdentityCell.vue'
@@ -28,12 +29,6 @@ import { useAccountsTable } from './composables/useAccountsTable'
 import { accountColumns, accountStatusFilterOptions } from './constants'
 
 const selectedIds = ref<Set<string>>(new Set())
-const providerFilterOptions = [
-  { label: '全部平台', value: '' },
-  { label: 'OpenAI', value: 'openai' },
-  { label: 'xAI', value: 'xai' },
-]
-
 const {
   totalAccounts,
   loading,
@@ -159,17 +154,15 @@ const {
             </BaseInput>
 
             <BaseSelect
-              v-model="providerQuery"
-              :options="providerFilterOptions"
-              aria-label="按平台筛选"
-              class="w-34 shrink-0 [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] md:w-40"
-            />
-
-            <BaseSelect
               v-model="statusQuery"
               :options="accountStatusFilterOptions"
               aria-label="按账号状态筛选"
               class="w-34 shrink-0 [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] md:w-40"
+            />
+
+            <ProviderFilterSegmented
+              v-model="providerQuery"
+              class="w-31 shrink-0"
             />
           </div>
 
@@ -193,8 +186,8 @@ const {
               导出选中 ({{ selectedIds.size }})
             </BaseButton>
             <BaseButton variant="primary" @click="openCreateAccount">
-              <Plus class="size-4" />
-              添加账号
+              <Upload class="size-4" />
+              导入账号
             </BaseButton>
           </div>
         </div>
@@ -252,7 +245,10 @@ const {
           </template>
 
           <template #provider="{ row }">
-            <ProviderBadge :provider="row.provider" />
+            <ProviderIconGroup
+              :provider="row.provider"
+              :authentication-kind="row.authenticationKind"
+            />
           </template>
 
           <template #status="{ row }">

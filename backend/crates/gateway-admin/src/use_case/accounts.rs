@@ -432,7 +432,12 @@ fn account_status(account: &AccountRecord, now: chrono::DateTime<Utc>) -> Accoun
                 AccountStatus::QuotaExhausted
             }
             crate::model::accounts::AccountAvailability::Expired => AccountStatus::Expired,
-            _ if account.access_token_expires_at <= now => AccountStatus::Expired,
+            _ if account
+                .access_token_expires_at
+                .is_some_and(|expires_at| expires_at <= now) =>
+            {
+                AccountStatus::Expired
+            }
             crate::model::accounts::AccountAvailability::Ready => AccountStatus::Active,
             _ => AccountStatus::Attention,
         }

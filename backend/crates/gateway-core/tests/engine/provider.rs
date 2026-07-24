@@ -3,8 +3,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
-use futures::stream;
+use futures::{StreamExt, stream};
+use futures_timer::Delay;
 
+use gateway_core::engine::credential::{
+    AccountFeedbackStats, CredentialRevision, ProviderAccountId,
+};
 use gateway_core::engine::provider::{
     EventStream, Provider, ProviderCallMetadata, ProviderCatalogGeneration,
     ProviderModelCapabilities, ProviderRegistry, ProviderRequest, ProviderResource, ProviderStream,
@@ -12,6 +16,7 @@ use gateway_core::engine::provider::{
 };
 use gateway_core::engine::{AttemptContext, UpstreamSendState};
 use gateway_core::error::{IdentifierError, ProviderError, ProviderErrorKind};
+use gateway_core::event::{ContentItem, ContentKind, GatewayEvent, ResponseMeta, TextDelta};
 use gateway_core::operation::OperationKind;
 use gateway_core::routing::{ModelCapabilities, ProviderKind, UpstreamModelId};
 
@@ -32,7 +37,7 @@ impl Provider for NamedProvider {
     ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
         Ok(vec![ProviderModelCapabilities::new(
             UpstreamModelId::new("live-model").expect("model"),
-            ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), 128_000, None),
+            ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), None),
         )])
     }
 
@@ -112,6 +117,96 @@ fn provider_stream_should_release_owned_lease_on_drop() {
     drop(provider_stream);
 
     assert!(released.load(Ordering::SeqCst));
+}
+
+#[test]
+fn provider_stream_should_report_common_account_success_and_first_output() {
+    let feedback = Arc::new(AccountFeedbackStats::default());
+    let provider = ProviderKind::new("openai").expect("valid provider");
+    let account = ProviderAccountId::new("acct_stream_success").expect("account");
+    let metadata = ProviderCallMetadata::new(
+        provider.clone(),
+        UpstreamModelId::new("gpt-5").expect("valid model"),
+        ProviderResource::Account {
+            id: account.clone(),
+            revision: CredentialRevision::new(1).expect("revision"),
+        },
+        UpstreamTransport::new("http_sse").expect("valid transport"),
+    );
+    let response = ResponseMeta::new("resp_upstream", "gpt-5");
+    let events: EventStream = Box::pin(
+        stream::iter([
+            Ok(GatewayEvent::Started(response.clone()).into()),
+            Ok(GatewayEvent::ContentAdded(ContentItem::new(0, ContentKind::Text)).into()),
+            Ok(GatewayEvent::TextDelta(TextDelta {
+                content_index: 0,
+                text: "hello".to_owned(),
+            })
+            .into()),
+            Ok(GatewayEvent::Completed(response).into()),
+        ])
+        .then(|event| async move {
+            Delay::new(std::time::Duration::from_millis(2)).await;
+            event
+        }),
+    );
+    let mut provider_stream =
+        ProviderStream::new(metadata, events, ()).with_account_feedback(Arc::clone(&feedback));
+
+    futures::executor::block_on(async {
+        while let Some(event) = provider_stream.next().await {
+            event.expect("valid provider event");
+        }
+    });
+
+    let (failure_rate, first_output_ms) = feedback.scheduling_signals(&provider, &account);
+    assert_eq!(failure_rate, Some(0));
+    assert!(first_output_ms.is_some_and(|value| value >= 2));
+}
+
+#[test]
+fn provider_stream_should_report_sent_failure_but_ignore_not_sent_failure() {
+    let feedback = Arc::new(AccountFeedbackStats::default());
+    let provider = ProviderKind::new("xai").expect("valid provider");
+    let sent_account = ProviderAccountId::new("acct_stream_sent").expect("account");
+    let not_sent_account = ProviderAccountId::new("acct_stream_not_sent").expect("account");
+    for (account, send_state) in [
+        (sent_account.clone(), UpstreamSendState::Sent),
+        (not_sent_account.clone(), UpstreamSendState::NotSent),
+    ] {
+        let metadata = ProviderCallMetadata::new(
+            provider.clone(),
+            UpstreamModelId::new("grok-4.5").expect("valid model"),
+            ProviderResource::Account {
+                id: account,
+                revision: CredentialRevision::new(1).expect("revision"),
+            },
+            UpstreamTransport::new("http_sse").expect("valid transport"),
+        );
+        let events: EventStream = Box::pin(stream::iter([Err(ProviderError::new(
+            ProviderErrorKind::Transport,
+            send_state,
+        ))]));
+        let mut provider_stream =
+            ProviderStream::new(metadata, events, ()).with_account_feedback(Arc::clone(&feedback));
+        futures::executor::block_on(async {
+            assert!(
+                provider_stream
+                    .next()
+                    .await
+                    .is_some_and(|event| event.is_err())
+            );
+        });
+    }
+
+    assert_eq!(
+        feedback.scheduling_signals(&provider, &sent_account).0,
+        Some(2_000)
+    );
+    assert_eq!(
+        feedback.scheduling_signals(&provider, &not_sent_account),
+        (None, None)
+    );
 }
 
 #[test]

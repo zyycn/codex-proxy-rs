@@ -144,7 +144,6 @@ pub struct CreateClientKeyRequest {
     provider_kind: String,
     max_concurrency: u64,
     requests_per_minute: u64,
-    tokens_per_minute: u64,
 }
 
 impl CreateClientKeyRequest {
@@ -156,7 +155,6 @@ impl CreateClientKeyRequest {
         validate_provider_kind(&self.provider_kind)?;
         validate_limit(self.max_concurrency, "maxConcurrency")?;
         validate_limit(self.requests_per_minute, "requestsPerMinute")?;
-        validate_limit(self.tokens_per_minute, "tokensPerMinute")?;
         Ok(CreateClientKey {
             expected_config_revision: revision(self.expected_config_revision)?,
             name: self.name,
@@ -166,7 +164,6 @@ impl CreateClientKeyRequest {
             limits: RateLimits {
                 max_concurrency: self.max_concurrency,
                 requests_per_minute: self.requests_per_minute,
-                tokens_per_minute: self.tokens_per_minute,
             },
         })
     }
@@ -183,7 +180,6 @@ pub struct UpdateClientKeyRequest {
     provider_kind: String,
     max_concurrency: u64,
     requests_per_minute: u64,
-    tokens_per_minute: u64,
 }
 
 impl UpdateClientKeyRequest {
@@ -196,7 +192,6 @@ impl UpdateClientKeyRequest {
         validate_provider_kind(&self.provider_kind)?;
         validate_limit(self.max_concurrency, "maxConcurrency")?;
         validate_limit(self.requests_per_minute, "requestsPerMinute")?;
-        validate_limit(self.tokens_per_minute, "tokensPerMinute")?;
         Ok(UpdateClientKey {
             expected_config_revision: revision(self.expected_config_revision)?,
             id: client_key_id(self.id, "clientKeyMutationNotFound")?,
@@ -207,7 +202,6 @@ impl UpdateClientKeyRequest {
             limits: RateLimits {
                 max_concurrency: self.max_concurrency,
                 requests_per_minute: self.requests_per_minute,
-                tokens_per_minute: self.tokens_per_minute,
             },
         })
     }
@@ -268,7 +262,6 @@ pub struct ClientKeyView {
     enabled: bool,
     max_concurrency: u64,
     requests_per_minute: u64,
-    tokens_per_minute: u64,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     last_used_at: Option<DateTime<Utc>>,
@@ -285,7 +278,6 @@ impl From<ClientKeyRecord> for ClientKeyView {
             enabled: record.enabled,
             max_concurrency: record.limits.max_concurrency,
             requests_per_minute: record.limits.requests_per_minute,
-            tokens_per_minute: record.limits.tokens_per_minute,
             created_at: record.created_at,
             updated_at: record.updated_at,
             last_used_at: record.last_used_at,

@@ -579,6 +579,7 @@ pub struct UsageRecordView {
     pub client_api_key_id: Option<String>,
     pub kind: String,
     pub provider: Option<String>,
+    pub authentication_kind: Option<String>,
     pub account_id: Option<String>,
     pub account_email: Option<String>,
     pub route: String,
@@ -629,9 +630,60 @@ pub struct UsageRecordMetadataView {
     pub protocol: String,
     pub logical_outcome: String,
     pub attempt_count: u64,
+    pub requested_model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_ip: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_preset: Option<String>,
+    pub compact: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_status_code: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_status_code: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_request_id: Option<String>,
     pub websocket_pool: Option<String>,
     pub image_generation_requested: bool,
     pub image_generation_succeeded: Option<bool>,
+    pub latency_details: UsageLatencyDetailsView,
+}
+
+/// 逻辑请求在上游和输出阶段测得的时延事实。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageLatencyDetailsView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport_decision_wait_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ws_connect_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_headers_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_event_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_reasoning_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_text_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_token_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub openai_processing_ms: Option<u64>,
 }
 
 /// 单次上游尝试展示。
@@ -797,11 +849,23 @@ pub struct DashboardCredentialUsageView {
 #[serde(rename_all = "camelCase")]
 pub struct DashboardAccountUsageView {
     pub id: String,
+    pub provider: String,
+    pub authentication_kind: String,
     pub email: String,
     pub plan_type: Option<String>,
     pub tokens: String,
+    pub request_count: u64,
+    pub request_buckets: Vec<DashboardAccountRequestBucketView>,
     pub quota_used_percent: Option<f64>,
     pub last_used: String,
+}
+
+/// Dashboard 账号单小时请求数。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardAccountRequestBucketView {
+    pub bucket_start: DateTime<Utc>,
+    pub request_count: u64,
 }
 
 /// Provider 账号池的持久事实汇总。
@@ -1676,12 +1740,46 @@ fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView {
         .upstream_transport
         .clone()
         .or_else(|| Some(record.client_transport.clone()));
+    let metadata = UsageRecordMetadataView {
+        protocol: record.protocol.clone(),
+        logical_outcome: outcome.clone(),
+        attempt_count: u64::from(record.attempt_count),
+        requested_model: record.requested_model_id.clone(),
+        upstream_model: record.upstream_model_id.clone(),
+        client_ip: record.client_ip.clone(),
+        user_agent: record.user_agent.clone(),
+        reasoning_effort: record.reasoning_effort.clone(),
+        reasoning_preset: record.reasoning_preset.clone(),
+        compact: record.compact,
+        request_kind: record.request_kind.clone(),
+        subagent_kind: record.subagent_kind.clone(),
+        transport: transport.clone(),
+        http_version: record.http_version.clone(),
+        client_status_code: record.client_status_code.map(i64::from),
+        upstream_status_code: record.upstream_status_code.map(i64::from),
+        response_id: record.client_response_id.clone(),
+        upstream_request_id: record.upstream_request_id.clone(),
+        websocket_pool: record.websocket_pool.clone(),
+        image_generation_requested: record.image_generation_requested,
+        image_generation_succeeded: record.image_generation_succeeded,
+        latency_details: UsageLatencyDetailsView {
+            transport_decision_wait_ms: record.transport_decision_wait_ms,
+            ws_connect_ms: record.connect_ms,
+            upstream_headers_ms: record.headers_ms,
+            first_event_ms: record.first_event_ms,
+            first_reasoning_ms: record.first_reasoning_ms,
+            first_text_ms: record.first_text_ms,
+            first_token_ms: record.first_token_ms,
+            openai_processing_ms: record.provider_processing_ms,
+        },
+    };
     UsageRecordView {
         id: record.id.clone(),
         request_id: record.id,
         client_api_key_id: Some(record.client_api_key_ref),
         kind: record.operation,
         provider: record.provider_kind,
+        authentication_kind: record.provider_account_authentication_kind,
         account_id: record.provider_account_ref,
         account_email: record.provider_account_email,
         route: record.endpoint,
@@ -1705,14 +1803,7 @@ fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView {
         image_input_tokens: record.image_input_tokens,
         image_output_tokens: record.image_output_tokens,
         message,
-        metadata: UsageRecordMetadataView {
-            protocol: record.protocol,
-            logical_outcome: outcome.clone(),
-            attempt_count: u64::from(record.attempt_count),
-            websocket_pool: record.websocket_pool,
-            image_generation_requested: record.image_generation_requested,
-            image_generation_succeeded: record.image_generation_succeeded,
-        },
+        metadata,
         created_at: record.started_at,
         created_at_display: china_datetime(&record.started_at),
         client_ip: record.client_ip,
@@ -2107,6 +2198,8 @@ fn dashboard_view(result: domain::DashboardResult, kind: TrendKind) -> Dashboard
     for credential in account_usage {
         account_usage_views.push(DashboardAccountUsageView {
             id: credential.account_id.clone(),
+            provider: credential.provider_kind.clone(),
+            authentication_kind: credential.authentication_kind.clone(),
             email: credential
                 .email
                 .clone()
@@ -2115,7 +2208,16 @@ fn dashboard_view(result: domain::DashboardResult, kind: TrendKind) -> Dashboard
             tokens: credential
                 .total_tokens
                 .map_or_else(|| "—".to_owned(), format_compact_number),
-            quota_used_percent: None,
+            request_count: credential.request_count,
+            request_buckets: credential
+                .request_buckets
+                .iter()
+                .map(|bucket| DashboardAccountRequestBucketView {
+                    bucket_start: bucket.bucket_start,
+                    request_count: bucket.request_count,
+                })
+                .collect(),
+            quota_used_percent: credential.quota_used_percent,
             last_used: relative_time(credential.last_used_at, range.end),
         });
         credential_usage_views.push(DashboardCredentialUsageView {

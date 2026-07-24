@@ -22,7 +22,7 @@ use gateway_admin::ports::provider::ProviderAdminErrorKind;
 use gateway_core::engine::credential::{
     AccountAvailability, AccountSelectionPolicy, CredentialRevision, NewProviderAccount,
     OpaqueProviderData, PlaintextCredential, ProviderAccount, ProviderAccountId,
-    ProviderAccountStore, RotationStrategy,
+    ProviderAccountStore, QuotaObservation, RotationStrategy,
 };
 use gateway_core::engine::provider::ProviderRequest;
 use gateway_core::engine::{
@@ -52,7 +52,9 @@ use provider_openai::transport::profile::APPCAST_POLL_INTERVAL;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 
-use crate::support::{MemoryAccountStore, TestLeaseCoordinator, profile, secret};
+use crate::support::{
+    MemoryAccountStore, MemorySessionAffinity, TestLeaseCoordinator, profile, secret,
+};
 
 #[tokio::test]
 #[ignore = "requires CODEX_REAL_ACCOUNT_FIXTURE and consumes live OpenAI quota"]
@@ -127,8 +129,9 @@ fn prepared_account(
         value.provider_kind,
         value.name,
         value.upstream_user_id,
+        value.authentication_kind,
         CredentialRevision::new(1).expect("initial revision"),
-        value.access_token_expires_at.into(),
+        value.access_token_expires_at.map(Into::into),
     )
     .with_profile(value.email, value.upstream_account_id, value.plan_type)
     .with_runtime_state(value.enabled, AccountAvailability::Ready, None)
@@ -158,7 +161,7 @@ fn planned_real_request(upstream_model: UpstreamModelId, operation: Operation) -
         vec![ProviderModel::new(
             provider,
             upstream_model,
-            ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), 1_000_000, None),
+            ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), None),
         )],
         vec![],
     )
@@ -467,6 +470,81 @@ async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export
 }
 
 #[tokio::test]
+async fn openai_admin_provider_projects_codex_additional_limit_as_the_primary_quota() {
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_admin_canonical_quota".to_owned(),
+            name: "admin canonical quota".to_owned(),
+            secret: secret("admin-canonical-quota-access"),
+            verified_account: profile("chatgpt-admin-canonical-quota"),
+            next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await;
+    let account = store
+        .account("acct_admin_canonical_quota")
+        .expect("stored account");
+    let raw = json!({
+        "rate_limit": {
+            "primary_window": {
+                "used_percent": 91,
+                "reset_at": 1_900_000_000,
+                "limit_window_seconds": 2_592_000
+            }
+        },
+        "additional_rate_limits": [{
+            "limit_name": "custom_codex_label",
+            "metered_feature": "codex",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 2,
+                    "reset_at": 1_900_000_000,
+                    "limit_window_seconds": 2_592_000
+                }
+            }
+        }]
+    });
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: Some(OpaqueProviderData::new(
+                raw.as_object().expect("quota object").clone(),
+            )),
+            observed_at: Some(SystemTime::now()),
+        })
+        .await
+        .expect("persist quota");
+    let bundle = provider_openai::initialize(
+        valid_config(),
+        provider_ports_with(Arc::clone(&store), Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .expect("OpenAI bundle");
+
+    let quota = bundle
+        .admin_provider()
+        .quota(ProviderQuotaRequest {
+            account_id: account.id().clone(),
+            refresh: false,
+            rolling_usage: None,
+        })
+        .await
+        .expect("cached quota");
+    let monthly = quota
+        .windows
+        .iter()
+        .filter(|window| window.group == "monthly")
+        .collect::<Vec<_>>();
+
+    assert_eq!(monthly.len(), 1);
+    assert_eq!(monthly[0].label, "月限额");
+    assert_eq!(monthly[0].source.as_deref(), Some("core"));
+    assert_eq!(monthly[0].used_percent, Some(2.0));
+}
+
+#[tokio::test]
 async fn openai_admin_provider_rejects_unprepared_mutations_before_store_commit() {
     let store = Arc::new(MemoryAccountStore::default());
     store
@@ -527,6 +605,7 @@ fn provider_ports_with(
     ProviderStorePorts::new(
         accounts,
         Arc::new(TestLeaseCoordinator::default()),
+        Arc::new(MemorySessionAffinity::default()),
         Arc::new(TestCatalogCache::default()),
         Arc::new(TestCredentialState),
         Arc::new(TestCooldown),
@@ -545,9 +624,10 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
         upstream_user_id: account.upstream_user_id().to_owned(),
         upstream_account_id: account.upstream_account_id().map(str::to_owned),
         plan_type: account.plan_type().map(str::to_owned),
+        authentication_kind: account.authentication_kind().to_owned(),
         credential_revision: Revision::new(account.revision().get()).expect("revision"),
         has_refresh_token: account.has_refresh_token(),
-        access_token_expires_at: DateTime::<Utc>::from(account.access_token_expires_at()),
+        access_token_expires_at: account.access_token_expires_at().map(DateTime::<Utc>::from),
         next_refresh_at: account.next_refresh_at().map(DateTime::<Utc>::from),
         enabled: account.enabled(),
         availability: AdminAccountAvailability::Ready,

@@ -396,28 +396,7 @@ fn derive_account_scoped_local_conversation_id(
     request: &mut CodexResponsesRequest,
     installation_id: &str,
 ) {
-    let anchor = request
-        .prompt_cache_key()
-        .map(|value| ("prompt-cache", value.to_owned()))
-        .or_else(|| {
-            request
-                .client_session_id
-                .as_deref()
-                .map(|value| ("session", value.to_owned()))
-        })
-        .or_else(|| {
-            request
-                .client_thread_id
-                .as_deref()
-                .map(|value| ("thread", value.to_owned()))
-        })
-        .or_else(|| {
-            request
-                .client_conversation_id
-                .as_deref()
-                .map(|value| ("conversation", value.to_owned()))
-        })
-        .or_else(|| derive_stable_conversation_key(request).map(|value| ("request", value)));
+    let anchor = derive_conversation_anchor(request);
     let Some((domain, value)) = anchor else {
         return;
     };
@@ -431,6 +410,33 @@ fn derive_account_scoped_local_conversation_id(
         ],
     );
     request.local_conversation_id = Some(format!("lc_{}", hex::encode(digest)));
+}
+
+pub(crate) fn derive_conversation_anchor(
+    request: &CodexResponsesRequest,
+) -> Option<(&'static str, String)> {
+    request
+        .client_session_id
+        .as_deref()
+        .map(|value| ("session", value.to_owned()))
+        .or_else(|| {
+            request
+                .client_conversation_id
+                .as_deref()
+                .map(|value| ("conversation", value.to_owned()))
+        })
+        .or_else(|| {
+            request
+                .client_thread_id
+                .as_deref()
+                .map(|value| ("thread", value.to_owned()))
+        })
+        .or_else(|| {
+            request
+                .prompt_cache_key()
+                .map(|value| ("prompt-cache", value.to_owned()))
+        })
+        .or_else(|| derive_stable_conversation_key(request).map(|value| ("request", value)))
 }
 
 const LEADING_SYSTEM_REMINDER_OPEN: &str = "<system-reminder>";

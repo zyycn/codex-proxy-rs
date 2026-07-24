@@ -82,6 +82,48 @@ fn decoder_should_normalize_text_usage_and_completion() {
 }
 
 #[test]
+fn decoder_should_restore_done_only_reasoning_and_text_as_canonical_facts() {
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_done_only\",\"model\":\"gpt-test\"}}\n\n",
+        "event: response.output_item.done\n",
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"plan\"}]}}\n\n",
+        "event: response.output_item.done\n",
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\"}]}}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_done_only\",\"model\":\"gpt-test\",\"status\":\"completed\"}}\n\n",
+    );
+
+    let events = CodexCanonicalDecoder::new("fallback")
+        .push(body.as_bytes())
+        .expect("done-only output should be canonicalized");
+    let facts = canonical_facts(&events);
+    let wire_types = events
+        .iter()
+        .filter_map(ProviderEvent::wire_event)
+        .filter_map(|wire| wire.event_type())
+        .collect::<Vec<_>>();
+
+    assert!(facts.iter().any(|event| matches!(
+        event,
+        GatewayEvent::ReasoningDelta(delta) if delta.text == "plan"
+    )));
+    assert!(facts.iter().any(|event| matches!(
+        event,
+        GatewayEvent::TextDelta(delta) if delta.text == "answer"
+    )));
+    assert_eq!(
+        wire_types,
+        vec![
+            "response.created",
+            "response.output_item.done",
+            "response.output_item.done",
+            "response.completed",
+        ]
+    );
+}
+
+#[test]
 fn decoder_should_preserve_image_tool_tokens_in_canonical_usage() {
     let body = concat!(
         "event: response.created\n",

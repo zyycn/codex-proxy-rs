@@ -5,9 +5,10 @@ use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 use thiserror::Error;
 
+use super::agent_identity::{CodexAgentIdentityError, CodexAgentIdentitySecret};
 use super::types::{
-    CodexAccountProfile, CodexCookie, CodexCredentialData, CodexCredentialPrincipal,
-    CodexOAuthSecret, RuntimeCodexCookie,
+    CodexAccountProfile, CodexAgentIdentityCredentialData, CodexCookie, CodexCredentialData,
+    CodexCredentialPrincipal, CodexOAuthCredentialData, CodexOAuthSecret, RuntimeCodexCookie,
 };
 
 const CODEX_CREDENTIAL_SCHEMA_VERSION: u32 = 1;
@@ -17,8 +18,8 @@ const MAX_COOKIES: usize = 128;
 
 /// 已解析且只在 Provider 内可见的认证材料。
 pub struct CodexRuntimeCredential {
-    pub secret: CodexOAuthSecret,
-    pub principal: CodexCredentialPrincipal,
+    pub authentication: CodexRuntimeAuthentication,
+    pub principal: Option<CodexCredentialPrincipal>,
     pub installation_id: String,
     pub cookies: Vec<RuntimeCodexCookie>,
     pub oauth_client_id: Option<String>,
@@ -29,13 +30,57 @@ impl std::fmt::Debug for CodexRuntimeCredential {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("CodexRuntimeCredential")
-            .field("secret", &self.secret)
+            .field("authentication", &self.authentication)
             .field("principal", &self.principal)
             .field("installation_id", &"<pseudonymous>")
             .field("cookies", &self.cookies)
             .field("oauth_client_id", &self.oauth_client_id)
             .field("oauth_scope", &self.oauth_scope)
             .finish()
+    }
+}
+
+pub enum CodexRuntimeAuthentication {
+    OAuth(CodexOAuthSecret),
+    AgentIdentity(Box<CodexAgentIdentitySecret>),
+}
+
+impl CodexRuntimeAuthentication {
+    #[must_use]
+    pub const fn is_agent_identity(&self) -> bool {
+        matches!(self, Self::AgentIdentity(_))
+    }
+
+    pub fn authorization_header(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<SecretString, CodexCredentialDataError> {
+        match self {
+            Self::OAuth(secret) => Ok(SecretString::from(format!(
+                "Bearer {}",
+                secret.access_token.expose_secret()
+            ))),
+            Self::AgentIdentity(secret) => secret
+                .authorization_header(now)
+                .map_err(|_| CodexCredentialDataError::Invalid),
+        }
+    }
+
+    #[must_use]
+    pub const fn oauth(&self) -> Option<&CodexOAuthSecret> {
+        match self {
+            Self::OAuth(secret) => Some(secret),
+            Self::AgentIdentity(_) => None,
+        }
+    }
+}
+
+impl std::fmt::Debug for CodexRuntimeAuthentication {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OAuth(secret) => secret.fmt(formatter),
+            Self::AgentIdentity(secret) => secret.fmt(formatter),
+        }
     }
 }
 
@@ -57,7 +102,7 @@ impl CodexCredentialCodec {
         account: &CodexAccountProfile,
         cookies: Vec<CodexCookie>,
     ) -> Result<PlaintextCredential, CodexCredentialDataError> {
-        Self::encode_complete(CodexCredentialData {
+        Self::encode_complete(CodexCredentialData::OAuth(CodexOAuthCredentialData {
             schema_version: CODEX_CREDENTIAL_SCHEMA_VERSION,
             principal: CodexCredentialPrincipal {
                 oauth_subject: account.oauth_subject.clone(),
@@ -76,7 +121,13 @@ impl CodexCredentialCodec {
             oauth_client_id: None,
             oauth_scope: None,
             cookies,
-        })
+        }))
+    }
+
+    pub fn encode_agent_identity(
+        data: CodexAgentIdentityCredentialData,
+    ) -> Result<PlaintextCredential, CodexCredentialDataError> {
+        Self::encode_complete(CodexCredentialData::AgentIdentity(data))
     }
 
     pub fn encode_complete(
@@ -112,16 +163,41 @@ impl CodexCredentialCodec {
         let data = serde_json::from_value::<CodexCredentialData>(value)
             .map_err(|_| CodexCredentialDataError::Invalid)?;
         validate(&data)?;
+        let (authentication, principal, installation_id, cookies, oauth_client_id, oauth_scope) =
+            match data {
+                CodexCredentialData::OAuth(data) => (
+                    CodexRuntimeAuthentication::OAuth(CodexOAuthSecret {
+                        access_token: SecretString::from(data.access_token),
+                        refresh_token: data.refresh_token.map(SecretString::from),
+                        id_token: data.id_token.map(SecretString::from),
+                    }),
+                    Some(data.principal),
+                    data.installation_id,
+                    data.cookies,
+                    data.oauth_client_id,
+                    data.oauth_scope,
+                ),
+                CodexCredentialData::AgentIdentity(data) => (
+                    CodexRuntimeAuthentication::AgentIdentity(Box::new(
+                        CodexAgentIdentitySecret::from_pkcs8(
+                            data.agent_runtime_id,
+                            &data.agent_private_key,
+                            data.task_id,
+                        )
+                        .map_err(map_agent_identity_error)?,
+                    )),
+                    None,
+                    data.installation_id,
+                    data.cookies,
+                    None,
+                    None,
+                ),
+            };
         Ok(CodexRuntimeCredential {
-            secret: CodexOAuthSecret {
-                access_token: SecretString::from(data.access_token),
-                refresh_token: data.refresh_token.map(SecretString::from),
-                id_token: data.id_token.map(SecretString::from),
-            },
-            principal: data.principal,
-            installation_id: data.installation_id,
-            cookies: data
-                .cookies
+            authentication,
+            principal,
+            installation_id,
+            cookies: cookies
                 .into_iter()
                 .map(|cookie| RuntimeCodexCookie {
                     name: cookie.name,
@@ -133,8 +209,8 @@ impl CodexCredentialCodec {
                     expires_at: cookie.expires_at,
                 })
                 .collect(),
-            oauth_client_id: data.oauth_client_id,
-            oauth_scope: data.oauth_scope,
+            oauth_client_id,
+            oauth_scope,
         })
     }
 
@@ -154,34 +230,80 @@ impl CodexCredentialCodec {
     ) -> Result<PlaintextCredential, CodexCredentialDataError> {
         let mut incoming = Self::decode_complete(incoming)?;
         let existing = Self::decode_complete(existing)?;
-        if incoming.principal != existing.principal {
-            return Err(CodexCredentialDataError::Invalid);
+        match (&mut incoming, existing) {
+            (CodexCredentialData::OAuth(incoming), CodexCredentialData::OAuth(existing)) => {
+                if incoming.principal != existing.principal {
+                    return Err(CodexCredentialDataError::Invalid);
+                }
+                incoming.installation_id = existing.installation_id;
+            }
+            (
+                CodexCredentialData::AgentIdentity(incoming),
+                CodexCredentialData::AgentIdentity(existing),
+            ) => {
+                if incoming.agent_runtime_id != existing.agent_runtime_id {
+                    return Err(CodexCredentialDataError::Invalid);
+                }
+                incoming.installation_id = existing.installation_id;
+                if incoming.task_id.is_none()
+                    && incoming.agent_private_key == existing.agent_private_key
+                {
+                    incoming.task_id = existing.task_id;
+                }
+            }
+            _ => return Err(CodexCredentialDataError::Invalid),
         }
-        incoming.installation_id = existing.installation_id;
         Self::encode_complete(incoming)
     }
 }
 
 fn validate(data: &CodexCredentialData) -> Result<(), CodexCredentialDataError> {
-    if data.schema_version != CODEX_CREDENTIAL_SCHEMA_VERSION
-        || !valid_identity(&data.principal.oauth_subject)
-        || data
-            .principal
-            .poid
-            .as_deref()
-            .is_some_and(|value| !valid_identity(value))
-        || !valid_installation_id(&data.installation_id)
-        || !valid_secret(&data.access_token)
-        || data
-            .refresh_token
-            .as_deref()
-            .is_some_and(|value| !valid_secret(value))
-        || data
-            .id_token
-            .as_deref()
-            .is_some_and(|value| !valid_secret(value))
-        || data.cookies.len() > MAX_COOKIES
-        || data.cookies.iter().any(|cookie| {
+    let (installation_id, cookies) = match data {
+        CodexCredentialData::OAuth(data) => {
+            if data.schema_version != CODEX_CREDENTIAL_SCHEMA_VERSION
+                || !valid_identity(&data.principal.oauth_subject)
+                || data
+                    .principal
+                    .poid
+                    .as_deref()
+                    .is_some_and(|value| !valid_identity(value))
+                || !valid_secret(&data.access_token)
+                || data
+                    .refresh_token
+                    .as_deref()
+                    .is_some_and(|value| !valid_secret(value))
+                || data
+                    .id_token
+                    .as_deref()
+                    .is_some_and(|value| !valid_secret(value))
+            {
+                return Err(CodexCredentialDataError::Invalid);
+            }
+            (&data.installation_id, &data.cookies)
+        }
+        CodexCredentialData::AgentIdentity(data) => {
+            if data.schema_version != CODEX_CREDENTIAL_SCHEMA_VERSION
+                || !valid_identity(&data.agent_runtime_id)
+                || !valid_secret(&data.agent_private_key)
+                || data
+                    .task_id
+                    .as_deref()
+                    .is_some_and(|value| !valid_identity(value))
+                || CodexAgentIdentitySecret::from_pkcs8(
+                    data.agent_runtime_id.clone(),
+                    &data.agent_private_key,
+                    data.task_id.clone(),
+                )
+                .is_err()
+            {
+                return Err(CodexCredentialDataError::Invalid);
+            }
+            (&data.installation_id, &data.cookies)
+        }
+    };
+    if !valid_installation_id(installation_id)
+        || cookies.len() > MAX_COOKIES
+        || cookies.iter().any(|cookie| {
             cookie.name.is_empty()
                 || cookie.name.len() > 256
                 || cookie.value.is_empty()
@@ -195,6 +317,10 @@ fn validate(data: &CodexCredentialData) -> Result<(), CodexCredentialDataError> 
         return Err(CodexCredentialDataError::Invalid);
     }
     Ok(())
+}
+
+const fn map_agent_identity_error(_: CodexAgentIdentityError) -> CodexCredentialDataError {
+    CodexCredentialDataError::Invalid
 }
 
 fn valid_identity(value: &str) -> bool {

@@ -13,6 +13,7 @@ mod credential_leases;
 mod credential_state;
 mod oauth_pending;
 mod provider_circuit;
+mod provider_session_affinity;
 mod runtime_change;
 pub(crate) mod worker_lease;
 
@@ -22,6 +23,7 @@ pub use credential_leases::*;
 pub use credential_state::*;
 pub use oauth_pending::*;
 pub use provider_circuit::*;
+pub use provider_session_affinity::*;
 pub use runtime_change::*;
 
 use crate::{StoreError, StoreResult, redis_unavailable, require_nonempty};

@@ -38,9 +38,9 @@ async fn response_json(response: axum::response::Response) -> Value {
 fn update_body() -> Value {
     json!({
         "expectedConfigRevision": 7,
-        "providerModelMappings": {
-            "openai": { "gpt-5.4": "gpt-5.5" },
-            "xai": { "grok-latest": "grok-4.5" }
+        "modelMappings": {
+            "gpt-5.4": "gpt-5.5",
+            "grok-latest": "grok-4.5"
         },
         "refreshMarginSeconds": 1800,
         "refreshConcurrency": 4,
@@ -91,7 +91,7 @@ fn settings_request_should_reject_removed_bucket_retention() {
 }
 
 #[tokio::test]
-async fn settings_get_should_preserve_provider_scoped_model_mappings() {
+async fn settings_get_should_preserve_global_model_mappings() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     let response = app(fixture.state())
@@ -102,8 +102,8 @@ async fn settings_get_should_preserve_provider_scoped_model_mappings() {
 
     assert_eq!(
         (
-            data["providerModelMappings"]["openai"]["coding-default"].as_str(),
-            data["providerModelMappings"]["xai"]["grok-latest"].as_str(),
+            data["modelMappings"]["coding-default"].as_str(),
+            data["modelMappings"]["grok-latest"].as_str(),
             data["rotationStrategy"].as_str()
         ),
         (Some("gpt-5.4"), Some("grok-4.5"), Some("smart"))
@@ -111,7 +111,7 @@ async fn settings_get_should_preserve_provider_scoped_model_mappings() {
 }
 
 #[tokio::test]
-async fn settings_post_should_replace_provider_scoped_model_mappings() {
+async fn settings_post_should_replace_global_model_mappings() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     let response = app(fixture.state())
@@ -125,29 +125,18 @@ async fn settings_post_should_replace_provider_scoped_model_mappings() {
     let data = response_json(response).await["data"].clone();
 
     assert_eq!(data["configRevision"], 8);
-    assert_eq!(
-        data["providerModelMappings"]["openai"]["gpt-5.4"],
-        "gpt-5.5"
-    );
-    assert_eq!(
-        data["providerModelMappings"]["xai"]["grok-latest"],
-        "grok-4.5"
-    );
+    assert_eq!(data["modelMappings"]["gpt-5.4"], "gpt-5.5");
+    assert_eq!(data["modelMappings"]["grok-latest"], "grok-4.5");
 }
 
 #[test]
-fn settings_request_should_reject_invalid_provider_mapping_slug() {
+fn settings_request_should_reject_invalid_model_mapping_name() {
     let mut body = update_body();
-    body["providerModelMappings"] = json!({
-        "OpenAI": { "gpt-5.4": "gpt-5.5" }
-    });
+    body["modelMappings"] = json!({ "\0": "gpt-5.5" });
     let request: UpdateRuntimeSettingsRequest =
         serde_json::from_value(body).expect("decode settings");
 
-    assert_eq!(
-        request.validate().unwrap_err().field(),
-        "providerModelMappings"
-    );
+    assert_eq!(request.validate().unwrap_err().field(), "modelMappings");
 }
 
 #[tokio::test]

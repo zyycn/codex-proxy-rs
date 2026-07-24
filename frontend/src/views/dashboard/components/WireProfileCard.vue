@@ -201,7 +201,7 @@ function providerLabel(provider: string) {
         <section
           aria-label="请求身份组成"
           class="grid min-w-0 flex-1 content-between gap-6 rounded-[14px] bg-(--cp-bg-subtle) px-5 py-5.5 sm:px-6 sm:py-5"
-          :class="verifiedLabel || checkedLabel || profile.provider === 'xai'
+          :class="verifiedLabel || checkedLabel
             ? 'sm:grid-rows-[auto_minmax(0,1fr)_auto_auto]'
             : 'sm:grid-rows-[auto_minmax(0,1fr)_auto]'"
         >
@@ -241,8 +241,13 @@ function providerLabel(provider: string) {
             </div>
           </div>
 
-          <dl v-if="profile.provider === 'xai'" class="m-0 min-w-0">
-            <div class="min-w-0">
+          <dl
+            class="m-0 grid min-w-0 gap-5 sm:gap-7"
+            :class="profile.provider === 'xai'
+              ? 'sm:grid-cols-[0.72fr_0.9fr_1.18fr]'
+              : 'sm:grid-cols-[0.72fr_1.28fr]'"
+          >
+            <div v-if="profile.provider === 'xai'" class="min-w-0">
               <dt
                 class="flex items-center gap-1.5 text-[10px] leading-none font-[720] text-(--cp-text-muted)"
               >
@@ -256,9 +261,7 @@ function providerLabel(provider: string) {
                 {{ authProtocol }}
               </dd>
             </div>
-          </dl>
 
-          <dl class="m-0 grid min-w-0 gap-5 sm:grid-cols-[0.72fr_1.28fr] sm:gap-7">
             <div class="min-w-0">
               <dt
                 class="flex items-center gap-1.5 text-[10px] leading-none font-[720] text-(--cp-text-muted)"

@@ -14,8 +14,9 @@ export const apiKeyColumns = [
   {
     key: 'providerKind',
     label: '平台',
-    width: '120px',
-    minWidth: '120px',
+    width: '80px',
+    minWidth: '80px',
+    align: 'center' as const,
   },
   {
     key: 'enabled',

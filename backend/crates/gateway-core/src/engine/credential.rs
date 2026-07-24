@@ -1,9 +1,11 @@
 //! Provider 账号、明文 credential port 与同一 target 内的账号选择。
 
 use std::cmp::Reverse;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
+use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
@@ -198,11 +200,12 @@ pub struct ProviderAccount {
     upstream_user_id: String,
     upstream_account_id: Option<String>,
     plan_type: Option<String>,
+    authentication_kind: String,
     revision: CredentialRevision,
     enabled: bool,
     availability: AccountAvailability,
     cooldown_until: Option<SystemTime>,
-    access_token_expires_at: SystemTime,
+    access_token_expires_at: Option<SystemTime>,
     next_refresh_at: Option<SystemTime>,
     has_refresh_token: bool,
 }
@@ -215,8 +218,9 @@ impl ProviderAccount {
         provider: ProviderKind,
         name: String,
         upstream_user_id: String,
+        authentication_kind: String,
         revision: CredentialRevision,
-        access_token_expires_at: SystemTime,
+        access_token_expires_at: Option<SystemTime>,
     ) -> Self {
         Self {
             id,
@@ -226,6 +230,7 @@ impl ProviderAccount {
             upstream_user_id,
             upstream_account_id: None,
             plan_type: None,
+            authentication_kind,
             revision,
             enabled: true,
             availability: AccountAvailability::Unknown,
@@ -314,6 +319,11 @@ impl ProviderAccount {
     }
 
     #[must_use]
+    pub fn authentication_kind(&self) -> &str {
+        &self.authentication_kind
+    }
+
+    #[must_use]
     pub const fn availability(&self) -> AccountAvailability {
         self.availability
     }
@@ -329,7 +339,7 @@ impl ProviderAccount {
     }
 
     #[must_use]
-    pub const fn access_token_expires_at(&self) -> SystemTime {
+    pub const fn access_token_expires_at(&self) -> Option<SystemTime> {
         self.access_token_expires_at
     }
 
@@ -355,7 +365,11 @@ impl ProviderAccount {
             | AccountAvailability::Banned
             | AccountAvailability::Invalid => false,
         };
-        self.enabled && available && self.access_token_expires_at > now
+        self.enabled
+            && available
+            && self
+                .access_token_expires_at
+                .is_none_or(|expires_at| expires_at > now)
     }
 }
 
@@ -410,7 +424,7 @@ pub struct CredentialCasUpdate {
     profile: ProviderAccountUpdate,
     credential: PlaintextCredential,
     has_refresh_token: bool,
-    access_token_expires_at: SystemTime,
+    access_token_expires_at: Option<SystemTime>,
     next_refresh_at: Option<SystemTime>,
 }
 
@@ -441,7 +455,7 @@ impl CredentialCasUpdate {
         profile: ProviderAccountUpdate,
         credential: PlaintextCredential,
         has_refresh_token: bool,
-        access_token_expires_at: SystemTime,
+        access_token_expires_at: Option<SystemTime>,
         next_refresh_at: Option<SystemTime>,
     ) -> Result<Self, CredentialError> {
         if profile.account_id != account_id {
@@ -487,7 +501,7 @@ impl CredentialCasUpdate {
     }
 
     #[must_use]
-    pub const fn access_token_expires_at(&self) -> SystemTime {
+    pub const fn access_token_expires_at(&self) -> Option<SystemTime> {
         self.access_token_expires_at
     }
 
@@ -505,7 +519,7 @@ impl CredentialCasUpdate {
         ProviderAccountUpdate,
         PlaintextCredential,
         bool,
-        SystemTime,
+        Option<SystemTime>,
         Option<SystemTime>,
     ) {
         (
@@ -682,6 +696,145 @@ pub struct AccountRuntimeSignals {
     pub last_started_at: Option<SystemTime>,
     pub quota_reset_at: Option<SystemTime>,
     pub quota_remaining_rank: Option<u64>,
+    pub failure_rate_basis_points: Option<u16>,
+    pub first_output_latency_ms: Option<u64>,
+}
+
+const ACCOUNT_FEEDBACK_EWMA_ALPHA: f64 = 0.2;
+const EMPTY_FEEDBACK_SAMPLE: u64 = f64::NAN.to_bits();
+
+/// 一次真实上游 attempt 对账号级 Smart 调度产生的中立反馈。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountAttemptFeedback {
+    Succeeded { first_output_ms: Option<u64> },
+    Failed { first_output_ms: Option<u64> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct AccountFeedbackKey {
+    provider_kind: ProviderKind,
+    account_id: ProviderAccountId,
+}
+
+#[derive(Debug)]
+struct AccountFeedback {
+    failure_rate: AtomicU64,
+    first_output_ms: AtomicU64,
+}
+
+impl Default for AccountFeedback {
+    fn default() -> Self {
+        Self {
+            // 新账号从健康基线开始，首个失败样本按 EWMA 平滑，而不是直接判死。
+            failure_rate: AtomicU64::new(0.0_f64.to_bits()),
+            first_output_ms: AtomicU64::new(EMPTY_FEEDBACK_SAMPLE),
+        }
+    }
+}
+
+impl AccountFeedback {
+    fn report(&self, feedback: AccountAttemptFeedback) {
+        let (failure, first_output_ms) = match feedback {
+            AccountAttemptFeedback::Succeeded { first_output_ms } => (0.0, first_output_ms),
+            AccountAttemptFeedback::Failed { first_output_ms } => (1.0, first_output_ms),
+        };
+        update_feedback_ewma(&self.failure_rate, failure);
+        if let Some(first_output_ms) = first_output_ms.filter(|value| *value > 0) {
+            update_feedback_ewma(&self.first_output_ms, first_output_ms as f64);
+        }
+    }
+
+    fn scheduling_signals(&self) -> (Option<u16>, Option<u64>) {
+        let failure_rate = load_feedback_ewma(&self.failure_rate).map(|value| {
+            let basis_points = (value.clamp(0.0, 1.0) * 10_000.0).round();
+            basis_points as u16
+        });
+        let first_output_ms = load_feedback_ewma(&self.first_output_ms)
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .map(|value| value.round() as u64);
+        (failure_rate, first_output_ms)
+    }
+}
+
+/// 所有 Provider 共享、按 Provider 和账号隔离的进程内 Smart 健康反馈。
+#[derive(Debug, Default)]
+pub struct AccountFeedbackStats {
+    accounts: RwLock<HashMap<AccountFeedbackKey, AccountFeedback>>,
+}
+
+impl AccountFeedbackStats {
+    /// 读取账号当前的错误率与首个有效输出延迟 EWMA。
+    #[must_use]
+    pub fn scheduling_signals(
+        &self,
+        provider_kind: &ProviderKind,
+        account_id: &ProviderAccountId,
+    ) -> (Option<u16>, Option<u64>) {
+        let key = AccountFeedbackKey {
+            provider_kind: provider_kind.clone(),
+            account_id: account_id.clone(),
+        };
+        self.accounts
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&key)
+            .map(AccountFeedback::scheduling_signals)
+            .unwrap_or_default()
+    }
+
+    /// 回灌一次已经真实发送的上游 attempt。
+    pub fn report(
+        &self,
+        provider_kind: &ProviderKind,
+        account_id: &ProviderAccountId,
+        feedback: AccountAttemptFeedback,
+    ) {
+        let key = AccountFeedbackKey {
+            provider_kind: provider_kind.clone(),
+            account_id: account_id.clone(),
+        };
+        if let Some(account) = self
+            .accounts
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&key)
+        {
+            account.report(feedback);
+            return;
+        }
+        self.accounts
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(key)
+            .or_default()
+            .report(feedback);
+    }
+}
+
+fn load_feedback_ewma(value: &AtomicU64) -> Option<f64> {
+    let value = f64::from_bits(value.load(Ordering::Relaxed));
+    (!value.is_nan()).then_some(value)
+}
+
+fn update_feedback_ewma(target: &AtomicU64, sample: f64) {
+    let mut current = target.load(Ordering::Relaxed);
+    loop {
+        let previous = f64::from_bits(current);
+        let next = if previous.is_nan() {
+            sample
+        } else {
+            ACCOUNT_FEEDBACK_EWMA_ALPHA * sample + (1.0 - ACCOUNT_FEEDBACK_EWMA_ALPHA) * previous
+        };
+        match target.compare_exchange_weak(
+            current,
+            next.to_bits(),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return,
+            Err(observed) => current = observed,
+        }
+    }
 }
 
 impl AccountRuntimeSignals {
@@ -691,6 +844,17 @@ impl AccountRuntimeSignals {
             self.quota_reset_at = quota.reset_at;
             self.quota_remaining_rank = quota.remaining_rank;
         }
+        self
+    }
+
+    #[must_use]
+    pub const fn with_runtime_health(
+        mut self,
+        failure_rate_basis_points: Option<u16>,
+        first_output_latency_ms: Option<u64>,
+    ) -> Self {
+        self.failure_rate_basis_points = failure_rate_basis_points;
+        self.first_output_latency_ms = first_output_latency_ms;
         self
     }
 }
@@ -735,7 +899,7 @@ pub struct AccountSelectionContext {
     pub policy: AccountSelectionPolicy,
     pub now: SystemTime,
     pub excluded_accounts: BTreeSet<ProviderAccountId>,
-    pub sticky_account: Option<ProviderAccountId>,
+    pub preferred_account: Option<ProviderAccountId>,
     pub round_robin_cursor: u64,
 }
 
@@ -759,11 +923,13 @@ impl AccountSelector {
             return None;
         }
 
-        if context.policy.strategy() == RotationStrategy::Sticky
-            && let Some(sticky) = context.sticky_account.as_ref()
+        if let Some(preferred) = context.preferred_account.as_ref()
             && let Some(candidate) = eligible
                 .iter()
-                .find(|candidate| candidate.account.id() == sticky)
+                .find(|candidate| candidate.account.id() == preferred)
+            && (context.policy.strategy() == RotationStrategy::Sticky
+                || (context.policy.strategy() == RotationStrategy::Smart
+                    && !smart_preference_should_escape(&candidate.signals)))
         {
             return Some(candidate);
         }
@@ -784,14 +950,7 @@ impl AccountSelector {
                 return Some(eligible[index]);
             }
             RotationStrategy::Smart => {
-                eligible.sort_by_key(|candidate| {
-                    (
-                        candidate.signals.in_flight,
-                        Reverse(candidate.signals.quota_remaining_rank),
-                        candidate.signals.last_started_at,
-                        candidate.account.id().clone(),
-                    )
-                });
+                return select_smart_candidate(&eligible, context.round_robin_cursor);
             }
             RotationStrategy::Sticky => {
                 eligible.sort_by_key(|candidate| {
@@ -804,6 +963,141 @@ impl AccountSelector {
         }
         eligible.into_iter().next()
     }
+}
+
+const SMART_LOAD_WEIGHT: f64 = 1.0;
+const SMART_QUOTA_WEIGHT: f64 = 0.8;
+const SMART_FAILURE_WEIGHT: f64 = 1.0;
+const SMART_LATENCY_WEIGHT: f64 = 0.5;
+const SMART_PREFERENCE_FAILURE_ESCAPE_BASIS_POINTS: u16 = 5_000;
+const SMART_PREFERENCE_LATENCY_ESCAPE_MS: u64 = 15_000;
+
+struct SmartNormalization {
+    max_in_flight: u32,
+    min_quota: Option<u64>,
+    max_quota: Option<u64>,
+    min_latency_ms: Option<u64>,
+    max_latency_ms: Option<u64>,
+}
+
+impl SmartNormalization {
+    fn from_candidates(candidates: &[&AccountCandidate]) -> Self {
+        let max_in_flight = candidates
+            .iter()
+            .map(|candidate| candidate.signals.in_flight)
+            .max()
+            .unwrap_or_default();
+        let min_quota = candidates
+            .iter()
+            .filter_map(|candidate| candidate.signals.quota_remaining_rank)
+            .min();
+        let max_quota = candidates
+            .iter()
+            .filter_map(|candidate| candidate.signals.quota_remaining_rank)
+            .max();
+        let min_latency_ms = candidates
+            .iter()
+            .filter_map(|candidate| candidate.signals.first_output_latency_ms)
+            .filter(|latency| *latency > 0)
+            .min();
+        let max_latency_ms = candidates
+            .iter()
+            .filter_map(|candidate| candidate.signals.first_output_latency_ms)
+            .filter(|latency| *latency > 0)
+            .max();
+        Self {
+            max_in_flight,
+            min_quota,
+            max_quota,
+            min_latency_ms,
+            max_latency_ms,
+        }
+    }
+}
+
+fn select_smart_candidate<'a>(
+    candidates: &[&'a AccountCandidate],
+    cursor: u64,
+) -> Option<&'a AccountCandidate> {
+    let normalization = SmartNormalization::from_candidates(candidates);
+    let mut ranked = candidates
+        .iter()
+        .map(|candidate| (*candidate, smart_score(candidate, &normalization)))
+        .collect::<Vec<_>>();
+    ranked.sort_by(|(left, left_score), (right, right_score)| {
+        right_score
+            .total_cmp(left_score)
+            .then_with(|| left.account.id().cmp(right.account.id()))
+    });
+    let best_score = ranked.first()?.1.to_bits();
+    let tied = ranked
+        .iter()
+        .take_while(|(_, score)| score.to_bits() == best_score)
+        .count();
+    let index = cursor as usize % tied;
+    Some(ranked[index].0)
+}
+
+fn smart_score(candidate: &AccountCandidate, normalization: &SmartNormalization) -> f64 {
+    let load = lower_is_better(
+        u64::from(candidate.signals.in_flight),
+        0,
+        u64::from(normalization.max_in_flight),
+    );
+    let quota = candidate.signals.quota_remaining_rank.map_or(0.5, |quota| {
+        higher_is_better(
+            quota,
+            normalization.min_quota.unwrap_or(quota),
+            normalization.max_quota.unwrap_or(quota),
+        )
+    });
+    let failure = 1.0
+        - f64::from(
+            candidate
+                .signals
+                .failure_rate_basis_points
+                .unwrap_or_default()
+                .min(10_000),
+        ) / 10_000.0;
+    let latency = candidate
+        .signals
+        .first_output_latency_ms
+        .filter(|latency| *latency > 0)
+        .map_or(1.0, |latency| {
+            lower_is_better(
+                latency,
+                normalization.min_latency_ms.unwrap_or(latency),
+                normalization.max_latency_ms.unwrap_or(latency),
+            )
+        });
+
+    SMART_LOAD_WEIGHT * load
+        + SMART_QUOTA_WEIGHT * quota
+        + SMART_FAILURE_WEIGHT * failure
+        + SMART_LATENCY_WEIGHT * latency
+}
+
+fn lower_is_better(value: u64, minimum: u64, maximum: u64) -> f64 {
+    if maximum <= minimum {
+        return 1.0;
+    }
+    1.0 - (value.saturating_sub(minimum) as f64 / (maximum - minimum) as f64).clamp(0.0, 1.0)
+}
+
+fn higher_is_better(value: u64, minimum: u64, maximum: u64) -> f64 {
+    if maximum <= minimum {
+        return 1.0;
+    }
+    (value.saturating_sub(minimum) as f64 / (maximum - minimum) as f64).clamp(0.0, 1.0)
+}
+
+fn smart_preference_should_escape(signals: &AccountRuntimeSignals) -> bool {
+    signals
+        .failure_rate_basis_points
+        .is_some_and(|rate| rate > SMART_PREFERENCE_FAILURE_ESCAPE_BASIS_POINTS)
+        || signals
+            .first_output_latency_ms
+            .is_some_and(|latency| latency > SMART_PREFERENCE_LATENCY_ESCAPE_MS)
 }
 
 fn eligible(candidate: &AccountCandidate, context: &AccountSelectionContext) -> bool {

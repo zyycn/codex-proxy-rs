@@ -23,7 +23,9 @@ use engine::admission::{
     ClientAdmissionPort, ClientAdmissionRecoveryPort, restore_client_admission_startup,
 };
 use engine::continuation::NativeContinuationPort;
-use engine::execution::{DefaultExecutionService, ExecutionService, ProviderCircuitPort};
+use engine::execution::{
+    ClientApiKeyUsageSink, DefaultExecutionService, ExecutionService, ProviderCircuitPort,
+};
 use engine::probe::AccountProbe;
 use engine::provider::ProviderRegistry;
 use health::HealthProbe;
@@ -43,18 +45,24 @@ pub struct CoreStorePorts {
     continuation: Arc<dyn NativeContinuationPort>,
     snapshots: Arc<dyn SnapshotStorePort>,
     snapshot_subscriptions: Arc<dyn SnapshotSubscriptionPort>,
+    client_api_key_usage: Arc<dyn ClientApiKeyUsageSink>,
 }
 
 impl CoreStorePorts {
     #[must_use]
     pub fn new(
         execution: Arc<dyn ExecutionStore>,
-        admissions: Arc<dyn ClientAdmissionPort>,
-        admission_recovery: Arc<dyn ClientAdmissionRecoveryPort>,
+        (admissions, admission_recovery): (
+            Arc<dyn ClientAdmissionPort>,
+            Arc<dyn ClientAdmissionRecoveryPort>,
+        ),
         circuits: Arc<dyn ProviderCircuitPort>,
         continuation: Arc<dyn NativeContinuationPort>,
-        snapshots: Arc<dyn SnapshotStorePort>,
-        snapshot_subscriptions: Arc<dyn SnapshotSubscriptionPort>,
+        (snapshots, snapshot_subscriptions): (
+            Arc<dyn SnapshotStorePort>,
+            Arc<dyn SnapshotSubscriptionPort>,
+        ),
+        client_api_key_usage: Arc<dyn ClientApiKeyUsageSink>,
     ) -> Self {
         Self {
             execution,
@@ -64,6 +72,7 @@ impl CoreStorePorts {
             continuation,
             snapshots,
             snapshot_subscriptions,
+            client_api_key_usage,
         }
     }
 }
@@ -137,6 +146,7 @@ pub async fn initialize(
         ports.admissions,
         ports.circuits,
         ports.continuation,
+        ports.client_api_key_usage,
     ));
     let execution: Arc<dyn ExecutionService> = service.clone();
     let account_probe: Arc<dyn AccountProbe> = service;

@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 
 use crate::model::{
     MutationContext, Revision,
@@ -18,9 +19,9 @@ use crate::model::{
         NewClientKey, SetClientKeyEnabled, UpdateClientKey,
     },
     observability::{
-        DashboardObservation, DiagnosticDimension, DiagnosticObservation, OpsErrorPage,
-        OpsErrorQuery, RequestMetricPoint, TimeRange, UsageDetail, UsageFilter, UsageOverview,
-        UsagePage, UsageQuery,
+        DashboardObservation, DashboardRuntimeSlots, DiagnosticDimension, DiagnosticObservation,
+        OpsErrorPage, OpsErrorQuery, RequestMetricPoint, TimeRange, UsageDetail, UsageFilter,
+        UsageOverview, UsagePage, UsageQuery,
     },
     provider_credentials::{
         AuthorizationCommit, CredentialDetails, CredentialImportCommit, CredentialImportResult,
@@ -228,6 +229,17 @@ pub trait ClientKeyStore: Send + Sync {
 #[async_trait]
 pub trait ObservabilityStore: Send + Sync {
     async fn dashboard_summary(&self, range: TimeRange) -> AdminStoreResult<DashboardObservation>;
+
+    /// 返回 Dashboard 可选的实时槽位事实。
+    ///
+    /// 该状态来自可丢失的运行时存储；无实现或运行时存储不可用时返回 `None`，不影响
+    /// 持久观测数据的读取。
+    async fn dashboard_runtime_slots(
+        &self,
+        _observed_at: DateTime<Utc>,
+    ) -> AdminStoreResult<Option<DashboardRuntimeSlots>> {
+        Ok(None)
+    }
 
     async fn dashboard_trend(&self, range: TimeRange) -> AdminStoreResult<Vec<RequestMetricPoint>>;
 

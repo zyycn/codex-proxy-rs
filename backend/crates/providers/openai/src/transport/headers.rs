@@ -6,14 +6,11 @@ use super::client::CodexClientResult;
 /// 构造 Codex Core 为模型请求设置的稳定身份请求头。
 pub fn build_codex_base_headers(
     profile: &CodexWireProfile,
-    access_token: &str,
+    authorization: &str,
     account_id: Option<&str>,
 ) -> CodexClientResult<HeaderMap> {
     let mut headers = HeaderMap::new();
-    headers.insert(
-        AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {access_token}"))?,
-    );
+    headers.insert(AUTHORIZATION, HeaderValue::from_str(authorization)?);
     insert_optional_header(&mut headers, "chatgpt-account-id", account_id)?;
     headers.insert(
         HeaderName::from_static("originator"),

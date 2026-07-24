@@ -133,6 +133,8 @@ pub enum ProviderErrorKind {
     RateLimited,
     /// Credential 配额耗尽。
     QuotaExhausted,
+    /// Provider 已确认当前请求无法选出可用账号。
+    NoEligibleAccount,
     /// 请求超时。
     Timeout,
     /// 网络或 transport 失败。
@@ -158,6 +160,7 @@ impl ProviderErrorKind {
             Self::PermissionDenied => "permission_denied",
             Self::RateLimited => "rate_limited",
             Self::QuotaExhausted => "quota_exhausted",
+            Self::NoEligibleAccount => "no_eligible_account",
             Self::Timeout => "timeout",
             Self::Transport => "transport",
             Self::Protocol => "protocol",
@@ -213,6 +216,7 @@ impl fmt::Debug for SafeUpstreamValue {
 /// 该类型不接收原始响应正文，也不会在 `Debug` 或 `Display` 中打印上游
 /// code/request ID/response ID。Adapter 若捕获到可能含 secret 的上下文，只能调用
 /// [`ProviderError::redact_sensitive_context`] 丢弃正文并留下脱敏标记。
+#[derive(Clone)]
 pub struct ProviderError {
     kind: ProviderErrorKind,
     send_state: UpstreamSendState,
@@ -522,6 +526,10 @@ impl GatewayError {
             ProviderErrorKind::RateLimited | ProviderErrorKind::QuotaExhausted => Self::new(
                 GatewayErrorKind::RateLimited,
                 "upstream capacity is temporarily unavailable",
+            ),
+            ProviderErrorKind::NoEligibleAccount => Self::new(
+                GatewayErrorKind::NoAvailableProvider,
+                "no upstream provider is currently available for this request",
             ),
             ProviderErrorKind::Timeout => {
                 Self::new(GatewayErrorKind::Timeout, "upstream request timed out")

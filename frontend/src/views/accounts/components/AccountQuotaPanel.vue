@@ -6,7 +6,7 @@ import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import { orderedPanelQuotaWindows } from '../constants'
 import AccountPlanBadge from './AccountPlanBadge.vue'
-import AccountQuotaWindow from './AccountQuotaWindow.vue'
+import AccountUsageWindow from './AccountUsageWindow.vue'
 
 const props = defineProps<{
   account: AccountRow
@@ -53,10 +53,8 @@ const quotaWindows = computed(() => orderedPanelQuotaWindows(props.account.quota
     </div>
 
     <div class="grid gap-3">
-      <AccountQuotaWindow v-for="window in quotaWindows" :key="window.key" :window="window" />
-      <p v-if="quotaWindows.length === 0" class="m-0 text-[12px] font-[620] text-(--cp-text-muted)">
-        暂无 Provider quota 观测
-      </p>
+      <AccountUsageWindow v-for="window in quotaWindows" :key="window.key" :window="window" />
+      <AccountUsageWindow v-if="quotaWindows.length === 0" />
     </div>
   </section>
 </template>

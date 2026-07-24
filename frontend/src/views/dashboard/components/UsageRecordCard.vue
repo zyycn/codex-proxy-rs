@@ -4,7 +4,7 @@ import type { dashboardSnapshotView } from '../composables/presenter'
 import { Minimize2 } from '@lucide/vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
-import ProviderBadge from '@/components/ProviderBadge.vue'
+import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import UsageBillingCell from '@/views/usage/components/UsageBillingCell.vue'
 import UsageClientIpCell from '@/views/usage/components/UsageClientIpCell.vue'
 import UsageLatencyCell from '@/views/usage/components/UsageLatencyCell.vue'
@@ -13,6 +13,7 @@ import UsageReasoningEffortCell from '@/views/usage/components/UsageReasoningEff
 import UsageTokenCell from '@/views/usage/components/UsageTokenCell.vue'
 import {
   usageAccountText,
+  usageAuthenticationKind,
   usageIsCompact,
   usageRecordColumns,
   usageRecordType,
@@ -46,7 +47,10 @@ const dashboardUsageRecordColumns = usageRecordColumns.filter(column => column.k
           min-width="1824px"
         >
           <template #provider="{ row }">
-            <ProviderBadge :provider="String(row.provider || '')" />
+            <ProviderIconGroup
+              :provider="String(row.provider || '')"
+              :authentication-kind="usageAuthenticationKind(row)"
+            />
           </template>
 
           <template #accountEmail="{ row }">

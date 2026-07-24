@@ -12,13 +12,13 @@ use uuid::Uuid;
 
 #[test]
 fn client_admission_rejects_zero_ttl() {
-    let request = admission_request("request-1", "key-1", 0, Duration::ZERO);
+    let request = admission_request("request-1", "key-1", Duration::ZERO);
     assert!(request.validate().is_err());
 }
 
 #[test]
 fn client_admission_rejects_values_outside_redis_exact_integer_range() {
-    let mut request = admission_request("request-1", "key-1", 0, Duration::from_secs(30));
+    let mut request = admission_request("request-1", "key-1", Duration::from_secs(30));
     request.limits.max_concurrency = 1_u64 << 53;
     assert!(request.validate().is_err());
 }
@@ -29,8 +29,8 @@ fn client_admission_restore_rejects_duplicate_request_ids() {
     let recovery = ClientAdmissionRestore {
         client_api_key_ref: "key-1".to_owned(),
         recent_requests: vec![
-            recent_request("request-1", started_at, 10),
-            recent_request("request-1", started_at, 20),
+            recent_request("request-1", started_at),
+            recent_request("request-1", started_at),
         ],
         running_requests: Vec::new(),
     };
@@ -43,7 +43,7 @@ async fn restore_rebuilds_lost_cache_without_overwriting_new_admission() {
         return;
     };
     let key_ref = "key-cache-recovery";
-    let old = admission_request("request-before-crash", key_ref, 13, Duration::from_secs(30));
+    let old = admission_request("request-before-crash", key_ref, Duration::from_secs(30));
     assert_eq!(
         repository
             .admit_client_request(&old)
@@ -53,7 +53,7 @@ async fn restore_rebuilds_lost_cache_without_overwriting_new_admission() {
     );
     delete_namespace_keys(&mut connection, &namespace).await;
 
-    let live = admission_request("request-after-crash", key_ref, 11, Duration::from_secs(30));
+    let live = admission_request("request-after-crash", key_ref, Duration::from_secs(30));
     assert_eq!(
         repository
             .admit_client_request(&live)
@@ -68,12 +68,10 @@ async fn restore_rebuilds_lost_cache_without_overwriting_new_admission() {
             recent_request(
                 "request-before-crash",
                 redis_now - chrono::Duration::seconds(2),
-                13,
             ),
             recent_request(
                 "request-after-crash",
                 redis_now - chrono::Duration::seconds(1),
-                11,
             ),
         ],
         running_requests: vec![
@@ -119,15 +117,11 @@ async fn restore_rebuilds_lost_cache_without_overwriting_new_admission() {
         zcard(&mut connection, key_with_suffix(&keys, ":requests")).await,
         2
     );
-    assert_eq!(
-        zcard(&mut connection, key_with_suffix(&keys, ":tokens")).await,
-        2
-    );
     let active_ttl = pttl(&mut connection, key_with_suffix(&keys, ":active")).await;
     assert!((230_000..=245_000).contains(&active_ttl));
 
-    let mut probe = admission_request("request-probe", key_ref, 1, Duration::from_secs(30));
-    probe.limits.tokens_per_minute = 25;
+    let mut probe = admission_request("request-probe", key_ref, Duration::from_secs(30));
+    probe.limits.requests_per_minute = 3;
     assert_eq!(
         repository
             .admit_client_request(&probe)
@@ -145,7 +139,7 @@ async fn restore_rebuilds_lost_cache_without_overwriting_new_admission() {
         repository
             .admit_client_request(&probe)
             .await
-            .expect("reuse released restored slot at exact TPM limit"),
+            .expect("reuse released restored slot within RPM limit"),
         ClientAdmissionDecision::Granted
     );
     assert!(
@@ -154,14 +148,13 @@ async fn restore_rebuilds_lost_cache_without_overwriting_new_admission() {
             .await
             .expect("release admission created during recovery")
     );
-    let mut rate_probe =
-        admission_request("request-rate-probe", key_ref, 1, Duration::from_secs(30));
-    rate_probe.limits.tokens_per_minute = 25;
+    let mut rate_probe = admission_request("request-rate-probe", key_ref, Duration::from_secs(30));
+    rate_probe.limits.requests_per_minute = 3;
     assert_eq!(
         repository
             .admit_client_request(&rate_probe)
             .await
-            .expect("enforce restored TPM without duplicate request facts"),
+            .expect("enforce restored RPM without duplicate request facts"),
         ClientAdmissionDecision::Rejected(ClientAdmissionRejection::RateLimited)
     );
 
@@ -184,12 +177,10 @@ async fn restore_uses_redis_time_for_window_and_running_expiry_boundaries() {
             recent_request(
                 "request-at-cutoff",
                 redis_now - chrono::Duration::seconds(60),
-                10,
             ),
             recent_request(
                 "request-inside-window",
                 redis_now - chrono::Duration::seconds(59),
-                20,
             ),
         ],
         running_requests: vec![
@@ -240,16 +231,8 @@ async fn restore_rejects_future_window_fact_without_partial_write() {
     let recovery = ClientAdmissionRestore {
         client_api_key_ref: "key-future-fact".to_owned(),
         recent_requests: vec![
-            recent_request(
-                "request-valid",
-                redis_now - chrono::Duration::seconds(1),
-                10,
-            ),
-            recent_request(
-                "request-future",
-                redis_now + chrono::Duration::seconds(10),
-                20,
-            ),
+            recent_request("request-valid", redis_now - chrono::Duration::seconds(1)),
+            recent_request("request-future", redis_now + chrono::Duration::seconds(10)),
         ],
         running_requests: Vec::new(),
     };
@@ -266,18 +249,15 @@ async fn restore_rejects_future_window_fact_without_partial_write() {
 fn admission_request(
     model_request_id: &str,
     client_api_key_ref: &str,
-    input_token_estimate: u64,
     lease_ttl: Duration,
 ) -> ClientAdmissionRequest {
     ClientAdmissionRequest {
         model_request_id: model_request_id.to_owned(),
         client_api_key_ref: client_api_key_ref.to_owned(),
-        input_token_estimate,
         lease_ttl,
         limits: ClientAdmissionLimits {
             max_concurrency: 2,
             requests_per_minute: 0,
-            tokens_per_minute: 0,
         },
     }
 }
@@ -285,12 +265,10 @@ fn admission_request(
 fn recent_request(
     model_request_id: &str,
     started_at: DateTime<Utc>,
-    input_token_estimate: u64,
 ) -> ClientAdmissionRecentRequest {
     ClientAdmissionRecentRequest {
         model_request_id: model_request_id.to_owned(),
         started_at,
-        input_token_estimate,
     }
 }
 

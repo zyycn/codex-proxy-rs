@@ -96,7 +96,7 @@ async fn fetch_should_use_wham_usage_headers_only() {
 
     let usage = client(&server.uri())
         .fetch_usage(CodexRequestContext {
-            access_token: "oauth-access",
+            authorization: "Bearer oauth-access",
             account_id: Some("acct_123"),
             request_id: "req_usage_headers",
             turn_state: Some("turn-state"),
@@ -326,7 +326,7 @@ fn profile() -> CodexWireProfileState {
 
 fn context() -> CodexRequestContext<'static> {
     CodexRequestContext {
-        access_token: "oauth-access",
+        authorization: "Bearer oauth-access",
         account_id: Some("acct_123"),
         request_id: "req_usage_limit",
         turn_state: None,
