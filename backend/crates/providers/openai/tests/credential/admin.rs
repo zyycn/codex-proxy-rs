@@ -3,23 +3,31 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use chrono::{TimeZone, Utc};
+use ed25519_dalek::SigningKey;
+use ed25519_dalek::pkcs8::EncodePrivateKey as _;
 use futures::future::BoxFuture;
 use gateway_core::engine::credential::{
-    CredentialRevision, LoadedCredential, PlaintextCredential, ProviderAccountId,
+    AccountAvailability, CredentialRevision, LoadedCredential, PlaintextCredential,
+    ProviderAccount, ProviderAccountId,
 };
 use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshLeaseRequest,
     ProviderStoreError,
 };
+use gateway_core::routing::ProviderKind;
 use provider_openai::OFFICIAL_CODEX_BASE_URL;
 use provider_openai::credential::token_client::{RefreshFailure, TokenPair, TokenRefresher};
 use provider_openai::credential::{
-    CodexAccountIdentityService, CodexAccountIdentityVerifier, CodexCredentialAdmin,
-    CodexCredentialAdminError, CodexCredentialAdminService, CodexCredentialCodec,
-    CodexIdentityExpectation, CodexIdentityVerification, CodexIdentityVerificationError,
-    CodexJwtIdentityVerifier, ExportManagedCodexCredential, ImportCodexOAuthCredential,
-    ReqwestCodexAuthenticatedAccountSource, ReqwestOpenAiJwksSource, RotateManagedCodexCredential,
+    CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY, CodexAccountIdentityService,
+    CodexAccountIdentityVerifier, CodexAgentIdentityAuthMode, CodexAgentIdentityCredentialData,
+    CodexCredentialAdmin, CodexCredentialAdminError, CodexCredentialAdminService,
+    CodexCredentialCodec, CodexIdentityExpectation, CodexIdentityVerification,
+    CodexIdentityVerificationError, CodexJwtIdentityVerifier, ExportManagedCodexCredential,
+    ImportCodexOAuthCredential, ReqwestCodexAuthenticatedAccountSource, ReqwestOpenAiJwksSource,
+    RotateManagedCodexCredential,
 };
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use secrecy::{ExposeSecret, SecretString};
@@ -137,6 +145,60 @@ fn export_item(id: &str, token: &str) -> ExportManagedCodexCredential {
     }
 }
 
+fn agent_export_item(id: &str) -> (ExportManagedCodexCredential, String) {
+    let signing_key = SigningKey::from_bytes(&[7; 32]);
+    let private_key = STANDARD.encode(
+        signing_key
+            .to_pkcs8_der()
+            .expect("encode Agent Identity key")
+            .as_bytes(),
+    );
+    let credential =
+        CodexCredentialCodec::encode_agent_identity(CodexAgentIdentityCredentialData {
+            schema_version: 1,
+            auth_mode: CodexAgentIdentityAuthMode::AgentIdentity,
+            installation_id: "00000000-0000-4000-8000-000000000007".to_owned(),
+            agent_runtime_id: "runtime-export".to_owned(),
+            agent_private_key: private_key.clone(),
+            task_id: Some("task-export".to_owned()),
+            cookies: Vec::new(),
+        })
+        .expect("encode Agent Identity credential");
+    let account = ProviderAccount::new(
+        ProviderAccountId::new(id.to_owned()).expect("account id"),
+        ProviderKind::new("openai").expect("provider"),
+        format!("Agent Identity {id}"),
+        "agent-user-export".to_owned(),
+        CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY.to_owned(),
+        CredentialRevision::new(1).expect("revision"),
+        None,
+    )
+    .with_profile(
+        Some("agent-export@example.com".to_owned()),
+        Some("agent-account-export".to_owned()),
+        Some("pro".to_owned()),
+    )
+    .with_runtime_state(true, AccountAvailability::Ready, None)
+    .with_refresh_schedule(false, None);
+    (
+        ExportManagedCodexCredential {
+            current: LoadedCredential {
+                account,
+                credential,
+            },
+            added_at: Utc
+                .with_ymd_and_hms(2026, 7, 18, 2, 47, 1)
+                .single()
+                .expect("added at"),
+            updated_at: Utc
+                .with_ymd_and_hms(2026, 7, 19, 3, 0, 0)
+                .single()
+                .expect("updated at"),
+        },
+        private_key,
+    )
+}
+
 #[test]
 fn cpr_export_matches_the_canonical_real_document_shape() {
     let document = CodexCredentialAdmin
@@ -209,6 +271,57 @@ fn cpr_export_batch_validation_and_debug_are_secret_safe() {
     assert!(!debug.contains("never-print-me"));
     assert!(!debug.contains("rt-never-print-me"));
     assert!(debug.contains("account_count: 1"));
+}
+
+#[test]
+fn cpr_export_preserves_agent_identity_material_without_oauth_fields() {
+    let (item, private_key) = agent_export_item("acct_agent_export");
+    let value = CodexCredentialAdmin
+        .format_cpr_export(vec![item])
+        .expect("Agent Identity export")
+        .into_json()
+        .expect("serialize Agent Identity export");
+    let account = &value["accounts"][0];
+
+    assert_eq!(account["authMode"], "agentIdentity");
+    assert_eq!(account["agentRuntimeId"], "runtime-export");
+    assert!(
+        account["agentPrivateKey"]
+            .as_str()
+            .is_some_and(|value| value == private_key)
+    );
+    assert_eq!(account["taskId"], "task-export");
+    assert!(account.get("token").is_none());
+    assert!(account.get("refreshToken").is_none());
+    assert!(account.get("accessTokenExpiresAt").is_none());
+}
+
+#[tokio::test]
+async fn cpr_export_and_import_support_mixed_oauth_and_agent_identity_accounts() {
+    let (agent, _) = agent_export_item("acct_mixed_agent");
+    let value = CodexCredentialAdmin
+        .format_cpr_export(vec![
+            export_item("acct_mixed_oauth", "token-acct_mixed_oauth"),
+            agent,
+        ])
+        .expect("mixed export")
+        .into_json()
+        .expect("serialize mixed export");
+
+    let prepared = import_service(unused_import_refresher())
+        .prepare_import_document(value)
+        .await
+        .expect("mixed CPR import");
+    assert_eq!(prepared.accounts().len(), 2);
+    assert!(prepared.accounts().iter().any(|account| {
+        account.account.authentication_kind() == CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY
+    }));
+    assert!(
+        prepared
+            .accounts()
+            .iter()
+            .any(|account| { account.account.authentication_kind() == "oauth" })
+    );
 }
 
 pub(super) struct ManualRefresher {
