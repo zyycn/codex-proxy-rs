@@ -13,11 +13,11 @@ use gateway_core::routing::ConfigRevision;
 use provider_xai::{
     GrokBillingRequest, GrokBillingTransport, GrokBillingTransportError,
     GrokBillingTransportErrorKind, GrokBillingTransportFuture, GrokBillingTransportResponse,
-    GrokCredentialCatalogCache, GrokCredentialCatalogError, GrokCredentialCatalogSeed,
-    GrokCredentialRepository, GrokModelCatalogRequest, GrokModelCatalogTransport,
-    GrokModelCatalogTransportError, GrokModelCatalogTransportErrorKind,
-    GrokModelCatalogTransportFuture, GrokModelCatalogTransportResponse, GrokQuotaError,
-    SecretValue,
+    GrokCatalogScope, GrokCredentialCatalogCache, GrokCredentialCatalogError,
+    GrokCredentialCatalogSeed, GrokCredentialRepository, GrokModelCatalogRequest,
+    GrokModelCatalogTransport, GrokModelCatalogTransportError, GrokModelCatalogTransportErrorKind,
+    GrokModelCatalogTransportFuture, GrokModelCatalogTransportResponse, GrokPlanCatalog,
+    GrokQuotaError, SecretValue,
 };
 
 use crate::support::{
@@ -28,6 +28,7 @@ const OFFICIAL_FIXTURE: &[u8] =
     include_bytes!("../transport/catalog/fixtures/official_grok_models_snapshot.json");
 
 struct QueueCatalogTransport {
+    calls: AtomicUsize,
     responses:
         Mutex<VecDeque<Result<GrokModelCatalogTransportResponse, GrokModelCatalogTransportError>>>,
 }
@@ -35,6 +36,7 @@ struct QueueCatalogTransport {
 impl QueueCatalogTransport {
     fn from_bodies(bodies: impl IntoIterator<Item = Vec<u8>>) -> Arc<Self> {
         Arc::new(Self {
+            calls: AtomicUsize::new(0),
             responses: Mutex::new(
                 bodies
                     .into_iter()
@@ -46,15 +48,32 @@ impl QueueCatalogTransport {
 
     fn failure() -> Arc<Self> {
         Arc::new(Self {
+            calls: AtomicUsize::new(0),
             responses: Mutex::new(VecDeque::from([Err(GrokModelCatalogTransportError::new(
                 GrokModelCatalogTransportErrorKind::Unavailable,
             ))])),
         })
     }
+
+    fn from_results(
+        responses: impl IntoIterator<
+            Item = Result<GrokModelCatalogTransportResponse, GrokModelCatalogTransportError>,
+        >,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            responses: Mutex::new(responses.into_iter().collect()),
+        })
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
 }
 
 impl GrokModelCatalogTransport for QueueCatalogTransport {
     fn execute(&self, _: GrokModelCatalogRequest) -> GrokModelCatalogTransportFuture<'_> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         let response = self
             .responses
             .lock()
@@ -185,8 +204,8 @@ async fn concurrent_cold_scheduling_hydration_reads_quota_once() {
 }
 
 #[tokio::test]
-async fn synchronization_caches_each_account_and_returns_strict_union() {
-    let (_, repository) =
+async fn synchronization_caches_each_plan_and_returns_strict_union() {
+    let (store, repository) =
         repository_with_accounts(&[("catalog-a", "subject-a"), ("catalog-b", "subject-b")]).await;
     let cache = MemoryGrokCatalogCache::shared();
     let cache_port: Arc<dyn GrokCredentialCatalogCache> = cache.clone();
@@ -206,27 +225,26 @@ async fn synchronization_caches_each_account_and_returns_strict_union() {
     service.query_models().await.expect("same catalog sync");
     assert_eq!(service.catalog_generation().get(), 1);
 
-    assert_eq!(snapshot.accounts().len(), 2);
+    assert_eq!(snapshot.plans().len(), 1);
     assert_eq!(snapshot.models().len(), 1);
     assert_eq!(snapshot.models()[0].request_model().as_str(), "grok-4.5");
-    for id in [account_id("catalog-a"), account_id("catalog-b")] {
-        assert_eq!(
-            cache
-                .observed_model_support(
-                    &id,
-                    gateway_core::engine::credential::CredentialRevision::new(1).expect("revision"),
-                    "grok-4.5",
-                )
-                .await
-                .expect("cache lookup"),
-            Some(true)
-        );
-    }
+    let account = store
+        .account(&account_id("catalog-a"))
+        .expect("created account");
+    let scope = GrokCatalogScope::for_account(&account).expect("catalog scope");
+    assert_eq!(
+        cache
+            .observed_model_support(&scope, "grok-4.5")
+            .await
+            .expect("cache lookup"),
+        Some(true)
+    );
 }
 
 #[tokio::test]
 async fn single_account_catalog_refresh_and_read_use_provider_cache_boundary() {
-    let (_, repository) = repository_with_accounts(&[("account-models", "subject-models")]).await;
+    let (store, repository) =
+        repository_with_accounts(&[("account-models", "subject-models")]).await;
     let cache = MemoryGrokCatalogCache::shared();
     let cache_port: Arc<dyn GrokCredentialCatalogCache> = cache;
     let service = crate::support::grok_catalog_service(
@@ -242,8 +260,9 @@ async fn single_account_catalog_refresh_and_read_use_provider_cache_boundary() {
 
     let cached = service
         .read_account_catalog(
-            &account_id("account-models"),
-            CredentialRevision::new(1).expect("revision"),
+            &store
+                .account(&account_id("account-models"))
+                .expect("created account"),
         )
         .await
         .expect("read cache")
@@ -253,7 +272,7 @@ async fn single_account_catalog_refresh_and_read_use_provider_cache_boundary() {
 
 #[tokio::test]
 async fn single_account_catalog_read_miss_does_not_call_upstream() {
-    let (_, repository) =
+    let (store, repository) =
         repository_with_accounts(&[("account-models-miss", "subject-models")]).await;
     let service = crate::support::grok_catalog_service(
         repository,
@@ -263,13 +282,132 @@ async fn single_account_catalog_read_miss_does_not_call_upstream() {
     assert!(
         service
             .read_account_catalog(
-                &account_id("account-models-miss"),
-                CredentialRevision::new(1).expect("revision"),
+                &store
+                    .account(&account_id("account-models-miss"))
+                    .expect("created account"),
             )
             .await
             .expect("read cache")
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn cached_account_catalog_uses_shared_plan_cache_without_upstream_call() {
+    let (store, repository) =
+        repository_with_accounts(&[("catalog-cache-hit", "subject-cache-hit")]).await;
+    let account = store
+        .account(&account_id("catalog-cache-hit"))
+        .expect("created account");
+    let scope = GrokCatalogScope::for_account(&account).expect("catalog scope");
+    let cache = MemoryGrokCatalogCache::shared();
+    cache
+        .replace(GrokPlanCatalog::new(
+            scope,
+            chrono::Utc::now(),
+            GrokCredentialCatalogSeed::new(["grok-4.5"], None).expect("seed"),
+        ))
+        .await
+        .expect("cache catalog");
+    let transport = QueueCatalogTransport::from_bodies([]);
+    let service = crate::support::grok_catalog_service(repository, transport.clone(), cache);
+
+    let catalog = service
+        .cached_or_refresh_account_catalog(&account)
+        .await
+        .expect("cached catalog");
+
+    assert_eq!(catalog.seed().models(), ["grok-4.5"]);
+    assert_eq!(transport.calls(), 0);
+}
+
+#[tokio::test]
+async fn manual_catalog_refresh_replaces_the_shared_plan_cache() {
+    let (store, repository) =
+        repository_with_accounts(&[("catalog-manual-refresh", "subject-manual-refresh")]).await;
+    let account = store
+        .account(&account_id("catalog-manual-refresh"))
+        .expect("created account");
+    let scope = GrokCatalogScope::for_account(&account).expect("catalog scope");
+    let cache = MemoryGrokCatalogCache::shared();
+    cache
+        .replace(GrokPlanCatalog::new(
+            scope,
+            chrono::Utc::now(),
+            GrokCredentialCatalogSeed::new(["grok-before-refresh"], None).expect("seed"),
+        ))
+        .await
+        .expect("cache catalog");
+    let transport = QueueCatalogTransport::from_bodies([OFFICIAL_FIXTURE.to_vec()]);
+    let service = crate::support::grok_catalog_service(repository, transport.clone(), cache);
+
+    let refreshed = service
+        .refresh_account_catalog(account.id())
+        .await
+        .expect("manual refresh");
+
+    assert_eq!(refreshed.seed().models(), ["grok-4.5"]);
+    assert_eq!(transport.calls(), 1);
+}
+
+#[tokio::test]
+async fn catalog_refresh_falls_back_within_the_same_plan() {
+    let (_, repository) = repository_with_accounts(&[
+        ("catalog-fallback-a", "subject-fallback-a"),
+        ("catalog-fallback-b", "subject-fallback-b"),
+    ])
+    .await;
+    let transport = QueueCatalogTransport::from_results([
+        Err(GrokModelCatalogTransportError::new(
+            GrokModelCatalogTransportErrorKind::Unavailable,
+        )),
+        Ok(GrokModelCatalogTransportResponse::new(
+            OFFICIAL_FIXTURE.to_vec(),
+            None,
+        )),
+    ]);
+    let service = crate::support::grok_catalog_service(
+        repository,
+        transport.clone(),
+        MemoryGrokCatalogCache::shared(),
+    );
+
+    let catalog = service
+        .refresh_account_catalog(&account_id("catalog-fallback-a"))
+        .await
+        .expect("second account fills the plan catalog");
+
+    assert_eq!(catalog.seed().models(), ["grok-4.5"]);
+    assert_eq!(transport.calls(), 2);
+}
+
+#[tokio::test]
+async fn catalog_refresh_stops_after_three_failed_accounts_in_one_plan() {
+    let (_, repository) = repository_with_accounts(&[
+        ("catalog-limit-a", "subject-limit-a"),
+        ("catalog-limit-b", "subject-limit-b"),
+        ("catalog-limit-c", "subject-limit-c"),
+        ("catalog-limit-d", "subject-limit-d"),
+    ])
+    .await;
+    let transport = QueueCatalogTransport::from_results((0..3).map(|_| {
+        Err(GrokModelCatalogTransportError::new(
+            GrokModelCatalogTransportErrorKind::Unavailable,
+        ))
+    }));
+    let service = crate::support::grok_catalog_service(
+        repository,
+        transport.clone(),
+        MemoryGrokCatalogCache::shared(),
+    );
+
+    let error = service
+        .refresh_account_catalog(&account_id("catalog-limit-a"))
+        .await
+        .expect_err("three failures stop the refresh");
+
+    assert!(matches!(error, GrokCredentialCatalogError::Upstream));
+    assert_eq!(transport.calls(), 3);
 }
 
 #[tokio::test]
@@ -342,8 +480,19 @@ async fn one_upstream_failure_rejects_the_whole_catalog_cycle() {
 
 #[tokio::test]
 async fn conflicting_facts_for_same_slug_fail_closed() {
-    let (_, repository) =
+    let (store, repository) =
         repository_with_accounts(&[("conflict-a", "subject-a"), ("conflict-b", "subject-b")]).await;
+    let account_id = account_id("conflict-b");
+    let account = store.account(&account_id).expect("created account");
+    store
+        .update_account(ProviderAccountUpdate {
+            account_id,
+            name: account.name().to_owned(),
+            email: account.email().map(str::to_owned),
+            plan_type: Some("premium".to_owned()),
+        })
+        .await
+        .expect("separate plan catalog");
     let mut conflicting: serde_json::Value =
         serde_json::from_slice(OFFICIAL_FIXTURE).expect("fixture JSON");
     conflicting["data"][0]["name"] = serde_json::json!("Different name");

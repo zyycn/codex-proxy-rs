@@ -7,13 +7,14 @@ use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use futures::{StreamExt, TryStreamExt, stream};
 use gateway_core::engine::credential::{
     AccountAvailability, AccountQuotaSignals, CredentialRevision, OpaqueProviderData,
     ProviderAccount, ProviderAccountId, QuotaObservation,
 };
 use gateway_core::engine::provider::ProviderCatalogGeneration;
-use gateway_core::provider_ports::{ProviderCatalogCacheKey, ProviderCatalogCachePort};
+use gateway_core::provider_ports::{
+    ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCatalogScope,
+};
 use gateway_core::routing::{ConfigRevision, ProviderKind};
 use tokio::sync::Mutex;
 
@@ -27,8 +28,8 @@ use crate::{
     parse_grok_billing,
 };
 
-const MAX_CONCURRENT_CATALOG_REQUESTS: usize = 8;
 const CATALOG_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+const MAX_CATALOG_FETCH_ATTEMPTS: usize = 3;
 const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);
 const QUOTA_HYDRATION_FAILURE_TTL: Duration = Duration::from_secs(5);
 
@@ -599,39 +600,56 @@ impl fmt::Debug for GrokCredentialCatalogSeed {
     }
 }
 
-/// Redis/内存 TTL cache 中的一条可重建 account catalog。
+/// xAI 以套餐划分的模型目录作用域。
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GrokCatalogScope(ProviderCatalogScope);
+
+impl GrokCatalogScope {
+    /// 从账号已验证的套餐事实构造目录作用域。
+    pub fn for_account(account: &ProviderAccount) -> Result<Self, GrokCatalogCacheError> {
+        let plan = account
+            .plan_type()
+            .map(str::trim)
+            .filter(|plan| !plan.is_empty())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_else(|| "unknown".to_owned());
+        ProviderCatalogScope::new(format!("plan:{plan}"))
+            .map(Self)
+            .map_err(|_| GrokCatalogCacheError::InvalidData)
+    }
+
+    /// 返回稳定的 Provider-owned 作用域。
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+/// Redis/内存 TTL cache 中的一条可重建套餐 catalog。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GrokAccountCatalog {
-    account_id: ProviderAccountId,
-    revision: CredentialRevision,
+pub struct GrokPlanCatalog {
+    scope: GrokCatalogScope,
     observed_at: DateTime<Utc>,
     seed: GrokCredentialCatalogSeed,
 }
 
-impl GrokAccountCatalog {
+impl GrokPlanCatalog {
     #[must_use]
     pub const fn new(
-        account_id: ProviderAccountId,
-        revision: CredentialRevision,
+        scope: GrokCatalogScope,
         observed_at: DateTime<Utc>,
         seed: GrokCredentialCatalogSeed,
     ) -> Self {
         Self {
-            account_id,
-            revision,
+            scope,
             observed_at,
             seed,
         }
     }
 
     #[must_use]
-    pub const fn account_id(&self) -> &ProviderAccountId {
-        &self.account_id
-    }
-
-    #[must_use]
-    pub const fn revision(&self) -> CredentialRevision {
-        self.revision
+    pub const fn scope(&self) -> &GrokCatalogScope {
+        &self.scope
     }
 
     #[must_use]
@@ -648,18 +666,16 @@ impl GrokAccountCatalog {
 /// Provider-owned catalog cache；实现只能保存可重建 TTL 数据。
 #[async_trait]
 pub trait GrokCredentialCatalogCache: Send + Sync {
-    async fn replace(&self, catalog: GrokAccountCatalog) -> Result<(), GrokCatalogCacheError>;
+    async fn replace(&self, catalog: GrokPlanCatalog) -> Result<(), GrokCatalogCacheError>;
 
     async fn read(
         &self,
-        account_id: &ProviderAccountId,
-        revision: CredentialRevision,
-    ) -> Result<Option<GrokAccountCatalog>, GrokCatalogCacheError>;
+        scope: &GrokCatalogScope,
+    ) -> Result<Option<GrokPlanCatalog>, GrokCatalogCacheError>;
 
     async fn observed_model_support(
         &self,
-        account_id: &ProviderAccountId,
-        revision: CredentialRevision,
+        scope: &GrokCatalogScope,
         model: &str,
     ) -> Result<Option<bool>, GrokCatalogCacheError>;
 }
@@ -679,17 +695,17 @@ impl GrokCatalogCache {
         })
     }
 
-    fn key(
-        &self,
-        account_id: &ProviderAccountId,
-        revision: CredentialRevision,
-    ) -> ProviderCatalogCacheKey {
-        ProviderCatalogCacheKey::new(self.provider_kind.clone(), account_id.clone(), revision)
+    fn key(&self, scope: &GrokCatalogScope) -> ProviderCatalogCacheKey {
+        ProviderCatalogCacheKey::new(self.provider_kind.clone(), scope.0.clone())
     }
 
-    fn encode(catalog: &GrokAccountCatalog) -> OpaqueProviderData {
+    fn encode(catalog: &GrokPlanCatalog) -> OpaqueProviderData {
         let mut document = serde_json::Map::new();
         document.insert("version".to_owned(), serde_json::Value::from(1));
+        document.insert(
+            "scope".to_owned(),
+            serde_json::Value::String(catalog.scope().as_str().to_owned()),
+        );
         document.insert(
             "observedAt".to_owned(),
             serde_json::Value::String(catalog.observed_at().to_rfc3339()),
@@ -716,12 +732,19 @@ impl GrokCatalogCache {
     }
 
     fn decode(
-        account_id: &ProviderAccountId,
-        revision: CredentialRevision,
+        scope: &GrokCatalogScope,
         document: OpaqueProviderData,
-    ) -> Result<GrokAccountCatalog, GrokCatalogCacheError> {
+    ) -> Result<GrokPlanCatalog, GrokCatalogCacheError> {
         let mut fields = document.into_inner();
         if fields.remove("version").and_then(|value| value.as_u64()) != Some(1) {
+            return Err(GrokCatalogCacheError::InvalidData);
+        }
+        if fields
+            .remove("scope")
+            .and_then(|value| value.as_str().map(ToOwned::to_owned))
+            .as_deref()
+            != Some(scope.as_str())
+        {
             return Err(GrokCatalogCacheError::InvalidData);
         }
         let observed_at = fields
@@ -752,21 +775,16 @@ impl GrokCatalogCache {
         }
         let seed = GrokCredentialCatalogSeed::new(models, etag)
             .map_err(|_| GrokCatalogCacheError::InvalidData)?;
-        Ok(GrokAccountCatalog::new(
-            account_id.clone(),
-            revision,
-            observed_at,
-            seed,
-        ))
+        Ok(GrokPlanCatalog::new(scope.clone(), observed_at, seed))
     }
 }
 
 #[async_trait]
 impl GrokCredentialCatalogCache for GrokCatalogCache {
-    async fn replace(&self, catalog: GrokAccountCatalog) -> Result<(), GrokCatalogCacheError> {
+    async fn replace(&self, catalog: GrokPlanCatalog) -> Result<(), GrokCatalogCacheError> {
         self.port
             .replace(
-                &self.key(catalog.account_id(), catalog.revision()),
+                &self.key(catalog.scope()),
                 &Self::encode(&catalog),
                 CATALOG_CACHE_TTL,
             )
@@ -776,25 +794,23 @@ impl GrokCredentialCatalogCache for GrokCatalogCache {
 
     async fn read(
         &self,
-        account_id: &ProviderAccountId,
-        revision: CredentialRevision,
-    ) -> Result<Option<GrokAccountCatalog>, GrokCatalogCacheError> {
+        scope: &GrokCatalogScope,
+    ) -> Result<Option<GrokPlanCatalog>, GrokCatalogCacheError> {
         self.port
-            .read(&self.key(account_id, revision))
+            .read(&self.key(scope))
             .await
             .map_err(|_| GrokCatalogCacheError::Unavailable)?
-            .map(|document| Self::decode(account_id, revision, document))
+            .map(|document| Self::decode(scope, document))
             .transpose()
     }
 
     async fn observed_model_support(
         &self,
-        account_id: &ProviderAccountId,
-        revision: CredentialRevision,
+        scope: &GrokCatalogScope,
         model: &str,
     ) -> Result<Option<bool>, GrokCatalogCacheError> {
         Ok(self
-            .read(account_id, revision)
+            .read(scope)
             .await?
             .map(|catalog| catalog.seed().permits(model)))
     }
@@ -808,12 +824,12 @@ pub enum GrokCatalogCacheError {
     InvalidData,
 }
 
-/// 一次 Provider 同步得到的账号目录和严格模型并集。
+/// 一次 Provider 同步得到的套餐目录和严格模型并集。
 #[derive(Clone, Debug)]
 pub struct GrokCredentialCatalogSnapshot {
     config_revision: ConfigRevision,
     observed_at: DateTime<Utc>,
-    accounts: Vec<GrokAccountCatalog>,
+    plans: Vec<GrokPlanCatalog>,
     models: Vec<GrokCatalogModel>,
 }
 
@@ -829,8 +845,8 @@ impl GrokCredentialCatalogSnapshot {
     }
 
     #[must_use]
-    pub fn accounts(&self) -> &[GrokAccountCatalog] {
-        &self.accounts
+    pub fn plans(&self) -> &[GrokPlanCatalog] {
+        &self.plans
     }
 
     #[must_use]
@@ -917,61 +933,80 @@ impl GrokCredentialCatalogService {
 
     pub async fn cache_seed(
         &self,
-        account_id: ProviderAccountId,
-        revision: CredentialRevision,
+        account_id: &ProviderAccountId,
         seed: GrokCredentialCatalogSeed,
     ) -> Result<(), GrokCredentialCatalogError> {
+        let account = self
+            .repository
+            .load_current(account_id)
+            .await
+            .map_err(|_| GrokCredentialCatalogError::Store)?
+            .account;
+        let scope = GrokCatalogScope::for_account(&account)
+            .map_err(|_| GrokCredentialCatalogError::InvalidCredentialData)?;
         self.cache
-            .replace(GrokAccountCatalog::new(
-                account_id,
-                revision,
-                Utc::now(),
-                seed,
-            ))
+            .replace(GrokPlanCatalog::new(scope, Utc::now(), seed))
             .await
             .map_err(|_| GrokCredentialCatalogError::Cache)
     }
 
-    /// 实时刷新一个指定账号的模型集合并写入可重建 cache。
+    /// 优先读取套餐目录 cache；缺失时才用当前账号所属套餐的有限候选集实时填充。
+    pub async fn cached_or_refresh_account_catalog(
+        &self,
+        account: &ProviderAccount,
+    ) -> Result<GrokPlanCatalog, GrokCredentialCatalogError> {
+        let scope = GrokCatalogScope::for_account(account)
+            .map_err(|_| GrokCredentialCatalogError::InvalidCredentialData)?;
+        if let Some(catalog) = self
+            .cache
+            .read(&scope)
+            .await
+            .map_err(|_| GrokCredentialCatalogError::Cache)?
+        {
+            return Ok(catalog);
+        }
+        self.refresh_account_catalog(account.id()).await
+    }
+
+    /// 实时刷新指定账号所属套餐的模型集合，并覆盖可重建 cache。
     pub async fn refresh_account_catalog(
         &self,
         account_id: &ProviderAccountId,
-    ) -> Result<GrokAccountCatalog, GrokCredentialCatalogError> {
-        let candidate = self
+    ) -> Result<GrokPlanCatalog, GrokCredentialCatalogError> {
+        let candidates = self
             .repository
-            .load_current(account_id)
+            .list_loaded_for_provider()
             .await
             .map_err(|_| GrokCredentialCatalogError::Store)?;
-        if !eligible_catalog_candidate(&candidate) {
+        let mut groups = catalog_candidates_by_scope(candidates)?;
+        let Some(scope) = groups.iter().find_map(|(scope, candidates)| {
+            candidates
+                .iter()
+                .any(|candidate| candidate.account.id() == account_id)
+                .then(|| scope.clone())
+        }) else {
             return Err(GrokCredentialCatalogError::NoEligibleCredential);
-        }
-        let revision = candidate.account.revision();
-        let seed = self
-            .fetch_seed(
-                candidate.access_token,
-                SecretValue::new(candidate.account.upstream_user_id().to_owned()),
-                candidate
-                    .account
-                    .email()
-                    .map(|email| SecretValue::new(email.to_owned())),
-            )
-            .await?;
-        let catalog = GrokAccountCatalog::new(account_id.clone(), revision, Utc::now(), seed);
-        self.cache
-            .replace(catalog.clone())
-            .await
-            .map_err(|_| GrokCredentialCatalogError::Cache)?;
-        Ok(catalog)
+        };
+        let mut candidates = groups.remove(&scope).unwrap_or_default();
+        candidates.sort_by(|left, right| {
+            let left_preferred = left.account.id() == account_id;
+            let right_preferred = right.account.id() == account_id;
+            right_preferred
+                .cmp(&left_preferred)
+                .then_with(|| left.account.id().cmp(right.account.id()))
+        });
+        self.refresh_scope_catalog(scope, candidates).await
     }
 
-    /// 读取一个指定 revision 的已验证模型 cache，不触发上游请求。
+    /// 读取当前账号所属套餐的目录 cache，不触发上游请求。
     pub async fn read_account_catalog(
         &self,
-        account_id: &ProviderAccountId,
-        revision: CredentialRevision,
-    ) -> Result<Option<GrokAccountCatalog>, GrokCredentialCatalogError> {
+        account: &ProviderAccount,
+    ) -> Result<Option<GrokPlanCatalog>, GrokCredentialCatalogError> {
+        let scope = GrokCatalogScope::for_account(account)
+            .map_err(|_| GrokCredentialCatalogError::InvalidCredentialData)?;
         self.cache
-            .read(account_id, revision)
+            .read(&scope)
             .await
             .map_err(|_| GrokCredentialCatalogError::Cache)
     }
@@ -985,7 +1020,7 @@ impl GrokCredentialCatalogService {
         Ok(GrokCredentialCatalogSnapshot {
             config_revision,
             observed_at: catalog.observed_at,
-            accounts: catalog.accounts,
+            plans: catalog.plans,
             models: catalog.models,
         })
     }
@@ -1004,34 +1039,25 @@ impl GrokCredentialCatalogService {
             .into_iter()
             .filter(eligible_catalog_candidate)
             .collect::<Vec<_>>();
-        if candidates.is_empty() {
-            return Err(GrokCredentialCatalogError::NoEligibleCredential);
+        let groups = catalog_candidates_by_scope(candidates)?;
+        let mut fetched = Vec::with_capacity(groups.len());
+        for (scope, candidates) in groups {
+            fetched.push(self.fetch_scope_catalog(scope, candidates).await?);
         }
-
-        let wire_profile = self.wire_profile.clone();
-        let mut fetched = stream::iter(candidates.into_iter().map(|candidate| {
-            let client = Arc::clone(&self.client);
-            let wire_profile = wire_profile.clone();
-            async move { fetch_candidate_catalog(client, candidate, wire_profile).await }
-        }))
-        .buffer_unordered(MAX_CONCURRENT_CATALOG_REQUESTS)
-        .try_collect::<Vec<_>>()
-        .await?;
-        fetched.sort_by(|left, right| left.account_id.cmp(&right.account_id));
+        fetched.sort_by(|left, right| left.scope.cmp(&right.scope));
         let models = strict_model_union(&fetched)?;
         let observed_at = Utc::now();
-        let accounts = fetched
+        let plans = fetched
             .into_iter()
-            .map(|fetched| GrokAccountCatalog {
-                account_id: fetched.account_id,
-                revision: fetched.revision,
+            .map(|fetched| GrokPlanCatalog {
+                scope: fetched.scope,
                 observed_at,
                 seed: fetched.seed,
             })
             .collect::<Vec<_>>();
-        for account in &accounts {
+        for plan in &plans {
             self.cache
-                .replace(account.clone())
+                .replace(plan.clone())
                 .await
                 .map_err(|_| GrokCredentialCatalogError::Cache)?;
         }
@@ -1039,9 +1065,45 @@ impl GrokCredentialCatalogService {
 
         Ok(FetchedProviderCatalog {
             observed_at,
-            accounts,
+            plans,
             models,
         })
+    }
+
+    async fn refresh_scope_catalog(
+        &self,
+        scope: GrokCatalogScope,
+        candidates: Vec<LoadedGrokCredential>,
+    ) -> Result<GrokPlanCatalog, GrokCredentialCatalogError> {
+        let fetched = self.fetch_scope_catalog(scope.clone(), candidates).await?;
+        let catalog = GrokPlanCatalog::new(scope, Utc::now(), fetched.seed);
+        self.cache
+            .replace(catalog.clone())
+            .await
+            .map_err(|_| GrokCredentialCatalogError::Cache)?;
+        Ok(catalog)
+    }
+
+    async fn fetch_scope_catalog(
+        &self,
+        scope: GrokCatalogScope,
+        candidates: Vec<LoadedGrokCredential>,
+    ) -> Result<FetchedCredentialCatalog, GrokCredentialCatalogError> {
+        let mut last_error = None;
+        for candidate in candidates.into_iter().take(MAX_CATALOG_FETCH_ATTEMPTS) {
+            match fetch_candidate_catalog(
+                Arc::clone(&self.client),
+                scope.clone(),
+                candidate,
+                self.wire_profile.clone(),
+            )
+            .await
+            {
+                Ok(catalog) => return Ok(catalog),
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(last_error.unwrap_or(GrokCredentialCatalogError::NoEligibleCredential))
     }
 
     fn publish_models(&self, models: &[GrokCatalogModel]) {
@@ -1069,16 +1131,33 @@ impl fmt::Debug for GrokCredentialCatalogService {
 }
 
 struct FetchedCredentialCatalog {
-    account_id: ProviderAccountId,
-    revision: CredentialRevision,
+    scope: GrokCatalogScope,
     snapshot: GrokModelCatalogSnapshot,
     seed: GrokCredentialCatalogSeed,
 }
 
 struct FetchedProviderCatalog {
     observed_at: DateTime<Utc>,
-    accounts: Vec<GrokAccountCatalog>,
+    plans: Vec<GrokPlanCatalog>,
     models: Vec<GrokCatalogModel>,
+}
+
+fn catalog_candidates_by_scope(
+    candidates: Vec<LoadedGrokCredential>,
+) -> Result<BTreeMap<GrokCatalogScope, Vec<LoadedGrokCredential>>, GrokCredentialCatalogError> {
+    let mut groups = BTreeMap::<GrokCatalogScope, Vec<LoadedGrokCredential>>::new();
+    for candidate in candidates.into_iter().filter(eligible_catalog_candidate) {
+        let scope = GrokCatalogScope::for_account(&candidate.account)
+            .map_err(|_| GrokCredentialCatalogError::InvalidCredentialData)?;
+        groups.entry(scope).or_default().push(candidate);
+    }
+    for candidates in groups.values_mut() {
+        candidates.sort_by(|left, right| left.account.id().cmp(right.account.id()));
+    }
+    if groups.is_empty() {
+        return Err(GrokCredentialCatalogError::NoEligibleCredential);
+    }
+    Ok(groups)
 }
 
 fn eligible_catalog_candidate(candidate: &LoadedGrokCredential) -> bool {
@@ -1104,6 +1183,7 @@ fn eligible_catalog_candidate(candidate: &LoadedGrokCredential) -> bool {
 
 async fn fetch_candidate_catalog(
     client: Arc<GrokModelCatalogClient>,
+    scope: GrokCatalogScope,
     candidate: LoadedGrokCredential,
     wire_profile: XaiWireProfileState,
 ) -> Result<FetchedCredentialCatalog, GrokCredentialCatalogError> {
@@ -1123,8 +1203,7 @@ async fn fetch_candidate_catalog(
         .map_err(|_| GrokCredentialCatalogError::Upstream)?;
     let seed = GrokCredentialCatalogSeed::from_snapshot(&snapshot)?;
     Ok(FetchedCredentialCatalog {
-        account_id: candidate.account.id().clone(),
-        revision: candidate.account.revision(),
+        scope,
         snapshot,
         seed,
     })

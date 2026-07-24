@@ -28,7 +28,7 @@ use serde_json::{Map, json};
 
 use crate::support::{
     MemoryAccountStore, MemorySessionAffinity, MemorySessionExclusions, TestLeaseCoordinator,
-    account_policy, agent_identity_service_with_pool, profile, secret,
+    account_policy, agent_identity_service_with_pool, catalog_cache, profile, secret,
 };
 
 fn wire_profile() -> CodexWireProfileState {
@@ -66,6 +66,7 @@ fn provider_with_affinity(
         http.clone(),
         OFFICIAL_CODEX_BASE_URL.to_owned(),
         Arc::clone(&agent_identity),
+        catalog_cache(),
     ));
     let quota = Arc::new(CodexCredentialQuotaService::new(
         store.repository(),

@@ -34,7 +34,8 @@ pub use admin::{
     PreparedCodexCredentialRotationGuard, RotateManagedCodexCredential,
 };
 pub use catalog::{
-    CodexCredentialCatalogError, CodexCredentialCatalogService, CodexCredentialCatalogSnapshot,
+    CodexCatalogScope, CodexCredentialCatalogError, CodexCredentialCatalogService,
+    CodexCredentialCatalogSnapshot, CodexPlanCatalog,
 };
 pub use cookie::{CodexCookiePolicy, CookiePolicyError};
 pub use identity::{

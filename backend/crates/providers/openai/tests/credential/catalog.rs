@@ -1,13 +1,39 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::{TimeZone as _, Utc};
 use futures::executor::block_on;
-use gateway_core::engine::credential::ProviderAccountId;
+use gateway_core::engine::credential::{ProviderAccount, ProviderAccountId};
+use gateway_core::provider_ports::ProviderCatalogCachePort;
 use provider_openai::OFFICIAL_CODEX_BASE_URL;
-use provider_openai::credential::{CodexCredentialCatalogError, CodexCredentialCatalogService};
+use provider_openai::credential::{
+    CodexCredentialCatalogError, CodexCredentialCatalogService, ImportCodexOAuthCredential,
+};
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
-use crate::support::{MemoryAccountStore, agent_identity_service};
+use crate::support::{MemoryAccountStore, agent_identity_service, catalog_cache, profile, secret};
+
+const OFFICIAL_FIXTURE: &[u8] =
+    include_bytes!("../transport/fixtures/official_models_snapshot.json");
+
+struct ReplacingCatalogResponder {
+    calls: Arc<AtomicUsize>,
+}
+
+impl Respond for ReplacingCatalogResponder {
+    fn respond(&self, _: &Request) -> ResponseTemplate {
+        let body = if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            OFFICIAL_FIXTURE.to_vec()
+        } else {
+            br#"{"models":[{"slug":"gpt-5.5","display_name":"GPT-5.5"}]}"#.to_vec()
+        };
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .set_body_raw(body, "application/json")
+    }
+}
 
 fn wire_profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
@@ -27,6 +53,14 @@ fn wire_profile() -> CodexWireProfileState {
 }
 
 fn service(store: &Arc<MemoryAccountStore>) -> CodexCredentialCatalogService {
+    service_with_catalog_cache(store, OFFICIAL_CODEX_BASE_URL.to_owned(), catalog_cache())
+}
+
+fn service_with_catalog_cache(
+    store: &Arc<MemoryAccountStore>,
+    base_url: String,
+    catalog_cache: Arc<dyn ProviderCatalogCachePort>,
+) -> CodexCredentialCatalogService {
     CodexCredentialCatalogService::new(
         store.repository(),
         wire_profile(),
@@ -34,9 +68,24 @@ fn service(store: &Arc<MemoryAccountStore>) -> CodexCredentialCatalogService {
             .no_proxy()
             .build()
             .expect("client"),
-        OFFICIAL_CODEX_BASE_URL.to_owned(),
+        base_url,
         agent_identity_service(store),
+        catalog_cache,
     )
+}
+
+async fn seed_account(store: &Arc<MemoryAccountStore>, account_id: &str) -> ProviderAccount {
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: account_id.to_owned(),
+            name: account_id.to_owned(),
+            secret: secret(&format!("access-{account_id}")),
+            verified_account: profile(&format!("chatgpt-{account_id}")),
+            next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await;
+    store.account(account_id).expect("seeded account")
 }
 
 #[test]
@@ -66,7 +115,7 @@ async fn missing_account_refresh_fails_before_network_io() {
     let account = ProviderAccountId::new("acct_missing").expect("account id");
 
     let error = service(&store)
-        .synchronize_account(&account)
+        .refresh_account_catalog(&account)
         .await
         .expect_err("missing account");
 
@@ -74,6 +123,75 @@ async fn missing_account_refresh_fails_before_network_io() {
         error,
         CodexCredentialCatalogError::NoEligibleCredential
     ));
+}
+
+#[tokio::test]
+async fn plan_catalog_cache_is_shared_and_manual_refresh_replaces_it() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let first = seed_account(&store, "acct_catalog_a").await;
+    let second = seed_account(&store, "acct_catalog_b").await;
+    let server = MockServer::start().await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(ReplacingCatalogResponder {
+            calls: Arc::clone(&calls),
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+
+    let initial = service
+        .cached_or_refresh_account_catalog(&first)
+        .await
+        .expect("cold cache fetch");
+    let cached = service
+        .cached_or_refresh_account_catalog(&second)
+        .await
+        .expect("shared cache hit");
+    let refreshed = service
+        .refresh_account_catalog(second.id())
+        .await
+        .expect("manual refresh");
+    let replaced = service
+        .cached_or_refresh_account_catalog(&first)
+        .await
+        .expect("replaced cache hit");
+
+    assert_eq!(initial.models(), ["gpt-5.4"]);
+    assert_eq!(cached.models(), ["gpt-5.4"]);
+    assert_eq!(refreshed.models(), ["gpt-5.5"]);
+    assert_eq!(replaced.models(), ["gpt-5.5"]);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn plan_catalog_refresh_stops_after_three_failed_accounts() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let accounts = [
+        seed_account(&store, "acct_catalog_limit_a").await,
+        seed_account(&store, "acct_catalog_limit_b").await,
+        seed_account(&store, "acct_catalog_limit_c").await,
+        seed_account(&store, "acct_catalog_limit_d").await,
+    ];
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(3)
+        .mount(&server)
+        .await;
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+
+    let error = service
+        .refresh_account_catalog(accounts[0].id())
+        .await
+        .expect_err("three failed accounts stop the refresh");
+
+    assert!(matches!(error, CodexCredentialCatalogError::Upstream));
+    server.verify().await;
 }
 
 #[tokio::test]
@@ -97,6 +215,38 @@ async fn response_etag_change_is_deduplicated_and_queued_once() {
     )
     .await
     .expect("queued ETag refresh");
+}
+
+#[tokio::test]
+async fn periodic_catalog_refresh_does_not_complete_an_etag_refresh_it_did_not_claim() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let service = service(&store);
+
+    assert!(
+        service
+            .observe_response_etag("\"models-v2\"")
+            .expect("new ETag")
+    );
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        service.wait_for_etag_refresh(),
+    )
+    .await
+    .expect("ETag daemon claims the refresh");
+
+    assert!(matches!(
+        service.refresh_catalogs().await,
+        Err(CodexCredentialCatalogError::NoEligibleCredential)
+    ));
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            service.wait_for_etag_refresh(),
+        )
+        .await
+        .is_err(),
+        "periodic refresh must not requeue or finish the daemon-owned ETag"
+    );
 }
 
 #[test]

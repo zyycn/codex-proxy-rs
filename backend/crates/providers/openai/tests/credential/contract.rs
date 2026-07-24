@@ -27,7 +27,7 @@ use url::Url;
 
 use crate::support::{
     MemoryAccountStore, MemorySessionAffinity, MemorySessionExclusions, TestLeaseCoordinator,
-    account_policy, agent_identity_service, profile, secret,
+    account_policy, agent_identity_service, catalog_cache, profile, secret,
 };
 
 fn create_account(store: &Arc<MemoryAccountStore>, id: &str, token: &str) {
@@ -129,6 +129,7 @@ fn selector_with_runtime(
         http.clone(),
         OFFICIAL_CODEX_BASE_URL.to_owned(),
         Arc::clone(&agent_identity),
+        catalog_cache(),
     ));
     let quota = Arc::new(CodexCredentialQuotaService::new(
         store.repository(),

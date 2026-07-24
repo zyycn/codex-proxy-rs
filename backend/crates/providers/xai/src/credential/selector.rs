@@ -14,7 +14,7 @@ use gateway_core::provider_ports::{
 };
 use gateway_core::routing::ProviderKind;
 
-use super::catalog::{GrokCredentialCatalogCache, GrokCredentialQuotaService};
+use super::catalog::{GrokCatalogScope, GrokCredentialCatalogCache, GrokCredentialQuotaService};
 use super::repository::GrokCredentialRepository;
 use super::types::{GrokCredentialAvailability, UpdateGrokCredentialState};
 use crate::{
@@ -69,14 +69,14 @@ impl GrokAccountSessionSelector {
         self.quota.prepare_scheduling(&accounts).await;
         let mut catalog_eligible = Vec::new();
         for account in accounts {
-            let support = self
-                .catalog_cache
-                .observed_model_support(
-                    account.id(),
-                    account.revision(),
-                    request.upstream_model().as_str(),
-                )
-                .await;
+            let support = match GrokCatalogScope::for_account(&account) {
+                Ok(scope) => {
+                    self.catalog_cache
+                        .observed_model_support(&scope, request.upstream_model().as_str())
+                        .await
+                }
+                Err(error) => Err(error),
+            };
             if !matches!(support, Ok(Some(false))) {
                 catalog_eligible.push(account);
             }

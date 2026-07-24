@@ -10,16 +10,17 @@ use async_trait::async_trait;
 use futures::future::BoxFuture;
 use gateway_core::engine::credential::{
     AccountAvailability, AccountRuntimeSignals, AccountStateChange, CredentialCasOutcome,
-    CredentialCasUpdate, CredentialRevision, LoadedCredential, NewProviderAccount, ProviderAccount,
-    ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate, QuotaObservation,
-    QuotaWriteOutcome,
+    CredentialCasUpdate, CredentialRevision, LoadedCredential, NewProviderAccount,
+    OpaqueProviderData, ProviderAccount, ProviderAccountId, ProviderAccountStore,
+    ProviderAccountUpdate, QuotaObservation, QuotaWriteOutcome,
 };
 use gateway_core::error::{StoreError, StoreErrorKind};
 use gateway_core::provider_ports::{
-    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshPolicy,
-    ProviderRuntimePolicyPort, ProviderSchedulingLeaseRequest, ProviderSchedulingState,
-    ProviderSessionAffinityKey, ProviderSessionAffinityPort, ProviderSessionExclusionPort,
-    ProviderSessionExclusions, ProviderStoreError,
+    ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderLeaseAcquisition, ProviderLeasePort,
+    ProviderLeaseRequest, ProviderRefreshPolicy, ProviderRuntimePolicyPort,
+    ProviderSchedulingLeaseRequest, ProviderSchedulingState, ProviderSessionAffinityKey,
+    ProviderSessionAffinityPort, ProviderSessionExclusionPort, ProviderSessionExclusions,
+    ProviderStoreError,
 };
 use gateway_core::routing::ProviderKind;
 use provider_openai::credential::{
@@ -577,6 +578,46 @@ impl ProviderSessionExclusionPort for MemorySessionExclusions {
             }
         })
     }
+}
+
+#[derive(Default)]
+pub(crate) struct MemoryCatalogCache {
+    values: Mutex<BTreeMap<String, OpaqueProviderData>>,
+}
+
+impl ProviderCatalogCachePort for MemoryCatalogCache {
+    fn replace<'a>(
+        &'a self,
+        key: &'a ProviderCatalogCacheKey,
+        catalog: &'a OpaqueProviderData,
+        _ttl: Duration,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            self.values
+                .lock()
+                .expect("catalog cache")
+                .insert(key.scope().as_str().to_owned(), catalog.clone());
+            Ok(())
+        })
+    }
+
+    fn read<'a>(
+        &'a self,
+        key: &'a ProviderCatalogCacheKey,
+    ) -> BoxFuture<'a, Result<Option<OpaqueProviderData>, ProviderStoreError>> {
+        Box::pin(async move {
+            Ok(self
+                .values
+                .lock()
+                .expect("catalog cache")
+                .get(key.scope().as_str())
+                .cloned())
+        })
+    }
+}
+
+pub(crate) fn catalog_cache() -> Arc<dyn ProviderCatalogCachePort> {
+    Arc::new(MemoryCatalogCache::default())
 }
 
 pub(crate) fn profile(account_id: &str) -> CodexAccountProfile {

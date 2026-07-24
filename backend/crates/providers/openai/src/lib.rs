@@ -102,6 +102,7 @@ pub async fn initialize(
         http.clone(),
         config.base_url().to_owned(),
         Arc::clone(&agent_identity),
+        ports.catalog_cache(),
     ));
     let quota = Arc::new(CodexCredentialQuotaService::new(
         repository.clone(),
