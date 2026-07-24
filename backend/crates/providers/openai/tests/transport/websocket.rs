@@ -1658,7 +1658,7 @@ async fn codex_backend_client_should_use_websocket_when_previous_response_id_is_
         .create_response(
             &request,
             CodexRequestContext {
-                access_token: "access-token",
+                authorization: "Bearer access-token",
                 account_id: Some("chatgpt-account"),
                 request_id: "req_ws_client",
                 turn_state: None,

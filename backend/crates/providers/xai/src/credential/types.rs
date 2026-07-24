@@ -13,6 +13,8 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::SecretValue;
 
+pub const XAI_AUTHENTICATION_KIND_OAUTH: &str = "oauth";
+
 /// 官方 xAI OAuth token pair；不接受 API Key。
 pub struct GrokOAuthSecret {
     pub access_token: SecretValue,

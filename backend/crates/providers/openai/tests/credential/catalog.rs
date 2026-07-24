@@ -6,7 +6,7 @@ use gateway_core::engine::credential::ProviderAccountId;
 use provider_openai::credential::{CodexCredentialCatalogError, CodexCredentialCatalogService};
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 
-use crate::support::MemoryAccountStore;
+use crate::support::{MemoryAccountStore, agent_identity_service};
 
 fn wire_profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
@@ -33,6 +33,7 @@ fn service(store: &Arc<MemoryAccountStore>) -> CodexCredentialCatalogService {
             .no_proxy()
             .build()
             .expect("client"),
+        agent_identity_service(store),
     )
 }
 

@@ -8,12 +8,15 @@ use std::time::{Duration, SystemTime};
 use async_trait::async_trait;
 use futures::{StreamExt, future::BoxFuture};
 use gateway_core::engine::continuation::{ContinuationBinding, NativeContinuationScope};
+use gateway_core::engine::credential::{AccountFeedbackStats, ProviderAccount};
 use gateway_core::engine::provider::{
     EventStream, Provider, ProviderCallMetadata, ProviderCatalogGeneration,
     ProviderModelCapabilities, ProviderRequest, ProviderRequestObservation, ProviderResource,
     ProviderStream, UpstreamTransport,
 };
-use gateway_core::engine::{AttemptContext, ContinuationAttempt, UpstreamSendState};
+use gateway_core::engine::{
+    AttemptContext, CancellationToken, ContinuationAttempt, UpstreamSendState,
+};
 use gateway_core::error::{
     ContinuationFailure, ProviderError, ProviderErrorKind, SafeUpstreamValue,
 };
@@ -22,6 +25,7 @@ use gateway_core::event::{
     ProviderResponseTimings, UpstreamHttpVersion, WebSocketPoolKind,
 };
 use gateway_core::operation::{GenerateRequest, Operation, OperationKind, ProviderSessionState};
+use gateway_core::provider_ports::ProviderSessionAffinityKey;
 use gateway_core::routing::{ModelCapabilities, ProviderKind, UpstreamModelId};
 use gateway_core::task::{
     DaemonRestartPolicy, DaemonTask, ScheduledTask, WorkerContribution, WorkerCycleContext,
@@ -35,9 +39,10 @@ use serde_json::Value;
 use url::Url;
 
 use crate::credential::{
-    CodexAccountFailure, CodexCredentialCatalogService, CodexCredentialLease,
-    CodexCredentialQuotaService, CodexCredentialRefreshOutcome, CodexCredentialRefreshService,
-    CodexCredentialSelector, CredentialSelectionError, RuntimeCodexCookie, SelectCodexCredential,
+    CodexAccountFailure, CodexAgentIdentityTaskService, CodexCredentialCatalogService,
+    CodexCredentialLease, CodexCredentialQuotaService, CodexCredentialRefreshOutcome,
+    CodexCredentialRefreshService, CodexCredentialSelector, CredentialSelectionError,
+    RuntimeCodexCookie, SelectCodexCredential, derive_codex_session_affinity_key,
 };
 use crate::transport::canonical::{
     CodexCanonicalDecoder, CodexCanonicalError, CodexCanonicalOutcome,
@@ -57,9 +62,9 @@ use crate::transport::request::{
 };
 use crate::transport::websocket::{CodexWebSocketExchangeError, PreviousResponseUnavailableReason};
 use crate::transport::{
-    CODEX_RESPONSES_PATH, CodexBackendClient, CodexBackendTransport, CodexClientError,
-    CodexRequestContext, CodexResponseMetadata, CodexTransportMetrics, CodexUpstreamDiagnostics,
-    CodexWebSocketPool, endpoint_url,
+    CODEX_RESPONSES_PATH, CodexBackendClient, CodexBackendStreamingResponse, CodexBackendTransport,
+    CodexClientError, CodexRequestContext, CodexResponseMetadata, CodexTransportMetrics,
+    CodexUpstreamDiagnostics, CodexWebSocketPool, endpoint_url,
 };
 
 const PROVIDER_NAME: &str = "openai";
@@ -95,15 +100,21 @@ pub struct CodexProvider {
     selector: Arc<CodexCredentialSelector>,
     catalog: Arc<CodexCredentialCatalogService>,
     quota: Arc<CodexCredentialQuotaService>,
+    agent_identity: Arc<CodexAgentIdentityTaskService>,
+    account_feedback: Arc<AccountFeedbackStats>,
     client: CodexBackendClient,
     responses_url: Url,
 }
 
 impl CodexProvider {
+    // Provider 构造集中装配独立领域服务和透明传输依赖，拆分参数会模糊所有权。
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         selector: Arc<CodexCredentialSelector>,
         catalog: Arc<CodexCredentialCatalogService>,
         quota: Arc<CodexCredentialQuotaService>,
+        agent_identity: Arc<CodexAgentIdentityTaskService>,
+        account_feedback: Arc<AccountFeedbackStats>,
         http: Client,
         profile: CodexWireProfileState,
         websocket_pool: Arc<CodexWebSocketPool>,
@@ -117,6 +128,8 @@ impl CodexProvider {
             selector,
             catalog,
             quota,
+            agent_identity,
+            account_feedback,
             client,
             responses_url,
         })
@@ -147,7 +160,7 @@ impl Provider for CodexProvider {
         let Operation::Generate(request) = operation else {
             return ProviderRequestObservation::default();
         };
-        let semantics = encode_generate_request(request, "observability")
+        let (semantics, reasoning_effort) = encode_generate_request(request, "observability")
             .map(|mut encoded| {
                 if let Ok(Some(previous)) = decode_openai_session_state(request) {
                     let mut input = previous
@@ -159,10 +172,18 @@ impl Provider for CodexProvider {
                     input.extend(encoded.input().iter().cloned());
                     encoded.set_input(input);
                 }
-                encoded.semantics()
+                let reasoning_effort = encoded
+                    .reasoning()
+                    .and_then(|reasoning| reasoning.get("effort"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned);
+                (encoded.semantics(), reasoning_effort)
             })
             .unwrap_or_default();
         ProviderRequestObservation {
+            reasoning_effort,
             reasoning_preset: semantics.reasoning_preset.map(str::to_owned),
             request_kind: semantics.request_kind,
             subagent_kind: semantics.subagent_kind,
@@ -218,6 +239,7 @@ impl Provider for CodexProvider {
         let mut upstream_request =
             encode_generate_request(generate, candidate.upstream_model().as_str())
                 .map_err(map_request_error)?;
+        let session_affinity_key = derive_codex_session_affinity_key(&upstream_request);
         let request_input = upstream_request.input().to_vec();
         let transport = selected_transport(&request)?;
         apply_transport(&mut upstream_request, transport);
@@ -228,6 +250,7 @@ impl Provider for CodexProvider {
                 upstream_model: candidate.upstream_model().as_str(),
                 request_url: &self.responses_url,
                 attempt: &context,
+                session_affinity_key: session_affinity_key.as_ref(),
             })
             .await
             .map_err(map_selection_error)?;
@@ -345,10 +368,13 @@ impl Provider for CodexProvider {
             selector: Arc::clone(&self.selector),
             quota: Arc::clone(&self.quota),
             catalog: Arc::clone(&self.catalog),
+            agent_identity: Arc::clone(&self.agent_identity),
             lease: Arc::clone(&lease),
+            session_affinity_key,
             session_capture,
         });
-        Ok(ProviderStream::new(metadata, events, lease))
+        Ok(ProviderStream::new(metadata, events, lease)
+            .with_account_feedback(Arc::clone(&self.account_feedback)))
     }
 }
 
@@ -362,7 +388,9 @@ struct ColdResponse {
     selector: Arc<CodexCredentialSelector>,
     quota: Arc<CodexCredentialQuotaService>,
     catalog: Arc<CodexCredentialCatalogService>,
+    agent_identity: Arc<CodexAgentIdentityTaskService>,
     lease: Arc<CodexCredentialLease>,
+    session_affinity_key: Option<ProviderSessionAffinityKey>,
     session_capture: Option<OpenAiSessionCapture>,
 }
 
@@ -542,6 +570,53 @@ fn without_output_id(mut item: Value) -> Value {
     item
 }
 
+enum CodexHandshakeAttemptError {
+    Client(CodexClientError),
+    Cancelled,
+    Timeout,
+    AgentIdentityRecovery,
+}
+
+async fn create_response_attempt(
+    client: &CodexBackendClient,
+    request: &CodexResponsesRequest,
+    request_context: CodexRequestContext<'_>,
+    account_id: &str,
+    deadline: SystemTime,
+    cancellation: &CancellationToken,
+) -> Result<CodexBackendStreamingResponse, CodexHandshakeAttemptError> {
+    let Some(handshake_deadline) = remaining(deadline) else {
+        return Err(CodexHandshakeAttemptError::Timeout);
+    };
+    tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => Err(CodexHandshakeAttemptError::Cancelled),
+        _ = tokio::time::sleep(handshake_deadline) => Err(CodexHandshakeAttemptError::Timeout),
+        response = client.create_response_stream_with_pool_account(
+            request,
+            request_context,
+            Some(account_id),
+        ) => response.map_err(CodexHandshakeAttemptError::Client),
+    }
+}
+
+fn map_handshake_attempt_error(error: CodexHandshakeAttemptError) -> MappedProviderFailure {
+    match error {
+        CodexHandshakeAttemptError::Client(error) => map_handshake_error(error),
+        CodexHandshakeAttemptError::Cancelled => MappedProviderFailure::plain(provider_error(
+            ProviderErrorKind::Cancelled,
+            UpstreamSendState::Ambiguous,
+        )),
+        CodexHandshakeAttemptError::Timeout => MappedProviderFailure::plain(provider_error(
+            ProviderErrorKind::Timeout,
+            UpstreamSendState::Ambiguous,
+        )),
+        CodexHandshakeAttemptError::AgentIdentityRecovery => MappedProviderFailure::plain(
+            provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::Sent),
+        ),
+    }
+}
+
 fn cold_response_stream(response: ColdResponse) -> EventStream {
     let ColdResponse {
         client,
@@ -553,39 +628,84 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         selector,
         quota,
         catalog,
+        agent_identity,
         lease,
+        session_affinity_key,
         mut session_capture,
     } = response;
     Box::pin(async_stream::try_stream! {
+        let mut active_account = lease.account().clone();
         let cookie_header = build_cookie_header(lease.cookies())?;
+        let mut authorization = lease
+            .authentication()
+            .authorization_header(chrono::Utc::now())
+            .map_err(|_| {
+                provider_error(
+                    ProviderErrorKind::Unauthorized,
+                    UpstreamSendState::NotSent,
+                )
+            })?;
         let request_id = context.request_id().as_str().to_owned();
         let cancellation = context.cancellation().clone();
-        let Some(handshake_deadline) = remaining(context.deadline()) else {
-            Err(provider_error(ProviderErrorKind::Timeout, UpstreamSendState::NotSent))?;
-            return;
-        };
-        let request_context = codex_request_context(
+        let mut response = create_response_attempt(
+            &client,
             &request,
-            &request_id,
-            &lease,
-            cookie_header.as_ref(),
-        );
-        let response = tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => Err(MappedProviderFailure::plain(provider_error(
-                ProviderErrorKind::Cancelled,
-                UpstreamSendState::Ambiguous,
-            ))),
-            _ = tokio::time::sleep(handshake_deadline) => Err(MappedProviderFailure::plain(provider_error(
-                ProviderErrorKind::Timeout,
-                UpstreamSendState::Ambiguous,
-            ))),
-            response = client.create_response_stream_with_pool_account(
+            codex_request_context(
                 &request,
-                request_context,
-                Some(lease.account_id().as_str()),
-            ) => response.map_err(map_handshake_error),
-        };
+                &request_id,
+                &active_account,
+                lease.installation_id(),
+                &authorization,
+                cookie_header.as_ref(),
+            ),
+            active_account.id().as_str(),
+            context.deadline(),
+            &cancellation,
+        )
+        .await;
+        if let Err(CodexHandshakeAttemptError::Client(error)) = &response {
+            match agent_identity
+                .recover_after_rejected_task(
+                    active_account.id(),
+                    lease.authentication(),
+                    error,
+                )
+                .await
+            {
+                Ok(Some(recovered)) => {
+                    authorization = recovered
+                        .credential
+                        .authentication
+                        .authorization_header(chrono::Utc::now())
+                        .map_err(|_| {
+                            provider_error(
+                                ProviderErrorKind::Unauthorized,
+                                UpstreamSendState::NotSent,
+                            )
+                        })?;
+                    active_account = recovered.account;
+                    response = create_response_attempt(
+                        &client,
+                        &request,
+                        codex_request_context(
+                            &request,
+                            &request_id,
+                            &active_account,
+                            &recovered.credential.installation_id,
+                            &authorization,
+                            cookie_header.as_ref(),
+                        ),
+                        active_account.id().as_str(),
+                        context.deadline(),
+                        &cancellation,
+                    )
+                    .await;
+                }
+                Ok(None) => {}
+                Err(_) => response = Err(CodexHandshakeAttemptError::AgentIdentityRecovery),
+            }
+        }
+        let response = response.map_err(map_handshake_attempt_error);
         let response = match response {
             Ok(response) => response,
             Err(mut failure) => {
@@ -596,7 +716,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                     &client,
                     &selector,
                     &quota,
-                    &lease,
+                    &active_account,
                     &response_origin,
                     &failure,
                 )
@@ -606,7 +726,21 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             }
         };
         if !accepts_backend_transport(transport_policy, response.transport) {
-            Err(provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent))?;
+            let failure = MappedProviderFailure::plain(provider_error(
+                ProviderErrorKind::Protocol,
+                UpstreamSendState::Sent,
+            ));
+            apply_failure(
+                &client,
+                &selector,
+                &quota,
+                &active_account,
+                &response_origin,
+                &failure,
+            )
+            .await;
+            Err(failure.error)?;
+            return;
         }
         if let Some(capture) = session_capture.as_mut() {
             capture.continuation_scope = Some(if capture.response_store {
@@ -619,14 +753,31 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 OpenAiContinuationScope::ReplayRequired
             });
         }
-        yield ProviderEvent::observation(codex_response_observation(
+        let observation = match codex_response_observation(
             response.transport,
             &response.diagnostics,
             &response.response_metadata,
             &response.transport_metrics,
             response.websocket_pool_decision,
-        )?);
-        synchronize_passive_quota(&quota, &lease, &response.rate_limit_headers).await;
+        ) {
+            Ok(observation) => observation,
+            Err(error) => {
+                let failure = MappedProviderFailure::plain(error);
+                apply_failure(
+                    &client,
+                    &selector,
+                    &quota,
+                    &active_account,
+                    &response_origin,
+                    &failure,
+                )
+                .await;
+                Err(failure.error)?;
+                return;
+            }
+        };
+        yield ProviderEvent::observation(observation);
+        synchronize_passive_quota(&quota, &active_account, &response.rate_limit_headers).await;
         if let Some(etag) = response.response_metadata.models_etag.as_deref()
             && let Err(error) = catalog.observe_response_etag(etag)
         {
@@ -635,10 +786,19 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 "OpenAI model ETag observation was rejected"
             );
         }
-        if !response.set_cookie_headers.is_empty() {
-            let _ = selector
-                .capture_response_cookies(&lease, &response_origin, &response.set_cookie_headers)
-                .await;
+        if !response.set_cookie_headers.is_empty()
+            && let Ok(outcome) = selector
+                .capture_response_cookies(
+                    &active_account,
+                    &response_origin,
+                    &response.set_cookie_headers,
+                )
+                .await
+                && let Some(revision) = outcome.credential_revision
+                && let Ok(current) = selector.current_account(active_account.id()).await
+                && current.revision().get() == revision
+        {
+            active_account = current;
         }
         let mut body = response.body;
         let failure_diagnostics = response.diagnostics.clone();
@@ -674,7 +834,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                         &client,
                         &selector,
                         &quota,
-                        &lease,
+                        &active_account,
                         &response_origin,
                         &failure,
                     )
@@ -686,9 +846,9 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             let Some(chunk) = next else { break; };
             if let Some(updates) = rate_limit_updates.as_ref() {
                 let updates = std::mem::take(&mut *updates.lock().await);
-                synchronize_passive_quota(&quota, &lease, &updates).await;
+                synchronize_passive_quota(&quota, &active_account, &updates).await;
             }
-            let (mut events, terminal_error) = match decoder.push(&chunk) {
+            let (mut events, terminal_failure) = match decoder.push(&chunk) {
                 CodexCanonicalOutcome::Events(events) => (events, None),
                 CodexCanonicalOutcome::Failed(failure) => {
                     let (events, error, semantic_output_seen) = failure.into_parts();
@@ -699,19 +859,38 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                         &failure_rate_limit_headers,
                         ReplayBoundary::from_semantic_output(semantic_output_seen),
                     );
+                    (events, Some(failure))
+                }
+            };
+            if let Some(failure) = terminal_failure.as_ref() {
+                apply_failure(
+                    &client,
+                    &selector,
+                    &quota,
+                    &active_account,
+                    &response_origin,
+                    failure,
+                )
+                .await;
+            }
+            if let Err(error) = attach_openai_session_update(&mut events, &mut session_capture) {
+                if terminal_failure.is_none() {
+                    let failure = MappedProviderFailure::plain(error);
                     apply_failure(
                         &client,
                         &selector,
                         &quota,
-                        &lease,
+                        &active_account,
                         &response_origin,
                         &failure,
                     )
                     .await;
-                    (events, Some(failure.error))
+                    Err(failure.error)?;
+                } else {
+                    Err(error)?;
                 }
-            };
-            attach_openai_session_update(&mut events, &mut session_capture)?;
+                return;
+            }
             let completed = events
                 .iter()
                 .flat_map(ProviderEvent::canonical_facts)
@@ -719,16 +898,18 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             for event in events {
                 yield event;
             }
-            if let Some(error) = terminal_error {
-                Err(error)?;
+            if let Some(failure) = terminal_failure {
+                Err(failure.error)?;
                 return;
             }
             if completed {
-                selector.record_success(&lease);
+                selector
+                    .record_success(&active_account, session_affinity_key.as_ref())
+                    .await;
                 return;
             }
         }
-        let (mut events, terminal_error) = match decoder.finish() {
+        let (mut events, terminal_failure) = match decoder.finish() {
             CodexCanonicalOutcome::Events(events) => (events, None),
             CodexCanonicalOutcome::Failed(failure) => {
                 let (events, error, semantic_output_seen) = failure.into_parts();
@@ -739,19 +920,38 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                     &failure_rate_limit_headers,
                     ReplayBoundary::from_semantic_output(semantic_output_seen),
                 );
+                (events, Some(failure))
+            }
+        };
+        if let Some(failure) = terminal_failure.as_ref() {
+            apply_failure(
+                &client,
+                &selector,
+                &quota,
+                &active_account,
+                &response_origin,
+                failure,
+            )
+            .await;
+        }
+        if let Err(error) = attach_openai_session_update(&mut events, &mut session_capture) {
+            if terminal_failure.is_none() {
+                let failure = MappedProviderFailure::plain(error);
                 apply_failure(
                     &client,
                     &selector,
                     &quota,
-                    &lease,
+                    &active_account,
                     &response_origin,
                     &failure,
                 )
                 .await;
-                (events, Some(failure.error))
+                Err(failure.error)?;
+            } else {
+                Err(error)?;
             }
-        };
-        attach_openai_session_update(&mut events, &mut session_capture)?;
+            return;
+        }
         let completed = events
             .iter()
             .flat_map(ProviderEvent::canonical_facts)
@@ -759,12 +959,14 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         for event in events {
             yield event;
         }
-        if let Some(error) = terminal_error {
-            Err(error)?;
+        if let Some(failure) = terminal_failure {
+            Err(failure.error)?;
             return;
         }
         if completed {
-            selector.record_success(&lease);
+            selector
+                .record_success(&active_account, session_affinity_key.as_ref())
+                .await;
         }
     })
 }
@@ -863,18 +1065,15 @@ fn codex_error_observation(error: &CodexClientError) -> Option<ProviderResponseO
 
 async fn synchronize_passive_quota(
     quota: &CodexCredentialQuotaService,
-    lease: &CodexCredentialLease,
+    account: &ProviderAccount,
     headers: &[(String, String)],
 ) {
     if headers.is_empty() {
         return;
     }
-    if let Err(error) = quota
-        .synchronize_passive_headers(lease.account(), headers)
-        .await
-    {
+    if let Err(error) = quota.synchronize_passive_headers(account, headers).await {
         tracing::warn!(
-            account_id = %lease.account_id(),
+            account_id = %account.id(),
             error = %error,
             "OpenAI passive quota synchronization failed"
         );
@@ -898,13 +1097,7 @@ fn compile_model_capabilities(model: &CodexCatalogModel) -> ProviderModelCapabil
     if evidence.responses_api() == CodexCatalogCapabilityEvidence::DeclaredNative {
         operations.insert(OperationKind::Generate);
     }
-    let context_window = model
-        .limits()
-        .context_window_tokens()
-        .or_else(|| model.limits().max_context_window_tokens())
-        .map_or(0, std::num::NonZeroU64::get);
-    let capabilities =
-        ModelCapabilities::new(operations, context_window, None).with_upstream_feature_validation();
+    let capabilities = ModelCapabilities::new(operations, None).with_upstream_feature_validation();
     ProviderModelCapabilities::new(model.request_model().clone(), capabilities)
 }
 
@@ -961,12 +1154,14 @@ const fn accepts_backend_transport(
 fn codex_request_context<'a>(
     request: &'a CodexResponsesRequest,
     request_id: &'a str,
-    lease: &'a CodexCredentialLease,
+    account: &'a ProviderAccount,
+    installation_id: &'a str,
+    authorization: &'a SecretString,
     cookie_header: Option<&'a SecretString>,
 ) -> CodexRequestContext<'a> {
     CodexRequestContext {
-        access_token: lease.secret().access_token.expose_secret(),
-        account_id: lease.account().upstream_account_id(),
+        authorization: authorization.expose_secret(),
+        account_id: account.upstream_account_id(),
         request_id,
         turn_state: request.turn_state.as_deref(),
         turn_metadata: request.turn_metadata.as_deref(),
@@ -976,7 +1171,7 @@ fn codex_request_context<'a>(
         codex_window_id: request.codex_window_id.as_deref(),
         parent_thread_id: request.parent_thread_id.as_deref(),
         cookie_header: cookie_header.map(ExposeSecret::expose_secret),
-        installation_id: Some(lease.installation_id()),
+        installation_id: Some(installation_id),
         session_id: request.client_session_id.as_deref(),
         thread_id: request.client_thread_id.as_deref(),
         client_request_id: request.client_request_id.as_deref(),
@@ -1062,8 +1257,11 @@ fn map_selection_error(error: CredentialSelectionError) -> ProviderError {
                 None => error,
             }
         }
-        CredentialSelectionError::NoEligibleCredential
-        | CredentialSelectionError::InvalidCredential
+        CredentialSelectionError::NoEligibleCredential => provider_error(
+            ProviderErrorKind::NoEligibleAccount,
+            UpstreamSendState::NotSent,
+        ),
+        CredentialSelectionError::InvalidCredential
         | CredentialSelectionError::Store
         | CredentialSelectionError::Coordinator
         | CredentialSelectionError::CookiePolicy => {
@@ -1118,18 +1316,16 @@ async fn apply_failure(
     client: &CodexBackendClient,
     selector: &CodexCredentialSelector,
     quota: &CodexCredentialQuotaService,
-    lease: &CodexCredentialLease,
+    account: &ProviderAccount,
     response_origin: &Url,
     failure: &MappedProviderFailure,
 ) {
-    synchronize_passive_quota(quota, lease, &failure.rate_limit_headers).await;
+    synchronize_passive_quota(quota, account, &failure.rate_limit_headers).await;
     if let Some(account_failure) = failure.account_failure {
-        client
-            .evict_websocket_account(lease.account_id().as_str())
-            .await;
-        if let Err(error) = selector.record_failure(lease, account_failure).await {
+        client.evict_websocket_account(account.id().as_str()).await;
+        if let Err(error) = selector.record_failure(account, account_failure).await {
             tracing::warn!(
-                account_id = %lease.account_id(),
+                account_id = %account.id(),
                 error = %error,
                 "Failed to persist OpenAI account failure state"
             );
@@ -1138,11 +1334,11 @@ async fn apply_failure(
     if failure.capture_response_cookies
         && !failure.set_cookie_headers.is_empty()
         && let Err(error) = selector
-            .capture_response_cookies(lease, response_origin, &failure.set_cookie_headers)
+            .capture_response_cookies(account, response_origin, &failure.set_cookie_headers)
             .await
     {
         tracing::warn!(
-            account_id = %lease.account_id(),
+            account_id = %account.id(),
             error = %error,
             "Failed to persist OpenAI response cookies"
         );

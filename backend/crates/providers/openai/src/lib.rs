@@ -17,11 +17,12 @@ use gateway_core::task::WorkerContribution;
 use crate::admin::{OpenAiAdminProvider, OpenAiAdminServices, OpenAiOAuthPendingStore};
 use crate::credential::token_client::{AuthorizationCodeExchanger, TokenRefresher};
 use crate::credential::{
-    CodexAccountIdentityService, CodexAccountIdentityVerifier, CodexAuthenticatedAccountSource,
-    CodexCookiePolicy, CodexCredentialAdmin, CodexCredentialAdminService,
-    CodexCredentialCatalogService, CodexCredentialQuotaService, CodexCredentialRefreshService,
-    CodexCredentialRepository, CodexCredentialSelector, CodexJwtIdentityVerifier, CodexOAuthAdmin,
-    CodexOAuthAdminService, CodexSignedIdentityVerifier, ReqwestCodexAuthenticatedAccountSource,
+    CodexAccountIdentityService, CodexAccountIdentityVerifier, CodexAgentIdentityTaskService,
+    CodexAuthenticatedAccountSource, CodexCookiePolicy, CodexCredentialAdmin,
+    CodexCredentialAdminService, CodexCredentialCatalogService, CodexCredentialQuotaService,
+    CodexCredentialRefreshService, CodexCredentialRepository, CodexCredentialSelector,
+    CodexJwtIdentityVerifier, CodexOAuthAdmin, CodexOAuthAdminService, CodexSignedIdentityVerifier,
+    OfficialCodexAgentIdentityTaskRegistrar, ReqwestCodexAuthenticatedAccountSource,
     ReqwestOpenAiJwksSource,
 };
 use crate::transport::profile::{
@@ -63,6 +64,8 @@ pub async fn initialize(
         ProviderKind::new("openai").map_err(|_| OpenAiInitializeError::InvalidProviderKind)?;
     let accounts: Arc<dyn ProviderAccountStore> = ports.accounts();
     let leases = ports.leases();
+    let session_affinity = ports.session_affinity();
+    let account_feedback = ports.account_feedback();
     let runtime_policy = ports.runtime_policy();
     let profile = config.wire_profile_state();
     let http = build_reqwest_client().map_err(|_| OpenAiInitializeError::Transport)?;
@@ -82,30 +85,45 @@ pub async fn initialize(
         ),
     ));
     let repository = CodexCredentialRepository::new(Arc::clone(&accounts));
+    let websocket_pool = Arc::new(CodexWebSocketPool::default());
+    let agent_identity = Arc::new(CodexAgentIdentityTaskService::new(
+        repository.clone(),
+        Arc::new(
+            OfficialCodexAgentIdentityTaskRegistrar::new(http.clone())
+                .map_err(|_| OpenAiInitializeError::AgentIdentity)?,
+        ),
+        Arc::clone(&websocket_pool),
+    ));
     let catalog = Arc::new(CodexCredentialCatalogService::new(
         repository.clone(),
         profile.clone(),
         http.clone(),
+        Arc::clone(&agent_identity),
     ));
     let quota = Arc::new(CodexCredentialQuotaService::new(
         repository.clone(),
         profile.clone(),
         http.clone(),
+        Arc::clone(&agent_identity),
     ));
     let selector = Arc::new(CodexCredentialSelector::new(
         provider_kind.clone(),
         repository.clone(),
         Arc::clone(&leases),
+        session_affinity,
         Arc::clone(&catalog),
         Arc::clone(&quota),
+        Arc::clone(&agent_identity),
+        Arc::clone(&account_feedback),
         CodexCookiePolicy::official().map_err(|_| OpenAiInitializeError::CookiePolicy)?,
     ));
-    let websocket_pool = Arc::new(CodexWebSocketPool::default());
     let core_provider: Arc<dyn Provider> = Arc::new(
         CodexProvider::new(
             selector,
             Arc::clone(&catalog),
             Arc::clone(&quota),
+            agent_identity,
+            account_feedback,
             http,
             profile.clone(),
             Arc::clone(&websocket_pool),
@@ -216,6 +234,8 @@ pub enum OpenAiInitializeError {
     TokenClient,
     #[error("OpenAI identity verifier could not initialize")]
     Identity,
+    #[error("OpenAI Agent Identity service could not initialize")]
+    AgentIdentity,
     #[error("OpenAI credential administration could not initialize")]
     CredentialAdmin,
     #[error("OpenAI credential refresh could not initialize")]

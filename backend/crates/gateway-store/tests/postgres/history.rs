@@ -158,7 +158,7 @@ async fn seed_native_history(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "insert into model_requests (
            id, client_api_key_ref, config_revision, protocol, operation, endpoint,
-           client_transport, requested_model_id, input_token_estimate,
+           client_transport, requested_model_id,
            provider_kind, provider_account_id,
            provider_account_ref, upstream_model_id, upstream_transport, attempt_count,
            upstream_send_state, downstream_committed_at, outcome, client_status_code,
@@ -166,7 +166,7 @@ async fn seed_native_history(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
            cost_source, started_at, deadline_at, completed_at
          ) values (
            'req_history', 'key_owner', 1, 'openai', 'responses', '/v1/responses',
-           'http_sse', 'history-model', 1, 'openai', 'acct_history',
+           'http_sse', 'history-model', 'openai', 'acct_history',
            'acct_history', 'history-upstream',
            'websocket', 1, 'sent', now(), 'succeeded', 200, 200,
            'resp_gateway_visible', 'resp_upstream_native', 'unavailable',

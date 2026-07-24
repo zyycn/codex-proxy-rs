@@ -31,6 +31,7 @@ use gateway_admin::{
             PreparedAuthorizationCredential, PreparedCredentialCreate, PreparedCredentialImport,
             PreparedCredentialRotation, PreparedCredentialRotationFacts, ProviderDocument,
             ProviderExport, ProviderExportCredentialInput, ProviderModels, ProviderQuota,
+            ProviderQuotaRequest,
         },
         settings::{
             AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RotationStrategy,
@@ -53,8 +54,11 @@ pub(super) struct FakeProviderAdmin {
     kind: ProviderKind,
     events: EventLog,
     failure: Mutex<Option<ProviderAdminErrorKind>>,
+    quota_failure: Mutex<Option<ProviderAdminErrorKind>>,
     pending: Mutex<Option<PendingAuthorizationMutation>>,
     export_inputs: Mutex<Vec<ProviderExportCredentialInput>>,
+    import_account_ids: Mutex<Vec<String>>,
+    quota_requests: Mutex<Vec<ProviderQuotaRequest>>,
 }
 
 impl FakeProviderAdmin {
@@ -63,13 +67,37 @@ impl FakeProviderAdmin {
             kind: ProviderKind::new(kind).expect("provider kind"),
             events,
             failure: Mutex::new(None),
+            quota_failure: Mutex::new(None),
             pending: Mutex::new(None),
             export_inputs: Mutex::new(Vec::new()),
+            import_account_ids: Mutex::new(vec!["acct_prepared".to_owned()]),
+            quota_requests: Mutex::new(Vec::new()),
         })
     }
 
     pub(super) fn fail_next(&self, kind: ProviderAdminErrorKind) {
         *self.failure.lock().expect("provider failure") = Some(kind);
+    }
+
+    pub(super) fn fail_next_quota(&self, kind: ProviderAdminErrorKind) {
+        *self.quota_failure.lock().expect("provider quota failure") = Some(kind);
+    }
+
+    pub(super) fn set_import_account_ids(&self, account_ids: &[&str]) {
+        *self
+            .import_account_ids
+            .lock()
+            .expect("provider import account IDs") = account_ids
+            .iter()
+            .map(|account_id| (*account_id).to_owned())
+            .collect();
+    }
+
+    pub(super) fn quota_requests(&self) -> Vec<ProviderQuotaRequest> {
+        self.quota_requests
+            .lock()
+            .expect("provider quota requests")
+            .clone()
     }
 
     pub(super) fn pending(&self) -> Option<PendingAuthorizationMutation> {
@@ -102,7 +130,9 @@ impl FakeProviderAdmin {
                 plan_type: account.plan_type.clone(),
                 provider_material: document(),
                 has_refresh_token: account.has_refresh_token,
-                access_token_expires_at: account.access_token_expires_at + TimeDelta::hours(1),
+                access_token_expires_at: account
+                    .access_token_expires_at
+                    .map(|expires_at| expires_at + TimeDelta::hours(1)),
                 next_refresh_at: account.next_refresh_at,
             },
             Box::new(RecordingGuard::new(self.events.clone())),
@@ -150,9 +180,19 @@ impl ProviderAdmin for FakeProviderAdmin {
     ) -> Result<PreparedCredentialImport, ProviderAdminError> {
         self.record("provider.prepare_import");
         self.require_available()?;
+        let account_ids = self
+            .import_account_ids
+            .lock()
+            .expect("provider import account IDs")
+            .clone();
         Ok(PreparedCredentialImport {
             provider_kind: self.kind.clone(),
-            credentials: vec![prepared_create(self.kind.clone(), "prepared-import")],
+            credentials: account_ids
+                .into_iter()
+                .map(|account_id| {
+                    prepared_create_with_id(self.kind.clone(), &account_id, "prepared-import")
+                })
+                .collect(),
         })
     }
 
@@ -225,8 +265,23 @@ impl ProviderAdmin for FakeProviderAdmin {
 
     async fn quota(
         &self,
-        _: gateway_admin::model::provider_credentials::ProviderQuotaRequest,
+        request: ProviderQuotaRequest,
     ) -> Result<ProviderQuota, ProviderAdminError> {
+        if request.refresh {
+            self.record("provider.quota");
+        }
+        self.quota_requests
+            .lock()
+            .expect("provider quota requests")
+            .push(request);
+        if let Some(kind) = self
+            .quota_failure
+            .lock()
+            .expect("provider quota failure")
+            .take()
+        {
+            return Err(ProviderAdminError::new(kind));
+        }
         Ok(ProviderQuota {
             observed_at: None,
             refresh_token_expires_at: None,
@@ -512,7 +567,7 @@ impl SettingsStore for StaticSettingsStore {
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(RuntimeSettings {
             config_revision: revision(1),
-            provider_model_mappings: Default::default(),
+            model_mappings: Default::default(),
             refresh_margin_seconds: 300,
             refresh_concurrency: 2,
             max_concurrent_per_account: 1,
@@ -787,9 +842,10 @@ pub(super) fn account_record(kind: &str) -> AccountRecord {
         upstream_user_id: "upstream-user".to_owned(),
         upstream_account_id: None,
         plan_type: Some("test".to_owned()),
+        authentication_kind: "oauth".to_owned(),
         credential_revision: revision(1),
         has_refresh_token: true,
-        access_token_expires_at: now + TimeDelta::hours(1),
+        access_token_expires_at: Some(now + TimeDelta::hours(1)),
         next_refresh_at: Some(now + TimeDelta::minutes(30)),
         enabled: true,
         availability: AccountAvailability::Ready,
@@ -807,18 +863,27 @@ pub(super) fn revision(value: u64) -> Revision {
 }
 
 fn prepared_create(provider_kind: ProviderKind, name: &str) -> PreparedCredentialCreate {
+    prepared_create_with_id(provider_kind, "acct_prepared", name)
+}
+
+fn prepared_create_with_id(
+    provider_kind: ProviderKind,
+    account_id: &str,
+    name: &str,
+) -> PreparedCredentialCreate {
     let now = Utc::now();
     PreparedCredentialCreate {
-        account_id: ProviderAccountId::new("acct_prepared").expect("prepared account ID"),
+        account_id: ProviderAccountId::new(account_id).expect("prepared account ID"),
         provider_kind,
         name: name.to_owned(),
         email: Some("prepared@example.invalid".to_owned()),
         upstream_user_id: "prepared-user".to_owned(),
         upstream_account_id: None,
         plan_type: Some("test".to_owned()),
+        authentication_kind: "oauth".to_owned(),
         provider_material: document(),
         has_refresh_token: true,
-        access_token_expires_at: now + TimeDelta::hours(1),
+        access_token_expires_at: Some(now + TimeDelta::hours(1)),
         next_refresh_at: Some(now + TimeDelta::minutes(30)),
         enabled: true,
         availability: AccountAvailability::Ready,

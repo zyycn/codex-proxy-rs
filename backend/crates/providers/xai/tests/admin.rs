@@ -40,14 +40,18 @@ use gateway_core::routing::{
     ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RoutingContext,
     RuntimeSnapshot, UpstreamModelId,
 };
-use gateway_core::task::WorkerKind;
+use gateway_core::task::{
+    WorkerContribution, WorkerCycleContext, WorkerKind, WorkerRunnable, WorkerTaskError,
+};
 use provider_xai::{
     DiscoveryDocument, GrokOAuthConfig, PendingAuthorization, RedirectUriAllowlist,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 
-use crate::support::{MemoryProviderAccountStore, create_input, seed_input, xai_config};
+use crate::support::{
+    MemoryProviderAccountStore, TestSessionAffinity, create_input, seed_input, xai_config,
+};
 
 #[tokio::test]
 #[ignore = "requires XAI_REAL_ACCOUNT_FIXTURE and consumes live xAI quota; refresh token may rotate"]
@@ -127,8 +131,9 @@ fn real_prepared_account(
         value.provider_kind,
         value.name,
         value.upstream_user_id,
+        value.authentication_kind,
         CredentialRevision::new(1).expect("initial revision"),
-        value.access_token_expires_at.into(),
+        value.access_token_expires_at.map(Into::into),
     )
     .with_profile(value.email, value.upstream_account_id, value.plan_type)
     .with_runtime_state(value.enabled, AccountAvailability::Ready, None)
@@ -154,7 +159,7 @@ fn real_planned_request(upstream_model: UpstreamModelId, operation: Operation) -
         vec![ProviderModel::new(
             provider,
             upstream_model,
-            ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), 1_000_000, None),
+            ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), None),
         )],
         vec![],
     )
@@ -209,6 +214,59 @@ async fn xai_bundle_exposes_core_admin_and_drains_worker_contributions_once() {
             .any(|item| item.kind() == WorkerKind::QuotaCatalogHealth)
     );
     assert!(bundle.take_worker_contributions().is_empty());
+}
+
+#[tokio::test]
+async fn xai_quota_catalog_worker_treats_empty_account_pool_as_idle() {
+    let mut bundle = provider_xai::initialize(xai_config(), provider_ports())
+        .await
+        .expect("xAI bundle");
+
+    assert_eq!(run_quota_catalog_cycle(&mut bundle).await, Ok(()));
+}
+
+#[tokio::test]
+async fn xai_quota_catalog_worker_preserves_store_failures() {
+    let store = Arc::new(MemoryProviderAccountStore::default());
+    store.fail_provider_listing();
+    let mut bundle = provider_xai::initialize(
+        xai_config(),
+        provider_ports_with(store, Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .expect("xAI bundle");
+
+    let error = run_quota_catalog_cycle(&mut bundle)
+        .await
+        .expect_err("Provider account Store failure");
+    assert_eq!(error.as_safe_str(), "xAI Provider accounts unavailable");
+}
+
+async fn run_quota_catalog_cycle(
+    bundle: &mut provider_xai::ProviderBundle,
+) -> Result<(), WorkerTaskError> {
+    let registration = bundle
+        .take_worker_contributions()
+        .into_iter()
+        .find_map(|contribution| match contribution {
+            WorkerContribution::Registration(registration)
+                if registration.id.kind() == WorkerKind::QuotaCatalogHealth
+                    && registration.id.owner() == "xai" =>
+            {
+                Some(registration)
+            }
+            WorkerContribution::Registration(_) | WorkerContribution::Disabled { .. } => None,
+        })
+        .expect("xAI quota/catalog worker");
+    let WorkerRunnable::Scheduled { task, .. } = registration.runnable else {
+        panic!("xAI quota/catalog worker must be scheduled");
+    };
+    task.run_cycle(WorkerCycleContext::new(
+        registration.id,
+        None,
+        CancellationToken::new(),
+    ))
+    .await
 }
 
 #[tokio::test]
@@ -523,6 +581,7 @@ fn provider_ports_with(
     ProviderStorePorts::new(
         accounts,
         Arc::new(TestLeases),
+        Arc::new(TestSessionAffinity),
         Arc::new(TestCatalogCache::default()),
         Arc::new(TestCredentialState),
         Arc::new(TestCooldown),
@@ -541,9 +600,10 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
         upstream_user_id: account.upstream_user_id().to_owned(),
         upstream_account_id: account.upstream_account_id().map(str::to_owned),
         plan_type: account.plan_type().map(str::to_owned),
+        authentication_kind: account.authentication_kind().to_owned(),
         credential_revision: Revision::new(account.revision().get()).expect("revision"),
         has_refresh_token: account.has_refresh_token(),
-        access_token_expires_at: DateTime::<Utc>::from(account.access_token_expires_at()),
+        access_token_expires_at: account.access_token_expires_at().map(DateTime::<Utc>::from),
         next_refresh_at: account.next_refresh_at().map(DateTime::<Utc>::from),
         enabled: account.enabled(),
         availability: admin_availability(account.availability()),
@@ -591,12 +651,14 @@ impl ProviderLeasePort for TestLeases {
                             last_started_at: None,
                             quota_reset_at: None,
                             quota_remaining_rank: None,
+                            failure_rate_basis_points: None,
+                            first_output_latency_ms: None,
                         },
                     )
                 })
                 .collect();
             Ok(gateway_core::provider_ports::ProviderSchedulingState::new(
-                signals, None, 0,
+                signals, 0,
             ))
         })
     }

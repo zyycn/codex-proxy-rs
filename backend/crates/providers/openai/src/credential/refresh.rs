@@ -253,11 +253,23 @@ impl CodexCredentialRefreshService {
         for account in accounts {
             let account_id = account.id().to_string();
             match self.repository.load_runtime_credential(&account).await {
-                Ok(runtime) if runtime.secret.refresh_token.is_some() => {
+                Ok(runtime)
+                    if runtime
+                        .authentication
+                        .oauth()
+                        .is_some_and(|secret| secret.refresh_token.is_some()) =>
+                {
+                    let Some(secret) = runtime.authentication.oauth() else {
+                        unreachable!("OAuth runtime authentication was checked above")
+                    };
+                    let Some(principal) = runtime.principal else {
+                        failures.push(CodexCredentialRefreshOutcome::Failed { account_id });
+                        continue;
+                    };
                     due.push(DueCodexCredential {
                         account,
-                        secret: runtime.secret,
-                        principal: runtime.principal,
+                        secret: secret.clone(),
+                        principal,
                         installation_id: runtime.installation_id,
                     });
                 }

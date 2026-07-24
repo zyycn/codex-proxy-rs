@@ -6,7 +6,9 @@ import { clamp } from 'es-toolkit'
 import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
+import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import AccountIdentityCell from '@/views/accounts/components/AccountIdentityCell.vue'
+import AccountUsageWindow from '@/views/accounts/components/AccountUsageWindow.vue'
 
 type DashboardSnapshot = ReturnType<typeof dashboardSnapshotView>
 
@@ -38,9 +40,20 @@ const usedPercent = computed(() => {
 
 const usedRatio = computed(() => {
   const cap = props.capacity
-  if (!cap || cap.usedSlots === null || cap.usedSlots === undefined)
+  if (!cap || cap.totalSlots === null || cap.totalSlots === undefined)
     return '— / —'
+  if (cap.usedSlots === null || cap.usedSlots === undefined)
+    return `— / ${cap.totalSlots}`
   return `${cap.usedSlots} / ${cap.totalSlots}`
+})
+
+const occupancyLabel = computed(() => {
+  if (usedPercent.value !== null)
+    return `${usedPercent.value}% 已占用`
+  const cap = props.capacity
+  return cap && cap.totalSlots !== null && cap.totalSlots !== undefined
+    ? ''
+    : '暂无容量数据'
 })
 
 const strategyLabel = computed(() => {
@@ -144,14 +157,6 @@ const valueToneClasses: Record<string, string> = {
   warning: 'text-(--cp-warning-text)',
   danger: 'text-(--cp-danger-text)',
 }
-
-const quotaToneClasses: Record<string, string> = {
-  normal: 'bg-(--cp-normal)',
-  info: 'bg-(--cp-info)',
-  success: 'bg-(--cp-success)',
-  warning: 'bg-(--cp-warning)',
-  danger: 'bg-(--cp-danger)',
-}
 </script>
 
 <template>
@@ -176,7 +181,7 @@ const quotaToneClasses: Record<string, string> = {
                   class="font-mono text-[32px] leading-[1.05] font-[760] tabular-nums text-(--cp-text-primary)"
                 >{{ usedRatio }}</strong>
                 <span class="mt-3.5 text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)">
-                  {{ usedPercent === null ? '暂无实时占用' : `${usedPercent}% 已占用` }}
+                  {{ occupancyLabel }}
                 </span>
               </div>
               <div class="mt-4 h-2.5 w-full overflow-hidden rounded-full bg-(--cp-progress-track)">
@@ -234,16 +239,32 @@ const quotaToneClasses: Record<string, string> = {
               :key="account.id"
               class="grid w-full shrink-0 grid-cols-1 gap-3 rounded-xl bg-(--cp-bg-subtle) px-3.5 py-3.5 transition-colors hover:bg-(--cp-bg-muted) xl:h-19.5 xl:grid-cols-[minmax(0,1fr)_minmax(70px,0.36fr)_minmax(74px,0.38fr)_minmax(82px,0.46fr)] xl:items-center xl:gap-4 xl:py-0"
             >
-              <AccountIdentityCell :account="account" show-plan class="min-w-0" />
+              <AccountIdentityCell
+                :account="account"
+                show-plan
+                title-mode="email"
+                meta-position="secondary"
+                class="min-w-0"
+              >
+                <template #meta>
+                  <ProviderIconGroup
+                    :provider="account.provider"
+                    :authentication-kind="account.authenticationKind"
+                    size="sm"
+                  />
+                </template>
+              </AccountIdentityCell>
 
               <span
                 class="grid min-w-0 grid-cols-[minmax(0,0.82fr)_minmax(0,0.64fr)_minmax(104px,1fr)] items-end gap-3 xl:contents"
               >
                 <span class="grid min-w-0 gap-1">
-                  <span class="text-[11px] leading-none font-[720] text-(--cp-text-muted)">Token</span>
+                  <span class="text-[11px] leading-none font-[720] text-(--cp-text-muted)">
+                    {{ account.metricLabel }}
+                  </span>
                   <strong
                     class="font-mono text-sm leading-[1.15] font-[780] tabular-nums text-(--cp-text-primary)"
-                  >{{ account.tokens }}</strong>
+                  >{{ account.metricValue }}</strong>
                 </span>
 
                 <span class="grid min-w-0 gap-1">
@@ -255,24 +276,11 @@ const quotaToneClasses: Record<string, string> = {
                   </span>
                 </span>
 
-                <span class="grid min-w-0 gap-2">
-                  <span class="flex items-center justify-between gap-2">
-                    <span class="text-[11px] leading-none font-[720] text-(--cp-text-muted)">额度</span>
-                    <span
-                      class="font-mono text-[10px] leading-none font-[760] text-(--cp-text-muted)"
-                    >{{ account.quotaPercent === null ? '—' : `${account.quotaPercent}%` }}</span>
-                  </span>
-                  <span class="block h-1.5 w-full overflow-hidden rounded-full bg-(--cp-bg-muted)">
-                    <i
-                      class="block h-1.5 rounded-full"
-                      :class="quotaToneClasses[account.quotaTone]"
-                      :style="{
-                        width: account.quotaPercent === null ? '0' : `${account.quotaPercent}%`,
-                        minWidth: account.quotaPercent > 0 ? '7px' : '0',
-                      }"
-                    />
-                  </span>
-                </span>
+                <AccountUsageWindow
+                  :window="account.usageWindow"
+                  :show-local-value="false"
+                  variant="compact"
+                />
               </span>
             </article>
           </template>

@@ -9,8 +9,8 @@ use std::time::{Duration, SystemTime};
 use futures::future::BoxFuture;
 
 use crate::engine::credential::{
-    AccountAvailability, AccountRuntimeSignals, CredentialRevision, OpaqueProviderData,
-    ProviderAccountId, ProviderAccountStore,
+    AccountAvailability, AccountFeedbackStats, AccountRuntimeSignals, CredentialRevision,
+    OpaqueProviderData, ProviderAccountId, ProviderAccountStore,
 };
 use crate::routing::ProviderKind;
 
@@ -48,7 +48,6 @@ impl ProviderStoreError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderSchedulingState {
     signals: BTreeMap<ProviderAccountId, AccountRuntimeSignals>,
-    sticky_account: Option<ProviderAccountId>,
     round_robin_cursor: u64,
 }
 
@@ -56,12 +55,10 @@ impl ProviderSchedulingState {
     #[must_use]
     pub const fn new(
         signals: BTreeMap<ProviderAccountId, AccountRuntimeSignals>,
-        sticky_account: Option<ProviderAccountId>,
         round_robin_cursor: u64,
     ) -> Self {
         Self {
             signals,
-            sticky_account,
             round_robin_cursor,
         }
     }
@@ -69,11 +66,6 @@ impl ProviderSchedulingState {
     #[must_use]
     pub const fn signals(&self) -> &BTreeMap<ProviderAccountId, AccountRuntimeSignals> {
         &self.signals
-    }
-
-    #[must_use]
-    pub const fn sticky_account(&self) -> Option<&ProviderAccountId> {
-        self.sticky_account.as_ref()
     }
 
     #[must_use]
@@ -185,6 +177,62 @@ pub trait ProviderLeasePort: Send + Sync {
         &self,
         request: ProviderLeaseRequest,
     ) -> BoxFuture<'_, Result<ProviderLeaseAcquisition, ProviderStoreError>>;
+}
+
+/// Provider 从原始会话锚点派生的不可逆亲和键。
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ProviderSessionAffinityKey(String);
+
+impl ProviderSessionAffinityKey {
+    pub fn try_new(value: impl Into<String>) -> Result<Self, ProviderStoreError> {
+        let value = value.into();
+        if value.is_empty()
+            || value.len() > 128
+            || !value.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+            })
+        {
+            return Err(ProviderStoreError::new(
+                ProviderStoreErrorKind::InvalidData,
+                "validate provider session affinity key",
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    #[must_use]
+    pub fn expose_to_store(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for ProviderSessionAffinityKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ProviderSessionAffinityKey([OPAQUE])")
+    }
+}
+
+/// 可丢失的会话到账号偏好；Provider 负责先把原始会话标识哈希为不透明键。
+pub trait ProviderSessionAffinityPort: Send + Sync {
+    fn load<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+    ) -> BoxFuture<'a, Result<Option<ProviderAccountId>, ProviderStoreError>>;
+
+    fn bind<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+        account_id: &'a ProviderAccountId,
+        ttl: Duration,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>>;
+
+    fn clear<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>>;
 }
 
 /// 所有 Provider 共享的 OAuth refresh 并发容量。
@@ -655,6 +703,8 @@ pub trait OAuthPendingFlowPort: Send + Sync {
 pub struct ProviderStorePorts {
     accounts: Arc<dyn ProviderAccountStore>,
     leases: Arc<dyn ProviderLeasePort>,
+    session_affinity: Arc<dyn ProviderSessionAffinityPort>,
+    account_feedback: Arc<AccountFeedbackStats>,
     catalog_cache: Arc<dyn ProviderCatalogCachePort>,
     credential_state: Arc<dyn ProviderCredentialStatePort>,
     cooldowns: Arc<dyn ProviderCooldownPort>,
@@ -664,9 +714,12 @@ pub struct ProviderStorePorts {
 
 impl ProviderStorePorts {
     #[must_use]
+    // 每个参数代表独立能力端口；合并为单一配置对象会隐藏 Provider 能力边界。
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         accounts: Arc<dyn ProviderAccountStore>,
         leases: Arc<dyn ProviderLeasePort>,
+        session_affinity: Arc<dyn ProviderSessionAffinityPort>,
         catalog_cache: Arc<dyn ProviderCatalogCachePort>,
         credential_state: Arc<dyn ProviderCredentialStatePort>,
         cooldowns: Arc<dyn ProviderCooldownPort>,
@@ -676,6 +729,8 @@ impl ProviderStorePorts {
         Self {
             accounts,
             leases,
+            session_affinity,
+            account_feedback: Arc::new(AccountFeedbackStats::default()),
             catalog_cache,
             credential_state,
             cooldowns,
@@ -692,6 +747,16 @@ impl ProviderStorePorts {
     #[must_use]
     pub fn leases(&self) -> Arc<dyn ProviderLeasePort> {
         Arc::clone(&self.leases)
+    }
+
+    #[must_use]
+    pub fn session_affinity(&self) -> Arc<dyn ProviderSessionAffinityPort> {
+        Arc::clone(&self.session_affinity)
+    }
+
+    #[must_use]
+    pub fn account_feedback(&self) -> Arc<AccountFeedbackStats> {
+        Arc::clone(&self.account_feedback)
     }
 
     #[must_use]

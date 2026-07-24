@@ -21,6 +21,11 @@ interface UseUsageRecordsTableOptions {
 
 type UsageLoadScope = 'all' | 'table'
 
+interface UsageLoadOptions {
+  scope?: UsageLoadScope
+  background?: boolean
+}
+
 export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   const loading = shallowRef(true)
   const analyticsLoading = shallowRef(true)
@@ -53,12 +58,23 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     pageSizes: [10, 20, 50, 100],
   }))
 
-  async function loadUsageRecords(scope: UsageLoadScope = 'all') {
+  async function loadUsageRecords(loadOptions: UsageLoadOptions = {}) {
+    const { scope = 'all', background = false } = loadOptions
     const requestId = ++loadRequestId
     try {
-      loading.value = true
+      if (background) {
+        loading.value = false
+        if (scope === 'all') {
+          analyticsLoading.value = false
+        }
+      }
+      else {
+        loading.value = true
+        if (scope === 'all') {
+          analyticsLoading.value = true
+        }
+      }
       if (scope === 'all') {
-        analyticsLoading.value = true
         diagnosticRequestId += 1
       }
 
@@ -101,7 +117,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
 
       if (records.value.length === 0 && totalRecords.value > 0 && page.value > 1) {
         page.value = clamp(result.page.totalPages, 1, Number.POSITIVE_INFINITY)
-        await loadUsageRecords(scope)
+        await loadUsageRecords({ scope, background })
       }
     }
     catch (error: unknown) {
@@ -110,7 +126,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
       toast.error(errorMessage(error, '加载失败'))
     }
     finally {
-      if (requestId === loadRequestId) {
+      if (requestId === loadRequestId && !background) {
         loading.value = false
         if (scope === 'all') {
           analyticsLoading.value = false
@@ -163,7 +179,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     refreshingList.value = true
     try {
       tableTimeRangeParams.value = options.latestTimeRangeParams()
-      await withMinimumDuration(() => loadUsageRecords('table'))
+      await withMinimumDuration(() => loadUsageRecords({ scope: 'table' }))
     }
     finally {
       refreshingList.value = false
@@ -172,13 +188,13 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
 
   function handlePageChange(nextPage: number) {
     page.value = nextPage
-    void loadUsageRecords('table')
+    void loadUsageRecords({ scope: 'table' })
   }
 
   function handlePageSizeChange(nextPageSize: number) {
     pageSize.value = nextPageSize
     page.value = 1
-    void loadUsageRecords('table')
+    void loadUsageRecords({ scope: 'table' })
   }
 
   onMounted(() => {
@@ -191,14 +207,14 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
 
   watch(providerQuery, () => {
     page.value = 1
-    void loadUsageRecords('all')
+    void loadUsageRecords({ background: true })
   })
 
   watchDebounced(
     searchQuery,
     () => {
       page.value = 1
-      void loadUsageRecords('table')
+      void loadUsageRecords({ scope: 'table' })
     },
     { debounce: 250 },
   )

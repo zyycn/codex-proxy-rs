@@ -124,7 +124,7 @@ async fn codex_backend_client_should_bound_and_redact_oversized_error_body() {
         .create_response(
             &request,
             CodexRequestContext {
-                access_token: "access-token",
+                authorization: "Bearer access-token",
                 account_id: Some("chatgpt-account"),
                 request_id: "req_large_error",
                 turn_state: None,
@@ -176,7 +176,7 @@ async fn codex_backend_client_should_parse_retry_after_from_rate_limit_error_bod
         .create_response(
             &request,
             CodexRequestContext {
-                access_token: "access-token",
+                authorization: "Bearer access-token",
                 account_id: Some("chatgpt-account"),
                 request_id: "req_http_retry_after_body",
                 turn_state: None,
@@ -281,7 +281,7 @@ async fn codex_backend_client_should_capture_only_safe_response_metadata() {
         .create_response(
             &request,
             CodexRequestContext {
-                access_token: "access-token",
+                authorization: "Bearer access-token",
                 account_id: Some("chatgpt-account"),
                 request_id: "req_response_metadata",
                 turn_state: None,

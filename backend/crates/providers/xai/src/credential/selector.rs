@@ -6,8 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use chrono::Utc;
 use gateway_core::engine::credential::{
-    AccountCandidate, AccountSelectionContext, AccountSelectionPolicy, AccountSelector,
-    RotationStrategy,
+    AccountCandidate, AccountFeedbackStats, AccountSelectionContext, AccountSelector,
 };
 use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
@@ -35,6 +34,7 @@ pub struct GrokAccountSessionSelector {
     catalog_cache: Arc<dyn GrokCredentialCatalogCache>,
     quota: Arc<GrokCredentialQuotaService>,
     scheduling: Arc<dyn ProviderLeasePort>,
+    account_feedback: Arc<AccountFeedbackStats>,
 }
 
 impl GrokAccountSessionSelector {
@@ -45,6 +45,7 @@ impl GrokAccountSessionSelector {
         catalog_cache: Arc<dyn GrokCredentialCatalogCache>,
         quota: Arc<GrokCredentialQuotaService>,
         scheduling: Arc<dyn ProviderLeasePort>,
+        account_feedback: Arc<AccountFeedbackStats>,
     ) -> Self {
         Self {
             provider_kind,
@@ -52,6 +53,7 @@ impl GrokAccountSessionSelector {
             catalog_cache,
             quota,
             scheduling,
+            account_feedback,
         }
     }
 
@@ -95,12 +97,16 @@ impl GrokAccountSessionSelector {
         let mut candidates = catalog_eligible
             .into_iter()
             .map(|account| {
+                let health = self
+                    .account_feedback
+                    .scheduling_signals(&self.provider_kind, account.id());
                 let signals = scheduling
                     .signals()
                     .get(account.id())
                     .cloned()
                     .ok_or(GrokSessionSelectorError::Unavailable)?
-                    .with_provider_quota(self.quota.scheduling_signals(&account));
+                    .with_provider_quota(self.quota.scheduling_signals(&account))
+                    .with_runtime_health(health.0, health.1);
                 Ok(AccountCandidate { account, signals })
             })
             .collect::<Result<Vec<_>, GrokSessionSelectorError>>()?;
@@ -115,25 +121,11 @@ impl GrokAccountSessionSelector {
                 .max_by_key(|candidate| affinity.score(candidate.account.id()))
                 .map(|candidate| candidate.account.id().clone())
         });
-        let configured_policy = request.account_selection_policy();
-        let policy = if request.required_account().is_none() && affinity_account.is_some() {
-            AccountSelectionPolicy::new(
-                RotationStrategy::Sticky,
-                configured_policy.max_concurrent_per_account(),
-                configured_policy.request_interval(),
-            )
-        } else {
-            configured_policy
-        };
         let context = AccountSelectionContext {
-            policy,
+            policy: request.account_selection_policy(),
             now: SystemTime::now(),
             excluded_accounts: request.excluded_accounts().clone(),
-            sticky_account: request
-                .required_account()
-                .cloned()
-                .or(affinity_account)
-                .or_else(|| scheduling.sticky_account().cloned()),
+            preferred_account: request.required_account().cloned().or(affinity_account),
             round_robin_cursor: scheduling.round_robin_cursor(),
         };
         let mut capacity_denied = false;

@@ -280,8 +280,9 @@ async fn repository_rejects_account_owned_by_another_provider() {
         ProviderKind::new("openai").expect("provider"),
         "other".to_owned(),
         "subject".to_owned(),
+        "oauth".to_owned(),
         revision,
-        std::time::SystemTime::now() + std::time::Duration::from_secs(3600),
+        Some(std::time::SystemTime::now() + std::time::Duration::from_secs(3600)),
     );
     let mut object = serde_json::Map::new();
     object.insert("access_token".to_owned(), serde_json::json!("secret"));

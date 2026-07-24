@@ -25,7 +25,7 @@ use crate::engine::{
 };
 use crate::error::{GatewayError, GatewayErrorKind, ProviderErrorKind, StoreError};
 use crate::event::{GatewayEvent, ProviderEvent, ProviderResponseHeader};
-use crate::operation::{Operation, ReasoningEffort};
+use crate::operation::Operation;
 use crate::policy::{ClientApiKeyId, ClientPolicy};
 use crate::routing::snapshot::RuntimeSnapshotHandle;
 use crate::routing::{ProviderKind, PublicModelId, RoutingContext, RuntimeSnapshot};
@@ -144,6 +144,13 @@ pub trait ExecutionService: Send + Sync {
     ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>>;
 }
 
+/// 成功认证后的 API Key 使用事实接收器。
+///
+/// 认证仍是同步快照读取；实现必须自行异步、去重地持久化，不得阻塞客户端请求。
+pub trait ClientApiKeyUsageSink: Send + Sync {
+    fn record_used(&self, key_id: &ClientApiKeyId);
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderCircuitDecision {
     Allow,
@@ -177,6 +184,7 @@ pub struct DefaultExecutionService {
     admissions: Arc<dyn ClientAdmissionPort>,
     circuits: Arc<dyn ProviderCircuitPort>,
     continuation: Arc<dyn NativeContinuationPort>,
+    client_api_key_usage: Arc<dyn ClientApiKeyUsageSink>,
 }
 
 impl DefaultExecutionService {
@@ -188,6 +196,7 @@ impl DefaultExecutionService {
         admissions: Arc<dyn ClientAdmissionPort>,
         circuits: Arc<dyn ProviderCircuitPort>,
         continuation: Arc<dyn NativeContinuationPort>,
+        client_api_key_usage: Arc<dyn ClientApiKeyUsageSink>,
     ) -> Self {
         let engine = GatewayEngine::<dyn ExecutionStore>::new(execution, providers.clone());
         let transient: Arc<dyn ExecutionStore> = Arc::new(TransientExecutionStore);
@@ -200,6 +209,7 @@ impl DefaultExecutionService {
             admissions,
             circuits,
             continuation,
+            client_api_key_usage,
         }
     }
 
@@ -269,14 +279,9 @@ impl DefaultExecutionService {
         plan: crate::routing::RoutingPlan,
         continuation: Option<ContinuationBinding>,
     ) -> Result<StartedExecution, GatewayError> {
-        let input_token_estimate = request
-            .operation
-            .capability_requirements()
-            .minimum_context_tokens();
         let admission_request = ClientAdmissionRequest {
             model_request_id: request_id.clone(),
             client_api_key_id: request.client.policy.key_id().clone(),
-            input_token_estimate,
             lease_ttl: MODEL_REQUEST_DEADLINE,
             limits: request.client.policy.limits(),
         };
@@ -309,20 +314,6 @@ impl DefaultExecutionService {
         let observation = self
             .providers
             .request_observation(request.client.policy.provider_kind(), &request.operation);
-        let reasoning_effort = match &request.operation {
-            Operation::Generate(generate) => generate
-                .reasoning()
-                .and_then(|reasoning| reasoning.effort)
-                .map(reasoning_effort_name)
-                .map(str::to_owned),
-            Operation::CompactConversation(compact) => compact
-                .generation()
-                .reasoning()
-                .and_then(|reasoning| reasoning.effort)
-                .map(reasoning_effort_name)
-                .map(str::to_owned),
-            _ => None,
-        };
         let new_request = NewModelRequest {
             id: request_id.clone(),
             client_api_key_id: Some(request.client.policy.key_id().clone()),
@@ -333,10 +324,9 @@ impl DefaultExecutionService {
             endpoint: request.metadata.endpoint,
             client_transport: request.metadata.transport.as_str().to_owned(),
             requested_model: request.public_model,
-            input_token_estimate,
             client_ip: request.metadata.client_ip,
             user_agent: request.metadata.user_agent,
-            reasoning_effort,
+            reasoning_effort: observation.reasoning_effort,
             reasoning_preset: observation.reasoning_preset,
             request_kind: observation.request_kind,
             subagent_kind: observation.subagent_kind,
@@ -430,7 +420,6 @@ impl DefaultExecutionService {
         let request_id = new_request_id()?;
         let actor = ClientApiKeyId::new("admin_connection_test")
             .map_err(|_| GatewayError::new(GatewayErrorKind::Internal, "invalid admin actor"))?;
-        let input_token_estimate = operation.capability_requirements().minimum_context_tokens();
         let new_request = NewModelRequest {
             id: request_id,
             client_api_key_id: None,
@@ -441,7 +430,6 @@ impl DefaultExecutionService {
             endpoint: "/api/admin/accounts/connection-test".to_owned(),
             client_transport: ClientTransport::InternalProbe.as_str().to_owned(),
             requested_model: public_model,
-            input_token_estimate,
             client_ip: None,
             user_agent: None,
             reasoning_effort: None,
@@ -552,6 +540,7 @@ impl ExecutionService for DefaultExecutionService {
             .find(|policy| policy.authorize().is_ok())
             .cloned()
             .ok_or(ClientAuthenticationError::InvalidKey)?;
+        self.client_api_key_usage.record_used(policy.key_id());
         Ok(AuthenticatedClient { snapshot, policy })
     }
 
@@ -790,16 +779,6 @@ fn constant_time_equal(left: &str, right: &str) -> bool {
 fn new_request_id() -> Result<ModelRequestId, GatewayError> {
     ModelRequestId::new(format!("req_{}", Uuid::now_v7().simple()))
         .map_err(|_| GatewayError::new(GatewayErrorKind::Internal, "failed to allocate request ID"))
-}
-
-const fn reasoning_effort_name(effort: ReasoningEffort) -> &'static str {
-    match effort {
-        ReasoningEffort::Minimal => "minimal",
-        ReasoningEffort::Low => "low",
-        ReasoningEffort::Medium => "medium",
-        ReasoningEffort::High => "high",
-        ReasoningEffort::ExtraHigh => "xhigh",
-    }
 }
 
 fn map_routing_error(error: crate::error::RoutingError) -> GatewayError {

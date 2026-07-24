@@ -195,11 +195,25 @@ impl DecimalAmount {
     #[must_use]
     pub fn checked_add(&self, other: &Self) -> Option<Self> {
         let sum = scaled_amount(&self.0)?.checked_add(scaled_amount(&other.0)?)?;
-        if sum >= 10_u128.pow(20) {
+        Self::from_scaled(sum)
+    }
+
+    /// 将金额按非零请求数均分，保留最多十位小数。
+    #[must_use]
+    pub fn checked_div_u64(&self, divisor: u64) -> Option<Self> {
+        let divisor = u128::from(divisor);
+        (divisor != 0)
+            .then(|| scaled_amount(&self.0)?.checked_div(divisor))
+            .flatten()
+            .and_then(Self::from_scaled)
+    }
+
+    fn from_scaled(value: u128) -> Option<Self> {
+        if value >= 10_u128.pow(20) {
             return None;
         }
-        let whole = sum / 10_u128.pow(10);
-        let fraction = sum % 10_u128.pow(10);
+        let whole = value / 10_u128.pow(10);
+        let fraction = value % 10_u128.pow(10);
         let value = if fraction == 0 {
             whole.to_string()
         } else {
@@ -453,11 +467,19 @@ pub struct DashboardAccountModelUsage {
     pub last_used_at: DateTime<Utc>,
 }
 
-/// Dashboard 中一个账号的完整用量与公共状态事实。
+/// Dashboard 中账号的单小时请求数。
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DashboardAccountRequestBucket {
+    pub bucket_start: DateTime<Utc>,
+    pub request_count: u64,
+}
+
+/// Dashboard 中一个账号的完整用量与公共状态事实。
+#[derive(Debug, Clone, PartialEq)]
 pub struct DashboardAccountUsage {
     pub account_id: String,
     pub provider_kind: String,
+    pub authentication_kind: String,
     pub name: String,
     pub email: Option<String>,
     pub plan_type: Option<String>,
@@ -478,11 +500,25 @@ pub struct DashboardAccountUsage {
     pub cost_coverage: CostCoverage,
     pub costs: Vec<CurrencyCost>,
     pub last_used_at: Option<DateTime<Utc>>,
+    pub request_buckets: Vec<DashboardAccountRequestBucket>,
+    /// Provider 已持久化额度窗口投影出的代表性已用比例。
+    ///
+    /// `None` 表示上游未提供可比较的百分比，不应伪造为零。
+    pub quota_used_percent: Option<f64>,
     pub models: Vec<DashboardAccountModelUsage>,
 }
 
+/// Dashboard 当前账号池的可重建运行时槽位事实。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DashboardRuntimeSlots {
+    /// 与持久账号池指标相同谓词下可参与调度的账号数。
+    pub active_accounts: u64,
+    /// Redis 可用时的实时 in-flight 槽位总数；不可用时为 `None`。
+    pub used_slots: Option<u64>,
+}
+
 /// 仪表盘所需的公共观测事实。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DashboardObservation {
     pub range: TimeRange,
     pub requests: RequestMetrics,
@@ -504,11 +540,11 @@ pub struct UsageRecord {
     pub endpoint: String,
     pub client_transport: String,
     pub requested_model_id: String,
-    pub input_token_estimate: u64,
     pub provider_kind: Option<String>,
     pub provider_account_ref: Option<String>,
     pub provider_account_name: Option<String>,
     pub provider_account_email: Option<String>,
+    pub provider_account_authentication_kind: Option<String>,
     pub upstream_model_id: Option<String>,
     pub upstream_transport: Option<String>,
     pub http_version: Option<String>,

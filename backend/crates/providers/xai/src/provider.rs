@@ -1,15 +1,16 @@
 //! `gateway-core` Provider adapter for official Grok Build sessions.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
 use base64::Engine as _;
 use futures::{StreamExt, future::BoxFuture};
 use gateway_core::engine::continuation::ContinuationBinding;
 use gateway_core::engine::credential::{
-    AccountAvailability, ProviderAccount, ProviderAccountId, ProviderAccountStore,
+    AccountAvailability, AccountFeedbackStats, ProviderAccount, ProviderAccountId,
+    ProviderAccountStore,
 };
 use gateway_core::engine::provider::{
     EventStream, Provider, ProviderCallMetadata, ProviderCatalogGeneration,
@@ -39,9 +40,9 @@ use url::Url;
 use crate::GrokCatalogCapabilityEvidence;
 use crate::XaiWireProfileState;
 use crate::credential::{
-    GrokCredentialCatalogService, GrokCredentialQuotaService, GrokCredentialRecovery,
-    GrokCredentialRecoveryOutcome, GrokCredentialRefreshOutcome, GrokCredentialRefreshService,
-    GrokQuotaError,
+    GrokCredentialCatalogError, GrokCredentialCatalogService, GrokCredentialQuotaService,
+    GrokCredentialRecovery, GrokCredentialRecoveryOutcome, GrokCredentialRefreshOutcome,
+    GrokCredentialRefreshService, GrokQuotaError,
 };
 use crate::transport::canonical::GrokCanonicalDecoder;
 use crate::transport::config::XAI_PROVIDER_NAME;
@@ -75,6 +76,7 @@ pub struct GrokBuildProvider {
     transport: Arc<dyn GrokInferenceTransport>,
     catalog: Arc<GrokCredentialCatalogService>,
     credential_recovery: Arc<dyn GrokCredentialRecovery>,
+    account_feedback: Arc<AccountFeedbackStats>,
     client_identity: GrokClientIdentity,
     wire_profile: XaiWireProfileState,
     responses_url: Url,
@@ -87,6 +89,7 @@ impl GrokBuildProvider {
         transport: Arc<dyn GrokInferenceTransport>,
         catalog: Arc<GrokCredentialCatalogService>,
         credential_recovery: Arc<dyn GrokCredentialRecovery>,
+        account_feedback: Arc<AccountFeedbackStats>,
         wire_profile: XaiWireProfileState,
     ) -> Result<Self, GrokProviderConfigError> {
         let responses_url = Url::parse(GROK_RESPONSES_URL)
@@ -96,6 +99,7 @@ impl GrokBuildProvider {
             transport,
             catalog,
             credential_recovery,
+            account_feedback,
             client_identity: GrokClientIdentity::new(),
             wire_profile,
             responses_url,
@@ -131,10 +135,6 @@ impl Provider for GrokBuildProvider {
                 }
                 let capabilities = ModelCapabilities::new(
                     operations,
-                    model
-                        .limits()
-                        .context_window_tokens()
-                        .map_or(0, std::num::NonZeroU64::get),
                     model
                         .limits()
                         .max_output_tokens()
@@ -247,7 +247,8 @@ impl GrokBuildProvider {
                 session_capture,
             },
         );
-        Ok(ProviderStream::new(metadata, events, selected))
+        Ok(ProviderStream::new(metadata, events, selected)
+            .with_account_feedback(Arc::clone(&self.account_feedback)))
     }
 
     async fn execute_compaction(
@@ -305,7 +306,8 @@ impl GrokBuildProvider {
                 session: Arc::clone(&selected),
             },
         );
-        Ok(ProviderStream::new(metadata, events, selected))
+        Ok(ProviderStream::new(metadata, events, selected)
+            .with_account_feedback(Arc::clone(&self.account_feedback)))
     }
 }
 
@@ -1490,6 +1492,7 @@ const WORKER_LEASE_TTL: Duration = Duration::from_secs(15 * 60);
 const WORKER_LEASE_RENEWAL: Duration = Duration::from_secs(5 * 60);
 const OAUTH_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const QUOTA_CATALOG_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const QUOTA_PERIODIC_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const CLI_RELEASE_WORKER_OWNER: &str = "xai-cli-release";
 
 pub(crate) fn worker_contributions(
@@ -1517,6 +1520,7 @@ pub(crate) fn worker_contributions(
                 quota,
                 catalog,
                 provider_kind,
+                last_periodic_refresh_at: Mutex::new(BTreeMap::new()),
             }),
         )?),
         WorkerContribution::Registration(scheduled_registration(
@@ -1612,6 +1616,7 @@ struct XaiQuotaCatalogTask {
     quota: Arc<GrokCredentialQuotaService>,
     catalog: Arc<GrokCredentialCatalogService>,
     provider_kind: ProviderKind,
+    last_periodic_refresh_at: Mutex<BTreeMap<ProviderAccountId, Instant>>,
 }
 
 impl ScheduledTask for XaiQuotaCatalogTask {
@@ -1624,10 +1629,8 @@ impl ScheduledTask for XaiQuotaCatalogTask {
                 .map_err(|_| WorkerTaskError::safe("xAI Provider accounts unavailable"))?;
             let mut failures = 0_u64;
             let now = SystemTime::now();
-            for account in accounts
-                .into_iter()
-                .filter(|account| eligible_quota_worker_account(account, now))
-            {
+            let accounts = self.reserve_periodic_refreshes(accounts, now);
+            for account in accounts {
                 if context.cancellation().is_cancelled() {
                     return Ok(());
                 }
@@ -1636,8 +1639,9 @@ impl ScheduledTask for XaiQuotaCatalogTask {
                     Err(_) => failures = failures.saturating_add(1),
                 }
             }
-            if self.catalog.query_models().await.is_err() {
-                failures = failures.saturating_add(1);
+            match self.catalog.query_models().await {
+                Ok(_) | Err(GrokCredentialCatalogError::NoEligibleCredential) => {}
+                Err(_) => failures = failures.saturating_add(1),
             }
             if failures == 0 {
                 Ok(())
@@ -1650,18 +1654,47 @@ impl ScheduledTask for XaiQuotaCatalogTask {
     }
 }
 
+impl XaiQuotaCatalogTask {
+    fn reserve_periodic_refreshes(
+        &self,
+        accounts: Vec<ProviderAccount>,
+        now: SystemTime,
+    ) -> Vec<ProviderAccount> {
+        let candidates = accounts
+            .into_iter()
+            .filter(|account| eligible_quota_worker_account(account, now))
+            .collect::<Vec<_>>();
+        let candidate_ids = candidates
+            .iter()
+            .map(|account| account.id().clone())
+            .collect::<BTreeSet<_>>();
+        let now = Instant::now();
+        let mut last_periodic_refresh_at = self
+            .last_periodic_refresh_at
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        last_periodic_refresh_at.retain(|account_id, _| candidate_ids.contains(account_id));
+        candidates
+            .into_iter()
+            .filter(|account| {
+                let due = last_periodic_refresh_at
+                    .get(account.id())
+                    .is_none_or(|last| {
+                        now.saturating_duration_since(*last) >= QUOTA_PERIODIC_REFRESH_MIN_INTERVAL
+                    });
+                if due {
+                    last_periodic_refresh_at.insert(account.id().clone(), now);
+                }
+                due
+            })
+            .collect()
+    }
+}
+
 fn eligible_quota_worker_account(account: &ProviderAccount, now: SystemTime) -> bool {
     account.enabled()
-        && account.access_token_expires_at() > now
-        && match account.availability() {
-            AccountAvailability::Unknown
-            | AccountAvailability::Ready
-            | AccountAvailability::QuotaExhausted => true,
-            AccountAvailability::Cooldown => {
-                account.cooldown_until().is_some_and(|until| until <= now)
-            }
-            AccountAvailability::Expired
-            | AccountAvailability::Banned
-            | AccountAvailability::Invalid => false,
-        }
+        && account
+            .access_token_expires_at()
+            .is_some_and(|expires_at| expires_at > now)
+        && account.availability() == AccountAvailability::QuotaExhausted
 }

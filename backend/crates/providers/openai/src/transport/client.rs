@@ -250,8 +250,8 @@ pub type CodexBackendSseStream =
 /// 单次 Codex 上游请求的上下文。
 #[derive(Clone, Copy)]
 pub struct CodexRequestContext<'a> {
-    /// Access token。
-    pub access_token: &'a str,
+    /// Provider 已构造并脱敏持有的完整 Authorization 值。
+    pub authorization: &'a str,
     /// ChatGPT account id。
     pub account_id: Option<&'a str>,
     /// 代理请求 ID。
@@ -284,11 +284,40 @@ pub struct CodexRequestContext<'a> {
     pub turn_id: Option<&'a str>,
 }
 
+impl<'a> CodexRequestContext<'a> {
+    #[must_use]
+    pub const fn auxiliary(
+        authorization: &'a str,
+        account_id: Option<&'a str>,
+        request_id: &'a str,
+        installation_id: Option<&'a str>,
+    ) -> Self {
+        Self {
+            authorization,
+            account_id,
+            request_id,
+            turn_state: None,
+            turn_metadata: None,
+            beta_features: None,
+            include_timing_metrics: None,
+            version: None,
+            codex_window_id: None,
+            parent_thread_id: None,
+            cookie_header: None,
+            installation_id,
+            session_id: None,
+            thread_id: None,
+            client_request_id: None,
+            turn_id: None,
+        }
+    }
+}
+
 impl fmt::Debug for CodexRequestContext<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CodexRequestContext")
-            .field("access_token", &"[REDACTED]")
+            .field("authorization", &"[REDACTED]")
             .field("account_id", &self.account_id.map(|_| "[REDACTED]"))
             .field("request_id", &self.request_id)
             .field("turn_state", &self.turn_state.map(|_| "[REDACTED]"))

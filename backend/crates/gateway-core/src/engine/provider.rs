@@ -5,12 +5,15 @@ use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use futures::Stream;
 use thiserror::Error;
 
-use crate::engine::credential::{CredentialRevision, ProviderAccountId};
+use crate::engine::credential::{
+    AccountAttemptFeedback, AccountFeedbackStats, CredentialRevision, ProviderAccountId,
+};
 use crate::engine::{AttemptContext, UpstreamSendState};
 use crate::error::{
     IdentifierError, ProviderError, ProviderErrorKind, SafeUpstreamValue, validate_text,
@@ -214,8 +217,79 @@ pub struct ProviderStream {
     metadata: ProviderCallMetadata,
     events: EventStream,
     _lease: Box<dyn ResourceLease>,
+    account_feedback: Option<ProviderStreamAccountFeedback>,
     validator: EventSequenceValidator,
     terminated: bool,
+}
+
+struct ProviderStreamAccountFeedback {
+    stats: Arc<AccountFeedbackStats>,
+    provider_kind: ProviderKind,
+    account_id: ProviderAccountId,
+    started_at: Option<Instant>,
+    first_output_ms: Option<u64>,
+    reported: bool,
+}
+
+impl ProviderStreamAccountFeedback {
+    fn start(&mut self) {
+        self.started_at.get_or_insert_with(Instant::now);
+    }
+
+    fn observe(&mut self, event: &ProviderEvent) {
+        if self.first_output_ms.is_some()
+            || !event.canonical_facts().iter().any(|event| {
+                matches!(
+                    event,
+                    crate::event::GatewayEvent::TextDelta(_)
+                        | crate::event::GatewayEvent::ReasoningDelta(_)
+                        | crate::event::GatewayEvent::ToolCallDelta(_)
+                        | crate::event::GatewayEvent::CompactionOutput(_)
+                )
+            })
+        {
+            return;
+        }
+        let Some(started_at) = self.started_at else {
+            return;
+        };
+        self.first_output_ms =
+            Some(u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX));
+    }
+
+    fn report_success(&mut self) {
+        if self.reported {
+            return;
+        }
+        self.stats.report(
+            &self.provider_kind,
+            &self.account_id,
+            AccountAttemptFeedback::Succeeded {
+                first_output_ms: self.first_output_ms,
+            },
+        );
+        self.reported = true;
+    }
+
+    fn report_failure(&mut self, error: &ProviderError) {
+        if self.reported
+            || error.send_state() == UpstreamSendState::NotSent
+            || matches!(
+                error.kind(),
+                ProviderErrorKind::Cancelled | ProviderErrorKind::ProcessTerminated
+            )
+        {
+            return;
+        }
+        self.stats.report(
+            &self.provider_kind,
+            &self.account_id,
+            AccountAttemptFeedback::Failed {
+                first_output_ms: self.first_output_ms,
+            },
+        );
+        self.reported = true;
+    }
 }
 
 impl ProviderStream {
@@ -229,9 +303,26 @@ impl ProviderStream {
             metadata,
             events: Box::pin(events),
             _lease: Box::new(lease),
+            account_feedback: None,
             validator: EventSequenceValidator::new(),
             terminated: false,
         }
+    }
+
+    /// 让公共 stream 边界统一回灌账号成功率与首个有效输出延迟。
+    #[must_use]
+    pub fn with_account_feedback(mut self, stats: Arc<AccountFeedbackStats>) -> Self {
+        if let Some(account_id) = self.metadata.provider_account_id().cloned() {
+            self.account_feedback = Some(ProviderStreamAccountFeedback {
+                stats,
+                provider_kind: self.metadata.provider().clone(),
+                account_id,
+                started_at: None,
+                first_output_ms: None,
+                reported: false,
+            });
+        }
+        self
     }
 
     /// 返回调用事实。
@@ -249,6 +340,9 @@ impl Stream for ProviderStream {
         if this.terminated {
             return Poll::Ready(None);
         }
+        if let Some(feedback) = this.account_feedback.as_mut() {
+            feedback.start();
+        }
 
         match this.events.as_mut().poll_next(context) {
             Poll::Pending => Poll::Pending,
@@ -256,26 +350,47 @@ impl Stream for ProviderStream {
                 for fact in event.canonical_facts() {
                     if this.validator.observe(fact).is_err() {
                         this.terminated = true;
-                        return Poll::Ready(Some(Err(ProviderError::new(
+                        let error = ProviderError::new(
                             ProviderErrorKind::Protocol,
                             UpstreamSendState::Sent,
-                        ))));
+                        );
+                        if let Some(feedback) = this.account_feedback.as_mut() {
+                            feedback.report_failure(&error);
+                        }
+                        return Poll::Ready(Some(Err(error)));
                     }
+                }
+                if let Some(feedback) = this.account_feedback.as_mut() {
+                    feedback.observe(&event);
                 }
                 Poll::Ready(Some(Ok(event)))
             }
             Poll::Ready(Some(Err(error))) => {
                 this.terminated = true;
+                if let Some(feedback) = this.account_feedback.as_mut() {
+                    feedback.report_failure(&error);
+                }
                 Poll::Ready(Some(Err(error)))
             }
             Poll::Ready(None) => {
                 this.terminated = true;
                 match this.validator.finish() {
-                    Ok(()) => Poll::Ready(None),
-                    Err(_) => Poll::Ready(Some(Err(ProviderError::new(
-                        ProviderErrorKind::Protocol,
-                        UpstreamSendState::Sent,
-                    )))),
+                    Ok(()) => {
+                        if let Some(feedback) = this.account_feedback.as_mut() {
+                            feedback.report_success();
+                        }
+                        Poll::Ready(None)
+                    }
+                    Err(_) => {
+                        let error = ProviderError::new(
+                            ProviderErrorKind::Protocol,
+                            UpstreamSendState::Sent,
+                        );
+                        if let Some(feedback) = this.account_feedback.as_mut() {
+                            feedback.report_failure(&error);
+                        }
+                        Poll::Ready(Some(Err(error)))
+                    }
                 }
             }
         }
@@ -292,6 +407,8 @@ pub struct ProviderRequest {
 /// Provider 对公共观测表可解释的请求语义；未知字段保持空值。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProviderRequestObservation {
+    /// 客户端原始请求中的推理强度。
+    pub reasoning_effort: Option<String>,
     pub reasoning_preset: Option<String>,
     pub request_kind: Option<String>,
     pub subagent_kind: Option<String>,

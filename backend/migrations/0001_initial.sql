@@ -53,7 +53,6 @@ create table client_api_keys (
   enabled boolean not null default true,
   max_concurrency bigint not null default 0,
   requests_per_minute bigint not null default 0,
-  tokens_per_minute bigint not null default 0,
   last_used_at timestamptz,
   created_at timestamptz not null,
   updated_at timestamptz not null,
@@ -66,7 +65,6 @@ create table client_api_keys (
   constraint client_api_keys_limits_ck check (
     max_concurrency >= 0
     and requests_per_minute >= 0
-    and tokens_per_minute >= 0
   ),
   constraint client_api_keys_time_ck check (created_at <= updated_at)
 );
@@ -85,7 +83,7 @@ create table runtime_settings (
   max_concurrent_per_account bigint not null default 3,
   request_interval_ms bigint not null default 50,
   rotation_strategy text not null default 'smart',
-  provider_model_mappings_json jsonb not null default '{}'::jsonb,
+  model_mappings_json jsonb not null default '{}'::jsonb,
   usage_retention_days bigint not null default 31,
   ops_event_retention_days bigint not null default 30,
   audit_retention_days bigint not null default 90,
@@ -102,8 +100,8 @@ create table runtime_settings (
     rotation_strategy in ('smart', 'quota_reset_priority', 'round_robin', 'sticky')
   ),
   constraint runtime_settings_model_mappings_ck check (
-    jsonb_typeof(provider_model_mappings_json) = 'object'
-    and octet_length(provider_model_mappings_json::text) <= 131072
+    jsonb_typeof(model_mappings_json) = 'object'
+    and octet_length(model_mappings_json::text) <= 131072
   ),
   constraint runtime_settings_retention_ck check (
     usage_retention_days >= 31
@@ -120,10 +118,11 @@ create table provider_accounts (
   upstream_user_id text not null,
   upstream_account_id text,
   plan_type text,
+  authentication_kind text not null,
   provider_credentials_json jsonb not null,
   credential_revision bigint not null default 1,
   has_refresh_token boolean not null,
-  access_token_expires_at timestamptz not null,
+  access_token_expires_at timestamptz,
   next_refresh_at timestamptz,
   enabled boolean not null default true,
   availability text not null default 'unknown',
@@ -135,6 +134,9 @@ create table provider_accounts (
   created_at timestamptz not null,
   updated_at timestamptz not null,
   constraint provider_accounts_revision_ck check (credential_revision > 0),
+  constraint provider_accounts_authentication_kind_ck check (
+    authentication_kind ~ '^[a-z][a-z0-9_]{0,63}$'
+  ),
   constraint provider_accounts_credentials_ck check (
     jsonb_typeof(provider_credentials_json) = 'object'
     and octet_length(provider_credentials_json::text) <= 262144
@@ -204,7 +206,6 @@ create table model_requests (
   endpoint text not null,
   client_transport text not null,
   requested_model_id text not null,
-  input_token_estimate bigint not null,
   provider_kind text,
   upstream_model_id text,
   provider_account_id text,
@@ -263,8 +264,8 @@ create table model_requests (
   constraint model_requests_account_ref_ck check (
     provider_account_id is null or provider_account_id = provider_account_ref
   ),
-  constraint model_requests_revision_estimate_ck check (
-    config_revision > 0 and input_token_estimate >= 0 and attempt_count >= 0
+  constraint model_requests_revision_attempt_ck check (
+    config_revision > 0 and attempt_count >= 0
   ),
   constraint model_requests_send_state_ck check (
     upstream_send_state in ('not_sent', 'sent', 'ambiguous')

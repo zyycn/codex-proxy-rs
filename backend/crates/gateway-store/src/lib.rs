@@ -9,7 +9,7 @@ use std::{fmt, num::NonZeroU64, str::FromStr};
 
 use gateway_admin::model::auth::{AdminAuditEvent as AdminAuditModel, AdminSession};
 use gateway_admin::model::settings::{
-    AdminApiKey, AdminApiKeyMutation, ProviderModelMappings, ReplaceRuntimeSettings,
+    AdminApiKey, AdminApiKeyMutation, ModelMappings, ReplaceRuntimeSettings,
     RotationStrategy as AdminRotationStrategy, RuntimeSettings as AdminRuntimeSettings,
 };
 use gateway_admin::model::{MutationActor, MutationContext, Revision as AdminRevision};
@@ -252,6 +252,10 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
     let provider_leases = Arc::new(redis::RedisProviderLeaseCoordinator::new(
         credential_leases.clone(),
     ));
+    let provider_session_affinity = Arc::new(redis::RedisProviderSessionAffinityRepository::new(
+        redis_connection.clone(),
+        REDIS_NAMESPACE,
+    )?);
     let credential_state = Arc::new(redis::RedisCredentialStateRepository::new(
         redis_connection.clone(),
         REDIS_NAMESPACE,
@@ -273,7 +277,10 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
             )?,
         }),
         Arc::new(postgres::PgAdminClientKeyStore::new(pool.clone())),
-        Arc::new(postgres::PgAdminObservabilityStore::new(pool.clone())),
+        Arc::new(postgres::PgAdminObservabilityStore::new(
+            pool.clone(),
+            Some(credential_leases.clone()),
+        )),
         Arc::new(AdminSettingsStoreAdapter {
             control_plane: postgres::PgControlPlaneRepository::new(pool.clone()),
         }),
@@ -283,29 +290,35 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
     let retention = Arc::new(postgres::PgRetentionRepository::new(pool.clone()));
     let core_ports = CoreStorePorts::new(
         execution.clone(),
-        Arc::new(redis::RedisClientAdmissionRepository::new(
-            redis_connection.clone(),
-            REDIS_NAMESPACE,
-        )?),
-        Arc::new(postgres::PgClientAdmissionRecoveryRepository::new(
-            pool.clone(),
-        )),
+        (
+            Arc::new(redis::RedisClientAdmissionRepository::new(
+                redis_connection.clone(),
+                REDIS_NAMESPACE,
+            )?),
+            Arc::new(postgres::PgClientAdmissionRecoveryRepository::new(
+                pool.clone(),
+            )),
+        ),
         Arc::new(redis::RedisProviderCircuitRepository::new(
             redis_connection.clone(),
             REDIS_NAMESPACE,
             redis::ProviderCircuitPolicy::default(),
         )?),
         Arc::new(postgres::PgHistoryRepository::new(pool.clone())),
-        Arc::new(postgres::PgRuntimeSnapshotRepository::new(pool.clone())),
-        Arc::new(redis::RedisRuntimeChangeRepository::new(
-            redis_client,
-            REDIS_NAMESPACE,
-        )?),
+        (
+            Arc::new(postgres::PgRuntimeSnapshotRepository::new(pool.clone())),
+            Arc::new(redis::RedisRuntimeChangeRepository::new(
+                redis_client,
+                REDIS_NAMESPACE,
+            )?),
+        ),
+        Arc::new(postgres::PgClientApiKeyUsageSink::new(pool.clone())),
     );
 
     let provider_ports = ProviderStorePorts::new(
         account_store,
         provider_leases,
+        provider_session_affinity,
         credential_state.clone(),
         credential_state,
         cooldowns,
@@ -507,7 +520,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 max_concurrent_per_account: command.max_concurrent_per_account,
                 request_interval_ms: command.request_interval_ms,
                 rotation_strategy: admin_rotation_name(command.rotation_strategy).to_owned(),
-                provider_model_mappings: store_model_mappings(command.provider_model_mappings),
+                model_mappings: store_model_mappings(command.model_mappings),
                 usage_retention_days: command.usage_retention_days,
                 ops_event_retention_days: command.ops_event_retention_days,
                 audit_retention_days: command.audit_retention_days,
@@ -518,7 +531,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 "runtime_settings",
                 "1",
                 vec![
-                    "provider_model_mappings_json".to_owned(),
+                    "model_mappings_json".to_owned(),
                     "refresh_margin_seconds".to_owned(),
                     "refresh_concurrency".to_owned(),
                     "max_concurrent_per_account".to_owned(),
@@ -580,7 +593,7 @@ impl AdminSettingsStoreAdapter {
             max_concurrent_per_account: current.settings.max_concurrent_per_account,
             request_interval_ms: current.settings.request_interval_ms,
             rotation_strategy: current.settings.rotation_strategy,
-            provider_model_mappings: current.settings.provider_model_mappings,
+            model_mappings: current.settings.model_mappings,
             usage_retention_days: current.settings.usage_retention_days,
             ops_event_retention_days: current.settings.ops_event_retention_days,
             audit_retention_days: current.settings.audit_retention_days,
@@ -628,45 +641,30 @@ fn admin_runtime_settings(
             ));
         }
     };
-    let provider_model_mappings = settings
-        .provider_model_mappings
+    let model_mappings = settings
+        .model_mappings
         .into_iter()
-        .map(|(provider, mappings)| {
-            let provider = gateway_core::routing::ProviderKind::new(provider).map_err(|_| {
+        .map(|(public, upstream)| {
+            let public = gateway_core::routing::PublicModelId::new(public).map_err(|_| {
                 AdminStoreError::new(
                     AdminStoreErrorKind::Invalid,
                     "runtime settings",
-                    "provider model mapping is invalid",
+                    "public model mapping is invalid",
                 )
             })?;
-            let mappings = mappings
-                .into_iter()
-                .map(|(public, upstream)| {
-                    let public =
-                        gateway_core::routing::PublicModelId::new(public).map_err(|_| {
-                            AdminStoreError::new(
-                                AdminStoreErrorKind::Invalid,
-                                "runtime settings",
-                                "public model mapping is invalid",
-                            )
-                        })?;
-                    let upstream =
-                        gateway_core::routing::UpstreamModelId::new(upstream).map_err(|_| {
-                            AdminStoreError::new(
-                                AdminStoreErrorKind::Invalid,
-                                "runtime settings",
-                                "upstream model mapping is invalid",
-                            )
-                        })?;
-                    Ok((public, upstream))
-                })
-                .collect::<AdminStoreResult<_>>()?;
-            Ok((provider, mappings))
+            let upstream = gateway_core::routing::UpstreamModelId::new(upstream).map_err(|_| {
+                AdminStoreError::new(
+                    AdminStoreErrorKind::Invalid,
+                    "runtime settings",
+                    "upstream model mapping is invalid",
+                )
+            })?;
+            Ok((public, upstream))
         })
-        .collect::<AdminStoreResult<ProviderModelMappings>>()?;
+        .collect::<AdminStoreResult<ModelMappings>>()?;
     Ok(AdminRuntimeSettings {
         config_revision: admin_revision(settings.config_revision)?,
-        provider_model_mappings,
+        model_mappings,
         refresh_margin_seconds: settings.refresh_margin_seconds,
         refresh_concurrency: settings.refresh_concurrency,
         max_concurrent_per_account: settings.max_concurrent_per_account,
@@ -679,22 +677,10 @@ fn admin_runtime_settings(
     })
 }
 
-fn store_model_mappings(
-    mappings: ProviderModelMappings,
-) -> std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> {
+fn store_model_mappings(mappings: ModelMappings) -> std::collections::BTreeMap<String, String> {
     mappings
         .into_iter()
-        .map(|(provider, mappings)| {
-            (
-                provider.as_str().to_owned(),
-                mappings
-                    .into_iter()
-                    .map(|(public, upstream)| {
-                        (public.as_str().to_owned(), upstream.as_str().to_owned())
-                    })
-                    .collect(),
-            )
-        })
+        .map(|(public, upstream)| (public.as_str().to_owned(), upstream.as_str().to_owned()))
         .collect()
 }
 

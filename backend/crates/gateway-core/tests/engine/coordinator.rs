@@ -374,8 +374,7 @@ fn image_stream(image_output_tokens: Option<u64>) -> Vec<Result<GatewayEvent, Pr
 fn plan(operation: &Operation) -> RoutingPlan {
     let provider = ProviderKind::new("openai").expect("provider");
     let public_model = PublicModelId::new("gpt-5").expect("public model");
-    let capabilities =
-        ModelCapabilities::new(BTreeSet::from([operation.kind()]), 128_000, Some(32_000));
+    let capabilities = ModelCapabilities::new(BTreeSet::from([operation.kind()]), Some(32_000));
     RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("config revision"),
         AccountSelectionPolicy::new(
@@ -415,7 +414,6 @@ fn model_request(operation: &Operation, deadline: SystemTime) -> NewModelRequest
         endpoint: "responses".to_owned(),
         client_transport: "http_sse".to_owned(),
         requested_model: PublicModelId::new("gpt-5").expect("model"),
-        input_token_estimate: 3,
         client_ip: Some("127.0.0.1".parse().expect("client IP")),
         user_agent: Some("gateway-core-test".to_owned()),
         reasoning_effort: Some("medium".to_owned()),
@@ -1019,7 +1017,7 @@ fn provider_metadata_for_another_account_fails_closed() {
     assert_eq!(provider.scripts.lock().expect("scripts lock").len(), 1);
     let state = store.state.lock().expect("store lock");
     assert!(state.attempts.is_empty());
-    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Failed);
+    assert!(state.finalizations.is_empty());
 }
 
 #[test]
@@ -1400,6 +1398,64 @@ fn non_idempotent_explicit_429_rejection_rotates_account_before_output() {
 }
 
 #[test]
+fn rate_limited_account_exhaustion_survives_a_later_empty_selection() {
+    let operation = operation(RetrySafety::Idempotent);
+    let route_plan = plan(&operation);
+    let (coordinator, store, _) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::RateLimited,
+                UpstreamSendState::Sent,
+            )
+            .with_status(429)
+            .with_upstream_code(
+                SafeUpstreamValue::new("rate_limit_exceeded").expect("provider code"),
+            )
+            .with_retry_after(Duration::from_secs(30))
+            .with_replay_safe())],
+        },
+        Script::Error(ProviderError::new(
+            ProviderErrorKind::NoEligibleAccount,
+            UpstreamSendState::NotSent,
+        )),
+    ]);
+
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+    let error = block_on(session.collect_uncommitted())
+        .expect_err("exhausted account must remain a rate-limit response");
+    let gateway_core::engine::EngineError::Provider(error) = error else {
+        panic!("expected provider error")
+    };
+
+    assert_eq!(error.kind(), ProviderErrorKind::RateLimited);
+    assert_eq!(error.upstream_status(), Some(429));
+    assert_eq!(
+        error.upstream_code().map(SafeUpstreamValue::as_str),
+        Some("rate_limit_exceeded")
+    );
+    assert_eq!(error.retry_after(), Some(Duration::from_secs(30)));
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.created, 1);
+    assert_eq!(state.attempts.len(), 1);
+    assert_eq!(state.intermediate_failures, 1);
+    assert_eq!(state.finalizations.len(), 1);
+    assert_eq!(state.finalizations[0].upstream_status_code, Some(429));
+    assert_eq!(
+        state.finalizations[0].provider_error_code.as_deref(),
+        Some("rate_limit_exceeded")
+    );
+}
+
+#[test]
 fn non_idempotent_sent_failure_without_provider_proof_is_not_retried() {
     let (store, provider) = terminal_non_idempotent_failure(
         vec![Err(ProviderError::new(
@@ -1666,14 +1722,13 @@ fn cancellation_before_pending_delivery_commit_reaches_terminal_state() {
 }
 
 #[test]
-fn local_unavailability_before_stream_does_not_create_attempt_or_provider_failure() {
+fn no_eligible_account_before_stream_does_not_create_request_detail() {
     let operation = operation(RetrySafety::Idempotent);
     let route_plan = plan(&operation);
-    let (coordinator, store, _) = coordinator(vec![Script::Error(
-        ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
-            .with_upstream_code(SafeUpstreamValue::new("overloaded").expect("provider code"))
-            .with_retry_after(Duration::from_millis(250)),
-    )]);
+    let (coordinator, store, _) = coordinator(vec![Script::Error(ProviderError::new(
+        ProviderErrorKind::NoEligibleAccount,
+        UpstreamSendState::NotSent,
+    ))]);
 
     let mut session = block_on(coordinator.start(
         model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
@@ -1689,17 +1744,14 @@ fn local_unavailability_before_stream_does_not_create_attempt_or_provider_failur
 
     assert!(matches!(
         error,
-        gateway_core::engine::EngineError::Provider(_)
+        gateway_core::engine::EngineError::Provider(ref error)
+            if error.kind() == ProviderErrorKind::NoEligibleAccount
     ));
     assert!(session.provider_attempt_outcomes().is_empty());
     let state = store.state.lock().expect("store lock");
-    assert_eq!(state.created, 1);
+    assert_eq!(state.created, 0);
     assert!(state.attempts.is_empty());
-    assert_eq!(
-        state.finalizations[0].provider_error_code.as_deref(),
-        Some("overloaded")
-    );
-    assert_eq!(state.finalizations[0].retry_after_ms, Some(250));
+    assert!(state.finalizations.is_empty());
 }
 
 #[test]
@@ -1723,7 +1775,7 @@ fn expired_deadline_finalizes_without_calling_provider() {
     assert!(matches!(error, gateway_core::engine::EngineError::Deadline));
     assert!(provider.contexts.lock().expect("contexts lock").is_empty());
     let state = store.state.lock().expect("store lock");
-    assert_eq!(state.created, 1);
+    assert_eq!(state.created, 0);
     assert!(state.attempts.is_empty());
-    assert_eq!(state.finalizations[0].attempt_count, 0);
+    assert!(state.finalizations.is_empty());
 }

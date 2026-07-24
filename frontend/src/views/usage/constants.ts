@@ -14,8 +14,9 @@ export const usageRecordColumns = [
   },
   {
     key: 'provider',
-    label: '平台',
-    width: '140px',
+    label: '平台/类型',
+    width: '100px',
+    align: 'center' as const,
     ellipsis: false,
     format: (value: unknown) => formatProvider(typeof value === 'string' ? value : null),
   },
@@ -190,6 +191,10 @@ export function usageRecordTypeClass(record: UsageDisplayRecord) {
 
 export function usageAccountText(record: UsageDisplayRecord) {
   return record.accountEmail || '—'
+}
+
+export function usageAuthenticationKind(record: UsageDisplayRecord) {
+  return typeof record.authenticationKind === 'string' ? record.authenticationKind : null
 }
 
 export function usageClientIp(record: UsageDisplayRecord) {

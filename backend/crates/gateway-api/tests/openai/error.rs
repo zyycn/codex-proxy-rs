@@ -134,6 +134,22 @@ fn local_provider_capacity_exhaustion_should_map_to_service_unavailable() {
 }
 
 #[test]
+fn no_eligible_provider_account_should_map_to_service_unavailable() {
+    let error = EngineError::Provider(ProviderError::new(
+        ProviderErrorKind::NoEligibleAccount,
+        UpstreamSendState::NotSent,
+    ));
+
+    assert_eq!(
+        gateway_error_from_engine(&error),
+        GatewayError::new(
+            GatewayErrorKind::NoAvailableProvider,
+            "no upstream provider is currently available for this request"
+        )
+    );
+}
+
+#[test]
 fn sent_provider_unavailability_should_remain_bad_gateway() {
     let error = EngineError::Provider(ProviderError::new(
         ProviderErrorKind::Unavailable,

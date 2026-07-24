@@ -9,7 +9,8 @@ use gateway_core::engine::continuation::{
     ContinuationBinding, NativeContinuationPin, PreviousResponseId,
 };
 use gateway_core::engine::credential::{
-    AccountSelectionPolicy, CredentialRevision, ProviderAccountStore, RotationStrategy,
+    AccountFeedbackStats, AccountSelectionPolicy, CredentialRevision, ProviderAccountStore,
+    RotationStrategy,
 };
 use gateway_core::engine::provider::{Provider, ProviderRequest};
 use gateway_core::engine::{
@@ -430,6 +431,7 @@ async fn provider_with_catalog_transport(
         transport,
         catalog,
         recovery,
+        Arc::new(AccountFeedbackStats::default()),
         crate::support::xai_wire_profile(),
     )
     .expect("official xAI provider configuration")
@@ -548,7 +550,6 @@ fn provider_request_with_operation(provider_kind: &str, operation: Operation) ->
         UpstreamModelId::new(MODEL).expect("model"),
         ModelCapabilities::new(
             BTreeSet::from([OperationKind::Generate, OperationKind::CompactConversation]),
-            1_000_000,
             Some(131_072),
         ),
     );

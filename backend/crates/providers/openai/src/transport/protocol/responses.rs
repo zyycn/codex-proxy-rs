@@ -228,6 +228,11 @@ pub fn response_event_signals(event_type: Option<&str>, value: &Value) -> Respon
             signals.reasoning_output = non_empty_string(value.get("delta"));
             signals.semantic_output = signals.reasoning_output;
         }
+        Some("response.reasoning_summary_text.done" | "response.reasoning_text.done") => {
+            signals.reasoning_output =
+                non_empty_string(value.get("text").or_else(|| value.get("summary")));
+            signals.semantic_output = signals.reasoning_output;
+        }
         Some(
             "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta",
         ) => {
@@ -235,6 +240,9 @@ pub fn response_event_signals(event_type: Option<&str>, value: &Value) -> Respon
         }
         Some("response.function_call_arguments.done") => {
             signals.semantic_output = non_empty_string(value.get("arguments"));
+        }
+        Some("response.custom_tool_call_input.done") => {
+            signals.semantic_output = non_empty_string(value.get("input"));
         }
         Some("response.image_generation_call.partial_image") => {
             signals.semantic_output = non_empty_string(

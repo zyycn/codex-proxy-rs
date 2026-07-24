@@ -1,15 +1,15 @@
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use chrono::{TimeZone as _, Utc};
 use futures::future::join_all;
 use gateway_core::engine::credential::{
-    AccountAvailability, OpaqueProviderData, ProviderAccountStore as _, QuotaObservation,
-    QuotaWriteOutcome,
+    AccountAvailability, AccountStateChange, OpaqueProviderData, ProviderAccountStore as _,
+    QuotaObservation, QuotaWriteOutcome,
 };
 use provider_openai::credential::{
-    CodexCredentialQuotaService, CodexQuotaWindowKind, ImportCodexOAuthCredential,
-    parse_codex_quota_usage,
+    CodexCredentialQuotaService, CodexQuotaSyncSummary, CodexQuotaWindowKind,
+    ImportCodexOAuthCredential, parse_codex_quota_usage,
 };
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use serde_json::json;
@@ -136,14 +136,36 @@ fn wire_profile() -> CodexWireProfileState {
 }
 
 fn quota_service(store: &Arc<MemoryAccountStore>) -> CodexCredentialQuotaService {
-    CodexCredentialQuotaService::new(
-        store.repository(),
-        wire_profile(),
+    quota_service_with_http(
+        store,
         reqwest::Client::builder()
             .no_proxy()
             .build()
             .expect("client"),
     )
+}
+
+fn quota_service_with_http(
+    store: &Arc<MemoryAccountStore>,
+    http: reqwest::Client,
+) -> CodexCredentialQuotaService {
+    CodexCredentialQuotaService::new(
+        store.repository(),
+        wire_profile(),
+        http,
+        crate::support::agent_identity_service(store),
+    )
+}
+
+fn blocked_network_quota_service(store: &Arc<MemoryAccountStore>) -> CodexCredentialQuotaService {
+    let proxy = reqwest::Proxy::all("http://127.0.0.1:9").expect("loopback proxy");
+    let http = reqwest::Client::builder()
+        .proxy(proxy)
+        .connect_timeout(Duration::from_secs(1))
+        .timeout(Duration::from_secs(1))
+        .build()
+        .expect("blocked client");
+    quota_service_with_http(store, http)
 }
 
 async fn create_account(store: &Arc<MemoryAccountStore>, account_id: &str) {
@@ -230,6 +252,62 @@ async fn persisted_provider_quota_projects_dynamic_windows_without_network_io() 
 }
 
 #[tokio::test]
+async fn persisted_codex_additional_limit_replaces_the_top_level_rate_limit() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_canonical_codex_limit").await;
+    let account = store
+        .account("acct_canonical_codex_limit")
+        .expect("created account");
+    let raw = json!({
+        "rate_limit": {
+            "primary_window": {
+                "used_percent": 91,
+                "reset_at": 1_900_000_000,
+                "limit_window_seconds": 2_592_000
+            }
+        },
+        "additional_rate_limits": [{
+            "metered_feature": "codex",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 2,
+                    "reset_at": 1_900_000_000,
+                    "limit_window_seconds": 2_592_000
+                }
+            }
+        }]
+    });
+    let outcome = store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: Some(OpaqueProviderData::new(
+                raw.as_object().expect("quota object").clone(),
+            )),
+            observed_at: Some(SystemTime::now()),
+        })
+        .await
+        .expect("persist quota");
+    assert_eq!(outcome, QuotaWriteOutcome::Updated);
+
+    let snapshot = quota_service(&store)
+        .read_account(account.id())
+        .await
+        .expect("read quota")
+        .expect("quota snapshot");
+    let monthly = snapshot
+        .windows()
+        .iter()
+        .filter(|window| window.kind() == CodexQuotaWindowKind::Monthly)
+        .collect::<Vec<_>>();
+
+    assert_eq!(snapshot.fact().remaining_percent(), Some(98));
+    assert_eq!(monthly.len(), 1);
+    assert_eq!(monthly[0].source(), "core");
+    assert_eq!(monthly[0].used_percent(), Some(2.0));
+}
+
+#[tokio::test]
 async fn passive_rate_limit_headers_update_quota_and_account_state_with_revision_fence() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_passive_quota").await;
@@ -286,4 +364,70 @@ async fn synchronize_without_accounts_is_a_noop_before_network_io() {
     assert_eq!(summary.cooldown, 0);
     assert_eq!(summary.transient, 0);
     assert_eq!(summary.stale, 0);
+}
+
+#[tokio::test]
+async fn periodic_quota_synchronization_skips_ready_accounts() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_periodic_ready").await;
+
+    let summary = blocked_network_quota_service(&store)
+        .synchronize()
+        .await
+        .expect("ready account must not query upstream");
+
+    assert_eq!(summary, CodexQuotaSyncSummary::default());
+}
+
+#[tokio::test]
+async fn periodic_quota_synchronization_attempts_quota_exhausted_accounts() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_periodic_exhausted").await;
+    let account = store
+        .account("acct_periodic_exhausted")
+        .expect("created account");
+    store
+        .apply_state_change(AccountStateChange {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            availability: AccountAvailability::QuotaExhausted,
+            reason: Some("quota_exhausted".to_owned()),
+            cooldown_until: None,
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("mark account exhausted");
+
+    let summary = blocked_network_quota_service(&store)
+        .synchronize()
+        .await
+        .expect("quota synchronization");
+
+    assert_eq!(summary.transient, 1);
+}
+
+#[tokio::test]
+async fn periodic_quota_synchronization_throttles_the_same_exhausted_account() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_periodic_throttled").await;
+    let account = store
+        .account("acct_periodic_throttled")
+        .expect("created account");
+    store
+        .apply_state_change(AccountStateChange {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            availability: AccountAvailability::QuotaExhausted,
+            reason: Some("quota_exhausted".to_owned()),
+            cooldown_until: None,
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("mark account exhausted");
+    let service = blocked_network_quota_service(&store);
+
+    service.synchronize().await.expect("first quota cycle");
+    let summary = service.synchronize().await.expect("throttled quota cycle");
+
+    assert_eq!(summary, CodexQuotaSyncSummary::default());
 }

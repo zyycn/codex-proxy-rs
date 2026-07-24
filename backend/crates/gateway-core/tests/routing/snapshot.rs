@@ -139,7 +139,6 @@ impl Provider for PublishingCatalogProvider {
             UpstreamModelId::new("upstream-model").expect("model"),
             ModelCapabilities::new(
                 std::collections::BTreeSet::from([OperationKind::Generate]),
-                128_000,
                 None,
             ),
         )])
@@ -191,10 +190,7 @@ fn compiler_should_preserve_passthrough_when_provider_catalog_is_unavailable() {
         &PublicModelId::new("unknown-upstream-model").expect("model"),
         &provider,
     ));
-    assert_eq!(
-        snapshot.mapped_model(&provider, "public-model"),
-        "upstream-model"
-    );
+    assert_eq!(snapshot.mapped_model("public-model"), "upstream-model");
     assert_eq!(snapshot.client_policies().count(), 1);
 }
 
@@ -332,10 +328,7 @@ fn facts(config_revision: u64, observed_current_revision: u64) -> SnapshotFacts 
             3,
             50,
             "smart",
-            BTreeMap::from([(
-                "alpha".to_owned(),
-                BTreeMap::from([("public-model".to_owned(), "upstream-model".to_owned())]),
-            )]),
+            BTreeMap::from([("public-model".to_owned(), "upstream-model".to_owned())]),
         ),
         vec![SnapshotClientPolicyFacts::new(
             ClientApiKeyId::new("key_one").expect("key ID"),

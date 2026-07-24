@@ -71,7 +71,6 @@ impl fmt::Debug for PlaintextClientApiKey {
 pub struct RateLimits {
     pub max_concurrency: u64,
     pub requests_per_minute: u64,
-    pub tokens_per_minute: u64,
 }
 
 impl RateLimits {
@@ -80,34 +79,7 @@ impl RateLimits {
         Self {
             max_concurrency: 0,
             requests_per_minute: 0,
-            tokens_per_minute: 0,
         }
-    }
-}
-
-/// 单次准入需要冻结的计数单位。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AdmissionUnits {
-    pub requests: u64,
-    pub estimated_tokens: u64,
-}
-
-impl AdmissionUnits {
-    /// 每次模型调用必须消耗一次 request。
-    ///
-    /// # Errors
-    ///
-    /// `requests` 为零时返回错误。
-    pub fn new(requests: u64, estimated_tokens: u64) -> Result<Self, PolicyError> {
-        if requests == 0 {
-            return Err(PolicyError::Denied {
-                reason: "request units must be positive",
-            });
-        }
-        Ok(Self {
-            requests,
-            estimated_tokens,
-        })
     }
 }
 

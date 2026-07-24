@@ -64,7 +64,7 @@ async fn settings_should_reject_zero_refresh_margin_before_store_call() {
             },
             ReplaceRuntimeSettings {
                 expected_config_revision: Revision::new(1).expect("revision"),
-                provider_model_mappings: Default::default(),
+                model_mappings: Default::default(),
                 refresh_margin_seconds: 0,
                 refresh_concurrency: 1,
                 max_concurrent_per_account: 1,

@@ -15,6 +15,7 @@ use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 
 use crate::{
     DecimalAmount, StoreError, StoreResult, admin_store_error, postgres_unavailable,
+    redis::{CredentialLeaseRepository as _, RedisCredentialLeaseRepository},
     require_nonempty,
 };
 
@@ -24,6 +25,7 @@ const MAX_SEARCH_BYTES: usize = 512;
 const MAX_ACCOUNT_IDS: usize = 200;
 const DASHBOARD_ACCOUNT_LIMIT: u16 = 50;
 const DIAGNOSTIC_LIMIT: i64 = 100;
+const ACCOUNT_USAGE_TIMELINE_HOURS: i64 = 24;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ObservabilityRange {
@@ -375,9 +377,16 @@ pub struct ProviderAccountMetrics {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderAccountRequestBucket {
+    pub bucket_start: DateTime<Utc>,
+    pub request_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccountUsageObservation {
     pub account_id: String,
     pub provider_kind: String,
+    pub authentication_kind: String,
     pub name: String,
     pub email: Option<String>,
     pub plan_type: Option<String>,
@@ -398,6 +407,7 @@ pub struct ProviderAccountUsageObservation {
     pub cost_coverage: CostCoverage,
     pub costs: Vec<CurrencyCostTotal>,
     pub last_used_at: Option<DateTime<Utc>>,
+    pub request_buckets: Vec<ProviderAccountRequestBucket>,
     pub models: Vec<ProviderAccountModelUsageObservation>,
 }
 
@@ -426,6 +436,7 @@ pub struct ProviderAccountUsageQuery {
     pub range: ObservabilityRange,
     pub account_ids: Option<Vec<String>>,
     pub limit: u16,
+    include_hourly_request_buckets: bool,
 }
 
 impl ProviderAccountUsageQuery {
@@ -441,6 +452,7 @@ impl ProviderAccountUsageQuery {
             limit: u16::try_from(account_ids.len())
                 .map_err(|_| invalid("account usage query is too large"))?,
             account_ids: Some(account_ids),
+            include_hourly_request_buckets: false,
         })
     }
 
@@ -452,7 +464,18 @@ impl ProviderAccountUsageQuery {
             range,
             account_ids: None,
             limit,
+            include_hourly_request_buckets: false,
         })
+    }
+
+    pub fn with_hourly_request_buckets(mut self) -> StoreResult<Self> {
+        if self.range.end.signed_duration_since(self.range.start)
+            > TimeDelta::hours(ACCOUNT_USAGE_TIMELINE_HOURS)
+        {
+            return Err(invalid("account request timeline cannot exceed 24 hours"));
+        }
+        self.include_hourly_request_buckets = true;
+        Ok(self)
     }
 }
 
@@ -477,11 +500,11 @@ pub struct UsageRecord {
     pub endpoint: String,
     pub client_transport: String,
     pub requested_model_id: String,
-    pub input_token_estimate: u64,
     pub provider_kind: Option<String>,
     pub provider_account_ref: Option<String>,
     pub provider_account_name: Option<String>,
     pub provider_account_email: Option<String>,
+    pub provider_account_authentication_kind: Option<String>,
     pub upstream_model_id: Option<String>,
     pub upstream_transport: Option<String>,
     pub http_version: Option<String>,
@@ -695,13 +718,15 @@ impl PgObservabilityRepository {
 #[derive(Clone)]
 pub struct PgAdminObservabilityStore {
     repository: PgObservabilityRepository,
+    runtime_signals: Option<RedisCredentialLeaseRepository>,
 }
 
 impl PgAdminObservabilityStore {
     #[must_use]
-    pub const fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool, runtime_signals: Option<RedisCredentialLeaseRepository>) -> Self {
         Self {
             repository: PgObservabilityRepository::new(pool),
+            runtime_signals,
         }
     }
 }
@@ -717,9 +742,14 @@ impl ObservabilityRepository for PgObservabilityRepository {
         let attempts = attempt_metrics(&self.pool, range, &filter).await?;
         let provider_accounts = provider_account_metrics(&self.pool, range.end).await?;
         let trend = request_metric_series(&self.pool, range, &filter).await?;
+        let account_usage_range = ObservabilityRange::new(
+            range.end - TimeDelta::hours(ACCOUNT_USAGE_TIMELINE_HOURS),
+            range.end,
+        )?;
         let account_usage = provider_account_usage(
             &self.pool,
-            ProviderAccountUsageQuery::recent(range, DASHBOARD_ACCOUNT_LIMIT)?,
+            ProviderAccountUsageQuery::recent(account_usage_range, DASHBOARD_ACCOUNT_LIMIT)?
+                .with_hourly_request_buckets()?,
         )
         .await?;
         let recent_requests = list_usage_records(
@@ -821,6 +851,45 @@ impl AdminObservabilityStore for PgAdminObservabilityStore {
             .await
             .map_err(observability_error)?;
         admin_dashboard_observation(observation)
+    }
+
+    async fn dashboard_runtime_slots(
+        &self,
+        observed_at: DateTime<Utc>,
+    ) -> AdminStoreResult<Option<admin_observability::DashboardRuntimeSlots>> {
+        let active_account_ids = active_provider_account_ids(&self.repository.pool, observed_at)
+            .await
+            .map_err(observability_error)?;
+        let active_accounts = u64::try_from(active_account_ids.len())
+            .map_err(|_| observability_error(invalid("active account count overflows u64")))?;
+        if active_account_ids.is_empty() {
+            return Ok(Some(admin_observability::DashboardRuntimeSlots {
+                active_accounts,
+                used_slots: Some(0),
+            }));
+        }
+        let Some(runtime_signals) = &self.runtime_signals else {
+            return Ok(None);
+        };
+        let signals = match runtime_signals
+            .credential_runtime_signals(&active_account_ids)
+            .await
+        {
+            Ok(signals) => signals,
+            Err(_) => {
+                return Ok(Some(admin_observability::DashboardRuntimeSlots {
+                    active_accounts,
+                    used_slots: None,
+                }));
+            }
+        };
+        let used_slots = signals.into_iter().fold(0_u64, |total, signal| {
+            total.saturating_add(u64::from(signal.in_flight))
+        });
+        Ok(Some(admin_observability::DashboardRuntimeSlots {
+            active_accounts,
+            used_slots: Some(used_slots),
+        }))
     }
 
     async fn dashboard_trend(
@@ -1186,6 +1255,7 @@ fn admin_dashboard_account_usage(
     Ok(admin_observability::DashboardAccountUsage {
         account_id: usage.account_id,
         provider_kind: usage.provider_kind,
+        authentication_kind: usage.authentication_kind,
         name: usage.name,
         email: usage.email,
         plan_type: usage.plan_type,
@@ -1206,6 +1276,17 @@ fn admin_dashboard_account_usage(
         cost_coverage: admin_cost_coverage(usage.cost_coverage),
         costs: admin_currency_costs(usage.costs)?,
         last_used_at: usage.last_used_at,
+        request_buckets: usage
+            .request_buckets
+            .into_iter()
+            .map(
+                |bucket| admin_observability::DashboardAccountRequestBucket {
+                    bucket_start: bucket.bucket_start,
+                    request_count: bucket.request_count,
+                },
+            )
+            .collect(),
+        quota_used_percent: None,
         models: usage
             .models
             .into_iter()
@@ -1304,11 +1385,11 @@ fn admin_usage_record(record: UsageRecord) -> AdminStoreResult<admin_observabili
         endpoint: record.endpoint,
         client_transport: record.client_transport,
         requested_model_id: record.requested_model_id,
-        input_token_estimate: record.input_token_estimate,
         provider_kind: record.provider_kind,
         provider_account_ref: record.provider_account_ref,
         provider_account_name: record.provider_account_name,
         provider_account_email: record.provider_account_email,
+        provider_account_authentication_kind: record.provider_account_authentication_kind,
         upstream_model_id: record.upstream_model_id,
         upstream_transport: record.upstream_transport,
         http_version: record.http_version,
@@ -1792,10 +1873,12 @@ async fn provider_account_metrics(
                 count(*) filter (where not enabled or availability <> 'ready')::bigint
                   as unavailable,
                 count(*) filter (
-                  where enabled and availability = 'ready' and access_token_expires_at > $1
+                  where enabled and availability = 'ready'
+                    and (access_token_expires_at is null or access_token_expires_at > $1)
                 )::bigint as active,
                 count(*) filter (
-                  where availability = 'expired' or access_token_expires_at <= $1
+                  where availability = 'expired'
+                    or (access_token_expires_at is not null and access_token_expires_at <= $1)
                 )::bigint as expired,
                 count(*) filter (where availability = 'quota_exhausted')::bigint
                   as quota_exhausted,
@@ -1817,6 +1900,26 @@ async fn provider_account_metrics(
         disabled: unsigned(&row, "disabled")?,
         banned: unsigned(&row, "banned")?,
     })
+}
+
+async fn active_provider_account_ids(
+    pool: &PgPool,
+    observed_at: DateTime<Utc>,
+) -> StoreResult<Vec<String>> {
+    sqlx::query(
+        "select id
+         from provider_accounts
+         where enabled and availability = 'ready'
+           and (access_token_expires_at is null or access_token_expires_at > $1)
+         order by id",
+    )
+    .bind(observed_at)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| postgres_unavailable("load active provider account IDs"))?
+    .iter()
+    .map(|row| get(row, "id"))
+    .collect()
 }
 
 async fn provider_observations(
@@ -2038,7 +2141,7 @@ async fn provider_account_usage(
     }
 
     let mut statement = QueryBuilder::<Postgres>::new(
-        "select pa.id, pa.provider_kind, pa.name, pa.email,
+        "select pa.id, pa.provider_kind, pa.authentication_kind, pa.name, pa.email,
                 pa.plan_type, pa.enabled, pa.availability,
                 count(mr.id)::bigint as request_count,
                 count(mr.id) filter (where mr.outcome = 'succeeded')::bigint as success_count,
@@ -2074,7 +2177,7 @@ async fn provider_account_usage(
         statement.push("::text[])");
     }
     statement.push(
-        " group by pa.id, pa.provider_kind, pa.name, pa.email,
+        " group by pa.id, pa.provider_kind, pa.authentication_kind, pa.name, pa.email,
                    pa.plan_type, pa.enabled, pa.availability
           order by max(mr.started_at) desc nulls last, pa.name, pa.id limit ",
     );
@@ -2096,6 +2199,11 @@ async fn provider_account_usage(
         .iter()
         .map(|item| item.account_id.clone())
         .collect::<Vec<_>>();
+    let mut request_buckets = if query.include_hourly_request_buckets {
+        provider_account_request_buckets(pool, query.range, &account_ids).await?
+    } else {
+        HashMap::new()
+    };
     let account_costs = account_costs(pool, query.range, &account_ids).await?;
     let model_rows = account_model_rows(pool, query.range, &account_ids).await?;
     let model_costs = account_model_costs(pool, query.range, &account_ids).await?;
@@ -2108,6 +2216,9 @@ async fn provider_account_usage(
         observation.costs = account_costs
             .get(&observation.account_id)
             .cloned()
+            .unwrap_or_default();
+        observation.request_buckets = request_buckets
+            .remove(&observation.account_id)
             .unwrap_or_default();
     }
     for row in model_rows {
@@ -2141,6 +2252,63 @@ async fn provider_account_usage(
             });
     }
     Ok(observations)
+}
+
+async fn provider_account_request_buckets(
+    pool: &PgPool,
+    range: ObservabilityRange,
+    account_ids: &[String],
+) -> StoreResult<HashMap<String, Vec<ProviderAccountRequestBucket>>> {
+    let rows = sqlx::query(
+        "select provider_account_ref,
+                floor(extract(epoch from (started_at - $1)) / 3600)::bigint as bucket_index,
+                count(*)::bigint as request_count
+         from model_requests
+         where provider_account_ref = any($2::text[])
+           and started_at >= $1 and started_at < $3
+         group by provider_account_ref, bucket_index
+         order by provider_account_ref, bucket_index",
+    )
+    .bind(range.start)
+    .bind(account_ids)
+    .bind(range.end)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| postgres_unavailable("load provider account request timeline"))?;
+
+    let mut observed = HashMap::<String, BTreeMap<u64, u64>>::new();
+    for row in rows {
+        observed
+            .entry(get(&row, "provider_account_ref")?)
+            .or_default()
+            .insert(
+                unsigned(&row, "bucket_index")?,
+                unsigned(&row, "request_count")?,
+            );
+    }
+
+    let step = TimeDelta::hours(1);
+    let mut timelines = HashMap::with_capacity(account_ids.len());
+    for account_id in account_ids {
+        let mut account_observed = observed.remove(account_id).unwrap_or_default();
+        let mut bucket_start = range.start;
+        let mut bucket_index = 0_u64;
+        let mut buckets = Vec::new();
+        while bucket_start < range.end {
+            buckets.push(ProviderAccountRequestBucket {
+                bucket_start,
+                request_count: account_observed.remove(&bucket_index).unwrap_or_default(),
+            });
+            bucket_start = bucket_start
+                .checked_add_signed(step)
+                .ok_or_else(|| invalid("account request timeline exceeds supported timestamps"))?;
+            bucket_index = bucket_index
+                .checked_add(1)
+                .ok_or_else(|| invalid("account request timeline exceeds supported buckets"))?;
+        }
+        timelines.insert(account_id.clone(), buckets);
+    }
+    Ok(timelines)
 }
 
 async fn account_costs(
@@ -2255,6 +2423,7 @@ fn provider_account_from_row(
     Ok(ProviderAccountUsageObservation {
         account_id: get(row, "id")?,
         provider_kind: get(row, "provider_kind")?,
+        authentication_kind: get(row, "authentication_kind")?,
         name: get(row, "name")?,
         email: get(row, "email")?,
         plan_type: get(row, "plan_type")?,
@@ -2275,6 +2444,7 @@ fn provider_account_from_row(
         cost_coverage: coverage_from_row(row)?,
         costs: Vec::new(),
         last_used_at: get(row, "last_used_at")?,
+        request_buckets: Vec::new(),
         models: Vec::new(),
     })
 }
@@ -2282,8 +2452,9 @@ fn provider_account_from_row(
 const USAGE_RECORD_SELECT: &str =
     "select mr.id, mr.client_api_key_ref, mr.config_revision, mr.protocol, mr.operation,
             mr.endpoint, mr.client_transport, mr.requested_model_id,
-            mr.input_token_estimate, mr.provider_kind, mr.provider_account_ref,
+            mr.provider_kind, mr.provider_account_ref,
             pa.name as provider_account_name, pa.email as provider_account_email,
+            pa.authentication_kind as provider_account_authentication_kind,
             mr.upstream_model_id, mr.upstream_transport, mr.http_version, mr.websocket_pool,
             mr.attempt_count, mr.upstream_send_state, mr.downstream_committed_at,
             mr.outcome, mr.client_status_code, mr.upstream_status_code,
@@ -2763,11 +2934,11 @@ fn usage_record_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<UsageRecord
         endpoint: get(row, "endpoint")?,
         client_transport: get(row, "client_transport")?,
         requested_model_id: get(row, "requested_model_id")?,
-        input_token_estimate: unsigned(row, "input_token_estimate")?,
         provider_kind: get(row, "provider_kind")?,
         provider_account_ref: get(row, "provider_account_ref")?,
         provider_account_name: get(row, "provider_account_name")?,
         provider_account_email: get(row, "provider_account_email")?,
+        provider_account_authentication_kind: get(row, "provider_account_authentication_kind")?,
         upstream_model_id: get(row, "upstream_model_id")?,
         upstream_transport: get(row, "upstream_transport")?,
         http_version: get(row, "http_version")?,

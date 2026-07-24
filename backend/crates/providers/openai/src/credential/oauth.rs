@@ -579,9 +579,10 @@ fn oauth_identity_expectation(
         .account
         .upstream_account_id()
         .ok_or(CodexOAuthAdminError::Credential)?;
+    let principal = runtime.principal.ok_or(CodexOAuthAdminError::Credential)?;
     CodexIdentityExpectation::current(
-        runtime.principal.oauth_subject,
-        runtime.principal.poid,
+        principal.oauth_subject,
+        principal.poid,
         account_id.to_owned(),
         current.account.upstream_user_id().to_owned(),
         runtime.installation_id,

@@ -24,7 +24,7 @@ pub struct SnapshotRuntimeSettings {
     pub max_concurrent_per_account: u32,
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
-    pub provider_model_mappings: BTreeMap<String, BTreeMap<String, String>>,
+    pub model_mappings: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,7 +142,7 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                 data.settings.max_concurrent_per_account,
                 data.settings.request_interval_ms,
                 data.settings.rotation_strategy,
-                data.settings.provider_model_mappings,
+                data.settings.model_mappings,
             );
             let client_policies = data
                 .client_api_keys
@@ -193,12 +193,12 @@ async fn load_settings(
             i64,
             i64,
             String,
-            sqlx::types::Json<BTreeMap<String, BTreeMap<String, String>>>,
+            sqlx::types::Json<BTreeMap<String, String>>,
         ),
     >(
         "select config_revision, refresh_margin_seconds, refresh_concurrency,
                 max_concurrent_per_account, request_interval_ms, rotation_strategy,
-                provider_model_mappings_json
+                model_mappings_json
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -216,7 +216,7 @@ async fn load_settings(
             max_concurrent_per_account: to_u32(row.3)?,
             request_interval_ms: to_u64(row.4)?,
             rotation_strategy: row.5,
-            provider_model_mappings: row.6.0,
+            model_mappings: row.6.0,
         },
     ))
 }
@@ -224,15 +224,15 @@ async fn load_settings(
 async fn load_client_keys(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<Vec<ClientApiKeySnapshot>> {
-    let rows = sqlx::query_as::<_, (String, String, String, i64, i64, i64)>(
-        "select id, key, provider_kind, max_concurrency, requests_per_minute, tokens_per_minute
+    let rows = sqlx::query_as::<_, (String, String, String, i64, i64)>(
+        "select id, key, provider_kind, max_concurrency, requests_per_minute
          from client_api_keys where enabled order by id",
     )
     .fetch_all(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("load snapshot client policies"))?;
     rows.into_iter()
-        .map(|row| ClientApiKeySnapshot::from_persisted(row.0, row.1, row.2, row.3, row.4, row.5))
+        .map(|row| ClientApiKeySnapshot::from_persisted(row.0, row.1, row.2, row.3, row.4))
         .collect()
 }
 

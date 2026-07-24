@@ -1,6 +1,6 @@
 //! Codex Provider 测试用内存 ports；不依赖 SQL、Redis 或 secret 加密。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -18,13 +18,15 @@ use gateway_core::error::{StoreError, StoreErrorKind};
 use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshPolicy,
     ProviderRuntimePolicyPort, ProviderSchedulingLeaseRequest, ProviderSchedulingState,
-    ProviderStoreError,
+    ProviderSessionAffinityKey, ProviderSessionAffinityPort, ProviderStoreError,
 };
 use gateway_core::routing::ProviderKind;
 use provider_openai::credential::{
-    CodexAccountProfile, CodexCredentialAdmin, CodexCredentialRepository, CodexOAuthSecret,
-    ImportCodexOAuthCredential,
+    CodexAccountProfile, CodexAgentIdentityTaskService, CodexCredentialAdmin,
+    CodexCredentialRepository, CodexOAuthSecret, ImportCodexOAuthCredential,
+    OfficialCodexAgentIdentityTaskRegistrar,
 };
+use provider_openai::transport::CodexWebSocketPool;
 use secrecy::SecretString;
 
 #[derive(Clone)]
@@ -297,7 +299,7 @@ struct AccountRebuild {
     enabled: bool,
     availability: AccountAvailability,
     cooldown_until: Option<SystemTime>,
-    access_token_expires_at: SystemTime,
+    access_token_expires_at: Option<SystemTime>,
     has_refresh_token: bool,
     next_refresh_at: Option<SystemTime>,
     profile: Option<(String, Option<String>, Option<String>)>,
@@ -316,6 +318,7 @@ fn rebuild_account(current: &ProviderAccount, rebuild: AccountRebuild) -> Provid
         current.provider().clone(),
         name,
         current.upstream_user_id().to_owned(),
+        current.authentication_kind().to_owned(),
         rebuild.revision,
         rebuild.access_token_expires_at,
     )
@@ -332,10 +335,34 @@ fn rebuild_account(current: &ProviderAccount, rebuild: AccountRebuild) -> Provid
     .with_refresh_schedule(rebuild.has_refresh_token, rebuild.next_refresh_at)
 }
 
+pub(crate) fn agent_identity_service(
+    store: &Arc<MemoryAccountStore>,
+) -> Arc<CodexAgentIdentityTaskService> {
+    agent_identity_service_with_pool(store, Arc::new(CodexWebSocketPool::default()))
+}
+
+pub(crate) fn agent_identity_service_with_pool(
+    store: &Arc<MemoryAccountStore>,
+    websocket_pool: Arc<CodexWebSocketPool>,
+) -> Arc<CodexAgentIdentityTaskService> {
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("agent task client");
+    let registrar =
+        OfficialCodexAgentIdentityTaskRegistrar::new(client).expect("agent task registrar");
+    Arc::new(CodexAgentIdentityTaskService::new(
+        store.repository(),
+        Arc::new(registrar),
+        websocket_pool,
+    ))
+}
+
 #[derive(Default)]
 pub(crate) struct TestLeaseCoordinator {
     pub(crate) requests: Mutex<Vec<ProviderSchedulingLeaseRequest>>,
     pub(crate) busy: Mutex<bool>,
+    pub(crate) busy_accounts: Mutex<BTreeSet<ProviderAccountId>>,
     round_robin_cursor: Mutex<u64>,
 }
 
@@ -357,6 +384,8 @@ impl ProviderLeasePort for TestLeaseCoordinator {
                             last_started_at: None,
                             quota_reset_at: None,
                             quota_remaining_rank: None,
+                            failure_rate_basis_points: None,
+                            first_output_latency_ms: None,
                         },
                     )
                 })
@@ -367,7 +396,7 @@ impl ProviderLeasePort for TestLeaseCoordinator {
                 .expect("round robin cursor lock");
             let current = *cursor;
             *cursor = cursor.wrapping_add(1);
-            Ok(ProviderSchedulingState::new(signals, None, current))
+            Ok(ProviderSchedulingState::new(signals, current))
         })
     }
 
@@ -379,17 +408,95 @@ impl ProviderLeasePort for TestLeaseCoordinator {
             let ProviderLeaseRequest::Scheduling(request) = request else {
                 panic!("expected scheduling lease request");
             };
+            let account_busy = self
+                .busy_accounts
+                .lock()
+                .expect("busy account lock")
+                .contains(request.account_id());
             self.requests
                 .lock()
                 .expect("lease requests lock")
                 .push(request);
-            if *self.busy.lock().expect("lease busy lock") {
+            if *self.busy.lock().expect("lease busy lock") || account_busy {
                 Ok(ProviderLeaseAcquisition::Busy {
                     retry_after: Some(Duration::from_millis(25)),
                 })
             } else {
                 Ok(ProviderLeaseAcquisition::Acquired(Box::new(())))
             }
+        })
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct MemorySessionAffinity {
+    bindings: Mutex<BTreeMap<(String, String), ProviderAccountId>>,
+    lookups: Mutex<Vec<String>>,
+}
+
+impl MemorySessionAffinity {
+    pub(crate) fn lookup_keys(&self) -> Vec<String> {
+        self.lookups.lock().expect("session affinity lock").clone()
+    }
+}
+
+impl ProviderSessionAffinityPort for MemorySessionAffinity {
+    fn load<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+    ) -> BoxFuture<'a, Result<Option<ProviderAccountId>, ProviderStoreError>> {
+        Box::pin(async move {
+            self.lookups
+                .lock()
+                .expect("session affinity lookup lock")
+                .push(key.expose_to_store().to_owned());
+            Ok(self
+                .bindings
+                .lock()
+                .expect("session affinity lock")
+                .get(&(
+                    provider_kind.as_str().to_owned(),
+                    key.expose_to_store().to_owned(),
+                ))
+                .cloned())
+        })
+    }
+
+    fn bind<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+        account_id: &'a ProviderAccountId,
+        _ttl: Duration,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            self.bindings.lock().expect("session affinity lock").insert(
+                (
+                    provider_kind.as_str().to_owned(),
+                    key.expose_to_store().to_owned(),
+                ),
+                account_id.clone(),
+            );
+            Ok(())
+        })
+    }
+
+    fn clear<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            Ok(self
+                .bindings
+                .lock()
+                .expect("session affinity lock")
+                .remove(&(
+                    provider_kind.as_str().to_owned(),
+                    key.expose_to_store().to_owned(),
+                ))
+                .is_some())
         })
     }
 }
@@ -448,8 +555,9 @@ pub(crate) fn codex_account(id: &str) -> ProviderAccount {
         ProviderKind::new("openai").expect("provider"),
         id.to_owned(),
         format!("user-chatgpt-{id}"),
+        "oauth".to_owned(),
         CredentialRevision::new(1).expect("revision"),
-        SystemTime::now() + Duration::from_secs(3_600),
+        Some(SystemTime::now() + Duration::from_secs(3_600)),
     )
     .with_profile(
         Some(format!("{id}@example.com")),

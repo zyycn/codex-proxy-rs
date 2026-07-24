@@ -37,7 +37,7 @@ use gateway_admin::{
             ProviderModels, ProviderQuota,
         },
         settings::{
-            AdminApiKey, AdminApiKeyMutation, ProviderModelMappings, ReplaceRuntimeSettings,
+            AdminApiKey, AdminApiKeyMutation, ModelMappings, ReplaceRuntimeSettings,
             RotationStrategy, RuntimeSettings,
         },
         system::{SystemOperationAccepted, SystemUpdateDetail, SystemUpdateStatus, SystemVersion},
@@ -310,7 +310,7 @@ impl SettingsStore for MemorySettingsStore {
     ) -> AdminStoreResult<RuntimeSettings> {
         let updated = RuntimeSettings {
             config_revision: next_revision(command.expected_config_revision),
-            provider_model_mappings: command.provider_model_mappings,
+            model_mappings: command.model_mappings,
             refresh_margin_seconds: command.refresh_margin_seconds,
             refresh_concurrency: command.refresh_concurrency,
             max_concurrent_per_account: command.max_concurrent_per_account,
@@ -729,25 +729,19 @@ impl SystemOperations for UnusedSystem {
 }
 
 fn test_runtime_settings() -> RuntimeSettings {
-    let mappings: ProviderModelMappings = BTreeMap::from([
+    let mappings: ModelMappings = BTreeMap::from([
         (
-            ProviderKind::new("openai").expect("provider kind"),
-            BTreeMap::from([(
-                PublicModelId::new("coding-default").expect("public model"),
-                UpstreamModelId::new("gpt-5.4").expect("upstream model"),
-            )]),
+            PublicModelId::new("coding-default").expect("public model"),
+            UpstreamModelId::new("gpt-5.4").expect("upstream model"),
         ),
         (
-            ProviderKind::new("xai").expect("provider kind"),
-            BTreeMap::from([(
-                PublicModelId::new("grok-latest").expect("public model"),
-                UpstreamModelId::new("grok-4.5").expect("upstream model"),
-            )]),
+            PublicModelId::new("grok-latest").expect("public model"),
+            UpstreamModelId::new("grok-4.5").expect("upstream model"),
         ),
     ]);
     RuntimeSettings {
         config_revision: Revision::new(7).expect("revision"),
-        provider_model_mappings: mappings,
+        model_mappings: mappings,
         refresh_margin_seconds: 3_600,
         refresh_concurrency: 2,
         max_concurrent_per_account: 3,

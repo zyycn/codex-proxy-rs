@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { useApiKeyMutations } from '../composables/useApiKeyMutations'
+import { Openai, Xai } from '@boxicons/vue'
 import { Copy, Upload } from '@lucide/vue'
 
 import { computed } from 'vue'
@@ -8,7 +9,7 @@ import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
-import BaseSelect from '@/components/base/BaseSelect.vue'
+import BaseSegmented from '@/components/base/BaseSegmented.vue'
 
 type CreateForm = ReturnType<typeof useApiKeyMutations>['createForm']['value']
 
@@ -39,8 +40,8 @@ const name = formField('name')
 const label = formField('label')
 const providerKind = formField('providerKind')
 const providerOptions = [
-  { label: 'OpenAI', value: 'openai' },
-  { label: 'xAI / Grok', value: 'xai' },
+  { label: 'OpenAI', value: 'openai', icon: Openai },
+  { label: 'xAI', value: 'xai', icon: Xai },
 ]
 </script>
 
@@ -54,6 +55,16 @@ const providerOptions = [
     :close-disabled="saving"
   >
     <BaseForm>
+      <BaseFormItem label="平台" required>
+        <BaseSegmented
+          v-model="providerKind"
+          :options="providerOptions"
+          icon-only
+          aria-label="平台"
+          class="w-21"
+        />
+      </BaseFormItem>
+
       <BaseFormItem label="名称" required>
         <BaseInput
           v-model="name"
@@ -68,10 +79,6 @@ const providerOptions = [
           aria-label="标签（可选）"
           placeholder="备注信息..."
         />
-      </BaseFormItem>
-
-      <BaseFormItem label="平台" required>
-        <BaseSelect v-model="providerKind" :options="providerOptions" aria-label="平台" />
       </BaseFormItem>
     </BaseForm>
 

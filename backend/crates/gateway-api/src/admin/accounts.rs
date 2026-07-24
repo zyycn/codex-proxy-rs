@@ -190,6 +190,7 @@ pub struct AccountView {
     pub user_id: Option<String>,
     pub label: Option<String>,
     pub plan_type: Option<String>,
+    pub authentication_kind: String,
     pub has_refresh_token: bool,
     pub status: String,
     pub display_status: String,
@@ -1436,7 +1437,7 @@ fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
         quota,
     } = item;
     let status = account_status_name(status).to_owned();
-    let expires_at = china_rfc3339(&account.access_token_expires_at);
+    let expires_at = account.access_token_expires_at.as_ref().map(china_rfc3339);
     let added_at = china_rfc3339(&account.created_at);
     let updated_at = china_rfc3339(&account.updated_at);
     let (quota, refresh_token_expires_at) = account_quota_view(quota, now);
@@ -1450,6 +1451,7 @@ fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
         user_id: Some(account.upstream_user_id),
         label: None,
         plan_type: account.plan_type,
+        authentication_kind: account.authentication_kind,
         has_refresh_token: account.has_refresh_token,
         status: status.clone(),
         display_status: status,
@@ -1458,8 +1460,11 @@ fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
         enabled: account.enabled,
         credential_revision: account.credential_revision.get(),
         state_revision: None,
-        access_token_expires_at: Some(expires_at),
-        access_token_expires_at_display: Some(china_datetime(&account.access_token_expires_at)),
+        access_token_expires_at: expires_at,
+        access_token_expires_at_display: account
+            .access_token_expires_at
+            .as_ref()
+            .map(china_datetime),
         refresh_token_expires_at,
         next_refresh_at: account.next_refresh_at.map(|value| china_rfc3339(&value)),
         added_at,
@@ -1535,6 +1540,10 @@ fn quota_local_usage(usage: &AccountUsage) -> Value {
         "imageRequestFailedCount": usage.image_request_failed_count,
         "totalTokens": total_tokens,
         "totalTokensDisplay": format_tokens(total_tokens),
+        "requestBuckets": usage.request_buckets.iter().map(|bucket| serde_json::json!({
+            "bucketStart": bucket.bucket_start,
+            "requestCount": bucket.request_count,
+        })).collect::<Vec<_>>(),
     })
 }
 

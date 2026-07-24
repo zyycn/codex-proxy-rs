@@ -6,12 +6,14 @@ use std::time::{Duration, SystemTime};
 use chrono::Utc;
 use futures::executor::block_on;
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountSelectionPolicy, ProviderAccountId, RotationStrategy,
+    AccountAttemptFeedback, AccountAvailability, AccountFeedbackStats, AccountSelectionPolicy,
+    ProviderAccountId, RotationStrategy,
 };
 use gateway_core::engine::{
     AccountAttemptContext, AttemptContext, CancellationToken, ModelRequestId, RequestAttemptContext,
 };
 use gateway_core::policy::ClientApiKeyId;
+use gateway_core::provider_ports::{ProviderSessionAffinityKey, ProviderSessionAffinityPort};
 use gateway_core::routing::ProviderKind;
 use provider_openai::credential::{
     CodexAccountFailure, CodexCookiePolicy, CodexCredentialCatalogService, CodexCredentialCodec,
@@ -22,7 +24,10 @@ use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileStat
 use secrecy::ExposeSecret;
 use url::Url;
 
-use crate::support::{MemoryAccountStore, TestLeaseCoordinator, account_policy, profile, secret};
+use crate::support::{
+    MemoryAccountStore, MemorySessionAffinity, TestLeaseCoordinator, account_policy,
+    agent_identity_service, profile, secret,
+};
 
 fn create_account(store: &Arc<MemoryAccountStore>, id: &str, token: &str) {
     block_on(store.seed_oauth_credential(ImportCodexOAuthCredential {
@@ -80,6 +85,28 @@ fn selector(
     store: &Arc<MemoryAccountStore>,
     leases: Arc<TestLeaseCoordinator>,
 ) -> CodexCredentialSelector {
+    selector_with_affinity(store, leases, Arc::new(MemorySessionAffinity::default()))
+}
+
+fn selector_with_affinity(
+    store: &Arc<MemoryAccountStore>,
+    leases: Arc<TestLeaseCoordinator>,
+    session_affinity: Arc<MemorySessionAffinity>,
+) -> CodexCredentialSelector {
+    selector_with_runtime(
+        store,
+        leases,
+        session_affinity,
+        Arc::new(AccountFeedbackStats::default()),
+    )
+}
+
+fn selector_with_runtime(
+    store: &Arc<MemoryAccountStore>,
+    leases: Arc<TestLeaseCoordinator>,
+    session_affinity: Arc<MemorySessionAffinity>,
+    account_feedback: Arc<AccountFeedbackStats>,
+) -> CodexCredentialSelector {
     let profile = CodexWireProfileState::new(CodexWireProfile {
         originator: "codex_cli_rs".to_owned(),
         codex_version: "0.144.0".to_owned(),
@@ -92,22 +119,28 @@ fn selector(
         verified_at: Utc::now(),
     });
     let http = reqwest::Client::builder().build().expect("HTTP client");
+    let agent_identity = agent_identity_service(store);
     let catalog = Arc::new(CodexCredentialCatalogService::new(
         store.repository(),
         profile.clone(),
         http.clone(),
+        Arc::clone(&agent_identity),
     ));
     let quota = Arc::new(CodexCredentialQuotaService::new(
         store.repository(),
         profile,
         http,
+        Arc::clone(&agent_identity),
     ));
     CodexCredentialSelector::new(
         ProviderKind::new("openai").expect("provider"),
         store.repository(),
         leases,
+        session_affinity,
         catalog,
         quota,
+        agent_identity,
+        account_feedback,
         CodexCookiePolicy::official().expect("official cookie policy"),
     )
 }
@@ -169,14 +202,18 @@ fn codec_reimport_preserves_existing_installation_id_for_the_same_principal() {
     .expect("incoming credential");
     let existing_id = CodexCredentialCodec::decode_complete(&existing)
         .expect("existing data")
-        .installation_id;
+        .installation_id()
+        .to_owned();
 
     let preserved = CodexCredentialCodec::preserve_installation_id(&incoming, &existing)
         .expect("preserve installation ID");
     let preserved = CodexCredentialCodec::decode_complete(&preserved).expect("preserved data");
 
-    assert_eq!(preserved.installation_id, existing_id);
-    assert_eq!(preserved.access_token, "incoming-access-token");
+    assert_eq!(preserved.installation_id(), existing_id);
+    assert_eq!(
+        preserved.oauth().expect("OAuth data").access_token,
+        "incoming-access-token"
+    );
 }
 
 #[test]
@@ -204,10 +241,10 @@ fn repository_round_trips_plaintext_runtime_secret() {
     let account = store.account("acct_primary").expect("account");
     let runtime = block_on(store.repository().load_runtime_credential(&account))
         .expect("load runtime credential");
-    assert_eq!(runtime.secret.access_token.expose_secret(), "at-primary");
+    let oauth = runtime.authentication.oauth().expect("OAuth credential");
+    assert_eq!(oauth.access_token.expose_secret(), "at-primary");
     assert_eq!(
-        runtime
-            .secret
+        oauth
             .refresh_token
             .as_ref()
             .expect("refresh token")
@@ -230,6 +267,7 @@ fn selector_uses_frozen_global_account_policy_for_lease() {
                 request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                     .expect("request URL"),
                 attempt: &attempt,
+                session_affinity_key: None,
             }),
         )
         .expect("select account");
@@ -276,6 +314,7 @@ fn selector_round_robin_cursor_advances_across_requests() {
             upstream_model: "gpt-5.4",
             request_url: &request_url,
             attempt: &attempt,
+            session_affinity_key: None,
         }))
         .expect("select round robin account");
         selected.push(lease.account_id().as_str().to_owned());
@@ -285,6 +324,147 @@ fn selector_round_robin_cursor_advances_across_requests() {
         selected,
         ["acct_first", "acct_second", "acct_first", "acct_second"]
     );
+}
+
+#[tokio::test]
+async fn selector_should_reuse_the_account_bound_to_the_same_session() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_first", "at-first");
+    create_account(&store, "acct_second", "at-second");
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let selector = selector_with_affinity(
+        &store,
+        Arc::new(TestLeaseCoordinator::default()),
+        Arc::clone(&affinity),
+    );
+    let key = ProviderSessionAffinityKey::try_new("same-session").expect("affinity key");
+    let request_url =
+        Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("request URL");
+    let first_attempt = attempt(BTreeSet::new());
+    let first = selector
+        .select(&SelectCodexCredential {
+            upstream_model: "gpt-5.4",
+            request_url: &request_url,
+            attempt: &first_attempt,
+            session_affinity_key: Some(&key),
+        })
+        .await
+        .expect("select first account");
+    selector.record_success(first.account(), Some(&key)).await;
+    let first_account = first.account_id().clone();
+
+    let second_attempt = attempt(BTreeSet::new());
+    let second = selector
+        .select(&SelectCodexCredential {
+            upstream_model: "gpt-5.4",
+            request_url: &request_url,
+            attempt: &second_attempt,
+            session_affinity_key: Some(&key),
+        })
+        .await
+        .expect("select bound account");
+
+    assert_eq!(second.account_id(), &first_account);
+    assert_eq!(
+        affinity
+            .load(&ProviderKind::new("openai").expect("provider"), &key)
+            .await
+            .expect("load affinity"),
+        Some(first_account)
+    );
+}
+
+#[tokio::test]
+async fn selector_should_escape_a_busy_affinity_account_without_overwriting_the_binding() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_first", "at-first");
+    create_account(&store, "acct_second", "at-second");
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    leases
+        .busy_accounts
+        .lock()
+        .expect("busy account lock")
+        .insert(ProviderAccountId::new("acct_first").expect("account"));
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let provider = ProviderKind::new("openai").expect("provider");
+    let key = ProviderSessionAffinityKey::try_new("busy-session").expect("affinity key");
+    let bound = ProviderAccountId::new("acct_first").expect("bound account");
+    affinity
+        .bind(&provider, &key, &bound, Duration::from_secs(60))
+        .await
+        .expect("seed affinity");
+    let selector = selector_with_affinity(&store, leases, Arc::clone(&affinity));
+    let request_url =
+        Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("request URL");
+    let request_attempt = attempt(BTreeSet::new());
+
+    let selected = selector
+        .select(&SelectCodexCredential {
+            upstream_model: "gpt-5.4",
+            request_url: &request_url,
+            attempt: &request_attempt,
+            session_affinity_key: Some(&key),
+        })
+        .await
+        .expect("select fallback account");
+    selector
+        .record_success(selected.account(), Some(&key))
+        .await;
+
+    assert_eq!(selected.account_id().as_str(), "acct_second");
+    assert_eq!(
+        affinity
+            .load(&provider, &key)
+            .await
+            .expect("load preserved affinity"),
+        Some(bound)
+    );
+}
+
+#[tokio::test]
+async fn selector_should_escape_an_unhealthy_affinity_account() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_first", "at-first");
+    create_account(&store, "acct_second", "at-second");
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let provider = ProviderKind::new("openai").expect("provider");
+    let key = ProviderSessionAffinityKey::try_new("unhealthy-session").expect("affinity key");
+    let bound = ProviderAccountId::new("acct_first").expect("bound account");
+    affinity
+        .bind(&provider, &key, &bound, Duration::from_secs(60))
+        .await
+        .expect("seed affinity");
+    let account_feedback = Arc::new(AccountFeedbackStats::default());
+    let selector = selector_with_runtime(
+        &store,
+        Arc::new(TestLeaseCoordinator::default()),
+        affinity,
+        Arc::clone(&account_feedback),
+    );
+    for _ in 0..4 {
+        account_feedback.report(
+            &provider,
+            &bound,
+            AccountAttemptFeedback::Failed {
+                first_output_ms: None,
+            },
+        );
+    }
+    let request_url =
+        Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("request URL");
+    let request_attempt = attempt(BTreeSet::new());
+
+    let selected = selector
+        .select(&SelectCodexCredential {
+            upstream_model: "gpt-5.4",
+            request_url: &request_url,
+            attempt: &request_attempt,
+            session_affinity_key: Some(&key),
+        })
+        .await
+        .expect("select healthy fallback");
+
+    assert_eq!(selected.account_id().as_str(), "acct_second");
 }
 
 #[test]
@@ -303,6 +483,7 @@ fn selector_honors_attempt_local_account_exclusion() {
                 request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                     .expect("request URL"),
                 attempt: &attempt,
+                session_affinity_key: None,
             }),
         )
         .expect("select non-excluded account");
@@ -324,6 +505,7 @@ fn selector_uses_only_the_required_account() {
                 request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                     .expect("request URL"),
                 attempt: &attempt,
+                session_affinity_key: None,
             }),
         )
         .expect("select required account");
@@ -346,6 +528,7 @@ fn unavailable_required_account_never_falls_back() {
                 request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                     .expect("request URL"),
                 attempt: &attempt,
+                session_affinity_key: None,
             }),
         )
         .expect_err("missing required account must not fall back");
@@ -370,6 +553,7 @@ fn selector_returns_capacity_error_when_every_redis_lease_is_busy() {
                 request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                     .expect("request URL"),
                 attempt: &attempt,
+                session_affinity_key: None,
             }),
         )
         .expect_err("busy lease must reject selection");
@@ -394,10 +578,11 @@ fn credential_expired_failure_marks_unified_account_expired() {
                 request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                     .expect("request URL"),
                 attempt: &attempt,
+                session_affinity_key: None,
             }),
         )
         .expect("select account");
-    block_on(selector.record_failure(&lease, CodexAccountFailure::CredentialExpired))
+    block_on(selector.record_failure(lease.account(), CodexAccountFailure::CredentialExpired))
         .expect("record credential expiry");
     assert_eq!(
         store
@@ -405,6 +590,41 @@ fn credential_expired_failure_marks_unified_account_expired() {
             .expect("account")
             .availability(),
         AccountAvailability::Expired
+    );
+}
+
+#[test]
+fn rate_limited_failure_marks_account_quota_exhausted_with_a_cooldown() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_primary", "at-primary");
+    let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
+    let attempt = attempt(BTreeSet::new());
+    let lease =
+        block_on(
+            selector.select(&SelectCodexCredential {
+                upstream_model: "gpt-5.4",
+                request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
+                    .expect("request URL"),
+                attempt: &attempt,
+                session_affinity_key: None,
+            }),
+        )
+        .expect("select account");
+
+    block_on(selector.record_failure(
+        lease.account(),
+        CodexAccountFailure::RateLimited {
+            retry_after: Some(Duration::from_secs(30)),
+        },
+    ))
+    .expect("record rate-limit failure");
+
+    let account = store.account("acct_primary").expect("account");
+    assert_eq!(account.availability(), AccountAvailability::QuotaExhausted);
+    assert!(
+        account
+            .cooldown_until()
+            .is_some_and(|until| until > SystemTime::now())
     );
 }
 
@@ -422,12 +642,16 @@ fn identity_verification_failure_isolates_only_selected_account() {
                 request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                     .expect("request URL"),
                 attempt: &attempt,
+                session_affinity_key: None,
             }),
         )
         .expect("select account");
 
-    block_on(selector.record_failure(&lease, CodexAccountFailure::IdentityVerificationRequired))
-        .expect("record identity verification failure");
+    block_on(selector.record_failure(
+        lease.account(),
+        CodexAccountFailure::IdentityVerificationRequired,
+    ))
+    .expect("record identity verification failure");
 
     assert_eq!(
         store
@@ -460,12 +684,13 @@ fn cloudflare_challenge_backoff_escalates_and_success_resets_it() {
                 request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                     .expect("request URL"),
                 attempt: &attempt,
+                session_affinity_key: None,
             }),
         )
         .expect("select account");
 
     block_on(selector.record_failure(
-        &lease,
+        lease.account(),
         CodexAccountFailure::CloudflareChallenge { retry_after: None },
     ))
     .expect("record first challenge");
@@ -479,7 +704,7 @@ fn cloudflare_challenge_backoff_escalates_and_success_resets_it() {
     assert!(first >= Duration::from_secs(9) && first <= Duration::from_secs(10));
 
     block_on(selector.record_failure(
-        &lease,
+        lease.account(),
         CodexAccountFailure::CloudflareChallenge { retry_after: None },
     ))
     .expect("record second challenge");
@@ -492,9 +717,9 @@ fn cloudflare_challenge_backoff_escalates_and_success_resets_it() {
         .expect("future cooldown");
     assert!(second >= Duration::from_secs(29) && second <= Duration::from_secs(30));
 
-    selector.record_success(&lease);
+    block_on(selector.record_success(lease.account(), None));
     block_on(selector.record_failure(
-        &lease,
+        lease.account(),
         CodexAccountFailure::CloudflareChallenge { retry_after: None },
     ))
     .expect("record reset challenge");
@@ -525,13 +750,16 @@ fn repeated_cloudflare_path_block_marks_only_the_affected_account_invalid() {
                 request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                     .expect("request URL"),
                 attempt: &attempt,
+                session_affinity_key: None,
             }),
         )
         .expect("select account");
 
     for _ in 0..3 {
-        block_on(selector.record_failure(&lease, CodexAccountFailure::CloudflarePathBlocked))
-            .expect("record path block");
+        block_on(
+            selector.record_failure(lease.account(), CodexAccountFailure::CloudflarePathBlocked),
+        )
+        .expect("record path block");
     }
 
     assert_eq!(
@@ -563,10 +791,11 @@ fn cloudflare_challenge_expires_provider_owned_cookies_at_cooldown_boundary() {
         upstream_model: "gpt-5.4",
         request_url: &request_url,
         attempt: &first_attempt,
+        session_affinity_key: None,
     }))
     .expect("select account");
     block_on(selector.capture_response_cookies(
-        &first,
+        first.account(),
         &request_url,
         &["cf_clearance=old; Path=/; Domain=chatgpt.com; Secure; Max-Age=3600".to_owned()],
     ))
@@ -577,10 +806,11 @@ fn cloudflare_challenge_expires_provider_owned_cookies_at_cooldown_boundary() {
         upstream_model: "gpt-5.4",
         request_url: &request_url,
         attempt: &second_attempt,
+        session_affinity_key: None,
     }))
     .expect("select revised account");
     block_on(selector.record_failure(
-        &second,
+        second.account(),
         CodexAccountFailure::CloudflareChallenge { retry_after: None },
     ))
     .expect("record challenge");
@@ -588,9 +818,9 @@ fn cloudflare_challenge_expires_provider_owned_cookies_at_cooldown_boundary() {
     let account = store.account("acct_primary").expect("account");
     let cooldown_until = account.cooldown_until().expect("cooldown");
     let data = block_on(store.repository().load_complete_data(&account)).expect("credential data");
-    assert_eq!(data.cookies.len(), 1);
+    assert_eq!(data.cookies().len(), 1);
     assert!(
-        data.cookies[0]
+        data.cookies()[0]
             .expires_at
             .is_some_and(|expires_at| SystemTime::from(expires_at) <= cooldown_until)
     );
@@ -609,10 +839,11 @@ fn cloudflare_path_block_deletes_provider_owned_cookies() {
         upstream_model: "gpt-5.4",
         request_url: &request_url,
         attempt: &first_attempt,
+        session_affinity_key: None,
     }))
     .expect("select account");
     block_on(selector.capture_response_cookies(
-        &first,
+        first.account(),
         &request_url,
         &["__cf_bm=old; Path=/; Domain=chatgpt.com; Secure; Max-Age=3600".to_owned()],
     ))
@@ -623,12 +854,53 @@ fn cloudflare_path_block_deletes_provider_owned_cookies() {
         upstream_model: "gpt-5.4",
         request_url: &request_url,
         attempt: &second_attempt,
+        session_affinity_key: None,
     }))
     .expect("select revised account");
-    block_on(selector.record_failure(&second, CodexAccountFailure::CloudflarePathBlocked))
+    block_on(selector.record_failure(second.account(), CodexAccountFailure::CloudflarePathBlocked))
         .expect("record path block");
 
     let account = store.account("acct_primary").expect("account");
     let data = block_on(store.repository().load_complete_data(&account)).expect("credential data");
-    assert!(data.cookies.is_empty());
+    assert!(data.cookies().is_empty());
+}
+
+#[test]
+fn response_cookie_rotation_returns_a_current_account_for_later_fenced_writes() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_primary", "at-primary");
+    let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
+    let request_url =
+        Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("request URL");
+    let attempt = attempt_with_required(
+        BTreeSet::new(),
+        Some(ProviderAccountId::new("acct_primary").expect("account id")),
+    );
+    let lease = block_on(selector.select(&SelectCodexCredential {
+        upstream_model: "gpt-5.4",
+        request_url: &request_url,
+        attempt: &attempt,
+        session_affinity_key: None,
+    }))
+    .expect("select account");
+
+    let outcome = block_on(selector.capture_response_cookies(
+        lease.account(),
+        &request_url,
+        &["cf_clearance=updated; Path=/; Domain=chatgpt.com; Secure; Max-Age=3600".to_owned()],
+    ))
+    .expect("capture response cookie");
+    let current = block_on(selector.current_account(lease.account_id())).expect("current account");
+
+    assert_eq!(outcome.credential_revision, Some(current.revision().get()));
+    assert_ne!(current.revision(), lease.account().revision());
+    block_on(selector.record_failure(&current, CodexAccountFailure::QuotaExhausted))
+        .expect("record failure with current revision");
+    assert_eq!(
+        store
+            .account("acct_primary")
+            .expect("updated account")
+            .availability(),
+        AccountAvailability::QuotaExhausted
+    );
 }

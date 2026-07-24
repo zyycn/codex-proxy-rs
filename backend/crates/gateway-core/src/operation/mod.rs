@@ -83,7 +83,6 @@ pub enum Feature {
 pub struct CapabilityRequirements {
     operation: OperationKind,
     features: BTreeSet<Feature>,
-    minimum_context_tokens: u64,
     requested_output_tokens: Option<u64>,
 }
 
@@ -94,7 +93,6 @@ impl CapabilityRequirements {
         Self {
             operation,
             features: BTreeSet::new(),
-            minimum_context_tokens: 0,
             requested_output_tokens: None,
         }
     }
@@ -103,13 +101,6 @@ impl CapabilityRequirements {
     #[must_use]
     pub fn require(mut self, feature: Feature) -> Self {
         self.features.insert(feature);
-        self
-    }
-
-    /// 设置估算的最小 context token 数。
-    #[must_use]
-    pub const fn with_minimum_context_tokens(mut self, tokens: u64) -> Self {
-        self.minimum_context_tokens = tokens;
         self
     }
 
@@ -130,12 +121,6 @@ impl CapabilityRequirements {
     #[must_use]
     pub fn features(&self) -> &BTreeSet<Feature> {
         &self.features
-    }
-
-    /// 返回估算的最小 context token 数。
-    #[must_use]
-    pub const fn minimum_context_tokens(&self) -> u64 {
-        self.minimum_context_tokens
     }
 
     /// 返回请求的最大输出 token 数。
@@ -655,7 +640,6 @@ pub struct GenerateRequest {
     reasoning: Option<ReasoningRequirement>,
     continuation: Option<ContinuationMode>,
     max_output_tokens: Option<u64>,
-    estimated_context_tokens: u64,
     image_generation_requested: bool,
     response_persistence: ResponsePersistence,
 }
@@ -712,7 +696,6 @@ impl GenerateRequest {
             reasoning: None,
             continuation: None,
             max_output_tokens: None,
-            estimated_context_tokens: 0,
             image_generation_requested: false,
             response_persistence: ResponsePersistence::Store,
         }
@@ -757,13 +740,6 @@ impl GenerateRequest {
     #[must_use]
     pub fn with_prompt_cache_key(mut self, key: impl Into<String>) -> Self {
         Arc::make_mut(&mut self.payload).prompt_cache_key = Some(key.into());
-        self
-    }
-
-    /// 设置协议层估算的 context token 数。
-    #[must_use]
-    pub const fn with_estimated_context_tokens(mut self, tokens: u64) -> Self {
-        self.estimated_context_tokens = tokens;
         self
     }
 
@@ -849,12 +825,6 @@ impl GenerateRequest {
         self.payload.prompt_cache_key.as_deref()
     }
 
-    /// 返回协议层估算的 context token 数。
-    #[must_use]
-    pub const fn estimated_context_tokens(&self) -> u64 {
-        self.estimated_context_tokens
-    }
-
     /// 返回客户端是否请求了图片生成工具。
     #[must_use]
     pub const fn image_generation_requested(&self) -> bool {
@@ -894,7 +864,6 @@ impl GenerateRequest {
 
     fn requirements_for(&self, operation: OperationKind) -> CapabilityRequirements {
         let mut requirements = CapabilityRequirements::new(operation)
-            .with_minimum_context_tokens(self.estimated_context_tokens)
             .with_requested_output_tokens(self.max_output_tokens);
         for feature in &self.payload.required_features {
             requirements = requirements.require(*feature);
@@ -938,7 +907,6 @@ impl fmt::Debug for GenerateRequest {
                 "prompt_cache_key",
                 &self.payload.prompt_cache_key.as_ref().map(|_| "<present>"),
             )
-            .field("estimated_context_tokens", &self.estimated_context_tokens)
             .field(
                 "image_generation_requested",
                 &self.image_generation_requested,

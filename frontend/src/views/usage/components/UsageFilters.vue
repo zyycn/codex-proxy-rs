@@ -3,7 +3,6 @@ import { RefreshCw, Search } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
-import BaseSelect from '@/components/base/BaseSelect.vue'
 
 defineProps<{
   refreshing: boolean
@@ -15,13 +14,6 @@ const emit = defineEmits<{
 }>()
 
 const search = defineModel<string>('search', { required: true })
-const provider = defineModel<string>('provider', { required: true })
-
-const providerOptions = [
-  { label: '全部平台', value: '' },
-  { label: 'OpenAI', value: 'openai' },
-  { label: 'xAI', value: 'xai' },
-]
 </script>
 
 <template>
@@ -33,13 +25,6 @@ const providerOptions = [
         </template>
       </BaseInput>
     </div>
-
-    <BaseSelect
-      v-model="provider"
-      :options="providerOptions"
-      aria-label="按平台筛选"
-      class="w-36 shrink-0"
-    />
 
     <div class="ml-auto flex shrink-0 items-center justify-end">
       <BaseButton

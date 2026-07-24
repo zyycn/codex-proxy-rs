@@ -27,7 +27,6 @@ fn model_request_rejects_mismatched_client_key_live_id() {
         endpoint: "/v1/responses".to_owned(),
         client_transport: "http_sse".to_owned(),
         requested_model_id: "coding".to_owned(),
-        input_token_estimate: 0,
         client_ip: None,
         user_agent: None,
         reasoning_effort: None,
@@ -280,10 +279,10 @@ async fn seed_running_request(pool: &sqlx::PgPool, id: &str) -> Result<(), sqlx:
     sqlx::query(
         "insert into model_requests (
            id, client_api_key_ref, config_revision, protocol, operation, endpoint,
-           client_transport, requested_model_id, input_token_estimate, cost_source,
+           client_transport, requested_model_id, cost_source,
            started_at, deadline_at
          ) values ($1, 'key_status', 1, 'openai_responses', 'generate', '/v1/responses',
-           'http_json', 'status-model', 0, 'unavailable', now(), now() + interval '1 minute')",
+           'http_json', 'status-model', 'unavailable', now(), now() + interval '1 minute')",
     )
     .bind(id)
     .execute(pool)
