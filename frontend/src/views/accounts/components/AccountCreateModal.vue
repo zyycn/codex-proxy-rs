@@ -2,7 +2,7 @@
 import type { useAccountOnboarding } from '../composables/useAccountOnboarding'
 import type { AccountRow } from '../constants'
 import { Openai, Xai } from '@boxicons/vue'
-import { Copy, KeyRound, Upload } from '@lucide/vue'
+import { Copy, Grid2X2, KeyRound, Upload } from '@lucide/vue'
 
 import { useClipboard, useFileDialog } from '@vueuse/core'
 import { computed, ref } from 'vue'
@@ -51,7 +51,7 @@ const { open: openImportFile, onChange: onImportFileChange } = useFileDialog({
 })
 
 const modeOptions = computed(() => accountProviderModeOptions(form.value.provider))
-const isProviderSelected = computed(() => form.value.provider === 'openai' || form.value.provider === 'xai')
+const isProviderSelected = computed(() => ['openai', 'xai', 'batch'].includes(form.value.provider))
 const isChoosingProvider = computed(() => !props.reauthorizing && !isProviderSelected.value)
 
 const provider = computed({
@@ -91,10 +91,17 @@ const oauthCallback = computed({
 
 const oauthAuthUrl = computed(() => form.value.oauthAuthUrl || '')
 const isXai = computed(() => form.value.provider === 'xai')
-const importFileLabel = computed(() => mode.value === 'agent_identity' ? 'Agent 身份文件' : '账号文件')
+const isBatch = computed(() => form.value.provider === 'batch')
+const importFileLabel = computed(() => {
+  if (isBatch.value)
+    return '批量账号文件'
+  return mode.value === 'agent_identity' ? 'Agent 身份文件' : '账号文件'
+})
 const importFilePlaceholder = computed(() => mode.value === 'agent_identity'
   ? '粘贴 Agent 身份文件内容'
-  : '粘贴 CPR、Sub2API 或 CPA 账号文件内容')
+  : isBatch.value
+    ? '粘贴 CPR 多平台导出文件内容'
+    : '粘贴 CPR、Sub2API 或 CPA 账号文件内容')
 
 const accountName = computed(() => {
   return props.account?.email || props.account?.accountId || props.account?.id || '该账号'
@@ -140,6 +147,8 @@ const description = computed<string | undefined>(() => {
     return undefined
   if (props.reauthorizing)
     return '完成授权后粘贴回调地址，系统会更新账号凭据'
+  if (isBatch.value)
+    return '导入 CPR 多平台账号包，系统会按文档中的平台自动分流'
   if (isXai.value) {
     return mode.value === 'oauth'
       ? '复制 xAI 授权链接，完成后粘贴回调地址，不使用 xAI API Key'
@@ -152,7 +161,7 @@ const description = computed<string | undefined>(() => {
   return '导入 CPR、Sub2API 或 CPA 账号文件，已存在账号会更新'
 })
 
-function selectProvider(value: 'openai' | 'xai') {
+function selectProvider(value: 'openai' | 'xai' | 'batch') {
   provider.value = value
 }
 
@@ -198,7 +207,8 @@ async function copyText(value: string, successText: string) {
     :hide-footer="isChoosingProvider"
   >
     <template #icon>
-      <Xai v-if="isXai" class="text-(--cp-text-primary)" aria-hidden="true" :width="20" :height="20" />
+      <Grid2X2 v-if="isBatch" class="text-(--cp-text-primary)" aria-hidden="true" :width="20" :height="20" />
+      <Xai v-else-if="isXai" class="text-(--cp-text-primary)" aria-hidden="true" :width="20" :height="20" />
       <Openai v-else class="text-(--cp-text-primary)" aria-hidden="true" :width="20" :height="20" />
     </template>
 
@@ -209,7 +219,12 @@ async function copyText(value: string, successText: string) {
     />
 
     <div v-else class="flex flex-col gap-4">
-      <BaseSegmented v-if="!reauthorizing" v-model="mode" :options="modeOptions" class="w-full" />
+      <BaseSegmented
+        v-if="!reauthorizing && !isBatch"
+        v-model="mode"
+        :options="modeOptions"
+        class="w-full"
+      />
 
       <div v-if="mode === 'oauth'" class="flex flex-col gap-4">
         <div class="rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-4 py-3">
@@ -316,7 +331,7 @@ async function copyText(value: string, successText: string) {
         :disabled="!canSubmit"
         @click="emit('create')"
       >
-        {{ reauthorizing ? '完成重新授权' : mode === 'oauth' ? '完成授权导入' : '导入' }}
+        {{ reauthorizing ? '完成重新授权' : mode === 'oauth' ? '完成授权导入' : isBatch ? '批量导入' : '导入' }}
       </BaseButton>
     </template>
   </BaseModal>
