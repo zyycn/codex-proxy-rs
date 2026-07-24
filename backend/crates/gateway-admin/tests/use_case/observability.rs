@@ -14,7 +14,8 @@ use gateway_admin::{
             AccountPoolMetrics, AttemptMetrics, CostCoverage, CurrencyCost, DashboardObservation,
             DashboardRuntimeSlots, DiagnosticDimension, DiagnosticObservation, Granularity,
             HealthStatus, OpsErrorPage, OpsErrorQuery, RequestMetricPoint, RequestMetrics,
-            TimeRange, TrendKind, UsageDetail, UsageFilter, UsageOverview, UsagePage, UsageQuery,
+            TimeRange, TrendKind, UsageCalculatedBillingFact, UsageDetail, UsageFilter,
+            UsageOverview, UsagePage, UsageQuery,
         },
         settings::{
             AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RotationStrategy,
@@ -242,8 +243,22 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
                 .expect("bucket USD cost"),
         }],
     }]);
+    store.replace_calculated_billing_facts(vec![UsageCalculatedBillingFact {
+        bucket_start: quarter_hour_start(now),
+        provider_kind: "openai".to_owned(),
+        upstream_model_id: "gpt-5.5".to_owned(),
+        input_tokens: Some(800),
+        output_tokens: Some(200),
+        cached_tokens: Some(0),
+        cache_write_tokens: Some(0),
+        total: CurrencyCost {
+            currency: "USD".to_owned(),
+            amount: gateway_admin::model::observability::DecimalAmount::from_str("1.25")
+                .expect("calculated total"),
+        },
+    }]);
     store.replace_diagnostics(vec![diagnostic("openai", 3), diagnostic("xai", 1)]);
-    let services = observability_services(store).await;
+    let services = observability_services_with_calculated_billing(store).await;
 
     let insights = services
         .observability()
@@ -284,6 +299,21 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
             .map(gateway_admin::model::observability::DecimalAmount::as_str),
         Some("0.25")
     );
+    assert_eq!(
+        insights
+            .cost
+            .standard_cost
+            .as_ref()
+            .map(gateway_admin::model::observability::DecimalAmount::as_str),
+        Some("1")
+    );
+    assert_eq!(
+        insights.cost.points[0]
+            .standard_cost
+            .as_ref()
+            .map(gateway_admin::model::observability::DecimalAmount::as_str),
+        Some("1")
+    );
     assert_eq!(diagnostics.items[0].request_share, 0.75);
     assert_eq!(diagnostics.items[1].request_share, 0.25);
 }
@@ -291,6 +321,7 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
 struct FixtureObservabilityStore {
     trend: Mutex<Vec<RequestMetricPoint>>,
     overview: Mutex<UsageOverview>,
+    calculated_billing_facts: Mutex<Vec<UsageCalculatedBillingFact>>,
     diagnostics: Mutex<Vec<DiagnosticObservation>>,
     runtime_slots: Mutex<Option<DashboardRuntimeSlots>>,
 }
@@ -305,6 +336,7 @@ impl FixtureObservabilityStore {
                 attempts: AttemptMetrics::default(),
                 providers: Vec::new(),
             }),
+            calculated_billing_facts: Mutex::new(Vec::new()),
             diagnostics: Mutex::new(Vec::new()),
             runtime_slots: Mutex::new(None),
         }
@@ -316,6 +348,13 @@ impl FixtureObservabilityStore {
 
     fn replace_overview(&self, overview: UsageOverview) {
         *self.overview.lock().expect("overview") = overview;
+    }
+
+    fn replace_calculated_billing_facts(&self, facts: Vec<UsageCalculatedBillingFact>) {
+        *self
+            .calculated_billing_facts
+            .lock()
+            .expect("calculated billing facts") = facts;
     }
 
     fn replace_diagnostics(&self, diagnostics: Vec<DiagnosticObservation>) {
@@ -358,6 +397,18 @@ impl ObservabilityStore for FixtureObservabilityStore {
         _: UsageFilter,
     ) -> AdminStoreResult<Vec<RequestMetricPoint>> {
         Ok(self.trend.lock().expect("trend").clone())
+    }
+
+    async fn usage_calculated_billing_facts(
+        &self,
+        _: TimeRange,
+        _: UsageFilter,
+    ) -> AdminStoreResult<Vec<UsageCalculatedBillingFact>> {
+        Ok(self
+            .calculated_billing_facts
+            .lock()
+            .expect("calculated billing facts")
+            .clone())
     }
 
     async fn list_usage_records(&self, _: UsageQuery) -> AdminStoreResult<UsagePage> {
@@ -441,6 +492,17 @@ async fn observability_services(store: Arc<FixtureObservabilityStore>) -> AdminS
         .observability(store)
         .settings(Arc::new(FixtureSettingsStore))
         .provider(super::dashboard_profile_provider())
+        .build()
+        .await
+}
+
+async fn observability_services_with_calculated_billing(
+    store: Arc<FixtureObservabilityStore>,
+) -> AdminServices {
+    super::AdminHarness::new()
+        .observability(store)
+        .settings(Arc::new(FixtureSettingsStore))
+        .provider(super::calculated_billing_provider())
         .build()
         .await
 }

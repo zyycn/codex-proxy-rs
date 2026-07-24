@@ -18,7 +18,9 @@ use gateway_protocol::openai::sse::{SseEvent, SseEventDecoder, SseFrame, sse_fra
 use serde_json::Value;
 use thiserror::Error;
 
-use super::protocol::responses::{ResponsesSseFailure, response_event_signals};
+use super::protocol::responses::{
+    ResponseEventSignals, ResponsesSseFailure, response_event_signals,
+};
 use super::usage::openai_billing_breakdown;
 
 const CONTENTS_PER_OUTPUT: u32 = 1_024;
@@ -39,6 +41,7 @@ pub struct CodexCanonicalDecoder {
     reasoning_output_seen: BTreeSet<u32>,
     usage_emitted: bool,
     semantic_output_seen: bool,
+    timing_signals: ResponseEventSignals,
     raw_sse_passthrough: bool,
 }
 
@@ -132,6 +135,7 @@ impl CodexCanonicalDecoder {
             reasoning_output_seen: BTreeSet::new(),
             usage_emitted: false,
             semantic_output_seen: false,
+            timing_signals: ResponseEventSignals::default(),
             raw_sse_passthrough: false,
         }
     }
@@ -146,6 +150,7 @@ impl CodexCanonicalDecoder {
     }
 
     pub fn push(&mut self, chunk: &[u8]) -> CodexCanonicalOutcome {
+        self.timing_signals = ResponseEventSignals::default();
         if self.raw_sse_passthrough {
             let frames = match self.decoder.push_frames(chunk) {
                 Ok(frames) => frames,
@@ -171,6 +176,7 @@ impl CodexCanonicalDecoder {
     }
 
     pub fn finish(&mut self) -> CodexCanonicalOutcome {
+        self.timing_signals = ResponseEventSignals::default();
         if self.raw_sse_passthrough {
             let frames = match self.decoder.finish_frames() {
                 Ok(frames) => frames,
@@ -193,6 +199,15 @@ impl CodexCanonicalDecoder {
             }
         };
         self.decode(events)
+    }
+
+    /// 取走最近一次解码中由原始 Responses 事件观察到的计时语义。
+    ///
+    /// 这份事实独立于 canonical 投影：未知的未来事件仍可保留 wire 透明转发，
+    /// 同时让 Provider 正确记录首个可消费输出的时延。
+    #[must_use]
+    pub fn take_timing_signals(&mut self) -> ResponseEventSignals {
+        std::mem::take(&mut self.timing_signals)
     }
 
     fn decode(&mut self, events: Vec<SseEvent>) -> CodexCanonicalOutcome {
@@ -254,6 +269,8 @@ impl CodexCanonicalDecoder {
             .event
             .as_deref()
             .or_else(|| value.get("type").and_then(Value::as_str));
+        let signals = response_event_signals(event_type, &value);
+        self.merge_timing_signals(signals);
         if matches!(event_type, Some("response.failed" | "error")) {
             let failure = ResponsesSseFailure::from_event(event_type.unwrap_or_default(), &value);
             if let Ok(wire) = Self::wire_for_event(event, value, raw_sse_frame) {
@@ -265,7 +282,6 @@ impl CodexCanonicalDecoder {
         if let Some(event_type) = event_type {
             let _ = self.decode_event(event_type, &value, &mut canonical);
         }
-        let semantic_output = response_event_signals(event_type, &value).semantic_output;
         let Ok(wire) = Self::wire_for_event(event, value, raw_sse_frame) else {
             return Ok(());
         };
@@ -274,8 +290,15 @@ impl CodexCanonicalDecoder {
         } else {
             ProviderEvent::canonical_with_wire(canonical, wire)
         });
-        self.semantic_output_seen |= semantic_output;
+        self.semantic_output_seen |= signals.semantic_output;
         Ok(())
+    }
+
+    fn merge_timing_signals(&mut self, signals: ResponseEventSignals) {
+        self.timing_signals.protocol_progress |= signals.protocol_progress;
+        self.timing_signals.semantic_output |= signals.semantic_output;
+        self.timing_signals.reasoning_output |= signals.reasoning_output;
+        self.timing_signals.text_output |= signals.text_output;
     }
 
     fn wire_for_event(

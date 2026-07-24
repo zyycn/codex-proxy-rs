@@ -29,8 +29,9 @@ use gateway_core::error::{
     ContinuationFailure, ProviderError, ProviderErrorKind, SafeUpstreamValue, StoreError,
 };
 use gateway_core::event::{
-    GatewayEvent, ProtocolWireEvent, ProviderEvent, ProviderResponseObservation,
-    ProviderResponseTimings, ResponseMeta, UpstreamHttpVersion, WebSocketPoolKind,
+    ContentItem, ContentKind, GatewayEvent, ProtocolWireEvent, ProviderEvent,
+    ProviderResponseObservation, ProviderResponseTimings, ResponseMeta, ToolCallDelta,
+    UpstreamHttpVersion, WebSocketPoolKind,
 };
 use gateway_core::operation::{
     EmbedRequest, GenerateRequest, Operation, ProtocolPayload, ProviderSessionState, RetrySafety,
@@ -67,6 +68,11 @@ struct FinalState {
     connect_ms: Option<u64>,
     headers_ms: Option<u64>,
     first_event_ms: Option<u64>,
+    first_reasoning_ms: Option<u64>,
+    first_text_ms: Option<u64>,
+    first_token_ms: Option<u64>,
+    provider_processing_ms: Option<u64>,
+    provider_metadata_json: Option<String>,
     cost_source: CostSource,
     cost_ticks: Option<u128>,
 }
@@ -191,6 +197,11 @@ impl ExecutionStore for FakeStore {
                 connect_ms: finalization.timings.connect_ms,
                 headers_ms: finalization.timings.headers_ms,
                 first_event_ms: finalization.timings.first_event_ms,
+                first_reasoning_ms: finalization.timings.first_reasoning_ms,
+                first_text_ms: finalization.timings.first_text_ms,
+                first_token_ms: finalization.timings.first_token_ms,
+                provider_processing_ms: finalization.timings.provider_processing_ms,
+                provider_metadata_json: finalization.provider_metadata_json,
                 cost_source: finalization.cost.source(),
                 cost_ticks: finalization
                     .cost
@@ -632,6 +643,7 @@ fn response_observation_is_persisted_but_never_delivered() {
         connect_ms: Some(11),
         headers_ms: Some(13),
         first_event_ms: Some(17),
+        ..ProviderResponseTimings::default()
     });
     let mut items = vec![Ok(ProviderEvent::observation(observation))];
     items.extend(
@@ -671,6 +683,115 @@ fn response_observation_is_persisted_but_never_delivered() {
     assert_eq!(finalization.connect_ms, Some(11));
     assert_eq!(finalization.headers_ms, Some(13));
     assert_eq!(finalization.first_event_ms, Some(17));
+}
+
+#[test]
+fn response_observation_should_persist_provider_metadata_and_output_timings() {
+    let operation = operation(RetrySafety::Idempotent);
+    let route_plan = plan(&operation);
+    let metadata = gateway_core::event::ProviderResponseMetadata::new(
+        serde_json::json!({"effectiveModel": "gpt-test", "firstTokenMs": 23}).to_string(),
+    )
+    .expect("provider metadata object");
+    let observation = ProviderResponseObservation::new(
+        UpstreamTransport::new("websocket").expect("actual transport"),
+    )
+    .with_timings(ProviderResponseTimings {
+        first_event_ms: Some(11),
+        first_reasoning_ms: Some(17),
+        first_text_ms: Some(19),
+        first_token_ms: Some(17),
+        provider_processing_ms: Some(5),
+        ..ProviderResponseTimings::default()
+    })
+    .with_provider_metadata(metadata);
+    let mut items = vec![Ok(ProviderEvent::observation(observation))];
+    items.extend(
+        complete_stream(Some(21))
+            .into_iter()
+            .map(|event| event.map(ProviderEvent::canonical)),
+    );
+    let (coordinator, store, _) = coordinator(vec![Script::ObservedStream {
+        account_id: "acct_observed",
+        items,
+    }]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+
+    block_on(session.collect_uncommitted()).expect("collect response");
+    block_on(session.commit_downstream(Some(200))).expect("commit response");
+
+    let state = store.state.lock().expect("store lock");
+    let finalization = &state.finalizations[0];
+    assert_eq!(finalization.first_event_ms, Some(11));
+    assert_eq!(finalization.first_reasoning_ms, Some(17));
+    assert_eq!(finalization.first_text_ms, Some(19));
+    assert_eq!(finalization.first_token_ms, Some(17));
+    assert_eq!(finalization.provider_processing_ms, Some(5));
+    assert_eq!(
+        finalization.provider_metadata_json.as_deref(),
+        Some("{\"effectiveModel\":\"gpt-test\",\"firstTokenMs\":23}")
+    );
+}
+
+#[test]
+fn empty_tool_call_delta_should_not_preempt_provider_first_token_timing() {
+    let operation = operation(RetrySafety::Idempotent);
+    let route_plan = plan(&operation);
+    let transport = UpstreamTransport::new("websocket").expect("actual transport");
+    let initial_observation = ProviderResponseObservation::new(transport.clone());
+    let output_observation =
+        ProviderResponseObservation::new(transport).with_timings(ProviderResponseTimings {
+            first_token_ms: Some(37),
+            ..ProviderResponseTimings::default()
+        });
+    let items = vec![
+        Ok(ProviderEvent::observation(initial_observation)),
+        Ok(ProviderEvent::canonical(GatewayEvent::Started(
+            ResponseMeta::new("response-tool", "gpt-5"),
+        ))),
+        Ok(ProviderEvent::canonical(GatewayEvent::ContentAdded(
+            ContentItem::new(0, ContentKind::ToolCall),
+        ))),
+        Ok(ProviderEvent::canonical(GatewayEvent::ToolCallDelta(
+            ToolCallDelta {
+                content_index: 0,
+                call_id: "call-tool".to_owned(),
+                name: Some("apply_patch".to_owned()),
+                arguments_delta: String::new(),
+            },
+        ))),
+        Ok(ProviderEvent::observation(output_observation)),
+        Ok(ProviderEvent::canonical(GatewayEvent::Completed(
+            ResponseMeta::new("response-tool", "gpt-5"),
+        ))),
+    ];
+    let (coordinator, store, _) = coordinator(vec![Script::ObservedStream {
+        account_id: "acct_tool",
+        items,
+    }]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+
+    block_on(session.collect_uncommitted()).expect("collect response");
+    block_on(session.commit_downstream(Some(200))).expect("commit response");
+
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.finalizations[0].first_token_ms, Some(37));
 }
 
 #[test]
@@ -734,6 +855,7 @@ fn discarded_attempt_observation_does_not_leak_into_retry_result() {
         connect_ms: Some(11),
         headers_ms: Some(13),
         first_event_ms: Some(987_654),
+        ..ProviderResponseTimings::default()
     });
     let second_observation = ProviderResponseObservation::new(
         UpstreamTransport::new("http_sse").expect("second transport"),

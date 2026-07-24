@@ -326,6 +326,14 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
             upstream_transport: Some("http_sse".to_owned()),
             http_version: Some("h2".to_owned()),
             websocket_pool: Some("reuse".to_owned()),
+            provider_metadata_json: Some(
+                serde_json::json!({
+                    "effectiveModel": "grok-4.5",
+                    "requestSummary": {"inputItemsCount": 2},
+                    "transport": "must-not-overwrite-core",
+                })
+                .to_string(),
+            ),
             attempt_count: 1,
             upstream_send_state: "sent".to_owned(),
             downstream_committed_at: None,
@@ -409,18 +417,21 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
             "requestKind": value["data"]["items"][0]["metadata"]["requestKind"],
             "subagentKind": value["data"]["items"][0]["metadata"]["subagentKind"],
             "compact": value["data"]["items"][0]["metadata"]["compact"],
+            "transport": value["data"]["items"][0]["metadata"]["transport"],
             "transportDecisionWaitMs": value["data"]["items"][0]["metadata"]["latencyDetails"]["transportDecisionWaitMs"],
             "wsConnectMs": value["data"]["items"][0]["metadata"]["latencyDetails"]["wsConnectMs"],
             "firstReasoningMs": value["data"]["items"][0]["metadata"]["latencyDetails"]["firstReasoningMs"],
             "firstTextMs": value["data"]["items"][0]["metadata"]["latencyDetails"]["firstTextMs"],
             "firstTokenMs": value["data"]["items"][0]["metadata"]["latencyDetails"]["firstTokenMs"],
+            "effectiveModel": value["data"]["items"][0]["metadata"]["effectiveModel"],
+            "requestSummary": value["data"]["items"][0]["metadata"]["requestSummary"],
         }),
         serde_json::json!({
             "route": "/v1/responses",
             "authenticationKind": "oauth",
             "imageInputTokens": 31,
             "imageOutputTokens": 9,
-            "websocketPool": "reuse",
+            "websocketPool": {"kind": "reuse"},
             "imageGenerationRequested": true,
             "imageGenerationSucceeded": true,
             "requestedModel": "grok-4.5",
@@ -432,11 +443,14 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
             "requestKind": "review",
             "subagentKind": "worker",
             "compact": true,
+            "transport": "http_sse",
             "transportDecisionWaitMs": 7,
             "wsConnectMs": 11,
             "firstReasoningMs": 19,
             "firstTextMs": 23,
             "firstTokenMs": 19,
+            "effectiveModel": "grok-4.5",
+            "requestSummary": {"inputItemsCount": 2},
         })
     );
 }

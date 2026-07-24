@@ -41,6 +41,9 @@ const props = withDefaults(
 const activeView = shallowRef('cost')
 const { palette } = useUsageChartPalette()
 const points = computed<any[]>(() => props.cost.points)
+const hasStandardCost = computed(() =>
+  points.value.some(point => point.standardCost != null),
+)
 
 const viewOptions = [
   { label: '费用', value: 'cost' },
@@ -101,7 +104,7 @@ function legendNames() {
     return ['未缓存输入', '缓存输入', '输出']
   if (activeView.value === 'cache')
     return ['缓存 Token 占比', '命中请求率']
-  return ['预估费用', '标准费用']
+  return hasStandardCost.value ? ['预估费用', '标准费用'] : ['预估费用']
 }
 
 function axisFormatter() {
@@ -152,7 +155,7 @@ function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
     ]
   }
 
-  return [
+  const series = [
     lineSeries(
       '预估费用',
       chartPoints.map(point => decimalDisplayNumber(point.estimatedCost)),
@@ -160,12 +163,17 @@ function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
       undefined,
       true,
     ),
-    lineSeries(
-      '标准费用',
-      chartPoints.map(point => decimalDisplayNumber(point.standardCost)),
-      theme.textMuted,
-    ),
   ]
+  if (hasStandardCost.value) {
+    series.push(
+      lineSeries(
+        '标准费用',
+        chartPoints.map(point => decimalDisplayNumber(point.standardCost)),
+        theme.textMuted,
+      ),
+    )
+  }
+  return series
 }
 
 function lineSeries(
@@ -230,11 +238,13 @@ function formatTooltip(params: unknown) {
     ].join('<br/>')
   }
 
-  return [
+  const lines = [
     title,
     `预估费用: ${formatUsd(point.estimatedCost)}`,
-    `标准费用: ${formatUsd(point.standardCost)}`,
-  ].join('<br/>')
+  ]
+  if (point.standardCost != null)
+    lines.push(`标准费用: ${formatUsd(point.standardCost)}`)
+  return lines.join('<br/>')
 }
 </script>
 

@@ -79,7 +79,7 @@ fn openai_config_defaults_to_the_provider_owned_operating_values() {
             8,
             64,
             8,
-            800,
+            20_000,
             5,
             true,
             true,

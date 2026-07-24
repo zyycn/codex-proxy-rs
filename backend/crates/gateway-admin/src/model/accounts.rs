@@ -7,7 +7,7 @@ use futures::Stream;
 
 use gateway_core::routing::ProviderKind;
 
-use super::{PageSize, Revision};
+use super::{PageSize, Revision, observability::TimeRange};
 
 /// Provider 账号当前可用性。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +149,24 @@ pub struct AccountUsage {
     pub last_used_at: Option<DateTime<Utc>>,
     pub request_buckets: Vec<AccountRequestBucket>,
     pub models: Vec<AccountModelUsage>,
+}
+
+/// 某个账号在调用方指定时间窗口内的本地用量查询。
+///
+/// `key` 只用于把聚合结果关联回调用方的窗口，不承载 Provider 私有语义。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountUsageWindowQuery {
+    pub account_id: String,
+    pub key: String,
+    pub range: TimeRange,
+}
+
+/// 一个账号时间窗口用量查询的结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountUsageWindowResult {
+    pub account_id: String,
+    pub key: String,
+    pub usage: AccountUsage,
 }
 
 /// 账号列表页所需的完整存储事实。

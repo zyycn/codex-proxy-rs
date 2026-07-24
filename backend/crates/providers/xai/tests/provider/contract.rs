@@ -493,6 +493,19 @@ fn operation() -> Operation {
     Operation::Generate(GenerateRequest::from_protocol_payload(payload))
 }
 
+fn operation_with_reasoning_effort(effort: &str) -> Operation {
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        Map::from_iter([
+            ("model".to_owned(), json!("client-model")),
+            ("input".to_owned(), json!("hello")),
+            ("reasoning".to_owned(), json!({"effort": effort})),
+        ]),
+    )
+    .expect("OpenAI payload");
+    Operation::Generate(GenerateRequest::from_protocol_payload(payload))
+}
+
 fn compaction_operation() -> Operation {
     let payload = ProtocolPayload::json_object(
         "openai",
@@ -626,6 +639,19 @@ fn context_with_continuation_attempt(
     attempt: ContinuationAttempt,
 ) -> AttemptContext {
     context(CancellationToken::new(), Some(continuation)).with_continuation_attempt(attempt)
+}
+
+#[tokio::test]
+async fn request_observation_preserves_raw_xai_reasoning_effort() {
+    let provider = provider(StubSelector::success(), StubInferenceTransport::success()).await;
+
+    let observation =
+        provider.request_observation(&operation_with_reasoning_effort("future-value"));
+
+    assert_eq!(
+        observation.reasoning_effort.as_deref(),
+        Some("future-value")
+    );
 }
 
 fn operation_with_state(body: serde_json::Value, state: ProviderSessionState) -> Operation {

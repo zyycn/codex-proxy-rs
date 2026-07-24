@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
 use futures::{StreamExt, future::BoxFuture};
@@ -22,8 +22,8 @@ use gateway_core::error::{
     SafeUpstreamValue,
 };
 use gateway_core::event::{
-    GatewayEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseObservation,
-    ProviderResponseTimings, UpstreamHttpVersion, WebSocketPoolKind,
+    GatewayEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseMetadata,
+    ProviderResponseObservation, ProviderResponseTimings, UpstreamHttpVersion, WebSocketPoolKind,
 };
 use gateway_core::operation::{GenerateRequest, Operation, OperationKind, ProviderSessionState};
 use gateway_core::provider_ports::ProviderSessionAffinityKey;
@@ -36,7 +36,7 @@ use gateway_core::task::{
 use reqwest::Client;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value, json};
 use url::Url;
 
 use crate::credential::{
@@ -57,7 +57,9 @@ use crate::transport::profile::{
     APPCAST_POLL_INTERVAL, CodexCliReleaseService, CodexDesktopReleaseService,
     CodexWireProfileState,
 };
-use crate::transport::protocol::responses::{CodexResponsesRequest, PreviousResponseScope};
+use crate::transport::protocol::responses::{
+    CodexResponsesRequest, PreviousResponseScope, ResponseEventSignals,
+};
 use crate::transport::request::{
     CodexRequestEncodeError, encode_generate_request, sanitize_cross_account_item,
     scope_request_to_account,
@@ -66,8 +68,8 @@ use crate::transport::session::CodexSessionIdentity;
 use crate::transport::websocket::{CodexWebSocketExchangeError, PreviousResponseUnavailableReason};
 use crate::transport::{
     CODEX_RESPONSES_PATH, CodexBackendClient, CodexBackendStreamingResponse, CodexBackendTransport,
-    CodexClientError, CodexRequestContext, CodexResponseMetadata, CodexTransportMetrics,
-    CodexUpstreamDiagnostics, CodexWebSocketPool, endpoint_url,
+    CodexClientError, CodexRateLimitHeaderUpdates, CodexRequestContext, CodexResponseMetadata,
+    CodexTransportMetrics, CodexUpstreamDiagnostics, CodexWebSocketPool, endpoint_url,
 };
 
 const PROVIDER_NAME: &str = "openai";
@@ -779,31 +781,13 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             });
             capture.turn_state = response.turn_state.clone().or(capture.turn_state.clone());
         }
-        let observation = match codex_response_observation(
-            response.transport,
-            &response.diagnostics,
-            &response.response_metadata,
-            &response.transport_metrics,
-            response.websocket_pool_decision,
-        ) {
-            Ok(observation) => observation,
-            Err(error) => {
-                let failure = MappedProviderFailure::plain(error);
-                apply_failure(
-                    &client,
-                    &selector,
-                    &quota,
-                    &active_account,
-                    &response_origin,
-                    cyber_policy_scope.as_ref(),
-                    &failure,
-                )
-                .await;
-                Err(failure.error)?;
-                return;
-            }
-        };
-        yield ProviderEvent::observation(observation);
+        let mut observation_state = OpenAiResponseObservationState::from_backend_response(
+            &response,
+            &request,
+            active_account.id().as_str(),
+            context.attempt_index().get(),
+        );
+        yield ProviderEvent::observation(observation_state.observation()?);
         synchronize_passive_quota(&quota, &active_account, &response.rate_limit_headers).await;
         if let Some(etag) = response.response_metadata.models_etag.as_deref()
             && let Err(error) = catalog.observe_response_etag(etag)
@@ -861,6 +845,13 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             let next = match next {
                 Ok(next) => next,
                 Err(failure) => {
+                    let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
+                    if !updates.is_empty() {
+                        synchronize_passive_quota(&quota, &active_account, &updates).await;
+                        if observation_state.merge_rate_limit_headers(&updates) {
+                            yield ProviderEvent::observation(observation_state.observation()?);
+                        }
+                    }
                     apply_failure(
                         &client,
                         &selector,
@@ -876,16 +867,21 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 }
             };
             let Some(chunk) = next else { break; };
-            if let Some(updates) = rate_limit_updates.as_ref() {
-                let updates = std::mem::take(&mut *updates.lock().await);
+            let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
+            let rate_limits_changed = if updates.is_empty() {
+                false
+            } else {
                 synchronize_passive_quota(&quota, &active_account, &updates).await;
-            }
+                observation_state.merge_rate_limit_headers(&updates)
+            };
             if let (Some(capture), Some(updates)) =
                 (session_capture.as_mut(), turn_state_updates.as_ref())
                 && let Some(turn_state) = updates.lock().await.clone()
             {
                 capture.turn_state = Some(turn_state);
             }
+            let first_event_changed =
+                observation_state.observe_stream_chunk(&chunk, context.timing_started_at());
             let (mut events, terminal_failure) = match decoder.push(&chunk) {
                 CodexCanonicalOutcome::Events(events) => (events, None),
                 CodexCanonicalOutcome::Failed(failure) => {
@@ -900,6 +896,18 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                     (events, Some(failure))
                 }
             };
+            let timing_changed = first_event_changed
+                || observation_state
+                    .observe_timing_signals(decoder.take_timing_signals(), context.timing_started_at());
+            let completed = events
+                .iter()
+                .flat_map(ProviderEvent::canonical_facts)
+                .any(|event| matches!(event, GatewayEvent::Completed(_)));
+            let terminal_changed = completed
+                && observation_state.mark_completed(terminal_response_is_incomplete(&events));
+            if rate_limits_changed || timing_changed || terminal_changed {
+                yield ProviderEvent::observation(observation_state.observation()?);
+            }
             if let Some(failure) = terminal_failure.as_ref() {
                 apply_failure(
                     &client,
@@ -931,10 +939,6 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 }
                 return;
             }
-            let completed = events
-                .iter()
-                .flat_map(ProviderEvent::canonical_facts)
-                .any(|event| matches!(event, GatewayEvent::Completed(_)));
             for event in events {
                 yield event;
             }
@@ -965,6 +969,15 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 );
                 (events, Some(failure))
             }
+        };
+        let timing_changed = observation_state
+            .observe_timing_signals(decoder.take_timing_signals(), context.timing_started_at());
+        let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
+        let rate_limits_changed = if updates.is_empty() {
+            false
+        } else {
+            synchronize_passive_quota(&quota, &active_account, &updates).await;
+            observation_state.merge_rate_limit_headers(&updates)
         };
         if let Some(failure) = terminal_failure.as_ref() {
             apply_failure(
@@ -1007,6 +1020,11 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             .iter()
             .flat_map(ProviderEvent::canonical_facts)
             .any(|event| matches!(event, GatewayEvent::Completed(_)));
+        let terminal_changed = completed
+            && observation_state.mark_completed(terminal_response_is_incomplete(&events));
+        if timing_changed || rate_limits_changed || terminal_changed {
+            yield ProviderEvent::observation(observation_state.observation()?);
+        }
         for event in events {
             yield event;
         }
@@ -1025,23 +1043,258 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
     })
 }
 
+/// OpenAI Responses 的观测状态完全归 Provider 所有。
+///
+/// 每次原始 SSE/WS 事件推进状态后重新生成不可变 observation，Core 只负责携带、
+/// 持久化和展示这份安全快照，不解释任何 OpenAI 协议字段。
+struct OpenAiResponseObservationState {
+    transport: CodexBackendTransport,
+    diagnostics: CodexUpstreamDiagnostics,
+    response_metadata: CodexResponseMetadata,
+    metrics: CodexTransportMetrics,
+    websocket_pool_decision: Option<crate::transport::WebSocketPoolDecision>,
+    request_summary: Value,
+    requested_model: String,
+    stream: bool,
+    compact: bool,
+    service_tier: Option<String>,
+    rate_limit_headers: Vec<(String, String)>,
+    account_id: String,
+    attempt_index: u32,
+    timings: ProviderResponseTimings,
+    terminal: Option<OpenAiResponseTerminal>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OpenAiResponseTerminal {
+    Completed,
+    Incomplete,
+}
+
+impl OpenAiResponseObservationState {
+    fn from_backend_response(
+        response: &CodexBackendStreamingResponse,
+        request: &CodexResponsesRequest,
+        account_id: &str,
+        attempt_index: u32,
+    ) -> Self {
+        let semantics = request.semantics();
+        Self {
+            transport: response.transport,
+            diagnostics: response.diagnostics.clone(),
+            response_metadata: response.response_metadata.clone(),
+            metrics: response.transport_metrics.clone(),
+            websocket_pool_decision: response.websocket_pool_decision,
+            request_summary: openai_response_request_summary(request, response.transport),
+            requested_model: request.model().to_owned(),
+            stream: request.stream(),
+            compact: semantics.compact,
+            service_tier: request.service_tier().map(str::to_owned),
+            rate_limit_headers: safe_observation_headers(&response.rate_limit_headers),
+            account_id: account_id.to_owned(),
+            attempt_index,
+            timings: openai_response_timings(
+                &response.transport_metrics,
+                &response.response_metadata,
+            ),
+            terminal: None,
+        }
+    }
+
+    fn observation(&self) -> Result<ProviderResponseObservation, ProviderError> {
+        let mut observation = codex_response_observation(
+            self.transport,
+            &self.diagnostics,
+            &self.response_metadata,
+            &self.metrics,
+            self.websocket_pool_decision,
+            self.timings,
+        )?;
+        if let Some(metadata) = self.provider_metadata() {
+            observation = observation.with_provider_metadata(metadata);
+        }
+        Ok(observation)
+    }
+
+    fn observe_stream_chunk(&mut self, chunk: &[u8], started_at: Instant) -> bool {
+        if chunk.is_empty() {
+            return false;
+        }
+        insert_first_timing(&mut self.timings.first_event_ms, started_at)
+    }
+
+    fn observe_timing_signals(
+        &mut self,
+        signals: ResponseEventSignals,
+        started_at: Instant,
+    ) -> bool {
+        let mut changed = false;
+        if signals.semantic_output {
+            changed |= insert_first_timing(&mut self.timings.first_token_ms, started_at);
+        }
+        if signals.reasoning_output {
+            changed |= insert_first_timing(&mut self.timings.first_reasoning_ms, started_at);
+        }
+        if signals.text_output {
+            changed |= insert_first_timing(&mut self.timings.first_text_ms, started_at);
+        }
+        changed
+    }
+
+    fn merge_rate_limit_headers(&mut self, updates: &[(String, String)]) -> bool {
+        let mut changed = false;
+        for (name, value) in safe_observation_headers(updates) {
+            if let Some(existing) = self
+                .rate_limit_headers
+                .iter_mut()
+                .find(|(existing_name, _)| existing_name == &name)
+            {
+                if existing.1 != value {
+                    existing.1 = value;
+                    changed = true;
+                }
+            } else {
+                self.rate_limit_headers.push((name, value));
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    fn mark_completed(&mut self, incomplete: bool) -> bool {
+        let terminal = if incomplete {
+            OpenAiResponseTerminal::Incomplete
+        } else {
+            OpenAiResponseTerminal::Completed
+        };
+        if self.terminal == Some(terminal) {
+            return false;
+        }
+        self.terminal = Some(terminal);
+        true
+    }
+
+    fn provider_metadata(&self) -> Option<ProviderResponseMetadata> {
+        let mut metadata = Map::new();
+        let effective_model = self
+            .response_metadata
+            .effective_model
+            .as_deref()
+            .filter(|model| !model.is_empty())
+            .unwrap_or(&self.requested_model);
+        if !effective_model.is_empty() {
+            metadata.insert(
+                "effectiveModel".to_owned(),
+                Value::String(effective_model.to_owned()),
+            );
+        }
+        metadata.insert(
+            "modelsEtag".to_owned(),
+            self.response_metadata
+                .models_etag
+                .as_ref()
+                .map_or(Value::Null, |etag| Value::String(etag.clone())),
+        );
+        metadata.insert(
+            "reasoningIncluded".to_owned(),
+            Value::Bool(self.response_metadata.reasoning_included),
+        );
+        metadata.insert("stream".to_owned(), Value::Bool(self.stream));
+        metadata.insert("compact".to_owned(), Value::Bool(self.compact));
+        metadata.insert("attemptIndex".to_owned(), json!(self.attempt_index));
+        metadata.insert(
+            "attemptAccountId".to_owned(),
+            Value::String(self.account_id.clone()),
+        );
+        metadata.insert(
+            "rateLimitHeaders".to_owned(),
+            json!(self.rate_limit_headers),
+        );
+        metadata.insert(
+            "upstreamTraceHeaders".to_owned(),
+            json!(safe_observation_headers(&self.diagnostics.trace_headers)),
+        );
+        metadata.insert("requestSummary".to_owned(), self.request_summary.clone());
+        if let Some(service_tier) = &self.service_tier {
+            metadata.insert(
+                "serviceTier".to_owned(),
+                Value::String(service_tier.clone()),
+            );
+        }
+        if let Some(status) = self.diagnostics.status_code {
+            metadata.insert("upstreamStatus".to_owned(), json!(status));
+        }
+        if let Some(decision) = self.metrics.decision {
+            metadata.insert(
+                "transportDecision".to_owned(),
+                Value::String(decision.as_str().to_owned()),
+            );
+        }
+        if let Some(decision) = self.websocket_pool_decision {
+            metadata.insert(
+                "websocketPool".to_owned(),
+                json!({ "kind": decision.kind() }),
+            );
+        }
+        if let Some(version) = self.metrics.http_version.as_deref() {
+            metadata.insert("httpVersion".to_owned(), Value::String(version.to_owned()));
+        }
+        if let Some((_, cf_ray)) = self
+            .diagnostics
+            .trace_headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("cf-ray"))
+            && let Some((_, cf_ray)) = safe_observation_header("cf-ray", cf_ray)
+        {
+            metadata.insert("cfRay".to_owned(), Value::String(cf_ray));
+        }
+        insert_optional_metadata_millis(
+            &mut metadata,
+            "transportDecisionWaitMs",
+            self.timings.transport_decision_wait_ms,
+        );
+        insert_optional_metadata_millis(&mut metadata, "wsConnectMs", self.timings.connect_ms);
+        insert_optional_metadata_millis(
+            &mut metadata,
+            "upstreamHeadersMs",
+            self.timings.headers_ms,
+        );
+        insert_optional_metadata_millis(&mut metadata, "firstEventMs", self.timings.first_event_ms);
+        insert_optional_metadata_millis(
+            &mut metadata,
+            "firstReasoningMs",
+            self.timings.first_reasoning_ms,
+        );
+        insert_optional_metadata_millis(&mut metadata, "firstTextMs", self.timings.first_text_ms);
+        insert_optional_metadata_millis(&mut metadata, "firstTokenMs", self.timings.first_token_ms);
+        insert_optional_metadata_millis(
+            &mut metadata,
+            "openaiProcessingMs",
+            self.timings.provider_processing_ms,
+        );
+        if let Some(terminal) = self.terminal {
+            let incomplete = terminal == OpenAiResponseTerminal::Incomplete;
+            metadata.insert("completed".to_owned(), Value::Bool(!incomplete));
+            metadata.insert("incomplete".to_owned(), Value::Bool(incomplete));
+            metadata.insert("eventStatusCode".to_owned(), json!(200_u16));
+        }
+        ProviderResponseMetadata::new(serde_json::to_string(&Value::Object(metadata)).ok()?)
+    }
+}
+
 fn codex_response_observation(
     transport: CodexBackendTransport,
     diagnostics: &CodexUpstreamDiagnostics,
     response_metadata: &CodexResponseMetadata,
     metrics: &CodexTransportMetrics,
     websocket_pool_decision: Option<crate::transport::WebSocketPoolDecision>,
+    timings: ProviderResponseTimings,
 ) -> Result<ProviderResponseObservation, ProviderError> {
     let mut observation = ProviderResponseObservation::new(
         UpstreamTransport::new(actual_transport_name(transport))
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent))?,
     )
-    .with_timings(ProviderResponseTimings {
-        transport_decision_wait_ms: nonnegative_millis(metrics.transport_decision_wait_ms),
-        connect_ms: nonnegative_millis(metrics.ws_connect_ms),
-        headers_ms: nonnegative_millis(metrics.upstream_headers_ms),
-        first_event_ms: nonnegative_millis(metrics.first_event_ms),
-    });
+    .with_timings(timings);
     if let Some(version) = metrics
         .http_version
         .as_deref()
@@ -1097,6 +1350,7 @@ fn codex_error_observation(error: &CodexClientError) -> Option<ProviderResponseO
                 &CodexResponseMetadata::default(),
                 transport_metrics,
                 None,
+                openai_response_timings(transport_metrics, &CodexResponseMetadata::default()),
             )
             .ok()?
             .with_status_code(status.as_u16());
@@ -1115,6 +1369,138 @@ fn codex_error_observation(error: &CodexClientError) -> Option<ProviderResponseO
         _ => {}
     }
     Some(observation)
+}
+
+fn openai_response_timings(
+    metrics: &CodexTransportMetrics,
+    response_metadata: &CodexResponseMetadata,
+) -> ProviderResponseTimings {
+    ProviderResponseTimings {
+        transport_decision_wait_ms: nonnegative_millis(metrics.transport_decision_wait_ms),
+        connect_ms: nonnegative_millis(metrics.ws_connect_ms),
+        headers_ms: nonnegative_millis(metrics.upstream_headers_ms),
+        first_event_ms: nonnegative_millis(metrics.first_event_ms),
+        provider_processing_ms: openai_processing_ms(response_metadata),
+        ..ProviderResponseTimings::default()
+    }
+}
+
+fn openai_processing_ms(response_metadata: &CodexResponseMetadata) -> Option<u64> {
+    response_metadata
+        .client_headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("openai-processing-ms"))
+        .and_then(|(_, value)| value.parse::<u64>().ok())
+}
+
+fn openai_response_request_summary(
+    request: &CodexResponsesRequest,
+    transport: CodexBackendTransport,
+) -> Value {
+    let body = request.body();
+    let input = body.get("input");
+    let tools = body.get("tools");
+    let semantics = request.semantics();
+    json!({
+        "model": request.model(),
+        "stream": request.stream(),
+        "store": request.store(),
+        "compact": semantics.compact,
+        "requestKind": semantics.request_kind,
+        "subagentKind": semantics.subagent_kind,
+        "reasoningPreset": semantics.reasoning_preset,
+        "transport": actual_transport_name(transport),
+        "inputType": json_value_kind(input),
+        "inputItemsCount": input.and_then(Value::as_array).map(Vec::len),
+        "toolsType": json_value_kind(tools),
+        "toolsCount": tools.and_then(Value::as_array).map(Vec::len),
+        "topLevelFields": body.keys().cloned().collect::<Vec<_>>(),
+        "previousResponseIdPresent": request.previous_response_id().is_some(),
+        "serviceTier": request.service_tier(),
+        "localTransport": {
+            "useWebsocket": request.use_websocket,
+            "forceHttpSse": request.force_http_sse,
+        },
+    })
+}
+
+const fn json_value_kind(value: Option<&Value>) -> &'static str {
+    match value {
+        None => "missing",
+        Some(Value::Null) => "null",
+        Some(Value::Bool(_)) => "boolean",
+        Some(Value::Number(_)) => "number",
+        Some(Value::String(_)) => "string",
+        Some(Value::Array(_)) => "array",
+        Some(Value::Object(_)) => "object",
+    }
+}
+
+fn safe_observation_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| safe_observation_header(name, value))
+        .collect()
+}
+
+fn safe_observation_header(name: &str, value: &str) -> Option<(String, String)> {
+    let name = name.trim().to_ascii_lowercase();
+    let value = value.trim();
+    let safe_value = SafeUpstreamValue::new(value.to_owned()).ok()?;
+    ProviderResponseHeader::new(name.clone(), safe_value)?;
+    Some((name, value.to_owned()))
+}
+
+fn insert_first_timing(target: &mut Option<u64>, started_at: Instant) -> bool {
+    if target.is_some() {
+        return false;
+    }
+    let elapsed = u64::try_from(started_at.elapsed().as_millis())
+        .unwrap_or(u64::MAX)
+        .max(1);
+    *target = Some(elapsed);
+    true
+}
+
+fn insert_optional_metadata_millis(
+    metadata: &mut Map<String, Value>,
+    name: &str,
+    value: Option<u64>,
+) {
+    if let Some(value) = value {
+        metadata.insert(name.to_owned(), json!(value));
+    }
+}
+
+async fn take_rate_limit_updates(
+    updates: Option<&CodexRateLimitHeaderUpdates>,
+) -> Vec<(String, String)> {
+    let Some(updates) = updates else {
+        return Vec::new();
+    };
+    std::mem::take(&mut *updates.lock().await)
+}
+
+fn terminal_response_is_incomplete(events: &[ProviderEvent]) -> bool {
+    events
+        .iter()
+        .find_map(|event| {
+            let wire = event.wire_event()?;
+            let event_type = wire
+                .event_type()
+                .or_else(|| wire.data().get("type").and_then(Value::as_str));
+            match event_type {
+                Some("response.incomplete") => Some(true),
+                Some("response.completed") => Some(
+                    wire.data()
+                        .pointer("/response/status")
+                        .and_then(Value::as_str)
+                        == Some("incomplete"),
+                ),
+                _ => None,
+            }
+        })
+        .unwrap_or(false)
 }
 
 async fn synchronize_passive_quota(

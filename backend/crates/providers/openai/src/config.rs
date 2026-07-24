@@ -159,7 +159,7 @@ impl Default for CodexWebSocketPoolSettings {
             max_per_account: 8,
             max_total: 64,
             max_connecting: 8,
-            initial_event_timeout_ms: 800,
+            initial_event_timeout_ms: 20_000,
         }
     }
 }

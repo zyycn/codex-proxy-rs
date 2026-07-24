@@ -203,13 +203,15 @@ fn provider_stream_should_not_sequence_gate_canonical_observation_attached_to_wi
 }
 
 #[test]
-fn provider_stream_should_report_sent_failure_but_ignore_not_sent_failure() {
+fn provider_stream_should_report_confirmed_sent_failure_but_ignore_unconfirmed_failure() {
     let feedback = Arc::new(AccountFeedbackStats::default());
     let provider = ProviderKind::new("xai").expect("valid provider");
     let sent_account = ProviderAccountId::new("acct_stream_sent").expect("account");
+    let ambiguous_account = ProviderAccountId::new("acct_stream_ambiguous").expect("account");
     let not_sent_account = ProviderAccountId::new("acct_stream_not_sent").expect("account");
     for (account, send_state) in [
         (sent_account.clone(), UpstreamSendState::Sent),
+        (ambiguous_account.clone(), UpstreamSendState::Ambiguous),
         (not_sent_account.clone(), UpstreamSendState::NotSent),
     ] {
         let metadata = ProviderCallMetadata::new(
@@ -240,6 +242,10 @@ fn provider_stream_should_report_sent_failure_but_ignore_not_sent_failure() {
     assert_eq!(
         feedback.scheduling_signals(&provider, &sent_account).0,
         Some(2_000)
+    );
+    assert_eq!(
+        feedback.scheduling_signals(&provider, &ambiguous_account),
+        (None, None)
     );
     assert_eq!(
         feedback.scheduling_signals(&provider, &not_sent_account),

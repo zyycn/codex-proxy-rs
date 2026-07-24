@@ -213,6 +213,7 @@ create table model_requests (
   upstream_transport text,
   http_version text,
   websocket_pool text,
+  provider_observation_json jsonb,
   attempt_count integer not null default 0,
   upstream_send_state text not null default 'not_sent',
   downstream_committed_at timestamptz,
@@ -315,6 +316,10 @@ create table model_requests (
   ),
   constraint model_requests_websocket_pool_ck check (
     websocket_pool is null or websocket_pool in ('new', 'reuse')
+  ),
+  constraint model_requests_provider_observation_ck check (
+    provider_observation_json is null
+    or jsonb_typeof(provider_observation_json) = 'object'
   ),
   constraint model_requests_cost_ck check (
     cost_source in ('provider_reported', 'calculated', 'unavailable')

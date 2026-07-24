@@ -16,8 +16,8 @@ use gateway_admin::{
             AccountListQuery as AdminAccountListQuery, AccountModelUsage, AccountPage,
             AccountRecord, AccountRequestBucket, AccountSort as AdminAccountSort,
             AccountSortField as AdminAccountSortField, AccountStatus as AdminAccountStatus,
-            AccountSummary, AccountUsage, DeleteAccounts, SetAccountEnabled,
-            SortDirection as AdminSortDirection,
+            AccountSummary, AccountUsage, AccountUsageWindowQuery, AccountUsageWindowResult,
+            DeleteAccounts, SetAccountEnabled, SortDirection as AdminSortDirection,
         },
         observability::{
             CostCoverage as AdminCostCoverage, DecimalAmount as AdminDecimalAmount, TimeRange,
@@ -63,6 +63,48 @@ const CREDENTIALS_MAX_BYTES: usize = 256 * 1024;
 const QUOTA_MAX_BYTES: usize = 128 * 1024;
 const MAX_ADMIN_IMPORT_BATCH: usize = 200;
 const ADMIN_USAGE_CHUNK_SIZE: usize = 200;
+
+const ACCOUNT_USAGE_BY_WINDOWS_SQL: &str = "with requested_windows as (
+         select *
+         from unnest($1::text[], $2::text[], $3::timestamptz[], $4::timestamptz[])
+           as requested(account_id, window_key, window_start, window_end)
+     )
+     select requested.account_id,
+            requested.window_key,
+            count(mr.id)::bigint as request_count,
+            count(mr.id) filter (where mr.outcome = 'succeeded')::bigint as success_count,
+            sum(mr.input_tokens)::bigint as input_tokens,
+            sum(mr.output_tokens)::bigint as output_tokens,
+            sum(mr.cached_tokens)::bigint as cached_tokens,
+            sum(mr.cache_write_tokens)::bigint as cache_write_tokens,
+            sum(mr.reasoning_tokens)::bigint as reasoning_tokens,
+            sum(mr.image_input_tokens)::bigint as image_input_tokens,
+            sum(mr.image_output_tokens)::bigint as image_output_tokens,
+            count(mr.id) filter (where mr.image_generation_succeeded is true)::bigint
+              as image_request_count,
+            count(mr.id) filter (where mr.image_generation_succeeded is false)::bigint
+              as image_request_failed_count,
+            coalesce(sum(coalesce(
+              mr.total_tokens,
+              coalesce(mr.input_tokens, 0) + coalesce(mr.output_tokens, 0)
+            )), 0)::bigint as total_tokens,
+            count(mr.id) filter (where mr.cost_source = 'provider_reported')::bigint
+              as provider_reported_count,
+            count(mr.id) filter (where mr.cost_source = 'calculated')::bigint
+              as calculated_count,
+            count(mr.id) filter (where mr.cost_source = 'unavailable')::bigint
+              as unavailable_count,
+            max(mr.started_at) as last_used_at
+       from requested_windows requested
+       left join model_requests mr
+         on mr.provider_account_ref = requested.account_id
+        and mr.started_at >= requested.window_start
+        and mr.started_at < requested.window_end
+        and mr.outcome = 'succeeded'
+        and mr.downstream_committed_at is not null
+        and mr.client_status_code between 200 and 399
+      group by requested.account_id, requested.window_key
+      order by requested.account_id, requested.window_key";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccountAdminScope {
@@ -898,6 +940,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
 /// 三个 PostgreSQL adapter 都保持私有，调用方只能取得 [`AccountStore`] 暴露的领域能力。
 #[derive(Clone)]
 pub struct PgAdminAccountStore {
+    pool: PgPool,
     accounts: PgProviderAccountRepository,
     observability: PgObservabilityRepository,
     control_plane: PgControlPlaneRepository,
@@ -907,6 +950,7 @@ impl PgAdminAccountStore {
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self {
+            pool: pool.clone(),
             accounts: PgProviderAccountRepository::new(pool.clone()),
             observability: PgObservabilityRepository::new(pool.clone()),
             control_plane: PgControlPlaneRepository::new(pool),
@@ -940,6 +984,61 @@ impl PgAdminAccountStore {
             );
         }
         Ok(observations)
+    }
+
+    async fn usage_by_windows(
+        &self,
+        windows: &[AccountUsageWindowQuery],
+    ) -> AdminStoreResult<Vec<AccountUsageWindowResult>> {
+        if windows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let account_ids = windows
+            .iter()
+            .map(|window| window.account_id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        validate_admin_account_ids(&account_ids)
+            .map_err(|error| admin_store_error(ENTITY, error))?;
+        for window in windows {
+            require_nonempty(ENTITY, "quota window key", &window.key)
+                .map_err(|error| admin_store_error(ENTITY, error))?;
+            ObservabilityRange::new(window.range.start, window.range.end)
+                .map_err(|error| admin_store_error(ENTITY, error))?;
+        }
+        let keys = windows
+            .iter()
+            .map(|window| window.key.clone())
+            .collect::<Vec<_>>();
+        let starts = windows
+            .iter()
+            .map(|window| window.range.start)
+            .collect::<Vec<_>>();
+        let ends = windows
+            .iter()
+            .map(|window| window.range.end)
+            .collect::<Vec<_>>();
+        let account_ids = windows
+            .iter()
+            .map(|window| window.account_id.clone())
+            .collect::<Vec<_>>();
+        sqlx::query(ACCOUNT_USAGE_BY_WINDOWS_SQL)
+            .bind(account_ids)
+            .bind(keys)
+            .bind(starts)
+            .bind(ends)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|_| {
+                admin_store_error(
+                    ENTITY,
+                    postgres_unavailable("load provider account quota window usage"),
+                )
+            })?
+            .iter()
+            .map(admin_account_usage_window)
+            .collect()
     }
 
     async fn required_scope(
@@ -1162,6 +1261,13 @@ impl AccountStore for PgAdminAccountStore {
             .into_iter()
             .map(admin_account_usage)
             .collect()
+    }
+
+    async fn load_account_usage_by_windows(
+        &self,
+        windows: &[AccountUsageWindowQuery],
+    ) -> AdminStoreResult<Vec<AccountUsageWindowResult>> {
+        self.usage_by_windows(windows).await
     }
 
     async fn list_credentials(
@@ -1622,11 +1728,25 @@ fn admin_account_summary(
             .count(),
     )
     .unwrap_or(u64::MAX);
+    let attention = u64::try_from(
+        accounts
+            .iter()
+            .filter(|account| {
+                matches!(
+                    admin_account_status(account, now),
+                    AdminAccountStatus::Expired
+                        | AdminAccountStatus::Disabled
+                        | AdminAccountStatus::Banned
+                )
+            })
+            .count(),
+    )
+    .unwrap_or(u64::MAX);
     AccountSummary {
         total,
         active,
         quota_exhausted,
-        attention: total.saturating_sub(active),
+        attention,
     }
 }
 
@@ -1802,6 +1922,74 @@ fn admin_account_usage(usage: ProviderAccountUsageObservation) -> AdminStoreResu
             .map(admin_account_model_usage)
             .collect::<AdminStoreResult<Vec<_>>>()?,
     })
+}
+
+fn admin_account_usage_window(
+    row: &sqlx::postgres::PgRow,
+) -> AdminStoreResult<AccountUsageWindowResult> {
+    let provider_reported_count = window_usage_count(row, "provider_reported_count")?;
+    let calculated_count = window_usage_count(row, "calculated_count")?;
+    let unavailable_count = window_usage_count(row, "unavailable_count")?;
+    Ok(AccountUsageWindowResult {
+        account_id: window_usage_value(row, "account_id")?,
+        key: window_usage_value(row, "window_key")?,
+        usage: AccountUsage {
+            account_id: window_usage_value(row, "account_id")?,
+            request_count: window_usage_count(row, "request_count")?,
+            success_count: window_usage_count(row, "success_count")?,
+            input_tokens: optional_window_usage_count(row, "input_tokens")?,
+            output_tokens: optional_window_usage_count(row, "output_tokens")?,
+            cached_tokens: optional_window_usage_count(row, "cached_tokens")?,
+            cache_write_tokens: optional_window_usage_count(row, "cache_write_tokens")?,
+            reasoning_tokens: optional_window_usage_count(row, "reasoning_tokens")?,
+            image_input_tokens: optional_window_usage_count(row, "image_input_tokens")?,
+            image_output_tokens: optional_window_usage_count(row, "image_output_tokens")?,
+            image_request_count: window_usage_count(row, "image_request_count")?,
+            image_request_failed_count: window_usage_count(row, "image_request_failed_count")?,
+            total_tokens: optional_window_usage_count(row, "total_tokens")?,
+            cost_coverage: AdminCostCoverage {
+                provider_reported_count,
+                calculated_count,
+                partial_count: 0,
+                unavailable_count,
+                not_billable_count: 0,
+            },
+            costs: Vec::new(),
+            last_used_at: window_usage_value(row, "last_used_at")?,
+            request_buckets: Vec::new(),
+            models: Vec::new(),
+        },
+    })
+}
+
+fn window_usage_count(row: &sqlx::postgres::PgRow, column: &'static str) -> AdminStoreResult<u64> {
+    let value = window_usage_value::<i64>(row, column)?;
+    u64::try_from(value).map_err(|_| invalid_window_usage(column))
+}
+
+fn optional_window_usage_count(
+    row: &sqlx::postgres::PgRow,
+    column: &'static str,
+) -> AdminStoreResult<Option<u64>> {
+    window_usage_value::<Option<i64>>(row, column)?
+        .map(|value| u64::try_from(value).map_err(|_| invalid_window_usage(column)))
+        .transpose()
+}
+
+fn window_usage_value<T>(row: &sqlx::postgres::PgRow, column: &'static str) -> AdminStoreResult<T>
+where
+    for<'row> T: sqlx::Decode<'row, Postgres> + sqlx::Type<Postgres>,
+{
+    row.try_get(column)
+        .map_err(|_| invalid_window_usage(column))
+}
+
+fn invalid_window_usage(column: &'static str) -> AdminStoreError {
+    AdminStoreError::new(
+        AdminStoreErrorKind::Invalid,
+        ENTITY,
+        format!("invalid quota window usage column: {column}"),
+    )
 }
 
 fn admin_account_model_usage(

@@ -364,6 +364,19 @@ pub struct RequestMetricPoint {
     pub costs: Vec<CurrencyCostTotal>,
 }
 
+/// 已完整交付且由 Provider 计算费用的请求事实。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CalculatedUsageBillingFact {
+    pub bucket_start: DateTime<Utc>,
+    pub provider_kind: String,
+    pub upstream_model_id: String,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cached_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub total: CurrencyCostTotal,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProviderAccountMetrics {
     pub total: u64,
@@ -509,6 +522,7 @@ pub struct UsageRecord {
     pub upstream_transport: Option<String>,
     pub http_version: Option<String>,
     pub websocket_pool: Option<String>,
+    pub provider_metadata_json: Option<String>,
     pub attempt_count: u32,
     pub upstream_send_state: String,
     pub downstream_committed_at: Option<DateTime<Utc>>,
@@ -679,6 +693,11 @@ pub trait ObservabilityRepository: Send + Sync {
         range: ObservabilityRange,
         filter: UsageRecordFilter,
     ) -> StoreResult<Vec<RequestMetricPoint>>;
+    async fn usage_calculated_billing_facts(
+        &self,
+        range: ObservabilityRange,
+        filter: UsageRecordFilter,
+    ) -> StoreResult<Vec<CalculatedUsageBillingFact>>;
     async fn provider_account_usage(
         &self,
         query: ProviderAccountUsageQuery,
@@ -791,6 +810,14 @@ impl ObservabilityRepository for PgObservabilityRepository {
         filter: UsageRecordFilter,
     ) -> StoreResult<Vec<RequestMetricPoint>> {
         request_metric_series(&self.pool, range, &filter).await
+    }
+
+    async fn usage_calculated_billing_facts(
+        &self,
+        range: ObservabilityRange,
+        filter: UsageRecordFilter,
+    ) -> StoreResult<Vec<CalculatedUsageBillingFact>> {
+        calculated_usage_billing_facts(&self.pool, range, &filter).await
     }
 
     async fn provider_account_usage(
@@ -916,6 +943,20 @@ impl AdminObservabilityStore for PgAdminObservabilityStore {
             .map_err(observability_error)?
             .into_iter()
             .map(admin_request_metric_point)
+            .collect()
+    }
+
+    async fn usage_calculated_billing_facts(
+        &self,
+        range: admin_observability::TimeRange,
+        filter: admin_observability::UsageFilter,
+    ) -> AdminStoreResult<Vec<admin_observability::UsageCalculatedBillingFact>> {
+        self.repository
+            .usage_calculated_billing_facts(store_range(range)?, store_usage_filter(filter))
+            .await
+            .map_err(observability_error)?
+            .into_iter()
+            .map(admin_calculated_usage_billing_fact)
             .collect()
     }
 
@@ -1330,6 +1371,24 @@ fn admin_request_metric_point(
     })
 }
 
+fn admin_calculated_usage_billing_fact(
+    fact: CalculatedUsageBillingFact,
+) -> AdminStoreResult<admin_observability::UsageCalculatedBillingFact> {
+    Ok(admin_observability::UsageCalculatedBillingFact {
+        bucket_start: fact.bucket_start,
+        provider_kind: fact.provider_kind,
+        upstream_model_id: fact.upstream_model_id,
+        input_tokens: fact.input_tokens,
+        output_tokens: fact.output_tokens,
+        cached_tokens: fact.cached_tokens,
+        cache_write_tokens: fact.cache_write_tokens,
+        total: admin_observability::CurrencyCost {
+            currency: fact.total.currency,
+            amount: admin_decimal_amount(fact.total.amount)?,
+        },
+    })
+}
+
 const fn admin_granularity(
     granularity: ObservationGranularity,
 ) -> admin_observability::Granularity {
@@ -1394,6 +1453,7 @@ fn admin_usage_record(record: UsageRecord) -> AdminStoreResult<admin_observabili
         upstream_transport: record.upstream_transport,
         http_version: record.http_version,
         websocket_pool: record.websocket_pool,
+        provider_metadata_json: record.provider_metadata_json,
         attempt_count: record.attempt_count,
         upstream_send_state: record.upstream_send_state,
         downstream_committed_at: record.downstream_committed_at,
@@ -1629,6 +1689,7 @@ async fn request_metrics(
     query.push_bind(range.start);
     query.push(" and mr.started_at < ");
     query.push_bind(range.end);
+    push_completed_usage_fact_filter(&mut query, "mr");
     push_usage_filter(&mut query, filter, "mr");
     let row = query
         .build()
@@ -1695,6 +1756,7 @@ async fn request_metric_series(
     query.push_bind(range.start);
     query.push(" and mr.started_at < ");
     query.push_bind(range.end);
+    push_completed_usage_fact_filter(&mut query, "mr");
     push_usage_filter(&mut query, filter, "mr");
     query.push(" group by bucket_start order by bucket_start");
     let rows = query
@@ -1726,6 +1788,44 @@ async fn request_metric_series(
     fill_metric_gaps(range, granularity, points)
 }
 
+async fn calculated_usage_billing_facts(
+    pool: &PgPool,
+    range: ObservabilityRange,
+    filter: &UsageRecordFilter,
+) -> StoreResult<Vec<CalculatedUsageBillingFact>> {
+    filter.validate()?;
+    let granularity = granularity_for(range);
+    let mut query = QueryBuilder::<Postgres>::new("select date_bin(");
+    query.push_bind(granularity.sql_interval());
+    query.push(
+        "::interval, mr.started_at, timestamptz '1970-01-01 00:00:00+00') as bucket_start,
+                mr.provider_kind, mr.upstream_model_id,
+                mr.input_tokens, mr.output_tokens, mr.cached_tokens, mr.cache_write_tokens,
+                mr.cost_currency, mr.cost_amount::text as amount
+         from model_requests mr where mr.started_at >= ",
+    );
+    query.push_bind(range.start);
+    query.push(" and mr.started_at < ");
+    query.push_bind(range.end);
+    query.push(
+        " and mr.cost_source = 'calculated'
+           and mr.cost_amount is not null and mr.cost_currency is not null
+           and nullif(mr.provider_kind, '') is not null
+           and nullif(mr.upstream_model_id, '') is not null",
+    );
+    push_completed_usage_fact_filter(&mut query, "mr");
+    push_usage_filter(&mut query, filter, "mr");
+    query.push(" order by bucket_start, mr.id");
+    query
+        .build()
+        .fetch_all(pool)
+        .await
+        .map_err(|_| postgres_unavailable("load calculated usage billing facts"))?
+        .iter()
+        .map(calculated_usage_billing_fact_from_row)
+        .collect()
+}
+
 async fn request_costs_by_bucket(
     pool: &PgPool,
     range: ObservabilityRange,
@@ -1744,6 +1844,7 @@ async fn request_costs_by_bucket(
     query.push(" and mr.started_at < ");
     query.push_bind(range.end);
     query.push(" and mr.cost_amount is not null and mr.cost_currency is not null");
+    push_completed_usage_fact_filter(&mut query, "mr");
     push_usage_filter(&mut query, filter, "mr");
     query.push(" group by bucket_start, mr.cost_currency order by bucket_start, mr.cost_currency");
     let rows = query
@@ -1776,7 +1877,12 @@ async fn attempt_metrics(
     query.push_bind(range.end);
     push_usage_filter(&mut query, filter, "mr");
     query.push(
-        "), failures as (
+        "), usage_facts as (
+           select * from selected_requests
+           where outcome = 'succeeded'
+             and downstream_committed_at is not null
+             and client_status_code between 200 and 399
+         ), failures as (
            select coalesce(oe.occurrence_count, 1)::bigint as occurrences,
                   oe.failure_kind, oe.status_code
            from ops_events oe
@@ -1809,13 +1915,13 @@ async fn attempt_metrics(
                 coalesce((select sum(occurrences) from failures
                           where status_code between 500 and 599), 0)::bigint
                   as provider_5xx_count,
-                coalesce((select count(*) from selected_requests
+                coalesce((select count(*) from usage_facts
                           where cost_source = 'provider_reported'), 0)::bigint
                   as provider_reported_count,
-                coalesce((select count(*) from selected_requests
+                coalesce((select count(*) from usage_facts
                           where cost_source = 'calculated'), 0)::bigint
                   as calculated_count,
-                coalesce((select count(*) from selected_requests
+                coalesce((select count(*) from usage_facts
                           where cost_source = 'unavailable'), 0)::bigint
                   as unavailable_count",
     );
@@ -1851,6 +1957,7 @@ async fn request_costs(
     query.push(" and mr.started_at < ");
     query.push_bind(range.end);
     query.push(" and mr.cost_amount is not null and mr.cost_currency is not null");
+    push_completed_usage_fact_filter(&mut query, "mr");
     push_usage_filter(&mut query, filter, "mr");
     query.push(" group by mr.cost_currency order by mr.cost_currency");
     query
@@ -1938,6 +2045,7 @@ async fn provider_observations(
     query.push_bind(range.start);
     query.push(" and mr.started_at < ");
     query.push_bind(range.end);
+    push_completed_usage_fact_filter(&mut query, "mr");
     push_usage_filter(&mut query, filter, "mr");
     query.push(" group by coalesce(mr.provider_kind, 'unrouted') order by request_count desc");
     let rows = query
@@ -2129,6 +2237,15 @@ fn push_usage_filter(query: &mut QueryBuilder<Postgres>, filter: &UsageRecordFil
     }
 }
 
+/// 只把已完整交付给客户端的成功响应投影为使用事实。
+///
+/// `model_requests` 同时承担执行审计：包括上游已发送、但尚未收到首个事件就断开的
+/// WebSocket 请求。这些失败仍必须留给 Ops Errors 和调度健康度分析，不能混入用量、
+/// 成本、账号使用次数或请求明细。
+fn push_completed_usage_fact_filter(query: &mut QueryBuilder<Postgres>, alias: &str) {
+    query.push(format!(" and {alias}.outcome = 'succeeded' and {alias}.downstream_committed_at is not null and {alias}.client_status_code between 200 and 399"));
+}
+
 async fn provider_account_usage(
     pool: &PgPool,
     query: ProviderAccountUsageQuery,
@@ -2171,6 +2288,7 @@ async fn provider_account_usage(
     statement.push_bind(query.range.start);
     statement.push(" and mr.started_at < ");
     statement.push_bind(query.range.end);
+    push_completed_usage_fact_filter(&mut statement, "mr");
     if let Some(account_ids) = &query.account_ids {
         statement.push(" where pa.id = any(");
         statement.push_bind(account_ids.clone());
@@ -2263,11 +2381,14 @@ async fn provider_account_request_buckets(
         "select provider_account_ref,
                 floor(extract(epoch from (started_at - $1)) / 3600)::bigint as bucket_index,
                 count(*)::bigint as request_count
-         from model_requests
-         where provider_account_ref = any($2::text[])
-           and started_at >= $1 and started_at < $3
-         group by provider_account_ref, bucket_index
-         order by provider_account_ref, bucket_index",
+         from model_requests mr
+         where mr.provider_account_ref = any($2::text[])
+           and mr.started_at >= $1 and mr.started_at < $3
+           and mr.outcome = 'succeeded'
+           and mr.downstream_committed_at is not null
+           and mr.client_status_code between 200 and 399
+         group by mr.provider_account_ref, bucket_index
+         order by mr.provider_account_ref, bucket_index",
     )
     .bind(range.start)
     .bind(account_ids)
@@ -2317,13 +2438,16 @@ async fn account_costs(
     account_ids: &[String],
 ) -> StoreResult<HashMap<String, Vec<CurrencyCostTotal>>> {
     let rows = sqlx::query(
-        "select provider_account_ref, cost_currency, sum(cost_amount)::text as amount
-         from model_requests
-         where provider_account_ref = any($1::text[])
-           and started_at >= $2 and started_at < $3
-           and cost_amount is not null and cost_currency is not null
-         group by provider_account_ref, cost_currency
-         order by provider_account_ref, cost_currency",
+        "select mr.provider_account_ref, mr.cost_currency, sum(mr.cost_amount)::text as amount
+         from model_requests mr
+         where mr.provider_account_ref = any($1::text[])
+           and mr.started_at >= $2 and mr.started_at < $3
+           and mr.outcome = 'succeeded'
+           and mr.downstream_committed_at is not null
+           and mr.client_status_code between 200 and 399
+           and mr.cost_amount is not null and mr.cost_currency is not null
+         group by mr.provider_account_ref, mr.cost_currency
+         order by mr.provider_account_ref, mr.cost_currency",
     )
     .bind(account_ids)
     .bind(range.start)
@@ -2347,34 +2471,37 @@ async fn account_model_rows(
     account_ids: &[String],
 ) -> StoreResult<Vec<sqlx::postgres::PgRow>> {
     sqlx::query(
-        "select provider_account_ref,
-                coalesce(upstream_model_id, requested_model_id) as model,
+        "select mr.provider_account_ref,
+                coalesce(mr.upstream_model_id, mr.requested_model_id) as model,
                 count(*)::bigint as request_count,
-                count(*) filter (where outcome = 'succeeded')::bigint as success_count,
-                sum(input_tokens)::bigint as input_tokens,
-                sum(output_tokens)::bigint as output_tokens,
-                sum(cached_tokens)::bigint as cached_tokens,
-                sum(cache_write_tokens)::bigint as cache_write_tokens,
-                sum(reasoning_tokens)::bigint as reasoning_tokens,
-                sum(image_input_tokens)::bigint as image_input_tokens,
-                sum(image_output_tokens)::bigint as image_output_tokens,
-                count(*) filter (where image_generation_succeeded is true)::bigint
+                count(*) filter (where mr.outcome = 'succeeded')::bigint as success_count,
+                sum(mr.input_tokens)::bigint as input_tokens,
+                sum(mr.output_tokens)::bigint as output_tokens,
+                sum(mr.cached_tokens)::bigint as cached_tokens,
+                sum(mr.cache_write_tokens)::bigint as cache_write_tokens,
+                sum(mr.reasoning_tokens)::bigint as reasoning_tokens,
+                sum(mr.image_input_tokens)::bigint as image_input_tokens,
+                sum(mr.image_output_tokens)::bigint as image_output_tokens,
+                count(*) filter (where mr.image_generation_succeeded is true)::bigint
                   as image_request_count,
-                count(*) filter (where image_generation_succeeded is false)::bigint
+                count(*) filter (where mr.image_generation_succeeded is false)::bigint
                   as image_request_failed_count,
-                sum(total_tokens)::bigint as total_tokens,
-                count(*) filter (where cost_source = 'provider_reported')::bigint
+                sum(mr.total_tokens)::bigint as total_tokens,
+                count(*) filter (where mr.cost_source = 'provider_reported')::bigint
                   as provider_reported_count,
-                count(*) filter (where cost_source = 'calculated')::bigint
+                count(*) filter (where mr.cost_source = 'calculated')::bigint
                   as calculated_count,
-                count(*) filter (where cost_source = 'unavailable')::bigint
+                count(*) filter (where mr.cost_source = 'unavailable')::bigint
                   as unavailable_count,
-                max(started_at) as last_used_at
-         from model_requests
-         where provider_account_ref = any($1::text[])
-           and started_at >= $2 and started_at < $3
-         group by provider_account_ref, coalesce(upstream_model_id, requested_model_id)
-         order by provider_account_ref, request_count desc, model",
+                max(mr.started_at) as last_used_at
+         from model_requests mr
+         where mr.provider_account_ref = any($1::text[])
+           and mr.started_at >= $2 and mr.started_at < $3
+           and mr.outcome = 'succeeded'
+           and mr.downstream_committed_at is not null
+           and mr.client_status_code between 200 and 399
+         group by mr.provider_account_ref, coalesce(mr.upstream_model_id, mr.requested_model_id)
+         order by mr.provider_account_ref, request_count desc, model",
     )
     .bind(account_ids)
     .bind(range.start)
@@ -2390,16 +2517,19 @@ async fn account_model_costs(
     account_ids: &[String],
 ) -> StoreResult<HashMap<(String, String), Vec<CurrencyCostTotal>>> {
     let rows = sqlx::query(
-        "select provider_account_ref,
-                coalesce(upstream_model_id, requested_model_id) as model,
-                cost_currency, sum(cost_amount)::text as amount
-         from model_requests
-         where provider_account_ref = any($1::text[])
-           and started_at >= $2 and started_at < $3
-           and cost_amount is not null and cost_currency is not null
-         group by provider_account_ref, coalesce(upstream_model_id, requested_model_id),
-                  cost_currency
-         order by provider_account_ref, model, cost_currency",
+        "select mr.provider_account_ref,
+                coalesce(mr.upstream_model_id, mr.requested_model_id) as model,
+                mr.cost_currency, sum(mr.cost_amount)::text as amount
+         from model_requests mr
+         where mr.provider_account_ref = any($1::text[])
+           and mr.started_at >= $2 and mr.started_at < $3
+           and mr.outcome = 'succeeded'
+           and mr.downstream_committed_at is not null
+           and mr.client_status_code between 200 and 399
+           and mr.cost_amount is not null and mr.cost_currency is not null
+         group by mr.provider_account_ref, coalesce(mr.upstream_model_id, mr.requested_model_id),
+                  mr.cost_currency
+         order by mr.provider_account_ref, model, mr.cost_currency",
     )
     .bind(account_ids)
     .bind(range.start)
@@ -2456,6 +2586,7 @@ const USAGE_RECORD_SELECT: &str =
             pa.name as provider_account_name, pa.email as provider_account_email,
             pa.authentication_kind as provider_account_authentication_kind,
             mr.upstream_model_id, mr.upstream_transport, mr.http_version, mr.websocket_pool,
+            mr.provider_observation_json,
             mr.attempt_count, mr.upstream_send_state, mr.downstream_committed_at,
             mr.outcome, mr.client_status_code, mr.upstream_status_code,
             mr.client_response_id, mr.upstream_request_id, mr.upstream_response_id,
@@ -2483,6 +2614,7 @@ async fn list_usage_records(
     statement.push_bind(query.range.start);
     statement.push(" and mr.started_at < ");
     statement.push_bind(query.range.end);
+    push_completed_usage_fact_filter(&mut statement, "mr");
     push_usage_filter(&mut statement, &query.filter, "mr");
     if let Some(cursor) = &query.cursor {
         statement.push(" and (mr.started_at, mr.id) < (");
@@ -2540,6 +2672,7 @@ async fn count_usage_records(
     statement.push_bind(range.start);
     statement.push(" and mr.started_at < ");
     statement.push_bind(range.end);
+    push_completed_usage_fact_filter(&mut statement, "mr");
     push_usage_filter(&mut statement, filter, "mr");
     let total = statement
         .build_query_scalar::<i64>()
@@ -2555,6 +2688,7 @@ async fn usage_record_detail(pool: &PgPool, request_id: &str) -> StoreResult<Usa
     let mut statement = QueryBuilder::<Postgres>::new(USAGE_RECORD_SELECT);
     statement.push(" where mr.id = ");
     statement.push_bind(request_id.to_owned());
+    push_completed_usage_fact_filter(&mut statement, "mr");
     let row = statement
         .build()
         .fetch_optional(pool)
@@ -2686,6 +2820,7 @@ async fn usage_diagnostics(
     statement.push_bind(range.start);
     statement.push(" and mr.started_at < ");
     statement.push_bind(range.end);
+    push_completed_usage_fact_filter(&mut statement, "mr");
     push_usage_filter(&mut statement, filter, "mr");
     statement.push(" group by dimension_name order by request_count desc, dimension_name limit ");
     statement.push_bind(DIAGNOSTIC_LIMIT);
@@ -2740,6 +2875,7 @@ async fn diagnostic_costs(
     statement.push(" and mr.started_at < ");
     statement.push_bind(range.end);
     statement.push(" and mr.cost_amount is not null and mr.cost_currency is not null");
+    push_completed_usage_fact_filter(&mut statement, "mr");
     push_usage_filter(&mut statement, filter, "mr");
     statement.push(
         " group by dimension_name, mr.cost_currency order by dimension_name, mr.cost_currency",
@@ -2943,6 +3079,10 @@ fn usage_record_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<UsageRecord
         upstream_transport: get(row, "upstream_transport")?,
         http_version: get(row, "http_version")?,
         websocket_pool: get(row, "websocket_pool")?,
+        provider_metadata_json: get::<Option<serde_json::Value>>(row, "provider_observation_json")?
+            .map(|value| serde_json::to_string(&value))
+            .transpose()
+            .map_err(|_| postgres_unavailable("encode provider observation"))?,
         attempt_count: to_u32(get(row, "attempt_count")?)?,
         upstream_send_state: get(row, "upstream_send_state")?,
         downstream_committed_at: get(row, "downstream_committed_at")?,
@@ -3023,6 +3163,21 @@ fn cost_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<CurrencyCostTotal> 
     Ok(CurrencyCostTotal {
         currency: get(row, "cost_currency")?,
         amount: DecimalAmount::from_str(&get::<String>(row, "amount")?)?,
+    })
+}
+
+fn calculated_usage_billing_fact_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> StoreResult<CalculatedUsageBillingFact> {
+    Ok(CalculatedUsageBillingFact {
+        bucket_start: get(row, "bucket_start")?,
+        provider_kind: get(row, "provider_kind")?,
+        upstream_model_id: get(row, "upstream_model_id")?,
+        input_tokens: optional_unsigned(row, "input_tokens")?,
+        output_tokens: optional_unsigned(row, "output_tokens")?,
+        cached_tokens: optional_unsigned(row, "cached_tokens")?,
+        cache_write_tokens: optional_unsigned(row, "cache_write_tokens")?,
+        total: cost_from_row(row)?,
     })
 }
 

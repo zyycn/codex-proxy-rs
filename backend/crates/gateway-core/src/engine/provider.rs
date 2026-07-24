@@ -273,7 +273,9 @@ impl ProviderStreamAccountFeedback {
 
     fn report_failure(&mut self, error: &ProviderError) {
         if self.reported
-            || error.send_state() == UpstreamSendState::NotSent
+            // `Ambiguous` 仍须关闭重放边界，但不能证明失败由账号造成；将它计入
+            // 账号评分会把传输不确定性错误归因给账号。
+            || error.send_state() != UpstreamSendState::Sent
             || matches!(
                 error.kind(),
                 ProviderErrorKind::Cancelled | ProviderErrorKind::ProcessTerminated

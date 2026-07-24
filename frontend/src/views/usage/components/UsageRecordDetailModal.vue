@@ -15,6 +15,7 @@ import {
   usageBilling,
   usageBillingText,
   usageClientIp,
+  usageLatencyDetails,
   usageModelDisplay,
   usageReasoningEffort,
   usageRecordType,
@@ -40,6 +41,7 @@ const modelDisplay = computed(() => props.record
   : { primary: '—', secondary: '' })
 const tokenDetails = computed(() => props.record ? usageTokenDetails(props.record) : null)
 const billing = computed(() => props.record ? usageBilling(props.record) : null)
+const latencyDetails = computed(() => props.record ? usageLatencyDetails(props.record) : null)
 
 const panelClass = 'rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5'
 const panelTitleClass = 'm-0 text-[12px] leading-none font-[780] text-(--cp-text-secondary)'
@@ -55,7 +57,11 @@ const overviewItems = computed(() => [
   { label: '时间', value: props.record?.createdAtDisplay, mono: true },
   { label: '类型', value: props.record ? usageRecordType(props.record) : '—' },
   { label: '耗时', value: props.record?.latencyMsDisplay, mono: true },
-  { label: '首字', value: props.record?.firstTokenLatencyMsDisplay, mono: true },
+  {
+    label: latencyDetails.value?.firstOutputLabel ?? '首字',
+    value: latencyDetails.value?.firstOutputDisplay ?? '—',
+    mono: true,
+  },
   { label: '总 Token', value: tokenDetails.value?.totalTokensDisplay, mono: true },
   { label: '请求 ID', value: props.record?.requestId, mono: true, wide: true },
   { label: '消息', value: props.record?.message, wide: true },

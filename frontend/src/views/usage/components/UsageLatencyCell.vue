@@ -18,8 +18,8 @@ const latencyDetails = computed(() => usageLatencyDetails(props.record))
     <div
       class="grid grid-cols-[auto_auto] items-center justify-end gap-x-2 gap-y-1.5 font-mono text-[12px] leading-none font-[760] tabular-nums"
     >
-      <span class="text-[11px] text-(--cp-text-muted)">首字</span>
-      <span class="text-(--cp-text-secondary)">{{ latencyDetails.firstTokenDisplay }}</span>
+      <span class="text-[11px] text-(--cp-text-muted)">{{ latencyDetails.firstOutputLabel }}</span>
+      <span class="text-(--cp-text-secondary)">{{ latencyDetails.firstOutputDisplay }}</span>
       <span class="text-[11px] text-(--cp-text-muted)">总耗时</span>
       <span class="text-(--cp-text-primary)">{{ latencyDetails.totalDisplay }}</span>
     </div>

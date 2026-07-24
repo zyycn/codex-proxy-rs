@@ -3,7 +3,7 @@
 use std::collections::{BTreeSet, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::accounting::{CostEstimate, CostSource, Usage};
 use crate::engine::continuation::{
@@ -58,7 +58,7 @@ where
     ) -> Result<ResponseExecutionSession<S>, EngineError> {
         let request_id = request.id.clone();
         let client_api_key_ref = request.client_api_key_ref.clone();
-        let request_started_at = request.started_at;
+        let timing_started_at = Instant::now();
         let deadline = request.deadline_at;
         let account_state_owner = continuation
             .as_ref()
@@ -77,7 +77,7 @@ where
             engine: Arc::clone(&self.engine),
             request_id,
             client_api_key_ref,
-            request_started_at,
+            timing_started_at,
             deadline,
             pending_request: Some(request),
             request_persisted: false,
@@ -155,7 +155,7 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     engine: Arc<GatewayEngine<S>>,
     request_id: ModelRequestId,
     client_api_key_ref: crate::policy::ClientApiKeyId,
-    request_started_at: SystemTime,
+    timing_started_at: Instant,
     deadline: SystemTime,
     pending_request: Option<NewModelRequest>,
     request_persisted: bool,
@@ -499,7 +499,8 @@ where
             .and_then(NonZeroU32::new)
             .ok_or(EngineError::EmptyRoutingPlan)?;
         let context = AttemptContext::new(
-            RequestAttemptContext::new(self.request_id.clone(), self.client_api_key_ref.clone()),
+            RequestAttemptContext::new(self.request_id.clone(), self.client_api_key_ref.clone())
+                .with_timing_started_at(self.timing_started_at),
             next_attempt,
             self.deadline,
             self.plan.account_selection_policy(),
@@ -692,8 +693,7 @@ where
     }
 
     async fn observe_event(&mut self, event: &GatewayEvent) -> Result<(), EngineError> {
-        let observed_at = SystemTime::now();
-        let elapsed = elapsed_ms(self.request_started_at, observed_at);
+        let elapsed = elapsed_ms(self.timing_started_at);
         observe_event_timing(&mut self.timings, event, elapsed);
         if let GatewayEvent::Usage(observed) = event {
             self.usage.merge(observed);
@@ -757,6 +757,18 @@ where
         }
         if let Some(value) = observed.first_event_ms {
             self.timings.first_event_ms = Some(value);
+        }
+        if let Some(value) = observed.first_reasoning_ms {
+            self.timings.first_reasoning_ms = Some(value);
+        }
+        if let Some(value) = observed.first_text_ms {
+            self.timings.first_text_ms = Some(value);
+        }
+        if let Some(value) = observed.first_token_ms {
+            self.timings.first_token_ms = Some(value);
+        }
+        if let Some(value) = observed.provider_processing_ms {
+            self.timings.provider_processing_ms = Some(value);
         }
         current.response_observation = Some(observation);
         Ok(())
@@ -949,7 +961,7 @@ where
             return Ok(());
         }
         let completed_at = SystemTime::now();
-        self.timings.latency_ms = Some(elapsed_ms(self.request_started_at, completed_at));
+        self.timings.latency_ms = Some(elapsed_ms(self.timing_started_at));
         let upstream_request_id = self.current.as_ref().and_then(|current| {
             current
                 .response_observation
@@ -974,6 +986,7 @@ where
             .or(Some(200));
         let (upstream_transport, http_version, websocket_pool) =
             self.current_transport_observation();
+        let provider_metadata_json = self.current_provider_metadata_json();
         self.engine
             .store()
             .finalize_model_request(ModelRequestFinalization {
@@ -990,6 +1003,7 @@ where
                 upstream_transport,
                 http_version,
                 websocket_pool,
+                provider_metadata_json,
                 error: None,
                 provider_error_code: None,
                 retry_after_ms: None,
@@ -1096,7 +1110,7 @@ where
             return Ok(());
         }
         let completed_at = SystemTime::now();
-        self.timings.latency_ms = Some(elapsed_ms(self.request_started_at, completed_at));
+        self.timings.latency_ms = Some(elapsed_ms(self.timing_started_at));
         let upstream_request_id = self.current.as_ref().and_then(|current| {
             current
                 .response_observation
@@ -1120,6 +1134,7 @@ where
             .and_then(ProviderResponseObservation::status_code);
         let (upstream_transport, http_version, websocket_pool) =
             self.current_transport_observation();
+        let provider_metadata_json = self.current_provider_metadata_json();
         self.engine
             .store()
             .finalize_model_request(ModelRequestFinalization {
@@ -1138,6 +1153,7 @@ where
                 upstream_transport,
                 http_version,
                 websocket_pool,
+                provider_metadata_json,
                 error: Some(finalization.error),
                 provider_error_code: finalization.provider_error_code,
                 retry_after_ms: finalization.retry_after_ms,
@@ -1168,6 +1184,14 @@ where
                 .websocket_pool()
                 .map(|kind| kind.as_str().to_owned()),
         )
+    }
+
+    fn current_provider_metadata_json(&self) -> Option<String> {
+        self.current
+            .as_ref()
+            .and_then(|current| current.response_observation.as_ref())
+            .and_then(ProviderResponseObservation::provider_metadata)
+            .map(|metadata| metadata.as_json().to_owned())
     }
 
     fn image_generation_succeeded(&self) -> Option<bool> {
@@ -1325,13 +1349,18 @@ fn observe_event_timing(timings: &mut ModelRequestTimings, event: &GatewayEvent,
             timings.first_text_ms.get_or_insert(elapsed_ms);
             timings.first_token_ms.get_or_insert(elapsed_ms);
         }
+        // `response.output_item.added` 会先投影一个空参数的 tool delta；它只是结构帧，
+        // 不能抢在真实工具参数之前成为首个可消费 token。
+        GatewayEvent::ToolCallDelta(delta) if !delta.arguments_delta.is_empty() => {
+            timings.first_token_ms.get_or_insert(elapsed_ms);
+        }
         GatewayEvent::CalculatedCost(_) | GatewayEvent::ProviderCost(_) => {}
         _ => {}
     }
 }
 
-fn elapsed_ms(started_at: SystemTime, observed_at: SystemTime) -> u64 {
-    duration_ms(observed_at.duration_since(started_at).unwrap_or_default())
+fn elapsed_ms(started_at: Instant) -> u64 {
+    duration_ms(started_at.elapsed())
 }
 
 fn duration_ms(duration: Duration) -> u64 {

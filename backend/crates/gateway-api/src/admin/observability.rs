@@ -1,6 +1,6 @@
 //! Dashboard、用量与诊断查询的 wire 映射和固定路由。
 
-use std::num::NonZeroU32;
+use std::{collections::BTreeMap, num::NonZeroU32};
 
 use axum::{
     Router,
@@ -13,6 +13,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Timelike as _, Utc};
 use gateway_admin::model::{PageSize as DomainPageSize, observability as domain};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::{
     AdminAuth, AdminEnvelope, AdminError, AdminResponse, AdminSessionState, WireValidationError,
@@ -658,10 +659,20 @@ pub struct UsageRecordMetadataView {
     pub response_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream_request_id: Option<String>,
-    pub websocket_pool: Option<String>,
+    pub websocket_pool: Option<WebSocketPoolMetadataView>,
     pub image_generation_requested: bool,
     pub image_generation_succeeded: Option<bool>,
     pub latency_details: UsageLatencyDetailsView,
+    /// Provider 安全观测直接展开，避免 API 层理解任何 Provider 专属字段。
+    #[serde(flatten)]
+    pub provider_metadata: BTreeMap<String, Value>,
+}
+
+/// WebSocket 池决策的稳定形状；与 Provider 选择逻辑无关。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSocketPoolMetadataView {
+    pub kind: String,
 }
 
 /// 逻辑请求在上游和输出阶段测得的时延事实。
@@ -1759,7 +1770,10 @@ fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView {
         upstream_status_code: record.upstream_status_code.map(i64::from),
         response_id: record.client_response_id.clone(),
         upstream_request_id: record.upstream_request_id.clone(),
-        websocket_pool: record.websocket_pool.clone(),
+        websocket_pool: record
+            .websocket_pool
+            .clone()
+            .map(|kind| WebSocketPoolMetadataView { kind }),
         image_generation_requested: record.image_generation_requested,
         image_generation_succeeded: record.image_generation_succeeded,
         latency_details: UsageLatencyDetailsView {
@@ -1772,6 +1786,7 @@ fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView {
             first_token_ms: record.first_token_ms,
             openai_processing_ms: record.provider_processing_ms,
         },
+        provider_metadata: provider_metadata_fields(record.provider_metadata_json.as_deref()),
     };
     UsageRecordView {
         id: record.id.clone(),
@@ -1822,6 +1837,40 @@ fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView {
         latency_ms_display: latency_display,
         logical_outcome: outcome,
     }
+}
+
+fn provider_metadata_fields(value: Option<&str>) -> BTreeMap<String, Value> {
+    const CORE_METADATA_FIELDS: &[&str] = &[
+        "protocol",
+        "logicalOutcome",
+        "attemptCount",
+        "requestedModel",
+        "upstreamModel",
+        "clientIp",
+        "userAgent",
+        "reasoningEffort",
+        "reasoningPreset",
+        "compact",
+        "requestKind",
+        "subagentKind",
+        "transport",
+        "httpVersion",
+        "clientStatusCode",
+        "upstreamStatusCode",
+        "responseId",
+        "upstreamRequestId",
+        "websocketPool",
+        "imageGenerationRequested",
+        "imageGenerationSucceeded",
+        "latencyDetails",
+    ];
+    let Some(Ok(Value::Object(fields))) = value.map(serde_json::from_str::<Value>) else {
+        return BTreeMap::new();
+    };
+    fields
+        .into_iter()
+        .filter(|(field, _)| !CORE_METADATA_FIELDS.contains(&field.as_str()))
+        .collect()
 }
 
 fn usage_attempt_view(attempt: domain::UsageAttempt) -> UsageAttemptView {

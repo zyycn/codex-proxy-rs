@@ -237,49 +237,53 @@ fn oauth_account_document_should_reject_api_key_credential_field() {
 }
 
 #[test]
-fn oauth_account_document_should_accept_optional_header_and_dynamic_provider_fields() {
+fn oauth_account_document_should_ignore_source_wrapper_and_non_auth_metadata() {
     let mut document: serde_json::Value =
         serde_json::from_slice(&oauth_account_document()).expect("fixture JSON");
-    document["type"] = serde_json::Value::String("external-account-bundle".to_owned());
-    document["version"] = serde_json::Value::from(1);
-    document["skipped_shadows"] = serde_json::Value::from(2);
+    document["type"] = serde_json::Value::String("sub2api-data".to_owned());
+    document["version"] = serde_json::Value::from(99);
+    document["proxies"] = serde_json::json!([{"url": "http://127.0.0.1:8080"}]);
+    document["source_extension"] = serde_json::json!({"opaque": true});
+    document["accounts"][0]["platform"] = serde_json::Value::String("source-platform".to_owned());
+    document["accounts"][0]["type"] = serde_json::Value::String("source-auth".to_owned());
+    document["accounts"][0]["concurrency"] = serde_json::Value::from(0);
+    document["accounts"][0]["priority"] = serde_json::Value::from(0);
     document["accounts"][0]["credentials"]["provider_extension"] =
         serde_json::json!({"window": "dynamic"});
-    document["accounts"][0]["extra"]["provider_snapshot"] = serde_json::json!({"remaining": 1});
+    document["accounts"][0]["extra"] = serde_json::json!({
+        "email": "different@example.test",
+        "provider_snapshot": {"remaining": 1}
+    });
 
     let parsed = GrokOAuthImportDocument::parse_json(
         &serde_json::to_vec(&document).expect("serialize fixture"),
     )
-    .expect("official optional fields");
+    .expect("source wrapper must not constrain xAI OAuth import");
 
     assert_eq!(parsed.into_entries().len(), 1);
 }
 
 #[test]
-fn strict_oauth_account_document_should_reject_proxy_and_identity_mismatch() {
-    let mut proxy_document: serde_json::Value =
-        serde_json::from_slice(&oauth_account_document()).expect("fixture JSON");
-    proxy_document["proxies"] = serde_json::json!([{"url": "http://127.0.0.1:8080"}]);
-    assert!(
-        GrokOAuthImportDocument::parse_json(
-            &serde_json::to_vec(&proxy_document).expect("serialize fixture")
-        )
-        .is_err()
-    );
+fn minimal_oauth_credential_should_not_require_a_source_format() {
+    let document = serde_json::json!({
+        "access_token": "fixture-access-token",
+        "refresh_token": "fixture-refresh-token",
+        "expires_at": Utc::now() + Duration::hours(1)
+    });
 
-    let mut mismatch_document: serde_json::Value =
-        serde_json::from_slice(&oauth_account_document()).expect("fixture JSON");
-    mismatch_document["accounts"][0]["extra"]["email"] =
-        serde_json::Value::String("different@example.test".to_owned());
-    let error = GrokOAuthImportDocument::parse_json(
-        &serde_json::to_vec(&mismatch_document).expect("serialize fixture"),
+    let mut entries = GrokOAuthImportDocument::parse_json(
+        &serde_json::to_vec(&document).expect("serialize fixture"),
     )
-    .expect_err("identity mismatch must fail closed");
-    assert!(matches!(error, GrokOAuthImportError::InvalidField("email")));
+    .expect("minimal credential")
+    .into_entries();
+
+    let entry = entries.pop().expect("one entry");
+    assert_eq!(entry.name(), "xAI OAuth account 1");
+    assert_eq!(entry.email(), None);
 }
 
 #[test]
-fn strict_oauth_account_document_should_reject_duplicate_account_names() {
+fn oauth_account_document_should_not_require_unique_source_names() {
     let mut document: serde_json::Value =
         serde_json::from_slice(&oauth_account_document()).expect("fixture JSON");
     let duplicate = document["accounts"][0].clone();
@@ -288,14 +292,12 @@ fn strict_oauth_account_document_should_reject_duplicate_account_names() {
         .expect("accounts array")
         .push(duplicate);
 
-    let error = GrokOAuthImportDocument::parse_json(
+    let parsed = GrokOAuthImportDocument::parse_json(
         &serde_json::to_vec(&document).expect("serialize fixture"),
     )
-    .expect_err("duplicate names must be rejected");
-    assert!(matches!(
-        error,
-        GrokOAuthImportError::InvalidField("account")
-    ));
+    .expect("upstream identity verification owns duplicate detection");
+
+    assert_eq!(parsed.into_entries().len(), 2);
 }
 
 #[test]

@@ -1,6 +1,9 @@
 //! 观测查询、趋势、费用覆盖与健康阈值规则。
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, btree_map::Entry},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Timelike as _, Utc};
@@ -14,15 +17,16 @@ use crate::{
             DashboardPeriodMetrics, DashboardResult, DecimalAmount, DiagnosticDimension,
             DiagnosticsItem, DiagnosticsResult, HealthStatus, HealthTimeline, HealthTimelinePoint,
             OpsErrorPage, OpsErrorQuery, ProviderBillingInput, RequestMetricPoint, RequestMetrics,
-            TimeRange, Trend, TrendKind, TrendPoint, TrendSummary, UsageBilling, UsageDetail,
-            UsageFilter, UsageInsights, UsageInsightsCost, UsageInsightsCostPoint,
-            UsageInsightsHealth, UsageInsightsHealthPoint, UsageInsightsPerformance,
-            UsageInsightsPerformancePoint, UsageOverview, UsagePage, UsageQuery, UsageSummary,
+            TimeRange, Trend, TrendKind, TrendPoint, TrendSummary, UsageBilling,
+            UsageCalculatedBillingFact, UsageDetail, UsageFilter, UsageInsights, UsageInsightsCost,
+            UsageInsightsCostPoint, UsageInsightsHealth, UsageInsightsHealthPoint,
+            UsageInsightsPerformance, UsageInsightsPerformancePoint, UsageOverview, UsagePage,
+            UsageQuery, UsageSummary,
         },
         provider_credentials::ProviderQuotaRequest,
     },
     ports::{
-        provider::ProviderAdminRegistry,
+        provider::{ProviderAdminErrorKind, ProviderAdminRegistry},
         store::{ObservabilityStore, SettingsStore},
     },
 };
@@ -215,12 +219,14 @@ impl ObservabilityService for DefaultObservabilityService {
         range: TimeRange,
         filter: UsageFilter,
     ) -> Result<UsageInsights, AdminError> {
-        let (overview, trend) = futures::try_join!(
+        let (overview, trend, billing_facts) = futures::try_join!(
             self.store.usage_summary(range, filter.clone()),
-            self.store.usage_trend(range, filter),
+            self.store.usage_trend(range, filter.clone()),
+            self.store.usage_calculated_billing_facts(range, filter),
         )
         .map_err(|error| map_store_error(error, "usage insights"))?;
-        build_usage_insights(overview, trend)
+        let standard_costs = recover_standard_costs(&self.providers, billing_facts)?;
+        build_usage_insights(overview, trend, standard_costs)
     }
 
     async fn diagnostics(
@@ -268,6 +274,7 @@ impl ObservabilityService for DefaultObservabilityService {
 fn build_usage_insights(
     overview: UsageOverview,
     trend: Vec<RequestMetricPoint>,
+    standard_costs: UsageStandardCosts,
 ) -> Result<UsageInsights, AdminError> {
     let granularity = trend.first().map_or(
         crate::model::observability::Granularity::FifteenMinutes,
@@ -325,12 +332,16 @@ fn build_usage_insights(
             .collect(),
     };
     let estimated_cost = usd_cost(&overview.attempts.costs);
+    let UsageStandardCosts {
+        total: standard_cost,
+        by_bucket: standard_costs_by_bucket,
+    } = standard_costs;
     let cost = UsageInsightsCost {
         cost_per_request: estimated_cost
             .as_ref()
             .and_then(|cost| cost.checked_div_u64(requests.request_count)),
         estimated_cost,
-        standard_cost: None,
+        standard_cost,
         tokens_per_request: rate_or_zero(requests.total_tokens, requests.request_count),
         cached_token_rate: rate_or_zero(requests.cached_tokens, requests.input_tokens),
         cache_hit_request_rate: ratio(
@@ -350,7 +361,7 @@ fn build_usage_insights(
                 cached_tokens: point.metrics.cached_tokens,
                 total_tokens: point.metrics.total_tokens,
                 estimated_cost: usd_cost(&point.costs),
-                standard_cost: None,
+                standard_cost: standard_costs_by_bucket.get(&point.bucket_start).cloned(),
                 cached_token_rate: rate_or_zero(
                     point.metrics.cached_tokens,
                     point.metrics.input_tokens,
@@ -372,6 +383,76 @@ fn build_usage_insights(
         attempts: overview.attempts,
         providers: overview.providers,
     })
+}
+
+#[derive(Debug, Default)]
+struct UsageStandardCosts {
+    total: Option<DecimalAmount>,
+    by_bucket: BTreeMap<DateTime<Utc>, DecimalAmount>,
+}
+
+impl UsageStandardCosts {
+    fn add(
+        &mut self,
+        bucket_start: DateTime<Utc>,
+        amount: DecimalAmount,
+    ) -> Result<(), AdminError> {
+        self.total = Some(match self.total.take() {
+            Some(current) => current
+                .checked_add(&amount)
+                .ok_or_else(|| AdminError::internal("Usage standard cost exceeds decimal range"))?,
+            None => amount.clone(),
+        });
+        match self.by_bucket.entry(bucket_start) {
+            Entry::Occupied(mut entry) => {
+                let sum = entry.get().checked_add(&amount).ok_or_else(|| {
+                    AdminError::internal("Usage standard cost exceeds decimal range")
+                })?;
+                entry.insert(sum);
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(amount);
+            }
+        }
+        Ok(())
+    }
+}
+
+fn recover_standard_costs(
+    providers: &ProviderAdminRegistry,
+    facts: Vec<UsageCalculatedBillingFact>,
+) -> Result<UsageStandardCosts, AdminError> {
+    let mut standard_costs = UsageStandardCosts::default();
+    for fact in facts {
+        let Ok(provider_kind) = ProviderKind::new(fact.provider_kind) else {
+            continue;
+        };
+        let input = ProviderBillingInput {
+            upstream_model_id: fact.upstream_model_id,
+            input_tokens: fact.input_tokens,
+            output_tokens: fact.output_tokens,
+            cached_tokens: fact.cached_tokens,
+            cache_write_tokens: fact.cache_write_tokens,
+            total: fact.total,
+        };
+        let breakdown = match providers.calculated_billing(&provider_kind, &input) {
+            Ok(breakdown) => breakdown,
+            Err(error) if error.kind() == ProviderAdminErrorKind::Unsupported => continue,
+            Err(error) => return Err(map_provider_error(error, "usage billing")),
+        };
+        let Some(breakdown) = breakdown else {
+            continue;
+        };
+        if !breakdown
+            .standard_amount
+            .currency
+            .eq_ignore_ascii_case("USD")
+        {
+            continue;
+        }
+        standard_costs.add(fact.bucket_start, breakdown.standard_amount.amount)?;
+    }
+    Ok(standard_costs)
 }
 
 fn usd_cost(costs: &[CurrencyCost]) -> Option<DecimalAmount> {
