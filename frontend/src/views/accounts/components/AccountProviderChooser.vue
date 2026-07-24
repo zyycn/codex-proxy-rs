@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Openai, Xai } from '@boxicons/vue'
+import { Grid2X2 } from '@lucide/vue'
 
 withDefaults(
   defineProps<{
@@ -11,7 +12,7 @@ withDefaults(
 )
 
 const emit = defineEmits<{
-  select: [provider: 'openai' | 'xai']
+  select: [provider: 'openai' | 'xai' | 'batch']
 }>()
 
 const providers = [
@@ -24,6 +25,11 @@ const providers = [
     value: 'xai' as const,
     label: 'xAI',
     icon: Xai,
+  },
+  {
+    value: 'batch' as const,
+    label: '批量导入',
+    icon: Grid2X2,
   },
 ]
 </script>

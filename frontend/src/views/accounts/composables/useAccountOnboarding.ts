@@ -11,6 +11,12 @@ import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
+type ImportProvider = 'openai' | 'xai'
+
+interface MixedImportDocument {
+  provider: ImportProvider
+  document: Record<string, unknown>
+}
 
 export function useAccountOnboarding(options: {
   reload: () => Promise<unknown>
@@ -46,10 +52,10 @@ export function useAccountOnboarding(options: {
 
     await creatingAccountAction.run(
       async () => {
-        await importAccountDocument()
-        await finishCreate(
-          createForm.value.provider === 'xai' ? 'xAI OAuth 账号已导入' : 'OpenAI 账号已导入',
-        )
+        const message = createForm.value.provider === 'batch'
+          ? await importMixedAccountDocument()
+          : await importAccountDocument()
+        await finishCreate(message)
       },
       { errorText: '导入失败' },
     )
@@ -170,6 +176,41 @@ export function useAccountOnboarding(options: {
       data,
     }))
     commitConfigRevision(result.configRevision)
+    return createForm.value.provider === 'xai' ? 'xAI 账号已导入' : 'OpenAI 账号已导入'
+  }
+
+  async function importMixedAccountDocument() {
+    const documents = parseMixedImportDocuments(parseImportJson(createForm.value.importText))
+    let importedCount = 0
+    const failures: string[] = []
+
+    for (const entry of documents) {
+      try {
+        const expectedConfigRevision = await requireConfigRevision()
+        const result = await withConflictRefresh(() => importAccounts({
+          provider: entry.provider,
+          expectedConfigRevision,
+          data: entry.document,
+        }))
+        commitConfigRevision(result.configRevision)
+        importedCount += result.importedCount
+      }
+      catch (error) {
+        const message = error instanceof Error && error.message
+          ? error.message
+          : '导入失败'
+        failures.push(`${entry.provider === 'xai' ? 'xAI' : 'OpenAI'}：${message}`)
+      }
+    }
+
+    if (importedCount === 0) {
+      throw new Error(failures.length > 0 ? `批量导入失败：${failures.join('；')}` : '批量文件没有可导入的账号')
+    }
+
+    if (failures.length > 0) {
+      return `已导入 ${importedCount} 个账号，${failures.length} 个文档失败：${failures.join('；')}`
+    }
+    return `已导入 ${importedCount} 个账号`
   }
 
   async function finishCreate(message: string) {
@@ -195,7 +236,7 @@ export function useAccountOnboarding(options: {
     () => {
       createForm.value = {
         ...createForm.value,
-        mode: 'oauth',
+        mode: createForm.value.provider === 'batch' ? 'json' : 'oauth',
         oauthFlowId: '',
         oauthAuthUrl: '',
         oauthCallback: '',
@@ -254,4 +295,29 @@ function parseImportJson(value: string) {
   catch {
     throw new Error('JSON 格式不正确')
   }
+}
+
+function parseMixedImportDocuments(value: unknown): MixedImportDocument[] {
+  if (!isRecord(value) || !Array.isArray(value.documents))
+    throw new Error('批量导入文件必须是 CPR 多平台导出文件')
+
+  const documents: MixedImportDocument[] = []
+  for (const entry of value.documents) {
+    if (!isRecord(entry))
+      throw new Error('批量导入文件包含无效的 Provider 文档')
+    const provider = entry.provider
+    if (provider !== 'openai' && provider !== 'xai')
+      throw new Error('批量导入文件包含无效的 Provider 文档')
+    if (!isRecord(entry.document))
+      throw new Error('批量导入文件包含无效的 Provider 文档')
+    documents.push({ provider, document: entry.document })
+  }
+
+  if (documents.length === 0)
+    throw new Error('批量文件没有可导入的账号文档')
+  return documents
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
