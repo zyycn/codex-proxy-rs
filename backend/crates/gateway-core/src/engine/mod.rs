@@ -16,7 +16,7 @@ use std::net::IpAddr;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
 use futures::channel::oneshot;
@@ -332,15 +332,24 @@ pub enum ContinuationAttempt {
 pub struct RequestAttemptContext {
     request_id: ModelRequestId,
     client_api_key_ref: ClientApiKeyId,
+    timing_started_at: Instant,
 }
 
 impl RequestAttemptContext {
     #[must_use]
-    pub const fn new(request_id: ModelRequestId, client_api_key_ref: ClientApiKeyId) -> Self {
+    pub fn new(request_id: ModelRequestId, client_api_key_ref: ClientApiKeyId) -> Self {
         Self {
             request_id,
             client_api_key_ref,
+            timing_started_at: Instant::now(),
         }
+    }
+
+    /// 覆盖本次请求的单调计时原点。
+    #[must_use]
+    pub fn with_timing_started_at(mut self, timing_started_at: Instant) -> Self {
+        self.timing_started_at = timing_started_at;
+        self
     }
 
     #[must_use]
@@ -351,6 +360,12 @@ impl RequestAttemptContext {
     #[must_use]
     pub const fn client_api_key_ref(&self) -> &ClientApiKeyId {
         &self.client_api_key_ref
+    }
+
+    /// 返回贯穿本次请求的单调计时原点。
+    #[must_use]
+    pub const fn timing_started_at(&self) -> Instant {
+        self.timing_started_at
     }
 }
 
@@ -414,6 +429,12 @@ impl AttemptContext {
     #[must_use]
     pub const fn client_api_key_ref(&self) -> &ClientApiKeyId {
         self.request.client_api_key_ref()
+    }
+
+    /// 返回本次请求统一的单调计时原点。
+    #[must_use]
+    pub const fn timing_started_at(&self) -> Instant {
+        self.request.timing_started_at()
     }
 
     #[must_use]
@@ -552,6 +573,8 @@ pub struct ModelRequestFinalization {
     pub upstream_transport: Option<String>,
     pub http_version: Option<String>,
     pub websocket_pool: Option<String>,
+    /// Provider 已筛选的专有观测 JSON；Core 不解释字段。
+    pub provider_metadata_json: Option<String>,
     pub error: Option<GatewayError>,
     pub provider_error_code: Option<String>,
     pub retry_after_ms: Option<u64>,

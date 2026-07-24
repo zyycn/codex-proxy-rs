@@ -1,15 +1,17 @@
 //! 已有 Grok Build OAuth token 的安全归一化边界。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt;
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use url::Url;
 
 use crate::credential::token::UnverifiedTokenSet;
-use crate::{FailureClass, GROK_CLI_BASE_URL, GrokOAuthConfig, OAuthError, SecretValue};
+use crate::{
+    FailureClass, GROK_CLI_BASE_URL, GrokOAuthConfig, OAuthError, OFFICIAL_CLIENT_ID,
+    OFFICIAL_SCOPES, SecretValue,
+};
 
 const MAX_ACCESS_TOKEN_BYTES: usize = 16 * 1024;
 const MAX_REFRESH_TOKEN_BYTES: usize = 64 * 1024;
@@ -143,88 +145,37 @@ impl fmt::Debug for GrokOAuthImportEntry {
     }
 }
 
-/// Provider-owned xAI OAuth 账号文档。
+/// Provider-owned xAI OAuth 账号导入。
 pub struct GrokOAuthImportDocument {
     entries: Vec<GrokOAuthImportEntry>,
 }
 
 impl GrokOAuthImportDocument {
-    /// 解析完整 OAuth 账号文档；未知字段、代理、API Key 或非 xAI OAuth 项均拒绝。
+    /// 从外部 JSON 提取 xAI OAuth 认证字段。
+    ///
+    /// 来源包装格式、代理、并发和其他展示 metadata 不参与认证，也不会影响导入。
+    /// 实际 token 仍须通过官方 refresh/user-info 验证；API Key 不能混入 OAuth 条目。
     pub fn parse_json(document: &[u8]) -> Result<Self, GrokOAuthImportError> {
         if document.is_empty() || document.len() > MAX_IMPORT_DOCUMENT_BYTES {
             return Err(GrokOAuthImportError::InvalidField("document"));
         }
-        let wire: OAuthAccountDocumentWire = serde_json::from_slice(document)
+        let wire: Value = serde_json::from_slice(document)
             .map_err(|_| GrokOAuthImportError::InvalidField("document"))?;
-        if wire
-            .kind
-            .as_deref()
-            .is_some_and(|kind| kind != "external-account-bundle")
-            || wire.version.is_some_and(|version| version != 1)
-            || !wire.proxies.is_empty()
-            || wire.accounts.is_empty()
-            || wire.accounts.len() > MAX_IMPORT_ACCOUNTS
-        {
+        let accounts = import_accounts(&wire)?;
+        if accounts.is_empty() || accounts.len() > MAX_IMPORT_ACCOUNTS {
             return Err(GrokOAuthImportError::InvalidField("document"));
         }
-        let mut names = HashSet::new();
-        let mut entries = Vec::with_capacity(wire.accounts.len());
-        for account in wire.accounts {
-            if account.credentials.extra_fields.keys().any(|field| {
-                matches!(
-                    field.as_str(),
-                    "api_key" | "apiKey" | "xai_api_key" | "xaiApiKey"
-                )
-            }) {
-                return Err(GrokOAuthImportError::InvalidField("account"));
+        let now = Utc::now();
+        let mut entries = Vec::with_capacity(accounts.len());
+        for (index, account) in accounts.into_iter().enumerate() {
+            if let Some(entry) = parse_account_entry(account, index, now)? {
+                entries.push(entry);
             }
-            if account.platform != "grok"
-                || account.kind != "oauth"
-                || account.concurrency == 0
-                || account.priority == 0
-                || !valid_display_value(&account.name, MAX_ACCOUNT_NAME_BYTES)
-                || !names.insert(account.name.clone())
-            {
-                return Err(GrokOAuthImportError::InvalidField("account"));
-            }
-            let email = match (account.credentials.email, account.extra.email) {
-                (Some(left), Some(right)) if left != right => {
-                    return Err(GrokOAuthImportError::InvalidField("email"));
-                }
-                (Some(email), _) | (_, Some(email)) => Some(email),
-                (None, None) => None,
-            };
-            if email
-                .as_deref()
-                .is_some_and(|value| !valid_display_value(value, MAX_EMAIL_BYTES))
-            {
-                return Err(GrokOAuthImportError::InvalidField("email"));
-            }
-            let tokens = match account.credentials.id_token {
-                Some(id_token) => GrokOAuthImportTokens::new(
-                    SecretValue::new(account.credentials.access_token),
-                    SecretValue::new(account.credentials.refresh_token),
-                    SecretValue::new(id_token),
-                ),
-                None => GrokOAuthImportTokens::without_id_token(
-                    SecretValue::new(account.credentials.access_token),
-                    SecretValue::new(account.credentials.refresh_token),
-                ),
-            };
-            let metadata = GrokOAuthImportMetadata::new(
-                account.credentials.token_type,
-                account.credentials.client_id,
-                account.credentials.scope,
-                account.credentials.base_url,
-                wire.exported_at,
-                account.credentials.expires_at,
-            );
-            entries.push(GrokOAuthImportEntry {
-                name: account.name,
-                email,
-                candidate: GrokOAuthImportCandidate::new(tokens, metadata),
-            });
         }
+        if entries.is_empty() {
+            return Err(GrokOAuthImportError::InvalidField("document"));
+        }
+
         Ok(Self { entries })
     }
 
@@ -244,66 +195,121 @@ impl fmt::Debug for GrokOAuthImportDocument {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OAuthAccountDocumentWire {
-    #[serde(default, rename = "type")]
-    kind: Option<String>,
-    #[serde(default)]
-    version: Option<u32>,
-    exported_at: DateTime<Utc>,
-    accounts: Vec<OAuthAccountWire>,
-    proxies: Vec<Value>,
-    #[serde(default, rename = "skipped_shadows")]
-    _skipped_shadows: u64,
+fn import_accounts(document: &Value) -> Result<Vec<&Value>, GrokOAuthImportError> {
+    match document {
+        Value::Array(accounts) => Ok(accounts.iter().collect()),
+        Value::Object(object) => match object.get("accounts") {
+            Some(Value::Array(accounts)) => Ok(accounts.iter().collect()),
+            Some(_) => Err(GrokOAuthImportError::InvalidField("accounts")),
+            None => Ok(vec![document]),
+        },
+        _ => Err(GrokOAuthImportError::InvalidField("document")),
+    }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OAuthAccountWire {
-    name: String,
-    #[serde(default, rename = "notes")]
-    _notes: Option<String>,
-    platform: String,
-    #[serde(rename = "type")]
-    kind: String,
-    credentials: OAuthCredentialsWire,
-    concurrency: u32,
-    priority: u32,
-    #[serde(default, rename = "rate_multiplier")]
-    _rate_multiplier: Option<Value>,
-    #[serde(default, rename = "expires_at")]
-    _expires_at: Option<i64>,
-    #[serde(default, rename = "auto_pause_on_expired")]
-    _auto_pause_on_expired: Option<bool>,
-    #[serde(default, rename = "proxy_key")]
-    _proxy_key: Option<String>,
-    #[serde(default)]
-    extra: OAuthAccountExtraWire,
+fn parse_account_entry(
+    account: &Value,
+    index: usize,
+    now: DateTime<Utc>,
+) -> Result<Option<GrokOAuthImportEntry>, GrokOAuthImportError> {
+    let account = account
+        .as_object()
+        .ok_or(GrokOAuthImportError::InvalidField("account"))?;
+    let credentials = account
+        .get("credentials")
+        .and_then(Value::as_object)
+        .unwrap_or(account);
+    let (access_token, refresh_token) = match (
+        credential_value(credentials, &["access_token", "accessToken", "at"]),
+        credential_value(credentials, &["refresh_token", "refreshToken", "rt"]),
+    ) {
+        (Some(access_token), Some(refresh_token)) => (access_token, refresh_token),
+        (None, None) => return Ok(None),
+        (None, Some(_)) => return Err(GrokOAuthImportError::InvalidField("access_token")),
+        (Some(_), None) => return Err(GrokOAuthImportError::InvalidField("refresh_token")),
+    };
+    if ["api_key", "apiKey", "xai_api_key", "xaiApiKey"]
+        .iter()
+        .any(|field| credentials.contains_key(*field))
+    {
+        return Err(GrokOAuthImportError::InvalidField("account"));
+    }
+
+    let email = [
+        credential_value(credentials, &["email"]),
+        display_value(account, &["email"]),
+        account
+            .get("extra")
+            .and_then(Value::as_object)
+            .and_then(|extra| display_value(extra, &["email"])),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|value| valid_display_value(value, MAX_EMAIL_BYTES))
+    .map(str::to_owned);
+    let name = display_value(account, &["name", "label"])
+        .filter(|value| valid_display_value(value, MAX_ACCOUNT_NAME_BYTES))
+        .map(str::to_owned)
+        .or_else(|| email.clone())
+        .unwrap_or_else(|| format!("xAI OAuth account {}", index + 1));
+    let expires_at = credential_value(
+        credentials,
+        &[
+            "expires_at",
+            "expiresAt",
+            "access_token_expires_at",
+            "accessTokenExpiresAt",
+        ],
+    )
+    .and_then(parse_source_expiry)
+    .filter(|expires_at| *expires_at > now && *expires_at - now <= MAX_DECLARED_LIFETIME)
+    .unwrap_or_else(|| now + ChronoDuration::seconds(1));
+    let tokens = match credential_value(credentials, &["id_token", "idToken"]) {
+        Some(id_token) => GrokOAuthImportTokens::new(
+            SecretValue::new(access_token.to_owned()),
+            SecretValue::new(refresh_token.to_owned()),
+            SecretValue::new(id_token.to_owned()),
+        ),
+        None => GrokOAuthImportTokens::without_id_token(
+            SecretValue::new(access_token.to_owned()),
+            SecretValue::new(refresh_token.to_owned()),
+        ),
+    };
+    let metadata = GrokOAuthImportMetadata::new(
+        "Bearer".to_owned(),
+        OFFICIAL_CLIENT_ID.to_owned(),
+        OFFICIAL_SCOPES.join(" "),
+        GROK_CLI_BASE_URL.to_owned(),
+        now,
+        expires_at,
+    );
+
+    Ok(Some(GrokOAuthImportEntry {
+        name,
+        email,
+        candidate: GrokOAuthImportCandidate::new(tokens, metadata),
+    }))
 }
 
-#[derive(Deserialize)]
-struct OAuthCredentialsWire {
-    access_token: String,
-    refresh_token: String,
-    #[serde(default)]
-    id_token: Option<String>,
-    token_type: String,
-    expires_at: DateTime<Utc>,
-    email: Option<String>,
-    base_url: String,
-    client_id: String,
-    scope: String,
-    #[serde(flatten)]
-    extra_fields: HashMap<String, Value>,
+fn credential_value<'a>(credentials: &'a Map<String, Value>, fields: &[&str]) -> Option<&'a str> {
+    display_value(credentials, fields).or_else(|| {
+        credentials
+            .get("token")
+            .and_then(Value::as_object)
+            .and_then(|token| display_value(token, fields))
+    })
 }
 
-#[derive(Default, Deserialize)]
-struct OAuthAccountExtraWire {
-    #[serde(default)]
-    email: Option<String>,
-    #[serde(flatten)]
-    _extra_fields: HashMap<String, Value>,
+fn display_value<'a>(object: &'a Map<String, Value>, fields: &[&str]) -> Option<&'a str> {
+    fields
+        .iter()
+        .find_map(|field| object.get(*field).and_then(Value::as_str))
+}
+
+fn parse_source_expiry(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
 }
 
 impl GrokOAuthImportCandidate {

@@ -31,6 +31,8 @@ const localUsage = computed<AccountLocalUsage | null>(() => {
   return value as AccountLocalUsage
 })
 const mode = computed<UsageWindowMode>(() => {
+  if (typeof props.window?.usedPercent === 'number')
+    return 'quota'
   if (localUsage.value)
     return 'local'
   if (props.window)
@@ -40,9 +42,21 @@ const mode = computed<UsageWindowMode>(() => {
 const quotaValueVisible = computed(() =>
   typeof props.window?.usedPercent === 'number' && props.window.usedPercent > 0,
 )
+const quotaLocalUsageDisplay = computed(() => {
+  const display = localUsage.value?.totalTokensDisplay
+  if (typeof display === 'string' && display.trim())
+    return display.trim()
+  const total = localUsage.value?.totalTokens
+  return typeof total === 'number' && total > 0 ? total.toLocaleString() : ''
+})
+const quotaLocalUsageVisible = computed(() =>
+  props.showLocalValue
+  && typeof localUsage.value?.totalTokens === 'number'
+  && localUsage.value.totalTokens > 0,
+)
 
 const rootClass = computed(() =>
-  isCompact.value ? 'min-w-0' : 'rounded-lg bg-(--cp-bg-subtle) p-2',
+  isCompact.value ? 'flex min-w-0 flex-col' : 'rounded-lg bg-(--cp-bg-subtle) p-2',
 )
 const headerClass = computed(() =>
   isCompact.value
@@ -59,14 +73,14 @@ const valueClass = computed(() =>
 )
 const trackShapeClass = computed(() =>
   isCompact.value
-    ? 'h-1.5 w-full overflow-hidden rounded-full'
+    ? 'h-1 w-full overflow-hidden rounded-full'
     : 'h-2 overflow-hidden rounded-full',
 )
 const trackClass = computed(() => `${trackShapeClass.value} bg-(--cp-default-border)`)
 const barStyle = computed(() => {
   if (!props.window)
     return undefined
-  return quotaWindowBarStyle(props.window, isCompact.value ? '6px' : '8px')
+  return quotaWindowBarStyle(props.window, isCompact.value ? '4px' : '8px')
 })
 const barClass = computed(() => props.window ? quotaWindowBarClass(props.window) : undefined)
 const percentTextClass = computed(() =>
@@ -131,16 +145,24 @@ const requestBars = computed(() => {
         <span class="min-w-0" :class="labelClass">
           {{ window.labelDisplay }}
         </span>
-        <span
-          v-if="quotaValueVisible"
-          class="shrink-0 font-mono tabular-nums"
-          :class="[valueClass, percentTextClass]"
-        >
-          {{ window.usedPercentDisplay }}
+        <span class="flex shrink-0 items-baseline justify-end gap-1.5 font-mono tabular-nums">
+          <span
+            v-if="quotaLocalUsageVisible"
+            class="text-(--cp-text-muted)"
+            :class="valueClass"
+          >
+            {{ quotaLocalUsageDisplay }}
+          </span>
+          <span
+            v-if="quotaValueVisible"
+            :class="[valueClass, percentTextClass]"
+          >
+            {{ window.usedPercentDisplay }}
+          </span>
         </span>
       </div>
       <div
-        :class="[trackClass, !isCompact ? 'mt-2' : undefined]"
+        :class="[trackClass, !isCompact ? 'mt-2' : 'mt-auto']"
         role="progressbar"
         :aria-label="window.labelDisplay"
         aria-valuemin="0"
@@ -176,7 +198,7 @@ const requestBars = computed(() => {
       </div>
       <div
         class="flex items-stretch gap-px"
-        :class="[trackShapeClass, !isCompact ? 'mt-2' : undefined]"
+        :class="[trackShapeClass, !isCompact ? 'mt-2' : 'mt-auto']"
         role="img"
         :aria-label="requestTimelineTitle"
         :title="requestTimelineTitle"

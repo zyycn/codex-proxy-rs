@@ -327,6 +327,21 @@ pub struct ProviderBillingInput {
     pub total: CurrencyCost,
 }
 
+/// 已完整交付且由 Provider 计算费用的持久请求事实。
+///
+/// 控制面仅保留通用事实，具体 Provider 负责校验已持久化总额并恢复标准费用。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageCalculatedBillingFact {
+    pub bucket_start: DateTime<Utc>,
+    pub provider_kind: String,
+    pub upstream_model_id: String,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cached_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub total: CurrencyCost,
+}
+
 /// Provider 已确认的逐项费用与单价。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalculatedBillingBreakdown {
@@ -549,6 +564,8 @@ pub struct UsageRecord {
     pub upstream_transport: Option<String>,
     pub http_version: Option<String>,
     pub websocket_pool: Option<String>,
+    /// Provider 已筛选的专有观测 JSON；管理领域保持不透明。
+    pub provider_metadata_json: Option<String>,
     pub attempt_count: u32,
     pub upstream_send_state: String,
     pub downstream_committed_at: Option<DateTime<Utc>>,

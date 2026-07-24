@@ -264,6 +264,7 @@ fn successful_core_finalization(id: &str) -> CoreModelRequestFinalization {
         upstream_transport: Some("websocket".to_owned()),
         http_version: Some("HTTP/2".to_owned()),
         websocket_pool: None,
+        provider_metadata_json: None,
         error: None,
         provider_error_code: None,
         retry_after_ms: None,
@@ -273,6 +274,54 @@ fn successful_core_finalization(id: &str) -> CoreModelRequestFinalization {
         timings: CoreModelRequestTimings::default(),
         completed_at: std::time::SystemTime::now(),
     }
+}
+
+#[tokio::test]
+async fn core_adapter_should_persist_only_object_provider_observation() {
+    let Some(database) = TestDatabase::create("execution_provider_observation").await else {
+        return;
+    };
+    seed_running_request(&database.pool, "req_provider_observation")
+        .await
+        .expect("seed model request");
+    let store = PgExecutionStore::new(database.pool.clone());
+    let mut finalization = successful_core_finalization("req_provider_observation");
+    finalization.provider_metadata_json = Some("{\"effectiveModel\":\"gpt-test\"}".to_owned());
+
+    ExecutionStore::finalize_model_request(&store, finalization)
+        .await
+        .expect("persist provider observation");
+    let persisted: serde_json::Value = sqlx::query_scalar(
+        "select provider_observation_json from model_requests where id = 'req_provider_observation'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("load provider observation");
+    assert_eq!(persisted["effectiveModel"], "gpt-test");
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn core_adapter_should_reject_non_object_provider_observation() {
+    let Some(database) = TestDatabase::create("execution_invalid_provider_observation").await
+    else {
+        return;
+    };
+    seed_running_request(&database.pool, "req_invalid_provider_observation")
+        .await
+        .expect("seed model request");
+    let store = PgExecutionStore::new(database.pool.clone());
+    let mut finalization = successful_core_finalization("req_invalid_provider_observation");
+    finalization.provider_metadata_json = Some("[]".to_owned());
+
+    assert!(
+        ExecutionStore::finalize_model_request(&store, finalization)
+            .await
+            .is_err()
+    );
+
+    database.close().await;
 }
 
 async fn seed_running_request(pool: &sqlx::PgPool, id: &str) -> Result<(), sqlx::Error> {

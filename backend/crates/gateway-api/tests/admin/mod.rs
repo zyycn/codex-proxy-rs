@@ -14,8 +14,8 @@ use gateway_admin::{
     model::{
         MutationContext, Revision,
         accounts::{
-            AccountListQuery, AccountPage, AccountRecord, AccountUsage, DeleteAccounts,
-            SetAccountEnabled,
+            AccountListQuery, AccountPage, AccountRecord, AccountUsage, AccountUsageWindowQuery,
+            AccountUsageWindowResult, DeleteAccounts, SetAccountEnabled,
         },
         auth::{AdminAuditEvent, AdminSession},
         client_keys::{
@@ -441,6 +441,13 @@ impl AccountStore for UnusedStore {
         Err(unavailable("account usage"))
     }
 
+    async fn load_account_usage_by_windows(
+        &self,
+        _: &[AccountUsageWindowQuery],
+    ) -> AdminStoreResult<Vec<AccountUsageWindowResult>> {
+        Err(unavailable("account quota window usage"))
+    }
+
     async fn list_credentials(
         &self,
         _: &ProviderKind,
@@ -538,6 +545,15 @@ impl ObservabilityStore for UnusedStore {
         _: UsageFilter,
     ) -> AdminStoreResult<Vec<RequestMetricPoint>> {
         Err(unavailable("usage trend"))
+    }
+
+    async fn usage_calculated_billing_facts(
+        &self,
+        _: TimeRange,
+        _: UsageFilter,
+    ) -> AdminStoreResult<Vec<gateway_admin::model::observability::UsageCalculatedBillingFact>>
+    {
+        Err(unavailable("usage billing facts"))
     }
 
     async fn list_usage_records(&self, _: UsageQuery) -> AdminStoreResult<UsagePage> {

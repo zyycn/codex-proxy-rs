@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -223,6 +224,7 @@ pub struct ModelRequestFinalization {
     pub upstream_transport: Option<String>,
     pub http_version: Option<String>,
     pub websocket_pool: Option<String>,
+    pub provider_metadata_json: Option<Value>,
     pub error_kind: Option<String>,
     pub provider_error_code: Option<String>,
     pub error_message: Option<String>,
@@ -273,6 +275,13 @@ impl ModelRequestFinalization {
             .is_some_and(|kind| !matches!(kind, "new" | "reuse"))
         {
             return Err(invalid("websocket pool must be new or reuse"));
+        }
+        if self
+            .provider_metadata_json
+            .as_ref()
+            .is_some_and(|metadata| !metadata.is_object())
+        {
+            return Err(invalid("provider observation must be a JSON object"));
         }
         self.timings.validate()
     }
@@ -498,7 +507,8 @@ impl ModelRequestRepository for PgExecutionStore {
                  first_text_ms = $32, first_token_ms = $33, provider_processing_ms = $34,
                  latency_ms = $35, completed_at = $36,
                  upstream_transport = coalesce($37, upstream_transport),
-                 http_version = coalesce($38, http_version), websocket_pool = $39
+                 http_version = coalesce($38, http_version), websocket_pool = $39,
+                 provider_observation_json = $40
              where id = $1 and outcome = 'running'",
         )
         .bind(&finalization.model_request_id)
@@ -585,6 +595,7 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(finalization.upstream_transport)
         .bind(finalization.http_version)
         .bind(finalization.websocket_pool)
+        .bind(finalization.provider_metadata_json.map(sqlx::types::Json))
         .execute(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("finalize model request"))?;
@@ -769,6 +780,18 @@ impl ExecutionStore for PgExecutionStore {
         &self,
         finalization: CoreModelRequestFinalization,
     ) -> Result<(), CoreStoreError> {
+        let provider_metadata_json = finalization
+            .provider_metadata_json
+            .as_deref()
+            .map(serde_json::from_str::<Value>)
+            .transpose()
+            .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
+        if provider_metadata_json
+            .as_ref()
+            .is_some_and(|metadata| !metadata.is_object())
+        {
+            return Err(CoreStoreError::new(CoreStoreErrorKind::InvalidData));
+        }
         let (cost_source, cost_amount, cost_currency) = match finalization.cost.total() {
             Some(total) => (
                 cost_source_from_core(finalization.cost.source()),
@@ -809,6 +832,7 @@ impl ExecutionStore for PgExecutionStore {
                 upstream_transport: finalization.upstream_transport,
                 http_version: finalization.http_version,
                 websocket_pool: finalization.websocket_pool,
+                provider_metadata_json,
                 error_kind,
                 provider_error_code: finalization.provider_error_code,
                 error_message,

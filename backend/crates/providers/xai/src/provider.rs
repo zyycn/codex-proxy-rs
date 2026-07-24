@@ -14,7 +14,8 @@ use gateway_core::engine::credential::{
 };
 use gateway_core::engine::provider::{
     EventStream, Provider, ProviderCallMetadata, ProviderCatalogGeneration,
-    ProviderModelCapabilities, ProviderRequest, ProviderStream, UpstreamTransport,
+    ProviderModelCapabilities, ProviderRequest, ProviderRequestObservation, ProviderStream,
+    UpstreamTransport,
 };
 use gateway_core::engine::{AttemptContext, ContinuationAttempt, UpstreamSendState};
 use gateway_core::error::{ContinuationFailure, ProviderError, ProviderErrorKind};
@@ -112,6 +113,26 @@ impl Provider for GrokBuildProvider {
 
     fn catalog_generation(&self) -> ProviderCatalogGeneration {
         self.catalog.catalog_generation()
+    }
+
+    fn request_observation(&self, operation: &Operation) -> ProviderRequestObservation {
+        let Operation::Generate(request) = operation else {
+            return ProviderRequestObservation::default();
+        };
+        let reasoning_effort = request
+            .protocol_payload()
+            .body()
+            .get("reasoning")
+            .and_then(Value::as_object)
+            .and_then(|reasoning| reasoning.get("effort"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        ProviderRequestObservation {
+            reasoning_effort,
+            ..ProviderRequestObservation::default()
+        }
     }
 
     async fn query_model_capabilities(

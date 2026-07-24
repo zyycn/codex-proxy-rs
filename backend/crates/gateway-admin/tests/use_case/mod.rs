@@ -7,7 +7,10 @@ mod settings;
 mod system;
 mod xai;
 
-use std::sync::{Arc, Mutex};
+use std::{
+    str::FromStr,
+    sync::{Arc, Mutex},
+};
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
@@ -16,8 +19,8 @@ use gateway_admin::{
     model::{
         MutationContext, Revision,
         accounts::{
-            AccountListQuery, AccountPage, AccountRecord, AccountUsage, DeleteAccounts,
-            SetAccountEnabled,
+            AccountListQuery, AccountPage, AccountRecord, AccountUsage, AccountUsageWindowQuery,
+            AccountUsageWindowResult, DeleteAccounts, SetAccountEnabled,
         },
         auth::{AdminAuditEvent, AdminSession},
         client_keys::{
@@ -244,6 +247,13 @@ impl AccountStore for UnavailableStore {
         Err(unavailable("account usage"))
     }
 
+    async fn load_account_usage_by_windows(
+        &self,
+        _: &[AccountUsageWindowQuery],
+    ) -> AdminStoreResult<Vec<AccountUsageWindowResult>> {
+        Err(unavailable("account quota window usage"))
+    }
+
     async fn list_credentials(
         &self,
         _: &ProviderKind,
@@ -389,6 +399,15 @@ impl ObservabilityStore for UnavailableStore {
         Err(unavailable("usage trend"))
     }
 
+    async fn usage_calculated_billing_facts(
+        &self,
+        _: TimeRange,
+        _: UsageFilter,
+    ) -> AdminStoreResult<Vec<gateway_admin::model::observability::UsageCalculatedBillingFact>>
+    {
+        Err(unavailable("usage billing facts"))
+    }
+
     async fn list_usage_records(&self, _: UsageQuery) -> AdminStoreResult<UsagePage> {
         Err(unavailable("usage records"))
     }
@@ -454,6 +473,7 @@ impl SettingsStore for UnavailableStore {
 struct UnavailableProvider {
     kind: ProviderKind,
     dashboard_profile: Option<DashboardWireProfile>,
+    calculated_billing: Option<gateway_admin::model::observability::CalculatedBillingBreakdown>,
 }
 
 impl UnavailableProvider {
@@ -461,6 +481,7 @@ impl UnavailableProvider {
         Self {
             kind: ProviderKind::new(kind).expect("provider kind"),
             dashboard_profile: None,
+            calculated_billing: None,
         }
     }
 }
@@ -492,7 +513,7 @@ impl ProviderAdmin for UnavailableProvider {
         Option<gateway_admin::model::observability::CalculatedBillingBreakdown>,
         ProviderAdminError,
     > {
-        Ok(None)
+        Ok(self.calculated_billing.clone())
     }
 
     async fn prepare_import(
@@ -587,6 +608,35 @@ pub(super) fn dashboard_profile_provider() -> Arc<dyn ProviderAdmin> {
                 error: None,
             }),
         }),
+        calculated_billing: None,
+    })
+}
+
+pub(super) fn calculated_billing_provider() -> Arc<dyn ProviderAdmin> {
+    let amount = |value| gateway_admin::model::observability::CurrencyCost {
+        currency: "USD".to_owned(),
+        amount: gateway_admin::model::observability::DecimalAmount::from_str(value)
+            .expect("test billing amount"),
+    };
+    Arc::new(UnavailableProvider {
+        kind: ProviderKind::new("openai").expect("provider kind"),
+        dashboard_profile: None,
+        calculated_billing: Some(
+            gateway_admin::model::observability::CalculatedBillingBreakdown {
+                input_amount: amount("0.8"),
+                output_amount: amount("0.2"),
+                cache_read_amount: amount("0"),
+                cache_write_amount: amount("0"),
+                standard_amount: amount("1"),
+                total_amount: amount("1.25"),
+                input_price_per_million: amount("0"),
+                output_price_per_million: amount("0"),
+                cache_read_price_per_million: amount("0"),
+                cache_write_price_per_million: amount("0"),
+                service_tier: None,
+                multiplier_percent: 125,
+            },
+        ),
     })
 }
 

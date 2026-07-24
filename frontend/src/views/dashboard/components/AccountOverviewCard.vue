@@ -280,6 +280,7 @@ const valueToneClasses: Record<string, string> = {
                   :window="account.usageWindow"
                   :show-local-value="false"
                   variant="compact"
+                  class="xl:h-7.25"
                 />
               </span>
             </article>

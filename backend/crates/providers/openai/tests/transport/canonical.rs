@@ -173,6 +173,46 @@ fn decoder_should_restore_done_only_reasoning_and_text_as_canonical_facts() {
 }
 
 #[test]
+fn decoder_timing_signals_should_count_tool_arguments_as_first_token() {
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_tool_timing\",\"model\":\"gpt-test\"}}\n\n",
+        "event: response.output_item.added\n",
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call_tool_timing\"}}\n\n",
+        "event: response.function_call_arguments.delta\n",
+        "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"delta\":\"{\\\"path\\\":\\\"a\\\"}\"}\n\n",
+    );
+    let mut decoder = CodexCanonicalDecoder::new("fallback");
+
+    let _ = decoder.push(body.as_bytes()).expect("tool argument frame");
+    let signals = decoder.take_timing_signals();
+
+    assert!(signals.semantic_output);
+    assert!(!signals.reasoning_output);
+    assert!(!signals.text_output);
+}
+
+#[test]
+fn decoder_timing_signals_should_distinguish_reasoning_and_text_output() {
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_output_timing\",\"model\":\"gpt-test\"}}\n\n",
+        "event: response.reasoning_summary_text.delta\n",
+        "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"plan\"}\n\n",
+        "event: response.output_text.delta\n",
+        "data: {\"type\":\"response.output_text.delta\",\"output_index\":1,\"content_index\":0,\"delta\":\"answer\"}\n\n",
+    );
+    let mut decoder = CodexCanonicalDecoder::new("fallback");
+
+    let _ = decoder.push(body.as_bytes()).expect("output frames");
+    let signals = decoder.take_timing_signals();
+
+    assert!(signals.semantic_output);
+    assert!(signals.reasoning_output);
+    assert!(signals.text_output);
+}
+
+#[test]
 fn decoder_should_preserve_image_tool_tokens_in_canonical_usage() {
     let body = concat!(
         "event: response.created\n",

@@ -10,8 +10,8 @@ use chrono::{DateTime, Utc};
 use crate::model::{
     MutationContext, Revision,
     accounts::{
-        AccountListQuery, AccountPage, AccountRecord, AccountUsage, DeleteAccounts,
-        SetAccountEnabled,
+        AccountListQuery, AccountPage, AccountRecord, AccountUsage, AccountUsageWindowQuery,
+        AccountUsageWindowResult, DeleteAccounts, SetAccountEnabled,
     },
     auth::{AdminAuditEvent, AdminSession},
     client_keys::{
@@ -20,8 +20,8 @@ use crate::model::{
     },
     observability::{
         DashboardObservation, DashboardRuntimeSlots, DiagnosticDimension, DiagnosticObservation,
-        OpsErrorPage, OpsErrorQuery, RequestMetricPoint, TimeRange, UsageDetail, UsageFilter,
-        UsageOverview, UsagePage, UsageQuery,
+        OpsErrorPage, OpsErrorQuery, RequestMetricPoint, TimeRange, UsageCalculatedBillingFact,
+        UsageDetail, UsageFilter, UsageOverview, UsagePage, UsageQuery,
     },
     provider_credentials::{
         AuthorizationCommit, CredentialDetails, CredentialImportCommit, CredentialImportResult,
@@ -89,6 +89,11 @@ pub trait AccountStore: Send + Sync {
         range: TimeRange,
         account_ids: &[String],
     ) -> AdminStoreResult<Vec<AccountUsage>>;
+
+    async fn load_account_usage_by_windows(
+        &self,
+        windows: &[AccountUsageWindowQuery],
+    ) -> AdminStoreResult<Vec<AccountUsageWindowResult>>;
 
     async fn list_credentials(
         &self,
@@ -248,6 +253,13 @@ pub trait ObservabilityStore: Send + Sync {
         range: TimeRange,
         filter: UsageFilter,
     ) -> AdminStoreResult<Vec<RequestMetricPoint>>;
+
+    /// 返回可由 Provider 重新校验的已计算费用事实，用于恢复标准费用趋势。
+    async fn usage_calculated_billing_facts(
+        &self,
+        range: TimeRange,
+        filter: UsageFilter,
+    ) -> AdminStoreResult<Vec<UsageCalculatedBillingFact>>;
 
     async fn list_usage_records(&self, query: UsageQuery) -> AdminStoreResult<UsagePage>;
 

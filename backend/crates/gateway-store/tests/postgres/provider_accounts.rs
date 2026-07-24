@@ -5,8 +5,9 @@ use gateway_admin::{
     model::{
         MutationActor, MutationContext, PageSize, Revision as AdminRevision,
         accounts::{
-            AccountListQuery, AccountSort, AccountSortField, AccountStatus, DeleteAccounts,
-            SetAccountEnabled as AdminSetAccountEnabled, SortDirection,
+            AccountListQuery, AccountSort, AccountSortField, AccountStatus,
+            AccountUsageWindowQuery, DeleteAccounts, SetAccountEnabled as AdminSetAccountEnabled,
+            SortDirection,
         },
         observability::TimeRange,
         provider_credentials::{
@@ -128,7 +129,10 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     let mut attention = account("acct_attention", "user-attention");
     attention.email = Some("attention@example.invalid".to_owned());
     attention.availability = ProviderAccountAvailability::Invalid;
-    for account in [alpha, beta, charlie, attention] {
+    let mut quota_exhausted = account("acct_quota_exhausted", "user-quota-exhausted");
+    quota_exhausted.email = Some("quota-exhausted@example.invalid".to_owned());
+    quota_exhausted.availability = ProviderAccountAvailability::QuotaExhausted;
+    for account in [alpha, beta, charlie, attention, quota_exhausted] {
         repository
             .insert_provider_account(account)
             .await
@@ -208,11 +212,11 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
         .await
         .expect("sort accounts by retained usage");
     assert_eq!(usage_page.config_revision.get(), 1);
-    assert_eq!(usage_page.total, 4);
-    assert_eq!(usage_page.summary.total, 4);
+    assert_eq!(usage_page.total, 5);
+    assert_eq!(usage_page.summary.total, 5);
     assert_eq!(usage_page.summary.active, 2);
-    assert_eq!(usage_page.summary.quota_exhausted, 0);
-    assert_eq!(usage_page.summary.attention, 2);
+    assert_eq!(usage_page.summary.quota_exhausted, 1);
+    assert_eq!(usage_page.summary.attention, 1);
     assert_eq!(
         usage_page
             .items
@@ -423,6 +427,96 @@ async fn terminal_admin_usage_chunks_large_selections_and_preserves_exact_costs(
     assert_eq!(usage[0].models.len(), 1);
     assert_eq!(usage[0].models[0].model, "gpt-exact");
     assert_eq!(usage[0].models[0].costs[0].amount.as_str(), "1.2345678901");
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn terminal_admin_quota_window_usage_prefers_provider_total_and_falls_back_to_components() {
+    let Some(database) = TestDatabase::create("provider_account_quota_window_usage").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    repository
+        .insert_provider_account(account("acct_quota_window", "user-quota-window"))
+        .await
+        .expect("insert quota window account");
+    let now = Utc::now();
+    seed_model_request(
+        &database.pool,
+        ModelRequestSeed {
+            request_id: "req_quota_window_recent",
+            account_id: "acct_quota_window",
+            provider_kind: "openai",
+            model: "gpt-window",
+            total_tokens: 10,
+            cost_amount: "0",
+            started_at: now - TimeDelta::minutes(30),
+        },
+    )
+    .await
+    .expect("seed recent quota window request");
+    seed_model_request(
+        &database.pool,
+        ModelRequestSeed {
+            request_id: "req_quota_window_older",
+            account_id: "acct_quota_window",
+            provider_kind: "openai",
+            model: "gpt-window",
+            total_tokens: 20,
+            cost_amount: "0",
+            started_at: now - TimeDelta::hours(6),
+        },
+    )
+    .await
+    .expect("seed older quota window request");
+    sqlx::query(
+        "update model_requests
+         set input_tokens = case id
+             when 'req_quota_window_recent' then 7
+             when 'req_quota_window_older' then 11
+           end,
+             output_tokens = case id
+             when 'req_quota_window_recent' then 3
+             when 'req_quota_window_older' then 9
+           end,
+             total_tokens = case id
+             when 'req_quota_window_recent' then 700
+             when 'req_quota_window_older' then null
+           end
+         where id in ('req_quota_window_recent', 'req_quota_window_older')",
+    )
+    .execute(&database.pool)
+    .await
+    .expect("separate provider total from fallback components");
+
+    let mut usage = PgAdminAccountStore::new(database.pool.clone())
+        .load_account_usage_by_windows(&[
+            AccountUsageWindowQuery {
+                account_id: "acct_quota_window".to_owned(),
+                key: "short".to_owned(),
+                range: TimeRange {
+                    start: now - TimeDelta::hours(1),
+                    end: now + TimeDelta::minutes(1),
+                },
+            },
+            AccountUsageWindowQuery {
+                account_id: "acct_quota_window".to_owned(),
+                key: "long".to_owned(),
+                range: TimeRange {
+                    start: now - TimeDelta::hours(7),
+                    end: now + TimeDelta::minutes(1),
+                },
+            },
+        ])
+        .await
+        .expect("load quota window usage");
+    usage.sort_by(|left, right| left.key.cmp(&right.key));
+
+    assert_eq!(usage[0].key, "long");
+    assert_eq!(usage[0].usage.total_tokens, Some(720));
+    assert_eq!(usage[1].key, "short");
+    assert_eq!(usage[1].usage.total_tokens, Some(700));
 
     database.close().await;
 }
@@ -1014,14 +1108,15 @@ async fn seed_model_request(
            client_transport, requested_model_id,
            provider_kind, provider_account_id,
            provider_account_ref, upstream_model_id, upstream_transport, attempt_count,
-           upstream_send_state, outcome, client_status_code, upstream_status_code,
+           upstream_send_state, downstream_committed_at, outcome, client_status_code,
+           upstream_status_code,
            input_tokens, output_tokens, cached_tokens, cache_write_tokens, reasoning_tokens,
            total_tokens, cost_source, cost_amount, cost_currency,
            started_at, deadline_at, completed_at
          ) values (
            $1, 'key-provider-account-test', 1, 'openai', 'responses', '/v1/responses',
            'http_sse', $4, $3, $2, $2, $4, 'http_sse', 1,
-           'sent', 'succeeded', 200, 200, $5, 0, 0, 0, 0,
+           'sent', $7 + interval '1 second', 'succeeded', 200, 200, $5, 0, 0, 0, 0,
            $5, 'provider_reported', $6::numeric, 'USD', $7,
            $7 + interval '5 minutes', $7 + interval '1 second'
          )",

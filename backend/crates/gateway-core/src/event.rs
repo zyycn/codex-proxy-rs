@@ -398,6 +398,46 @@ pub struct ProviderResponseTimings {
     pub connect_ms: Option<u64>,
     pub headers_ms: Option<u64>,
     pub first_event_ms: Option<u64>,
+    pub first_reasoning_ms: Option<u64>,
+    pub first_text_ms: Option<u64>,
+    pub first_token_ms: Option<u64>,
+    pub provider_processing_ms: Option<u64>,
+}
+
+/// Provider 已筛选的响应观测 JSON。
+///
+/// Core 只验证它是有界 JSON object，并在请求终态原样交给存储层；字段语义、
+/// 脱敏和版本演进均由所属 Provider 负责。这样 Provider 专有协议不会渗入路由
+/// 或管理领域。
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProviderResponseMetadata(String);
+
+impl ProviderResponseMetadata {
+    const MAX_BYTES: usize = 32 * 1024;
+
+    /// 从 Provider 已筛选的 JSON object 创建观测快照。
+    #[must_use]
+    pub fn new(json: String) -> Option<Self> {
+        if json.len() > Self::MAX_BYTES {
+            return None;
+        }
+        serde_json::from_str::<Value>(&json)
+            .ok()
+            .filter(Value::is_object)
+            .map(|_| Self(json))
+    }
+
+    /// 返回不透明的 JSON 文本，供持久化 adapter 原样验证和写入。
+    #[must_use]
+    pub fn as_json(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for ProviderResponseMetadata {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ProviderResponseMetadata(<provider-owned>)")
+    }
 }
 
 /// Provider 已筛选、可由协议 adapter 再次按白名单表达的响应头。
@@ -451,6 +491,7 @@ pub struct ProviderResponseObservation {
     request_id: Option<SafeUpstreamValue>,
     timings: ProviderResponseTimings,
     client_headers: Vec<ProviderResponseHeader>,
+    provider_metadata: Option<ProviderResponseMetadata>,
 }
 
 impl ProviderResponseObservation {
@@ -464,6 +505,7 @@ impl ProviderResponseObservation {
             request_id: None,
             timings: ProviderResponseTimings::default(),
             client_headers: Vec::new(),
+            provider_metadata: None,
         }
     }
 
@@ -503,6 +545,13 @@ impl ProviderResponseObservation {
         self
     }
 
+    /// 附加由 Provider 自己定义且已筛选的响应观测快照。
+    #[must_use]
+    pub fn with_provider_metadata(mut self, metadata: ProviderResponseMetadata) -> Self {
+        self.provider_metadata = Some(metadata);
+        self
+    }
+
     #[must_use]
     pub const fn transport(&self) -> &UpstreamTransport {
         &self.transport
@@ -536,6 +585,12 @@ impl ProviderResponseObservation {
     #[must_use]
     pub fn client_headers(&self) -> &[ProviderResponseHeader] {
         &self.client_headers
+    }
+
+    /// 返回 Provider 专有的安全观测 JSON；Core 不读取其字段。
+    #[must_use]
+    pub const fn provider_metadata(&self) -> Option<&ProviderResponseMetadata> {
+        self.provider_metadata.as_ref()
     }
 }
 

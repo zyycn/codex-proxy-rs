@@ -49,7 +49,8 @@ async fn restart_should_request_process_restart_inside_docker() {
 #[tokio::test]
 async fn restart_should_spawn_replacement_before_shutdown_outside_docker() {
     let fixture = Fixture::new();
-    fixture.write_executable("#!/bin/sh\nexit 0\n");
+    let replacement_marker = fixture.root.path().join("replacement-ran");
+    fixture.write_executable("#!/bin/sh\n: > \"${0%/*}/replacement-ran\"\n");
     let mut config = fixture.config("http://127.0.0.1:1/repos");
     config.self_restart_enabled = true;
     let shutdown = CancellationToken::new();
@@ -66,6 +67,13 @@ async fn restart_should_spawn_replacement_before_shutdown_outside_docker() {
     tokio::time::timeout(Duration::from_secs(2), shutdown.cancelled())
         .await
         .expect("shutdown requested after spawn");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !replacement_marker.is_file() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("replacement executed before fixture cleanup");
 }
 
 #[tokio::test]

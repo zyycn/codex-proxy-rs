@@ -132,7 +132,7 @@ async fn connect_and_migrate_should_apply_0001_once_and_reopen_cleanly() {
     .expect("drop migration test database");
     admin.close().await;
 
-    assert_eq!((first_table_count, migration_count), (9, 1));
+    assert_eq!((first_table_count, migration_count), (8, 1));
 }
 
 #[test]

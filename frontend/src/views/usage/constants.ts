@@ -249,6 +249,7 @@ export function usageLatencyDetails(record: UsageDisplayRecord) {
   const firstTokenMs = durationValue(
     record.firstTokenLatencyMs ?? property(latencyDetails, 'firstTokenMs'),
   )
+  const firstEventMs = durationValue(property(latencyDetails, 'firstEventMs'))
   const totalMs = durationValue(record.latencyMs)
   const firstReasoningMs = durationValue(property(latencyDetails, 'firstReasoningMs'))
   const firstTextMs = durationValue(property(latencyDetails, 'firstTextMs'))
@@ -282,14 +283,16 @@ export function usageLatencyDetails(record: UsageDisplayRecord) {
     },
     { label: 'WebSocket 连接', value: durationValue(property(latencyDetails, 'wsConnectMs')) },
     { label: '上游响应头', value: durationValue(property(latencyDetails, 'upstreamHeadersMs')) },
-    { label: '首个上游事件', value: durationValue(property(latencyDetails, 'firstEventMs')) },
+    { label: '首个上游事件', value: firstEventMs },
     { label: '上游处理', value: durationValue(property(latencyDetails, 'openaiProcessingMs')) },
   ]
     .filter(item => item.value !== null)
     .map(item => ({ ...item, value: formatDuration(item.value) }))
 
   return {
-    firstTokenDisplay: formatDuration(firstTokenMs),
+    // SSE 可能先收到生命周期事件而没有文本或推理增量；这不是首字，须保留原始语义。
+    firstOutputLabel: firstTokenMs === null && firstEventMs !== null ? '首事件' : '首字',
+    firstOutputDisplay: formatDuration(firstTokenMs ?? firstEventMs),
     totalDisplay: formatDuration(totalMs),
     breakdownItems,
     transportItems,
@@ -386,8 +389,10 @@ function recordMetadata(record: UsageDisplayRecord) {
 }
 
 function recordLatencyDetails(record: UsageDisplayRecord) {
+  const metadata = recordMetadata(record)
   return asRecord('latencyDetails' in record ? record.latencyDetails : undefined)
-    ?? recordMetadata(record)
+    ?? asRecord(property(metadata, 'latencyDetails'))
+    ?? metadata
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

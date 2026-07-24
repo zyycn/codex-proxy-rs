@@ -18,7 +18,8 @@ use gateway_admin::{
         MutationContext, Revision,
         accounts::{
             AccountAvailability, AccountListQuery, AccountPage, AccountRecord, AccountSummary,
-            AccountUsage, DeleteAccounts, SetAccountEnabled,
+            AccountUsage, AccountUsageWindowQuery, AccountUsageWindowResult, DeleteAccounts,
+            SetAccountEnabled,
         },
         observability::TimeRange,
         provider_credentials::{
@@ -31,7 +32,7 @@ use gateway_admin::{
             PreparedAuthorizationCredential, PreparedCredentialCreate, PreparedCredentialImport,
             PreparedCredentialRotation, PreparedCredentialRotationFacts, ProviderDocument,
             ProviderExport, ProviderExportCredentialInput, ProviderModels, ProviderQuota,
-            ProviderQuotaRequest,
+            ProviderQuotaRequest, ProviderQuotaWindow,
         },
         settings::{
             AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RotationStrategy,
@@ -59,6 +60,7 @@ pub(super) struct FakeProviderAdmin {
     export_inputs: Mutex<Vec<ProviderExportCredentialInput>>,
     import_account_ids: Mutex<Vec<String>>,
     quota_requests: Mutex<Vec<ProviderQuotaRequest>>,
+    quota: Mutex<ProviderQuota>,
 }
 
 impl FakeProviderAdmin {
@@ -72,6 +74,7 @@ impl FakeProviderAdmin {
             export_inputs: Mutex::new(Vec::new()),
             import_account_ids: Mutex::new(vec!["acct_prepared".to_owned()]),
             quota_requests: Mutex::new(Vec::new()),
+            quota: Mutex::new(empty_quota()),
         })
     }
 
@@ -98,6 +101,10 @@ impl FakeProviderAdmin {
             .lock()
             .expect("provider quota requests")
             .clone()
+    }
+
+    pub(super) fn set_quota(&self, quota: ProviderQuota) {
+        *self.quota.lock().expect("provider quota") = quota;
     }
 
     pub(super) fn pending(&self) -> Option<PendingAuthorizationMutation> {
@@ -282,12 +289,7 @@ impl ProviderAdmin for FakeProviderAdmin {
         {
             return Err(ProviderAdminError::new(kind));
         }
-        Ok(ProviderQuota {
-            observed_at: None,
-            refresh_token_expires_at: None,
-            windows: Vec::new(),
-            provider_data: None,
-        })
+        Ok(self.quota.lock().expect("provider quota").clone())
     }
 
     async fn models(
@@ -327,6 +329,7 @@ pub(super) struct FakeAccountStore {
     fail_commit: Mutex<bool>,
     audit_requests: Mutex<Vec<String>>,
     authorization_revision: Mutex<Option<Revision>>,
+    quota_window_usage: Mutex<Vec<AccountUsageWindowResult>>,
 }
 
 impl FakeAccountStore {
@@ -337,6 +340,7 @@ impl FakeAccountStore {
             fail_commit: Mutex::new(false),
             audit_requests: Mutex::new(Vec::new()),
             authorization_revision: Mutex::new(None),
+            quota_window_usage: Mutex::new(Vec::new()),
         })
     }
 
@@ -353,6 +357,10 @@ impl FakeAccountStore {
             .authorization_revision
             .lock()
             .expect("authorization revision")
+    }
+
+    pub(super) fn set_quota_window_usage(&self, usage: Vec<AccountUsageWindowResult>) {
+        *self.quota_window_usage.lock().expect("quota window usage") = usage;
     }
 
     fn record(&self, event: &'static str) {
@@ -403,6 +411,17 @@ impl AccountStore for FakeAccountStore {
         _: &[String],
     ) -> AdminStoreResult<Vec<AccountUsage>> {
         Ok(Vec::new())
+    }
+
+    async fn load_account_usage_by_windows(
+        &self,
+        _: &[AccountUsageWindowQuery],
+    ) -> AdminStoreResult<Vec<AccountUsageWindowResult>> {
+        Ok(self
+            .quota_window_usage
+            .lock()
+            .expect("quota window usage")
+            .clone())
     }
 
     async fn list_credentials(
@@ -759,6 +778,54 @@ async fn accounts_list_should_return_complete_directory_semantics() {
 }
 
 #[tokio::test]
+async fn accounts_list_should_attach_local_usage_to_quota_windows() {
+    let provider = FakeProviderAdmin::new("openai", events());
+    let reset_at = Utc::now() + TimeDelta::hours(1);
+    provider.set_quota(ProviderQuota {
+        observed_at: Some(Utc::now()),
+        refresh_token_expires_at: None,
+        windows: vec![ProviderQuotaWindow {
+            key: "primary".to_owned(),
+            group: "shortTerm".to_owned(),
+            label: "5小时限额".to_owned(),
+            source: None,
+            window_seconds: Some(5 * 60 * 60),
+            used_percent: Some(97.0),
+            reset_at: Some(reset_at),
+            local_usage: None,
+            provider_data: None,
+        }],
+        provider_data: None,
+    });
+    let store = FakeAccountStore::new("openai", events());
+    store.set_quota_window_usage(vec![AccountUsageWindowResult {
+        account_id: "acct_test".to_owned(),
+        key: "primary".to_owned(),
+        usage: quota_local_usage("acct_test", 4_330_000),
+    }]);
+
+    let page = accounts_service(provider, store)
+        .await
+        .accounts()
+        .list(AccountListQuery {
+            page: 1,
+            page_size: gateway_admin::model::PageSize::new(20).expect("page size"),
+            provider_kind: None,
+            search: None,
+            status: None,
+            sort: None,
+        })
+        .await
+        .expect("quota window usage");
+
+    let usage = page.items[0].quota.windows[0]
+        .local_usage
+        .as_ref()
+        .expect("quota window local usage");
+    assert_eq!(usage.total_tokens, Some(4_330_000));
+}
+
+#[tokio::test]
 async fn accounts_refresh_provider_failure_should_not_call_store_commit() {
     let events = events();
     let provider = FakeProviderAdmin::new("openai", events.clone());
@@ -830,6 +897,38 @@ pub(super) fn context(request_id: &str) -> MutationContext {
 
 pub(super) fn document() -> ProviderDocument {
     ProviderDocument::new(OpaqueProviderData::new(Default::default()))
+}
+
+fn empty_quota() -> ProviderQuota {
+    ProviderQuota {
+        observed_at: None,
+        refresh_token_expires_at: None,
+        windows: Vec::new(),
+        provider_data: None,
+    }
+}
+
+fn quota_local_usage(account_id: &str, total_tokens: u64) -> AccountUsage {
+    AccountUsage {
+        account_id: account_id.to_owned(),
+        request_count: 1,
+        success_count: 1,
+        input_tokens: Some(total_tokens),
+        output_tokens: Some(0),
+        cached_tokens: Some(0),
+        cache_write_tokens: Some(0),
+        reasoning_tokens: Some(0),
+        image_input_tokens: Some(0),
+        image_output_tokens: Some(0),
+        image_request_count: 0,
+        image_request_failed_count: 0,
+        total_tokens: Some(total_tokens),
+        cost_coverage: Default::default(),
+        costs: Vec::new(),
+        last_used_at: Some(Utc::now()),
+        request_buckets: Vec::new(),
+        models: Vec::new(),
+    }
 }
 
 pub(super) fn account_record(kind: &str) -> AccountRecord {

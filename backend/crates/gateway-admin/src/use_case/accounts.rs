@@ -19,12 +19,13 @@ use crate::{
         AdminError, MutationContext, Revision,
         accounts::{
             AccountConnectionTestEvent, AccountConnectionTestEventStream, AccountListQuery,
-            AccountRecord, AccountStatus,
+            AccountRecord, AccountStatus, AccountUsageWindowQuery,
         },
         observability::TimeRange,
         provider_credentials::{
             AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountRefreshResult,
-            PrepareCredentialRefresh, ProviderModels, ProviderQuotaRequest,
+            PrepareCredentialRefresh, ProviderModels, ProviderQuota, ProviderQuotaRequest,
+            ProviderQuotaWindow,
         },
     },
     ports::{
@@ -132,6 +133,45 @@ impl DefaultAccountsService {
         Ok((account, provider))
     }
 
+    async fn attach_quota_local_usage(
+        &self,
+        accounts: &[AccountRecord],
+        quotas: &mut [ProviderQuota],
+    ) -> Result<(), AdminError> {
+        let windows = accounts
+            .iter()
+            .zip(quotas.iter())
+            .flat_map(|(account, quota)| {
+                quota
+                    .windows
+                    .iter()
+                    .filter_map(|window| quota_usage_window(&account.id, window))
+            })
+            .collect::<Vec<_>>();
+        if windows.is_empty() {
+            return Ok(());
+        }
+        let usage_by_window = self
+            .accounts
+            .load_account_usage_by_windows(&windows)
+            .await
+            .map_err(|error| map_store_error(error, "quota window usage"))?
+            .into_iter()
+            .map(|result| ((result.account_id, result.key), result.usage))
+            .collect::<BTreeMap<_, _>>();
+        for (account, quota) in accounts.iter().zip(quotas) {
+            for window in &mut quota.windows {
+                if window.local_usage.is_none() {
+                    let key = (account.id.clone(), window.key.clone());
+                    if let Some(usage) = usage_by_window.get(&key) {
+                        window.local_usage = Some(usage.clone());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn load_directory_item(
         &self,
         account_id: &ProviderAccountId,
@@ -165,7 +205,7 @@ impl DefaultAccountsService {
             },
         )?;
         let rolling_usage = rolling_usage.into_iter().next();
-        let quota = provider
+        let mut quota = provider
             .quota(ProviderQuotaRequest {
                 account_id: account_id.clone(),
                 refresh: refresh_quota,
@@ -173,6 +213,11 @@ impl DefaultAccountsService {
             })
             .await
             .map_err(|error| map_provider_error(error, "provider quota"))?;
+        self.attach_quota_local_usage(
+            std::slice::from_ref(&account),
+            std::slice::from_mut(&mut quota),
+        )
+        .await?;
         Ok(AccountDirectoryItem {
             status: account_status(&account, now),
             usage: usage.into_iter().next(),
@@ -214,7 +259,7 @@ impl AccountsService for DefaultAccountsService {
             .into_iter()
             .map(|usage| (usage.account_id.clone(), usage))
             .collect::<BTreeMap<_, _>>();
-        let quotas = futures::future::join_all(page.items.iter().map(|account| async {
+        let mut quotas = futures::future::join_all(page.items.iter().map(|account| async {
             let account_id = ProviderAccountId::new(account.id.clone())
                 .map_err(|_| AdminError::invalid("Invalid provider account ID"))?;
             let provider = self
@@ -233,6 +278,8 @@ impl AccountsService for DefaultAccountsService {
         .await
         .into_iter()
         .collect::<Result<Vec<_>, AdminError>>()?;
+        self.attach_quota_local_usage(&page.items, &mut quotas)
+            .await?;
         let items = page
             .items
             .into_iter()
@@ -450,4 +497,23 @@ fn retained_usage_range(now: chrono::DateTime<Utc>, retention_days: u32) -> Time
         start: now - Duration::days(i64::from(retention_days)),
         end: now,
     }
+}
+
+fn quota_usage_window(
+    account_id: &str,
+    window: &ProviderQuotaWindow,
+) -> Option<AccountUsageWindowQuery> {
+    if window.local_usage.is_some() {
+        return None;
+    }
+    let reset_at = window.reset_at?;
+    let seconds = i64::try_from(window.window_seconds?).ok()?;
+    let start = reset_at.checked_sub_signed(Duration::seconds(seconds))?;
+    let range = TimeRange::new(start, reset_at).ok()?;
+    // 上游百分比以该 reset 边界定义；以当前时间回推会让本地 Token 属于另一窗口。
+    Some(AccountUsageWindowQuery {
+        account_id: account_id.to_owned(),
+        key: window.key.clone(),
+        range,
+    })
 }
