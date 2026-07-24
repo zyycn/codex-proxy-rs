@@ -163,7 +163,7 @@ impl GrokResponsesRequest {
         upstream_model: &str,
         client_api_key_ref: &ClientApiKeyId,
     ) -> Result<Self, GrokRequestEncodeError> {
-        Self::encode_inner(request, upstream_model, client_api_key_ref, true)
+        Self::encode_inner(request, upstream_model, client_api_key_ref, true, false)
     }
 
     pub(super) fn encode_compaction_source(
@@ -171,7 +171,7 @@ impl GrokResponsesRequest {
         upstream_model: &str,
         client_api_key_ref: &ClientApiKeyId,
     ) -> Result<Self, GrokRequestEncodeError> {
-        Self::encode_inner(request, upstream_model, client_api_key_ref, false)
+        Self::encode_inner(request, upstream_model, client_api_key_ref, false, true)
     }
 
     fn encode_inner(
@@ -179,12 +179,16 @@ impl GrokResponsesRequest {
         upstream_model: &str,
         client_api_key_ref: &ClientApiKeyId,
         allow_cache_route: bool,
+        should_consume_terminal_compaction_trigger: bool,
     ) -> Result<Self, GrokRequestEncodeError> {
-        let payload = request
-            .protocol_payload()
-            .filter(|payload| payload.protocol() == "openai")
-            .ok_or(GrokRequestEncodeError::InvalidProtocolPayload)?;
+        let payload = request.protocol_payload();
+        if payload.protocol() != "openai" {
+            return Err(GrokRequestEncodeError::InvalidProtocolPayload);
+        }
         let mut body = payload.body().clone();
+        if should_consume_terminal_compaction_trigger {
+            consume_terminal_compaction_trigger(&mut body)?;
+        }
         // `provider_options` 是已废弃的网关私有 envelope，不是 xAI 上游协议字段。
         // OpenAI 透明路径会保留未知字段；这里只在 xAI adapter 内做最小剥离。
         body.remove("provider_options");
@@ -229,6 +233,22 @@ impl GrokResponsesRequest {
     pub(crate) fn to_json_bytes(&self) -> Result<Vec<u8>, GrokRequestEncodeError> {
         serde_json::to_vec(&self.body).map_err(|_| GrokRequestEncodeError::Serialization)
     }
+}
+
+fn consume_terminal_compaction_trigger(
+    body: &mut Map<String, Value>,
+) -> Result<(), GrokRequestEncodeError> {
+    let Some(Value::Array(input)) = body.get_mut("input") else {
+        return Err(GrokRequestEncodeError::InvalidRequestNormalization);
+    };
+    let Some(Value::Object(last)) = input.last() else {
+        return Err(GrokRequestEncodeError::InvalidRequestNormalization);
+    };
+    if last.get("type").and_then(Value::as_str) != Some("compaction_trigger") {
+        return Err(GrokRequestEncodeError::InvalidRequestNormalization);
+    }
+    input.pop();
+    Ok(())
 }
 
 impl fmt::Debug for GrokResponsesRequest {

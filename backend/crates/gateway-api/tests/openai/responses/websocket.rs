@@ -22,12 +22,7 @@ fn response_create_should_default_to_the_websocket_streaming_contract() {
     let Operation::Generate(request) = decoded.operation() else {
         panic!("Responses must map to Generate");
     };
-    assert!(
-        request
-            .protocol_payload()
-            .and_then(|payload| payload.body().get("stream"))
-            .is_none()
-    );
+    assert!(request.protocol_payload().body().get("stream").is_none());
 }
 
 #[test]
@@ -51,7 +46,7 @@ fn response_create_should_preserve_provider_options_as_opaque_wire_body() {
     let Operation::Generate(request) = decoded.operation() else {
         panic!("Responses must map to Generate");
     };
-    let payload = request.protocol_payload().expect("OpenAI wire payload");
+    let payload = request.protocol_payload();
 
     assert_eq!(
         payload.body().get("provider_options"),
@@ -86,7 +81,8 @@ fn response_create_should_preserve_compaction_trigger_for_openai() {
     assert_eq!(
         request
             .protocol_payload()
-            .and_then(|payload| payload.body().get("input"))
+            .body()
+            .get("input")
             .and_then(|input| input.pointer("/1/type")),
         Some(&json!("compaction_trigger"))
     );

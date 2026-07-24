@@ -245,7 +245,6 @@ impl ProviderStreamAccountFeedback {
                     crate::event::GatewayEvent::TextDelta(_)
                         | crate::event::GatewayEvent::ReasoningDelta(_)
                         | crate::event::GatewayEvent::ToolCallDelta(_)
-                        | crate::event::GatewayEvent::CompactionOutput(_)
                 )
             })
         {
@@ -350,8 +349,7 @@ impl Stream for ProviderStream {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Some(Ok(event))) => {
                 // 带 wire 的 canonical facts 只是旁路观测：wire 才是客户端协议的
-                // 权威表达。只有 canonical-only Provider 输出（例如 xAI 的内部
-                // compaction）需要以状态机作为交付条件。
+                // 权威表达。只有 canonical-only Provider 输出需要以状态机作为交付条件。
                 if event.wire_event().is_none() && !event.canonical_facts().is_empty() {
                     this.strict_canonical_seen = true;
                     for fact in event.canonical_facts() {

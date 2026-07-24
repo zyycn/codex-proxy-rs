@@ -19,8 +19,6 @@ use crate::error::{OperationError, validate_text};
 pub enum OperationKind {
     /// 文本、多模态和工具生成。
     Generate,
-    /// 对话历史压缩。
-    CompactConversation,
     /// 向量嵌入。
     Embed,
     /// 文档重排。
@@ -37,7 +35,6 @@ impl OperationKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Generate => "generate",
-            Self::CompactConversation => "compact_conversation",
             Self::Embed => "embed",
             Self::Rerank => "rerank",
             Self::GenerateImage => "generate_image",
@@ -53,15 +50,6 @@ pub enum RetrySafety {
     Idempotent,
     /// 默认禁止跨 Provider fallback。
     NonIdempotent,
-}
-
-/// 客户端对生成结果的持久化意图。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ResponsePersistence {
-    /// 允许所选 Provider 保存响应状态。
-    Store,
-    /// 要求所选 Provider 不保存响应状态。
-    DoNotStore,
 }
 
 /// Router 理解的稳定能力。
@@ -251,474 +239,31 @@ impl fmt::Debug for ProtocolPayload {
     }
 }
 
-/// 生成输入的角色。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum MessageRole {
-    /// 系统指令。
-    System,
-    /// 开发者指令；与系统角色分开保留，避免协议 adapter 丢失优先级语义。
-    Developer,
-    /// 用户输入。
-    User,
-    /// 助手历史输出。
-    Assistant,
-}
-
-/// 图像输入来源。
-#[derive(Clone, PartialEq, Eq)]
-pub enum ImageSource {
-    /// 外部 URL；协议 adapter 必须先完成长度与 scheme 校验。
-    Url(String),
-    /// 已解码的二进制图像。
-    Bytes {
-        /// MIME type。
-        media_type: String,
-        /// 图像内容。
-        data: Vec<u8>,
-    },
-}
-
-impl fmt::Debug for ImageSource {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Url(_) => formatter.write_str("ImageSource::Url(<redacted>)"),
-            Self::Bytes { media_type, data } => formatter
-                .debug_struct("ImageSource::Bytes")
-                .field("media_type", media_type)
-                .field("bytes", &data.len())
-                .finish(),
-        }
-    }
-}
-
-/// 生成输入的稳定内容片段。
-#[derive(Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ContentPart {
-    /// 文本内容。
-    Text(String),
-    /// 图像内容。
-    Image(ImageSource),
-    /// 工具结果。
-    ToolResult {
-        /// 对应 tool call ID。
-        call_id: String,
-        /// 工具输出文本。
-        output: String,
-    },
-    /// 助手发起的工具调用；portable history 用它在跨 Provider 时恢复调用上下文。
-    ToolCall {
-        /// 稳定 tool call ID。
-        call_id: String,
-        /// 工具名称。
-        name: String,
-        /// 完整 JSON arguments 文本。
-        arguments: String,
-    },
-}
-
-impl fmt::Debug for ContentPart {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Text(text) => formatter
-                .debug_tuple("Text")
-                .field(&format_args!("<{} bytes>", text.len()))
-                .finish(),
-            Self::Image(source) => formatter.debug_tuple("Image").field(source).finish(),
-            Self::ToolResult { call_id, output } => formatter
-                .debug_struct("ToolResult")
-                .field("call_id", call_id)
-                .field("output", &format_args!("<{} bytes>", output.len()))
-                .finish(),
-            Self::ToolCall {
-                call_id,
-                name,
-                arguments,
-            } => formatter
-                .debug_struct("ToolCall")
-                .field("call_id", call_id)
-                .field("name", name)
-                .field("arguments", &format_args!("<{} bytes>", arguments.len()))
-                .finish(),
-        }
-    }
-}
-
-/// 一项有角色的生成输入。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Message {
-    role: MessageRole,
-    content: Vec<ContentPart>,
-}
-
-impl Message {
-    /// 创建消息。
-    ///
-    /// # Errors
-    ///
-    /// 内容为空时返回错误。
-    pub fn new(role: MessageRole, content: Vec<ContentPart>) -> Result<Self, OperationError> {
-        if content.is_empty() {
-            return Err(OperationError::EmptyField { field: "content" });
-        }
-        Ok(Self { role, content })
-    }
-
-    /// 返回消息角色。
-    #[must_use]
-    pub const fn role(&self) -> MessageRole {
-        self.role
-    }
-
-    /// 返回内容片段。
-    #[must_use]
-    pub fn content(&self) -> &[ContentPart] {
-        &self.content
-    }
-}
-
-/// 工具声明。
-#[derive(Clone, PartialEq)]
-pub struct ToolDefinition {
-    name: String,
-    description: Option<String>,
-    input_schema: Map<String, Value>,
-    strict: bool,
-}
-
-impl ToolDefinition {
-    /// 创建工具声明。
-    ///
-    /// # Errors
-    ///
-    /// 名称为空时返回错误。
-    pub fn new(
-        name: impl Into<String>,
-        description: Option<String>,
-        input_schema: Map<String, Value>,
-    ) -> Result<Self, OperationError> {
-        let name = name.into();
-        if name.is_empty() {
-            return Err(OperationError::EmptyField { field: "tool.name" });
-        }
-        Ok(Self {
-            name,
-            description,
-            input_schema,
-            strict: false,
-        })
-    }
-
-    /// 设置是否要求 Provider 严格遵守输入 schema。
-    #[must_use]
-    pub const fn with_strict(mut self, strict: bool) -> Self {
-        self.strict = strict;
-        self
-    }
-
-    /// 返回工具名。
-    #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// 返回工具说明。
-    #[must_use]
-    pub fn description(&self) -> Option<&str> {
-        self.description.as_deref()
-    }
-
-    /// 返回工具输入 schema。
-    #[must_use]
-    pub const fn input_schema(&self) -> &Map<String, Value> {
-        &self.input_schema
-    }
-
-    /// 返回是否启用严格 schema。
-    #[must_use]
-    pub const fn strict(&self) -> bool {
-        self.strict
-    }
-}
-
-impl fmt::Debug for ToolDefinition {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ToolDefinition")
-            .field("name", &self.name)
-            .field(
-                "description",
-                &self.description.as_ref().map(|_| "<present>"),
-            )
-            .field("input_schema", &"<validated JSON object>")
-            .field("strict", &self.strict)
-            .finish()
-    }
-}
-
-/// 结构化 JSON 输出的稳定约束。
-#[derive(Clone, PartialEq)]
-pub struct JsonSchemaFormat {
-    name: String,
-    description: Option<String>,
-    schema: Map<String, Value>,
-    strict: bool,
-}
-
-impl JsonSchemaFormat {
-    /// 创建 JSON Schema 输出约束。
-    ///
-    /// # Errors
-    ///
-    /// Schema 名称为空时返回错误。
-    pub fn new(
-        name: impl Into<String>,
-        description: Option<String>,
-        schema: Map<String, Value>,
-        strict: bool,
-    ) -> Result<Self, OperationError> {
-        let name = name.into();
-        if name.is_empty() {
-            return Err(OperationError::EmptyField {
-                field: "text.format.name",
-            });
-        }
-        Ok(Self {
-            name,
-            description,
-            schema,
-            strict,
-        })
-    }
-
-    /// 返回 schema 名称。
-    #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// 返回可选说明。
-    #[must_use]
-    pub fn description(&self) -> Option<&str> {
-        self.description.as_deref()
-    }
-
-    /// 返回 JSON Schema object。
-    #[must_use]
-    pub const fn schema(&self) -> &Map<String, Value> {
-        &self.schema
-    }
-
-    /// 返回是否要求严格结构化输出。
-    #[must_use]
-    pub const fn strict(&self) -> bool {
-        self.strict
-    }
-}
-
-impl fmt::Debug for JsonSchemaFormat {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("JsonSchemaFormat")
-            .field("name", &self.name)
-            .field(
-                "description",
-                &self.description.as_ref().map(|_| "<present>"),
-            )
-            .field("schema", &"<validated JSON object>")
-            .field("strict", &self.strict)
-            .finish()
-    }
-}
-
-/// 生成输出格式。
-#[derive(Clone, PartialEq)]
-pub enum OutputFormat {
-    /// 普通文本。
-    Text,
-    /// 任意 JSON object。
-    JsonObject,
-    /// 指定 JSON Schema。
-    JsonSchema(JsonSchemaFormat),
-}
-
-impl fmt::Debug for OutputFormat {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Text => formatter.write_str("Text"),
-            Self::JsonObject => formatter.write_str("JsonObject"),
-            Self::JsonSchema(_) => formatter.write_str("JsonSchema(<validated>)"),
-        }
-    }
-}
-
-/// 推理强度。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ReasoningEffort {
-    /// 最低推理预算。
-    Minimal,
-    /// 低。
-    Low,
-    /// 中。
-    Medium,
-    /// 高。
-    High,
-    /// Provider 支持时使用最高推理预算。
-    ExtraHigh,
-}
-
-/// 可见推理摘要要求。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ReasoningSummary {
-    /// 由模型选择摘要粒度。
-    Auto,
-    /// 简短摘要。
-    Concise,
-    /// 详细摘要。
-    Detailed,
-    /// 显式关闭摘要。
-    None,
-}
-
-/// 推理要求。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ReasoningRequirement {
-    /// 推理强度。
-    pub effort: Option<ReasoningEffort>,
-    /// 可见推理摘要要求；`None` 表示客户端未指定。
-    pub summary: Option<ReasoningSummary>,
-}
-
-/// 对话延续模式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ContinuationMode {
-    /// Provider 原生绑定。
-    Native,
-}
-
 /// 通用生成请求。
 #[derive(Clone, PartialEq)]
 pub struct GenerateRequest {
     payload: Arc<GeneratePayload>,
-    reasoning: Option<ReasoningRequirement>,
-    continuation: Option<ContinuationMode>,
-    max_output_tokens: Option<u64>,
-    image_generation_requested: bool,
-    response_persistence: ResponsePersistence,
 }
 
 #[derive(Clone, PartialEq)]
 struct GeneratePayload {
-    messages: Vec<Message>,
-    tools: Vec<ToolDefinition>,
-    output_format: OutputFormat,
-    prompt_cache_key: Option<String>,
-    required_features: BTreeSet<Feature>,
-    protocol_payload: Option<ProtocolPayload>,
+    protocol_payload: ProtocolPayload,
     provider_session_state: Option<ProviderSessionState>,
 }
 
 impl GenerateRequest {
-    /// 创建最小生成请求。
-    ///
-    /// # Errors
-    ///
-    /// 消息为空时返回错误。
-    pub fn new(messages: Vec<Message>) -> Result<Self, OperationError> {
-        if messages.is_empty() {
-            return Err(OperationError::EmptyField { field: "messages" });
-        }
-        Ok(Self::from_parts(messages, None))
-    }
-
     /// 创建携带协议不透明正文的生成请求。
     ///
-    /// `messages` 是 Router 使用的已知语义投影，允许为空；完整请求始终由
-    /// `protocol_payload` 保留并交给对应 Provider 解释。
+    /// 完整请求只以原始 wire object 保存；Core 仅局部只读已知字段以推导路由能力，
+    /// Provider 负责解释与转换正文。
     #[must_use]
-    pub fn from_protocol_payload(
-        messages: Vec<Message>,
-        protocol_payload: ProtocolPayload,
-    ) -> Self {
-        Self::from_parts(messages, Some(protocol_payload))
-    }
-
-    fn from_parts(messages: Vec<Message>, protocol_payload: Option<ProtocolPayload>) -> Self {
+    pub fn from_protocol_payload(protocol_payload: ProtocolPayload) -> Self {
         Self {
             payload: Arc::new(GeneratePayload {
-                messages,
-                tools: Vec::new(),
-                output_format: OutputFormat::Text,
-                prompt_cache_key: None,
-                required_features: BTreeSet::new(),
                 protocol_payload,
                 provider_session_state: None,
             }),
-            reasoning: None,
-            continuation: None,
-            max_output_tokens: None,
-            image_generation_requested: false,
-            response_persistence: ResponsePersistence::Store,
         }
-    }
-
-    /// 设置工具。
-    #[must_use]
-    pub fn with_tools(mut self, tools: Vec<ToolDefinition>) -> Self {
-        Arc::make_mut(&mut self.payload).tools = tools;
-        self
-    }
-
-    /// 设置输出格式。
-    #[must_use]
-    pub fn with_output_format(mut self, output_format: OutputFormat) -> Self {
-        Arc::make_mut(&mut self.payload).output_format = output_format;
-        self
-    }
-
-    /// 设置推理要求。
-    #[must_use]
-    pub const fn with_reasoning(mut self, reasoning: ReasoningRequirement) -> Self {
-        self.reasoning = Some(reasoning);
-        self
-    }
-
-    /// 设置对话延续模式。
-    #[must_use]
-    pub const fn with_continuation(mut self, continuation: ContinuationMode) -> Self {
-        self.continuation = Some(continuation);
-        self
-    }
-
-    /// 设置输出 token 上限。
-    #[must_use]
-    pub const fn with_max_output_tokens(mut self, tokens: u64) -> Self {
-        self.max_output_tokens = Some(tokens);
-        self
-    }
-
-    /// 设置客户端提供的稳定 prompt cache 路由键。
-    #[must_use]
-    pub fn with_prompt_cache_key(mut self, key: impl Into<String>) -> Self {
-        Arc::make_mut(&mut self.payload).prompt_cache_key = Some(key.into());
-        self
-    }
-
-    /// 记录协议 adapter 已识别的图片生成工具意图。
-    #[must_use]
-    pub const fn with_image_generation_requested(mut self, requested: bool) -> Self {
-        self.image_generation_requested = requested;
-        self
-    }
-
-    /// 冻结客户端的响应持久化意图。
-    #[must_use]
-    pub const fn with_response_persistence(
-        mut self,
-        response_persistence: ResponsePersistence,
-    ) -> Self {
-        self.response_persistence = response_persistence;
-        self
     }
 
     /// 附着同一客户端连接上一轮由 Provider 返回的不透明状态。
@@ -728,67 +273,44 @@ impl GenerateRequest {
         self
     }
 
-    /// 增加从不透明协议正文识别出的稳定能力要求。
-    #[must_use]
-    pub fn require_feature(mut self, feature: Feature) -> Self {
-        Arc::make_mut(&mut self.payload)
-            .required_features
-            .insert(feature);
-        self
-    }
-
-    /// 返回消息。
-    #[must_use]
-    pub fn messages(&self) -> &[Message] {
-        &self.payload.messages
-    }
-
-    /// 返回工具。
-    #[must_use]
-    pub fn tools(&self) -> &[ToolDefinition] {
-        &self.payload.tools
-    }
-
-    /// 返回输出格式。
-    #[must_use]
-    pub fn output_format(&self) -> &OutputFormat {
-        &self.payload.output_format
-    }
-
-    /// 返回推理要求。
-    #[must_use]
-    pub const fn reasoning(&self) -> Option<ReasoningRequirement> {
-        self.reasoning
-    }
-
-    /// 返回对话延续模式。
-    #[must_use]
-    pub const fn continuation(&self) -> Option<ContinuationMode> {
-        self.continuation
-    }
-
     /// 返回最大输出 token 数。
     #[must_use]
-    pub const fn max_output_tokens(&self) -> Option<u64> {
-        self.max_output_tokens
+    pub fn max_output_tokens(&self) -> Option<u64> {
+        self.body()
+            .get("max_output_tokens")
+            .and_then(Value::as_u64)
+            .filter(|tokens| *tokens > 0)
     }
 
     /// 返回客户端提供的 prompt cache 路由键。
     #[must_use]
     pub fn prompt_cache_key(&self) -> Option<&str> {
-        self.payload.prompt_cache_key.as_deref()
+        self.body()
+            .get("prompt_cache_key")
+            .and_then(Value::as_str)
+            .filter(|key| !key.trim().is_empty())
+    }
+
+    /// 返回原始请求是否要求 Provider 原生 continuation。
+    #[must_use]
+    pub fn native_continuation_requested(&self) -> bool {
+        self.body()
+            .get("previous_response_id")
+            .and_then(Value::as_str)
+            .is_some_and(|response_id| !response_id.is_empty())
     }
 
     /// 返回客户端是否请求了图片生成工具。
     #[must_use]
-    pub const fn image_generation_requested(&self) -> bool {
-        self.image_generation_requested
-    }
-
-    /// 返回客户端的响应持久化意图。
-    #[must_use]
-    pub const fn response_persistence(&self) -> ResponsePersistence {
-        self.response_persistence
+    pub fn image_generation_requested(&self) -> bool {
+        self.body()
+            .get("tools")
+            .and_then(Value::as_array)
+            .is_some_and(|tools| {
+                tools.iter().any(|tool| {
+                    tool.get("type").and_then(Value::as_str) == Some("image_generation")
+                })
+            })
     }
 
     /// 返回指定 Provider 的连接内会话状态。
@@ -802,42 +324,48 @@ impl GenerateRequest {
 
     /// 返回协议不透明正文。
     #[must_use]
-    pub fn protocol_payload(&self) -> Option<&ProtocolPayload> {
-        self.payload.protocol_payload.as_ref()
+    pub fn protocol_payload(&self) -> &ProtocolPayload {
+        &self.payload.protocol_payload
     }
 
     fn requirements(&self) -> CapabilityRequirements {
-        self.requirements_for(OperationKind::Generate)
-    }
-
-    fn requirements_for(&self, operation: OperationKind) -> CapabilityRequirements {
-        let mut requirements = CapabilityRequirements::new(operation)
-            .with_requested_output_tokens(self.max_output_tokens);
-        for feature in &self.payload.required_features {
-            requirements = requirements.require(*feature);
-        }
-        if !self.payload.tools.is_empty() {
+        let mut requirements = CapabilityRequirements::new(OperationKind::Generate)
+            .with_requested_output_tokens(self.max_output_tokens());
+        if self
+            .body()
+            .get("tools")
+            .and_then(Value::as_array)
+            .is_some_and(|tools| !tools.is_empty())
+        {
             requirements = requirements.require(Feature::Tools);
         }
-        if self.payload.messages.iter().any(|message| {
-            message
-                .content()
-                .iter()
-                .any(|part| matches!(part, ContentPart::Image(_)))
-        }) {
+        if contains_type(self.body().get("input"), "input_image") {
             requirements = requirements.require(Feature::Vision);
         }
-        if self.reasoning.is_some() {
+        if self.body().get("reasoning").is_some_and(Value::is_object) {
             requirements = requirements.require(Feature::Reasoning);
         }
-        if matches!(self.payload.output_format, OutputFormat::JsonSchema(_)) {
+        if self
+            .body()
+            .get("text")
+            .and_then(Value::as_object)
+            .and_then(|text| text.get("format"))
+            .and_then(Value::as_object)
+            .and_then(|format| format.get("type"))
+            .and_then(Value::as_str)
+            == Some("json_schema")
+        {
             requirements = requirements.require(Feature::JsonSchema);
         }
-        if self.continuation.is_some() {
+        if self.native_continuation_requested() {
             requirements.require(Feature::NativeContinuation)
         } else {
             requirements
         }
+    }
+
+    fn body(&self) -> &Map<String, Value> {
+        self.protocol_payload().body()
     }
 }
 
@@ -845,21 +373,6 @@ impl fmt::Debug for GenerateRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("GenerateRequest")
-            .field("messages", &self.payload.messages.len())
-            .field("tools", &self.payload.tools.len())
-            .field("output_format", &self.payload.output_format)
-            .field("reasoning", &self.reasoning)
-            .field("continuation", &self.continuation)
-            .field("max_output_tokens", &self.max_output_tokens)
-            .field(
-                "prompt_cache_key",
-                &self.payload.prompt_cache_key.as_ref().map(|_| "<present>"),
-            )
-            .field(
-                "image_generation_requested",
-                &self.image_generation_requested,
-            )
-            .field("response_persistence", &self.response_persistence)
             .field(
                 "provider_session_state",
                 &self
@@ -868,57 +381,23 @@ impl fmt::Debug for GenerateRequest {
                     .as_ref()
                     .map(|_| "<present>"),
             )
-            .field("required_features", &self.payload.required_features)
-            .field("protocol_payload", &self.payload.protocol_payload)
+            .field("protocol_payload", self.protocol_payload())
             .finish()
     }
 }
 
-/// 请求 Provider 将完整对话历史压缩为可在后续轮次继续使用的摘要。
-///
-/// 请求沿用生成调用的 canonical history、工具和推理约束，但作为独立 operation
-/// 路由，Provider 不得通过扫描客户端 wire payload 判断压缩语义。
-#[derive(Clone, PartialEq)]
-pub struct CompactConversationRequest {
-    generation: GenerateRequest,
-}
-
-impl CompactConversationRequest {
-    /// 从协议 adapter 已规范化的生成上下文创建压缩请求。
-    #[must_use]
-    pub const fn new(generation: GenerateRequest) -> Self {
-        Self { generation }
-    }
-
-    /// 返回需要压缩的 canonical 生成上下文。
-    #[must_use]
-    pub const fn generation(&self) -> &GenerateRequest {
-        &self.generation
-    }
-
-    /// 拆出需要压缩的 canonical 生成上下文。
-    #[must_use]
-    pub fn into_generation(self) -> GenerateRequest {
-        self.generation
-    }
-
-    fn with_provider_session_state(mut self, state: ProviderSessionState) -> Self {
-        self.generation = self.generation.with_provider_session_state(state);
-        self
-    }
-
-    fn requirements(&self) -> CapabilityRequirements {
-        self.generation
-            .requirements_for(OperationKind::CompactConversation)
-    }
-}
-
-impl fmt::Debug for CompactConversationRequest {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CompactConversationRequest")
-            .field("generation", &self.generation)
-            .finish()
+fn contains_type(value: Option<&Value>, expected: &str) -> bool {
+    match value {
+        Some(Value::Array(values)) => values
+            .iter()
+            .any(|value| contains_type(Some(value), expected)),
+        Some(Value::Object(object)) => {
+            object.get("type").and_then(Value::as_str) == Some(expected)
+                || object
+                    .values()
+                    .any(|value| contains_type(Some(value), expected))
+        }
+        _ => false,
     }
 }
 
@@ -1098,8 +577,6 @@ impl fmt::Debug for SpeechRequest {
 pub enum Operation {
     /// 生成。
     Generate(GenerateRequest),
-    /// 对话历史压缩。
-    CompactConversation(CompactConversationRequest),
     /// Embedding。
     Embed(EmbedRequest),
     /// Rerank。
@@ -1116,9 +593,6 @@ impl Operation {
     pub fn with_provider_session_state(self, state: ProviderSessionState) -> Self {
         match self {
             Self::Generate(request) => Self::Generate(request.with_provider_session_state(state)),
-            Self::CompactConversation(request) => {
-                Self::CompactConversation(request.with_provider_session_state(state))
-            }
             operation => operation,
         }
     }
@@ -1128,7 +602,6 @@ impl Operation {
     pub const fn kind(&self) -> OperationKind {
         match self {
             Self::Generate(_) => OperationKind::Generate,
-            Self::CompactConversation(_) => OperationKind::CompactConversation,
             Self::Embed(_) => OperationKind::Embed,
             Self::Rerank(_) => OperationKind::Rerank,
             Self::GenerateImage(_) => OperationKind::GenerateImage,
@@ -1141,7 +614,6 @@ impl Operation {
     pub fn capability_requirements(&self) -> CapabilityRequirements {
         match self {
             Self::Generate(request) => request.requirements(),
-            Self::CompactConversation(request) => request.requirements(),
             Self::Embed(_) => CapabilityRequirements::new(OperationKind::Embed),
             Self::Rerank(_) => CapabilityRequirements::new(OperationKind::Rerank),
             Self::GenerateImage(_) => CapabilityRequirements::new(OperationKind::GenerateImage),
@@ -1154,23 +626,18 @@ impl Operation {
     pub const fn retry_safety(&self) -> RetrySafety {
         match self {
             Self::Embed(_) | Self::Rerank(_) => RetrySafety::Idempotent,
-            Self::Generate(_)
-            | Self::CompactConversation(_)
-            | Self::GenerateImage(_)
-            | Self::Speech(_) => RetrySafety::NonIdempotent,
+            Self::Generate(_) | Self::GenerateImage(_) | Self::Speech(_) => {
+                RetrySafety::NonIdempotent
+            }
         }
     }
 
     /// 返回该 operation 是否代表一次图片生成请求。
     #[must_use]
-    pub const fn image_generation_requested(&self) -> bool {
+    pub fn image_generation_requested(&self) -> bool {
         match self {
             Self::Generate(request) => request.image_generation_requested(),
-            Self::CompactConversation(_)
-            | Self::Embed(_)
-            | Self::Rerank(_)
-            | Self::GenerateImage(_)
-            | Self::Speech(_) => false,
+            Self::Embed(_) | Self::Rerank(_) | Self::GenerateImage(_) | Self::Speech(_) => false,
         }
     }
 
@@ -1179,9 +646,6 @@ impl Operation {
     pub fn provider_session_state(&self, provider: &str) -> Option<&ProviderSessionState> {
         match self {
             Self::Generate(request) => request.provider_session_state(provider),
-            Self::CompactConversation(request) => {
-                request.generation.provider_session_state(provider)
-            }
             Self::Embed(_) | Self::Rerank(_) | Self::GenerateImage(_) | Self::Speech(_) => None,
         }
     }

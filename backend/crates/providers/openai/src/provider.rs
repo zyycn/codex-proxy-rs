@@ -235,7 +235,7 @@ impl Provider for CodexProvider {
             ));
         };
         let previous_session = decode_openai_session_state(generate)?;
-        let continuation_requested = generate.continuation().is_some();
+        let continuation_requested = generate.native_continuation_requested();
         let mut upstream_request =
             encode_generate_request(generate, candidate.upstream_model().as_str())
                 .map_err(map_request_error)?;
@@ -1284,7 +1284,6 @@ fn valid_cookie_name(name: &str) -> bool {
 fn map_request_error(error: CodexRequestEncodeError) -> ProviderError {
     let kind = match error {
         CodexRequestEncodeError::InvalidProtocolPayload => ProviderErrorKind::InvalidRequest,
-        CodexRequestEncodeError::UnsupportedContent => ProviderErrorKind::Unsupported,
     };
     provider_error(kind, UpstreamSendState::NotSent)
 }

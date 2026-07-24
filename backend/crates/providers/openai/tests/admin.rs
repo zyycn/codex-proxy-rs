@@ -296,8 +296,7 @@ async fn openai_core_provider_projects_codex_request_observation_without_routing
         "turn_metadata".to_owned(),
         Value::String(r#"{"request_kind":"compaction","subagent_kind":"review"}"#.to_owned()),
     )]));
-    let operation =
-        Operation::Generate(GenerateRequest::from_protocol_payload(Vec::new(), payload));
+    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
 
     let observation = bundle.core_provider().request_observation(&operation);
 

@@ -1,7 +1,6 @@
 //! OpenAI wire adapter 到 Core 执行用例的唯一映射。
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use gateway_core::engine::continuation::PreviousResponseId;
 use gateway_core::engine::execution::{
@@ -120,13 +119,6 @@ impl OpenAiService {
     pub(crate) fn next_request_id(&self) -> String {
         format!("req_{}", Uuid::now_v7().simple())
     }
-}
-
-pub(crate) fn created_at_unix_seconds(created_at: SystemTime) -> Result<u64, GatewayError> {
-    created_at
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .map_err(|_| GatewayError::new(GatewayErrorKind::Internal, "system clock is invalid"))
 }
 
 const fn map_authentication_error(error: ClientAuthenticationError) -> ClientApiKeyAuthError {

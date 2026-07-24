@@ -18,12 +18,9 @@ use gateway_core::engine::provider::{
 };
 use gateway_core::engine::{AttemptContext, ContinuationAttempt, UpstreamSendState};
 use gateway_core::error::{ContinuationFailure, ProviderError, ProviderErrorKind};
-use gateway_core::event::{
-    CompactionOutput, GatewayEvent, ProviderEvent, ProviderResponseObservation, ResponseMeta,
-};
+use gateway_core::event::{GatewayEvent, ProviderEvent, ProviderResponseObservation, ResponseMeta};
 use gateway_core::operation::{
-    CompactConversationRequest, Feature, GenerateRequest, Operation, OperationKind,
-    ProviderSessionState,
+    Feature, GenerateRequest, Operation, OperationKind, ProviderSessionState,
 };
 use gateway_core::routing::{
     ModelCapabilities, ProviderCandidate, ProviderKind, SupportLevel, UpstreamModelId,
@@ -131,7 +128,6 @@ impl Provider for GrokBuildProvider {
                     == GrokCatalogCapabilityEvidence::DeclaredNative
                 {
                     operations.insert(OperationKind::Generate);
-                    operations.insert(OperationKind::CompactConversation);
                 }
                 let capabilities = ModelCapabilities::new(
                     operations,
@@ -174,9 +170,6 @@ impl Provider for GrokBuildProvider {
             Operation::Generate(generate) => {
                 self.execute_generate(generate, candidate, context).await
             }
-            Operation::CompactConversation(compact) => {
-                self.execute_compaction(compact, candidate, context).await
-            }
             _ => Err(provider_error(
                 ProviderErrorKind::Unsupported,
                 UpstreamSendState::NotSent,
@@ -192,6 +185,9 @@ impl GrokBuildProvider {
         candidate: &ProviderCandidate,
         context: AttemptContext,
     ) -> Result<ProviderStream, ProviderError> {
+        if crate::transport::compaction::has_terminal_compaction_trigger(generate) {
+            return self.execute_compaction(generate, candidate, context).await;
+        }
         let previous_session = decode_xai_session_state(generate)?;
         let continuation_account = continuation_account(&context, previous_session.as_ref())?;
         let mut upstream_request = GrokResponsesRequest::encode(
@@ -253,7 +249,7 @@ impl GrokBuildProvider {
 
     async fn execute_compaction(
         &self,
-        compact: &CompactConversationRequest,
+        generate: &GenerateRequest,
         candidate: &ProviderCandidate,
         context: AttemptContext,
     ) -> Result<ProviderStream, ProviderError> {
@@ -265,7 +261,7 @@ impl GrokBuildProvider {
                 UpstreamSendState::NotSent,
             ));
         }
-        let previous_session = decode_xai_session_state(compact.generation())?;
+        let previous_session = decode_xai_session_state(generate)?;
         let operation_account = previous_session
             .as_ref()
             .map(|previous| ProviderAccountId::new(previous.account_id.clone()))
@@ -275,7 +271,7 @@ impl GrokBuildProvider {
             .as_ref()
             .and_then(|previous| previous.session_id.clone());
         let upstream_request = GrokCompactionRequest::encode(
-            compact,
+            generate,
             candidate.upstream_model().as_str(),
             context.client_api_key_ref(),
         )
@@ -959,9 +955,7 @@ fn cold_compaction_http_sse_stream(
         let mut body = accepted.response.into_body();
         let mut canonical = GrokCanonicalDecoder::new(upstream_model.as_str());
         let mut summary = GrokCompactionSummaryDecoder::new();
-        let mut started = None;
-        let mut completed = None;
-        let mut accounting = Vec::new();
+        let mut facts = CompactionFacts::default();
 
         'stream: while let Some(chunk) = next_grok_chunk(
             &mut body,
@@ -977,81 +971,104 @@ fn cold_compaction_http_sse_stream(
             })?;
             for event in events {
                 summary.observe(&event).map_err(map_compaction_decode_error)?;
-                collect_compaction_facts(
-                    &event,
-                    &mut started,
-                    &mut completed,
-                    &mut accounting,
-                )?;
-                if completed.is_some() {
+                facts.observe(&event);
+                if facts.completed.is_some() {
                     break 'stream;
                 }
             }
         }
 
-        if completed.is_none() {
+        if facts.completed.is_none() {
             for event in canonical.finish_without_terminal().map_err(|error| {
                 mark_transient_compaction_failure(map_continuation_failure(&context, error))
             })? {
                 summary.observe(&event).map_err(map_compaction_decode_error)?;
-                collect_compaction_facts(
-                    &event,
-                    &mut started,
-                    &mut completed,
-                    &mut accounting,
-                )?;
-                if completed.is_some() {
+                facts.observe(&event);
+                if facts.completed.is_some() {
                     break;
                 }
             }
         }
 
         let summary = summary.finish().map_err(map_compaction_decode_error)?;
-        let started = started.ok_or_else(protocol_sent)?;
-        let completed = completed.unwrap_or_else(|| started.clone());
+        let started = facts.started.ok_or_else(protocol_sent)?;
+        let completed = facts.completed.unwrap_or_else(|| started.clone());
+        let (created, output_done, terminal) = crate::transport::compaction::compaction_wire_events(
+            &started,
+            &completed,
+            &summary,
+            facts.created_response.as_ref(),
+            facts.terminal_response.as_ref(),
+            facts.terminal_was_incomplete,
+        )
+        .map_err(|_| protocol_sent())?
+        .into_parts();
         ensure_sent_context(&context)?;
-        yield ProviderEvent::canonical(GatewayEvent::Started(started));
-        yield ProviderEvent::canonical(GatewayEvent::CompactionOutput(
-            CompactionOutput::new(summary),
-        ));
-        for fact in accounting {
-            yield ProviderEvent::canonical(fact);
-        }
-        yield ProviderEvent::canonical(GatewayEvent::Completed(completed));
+        yield ProviderEvent::canonical_with_wire(vec![GatewayEvent::Started(started)], created);
+        yield ProviderEvent::wire(output_done);
+        let mut terminal_facts = facts.accounting;
+        terminal_facts.push(GatewayEvent::Completed(completed));
+        yield ProviderEvent::canonical_with_wire(terminal_facts, terminal);
     })
 }
 
-fn collect_compaction_facts(
-    event: &ProviderEvent,
-    started: &mut Option<ResponseMeta>,
-    completed: &mut Option<ResponseMeta>,
-    accounting: &mut Vec<GatewayEvent>,
-) -> Result<(), ProviderError> {
-    for fact in event.canonical_facts() {
-        match fact {
-            GatewayEvent::Started(meta) => {
-                if started.is_none() {
-                    *started = Some(meta.clone());
+#[derive(Default)]
+struct CompactionFacts {
+    started: Option<ResponseMeta>,
+    completed: Option<ResponseMeta>,
+    accounting: Vec<GatewayEvent>,
+    created_response: Option<Value>,
+    terminal_response: Option<Value>,
+    terminal_was_incomplete: bool,
+}
+
+impl CompactionFacts {
+    fn observe(&mut self, event: &ProviderEvent) {
+        self.capture_wire_response(event);
+        for fact in event.canonical_facts() {
+            match fact {
+                GatewayEvent::Started(meta) if self.started.is_none() => {
+                    self.started = Some(meta.clone());
                 }
-            }
-            GatewayEvent::Completed(meta) => {
-                if completed.is_none() {
-                    *completed = Some(meta.clone());
+                GatewayEvent::Completed(meta) if self.completed.is_none() => {
+                    self.completed = Some(meta.clone());
                 }
+                GatewayEvent::Usage(_)
+                | GatewayEvent::CalculatedCost(_)
+                | GatewayEvent::ProviderCost(_) => self.accounting.push(fact.clone()),
+                _ => {}
             }
-            GatewayEvent::Usage(_)
-            | GatewayEvent::CalculatedCost(_)
-            | GatewayEvent::ProviderCost(_) => accounting.push(fact.clone()),
+        }
+    }
+
+    fn capture_wire_response(&mut self, event: &ProviderEvent) {
+        let Some(wire) = event.wire_event().filter(|wire| wire.has_json_data()) else {
+            return;
+        };
+        let event_type = wire
+            .event_type()
+            .or_else(|| wire.data().get("type").and_then(Value::as_str));
+        let response = wire.data().get("response").cloned();
+        match event_type {
+            Some("response.created" | "response.in_progress")
+                if self.created_response.is_none() =>
+            {
+                self.created_response = response;
+            }
+            Some("response.completed" | "response.incomplete")
+                if self.terminal_response.is_none() =>
+            {
+                self.terminal_was_incomplete = event_type == Some("response.incomplete");
+                self.terminal_response = response;
+            }
             _ => {}
         }
     }
-    Ok(())
 }
 
 fn map_compaction_decode_error(error: GrokCompactionDecodeError) -> ProviderError {
     match error {
         GrokCompactionDecodeError::Degenerate => mark_transient_compaction_failure(protocol_sent()),
-        GrokCompactionDecodeError::InvalidSummary(_) => protocol_sent(),
     }
 }
 

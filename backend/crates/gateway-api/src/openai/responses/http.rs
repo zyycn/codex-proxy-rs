@@ -28,7 +28,6 @@ use crate::openai::{
         gateway_error_contract, gateway_error_from_engine, gateway_error_response,
         protocol_error_response, runtime_unavailable_response,
     },
-    service::created_at_unix_seconds,
 };
 
 use super::{
@@ -69,9 +68,9 @@ async fn handle_responses(
         Err(error) => return authentication_error_response(error),
     };
     let decoded = match if review {
-        decode_review_request_with_headers(&body, &headers, client.policy().provider_kind())
+        decode_review_request_with_headers(&body, &headers)
     } else {
-        decode_request_with_headers(&body, &headers, client.policy().provider_kind())
+        decode_request_with_headers(&body, &headers)
     } {
         Ok(decoded) => decoded,
         Err(error) => {
@@ -113,24 +112,13 @@ async fn handle_responses(
         Err(error) => return gateway_error_response(&error),
     };
     let StartedExecution {
-        created_at,
-        stream,
-        session,
-        ..
+        stream, session, ..
     } = started;
-    let created_at = match created_at_unix_seconds(created_at) {
-        Ok(created_at) => created_at,
-        Err(error) => {
-            let mut execution = PendingExecution::new(session);
-            let response = gateway_error_response(&error);
-            return execution.record_response_status(response).await;
-        }
-    };
     if stream {
-        stream_execution_response(session, created_at, connection_guard).await
+        stream_execution_response(session, connection_guard).await
     } else {
         drop(connection_guard);
-        collect_execution_response(session, created_at).await
+        collect_execution_response(session).await
     }
 }
 
@@ -184,10 +172,7 @@ const fn is_private_or_loopback(address: IpAddr) -> bool {
 }
 
 /// 编码完整 canonical event 集合，并在完整 JSON 成功后提交下游。
-pub async fn collect_execution_response(
-    session: Box<dyn ExecutionSession>,
-    created_at: u64,
-) -> Response {
+pub async fn collect_execution_response(session: Box<dyn ExecutionSession>) -> Response {
     let mut execution = PendingExecution::new(session);
     let Some(session) = execution.session_mut() else {
         return internal_gateway_response("gateway response session is unavailable");
@@ -200,7 +185,7 @@ pub async fn collect_execution_response(
         }
     };
 
-    let encoded = match encode_collected_events(created_at, &events) {
+    let encoded = match encode_collected_events(&events) {
         Ok(encoded) => encoded,
         Err(error) => {
             let response =
@@ -242,16 +227,15 @@ impl BufferedResponseEncodeError {
     fn protocol_body(&self) -> ProtocolErrorBody {
         match self {
             Self::Canonical(error) => error.protocol_body(),
-            Self::Json => ResponseEncodeError::UnsupportedEvent.protocol_body(),
+            Self::Json => ResponseEncodeError::Serialization.protocol_body(),
         }
     }
 }
 
 fn encode_collected_events(
-    created_at: u64,
     events: &[ProviderEvent],
 ) -> Result<Vec<u8>, BufferedResponseEncodeError> {
-    let mut encoder = OpenAiResponsesEncoder::new(created_at);
+    let mut encoder = OpenAiResponsesEncoder::new();
     for event in events {
         encoder
             .push_sse(event)
@@ -293,7 +277,6 @@ fn apply_safe_response_headers(
 /// 编码首个 SSE frame 后提交下游，再持续驱动同一执行会话。
 pub async fn stream_execution_response(
     session: Box<dyn ExecutionSession>,
-    created_at: u64,
     connection_guard: Option<Box<dyn ConnectionGuard>>,
 ) -> Response {
     let mut execution = PendingExecution::new(session);
@@ -324,7 +307,7 @@ pub async fn stream_execution_response(
         execution.cancel_and_finalize().await;
         return response;
     }
-    let mut encoder = OpenAiResponsesEncoder::new(created_at);
+    let mut encoder = OpenAiResponsesEncoder::new();
     let mut frames = Vec::new();
     for event in &first_events {
         match encoder.push_sse(event) {

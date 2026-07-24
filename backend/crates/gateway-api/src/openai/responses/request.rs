@@ -3,12 +3,7 @@
 use std::{fmt, net::IpAddr};
 
 use axum::http::HeaderMap;
-use gateway_core::operation::{
-    CompactConversationRequest, ContentPart, ContinuationMode, Feature, GenerateRequest,
-    ImageSource, JsonSchemaFormat, Message, MessageRole, Operation, OutputFormat, ProtocolPayload,
-    ProviderSessionState, ResponsePersistence, ToolDefinition,
-};
-use gateway_core::routing::ProviderKind;
+use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload, ProviderSessionState};
 use gateway_protocol::openai::{
     X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER, X_OPENAI_MEMGEN_REQUEST_HEADER,
 };
@@ -17,7 +12,6 @@ use serde_json::{Map, Value};
 use super::error::RequestDecodeError;
 
 const OPENAI_PROTOCOL: &str = "openai";
-const XAI_PROVIDER: &str = "xai";
 const REVIEW_SUBAGENT: &str = "review";
 const OPENAI_SUBAGENT_KEY: &str = "x-openai-subagent";
 
@@ -297,35 +291,22 @@ impl fmt::Debug for DecodedResponsesRequest {
 pub fn decode_request_with_headers(
     body: &[u8],
     headers: &HeaderMap,
-    provider_kind: &ProviderKind,
 ) -> Result<DecodedResponsesRequest, RequestDecodeError> {
-    decode_request_inner(
-        body,
-        false,
-        &OpenAiRequestHeaders::from_headers(headers),
-        Some(provider_kind),
-    )
+    decode_request_inner(body, false, &OpenAiRequestHeaders::from_headers(headers))
 }
 
 /// 解码 `POST /v1/responses/review` 请求并冻结 review subagent 语义。
 pub(super) fn decode_review_request_with_headers(
     body: &[u8],
     headers: &HeaderMap,
-    provider_kind: &ProviderKind,
 ) -> Result<DecodedResponsesRequest, RequestDecodeError> {
-    decode_request_inner(
-        body,
-        true,
-        &OpenAiRequestHeaders::from_headers(headers),
-        Some(provider_kind),
-    )
+    decode_request_inner(body, true, &OpenAiRequestHeaders::from_headers(headers))
 }
 
 pub(super) fn decode_request_inner(
     body: &[u8],
     review: bool,
     request_headers: &OpenAiRequestHeaders,
-    provider_kind: Option<&ProviderKind>,
 ) -> Result<DecodedResponsesRequest, RequestDecodeError> {
     let value =
         serde_json::from_slice::<Value>(body).map_err(|_| RequestDecodeError::MalformedJson)?;
@@ -344,10 +325,6 @@ pub(super) fn decode_request_inner(
         });
     }
     let model = model.to_owned();
-    let compact_conversation = provider_kind
-        .is_some_and(|provider| provider.as_str() == XAI_PROVIDER)
-        && consume_compaction_trigger(&mut object);
-
     let stream = object
         .get("stream")
         .and_then(Value::as_bool)
@@ -366,85 +343,12 @@ pub(super) fn decode_request_inner(
     request_headers.apply_subagent(&mut object, review.then_some(REVIEW_SUBAGENT));
     let protocol_context = request_headers.protocol_context(use_websocket);
 
-    let messages = canonical_messages(&object);
-    let tools = canonical_function_tools(&object);
-    let tools_requested = object
-        .get("tools")
-        .and_then(Value::as_array)
-        .is_some_and(|tools| !tools.is_empty());
-    let image_generation_requested =
-        object
-            .get("tools")
-            .and_then(Value::as_array)
-            .is_some_and(|tools| {
-                tools.iter().any(|tool| {
-                    tool.get("type").and_then(Value::as_str) == Some("image_generation")
-                })
-            });
-    let vision_requested = contains_type(object.get("input"), "input_image");
-    let reasoning_requested = object.get("reasoning").is_some_and(Value::is_object);
-    let output_format = canonical_output_format(&object);
-    let json_schema_requested = object
-        .get("text")
-        .and_then(|text| text.get("format"))
-        .and_then(|format| format.get("type"))
-        .and_then(Value::as_str)
-        == Some("json_schema");
-    let max_output_tokens = object
-        .get("max_output_tokens")
-        .and_then(Value::as_u64)
-        .filter(|tokens| *tokens > 0);
-    let prompt_cache_key = object
-        .get("prompt_cache_key")
-        .and_then(Value::as_str)
-        .filter(|key| !key.trim().is_empty())
-        .map(ToOwned::to_owned);
     let payload = ProtocolPayload::json_object(OPENAI_PROTOCOL, object)
         .map_err(|_| RequestDecodeError::CanonicalContract {
             field: "request".to_owned(),
         })?
         .with_context(protocol_context);
-    let mut request = GenerateRequest::from_protocol_payload(messages, payload)
-        .with_image_generation_requested(image_generation_requested)
-        .with_response_persistence(if store {
-            ResponsePersistence::Store
-        } else {
-            ResponsePersistence::DoNotStore
-        });
-
-    if tools_requested {
-        request = request.require_feature(Feature::Tools);
-    }
-    if !tools.is_empty() {
-        request = request.with_tools(tools);
-    }
-    if vision_requested {
-        request = request.require_feature(Feature::Vision);
-    }
-    if reasoning_requested {
-        request = request.require_feature(Feature::Reasoning);
-    }
-    if json_schema_requested {
-        request = request.require_feature(Feature::JsonSchema);
-    }
-    if let Some(format) = output_format {
-        request = request.with_output_format(format);
-    }
-    if let Some(tokens) = max_output_tokens {
-        request = request.with_max_output_tokens(tokens);
-    }
-    if let Some(key) = prompt_cache_key {
-        request = request.with_prompt_cache_key(key);
-    }
-    if continuation.is_continuation() {
-        request = request.with_continuation(ContinuationMode::Native);
-    }
-
-    let operation = if compact_conversation {
-        Operation::CompactConversation(CompactConversationRequest::new(request))
-    } else {
-        Operation::Generate(request)
-    };
+    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
     Ok(DecodedResponsesRequest {
         operation,
         metadata: ResponsesRequestMetadata {
@@ -481,182 +385,6 @@ fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-}
-
-fn canonical_messages(body: &Map<String, Value>) -> Vec<Message> {
-    let mut messages = Vec::new();
-    if let Some(instructions) = body
-        .get("instructions")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        && let Some(message) = message(
-            MessageRole::Developer,
-            vec![ContentPart::Text(instructions.to_owned())],
-        )
-    {
-        messages.push(message);
-    }
-    match body.get("input") {
-        Some(Value::String(input)) if !input.is_empty() => {
-            if let Some(message) =
-                message(MessageRole::User, vec![ContentPart::Text(input.clone())])
-            {
-                messages.push(message);
-            }
-        }
-        Some(Value::Array(input)) => {
-            messages.extend(input.iter().filter_map(canonical_input_item));
-        }
-        _ => {}
-    }
-    messages
-}
-
-fn canonical_input_item(value: &Value) -> Option<Message> {
-    let object = value.as_object()?;
-    match object.get("type").and_then(Value::as_str) {
-        Some("function_call_output") => message(
-            MessageRole::User,
-            vec![ContentPart::ToolResult {
-                call_id: object.get("call_id")?.as_str()?.to_owned(),
-                output: object.get("output")?.as_str()?.to_owned(),
-            }],
-        ),
-        Some("function_call") => message(
-            MessageRole::Assistant,
-            vec![ContentPart::ToolCall {
-                call_id: object.get("call_id")?.as_str()?.to_owned(),
-                name: object.get("name")?.as_str()?.to_owned(),
-                arguments: object.get("arguments")?.as_str()?.to_owned(),
-            }],
-        ),
-        _ => {
-            let role = match object.get("role").and_then(Value::as_str)? {
-                "system" => MessageRole::System,
-                "developer" => MessageRole::Developer,
-                "user" => MessageRole::User,
-                "assistant" => MessageRole::Assistant,
-                _ => return None,
-            };
-            let content = canonical_content(object.get("content")?, role);
-            message(role, content)
-        }
-    }
-}
-
-fn canonical_content(value: &Value, role: MessageRole) -> Vec<ContentPart> {
-    match value {
-        Value::String(text) if !text.is_empty() => vec![ContentPart::Text(text.clone())],
-        Value::Array(parts) => parts
-            .iter()
-            .filter_map(|part| canonical_content_part(part, role))
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-fn canonical_content_part(value: &Value, role: MessageRole) -> Option<ContentPart> {
-    let object = value.as_object()?;
-    match object.get("type").and_then(Value::as_str)? {
-        "input_text" | "output_text" => object
-            .get("text")
-            .and_then(Value::as_str)
-            .filter(|text| !text.is_empty())
-            .map(|text| ContentPart::Text(text.to_owned())),
-        "input_image" if role == MessageRole::User => object
-            .get("image_url")
-            .and_then(Value::as_str)
-            .filter(|url| !url.is_empty())
-            .map(|url| ContentPart::Image(ImageSource::Url(url.to_owned()))),
-        _ => None,
-    }
-}
-
-fn message(role: MessageRole, content: Vec<ContentPart>) -> Option<Message> {
-    (!content.is_empty())
-        .then(|| Message::new(role, content).ok())
-        .flatten()
-}
-
-fn canonical_function_tools(body: &Map<String, Value>) -> Vec<ToolDefinition> {
-    body.get("tools")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|value| {
-            let tool = value.as_object()?;
-            if tool.get("type").and_then(Value::as_str) != Some("function") {
-                return None;
-            }
-            let name = tool.get("name")?.as_str()?;
-            let schema = tool.get("parameters")?.as_object()?.clone();
-            ToolDefinition::new(
-                name,
-                tool.get("description")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned),
-                schema,
-            )
-            .ok()
-            .map(|definition| {
-                definition.with_strict(tool.get("strict").and_then(Value::as_bool).unwrap_or(false))
-            })
-        })
-        .collect()
-}
-
-fn canonical_output_format(body: &Map<String, Value>) -> Option<OutputFormat> {
-    let format = body.get("text")?.get("format")?.as_object()?;
-    match format.get("type")?.as_str()? {
-        "text" => Some(OutputFormat::Text),
-        "json_object" => Some(OutputFormat::JsonObject),
-        "json_schema" => JsonSchemaFormat::new(
-            format.get("name")?.as_str()?,
-            format
-                .get("description")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-            format.get("schema")?.as_object()?.clone(),
-            format
-                .get("strict")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-        )
-        .ok()
-        .map(OutputFormat::JsonSchema),
-        _ => None,
-    }
-}
-
-fn contains_type(value: Option<&Value>, expected: &str) -> bool {
-    match value {
-        Some(Value::Array(values)) => values
-            .iter()
-            .any(|value| contains_type(Some(value), expected)),
-        Some(Value::Object(object)) => {
-            object.get("type").and_then(Value::as_str) == Some(expected)
-                || object
-                    .values()
-                    .any(|value| contains_type(Some(value), expected))
-        }
-        _ => false,
-    }
-}
-
-fn consume_compaction_trigger(body: &mut Map<String, Value>) -> bool {
-    let Some(Value::Array(input)) = body.get_mut("input") else {
-        return false;
-    };
-    if input
-        .last()
-        .and_then(|item| item.get("type"))
-        .and_then(Value::as_str)
-        != Some("compaction_trigger")
-    {
-        return false;
-    }
-    input.pop();
-    true
 }
 
 fn required_non_empty_string<'a>(

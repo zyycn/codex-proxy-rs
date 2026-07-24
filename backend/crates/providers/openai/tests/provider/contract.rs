@@ -11,10 +11,7 @@ use gateway_core::engine::{
     RequestAttemptContext, UpstreamSendState,
 };
 use gateway_core::error::ProviderErrorKind;
-use gateway_core::operation::{
-    CompactConversationRequest, ContentPart, GenerateRequest, Message, MessageRole, Operation,
-    ProtocolPayload,
-};
+use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::{
     ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RoutingContext,
@@ -120,16 +117,16 @@ async fn create_account(store: &Arc<MemoryAccountStore>, id: &str) {
 }
 
 fn generate_operation() -> Operation {
-    Operation::Generate(
-        GenerateRequest::new(vec![
-            Message::new(
-                MessageRole::User,
-                vec![ContentPart::Text("hello".to_owned())],
-            )
-            .expect("message"),
-        ])
-        .expect("generate request"),
-    )
+    Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([
+                ("model".to_owned(), json!("gpt-5.4")),
+                ("input".to_owned(), json!("hello")),
+            ]),
+        )
+        .expect("OpenAI payload"),
+    ))
 }
 
 fn planned_request(provider_name: &str, operation: Operation) -> ProviderRequest {
@@ -207,12 +204,24 @@ async fn cancelled_attempt_fails_before_account_selection_or_upstream_send() {
 }
 
 #[tokio::test]
-async fn openai_provider_rejects_compaction_as_an_unsupported_operation() {
+async fn openai_provider_keeps_a_compaction_trigger_as_a_regular_generate_request() {
     let store = Arc::new(MemoryAccountStore::default());
-    let Operation::Generate(generation) = generate_operation() else {
-        unreachable!("fixture is generate")
-    };
-    let operation = Operation::CompactConversation(CompactConversationRequest::new(generation));
+    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([
+                ("model".to_owned(), json!("gpt-5.4")),
+                (
+                    "input".to_owned(),
+                    json!([
+                        {"type": "message", "role": "user", "content": "hello"},
+                        {"type": "compaction_trigger"}
+                    ]),
+                ),
+            ]),
+        )
+        .expect("OpenAI payload"),
+    ));
     let result = provider(&store)
         .execute(
             planned_request("openai", operation),
@@ -220,10 +229,10 @@ async fn openai_provider_rejects_compaction_as_an_unsupported_operation() {
         )
         .await;
     let Err(error) = result else {
-        panic!("OpenAI compaction must remain unsupported")
+        panic!("missing OpenAI account must fail")
     };
 
-    assert_eq!(error.kind(), ProviderErrorKind::Unsupported);
+    assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
     assert_eq!(error.send_state(), UpstreamSendState::NotSent);
 }
 
@@ -259,7 +268,7 @@ async fn opaque_provider_options_do_not_change_openai_account_selection() {
         ]),
     )
     .expect("OpenAI payload");
-    let generation = GenerateRequest::from_protocol_payload(Vec::new(), payload);
+    let generation = GenerateRequest::from_protocol_payload(payload);
     let result = provider(&store)
         .execute(
             planned_request("openai", Operation::Generate(generation)),
@@ -279,11 +288,17 @@ async fn prompt_cache_key_should_become_an_opaque_session_affinity_lookup_key() 
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_affinity").await;
     let affinity = Arc::new(MemorySessionAffinity::default());
-    let mut generation = match generate_operation() {
-        Operation::Generate(generation) => generation,
-        _ => unreachable!("fixture is generate"),
-    };
-    generation = generation.with_prompt_cache_key("raw-prompt-cache-key");
+    let generation = GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([
+                ("model".to_owned(), json!("gpt-5.4")),
+                ("input".to_owned(), json!("hello")),
+                ("prompt_cache_key".to_owned(), json!("raw-prompt-cache-key")),
+            ]),
+        )
+        .expect("OpenAI payload"),
+    );
 
     let stream = provider_with_affinity(&store, Arc::clone(&affinity))
         .execute(
@@ -318,7 +333,7 @@ fn request_observation_reads_openai_metadata_without_changing_the_operation() {
             r#"{"request_kind":"review","subagent_kind":"worker"}"#.to_owned(),
         ),
     )]));
-    let generation = GenerateRequest::from_protocol_payload(Vec::new(), payload);
+    let generation = GenerateRequest::from_protocol_payload(payload);
     let operation = Operation::Generate(generation);
 
     let observation = provider(&store).request_observation(&operation);
@@ -337,8 +352,7 @@ fn request_observation_preserves_the_raw_reasoning_effort() {
         Map::from_iter([("reasoning".to_owned(), json!({"effort": "future-value"}))]),
     )
     .expect("protocol payload");
-    let operation =
-        Operation::Generate(GenerateRequest::from_protocol_payload(Vec::new(), payload));
+    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
 
     let observation = provider(&store).request_observation(&operation);
 

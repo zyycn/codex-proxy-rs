@@ -266,7 +266,6 @@ pub enum CodexModelCatalogError {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct CodexModelsWire {
     models: Vec<CodexModelWire>,
 }
@@ -294,18 +293,20 @@ struct CodexReasoningEffortWire {
     effort: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum CodexInputModalityWire {
     Text,
     Image,
+    #[serde(other)]
+    Unknown,
 }
 
 /// 解析唯一受支持的 Codex 官方完整快照。
 ///
 /// # Errors
 ///
-/// 任一条目、分页信号、重复 slug、未知顶层字段或 ETag 不合法时整轮失败。
+/// 任一条目、重复 slug 或 ETag 不合法时整轮失败；上游新增的未知字段会忽略。
 pub fn parse_codex_model_catalog(
     body: &[u8],
     etag: Option<&str>,
@@ -453,21 +454,33 @@ fn modality_evidence(
             CodexCatalogCapabilityEvidence::Unknown,
         ));
     };
-    let mut unique = BTreeSet::new();
+    let mut has_text = false;
+    let mut has_image = false;
+    let mut has_unknown = false;
     for value in values {
-        if !unique.insert(value) {
-            return Err(CodexModelCatalogError::InvalidCapabilities);
+        match value {
+            CodexInputModalityWire::Text if has_text => {
+                return Err(CodexModelCatalogError::InvalidCapabilities);
+            }
+            CodexInputModalityWire::Image if has_image => {
+                return Err(CodexModelCatalogError::InvalidCapabilities);
+            }
+            CodexInputModalityWire::Text => has_text = true,
+            CodexInputModalityWire::Image => has_image = true,
+            CodexInputModalityWire::Unknown => has_unknown = true,
         }
     }
     Ok((
-        declared_presence(unique.contains(&CodexInputModalityWire::Text)),
-        declared_presence(unique.contains(&CodexInputModalityWire::Image)),
+        modality_presence(has_text, has_unknown),
+        modality_presence(has_image, has_unknown),
     ))
 }
 
-fn declared_presence(value: bool) -> CodexCatalogCapabilityEvidence {
-    if value {
+fn modality_presence(declared: bool, has_unknown: bool) -> CodexCatalogCapabilityEvidence {
+    if declared {
         CodexCatalogCapabilityEvidence::DeclaredNative
+    } else if has_unknown {
+        CodexCatalogCapabilityEvidence::Unknown
     } else {
         CodexCatalogCapabilityEvidence::DeclaredUnsupported
     }

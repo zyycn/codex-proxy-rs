@@ -33,15 +33,14 @@ use gateway_core::event::{
     ProviderResponseTimings, ResponseMeta, UpstreamHttpVersion, WebSocketPoolKind,
 };
 use gateway_core::operation::{
-    ContentPart, EmbedRequest, GenerateRequest, Message, MessageRole, Operation,
-    ProviderSessionState, RetrySafety,
+    EmbedRequest, GenerateRequest, Operation, ProtocolPayload, ProviderSessionState, RetrySafety,
 };
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::{
     ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RoutingContext,
     RoutingPlan, RuntimeSnapshot, UpstreamModelId,
 };
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FinalState {
@@ -317,19 +316,26 @@ fn operation(retry_safety: RetrySafety) -> Operation {
 }
 
 fn generate_operation() -> Operation {
-    let message = Message::new(
-        MessageRole::User,
-        vec![ContentPart::Text("hello".to_owned())],
-    )
-    .expect("message");
-    Operation::Generate(GenerateRequest::new(vec![message]).expect("generate request"))
+    let body = json!({
+        "model": "gpt-5",
+        "input": [{"type": "message", "role": "user", "content": "hello"}],
+    });
+    Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", body.as_object().expect("request object").clone())
+            .expect("OpenAI payload"),
+    ))
 }
 
 fn image_generate_operation() -> Operation {
-    let Operation::Generate(request) = generate_operation() else {
-        unreachable!("generate_operation must return Generate")
-    };
-    Operation::Generate(request.with_image_generation_requested(true))
+    let body = json!({
+        "model": "gpt-5",
+        "input": [{"type": "message", "role": "user", "content": "draw"}],
+        "tools": [{"type": "image_generation"}],
+    });
+    Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", body.as_object().expect("request object").clone())
+            .expect("OpenAI payload"),
+    ))
 }
 
 fn complete_stream(total_tokens: Option<u64>) -> Vec<Result<GatewayEvent, ProviderError>> {
@@ -373,7 +379,8 @@ fn image_stream(image_output_tokens: Option<u64>) -> Vec<Result<GatewayEvent, Pr
 fn plan(operation: &Operation) -> RoutingPlan {
     let provider = ProviderKind::new("openai").expect("provider");
     let public_model = PublicModelId::new("gpt-5").expect("public model");
-    let capabilities = ModelCapabilities::new(BTreeSet::from([operation.kind()]), Some(32_000));
+    let capabilities = ModelCapabilities::new(BTreeSet::from([operation.kind()]), Some(32_000))
+        .with_upstream_feature_validation();
     RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("config revision"),
         AccountSelectionPolicy::new(

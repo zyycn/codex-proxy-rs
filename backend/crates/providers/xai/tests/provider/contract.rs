@@ -22,12 +22,11 @@ use gateway_core::error::{
 };
 use gateway_core::event::{GatewayEvent, UpstreamHttpVersion};
 use gateway_core::operation::{
-    CompactConversationRequest, Feature, GenerateRequest, Operation, OperationKind,
-    ProtocolPayload, ProviderSessionState,
+    Feature, GenerateRequest, Operation, OperationKind, ProtocolPayload, ProviderSessionState,
 };
 use gateway_core::routing::{
     ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RoutingContext,
-    RuntimeSnapshot, UpstreamModelId,
+    RuntimeSnapshot, SupportLevel, UpstreamModelId,
 };
 use provider_xai::{
     GrokBuildProvider, GrokCredentialCatalogCache, GrokCredentialFailure,
@@ -491,7 +490,7 @@ fn operation() -> Operation {
         ]),
     )
     .expect("OpenAI payload");
-    Operation::Generate(GenerateRequest::from_protocol_payload(Vec::new(), payload))
+    Operation::Generate(GenerateRequest::from_protocol_payload(payload))
 }
 
 fn compaction_operation() -> Operation {
@@ -501,15 +500,16 @@ fn compaction_operation() -> Operation {
             ("model".to_owned(), json!("client-model")),
             (
                 "input".to_owned(),
-                json!([{"type": "message", "role": "user", "content": "history"}]),
+                json!([
+                    {"type": "message", "role": "user", "content": "history"},
+                    {"type": "compaction_trigger"}
+                ]),
             ),
             ("stream".to_owned(), json!(true)),
         ]),
     )
     .expect("OpenAI payload");
-    Operation::CompactConversation(CompactConversationRequest::new(
-        GenerateRequest::from_protocol_payload(Vec::new(), payload),
-    ))
+    Operation::Generate(GenerateRequest::from_protocol_payload(payload))
 }
 
 fn compaction_operation_with_state(state: ProviderSessionState) -> Operation {
@@ -519,24 +519,27 @@ fn compaction_operation_with_state(state: ProviderSessionState) -> Operation {
             ("model".to_owned(), json!("client-model")),
             (
                 "input".to_owned(),
-                json!([{
-                    "type": "reasoning",
-                    "summary": [],
-                    "encrypted_content": "account-bound-reasoning"
-                }, {
-                    "type": "message",
-                    "role": "user",
-                    "content": "complete history"
-                }]),
+                json!([
+                    {
+                        "type": "reasoning",
+                        "summary": [],
+                        "encrypted_content": "account-bound-reasoning"
+                    },
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": "complete history"
+                    },
+                    {"type": "compaction_trigger"}
+                ]),
             ),
             ("stream".to_owned(), json!(true)),
         ]),
     )
     .expect("OpenAI payload");
-    Operation::CompactConversation(CompactConversationRequest::new(
-        GenerateRequest::from_protocol_payload(Vec::new(), payload)
-            .with_provider_session_state(state),
-    ))
+    Operation::Generate(
+        GenerateRequest::from_protocol_payload(payload).with_provider_session_state(state),
+    )
 }
 
 fn provider_request(provider_kind: &str) -> ProviderRequest {
@@ -548,10 +551,9 @@ fn provider_request_with_operation(provider_kind: &str, operation: Operation) ->
     let provider_model = ProviderModel::new(
         provider.clone(),
         UpstreamModelId::new(MODEL).expect("model"),
-        ModelCapabilities::new(
-            BTreeSet::from([OperationKind::Generate, OperationKind::CompactConversation]),
-            Some(131_072),
-        ),
+        ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), Some(131_072))
+            .with_feature(Feature::Tools, SupportLevel::Native)
+            .with_feature(Feature::NativeContinuation, SupportLevel::Native),
     );
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
@@ -631,7 +633,6 @@ fn operation_with_state(body: serde_json::Value, state: ProviderSessionState) ->
         panic!("request body must be an object");
     };
     let request = GenerateRequest::from_protocol_payload(
-        Vec::new(),
         ProtocolPayload::json_object("openai", body).expect("OpenAI payload"),
     )
     .with_provider_session_state(state);
@@ -701,7 +702,7 @@ async fn execute_returns_cold_stream_and_records_selected_account() {
 }
 
 #[tokio::test]
-async fn compaction_stream_should_publish_only_typed_summary_and_accounting() {
+async fn compaction_stream_should_emit_openai_wire_and_keep_only_accounting_canonical() {
     let summary = valid_compaction_summary("validated summary");
     let transport = StubInferenceTransport::sequence([InferenceMode::SuccessBody(compaction_sse(
         &summary,
@@ -717,21 +718,33 @@ async fn compaction_stream_should_publish_only_typed_summary_and_accounting() {
         .expect("compaction stream");
     let events = stream.by_ref().collect::<Vec<_>>().await;
     let facts = events
-        .into_iter()
-        .map(|event| event.expect("successful compaction event"))
-        .flat_map(|event| event.into_parts().0)
+        .iter()
+        .map(|event| event.as_ref().expect("successful compaction event"))
+        .flat_map(|event| event.canonical_facts())
+        .collect::<Vec<_>>();
+    let wire_types = events
+        .iter()
+        .map(|event| event.as_ref().expect("successful compaction event"))
+        .filter_map(|event| event.wire_event().and_then(|wire| wire.event_type()))
         .collect::<Vec<_>>();
 
     assert!(matches!(
         facts.as_slice(),
         [
             GatewayEvent::Started(_),
-            GatewayEvent::CompactionOutput(_),
             GatewayEvent::Usage(_),
             GatewayEvent::CalculatedCost(_),
             GatewayEvent::Completed(_),
         ]
     ));
+    assert_eq!(
+        wire_types,
+        [
+            "response.created",
+            "response.output_item.done",
+            "response.completed"
+        ]
+    );
 }
 
 #[tokio::test]
@@ -801,25 +814,36 @@ async fn compaction_should_accept_summary_when_upstream_stream_ends_without_term
         )
         .await
         .expect("compaction stream");
-    let facts = stream
+    let events = stream
         .by_ref()
         .map(|event| event.expect("successful compaction event"))
-        .flat_map(|event| stream::iter(event.into_parts().0))
         .collect::<Vec<_>>()
         .await;
+    let facts = events
+        .iter()
+        .flat_map(|event| event.canonical_facts())
+        .collect::<Vec<_>>();
+    let wire_types = events
+        .iter()
+        .filter_map(|event| event.wire_event().and_then(|wire| wire.event_type()))
+        .collect::<Vec<_>>();
 
     assert!(matches!(
         facts.as_slice(),
-        [
-            GatewayEvent::Started(_),
-            GatewayEvent::CompactionOutput(_),
-            GatewayEvent::Completed(_),
-        ]
+        [GatewayEvent::Started(_), GatewayEvent::Completed(_)]
     ));
+    assert_eq!(
+        wire_types,
+        [
+            "response.created",
+            "response.output_item.done",
+            "response.completed"
+        ]
+    );
 }
 
 #[tokio::test]
-async fn compaction_stream_should_exclude_reasoning_from_plaintext_summary() {
+async fn compaction_wire_should_exclude_reasoning_from_summary_content() {
     let summary = valid_compaction_summary("continuation marker");
     let transport = StubInferenceTransport::sequence([InferenceMode::SuccessBody(compaction_sse(
         &summary,
@@ -834,18 +858,17 @@ async fn compaction_stream_should_exclude_reasoning_from_plaintext_summary() {
         .await
         .expect("compaction stream");
     let events = stream.by_ref().collect::<Vec<_>>().await;
-    let output = events
+    let summary = events
         .iter()
         .map(|event| event.as_ref().expect("successful compaction event"))
-        .flat_map(|event| event.canonical_facts())
-        .find_map(|event| match event {
-            GatewayEvent::CompactionOutput(output) => Some(output),
-            _ => None,
-        })
-        .expect("typed compaction output");
+        .filter_map(|event| event.wire_event())
+        .find(|wire| wire.event_type() == Some("response.output_item.done"))
+        .and_then(|wire| wire.data().pointer("/item/encrypted_content"))
+        .and_then(serde_json::Value::as_str)
+        .expect("compaction output wire");
 
-    assert!(output.summary().as_str().contains("continuation marker"));
-    assert!(!output.summary().as_str().contains("private reasoning"));
+    assert!(summary.contains("continuation marker"));
+    assert!(!summary.contains("private reasoning"));
 }
 
 #[tokio::test]
@@ -1285,7 +1308,6 @@ async fn connection_state_inherits_session_and_recovers_reasoning_on_pinned_acco
     let selector = StubSelector::success();
     let provider = provider(selector.clone(), transport.clone()).await;
     let first_operation = Operation::Generate(GenerateRequest::from_protocol_payload(
-        Vec::new(),
         ProtocolPayload::json_object(
             "openai",
             Map::from_iter([
@@ -1408,7 +1430,6 @@ async fn replay_owner_should_reencode_custom_apply_patch_call_for_grok() {
     ]);
     let provider = provider(StubSelector::success(), transport.clone()).await;
     let first_operation = Operation::Generate(GenerateRequest::from_protocol_payload(
-        Vec::new(),
         ProtocolPayload::json_object(
             "openai",
             Map::from_iter([

@@ -55,7 +55,6 @@ fn tool_request(body: Value) -> GrokResponsesRequest {
         panic!("request fixture must be an object");
     };
     let request = GenerateRequest::from_protocol_payload(
-        Vec::new(),
         ProtocolPayload::json_object("openai", body).expect("OpenAI payload"),
     );
     GrokResponsesRequest::encode(
