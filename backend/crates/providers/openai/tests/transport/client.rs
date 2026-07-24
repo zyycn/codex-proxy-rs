@@ -24,7 +24,7 @@ fn upstream_error_formatting_should_redact_body() {
 #[test]
 fn request_context_debug_should_redact_all_identity_material() {
     let context = CodexRequestContext {
-        access_token: "access-secret-marker",
+        authorization: "Bearer access-secret-marker",
         account_id: Some("account-secret-marker"),
         request_id: "req_safe",
         turn_state: Some("turn-secret-marker"),

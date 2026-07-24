@@ -189,7 +189,7 @@ function metricCards(
       trend: trendState(tokens.todayTokensValue, tokens.yesterdayTokensValue, 'success'),
       details: [
         { label: '总 Token', value: tokens.totalTokens, tone: 'success' },
-        { label: '总计费', value: tokens.totalBillingAmountUsd, tone: 'success' },
+        { label: '总计费', value: formatDashboardUsd(tokens.totalBillingAmountUsd), tone: 'success' },
       ],
     },
     {
@@ -336,15 +336,64 @@ function usageTrendSummary(points: ReturnType<typeof aggregateUsageTrend>) {
 }
 
 function accountUsageItem(item: DashboardSummary['accountUsage'][number]) {
-  const quotaPercent = quotaUsedPercent(item.quotaUsedPercent)
+  const usageWindow = dashboardUsageWindow(item)
+  const requestCount = usageWindow.localUsage?.requestCount
+  const usesDailyRequests = typeof requestCount === 'number'
   return {
     id: item.id,
+    provider: item.provider,
+    authenticationKind: item.authenticationKind,
     email: item.email,
     planType: item.planType,
     tokens: item.tokens,
     lastUsed: item.lastUsed,
-    quotaPercent,
-    quotaTone: quotaTone(quotaPercent),
+    metricLabel: usesDailyRequests ? '次数' : 'Token',
+    metricValue: usesDailyRequests
+      ? requestCount > 0 ? usageWindow.localUsage?.requestCountDisplay : '—'
+      : item.tokens,
+    usageWindow,
+  }
+}
+
+function dashboardUsageWindow(item: DashboardSummary['accountUsage'][number]) {
+  const provider = item.provider.trim().toLowerCase()
+  const planType = item.planType?.trim().toLowerCase() || 'free'
+  if (provider !== 'xai' || planType !== 'free') {
+    const usedPercent = quotaUsedPercent(item.quotaUsedPercent)
+    return {
+      key: 'quota',
+      group: 'other',
+      labelDisplay: '额度',
+      usedPercent,
+      usedPercentDisplay: usedPercent === null ? '—' : `${usedPercent}%`,
+      windowSeconds: null,
+      resetAtDisplay: '—',
+    }
+  }
+
+  const requestCount = typeof item.requestCount === 'number' && Number.isFinite(item.requestCount)
+    ? Math.max(0, item.requestCount)
+    : 0
+  const requestBuckets = Array.isArray(item.requestBuckets)
+    ? item.requestBuckets.map((bucket: { bucketStart: string, requestCount: number }) => ({
+        bucketStart: bucket.bucketStart,
+        requestCount: bucket.requestCount,
+      }))
+    : []
+
+  return {
+    key: 'dailyRequests',
+    group: 'other',
+    labelDisplay: '日请求',
+    usedPercent: null,
+    usedPercentDisplay: '—',
+    windowSeconds: 86_400,
+    resetAtDisplay: '—',
+    localUsage: {
+      requestCount,
+      requestCountDisplay: formatDashboardCompactNumber(requestCount),
+      requestBuckets,
+    },
   }
 }
 
@@ -354,16 +403,12 @@ function quotaUsedPercent(value: number | null) {
   return clamp(Math.round(value), 0, 100)
 }
 
-function quotaTone(percent: number | null) {
-  if (percent === null)
-    return 'normal'
-  if (percent >= 95)
-    return 'danger'
-  if (percent >= 80)
-    return 'warning'
-  if (percent > 0)
-    return 'success'
-  return 'normal'
+function formatDashboardUsd(value: string) {
+  const normalized = value.trim()
+  if (!normalized.startsWith('$'))
+    return value
+  const amount = Number(normalized.slice(1).replaceAll(',', ''))
+  return Number.isFinite(amount) ? `$${amount.toFixed(2)}` : value
 }
 
 function trendState(

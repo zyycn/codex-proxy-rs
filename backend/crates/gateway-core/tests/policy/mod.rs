@@ -1,6 +1,4 @@
-use gateway_core::policy::{
-    AdmissionUnits, ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits,
-};
+use gateway_core::policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits};
 use gateway_core::routing::ProviderKind;
 
 fn plaintext(value: &str) -> PlaintextClientApiKey {
@@ -31,11 +29,6 @@ fn enabled_client_key_should_be_authorized() {
     );
 
     assert!(policy.authorize().is_ok());
-}
-
-#[test]
-fn admission_should_reject_zero_request_units() {
-    assert!(AdmissionUnits::new(0, 10).is_err());
 }
 
 #[test]

@@ -42,6 +42,7 @@ use self::swap::{replace_release_files, rollback_release};
 const APP_BINARY_NAME: &str = "codex-proxy-rs";
 const DEFAULT_WEB_DIST_DIR: &str = "/app/web/dist";
 const DEFAULT_GITHUB_API_BASE: &str = "https://api.github.com/repos";
+const DEFAULT_UPDATE_REPOSITORY: &str = "zyycn/codex-proxy-rs";
 
 type OperationError = SystemOperationError;
 
@@ -96,7 +97,10 @@ impl Default for SystemUpdateConfig {
             build_type: option_env!("CPR_BUILD_TYPE").unwrap_or("source").to_owned(),
             update_channel: environment_value("CPR_UPDATE_CHANNEL")
                 .unwrap_or_else(|| "stable".to_owned()),
-            update_repository: environment_value("CPR_UPDATE_REPOSITORY"),
+            update_repository: Some(
+                environment_value("CPR_UPDATE_REPOSITORY")
+                    .unwrap_or_else(|| DEFAULT_UPDATE_REPOSITORY.to_owned()),
+            ),
             github_api_base: environment_value("CPR_GITHUB_API_BASE")
                 .unwrap_or_else(|| DEFAULT_GITHUB_API_BASE.to_owned()),
             executable_path,
@@ -350,9 +354,6 @@ impl SystemOperations for ProcessSystemOperations {
     }
 
     async fn update_detail(&self, refresh: bool) -> Result<SystemUpdateDetail, OperationError> {
-        if let Some(reason) = self.config.update_support_error() {
-            return Ok(base_update_detail(&self.config, Some(reason), None));
-        }
         match self.release_cache.detail(&self.config, refresh).await {
             Ok(detail) => Ok(detail),
             Err(error) => Ok(base_update_detail(

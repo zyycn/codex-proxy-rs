@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use chrono::Utc;
-use gateway_core::engine::credential::ProviderAccountId;
+use gateway_core::engine::credential::{AccountFeedbackStats, ProviderAccountId};
 use gateway_core::engine::provider::{Provider as _, ProviderRequest};
 use gateway_core::engine::{
     AccountAttemptContext, AttemptContext, CancellationToken, ModelRequestId,
@@ -13,7 +13,7 @@ use gateway_core::engine::{
 use gateway_core::error::ProviderErrorKind;
 use gateway_core::operation::{
     CompactConversationRequest, ContentPart, GenerateRequest, Message, MessageRole, Operation,
-    ProviderOptions,
+    ProtocolPayload, ProviderOptions,
 };
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::{
@@ -23,13 +23,16 @@ use gateway_core::routing::{
 use provider_openai::CodexProvider;
 use provider_openai::credential::{
     CodexCookiePolicy, CodexCredentialCatalogService, CodexCredentialQuotaService,
-    CodexCredentialSelector,
+    CodexCredentialSelector, ImportCodexOAuthCredential,
 };
 use provider_openai::transport::CodexWebSocketPool;
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use serde_json::{Map, json};
 
-use crate::support::{MemoryAccountStore, TestLeaseCoordinator, account_policy};
+use crate::support::{
+    MemoryAccountStore, MemorySessionAffinity, TestLeaseCoordinator, account_policy,
+    agent_identity_service_with_pool, profile, secret,
+};
 
 fn wire_profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
@@ -46,27 +49,42 @@ fn wire_profile() -> CodexWireProfileState {
 }
 
 fn provider(store: &Arc<MemoryAccountStore>) -> CodexProvider {
+    provider_with_affinity(store, Arc::new(MemorySessionAffinity::default()))
+}
+
+fn provider_with_affinity(
+    store: &Arc<MemoryAccountStore>,
+    session_affinity: Arc<MemorySessionAffinity>,
+) -> CodexProvider {
     let profile = wire_profile();
     let http = reqwest::Client::builder()
         .no_proxy()
         .build()
         .expect("client");
+    let websocket_pool = Arc::new(CodexWebSocketPool::default());
+    let agent_identity = agent_identity_service_with_pool(store, Arc::clone(&websocket_pool));
     let catalog = Arc::new(CodexCredentialCatalogService::new(
         store.repository(),
         profile.clone(),
         http.clone(),
+        Arc::clone(&agent_identity),
     ));
     let quota = Arc::new(CodexCredentialQuotaService::new(
         store.repository(),
         profile.clone(),
         http.clone(),
+        Arc::clone(&agent_identity),
     ));
+    let account_feedback = Arc::new(AccountFeedbackStats::default());
     let selector = Arc::new(CodexCredentialSelector::new(
         ProviderKind::new("openai").expect("provider"),
         store.repository(),
         Arc::new(TestLeaseCoordinator::default()),
+        session_affinity,
         Arc::clone(&catalog),
         Arc::clone(&quota),
+        Arc::clone(&agent_identity),
+        Arc::clone(&account_feedback),
         CodexCookiePolicy::official().expect("cookie policy"),
     ));
 
@@ -74,11 +92,26 @@ fn provider(store: &Arc<MemoryAccountStore>) -> CodexProvider {
         selector,
         catalog,
         quota,
+        agent_identity,
+        account_feedback,
         http,
         profile,
-        Arc::new(CodexWebSocketPool::default()),
+        websocket_pool,
     )
     .expect("official OpenAI provider")
+}
+
+async fn create_account(store: &Arc<MemoryAccountStore>, id: &str) {
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: id.to_owned(),
+            name: id.to_owned(),
+            secret: secret(&format!("at-{id}")),
+            verified_account: profile(&format!("chatgpt-{id}")),
+            next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await;
 }
 
 fn generate_operation() -> Operation {
@@ -105,7 +138,7 @@ fn planned_request(provider_name: &str, operation: Operation) -> ProviderRequest
         vec![ProviderModel::new(
             provider,
             upstream_model,
-            ModelCapabilities::new(BTreeSet::from([operation.kind()]), 128_000, Some(32_000)),
+            ModelCapabilities::new(BTreeSet::from([operation.kind()]), Some(32_000)),
         )],
         Vec::new(),
     )
@@ -202,7 +235,7 @@ async fn generate_without_an_eligible_openai_account_fails_before_network_io() {
         panic!("missing OpenAI account must fail")
     };
 
-    assert_eq!(error.kind(), ProviderErrorKind::Unavailable);
+    assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
     assert_eq!(error.send_state(), UpstreamSendState::NotSent);
 }
 
@@ -234,6 +267,33 @@ async fn unknown_openai_transport_is_rejected_before_account_selection() {
     assert_eq!(error.send_state(), UpstreamSendState::NotSent);
 }
 
+#[tokio::test]
+async fn prompt_cache_key_should_become_an_opaque_session_affinity_lookup_key() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_affinity").await;
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let mut generation = match generate_operation() {
+        Operation::Generate(generation) => generation,
+        _ => unreachable!("fixture is generate"),
+    };
+    generation = generation.with_prompt_cache_key("raw-prompt-cache-key");
+
+    let stream = provider_with_affinity(&store, Arc::clone(&affinity))
+        .execute(
+            planned_request("openai", Operation::Generate(generation)),
+            context("req_affinity_key", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare provider stream");
+    drop(stream);
+
+    let keys = affinity.lookup_keys();
+    assert_eq!(keys.len(), 1);
+    assert_ne!(keys[0], "raw-prompt-cache-key");
+    assert_eq!(keys[0].len(), 64);
+    assert!(keys[0].bytes().all(|byte| byte.is_ascii_hexdigit()));
+}
+
 #[test]
 fn request_observation_reads_openai_metadata_without_changing_the_operation() {
     let store = Arc::new(MemoryAccountStore::default());
@@ -262,4 +322,23 @@ fn request_observation_reads_openai_metadata_without_changing_the_operation() {
     assert_eq!(observation.subagent_kind.as_deref(), Some("worker"));
     assert!(!observation.compact);
     assert!(matches!(operation, Operation::Generate(_)));
+}
+
+#[test]
+fn request_observation_preserves_the_raw_reasoning_effort() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        Map::from_iter([("reasoning".to_owned(), json!({"effort": "future-value"}))]),
+    )
+    .expect("protocol payload");
+    let operation =
+        Operation::Generate(GenerateRequest::from_protocol_payload(Vec::new(), payload));
+
+    let observation = provider(&store).request_observation(&operation);
+
+    assert_eq!(
+        observation.reasoning_effort.as_deref(),
+        Some("future-value")
+    );
 }

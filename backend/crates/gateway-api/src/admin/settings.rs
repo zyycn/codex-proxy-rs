@@ -13,11 +13,11 @@ use chrono::{DateTime, Utc};
 use gateway_admin::model::{
     Revision,
     settings::{
-        ProviderModelMappings as DomainProviderModelMappings, ReplaceRuntimeSettings,
-        RotationStrategy, RuntimeSettings,
+        ModelMappings as DomainModelMappings, ReplaceRuntimeSettings, RotationStrategy,
+        RuntimeSettings,
     },
 };
-use gateway_core::routing::{ProviderKind, PublicModelId, UpstreamModelId};
+use gateway_core::routing::{PublicModelId, UpstreamModelId};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -25,15 +25,15 @@ use super::{
     wire::map_admin_service_error,
 };
 
-/// 按 Provider 分组的精确模型映射：Provider → 客户端模型 → 上游模型。
-pub type ProviderModelMappings = BTreeMap<String, BTreeMap<String, String>>;
+/// 客户端模型到上游模型的全局精确映射。
+pub type ModelMappings = BTreeMap<String, String>;
 
 /// 运行配置投影与设置页字段的聚合响应。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettingsView {
     pub config_revision: u64,
-    pub provider_model_mappings: ProviderModelMappings,
+    pub model_mappings: ModelMappings,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u64,
     pub max_concurrent_per_account: u64,
@@ -50,7 +50,7 @@ pub struct RuntimeSettingsView {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateRuntimeSettingsRequest {
     pub expected_config_revision: u64,
-    pub provider_model_mappings: ProviderModelMappings,
+    pub model_mappings: ModelMappings,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u64,
     pub max_concurrent_per_account: u64,
@@ -67,7 +67,7 @@ impl UpdateRuntimeSettingsRequest {
         if self.expected_config_revision == 0 {
             return Err(WireValidationError::new("expectedConfigRevision"));
         }
-        validate_provider_model_mappings(&self.provider_model_mappings)?;
+        validate_model_mappings(&self.model_mappings)?;
         for (value, field) in [
             (self.refresh_margin_seconds, "refreshMarginSeconds"),
             (self.refresh_concurrency, "refreshConcurrency"),
@@ -95,7 +95,7 @@ impl UpdateRuntimeSettingsRequest {
         Ok(ReplaceRuntimeSettings {
             expected_config_revision: Revision::new(self.expected_config_revision)
                 .map_err(|_| WireValidationError::new("settingsRevisionOverflow"))?,
-            provider_model_mappings: domain_provider_model_mappings(self.provider_model_mappings)?,
+            model_mappings: domain_model_mappings(self.model_mappings)?,
             refresh_margin_seconds: self.refresh_margin_seconds,
             refresh_concurrency: u32::try_from(self.refresh_concurrency)
                 .map_err(|_| WireValidationError::new("settingsRefreshConcurrencyOverflow"))?,
@@ -118,7 +118,7 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
     fn from(settings: RuntimeSettings) -> Self {
         Self {
             config_revision: settings.config_revision.get(),
-            provider_model_mappings: wire_provider_model_mappings(settings.provider_model_mappings),
+            model_mappings: wire_model_mappings(settings.model_mappings),
             refresh_margin_seconds: settings.refresh_margin_seconds,
             refresh_concurrency: u64::from(settings.refresh_concurrency),
             max_concurrent_per_account: u64::from(settings.max_concurrent_per_account),
@@ -296,61 +296,38 @@ fn require_positive_i64(value: u64, field: &'static str) -> Result<(), WireValid
     Ok(())
 }
 
-fn validate_provider_model_mappings(
-    mappings: &ProviderModelMappings,
-) -> Result<(), WireValidationError> {
-    if mappings.len() > 32 {
-        return Err(WireValidationError::new("providerModelMappings"));
+fn validate_model_mappings(mappings: &ModelMappings) -> Result<(), WireValidationError> {
+    if mappings.len() > 512 {
+        return Err(WireValidationError::new("modelMappings"));
     }
-    for (provider, entries) in mappings {
-        if !valid_slug(provider, 64) || entries.len() > 512 {
-            return Err(WireValidationError::new("providerModelMappings"));
-        }
-        for (requested, upstream) in entries {
-            if !valid_model_name(requested, 256) || !valid_model_name(upstream, 256) {
-                return Err(WireValidationError::new("providerModelMappings"));
-            }
+    for (requested, upstream) in mappings {
+        if !valid_model_name(requested, 256) || !valid_model_name(upstream, 256) {
+            return Err(WireValidationError::new("modelMappings"));
         }
     }
     Ok(())
 }
 
-fn domain_provider_model_mappings(
-    mappings: ProviderModelMappings,
-) -> Result<DomainProviderModelMappings, WireValidationError> {
+fn domain_model_mappings(
+    mappings: ModelMappings,
+) -> Result<DomainModelMappings, WireValidationError> {
     mappings
         .into_iter()
-        .map(|(provider, entries)| {
-            let provider = ProviderKind::new(provider)
-                .map_err(|_| WireValidationError::new("providerModelMappings"))?;
-            let entries = entries
-                .into_iter()
-                .map(|(requested, upstream)| {
-                    Ok((
-                        PublicModelId::new(requested)
-                            .map_err(|_| WireValidationError::new("providerModelMappings"))?,
-                        UpstreamModelId::new(upstream)
-                            .map_err(|_| WireValidationError::new("providerModelMappings"))?,
-                    ))
-                })
-                .collect::<Result<_, WireValidationError>>()?;
-            Ok((provider, entries))
+        .map(|(requested, upstream)| {
+            Ok((
+                PublicModelId::new(requested)
+                    .map_err(|_| WireValidationError::new("modelMappings"))?,
+                UpstreamModelId::new(upstream)
+                    .map_err(|_| WireValidationError::new("modelMappings"))?,
+            ))
         })
         .collect()
 }
 
-fn wire_provider_model_mappings(mappings: DomainProviderModelMappings) -> ProviderModelMappings {
+fn wire_model_mappings(mappings: DomainModelMappings) -> ModelMappings {
     mappings
         .into_iter()
-        .map(|(provider, entries)| {
-            (
-                provider.to_string(),
-                entries
-                    .into_iter()
-                    .map(|(requested, upstream)| (requested.to_string(), upstream.to_string()))
-                    .collect(),
-            )
-        })
+        .map(|(requested, upstream)| (requested.to_string(), upstream.to_string()))
         .collect()
 }
 
@@ -371,16 +348,6 @@ const fn rotation_strategy_name(strategy: RotationStrategy) -> &'static str {
         RotationStrategy::RoundRobin => "round_robin",
         RotationStrategy::Sticky => "sticky",
     }
-}
-
-fn valid_slug(value: &str, max_len: usize) -> bool {
-    !value.is_empty()
-        && value.len() <= max_len
-        && !value.starts_with('-')
-        && !value.ends_with('-')
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 fn valid_model_name(value: &str, max_len: usize) -> bool {

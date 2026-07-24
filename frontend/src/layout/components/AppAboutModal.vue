@@ -75,9 +75,9 @@ const linkItems = [
         >
           <div class="flex min-w-0 items-center gap-3">
             <span
-              class="inline-flex size-8 shrink-0 items-center justify-center rounded-(--cp-icon-button-radius) bg-(--cp-bg-muted) text-(--cp-text-secondary)"
+              class="inline-flex size-8 shrink-0 items-center justify-center rounded-(--cp-icon-button-radius) bg-(--cp-bg-muted) text-(--cp-text-primary)"
             >
-              <component :is="item.icon" class="size-5 text-white" />
+              <component :is="item.icon" class="size-5" />
             </span>
             <div class="min-w-0">
               <p class="m-0 text-[11px] leading-none font-[760] text-(--cp-text-muted)">

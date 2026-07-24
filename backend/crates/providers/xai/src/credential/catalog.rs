@@ -428,7 +428,10 @@ impl GrokCredentialQuotaService {
             .await
             .map_err(map_quota_repository_error)?;
         if !loaded.account.enabled()
-            || loaded.account.access_token_expires_at() <= SystemTime::now()
+            || loaded
+                .account
+                .access_token_expires_at()
+                .is_none_or(|expires_at| expires_at <= SystemTime::now())
         {
             return Err(GrokQuotaError::AccountUnavailable);
         }
@@ -1082,7 +1085,9 @@ fn eligible_catalog_candidate(candidate: &LoadedGrokCredential) -> bool {
     let account = &candidate.account;
     let now = SystemTime::now();
     account.enabled()
-        && account.access_token_expires_at() > now
+        && account
+            .access_token_expires_at()
+            .is_some_and(|expires_at| expires_at > now)
         && candidate
             .refresh_token_expires_at
             .is_none_or(|expires_at| expires_at > Utc::now())
@@ -1269,7 +1274,9 @@ fn quota_is_exhausted(billing: &GrokBillingPresentation) -> bool {
 
 fn quota_refresh_may_update_state(before: &ProviderAccount, current: &ProviderAccount) -> bool {
     current.enabled()
-        && current.access_token_expires_at() > SystemTime::now()
+        && current
+            .access_token_expires_at()
+            .is_some_and(|expires_at| expires_at > SystemTime::now())
         && current.revision() == before.revision()
         && current.availability() == before.availability()
         && current.cooldown_until() == before.cooldown_until()

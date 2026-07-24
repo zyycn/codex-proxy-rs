@@ -1,3 +1,6 @@
+use std::collections::BTreeMap;
+
+use chrono::{TimeZone as _, Utc};
 use gateway_admin::{
     model::client_keys::{
         ClientKeyListQuery as AdminClientKeyListQuery, ClientKeyPageSize,
@@ -24,7 +27,6 @@ fn client_key_requires_the_frozen_plaintext_format() {
         key: format!("sk_{}", "a".repeat(43)),
         max_concurrency: 0,
         requests_per_minute: 0,
-        tokens_per_minute: 0,
     };
     assert!(key.validate().is_ok());
 }
@@ -43,8 +45,8 @@ async fn client_key_list_uses_safe_keyset_search_and_filtered_total() {
         sqlx::query(
             "insert into client_api_keys (
                id, name, label, provider_kind, key, enabled, max_concurrency, requests_per_minute,
-               tokens_per_minute, created_at, updated_at
-             ) values ($1, $2, $2, 'openai', $3, true, 0, 0, 0,
+               created_at, updated_at
+             ) values ($1, $2, $2, 'openai', $3, true, 0, 0,
                        now() - ($4::bigint * interval '1 minute'), now())",
         )
         .bind(id)
@@ -185,8 +187,8 @@ async fn client_key_database_sort_is_stable_and_keeps_null_last_used_at_last() {
         sqlx::query(
             "insert into client_api_keys (
                id, name, provider_kind, key, enabled, max_concurrency, requests_per_minute,
-               tokens_per_minute, last_used_at, created_at, updated_at
-             ) values ($1, $2, 'openai', $3, $4, 0, 0, 0, $5::timestamptz, $6::timestamptz,
+               last_used_at, created_at, updated_at
+             ) values ($1, $2, 'openai', $3, $4, 0, 0, $5::timestamptz, $6::timestamptz,
                        $6::timestamptz)",
         )
         .bind(id)
@@ -264,6 +266,48 @@ async fn client_key_database_sort_is_stable_and_keeps_null_last_used_at_last() {
 }
 
 #[tokio::test]
+async fn client_key_usage_touch_should_preserve_the_latest_observed_timestamp() {
+    let Some(database) = TestDatabase::create("client_key_usage_touch").await else {
+        return;
+    };
+    sqlx::query(
+        "insert into client_api_keys (
+           id, name, provider_kind, key, enabled, max_concurrency, requests_per_minute,
+           created_at, updated_at
+         ) values ('key_usage_touch', 'usage', 'openai', $1, true, 0, 0, now(), now())",
+    )
+    .bind(format!("sk_{}", "t".repeat(43)))
+    .execute(&database.pool)
+    .await
+    .expect("seed client key");
+    let repository = PgClientApiKeyRepository::new(database.pool.clone());
+    let first = Utc
+        .with_ymd_and_hms(2026, 7, 24, 0, 0, 0)
+        .single()
+        .expect("first timestamp");
+    let latest = Utc
+        .with_ymd_and_hms(2026, 7, 24, 0, 0, 1)
+        .single()
+        .expect("latest timestamp");
+    repository
+        .touch_client_api_keys(&BTreeMap::from([("key_usage_touch".to_owned(), first)]))
+        .await
+        .expect("record first API Key use");
+    repository
+        .touch_client_api_keys(&BTreeMap::from([("key_usage_touch".to_owned(), latest)]))
+        .await
+        .expect("record latest API Key use");
+
+    let record = repository
+        .get_client_api_key("key_usage_touch")
+        .await
+        .expect("load API Key")
+        .expect("client key exists");
+    assert_eq!(record.last_used_at, Some(latest));
+    database.close().await;
+}
+
+#[tokio::test]
 async fn dedicated_reveal_returns_plaintext_without_debug_exposure() {
     let Some(database) = TestDatabase::create("client_key_reveal").await else {
         return;
@@ -272,8 +316,8 @@ async fn dedicated_reveal_returns_plaintext_without_debug_exposure() {
     sqlx::query(
         "insert into client_api_keys (
            id, name, provider_kind, key, enabled, max_concurrency, requests_per_minute,
-           tokens_per_minute, created_at, updated_at
-         ) values ('key_reveal', 'reveal', 'openai', $1, true, 1, 2, 3, now(), now())",
+           created_at, updated_at
+         ) values ('key_reveal', 'reveal', 'openai', $1, true, 1, 2, now(), now())",
     )
     .bind(&plaintext)
     .execute(&database.pool)
@@ -300,7 +344,6 @@ fn client_key_debug_redacts_plaintext() {
         key: secret.clone(),
         max_concurrency: 0,
         requests_per_minute: 0,
-        tokens_per_minute: 0,
     };
     assert!(!format!("{key:?}").contains(&secret));
 }

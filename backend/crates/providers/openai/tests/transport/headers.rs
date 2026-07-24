@@ -168,7 +168,7 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
         .create_response(
             &request,
             CodexRequestContext {
-                access_token: "access-token",
+                authorization: "Bearer access-token",
                 account_id: Some("chatgpt-account"),
                 request_id: "req_ws_security",
                 turn_state: Some("turn-state"),
@@ -273,7 +273,7 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
         .create_response(
             &request,
             CodexRequestContext {
-                access_token: "access-token",
+                authorization: "Bearer access-token",
                 account_id: Some("chatgpt-account"),
                 request_id: "req_order",
                 turn_state: Some("turn-state"),

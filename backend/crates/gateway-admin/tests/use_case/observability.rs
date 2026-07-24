@@ -12,9 +12,9 @@ use gateway_admin::{
         MutationContext, Revision,
         observability::{
             AccountPoolMetrics, AttemptMetrics, CostCoverage, CurrencyCost, DashboardObservation,
-            DiagnosticDimension, DiagnosticObservation, Granularity, HealthStatus, OpsErrorPage,
-            OpsErrorQuery, RequestMetricPoint, RequestMetrics, TimeRange, TrendKind, UsageDetail,
-            UsageFilter, UsageOverview, UsagePage, UsageQuery,
+            DashboardRuntimeSlots, DiagnosticDimension, DiagnosticObservation, Granularity,
+            HealthStatus, OpsErrorPage, OpsErrorQuery, RequestMetricPoint, RequestMetrics,
+            TimeRange, TrendKind, UsageDetail, UsageFilter, UsageOverview, UsagePage, UsageQuery,
         },
         settings::{
             AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RotationStrategy,
@@ -176,6 +176,28 @@ async fn health_timeline_should_match_legacy_status_precedence_and_thresholds() 
 }
 
 #[tokio::test]
+async fn dashboard_summary_should_project_rebuildable_runtime_slots() {
+    let now = Utc::now();
+    let store = Arc::new(FixtureObservabilityStore::new(observation_range(now)));
+    store.replace_runtime_slots(Some(DashboardRuntimeSlots {
+        active_accounts: 3,
+        used_slots: Some(2),
+    }));
+    let services = observability_services(store).await;
+
+    let capacity = services
+        .observability()
+        .dashboard_summary(observation_range(now), TrendKind::Usage)
+        .await
+        .expect("dashboard summary")
+        .capacity;
+
+    assert_eq!(capacity.total_slots, 3);
+    assert_eq!(capacity.used_slots, Some(2));
+    assert_eq!(capacity.available_slots, Some(1));
+}
+
+#[tokio::test]
 async fn observability_services_should_calculate_usage_insights_and_diagnostic_shares() {
     let now = Utc::now();
     let range = observation_range(now);
@@ -214,7 +236,11 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
         granularity: Granularity::FifteenMinutes,
         metrics,
         cost_coverage: CostCoverage::default(),
-        costs: Vec::new(),
+        costs: vec![CurrencyCost {
+            currency: "USD".to_owned(),
+            amount: gateway_admin::model::observability::DecimalAmount::from_str("0.25")
+                .expect("bucket USD cost"),
+        }],
     }]);
     store.replace_diagnostics(vec![diagnostic("openai", 3), diagnostic("xai", 1)]);
     let services = observability_services(store).await;
@@ -243,6 +269,21 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
             .map(gateway_admin::model::observability::DecimalAmount::as_str),
         Some("1.25")
     );
+    assert_eq!(
+        insights
+            .cost
+            .cost_per_request
+            .as_ref()
+            .map(gateway_admin::model::observability::DecimalAmount::as_str),
+        Some("0.125")
+    );
+    assert_eq!(
+        insights.cost.points[0]
+            .estimated_cost
+            .as_ref()
+            .map(gateway_admin::model::observability::DecimalAmount::as_str),
+        Some("0.25")
+    );
     assert_eq!(diagnostics.items[0].request_share, 0.75);
     assert_eq!(diagnostics.items[1].request_share, 0.25);
 }
@@ -251,6 +292,7 @@ struct FixtureObservabilityStore {
     trend: Mutex<Vec<RequestMetricPoint>>,
     overview: Mutex<UsageOverview>,
     diagnostics: Mutex<Vec<DiagnosticObservation>>,
+    runtime_slots: Mutex<Option<DashboardRuntimeSlots>>,
 }
 
 impl FixtureObservabilityStore {
@@ -264,6 +306,7 @@ impl FixtureObservabilityStore {
                 providers: Vec::new(),
             }),
             diagnostics: Mutex::new(Vec::new()),
+            runtime_slots: Mutex::new(None),
         }
     }
 
@@ -277,6 +320,10 @@ impl FixtureObservabilityStore {
 
     fn replace_diagnostics(&self, diagnostics: Vec<DiagnosticObservation>) {
         *self.diagnostics.lock().expect("diagnostics") = diagnostics;
+    }
+
+    fn replace_runtime_slots(&self, runtime_slots: Option<DashboardRuntimeSlots>) {
+        *self.runtime_slots.lock().expect("runtime slots") = runtime_slots;
     }
 }
 
@@ -292,6 +339,13 @@ impl ObservabilityStore for FixtureObservabilityStore {
             account_usage: Vec::new(),
             recent_requests: Vec::new(),
         })
+    }
+
+    async fn dashboard_runtime_slots(
+        &self,
+        _: DateTime<Utc>,
+    ) -> AdminStoreResult<Option<DashboardRuntimeSlots>> {
+        Ok(*self.runtime_slots.lock().expect("runtime slots"))
     }
 
     async fn dashboard_trend(&self, _: TimeRange) -> AdminStoreResult<Vec<RequestMetricPoint>> {
@@ -339,7 +393,7 @@ impl SettingsStore for FixtureSettingsStore {
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(RuntimeSettings {
             config_revision: Revision::new(1).expect("revision"),
-            provider_model_mappings: Default::default(),
+            model_mappings: Default::default(),
             refresh_margin_seconds: 300,
             refresh_concurrency: 2,
             max_concurrent_per_account: 1,

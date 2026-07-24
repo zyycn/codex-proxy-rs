@@ -4,21 +4,22 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Timelike as _, Utc};
-use gateway_core::routing::ProviderKind;
+use gateway_core::{engine::credential::ProviderAccountId, routing::ProviderKind};
 
 use crate::{
     model::{
         AdminError,
         observability::{
-            CostCoverage, CurrencyCost, DashboardCapacity, DashboardPeriodMetrics, DashboardResult,
-            DecimalAmount, DiagnosticDimension, DiagnosticsItem, DiagnosticsResult, HealthStatus,
-            HealthTimeline, HealthTimelinePoint, OpsErrorPage, OpsErrorQuery, ProviderBillingInput,
-            RequestMetricPoint, RequestMetrics, TimeRange, Trend, TrendKind, TrendPoint,
-            TrendSummary, UsageBilling, UsageDetail, UsageFilter, UsageInsights, UsageInsightsCost,
-            UsageInsightsCostPoint, UsageInsightsHealth, UsageInsightsHealthPoint,
-            UsageInsightsPerformance, UsageInsightsPerformancePoint, UsageOverview, UsagePage,
-            UsageQuery, UsageSummary,
+            CostCoverage, CurrencyCost, DashboardAccountUsage, DashboardCapacity,
+            DashboardPeriodMetrics, DashboardResult, DecimalAmount, DiagnosticDimension,
+            DiagnosticsItem, DiagnosticsResult, HealthStatus, HealthTimeline, HealthTimelinePoint,
+            OpsErrorPage, OpsErrorQuery, ProviderBillingInput, RequestMetricPoint, RequestMetrics,
+            TimeRange, Trend, TrendKind, TrendPoint, TrendSummary, UsageBilling, UsageDetail,
+            UsageFilter, UsageInsights, UsageInsightsCost, UsageInsightsCostPoint,
+            UsageInsightsHealth, UsageInsightsHealthPoint, UsageInsightsPerformance,
+            UsageInsightsPerformancePoint, UsageOverview, UsagePage, UsageQuery, UsageSummary,
         },
+        provider_credentials::ProviderQuotaRequest,
     },
     ports::{
         provider::ProviderAdminRegistry,
@@ -94,12 +95,15 @@ impl ObservabilityService for DefaultObservabilityService {
         range: TimeRange,
         kind: TrendKind,
     ) -> Result<DashboardResult, AdminError> {
-        let (mut observation, settings) = futures::try_join!(
+        let (mut observation, settings, runtime_slots) = futures::try_join!(
             self.store.dashboard_summary(range),
             self.settings.load_runtime_settings(),
+            self.store.dashboard_runtime_slots(range.end),
         )
         .map_err(|error| map_store_error(error, "dashboard"))?;
         self.enrich_billing(&mut observation.recent_requests)?;
+        self.enrich_dashboard_quotas(&mut observation.account_usage)
+            .await;
         let today_start = china_day_start(observation.range.end);
         let yesterday_start = today_start - Duration::days(1);
         let today =
@@ -123,15 +127,19 @@ impl ObservabilityService for DefaultObservabilityService {
         let health_timeline = health_timeline_at(&observation.trend, Utc::now());
         let wire_profiles = self.providers.dashboard_wire_profiles();
         let max_concurrent_per_account = u64::from(settings.max_concurrent_per_account);
+        let active_accounts = runtime_slots
+            .as_ref()
+            .map_or(observation.provider_accounts.active, |slots| {
+                slots.active_accounts
+            });
+        let total_slots = active_accounts.saturating_mul(max_concurrent_per_account);
+        let used_slots = runtime_slots.and_then(|slots| slots.used_slots);
         Ok(DashboardResult {
             capacity: DashboardCapacity {
                 max_concurrent_per_account,
-                total_slots: observation
-                    .provider_accounts
-                    .active
-                    .saturating_mul(max_concurrent_per_account),
-                used_slots: None,
-                available_slots: None,
+                total_slots,
+                used_slots,
+                available_slots: used_slots.map(|used| total_slots.saturating_sub(used)),
             },
             rotation_strategy: settings.rotation_strategy,
             observation,
@@ -241,7 +249,7 @@ impl ObservabilityService for DefaultObservabilityService {
                     error_rate: rate_or_zero(item.failure_count, item.request_count),
                     request_share: rate_or_zero(item.request_count, total_requests),
                     average_latency_ms: item.average_latency_ms,
-                    estimated_cost: None,
+                    estimated_cost: usd_cost(&item.costs),
                     attempt_count: item.attempt_count,
                     total_tokens: item.total_tokens,
                 })
@@ -316,16 +324,13 @@ fn build_usage_insights(
             })
             .collect(),
     };
-    let estimated_cost = overview
-        .attempts
-        .costs
-        .iter()
-        .find(|cost| cost.currency.eq_ignore_ascii_case("USD"))
-        .map(|cost| cost.amount.clone());
+    let estimated_cost = usd_cost(&overview.attempts.costs);
     let cost = UsageInsightsCost {
+        cost_per_request: estimated_cost
+            .as_ref()
+            .and_then(|cost| cost.checked_div_u64(requests.request_count)),
         estimated_cost,
         standard_cost: None,
-        cost_per_request: None,
         tokens_per_request: rate_or_zero(requests.total_tokens, requests.request_count),
         cached_token_rate: rate_or_zero(requests.cached_tokens, requests.input_tokens),
         cache_hit_request_rate: ratio(
@@ -344,7 +349,7 @@ fn build_usage_insights(
                 output_tokens: point.metrics.output_tokens,
                 cached_tokens: point.metrics.cached_tokens,
                 total_tokens: point.metrics.total_tokens,
-                estimated_cost: None,
+                estimated_cost: usd_cost(&point.costs),
                 standard_cost: None,
                 cached_token_rate: rate_or_zero(
                     point.metrics.cached_tokens,
@@ -369,7 +374,43 @@ fn build_usage_insights(
     })
 }
 
+fn usd_cost(costs: &[CurrencyCost]) -> Option<DecimalAmount> {
+    costs
+        .iter()
+        .find(|cost| cost.currency.eq_ignore_ascii_case("USD"))
+        .map(|cost| cost.amount.clone())
+}
+
 impl DefaultObservabilityService {
+    async fn enrich_dashboard_quotas(&self, accounts: &mut [DashboardAccountUsage]) {
+        let providers = self.providers.clone();
+        let quota_reads = accounts.iter().map(|account| {
+            let account_id = ProviderAccountId::new(account.account_id.clone()).ok();
+            let provider = ProviderKind::new(account.provider_kind.clone())
+                .ok()
+                .and_then(|kind| providers.require(&kind).ok());
+            async move {
+                let (Some(account_id), Some(provider)) = (account_id, provider) else {
+                    return None;
+                };
+                provider
+                    .quota(ProviderQuotaRequest {
+                        account_id,
+                        refresh: false,
+                        rolling_usage: None,
+                    })
+                    .await
+                    .ok()
+                    .and_then(|quota| quota.representative_used_percent())
+            }
+        });
+        let quota_used = futures::future::join_all(quota_reads).await;
+        for (account, used_percent) in accounts.iter_mut().zip(quota_used) {
+            account.quota_used_percent = used_percent
+                .or_else(|| (account.availability == "quota_exhausted").then_some(100.0));
+        }
+    }
+
     fn enrich_billing(
         &self,
         records: &mut [crate::model::observability::UsageRecord],

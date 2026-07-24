@@ -41,7 +41,7 @@ pub struct SnapshotSettingsFacts {
     max_concurrent_per_account: u32,
     request_interval_ms: u64,
     rotation_strategy: String,
-    provider_model_mappings: BTreeMap<String, BTreeMap<String, String>>,
+    model_mappings: BTreeMap<String, String>,
 }
 
 impl SnapshotSettingsFacts {
@@ -50,13 +50,13 @@ impl SnapshotSettingsFacts {
         max_concurrent_per_account: u32,
         request_interval_ms: u64,
         rotation_strategy: impl Into<String>,
-        provider_model_mappings: BTreeMap<String, BTreeMap<String, String>>,
+        model_mappings: BTreeMap<String, String>,
     ) -> Self {
         Self {
             max_concurrent_per_account,
             request_interval_ms,
             rotation_strategy: rotation_strategy.into(),
-            provider_model_mappings,
+            model_mappings,
         }
     }
 }
@@ -239,16 +239,7 @@ async fn compile_runtime_snapshot(
         }));
     }
 
-    let provider_model_mappings = facts
-        .settings
-        .provider_model_mappings
-        .into_iter()
-        .map(|(provider, mappings)| {
-            ProviderKind::new(provider)
-                .map(|provider| (provider, mappings))
-                .map_err(|_| RuntimeSnapshotCompileError::InvalidData)
-        })
-        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let model_mappings = facts.settings.model_mappings;
     let rotation_strategy = match facts.settings.rotation_strategy.as_str() {
         "smart" => RotationStrategy::Smart,
         "quota_reset_priority" => RotationStrategy::QuotaResetPriority,
@@ -286,7 +277,7 @@ async fn compile_runtime_snapshot(
         client_policies,
     )
     .map_err(|_| RuntimeSnapshotCompileError::InvalidData)
-    .map(|snapshot| snapshot.with_provider_model_mappings(provider_model_mappings))
+    .map(|snapshot| snapshot.with_model_mappings(model_mappings))
 }
 
 /// 数据面使用的不可变配置快照。
@@ -296,7 +287,7 @@ pub struct RuntimeSnapshot {
     account_selection_policy: AccountSelectionPolicy,
     providers: Arc<BTreeSet<ProviderKind>>,
     provider_models: Arc<BTreeMap<ProviderKind, BTreeMap<UpstreamModelId, ModelCapabilities>>>,
-    provider_model_mappings: Arc<BTreeMap<ProviderKind, BTreeMap<String, String>>>,
+    model_mappings: Arc<BTreeMap<String, String>>,
     provider_catalog_generations: Arc<BTreeMap<ProviderKind, ProviderCatalogGeneration>>,
     client_policies: Arc<BTreeMap<ClientApiKeyId, ClientPolicy>>,
 }
@@ -359,18 +350,15 @@ impl RuntimeSnapshot {
             account_selection_policy,
             providers: Arc::new(provider_set),
             provider_models: Arc::new(model_map),
-            provider_model_mappings: Arc::new(BTreeMap::new()),
+            model_mappings: Arc::new(BTreeMap::new()),
             provider_catalog_generations: Arc::new(BTreeMap::new()),
             client_policies: Arc::new(client_policy_map),
         })
     }
 
     #[must_use]
-    pub fn with_provider_model_mappings(
-        mut self,
-        mappings: BTreeMap<ProviderKind, BTreeMap<String, String>>,
-    ) -> Self {
-        self.provider_model_mappings = Arc::new(mappings);
+    pub fn with_model_mappings(mut self, mappings: BTreeMap<String, String>) -> Self {
+        self.model_mappings = Arc::new(mappings);
         self
     }
 
@@ -406,13 +394,11 @@ impl RuntimeSnapshot {
                     .filter_map(|model| PublicModelId::new(model.as_str().to_owned()).ok()),
             );
         }
-        if let Some(mappings) = self.provider_model_mappings.get(provider) {
-            models.extend(
-                mappings
-                    .keys()
-                    .filter_map(|model| PublicModelId::new(model.clone()).ok()),
-            );
-        }
+        models.extend(
+            self.model_mappings
+                .keys()
+                .filter_map(|model| PublicModelId::new(model.clone()).ok()),
+        );
         models.into_iter().collect()
     }
 
@@ -437,10 +423,9 @@ impl RuntimeSnapshot {
     }
 
     #[must_use]
-    pub fn mapped_model(&self, provider: &ProviderKind, requested: &str) -> String {
-        self.provider_model_mappings
-            .get(provider)
-            .and_then(|mapping| mapping.get(requested))
+    pub fn mapped_model(&self, requested: &str) -> String {
+        self.model_mappings
+            .get(requested)
             .cloned()
             .unwrap_or_else(|| requested.to_owned())
     }
@@ -467,9 +452,8 @@ impl RuntimeSnapshot {
             {
                 continue;
             }
-            let upstream_model =
-                UpstreamModelId::new(self.mapped_model(provider, public_model.as_str()))
-                    .map_err(|_| RoutingError::InvalidIdentifier)?;
+            let upstream_model = UpstreamModelId::new(self.mapped_model(public_model.as_str()))
+                .map_err(|_| RoutingError::InvalidIdentifier)?;
             let emulated_features = match self
                 .provider_models
                 .get(provider)

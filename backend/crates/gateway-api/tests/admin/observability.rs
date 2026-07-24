@@ -67,9 +67,10 @@ mod response {
     use chrono::{TimeZone, Utc};
     use gateway_admin::model::observability::DesktopReleaseStatus;
     use gateway_api::admin::observability::{
-        BillingView, CostCoverageView, CursorWire, DashboardDesktopReleaseStatusView,
-        DashboardWireAttributeView, DashboardWireProfileView, DashboardWireTargetView, PageData,
-        PageMeta, TokenDetailsView, TrendData, TrendKind, TrendPointView, TrendSummaryView,
+        BillingView, CostCoverageView, CursorWire, DashboardAccountRequestBucketView,
+        DashboardAccountUsageView, DashboardDesktopReleaseStatusView, DashboardWireAttributeView,
+        DashboardWireProfileView, DashboardWireTargetView, PageData, PageMeta, TokenDetailsView,
+        TrendData, TrendKind, TrendPointView, TrendSummaryView,
     };
     use serde_json::json;
 
@@ -113,6 +114,34 @@ mod response {
         assert_eq!(value["attributes"][0]["label"], "客户端标识");
         assert!(value.get("release").is_none());
         assert!(value.get("verifiedAt").is_none());
+    }
+
+    #[test]
+    fn dashboard_account_usage_should_keep_daily_request_timeline() {
+        let bucket_start = Utc.timestamp_opt(0, 0).single().unwrap();
+        let value = serde_json::to_value(DashboardAccountUsageView {
+            id: "account_1".to_owned(),
+            provider: "xai".to_owned(),
+            authentication_kind: "oauth".to_owned(),
+            email: "account@example.com".to_owned(),
+            plan_type: Some("free".to_owned()),
+            tokens: "—".to_owned(),
+            request_count: 3,
+            request_buckets: vec![DashboardAccountRequestBucketView {
+                bucket_start,
+                request_count: 3,
+            }],
+            quota_used_percent: None,
+            last_used: "刚刚".to_owned(),
+        })
+        .expect("dashboard account usage");
+
+        assert_eq!(value["requestCount"], 3);
+        assert_eq!(
+            value["requestBuckets"][0]["bucketStart"],
+            "1970-01-01T00:00:00Z"
+        );
+        assert_eq!(value["requestBuckets"][0]["requestCount"], 3);
     }
 
     #[test]
@@ -288,11 +317,11 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
             endpoint: "/v1/responses".to_owned(),
             client_transport: "http_sse".to_owned(),
             requested_model_id: "grok-4.5".to_owned(),
-            input_token_estimate: 1,
             provider_kind: Some("xai".to_owned()),
             provider_account_ref: None,
             provider_account_name: None,
             provider_account_email: None,
+            provider_account_authentication_kind: Some("oauth".to_owned()),
             upstream_model_id: Some("grok-4.5".to_owned()),
             upstream_transport: Some("http_sse".to_owned()),
             http_version: Some("h2".to_owned()),
@@ -303,8 +332,8 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
             outcome: RequestOutcome::Succeeded,
             client_status_code: Some(200),
             upstream_status_code: Some(200),
-            client_response_id: None,
-            upstream_request_id: None,
+            client_response_id: Some("resp_usage_metadata".to_owned()),
+            upstream_request_id: Some("upstream_usage_metadata".to_owned()),
             upstream_response_id: None,
             error_kind: None,
             provider_error_code: None,
@@ -322,22 +351,22 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
             cost_amount: None,
             cost_currency: None,
             billing: None,
-            transport_decision_wait_ms: None,
-            connect_ms: None,
-            headers_ms: None,
-            first_event_ms: None,
-            first_reasoning_ms: None,
-            first_text_ms: None,
-            first_token_ms: None,
-            provider_processing_ms: None,
-            latency_ms: None,
-            client_ip: None,
-            user_agent: None,
-            reasoning_effort: None,
-            reasoning_preset: None,
-            request_kind: None,
-            subagent_kind: None,
-            compact: false,
+            transport_decision_wait_ms: Some(7),
+            connect_ms: Some(11),
+            headers_ms: Some(13),
+            first_event_ms: Some(17),
+            first_reasoning_ms: Some(19),
+            first_text_ms: Some(23),
+            first_token_ms: Some(19),
+            provider_processing_ms: Some(29),
+            latency_ms: Some(31),
+            client_ip: Some("127.0.0.1".to_owned()),
+            user_agent: Some("usage-metadata-test".to_owned()),
+            reasoning_effort: Some("max".to_owned()),
+            reasoning_preset: Some("ultra".to_owned()),
+            request_kind: Some("review".to_owned()),
+            subagent_kind: Some("worker".to_owned()),
+            compact: true,
             image_generation_requested: true,
             image_generation_succeeded: Some(true),
             started_at: Utc::now(),
@@ -365,19 +394,49 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
     assert_eq!(
         serde_json::json!({
             "route": value["data"]["items"][0]["route"],
+            "authenticationKind": value["data"]["items"][0]["authenticationKind"],
             "imageInputTokens": value["data"]["items"][0]["tokenDetails"]["imageInputTokens"],
             "imageOutputTokens": value["data"]["items"][0]["tokenDetails"]["imageOutputTokens"],
             "websocketPool": value["data"]["items"][0]["metadata"]["websocketPool"],
             "imageGenerationRequested": value["data"]["items"][0]["metadata"]["imageGenerationRequested"],
             "imageGenerationSucceeded": value["data"]["items"][0]["metadata"]["imageGenerationSucceeded"],
+            "requestedModel": value["data"]["items"][0]["metadata"]["requestedModel"],
+            "upstreamModel": value["data"]["items"][0]["metadata"]["upstreamModel"],
+            "clientIp": value["data"]["items"][0]["metadata"]["clientIp"],
+            "userAgent": value["data"]["items"][0]["metadata"]["userAgent"],
+            "reasoningEffort": value["data"]["items"][0]["metadata"]["reasoningEffort"],
+            "reasoningPreset": value["data"]["items"][0]["metadata"]["reasoningPreset"],
+            "requestKind": value["data"]["items"][0]["metadata"]["requestKind"],
+            "subagentKind": value["data"]["items"][0]["metadata"]["subagentKind"],
+            "compact": value["data"]["items"][0]["metadata"]["compact"],
+            "transportDecisionWaitMs": value["data"]["items"][0]["metadata"]["latencyDetails"]["transportDecisionWaitMs"],
+            "wsConnectMs": value["data"]["items"][0]["metadata"]["latencyDetails"]["wsConnectMs"],
+            "firstReasoningMs": value["data"]["items"][0]["metadata"]["latencyDetails"]["firstReasoningMs"],
+            "firstTextMs": value["data"]["items"][0]["metadata"]["latencyDetails"]["firstTextMs"],
+            "firstTokenMs": value["data"]["items"][0]["metadata"]["latencyDetails"]["firstTokenMs"],
         }),
         serde_json::json!({
             "route": "/v1/responses",
+            "authenticationKind": "oauth",
             "imageInputTokens": 31,
             "imageOutputTokens": 9,
             "websocketPool": "reuse",
             "imageGenerationRequested": true,
             "imageGenerationSucceeded": true,
+            "requestedModel": "grok-4.5",
+            "upstreamModel": "grok-4.5",
+            "clientIp": "127.0.0.1",
+            "userAgent": "usage-metadata-test",
+            "reasoningEffort": "max",
+            "reasoningPreset": "ultra",
+            "requestKind": "review",
+            "subagentKind": "worker",
+            "compact": true,
+            "transportDecisionWaitMs": 7,
+            "wsConnectMs": 11,
+            "firstReasoningMs": 19,
+            "firstTextMs": 23,
+            "firstTokenMs": 19,
         })
     );
 }

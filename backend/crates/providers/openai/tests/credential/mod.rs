@@ -1,4 +1,5 @@
 mod admin;
+mod agent_identity;
 mod catalog;
 mod contract;
 mod cookie;

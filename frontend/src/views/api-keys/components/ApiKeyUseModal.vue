@@ -11,6 +11,7 @@ const props = defineProps<{
   apiKey: {
     name?: string
     key?: string
+    providerKind?: string
   } | null
   apiBaseUrl: string
 }>()
@@ -38,11 +39,14 @@ const authPath = computed(() =>
   activePlatform.value === 'windows' ? '%userprofile%\\.codex\\auth.json' : '~/.codex/auth.json',
 )
 const codexAuthJson = computed(() => JSON.stringify({ OPENAI_API_KEY: keyValue.value }, null, 2))
+const defaultModel = computed(() =>
+  props.apiKey?.providerKind?.trim().toLowerCase() === 'xai' ? 'grok-4.5' : 'gpt-5.5',
+)
 
 const codexConfigToml = computed(
   () => `model_provider = "OpenAI"
-model = "gpt-5.5"
-review_model = "gpt-5.5"
+model = "${defaultModel.value}"
+review_model = "${defaultModel.value}"
 model_reasoning_effort = "xhigh"
 disable_response_storage = true
 network_access = "enabled"

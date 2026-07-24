@@ -9,15 +9,19 @@ interface SegmentedOption {
   icon?: Component
 }
 
+type SegmentedSize = 'default' | 'input'
+
 const props = withDefaults(
   defineProps<{
     options: SegmentedOption[]
     disabled?: boolean
     iconOnly?: boolean
+    size?: SegmentedSize
   }>(),
   {
     disabled: false,
     iconOnly: false,
+    size: 'default',
   },
 )
 
@@ -48,7 +52,8 @@ function selectOption(value: string) {
 
 <template>
   <div
-    class="relative inline-grid h-9 items-center rounded-(--cp-icon-button-radius) bg-(--cp-bg-muted) p-1"
+    class="relative inline-grid items-center rounded-(--cp-icon-button-radius) bg-(--cp-bg-muted) p-1"
+    :class="size === 'input' ? 'h-(--cp-input-height-default)' : 'h-9'"
     :style="gridStyle"
     role="tablist"
   >
@@ -59,8 +64,9 @@ function selectOption(value: string) {
     <button
       v-for="option in options"
       :key="option.value"
-      class="relative z-10 inline-flex h-7 min-w-0 items-center justify-center gap-1.5 rounded-(--cp-input-radius-base) border-0 bg-transparent px-3 text-xs leading-none font-[650] transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border)"
+      class="relative z-10 inline-flex min-w-0 items-center justify-center gap-1.5 rounded-(--cp-input-radius-base) border-0 bg-transparent px-3 text-xs leading-none font-[650] transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border)"
       :class="[
+        size === 'input' ? 'h-8' : 'h-7',
         model === option.value
           ? 'text-(--cp-text-primary)'
           : 'text-(--cp-text-secondary) hover:text-(--cp-text-primary)',

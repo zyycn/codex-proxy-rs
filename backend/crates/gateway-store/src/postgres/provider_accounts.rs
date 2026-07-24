@@ -14,7 +14,7 @@ use gateway_admin::{
         accounts::{
             AccountAvailability as AdminAccountAvailability, AccountCost,
             AccountListQuery as AdminAccountListQuery, AccountModelUsage, AccountPage,
-            AccountRecord, AccountSort as AdminAccountSort,
+            AccountRecord, AccountRequestBucket, AccountSort as AdminAccountSort,
             AccountSortField as AdminAccountSortField, AccountStatus as AdminAccountStatus,
             AccountSummary, AccountUsage, DeleteAccounts, SetAccountEnabled,
             SortDirection as AdminSortDirection,
@@ -127,9 +127,10 @@ pub struct ProviderAccountSummary {
     pub upstream_user_id: String,
     pub upstream_account_id: Option<String>,
     pub plan_type: Option<String>,
+    pub authentication_kind: String,
     pub credential_revision: Revision,
     pub has_refresh_token: bool,
-    pub access_token_expires_at: DateTime<Utc>,
+    pub access_token_expires_at: Option<DateTime<Utc>>,
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
     pub availability: ProviderAccountAvailability,
@@ -171,9 +172,10 @@ pub struct NewProviderAccount {
     pub upstream_user_id: String,
     pub upstream_account_id: Option<String>,
     pub plan_type: Option<String>,
+    pub authentication_kind: String,
     pub provider_credentials_json: JsonObject,
     pub has_refresh_token: bool,
-    pub access_token_expires_at: DateTime<Utc>,
+    pub access_token_expires_at: Option<DateTime<Utc>>,
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
     pub availability: ProviderAccountAvailability,
@@ -211,6 +213,7 @@ impl NewProviderAccount {
         require_nonempty(ENTITY, "provider_kind", &self.provider_kind)?;
         require_nonempty(ENTITY, "name", &self.name)?;
         require_nonempty(ENTITY, "upstream_user_id", &self.upstream_user_id)?;
+        require_nonempty(ENTITY, "authentication_kind", &self.authentication_kind)?;
         if !self.has_refresh_token && self.next_refresh_at.is_some() {
             return Err(invalid("next_refresh_at requires a refresh token"));
         }
@@ -331,7 +334,7 @@ pub struct ProviderCredentialUpdate {
     pub expected_revision: Revision,
     pub provider_credentials_json: JsonObject,
     pub has_refresh_token: bool,
-    pub access_token_expires_at: DateTime<Utc>,
+    pub access_token_expires_at: Option<DateTime<Utc>>,
     pub next_refresh_at: Option<DateTime<Utc>>,
 }
 
@@ -498,7 +501,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
     ) -> StoreResult<Vec<ProviderAccountSummary>> {
         let rows = sqlx::query(
             "select id, provider_kind, name, email, upstream_user_id,
-                    upstream_account_id, plan_type, credential_revision, has_refresh_token,
+                    upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
                     access_token_expires_at, next_refresh_at, enabled, availability,
                     availability_reason, cooldown_until, availability_observed_at,
                     quota_observed_at, created_at, updated_at
@@ -519,13 +522,13 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         sqlx::query(
             "insert into provider_accounts (
                id, provider_kind, name, email, upstream_user_id,
-               upstream_account_id, plan_type, provider_credentials_json, credential_revision,
+               upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
                has_refresh_token, access_token_expires_at, next_refresh_at, enabled,
                availability, availability_reason, cooldown_until, provider_quota_json,
                availability_observed_at, quota_observed_at, created_at, updated_at
              ) values (
-               $1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11, $12,
-               $13, null, $14, null, $15, null, now(), greatest(now(), $15)
+               $1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12, $13,
+               $14, null, $15, null, $16, null, now(), greatest(now(), $16)
              )",
         )
         .bind(account.id)
@@ -535,6 +538,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         .bind(account.upstream_user_id)
         .bind(account.upstream_account_id)
         .bind(account.plan_type)
+        .bind(account.authentication_kind)
         .bind(account.provider_credentials_json.as_value())
         .bind(account.has_refresh_token)
         .bind(account.access_token_expires_at)
@@ -920,6 +924,13 @@ impl PgAdminAccountStore {
         let mut observations = Vec::with_capacity(account_ids.len());
         for account_ids in account_ids.chunks(ADMIN_USAGE_CHUNK_SIZE) {
             let query = ProviderAccountUsageQuery::for_accounts(range, account_ids.to_vec())
+                .and_then(|query| {
+                    if range.end.signed_duration_since(range.start) <= TimeDelta::hours(24) {
+                        query.with_hourly_request_buckets()
+                    } else {
+                        Ok(query)
+                    }
+                })
                 .map_err(|error| admin_store_error(ENTITY, error))?;
             observations.extend(
                 self.observability
@@ -1578,7 +1589,9 @@ fn admin_account_status(
     } else if account.availability == ProviderAccountAvailability::QuotaExhausted {
         AdminAccountStatus::QuotaExhausted
     } else if account.availability == ProviderAccountAvailability::Expired
-        || account.access_token_expires_at <= now
+        || account
+            .access_token_expires_at
+            .is_some_and(|expires_at| expires_at <= now)
     {
         AdminAccountStatus::Expired
     } else if account.availability == ProviderAccountAvailability::Ready {
@@ -1683,6 +1696,7 @@ fn admin_account_record(summary: ProviderAccountSummary) -> AdminStoreResult<Acc
         upstream_user_id: summary.upstream_user_id,
         upstream_account_id: summary.upstream_account_id,
         plan_type: summary.plan_type,
+        authentication_kind: summary.authentication_kind,
         credential_revision: admin_revision(summary.credential_revision)?,
         has_refresh_token: summary.has_refresh_token,
         access_token_expires_at: summary.access_token_expires_at,
@@ -1707,6 +1721,7 @@ fn prepared_account(credential: PreparedCredentialCreate) -> StoreResult<NewProv
         upstream_user_id: credential.upstream_user_id,
         upstream_account_id: credential.upstream_account_id,
         plan_type: credential.plan_type,
+        authentication_kind: credential.authentication_kind,
         provider_credentials_json: provider_document_json(credential.provider_material)?,
         has_refresh_token: credential.has_refresh_token,
         access_token_expires_at: credential.access_token_expires_at,
@@ -1773,6 +1788,14 @@ fn admin_account_usage(usage: ProviderAccountUsageObservation) -> AdminStoreResu
         cost_coverage: admin_account_cost_coverage(usage.cost_coverage),
         costs: admin_account_costs(usage.costs)?,
         last_used_at: usage.last_used_at,
+        request_buckets: usage
+            .request_buckets
+            .into_iter()
+            .map(|bucket| AccountRequestBucket {
+                bucket_start: bucket.bucket_start,
+                request_count: bucket.request_count,
+            })
+            .collect(),
         models: usage
             .models
             .into_iter()
@@ -1841,13 +1864,13 @@ async fn upsert_provider_account_in_transaction(
     let imported_id = sqlx::query_scalar::<_, String>(
         "insert into provider_accounts (
            id, provider_kind, name, email, upstream_user_id,
-           upstream_account_id, plan_type, provider_credentials_json, credential_revision,
+           upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
            has_refresh_token, access_token_expires_at, next_refresh_at, enabled,
            availability, availability_reason, cooldown_until, provider_quota_json,
            availability_observed_at, quota_observed_at, created_at, updated_at
          ) values (
-           $1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11, $12,
-           $13, $14, $15, null, $16, null, now(), greatest(now(), $16)
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12, $13,
+           $14, $15, $16, null, $17, null, now(), greatest(now(), $17)
          )
          on conflict (
            provider_kind,
@@ -1857,6 +1880,7 @@ async fn upsert_provider_account_in_transaction(
            name = excluded.name,
            email = excluded.email,
            plan_type = excluded.plan_type,
+           authentication_kind = excluded.authentication_kind,
            provider_credentials_json = excluded.provider_credentials_json,
            credential_revision = provider_accounts.credential_revision + 1,
            has_refresh_token = excluded.has_refresh_token,
@@ -1879,6 +1903,7 @@ async fn upsert_provider_account_in_transaction(
     .bind(&account.upstream_user_id)
     .bind(&account.upstream_account_id)
     .bind(&account.plan_type)
+    .bind(&account.authentication_kind)
     .bind(account.provider_credentials_json.as_value())
     .bind(account.has_refresh_token)
     .bind(account.access_token_expires_at)
@@ -2082,11 +2107,13 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             upstream_user_id: account.account.upstream_user_id().to_owned(),
             upstream_account_id: account.account.upstream_account_id().map(str::to_owned),
             plan_type: account.account.plan_type().map(str::to_owned),
+            authentication_kind: account.account.authentication_kind().to_owned(),
             provider_credentials_json: credential,
             has_refresh_token: account.account.has_refresh_token(),
-            access_token_expires_at: DateTime::<Utc>::from(
-                account.account.access_token_expires_at(),
-            ),
+            access_token_expires_at: account
+                .account
+                .access_token_expires_at()
+                .map(DateTime::<Utc>::from),
             next_refresh_at: account.account.next_refresh_at().map(DateTime::<Utc>::from),
             enabled: account.account.enabled(),
             availability: availability_from_core(account.account.availability()),
@@ -2189,7 +2216,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         .bind(profile.plan_type)
         .bind(credentials.as_value())
         .bind(has_refresh_token)
-        .bind(DateTime::<Utc>::from(access_token_expires_at))
+        .bind(access_token_expires_at.map(DateTime::<Utc>::from))
         .bind(next_refresh_at.map(DateTime::<Utc>::from))
         .fetch_optional(&self.pool)
         .await
@@ -2343,14 +2370,14 @@ impl ProviderAccountStore for PgProviderAccountRepository {
 }
 
 const ACCOUNT_SELECT: &str = "select id, provider_kind, name, email, upstream_user_id,
-            upstream_account_id, plan_type, provider_credentials_json, credential_revision,
+            upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, availability,
             availability_reason, cooldown_until, provider_quota_json,
             availability_observed_at, quota_observed_at, created_at, updated_at
      from provider_accounts where id = $1";
 
 const ACCOUNT_SELECT_BY_IDS: &str = "select id, provider_kind, name, email, upstream_user_id,
-            upstream_account_id, plan_type, provider_credentials_json, credential_revision,
+            upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, availability,
             availability_reason, cooldown_until, provider_quota_json,
             availability_observed_at, quota_observed_at, created_at, updated_at
@@ -2391,8 +2418,9 @@ fn core_account_from_summary(
         provider,
         summary.name,
         summary.upstream_user_id,
+        summary.authentication_kind,
         revision,
-        summary.access_token_expires_at.into(),
+        summary.access_token_expires_at.map(Into::into),
     )
     .with_profile(
         summary.email,
@@ -2468,6 +2496,7 @@ fn account_summary_from_row(row: sqlx::postgres::PgRow) -> StoreResult<ProviderA
         upstream_user_id: get(&row, "upstream_user_id")?,
         upstream_account_id: get(&row, "upstream_account_id")?,
         plan_type: get(&row, "plan_type")?,
+        authentication_kind: get(&row, "authentication_kind")?,
         credential_revision: Revision::new(to_u64(revision)?)?,
         has_refresh_token: get(&row, "has_refresh_token")?,
         access_token_expires_at: get(&row, "access_token_expires_at")?,

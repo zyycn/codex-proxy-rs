@@ -5,10 +5,9 @@ import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
-import BaseSelect from '@/components/base/BaseSelect.vue'
 
 const props = withDefaults(defineProps<{
-  mappings: Record<string, Array<{ requestedModel: string, upstreamModel: string }>>
+  mappings: Array<{ requestedModel: string, upstreamModel: string }>
   loading?: boolean
   error?: string
 }>(), {
@@ -16,15 +15,13 @@ const props = withDefaults(defineProps<{
   error: '',
 })
 
-const emit = defineEmits(['addMapping', 'updateMapping', 'removeMapping'])
-const provider = defineModel<string>('provider', { default: 'openai' })
+const emit = defineEmits<{
+  addMapping: []
+  updateMapping: [index: number, key: 'requestedModel' | 'upstreamModel', value: string]
+  removeMapping: [index: number]
+}>()
 
-const providerOptions = [
-  { label: 'OpenAI', value: 'openai' },
-  { label: 'xAI / Grok', value: 'xai' },
-]
-
-const rows = computed(() => props.mappings[provider.value] || [])
+const rows = computed(() => props.mappings)
 </script>
 
 <template>
@@ -37,8 +34,7 @@ const rows = computed(() => props.mappings[provider.value] || [])
   >
     <div class="grid gap-4">
       <div class="flex flex-wrap items-center gap-3">
-        <BaseSelect v-model="provider" :options="providerOptions" class="min-w-64 sm:max-w-80" aria-label="选择 Provider" />
-        <BaseButton variant="default" :disabled="loading" @click="emit('addMapping', provider)">
+        <BaseButton variant="default" :disabled="loading" @click="emit('addMapping')">
           <template #icon>
             <Plus class="size-4" />
           </template>
@@ -49,7 +45,7 @@ const rows = computed(() => props.mappings[provider.value] || [])
 
       <div class="flex items-center gap-2 text-[12px] font-[650] text-(--cp-text-secondary)">
         <GitBranch class="size-4 text-(--cp-info)" />
-        {{ provider === 'xai' ? 'xAI / Grok' : 'OpenAI' }} 映射
+        全局模型映射
       </div>
 
       <div
@@ -73,27 +69,27 @@ const rows = computed(() => props.mappings[provider.value] || [])
         </div>
         <div
           v-for="(row, index) in rows"
-          :key="`${provider}-${index}`"
+          :key="index"
           class="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-3 rounded-(--cp-card-radius) bg-(--cp-bg-subtle) p-3"
         >
           <BaseInput
             :model-value="row.requestedModel"
             placeholder="gpt-5.4"
             aria-label="请求模型"
-            @update:model-value="emit('updateMapping', provider, index, 'requestedModel', $event)"
+            @update:model-value="emit('updateMapping', index, 'requestedModel', $event)"
           />
           <span class="text-(--cp-text-muted)">→</span>
           <BaseInput
             :model-value="row.upstreamModel"
             placeholder="gpt-5.5"
             aria-label="上游模型名称"
-            @update:model-value="emit('updateMapping', provider, index, 'upstreamModel', $event)"
+            @update:model-value="emit('updateMapping', index, 'upstreamModel', $event)"
           />
           <BaseButton
             variant="ghost"
             icon-only
             label="删除映射"
-            @click="emit('removeMapping', provider, index)"
+            @click="emit('removeMapping', index)"
           >
             <Trash2 class="size-4 text-(--cp-danger)" />
           </BaseButton>

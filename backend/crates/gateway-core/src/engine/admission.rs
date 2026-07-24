@@ -12,7 +12,6 @@ use super::{ExecutionStore, ModelRequestId};
 pub struct ClientAdmissionRequest {
     pub model_request_id: ModelRequestId,
     pub client_api_key_id: ClientApiKeyId,
-    pub input_token_estimate: u64,
     pub lease_ttl: Duration,
     pub limits: RateLimits,
 }
@@ -33,7 +32,6 @@ pub enum ClientAdmissionDecision {
 pub struct RecentAdmissionFact {
     pub model_request_id: ModelRequestId,
     pub started_at: SystemTime,
-    pub input_token_estimate: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

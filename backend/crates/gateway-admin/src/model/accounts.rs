@@ -78,9 +78,10 @@ pub struct AccountRecord {
     pub upstream_user_id: String,
     pub upstream_account_id: Option<String>,
     pub plan_type: Option<String>,
+    pub authentication_kind: String,
     pub credential_revision: Revision,
     pub has_refresh_token: bool,
-    pub access_token_expires_at: DateTime<Utc>,
+    pub access_token_expires_at: Option<DateTime<Utc>>,
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
     pub availability: AccountAvailability,
@@ -120,6 +121,13 @@ pub struct AccountModelUsage {
     pub last_used_at: DateTime<Utc>,
 }
 
+/// 账号在一个小时窗口内的请求数。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountRequestBucket {
+    pub bucket_start: DateTime<Utc>,
+    pub request_count: u64,
+}
+
 /// 账号历史用量聚合。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountUsage {
@@ -139,6 +147,7 @@ pub struct AccountUsage {
     pub cost_coverage: super::observability::CostCoverage,
     pub costs: Vec<AccountCost>,
     pub last_used_at: Option<DateTime<Utc>>,
+    pub request_buckets: Vec<AccountRequestBucket>,
     pub models: Vec<AccountModelUsage>,
 }
 

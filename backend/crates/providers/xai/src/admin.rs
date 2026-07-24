@@ -720,9 +720,10 @@ fn prepared_create(
         upstream_user_id: account.upstream_user_id().to_owned(),
         upstream_account_id: account.upstream_account_id().map(str::to_owned),
         plan_type: account.plan_type().map(str::to_owned),
+        authentication_kind: account.authentication_kind().to_owned(),
         provider_material: ProviderDocument::new(OpaqueProviderData::new(credential.into_inner())),
         has_refresh_token: account.has_refresh_token(),
-        access_token_expires_at: account.access_token_expires_at().into(),
+        access_token_expires_at: account.access_token_expires_at().map(DateTime::<Utc>::from),
         next_refresh_at: account.next_refresh_at().map(Into::into),
         enabled: account.enabled(),
         availability: admin_availability(account.availability()),
@@ -762,7 +763,7 @@ fn prepared_rotation(
                 credential.into_inner(),
             )),
             has_refresh_token,
-            access_token_expires_at: access_token_expires_at.into(),
+            access_token_expires_at: access_token_expires_at.map(DateTime::<Utc>::from),
             next_refresh_at: next_refresh_at.map(Into::into),
         },
         Box::new(XaiCredentialCommitGuard { _guard: guard }),
@@ -791,8 +792,9 @@ fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, Provi
         account.provider_kind.clone(),
         account.name.clone(),
         account.upstream_user_id.clone(),
+        account.authentication_kind.clone(),
         revision,
-        account.access_token_expires_at.into(),
+        account.access_token_expires_at.map(SystemTime::from),
     )
     .with_profile(
         account.email.clone(),
@@ -822,7 +824,7 @@ fn account_matches_record(account: &ProviderAccount, record: &AccountRecord) -> 
         && account.enabled() == record.enabled
         && admin_availability(account.availability()) == record.availability
         && account.cooldown_until().map(DateTime::<Utc>::from) == record.cooldown_until
-        && DateTime::<Utc>::from(account.access_token_expires_at())
+        && account.access_token_expires_at().map(DateTime::<Utc>::from)
             == record.access_token_expires_at
         && account.next_refresh_at().map(DateTime::<Utc>::from) == record.next_refresh_at
         && account.has_refresh_token() == record.has_refresh_token
@@ -909,7 +911,7 @@ fn project_quota(
         ProviderQuotaWindow {
             key: "free-rolling-24h".to_owned(),
             group: "shortTerm".to_owned(),
-            label: "天限额".to_owned(),
+            label: "日限额".to_owned(),
             source: None,
             window_seconds: Some(crate::GROK_FREE_ROLLING_WINDOW_SECONDS),
             used_percent: None,
@@ -947,7 +949,7 @@ fn custom_quota_window_label(window_seconds: Option<u64>) -> String {
         return "额度".to_owned();
     };
     if seconds % 86_400 == 0 {
-        format!("{}天限额", seconds / 86_400)
+        format!("{}日限额", seconds / 86_400)
     } else if seconds % 3_600 == 0 {
         format!("{}小时限额", seconds / 3_600)
     } else {

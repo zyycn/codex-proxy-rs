@@ -23,7 +23,7 @@ pub struct RuntimeSettings {
     pub max_concurrent_per_account: u32,
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
-    pub provider_model_mappings: BTreeMap<String, BTreeMap<String, String>>,
+    pub model_mappings: BTreeMap<String, String>,
     pub usage_retention_days: u32,
     pub ops_event_retention_days: u32,
     pub audit_retention_days: u32,
@@ -47,7 +47,7 @@ impl fmt::Debug for RuntimeSettings {
             )
             .field("request_interval_ms", &self.request_interval_ms)
             .field("rotation_strategy", &self.rotation_strategy)
-            .field("provider_model_mappings", &self.provider_model_mappings)
+            .field("model_mappings", &self.model_mappings)
             .field("usage_retention_days", &self.usage_retention_days)
             .field("ops_event_retention_days", &self.ops_event_retention_days)
             .field("audit_retention_days", &self.audit_retention_days)
@@ -64,7 +64,7 @@ pub struct RuntimeSettingsUpdate {
     pub max_concurrent_per_account: u32,
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
-    pub provider_model_mappings: BTreeMap<String, BTreeMap<String, String>>,
+    pub model_mappings: BTreeMap<String, String>,
     pub usage_retention_days: u32,
     pub ops_event_retention_days: u32,
     pub audit_retention_days: u32,
@@ -79,7 +79,7 @@ impl fmt::Debug for RuntimeSettingsUpdate {
                 &self.admin_api_key.as_ref().map(|_| "[REDACTED]"),
             )
             .field("rotation_strategy", &self.rotation_strategy)
-            .field("provider_model_mappings", &self.provider_model_mappings)
+            .field("model_mappings", &self.model_mappings)
             .finish_non_exhaustive()
     }
 }
@@ -92,7 +92,7 @@ impl RuntimeSettingsUpdate {
             || self.usage_retention_days < 31
             || self.ops_event_retention_days == 0
             || self.audit_retention_days == 0
-            || !valid_model_mappings(&self.provider_model_mappings)
+            || !valid_model_mappings(&self.model_mappings)
             || !matches!(
                 self.rotation_strategy.as_str(),
                 "smart" | "quota_reset_priority" | "round_robin" | "sticky"
@@ -143,7 +143,7 @@ impl RuntimeSettingsRepository for PgRuntimeSettingsRepository {
                 i64,
                 i64,
                 String,
-                sqlx::types::Json<BTreeMap<String, BTreeMap<String, String>>>,
+                sqlx::types::Json<BTreeMap<String, String>>,
                 i64,
                 i64,
                 i64,
@@ -152,7 +152,7 @@ impl RuntimeSettingsRepository for PgRuntimeSettingsRepository {
         >(
             "select config_revision, admin_api_key, refresh_margin_seconds,
                     refresh_concurrency, max_concurrent_per_account, request_interval_ms,
-                    rotation_strategy, provider_model_mappings_json, usage_retention_days, ops_event_retention_days,
+                    rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, updated_at
              from runtime_settings where id = 1",
         )
@@ -212,7 +212,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
         "select config_revision, admin_api_key, refresh_margin_seconds,
                 refresh_concurrency, max_concurrent_per_account, request_interval_ms,
-                rotation_strategy, provider_model_mappings_json, usage_retention_days, ops_event_retention_days,
+                rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, updated_at
          from runtime_settings where id = 1",
     )
@@ -241,7 +241,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                  max_concurrent_per_account = $5,
                  request_interval_ms = $6,
                  rotation_strategy = $7,
-                 provider_model_mappings_json = $8,
+                 model_mappings_json = $8,
                  usage_retention_days = $9,
                  ops_event_retention_days = $10,
                  audit_retention_days = $11,
@@ -256,7 +256,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(i64::from(update.max_concurrent_per_account))
     .bind(i64::try_from(update.request_interval_ms).map_err(|_| invalid_numeric())?)
     .bind(&update.rotation_strategy)
-    .bind(sqlx::types::Json(&update.provider_model_mappings))
+    .bind(sqlx::types::Json(&update.model_mappings))
     .bind(i64::from(update.usage_retention_days))
     .bind(i64::from(update.ops_event_retention_days))
     .bind(i64::from(update.audit_retention_days))
@@ -301,7 +301,7 @@ type RuntimeSettingsRow = (
     i64,
     i64,
     String,
-    sqlx::types::Json<BTreeMap<String, BTreeMap<String, String>>>,
+    sqlx::types::Json<BTreeMap<String, String>>,
     i64,
     i64,
     i64,
@@ -317,7 +317,7 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
         max_concurrent_per_account: to_u32(row.4)?,
         request_interval_ms: to_u64(row.5)?,
         rotation_strategy: row.6,
-        provider_model_mappings: row.7.0,
+        model_mappings: row.7.0,
         usage_retention_days: to_u32(row.8)?,
         ops_event_retention_days: to_u32(row.9)?,
         audit_retention_days: to_u32(row.10)?,
@@ -348,25 +348,11 @@ fn provider_invalid(operation: &'static str) -> ProviderStoreError {
     ProviderStoreError::new(ProviderStoreErrorKind::InvalidData, operation)
 }
 
-fn valid_model_mappings(mappings: &BTreeMap<String, BTreeMap<String, String>>) -> bool {
-    mappings.len() <= 32
-        && mappings.iter().all(|(provider, entries)| {
-            valid_slug(provider, 64)
-                && entries.len() <= 512
-                && entries.iter().all(|(requested, upstream)| {
-                    valid_model_name(requested, 256) && valid_model_name(upstream, 256)
-                })
+fn valid_model_mappings(mappings: &BTreeMap<String, String>) -> bool {
+    mappings.len() <= 512
+        && mappings.iter().all(|(requested, upstream)| {
+            valid_model_name(requested, 256) && valid_model_name(upstream, 256)
         })
-}
-
-fn valid_slug(value: &str, max_len: usize) -> bool {
-    !value.is_empty()
-        && value.len() <= max_len
-        && !value.starts_with('-')
-        && !value.ends_with('-')
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 fn valid_model_name(value: &str, max_len: usize) -> bool {

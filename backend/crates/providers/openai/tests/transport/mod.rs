@@ -129,7 +129,7 @@ fn request_context<'a>(
     account_id: Option<&'a str>,
 ) -> CodexRequestContext<'a> {
     CodexRequestContext {
-        access_token: "access-token",
+        authorization: "Bearer access-token",
         account_id,
         request_id,
         turn_state: None,

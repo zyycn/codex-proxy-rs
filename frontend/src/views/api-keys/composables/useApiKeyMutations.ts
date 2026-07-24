@@ -24,6 +24,7 @@ export function useApiKeyMutations(options: {
   const showKeyModal = shallowRef(false)
   const createdKey = shallowRef('')
   const createdKeyName = shallowRef('')
+  const createdKeyProviderKind = shallowRef('')
   const pendingDeleteKey = shallowRef<ApiKeyRow | null>(null)
   const creatingKeyAction = useAsyncAction()
   const deletingKeyAction = useAsyncAction()
@@ -46,6 +47,7 @@ export function useApiKeyMutations(options: {
     if (!open) {
       createdKey.value = ''
       createdKeyName.value = ''
+      createdKeyProviderKind.value = ''
     }
   })
 
@@ -67,19 +69,20 @@ export function useApiKeyMutations(options: {
     await creatingKeyAction.run(
       async () => {
         const name = createForm.value.name.trim()
+        const providerKind = createForm.value.providerKind
         const result = await createApiKey({
           expectedConfigRevision: currentRevision(),
           name,
           label: createForm.value.label.trim() || undefined,
-          providerKind: createForm.value.providerKind,
+          providerKind,
           maxConcurrency: 0,
           requestsPerMinute: 0,
-          tokensPerMinute: 0,
         })
 
         options.configRevision.value = result.configRevision
         createdKey.value = result.plaintextKey
         createdKeyName.value = name
+        createdKeyProviderKind.value = providerKind
         showCreateModal.value = false
         showKeyModal.value = true
         createForm.value = { name: '', label: '', providerKind: 'openai' }
@@ -207,6 +210,7 @@ export function useApiKeyMutations(options: {
     showKeyModal,
     createdKey,
     createdKeyName,
+    createdKeyProviderKind,
     pendingDeleteKey,
     creatingKey,
     deletingKey,

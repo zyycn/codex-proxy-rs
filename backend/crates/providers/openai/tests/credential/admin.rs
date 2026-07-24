@@ -67,7 +67,7 @@ fn prepare_rotation_preserves_provider_owned_cookie_data() {
         .get("access_token")
         .expect("access token");
     let mut data = CodexCredentialCodec::decode_complete(&credential).expect("decode data");
-    data.oauth_client_id = Some("oauth-client".to_owned());
+    data.oauth_mut().expect("OAuth data").oauth_client_id = Some("oauth-client".to_owned());
     credential = CodexCredentialCodec::encode_complete(data).expect("encode complete data");
     let prepared = CodexCredentialAdmin
         .prepare_rotation(RotateManagedCodexCredential {
@@ -82,7 +82,15 @@ fn prepare_rotation_preserves_provider_owned_cookie_data() {
         .expect("prepare rotation");
     let decoded = CodexCredentialCodec::decode(prepared.credential.credential())
         .expect("decode prepared credential");
-    assert_eq!(decoded.secret.access_token.expose_secret(), "new-access");
+    assert_eq!(
+        decoded
+            .authentication
+            .oauth()
+            .expect("OAuth credential")
+            .access_token
+            .expose_secret(),
+        "new-access"
+    );
     assert_eq!(decoded.oauth_client_id.as_deref(), Some("oauth-client"));
 }
 
@@ -202,7 +210,7 @@ fn cpr_export_batch_validation_and_debug_are_secret_safe() {
     assert!(debug.contains("account_count: 1"));
 }
 
-struct ManualRefresher {
+pub(super) struct ManualRefresher {
     outcome: Mutex<Option<Result<TokenPair, RefreshFailure>>>,
     seen: Mutex<Vec<String>>,
 }
@@ -276,7 +284,6 @@ impl ProviderLeasePort for ManualLeases {
         Box::pin(async {
             Ok(gateway_core::provider_ports::ProviderSchedulingState::new(
                 Default::default(),
-                None,
                 0,
             ))
         })
@@ -370,12 +377,19 @@ async fn manual_refresh_prepares_revision_fenced_rotation_without_store_mutation
     let runtime = CodexCredentialCodec::decode(prepared.credential.credential())
         .expect("prepared credential");
     assert_eq!(
-        runtime.secret.access_token.expose_secret(),
+        runtime
+            .authentication
+            .oauth()
+            .expect("OAuth credential")
+            .access_token
+            .expose_secret(),
         "refreshed-access"
     );
     assert_eq!(
         runtime
-            .secret
+            .authentication
+            .oauth()
+            .expect("OAuth credential")
             .refresh_token
             .as_ref()
             .expect("rotated refresh")
@@ -475,7 +489,7 @@ impl CodexAccountIdentityVerifier for ImportVerifier {
     }
 }
 
-fn import_service(
+pub(super) fn import_service(
     refresher: Arc<ManualRefresher>,
 ) -> provider_openai::credential::CodexCredentialAdminService {
     let store = Arc::new(MemoryAccountStore::default());
@@ -492,7 +506,7 @@ fn import_service(
     )
 }
 
-fn unused_import_refresher() -> Arc<ManualRefresher> {
+pub(super) fn unused_import_refresher() -> Arc<ManualRefresher> {
     Arc::new(ManualRefresher {
         outcome: Mutex::new(Some(Err(RefreshFailure::InvalidGrant))),
         seen: Mutex::new(Vec::new()),
@@ -528,7 +542,15 @@ async fn formal_cpr_import_is_strict_and_uses_the_single_core_write_shape() {
     assert!(!account.account.enabled());
     assert_eq!(account.account.upstream_account_id(), Some("chatgpt-cpr"));
     let runtime = CodexCredentialCodec::decode(&account.credential).expect("credential");
-    assert_eq!(runtime.secret.access_token.expose_secret(), "token-cpr");
+    assert_eq!(
+        runtime
+            .authentication
+            .oauth()
+            .expect("OAuth credential")
+            .access_token
+            .expose_secret(),
+        "token-cpr"
+    );
     assert!(refresher.seen.lock().expect("seen tokens").is_empty());
 
     let error = import_service(unused_import_refresher())
@@ -666,6 +688,28 @@ async fn credential_bundle_and_auth_document_normalize_to_the_same_core_accounts
 }
 
 #[tokio::test]
+async fn cliproxyapi_codex_auth_file_is_recognized_as_an_openai_auth_document() {
+    let prepared = import_service(unused_import_refresher())
+        .prepare_import_document(serde_json::json!({
+            "type": "codex",
+            "access_token": "token-cpa",
+            "refresh_token": "refresh-cpa",
+            "id_token": "id-cpa",
+            "account_id": "chatgpt-cpa",
+            "email": "cpa@example.com",
+            "expired": "2100-01-01T00:00:00Z"
+        }))
+        .await
+        .expect("CLIProxyAPI Codex auth file import");
+
+    assert_eq!(prepared.accounts().len(), 1);
+    let account = &prepared.accounts()[0].account;
+    assert_eq!(account.upstream_account_id(), Some("chatgpt-cpa"));
+    assert_eq!(account.email(), Some("chatgpt-cpa@example.com"));
+    assert_eq!(account.authentication_kind(), "oauth");
+}
+
+#[tokio::test]
 #[ignore = "requires CODEX_REAL_ACCOUNT_FIXTURE and live official OpenAI OAuth/JWKS"]
 async fn real_cpr_fixture_import_contract() {
     let fixture = std::env::var("CODEX_REAL_ACCOUNT_FIXTURE")
@@ -725,9 +769,10 @@ async fn real_cpr_fixture_import_contract() {
         assert!(!account.account.upstream_user_id().is_empty());
         let runtime =
             CodexCredentialCodec::decode(&account.credential).expect("new credential schema");
-        assert!(runtime.principal.poid.is_some());
+        let principal = runtime.principal.as_ref().expect("OAuth principal");
+        assert!(principal.poid.is_some());
         assert_ne!(
-            runtime.principal.poid.as_deref(),
+            principal.poid.as_deref(),
             account.account.upstream_account_id()
         );
         assert_eq!(

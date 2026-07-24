@@ -48,13 +48,16 @@ impl CodexCredentialRepository {
         let current = self.store.load_credential(&account_id, expected).await?;
         let mut data = CodexCredentialCodec::decode_complete(&current.credential)?;
         verify_identity(&current, &data, &input.verified_account)?;
-        data.access_token = input.secret.access_token.expose_secret().to_owned();
-        data.refresh_token = input
+        let oauth = data
+            .oauth_mut()
+            .ok_or(CredentialRepositoryError::InvalidCredentialData)?;
+        oauth.access_token = input.secret.access_token.expose_secret().to_owned();
+        oauth.refresh_token = input
             .secret
             .refresh_token
             .as_ref()
             .map(|value| value.expose_secret().to_owned());
-        data.id_token = input
+        oauth.id_token = input
             .secret
             .id_token
             .as_ref()
@@ -71,7 +74,9 @@ impl CodexCredentialRepository {
             },
             credential,
             input.secret.refresh_token.is_some(),
-            required_time(input.verified_account.access_token_expires_at)?,
+            Some(required_time(
+                input.verified_account.access_token_expires_at,
+            )?),
             optional_time(input.next_refresh_at),
         )
         .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
@@ -94,8 +99,11 @@ impl CodexCredentialRepository {
             return Err(CredentialRepositoryError::RevisionConflict);
         }
         let mut data = CodexCredentialCodec::decode_complete(&current.credential)?;
-        if data.principal.oauth_subject != signed.oauth_subject()
-            || data.principal.poid.as_deref() != signed.poid()
+        let oauth = data
+            .oauth_mut()
+            .ok_or(CredentialRepositoryError::InvalidCredentialData)?;
+        if oauth.principal.oauth_subject != signed.oauth_subject()
+            || oauth.principal.poid.as_deref() != signed.poid()
             || signed
                 .claimed_account_id()
                 .is_some_and(|value| account.upstream_account_id() != Some(value))
@@ -105,12 +113,12 @@ impl CodexCredentialRepository {
         {
             return Err(CredentialRepositoryError::IdentityMismatch);
         }
-        data.access_token = secret.access_token.expose_secret().to_owned();
-        data.refresh_token = secret
+        oauth.access_token = secret.access_token.expose_secret().to_owned();
+        oauth.refresh_token = secret
             .refresh_token
             .as_ref()
             .map(|value| value.expose_secret().to_owned());
-        data.id_token = secret
+        oauth.id_token = secret
             .id_token
             .as_ref()
             .map(|value| value.expose_secret().to_owned());
@@ -121,7 +129,7 @@ impl CodexCredentialRepository {
             unchanged_profile(account),
             credential,
             secret.refresh_token.is_some(),
-            SystemTime::from(signed.access_token_expires_at()),
+            Some(SystemTime::from(signed.access_token_expires_at())),
             Some(next_refresh_at),
         )
         .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
@@ -142,7 +150,7 @@ impl CodexCredentialRepository {
             return Err(CredentialRepositoryError::RevisionConflict);
         }
         let data = CodexCredentialCodec::decode_complete(&current.credential)?;
-        let has_refresh_token = data.refresh_token.is_some();
+        let has_refresh_token = data.has_refresh_token();
         let credential = CodexCredentialCodec::encode_complete(data)?;
         let update = CredentialCasUpdate::new(
             account.id().clone(),
@@ -201,7 +209,7 @@ impl CodexCredentialRepository {
         account: &ProviderAccount,
         data: CodexCredentialData,
     ) -> Result<CredentialRevision, CredentialRepositoryError> {
-        let has_refresh_token = data.refresh_token.is_some();
+        let has_refresh_token = data.has_refresh_token();
         let credential = CodexCredentialCodec::encode_complete(data)?;
         let update = CredentialCasUpdate::new(
             account.id().clone(),
@@ -269,8 +277,10 @@ fn verify_identity(
     if current.account.provider().as_str() != PROVIDER_NAME
         || current.account.upstream_account_id() != Some(verified.chatgpt_account_id.as_str())
         || verified.chatgpt_user_id != current.account.upstream_user_id()
-        || verified.oauth_subject != credential.principal.oauth_subject
-        || verified.poid != credential.principal.poid
+        || credential.oauth().is_none_or(|credential| {
+            verified.oauth_subject != credential.principal.oauth_subject
+                || verified.poid != credential.principal.poid
+        })
     {
         return Err(CredentialRepositoryError::IdentityMismatch);
     }

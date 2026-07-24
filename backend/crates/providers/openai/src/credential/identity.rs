@@ -499,26 +499,16 @@ impl CodexAuthenticatedAccountSource for ReqwestCodexAuthenticatedAccountSource 
         expectation: &CodexIdentityExpectation,
     ) -> Result<CodexAuthenticatedAccount, CodexIdentityVerificationError> {
         let request_id = format!("identity_{}", Uuid::now_v7().simple());
+        let authorization =
+            SecretString::from(format!("Bearer {}", secret.access_token.expose_secret()));
         let value = self
             .client
-            .fetch_usage(CodexRequestContext {
-                access_token: secret.access_token.expose_secret(),
-                account_id: expectation.chatgpt_account_id(),
-                request_id: &request_id,
-                turn_state: None,
-                turn_metadata: None,
-                beta_features: None,
-                include_timing_metrics: None,
-                version: None,
-                codex_window_id: None,
-                parent_thread_id: None,
-                cookie_header: None,
-                installation_id: expectation.installation_id(),
-                session_id: None,
-                thread_id: None,
-                client_request_id: None,
-                turn_id: None,
-            })
+            .fetch_usage(CodexRequestContext::auxiliary(
+                authorization.expose_secret(),
+                expectation.chatgpt_account_id(),
+                &request_id,
+                expectation.installation_id(),
+            ))
             .await
             .map_err(map_account_source_error)?;
         authenticated_account(&value)
