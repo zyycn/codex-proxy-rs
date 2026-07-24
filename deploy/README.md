@@ -19,21 +19,21 @@ sudo chown "$(id -u):10001" deploy/config.yaml
 chmod 0640 deploy/config.yaml
 ```
 
-分别执行三次以下命令：
+为 PostgreSQL 与 Redis 分别生成一个密码：
 
 ```bash
 openssl rand -hex 24
 ```
 
-把结果写入 `deploy/config.yaml`：
+把两个 48 位十六进制结果分别写入 `deploy/config.yaml` 的：
 
 - `store.database.password`
 - `store.redis.password`
-- `admin.default_password`
 
-PostgreSQL 与 Redis 密码必须是 48 位十六进制字符。管理员初始化密码至少 12 位、不能是
-常见弱口令且不能包含 `$`。Compose 通过 `config.yaml` 的凭据桥接区引用同一密码，三个密码
-都不需要额外导出为环境变量，也不能嵌入连接 URL。
+另行设置 `admin.default_password`。它至少需要 12 个字符，不能是常见弱口令，也不能包含 `$`。
+
+PostgreSQL 与 Redis 密码必须是 48 位十六进制字符。Compose 通过 `config.yaml` 的凭据桥接区
+引用同一密码；三个值都不需要额外导出为环境变量，数据库和 Redis 密码也不能嵌入连接 URL。
 
 Linux 上应用容器以 `10001:10001` 运行，需要允许该组写入应用数据和日志目录：
 
@@ -44,6 +44,11 @@ chmod 0770 .runtime/data .runtime/logs
 
 `config.yaml` 通过 Compose `configs` 只读挂载。普通 Compose 对本地文件保留宿主机的
 UID/GID 和 mode，因此配置由当前用户持有，并只向容器组 `10001` 开放读取权限。
+
+模板中的 `openai` / `xai` 只保留请求画像启动基线。OpenAI 的上游地址、WebSocket 池、额度刷新
+与 OAuth 设置，以及 xAI 的 OAuth、额度和模型目录策略，均由各自 Provider 使用代码内默认值管理；
+模板不重复列出这些默认项。运行后，OpenAI CLI/Desktop 与 xAI CLI 的官方发布检查只更新进程内
+版本字段，不回写 `config.yaml`；检查失败时继续使用上一份有效画像。
 
 ## 启动
 
@@ -78,79 +83,26 @@ cargo run -p codex-proxy-rs
 后端会从当前目录向上查找 `deploy/config.yaml`。相对数据和日志目录以该文件所在目录解析；
 Compose 只把监听地址和数据库、Redis 地址固定覆盖为容器内部服务名。
 
-## 持久化
+## 持久化与备份
 
 Compose 使用以下绑定目录：
 
-- `.runtime/data` → 应用身份密钥、credential 加密 keyring 和更新状态
+- `.runtime/data` → OpenAI 会话锚点密钥、更新状态与临时更新目录
 - `.runtime/logs` → 应用文件日志
 - `.runtime/postgres` → PostgreSQL
 - `.runtime/redis` → Redis AOF
 
 普通 `docker compose down` 不会删除这些目录。删除 `.runtime` 会永久清除本地状态。
 
-PostgreSQL 由 `0001_initial.sql` 创建当前业务结构，Redis 保存可丢失的协调状态。
+PostgreSQL 是账号、Client Key、运行设置、请求记录与审计的权威存储；账号 credential 当前按
+Provider schema 以明文 JSON 保存于 PostgreSQL。Redis 只保存可重建、可过期的协调状态，例如
+会话亲和、lease、cooldown、OAuth pending flow 与套餐模型目录 cache。
+
+备份必须包含 `.runtime/postgres`。若希望保留短期 Redis 状态、OpenAI 会话亲和和更新状态，
+同时备份 `.runtime/redis` 与 `.runtime/data`；后两者丢失不会造成账号 credential 丢失，但会使
+缓存和会话锚点重新建立。
 
 完整运行时、Provider、revision 与恢复边界见 [架构文档](../docs/architecture.md)。
-
-## Credential 加密 keyring
-
-首次启动会在 `.runtime/data/credential_keyring` 生成：
-
-- `active_key_id`：新 envelope 唯一使用的 active key ID。
-- `envelope_keys/<key-id>.key`：active key 与只读历史解密 key。
-- `credential_fingerprint_hmac_key`：稳定 credential 去重域，不能随 envelope key 轮换。
-- `resource_pseudonym_hmac_key`：稳定资源伪名域，不能随 envelope key 轮换。
-
-目录权限固定为 `0700`，文件权限固定为 `0600`；符号链接、组/其他用户可读权限、无效 key ID
-或重复 key 材料都会让进程拒绝启动。Keyring 不进入 PostgreSQL，必须和 PostgreSQL 备份分开保存；
-丢失任何仍被数据库引用的 envelope key 后，对应 credential、Cookie 或 continuation 将无法恢复。
-
-Envelope key 使用“读旧写新”两阶段轮换。多节点必须为每个节点执行相同步骤：
-
-1. 生成相同的新 key ID 和 32-byte key，写入 `envelope_keys/<key-id>.key`，保持当前
-   `active_key_id` 不变。
-2. 滚动重启全部节点，使每个旧进程都先把新 key 加载为历史解密 key。
-3. 在全部节点原子替换 `active_key_id`，再滚动重启。已重启节点只用新 key 写入，尚未重启节点
-   仍能用第二步加载的 key 解密新 envelope。
-
-单机 Compose 可按以下方式准备和激活新 key；不要把命令输出或 key 文件内容写入日志：
-
-```bash
-new_key_id="ek-$(openssl rand -hex 16)"
-openssl rand -hex 32 | sudo sh -c \
-  'umask 077; cat > ".runtime/data/credential_keyring/envelope_keys/$1.key"' sh "$new_key_id"
-sudo chown 10001:10001 ".runtime/data/credential_keyring/envelope_keys/$new_key_id.key"
-
-# 先重启一次，让当前进程把新 key 作为历史 key 加载。
-docker compose -f deploy/compose.yaml restart codex-proxy-rs
-
-sudo env NEW_KEY_ID="$new_key_id" sh -c '
-  umask 077
-  printf "%s" "$NEW_KEY_ID" > .runtime/data/credential_keyring/active_key_id.next
-  chown 10001:10001 .runtime/data/credential_keyring/active_key_id.next
-  mv -f .runtime/data/credential_keyring/active_key_id.next \
-    .runtime/data/credential_keyring/active_key_id
-'
-docker compose -f deploy/compose.yaml restart codex-proxy-rs
-unset new_key_id
-```
-
-历史 key 只有在所有引用计数均为零、备份也满足同一退役策略后才能删除：
-
-```sql
-select 'upstream_credentials' as source, count(*) from upstream_credentials where secret_key_id = $1
-union all
-select 'codex_account_cookies', count(*) from codex_account_cookies where secret_key_id = $1
-union all
-select 'conversation_items', count(*) from conversation_items where secret_key_id = $1
-union all
-select 'continuation_bindings', count(*) from continuation_bindings where secret_key_id = $1;
-```
-
-删除仍被引用的历史 key 不会降级或尝试其他 key；解密会以 unknown key fail closed。确认零引用后，
-从全部节点删除对应 `.key` 文件并滚动重启，才算完成退役。Fingerprint 与 resource pseudonym 两个
-HMAC key 不属于此轮换流程，不能用 envelope key 替换。
 
 ## 密码语义
 
@@ -159,9 +111,10 @@ HMAC key 不属于此轮换流程，不能用 envelope key 替换。
 - Redis 在每次容器创建时使用 `redis.password`。
 
 已有 PostgreSQL 数据目录后，直接修改 `database.password` 不会修改数据库用户密码，只会导致
-应用无法连接。轮换时必须先在 PostgreSQL 中修改用户密码，再同步更新 `config.yaml`。
+应用无法连接。轮换时必须先在 PostgreSQL 中修改用户密码，再同步更新 `config.yaml`。Redis
+密码变更后需要使用新密码重建或重新配置 Redis 数据目录。
 
-## 构建与升级
+## 镜像升级与源码构建
 
 ```bash
 docker compose -f deploy/compose.yaml build codex-proxy-rs
@@ -175,6 +128,14 @@ docker compose -f deploy/compose.yaml pull codex-proxy-rs
 docker compose -f deploy/compose.yaml up -d --no-build
 ```
 
+仓库维护者发布新版本时必须从干净且已同步上游的分支运行：
+
+```bash
+release/publish <version>
+```
+
+该脚本负责更新 `release/version.yaml`、创建版本提交和带注释 tag，并原子推送分支与 tag。
+
 构建元数据仍可作为一次性进程环境传入，不需要 `.env` 文件：
 
 ```bash
@@ -184,22 +145,22 @@ CPR_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
 docker compose -f deploy/compose.yaml build codex-proxy-rs
 ```
 
-### 管理端 Release 更新
+### 管理端在线更新
 
-Compose 已显式装配正式更新所需的运行参数：
+Compose 已显式装配正式发布构建所需的运行参数：
 
 - `CPR_UPDATE_REPOSITORY`：只接受 `owner/repository`；默认 `zyycn/codex-proxy-rs`。
 - `CPR_GITHUB_API_BASE`：正式环境必须为 `https://api.github.com/repos`。
 - `CPR_UPDATE_CHANNEL`：`stable` 会拒绝 prerelease。
-- `CPR_UPDATE_EXE_PATH`、`CPR_WEB_DIST_DIR`：分别指向容器内二进制和旧前端静态目录。
+- `CPR_UPDATE_EXE_PATH`、`CPR_WEB_DIST_DIR`：分别指向容器内二进制和前端静态目录。
 - `CPR_UPDATE_TEMP_DIR`、`CPR_UPDATE_STATE_FILE`、`CPR_UPDATE_LOCK_FILE`：全部位于持久化的
   `.runtime/data`。
 - `CPR_ENABLE_SELF_RESTART=true`：更新或回滚完成后允许管理端请求重启；Docker 进程退出后由
   Compose 的 `restart: unless-stopped` 拉起新进程。
 
-Release 必须提供当前 OS/架构的 `codex-proxy-rs_<version>_<os>_<arch>.tar.gz` 和
-`checksums.txt`。服务会在替换前再次查询远端最新版本，校验下载 host、声明大小、SHA-256 和 tar
-路径；二进制或静态资源任一替换失败时恢复旧文件。成功后的旧二进制和旧静态目录分别保留为
+Release 必须提供当前 OS/架构的 `codex-proxy-rs_<version>_<os>_<arch>.tar.gz` 与
+`checksums.txt`。服务会在替换前再次查询远端最新版本，校验下载 host、声明大小、SHA-256 和
+归档路径；二进制或静态资源任一替换失败时恢复旧文件。成功后的旧二进制和旧静态目录分别保留为
 `*.backup`，管理端 rollback 会交换当前文件与这份备份。更新状态和跨进程锁可在以下位置排查：
 
 ```text

@@ -12,7 +12,7 @@
 [![GHCR](https://img.shields.io/badge/GHCR-codex--proxy--rs-2496ED?logo=docker&logoColor=white&style=flat-square)](https://github.com/zyycn/codex-proxy-rs/pkgs/container/codex-proxy-rs)
 [![MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](https://opensource.org/license/mit)
 
-[快速开始](#快速开始) · [客户端接入](#客户端接入) · [运维](#运维) · [部署文档](deploy/README.md) · [架构](docs/architecture.md)
+[快速开始](#快速开始) · [客户端接入](#客户端接入) · [运维](#运维) · [部署](deploy/README.md) · [接口](docs/api.md) · [架构](docs/architecture.md)
 
 </div>
 
@@ -21,14 +21,15 @@
 
 ## 能力
 
-| 领域     | 实现                                                         |
-| -------- | ------------------------------------------------------------ |
-| 协议     | OpenAI Responses JSON、SSE、WebSocket 与模型目录              |
-| Provider | OpenAI OAuth、xAI OAuth，多账号隔离与自动刷新                  |
-| 路由     | Client Key 平台绑定、Provider instance、模型映射与安全 fallback |
-| 延续     | OpenAI native/replay continuation；xAI 客户端完整历史         |
-| 管理     | Client Key、账号、模型目录、设置、观测、系统与 OAuth          |
-| 计量     | 模型请求 Token、费用、延迟、账号与 Provider 归因               |
+| 领域     | 实现                                                                        |
+| -------- | --------------------------------------------------------------------------- |
+| 协议     | OpenAI Responses JSON、SSE、WebSocket 与模型目录                             |
+| Provider | 固定 OpenAI、xAI 两个 Provider；各自管理 OAuth、账号、额度与模型目录          |
+| 路由     | Client Key 绑定 Provider、全局模型映射、会话亲和与同 Provider 安全 fallback   |
+| 透明边界 | OpenAI 保持 Responses 语义透明；xAI 的协议适配只驻留在 `providers/xai`         |
+| 延续     | OpenAI native/replay continuation；xAI 使用客户端提交的完整历史                |
+| 管理     | Client Key、账号、模型目录、设置、观测、系统更新与 OAuth                       |
+| 计量     | 模型请求 Token、费用、延迟、账号与 Provider 归因                               |
 
 ## 快速开始
 
@@ -47,15 +48,14 @@ sudo chown "$(id -u):10001" deploy/config.yaml
 chmod 0640 deploy/config.yaml
 ```
 
-分别生成三个密码：
+分别生成 PostgreSQL 与 Redis 密码：
 
 ```bash
 openssl rand -hex 24
 openssl rand -hex 24
-openssl rand -hex 24
 ```
 
-把结果写入 `deploy/config.yaml`：
+把两个结果写入 `deploy/config.yaml`，并单独设置管理员初始密码：
 
 | 配置                       | 约束                         |
 | -------------------------- | ---------------------------- |
@@ -64,7 +64,7 @@ openssl rand -hex 24
 | `admin.default_password`   | 至少 12 位，不能包含 `$`      |
 
 PostgreSQL、Redis 容器和应用通过同一份 `config.yaml` 使用这两个基础设施密码，不需要额外
-导出环境变量。
+导出环境变量。管理员密码只在首次创建管理员时生效。
 
 Linux 需要允许容器组写入运行目录：
 
@@ -88,9 +88,10 @@ curl -i http://127.0.0.1:8080/healthz
 ### 3. 初始化
 
 1. 使用 `admin@cpr.local` 与初始密码登录。
-2. 创建 Provider instance，并通过 OAuth 或 JSON 导入 OpenAI、xAI 账号。
-3. 按平台配置客户端模型到上游模型的映射；未配置的模型名原样透传。
-4. 创建 `sk_...` 客户端 Key，绑定平台并设置模型范围、速率与并发限制。
+2. 在账号页选择对应 Provider：OpenAI 支持 OAuth、账号文件与 Agent Identity；xAI 支持 OAuth
+   和兼容账号文件导入。
+3. 按需配置客户端模型到上游模型的全局映射；未命中映射的模型名原样透传。
+4. 创建 `sk_...` Client Key，绑定 `openai` 或 `xai`，并设置模型范围、速率与并发限制。
 
 > [!IMPORTANT]
 > xAI 使用 OAuth session，不支持把 xAI API Key 作为上游 credential。
@@ -125,17 +126,21 @@ curl http://127.0.0.1:8080/v1/responses \
 <details>
 <summary>API 路由</summary>
 
-| 路由                        | 用途                |
-| --------------------------- | ------------------- |
-| `POST /v1/responses`        | JSON 或 SSE 透明代理 |
-| `GET /v1/responses`         | WebSocket 透明代理   |
-| `POST /v1/responses/review` | OpenAI review 请求   |
-| `GET /v1/models`            | 启用的公开模型列表   |
-| `GET /v1/models/{model_id}` | 公开模型详情         |
+| 路由                               | 用途                           |
+| ---------------------------------- | ------------------------------ |
+| `POST /v1/responses`               | JSON 响应或 SSE Responses 流    |
+| `GET /v1/responses`                | Responses WebSocket 升级        |
+| `POST /v1/responses/review`        | review 子代理请求               |
+| `GET /v1/models`                   | 当前 Client Key 可用的模型列表   |
+| `GET /v1/models/catalog`           | Codex 客户端展示用模型目录      |
+| `GET /v1/models/{model_id}/info`   | Codex 客户端展示用模型详情      |
+| `GET /v1/models/{model_id}`        | OpenAI 兼容模型详情             |
 
 所有 `/v1/*` 路由都需要客户端 API Key。
 
 </details>
+
+完整的客户端与管理端路由、鉴权和 mutation 规则见 [接口文档](docs/api.md)。
 
 ## 运维
 
@@ -153,14 +158,27 @@ docker compose -f deploy/compose.yaml up -d
 ```
 
 > [!IMPORTANT]
-> `.runtime/` 保存 PostgreSQL、Redis、自更新状态和日志。删除该目录会永久清除运行状态。
+> `.runtime/` 保存 PostgreSQL、Redis、日志、OpenAI 会话锚点和自更新状态。删除该目录会永久清除
+> 运行状态。
 
 Compose 默认只绑定 `127.0.0.1`。公网接入应使用 HTTPS 反向代理，转发 WebSocket
 upgrade 与真实客户端 IP；不要暴露 PostgreSQL 或 Redis。
 
+## 维护与发布
+
+发布仓库版本必须从干净、已同步上游的发布分支运行：
+
+```bash
+release/publish <version>
+```
+
+脚本会更新 `release/version.yaml`、创建约定提交与带注释的 `v<version>` tag，并原子推送分支和 tag。
+不要手工修改版本后单独打 tag。
+
 ## 文档
 
 - [部署](deploy/README.md)
+- [客户端与管理端接口](docs/api.md)
 - [架构与数据边界](docs/architecture.md)
 - [Release](https://github.com/zyycn/codex-proxy-rs/releases)
 - [容器镜像](https://github.com/zyycn/codex-proxy-rs/pkgs/container/codex-proxy-rs)

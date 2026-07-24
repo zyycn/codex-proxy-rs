@@ -32,19 +32,19 @@
 - Core 冻结 RuntimeSnapshot、RoutePlan、retry/fallback 与 downstream commit 边界。
 - Provider 每次 `execute` 只选择一个 credential 并返回 cold canonical stream。
 - 换号只由 Core 在下游 commit 前按重放安全性决定。
-- fallback 只允许同 instance 账号和同 Provider kind instance；不跨 Provider kind。
+- fallback 只允许同一 Provider kind 内的账号；不跨 Provider，也不存在 Provider Instance 层。
 - OpenAI continuation 为 native → replay owner → replay any；xAI 使用客户端完整历史。
 - Provider wire profile 以配置为启动基线，并由共享运行时状态统一发布。OpenAI CLI 读取 `@openai/codex`、Desktop 读取官方 appcast、xAI CLI 读取 `@xai-official/grok`；发现新版本后自动更新对应版本字段，所有消费边界不得维护独立常量。
 - `downstream_committed_at` 是不可撤回交付承诺，不是首字节已经写达的证明。
 
 ## 存储
 
-- PostgreSQL 只有 `0001_initial.sql` 定义的八张终态业务表。
+- PostgreSQL 只有 `0001_initial.sql` 定义的七张终态业务表。
 - `config_revision` 只用于会改变调度快照或安全配置的管理 mutation。
 - quota、cooldown、catalog generation、自动 refresh 不推进全局 revision。
 - refresh 只推进账号 `credential_revision`；Redis cooldown 是可丢失热缓存。
 - OAuth pending 使用 Provider 域隔离 SHA-256 key、固定三字段 Hash 和原子一次消费。
-- secret 不进入日志、Debug、fixture、文档或 audit details。
+- 真实 secret 不进入日志、Debug、fixture、文档或 audit details；测试只能使用合成值。
 
 ## 前端
 
