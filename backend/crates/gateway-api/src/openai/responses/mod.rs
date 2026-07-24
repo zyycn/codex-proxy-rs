@@ -10,8 +10,8 @@ pub use error::{ProtocolErrorBody, RequestDecodeError, ResponseEncodeError};
 pub use http::{collect_execution_response, stream_execution_response};
 pub(crate) use http::{responses, review_responses};
 pub use request::{
-    ContinuationIntent, DecodedResponsesRequest, OpenAiRequestHeaders, PROVIDER_OPTIONS_VERSION,
-    ResponsesRequestMetadata, decode_request_with_headers,
+    ContinuationIntent, DecodedResponsesRequest, OpenAiRequestHeaders, ResponsesRequestMetadata,
+    decode_request_with_headers,
 };
 pub use response::{OpenAiResponsesEncoder, ResponsesCollector};
 pub(crate) use websocket::responses_websocket;

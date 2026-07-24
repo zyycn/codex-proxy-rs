@@ -219,6 +219,7 @@ pub struct ProviderStream {
     _lease: Box<dyn ResourceLease>,
     account_feedback: Option<ProviderStreamAccountFeedback>,
     validator: EventSequenceValidator,
+    strict_canonical_seen: bool,
     terminated: bool,
 }
 
@@ -305,6 +306,7 @@ impl ProviderStream {
             _lease: Box::new(lease),
             account_feedback: None,
             validator: EventSequenceValidator::new(),
+            strict_canonical_seen: false,
             terminated: false,
         }
     }
@@ -347,17 +349,23 @@ impl Stream for ProviderStream {
         match this.events.as_mut().poll_next(context) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Some(Ok(event))) => {
-                for fact in event.canonical_facts() {
-                    if this.validator.observe(fact).is_err() {
-                        this.terminated = true;
-                        let error = ProviderError::new(
-                            ProviderErrorKind::Protocol,
-                            UpstreamSendState::Sent,
-                        );
-                        if let Some(feedback) = this.account_feedback.as_mut() {
-                            feedback.report_failure(&error);
+                // 带 wire 的 canonical facts 只是旁路观测：wire 才是客户端协议的
+                // 权威表达。只有 canonical-only Provider 输出（例如 xAI 的内部
+                // compaction）需要以状态机作为交付条件。
+                if event.wire_event().is_none() && !event.canonical_facts().is_empty() {
+                    this.strict_canonical_seen = true;
+                    for fact in event.canonical_facts() {
+                        if this.validator.observe(fact).is_err() {
+                            this.terminated = true;
+                            let error = ProviderError::new(
+                                ProviderErrorKind::Protocol,
+                                UpstreamSendState::Sent,
+                            );
+                            if let Some(feedback) = this.account_feedback.as_mut() {
+                                feedback.report_failure(&error);
+                            }
+                            return Poll::Ready(Some(Err(error)));
                         }
-                        return Poll::Ready(Some(Err(error)));
                     }
                 }
                 if let Some(feedback) = this.account_feedback.as_mut() {
@@ -374,7 +382,12 @@ impl Stream for ProviderStream {
             }
             Poll::Ready(None) => {
                 this.terminated = true;
-                match this.validator.finish() {
+                let validation = if this.strict_canonical_seen {
+                    this.validator.finish()
+                } else {
+                    Ok(())
+                };
+                match validation {
                     Ok(()) => {
                         if let Some(feedback) = this.account_feedback.as_mut() {
                             feedback.report_success();

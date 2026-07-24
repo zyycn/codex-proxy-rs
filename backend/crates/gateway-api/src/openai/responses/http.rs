@@ -606,12 +606,12 @@ impl ResponsesStreamState {
     }
 
     fn finish_with_gateway_error(&mut self, error: GatewayError) {
-        let (_, error_type, code) = gateway_error_contract(error.kind());
+        let (_, default_type, default_code) = gateway_error_contract(error.kind());
         self.pending
             .push_back(Bytes::from(response_failed_sse_event(
-                error_type,
-                code,
-                error.safe_message(),
+                error.client_error_type().unwrap_or(default_type),
+                error.client_error_code().unwrap_or(default_code),
+                error.client_message(),
             )));
         self.pending
             .push_back(Bytes::from_static(DONE_SSE_FRAME.as_bytes()));

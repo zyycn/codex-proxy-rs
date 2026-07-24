@@ -18,7 +18,8 @@ use gateway_core::engine::{
     AttemptContext, CancellationToken, ContinuationAttempt, UpstreamSendState,
 };
 use gateway_core::error::{
-    ContinuationFailure, ProviderError, ProviderErrorKind, SafeUpstreamValue,
+    ClientVisibleUpstreamError, ContinuationFailure, ProviderError, ProviderErrorKind,
+    SafeUpstreamValue,
 };
 use gateway_core::event::{
     GatewayEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseObservation,
@@ -78,16 +79,6 @@ pub const OFFICIAL_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api";
 pub enum CodexProviderTransport {
     HttpOnly,
     PreferWebSocket,
-}
-
-impl CodexProviderTransport {
-    fn parse_explicit(value: &str) -> Option<Self> {
-        match value {
-            HTTP_SSE_TRANSPORT => Some(Self::HttpOnly),
-            WEBSOCKET_TRANSPORT => Some(Self::PreferWebSocket),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -241,7 +232,7 @@ impl Provider for CodexProvider {
                 .map_err(map_request_error)?;
         let session_affinity_key = derive_codex_session_affinity_key(&upstream_request);
         let request_input = upstream_request.input().to_vec();
-        let transport = selected_transport(&request)?;
+        let transport = selected_transport(&upstream_request);
         apply_transport(&mut upstream_request, transport);
 
         let lease = self
@@ -1101,24 +1092,12 @@ fn compile_model_capabilities(model: &CodexCatalogModel) -> ProviderModelCapabil
     ProviderModelCapabilities::new(model.request_model().clone(), capabilities)
 }
 
-fn selected_transport(request: &ProviderRequest) -> Result<CodexProviderTransport, ProviderError> {
-    let mut transport = CodexProviderTransport::PreferWebSocket;
-    if let Some(value) = request
-        .operation()
-        .provider_options(PROVIDER_NAME)
-        .and_then(|options| options.get("transport"))
-    {
-        transport = value
-            .as_str()
-            .and_then(CodexProviderTransport::parse_explicit)
-            .ok_or_else(|| {
-                provider_error(
-                    ProviderErrorKind::InvalidRequest,
-                    UpstreamSendState::NotSent,
-                )
-            })?;
+fn selected_transport(request: &CodexResponsesRequest) -> CodexProviderTransport {
+    if request.force_http_sse {
+        CodexProviderTransport::HttpOnly
+    } else {
+        CodexProviderTransport::PreferWebSocket
     }
-    Ok(transport)
 }
 
 fn apply_transport(request: &mut CodexResponsesRequest, transport: CodexProviderTransport) {
@@ -1241,9 +1220,8 @@ fn valid_cookie_name(name: &str) -> bool {
 
 fn map_request_error(error: CodexRequestEncodeError) -> ProviderError {
     let kind = match error {
-        CodexRequestEncodeError::InvalidProviderOptions => ProviderErrorKind::InvalidRequest,
-        CodexRequestEncodeError::UnsupportedProviderOption
-        | CodexRequestEncodeError::UnsupportedContent => ProviderErrorKind::Unsupported,
+        CodexRequestEncodeError::InvalidProtocolPayload => ProviderErrorKind::InvalidRequest,
+        CodexRequestEncodeError::UnsupportedContent => ProviderErrorKind::Unsupported,
     };
     provider_error(kind, UpstreamSendState::NotSent)
 }
@@ -1457,8 +1435,16 @@ fn map_upstream_failure(
         .filter(|code| is_history_failure_code(code))
         .map(|_| ContinuationFailure::HistoryUnavailable);
     let send_state = upstream_send_state(failure.send_phase);
-    let mut error = provider_error(provider_error_kind(category), send_state)
-        .redact_sensitive_context("upstream response body");
+    let mut error = provider_error(provider_error_kind(category), send_state);
+    if let Some(message) = failure.client_message.as_ref()
+        && let Ok(client_error) = ClientVisibleUpstreamError::new(
+            message.clone(),
+            failure.client_code.clone(),
+            failure.client_error_type.clone(),
+        )
+    {
+        error = error.with_client_visible_upstream_error(client_error);
+    }
     if let Some(status) = failure.status {
         error = error.with_status(status.as_u16());
     }
@@ -1579,7 +1565,6 @@ const fn websocket_send_state(error: &CodexWebSocketExchangeError) -> UpstreamSe
         | CodexWebSocketExchangeError::ContinuationUnavailable { .. } => UpstreamSendState::NotSent,
         CodexWebSocketExchangeError::Upstream(_)
         | CodexWebSocketExchangeError::InvalidSse(_)
-        | CodexWebSocketExchangeError::InvalidCompletedResponse { .. }
         | CodexWebSocketExchangeError::UnexpectedBinaryEvent => UpstreamSendState::Sent,
         CodexWebSocketExchangeError::Transport(_)
         | CodexWebSocketExchangeError::PostSendAmbiguous { .. }
@@ -1595,7 +1580,6 @@ const fn websocket_error_kind(error: &CodexWebSocketExchangeError) -> ProviderEr
     match error {
         CodexWebSocketExchangeError::InvalidRequest(_)
         | CodexWebSocketExchangeError::InvalidSse(_)
-        | CodexWebSocketExchangeError::InvalidCompletedResponse { .. }
         | CodexWebSocketExchangeError::UnexpectedBinaryEvent => ProviderErrorKind::Protocol,
         CodexWebSocketExchangeError::ConnectTimeout { .. }
         | CodexWebSocketExchangeError::FastPathTimeout { .. }

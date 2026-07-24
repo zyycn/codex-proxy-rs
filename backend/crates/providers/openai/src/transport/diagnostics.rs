@@ -102,6 +102,9 @@ pub(crate) enum CodexFailureCategory {
 pub(crate) struct CodexUpstreamFailure {
     pub(crate) status: Option<StatusCode>,
     pub(crate) code: Option<String>,
+    pub(crate) client_message: Option<String>,
+    pub(crate) client_code: Option<String>,
+    pub(crate) client_error_type: Option<String>,
     pub(crate) identity_error_code: Option<String>,
     pub(crate) retry_after_seconds: Option<u64>,
     pub(crate) request_id: Option<String>,
@@ -131,7 +134,10 @@ impl CodexUpstreamFailure {
         );
         Self {
             status: Some(status),
-            code: fields.code,
+            code: fields.code.clone(),
+            client_message: fields.client_message,
+            client_code: fields.code,
+            client_error_type: fields.error_type,
             identity_error_code: diagnostics.identity_error_code.clone(),
             retry_after_seconds,
             request_id: diagnostics.request_id.clone(),
@@ -153,6 +159,7 @@ impl CodexUpstreamFailure {
             code: failure.upstream_code.clone(),
             error_type: failure.upstream_type.clone(),
             message: failure.message.clone(),
+            client_message: Some(failure.message.clone()),
         };
         let status = failure
             .explicit_status_code
@@ -166,7 +173,10 @@ impl CodexUpstreamFailure {
         );
         Self {
             status,
-            code: fields.code,
+            code: fields.code.clone(),
+            client_message: Some(fields.message),
+            client_code: fields.code,
+            client_error_type: fields.error_type,
             identity_error_code: diagnostics.identity_error_code.clone(),
             retry_after_seconds: failure.retry_after_seconds,
             request_id: diagnostics.request_id.clone(),
@@ -215,6 +225,7 @@ struct ParsedUpstreamError {
     code: Option<String>,
     error_type: Option<String>,
     message: String,
+    client_message: Option<String>,
 }
 
 impl ParsedUpstreamError {
@@ -224,6 +235,7 @@ impl ParsedUpstreamError {
                 code: None,
                 error_type: None,
                 message: body.to_owned(),
+                client_message: None,
             };
         };
         let error = value
@@ -241,17 +253,20 @@ impl ParsedUpstreamError {
             .or_else(|| value.get("type"))
             .and_then(Value::as_str)
             .and_then(non_empty_owned);
-        let message = error
+        let client_message = error
             .get("message")
             .or_else(|| value.get("message"))
             .and_then(Value::as_str)
-            .or_else(|| error.as_str())
-            .and_then(non_empty_owned)
+            .and_then(non_empty_owned);
+        let message = client_message
+            .clone()
+            .or_else(|| error.as_str().and_then(non_empty_owned))
             .unwrap_or_else(|| body.to_owned());
         Self {
             code,
             error_type,
             message,
+            client_message,
         }
     }
 }

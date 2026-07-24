@@ -48,44 +48,6 @@ pub struct WebSocketAuditArtifact {
     pub payload: Option<PayloadAuditSnapshot>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ResponseCompleted {
-    #[serde(rename = "id")]
-    id: String,
-    #[serde(default, rename = "usage")]
-    _usage: Option<ResponseCompletedUsage>,
-    #[serde(default, rename = "end_turn")]
-    _end_turn: Option<bool>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ResponseCompletedUsage {
-    #[serde(rename = "input_tokens")]
-    _input_tokens: i64,
-    #[serde(default, rename = "input_tokens_details")]
-    _input_tokens_details: Option<ResponseCompletedInputTokensDetails>,
-    #[serde(rename = "output_tokens")]
-    _output_tokens: i64,
-    #[serde(default, rename = "output_tokens_details")]
-    _output_tokens_details: Option<ResponseCompletedOutputTokensDetails>,
-    #[serde(rename = "total_tokens")]
-    _total_tokens: i64,
-}
-
-#[derive(Debug, Deserialize)]
-struct ResponseCompletedInputTokensDetails {
-    #[serde(rename = "cached_tokens")]
-    _cached_tokens: i64,
-    #[serde(default, rename = "cache_write_tokens")]
-    _cache_write_tokens: i64,
-}
-
-#[derive(Debug, Deserialize)]
-struct ResponseCompletedOutputTokensDetails {
-    #[serde(rename = "reasoning_tokens")]
-    _reasoning_tokens: i64,
-}
-
 /// 将一条公开 WebSocket JSON 事件编码为 SSE 帧。
 pub fn websocket_event_to_sse_frame(raw: &str) -> Option<String> {
     let event = websocket_event_type(raw)?;
@@ -163,22 +125,19 @@ fn json_value_as_string(value: &Value) -> Option<String> {
     }
 }
 
-/// 校验 `response.completed` 的官方响应形状并提取 response ID。
-pub fn websocket_response_completed_id(raw: &str) -> Result<Option<String>, String> {
-    let value = serde_json::from_str::<Value>(raw).map_err(|error| error.to_string())?;
+/// 从 `response.completed` 旁路提取 response ID，供连接池记录续接能力。
+///
+/// 该值不参与客户端 wire 的可交付性判断；无法读取时只是不记录连接内续接状态。
+pub fn websocket_response_completed_id(raw: &str) -> Option<String> {
+    let value = serde_json::from_str::<Value>(raw).ok()?;
     if value.get("type").and_then(Value::as_str) != Some("response.completed") {
-        return Ok(None);
+        return None;
     }
-    let response = value
-        .get("response")
-        .filter(|response| !response.is_null())
-        .ok_or_else(|| "response.completed is missing response".to_string())?;
-    let completed = serde_json::from_value::<ResponseCompleted>(response.clone())
-        .map_err(|error| format!("failed to parse ResponseCompleted: {error}"))?;
-    if completed.id.trim().is_empty() {
-        return Err("response.completed contains an empty response id".to_string());
-    }
-    Ok(Some(completed.id))
+    value
+        .pointer("/response/id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .map(ToOwned::to_owned)
 }
 
 /// 生成 Responses WebSocket payload 审计快照。

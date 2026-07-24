@@ -148,7 +148,7 @@ fn websocket_metadata_turn_state_should_accept_case_insensitive_header() {
 }
 
 #[test]
-fn websocket_completed_id_should_validate_the_official_shape() {
+fn websocket_completed_id_should_read_the_id_without_validating_the_response_shape() {
     let valid = json!({
         "type": "response.completed",
         "response": {
@@ -167,13 +167,12 @@ fn websocket_completed_id_should_validate_the_official_shape() {
     .to_string();
 
     assert_eq!(
-        websocket_response_completed_id(&valid).expect("valid completed"),
+        websocket_response_completed_id(&valid),
         Some("resp_valid".to_owned())
     );
-    assert!(
-        websocket_response_completed_id(&invalid_usage)
-            .expect_err("invalid usage")
-            .contains("failed to parse ResponseCompleted")
+    assert_eq!(
+        websocket_response_completed_id(&invalid_usage),
+        Some("resp_invalid".to_owned())
     );
 }
 
@@ -221,7 +220,7 @@ fn websocket_audit_artifact_should_record_opening_and_redacted_payload() {
 }
 
 #[test]
-fn websocket_completed_id_should_reject_missing_id_and_incomplete_usage() {
+fn websocket_completed_id_should_leave_unreadable_completion_untracked() {
     let missing_id = json!({
         "type": "response.completed",
         "response": {
@@ -238,15 +237,10 @@ fn websocket_completed_id_should_reject_missing_id_and_incomplete_usage() {
     })
     .to_string();
 
-    assert!(
-        websocket_response_completed_id(&missing_id)
-            .expect_err("missing id")
-            .contains("missing field")
-    );
-    assert!(
-        websocket_response_completed_id(&incomplete_usage)
-            .expect_err("incomplete usage")
-            .contains("missing field")
+    assert_eq!(websocket_response_completed_id(&missing_id), None);
+    assert_eq!(
+        websocket_response_completed_id(&incomplete_usage),
+        Some("resp_incomplete_usage".to_owned())
     );
 }
 

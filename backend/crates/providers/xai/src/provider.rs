@@ -1099,7 +1099,7 @@ fn cold_http_sse_stream(
             &client_identity,
             context.request_id(),
             request.session_id(),
-            request.turn_index(),
+            None,
             &upstream_model,
         );
         let body = request.to_json_bytes().map_err(map_request_error)?;
@@ -1377,9 +1377,7 @@ fn ensure_sent_context(context: &AttemptContext) -> Result<(), ProviderError> {
 fn map_request_error(error: GrokRequestEncodeError) -> ProviderError {
     let kind = match error {
         GrokRequestEncodeError::InvalidProtocolPayload
-        | GrokRequestEncodeError::InvalidProviderOptions
         | GrokRequestEncodeError::InvalidRequestNormalization => ProviderErrorKind::InvalidRequest,
-        GrokRequestEncodeError::UnsupportedProviderOption => ProviderErrorKind::Unsupported,
         GrokRequestEncodeError::Serialization => ProviderErrorKind::Protocol,
     };
     provider_error(kind, UpstreamSendState::NotSent)

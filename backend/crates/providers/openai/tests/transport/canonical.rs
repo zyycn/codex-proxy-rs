@@ -1,5 +1,3 @@
-use gateway_core::engine::UpstreamSendState;
-use gateway_core::error::ProviderErrorKind;
 use gateway_core::event::{ContentKind, FinishReason, GatewayEvent, ProviderEvent};
 
 use provider_openai::transport::canonical::{
@@ -389,7 +387,7 @@ fn decoder_should_keep_unknown_incomplete_reason_explicit() {
 }
 
 #[test]
-fn decoder_should_reject_a_changed_upstream_response_id() {
+fn decoder_should_preserve_changed_upstream_response_ids_as_wire() {
     let body = concat!(
         "event: response.created\n",
         "data: {\"response\":{\"id\":\"resp_first\",\"model\":\"gpt-test\"}}\n\n",
@@ -397,15 +395,29 @@ fn decoder_should_reject_a_changed_upstream_response_id() {
         "data: {\"response\":{\"id\":\"resp_changed\",\"model\":\"gpt-test\"}}\n\n",
     );
 
-    let failure = CodexCanonicalDecoder::new("fallback")
+    let events = CodexCanonicalDecoder::new("fallback")
         .push(body.as_bytes())
-        .expect_err("response ID changes must fail closed");
+        .expect("response ID changes must not block wire delivery");
 
-    let CodexCanonicalError::Protocol(error) = failure.error() else {
-        panic!("response ID changes are protocol failures");
-    };
-    assert_eq!(error.kind(), ProviderErrorKind::Protocol);
-    assert_eq!(error.send_state(), UpstreamSendState::Sent);
+    let wire = events
+        .iter()
+        .filter_map(ProviderEvent::wire_event)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        wire.iter()
+            .filter_map(|event| event.event_type())
+            .collect::<Vec<_>>(),
+        vec!["response.created", "response.completed"]
+    );
+    assert_eq!(
+        wire.iter()
+            .map(|event| event
+                .data()
+                .pointer("/response/id")
+                .and_then(|id| id.as_str()))
+            .collect::<Vec<_>>(),
+        vec![Some("resp_first"), Some("resp_changed")]
+    );
 }
 
 fn assert_failed_event(code: &str, marker: &str) {

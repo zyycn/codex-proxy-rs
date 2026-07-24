@@ -1,5 +1,5 @@
 use gateway_core::operation::{
-    ContentPart, GenerateRequest, Message, MessageRole, ProtocolPayload, ProviderOptions,
+    ContentPart, GenerateRequest, Message, MessageRole, ProtocolPayload,
 };
 use gateway_core::policy::ClientApiKeyId;
 use serde_json::{Map, Value, json};
@@ -181,48 +181,28 @@ fn request_debug_should_not_expose_prompt_or_unknown_values() {
 }
 
 #[test]
-fn provider_options_should_only_select_the_supported_transport() {
-    for raw_options in [
-        json!({"schema_version": 1, "conversation_id": "attacker"}),
-        json!({"schema_version": 1, "transport": "websocket"}),
-    ] {
-        let mut provider_options = ProviderOptions::new();
-        provider_options
-            .insert(
-                "xai",
-                raw_options
-                    .as_object()
-                    .cloned()
-                    .expect("provider options object"),
-            )
-            .expect("provider options");
-        let request = raw_request(json!({"model": "client", "input": "hello"}))
-            .with_provider_options(provider_options);
-
-        assert!(matches!(
-            GrokResponsesRequest::encode(&request, "grok-routed", &client_key()),
-            Err(GrokRequestEncodeError::UnsupportedProviderOption
-                | GrokRequestEncodeError::InvalidProviderOptions)
-        ));
-    }
-
-    let mut provider_options = ProviderOptions::new();
-    provider_options
-        .insert(
-            "xai",
-            Map::from_iter([
-                ("schema_version".to_owned(), json!(1)),
-                ("transport".to_owned(), json!("http_sse")),
-                ("turn_index".to_owned(), json!("7")),
-            ]),
-        )
-        .expect("provider options");
-    let request = raw_request(json!({"model": "client", "input": "hello"}))
-        .with_provider_options(provider_options);
+fn encoder_should_remove_retired_gateway_provider_options_before_xai_conversion() {
+    let request = raw_request(Value::Object(Map::from_iter([
+        ("model".to_owned(), json!("client")),
+        ("input".to_owned(), json!("hello")),
+        (
+            "provider_options".to_owned(),
+            json!({
+                "version": "future-version",
+                "providers": {"xai": {"transport": "websocket", "turn_index": "7"}}
+            }),
+        ),
+        ("future_official_field".to_owned(), json!({"keep": true})),
+    ])));
 
     let encoded =
         GrokResponsesRequest::encode(&request, "grok-routed", &client_key()).expect("request");
-    assert_eq!(encoded.turn_index(), Some("7"));
+
+    assert!(encoded.body().get("provider_options").is_none());
+    assert_eq!(
+        encoded.body().get("future_official_field"),
+        Some(&json!({"keep": true}))
+    );
 }
 
 #[test]

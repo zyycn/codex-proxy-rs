@@ -17,7 +17,8 @@ use gateway_core::engine::execution::{
 };
 use gateway_core::engine::{CommitRequirement, CoordinatedEvent, EngineError, UpstreamSendState};
 use gateway_core::error::{
-    GatewayError, GatewayErrorKind, ProviderError, ProviderErrorKind, SafeUpstreamValue,
+    ClientVisibleUpstreamError, GatewayError, GatewayErrorKind, ProviderError, ProviderErrorKind,
+    SafeUpstreamValue,
 };
 use gateway_core::event::{
     ContentItem, ContentKind, GatewayEvent, ProtocolWireEvent, ProviderEvent,
@@ -105,8 +106,7 @@ struct CapturedClientContext {
     operation_kind: OperationKind,
     input: Option<Value>,
     client_metadata: Option<Value>,
-    openai_options: Option<Value>,
-    xai_options: Option<Value>,
+    protocol_context: Option<Value>,
     prompt_cache_key: Option<String>,
 }
 
@@ -141,21 +141,17 @@ impl ExecutionService for ContextCaptureExecution {
                 Operation::CompactConversation(compaction) => Some(compaction.generation()),
                 _ => None,
             };
-            let (client_metadata, openai_options, xai_options, prompt_cache_key, input) =
-                generation.map_or((None, None, None, None, None), |generation| {
+            let (client_metadata, protocol_context, prompt_cache_key, input) =
+                generation.map_or((None, None, None, None), |generation| {
                     (
                         generation
                             .protocol_payload()
                             .and_then(|payload| payload.body().get("client_metadata"))
                             .cloned(),
                         generation
-                            .provider_options()
-                            .get("openai")
-                            .cloned()
-                            .map(Value::Object),
-                        generation
-                            .provider_options()
-                            .get("xai")
+                            .protocol_payload()
+                            .map(|payload| payload.context())
+                            .filter(|context| !context.is_empty())
                             .cloned()
                             .map(Value::Object),
                         generation.prompt_cache_key().map(ToOwned::to_owned),
@@ -172,8 +168,7 @@ impl ExecutionService for ContextCaptureExecution {
                 operation_kind,
                 input,
                 client_metadata,
-                openai_options,
-                xai_options,
+                protocol_context,
                 prompt_cache_key,
             });
             Err(GatewayError::new(
@@ -466,8 +461,7 @@ async fn request_context_should_resolve_forwarded_precedence_and_peer_fallback()
             operation_kind: OperationKind::Generate,
             input: Some(json!("hello")),
             client_metadata: None,
-            openai_options: None,
-            xai_options: None,
+            protocol_context: None,
             prompt_cache_key: None,
         }
     );
@@ -505,21 +499,20 @@ async fn http_request_should_forward_safe_codex_headers_without_projecting_xai_h
     );
 
     let captured = captured_client_context(headers, peer).await;
-    let options = captured
-        .openai_options
+    let context = captured
+        .protocol_context
         .as_ref()
         .and_then(Value::as_object)
-        .expect("OpenAI options");
-    assert_eq!(options.get("turn_state"), Some(&json!("turn-state")));
+        .expect("OpenAI protocol context");
+    assert_eq!(context.get("turn_state"), Some(&json!("turn-state")));
     assert_eq!(
-        options.get("conversation_id"),
+        context.get("conversation_id"),
         Some(&json!("conversation-1"))
     );
-    assert_eq!(options.get("session_id"), Some(&json!("session-1")));
-    assert_eq!(options.get("responses_lite"), Some(&json!("true")));
-    assert_eq!(captured.prompt_cache_key.as_deref(), Some("session-1"));
-    assert!(captured.xai_options.is_none());
-    assert!(!options.contains_key("authorization"));
+    assert_eq!(context.get("session_id"), Some(&json!("session-1")));
+    assert_eq!(context.get("responses_lite"), Some(&json!("true")));
+    assert!(captured.prompt_cache_key.is_none());
+    assert!(!context.contains_key("authorization"));
     assert_eq!(
         captured
             .client_metadata
@@ -538,8 +531,7 @@ async fn xai_private_headers_should_not_enter_openai_request_facts() {
 
     let captured = captured_client_context(headers, peer).await;
 
-    assert!(captured.openai_options.is_none());
-    assert!(captured.xai_options.is_none());
+    assert!(captured.protocol_context.is_none());
     assert!(captured.prompt_cache_key.is_none());
 }
 
@@ -894,6 +886,39 @@ async fn streaming_empty_terminal_should_emit_failure_done_and_cancel_execution(
         trace.snapshot(),
         vec!["next_event", "commit", "next_end", "cancel_finalize"]
     );
+}
+
+#[tokio::test]
+async fn streaming_error_should_emit_client_visible_upstream_details() {
+    let trace = Arc::new(Trace::default());
+    let error = ProviderError::new(ProviderErrorKind::RateLimited, UpstreamSendState::Sent)
+        .with_client_visible_upstream_error(
+            ClientVisibleUpstreamError::new(
+                "Your Codex quota is exhausted",
+                Some("quota_exhausted".to_owned()),
+                Some("rate_limit_error".to_owned()),
+            )
+            .expect("safe structured upstream error"),
+        );
+    let session = FakeSession::streaming(
+        Arc::clone(&trace),
+        vec![
+            NextStep::Event(delivery(started(), CommitRequirement::CommitBeforeDelivery)),
+            NextStep::Error(EngineError::Provider(error)),
+        ],
+    );
+
+    let response = stream_execution_response(Box::new(session), 1, None).await;
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read SSE body");
+    let body = String::from_utf8(body.to_vec()).expect("SSE is UTF-8");
+
+    assert!(body.contains("event: response.failed"));
+    assert!(body.contains("Your Codex quota is exhausted"));
+    assert!(body.contains("\"code\":\"quota_exhausted\""));
+    assert!(body.contains("\"type\":\"rate_limit_error\""));
+    assert!(body.ends_with("data: [DONE]\n\n"));
 }
 
 #[tokio::test]

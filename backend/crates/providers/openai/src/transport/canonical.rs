@@ -24,8 +24,8 @@ const CONTENTS_PER_OUTPUT: u32 = 1_024;
 
 /// 单 attempt 的增量 Responses decoder。
 ///
-/// 该类型不保留原始正文，也不会把无法识别的事件静默丢弃。Provider transport
-/// 越过 send barrier 后才调用它，因此所有解码错误都按 `sent` 处理。
+/// 上游 wire 是客户端可见的事实来源；canonical facts 只用于观测、亲和和计费。
+/// 因而未知或形状变化的 JSON event 只能放弃 canonical 投影，不能截断 wire 流。
 pub struct CodexCanonicalDecoder {
     decoder: SseEventDecoder,
     fallback_model: String,
@@ -163,44 +163,32 @@ impl CodexCanonicalDecoder {
         let mut output = Vec::new();
         for event in events {
             if event.data.trim() == "[DONE]" {
-                if !self.completed {
-                    return self.failure(
-                        output,
-                        CodexCanonicalError::Protocol(protocol_error_marker()),
-                    );
-                }
                 continue;
             }
             let value = match serde_json::from_str::<Value>(&event.data) {
                 Ok(value) => value,
-                Err(error) => {
-                    return self
-                        .failure(output, CodexCanonicalError::Protocol(protocol_error(error)));
-                }
+                // P1 恢复 raw bytes 后会连该帧原样交付；当前 event carrier 只能承载
+                // JSON，所以先跳过这条无法投影的帧，继续读取后续上游事件。
+                Err(_) => continue,
             };
-            let Some(event_type) = event
+            let event_type = event
                 .event
                 .as_deref()
-                .or_else(|| value.get("type").and_then(Value::as_str))
-            else {
-                return self.failure(
-                    output,
-                    CodexCanonicalError::Protocol(protocol_error_marker()),
-                );
-            };
-            if matches!(event_type, "response.failed" | "error") {
+                .or_else(|| value.get("type").and_then(Value::as_str));
+            if matches!(event_type, Some("response.failed" | "error")) {
                 return self.failure(
                     output,
                     CodexCanonicalError::Upstream(ResponsesSseFailure::from_event(
-                        event_type, &value,
+                        event_type.unwrap_or_default(),
+                        &value,
                     )),
                 );
             }
             let mut canonical = Vec::new();
-            if let Err(error) = self.decode_event(event_type, &value, &mut canonical) {
-                return self.failure(output, CodexCanonicalError::Protocol(error));
+            if let Some(event_type) = event_type {
+                let _ = self.decode_event(event_type, &value, &mut canonical);
             }
-            let semantic_output = response_event_signals(Some(event_type), &value).semantic_output;
+            let semantic_output = response_event_signals(event_type, &value).semantic_output;
             let wire = match ProtocolWireEvent::json_with_sse_metadata(
                 "openai",
                 event.event,
@@ -209,12 +197,7 @@ impl CodexCanonicalDecoder {
                 event.retry,
             ) {
                 Ok(wire) => wire,
-                Err(_) => {
-                    return self.failure(
-                        output,
-                        CodexCanonicalError::Protocol(protocol_error_marker()),
-                    );
-                }
+                Err(_) => continue,
             };
             output.push(if canonical.is_empty() {
                 ProviderEvent::wire(wire)
@@ -245,7 +228,7 @@ impl CodexCanonicalDecoder {
         output: &mut Vec<GatewayEvent>,
     ) -> Result<(), ProviderError> {
         if self.completed {
-            return Err(protocol_error_marker());
+            return Ok(());
         }
 
         match event_type {
@@ -676,11 +659,17 @@ impl CodexCanonicalDecoder {
         value: &Value,
         output: &mut Vec<GatewayEvent>,
     ) -> Result<(), ProviderError> {
-        self.require_started()?;
-        let response = response_object(value).ok_or_else(protocol_error_marker)?;
-        let response_id = required_text(response, "id")?;
-        if self.response_id.as_deref() != Some(response_id.as_str()) {
-            return Err(protocol_error_marker());
+        let Some(response) = response_object(value) else {
+            self.completed = true;
+            return Ok(());
+        };
+        let Ok(response_id) = required_text(response, "id") else {
+            self.completed = true;
+            return Ok(());
+        };
+        if !self.started || self.response_id.as_deref() != Some(response_id.as_str()) {
+            self.completed = true;
+            return Ok(());
         }
         if let Some(items) = response.get("output").and_then(Value::as_array) {
             for (output_index, item) in items.iter().enumerate() {

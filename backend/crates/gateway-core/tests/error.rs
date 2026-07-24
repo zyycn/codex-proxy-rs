@@ -1,5 +1,7 @@
 use gateway_core::engine::UpstreamSendState;
-use gateway_core::error::{ProviderError, ProviderErrorKind, SafeUpstreamValue};
+use gateway_core::error::{
+    ClientVisibleUpstreamError, GatewayError, ProviderError, ProviderErrorKind, SafeUpstreamValue,
+};
 
 #[test]
 fn provider_error_debug_should_not_expose_sensitive_context() {
@@ -33,4 +35,28 @@ fn provider_error_replay_proof_should_be_explicit() {
         .with_replay_safe();
 
     assert!(error.replay_is_safe());
+}
+
+#[test]
+fn gateway_error_should_keep_client_visible_upstream_fields_out_of_safe_diagnostics() {
+    let message = "Your Codex quota is exhausted";
+    let error = ProviderError::new(ProviderErrorKind::QuotaExhausted, UpstreamSendState::Sent)
+        .with_client_visible_upstream_error(
+            ClientVisibleUpstreamError::new(
+                message,
+                Some("quota_exhausted".to_owned()),
+                Some("rate_limit_error".to_owned()),
+            )
+            .expect("safe structured upstream error"),
+        );
+    let gateway = GatewayError::from_provider(&error);
+
+    assert_eq!(
+        gateway.safe_message(),
+        "upstream capacity is temporarily unavailable"
+    );
+    assert_eq!(gateway.client_message(), message);
+    assert_eq!(gateway.client_error_code(), Some("quota_exhausted"));
+    assert_eq!(gateway.client_error_type(), Some("rate_limit_error"));
+    assert!(!format!("{gateway:?}").contains(message));
 }

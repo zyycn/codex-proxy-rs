@@ -82,9 +82,6 @@ pub enum RequestDecodeError {
         /// 字段路径。
         field: String,
     },
-    /// Provider options 版本不受支持。
-    #[error("unsupported provider_options version")]
-    UnsupportedProviderOptionsVersion,
     /// Core operation 拒绝规范化后的字段。
     #[error("field `{field}` violates the canonical operation contract")]
     CanonicalContract {
@@ -137,11 +134,6 @@ impl RequestDecodeError {
                 "unsupported_parameter",
                 format!("Parameter `{field}` is not supported by this gateway."),
                 Some(field.clone()),
-            ),
-            Self::UnsupportedProviderOptionsVersion => (
-                "unsupported_provider_options_version",
-                "The provider_options version is not supported.".to_owned(),
-                Some("provider_options.version".to_owned()),
             ),
         };
         ProtocolErrorBody {

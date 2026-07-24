@@ -48,12 +48,9 @@ pub(super) fn reduce_websocket_event(
     }
 
     let event = websocket_event_type(raw);
-    if event.as_deref() == Some("response.completed") {
-        let response_id = websocket_response_completed_id(raw)
-            .map_err(|message| CodexWebSocketExchangeError::InvalidCompletedResponse { message })?
-            .ok_or_else(|| CodexWebSocketExchangeError::InvalidCompletedResponse {
-                message: "response.completed is missing response id".to_string(),
-            })?;
+    if event.as_deref() == Some("response.completed")
+        && let Some(response_id) = websocket_response_completed_id(raw)
+    {
         continuation.record_completed(response_id);
     }
 

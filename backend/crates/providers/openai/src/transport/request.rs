@@ -10,27 +10,6 @@ use sha2::{Digest, Sha256};
 
 use crate::transport::protocol::responses::CodexResponsesRequest;
 
-const CODEX_OPTION_FIELDS: &[&str] = &[
-    "beta_features",
-    "client_request_id",
-    "codex_window_id",
-    "conversation_id",
-    "include_timing_metrics",
-    "memgen_request",
-    "parent_thread_id",
-    "prompt_cache_key",
-    "responses_lite",
-    "schema_version",
-    "service_tier",
-    "session_id",
-    "thread_id",
-    "transport",
-    "turn_id",
-    "turn_metadata",
-    "turn_state",
-    "version",
-];
-
 const CROSS_ACCOUNT_IDENTITY_KEYS: &[&str] = &[
     "authorization",
     "Authorization",
@@ -92,10 +71,8 @@ const INSTALLATION_ID_KEYS: &[&str] = &[
 /// Provider 专属编码错误；不保存 prompt、schema 或 option 值。
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CodexRequestEncodeError {
-    #[error("Codex provider option schema is invalid")]
-    InvalidProviderOptions,
-    #[error("Codex provider option is unsupported")]
-    UnsupportedProviderOption,
+    #[error("Codex request is missing its OpenAI protocol payload")]
+    InvalidProtocolPayload,
     #[error("Codex request contains unsupported content")]
     UnsupportedContent,
 }
@@ -104,11 +81,14 @@ pub fn encode_generate_request(
     request: &GenerateRequest,
     upstream_model: &str,
 ) -> Result<CodexResponsesRequest, CodexRequestEncodeError> {
-    let (mut body, protocol_payload) = match request.protocol_payload() {
-        Some(payload) if payload.protocol() == "openai" => (payload.body().clone(), true),
-        Some(_) => return Err(CodexRequestEncodeError::InvalidProviderOptions),
-        None => (Map::new(), false),
+    let (mut body, protocol_context) = match request.protocol_payload() {
+        Some(payload) if payload.protocol() == "openai" => {
+            (payload.body().clone(), Some(payload.context()))
+        }
+        Some(_) => return Err(CodexRequestEncodeError::InvalidProtocolPayload),
+        None => (Map::new(), None),
     };
+    let protocol_payload = protocol_context.is_some();
     body.insert("model".to_owned(), Value::String(upstream_model.to_owned()));
     if !protocol_payload {
         body.insert("input".to_owned(), Value::Array(encode_messages(request)?));
@@ -185,8 +165,8 @@ pub fn encode_generate_request(
     let mut encoded = CodexResponsesRequest::from_body(body);
     encoded.explicit_prompt_cache_key = encoded.prompt_cache_key().is_some();
     extract_request_context(&mut encoded);
-    if let Some(options) = request.provider_options().get("openai") {
-        apply_codex_options(&mut encoded, options)?;
+    if let Some(context) = protocol_context {
+        apply_protocol_context(&mut encoded, context);
     }
     Ok(encoded)
 }
@@ -558,9 +538,6 @@ pub(crate) fn scope_request_to_account(
     for key in CROSS_ACCOUNT_IDENTITY_KEYS {
         request.body_mut().remove(*key);
     }
-    for key in UNTRUSTED_CONTINUATION_KEYS {
-        request.body_mut().remove(*key);
-    }
 
     let client_metadata_turn_state = metadata_string(request, "x-codex-turn-state");
     let preserve_turn_state =
@@ -583,6 +560,9 @@ pub(crate) fn scope_request_to_account(
     if cross_account {
         sanitize_cross_account_input(request);
         for key in ACCOUNT_BOUND_STATE_KEYS {
+            request.body_mut().remove(*key);
+        }
+        for key in UNTRUSTED_CONTINUATION_KEYS {
             request.body_mut().remove(*key);
         }
     }
@@ -748,108 +728,78 @@ fn replace_metadata_field(metadata: &mut Map<String, Value>, key: &str, value: O
     }
 }
 
-fn apply_codex_options(
-    request: &mut CodexResponsesRequest,
-    options: &Map<String, Value>,
-) -> Result<(), CodexRequestEncodeError> {
-    if options
-        .keys()
-        .any(|field| !CODEX_OPTION_FIELDS.contains(&field.as_str()))
-    {
-        return Err(CodexRequestEncodeError::UnsupportedProviderOption);
-    }
-    if options.get("schema_version").and_then(Value::as_u64) != Some(1) {
-        return Err(CodexRequestEncodeError::InvalidProviderOptions);
-    }
-
+fn apply_protocol_context(request: &mut CodexResponsesRequest, context: &Map<String, Value>) {
     request.turn_state = request
         .turn_state
         .take()
-        .or(optional_string(options, "turn_state")?);
+        .or_else(|| context_string(context, "turn_state"));
     request.turn_metadata = request
         .turn_metadata
         .take()
-        .or(optional_string(options, "turn_metadata")?);
+        .or_else(|| context_string(context, "turn_metadata"));
     request.beta_features = request
         .beta_features
         .take()
-        .or(optional_string(options, "beta_features")?);
+        .or_else(|| context_string(context, "beta_features"));
     request.version = request
         .version
         .take()
-        .or(optional_string(options, "version")?);
+        .or_else(|| context_string(context, "version"));
     request.include_timing_metrics = request
         .include_timing_metrics
         .take()
-        .or(optional_string(options, "include_timing_metrics")?);
+        .or_else(|| context_string(context, "include_timing_metrics"));
     request.codex_window_id = request
         .codex_window_id
         .take()
-        .or(optional_string(options, "codex_window_id")?);
+        .or_else(|| context_string(context, "codex_window_id"));
     request.parent_thread_id = request
         .parent_thread_id
         .take()
-        .or(optional_string(options, "parent_thread_id")?);
+        .or_else(|| context_string(context, "parent_thread_id"));
     request.client_conversation_id = request
         .client_conversation_id
         .take()
-        .or(optional_string(options, "conversation_id")?);
+        .or_else(|| context_string(context, "conversation_id"));
     request.client_session_id = request
         .client_session_id
         .take()
-        .or(optional_string(options, "session_id")?);
+        .or_else(|| context_string(context, "session_id"));
     request.client_thread_id = request
         .client_thread_id
         .take()
-        .or(optional_string(options, "thread_id")?);
+        .or_else(|| context_string(context, "thread_id"));
     request.client_request_id = request
         .client_request_id
         .take()
-        .or(optional_string(options, "client_request_id")?);
+        .or_else(|| context_string(context, "client_request_id"));
     request.client_turn_id = request
         .client_turn_id
         .take()
-        .or(optional_string(options, "turn_id")?);
+        .or_else(|| context_string(context, "turn_id"));
     request.responses_lite =
-        optional_string(options, "responses_lite")?.or_else(|| request.responses_lite.take());
+        context_string(context, "responses_lite").or_else(|| request.responses_lite.take());
     request.memgen_request =
-        optional_string(options, "memgen_request")?.or_else(|| request.memgen_request.take());
-    match optional_string(options, "transport")?.as_deref() {
-        Some("http_sse") => encoded_transport(request, false),
-        Some("websocket") => encoded_transport(request, true),
-        Some(_) => return Err(CodexRequestEncodeError::InvalidProviderOptions),
+        context_string(context, "memgen_request").or_else(|| request.memgen_request.take());
+    match context.get("use_websocket").and_then(Value::as_bool) {
+        Some(true) => {
+            request.use_websocket = true;
+            request.force_http_sse = false;
+        }
+        Some(false) => {
+            request.use_websocket = false;
+            request.force_http_sse = true;
+        }
         None => {}
     }
-
-    for field in ["prompt_cache_key", "service_tier"] {
-        if let Some(value) = optional_string(options, field)? {
-            if field == "prompt_cache_key" && request.prompt_cache_key().is_some() {
-                return Err(CodexRequestEncodeError::InvalidProviderOptions);
-            }
-            request
-                .body_mut()
-                .insert(field.to_owned(), Value::String(value));
-        }
-    }
-    Ok(())
 }
 
-fn encoded_transport(request: &mut CodexResponsesRequest, websocket: bool) {
-    request.force_http_sse = !websocket;
-    request.use_websocket = websocket;
-}
-
-fn optional_string(
-    options: &Map<String, Value>,
-    field: &str,
-) -> Result<Option<String>, CodexRequestEncodeError> {
-    match options.get(field) {
-        None => Ok(None),
-        Some(Value::String(value)) if !value.trim().is_empty() && value.len() <= 8_192 => {
-            Ok(Some(value.clone()))
-        }
-        Some(_) => Err(CodexRequestEncodeError::InvalidProviderOptions),
-    }
+fn context_string(context: &Map<String, Value>, field: &str) -> Option<String> {
+    context
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
 }
 
 const fn message_role(role: MessageRole) -> &'static str {
