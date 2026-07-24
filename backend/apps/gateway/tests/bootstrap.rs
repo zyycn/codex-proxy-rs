@@ -135,7 +135,7 @@ fn config_loader_should_reject_removed_fingerprint_section() {
 
 #[test]
 fn config_loader_should_reject_invalid_codex_core_version() {
-    assert_rejected(valid_config().replace("codex_version: '0.144.6'", "codex_version: 'latest'"));
+    assert_rejected(valid_config().replace("codex_version: '0.145.0'", "codex_version: 'latest'"));
 }
 
 #[test]
@@ -154,7 +154,7 @@ fn config_loader_should_reject_zero_server_port() {
 
 #[test]
 fn config_loader_should_reject_invalid_desktop_profile_fields() {
-    assert_rejected(valid_config().replace("desktop_build: '5628'", "desktop_build: 'build'"));
+    assert_rejected(valid_config().replace("desktop_build: '5828'", "desktop_build: 'build'"));
 }
 
 fn assert_rejected(config: String) {
