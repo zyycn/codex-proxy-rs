@@ -81,7 +81,29 @@ jobs:
 
       - name: Rust clippy
         working-directory: backend
-        run: cargo clippy --all-targets --all-features --locked
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Configure PostgreSQL and Redis test authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          postgres_password="$(openssl rand -hex 24)"
+          redis_password="$(openssl rand -hex 24)"
+          echo "::add-mask::$postgres_password"
+          echo "::add-mask::$redis_password"
+          docker exec --env PGPASSWORD=codex_proxy "${{ job.services.postgres.id }}" psql \
+            --username=codex_proxy --dbname=codex_proxy \
+            --set=ON_ERROR_STOP=1 \
+            --command="ALTER USER codex_proxy WITH PASSWORD '${postgres_password}'" >/dev/null
+          docker exec --env PGPASSWORD="$postgres_password" "${{ job.services.postgres.id }}" psql \
+            --username=codex_proxy --dbname=codex_proxy \
+            --set=ON_ERROR_STOP=1 --command='SELECT 1' >/dev/null
+          redis-cli -h 127.0.0.1 -p 6379 CONFIG SET requirepass "$redis_password" >/dev/null
+          redis-cli --no-auth-warning -h 127.0.0.1 -p 6379 -a "$redis_password" ping >/dev/null
+          {
+            echo "CPR_TEST_DATABASE_URL=postgres://codex_proxy:${postgres_password}@127.0.0.1:5432/codex_proxy"
+            echo "CPR_TEST_REDIS_URL=redis://:${redis_password}@127.0.0.1:6379"
+          } >> "$GITHUB_ENV"
 
       - name: Rust tests
         working-directory: backend

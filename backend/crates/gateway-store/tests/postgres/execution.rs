@@ -328,10 +328,10 @@ async fn seed_running_request(pool: &sqlx::PgPool, id: &str) -> Result<(), sqlx:
     sqlx::query(
         "insert into model_requests (
            id, client_api_key_ref, config_revision, protocol, operation, endpoint,
-           client_transport, requested_model_id, cost_source,
+           client_transport, requested_model_id, provider_kind, provider_account_ref, cost_source,
            started_at, deadline_at
          ) values ($1, 'key_status', 1, 'openai_responses', 'generate', '/v1/responses',
-           'http_json', 'status-model', 'unavailable', now(), now() + interval '1 minute')",
+           'http_json', 'status-model', 'openai', 'acct_status', 'unavailable', now(), now() + interval '1 minute')",
     )
     .bind(id)
     .execute(pool)

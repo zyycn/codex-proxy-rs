@@ -54,14 +54,14 @@ openai:
   wire_profile:
     # 该画像来自 Desktop 制品与 bundled Codex Core 的联合审计。
     originator: 'Codex Desktop'
-    codex_version: '0.144.6'
-    desktop_version: '26.715.61943'
-    desktop_build: '5628'
+    codex_version: '0.145.0'
+    desktop_version: '26.721.31836'
+    desktop_build: '5828'
     os_type: 'Mac OS'
     os_version: '15.7.1'
     arch: 'arm64'
     terminal: 'unknown'
-    verified_at: '2026-07-21T00:00:00+08:00'
+    verified_at: '2026-07-25T00:00:00+08:00'
 
 xai:
   wire_profile:

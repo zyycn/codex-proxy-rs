@@ -277,9 +277,9 @@ impl Default for CodexWireProfileConfig {
     fn default() -> Self {
         Self {
             originator: "Codex Desktop".to_owned(),
-            codex_version: "0.144.6".to_owned(),
-            desktop_version: "26.715.61943".to_owned(),
-            desktop_build: "5628".to_owned(),
+            codex_version: "0.145.0".to_owned(),
+            desktop_version: "26.721.31836".to_owned(),
+            desktop_build: "5828".to_owned(),
             os_type: "Mac OS".to_owned(),
             os_version: "15.7.1".to_owned(),
             arch: "arm64".to_owned(),

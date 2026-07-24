@@ -22,7 +22,7 @@ gateway-core = { path = "../../gateway-core" }
 gateway-protocol = { path = "../../gateway-protocol" }
 getrandom = "0.3.4"
 hex = "0.4.3"
-jsonwebtoken = { version = "=10.3.0", default-features = false, features = ["rust_crypto"] }
+jsonwebtoken = { version = "=10.3.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 reqwest = { version = "=0.12.28", default-features = false, features = ["json", "stream", "cookies", "rustls-tls-native-roots", "gzip", "brotli", "zstd", "deflate", "http2"] }
 roxmltree = "0.21.1"
 semver = "1.0.27"
@@ -46,7 +46,6 @@ uuid = { version = "1.23.3", features = ["v4", "v7"] }
 zeroize = { version = "1.8.2", features = ["derive"] }
 
 [dev-dependencies]
-rsa = "=0.9.10"
 tempfile = "3.27.0"
 tokio = { version = "1.52.3", default-features = false, features = ["rt-multi-thread", "test-util"] }
 wiremock = "0.6.5"

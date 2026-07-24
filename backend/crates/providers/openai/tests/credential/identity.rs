@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode, get_current_timestamp};
 use provider_openai::credential::token_client::OFFICIAL_CODEX_OAUTH_CLIENT_ID;
 use provider_openai::credential::{
@@ -12,15 +11,13 @@ use provider_openai::credential::{
     CodexSignedIdentityVerifier, OFFICIAL_OPENAI_API_AUDIENCE, OFFICIAL_OPENAI_ISSUER,
     ReqwestOpenAiJwksSource,
 };
-use rsa::RsaPrivateKey;
-use rsa::pkcs1::EncodeRsaPrivateKey;
-use rsa::pkcs8::DecodePrivateKey;
-use rsa::traits::PublicKeyParts;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 const KEY_ID: &str = "codex-test-key";
+const RSA_MODULUS: &str = "p6GpjR8xbWJF2X63CJL02fTHBmfhfEGSqckUQaAT7KYubw95XhpwQ-V2IQcMm8K-ckx4hTd1CfqPjz0xgZzFRxns2BD_lUWYazDrsNISW23Y25rhg8GoC5ad9msdJlEARgyEFA2WQxqKg9KDpV8aZmVOSUkUjujF7VPijQ63ogNzSxAhBPbctSIzhcJApO6KV97j4OizhynWxJtCzmCEsxVvoLVNOXWLTJ0JW3ogs7dY8Unf3PTkci7QQhslJRSaCuy_6HWpP-Z94ayfKyo8nhz0PQsXvTl3y_8ARtwOT9sywmrd8nkTZ1obi5QC3DUZLHtenIk--rJLhvGn0klevw";
+const RSA_EXPONENT: &str = "AQAB";
 const PRIVATE_KEY: &str = r#"-----BEGIN PRIVATE KEY-----
 MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCnoamNHzFtYkXZ
 frcIkvTZ9McGZ+F8QZKpyRRBoBPspi5vD3leGnBD5XYhBwybwr5yTHiFN3UJ+o+P
@@ -84,15 +81,14 @@ impl CodexAuthenticatedAccountSource for StaticAccountSource {
 
 fn verifier() -> (CodexJwtIdentityVerifier, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
-    let private = RsaPrivateKey::from_pkcs8_pem(PRIVATE_KEY).expect("parse test RSA key");
     let body = serde_json::to_vec(&json!({
         "keys": [{
             "kty": "RSA",
             "use": "sig",
             "alg": "RS256",
             "kid": KEY_ID,
-            "n": URL_SAFE_NO_PAD.encode(private.n().to_bytes_be()),
-            "e": URL_SAFE_NO_PAD.encode(private.e().to_bytes_be())
+            "n": RSA_MODULUS,
+            "e": RSA_EXPONENT
         }]
     }))
     .expect("serialize test JWKS");
@@ -129,12 +125,10 @@ fn token(claims: &Value) -> String {
     let mut header = Header::new(Algorithm::RS256);
     header.kid = Some(KEY_ID.to_owned());
     header.typ = Some("JWT".to_owned());
-    let private = RsaPrivateKey::from_pkcs8_pem(PRIVATE_KEY).expect("parse signing key");
-    let private_der = private.to_pkcs1_der().expect("encode signing key");
     encode(
         &header,
         claims,
-        &EncodingKey::from_rsa_der(private_der.as_bytes()),
+        &EncodingKey::from_rsa_pem(PRIVATE_KEY.as_bytes()).expect("parse signing key"),
     )
     .expect("sign test access token")
 }
