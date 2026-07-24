@@ -177,7 +177,8 @@ pub(crate) fn select_archive<'a>(
         })
 }
 
-pub(crate) fn validate_download_url(raw: &str, api_base: &str) -> Result<(), OperationError> {
+/// 校验 GitHub Release 资产 URL 及其重定向目标是否位于受信任边界内。
+pub fn validate_download_url(raw: &str, api_base: &str) -> Result<(), OperationError> {
     let url = reqwest::Url::parse(raw)
         .map_err(|error| invalid(format!("invalid download URL: {error}")))?;
     if local_download_allowed(&url, api_base) {
@@ -294,6 +295,7 @@ fn github_download_host_allowed(host: &str) -> bool {
         || host.ends_with(".github.com")
         || host == "objects.githubusercontent.com"
         || host.ends_with(".objects.githubusercontent.com")
+        || host == "release-assets.githubusercontent.com"
 }
 
 fn local_download_allowed(url: &reqwest::Url, api_base: &str) -> bool {
