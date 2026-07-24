@@ -42,8 +42,9 @@ use url::Url;
 use crate::credential::{
     CodexAccountFailure, CodexAgentIdentityTaskService, CodexCredentialCatalogService,
     CodexCredentialLease, CodexCredentialQuotaService, CodexCredentialRefreshOutcome,
-    CodexCredentialRefreshService, CodexCredentialSelector, CredentialSelectionError,
-    RuntimeCodexCookie, SelectCodexCredential, derive_codex_session_affinity_key,
+    CodexCredentialRefreshService, CodexCredentialSelector, CodexCyberPolicyScope,
+    CodexQuotaRefreshPolicy, CredentialSelectionError, RuntimeCodexCookie, SelectCodexCredential,
+    derive_codex_cyber_policy_session_key, derive_codex_session_affinity_key,
 };
 use crate::transport::canonical::{
     CodexCanonicalDecoder, CodexCanonicalError, CodexCanonicalOutcome,
@@ -61,6 +62,7 @@ use crate::transport::request::{
     CodexRequestEncodeError, encode_generate_request, sanitize_cross_account_item,
     scope_request_to_account,
 };
+use crate::transport::session::CodexSessionIdentity;
 use crate::transport::websocket::{CodexWebSocketExchangeError, PreviousResponseUnavailableReason};
 use crate::transport::{
     CODEX_RESPONSES_PATH, CodexBackendClient, CodexBackendStreamingResponse, CodexBackendTransport,
@@ -83,7 +85,7 @@ pub enum CodexProviderTransport {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CodexProviderConfigError {
-    #[error("official Codex provider URL is invalid")]
+    #[error("Codex provider URL is invalid")]
     InvalidBaseUrl,
 }
 
@@ -95,6 +97,7 @@ pub struct CodexProvider {
     account_feedback: Arc<AccountFeedbackStats>,
     client: CodexBackendClient,
     responses_url: Url,
+    session_identity: Option<CodexSessionIdentity>,
 }
 
 impl CodexProvider {
@@ -108,13 +111,13 @@ impl CodexProvider {
         account_feedback: Arc<AccountFeedbackStats>,
         http: Client,
         profile: CodexWireProfileState,
+        base_url: String,
         websocket_pool: Arc<CodexWebSocketPool>,
     ) -> Result<Self, CodexProviderConfigError> {
-        let responses_url =
-            Url::parse(&endpoint_url(OFFICIAL_CODEX_BASE_URL, CODEX_RESPONSES_PATH))
-                .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
-        let client = CodexBackendClient::new(http, OFFICIAL_CODEX_BASE_URL, profile)
-            .with_websocket_pool(websocket_pool);
+        let responses_url = Url::parse(&endpoint_url(&base_url, CODEX_RESPONSES_PATH))
+            .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
+        let client =
+            CodexBackendClient::new(http, base_url, profile).with_websocket_pool(websocket_pool);
         Ok(Self {
             selector,
             catalog,
@@ -123,7 +126,13 @@ impl CodexProvider {
             account_feedback,
             client,
             responses_url,
+            session_identity: None,
         })
+    }
+
+    pub(crate) fn with_session_identity(mut self, identity: CodexSessionIdentity) -> Self {
+        self.session_identity = Some(identity);
+        self
     }
 }
 
@@ -230,19 +239,42 @@ impl Provider for CodexProvider {
         let mut upstream_request =
             encode_generate_request(generate, candidate.upstream_model().as_str())
                 .map_err(map_request_error)?;
+        if let Some(conversation_id) = previous_session
+            .as_ref()
+            .and_then(|state| state.conversation_id.as_ref())
+        {
+            upstream_request.local_conversation_id = Some(conversation_id.clone());
+        }
+        if let Some(identity) = &self.session_identity {
+            identity.prepare_local_conversation(&mut upstream_request);
+        }
+        if upstream_request
+            .turn_state
+            .as_deref()
+            .is_none_or(str::is_empty)
+        {
+            upstream_request.turn_state = previous_session
+                .as_ref()
+                .and_then(|state| state.turn_state.clone());
+        }
         let session_affinity_key = derive_codex_session_affinity_key(&upstream_request);
+        let cyber_policy_session_key =
+            derive_codex_cyber_policy_session_key(&upstream_request, context.client_api_key_ref());
         let request_input = upstream_request.input().to_vec();
         let transport = selected_transport(&upstream_request);
         apply_transport(&mut upstream_request, transport);
 
         let lease = self
             .selector
-            .select(&SelectCodexCredential {
-                upstream_model: candidate.upstream_model().as_str(),
-                request_url: &self.responses_url,
-                attempt: &context,
-                session_affinity_key: session_affinity_key.as_ref(),
-            })
+            .select_with_cyber_policy(
+                &SelectCodexCredential {
+                    upstream_model: candidate.upstream_model().as_str(),
+                    request_url: &self.responses_url,
+                    attempt: &context,
+                    session_affinity_key: session_affinity_key.as_ref(),
+                },
+                cyber_policy_session_key.as_ref(),
+            )
             .await
             .map_err(map_selection_error)?;
         let lease = Arc::new(lease);
@@ -280,12 +312,6 @@ impl Provider for CodexProvider {
             lease.installation_id(),
             cross_account,
         );
-        if let Some(conversation_id) = previous_session
-            .as_ref()
-            .and_then(|state| state.conversation_id.as_ref())
-        {
-            upstream_request.local_conversation_id = Some(conversation_id.clone());
-        }
         if context.continuation_attempt() == ContinuationAttempt::Native
             && !replay_previous_response
             && let Some(continuation) = context.continuation()
@@ -346,6 +372,7 @@ impl Provider for CodexProvider {
                 request_input,
                 account_id: lease.account_id().as_str().to_owned(),
                 conversation_id: upstream_request.local_conversation_id.clone(),
+                turn_state: upstream_request.turn_state.clone(),
                 response_store,
                 continuation_scope: None,
             });
@@ -389,6 +416,8 @@ struct ColdResponse {
 struct OpenAiSessionState {
     account_id: String,
     conversation_id: Option<String>,
+    #[serde(default)]
+    turn_state: Option<String>,
     continuation_scope: OpenAiContinuationScope,
     transcript: Vec<OpenAiReplayItem>,
 }
@@ -424,6 +453,7 @@ struct OpenAiSessionCapture {
     request_input: Vec<Value>,
     account_id: String,
     conversation_id: Option<String>,
+    turn_state: Option<String>,
     response_store: bool,
     continuation_scope: Option<OpenAiContinuationScope>,
 }
@@ -490,6 +520,7 @@ fn attach_openai_session_update(
     let update = encode_openai_session_state(OpenAiSessionState {
         account_id: capture.account_id,
         conversation_id: capture.conversation_id,
+        turn_state: capture.turn_state,
         continuation_scope: capture
             .continuation_scope
             .ok_or_else(|| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent))?,
@@ -625,6 +656,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         mut session_capture,
     } = response;
     Box::pin(async_stream::try_stream! {
+        let cyber_policy_scope = lease.cyber_policy_scope().cloned();
         let mut active_account = lease.account().clone();
         let cookie_header = build_cookie_header(lease.cookies())?;
         let mut authorization = lease
@@ -709,6 +741,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                     &quota,
                     &active_account,
                     &response_origin,
+                    cyber_policy_scope.as_ref(),
                     &failure,
                 )
                 .await;
@@ -727,6 +760,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 &quota,
                 &active_account,
                 &response_origin,
+                cyber_policy_scope.as_ref(),
                 &failure,
             )
             .await;
@@ -743,6 +777,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             } else {
                 OpenAiContinuationScope::ReplayRequired
             });
+            capture.turn_state = response.turn_state.clone().or(capture.turn_state.clone());
         }
         let observation = match codex_response_observation(
             response.transport,
@@ -760,6 +795,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                     &quota,
                     &active_account,
                     &response_origin,
+                    cyber_policy_scope.as_ref(),
                     &failure,
                 )
                 .await;
@@ -796,6 +832,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         let failure_set_cookie_headers = response.set_cookie_headers.clone();
         let failure_rate_limit_headers = response.rate_limit_headers.clone();
         let rate_limit_updates = response.rate_limit_header_updates;
+        let turn_state_updates = response.turn_state_update;
         let mut decoder = CodexCanonicalDecoder::new(upstream_model.as_str());
         if response.transport == CodexBackendTransport::HttpSse {
             decoder = decoder.with_raw_sse_passthrough();
@@ -830,6 +867,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                         &quota,
                         &active_account,
                         &response_origin,
+                        cyber_policy_scope.as_ref(),
                         &failure,
                     )
                     .await;
@@ -841,6 +879,12 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             if let Some(updates) = rate_limit_updates.as_ref() {
                 let updates = std::mem::take(&mut *updates.lock().await);
                 synchronize_passive_quota(&quota, &active_account, &updates).await;
+            }
+            if let (Some(capture), Some(updates)) =
+                (session_capture.as_mut(), turn_state_updates.as_ref())
+                && let Some(turn_state) = updates.lock().await.clone()
+            {
+                capture.turn_state = Some(turn_state);
             }
             let (mut events, terminal_failure) = match decoder.push(&chunk) {
                 CodexCanonicalOutcome::Events(events) => (events, None),
@@ -863,6 +907,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                     &quota,
                     &active_account,
                     &response_origin,
+                    cyber_policy_scope.as_ref(),
                     failure,
                 )
                 .await;
@@ -876,6 +921,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                         &quota,
                         &active_account,
                         &response_origin,
+                        cyber_policy_scope.as_ref(),
                         &failure,
                     )
                     .await;
@@ -899,6 +945,9 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             if completed {
                 selector
                     .record_success(&active_account, session_affinity_key.as_ref())
+                    .await;
+                selector
+                    .observe_cyber_policy_success(cyber_policy_scope.as_ref())
                     .await;
                 return;
             }
@@ -924,9 +973,16 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 &quota,
                 &active_account,
                 &response_origin,
+                cyber_policy_scope.as_ref(),
                 failure,
             )
             .await;
+        }
+        if let (Some(capture), Some(updates)) =
+            (session_capture.as_mut(), turn_state_updates.as_ref())
+            && let Some(turn_state) = updates.lock().await.clone()
+        {
+            capture.turn_state = Some(turn_state);
         }
         if let Err(error) = attach_openai_session_update(&mut events, &mut session_capture) {
             if terminal_failure.is_none() {
@@ -937,6 +993,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                     &quota,
                     &active_account,
                     &response_origin,
+                    cyber_policy_scope.as_ref(),
                     &failure,
                 )
                 .await;
@@ -960,6 +1017,9 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         if completed {
             selector
                 .record_success(&active_account, session_affinity_key.as_ref())
+                .await;
+            selector
+                .observe_cyber_policy_success(cyber_policy_scope.as_ref())
                 .await;
         }
     })
@@ -1254,6 +1314,7 @@ fn map_selection_error(error: CredentialSelectionError) -> ProviderError {
 struct MappedProviderFailure {
     error: ProviderError,
     account_failure: Option<CodexAccountFailure>,
+    cyber_policy_failure: bool,
     set_cookie_headers: Vec<String>,
     rate_limit_headers: Vec<(String, String)>,
     observation: Option<ProviderResponseObservation>,
@@ -1265,6 +1326,7 @@ impl MappedProviderFailure {
         Self {
             error,
             account_failure: None,
+            cyber_policy_failure: false,
             set_cookie_headers: Vec::new(),
             rate_limit_headers: Vec::new(),
             observation: None,
@@ -1299,9 +1361,15 @@ async fn apply_failure(
     quota: &CodexCredentialQuotaService,
     account: &ProviderAccount,
     response_origin: &Url,
+    cyber_policy_scope: Option<&CodexCyberPolicyScope>,
     failure: &MappedProviderFailure,
 ) {
     synchronize_passive_quota(quota, account, &failure.rate_limit_headers).await;
+    if failure.cyber_policy_failure {
+        selector
+            .record_cyber_policy_failure(cyber_policy_scope, account)
+            .await;
+    }
     if let Some(account_failure) = failure.account_failure {
         client.evict_websocket_account(account.id().as_str()).await;
         if let Err(error) = selector.record_failure(account, account_failure).await {
@@ -1433,6 +1501,10 @@ fn map_upstream_failure(
     replay_boundary: ReplayBoundary,
 ) -> MappedProviderFailure {
     let category = failure.category();
+    let cyber_policy_failure = failure
+        .status
+        .is_some_and(|status| status.is_client_error())
+        && is_cyber_policy_code(failure.code.as_deref());
     let continuation_failure = failure
         .persistable_code()
         .filter(|code| is_history_failure_code(code))
@@ -1452,7 +1524,7 @@ fn map_upstream_failure(
         error = error.with_status(status.as_u16());
     }
     if replay_boundary.permits_provider_proof()
-        && (failure.replay_is_safe() || continuation_failure.is_some())
+        && (failure.replay_is_safe() || continuation_failure.is_some() || cyber_policy_failure)
     {
         error = error.with_replay_safe();
     }
@@ -1478,6 +1550,7 @@ fn map_upstream_failure(
     MappedProviderFailure {
         error,
         account_failure: account_failure(category, failure.retry_after_seconds),
+        cyber_policy_failure,
         set_cookie_headers: failure.set_cookie_headers,
         rate_limit_headers: failure.rate_limit_headers,
         observation,
@@ -1486,6 +1559,10 @@ fn map_upstream_failure(
             CodexFailureCategory::CloudflareChallenge | CodexFailureCategory::CloudflarePathBlocked
         ),
     }
+}
+
+fn is_cyber_policy_code(code: Option<&str>) -> bool {
+    code.is_some_and(|code| code.trim().eq_ignore_ascii_case("cyber_policy"))
 }
 
 fn is_history_failure_code(code: &str) -> bool {
@@ -1622,7 +1699,6 @@ const WORKER_MAXIMUM_BACKOFF: Duration = Duration::from_secs(60);
 const WORKER_LEASE_TTL: Duration = Duration::from_secs(15 * 60);
 const WORKER_LEASE_RENEWAL: Duration = Duration::from_secs(5 * 60);
 const OAUTH_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
-const QUOTA_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const DESKTOP_RELEASE_WORKER_OWNER: &str = "openai-desktop-release";
 const CLI_RELEASE_WORKER_OWNER: &str = "openai-cli-release";
 const MODEL_ETAG_WORKER_OWNER: &str = "openai-model-etag";
@@ -1631,6 +1707,8 @@ pub(crate) fn worker_contributions(
     refresh: Arc<CodexCredentialRefreshService>,
     quota: Arc<CodexCredentialQuotaService>,
     catalog: Arc<CodexCredentialCatalogService>,
+    quota_refresh_policy: CodexQuotaRefreshPolicy,
+    oauth_refresh_enabled: bool,
     cli_release: Arc<CodexCliReleaseService>,
     desktop_release: Arc<CodexDesktopReleaseService>,
 ) -> Result<Vec<WorkerContribution>, WorkerDefinitionError> {
@@ -1641,15 +1719,18 @@ pub(crate) fn worker_contributions(
         WorkerId::try_new(WorkerKind::QuotaCatalogHealth, DESKTOP_RELEASE_WORKER_OWNER)?;
     let cli_release_id =
         WorkerId::try_new(WorkerKind::QuotaCatalogHealth, CLI_RELEASE_WORKER_OWNER)?;
-    Ok(vec![
-        WorkerContribution::Registration(scheduled_registration(
+    let mut contributions = Vec::new();
+    if oauth_refresh_enabled {
+        contributions.push(WorkerContribution::Registration(scheduled_registration(
             refresh_id,
             OAUTH_REFRESH_INTERVAL,
             Box::new(OpenAiOAuthRefreshTask { service: refresh }),
-        )?),
+        )?));
+    }
+    contributions.extend([
         WorkerContribution::Registration(scheduled_registration(
             quota_id,
-            QUOTA_REFRESH_INTERVAL,
+            quota_refresh_policy.interval(),
             Box::new(OpenAiQuotaTask { quota }),
         )?),
         WorkerContribution::Registration(WorkerRegistration::try_new(
@@ -1676,7 +1757,8 @@ pub(crate) fn worker_contributions(
                 service: desktop_release,
             }),
         )?),
-    ])
+    ]);
+    Ok(contributions)
 }
 
 fn scheduled_registration(

@@ -333,11 +333,12 @@ pub struct CodexOAuthAdminService {
     store: Arc<dyn ProviderAccountStore>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     credentials: CodexCredentialAdmin,
+    oauth_client_id: String,
 }
 
 impl CodexOAuthAdminService {
     #[must_use]
-    pub const fn new(
+    pub fn new(
         pending: Arc<dyn CodexOAuthPendingStore>,
         exchanger: Arc<dyn AuthorizationCodeExchanger>,
         verifier: Arc<dyn CodexAccountIdentityVerifier>,
@@ -352,7 +353,14 @@ impl CodexOAuthAdminService {
             store,
             runtime_policy,
             credentials,
+            oauth_client_id: OFFICIAL_CODEX_OAUTH_CLIENT_ID.to_owned(),
         }
+    }
+
+    #[must_use]
+    pub fn with_oauth_client_id(mut self, oauth_client_id: impl Into<String>) -> Self {
+        self.oauth_client_id = oauth_client_id.into();
+        self
     }
 }
 
@@ -520,7 +528,7 @@ impl CodexOAuthAdminService {
             .map_err(map_pending_error)?;
         Ok(CodexOAuthAuthorizationStarted {
             flow_id: pending.flow_id.clone(),
-            authorization_url: authorization_url(&pending)?,
+            authorization_url: authorization_url(&pending, &self.oauth_client_id)?,
             expires_at,
         })
     }
@@ -590,7 +598,10 @@ fn oauth_identity_expectation(
     .map_err(|_| CodexOAuthAdminError::Credential)
 }
 
-fn authorization_url(pending: &CodexPendingAuthorization) -> Result<String, CodexOAuthAdminError> {
+fn authorization_url(
+    pending: &CodexPendingAuthorization,
+    oauth_client_id: &str,
+) -> Result<String, CodexOAuthAdminError> {
     let mut url =
         Url::parse(AUTHORIZATION_ENDPOINT).map_err(|_| CodexOAuthAdminError::InvalidInput)?;
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(
@@ -598,7 +609,7 @@ fn authorization_url(pending: &CodexPendingAuthorization) -> Result<String, Code
     ));
     url.query_pairs_mut()
         .append_pair("response_type", "code")
-        .append_pair("client_id", OFFICIAL_CODEX_OAUTH_CLIENT_ID)
+        .append_pair("client_id", oauth_client_id)
         .append_pair("redirect_uri", OFFICIAL_CODEX_REDIRECT_URI)
         .append_pair("scope", AUTHORIZATION_SCOPE)
         .append_pair("state", pending.state.expose_secret())

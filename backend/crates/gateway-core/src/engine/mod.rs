@@ -30,6 +30,7 @@ use crate::error::{
 };
 use crate::event::ProviderEvent;
 use crate::operation::OperationKind;
+use crate::operation::ProviderSessionState;
 use crate::policy::ClientApiKeyId;
 use crate::routing::{ConfigRevision, ProviderKind, PublicModelId, UpstreamModelId};
 
@@ -648,6 +649,12 @@ impl CoordinatedEvent {
     #[must_use]
     pub fn into_provider_events(self) -> Vec<ProviderEvent> {
         self.events
+    }
+
+    /// 返回本批次中 Provider 交付的私有会话更新。
+    #[must_use]
+    pub fn session_update(&self) -> Option<&ProviderSessionState> {
+        self.events.iter().find_map(ProviderEvent::session_update)
     }
 }
 

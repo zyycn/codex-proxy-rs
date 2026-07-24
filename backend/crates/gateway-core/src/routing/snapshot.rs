@@ -412,22 +412,47 @@ impl RuntimeSnapshot {
             .collect()
     }
 
-    /// 透明代理不以目录白名单拒绝模型；只要求该 Provider 已注册。
+    /// 已取得目录时按目录与全局别名判断模型可用性；目录暂不可用时沿用旧版
+    /// fail-open 语义，把具体 wire 可接受性留给上游。
     #[must_use]
     pub fn contains_public_model_for_provider(
         &self,
-        _public_model: &PublicModelId,
+        public_model: &PublicModelId,
         provider: &ProviderKind,
     ) -> bool {
-        self.providers.contains(provider)
+        if !self.providers.contains(provider) {
+            return false;
+        }
+        if self.model_mappings.contains_key(public_model.as_str()) {
+            return true;
+        }
+        match self.provider_models.get(provider) {
+            Some(models) if !models.is_empty() => models
+                .keys()
+                .any(|model| model.as_str() == public_model.as_str()),
+            Some(_) | None => true,
+        }
     }
 
     #[must_use]
     pub fn mapped_model(&self, requested: &str) -> String {
-        self.model_mappings
-            .get(requested)
-            .cloned()
-            .unwrap_or_else(|| requested.to_owned())
+        let original = requested.trim();
+        let mut current = original.to_owned();
+        let mut seen = BTreeSet::new();
+        for _ in 0..20 {
+            let Some(target) = self
+                .model_mappings
+                .get(&current)
+                .map(|target| target.trim())
+            else {
+                return current;
+            };
+            if !seen.insert(current.clone()) || seen.contains(target) {
+                return original.to_owned();
+            }
+            current = target.to_owned();
+        }
+        original.to_owned()
     }
 
     pub fn client_policies(&self) -> impl Iterator<Item = &ClientPolicy> {

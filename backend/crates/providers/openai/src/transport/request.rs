@@ -372,38 +372,17 @@ fn non_empty_string(value: Option<&Value>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn derive_account_scoped_local_conversation_id(
-    request: &mut CodexResponsesRequest,
-    installation_id: &str,
-) {
-    let anchor = derive_conversation_anchor(request);
-    let Some((domain, value)) = anchor else {
-        return;
-    };
-    let digest = hmac_sha256(
-        installation_id.as_bytes(),
-        &[
-            b"codex-local-conversation-v2\0",
-            domain.as_bytes(),
-            b"\0",
-            value.as_bytes(),
-        ],
-    );
-    request.local_conversation_id = Some(format!("lc_{}", hex::encode(digest)));
-}
-
 pub(crate) fn derive_conversation_anchor(
     request: &CodexResponsesRequest,
 ) -> Option<(&'static str, String)> {
     request
-        .client_session_id
-        .as_deref()
-        .map(|value| ("session", value.to_owned()))
+        .prompt_cache_key()
+        .map(|value| ("prompt-cache", value.to_owned()))
         .or_else(|| {
             request
-                .client_conversation_id
+                .client_session_id
                 .as_deref()
-                .map(|value| ("conversation", value.to_owned()))
+                .map(|value| ("session", value.to_owned()))
         })
         .or_else(|| {
             request
@@ -413,8 +392,9 @@ pub(crate) fn derive_conversation_anchor(
         })
         .or_else(|| {
             request
-                .prompt_cache_key()
-                .map(|value| ("prompt-cache", value.to_owned()))
+                .client_conversation_id
+                .as_deref()
+                .map(|value| ("conversation", value.to_owned()))
         })
         .or_else(|| derive_stable_conversation_key(request).map(|value| ("request", value)))
 }
@@ -492,37 +472,6 @@ fn normalize_conversation_anchor_text(text: &str) -> String {
         rest = rest[close_start + LEADING_SYSTEM_REMINDER_CLOSE.len()..].trim_start();
     }
     rest.to_owned()
-}
-
-fn hmac_sha256(key: &[u8], message: &[&[u8]]) -> [u8; 32] {
-    const BLOCK_BYTES: usize = 64;
-
-    let mut key_block = [0_u8; BLOCK_BYTES];
-    if key.len() > BLOCK_BYTES {
-        key_block[..32].copy_from_slice(&Sha256::digest(key));
-    } else {
-        key_block[..key.len()].copy_from_slice(key);
-    }
-    let mut inner_pad = key_block;
-    let mut outer_pad = key_block;
-    for byte in &mut inner_pad {
-        *byte ^= 0x36;
-    }
-    for byte in &mut outer_pad {
-        *byte ^= 0x5c;
-    }
-
-    let mut inner = Sha256::new();
-    inner.update(inner_pad);
-    for part in message {
-        inner.update(part);
-    }
-    let inner_digest = inner.finalize();
-
-    let mut outer = Sha256::new();
-    outer.update(outer_pad);
-    outer.update(inner_digest);
-    outer.finalize().into()
 }
 
 /// 把客户端正文收敛到当前 lease 的账号身份边界。
@@ -639,7 +588,6 @@ pub(crate) fn scope_request_to_account(
 
     request.turn_state = turn_state;
     request.turn_metadata = turn_metadata;
-    derive_account_scoped_local_conversation_id(request, installation_id);
 }
 
 fn sanitize_cross_account_input(request: &mut CodexResponsesRequest) {

@@ -4,7 +4,6 @@ mod admin;
 pub mod config;
 mod provider;
 
-use std::path::Path;
 use std::sync::Arc;
 
 use gateway_admin::ports::provider::ProviderAdmin;
@@ -54,20 +53,21 @@ pub struct ProviderBundle {
 
 /// 构造 OpenAI 数据面、Provider-owned 后台任务与 Redis OAuth pending owner。
 pub async fn initialize(
-    mut config: OpenAiConfig,
+    config: OpenAiConfig,
     ports: ProviderStorePorts,
 ) -> Result<ProviderBundle, OpenAiInitializeError> {
-    config
-        .resolve_and_validate(Path::new("."))
-        .map_err(OpenAiInitializeError::Config)?;
     let provider_kind =
         ProviderKind::new("openai").map_err(|_| OpenAiInitializeError::InvalidProviderKind)?;
     let accounts: Arc<dyn ProviderAccountStore> = ports.accounts();
     let leases = ports.leases();
     let session_affinity = ports.session_affinity();
+    let session_exclusions = ports.session_exclusions();
     let account_feedback = ports.account_feedback();
     let runtime_policy = ports.runtime_policy();
     let profile = config.wire_profile_state();
+    let session_identity = config
+        .session_identity()
+        .map_err(|_| OpenAiInitializeError::SessionIdentity)?;
     let http = build_reqwest_client().map_err(|_| OpenAiInitializeError::Transport)?;
     let desktop_release = Arc::new(CodexDesktopReleaseService::new(
         profile.clone(),
@@ -85,7 +85,9 @@ pub async fn initialize(
         ),
     ));
     let repository = CodexCredentialRepository::new(Arc::clone(&accounts));
-    let websocket_pool = Arc::new(CodexWebSocketPool::default());
+    let websocket_pool = Arc::new(CodexWebSocketPool::with_config(
+        config.websocket_pool_config(),
+    ));
     let agent_identity = Arc::new(CodexAgentIdentityTaskService::new(
         repository.clone(),
         Arc::new(
@@ -98,24 +100,29 @@ pub async fn initialize(
         repository.clone(),
         profile.clone(),
         http.clone(),
+        config.base_url().to_owned(),
         Arc::clone(&agent_identity),
     ));
     let quota = Arc::new(CodexCredentialQuotaService::new(
         repository.clone(),
         profile.clone(),
         http.clone(),
+        config.base_url().to_owned(),
         Arc::clone(&agent_identity),
     ));
+    let quota_skip_exhausted = config.quota_skip_exhausted();
     let selector = Arc::new(CodexCredentialSelector::new(
         provider_kind.clone(),
         repository.clone(),
         Arc::clone(&leases),
         session_affinity,
+        session_exclusions,
         Arc::clone(&catalog),
         Arc::clone(&quota),
         Arc::clone(&agent_identity),
         Arc::clone(&account_feedback),
         CodexCookiePolicy::official().map_err(|_| OpenAiInitializeError::CookiePolicy)?,
+        quota_skip_exhausted,
     ));
     let core_provider: Arc<dyn Provider> = Arc::new(
         CodexProvider::new(
@@ -126,20 +133,24 @@ pub async fn initialize(
             account_feedback,
             http,
             profile.clone(),
+            config.base_url().to_owned(),
             Arc::clone(&websocket_pool),
         )
-        .map_err(OpenAiInitializeError::Provider)?,
+        .map_err(OpenAiInitializeError::Provider)?
+        .with_session_identity(session_identity),
     );
 
     let token_client = Arc::new(
-        credential::token_client::official_openai_token_client()
+        credential::token_client::openai_token_client(config.token_client_config())
             .map_err(|_| OpenAiInitializeError::TokenClient)?,
     );
     let jwks = ReqwestOpenAiJwksSource::new().map_err(|_| OpenAiInitializeError::Identity)?;
-    let signed: Arc<dyn CodexSignedIdentityVerifier> =
-        Arc::new(CodexJwtIdentityVerifier::new(Box::new(jwks)));
+    let signed: Arc<dyn CodexSignedIdentityVerifier> = Arc::new(
+        CodexJwtIdentityVerifier::new(Box::new(jwks))
+            .with_oauth_client_id(config.oauth_client_id()),
+    );
     let account_source: Arc<dyn CodexAuthenticatedAccountSource> = Arc::new(
-        ReqwestCodexAuthenticatedAccountSource::new(profile.clone())
+        ReqwestCodexAuthenticatedAccountSource::new(profile.clone(), config.base_url().to_owned())
             .map_err(|_| OpenAiInitializeError::Identity)?,
     );
     let identity: Arc<dyn CodexAccountIdentityVerifier> =
@@ -164,14 +175,17 @@ pub async fn initialize(
         ports.oauth_pending(),
         provider_kind.clone(),
     ));
-    let oauth_admin: Arc<dyn CodexOAuthAdmin> = Arc::new(CodexOAuthAdminService::new(
-        pending,
-        exchanger,
-        Arc::clone(&identity),
-        Arc::clone(&accounts),
-        Arc::clone(&runtime_policy),
-        CodexCredentialAdmin,
-    ));
+    let oauth_admin: Arc<dyn CodexOAuthAdmin> = Arc::new(
+        CodexOAuthAdminService::new(
+            pending,
+            exchanger,
+            Arc::clone(&identity),
+            Arc::clone(&accounts),
+            Arc::clone(&runtime_policy),
+            CodexCredentialAdmin,
+        )
+        .with_oauth_client_id(config.oauth_client_id()),
+    );
     let admin_provider: Arc<dyn ProviderAdmin> = Arc::new(OpenAiAdminProvider::new(
         provider_kind,
         profile,
@@ -187,9 +201,16 @@ pub async fn initialize(
         websocket_pool,
         desktop_release_status,
     ));
-    let worker_contributions =
-        provider::worker_contributions(refresh, quota, catalog, cli_release, desktop_release)
-            .map_err(|_| OpenAiInitializeError::Worker)?;
+    let worker_contributions = provider::worker_contributions(
+        refresh,
+        quota,
+        catalog,
+        config.quota_refresh_policy(),
+        config.oauth_refresh_enabled(),
+        cli_release,
+        desktop_release,
+    )
+    .map_err(|_| OpenAiInitializeError::Worker)?;
 
     Ok(ProviderBundle {
         core_provider,
@@ -224,6 +245,8 @@ pub enum OpenAiInitializeError {
     RuntimePolicy,
     #[error("OpenAI Provider kind is invalid")]
     InvalidProviderKind,
+    #[error("OpenAI local session identity is unavailable")]
+    SessionIdentity,
     #[error("OpenAI transport could not initialize")]
     Transport,
     #[error(transparent)]

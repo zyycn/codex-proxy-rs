@@ -15,6 +15,7 @@ use gateway_core::engine::{
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{ProviderSessionAffinityKey, ProviderSessionAffinityPort};
 use gateway_core::routing::ProviderKind;
+use provider_openai::OFFICIAL_CODEX_BASE_URL;
 use provider_openai::credential::{
     CodexAccountFailure, CodexCookiePolicy, CodexCredentialCatalogService, CodexCredentialCodec,
     CodexCredentialQuotaService, CodexCredentialSelector, CredentialSelectionError,
@@ -25,8 +26,8 @@ use secrecy::ExposeSecret;
 use url::Url;
 
 use crate::support::{
-    MemoryAccountStore, MemorySessionAffinity, TestLeaseCoordinator, account_policy,
-    agent_identity_service, profile, secret,
+    MemoryAccountStore, MemorySessionAffinity, MemorySessionExclusions, TestLeaseCoordinator,
+    account_policy, agent_identity_service, profile, secret,
 };
 
 fn create_account(store: &Arc<MemoryAccountStore>, id: &str, token: &str) {
@@ -98,6 +99,7 @@ fn selector_with_affinity(
         leases,
         session_affinity,
         Arc::new(AccountFeedbackStats::default()),
+        true,
     )
 }
 
@@ -106,6 +108,7 @@ fn selector_with_runtime(
     leases: Arc<TestLeaseCoordinator>,
     session_affinity: Arc<MemorySessionAffinity>,
     account_feedback: Arc<AccountFeedbackStats>,
+    skip_exhausted: bool,
 ) -> CodexCredentialSelector {
     let profile = CodexWireProfileState::new(CodexWireProfile {
         originator: "codex_cli_rs".to_owned(),
@@ -124,12 +127,14 @@ fn selector_with_runtime(
         store.repository(),
         profile.clone(),
         http.clone(),
+        OFFICIAL_CODEX_BASE_URL.to_owned(),
         Arc::clone(&agent_identity),
     ));
     let quota = Arc::new(CodexCredentialQuotaService::new(
         store.repository(),
         profile,
         http,
+        OFFICIAL_CODEX_BASE_URL.to_owned(),
         Arc::clone(&agent_identity),
     ));
     CodexCredentialSelector::new(
@@ -137,11 +142,13 @@ fn selector_with_runtime(
         store.repository(),
         leases,
         session_affinity,
+        Arc::new(MemorySessionExclusions::default()),
         catalog,
         quota,
         agent_identity,
         account_feedback,
         CodexCookiePolicy::official().expect("official cookie policy"),
+        skip_exhausted,
     )
 }
 
@@ -375,7 +382,7 @@ async fn selector_should_reuse_the_account_bound_to_the_same_session() {
 }
 
 #[tokio::test]
-async fn selector_should_escape_a_busy_affinity_account_without_overwriting_the_binding() {
+async fn selector_should_replace_a_busy_affinity_binding_after_the_fallback_succeeds() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_first", "at-first");
     create_account(&store, "acct_second", "at-second");
@@ -416,8 +423,8 @@ async fn selector_should_escape_a_busy_affinity_account_without_overwriting_the_
         affinity
             .load(&provider, &key)
             .await
-            .expect("load preserved affinity"),
-        Some(bound)
+            .expect("load replaced affinity"),
+        Some(ProviderAccountId::new("acct_second").expect("second account"))
     );
 }
 
@@ -440,6 +447,7 @@ async fn selector_should_escape_an_unhealthy_affinity_account() {
         Arc::new(TestLeaseCoordinator::default()),
         affinity,
         Arc::clone(&account_feedback),
+        true,
     );
     for _ in 0..4 {
         account_feedback.report(
@@ -625,6 +633,44 @@ fn rate_limited_failure_marks_account_quota_exhausted_with_a_cooldown() {
         account
             .cooldown_until()
             .is_some_and(|until| until > SystemTime::now())
+    );
+}
+
+#[test]
+fn selector_keeps_a_quota_exhausted_account_eligible_when_configured_not_to_skip_it() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_primary", "at-primary");
+    let strict_selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
+    let account = store.account("acct_primary").expect("account");
+    block_on(strict_selector.record_failure(&account, CodexAccountFailure::QuotaExhausted))
+        .expect("mark account exhausted");
+
+    let selector = selector_with_runtime(
+        &store,
+        Arc::new(TestLeaseCoordinator::default()),
+        Arc::new(MemorySessionAffinity::default()),
+        Arc::new(AccountFeedbackStats::default()),
+        false,
+    );
+    let request_url =
+        Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("request URL");
+    let request_attempt = attempt(BTreeSet::new());
+
+    let lease = block_on(selector.select(&SelectCodexCredential {
+        upstream_model: "gpt-5.4",
+        request_url: &request_url,
+        attempt: &request_attempt,
+        session_affinity_key: None,
+    }))
+    .expect("select quota exhausted account when skipping is disabled");
+
+    assert_eq!(lease.account_id().as_str(), "acct_primary");
+    assert_eq!(
+        store
+            .account("acct_primary")
+            .expect("persisted account")
+            .availability(),
+        AccountAvailability::QuotaExhausted
     );
 }
 

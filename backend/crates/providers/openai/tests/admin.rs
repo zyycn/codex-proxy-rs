@@ -48,9 +48,11 @@ use provider_openai::credential::ImportCodexOAuthCredential;
 use provider_openai::transport::profile::APPCAST_POLL_INTERVAL;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
+use tempfile::TempDir;
 
 use crate::support::{
-    MemoryAccountStore, MemorySessionAffinity, TestLeaseCoordinator, profile, secret,
+    MemoryAccountStore, MemorySessionAffinity, MemorySessionExclusions, TestLeaseCoordinator,
+    profile, secret,
 };
 
 #[tokio::test]
@@ -64,8 +66,9 @@ async fn real_openai_conversation_crosses_production_provider_boundaries() {
         panic!("real OpenAI fixture must be an object");
     };
     let store = Arc::new(MemoryAccountStore::default());
+    let config = valid_config();
     let bundle = provider_openai::initialize(
-        valid_config(),
+        config.config.clone(),
         provider_ports_with(Arc::clone(&store), Arc::new(TestOAuthPending::default())),
     )
     .await
@@ -190,7 +193,8 @@ fn real_attempt_context() -> AttemptContext {
 
 #[tokio::test]
 async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions_once() {
-    let mut bundle = provider_openai::initialize(valid_config(), provider_ports())
+    let config = valid_config();
+    let mut bundle = provider_openai::initialize(config.config.clone(), provider_ports())
         .await
         .expect("OpenAI bundle");
 
@@ -237,7 +241,8 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
 
 #[tokio::test]
 async fn openai_admin_provider_exposes_live_wire_profile_and_validated_billing() {
-    let bundle = provider_openai::initialize(valid_config(), provider_ports())
+    let config = valid_config();
+    let bundle = provider_openai::initialize(config.config.clone(), provider_ports())
         .await
         .expect("OpenAI bundle");
     let admin = bundle.admin_provider();
@@ -274,7 +279,8 @@ async fn openai_admin_provider_exposes_live_wire_profile_and_validated_billing()
 
 #[tokio::test]
 async fn openai_core_provider_projects_codex_request_observation_without_routing_side_effects() {
-    let bundle = provider_openai::initialize(valid_config(), provider_ports())
+    let config = valid_config();
+    let bundle = provider_openai::initialize(config.config.clone(), provider_ports())
         .await
         .expect("OpenAI bundle");
     let payload = ProtocolPayload::json_object(
@@ -305,8 +311,9 @@ async fn openai_core_provider_projects_codex_request_observation_without_routing
 #[tokio::test]
 async fn openai_admin_provider_persists_the_full_pending_envelope_and_binds_owner() {
     let pending = Arc::new(TestOAuthPending::default());
+    let config = valid_config();
     let bundle = provider_openai::initialize(
-        valid_config(),
+        config.config.clone(),
         provider_ports_with(
             Arc::new(MemoryAccountStore::default()),
             Arc::clone(&pending),
@@ -386,8 +393,9 @@ async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export
         .account("acct_admin_projection")
         .expect("stored account");
     let record = account_record(&account);
+    let config = valid_config();
     let bundle = provider_openai::initialize(
-        valid_config(),
+        config.config.clone(),
         provider_ports_with(Arc::clone(&store), Arc::new(TestOAuthPending::default())),
     )
     .await
@@ -501,8 +509,9 @@ async fn openai_admin_provider_projects_codex_additional_limit_as_the_primary_qu
         })
         .await
         .expect("persist quota");
+    let config = valid_config();
     let bundle = provider_openai::initialize(
-        valid_config(),
+        config.config.clone(),
         provider_ports_with(Arc::clone(&store), Arc::new(TestOAuthPending::default())),
     )
     .await
@@ -544,8 +553,9 @@ async fn openai_admin_provider_rejects_unprepared_mutations_before_store_commit(
         .await;
     let account = store.account("acct_admin_invalid").expect("stored account");
     let record = account_record(&account);
+    let config = valid_config();
     let bundle = provider_openai::initialize(
-        valid_config(),
+        config.config.clone(),
         provider_ports_with(store, Arc::new(TestOAuthPending::default())),
     )
     .await
@@ -591,6 +601,7 @@ fn provider_ports_with(
         accounts,
         Arc::new(TestLeaseCoordinator::default()),
         Arc::new(MemorySessionAffinity::default()),
+        Arc::new(MemorySessionExclusions::default()),
         Arc::new(TestCatalogCache::default()),
         Arc::new(TestCredentialState),
         Arc::new(TestCooldown),
@@ -625,22 +636,34 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
     }
 }
 
-fn valid_config() -> OpenAiConfig {
-    OpenAiConfig {
-        wire_profile: CodexWireProfileConfig {
-            originator: "Codex Desktop".to_owned(),
-            codex_version: "0.102.0".to_owned(),
-            desktop_version: "1.2026.190".to_owned(),
-            desktop_build: "19012345678".to_owned(),
-            os_type: "macOS".to_owned(),
-            os_version: "15.5.0".to_owned(),
-            arch: "arm64".to_owned(),
-            terminal: "xterm-256color".to_owned(),
-            verified_at: Utc
-                .with_ymd_and_hms(2026, 7, 19, 0, 0, 0)
-                .single()
-                .expect("valid test time"),
-        },
+struct TestOpenAiConfig {
+    config: OpenAiConfig,
+    _runtime: TempDir,
+}
+
+fn valid_config() -> TestOpenAiConfig {
+    let mut config = OpenAiConfig::default();
+    config.wire_profile = CodexWireProfileConfig {
+        originator: "Codex Desktop".to_owned(),
+        codex_version: "0.102.0".to_owned(),
+        desktop_version: "1.2026.190".to_owned(),
+        desktop_build: "19012345678".to_owned(),
+        os_type: "macOS".to_owned(),
+        os_version: "15.5.0".to_owned(),
+        arch: "arm64".to_owned(),
+        terminal: "xterm-256color".to_owned(),
+        verified_at: Utc
+            .with_ymd_and_hms(2026, 7, 19, 0, 0, 0)
+            .single()
+            .expect("valid test time"),
+    };
+    let runtime = tempfile::tempdir().expect("test runtime directory");
+    config
+        .resolve_and_validate(&runtime.path().join("deploy"))
+        .expect("valid OpenAI test configuration");
+    TestOpenAiConfig {
+        config,
+        _runtime: runtime,
     }
 }
 

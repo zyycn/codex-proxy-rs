@@ -9,7 +9,7 @@ use futures::future::BoxFuture;
 
 use crate::engine::credential::ProviderAccountId;
 use crate::error::{IdentifierError, SafeUpstreamValue, validate_text};
-use crate::policy::ClientApiKeyId;
+use crate::operation::ProviderSessionState;
 use crate::routing::ProviderKind;
 
 /// 客户端传入的 previous response ID。
@@ -43,19 +43,20 @@ pub enum NativeContinuationScope {
     ConnectionLocal,
 }
 
-/// 外层已解析并认证的 native previous-response pin。
+/// 从可丢失会话亲和存储恢复的 native previous-response pin。
 ///
-/// 该值不代表数据库 transcript；它只阻止 native handle 被发送到错误的
-/// Provider 或账号。
-#[derive(Clone, PartialEq, Eq)]
+/// 该值不依赖调用方 API Key；它只阻止 native handle 与不透明 Provider state
+/// 被发送到错误的 Provider 或账号。
+#[derive(Clone, PartialEq)]
 pub struct NativeContinuationPin {
-    /// 客户端提交、仅供 Store 在调用方隔离下查找的网关 response ID。
+    /// 客户端提交、用于查找可丢失会话亲和记录的 response ID。
     previous_response_id: PreviousResponseId,
-    /// Store 从已提交成功请求解析出的 Provider 原生 response handle。
+    /// Provider 原生 response handle。
     upstream_response_id: SafeUpstreamValue,
     provider: ProviderKind,
     account: ProviderAccountId,
     scope: NativeContinuationScope,
+    session_state: Option<ProviderSessionState>,
 }
 
 impl NativeContinuationPin {
@@ -72,6 +73,7 @@ impl NativeContinuationPin {
             provider,
             account,
             scope: NativeContinuationScope::ConnectionLocal,
+            session_state: None,
         }
     }
 
@@ -79,6 +81,13 @@ impl NativeContinuationPin {
     #[must_use]
     pub const fn with_scope(mut self, scope: NativeContinuationScope) -> Self {
         self.scope = scope;
+        self
+    }
+
+    /// 附着仅由对应 Provider 解释的不透明会话状态。
+    #[must_use]
+    pub fn with_session_state(mut self, state: ProviderSessionState) -> Self {
+        self.session_state = Some(state);
         self
     }
 
@@ -108,6 +117,12 @@ impl NativeContinuationPin {
         self.scope
     }
 
+    /// 返回与本 pin 同账号绑定的 Provider 私有会话状态。
+    #[must_use]
+    pub const fn session_state(&self) -> Option<&ProviderSessionState> {
+        self.session_state.as_ref()
+    }
+
     /// 校验本次 route/account 选择没有破坏 native pin。
     #[must_use]
     pub fn matches(&self, provider: &ProviderKind, account: &ProviderAccountId) -> bool {
@@ -124,6 +139,10 @@ impl fmt::Debug for NativeContinuationPin {
             .field("provider", &self.provider)
             .field("account", &self.account)
             .field("scope", &self.scope)
+            .field(
+                "session_state",
+                &self.session_state.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
@@ -132,7 +151,7 @@ impl fmt::Debug for NativeContinuationPin {
 ///
 /// 已命中网关历史的 handle 携带完整账号 pin；未命中历史的外部 handle 只保留
 /// 客户端提交的 opaque ID，由目标 Provider 在首次且唯一一次 attempt 中解释。
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 pub enum ContinuationBinding {
     Pinned(NativeContinuationPin),
     External(PreviousResponseId),
@@ -172,11 +191,18 @@ impl fmt::Debug for ContinuationBinding {
 #[error("native continuation store is unavailable")]
 pub struct NativeContinuationStoreError;
 
-/// 调用方隔离后的 previous-response 解析端口。
+/// 可丢失的 previous-response 亲和存储端口。
+///
+/// 亲和记录不按调用方 API Key 隔离：与旧版一样，response ID 是会话级 opaque
+/// handle；Redis 不可用或超时必须由调用方 fail-open。
 pub trait NativeContinuationPort: Send + Sync {
     fn resolve<'a>(
         &'a self,
-        client_api_key_id: &'a ClientApiKeyId,
         previous_response_id: &'a PreviousResponseId,
     ) -> BoxFuture<'a, Result<Option<NativeContinuationPin>, NativeContinuationStoreError>>;
+
+    fn record<'a>(
+        &'a self,
+        pin: NativeContinuationPin,
+    ) -> BoxFuture<'a, Result<(), NativeContinuationStoreError>>;
 }

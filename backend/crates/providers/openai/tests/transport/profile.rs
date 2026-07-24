@@ -4,8 +4,9 @@ use std::sync::{Arc, Mutex};
 use chrono::{TimeZone, Utc};
 use futures::future::BoxFuture;
 use provider_openai::transport::profile::{
-    CodexDesktopRelease, CodexDesktopReleaseError, CodexDesktopReleaseService,
-    CodexDesktopReleaseTransport, CodexWireProfile, CodexWireProfileState, parse_desktop_release,
+    CodexCliReleaseError, CodexCliReleaseService, CodexCliReleaseTransport, CodexDesktopRelease,
+    CodexDesktopReleaseError, CodexDesktopReleaseService, CodexDesktopReleaseTransport,
+    CodexWireProfile, CodexWireProfileState, parse_desktop_release,
 };
 
 struct ReleaseTransport {
@@ -30,6 +31,30 @@ impl CodexDesktopReleaseTransport for ReleaseTransport {
                 .expect("release outcomes")
                 .pop_front()
                 .expect("release outcome")
+        })
+    }
+}
+
+struct CliReleaseTransport {
+    outcomes: Mutex<VecDeque<Result<String, CodexCliReleaseError>>>,
+}
+
+impl CliReleaseTransport {
+    fn new(outcomes: impl IntoIterator<Item = Result<String, CodexCliReleaseError>>) -> Self {
+        Self {
+            outcomes: Mutex::new(outcomes.into_iter().collect()),
+        }
+    }
+}
+
+impl CodexCliReleaseTransport for CliReleaseTransport {
+    fn fetch(&self) -> BoxFuture<'_, Result<String, CodexCliReleaseError>> {
+        Box::pin(async move {
+            self.outcomes
+                .lock()
+                .expect("CLI release outcomes")
+                .pop_front()
+                .expect("CLI release outcome")
         })
     }
 }
@@ -134,6 +159,29 @@ async fn wire_profile_release_update_should_change_only_desktop_identity() {
     assert_eq!(status.latest, Some(release("26.720.1", "72001")));
     assert!(status.checked_at.is_some());
     assert!(status.last_error.is_none());
+}
+
+#[tokio::test]
+async fn cli_release_update_should_change_only_codex_core_identity() {
+    let original = wire_profile();
+    let state = CodexWireProfileState::new(original.clone());
+    let service = CodexCliReleaseService::new(
+        state.clone(),
+        Arc::new(CliReleaseTransport::new([Ok("0.145.0".to_owned())])),
+    );
+
+    service.refresh().await.expect("CLI release refresh");
+
+    let updated = state.snapshot();
+    assert_eq!(updated.codex_version, "0.145.0");
+    assert_eq!(updated.desktop_version, original.desktop_version);
+    assert_eq!(updated.desktop_build, original.desktop_build);
+    assert_eq!(updated.originator, original.originator);
+    assert_eq!(updated.os_type, original.os_type);
+    assert_eq!(updated.os_version, original.os_version);
+    assert_eq!(updated.arch, original.arch);
+    assert_eq!(updated.terminal, original.terminal);
+    assert_eq!(updated.verified_at, original.verified_at);
 }
 
 #[tokio::test]

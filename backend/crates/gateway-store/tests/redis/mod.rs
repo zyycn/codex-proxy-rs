@@ -2,9 +2,11 @@ mod client_admission;
 mod credential_cooldown;
 mod credential_leases;
 mod credential_state;
+mod native_continuation;
 mod oauth_pending;
 mod provider_circuit;
 mod provider_session_affinity;
+mod provider_session_exclusion;
 mod worker_lease;
 
 use chrono::Utc;

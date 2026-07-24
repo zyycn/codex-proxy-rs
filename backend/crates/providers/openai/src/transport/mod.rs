@@ -11,6 +11,7 @@ pub mod profile;
 pub mod protocol;
 pub mod request;
 mod response_meta;
+pub(crate) mod session;
 mod time;
 pub mod tls;
 pub mod usage;

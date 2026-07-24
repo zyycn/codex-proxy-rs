@@ -3,6 +3,7 @@ use std::sync::Arc;
 use chrono::{TimeZone as _, Utc};
 use futures::executor::block_on;
 use gateway_core::engine::credential::ProviderAccountId;
+use provider_openai::OFFICIAL_CODEX_BASE_URL;
 use provider_openai::credential::{CodexCredentialCatalogError, CodexCredentialCatalogService};
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 
@@ -33,6 +34,7 @@ fn service(store: &Arc<MemoryAccountStore>) -> CodexCredentialCatalogService {
             .no_proxy()
             .build()
             .expect("client"),
+        OFFICIAL_CODEX_BASE_URL.to_owned(),
         agent_identity_service(store),
     )
 }

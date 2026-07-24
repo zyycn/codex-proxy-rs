@@ -16,7 +16,6 @@ use uuid::Uuid;
 
 use super::agent_identity::CodexAgentIdentityTaskService;
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
-use crate::provider::OFFICIAL_CODEX_BASE_URL;
 use crate::transport::profile::CodexWireProfileState;
 use crate::transport::{CodexBackendClient, CodexCatalogModel, CodexRequestContext};
 
@@ -124,6 +123,7 @@ pub struct CodexCredentialCatalogService {
     repository: CodexCredentialRepository,
     profile: CodexWireProfileState,
     http: reqwest::Client,
+    base_url: String,
     agent_identity: Arc<CodexAgentIdentityTaskService>,
     cache: Arc<RwLock<CatalogCacheState>>,
     etags: Arc<Mutex<CatalogEtagState>>,
@@ -135,12 +135,14 @@ impl CodexCredentialCatalogService {
         repository: CodexCredentialRepository,
         profile: CodexWireProfileState,
         http: reqwest::Client,
+        base_url: String,
         agent_identity: Arc<CodexAgentIdentityTaskService>,
     ) -> Self {
         Self {
             repository,
             profile,
             http,
+            base_url,
             agent_identity,
             cache: Arc::new(RwLock::new(CatalogCacheState::default())),
             etags: Arc::new(Mutex::new(CatalogEtagState::default())),
@@ -210,7 +212,7 @@ impl CodexCredentialCatalogService {
             .ok_or(CodexCredentialCatalogError::NoEligibleCredential)?;
         let client = CodexBackendClient::new(
             self.http.clone(),
-            OFFICIAL_CODEX_BASE_URL,
+            self.base_url.clone(),
             self.profile.clone(),
         );
         let cache_revision = self.cache_revision()?;
@@ -254,7 +256,7 @@ impl CodexCredentialCatalogService {
         }
         let client = CodexBackendClient::new(
             self.http.clone(),
-            OFFICIAL_CODEX_BASE_URL,
+            self.base_url.clone(),
             self.profile.clone(),
         );
         let mut union = BTreeMap::<String, CodexCatalogModel>::new();

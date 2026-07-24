@@ -149,6 +149,26 @@ fn selected_provider_should_use_global_model_mapping() {
 }
 
 #[test]
+fn model_mapping_should_follow_a_bounded_alias_chain() {
+    let snapshot = snapshot().with_model_mappings(BTreeMap::from([
+        ("public-model".to_owned(), "compat-model".to_owned()),
+        ("compat-model".to_owned(), "gpt-5.5".to_owned()),
+    ]));
+
+    assert_eq!(snapshot.mapped_model("public-model"), "gpt-5.5");
+}
+
+#[test]
+fn cyclic_model_mapping_should_fall_back_to_the_original_name() {
+    let snapshot = snapshot().with_model_mappings(BTreeMap::from([
+        ("first".to_owned(), "second".to_owned()),
+        ("second".to_owned(), "first".to_owned()),
+    ]));
+
+    assert_eq!(snapshot.mapped_model("first"), "first");
+}
+
+#[test]
 fn global_mapping_should_apply_to_every_provider() {
     let snapshot = snapshot();
     let plan = snapshot
@@ -274,8 +294,8 @@ fn public_catalog_should_include_discovered_models_and_aliases() {
 }
 
 #[test]
-fn unknown_model_should_be_accepted_when_provider_is_registered() {
-    assert!(snapshot().contains_public_model_for_provider(
+fn unknown_model_should_be_hidden_when_provider_catalog_is_available() {
+    assert!(!snapshot().contains_public_model_for_provider(
         &PublicModelId::new("future-model").expect("model"),
         &ProviderKind::new("openai").expect("provider"),
     ));
