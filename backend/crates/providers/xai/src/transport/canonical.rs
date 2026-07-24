@@ -194,15 +194,21 @@ impl GrokCanonicalDecoder {
                 }
                 continue;
             }
-            let value = serde_json::from_str::<Value>(&event.data).map_err(protocol_error)?;
+            let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
+                continue;
+            };
             let body_type = value.get("type").and_then(Value::as_str);
-            let event_type = match (event.event.as_deref(), body_type) {
-                (Some(header), Some(body)) if header != body => {
-                    return Err(protocol_error_marker());
-                }
-                (Some(header), _) => header,
-                (None, Some(body)) => body,
-                (None, None) => return Err(protocol_error_marker()),
+            let Some(event_type) = body_type.or(event.event.as_deref()) else {
+                let wire = ProtocolWireEvent::json_with_sse_metadata(
+                    "openai",
+                    event.event,
+                    value,
+                    event.id,
+                    event.retry,
+                )
+                .map_err(|_| protocol_error_marker())?;
+                output.push(ProviderEvent::wire(wire));
+                continue;
             };
             let event_type = event_type.to_owned();
             let transformed = self

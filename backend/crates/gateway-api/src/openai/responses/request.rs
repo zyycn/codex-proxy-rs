@@ -6,7 +6,7 @@ use axum::http::HeaderMap;
 use gateway_core::operation::{
     CompactConversationRequest, ContentPart, ContinuationMode, Feature, GenerateRequest,
     ImageSource, JsonSchemaFormat, Message, MessageRole, Operation, OutputFormat, ProtocolPayload,
-    ProviderOptions, ProviderSessionState, ResponsePersistence, ToolDefinition,
+    ProviderSessionState, ResponsePersistence, ToolDefinition,
 };
 use gateway_core::routing::ProviderKind;
 use gateway_protocol::openai::{
@@ -16,17 +16,10 @@ use serde_json::{Map, Value};
 
 use super::error::RequestDecodeError;
 
-/// Gateway 扩展 `provider_options` 的唯一受支持版本。
-pub const PROVIDER_OPTIONS_VERSION: &str = "v1";
-
 const OPENAI_PROTOCOL: &str = "openai";
 const XAI_PROVIDER: &str = "xai";
-const OPENAI_TRANSPORT_OPTION: &str = "transport";
-const HTTP_SSE_TRANSPORT: &str = "http_sse";
-const WEBSOCKET_TRANSPORT: &str = "websocket";
 const REVIEW_SUBAGENT: &str = "review";
 const OPENAI_SUBAGENT_KEY: &str = "x-openai-subagent";
-const MAX_PROMPT_CACHE_KEY_BYTES: usize = 1_024;
 
 #[derive(Clone, Default)]
 pub struct OpenAiRequestHeaders {
@@ -40,7 +33,6 @@ pub struct OpenAiRequestHeaders {
 
     conversation_id: Option<String>,
     session_id: Option<String>,
-    prompt_cache_seed: Option<String>,
     thread_id: Option<String>,
     client_request_id: Option<String>,
     turn_id: Option<String>,
@@ -54,19 +46,6 @@ impl OpenAiRequestHeaders {
     /// 提取 OpenAI/Codex 连接级请求头上下文。
     #[must_use]
     pub fn from_headers(headers: &HeaderMap) -> Self {
-        let prompt_cache_seed = [
-            "x-claude-code-session-id",
-            "x-session-id",
-            "session-id",
-            "session_id",
-            "x-conversation-id",
-            "conversation-id",
-            "conversation_id",
-            "x-client-session-id",
-        ]
-        .into_iter()
-        .find_map(|name| header_string(headers, name))
-        .and_then(|value| normalize_prompt_cache_seed(&value));
         Self {
             turn_state: header_string(headers, "x-codex-turn-state"),
             turn_metadata: header_string(headers, "x-codex-turn-metadata"),
@@ -79,7 +58,6 @@ impl OpenAiRequestHeaders {
                 .or_else(|| header_string(headers, "conversation_id")),
             session_id: header_string(headers, "session-id")
                 .or_else(|| header_string(headers, "session_id")),
-            prompt_cache_seed,
             thread_id: header_string(headers, "thread-id"),
             client_request_id: header_string(headers, "x-client-request-id"),
             turn_id: header_string(headers, "x-codex-turn-id"),
@@ -100,49 +78,52 @@ impl OpenAiRequestHeaders {
         }
     }
 
-    fn provider_options(&self) -> Map<String, Value> {
-        let mut options = Map::new();
-        insert_header_option(&mut options, "turn_state", self.turn_state.as_ref());
-        insert_header_option(&mut options, "turn_metadata", self.turn_metadata.as_ref());
-        insert_header_option(&mut options, "beta_features", self.beta_features.as_ref());
-        insert_header_option(&mut options, "version", self.version.as_ref());
-        insert_header_option(
-            &mut options,
+    fn protocol_context(&self, use_websocket: Option<bool>) -> Map<String, Value> {
+        let mut context = Map::new();
+        insert_protocol_context(&mut context, "turn_state", self.turn_state.as_ref());
+        insert_protocol_context(&mut context, "turn_metadata", self.turn_metadata.as_ref());
+        insert_protocol_context(&mut context, "beta_features", self.beta_features.as_ref());
+        insert_protocol_context(&mut context, "version", self.version.as_ref());
+        insert_protocol_context(
+            &mut context,
             "include_timing_metrics",
             self.include_timing_metrics.as_ref(),
         );
-        insert_header_option(
-            &mut options,
+        insert_protocol_context(
+            &mut context,
             "codex_window_id",
             self.codex_window_id.as_ref(),
         );
-        insert_header_option(
-            &mut options,
+        insert_protocol_context(
+            &mut context,
             "parent_thread_id",
             self.parent_thread_id.as_ref(),
         );
-        insert_header_option(
-            &mut options,
+        insert_protocol_context(
+            &mut context,
             "conversation_id",
             self.conversation_id.as_ref(),
         );
-        insert_header_option(&mut options, "session_id", self.session_id.as_ref());
-        insert_header_option(&mut options, "thread_id", self.thread_id.as_ref());
-        insert_header_option(
-            &mut options,
+        insert_protocol_context(&mut context, "session_id", self.session_id.as_ref());
+        insert_protocol_context(&mut context, "thread_id", self.thread_id.as_ref());
+        insert_protocol_context(
+            &mut context,
             "client_request_id",
             self.client_request_id.as_ref(),
         );
-        insert_header_option(&mut options, "turn_id", self.turn_id.as_ref());
-        insert_header_option(&mut options, "responses_lite", self.responses_lite.as_ref());
-        insert_header_option(&mut options, "memgen_request", self.memgen_request.as_ref());
-        options
+        insert_protocol_context(&mut context, "turn_id", self.turn_id.as_ref());
+        insert_protocol_context(&mut context, "responses_lite", self.responses_lite.as_ref());
+        insert_protocol_context(&mut context, "memgen_request", self.memgen_request.as_ref());
+        if let Some(use_websocket) = use_websocket {
+            context.insert("use_websocket".to_owned(), Value::Bool(use_websocket));
+        }
+        context
     }
 }
 
-fn insert_header_option(options: &mut Map<String, Value>, field: &str, value: Option<&String>) {
+fn insert_protocol_context(context: &mut Map<String, Value>, field: &str, value: Option<&String>) {
     if let Some(value) = value {
-        options.insert(field.to_owned(), Value::String(value.clone()));
+        context.insert(field.to_owned(), Value::String(value.clone()));
     }
 }
 
@@ -351,54 +332,39 @@ pub(super) fn decode_request_inner(
     let Value::Object(mut object) = value else {
         return Err(RequestDecodeError::ExpectedObject);
     };
-    let use_websocket = optional_bool(&object, "use_websocket", "use_websocket")?;
-    object.remove("use_websocket");
+    // `use_websocket` 只影响本地 transport。无论值是否可识别，都不得进入上游 body。
+    let use_websocket = object
+        .remove("use_websocket")
+        .and_then(|value| value.as_bool());
 
-    let model = required_non_empty_string(&object, "model", "model")?.to_owned();
-    if model.len() > 256 || model.chars().any(char::is_control) {
-        return Err(RequestDecodeError::InvalidValue {
+    let model = required_non_empty_string(&object, "model", "model")?.trim();
+    if model.is_empty() {
+        return Err(RequestDecodeError::EmptyField {
             field: "model".to_owned(),
         });
     }
-    if !object.contains_key("input") {
-        return Err(RequestDecodeError::MissingField {
-            field: "input".to_owned(),
-        });
-    }
+    let model = model.to_owned();
     let compact_conversation = provider_kind
         .is_some_and(|provider| provider.as_str() == XAI_PROVIDER)
         && consume_compaction_trigger(&mut object);
 
-    let stream = optional_bool(&object, "stream", "stream")?.unwrap_or(true);
-    let store = optional_bool(&object, "store", "store")?.unwrap_or(false);
-    let continuation =
-        match optional_non_empty_string(&object, "previous_response_id", "previous_response_id")? {
-            Some(response_id) => {
-                validate_response_id(response_id)?;
-                ContinuationIntent::PreviousResponseId(response_id.to_owned())
-            }
-            None => ContinuationIntent::None,
-        };
+    let stream = object
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let store = object
+        .get("store")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let continuation = object
+        .get("previous_response_id")
+        .and_then(Value::as_str)
+        .filter(|response_id| !response_id.is_empty())
+        .map(|response_id| ContinuationIntent::PreviousResponseId(response_id.to_owned()))
+        .unwrap_or(ContinuationIntent::None);
 
     request_headers.apply_subagent(&mut object, review.then_some(REVIEW_SUBAGENT));
-    let provider_options_document = object.remove("provider_options");
-    let mut openai_fallback_options = request_headers.provider_options();
-    if let Some(use_websocket) = use_websocket {
-        // 显式 provider_options 优先；body transport 只覆盖同名 header fallback。
-        openai_fallback_options.insert(
-            OPENAI_TRANSPORT_OPTION.to_owned(),
-            Value::String(
-                if use_websocket {
-                    WEBSOCKET_TRANSPORT
-                } else {
-                    HTTP_SSE_TRANSPORT
-                }
-                .to_owned(),
-            ),
-        );
-    }
-    let provider_options =
-        parse_provider_options(provider_options_document.as_ref(), openai_fallback_options)?;
+    let protocol_context = request_headers.protocol_context(use_websocket);
 
     let messages = canonical_messages(&object);
     let tools = canonical_function_tools(&object);
@@ -428,20 +394,18 @@ pub(super) fn decode_request_inner(
         .get("max_output_tokens")
         .and_then(Value::as_u64)
         .filter(|tokens| *tokens > 0);
-    let prompt_cache_key = request_headers.prompt_cache_seed.clone().or_else(|| {
-        object
-            .get("prompt_cache_key")
-            .and_then(Value::as_str)
-            .and_then(normalize_prompt_cache_seed)
-    });
-    let payload = ProtocolPayload::json_object(OPENAI_PROTOCOL, object).map_err(|_| {
-        RequestDecodeError::CanonicalContract {
+    let prompt_cache_key = object
+        .get("prompt_cache_key")
+        .and_then(Value::as_str)
+        .filter(|key| !key.trim().is_empty())
+        .map(ToOwned::to_owned);
+    let payload = ProtocolPayload::json_object(OPENAI_PROTOCOL, object)
+        .map_err(|_| RequestDecodeError::CanonicalContract {
             field: "request".to_owned(),
-        }
-    })?;
+        })?
+        .with_context(protocol_context);
     let mut request = GenerateRequest::from_protocol_payload(messages, payload)
         .with_image_generation_requested(image_generation_requested)
-        .with_provider_options(provider_options)
         .with_response_persistence(if store {
             ResponsePersistence::Store
         } else {
@@ -695,106 +659,6 @@ fn consume_compaction_trigger(body: &mut Map<String, Value>) -> bool {
     true
 }
 
-fn valid_prompt_cache_key(key: &str) -> bool {
-    !key.is_empty()
-        && key.len() <= MAX_PROMPT_CACHE_KEY_BYTES
-        && key.trim() == key
-        && !key.chars().any(char::is_control)
-}
-
-fn normalize_prompt_cache_seed(value: &str) -> Option<String> {
-    let value = value.trim();
-    valid_prompt_cache_key(value).then(|| value.to_owned())
-}
-
-fn parse_provider_options(
-    value: Option<&Value>,
-    mut openai_fallback_options: Map<String, Value>,
-) -> Result<ProviderOptions, RequestDecodeError> {
-    let Some(value) = value else {
-        if openai_fallback_options.is_empty() {
-            return Ok(ProviderOptions::new());
-        }
-        let mut options = ProviderOptions::new();
-        insert_fallback_provider_options(&mut options, OPENAI_PROTOCOL, openai_fallback_options)?;
-        return Ok(options);
-    };
-    let object = value
-        .as_object()
-        .ok_or_else(|| RequestDecodeError::InvalidType {
-            field: "provider_options".to_owned(),
-            expected: "a JSON object",
-        })?;
-    let version = required_non_empty_string(object, "version", "provider_options.version")?;
-    if version != PROVIDER_OPTIONS_VERSION {
-        return Err(RequestDecodeError::UnsupportedProviderOptionsVersion);
-    }
-    let providers = object
-        .get("providers")
-        .ok_or_else(|| RequestDecodeError::MissingField {
-            field: "provider_options.providers".to_owned(),
-        })?
-        .as_object()
-        .ok_or_else(|| RequestDecodeError::InvalidType {
-            field: "provider_options.providers".to_owned(),
-            expected: "a JSON object",
-        })?;
-    let mut options = ProviderOptions::new();
-    for (provider, value) in providers {
-        let mut provider_options = value
-            .as_object()
-            .ok_or_else(|| RequestDecodeError::InvalidType {
-                field: format!("provider_options.providers.{provider}"),
-                expected: "a JSON object",
-            })?
-            .clone();
-        if provider == OPENAI_PROTOCOL {
-            merge_provider_fallbacks(&mut provider_options, &mut openai_fallback_options);
-        }
-        options
-            .insert(provider.clone(), provider_options)
-            .map_err(|_| RequestDecodeError::CanonicalContract {
-                field: format!("provider_options.providers.{provider}"),
-            })?;
-    }
-    insert_fallback_provider_options(&mut options, OPENAI_PROTOCOL, openai_fallback_options)?;
-    Ok(options)
-}
-
-fn insert_fallback_provider_options(
-    options: &mut ProviderOptions,
-    provider: &str,
-    mut fallback: Map<String, Value>,
-) -> Result<(), RequestDecodeError> {
-    if fallback.is_empty() {
-        return Ok(());
-    }
-    fallback.insert("schema_version".to_owned(), Value::from(1));
-    options
-        .insert(provider, fallback)
-        .map_err(|_| RequestDecodeError::CanonicalContract {
-            field: format!("provider_options.providers.{provider}"),
-        })
-}
-
-fn merge_provider_fallbacks(
-    provider_options: &mut Map<String, Value>,
-    fallback_options: &mut Map<String, Value>,
-) {
-    for (field, value) in std::mem::take(fallback_options) {
-        provider_options.entry(field).or_insert(value);
-    }
-}
-
-fn validate_response_id(response_id: &str) -> Result<(), RequestDecodeError> {
-    if response_id.len() > 256 || response_id.chars().any(char::is_control) {
-        return Err(RequestDecodeError::InvalidValue {
-            field: "previous_response_id".to_owned(),
-        });
-    }
-    Ok(())
-}
-
 fn required_non_empty_string<'a>(
     object: &'a Map<String, Value>,
     key: &str,
@@ -816,37 +680,4 @@ fn required_non_empty_string<'a>(
         });
     }
     Ok(value)
-}
-
-fn optional_non_empty_string<'a>(
-    object: &'a Map<String, Value>,
-    key: &str,
-    field: &str,
-) -> Result<Option<&'a str>, RequestDecodeError> {
-    match object.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(value)) if !value.is_empty() => Ok(Some(value)),
-        Some(Value::String(_)) => Err(RequestDecodeError::EmptyField {
-            field: field.to_owned(),
-        }),
-        Some(_) => Err(RequestDecodeError::InvalidType {
-            field: field.to_owned(),
-            expected: "a string",
-        }),
-    }
-}
-
-fn optional_bool(
-    object: &Map<String, Value>,
-    key: &str,
-    field: &str,
-) -> Result<Option<bool>, RequestDecodeError> {
-    match object.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Bool(value)) => Ok(Some(*value)),
-        Some(_) => Err(RequestDecodeError::InvalidType {
-            field: field.to_owned(),
-            expected: "a boolean",
-        }),
-    }
 }

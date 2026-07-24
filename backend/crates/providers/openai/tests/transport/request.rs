@@ -1,10 +1,10 @@
 use gateway_core::operation::{
-    ContentPart, GenerateRequest, Message, MessageRole, ProtocolPayload, ProviderOptions,
-    ReasoningEffort, ReasoningRequirement, ReasoningSummary, ResponsePersistence, ToolDefinition,
+    ContentPart, GenerateRequest, Message, MessageRole, ProtocolPayload, ReasoningEffort,
+    ReasoningRequirement, ReasoningSummary, ResponsePersistence, ToolDefinition,
 };
 use serde_json::{Map, Value, json};
 
-use provider_openai::{CodexRequestEncodeError, encode_generate_request};
+use provider_openai::encode_generate_request;
 
 #[test]
 fn encoder_should_preserve_openai_wire_fields_without_deriving_accountless_pool_identity() {
@@ -147,24 +147,19 @@ fn encoder_should_forward_the_common_prompt_cache_key() {
 
 #[test]
 fn encoder_should_project_explicit_websocket_transport_without_touching_body() {
-    let message = Message::new(
-        MessageRole::User,
-        vec![ContentPart::Text("prompt".to_owned())],
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        Map::from_iter([
+            ("model".to_owned(), json!("client-model")),
+            ("input".to_owned(), json!("prompt")),
+        ]),
     )
-    .expect("message");
-    let mut providers = ProviderOptions::new();
-    providers
-        .insert(
-            "openai",
-            Map::from_iter([
-                ("schema_version".to_owned(), json!(1)),
-                ("transport".to_owned(), json!("websocket")),
-            ]),
-        )
-        .expect("provider options");
-    let request = GenerateRequest::new(vec![message])
-        .expect("generate")
-        .with_provider_options(providers);
+    .expect("OpenAI payload")
+    .with_context(Map::from_iter([(
+        "use_websocket".to_owned(),
+        Value::Bool(true),
+    )]));
+    let request = GenerateRequest::from_protocol_payload(Vec::new(), payload);
 
     let encoded = encode_generate_request(&request, "gpt-test").expect("encode");
 
@@ -175,24 +170,19 @@ fn encoder_should_project_explicit_websocket_transport_without_touching_body() {
 
 #[test]
 fn encoder_should_project_explicit_http_transport_without_touching_body() {
-    let message = Message::new(
-        MessageRole::User,
-        vec![ContentPart::Text("prompt".to_owned())],
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        Map::from_iter([
+            ("model".to_owned(), json!("client-model")),
+            ("input".to_owned(), json!("prompt")),
+        ]),
     )
-    .expect("message");
-    let mut providers = ProviderOptions::new();
-    providers
-        .insert(
-            "openai",
-            Map::from_iter([
-                ("schema_version".to_owned(), json!(1)),
-                ("transport".to_owned(), json!("http_sse")),
-            ]),
-        )
-        .expect("provider options");
-    let request = GenerateRequest::new(vec![message])
-        .expect("generate")
-        .with_provider_options(providers);
+    .expect("OpenAI payload")
+    .with_context(Map::from_iter([(
+        "use_websocket".to_owned(),
+        Value::Bool(false),
+    )]));
+    let request = GenerateRequest::from_protocol_payload(Vec::new(), payload);
 
     let encoded = encode_generate_request(&request, "gpt-test").expect("encode");
 
@@ -202,30 +192,30 @@ fn encoder_should_project_explicit_http_transport_without_touching_body() {
 }
 
 #[test]
-fn encoder_should_reject_unknown_codex_options_without_echoing_values() {
-    let message = Message::new(
-        MessageRole::User,
-        vec![ContentPart::Text("prompt".to_owned())],
+fn encoder_should_preserve_opaque_provider_options_without_interpreting_them() {
+    let opaque_options = json!({
+        "version": "future-version",
+        "providers": {
+            "openai": {"secret_future_option": "must-survive"}
+        }
+    });
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        Map::from_iter([
+            ("model".to_owned(), json!("client-model")),
+            ("input".to_owned(), json!("prompt")),
+            ("provider_options".to_owned(), opaque_options.clone()),
+        ]),
     )
-    .expect("message");
-    let mut providers = ProviderOptions::new();
-    providers
-        .insert(
-            "openai",
-            Map::from_iter([
-                ("schema_version".to_owned(), json!(1)),
-                ("secret_future_option".to_owned(), json!("must-not-leak")),
-            ]),
-        )
-        .expect("provider options");
-    let request = GenerateRequest::new(vec![message])
-        .expect("generate")
-        .with_provider_options(providers);
+    .expect("OpenAI payload");
+    let request = GenerateRequest::from_protocol_payload(Vec::new(), payload);
 
-    let error =
-        encode_generate_request(&request, "gpt-test").expect_err("unknown option must fail closed");
-    assert_eq!(error, CodexRequestEncodeError::UnsupportedProviderOption);
-    assert!(!format!("{error:?}").contains("must-not-leak"));
+    let encoded = encode_generate_request(&request, "gpt-test").expect("opaque options encode");
+
+    assert_eq!(
+        encoded.body().get("provider_options"),
+        Some(&opaque_options)
+    );
 }
 
 #[test]
@@ -245,19 +235,17 @@ fn encoder_should_project_lite_and_memgen_options_to_transport_state_only() {
         ]),
     )
     .expect("OpenAI payload");
-    let mut providers = ProviderOptions::new();
-    providers
-        .insert(
-            "openai",
-            Map::from_iter([
-                ("schema_version".to_owned(), json!(1)),
-                ("responses_lite".to_owned(), json!("true")),
-                ("memgen_request".to_owned(), json!("true")),
-            ]),
-        )
-        .expect("provider options");
-    let request = GenerateRequest::from_protocol_payload(Vec::new(), payload)
-        .with_provider_options(providers);
+    let payload = payload.with_context(Map::from_iter([
+        (
+            "responses_lite".to_owned(),
+            Value::String("true".to_owned()),
+        ),
+        (
+            "memgen_request".to_owned(),
+            Value::String("true".to_owned()),
+        ),
+    ]));
+    let request = GenerateRequest::from_protocol_payload(Vec::new(), payload);
 
     let encoded = encode_generate_request(&request, "gpt-test").expect("encode");
 
@@ -269,27 +257,19 @@ fn encoder_should_project_lite_and_memgen_options_to_transport_state_only() {
 
 #[test]
 fn observability_semantics_should_reuse_codex_turn_metadata() {
-    let message = Message::new(
-        MessageRole::User,
-        vec![ContentPart::Text("prompt".to_owned())],
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        Map::from_iter([
+            ("model".to_owned(), json!("client-model")),
+            ("input".to_owned(), json!("prompt")),
+        ]),
     )
-    .expect("message");
-    let mut providers = ProviderOptions::new();
-    providers
-        .insert(
-            "openai",
-            Map::from_iter([
-                ("schema_version".to_owned(), json!(1)),
-                (
-                    "turn_metadata".to_owned(),
-                    json!(r#"{"request_kind":"compaction","subagent_kind":"review"}"#),
-                ),
-            ]),
-        )
-        .expect("provider options");
-    let request = GenerateRequest::new(vec![message])
-        .expect("generate")
-        .with_provider_options(providers);
+    .expect("OpenAI payload")
+    .with_context(Map::from_iter([(
+        "turn_metadata".to_owned(),
+        Value::String(r#"{"request_kind":"compaction","subagent_kind":"review"}"#.to_owned()),
+    )]));
+    let request = GenerateRequest::from_protocol_payload(Vec::new(), payload);
 
     let semantics = encode_generate_request(&request, "observability")
         .expect("observability request should encode")

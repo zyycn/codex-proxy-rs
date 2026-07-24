@@ -54,12 +54,6 @@ pub enum OperationError {
         /// 字段名。
         field: &'static str,
     },
-    /// Provider 专属参数重复。
-    #[error("provider options for `{provider}` already exist")]
-    DuplicateProviderOptions {
-        /// Provider 名称。
-        provider: String,
-    },
 }
 
 /// 路由快照或 Route Plan 不满足不变量。
@@ -211,6 +205,65 @@ impl fmt::Debug for SafeUpstreamValue {
     }
 }
 
+/// 已由 Provider 从结构化上游错误中提取、仅供原客户端协议展示的错误详情。
+///
+/// 它不是诊断日志或持久化错误信息：[`Debug`] 会隐藏全部值，调用方应只在
+/// 原请求的协议响应中使用它。
+#[derive(Clone, PartialEq, Eq)]
+pub struct ClientVisibleUpstreamError {
+    message: String,
+    code: Option<SafeUpstreamValue>,
+    error_type: Option<SafeUpstreamValue>,
+}
+
+impl ClientVisibleUpstreamError {
+    const MAX_MESSAGE_BYTES: usize = 8_192;
+
+    /// 从结构化上游 `message`、`code` 和 `type` 创建客户端可见错误。
+    ///
+    /// # Errors
+    ///
+    /// message 为空、过长或含控制字符时返回错误；可选 code/type 不满足安全
+    /// 约束时会被省略，不会把整段上游 body 重新暴露。
+    pub fn new(
+        message: impl Into<String>,
+        code: Option<String>,
+        error_type: Option<String>,
+    ) -> Result<Self, IdentifierError> {
+        let message = message.into();
+        validate_text(&message, Self::MAX_MESSAGE_BYTES, false, None)?;
+        Ok(Self {
+            message,
+            code: code.and_then(|value| SafeUpstreamValue::new(value).ok()),
+            error_type: error_type.and_then(|value| SafeUpstreamValue::new(value).ok()),
+        })
+    }
+
+    /// 返回原上游的结构化 message。
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// 返回原上游的结构化 code。
+    #[must_use]
+    pub fn code(&self) -> Option<&str> {
+        self.code.as_ref().map(SafeUpstreamValue::as_str)
+    }
+
+    /// 返回原上游的结构化 type。
+    #[must_use]
+    pub fn error_type(&self) -> Option<&str> {
+        self.error_type.as_ref().map(SafeUpstreamValue::as_str)
+    }
+}
+
+impl fmt::Debug for ClientVisibleUpstreamError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ClientVisibleUpstreamError(<redacted-from-Debug>)")
+    }
+}
+
 /// 单次 Provider 调用的稳定错误。
 ///
 /// 该类型不接收原始响应正文，也不会在 `Debug` 或 `Display` 中打印上游
@@ -230,6 +283,7 @@ pub struct ProviderError {
     credential_recovery_required: bool,
     retry_same_account: bool,
     sensitive_context_redacted: bool,
+    client_visible_upstream_error: Option<Box<ClientVisibleUpstreamError>>,
 }
 
 impl ProviderError {
@@ -249,6 +303,7 @@ impl ProviderError {
             credential_recovery_required: false,
             retry_same_account: false,
             sensitive_context_redacted: false,
+            client_visible_upstream_error: None,
         }
     }
 
@@ -314,6 +369,13 @@ impl ProviderError {
     #[must_use]
     pub const fn with_credential_recovery(mut self) -> Self {
         self.credential_recovery_required = true;
+        self
+    }
+
+    /// 附加只用于原客户端协议响应的结构化上游错误。
+    #[must_use]
+    pub fn with_client_visible_upstream_error(mut self, error: ClientVisibleUpstreamError) -> Self {
+        self.client_visible_upstream_error = Some(Box::new(error));
         self
     }
 
@@ -394,6 +456,12 @@ impl ProviderError {
     pub const fn sensitive_context_was_redacted(&self) -> bool {
         self.sensitive_context_redacted
     }
+
+    /// 返回仅供原客户端协议展示的结构化上游错误。
+    #[must_use]
+    pub fn client_visible_upstream_error(&self) -> Option<&ClientVisibleUpstreamError> {
+        self.client_visible_upstream_error.as_deref()
+    }
 }
 
 impl fmt::Debug for ProviderError {
@@ -432,6 +500,13 @@ impl fmt::Debug for ProviderError {
             .field(
                 "sensitive_context",
                 &self.sensitive_context_redacted.then_some("<redacted>"),
+            )
+            .field(
+                "client_visible_upstream_error",
+                &self
+                    .client_visible_upstream_error
+                    .as_ref()
+                    .map(|_| "<present>"),
             )
             .finish()
     }
@@ -494,24 +569,29 @@ impl GatewayErrorKind {
 }
 
 /// 协议无关、可安全暴露的网关错误。
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Clone, PartialEq, Eq, Error)]
 #[error("{message}")]
 pub struct GatewayError {
     kind: GatewayErrorKind,
     message: &'static str,
+    client_visible_upstream_error: Option<ClientVisibleUpstreamError>,
 }
 
 impl GatewayError {
     /// 使用静态安全消息创建错误。
     #[must_use]
     pub const fn new(kind: GatewayErrorKind, message: &'static str) -> Self {
-        Self { kind, message }
+        Self {
+            kind,
+            message,
+            client_visible_upstream_error: None,
+        }
     }
 
     /// 将 Provider 错误归一为客户端无关错误。
     #[must_use]
     pub fn from_provider(error: &ProviderError) -> Self {
-        match error.kind() {
+        let gateway = match error.kind() {
             ProviderErrorKind::InvalidRequest => {
                 Self::new(GatewayErrorKind::InvalidRequest, "invalid upstream request")
             }
@@ -544,7 +624,18 @@ impl GatewayError {
                 GatewayErrorKind::UpstreamUnavailable,
                 "upstream service is unavailable",
             ),
+        };
+        match error.client_visible_upstream_error() {
+            Some(upstream) => gateway.with_client_visible_upstream_error(upstream.clone()),
+            None => gateway,
         }
+    }
+
+    /// 附加只供请求方协议展示的结构化上游错误。
+    #[must_use]
+    pub fn with_client_visible_upstream_error(mut self, error: ClientVisibleUpstreamError) -> Self {
+        self.client_visible_upstream_error = Some(error);
+        self
     }
 
     /// 返回稳定错误分类。
@@ -557,6 +648,48 @@ impl GatewayError {
     #[must_use]
     pub const fn safe_message(&self) -> &'static str {
         self.message
+    }
+
+    /// 返回优先用于原客户端协议响应的 message；持久化和日志必须继续使用
+    /// [`Self::safe_message`]。
+    #[must_use]
+    pub fn client_message(&self) -> &str {
+        self.client_visible_upstream_error
+            .as_ref()
+            .map_or(self.message, ClientVisibleUpstreamError::message)
+    }
+
+    /// 返回原上游结构化 error type；没有时调用方应回退稳定网关 type。
+    #[must_use]
+    pub fn client_error_type(&self) -> Option<&str> {
+        self.client_visible_upstream_error
+            .as_ref()
+            .and_then(ClientVisibleUpstreamError::error_type)
+    }
+
+    /// 返回原上游结构化 error code；没有时调用方应回退稳定网关 code。
+    #[must_use]
+    pub fn client_error_code(&self) -> Option<&str> {
+        self.client_visible_upstream_error
+            .as_ref()
+            .and_then(ClientVisibleUpstreamError::code)
+    }
+}
+
+impl fmt::Debug for GatewayError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GatewayError")
+            .field("kind", &self.kind)
+            .field("message", &self.message)
+            .field(
+                "client_visible_upstream_error",
+                &self
+                    .client_visible_upstream_error
+                    .as_ref()
+                    .map(|_| "<present>"),
+            )
+            .finish()
     }
 }
 

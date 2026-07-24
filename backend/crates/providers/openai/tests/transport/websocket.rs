@@ -795,7 +795,7 @@ async fn websocket_execute_response_create_request_should_forward_incomplete_res
 }
 
 #[tokio::test]
-async fn websocket_execute_response_create_request_should_reject_invalid_completed_response() {
+async fn websocket_execute_response_create_request_should_forward_invalid_completed_response() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -835,22 +835,18 @@ async fn websocket_execute_response_create_request_should_reject_invalid_complet
     )
     .expect("payload should serialize");
 
-    let error = execute_response_create_request(&prepared)
+    let exchange = execute_response_create_request(&prepared)
         .await
-        .expect_err("invalid response.completed should be rejected");
+        .expect("invalid response.completed must remain forwardable");
     server.await.unwrap();
 
-    let CodexClientError::WebSocket(CodexWebSocketExchangeError::PostSendAmbiguous {
-        message, ..
-    }) = error
-    else {
-        panic!("expected post-send ambiguous websocket response");
-    };
-    assert!(message.contains("failed to parse ResponseCompleted"));
+    assert!(exchange.body.contains("event: response.completed"));
+    assert!(exchange.body.contains("\"input_tokens\":\"bad\""));
+    assert!(!exchange.body.contains("response.failed"));
 }
 
 #[tokio::test]
-async fn websocket_execute_response_create_request_should_reject_completed_without_response() {
+async fn websocket_execute_response_create_request_should_forward_completed_without_response() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -881,19 +877,14 @@ async fn websocket_execute_response_create_request_should_reject_completed_witho
     )
     .expect("payload should serialize");
 
-    let error = execute_response_create_request(&prepared)
+    let exchange = execute_response_create_request(&prepared)
         .await
-        .expect_err("completed frame without response must be rejected");
+        .expect("completion without response must remain forwardable");
     server.await.unwrap();
 
-    std::assert_matches!(
-        error,
-        CodexClientError::WebSocket(CodexWebSocketExchangeError::PostSendAmbiguous {
-            message,
-            ..
-        })
-            if message.contains("response.completed is missing response")
-    );
+    assert!(exchange.body.contains("event: response.completed"));
+    assert!(exchange.usage.is_none());
+    assert!(!exchange.body.contains("response.failed"));
 }
 
 #[tokio::test]

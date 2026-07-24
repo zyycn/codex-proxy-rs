@@ -507,17 +507,30 @@ fn decoder_should_preserve_image_and_hosted_tool_items_without_inventing_facts()
 }
 
 #[test]
-fn decoder_should_reject_mismatched_event_identity_without_retaining_body() {
+fn decoder_should_tolerate_mismatched_event_identity_and_preserve_the_wire_event() {
     let body = concat!(
         "event: response.created\n",
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"},\"secret\":\"must-not-leak\"}\n\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n",
+        "event: response.output_text.delta\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\"},\"future_field\":true}\n\n",
     );
-    let error = GrokCanonicalDecoder::new("fallback")
+    let events = GrokCanonicalDecoder::new("fallback")
         .push(body.as_bytes())
-        .expect_err("mismatched event must fail");
+        .expect("event and body type disagreement must not terminate the stream");
+    let wire = wire_events(&events);
 
-    assert!(!format!("{error:?}").contains("must-not-leak"));
-    assert!(error.sensitive_context_was_redacted());
+    assert_eq!(wire.len(), 2);
+    assert_eq!(wire[1].event_type(), Some("response.output_text.delta"));
+    assert_eq!(
+        wire[1].data().pointer("/future_field"),
+        Some(&Value::Bool(true))
+    );
+    assert!(
+        events[1]
+            .canonical_facts()
+            .iter()
+            .any(|event| matches!(event, GatewayEvent::Completed(_)))
+    );
 }
 
 #[test]

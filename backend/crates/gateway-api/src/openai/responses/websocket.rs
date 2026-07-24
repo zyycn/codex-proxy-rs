@@ -552,20 +552,8 @@ fn decode_response_create_inner(
         Some(Value::String(message_type)) if message_type == "response.create" => {}
         _ => return Err(ResponseCreateFrameError::UnsupportedType),
     }
-    match body.get("stream") {
-        Some(Value::Bool(true)) => {}
-        Some(Value::Bool(false)) => return Err(ResponseCreateFrameError::StreamingRequired),
-        Some(_) => {
-            return Err(ResponseCreateFrameError::Request(
-                RequestDecodeError::InvalidType {
-                    field: "stream".to_owned(),
-                    expected: "a boolean",
-                },
-            ));
-        }
-        None => {
-            body.insert("stream".to_owned(), Value::Bool(true));
-        }
+    if matches!(body.get("stream"), Some(value) if value.as_bool() != Some(true)) {
+        return Err(ResponseCreateFrameError::StreamingRequired);
     }
     let encoded = serde_json::to_vec(&Value::Object(body))
         .map_err(|_| ResponseCreateFrameError::InvalidJson)?;
@@ -642,13 +630,13 @@ async fn send_gateway_error(
     error: &GatewayError,
     request_id: &str,
 ) -> ForwardOutcome {
-    let (status, error_type, code) = gateway_error_contract(error.kind());
+    let (status, default_type, default_code) = gateway_error_contract(error.kind());
     if send_error_event(
         socket,
         status,
-        error_type,
-        code,
-        error.safe_message(),
+        error.client_error_type().unwrap_or(default_type),
+        error.client_error_code().unwrap_or(default_code),
+        error.client_message(),
         None,
         request_id,
     )

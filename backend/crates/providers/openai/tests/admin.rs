@@ -30,10 +30,7 @@ use gateway_core::engine::{
 };
 use gateway_core::event::GatewayEvent;
 use gateway_core::operation::OperationKind;
-use gateway_core::operation::{
-    ContentPart, GenerateRequest, Message, MessageRole, Operation, ProviderOptions,
-    ReasoningEffort, ReasoningRequirement,
-};
+use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
     NewOAuthPendingFlow, OAuthPendingFlowPort, OAuthPendingPutOutcome, OAuthPendingTakeOutcome,
@@ -280,33 +277,21 @@ async fn openai_core_provider_projects_codex_request_observation_without_routing
     let bundle = provider_openai::initialize(valid_config(), provider_ports())
         .await
         .expect("OpenAI bundle");
-    let message = Message::new(
-        MessageRole::User,
-        vec![ContentPart::Text("summarize".to_owned())],
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        Map::from_iter([
+            ("model".to_owned(), json!("gpt-5.4")),
+            ("input".to_owned(), json!("summarize")),
+            ("reasoning".to_owned(), json!({"effort": "high"})),
+        ]),
     )
-    .expect("message");
-    let mut options = ProviderOptions::new();
-    options
-        .insert(
-            "openai",
-            Map::from_iter([
-                ("schema_version".to_owned(), json!(1)),
-                (
-                    "turn_metadata".to_owned(),
-                    json!(r#"{"request_kind":"compaction","subagent_kind":"review"}"#),
-                ),
-            ]),
-        )
-        .expect("provider options");
-    let operation = Operation::Generate(
-        GenerateRequest::new(vec![message])
-            .expect("generate")
-            .with_reasoning(ReasoningRequirement {
-                effort: Some(ReasoningEffort::High),
-                summary: None,
-            })
-            .with_provider_options(options),
-    );
+    .expect("OpenAI payload")
+    .with_context(Map::from_iter([(
+        "turn_metadata".to_owned(),
+        Value::String(r#"{"request_kind":"compaction","subagent_kind":"review"}"#.to_owned()),
+    )]));
+    let operation =
+        Operation::Generate(GenerateRequest::from_protocol_payload(Vec::new(), payload));
 
     let observation = bundle.core_provider().request_observation(&operation);
 

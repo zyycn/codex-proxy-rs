@@ -16,9 +16,13 @@ use gateway_core::engine::provider::{
 };
 use gateway_core::engine::{AttemptContext, UpstreamSendState};
 use gateway_core::error::{IdentifierError, ProviderError, ProviderErrorKind};
-use gateway_core::event::{ContentItem, ContentKind, GatewayEvent, ResponseMeta, TextDelta};
+use gateway_core::event::{
+    ContentItem, ContentKind, GatewayEvent, ProtocolWireEvent, ProviderEvent, ResponseMeta,
+    TextDelta,
+};
 use gateway_core::operation::OperationKind;
 use gateway_core::routing::{ModelCapabilities, ProviderKind, UpstreamModelId};
+use serde_json::json;
 
 struct NamedProvider(&'static str);
 
@@ -162,6 +166,40 @@ fn provider_stream_should_report_common_account_success_and_first_output() {
     let (failure_rate, first_output_ms) = feedback.scheduling_signals(&provider, &account);
     assert_eq!(failure_rate, Some(0));
     assert!(first_output_ms.is_some_and(|value| value >= 2));
+}
+
+#[test]
+fn provider_stream_should_not_sequence_gate_canonical_observation_attached_to_wire() {
+    let metadata = ProviderCallMetadata::new(
+        ProviderKind::new("openai").expect("valid provider"),
+        UpstreamModelId::new("gpt-5").expect("valid model"),
+        ProviderResource::Anonymous(ResourceId::none()),
+        UpstreamTransport::new("http_sse").expect("valid transport"),
+    );
+    let wire = ProtocolWireEvent::json(
+        "openai",
+        Some("response.output_text.delta".to_owned()),
+        json!({"type":"response.output_text.delta","delta":"hello"}),
+    )
+    .expect("wire event");
+    let events: EventStream = Box::pin(stream::iter([Ok(ProviderEvent::canonical_with_wire(
+        vec![GatewayEvent::TextDelta(TextDelta {
+            content_index: 0,
+            text: "hello".to_owned(),
+        })],
+        wire,
+    ))]));
+    let mut provider_stream = ProviderStream::new(metadata, events, ());
+
+    let delivered = futures::executor::block_on(provider_stream.next())
+        .expect("wire-backed event")
+        .expect("wire-backed observation must be deliverable");
+
+    assert!(matches!(
+        delivered.canonical_facts(),
+        [GatewayEvent::TextDelta(delta)] if delta.text == "hello"
+    ));
+    assert!(futures::executor::block_on(provider_stream.next()).is_none());
 }
 
 #[test]

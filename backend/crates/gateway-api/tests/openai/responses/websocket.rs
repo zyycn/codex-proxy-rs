@@ -19,11 +19,19 @@ fn response_create_should_default_to_the_websocket_streaming_contract() {
 
     assert!(decoded.metadata().stream());
     assert!(!decoded.metadata().store());
-    assert!(matches!(decoded.operation(), Operation::Generate(_)));
+    let Operation::Generate(request) = decoded.operation() else {
+        panic!("Responses must map to Generate");
+    };
+    assert!(
+        request
+            .protocol_payload()
+            .and_then(|payload| payload.body().get("stream"))
+            .is_none()
+    );
 }
 
 #[test]
-fn response_create_should_preserve_current_provider_options() {
+fn response_create_should_preserve_provider_options_as_opaque_wire_body() {
     let decoded = decode_response_create(
         &json!({
             "type": "response.create",
@@ -39,18 +47,22 @@ fn response_create_should_preserve_current_provider_options() {
         })
         .to_string(),
     )
-    .expect("decode provider options");
+    .expect("decode opaque provider options");
     let Operation::Generate(request) = decoded.operation() else {
         panic!("Responses must map to Generate");
     };
+    let payload = request.protocol_payload().expect("OpenAI wire payload");
 
     assert_eq!(
-        request
-            .provider_options()
-            .get("openai")
-            .and_then(|options| options.get("transport")),
-        Some(&json!("websocket"))
+        payload.body().get("provider_options"),
+        Some(&json!({
+            "version": "v1",
+            "providers": {
+                "openai": {"schema_version": 1, "transport": "websocket"}
+            }
+        }))
     );
+    assert!(payload.context().get("provider_options").is_none());
 }
 
 #[test]
@@ -114,22 +126,22 @@ fn response_create_should_reject_invalid_frame_shapes() {
 }
 
 #[test]
-fn response_create_errors_should_not_retain_prompt_or_unknown_field_values() {
+fn response_create_should_reject_non_boolean_stream_without_disclosing_body_values() {
     let prompt = "private-websocket-prompt-marker";
-    let secret = "private-websocket-option-marker";
+    let opaque_stream_value = "private-websocket-option-marker";
     let error = decode_response_create(
         &json!({
             "type": "response.create",
             "model": "smart-code",
             "input": prompt,
-            "metadata": {"secret": secret},
-            "stream": secret
+            "stream": opaque_stream_value
         })
         .to_string(),
     )
-    .expect_err("invalid stream field");
+    .expect_err("WebSocket response.create must explicitly enable streaming");
     let rendered = format!("{error:?}\n{error}");
 
+    assert_eq!(error, ResponseCreateFrameError::StreamingRequired);
     assert!(!rendered.contains(prompt));
-    assert!(!rendered.contains(secret));
+    assert!(!rendered.contains(opaque_stream_value));
 }

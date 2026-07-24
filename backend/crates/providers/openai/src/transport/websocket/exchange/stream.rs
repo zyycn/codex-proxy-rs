@@ -33,7 +33,6 @@ enum StreamWebSocketDiscardReason {
     DownstreamSendFailed,
     IncompleteResponse,
     FailedResponse,
-    InvalidCompletedResponse,
     UnexpectedBinaryEvent,
     PoolShutdown,
     UpstreamClosed,
@@ -47,7 +46,6 @@ impl StreamWebSocketDiscardReason {
             Self::DownstreamSendFailed => "downstream_send_failed",
             Self::IncompleteResponse => "incomplete_response",
             Self::FailedResponse => "failed_response",
-            Self::InvalidCompletedResponse => "invalid_completed_response",
             Self::UnexpectedBinaryEvent => "unexpected_binary_event",
             Self::PoolShutdown => "pool_shutdown",
             Self::UpstreamClosed => "upstream_closed",
@@ -240,16 +238,6 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
             }
             Ok(ExchangeAction::Forward { frame, terminal }) => (frame, terminal),
             Ok(ExchangeAction::Ignore) => continue,
-            Err(error @ CodexWebSocketExchangeError::InvalidCompletedResponse { .. }) => {
-                discard_stream_websocket(
-                    websocket,
-                    pool_return,
-                    StreamWebSocketDiscardReason::InvalidCompletedResponse,
-                )
-                .await;
-                let _ = tx.send(Err(error)).await;
-                return;
-            }
             Err(error) => {
                 discard_stream_websocket(
                     websocket,

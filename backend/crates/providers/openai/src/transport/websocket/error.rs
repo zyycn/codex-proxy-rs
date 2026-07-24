@@ -69,12 +69,6 @@ pub enum CodexWebSocketExchangeError {
     ContinuationUnavailable {
         reason: PreviousResponseUnavailableReason,
     },
-    /// 上游返回无法按官方形状解析的 `response.completed`。
-    #[error("{message}")]
-    InvalidCompletedResponse {
-        /// 解析失败说明。
-        message: String,
-    },
     /// 上游在 terminal 事件前关闭。
     #[error("websocket closed before terminal event")]
     ClosedBeforeTerminal,

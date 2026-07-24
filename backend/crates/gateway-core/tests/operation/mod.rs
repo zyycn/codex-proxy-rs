@@ -4,7 +4,7 @@ use gateway_core::error::OperationError;
 use gateway_core::operation::{
     CompactConversationRequest, ContentPart, ContinuationMode, EmbedRequest, Feature,
     GenerateRequest, ImageRequest, ImageSource, JsonSchemaFormat, Message, MessageRole, Operation,
-    OperationKind, OutputFormat, ProviderOptions, ReasoningEffort, ReasoningRequirement,
+    OperationKind, OutputFormat, ProtocolPayload, ReasoningEffort, ReasoningRequirement,
     ReasoningSummary, RerankRequest, ResponsePersistence, RetrySafety, SpeechRequest,
     ToolDefinition,
 };
@@ -189,70 +189,21 @@ fn json_schema_format_should_reject_empty_name() {
 }
 
 #[test]
-fn provider_options_should_reject_duplicate_provider() {
-    let mut options = ProviderOptions::new();
-    options
-        .insert("openai", Map::new())
-        .expect("first provider options are valid");
-
-    let error = options
-        .insert("openai", Map::new())
-        .expect_err("provider options must be unique");
-
-    assert_eq!(
-        error,
-        OperationError::DuplicateProviderOptions {
-            provider: "openai".to_owned()
-        }
-    );
-}
-
-#[test]
-fn provider_options_should_reject_invalid_provider_name() {
-    let mut options = ProviderOptions::new();
-
-    let error = options
-        .insert("bad\nprovider", Map::new())
-        .expect_err("control characters are invalid");
+fn protocol_payload_context_should_be_opaque_and_separate_from_wire_body() {
+    let secret = "connection-only-value";
+    let mut body = Map::new();
+    body.insert("model".to_owned(), Value::from("gpt-test"));
+    let mut context = Map::new();
+    context.insert("turn_state".to_owned(), Value::from(secret));
+    let payload = ProtocolPayload::json_object("openai", body)
+        .expect("protocol payload is valid")
+        .with_context(context);
 
     assert_eq!(
-        error,
-        OperationError::EmptyField {
-            field: "provider_options provider"
-        }
+        payload.context().get("turn_state"),
+        Some(&Value::from(secret))
     );
-}
-
-#[test]
-fn provider_options_debug_should_redact_values() {
-    let secret = "provider-private-value";
-    let mut codex = Map::new();
-    codex.insert("opaque".to_owned(), Value::from(secret));
-    let mut options = ProviderOptions::new();
-    options
-        .insert("openai", codex)
-        .expect("provider options are valid");
-
-    let debug = format!("{options:?}");
-
-    assert!(debug.contains("openai"));
-    assert!(!debug.contains(secret));
-}
-
-#[test]
-fn provider_options_should_iterate_in_stable_provider_order() {
-    let mut options = ProviderOptions::new();
-    options
-        .insert("xai", Map::new())
-        .expect("xAI options are valid");
-    options
-        .insert("openai", Map::new())
-        .expect("Codex options are valid");
-
-    assert_eq!(
-        options.providers().collect::<Vec<_>>(),
-        vec!["openai", "xai"]
-    );
+    assert!(!format!("{payload:?}").contains(secret));
 }
 
 #[test]

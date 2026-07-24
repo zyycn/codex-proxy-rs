@@ -68,8 +68,8 @@ impl OpenAiService {
         endpoint: &'static str,
     ) -> Result<StartedExecution, GatewayError> {
         let (operation, metadata) = request.into_parts();
-        let public_model =
-            PublicModelId::new(metadata.public_model().to_owned()).map_err(|_| {
+        let public_model = PublicModelId::from_client_wire(metadata.public_model().to_owned())
+            .map_err(|_| {
                 GatewayError::new(
                     GatewayErrorKind::ModelNotFound,
                     "requested model was not found",
@@ -78,12 +78,7 @@ impl OpenAiService {
         let previous_response_id = match metadata.continuation() {
             ContinuationIntent::None => None,
             ContinuationIntent::PreviousResponseId(value) => {
-                Some(PreviousResponseId::new(value.clone()).map_err(|_| {
-                    GatewayError::new(
-                        GatewayErrorKind::InvalidRequest,
-                        "previous_response_id is invalid",
-                    )
-                })?)
+                PreviousResponseId::new(value.clone()).ok()
             }
         };
         self.execution

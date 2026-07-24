@@ -7,8 +7,6 @@ use serde_json::{Map, Value};
 use sha2::{Digest as _, Sha256};
 
 use super::{GrokSessionAffinityKey, XAI_PROVIDER_NAME};
-
-const GROK_OPTION_FIELDS: &[&str] = &["schema_version", "transport", "turn_index"];
 const IDENTITY_FIELDS: &[&str] = &[
     "Authorization",
     "authorization",
@@ -67,7 +65,6 @@ pub struct GrokResponsesRequest {
     body: Map<String, Value>,
     session_id: Option<String>,
     affinity: Option<GrokSessionAffinityKey>,
-    turn_index: Option<String>,
     response_transform: GrokResponseTransform,
 }
 
@@ -88,12 +85,6 @@ impl GrokResponsesRequest {
     #[must_use]
     pub const fn affinity(&self) -> Option<&GrokSessionAffinityKey> {
         self.affinity.as_ref()
-    }
-
-    /// 返回客户端真实提供且仅在稳定会话内有效的非负轮次。
-    #[must_use]
-    pub fn turn_index(&self) -> Option<&str> {
-        self.turn_index.as_deref()
     }
 
     pub(crate) fn response_transform(&self) -> GrokResponseTransform {
@@ -165,7 +156,6 @@ impl GrokResponsesRequest {
         self.body.remove("prompt_cache_key");
         self.session_id = None;
         self.affinity = None;
-        self.turn_index = None;
     }
 
     pub fn encode(
@@ -195,6 +185,9 @@ impl GrokResponsesRequest {
             .filter(|payload| payload.protocol() == "openai")
             .ok_or(GrokRequestEncodeError::InvalidProtocolPayload)?;
         let mut body = payload.body().clone();
+        // `provider_options` 是已废弃的网关私有 envelope，不是 xAI 上游协议字段。
+        // OpenAI 透明路径会保留未知字段；这里只在 xAI adapter 内做最小剥离。
+        body.remove("provider_options");
         let session_seed = explicit_session_seed(request, &body);
         let enable_cache_route = allow_cache_route && session_seed.is_some();
         let identity = resolve_session_identity(
@@ -225,18 +218,10 @@ impl GrokResponsesRequest {
         }
         body.insert("model".to_owned(), Value::String(upstream_model.to_owned()));
         body.insert("stream".to_owned(), Value::Bool(true));
-        let turn_index = request
-            .provider_options()
-            .get(XAI_PROVIDER_NAME)
-            .map(validate_provider_options)
-            .transpose()?
-            .flatten()
-            .filter(|_| session_id.is_some());
         Ok(Self {
             body,
             session_id,
             affinity,
-            turn_index,
             response_transform,
         })
     }
@@ -252,7 +237,6 @@ impl fmt::Debug for GrokResponsesRequest {
             .debug_struct("GrokResponsesRequest")
             .field("body_keys", &self.body.keys().collect::<Vec<_>>())
             .field("has_session", &self.session_id.is_some())
-            .field("has_turn_index", &self.turn_index.is_some())
             .field(
                 "has_response_transform",
                 &!self.response_transform.is_empty(),
@@ -269,57 +253,12 @@ pub enum GrokRequestEncodeError {
     /// 数据面只接受 OpenAI adapter 保留的原始 Responses object。
     #[error("Grok Build request is missing its OpenAI protocol payload")]
     InvalidProtocolPayload,
-    /// Grok provider option schema or value is malformed.
-    #[error("Grok Build provider option schema is invalid")]
-    InvalidProviderOptions,
-    /// A Grok-specific option is unknown or unsupported.
-    #[error("Grok Build provider option is unsupported")]
-    UnsupportedProviderOption,
     /// JSON serialization unexpectedly failed.
     #[error("Grok Build request serialization failed")]
     Serialization,
     /// Responses compatibility fields could not be normalized safely.
     #[error("Grok Build request normalization failed")]
     InvalidRequestNormalization,
-}
-
-fn validate_provider_options(
-    options: &Map<String, Value>,
-) -> Result<Option<String>, GrokRequestEncodeError> {
-    if options
-        .keys()
-        .any(|field| !GROK_OPTION_FIELDS.contains(&field.as_str()))
-    {
-        return Err(GrokRequestEncodeError::UnsupportedProviderOption);
-    }
-    if options.get("schema_version").and_then(Value::as_u64) != Some(1) {
-        return Err(GrokRequestEncodeError::InvalidProviderOptions);
-    }
-    if let Some(transport) = options.get("transport")
-        && transport.as_str() != Some("http_sse")
-    {
-        return Err(GrokRequestEncodeError::InvalidProviderOptions);
-    }
-    let turn_index = options
-        .get("turn_index")
-        .map(|value| {
-            value
-                .as_str()
-                .and_then(normalize_turn_index)
-                .map(ToOwned::to_owned)
-                .ok_or(GrokRequestEncodeError::InvalidProviderOptions)
-        })
-        .transpose()?;
-    Ok(turn_index)
-}
-
-fn normalize_turn_index(value: &str) -> Option<&str> {
-    let value = value.trim();
-    (!value.is_empty()
-        && value.len() <= 20
-        && value.bytes().all(|byte| byte.is_ascii_digit())
-        && value.parse::<u64>().is_ok())
-    .then_some(value)
 }
 
 fn sanitize_account_identity(body: &mut Map<String, Value>) {

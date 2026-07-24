@@ -106,8 +106,14 @@ pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {
 
 /// Gateway 错误的 OpenAI HTTP 表达。
 pub fn gateway_error_response(error: &GatewayError) -> Response {
-    let (status, error_type, code) = gateway_error_contract(error.kind());
-    openai_error_response(status, error.safe_message(), error_type, code).into_response()
+    let (status, default_type, default_code) = gateway_error_contract(error.kind());
+    openai_error_response(
+        status,
+        error.client_message(),
+        error.client_error_type().unwrap_or(default_type),
+        error.client_error_code().unwrap_or(default_code),
+    )
+    .into_response()
 }
 
 /// Gateway 错误稳定映射，供 HTTP、SSE 和 WebSocket 共用。

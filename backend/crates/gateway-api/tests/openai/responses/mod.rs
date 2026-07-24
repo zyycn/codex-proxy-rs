@@ -61,6 +61,15 @@ fn openai_wire_body(
         .body()
 }
 
+fn openai_protocol_context(
+    decoded: &gateway_api::openai::responses::DecodedResponsesRequest,
+) -> &serde_json::Map<String, Value> {
+    generate_operation(decoded)
+        .protocol_payload()
+        .expect("OpenAI request should retain protocol context")
+        .context()
+}
+
 fn response_meta() -> ResponseMeta {
     ResponseMeta::new("resp_gateway_contract", "smart-code")
 }
@@ -123,7 +132,7 @@ fn text_events() -> Vec<GatewayEvent> {
 }
 
 #[test]
-fn decoder_should_preserve_roles_tools_reasoning_schema_and_provider_options() {
+fn decoder_should_preserve_roles_tools_reasoning_schema_and_unknown_provider_options() {
     let decoded = generate_request(json!({
         "model": "smart-code",
         "input": [
@@ -180,7 +189,9 @@ fn decoder_should_preserve_roles_tools_reasoning_schema_and_provider_options() {
             request.response_persistence(),
             decoded.metadata().stream(),
             decoded.metadata().store(),
-            request.provider_options().get("xai"),
+            request
+                .protocol_payload()
+                .and_then(|payload| payload.body().get("provider_options")),
         ),
         (
             vec![
@@ -199,11 +210,10 @@ fn decoder_should_preserve_roles_tools_reasoning_schema_and_provider_options() {
             ResponsePersistence::DoNotStore,
             true,
             false,
-            Some(
-                json!({"search_mode": "off"})
-                    .as_object()
-                    .expect("fixture is an object")
-            ),
+            Some(&json!({
+                "version": "v1",
+                "providers": {"xai": {"search_mode": "off"}}
+            })),
         )
     );
 }
@@ -220,7 +230,7 @@ fn decoder_should_mark_image_generation_tool_intent() {
 }
 
 #[test]
-fn decoder_should_preserve_only_explicit_xai_provider_options() {
+fn decoder_should_preserve_provider_options_as_an_unknown_wire_field() {
     let decoded = generate_request(json!({
         "model": "smart-code",
         "input": "hello",
@@ -231,11 +241,12 @@ fn decoder_should_preserve_only_explicit_xai_provider_options() {
             }
         }
     }));
-    let request = generate_operation(&decoded);
-
     assert_eq!(
-        request.provider_options().get("xai"),
-        json!({"schema_version": 1, "turn_index": "7"}).as_object()
+        openai_wire_body(&decoded).get("provider_options"),
+        Some(&json!({
+            "version": "v1",
+            "providers": {"xai": {"schema_version": 1, "turn_index": "7"}}
+        }))
     );
 }
 
@@ -305,47 +316,42 @@ fn decoder_should_default_to_streaming_non_stored_response() {
 
 #[test]
 fn decoder_should_project_boolean_transport_override_without_wire_leak() {
-    for (use_websocket, expected) in [(true, "websocket"), (false, "http_sse")] {
+    for use_websocket in [true, false] {
         let decoded = generate_request(json!({
             "model": "smart-code",
             "input": "hello",
             "use_websocket": use_websocket
         }));
-        let request = generate_operation(&decoded);
 
         assert!(openai_wire_body(&decoded).get("use_websocket").is_none());
         assert_eq!(
-            request
-                .provider_options()
-                .get("openai")
-                .and_then(|options| options.get("transport")),
-            Some(&json!(expected))
+            openai_protocol_context(&decoded).get("use_websocket"),
+            Some(&json!(use_websocket))
         );
     }
 }
 
 #[test]
-fn decoder_should_reject_non_boolean_transport_override_without_disclosure() {
+fn decoder_should_ignore_non_boolean_transport_override_without_disclosure() {
     let secret = "private-transport-marker";
-    let error = decode_request(
+    let decoded = decode_request(
         json!({"model": "smart-code", "input": "hello", "use_websocket": secret})
             .to_string()
             .as_bytes(),
     )
-    .expect_err("transport override must be a boolean");
+    .expect("transport-only value should not become a request schema gate");
 
-    assert_eq!(
-        error,
-        RequestDecodeError::InvalidType {
-            field: "use_websocket".to_owned(),
-            expected: "a boolean"
-        }
+    assert!(openai_wire_body(&decoded).get("use_websocket").is_none());
+    assert!(
+        openai_protocol_context(&decoded)
+            .get("use_websocket")
+            .is_none()
     );
-    assert!(!format!("{error:?}\n{error}").contains(secret));
+    assert!(!format!("{decoded:?}").contains(secret));
 }
 
 #[test]
-fn decoder_should_prefer_explicit_provider_transport_over_body_override() {
+fn decoder_should_not_interpret_provider_options_as_a_transport_override() {
     let decoded = generate_request(json!({
         "model": "smart-code",
         "input": "hello",
@@ -359,12 +365,10 @@ fn decoder_should_prefer_explicit_provider_transport_over_body_override() {
     }));
 
     assert_eq!(
-        generate_operation(&decoded)
-            .provider_options()
-            .get("openai")
-            .and_then(|options| options.get("transport")),
-        Some(&json!("http_sse"))
+        openai_protocol_context(&decoded).get("use_websocket"),
+        Some(&json!(true))
     );
+    assert!(openai_wire_body(&decoded).contains_key("provider_options"));
     assert!(openai_wire_body(&decoded).get("use_websocket").is_none());
 }
 
@@ -382,11 +386,8 @@ fn response_create_should_share_transport_override_projection() {
     .expect("WebSocket response.create should use the shared request decoder");
 
     assert_eq!(
-        generate_operation(&decoded)
-            .provider_options()
-            .get("openai")
-            .and_then(|options| options.get("transport")),
-        Some(&json!("http_sse"))
+        openai_protocol_context(&decoded).get("use_websocket"),
+        Some(&json!(false))
     );
     assert!(openai_wire_body(&decoded).get("use_websocket").is_none());
 }
@@ -544,16 +545,11 @@ fn decoder_should_require_model() {
 }
 
 #[test]
-fn decoder_should_require_input() {
-    let error = decode_request(json!({"model": "smart-code"}).to_string().as_bytes())
-        .expect_err("missing input must fail");
+fn decoder_should_preserve_missing_input_for_upstream_validation() {
+    let decoded = decode_request(json!({"model": "smart-code"}).to_string().as_bytes())
+        .expect("missing input must not become a gateway schema gate");
 
-    assert_eq!(
-        error,
-        RequestDecodeError::MissingField {
-            field: "input".to_owned()
-        }
-    );
+    assert!(openai_wire_body(&decoded).get("input").is_none());
 }
 
 #[test]
@@ -609,30 +605,9 @@ fn decoder_should_accept_an_external_previous_response_id() {
 }
 
 #[test]
-fn decoder_should_reject_a_gateway_prefixed_response_id_with_control_characters() {
-    let error = decode_request(
-        json!({
-            "model": "smart-code",
-            "input": "continue",
-            "previous_response_id": "resp_safe_prefix\nforged_suffix"
-        })
-        .to_string()
-        .as_bytes(),
-    )
-    .expect_err("control characters must fail even with the gateway prefix");
-
-    assert_eq!(
-        error,
-        RequestDecodeError::InvalidValue {
-            field: "previous_response_id".to_owned()
-        }
-    );
-}
-
-#[test]
-fn decoder_should_reject_an_oversized_gateway_response_id() {
-    let response_id = format!("resp_{}", "a".repeat(252));
-    let error = decode_request(
+fn decoder_should_preserve_a_response_id_with_control_characters_for_upstream_validation() {
+    let response_id = "resp_safe_prefix\nforged_suffix";
+    let decoded = decode_request(
         json!({
             "model": "smart-code",
             "input": "continue",
@@ -641,13 +616,31 @@ fn decoder_should_reject_an_oversized_gateway_response_id() {
         .to_string()
         .as_bytes(),
     )
-    .expect_err("oversized response IDs must fail");
+    .expect("response ID shape belongs to the upstream");
 
     assert_eq!(
-        error,
-        RequestDecodeError::InvalidValue {
-            field: "previous_response_id".to_owned()
-        }
+        openai_wire_body(&decoded).get("previous_response_id"),
+        Some(&json!(response_id))
+    );
+}
+
+#[test]
+fn decoder_should_preserve_an_oversized_response_id_for_upstream_validation() {
+    let response_id = format!("resp_{}", "a".repeat(252));
+    let decoded = decode_request(
+        json!({
+            "model": "smart-code",
+            "input": "continue",
+            "previous_response_id": response_id
+        })
+        .to_string()
+        .as_bytes(),
+    )
+    .expect("response ID length belongs to the upstream");
+
+    assert_eq!(
+        openai_wire_body(&decoded).get("previous_response_id"),
+        Some(&json!(response_id))
     );
 }
 
@@ -745,8 +738,8 @@ fn decoder_should_preserve_new_official_semantic_without_gateway_enumeration() {
 }
 
 #[test]
-fn decoder_should_reject_unknown_provider_options_version() {
-    let error = decode_request(
+fn decoder_should_preserve_unknown_provider_options_version() {
+    let decoded = decode_request(
         json!({
             "model": "smart-code",
             "input": "hello",
@@ -755,22 +748,29 @@ fn decoder_should_reject_unknown_provider_options_version() {
         .to_string()
         .as_bytes(),
     )
-    .expect_err("unknown extension version must fail");
+    .expect("provider_options is an upstream-owned unknown field");
 
-    assert_eq!(error, RequestDecodeError::UnsupportedProviderOptionsVersion);
+    assert_eq!(
+        openai_wire_body(&decoded).get("provider_options"),
+        Some(&json!({"version": "v2", "providers": {}}))
+    );
 }
 
 #[test]
-fn request_errors_should_not_disclose_prompt_or_raw_body() {
+fn decoder_should_preserve_unknown_stream_value_without_disclosing_prompt() {
     let secret = "private prompt that must not appear";
-    let error = decode_request(
+    let decoded = decode_request(
         json!({"model": "smart-code", "input": secret, "stream": "private-invalid-value"})
             .to_string()
             .as_bytes(),
     )
-    .expect_err("wire routing field type must fail");
-    let rendered = format!("{error:?}\n{error}\n{}", error.protocol_body().into_value());
+    .expect("upstream owns stream field validation");
+    let rendered = format!("{decoded:?}");
 
+    assert_eq!(
+        openai_wire_body(&decoded).get("stream"),
+        Some(&json!("private-invalid-value"))
+    );
     assert!(!rendered.contains(secret) && !rendered.contains("private prompt"));
 }
 

@@ -50,6 +50,22 @@ impl PublicModelId {
         Ok(Self(value))
     }
 
+    /// 从客户端 OpenAI wire 读取模型名。
+    ///
+    /// 该值只作为路由查询键；具体模型字符串能否被上游接受由 Provider 决定，
+    /// 因而不能把内部标识长度或控制字符规则当作入站 schema gate。
+    ///
+    /// # Errors
+    ///
+    /// 空模型名无法参与路由时返回错误。
+    pub fn from_client_wire(value: impl Into<String>) -> Result<Self, IdentifierError> {
+        let value = value.into();
+        if value.is_empty() {
+            return Err(IdentifierError::Empty);
+        }
+        Ok(Self(value))
+    }
+
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0

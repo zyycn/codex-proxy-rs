@@ -1,9 +1,10 @@
 //! 协议无关的业务 operation。
 //!
-//! 这里只保留网关需要解释、路由或结算的稳定语义。Provider 专属字段被
-//! 限制在按 Provider 命名的 [`ProviderOptions`] 中。
+//! 这里只保留网关需要解释、路由或结算的稳定语义。协议 adapter 无法写入
+//! wire body 的连接级事实随 [`ProtocolPayload`] 不透明传递，由对应 Provider
+//! 自己解释。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 
@@ -130,66 +131,6 @@ impl CapabilityRequirements {
     }
 }
 
-/// 按 Provider 命名的专属参数。
-#[derive(Clone, Default, PartialEq)]
-pub struct ProviderOptions(BTreeMap<String, Map<String, Value>>);
-
-impl ProviderOptions {
-    /// 创建空 Provider 参数集合。
-    #[must_use]
-    pub const fn new() -> Self {
-        Self(BTreeMap::new())
-    }
-
-    /// 插入由对应 Provider adapter 独占校验的 JSON object。
-    ///
-    /// # Errors
-    ///
-    /// Provider 名称无效或同名参数已经存在时返回错误。
-    pub fn insert(
-        &mut self,
-        provider: impl Into<String>,
-        options: Map<String, Value>,
-    ) -> Result<(), OperationError> {
-        let provider = provider.into();
-        validate_text(&provider, 64, true, None).map_err(|_| OperationError::EmptyField {
-            field: "provider_options provider",
-        })?;
-        if self.0.contains_key(&provider) {
-            return Err(OperationError::DuplicateProviderOptions { provider });
-        }
-        self.0.insert(provider, options);
-        Ok(())
-    }
-
-    /// 返回某个 Provider 的参数。
-    #[must_use]
-    pub fn get(&self, provider: &str) -> Option<&Map<String, Value>> {
-        self.0.get(provider)
-    }
-
-    /// 返回所有声明了参数的 Provider 名称。
-    pub fn providers(&self) -> impl Iterator<Item = &str> {
-        self.0.keys().map(String::as_str)
-    }
-
-    /// 判断集合是否为空。
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
-
-impl fmt::Debug for ProviderOptions {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ProviderOptions")
-            .field("providers", &self.0.keys().collect::<Vec<_>>())
-            .field("values", &"<not included in Debug>")
-            .finish()
-    }
-}
-
 /// 同一客户端连接内由 Provider 生成并解释的不透明会话状态。
 ///
 /// Core 只在重试和路由过程中保持该值；协议层只能把 Provider 返回的状态原样带入
@@ -246,6 +187,7 @@ impl fmt::Debug for ProviderSessionState {
 pub struct ProtocolPayload {
     protocol: String,
     body: Map<String, Value>,
+    context: Map<String, Value>,
 }
 
 impl ProtocolPayload {
@@ -262,7 +204,11 @@ impl ProtocolPayload {
         validate_text(&protocol, 64, true, None).map_err(|_| OperationError::EmptyField {
             field: "protocol_payload protocol",
         })?;
-        Ok(Self { protocol, body })
+        Ok(Self {
+            protocol,
+            body,
+            context: Map::new(),
+        })
     }
 
     /// 返回协议名称。
@@ -276,6 +222,21 @@ impl ProtocolPayload {
     pub const fn body(&self) -> &Map<String, Value> {
         &self.body
     }
+
+    /// 附着不写入 wire body 的协议连接上下文。
+    ///
+    /// Core 只保留该值；对应 Provider 可以读取已知键，未知键必须忽略。
+    #[must_use]
+    pub fn with_context(mut self, context: Map<String, Value>) -> Self {
+        self.context = context;
+        self
+    }
+
+    /// 返回仅供对应 Provider 解释的非 wire 上下文。
+    #[must_use]
+    pub const fn context(&self) -> &Map<String, Value> {
+        &self.context
+    }
 }
 
 impl fmt::Debug for ProtocolPayload {
@@ -284,6 +245,7 @@ impl fmt::Debug for ProtocolPayload {
             .debug_struct("ProtocolPayload")
             .field("protocol", &self.protocol)
             .field("body", &"<not included in Debug>")
+            .field("context", &"<not included in Debug>")
             .finish()
     }
 }
@@ -650,7 +612,6 @@ struct GeneratePayload {
     tools: Vec<ToolDefinition>,
     output_format: OutputFormat,
     prompt_cache_key: Option<String>,
-    provider_options: ProviderOptions,
     required_features: BTreeSet<Feature>,
     protocol_payload: Option<ProtocolPayload>,
     provider_session_state: Option<ProviderSessionState>,
@@ -688,7 +649,6 @@ impl GenerateRequest {
                 tools: Vec::new(),
                 output_format: OutputFormat::Text,
                 prompt_cache_key: None,
-                provider_options: ProviderOptions::new(),
                 required_features: BTreeSet::new(),
                 protocol_payload,
                 provider_session_state: None,
@@ -757,13 +717,6 @@ impl GenerateRequest {
         response_persistence: ResponsePersistence,
     ) -> Self {
         self.response_persistence = response_persistence;
-        self
-    }
-
-    /// 设置 Provider 专属参数。
-    #[must_use]
-    pub fn with_provider_options(mut self, provider_options: ProviderOptions) -> Self {
-        Arc::make_mut(&mut self.payload).provider_options = provider_options;
         self
     }
 
@@ -837,12 +790,6 @@ impl GenerateRequest {
         self.response_persistence
     }
 
-    /// 返回 Provider 专属参数。
-    #[must_use]
-    pub fn provider_options(&self) -> &ProviderOptions {
-        &self.payload.provider_options
-    }
-
     /// 返回指定 Provider 的连接内会话状态。
     #[must_use]
     pub fn provider_session_state(&self, provider: &str) -> Option<&ProviderSessionState> {
@@ -912,7 +859,6 @@ impl fmt::Debug for GenerateRequest {
                 &self.image_generation_requested,
             )
             .field("response_persistence", &self.response_persistence)
-            .field("provider_options", &self.payload.provider_options)
             .field(
                 "provider_session_state",
                 &self
@@ -1224,18 +1170,6 @@ impl Operation {
             | Self::Rerank(_)
             | Self::GenerateImage(_)
             | Self::Speech(_) => false,
-        }
-    }
-
-    /// 返回当前 Provider 的专属请求参数。
-    #[must_use]
-    pub fn provider_options(&self, provider: &str) -> Option<&Map<String, Value>> {
-        match self {
-            Self::Generate(request) => request.provider_options().get(provider),
-            Self::CompactConversation(request) => {
-                request.generation.provider_options().get(provider)
-            }
-            Self::Embed(_) | Self::Rerank(_) | Self::GenerateImage(_) | Self::Speech(_) => None,
         }
     }
 

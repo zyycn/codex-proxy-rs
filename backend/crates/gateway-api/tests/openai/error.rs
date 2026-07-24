@@ -1,11 +1,13 @@
-use axum::http::StatusCode;
+use axum::{body::to_bytes, http::StatusCode};
 use gateway_core::engine::{EngineError, UpstreamSendState};
 use gateway_core::error::{
-    GatewayError, GatewayErrorKind, ProviderError, ProviderErrorKind, StoreError, StoreErrorKind,
+    ClientVisibleUpstreamError, GatewayError, GatewayErrorKind, ProviderError, ProviderErrorKind,
+    StoreError, StoreErrorKind,
 };
 
 use gateway_api::openai::error::{
-    gateway_error_contract, gateway_error_from_engine, openai_error_response,
+    gateway_error_contract, gateway_error_from_engine, gateway_error_response,
+    openai_error_response,
 };
 
 #[test]
@@ -288,5 +290,39 @@ fn openai_error_response_should_preserve_only_safe_contract_fields() {
                 }
             }),
         )
+    );
+}
+
+#[tokio::test]
+async fn gateway_error_response_should_expose_only_structured_client_visible_upstream_fields() {
+    let error = GatewayError::from_provider(
+        &ProviderError::new(ProviderErrorKind::QuotaExhausted, UpstreamSendState::Sent)
+            .with_client_visible_upstream_error(
+                ClientVisibleUpstreamError::new(
+                    "Your Codex quota is exhausted",
+                    Some("quota_exhausted".to_owned()),
+                    Some("rate_limit_error".to_owned()),
+                )
+                .expect("safe structured upstream error"),
+            ),
+    );
+
+    let response = gateway_error_response(&error);
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read OpenAI error body");
+    let body: serde_json::Value = serde_json::from_slice(&body).expect("OpenAI error JSON");
+
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "error": {
+                "message": "Your Codex quota is exhausted",
+                "type": "rate_limit_error",
+                "code": "quota_exhausted"
+            }
+        })
     );
 }
