@@ -71,18 +71,17 @@ pub trait CredentialStateRepository: Send + Sync {
     async fn clear_credential_state(&self, provider_account_id: &str) -> StoreResult<bool>;
 }
 
-/// Provider 账号目录 cache 的隔离键。Revision 变化后不会读取旧目录。
+/// Provider 目录 cache 的隔离键。具体作用域由对应 Provider 决定。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderAccountCatalogCacheKey {
+pub struct RedisProviderCatalogCacheKey {
     pub provider_kind: String,
-    pub provider_account_id: String,
-    pub credential_revision: Revision,
+    pub catalog_scope: String,
 }
 
-impl ProviderAccountCatalogCacheKey {
+impl RedisProviderCatalogCacheKey {
     pub fn validate(&self) -> StoreResult<()> {
         require_nonempty(
-            "provider account catalog cache",
+            "provider catalog cache",
             "provider_kind",
             &self.provider_kind,
         )?;
@@ -92,25 +91,25 @@ impl ProviderAccountCatalogCacheKey {
             return Err(catalog_invalid("provider_kind must be a stable slug"));
         }
         require_nonempty(
-            "provider account catalog cache",
-            "provider_account_id",
-            &self.provider_account_id,
+            "provider catalog cache",
+            "catalog_scope",
+            &self.catalog_scope,
         )
     }
 }
 
 #[async_trait]
-pub trait ProviderAccountCatalogCacheRepository: Send + Sync {
-    async fn replace_provider_account_catalog(
+pub trait ProviderCatalogCacheRepository: Send + Sync {
+    async fn replace_provider_catalog(
         &self,
-        key: &ProviderAccountCatalogCacheKey,
+        key: &RedisProviderCatalogCacheKey,
         catalog: &OpaqueProviderData,
         ttl_seconds: u64,
     ) -> StoreResult<()>;
 
-    async fn get_provider_account_catalog(
+    async fn get_provider_catalog(
         &self,
-        key: &ProviderAccountCatalogCacheKey,
+        key: &RedisProviderCatalogCacheKey,
     ) -> StoreResult<Option<OpaqueProviderData>>;
 }
 
@@ -133,15 +132,12 @@ impl RedisCredentialStateRepository {
         Ok(format!("{}:account:{fingerprint}:state", self.namespace))
     }
 
-    fn catalog_key(&self, key: &ProviderAccountCatalogCacheKey) -> StoreResult<String> {
+    fn catalog_key(&self, key: &RedisProviderCatalogCacheKey) -> StoreResult<String> {
         key.validate()?;
-        let fingerprint =
-            resource_fingerprint("provider account catalog cache", &key.provider_account_id)?;
+        let fingerprint = resource_fingerprint("provider catalog cache", &key.catalog_scope)?;
         Ok(format!(
-            "{}:provider:{}:account:{{{fingerprint}}}:catalog:{}",
-            self.namespace,
-            key.provider_kind,
-            key.credential_revision.get()
+            "{}:provider:{}:catalog:{{{fingerprint}}}",
+            self.namespace, key.provider_kind,
         ))
     }
 }
@@ -224,10 +220,10 @@ impl CredentialStateRepository for RedisCredentialStateRepository {
 }
 
 #[async_trait]
-impl ProviderAccountCatalogCacheRepository for RedisCredentialStateRepository {
-    async fn replace_provider_account_catalog(
+impl ProviderCatalogCacheRepository for RedisCredentialStateRepository {
+    async fn replace_provider_catalog(
         &self,
-        key: &ProviderAccountCatalogCacheKey,
+        key: &RedisProviderCatalogCacheKey,
         catalog: &OpaqueProviderData,
         ttl_seconds: u64,
     ) -> StoreResult<()> {
@@ -252,20 +248,20 @@ impl ProviderAccountCatalogCacheRepository for RedisCredentialStateRepository {
             .arg(ttl_ms)
             .query_async::<()>(&mut connection)
             .await
-            .map_err(|_| redis_unavailable("replace provider account catalog cache"))?;
+            .map_err(|_| redis_unavailable("replace provider catalog cache"))?;
         Ok(())
     }
 
-    async fn get_provider_account_catalog(
+    async fn get_provider_catalog(
         &self,
-        key: &ProviderAccountCatalogCacheKey,
+        key: &RedisProviderCatalogCacheKey,
     ) -> StoreResult<Option<OpaqueProviderData>> {
         let mut connection = self.connection.clone();
         let payload = redis::cmd("GET")
             .arg(self.catalog_key(key)?)
             .query_async::<Option<Vec<u8>>>(&mut connection)
             .await
-            .map_err(|_| redis_unavailable("read provider account catalog cache"))?;
+            .map_err(|_| redis_unavailable("read provider catalog cache"))?;
         let Some(payload) = payload else {
             return Ok(None);
         };
@@ -358,13 +354,11 @@ impl ProviderCatalogCachePort for RedisCredentialStateRepository {
             if ttl_seconds == 0 || ttl.subsec_nanos() != 0 {
                 return Err(provider_invalid("validate catalog cache TTL"));
             }
-            let key = ProviderAccountCatalogCacheKey {
+            let key = RedisProviderCatalogCacheKey {
                 provider_kind: key.provider_kind().as_str().to_owned(),
-                provider_account_id: key.account_id().as_str().to_owned(),
-                credential_revision: Revision::new(key.credential_revision().get())
-                    .map_err(|_| provider_invalid("encode catalog cache key"))?,
+                catalog_scope: key.scope().as_str().to_owned(),
             };
-            ProviderAccountCatalogCacheRepository::replace_provider_account_catalog(
+            ProviderCatalogCacheRepository::replace_provider_catalog(
                 self,
                 &key,
                 catalog,
@@ -381,13 +375,11 @@ impl ProviderCatalogCachePort for RedisCredentialStateRepository {
     ) -> futures::future::BoxFuture<'a, Result<Option<OpaqueProviderData>, ProviderStoreError>>
     {
         Box::pin(async move {
-            let key = ProviderAccountCatalogCacheKey {
+            let key = RedisProviderCatalogCacheKey {
                 provider_kind: key.provider_kind().as_str().to_owned(),
-                provider_account_id: key.account_id().as_str().to_owned(),
-                credential_revision: Revision::new(key.credential_revision().get())
-                    .map_err(|_| provider_invalid("encode catalog cache key"))?,
+                catalog_scope: key.scope().as_str().to_owned(),
             };
-            ProviderAccountCatalogCacheRepository::get_provider_account_catalog(self, &key)
+            ProviderCatalogCacheRepository::get_provider_catalog(self, &key)
                 .await
                 .map_err(|_| provider_unavailable("read catalog cache"))
         })
@@ -403,7 +395,7 @@ fn invalid(message: &str) -> StoreError {
 
 fn catalog_invalid(message: &str) -> StoreError {
     StoreError::InvalidData {
-        entity: "provider account catalog cache",
+        entity: "provider catalog cache",
         message: message.to_owned(),
     }
 }

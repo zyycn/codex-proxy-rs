@@ -440,24 +440,21 @@ impl ProviderAdmin for OpenAiAdminProvider {
         refresh: bool,
     ) -> Result<ProviderModels, ProviderAdminError> {
         let account = self.account(account_id).await?;
-        let models = if refresh {
+        let catalog = if refresh {
             self.catalog
-                .synchronize_account(account_id)
+                .refresh_account_catalog(account_id)
                 .await
                 .map_err(map_catalog_error)?
         } else {
             self.catalog
-                .cached_account_models(account_id, account.revision())
+                .cached_or_refresh_account_catalog(&account)
+                .await
                 .map_err(map_catalog_error)?
-                .unwrap_or_default()
         };
-        let observed_at = self
-            .catalog
-            .cached()
-            .map_err(map_catalog_error)?
-            .map(|snapshot| DateTime::<Utc>::from(snapshot.observed_at()));
-        let models = models
-            .into_iter()
+        let models = catalog
+            .models()
+            .iter()
+            .cloned()
             .map(|model| {
                 let id = UpstreamModelId::new(model.clone())
                     .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Internal))?;
@@ -466,7 +463,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
             .collect::<Result<Vec<_>, ProviderAdminError>>()?;
         Ok(ProviderModels {
             models,
-            observed_at,
+            observed_at: Some(catalog.observed_at()),
         })
     }
 

@@ -26,11 +26,11 @@ pub use config::{
 };
 
 pub use catalog::{
-    GROK_FREE_ROLLING_WINDOW_SECONDS, GrokAccountCatalog, GrokBillingPresentation,
-    GrokCatalogCache, GrokCatalogCacheError, GrokCredentialCatalogCache,
+    GROK_FREE_ROLLING_WINDOW_SECONDS, GrokBillingPresentation, GrokCatalogCache,
+    GrokCatalogCacheError, GrokCatalogScope, GrokCredentialCatalogCache,
     GrokCredentialCatalogError, GrokCredentialCatalogSeed, GrokCredentialCatalogService,
-    GrokCredentialCatalogSnapshot, GrokCredentialQuotaService, GrokQuotaError, GrokQuotaPeriodKind,
-    GrokQuotaSnapshot,
+    GrokCredentialCatalogSnapshot, GrokCredentialQuotaService, GrokPlanCatalog, GrokQuotaError,
+    GrokQuotaPeriodKind, GrokQuotaSnapshot,
 };
 pub use discovery::DiscoveryDocument;
 pub use error::{

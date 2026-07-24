@@ -6,17 +6,18 @@ use chrono::Utc;
 use gateway_core::engine::credential::{
     AccountAttemptFeedback, AccountAvailability, AccountFeedbackStats, AccountRuntimeSignals,
     AccountSelectionPolicy, CredentialCasOutcome, CredentialRevision, OpaqueProviderData,
-    ProviderAccountId, ProviderAccountStore, QuotaObservation, QuotaWriteOutcome, RotationStrategy,
+    ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate, QuotaObservation,
+    QuotaWriteOutcome, RotationStrategy,
 };
 use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderSchedulingState,
     ProviderStoreError,
 };
 use provider_xai::{
-    GrokAccountCatalog, GrokAccountSessionSelector, GrokBillingRequest, GrokBillingTransport,
+    GrokAccountSessionSelector, GrokBillingRequest, GrokBillingTransport,
     GrokBillingTransportError, GrokBillingTransportErrorKind, GrokBillingTransportFuture,
-    GrokCredentialAdmin, GrokCredentialAvailability, GrokCredentialCatalogCache,
-    GrokCredentialCatalogSeed, GrokCredentialFailure, GrokCredentialRepository,
+    GrokCatalogScope, GrokCredentialAdmin, GrokCredentialAvailability, GrokCredentialCatalogCache,
+    GrokCredentialCatalogSeed, GrokCredentialFailure, GrokCredentialRepository, GrokPlanCatalog,
     GrokSessionSelection, GrokSessionSelector, GrokSessionSelectorError,
     RotateManagedGrokCredential, UpdateGrokCredentialState,
 };
@@ -111,10 +112,10 @@ impl SelectorFixture {
                 })
                 .await
                 .expect("ready account");
+            let account = store.account(&input.account_id).expect("created account");
             cache
-                .replace(GrokAccountCatalog::new(
-                    input.account_id.clone(),
-                    CredentialRevision::new(1).expect("revision"),
+                .replace(GrokPlanCatalog::new(
+                    GrokCatalogScope::for_account(&account).expect("catalog scope"),
                     Utc::now(),
                     GrokCredentialCatalogSeed::new(["grok-4.5"], None).expect("catalog"),
                 ))
@@ -452,16 +453,47 @@ async fn stale_catalog_revision_does_not_block_transparent_request() {
 #[tokio::test]
 async fn explicit_catalog_non_membership_excludes_only_unsupported_account() {
     let fixture = SelectorFixture::new(&["aaa-unsupported", "zzz-supported"]).await;
+    let supported_id = account_id("zzz-supported");
+    let supported = fixture
+        .store
+        .account(&supported_id)
+        .expect("supported account");
+    fixture
+        .store
+        .update_account(ProviderAccountUpdate {
+            account_id: supported_id.clone(),
+            name: supported.name().to_owned(),
+            email: supported.email().map(str::to_owned),
+            plan_type: Some("premium".to_owned()),
+        })
+        .await
+        .expect("move supported account to another plan");
+    let unsupported = fixture
+        .store
+        .account(&account_id("aaa-unsupported"))
+        .expect("unsupported account");
+    let supported = fixture
+        .store
+        .account(&supported_id)
+        .expect("supported account");
     fixture
         .cache
-        .replace(GrokAccountCatalog::new(
-            account_id("aaa-unsupported"),
-            CredentialRevision::new(1).expect("revision"),
+        .replace(GrokPlanCatalog::new(
+            GrokCatalogScope::for_account(&unsupported).expect("catalog scope"),
             Utc::now(),
             GrokCredentialCatalogSeed::new(["grok-other"], None).expect("catalog"),
         ))
         .await
         .expect("replace catalog");
+    fixture
+        .cache
+        .replace(GrokPlanCatalog::new(
+            GrokCatalogScope::for_account(&supported).expect("catalog scope"),
+            Utc::now(),
+            GrokCredentialCatalogSeed::new(["grok-4.5"], None).expect("catalog"),
+        ))
+        .await
+        .expect("cache supported plan");
 
     let session = fixture
         .selector

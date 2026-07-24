@@ -393,9 +393,15 @@ async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export
         .expect("stored account");
     let record = account_record(&account);
     let config = valid_config();
+    let catalog_cache = Arc::new(TestCatalogCache::default());
+    catalog_cache.seed("plan:pro", ["gpt-5.4"]);
     let bundle = provider_openai::initialize(
         config.config.clone(),
-        provider_ports_with(Arc::clone(&store), Arc::new(TestOAuthPending::default())),
+        provider_ports_with_catalog(
+            Arc::clone(&store),
+            Arc::new(TestOAuthPending::default()),
+            catalog_cache,
+        ),
     )
     .await
     .expect("OpenAI bundle");
@@ -435,7 +441,7 @@ async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export
         .models(&account_id, false)
         .await
         .expect("cached models");
-    assert!(models.models.is_empty());
+    assert_eq!(models.models[0].id.as_str(), "gpt-5.4");
     let loaded = store
         .load_credential(account.id(), account.revision())
         .await
@@ -596,12 +602,20 @@ fn provider_ports_with(
     accounts: Arc<MemoryAccountStore>,
     pending: Arc<TestOAuthPending>,
 ) -> ProviderStorePorts {
+    provider_ports_with_catalog(accounts, pending, Arc::new(TestCatalogCache::default()))
+}
+
+fn provider_ports_with_catalog(
+    accounts: Arc<MemoryAccountStore>,
+    pending: Arc<TestOAuthPending>,
+    catalog_cache: Arc<TestCatalogCache>,
+) -> ProviderStorePorts {
     ProviderStorePorts::new(
         accounts,
         Arc::new(TestLeaseCoordinator::default()),
         Arc::new(MemorySessionAffinity::default()),
         Arc::new(MemorySessionExclusions::default()),
-        Arc::new(TestCatalogCache::default()),
+        catalog_cache,
         Arc::new(TestCredentialState),
         Arc::new(TestCooldown),
         Arc::new(TestRuntimePolicy),
@@ -682,7 +696,7 @@ impl ProviderCatalogCachePort for TestCatalogCache {
             self.values
                 .lock()
                 .expect("catalog cache")
-                .insert(key.account_id().to_string(), catalog.clone());
+                .insert(key.scope().as_str().to_owned(), catalog.clone());
             Ok(())
         })
     }
@@ -696,9 +710,34 @@ impl ProviderCatalogCachePort for TestCatalogCache {
                 .values
                 .lock()
                 .expect("catalog cache")
-                .get(key.account_id().as_str())
+                .get(key.scope().as_str())
                 .cloned())
         })
+    }
+}
+
+impl TestCatalogCache {
+    fn seed(&self, scope: &str, models: impl IntoIterator<Item = &'static str>) {
+        let mut document = Map::new();
+        document.insert("version".to_owned(), Value::from(1));
+        document.insert("scope".to_owned(), Value::String(scope.to_owned()));
+        document.insert(
+            "observedAt".to_owned(),
+            Value::String(Utc::now().to_rfc3339()),
+        );
+        document.insert(
+            "models".to_owned(),
+            Value::Array(
+                models
+                    .into_iter()
+                    .map(|model| Value::String(model.to_owned()))
+                    .collect(),
+            ),
+        );
+        self.values
+            .lock()
+            .expect("catalog cache")
+            .insert(scope.to_owned(), OpaqueProviderData::new(document));
     }
 }
 

@@ -2,14 +2,14 @@ use chrono::Utc;
 use gateway_store::{
     Revision,
     redis::{
-        CredentialStateCache, ProviderAccountCatalogCacheKey,
-        ProviderAccountCatalogCacheRepository, RedisCredentialStateRepository,
+        CredentialStateCache, ProviderCatalogCacheRepository, RedisCredentialStateRepository,
+        RedisProviderCatalogCacheKey,
     },
 };
 
 #[test]
 fn credential_state_adapter_implements_opaque_catalog_cache_port() {
-    fn assert_port<T: ProviderAccountCatalogCacheRepository>() {}
+    fn assert_port<T: ProviderCatalogCacheRepository>() {}
     assert_port::<RedisCredentialStateRepository>();
 }
 
@@ -26,11 +26,10 @@ fn credential_state_rejects_provider_specific_status() {
 }
 
 #[test]
-fn provider_catalog_cache_key_requires_provider_and_account() {
-    let key = ProviderAccountCatalogCacheKey {
+fn provider_catalog_cache_key_requires_provider_and_scope() {
+    let key = RedisProviderCatalogCacheKey {
         provider_kind: "xai".to_owned(),
-        provider_account_id: String::new(),
-        credential_revision: Revision::new(1).expect("positive revision"),
+        catalog_scope: String::new(),
     };
     assert!(key.validate().is_err());
 }

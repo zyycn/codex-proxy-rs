@@ -21,12 +21,12 @@ use gateway_core::provider_ports::{
 };
 use gateway_core::routing::ProviderKind;
 use provider_xai::{
-    CreateGrokCredential, GROK_BILLING_URL, GrokAccountCatalog, GrokAccountProfile,
-    GrokBillingTransport, GrokCatalogCacheError, GrokCredentialAdmin, GrokCredentialAvailability,
+    CreateGrokCredential, GROK_BILLING_URL, GrokAccountProfile, GrokBillingTransport,
+    GrokCatalogCacheError, GrokCatalogScope, GrokCredentialAdmin, GrokCredentialAvailability,
     GrokCredentialCatalogCache, GrokCredentialCatalogService, GrokCredentialQuotaService,
     GrokCredentialRepository, GrokCredentialRepositoryError, GrokEndpointPolicy,
-    GrokModelCatalogTransport, GrokOAuthSecret, GrokReqwestTransportBuildError, SecretValue,
-    XaiConfig, XaiWireProfileState,
+    GrokModelCatalogTransport, GrokOAuthSecret, GrokPlanCatalog, GrokReqwestTransportBuildError,
+    SecretValue, XaiConfig, XaiWireProfileState,
 };
 use reqwest::Client;
 use reqwest::redirect::Policy;
@@ -474,7 +474,7 @@ fn rebuild_account(previous: &ProviderAccount, replacement: AccountReplacement) 
 
 #[derive(Default)]
 pub struct MemoryGrokCatalogCache {
-    entries: Mutex<BTreeMap<(ProviderAccountId, CredentialRevision), GrokAccountCatalog>>,
+    entries: Mutex<BTreeMap<GrokCatalogScope, GrokPlanCatalog>>,
 }
 
 impl MemoryGrokCatalogCache {
@@ -485,29 +485,25 @@ impl MemoryGrokCatalogCache {
 
 #[async_trait]
 impl GrokCredentialCatalogCache for MemoryGrokCatalogCache {
-    async fn replace(&self, catalog: GrokAccountCatalog) -> Result<(), GrokCatalogCacheError> {
-        lock(&self.entries).insert((catalog.account_id().clone(), catalog.revision()), catalog);
+    async fn replace(&self, catalog: GrokPlanCatalog) -> Result<(), GrokCatalogCacheError> {
+        lock(&self.entries).insert(catalog.scope().clone(), catalog);
         Ok(())
     }
 
     async fn read(
         &self,
-        account_id: &ProviderAccountId,
-        revision: CredentialRevision,
-    ) -> Result<Option<GrokAccountCatalog>, GrokCatalogCacheError> {
-        Ok(lock(&self.entries)
-            .get(&(account_id.clone(), revision))
-            .cloned())
+        scope: &GrokCatalogScope,
+    ) -> Result<Option<GrokPlanCatalog>, GrokCatalogCacheError> {
+        Ok(lock(&self.entries).get(scope).cloned())
     }
 
     async fn observed_model_support(
         &self,
-        account_id: &ProviderAccountId,
-        revision: CredentialRevision,
+        scope: &GrokCatalogScope,
         model: &str,
     ) -> Result<Option<bool>, GrokCatalogCacheError> {
         Ok(lock(&self.entries)
-            .get(&(account_id.clone(), revision))
+            .get(scope)
             .map(|catalog| catalog.seed().permits(model)))
     }
 }

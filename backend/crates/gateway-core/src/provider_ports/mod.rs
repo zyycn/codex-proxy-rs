@@ -12,6 +12,7 @@ use crate::engine::credential::{
     AccountAvailability, AccountFeedbackStats, AccountRuntimeSignals, CredentialRevision,
     OpaqueProviderData, ProviderAccountId, ProviderAccountStore,
 };
+use crate::error::{IdentifierError, validate_text};
 use crate::routing::ProviderKind;
 
 const MAX_PENDING_FLOW_TTL: Duration = Duration::from_secs(30 * 60);
@@ -338,25 +339,44 @@ impl ProviderRefreshLeaseRequest {
     }
 }
 
-/// Opaque catalog cache 的平台、账号与 credential revision 作用域。
+/// Provider 定义的 catalog cache 作用域。
+///
+/// Core 不解释其值；例如 Provider 可以使用套餐、区域或产品线作为共享目录边界。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ProviderCatalogScope(String);
+
+impl ProviderCatalogScope {
+    /// 创建一个稳定且可用于 Redis 隔离键的 Provider-owned 作用域。
+    ///
+    /// # Errors
+    ///
+    /// 空值、过长文本或控制字符会被拒绝。
+    pub fn new(value: impl Into<String>) -> Result<Self, IdentifierError> {
+        let value = value.into();
+        validate_text(&value, 128, false, None)?;
+        Ok(Self(value))
+    }
+
+    /// 返回 Provider-owned 作用域文本。
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Opaque catalog cache 的 Provider 与 Provider-owned 作用域。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCatalogCacheKey {
     provider_kind: ProviderKind,
-    account_id: ProviderAccountId,
-    credential_revision: CredentialRevision,
+    scope: ProviderCatalogScope,
 }
 
 impl ProviderCatalogCacheKey {
     #[must_use]
-    pub const fn new(
-        provider_kind: ProviderKind,
-        account_id: ProviderAccountId,
-        credential_revision: CredentialRevision,
-    ) -> Self {
+    pub const fn new(provider_kind: ProviderKind, scope: ProviderCatalogScope) -> Self {
         Self {
             provider_kind,
-            account_id,
-            credential_revision,
+            scope,
         }
     }
 
@@ -366,13 +386,8 @@ impl ProviderCatalogCacheKey {
     }
 
     #[must_use]
-    pub const fn account_id(&self) -> &ProviderAccountId {
-        &self.account_id
-    }
-
-    #[must_use]
-    pub const fn credential_revision(&self) -> CredentialRevision {
-        self.credential_revision
+    pub const fn scope(&self) -> &ProviderCatalogScope {
+        &self.scope
     }
 }
 

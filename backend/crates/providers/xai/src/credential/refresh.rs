@@ -636,10 +636,7 @@ impl GrokCredentialRefreshService {
             )
             .await
         {
-            let _ = self
-                .catalog
-                .cache_seed(account_id.clone(), record.credential_revision, seed)
-                .await;
+            let _ = self.catalog.cache_seed(&account_id, seed).await;
         }
         Ok(GrokCredentialRefreshOutcome::Refreshed {
             account_id,

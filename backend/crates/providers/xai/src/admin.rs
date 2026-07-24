@@ -574,23 +574,15 @@ impl ProviderAdmin for XaiAdminProvider {
     ) -> Result<ProviderModels, ProviderAdminError> {
         let account = self.account(account_id).await?;
         let catalog = if refresh {
-            Some(
-                self.catalog
-                    .refresh_account_catalog(account_id)
-                    .await
-                    .map_err(map_catalog_error)?,
-            )
-        } else {
             self.catalog
-                .read_account_catalog(account_id, account.revision())
+                .refresh_account_catalog(account_id)
                 .await
                 .map_err(map_catalog_error)?
-        };
-        let Some(catalog) = catalog else {
-            return Ok(ProviderModels {
-                models: Vec::new(),
-                observed_at: None,
-            });
+        } else {
+            self.catalog
+                .cached_or_refresh_account_catalog(&account)
+                .await
+                .map_err(map_catalog_error)?
         };
         let models = catalog
             .seed()

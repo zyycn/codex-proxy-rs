@@ -40,11 +40,12 @@ use serde_json::{Map, Value, json};
 use url::Url;
 
 use crate::credential::{
-    CodexAccountFailure, CodexAgentIdentityTaskService, CodexCredentialCatalogService,
-    CodexCredentialLease, CodexCredentialQuotaService, CodexCredentialRefreshOutcome,
-    CodexCredentialRefreshService, CodexCredentialSelector, CodexCyberPolicyScope,
-    CodexQuotaRefreshPolicy, CredentialSelectionError, RuntimeCodexCookie, SelectCodexCredential,
-    derive_codex_cyber_policy_session_key, derive_codex_session_affinity_key,
+    CodexAccountFailure, CodexAgentIdentityTaskService, CodexCredentialCatalogError,
+    CodexCredentialCatalogService, CodexCredentialLease, CodexCredentialQuotaService,
+    CodexCredentialRefreshOutcome, CodexCredentialRefreshService, CodexCredentialSelector,
+    CodexCyberPolicyScope, CodexQuotaRefreshPolicy, CredentialSelectionError, RuntimeCodexCookie,
+    SelectCodexCredential, derive_codex_cyber_policy_session_key,
+    derive_codex_session_affinity_key,
 };
 use crate::transport::canonical::{
     CodexCanonicalDecoder, CodexCanonicalError, CodexCanonicalOutcome,
@@ -2116,7 +2117,10 @@ pub(crate) fn worker_contributions(
         WorkerContribution::Registration(scheduled_registration(
             quota_id,
             quota_refresh_policy.interval(),
-            Box::new(OpenAiQuotaTask { quota }),
+            Box::new(OpenAiQuotaTask {
+                quota,
+                catalog: Arc::clone(&catalog),
+            }),
         )?),
         WorkerContribution::Registration(WorkerRegistration::try_new(
             etag_id,
@@ -2208,6 +2212,7 @@ impl ScheduledTask for OpenAiOAuthRefreshTask {
 
 struct OpenAiQuotaTask {
     quota: Arc<CodexCredentialQuotaService>,
+    catalog: Arc<CodexCredentialCatalogService>,
 }
 
 struct OpenAiCatalogEtagTask {
@@ -2264,13 +2269,33 @@ impl ScheduledTask for OpenAiQuotaTask {
             if context.cancellation().is_cancelled() {
                 return Ok(());
             }
+            let mut failures = false;
             match self.quota.synchronize().await {
                 Ok(summary) if summary.has_operational_failures() => {
                     tracing::warn!("OpenAI quota cycle contained operational failures");
-                    Ok(())
                 }
-                Ok(_) => Ok(()),
-                Err(_) => Err(WorkerTaskError::safe("OpenAI quota synchronization failed")),
+                Ok(_) => {}
+                Err(_) => {
+                    failures = true;
+                    tracing::warn!("OpenAI quota synchronization failed");
+                }
+            }
+            if context.cancellation().is_cancelled() {
+                return Ok(());
+            }
+            match self.catalog.refresh_catalogs().await {
+                Ok(_) | Err(CodexCredentialCatalogError::NoEligibleCredential) => {}
+                Err(error) => {
+                    failures = true;
+                    tracing::warn!(error = %error, "OpenAI model catalog refresh failed");
+                }
+            }
+            if failures {
+                Err(WorkerTaskError::safe(
+                    "OpenAI quota or catalog synchronization failed",
+                ))
+            } else {
+                Ok(())
             }
         })
     }
