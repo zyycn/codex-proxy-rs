@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use bytes::Bytes;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -17,7 +18,6 @@ pub struct ResponseMeta {
     response_id: String,
     model: String,
     finish_reason: Option<FinishReason>,
-    upstream_response_id: Option<SafeUpstreamValue>,
 }
 
 impl ResponseMeta {
@@ -28,7 +28,6 @@ impl ResponseMeta {
             response_id: response_id.into(),
             model: model.into(),
             finish_reason: None,
-            upstream_response_id: None,
         }
     }
 
@@ -39,7 +38,7 @@ impl ResponseMeta {
         self
     }
 
-    /// 返回网关响应 ID。
+    /// 返回客户端可见的 Provider 原生响应 ID。
     #[must_use]
     pub fn response_id(&self) -> &str {
         &self.response_id
@@ -55,19 +54,6 @@ impl ResponseMeta {
     #[must_use]
     pub const fn finish_reason(&self) -> Option<FinishReason> {
         self.finish_reason
-    }
-
-    /// 附加 adapter 已分类为非 bearer 的上游 response ID。
-    #[must_use]
-    pub fn with_upstream_response_id(mut self, response_id: SafeUpstreamValue) -> Self {
-        self.upstream_response_id = Some(response_id);
-        self
-    }
-
-    /// 返回仅供 attempt 遥测持久化的安全上游 response ID。
-    #[must_use]
-    pub const fn upstream_response_id(&self) -> Option<&SafeUpstreamValue> {
-        self.upstream_response_id.as_ref()
     }
 }
 
@@ -273,6 +259,8 @@ pub struct ProtocolWireEvent {
     protocol: String,
     event_type: Option<String>,
     data: Value,
+    has_json_data: bool,
+    raw_sse_frame: Option<Bytes>,
     sse_id: Option<String>,
     sse_retry: Option<u64>,
 }
@@ -318,8 +306,56 @@ impl ProtocolWireEvent {
             protocol,
             event_type,
             data,
+            has_json_data: true,
+            raw_sse_frame: None,
             sse_id,
             sse_retry,
+        })
+    }
+
+    /// 创建携带未经改写 SSE 原始帧的协议 JSON event。
+    ///
+    /// `data` 只供 Core 旁路观测；客户端 SSE 输出必须优先使用 `raw_sse_frame`。
+    ///
+    /// # Errors
+    ///
+    /// 与 [`Self::json_with_sse_metadata`] 相同。
+    pub fn json_with_raw_sse_metadata(
+        protocol: impl Into<String>,
+        event_type: Option<String>,
+        data: Value,
+        raw_sse_frame: Bytes,
+        sse_id: Option<String>,
+        sse_retry: Option<u64>,
+    ) -> Result<Self, IdentifierError> {
+        let mut event =
+            Self::json_with_sse_metadata(protocol, event_type, data, sse_id, sse_retry)?;
+        event.raw_sse_frame = Some(raw_sse_frame);
+        Ok(event)
+    }
+
+    /// 创建只有原始 SSE 字节、没有可解析 JSON 的协议 event。
+    ///
+    /// 例如 keep-alive 注释和未知的非 JSON SSE 帧仍须原样透传，但不会参与
+    /// WebSocket JSON 输出或旁路观测。
+    ///
+    /// # Errors
+    ///
+    /// 协议名不满足 wire 安全约束时返回错误。
+    pub fn raw_sse(
+        protocol: impl Into<String>,
+        raw_sse_frame: Bytes,
+    ) -> Result<Self, IdentifierError> {
+        let protocol = protocol.into();
+        validate_text(&protocol, 64, true, None)?;
+        Ok(Self {
+            protocol,
+            event_type: None,
+            data: Value::Null,
+            has_json_data: false,
+            raw_sse_frame: Some(raw_sse_frame),
+            sse_id: None,
+            sse_retry: None,
         })
     }
 
@@ -353,6 +389,18 @@ impl ProtocolWireEvent {
         &self.data
     }
 
+    /// 返回该 event 是否携带可供旁路观测的 JSON 数据。
+    #[must_use]
+    pub const fn has_json_data(&self) -> bool {
+        self.has_json_data
+    }
+
+    /// 返回可直接写给 SSE 客户端的未经改写原始帧。
+    #[must_use]
+    pub const fn raw_sse_frame(&self) -> Option<&Bytes> {
+        self.raw_sse_frame.as_ref()
+    }
+
     /// 拆出协议原生 JSON 数据。
     #[must_use]
     pub fn into_data(self) -> Value {
@@ -366,6 +414,8 @@ impl fmt::Debug for ProtocolWireEvent {
             .debug_struct("ProtocolWireEvent")
             .field("protocol", &self.protocol)
             .field("event_type", &self.event_type)
+            .field("has_json_data", &self.has_json_data)
+            .field("has_raw_sse_frame", &self.raw_sse_frame.is_some())
             .field("has_sse_id", &self.sse_id.is_some())
             .field("sse_retry", &self.sse_retry)
             .field("data", &"<not included in Debug>")
@@ -759,24 +809,6 @@ impl GatewayEvent {
                 | Self::CompactionOutput(_)
                 | Self::Completed(_)
         )
-    }
-
-    /// 冻结客户端可见的网关 response ID，并返回 Provider 原生 response ID。
-    ///
-    /// 只有 Coordinator 会调用该边界；Provider 产生的 ID 永远不会直接下发。
-    pub(crate) fn freeze_gateway_response_id(
-        &mut self,
-        gateway_response_id: &str,
-    ) -> Result<Option<String>, crate::error::IdentifierError> {
-        let metadata = match self {
-            Self::Started(metadata) | Self::Completed(metadata) => metadata,
-            _ => return Ok(None),
-        };
-        let upstream_response_id = SafeUpstreamValue::new(metadata.response_id.clone())?;
-        let upstream_response_id_text = upstream_response_id.as_str().to_owned();
-        metadata.response_id = gateway_response_id.to_owned();
-        metadata.upstream_response_id = Some(upstream_response_id);
-        Ok(Some(upstream_response_id_text))
     }
 }
 

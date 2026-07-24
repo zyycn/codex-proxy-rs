@@ -2,6 +2,7 @@ mod http;
 mod websocket;
 
 use axum::http::HeaderMap;
+use bytes::Bytes;
 use gateway_api::openai::responses::{
     ContinuationIntent, DecodedResponsesRequest, OpenAiRequestHeaders, OpenAiResponsesEncoder,
     RequestDecodeError, ResponseCreateFrameError, ResponseEncodeError, ResponsesCollector,
@@ -9,7 +10,6 @@ use gateway_api::openai::responses::{
 };
 use gateway_core::{
     accounting::{CalculatedCost, ProviderReportedCost, Usage},
-    error::SafeUpstreamValue,
     event::{
         CompactionOutput, CompactionSummary, ContentItem, ContentKind, EventSequenceError,
         FinishReason, GatewayEvent, ProtocolWireEvent, ProviderEvent, ReasoningDelta, ResponseMeta,
@@ -804,11 +804,17 @@ fn websocket_events_should_reuse_the_exact_sse_event_json() {
         let websocket_events = websocket_encoder
             .push_websocket(&provider_event)
             .expect("WebSocket event encoding");
-        let parsed = parse_sse_events(&sse_frames.join(""))
-            .expect("generated SSE frames remain parseable")
-            .into_iter()
-            .map(|event| event.data)
+        let sse_body = sse_frames
+            .iter()
+            .flat_map(|frame| frame.as_ref().iter().copied())
             .collect::<Vec<_>>();
+        let parsed = parse_sse_events(
+            std::str::from_utf8(&sse_body).expect("generated SSE frames remain UTF-8"),
+        )
+        .expect("generated SSE frames remain parseable")
+        .into_iter()
+        .map(|event| event.data)
+        .collect::<Vec<_>>();
 
         assert_eq!(websocket_events, parsed);
     }
@@ -1070,17 +1076,14 @@ fn collector_should_reject_unrepresentable_media_output() {
 }
 
 #[test]
-fn openai_wire_encoder_should_preserve_unknown_media_events_and_hide_upstream_response_id() {
+fn openai_wire_encoder_should_preserve_unknown_media_events_and_upstream_response_id() {
     let upstream_id = "resp_upstream_private";
-    let gateway_id = "resp_gateway_public";
-    let started = ResponseMeta::new(gateway_id, "gpt-test").with_upstream_response_id(
-        SafeUpstreamValue::new(upstream_id).expect("safe upstream response ID"),
+    let started = ResponseMeta::new(upstream_id, "gpt-test");
+    let completed =
+        ResponseMeta::new(upstream_id, "gpt-test").with_finish_reason(FinishReason::Stop);
+    let raw_partial_image = Bytes::from_static(
+        b"id: evt_partial_image\r\nevent: response.image_generation_call.partial_image\r\nretry: 2000\r\ndata: { \"type\": \"response.image_generation_call.partial_image\", \"response_id\": \"resp_upstream_private\", \"partial_image_b64\": \"opaque-image-fragment\" }\r\n\r\n",
     );
-    let completed = ResponseMeta::new(gateway_id, "gpt-test")
-        .with_finish_reason(FinishReason::Stop)
-        .with_upstream_response_id(
-            SafeUpstreamValue::new(upstream_id).expect("safe upstream response ID"),
-        );
     let events = [
         openai_wire_event(
             vec![GatewayEvent::Started(started)],
@@ -1091,7 +1094,7 @@ fn openai_wire_encoder_should_preserve_unknown_media_events_and_hide_upstream_re
             }),
         ),
         ProviderEvent::wire(
-            ProtocolWireEvent::json_with_sse_metadata(
+            ProtocolWireEvent::json_with_raw_sse_metadata(
                 "openai",
                 Some("response.image_generation_call.partial_image".to_owned()),
                 json!({
@@ -1099,6 +1102,7 @@ fn openai_wire_encoder_should_preserve_unknown_media_events_and_hide_upstream_re
                     "response_id": upstream_id,
                     "partial_image_b64": "opaque-image-fragment"
                 }),
+                raw_partial_image.clone(),
                 Some("evt_partial_image".to_owned()),
                 Some(2_000),
             )
@@ -1123,7 +1127,12 @@ fn openai_wire_encoder_should_preserve_unknown_media_events_and_hide_upstream_re
         .flat_map(|event| encoder.push_sse(event).expect("wire event should encode"))
         .collect::<Vec<_>>();
     let response = encoder.finish().expect("wire response should finish");
-    let parsed = parse_sse_events(&frames.join("")).expect("wire SSE should parse");
+    let body = frames
+        .iter()
+        .flat_map(|frame| frame.as_ref().iter().copied())
+        .collect::<Vec<_>>();
+    let body_text = std::str::from_utf8(&body).expect("wire SSE should be UTF-8");
+    let parsed = parse_sse_events(body_text).expect("wire SSE should parse");
 
     assert_eq!(parsed.len(), 3);
     assert_eq!(parsed[1].id.as_deref(), Some("evt_partial_image"));
@@ -1134,8 +1143,12 @@ fn openai_wire_encoder_should_preserve_unknown_media_events_and_hide_upstream_re
             .get("partial_image_b64"),
         Some(&json!("opaque-image-fragment"))
     );
-    assert_eq!(response.get("id"), Some(&json!(gateway_id)));
-    assert!(!frames.join("").contains(upstream_id));
+    assert_eq!(response.get("id"), Some(&json!(upstream_id)));
+    assert!(body_text.contains(upstream_id));
+    assert!(
+        body.windows(raw_partial_image.len())
+            .any(|frame| frame == raw_partial_image.as_ref())
+    );
 }
 
 fn openai_wire_event(canonical: Vec<GatewayEvent>, event_type: &str, data: Value) -> ProviderEvent {

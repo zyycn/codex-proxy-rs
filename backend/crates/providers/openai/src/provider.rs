@@ -797,6 +797,9 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         let failure_rate_limit_headers = response.rate_limit_headers.clone();
         let rate_limit_updates = response.rate_limit_header_updates;
         let mut decoder = CodexCanonicalDecoder::new(upstream_model.as_str());
+        if response.transport == CodexBackendTransport::HttpSse {
+            decoder = decoder.with_raw_sse_passthrough();
+        }
         loop {
             let Some(stream_deadline) = remaining(context.deadline()) else {
                 Err(provider_error(ProviderErrorKind::Timeout, UpstreamSendState::Sent))?;

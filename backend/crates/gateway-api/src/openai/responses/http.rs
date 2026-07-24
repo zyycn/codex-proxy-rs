@@ -19,7 +19,7 @@ use gateway_core::engine::execution::{ClientTransport, ExecutionSession, Started
 use gateway_core::error::{GatewayError, GatewayErrorKind};
 use gateway_core::event::{ProviderEvent, ProviderResponseHeader};
 use gateway_core::lifecycle::ConnectionGuard;
-use gateway_protocol::openai::sse::{DONE_SSE_FRAME, response_failed_sse_event};
+use gateway_protocol::openai::sse::{DONE_SSE_FRAME, response_failed_sse_event_with_id};
 
 use crate::ApiState;
 use crate::openai::{
@@ -468,13 +468,13 @@ impl ResponsesStreamState {
     fn new(
         session: Box<dyn ExecutionSession>,
         encoder: OpenAiResponsesEncoder,
-        initial_frames: Vec<String>,
+        initial_frames: Vec<Bytes>,
         connection_guard: Option<Box<dyn ConnectionGuard>>,
     ) -> Self {
         Self {
             session: Some(session),
             encoder,
-            pending: initial_frames.into_iter().map(Bytes::from).collect(),
+            pending: initial_frames.into_iter().collect(),
             output_finished: false,
             execution_terminal: false,
             _connection_guard: connection_guard,
@@ -526,7 +526,13 @@ impl ResponsesStreamState {
                     .session
                     .as_ref()
                     .is_some_and(|session| session.is_finalized());
-                self.finish_with_gateway_error(gateway_error_from_engine(&error));
+                if self.encoder.has_wire_failure() {
+                    self.pending
+                        .push_back(Bytes::from_static(DONE_SSE_FRAME.as_bytes()));
+                    self.output_finished = true;
+                } else {
+                    self.finish_with_gateway_error(gateway_error_from_engine(&error));
+                }
             }
         }
     }
@@ -537,7 +543,7 @@ impl ResponsesStreamState {
                 if self.encoder.is_completed() {
                     self.finish_completed(frames).await;
                 } else {
-                    self.pending.extend(frames.into_iter().map(Bytes::from));
+                    self.pending.extend(frames);
                 }
             }
             Err(error) => {
@@ -547,7 +553,7 @@ impl ResponsesStreamState {
         }
     }
 
-    async fn finish_completed(&mut self, frames: Vec<String>) {
+    async fn finish_completed(&mut self, frames: Vec<Bytes>) {
         let next = match self.session.as_mut() {
             Some(session) => session.next_event().await,
             None => {
@@ -565,7 +571,7 @@ impl ResponsesStreamState {
                     .as_ref()
                     .is_some_and(|session| session.is_finalized()) =>
             {
-                self.pending.extend(frames.into_iter().map(Bytes::from));
+                self.pending.extend(frames);
                 self.execution_terminal = true;
                 self.pending
                     .push_back(Bytes::from_static(DONE_SSE_FRAME.as_bytes()));
@@ -608,7 +614,8 @@ impl ResponsesStreamState {
     fn finish_with_gateway_error(&mut self, error: GatewayError) {
         let (_, default_type, default_code) = gateway_error_contract(error.kind());
         self.pending
-            .push_back(Bytes::from(response_failed_sse_event(
+            .push_back(Bytes::from(response_failed_sse_event_with_id(
+                self.encoder.response_id(),
                 error.client_error_type().unwrap_or(default_type),
                 error.client_error_code().unwrap_or(default_code),
                 error.client_message(),
@@ -621,7 +628,8 @@ impl ResponsesStreamState {
     fn finish_with_encode_error(&mut self, error: ResponseEncodeError) {
         let protocol = error.protocol_body().error;
         self.pending
-            .push_back(Bytes::from(response_failed_sse_event(
+            .push_back(Bytes::from(response_failed_sse_event_with_id(
+                self.encoder.response_id(),
                 protocol.kind,
                 protocol.code,
                 &protocol.message,

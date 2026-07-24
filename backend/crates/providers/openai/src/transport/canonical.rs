@@ -5,6 +5,7 @@ use std::{
     fmt,
 };
 
+use bytes::Bytes;
 use gateway_core::accounting::Usage;
 use gateway_core::engine::UpstreamSendState;
 use gateway_core::error::{ProviderError, ProviderErrorKind};
@@ -13,7 +14,7 @@ use gateway_core::event::{
     ReasoningDelta, ResponseMeta, TextDelta, ToolCallDelta,
 };
 use gateway_protocol::openai::events::{TokenUsage, extract_usage};
-use gateway_protocol::openai::sse::{SseEvent, SseEventDecoder};
+use gateway_protocol::openai::sse::{SseEvent, SseEventDecoder, SseFrame, sse_frame_is_done};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -38,6 +39,7 @@ pub struct CodexCanonicalDecoder {
     reasoning_output_seen: BTreeSet<u32>,
     usage_emitted: bool,
     semantic_output_seen: bool,
+    raw_sse_passthrough: bool,
 }
 
 /// 上游 Responses 事件的两类失败：协议损坏，或上游明确报告业务失败。
@@ -130,10 +132,32 @@ impl CodexCanonicalDecoder {
             reasoning_output_seen: BTreeSet::new(),
             usage_emitted: false,
             semantic_output_seen: false,
+            raw_sse_passthrough: false,
         }
     }
 
+    /// 让 HTTP SSE 上游帧以原始字节随 wire event 向下游传递。
+    ///
+    /// JSON 投影仍只供 canonical facts、计费与亲和旁路读取；不会用于重建 SSE。
+    #[must_use]
+    pub fn with_raw_sse_passthrough(mut self) -> Self {
+        self.raw_sse_passthrough = true;
+        self
+    }
+
     pub fn push(&mut self, chunk: &[u8]) -> CodexCanonicalOutcome {
+        if self.raw_sse_passthrough {
+            let frames = match self.decoder.push_frames(chunk) {
+                Ok(frames) => frames,
+                Err(error) => {
+                    return self.failure(
+                        Vec::new(),
+                        CodexCanonicalError::Protocol(protocol_error(error)),
+                    );
+                }
+            };
+            return self.decode_frames(frames);
+        }
         let events = match self.decoder.push(chunk) {
             Ok(events) => events,
             Err(error) => {
@@ -147,6 +171,18 @@ impl CodexCanonicalDecoder {
     }
 
     pub fn finish(&mut self) -> CodexCanonicalOutcome {
+        if self.raw_sse_passthrough {
+            let frames = match self.decoder.finish_frames() {
+                Ok(frames) => frames,
+                Err(error) => {
+                    return self.failure(
+                        Vec::new(),
+                        CodexCanonicalError::Protocol(protocol_error(error)),
+                    );
+                }
+            };
+            return self.decode_frames(frames);
+        }
         let events = match self.decoder.finish() {
             Ok(events) => events,
             Err(error) => {
@@ -162,51 +198,108 @@ impl CodexCanonicalDecoder {
     fn decode(&mut self, events: Vec<SseEvent>) -> CodexCanonicalOutcome {
         let mut output = Vec::new();
         for event in events {
-            if event.data.trim() == "[DONE]" {
+            if let Err(error) = self.decode_one(event, None, &mut output) {
+                return self.failure(output, error);
+            }
+        }
+        CodexCanonicalOutcome::Events(output)
+    }
+
+    fn decode_frames(&mut self, frames: Vec<SseFrame>) -> CodexCanonicalOutcome {
+        let mut output = Vec::new();
+        for frame in frames {
+            let done = std::str::from_utf8(frame.raw()).is_ok_and(sse_frame_is_done);
+            let (raw, events) = frame.into_parts();
+            if done {
                 continue;
             }
-            let value = match serde_json::from_str::<Value>(&event.data) {
-                Ok(value) => value,
-                // P1 恢复 raw bytes 后会连该帧原样交付；当前 event carrier 只能承载
-                // JSON，所以先跳过这条无法投影的帧，继续读取后续上游事件。
-                Err(_) => continue,
-            };
-            let event_type = event
-                .event
-                .as_deref()
-                .or_else(|| value.get("type").and_then(Value::as_str));
-            if matches!(event_type, Some("response.failed" | "error")) {
-                return self.failure(
-                    output,
-                    CodexCanonicalError::Upstream(ResponsesSseFailure::from_event(
-                        event_type.unwrap_or_default(),
-                        &value,
-                    )),
-                );
+            let raw = Bytes::from(raw);
+            if events.is_empty() {
+                if let Ok(wire) = ProtocolWireEvent::raw_sse("openai", raw) {
+                    output.push(ProviderEvent::wire(wire));
+                }
+                continue;
             }
-            let mut canonical = Vec::new();
-            if let Some(event_type) = event_type {
-                let _ = self.decode_event(event_type, &value, &mut canonical);
+            for (index, event) in events.into_iter().enumerate() {
+                let raw_sse_frame = (index == 0).then(|| raw.clone());
+                if let Err(error) = self.decode_one(event, raw_sse_frame, &mut output) {
+                    return self.failure(output, error);
+                }
             }
-            let semantic_output = response_event_signals(event_type, &value).semantic_output;
-            let wire = match ProtocolWireEvent::json_with_sse_metadata(
+        }
+        CodexCanonicalOutcome::Events(output)
+    }
+
+    fn decode_one(
+        &mut self,
+        event: SseEvent,
+        raw_sse_frame: Option<Bytes>,
+        output: &mut Vec<ProviderEvent>,
+    ) -> Result<(), CodexCanonicalError> {
+        if event.data.trim() == "[DONE]" {
+            return Ok(());
+        }
+        let value = match serde_json::from_str::<Value>(&event.data) {
+            Ok(value) => value,
+            Err(_) => {
+                if let Some(raw_sse_frame) = raw_sse_frame
+                    && let Ok(wire) = ProtocolWireEvent::raw_sse("openai", raw_sse_frame)
+                {
+                    output.push(ProviderEvent::wire(wire));
+                }
+                return Ok(());
+            }
+        };
+        let event_type = event
+            .event
+            .as_deref()
+            .or_else(|| value.get("type").and_then(Value::as_str));
+        if matches!(event_type, Some("response.failed" | "error")) {
+            let failure = ResponsesSseFailure::from_event(event_type.unwrap_or_default(), &value);
+            if let Ok(wire) = Self::wire_for_event(event, value, raw_sse_frame) {
+                output.push(ProviderEvent::wire(wire));
+            }
+            return Err(CodexCanonicalError::Upstream(failure));
+        }
+        let mut canonical = Vec::new();
+        if let Some(event_type) = event_type {
+            let _ = self.decode_event(event_type, &value, &mut canonical);
+        }
+        let semantic_output = response_event_signals(event_type, &value).semantic_output;
+        let Ok(wire) = Self::wire_for_event(event, value, raw_sse_frame) else {
+            return Ok(());
+        };
+        output.push(if canonical.is_empty() {
+            ProviderEvent::wire(wire)
+        } else {
+            ProviderEvent::canonical_with_wire(canonical, wire)
+        });
+        self.semantic_output_seen |= semantic_output;
+        Ok(())
+    }
+
+    fn wire_for_event(
+        event: SseEvent,
+        value: Value,
+        raw_sse_frame: Option<Bytes>,
+    ) -> Result<ProtocolWireEvent, gateway_core::error::IdentifierError> {
+        match raw_sse_frame {
+            Some(raw_sse_frame) => ProtocolWireEvent::json_with_raw_sse_metadata(
+                "openai",
+                event.event,
+                value,
+                raw_sse_frame,
+                event.id,
+                event.retry,
+            ),
+            None => ProtocolWireEvent::json_with_sse_metadata(
                 "openai",
                 event.event,
                 value,
                 event.id,
                 event.retry,
-            ) {
-                Ok(wire) => wire,
-                Err(_) => continue,
-            };
-            output.push(if canonical.is_empty() {
-                ProviderEvent::wire(wire)
-            } else {
-                ProviderEvent::canonical_with_wire(canonical, wire)
-            });
-            self.semantic_output_seen |= semantic_output;
+            ),
         }
-        CodexCanonicalOutcome::Events(output)
     }
 
     fn failure(

@@ -30,6 +30,57 @@ fn decoder_should_preserve_existing_metadata_fixture_as_openai_wire() {
 }
 
 #[test]
+fn raw_sse_passthrough_should_keep_original_bytes_alongside_canonical_facts() {
+    let heartbeat = ": keep-alive\r\n\r\n";
+    let created = concat!(
+        "id: evt_created\r\n",
+        "event: response.created\r\n",
+        "retry: 250\r\n",
+        "data: { \"type\": \"response.created\", \"response\": { \"id\": \"resp_raw\", \"model\": \"gpt-test\" } }\r\n\r\n",
+    );
+    let body = format!("{heartbeat}{created}");
+
+    let events = CodexCanonicalDecoder::new("fallback")
+        .with_raw_sse_passthrough()
+        .push(body.as_bytes())
+        .expect("raw SSE should remain deliverable");
+    let heartbeat_wire = events[0].wire_event().expect("heartbeat wire");
+    let created_wire = events[1].wire_event().expect("created wire");
+
+    assert!(!heartbeat_wire.has_json_data());
+    assert_eq!(
+        heartbeat_wire.raw_sse_frame().map(AsRef::as_ref),
+        Some(heartbeat.as_bytes())
+    );
+    assert!(created_wire.has_json_data());
+    assert_eq!(
+        created_wire.raw_sse_frame().map(AsRef::as_ref),
+        Some(created.as_bytes())
+    );
+    assert!(matches!(
+        events[1].canonical_facts(),
+        [GatewayEvent::Started(metadata)] if metadata.response_id() == "resp_raw"
+    ));
+}
+
+#[test]
+fn raw_sse_passthrough_should_forward_unparseable_frames_without_failure() {
+    let raw = b"retry: later\ndata: opaque\n\n";
+
+    let events = CodexCanonicalDecoder::new("fallback")
+        .with_raw_sse_passthrough()
+        .push(raw)
+        .expect("unparseable frame must not abort transparent transport");
+    let wire = events[0].wire_event().expect("raw wire event");
+
+    assert!(!wire.has_json_data());
+    assert_eq!(
+        wire.raw_sse_frame().map(AsRef::as_ref),
+        Some(raw.as_slice())
+    );
+}
+
+#[test]
 fn decoder_should_emit_calculated_cost_for_complete_known_model_usage() {
     let body = concat!(
         "event: response.created\n",
@@ -329,6 +380,29 @@ fn decoder_should_classify_official_cyber_policy_as_an_invalid_request() {
 }
 
 #[test]
+fn raw_sse_failure_should_keep_the_original_frame_before_reporting_the_typed_failure() {
+    let raw = concat!(
+        "event: response.failed\r\n",
+        "data: { \"type\": \"response.failed\", \"response\": { \"id\": \"resp_raw_failed\", \"status\": \"failed\", \"error\": { \"code\": \"rate_limit_exceeded\", \"message\": \"raw failure marker\" } } }\r\n\r\n",
+    );
+
+    let failure = CodexCanonicalDecoder::new("fallback")
+        .with_raw_sse_passthrough()
+        .push(raw.as_bytes())
+        .expect_err("response.failed remains a typed lifecycle failure");
+    let wire = failure.events()[0]
+        .wire_event()
+        .expect("upstream failure wire remains deliverable");
+
+    assert_eq!(wire.event_type(), Some("response.failed"));
+    assert_eq!(
+        wire.raw_sse_frame().map(|frame| frame.as_ref()),
+        Some(raw.as_bytes())
+    );
+    assert!(!format!("{failure:?}").contains("raw failure marker"));
+}
+
+#[test]
 fn decoder_should_preserve_same_chunk_output_before_typed_failure() {
     let marker = "same-chunk-secret-marker";
     let body = format!(
@@ -365,7 +439,8 @@ fn decoder_should_preserve_same_chunk_output_before_typed_failure() {
         vec![
             "response.created",
             "response.content_part.added",
-            "response.output_text.delta"
+            "response.output_text.delta",
+            "response.failed"
         ]
     );
     assert!(!format!("{failure:?}").contains(marker));
