@@ -127,6 +127,87 @@ fn encoder_should_forward_the_client_prompt_cache_key() {
 }
 
 #[test]
+fn encoder_should_restore_conversation_fallback_after_body_and_context_values() {
+    let request = request(Map::from_iter([
+        ("model".to_owned(), json!("client-model")),
+        ("input".to_owned(), json!("prompt")),
+        ("prompt_cache_key".to_owned(), json!("cache-conversation")),
+    ]));
+
+    let encoded = encode_generate_request(&request, "gpt-test").expect("encode");
+
+    assert_eq!(
+        encoded.client_conversation_id.as_deref(),
+        Some("cache-conversation")
+    );
+}
+
+#[test]
+fn encoder_should_ignore_legacy_context_aliases_and_metadata_fallbacks() {
+    let request = request(Map::from_iter([
+        ("model".to_owned(), json!("client-model")),
+        ("input".to_owned(), json!("prompt")),
+        ("turn_state".to_owned(), json!("legacy-turn-state")),
+        (
+            "x-codex-turn-state".to_owned(),
+            json!("legacy-header-turn-state"),
+        ),
+        ("turn_metadata".to_owned(), json!("legacy-turn-metadata")),
+        ("beta_features".to_owned(), json!("legacy-beta")),
+        ("include_timing_metrics".to_owned(), json!("legacy-timing")),
+        ("codex_window_id".to_owned(), json!("legacy-window")),
+        (
+            "x-codex-window-id".to_owned(),
+            json!("legacy-header-window"),
+        ),
+        ("parent_thread_id".to_owned(), json!("legacy-parent")),
+        (
+            "x-codex-parent-thread-id".to_owned(),
+            json!("legacy-header-parent"),
+        ),
+        ("conversationId".to_owned(), json!("legacy-conversation")),
+        ("sessionId".to_owned(), json!("legacy-session")),
+        ("threadId".to_owned(), json!("legacy-thread")),
+        ("client_request_id".to_owned(), json!("legacy-request")),
+        ("clientRequestId".to_owned(), json!("legacy-camel-request")),
+        ("turnId".to_owned(), json!("legacy-turn")),
+        ("x-codex-turn-id".to_owned(), json!("legacy-header-turn")),
+        (
+            "client_metadata".to_owned(),
+            json!({
+                "turnState": "metadata-turn-state",
+                "turnMetadata": "metadata-turn-metadata",
+                "conversation_id": "metadata-conversation",
+                "session_id": "metadata-session",
+                "thread_id": "metadata-thread",
+                "x-codex-window-id": "metadata-window"
+            }),
+        ),
+    ]));
+
+    let encoded = encode_generate_request(&request, "gpt-test").expect("encode");
+
+    assert_eq!(
+        (
+            encoded.turn_state,
+            encoded.turn_metadata,
+            encoded.beta_features,
+            encoded.include_timing_metrics,
+            encoded.codex_window_id,
+            encoded.parent_thread_id,
+            encoded.client_conversation_id,
+            encoded.client_session_id,
+            encoded.client_thread_id,
+            encoded.client_request_id,
+            encoded.client_turn_id,
+        ),
+        (
+            None, None, None, None, None, None, None, None, None, None, None,
+        )
+    );
+}
+
+#[test]
 fn encoder_should_project_explicit_websocket_transport_without_touching_body() {
     let payload = ProtocolPayload::json_object(
         "openai",
