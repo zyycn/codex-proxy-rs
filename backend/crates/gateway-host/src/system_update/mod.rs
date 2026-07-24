@@ -39,6 +39,8 @@ use self::state::{
 };
 use self::swap::{replace_release_files, rollback_release};
 
+pub use self::release::validate_download_url;
+
 const APP_BINARY_NAME: &str = "codex-proxy-rs";
 const DEFAULT_WEB_DIST_DIR: &str = "/app/web/dist";
 const DEFAULT_GITHUB_API_BASE: &str = "https://api.github.com/repos";

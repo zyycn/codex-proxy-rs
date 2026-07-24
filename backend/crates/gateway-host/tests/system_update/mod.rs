@@ -10,7 +10,9 @@ use gateway_admin::model::system::{
 };
 use gateway_admin::ports::system::{SystemOperationErrorKind, SystemOperations};
 use gateway_core::engine::CancellationToken;
-use gateway_host::system_update::{ProcessSystemOperations, SystemUpdateConfig};
+use gateway_host::system_update::{
+    ProcessSystemOperations, SystemUpdateConfig, validate_download_url,
+};
 use sha2::{Digest as _, Sha256};
 use tar::{Builder, EntryType, Header};
 use wiremock::matchers::{method, path};
@@ -277,6 +279,17 @@ async fn update_should_reject_release_archive_from_untrusted_host() {
             .perform_update(Some(TARGET_VERSION.to_owned()))
             .await
             .is_err()
+    );
+}
+
+#[test]
+fn update_should_trust_github_release_asset_redirect_host() {
+    assert!(
+        validate_download_url(
+            "https://release-assets.githubusercontent.com/github-production-release-asset/archive",
+            "https://api.github.com/repos",
+        )
+        .is_ok()
     );
 }
 
