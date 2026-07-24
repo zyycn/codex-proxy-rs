@@ -32,10 +32,7 @@ use gateway_core::engine::credential::{
     ProviderAccountStore,
 };
 use gateway_core::error::StoreErrorKind;
-use gateway_core::operation::{
-    ContentPart, GenerateRequest, Message, MessageRole, Operation, ProtocolPayload,
-    ResponsePersistence,
-};
+use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
 use gateway_core::provider_ports::{
     NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingFlowPort, OAuthPendingPutOutcome,
     OAuthPendingTakeOutcome, ProviderRuntimePolicyPort, ProviderStoreError, ProviderStoreErrorKind,
@@ -1172,11 +1169,6 @@ fn build_connection_test_operation(
     upstream_model: &UpstreamModelId,
     input_text: &str,
 ) -> Result<Operation, ProviderAdminError> {
-    let message = Message::new(
-        MessageRole::User,
-        vec![ContentPart::Text(input_text.to_owned())],
-    )
-    .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
     let mut body = Map::new();
     body.insert(
         "model".to_owned(),
@@ -1194,10 +1186,9 @@ fn build_connection_test_operation(
     body.insert("store".to_owned(), Value::Bool(false));
     let payload = ProtocolPayload::json_object("openai", body)
         .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
-    Ok(Operation::Generate(
-        GenerateRequest::from_protocol_payload(vec![message], payload)
-            .with_response_persistence(ResponsePersistence::DoNotStore),
-    ))
+    Ok(Operation::Generate(GenerateRequest::from_protocol_payload(
+        payload,
+    )))
 }
 
 fn currency_cost(money: Money) -> Result<CurrencyCost, ProviderAdminError> {

@@ -1,10 +1,13 @@
-use gateway_core::operation::{
-    ContentPart, GenerateRequest, Message, MessageRole, ProtocolPayload, ReasoningEffort,
-    ReasoningRequirement, ReasoningSummary, ResponsePersistence, ToolDefinition,
-};
+use gateway_core::operation::{GenerateRequest, ProtocolPayload};
 use serde_json::{Map, Value, json};
 
 use provider_openai::encode_generate_request;
+
+fn request(body: Map<String, Value>) -> GenerateRequest {
+    GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", body).expect("OpenAI payload"),
+    )
+}
 
 #[test]
 fn encoder_should_preserve_openai_wire_fields_without_deriving_accountless_pool_identity() {
@@ -25,8 +28,7 @@ fn encoder_should_preserve_openai_wire_fields_without_deriving_accountless_pool_
         ("turnState".to_owned(), json!("private-turn-state")),
         ("future_official_field".to_owned(), json!({"enabled": true})),
     ]);
-    let payload = ProtocolPayload::json_object("openai", body).expect("OpenAI payload");
-    let request = GenerateRequest::from_protocol_payload(Vec::new(), payload);
+    let request = request(body);
 
     let encoded = encode_generate_request(&request, "gpt-routed").expect("encode wire payload");
 
@@ -54,15 +56,10 @@ fn encoder_should_preserve_openai_wire_fields_without_deriving_accountless_pool_
 #[test]
 fn encoder_should_never_hash_prompt_content_into_an_accountless_pool_identity() {
     let request = |input: &str| {
-        let payload = ProtocolPayload::json_object(
-            "openai",
-            Map::from_iter([
-                ("model".to_owned(), json!("client-model")),
-                ("input".to_owned(), Value::String(input.to_owned())),
-            ]),
-        )
-        .expect("OpenAI payload");
-        GenerateRequest::from_protocol_payload(Vec::new(), payload)
+        request(Map::from_iter([
+            ("model".to_owned(), json!("client-model")),
+            ("input".to_owned(), Value::String(input.to_owned())),
+        ]))
     };
 
     for input in ["private stable prompt", "different private prompt"] {
@@ -73,35 +70,25 @@ fn encoder_should_never_hash_prompt_content_into_an_accountless_pool_identity() 
 }
 
 #[test]
-fn encoder_should_project_typed_generate_semantics() {
-    let message = Message::new(
-        MessageRole::User,
-        vec![ContentPart::Text("secret prompt".to_owned())],
-    )
-    .expect("message");
-    let tool = ToolDefinition::new(
-        "lookup",
-        Some("Lookup a value".to_owned()),
-        json!({"type":"object"})
-            .as_object()
-            .cloned()
-            .expect("object"),
-    )
-    .expect("tool")
-    .with_strict(true);
-    let request = GenerateRequest::new(vec![message])
-        .expect("generate")
-        .with_tools(vec![tool])
-        .with_max_output_tokens(512)
-        .with_response_persistence(ResponsePersistence::DoNotStore)
-        .with_reasoning(ReasoningRequirement {
-            effort: Some(ReasoningEffort::High),
-            summary: Some(ReasoningSummary::Concise),
-        });
+fn encoder_should_only_patch_model_and_preserve_raw_generate_semantics() {
+    let request = request(Map::from_iter([
+        ("model".to_owned(), json!("client-model")),
+        ("input".to_owned(), json!("secret prompt")),
+        (
+            "tools".to_owned(),
+            json!([{"type": "function", "name": "lookup", "strict": true}]),
+        ),
+        ("max_output_tokens".to_owned(), json!(512)),
+        ("store".to_owned(), json!(false)),
+        (
+            "reasoning".to_owned(),
+            json!({"effort": "high", "summary": "concise"}),
+        ),
+    ]));
 
     let encoded = encode_generate_request(&request, "gpt-test").expect("encode");
     assert_eq!(encoded.body().get("model"), Some(&json!("gpt-test")));
-    assert_eq!(encoded.body().get("stream"), Some(&json!(true)));
+    assert!(encoded.body().get("stream").is_none());
     assert_eq!(encoded.body().get("max_output_tokens"), Some(&json!(512)));
     assert_eq!(encoded.body().get("store"), Some(&json!(false)));
     let body = Value::Object(encoded.body().clone());
@@ -111,15 +98,12 @@ fn encoder_should_project_typed_generate_semantics() {
 }
 
 #[test]
-fn downstream_store_intent_should_not_enable_upstream_storage() {
-    let message = Message::new(
-        MessageRole::User,
-        vec![ContentPart::Text("persist inside gateway".to_owned())],
-    )
-    .expect("message");
-    let request = GenerateRequest::new(vec![message])
-        .expect("generate")
-        .with_response_persistence(ResponsePersistence::Store);
+fn encoder_should_preserve_client_store_intent() {
+    let request = request(Map::from_iter([
+        ("model".to_owned(), json!("client-model")),
+        ("input".to_owned(), json!("persist inside gateway")),
+        ("store".to_owned(), json!(true)),
+    ]));
 
     let encoded = encode_generate_request(&request, "gpt-test").expect("encode");
 
@@ -127,15 +111,12 @@ fn downstream_store_intent_should_not_enable_upstream_storage() {
 }
 
 #[test]
-fn encoder_should_forward_the_common_prompt_cache_key() {
-    let message = Message::new(
-        MessageRole::User,
-        vec![ContentPart::Text("cache prefix".to_owned())],
-    )
-    .expect("message");
-    let request = GenerateRequest::new(vec![message])
-        .expect("generate")
-        .with_prompt_cache_key("cache-route");
+fn encoder_should_forward_the_client_prompt_cache_key() {
+    let request = request(Map::from_iter([
+        ("model".to_owned(), json!("client-model")),
+        ("input".to_owned(), json!("cache prefix")),
+        ("prompt_cache_key".to_owned(), json!("cache-route")),
+    ]));
 
     let encoded = encode_generate_request(&request, "gpt-test").expect("encode");
 
@@ -159,7 +140,7 @@ fn encoder_should_project_explicit_websocket_transport_without_touching_body() {
         "use_websocket".to_owned(),
         Value::Bool(true),
     )]));
-    let request = GenerateRequest::from_protocol_payload(Vec::new(), payload);
+    let request = GenerateRequest::from_protocol_payload(payload);
 
     let encoded = encode_generate_request(&request, "gpt-test").expect("encode");
 
@@ -182,7 +163,7 @@ fn encoder_should_project_explicit_http_transport_without_touching_body() {
         "use_websocket".to_owned(),
         Value::Bool(false),
     )]));
-    let request = GenerateRequest::from_protocol_payload(Vec::new(), payload);
+    let request = GenerateRequest::from_protocol_payload(payload);
 
     let encoded = encode_generate_request(&request, "gpt-test").expect("encode");
 
@@ -208,7 +189,7 @@ fn encoder_should_preserve_opaque_provider_options_without_interpreting_them() {
         ]),
     )
     .expect("OpenAI payload");
-    let request = GenerateRequest::from_protocol_payload(Vec::new(), payload);
+    let request = GenerateRequest::from_protocol_payload(payload);
 
     let encoded = encode_generate_request(&request, "gpt-test").expect("opaque options encode");
 
@@ -245,7 +226,7 @@ fn encoder_should_project_lite_and_memgen_options_to_transport_state_only() {
             Value::String("true".to_owned()),
         ),
     ]));
-    let request = GenerateRequest::from_protocol_payload(Vec::new(), payload);
+    let request = GenerateRequest::from_protocol_payload(payload);
 
     let encoded = encode_generate_request(&request, "gpt-test").expect("encode");
 
@@ -269,7 +250,7 @@ fn observability_semantics_should_reuse_codex_turn_metadata() {
         "turn_metadata".to_owned(),
         Value::String(r#"{"request_kind":"compaction","subagent_kind":"review"}"#.to_owned()),
     )]));
-    let request = GenerateRequest::from_protocol_payload(Vec::new(), payload);
+    let request = GenerateRequest::from_protocol_payload(payload);
 
     let semantics = encode_generate_request(&request, "observability")
         .expect("observability request should encode")
@@ -304,7 +285,7 @@ fn observability_semantics_should_use_the_transparent_openai_payload() {
         .clone(),
     )
     .expect("OpenAI payload");
-    let request = GenerateRequest::from_protocol_payload(Vec::new(), payload);
+    let request = GenerateRequest::from_protocol_payload(payload);
 
     let semantics = encode_generate_request(&request, "observability")
         .expect("transparent OpenAI request should encode")

@@ -584,6 +584,9 @@ pub enum GrokCatalogApiBackend {
     ChatCompletions,
     /// Anthropic Messages wire。
     Messages,
+    /// 上游新增、当前 adapter 尚未识别的 backend。
+    #[serde(other)]
+    Unknown,
 }
 
 /// Grok 目录中允许进入控制面的能力证据。
@@ -815,7 +818,6 @@ impl fmt::Debug for GrokModelCatalogClient {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct GrokModelsWire {
     object: GrokModelsObject,
     data: Vec<GrokModelWire>,
@@ -859,7 +861,7 @@ struct GrokModelWire {
 ///
 /// # Errors
 ///
-/// 任一条目、分页信号、重复 slug、未知顶层字段或 ETag 不合法时整轮失败。
+/// 任一条目、重复 slug 或 ETag 不合法时整轮失败；上游新增的未知字段会忽略。
 pub fn parse_grok_model_catalog(
     body: &[u8],
     etag: Option<&str>,
@@ -916,7 +918,10 @@ fn normalize_model(wire: GrokModelWire) -> Result<GrokCatalogModel, GrokModelCat
 
     let context_window_tokens = optional_positive(wire.context_window)?;
     let max_output_tokens = optional_positive(wire.max_completion_tokens)?;
-    let responses_api = responses_evidence(wire.supported_in_api, wire.api_backend);
+    let api_backend = wire
+        .api_backend
+        .filter(|backend| *backend != GrokCatalogApiBackend::Unknown);
+    let responses_api = responses_evidence(wire.supported_in_api, api_backend);
 
     Ok(GrokCatalogModel {
         request_model,
@@ -928,7 +933,7 @@ fn normalize_model(wire: GrokModelWire) -> Result<GrokCatalogModel, GrokModelCat
             ),
             backend_search: GrokCatalogCapabilityEvidence::from_wire(wire.supports_backend_search),
             streaming_tool_calls: GrokCatalogCapabilityEvidence::from_wire(wire.stream_tool_calls),
-            api_backend: wire.api_backend,
+            api_backend,
         },
         limits: GrokCatalogLimits {
             context_window_tokens,

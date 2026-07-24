@@ -1,11 +1,7 @@
 //! 核心 Generate operation 到 Codex Responses wire request 的严格编码。
 
-use base64::Engine as _;
-use gateway_core::operation::{
-    ContentPart, GenerateRequest, ImageSource, MessageRole, OutputFormat, ReasoningEffort,
-    ReasoningSummary, ResponsePersistence,
-};
-use serde_json::{Map, Value, json};
+use gateway_core::operation::GenerateRequest;
+use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::transport::protocol::responses::CodexResponsesRequest;
@@ -73,197 +69,24 @@ const INSTALLATION_ID_KEYS: &[&str] = &[
 pub enum CodexRequestEncodeError {
     #[error("Codex request is missing its OpenAI protocol payload")]
     InvalidProtocolPayload,
-    #[error("Codex request contains unsupported content")]
-    UnsupportedContent,
 }
 
 pub fn encode_generate_request(
     request: &GenerateRequest,
     upstream_model: &str,
 ) -> Result<CodexResponsesRequest, CodexRequestEncodeError> {
-    let (mut body, protocol_context) = match request.protocol_payload() {
-        Some(payload) if payload.protocol() == "openai" => {
-            (payload.body().clone(), Some(payload.context()))
-        }
-        Some(_) => return Err(CodexRequestEncodeError::InvalidProtocolPayload),
-        None => (Map::new(), None),
-    };
-    let protocol_payload = protocol_context.is_some();
+    let payload = request.protocol_payload();
+    if payload.protocol() != "openai" {
+        return Err(CodexRequestEncodeError::InvalidProtocolPayload);
+    }
+    let mut body = payload.body().clone();
     body.insert("model".to_owned(), Value::String(upstream_model.to_owned()));
-    if !protocol_payload {
-        body.insert("input".to_owned(), Value::Array(encode_messages(request)?));
-    }
-    if !protocol_payload {
-        body.insert("stream".to_owned(), Value::Bool(true));
-        body.insert(
-            "store".to_owned(),
-            Value::Bool(matches!(
-                request.response_persistence(),
-                ResponsePersistence::Store
-            )),
-        );
-    }
-
-    if !protocol_payload && !request.tools().is_empty() {
-        body.insert(
-            "tools".to_owned(),
-            Value::Array(
-                request
-                    .tools()
-                    .iter()
-                    .map(|tool| {
-                        let mut value = Map::new();
-                        value.insert("type".to_owned(), Value::String("function".to_owned()));
-                        value.insert("name".to_owned(), Value::String(tool.name().to_owned()));
-                        if let Some(description) = tool.description() {
-                            value.insert(
-                                "description".to_owned(),
-                                Value::String(description.to_owned()),
-                            );
-                        }
-                        value.insert(
-                            "parameters".to_owned(),
-                            Value::Object(tool.input_schema().clone()),
-                        );
-                        value.insert("strict".to_owned(), Value::Bool(tool.strict()));
-                        Value::Object(value)
-                    })
-                    .collect(),
-            ),
-        );
-    }
-
-    if !protocol_payload && !matches!(request.output_format(), OutputFormat::Text) {
-        body.insert(
-            "text".to_owned(),
-            encode_output_format(request.output_format()),
-        );
-    }
-    if !protocol_payload && let Some(reasoning) = request.reasoning() {
-        let mut value = Map::new();
-        if let Some(effort) = reasoning.effort {
-            value.insert(
-                "effort".to_owned(),
-                Value::String(reasoning_effort(effort).to_owned()),
-            );
-        }
-        if let Some(summary) = reasoning.summary {
-            value.insert(
-                "summary".to_owned(),
-                Value::String(reasoning_summary(summary).to_owned()),
-            );
-        }
-        body.insert("reasoning".to_owned(), Value::Object(value));
-    }
-    if !protocol_payload && let Some(tokens) = request.max_output_tokens() {
-        body.insert("max_output_tokens".to_owned(), Value::from(tokens));
-    }
-    if !protocol_payload && let Some(key) = request.prompt_cache_key() {
-        body.insert("prompt_cache_key".to_owned(), Value::String(key.to_owned()));
-    }
 
     let mut encoded = CodexResponsesRequest::from_body(body);
     encoded.explicit_prompt_cache_key = encoded.prompt_cache_key().is_some();
     extract_request_context(&mut encoded);
-    if let Some(context) = protocol_context {
-        apply_protocol_context(&mut encoded, context);
-    }
+    apply_protocol_context(&mut encoded, payload.context());
     Ok(encoded)
-}
-
-fn encode_messages(request: &GenerateRequest) -> Result<Vec<Value>, CodexRequestEncodeError> {
-    let mut input = Vec::new();
-    for message in request.messages() {
-        let mut content = Vec::new();
-        for part in message.content() {
-            match part {
-                ContentPart::Text(text) => content.push(json!({
-                    "type": match message.role() {
-                        MessageRole::Assistant => "output_text",
-                        MessageRole::System
-                        | MessageRole::Developer
-                        | MessageRole::User => "input_text",
-                    },
-                    "text": text,
-                })),
-                ContentPart::Image(source) => {
-                    if message.role() != MessageRole::User {
-                        return Err(CodexRequestEncodeError::UnsupportedContent);
-                    }
-                    content.push(json!({
-                        "type": "input_image",
-                        "image_url": image_url(source),
-                    }));
-                }
-                ContentPart::ToolResult { call_id, output } => {
-                    input.push(json!({
-                        "type": "function_call_output",
-                        "call_id": call_id,
-                        "output": output,
-                    }));
-                }
-                ContentPart::ToolCall {
-                    call_id,
-                    name,
-                    arguments,
-                } => {
-                    if message.role() != MessageRole::Assistant {
-                        return Err(CodexRequestEncodeError::UnsupportedContent);
-                    }
-                    input.push(json!({
-                        "type": "function_call",
-                        "call_id": call_id,
-                        "name": name,
-                        "arguments": arguments,
-                    }));
-                }
-                _ => return Err(CodexRequestEncodeError::UnsupportedContent),
-            }
-        }
-        if !content.is_empty() {
-            input.push(json!({
-                "type": "message",
-                "role": message_role(message.role()),
-                "content": content,
-            }));
-        }
-    }
-    if input.is_empty() {
-        return Err(CodexRequestEncodeError::UnsupportedContent);
-    }
-    Ok(input)
-}
-
-fn image_url(source: &ImageSource) -> String {
-    match source {
-        ImageSource::Url(url) => url.clone(),
-        ImageSource::Bytes { media_type, data } => format!(
-            "data:{media_type};base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(data)
-        ),
-    }
-}
-
-fn encode_output_format(format: &OutputFormat) -> Value {
-    let format = match format {
-        OutputFormat::Text => json!({"type": "text"}),
-        OutputFormat::JsonObject => json!({"type": "json_object"}),
-        OutputFormat::JsonSchema(schema) => {
-            let mut value = Map::new();
-            value.insert("type".to_owned(), Value::String("json_schema".to_owned()));
-            value.insert("name".to_owned(), Value::String(schema.name().to_owned()));
-            if let Some(description) = schema.description() {
-                value.insert(
-                    "description".to_owned(),
-                    Value::String(description.to_owned()),
-                );
-            }
-            value.insert("schema".to_owned(), Value::Object(schema.schema().clone()));
-            value.insert("strict".to_owned(), Value::Bool(schema.strict()));
-            Value::Object(value)
-        }
-    };
-    json!({"format": format})
 }
 
 fn extract_request_context(request: &mut CodexResponsesRequest) {
@@ -748,32 +571,4 @@ fn context_string(context: &Map<String, Value>, field: &str) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned)
-}
-
-const fn message_role(role: MessageRole) -> &'static str {
-    match role {
-        MessageRole::System => "system",
-        MessageRole::Developer => "developer",
-        MessageRole::User => "user",
-        MessageRole::Assistant => "assistant",
-    }
-}
-
-const fn reasoning_effort(effort: ReasoningEffort) -> &'static str {
-    match effort {
-        ReasoningEffort::Minimal => "minimal",
-        ReasoningEffort::Low => "low",
-        ReasoningEffort::Medium => "medium",
-        ReasoningEffort::High => "high",
-        ReasoningEffort::ExtraHigh => "xhigh",
-    }
-}
-
-const fn reasoning_summary(summary: ReasoningSummary) -> &'static str {
-    match summary {
-        ReasoningSummary::Auto => "auto",
-        ReasoningSummary::Concise => "concise",
-        ReasoningSummary::Detailed => "detailed",
-        ReasoningSummary::None => "none",
-    }
 }

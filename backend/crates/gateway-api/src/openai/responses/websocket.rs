@@ -19,7 +19,6 @@ use gateway_core::error::{GatewayError, GatewayErrorKind};
 use gateway_core::event::ProviderResponseHeader;
 use gateway_core::lifecycle::{ConnectionGuard, ConnectionLifecycle};
 use gateway_core::operation::ProviderSessionState;
-use gateway_core::routing::ProviderKind;
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
@@ -29,7 +28,7 @@ use crate::{
         auth::{authenticate_client, authentication_error_response},
         error::{gateway_error_contract, gateway_error_from_engine, runtime_unavailable_response},
         router::MAX_CLIENT_REQUEST_BODY_BYTES,
-        service::{OpenAiService, created_at_unix_seconds},
+        service::OpenAiService,
     },
 };
 
@@ -158,35 +157,32 @@ async fn serve_responses_websocket(mut socket: WebSocket, session: ResponsesWebS
         };
         request_count = request_count.saturating_add(1);
         let correlation_id = session.service.next_request_id();
-        let decoded = match decode_response_create_with_context(
-            payload.as_str(),
-            &session.request_headers,
-            session.client.policy().provider_kind(),
-        ) {
-            Ok(decoded) => {
-                decoded.with_client_context(session.client_ip, session.user_agent.clone())
-            }
-            Err(error) => {
-                tracing::info!(
-                    websocket_connection_id = %session.connection_id,
-                    request_id = %correlation_id,
-                    error = %error,
-                    "Responses WebSocket request rejected"
-                );
-                if send_protocol_error(
-                    &mut socket,
-                    StatusCode::BAD_REQUEST,
-                    error.protocol_body(),
-                    &correlation_id,
-                )
-                .await
-                    == ForwardOutcome::Disconnect
-                {
-                    break;
+        let decoded =
+            match decode_response_create_with_context(payload.as_str(), &session.request_headers) {
+                Ok(decoded) => {
+                    decoded.with_client_context(session.client_ip, session.user_agent.clone())
                 }
-                continue;
-            }
-        };
+                Err(error) => {
+                    tracing::info!(
+                        websocket_connection_id = %session.connection_id,
+                        request_id = %correlation_id,
+                        error = %error,
+                        "Responses WebSocket request rejected"
+                    );
+                    if send_protocol_error(
+                        &mut socket,
+                        StatusCode::BAD_REQUEST,
+                        error.protocol_body(),
+                        &correlation_id,
+                    )
+                    .await
+                        == ForwardOutcome::Disconnect
+                    {
+                        break;
+                    }
+                    continue;
+                }
+            };
         let decoded = replay.prepare(decoded);
         let started = match session
             .service
@@ -262,10 +258,6 @@ async fn forward_execution(
     let request_id = started.request_id.to_string();
     let streaming = started.stream;
     let mut execution = PendingExecution::new(started.session);
-    let created_at = match created_at_unix_seconds(started.created_at) {
-        Ok(created_at) => created_at,
-        Err(error) => return send_gateway_error(socket, &error, &request_id).await,
-    };
     if !streaming {
         let error = GatewayError::new(
             GatewayErrorKind::Internal,
@@ -304,7 +296,7 @@ async fn forward_execution(
         );
         return send_gateway_error(socket, &error, &request_id).await;
     }
-    let mut encoder = OpenAiResponsesEncoder::new(created_at);
+    let mut encoder = OpenAiResponsesEncoder::new();
     let mut provider_state = None;
     let mut first_messages = Vec::new();
     for event in &mut first {
@@ -537,15 +529,13 @@ async fn next_active_input(
 pub fn decode_response_create_with_context(
     payload: &str,
     request_headers: &OpenAiRequestHeaders,
-    provider_kind: &ProviderKind,
 ) -> Result<DecodedResponsesRequest, ResponseCreateFrameError> {
-    decode_response_create_inner(payload, request_headers, Some(provider_kind))
+    decode_response_create_inner(payload, request_headers)
 }
 
 fn decode_response_create_inner(
     payload: &str,
     request_headers: &OpenAiRequestHeaders,
-    provider_kind: Option<&ProviderKind>,
 ) -> Result<DecodedResponsesRequest, ResponseCreateFrameError> {
     let Value::Object(mut body) = serde_json::from_str::<Value>(payload)
         .map_err(|_| ResponseCreateFrameError::InvalidJson)?
@@ -561,7 +551,7 @@ fn decode_response_create_inner(
     }
     let encoded = serde_json::to_vec(&Value::Object(body))
         .map_err(|_| ResponseCreateFrameError::InvalidJson)?;
-    super::request::decode_request_inner(&encoded, false, request_headers, provider_kind)
+    super::request::decode_request_inner(&encoded, false, request_headers)
         .map_err(ResponseCreateFrameError::Request)
 }
 

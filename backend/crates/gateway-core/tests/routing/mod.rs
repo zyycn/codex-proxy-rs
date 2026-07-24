@@ -4,8 +4,7 @@ use std::time::Duration;
 
 use gateway_core::engine::credential::{AccountSelectionPolicy, RotationStrategy};
 use gateway_core::operation::{
-    CapabilityRequirements, ContentPart, Feature, GenerateRequest, Message, MessageRole, Operation,
-    OperationKind,
+    CapabilityRequirements, Feature, GenerateRequest, Operation, OperationKind, ProtocolPayload,
 };
 use gateway_core::policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits};
 use gateway_core::routing::{
@@ -36,12 +35,14 @@ fn model(provider: &str, name: &str, capabilities: ModelCapabilities) -> Provide
 }
 
 fn operation() -> Operation {
-    let message = Message::new(
-        MessageRole::User,
-        vec![ContentPart::Text("hello".to_owned())],
-    )
-    .expect("valid message");
-    Operation::Generate(GenerateRequest::new(vec![message]).expect("valid request"))
+    let body = serde_json::json!({
+        "model": "gpt-5.5",
+        "input": [{"type": "message", "role": "user", "content": "hello"}],
+    });
+    Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", body.as_object().expect("request object").clone())
+            .expect("OpenAI payload"),
+    ))
 }
 
 fn client_policy(id: &str, plaintext: &str, enabled: bool) -> ClientPolicy {
@@ -269,7 +270,7 @@ fn upstream_feature_validation_should_preserve_operation_and_limit_gates() {
         .require(Feature::JsonSchema);
     let oversized_output = CapabilityRequirements::new(OperationKind::Generate)
         .with_requested_output_tokens(Some(16_001));
-    let unsupported_operation = CapabilityRequirements::new(OperationKind::CompactConversation);
+    let unsupported_operation = CapabilityRequirements::new(OperationKind::Speech);
 
     assert_eq!(
         (

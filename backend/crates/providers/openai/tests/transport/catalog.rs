@@ -144,13 +144,32 @@ fn duplicate_request_slugs_should_fail_the_entire_snapshot() {
 }
 
 #[test]
-fn pagination_signal_should_fail_the_entire_snapshot() {
-    let result = parse_codex_model_catalog(
+fn unknown_top_level_pagination_fields_should_not_reject_the_snapshot() {
+    let snapshot = parse_codex_model_catalog(
         br#"{"models":[{"slug":"gpt-5.4","display_name":"GPT-5.4"}],"has_more":true,"cursor":"next"}"#,
         None,
-    );
+    )
+    .expect("unknown pagination fields are not part of the model contract");
 
-    assert!(matches!(result, Err(CodexModelCatalogError::InvalidWire)));
+    assert_eq!(snapshot.models()[0].request_model().as_str(), "gpt-5.4");
+}
+
+#[test]
+fn unknown_input_modality_should_degrade_capability_evidence_to_unknown() {
+    let snapshot = parse_codex_model_catalog(
+        br#"{"models":[{"slug":"gpt-future","display_name":"Future","input_modalities":["audio"]}]}"#,
+        None,
+    )
+    .expect("future modality should not reject the snapshot");
+    let capabilities = snapshot.models()[0].capabilities();
+
+    assert_eq!(
+        (capabilities.text_input(), capabilities.image_input()),
+        (
+            CodexCatalogCapabilityEvidence::Unknown,
+            CodexCatalogCapabilityEvidence::Unknown
+        )
+    );
 }
 
 #[test]

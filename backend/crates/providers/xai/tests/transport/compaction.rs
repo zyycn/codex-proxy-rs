@@ -1,7 +1,5 @@
-use gateway_core::event::{
-    CompactionSummary, GatewayEvent, ProviderEvent, ReasoningDelta, TextDelta, ToolCallDelta,
-};
-use gateway_core::operation::{CompactConversationRequest, GenerateRequest, ProtocolPayload};
+use gateway_core::event::{GatewayEvent, ProviderEvent, ReasoningDelta, TextDelta, ToolCallDelta};
+use gateway_core::operation::{GenerateRequest, ProtocolPayload};
 use gateway_core::policy::ClientApiKeyId;
 use provider_xai::{
     GrokCompactionDecodeError, GrokCompactionRequest, GrokCompactionSummaryDecoder,
@@ -11,15 +9,15 @@ use serde_json::{Value, json};
 
 const GROK_COMPACTION_REQUEST_FIXTURE: &str = include_str!("fixtures/grok_compaction_request.json");
 
-fn compact_request(body: Value) -> CompactConversationRequest {
+fn compaction_request(body: Value) -> GenerateRequest {
     let body = body.as_object().expect("request object").clone();
     let payload = ProtocolPayload::json_object("openai", body).expect("OpenAI payload");
-    CompactConversationRequest::new(GenerateRequest::from_protocol_payload(Vec::new(), payload))
+    GenerateRequest::from_protocol_payload(payload)
 }
 
 fn encode(body: Value) -> Result<GrokCompactionRequest, GrokRequestEncodeError> {
     GrokCompactionRequest::encode(
-        &compact_request(body),
+        &compaction_request(body),
         "grok-4.5",
         &ClientApiKeyId::new("key_compaction").expect("client API key ID"),
     )
@@ -32,7 +30,7 @@ fn valid_summary(secret: &str) -> String {
     )
 }
 
-fn decode_summary(raw: &str) -> Result<CompactionSummary, GrokCompactionDecodeError> {
+fn decode_summary(raw: &str) -> Result<String, GrokCompactionDecodeError> {
     let mut decoder = GrokCompactionSummaryDecoder::new();
     decoder.observe(&ProviderEvent::canonical(GatewayEvent::TextDelta(
         TextDelta {
@@ -51,7 +49,8 @@ fn encoder_should_preserve_history_order_and_append_summary_prompt() {
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "first"}]},
             {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
             {"type": "function_call_output", "call_id": "call_1", "output": "result"},
-            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "last"}]}
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "last"}]},
+            {"type": "compaction_trigger"}
         ],
         "stream": true
     }))
@@ -78,7 +77,10 @@ fn encoder_should_preserve_history_order_and_append_summary_prompt() {
 fn encoder_should_preserve_tools_and_remove_non_prefix_constraints() {
     let request = encode(json!({
         "model": "client-model",
-        "input": [{"type": "message", "role": "user", "content": "history"}],
+        "input": [
+            {"type": "message", "role": "user", "content": "history"},
+            {"type": "compaction_trigger"}
+        ],
         "tools": [{"type": "function", "name": "lookup", "parameters": {"type": "object"}}],
         "tool_choice": "required",
         "parallel_tool_calls": true,
@@ -120,7 +122,10 @@ fn encoder_should_preserve_tools_and_remove_non_prefix_constraints() {
 fn encoder_should_match_grok_compaction_fixture_shape() {
     let request = encode(json!({
         "model": "client-model",
-        "input": [{"type": "message", "role": "user", "content": "history"}],
+        "input": [
+            {"type": "message", "role": "user", "content": "history"},
+            {"type": "compaction_trigger"}
+        ],
         "tools": [{"type": "function", "name": "lookup", "parameters": {"type": "object"}}]
     }))
     .expect("compaction request");
@@ -138,7 +143,10 @@ fn encoder_should_match_grok_compaction_fixture_shape() {
 fn encoder_should_append_structured_full_replace_prompt() {
     let request = encode(json!({
         "model": "client-model",
-        "input": [{"type": "message", "role": "user", "content": "history"}]
+        "input": [
+            {"type": "message", "role": "user", "content": "history"},
+            {"type": "compaction_trigger"}
+        ]
     }))
     .expect("compaction request");
     let prompt = request.body()["input"][1]["content"][0]["text"]
@@ -153,19 +161,23 @@ fn encoder_should_append_structured_full_replace_prompt() {
 }
 
 #[test]
-fn encoder_should_fail_closed_when_raw_trigger_reaches_provider() {
-    let error = match encode(json!({
+fn encoder_should_consume_only_the_terminal_compaction_trigger() {
+    let request = encode(json!({
         "model": "client-model",
         "input": [
             {"type": "message", "role": "user", "content": "history"},
             {"type": "compaction_trigger"}
         ]
-    })) {
-        Ok(_) => panic!("raw trigger must not cross the typed operation boundary"),
-        Err(error) => error,
-    };
+    }))
+    .expect("compaction request");
 
-    assert_eq!(error, GrokRequestEncodeError::InvalidRequestNormalization);
+    assert!(
+        request.body()["input"]
+            .as_array()
+            .expect("input array")
+            .iter()
+            .all(|item| item["type"] != "compaction_trigger")
+    );
 }
 
 #[test]
@@ -334,7 +346,10 @@ fn decoder_should_accept_a_valid_summary_without_interpreting_terminal_state() {
 fn debug_output_should_not_contain_private_conversation_or_summary() {
     let request = encode(json!({
         "model": "client-model",
-        "input": [{"type": "message", "role": "user", "content": "request-private-secret"}]
+        "input": [
+            {"type": "message", "role": "user", "content": "request-private-secret"},
+            {"type": "compaction_trigger"}
+        ]
     }))
     .expect("compaction request");
     let mut decoder = GrokCompactionSummaryDecoder::new();

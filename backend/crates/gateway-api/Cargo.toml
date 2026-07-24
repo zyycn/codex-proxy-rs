@@ -21,7 +21,7 @@ gateway-admin = { path = "../gateway-admin" }
 gateway-core = { path = "../gateway-core" }
 gateway-protocol = { path = "../gateway-protocol" }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
+serde_json = { version = "1.0.150", features = ["preserve_order"] }
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", default-features = false, features = ["macros", "time"] }
 tower-http = { version = "0.6.11", features = ["cors", "fs", "request-id", "timeout", "trace"] }

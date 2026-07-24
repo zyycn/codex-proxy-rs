@@ -1,6 +1,4 @@
-use gateway_core::operation::{
-    ContentPart, GenerateRequest, Message, MessageRole, ProtocolPayload,
-};
+use gateway_core::operation::{GenerateRequest, ProtocolPayload};
 use gateway_core::policy::ClientApiKeyId;
 use serde_json::{Map, Value, json};
 
@@ -11,7 +9,6 @@ fn raw_request(body: Value) -> GenerateRequest {
         panic!("request fixture must be an object");
     };
     GenerateRequest::from_protocol_payload(
-        Vec::new(),
         ProtocolPayload::json_object("openai", body).expect("OpenAI payload"),
     )
 }
@@ -146,22 +143,6 @@ fn account_identity_should_be_removed_without_touching_prompt_content() {
     assert_eq!(
         body.pointer("/metadata/application_tag"),
         Some(&json!("preserve-me"))
-    );
-}
-
-#[test]
-fn typed_projection_should_not_exist_as_a_second_request_path() {
-    let message = Message::new(
-        MessageRole::User,
-        vec![ContentPart::Text("private prompt".to_owned())],
-    )
-    .expect("message");
-    let request = GenerateRequest::new(vec![message]).expect("typed operation");
-
-    assert_eq!(
-        GrokResponsesRequest::encode(&request, "grok-routed", &client_key())
-            .expect_err("missing raw payload must fail"),
-        GrokRequestEncodeError::InvalidProtocolPayload
     );
 }
 

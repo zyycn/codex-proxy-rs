@@ -30,15 +30,14 @@ use gateway_core::engine::{
     NewModelRequest, RecoveryReport, UpstreamSendState,
 };
 use gateway_core::error::{GatewayErrorKind, ProviderErrorKind, StoreError};
-use gateway_core::operation::{
-    ContentPart, GenerateRequest, Message, MessageRole, Operation, OperationKind,
-};
+use gateway_core::operation::{GenerateRequest, Operation, OperationKind, ProtocolPayload};
 use gateway_core::policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits};
 use gateway_core::routing::snapshot::RuntimeSnapshotHandle;
 use gateway_core::routing::{
     ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, RuntimeSnapshot,
     UpstreamModelId,
 };
+use serde_json::json;
 
 #[test]
 fn only_provider_attributable_failures_should_affect_circuit() {
@@ -296,10 +295,12 @@ fn client_snapshot() -> RuntimeSnapshot {
 }
 
 fn probe_operation() -> Operation {
-    let message = Message::new(
-        MessageRole::User,
-        vec![ContentPart::Text("ping".to_owned())],
-    )
-    .expect("probe message");
-    Operation::Generate(GenerateRequest::new(vec![message]).expect("probe request"))
+    let body = json!({
+        "model": "gpt-probe",
+        "input": [{"type": "message", "role": "user", "content": "ping"}],
+    });
+    Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", body.as_object().expect("request object").clone())
+            .expect("OpenAI payload"),
+    ))
 }

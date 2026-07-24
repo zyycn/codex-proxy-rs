@@ -415,13 +415,30 @@ fn duplicate_actual_models_should_fail_the_entire_snapshot() {
 }
 
 #[test]
-fn pagination_signal_should_fail_the_entire_snapshot() {
-    let result = parse_grok_model_catalog(
+fn unknown_top_level_pagination_fields_should_not_reject_the_snapshot() {
+    let snapshot = parse_grok_model_catalog(
         br#"{"object":"list","data":[{"id":"grok-4"}],"has_more":true,"cursor":"next"}"#,
         None,
-    );
+    )
+    .expect("unknown pagination fields are not part of the model contract");
 
-    assert!(matches!(result, Err(GrokModelCatalogError::InvalidWire)));
+    assert_eq!(snapshot.models()[0].request_model().as_str(), "grok-4");
+}
+
+#[test]
+fn unknown_api_backend_should_degrade_to_unknown_without_rejecting_the_snapshot() {
+    let snapshot = parse_grok_model_catalog(
+        br#"{"object":"list","future_top_level":true,"data":[{"id":"grok-future","apiBackend":"future_backend","future_field":{"keep":true}}]}"#,
+        None,
+    )
+    .expect("future backend should not reject the snapshot");
+    let capabilities = snapshot.models()[0].capabilities();
+
+    assert_eq!(capabilities.api_backend(), None);
+    assert_eq!(
+        capabilities.responses_api(),
+        GrokCatalogCapabilityEvidence::Unknown
+    );
 }
 
 #[test]

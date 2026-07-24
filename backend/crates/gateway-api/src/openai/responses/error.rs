@@ -1,6 +1,5 @@
 //! OpenAI Responses adapter 的稳定错误 contract。
 
-use gateway_core::event::EventSequenceError;
 use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
@@ -147,57 +146,18 @@ impl RequestDecodeError {
     }
 }
 
-/// Canonical event 到 OpenAI Responses 的编码错误。
+/// OpenAI Responses 原生 wire 转发错误。
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ResponseEncodeError {
-    /// Core canonical 顺序错误。
-    #[error("canonical event sequence is invalid: {0}")]
-    Sequence(#[from] EventSequenceError),
-    /// Core 新增了当前 adapter 尚未声明的事件语义。
-    #[error("canonical event is not supported by this OpenAI Responses adapter")]
-    UnsupportedEvent,
-    /// `Started` 与 `Completed` 元数据不一致。
-    #[error("response metadata changed during canonical stream")]
-    MetadataChanged,
-    /// 同一 stream 重复报告 usage。
-    #[error("canonical stream contains more than one Usage event")]
-    DuplicateUsage,
-    /// 当前 OpenAI Responses adapter 无法表达该 canonical 内容类别。
-    #[error("canonical content kind `{kind}` is not supported by OpenAI Responses")]
-    UnsupportedContentKind {
-        /// 安全类别名。
-        kind: &'static str,
-    },
-    /// Usage 缺少 OpenAI Responses 所需的基础 token 事实。
-    #[error("canonical Usage is missing required token totals")]
-    IncompleteUsage,
-    /// Tool call 在结束时仍缺少名称。
-    #[error("tool call at content index {index} has no name")]
-    MissingToolName {
-        /// Canonical content index。
-        index: u32,
-    },
-    /// Tool call ID 或名称在增量中发生变化。
-    #[error("tool call identity changed at content index {index}")]
-    ToolIdentityChanged {
-        /// Canonical content index。
-        index: u32,
-    },
-    /// Collector 已终结。
-    #[error("responses collector has already completed")]
-    AlreadyCompleted,
-    /// Adapter 自身生成的 event framing 无法还原为 WebSocket event JSON。
-    #[error("responses event encoder produced an invalid internal framing")]
-    InvalidEventEncoding,
-    /// 同一响应混用了协议原生与 canonical 表达。
-    #[error("responses stream changed its wire representation")]
-    MixedWireRepresentation,
     /// 协议原生流缺少可返回的终态 response object。
     #[error("responses wire stream has no terminal response")]
     MissingWireTerminal,
     /// 协议原生事件携带了不一致的响应身份。
     #[error("responses wire stream changed its response identity")]
     WireIdentityChanged,
+    /// 终态 response object 无法序列化为完整 HTTP JSON 响应。
+    #[error("responses wire terminal serialization failed")]
+    Serialization,
 }
 
 impl ResponseEncodeError {
@@ -208,7 +168,7 @@ impl ResponseEncodeError {
             error: ProtocolError {
                 kind: "server_error",
                 code: "invalid_canonical_response",
-                message: "The gateway could not encode the canonical response.".to_owned(),
+                message: "The gateway could not forward the upstream response.".to_owned(),
                 param: None,
             },
         }

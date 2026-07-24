@@ -1,7 +1,11 @@
 use std::fmt;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use gateway_core::event::{CompactionSummary, CompactionSummaryError, GatewayEvent, ProviderEvent};
-use gateway_core::operation::CompactConversationRequest;
+use gateway_core::error::IdentifierError;
+use gateway_core::event::{
+    FinishReason, GatewayEvent, ProtocolWireEvent, ProviderEvent, ResponseMeta,
+};
+use gateway_core::operation::GenerateRequest;
 use gateway_core::policy::ClientApiKeyId;
 use serde_json::{Map, Value, json};
 
@@ -33,8 +37,8 @@ If the prior conversation contains a note about files at /tmp/compaction/segment
 
 /// xAI 上游专用的全历史摘要请求。
 ///
-/// 该类型只接受 Core 已分类的压缩 operation。它复用常规 Grok request encoder
-/// 规范化完整历史，但不会从客户端 wire 中推断压缩语义。
+/// 该类型只接收已由 xAI adapter 识别出末尾 `compaction_trigger` 的生成请求。
+/// 它复用常规 Grok request encoder 规范化完整历史，再生成 xAI 专用摘要请求。
 pub struct GrokCompactionRequest {
     body: Map<String, Value>,
     affinity: Option<GrokSessionAffinityKey>,
@@ -47,12 +51,12 @@ impl GrokCompactionRequest {
     ///
     /// 完整历史无法按 Grok Responses contract 规范化时返回错误。
     pub fn encode(
-        request: &CompactConversationRequest,
+        request: &GenerateRequest,
         upstream_model: &str,
         client_api_key_ref: &ClientApiKeyId,
     ) -> Result<Self, GrokRequestEncodeError> {
         let normalized = GrokResponsesRequest::encode_compaction_source(
-            request.generation(),
+            request,
             upstream_model,
             client_api_key_ref,
         )?;
@@ -116,6 +120,25 @@ impl GrokCompactionRequest {
     }
 }
 
+/// 返回 xAI 专用全历史压缩是否由客户端请求。
+///
+/// `compaction_trigger` 是 Codex Responses wire 的控制项。它只在 xAI adapter
+/// 内被识别，并且只接受处在 `input` 最末尾的触发器；OpenAI 透明路径不会调用
+/// 本函数，因此会保留该项原样上游。
+#[must_use]
+pub(crate) fn has_terminal_compaction_trigger(request: &GenerateRequest) -> bool {
+    request
+        .protocol_payload()
+        .body()
+        .get("input")
+        .and_then(Value::as_array)
+        .and_then(|input| input.last())
+        .and_then(Value::as_object)
+        .and_then(|item| item.get("type"))
+        .and_then(Value::as_str)
+        == Some("compaction_trigger")
+}
+
 impl fmt::Debug for GrokCompactionRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -127,9 +150,9 @@ impl fmt::Debug for GrokCompactionRequest {
     }
 }
 
-/// 从一次专用 Grok 摘要响应中提取 Core-owned [`CompactionSummary`]。
+/// 从一次专用 Grok 摘要响应中提取 xAI adapter 私有的摘要文本。
 ///
-/// Decoder 不产出客户端事件；协议投影属于 API 边界。
+/// xAI 随后自行投影为 OpenAI Responses wire，Core 不再承载 compaction 语义。
 #[derive(Default)]
 pub struct GrokCompactionSummaryDecoder {
     text: String,
@@ -158,20 +181,17 @@ impl GrokCompactionSummaryDecoder {
         Ok(())
     }
 
-    /// 完成摘要解码并返回有界的 typed summary。
+    /// 完成摘要解码并返回清理后的摘要文本。
     ///
     /// # Errors
     ///
     /// 摘要为空或过短时返回错误。
-    pub fn finish(self) -> Result<CompactionSummary, GrokCompactionDecodeError> {
+    pub fn finish(self) -> Result<String, GrokCompactionDecodeError> {
         let summary = clean_summary(&self.text);
-        if summary.is_empty() {
+        if summary.is_empty() || summary.chars().count() < MIN_GROK_COMPACTION_SUMMARY_CHARS {
             return Err(GrokCompactionDecodeError::Degenerate);
         }
-        if summary.chars().count() < MIN_GROK_COMPACTION_SUMMARY_CHARS {
-            return Err(GrokCompactionDecodeError::Degenerate);
-        }
-        CompactionSummary::new(summary).map_err(GrokCompactionDecodeError::InvalidSummary)
+        Ok(summary)
     }
 }
 
@@ -189,8 +209,159 @@ impl fmt::Debug for GrokCompactionSummaryDecoder {
 pub enum GrokCompactionDecodeError {
     #[error("Grok compaction response summary was too short")]
     Degenerate,
-    #[error("Grok compaction response summary is invalid")]
-    InvalidSummary(#[source] CompactionSummaryError),
+}
+
+pub(crate) struct GrokCompactionWireEvents {
+    created: ProtocolWireEvent,
+    output_done: ProtocolWireEvent,
+    terminal: ProtocolWireEvent,
+}
+
+impl GrokCompactionWireEvents {
+    #[must_use]
+    pub(crate) fn into_parts(self) -> (ProtocolWireEvent, ProtocolWireEvent, ProtocolWireEvent) {
+        (self.created, self.output_done, self.terminal)
+    }
+}
+
+/// 把 xAI 的专用摘要结果投影为 Codex 需要的 OpenAI Responses 事件。
+///
+/// 这是 xAI adapter 的局部兼容职责，不经过 API 层的通用 canonical 重建器。
+pub(crate) fn compaction_wire_events(
+    started: &ResponseMeta,
+    completed: &ResponseMeta,
+    summary: &str,
+    created_source: Option<&Value>,
+    terminal_source: Option<&Value>,
+    terminal_was_incomplete: bool,
+) -> Result<GrokCompactionWireEvents, IdentifierError> {
+    let created_response = compaction_response(
+        started,
+        created_source,
+        "in_progress",
+        Value::Null,
+        Vec::new(),
+        Value::Null,
+    );
+    let item = compaction_item(summary);
+    let (status, terminal_event, incomplete_details) = terminal_shape(
+        completed.finish_reason(),
+        terminal_was_incomplete,
+        terminal_source,
+    );
+    let terminal_response = compaction_response(
+        completed,
+        terminal_source.or(created_source),
+        status,
+        incomplete_details,
+        vec![item.clone()],
+        terminal_source
+            .and_then(|source| source.get("usage"))
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    Ok(GrokCompactionWireEvents {
+        created: ProtocolWireEvent::json_with_sse_metadata(
+            "openai",
+            Some("response.created".to_owned()),
+            json!({
+                "type": "response.created",
+                "response": created_response,
+            }),
+            None,
+            None,
+        )?,
+        output_done: ProtocolWireEvent::json_with_sse_metadata(
+            "openai",
+            Some("response.output_item.done".to_owned()),
+            json!({
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": item,
+            }),
+            None,
+            None,
+        )?,
+        terminal: ProtocolWireEvent::json_with_sse_metadata(
+            "openai",
+            Some(terminal_event.to_owned()),
+            json!({
+                "type": terminal_event,
+                "response": terminal_response,
+            }),
+            None,
+            None,
+        )?,
+    })
+}
+
+fn compaction_response(
+    meta: &ResponseMeta,
+    source: Option<&Value>,
+    status: &str,
+    incomplete_details: Value,
+    output: Vec<Value>,
+    usage: Value,
+) -> Value {
+    let mut response = source
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    response.insert(
+        "id".to_owned(),
+        Value::String(meta.response_id().to_owned()),
+    );
+    response
+        .entry("object".to_owned())
+        .or_insert_with(|| Value::String("response".to_owned()));
+    response
+        .entry("created_at".to_owned())
+        .or_insert_with(|| json!(unix_seconds()));
+    response.insert("status".to_owned(), Value::String(status.to_owned()));
+    response.insert("error".to_owned(), Value::Null);
+    response.insert("incomplete_details".to_owned(), incomplete_details);
+    response.insert("model".to_owned(), Value::String(meta.model().to_owned()));
+    response.insert("output".to_owned(), Value::Array(output));
+    response.insert("usage".to_owned(), usage);
+    Value::Object(response)
+}
+
+fn compaction_item(summary: &str) -> Value {
+    json!({
+        "type": "compaction",
+        "encrypted_content": summary,
+    })
+}
+
+fn terminal_shape(
+    finish_reason: Option<FinishReason>,
+    terminal_was_incomplete: bool,
+    terminal_source: Option<&Value>,
+) -> (&'static str, &'static str, Value) {
+    let incomplete = terminal_was_incomplete
+        || matches!(
+            finish_reason,
+            Some(FinishReason::Length | FinishReason::ContentFilter)
+        );
+    if !incomplete {
+        return ("completed", "response.completed", Value::Null);
+    }
+    let details = terminal_source
+        .and_then(|source| source.get("incomplete_details"))
+        .cloned()
+        .unwrap_or_else(|| match finish_reason {
+            Some(FinishReason::Length) => json!({ "reason": "max_output_tokens" }),
+            Some(FinishReason::ContentFilter) => json!({ "reason": "content_filter" }),
+            _ => json!({ "reason": "other" }),
+        });
+    ("incomplete", "response.incomplete", details)
+}
+
+fn unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn summary_prompt_item() -> Value {

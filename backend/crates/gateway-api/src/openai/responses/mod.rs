@@ -13,7 +13,7 @@ pub use request::{
     ContinuationIntent, DecodedResponsesRequest, OpenAiRequestHeaders, ResponsesRequestMetadata,
     decode_request_with_headers,
 };
-pub use response::{OpenAiResponsesEncoder, ResponsesCollector};
+pub use response::OpenAiResponsesEncoder;
 pub(crate) use websocket::responses_websocket;
 pub use websocket::{ResponseCreateFrameError, decode_response_create_with_context};
 
