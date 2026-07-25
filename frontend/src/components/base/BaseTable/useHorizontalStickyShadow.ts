@@ -15,6 +15,8 @@ interface UseHorizontalStickyShadowOptions {
 export function useHorizontalStickyShadow(options: UseHorizontalStickyShadowOptions) {
   const horizontalScrolled = shallowRef(false)
   const horizontalCanScrollRight = shallowRef(false)
+  let horizontalScrollRange = 0
+  let scrollLeftPosition = 0
 
   function maxScrollLeft(wrap: HTMLElement) {
     return Math.max(wrap.scrollWidth - wrap.clientWidth, 0)
@@ -25,11 +27,26 @@ export function useHorizontalStickyShadow(options: UseHorizontalStickyShadowOpti
   }
 
   function resetHorizontalScrollbar() {
+    horizontalScrollRange = 0
+    scrollLeftPosition = 0
     horizontalScrolled.value = false
     horizontalCanScrollRight.value = false
+    syncHeaderScroll(0)
   }
 
-  function updateHorizontalScrollbar() {
+  function syncHeaderScroll(scrollLeft: number) {
+    const headerWrap = options.headerWrapRef.value
+    if (headerWrap && headerWrap.scrollLeft !== scrollLeft) {
+      headerWrap.scrollLeft = scrollLeft
+    }
+  }
+
+  function updateHorizontalScrollPosition(scrollLeft: number) {
+    horizontalScrolled.value = scrollLeft > 0
+    horizontalCanScrollRight.value = scrollLeft < horizontalScrollRange - 1
+  }
+
+  function measureHorizontalScrollbar() {
     const wrap = scrollWrap()
     if (!wrap || !options.hasRows.value) {
       resetHorizontalScrollbar()
@@ -42,21 +59,25 @@ export function useHorizontalStickyShadow(options: UseHorizontalStickyShadowOpti
       return
     }
 
-    horizontalScrolled.value = wrap.scrollLeft > 0
-    horizontalCanScrollRight.value = wrap.scrollLeft < scrollRange - 1
+    horizontalScrollRange = scrollRange
+    scrollLeftPosition = wrap.scrollLeft
+    syncHeaderScroll(scrollLeftPosition)
+    updateHorizontalScrollPosition(scrollLeftPosition)
   }
 
-  function handleTableScroll() {
-    const wrap = scrollWrap()
-    if (wrap && options.headerWrapRef.value) {
-      options.headerWrapRef.value.scrollLeft = wrap.scrollLeft
+  function handleTableScroll(payload: { scrollTop: number, scrollLeft: number }) {
+    if (payload.scrollLeft === scrollLeftPosition) {
+      return
     }
-    updateHorizontalScrollbar()
+
+    scrollLeftPosition = payload.scrollLeft
+    syncHeaderScroll(scrollLeftPosition)
+    updateHorizontalScrollPosition(scrollLeftPosition)
   }
 
   onMounted(async () => {
     await nextTick()
-    updateHorizontalScrollbar()
+    measureHorizontalScrollbar()
   })
 
   useResizeObserver(
@@ -64,12 +85,12 @@ export function useHorizontalStickyShadow(options: UseHorizontalStickyShadowOpti
       [scrollWrap(), options.tableViewRef.value].filter(
         (element): element is HTMLDivElement | HTMLTableElement => Boolean(element),
       ),
-    updateHorizontalScrollbar,
+    measureHorizontalScrollbar,
   )
 
   watch(options.watchSources, async () => {
     await nextTick()
-    updateHorizontalScrollbar()
+    measureHorizontalScrollbar()
   })
 
   return {

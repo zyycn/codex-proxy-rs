@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { useEventListener, useResizeObserver, useScroll, useTimeoutFn } from '@vueuse/core'
+import { useEventListener, useResizeObserver, useTimeoutFn } from '@vueuse/core'
 import { clamp } from 'es-toolkit'
-import { computed, nextTick, onMounted, shallowRef, useTemplateRef } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, shallowRef, useTemplateRef } from 'vue'
 
 const props = withDefaults(
   defineProps<{
@@ -42,11 +42,26 @@ const verticalTrackHovering = shallowRef(false)
 const horizontalTrackHovering = shallowRef(false)
 const dragging = shallowRef(false)
 const horizontalDragging = shallowRef(false)
+const dragDocument = computed(() =>
+  dragging.value || horizontalDragging.value ? document : null,
+)
+
+interface AxisMetrics {
+  scrollRange: number
+  thumbRange: number
+}
+
+const verticalMetrics: AxisMetrics = { scrollRange: 0, thumbRange: 0 }
+const horizontalMetrics: AxisMetrics = { scrollRange: 0, thumbRange: 0 }
 
 let dragStartY = 0
 let dragStartScrollTop = 0
 let horizontalDragStartX = 0
 let horizontalDragStartScrollLeft = 0
+let scrollTopPosition = 0
+let scrollLeftPosition = 0
+let scrollFrameId: number | undefined
+let rootHovering = false
 const { start: startHideTimer, stop: stopHideTimer } = useTimeoutFn(hideScrollbar, 1600, {
   immediate: false,
 })
@@ -88,30 +103,6 @@ const horizontalTrackInsetClass = computed(() =>
   props.trackInset === 'none' ? 'bottom-0 left-0' : 'bottom-1 left-1',
 )
 
-function trackHeight(wrap: HTMLElement) {
-  return clamp(wrap.clientHeight - 8, 0, Number.POSITIVE_INFINITY)
-}
-
-function maxScrollTop(wrap: HTMLElement) {
-  return clamp(wrap.scrollHeight - wrap.clientHeight, 0, Number.POSITIVE_INFINITY)
-}
-
-function trackWidth(wrap: HTMLElement) {
-  return clamp(wrap.clientWidth - 8, 0, Number.POSITIVE_INFINITY)
-}
-
-function maxScrollLeft(wrap: HTMLElement) {
-  return clamp(wrap.scrollWidth - wrap.clientWidth, 0, Number.POSITIVE_INFINITY)
-}
-
-function maxThumbTop(wrap: HTMLElement) {
-  return clamp(trackHeight(wrap) - thumbHeight.value, 0, Number.POSITIVE_INFINITY)
-}
-
-function maxHorizontalThumbLeft(wrap: HTMLElement) {
-  return clamp(trackWidth(wrap) - horizontalThumbWidth.value, 0, Number.POSITIVE_INFINITY)
-}
-
 function showScrollbar() {
   visible.value = true
 }
@@ -122,7 +113,9 @@ function clearHideTimer() {
 
 function scheduleHideScrollbar() {
   clearHideTimer()
-  startHideTimer()
+  if (!rootHovering) {
+    startHideTimer()
+  }
 }
 
 function hideScrollbar() {
@@ -133,6 +126,16 @@ function hideScrollbar() {
 function activateScrollbar() {
   showScrollbar()
   scheduleHideScrollbar()
+}
+
+function handleRootMouseEnter() {
+  rootHovering = true
+  activateScrollbar()
+}
+
+function handleRootMouseLeave() {
+  rootHovering = false
+  hideScrollbar()
 }
 
 type ScrollbarAxis = 'vertical' | 'horizontal'
@@ -163,48 +166,90 @@ function update() {
     return
   }
 
-  updateVerticalScrollbar(wrap)
-  updateHorizontalScrollbar(wrap)
+  measureVerticalScrollbar(wrap)
+  measureHorizontalScrollbar(wrap)
+  syncScrollbarPosition(wrap, true)
 }
 
-function updateVerticalScrollbar(wrap: HTMLElement) {
+function measureVerticalScrollbar(wrap: HTMLElement) {
   if (!props.vertical) {
+    verticalMetrics.scrollRange = 0
+    verticalMetrics.thumbRange = 0
     thumbHeight.value = 0
-    thumbTop.value = 0
     return
   }
 
-  const scrollRange = maxScrollTop(wrap)
-  const availableTrackHeight = trackHeight(wrap)
+  const clientHeight = wrap.clientHeight
+  const scrollHeight = wrap.scrollHeight
+  const scrollRange = clamp(scrollHeight - clientHeight, 0, Number.POSITIVE_INFINITY)
+  const availableTrackHeight = clamp(clientHeight - 8, 0, Number.POSITIVE_INFINITY)
   if (scrollRange <= overflowTolerance || availableTrackHeight <= 0) {
     wrap.scrollTop = 0
+    verticalMetrics.scrollRange = 0
+    verticalMetrics.thumbRange = 0
     thumbHeight.value = 0
-    thumbTop.value = 0
     return
   }
-  const ratio = wrap.clientHeight / wrap.scrollHeight
-  thumbHeight.value = clamp(availableTrackHeight * ratio, 32, availableTrackHeight)
-  thumbTop.value = (wrap.scrollTop / scrollRange) * maxThumbTop(wrap)
+
+  const ratio = clientHeight / scrollHeight
+  const nextThumbHeight = clamp(availableTrackHeight * ratio, 32, availableTrackHeight)
+  verticalMetrics.scrollRange = scrollRange
+  verticalMetrics.thumbRange = availableTrackHeight - nextThumbHeight
+  thumbHeight.value = nextThumbHeight
 }
 
-function updateHorizontalScrollbar(wrap: HTMLElement) {
+function measureHorizontalScrollbar(wrap: HTMLElement) {
   if (!props.horizontal) {
+    horizontalMetrics.scrollRange = 0
+    horizontalMetrics.thumbRange = 0
     horizontalThumbWidth.value = 0
-    horizontalThumbLeft.value = 0
     return
   }
 
-  const scrollRange = maxScrollLeft(wrap)
-  const availableTrackWidth = trackWidth(wrap)
+  const clientWidth = wrap.clientWidth
+  const scrollWidth = wrap.scrollWidth
+  const scrollRange = clamp(scrollWidth - clientWidth, 0, Number.POSITIVE_INFINITY)
+  const availableTrackWidth = clamp(clientWidth - 8, 0, Number.POSITIVE_INFINITY)
   if (scrollRange <= overflowTolerance || availableTrackWidth <= 0) {
     wrap.scrollLeft = 0
+    horizontalMetrics.scrollRange = 0
+    horizontalMetrics.thumbRange = 0
     horizontalThumbWidth.value = 0
-    horizontalThumbLeft.value = 0
     return
   }
-  const ratio = wrap.clientWidth / wrap.scrollWidth
-  horizontalThumbWidth.value = clamp(availableTrackWidth * ratio, 32, availableTrackWidth)
-  horizontalThumbLeft.value = (wrap.scrollLeft / scrollRange) * maxHorizontalThumbLeft(wrap)
+
+  const ratio = clientWidth / scrollWidth
+  const nextThumbWidth = clamp(availableTrackWidth * ratio, 32, availableTrackWidth)
+  horizontalMetrics.scrollRange = scrollRange
+  horizontalMetrics.thumbRange = availableTrackWidth - nextThumbWidth
+  horizontalThumbWidth.value = nextThumbWidth
+}
+
+function updateVerticalThumbPosition(scrollTop: number) {
+  const { scrollRange, thumbRange } = verticalMetrics
+  thumbTop.value
+    = scrollRange > 0 ? (clamp(scrollTop, 0, scrollRange) / scrollRange) * thumbRange : 0
+}
+
+function updateHorizontalThumbPosition(scrollLeft: number) {
+  const { scrollRange, thumbRange } = horizontalMetrics
+  horizontalThumbLeft.value
+    = scrollRange > 0 ? (clamp(scrollLeft, 0, scrollRange) / scrollRange) * thumbRange : 0
+}
+
+function syncScrollbarPosition(wrap: HTMLElement, force = false) {
+  const scrollTop = wrap.scrollTop
+  const scrollLeft = wrap.scrollLeft
+
+  if (force || scrollTop !== scrollTopPosition) {
+    updateVerticalThumbPosition(scrollTop)
+  }
+  if (force || scrollLeft !== scrollLeftPosition) {
+    updateHorizontalThumbPosition(scrollLeft)
+  }
+
+  scrollTopPosition = scrollTop
+  scrollLeftPosition = scrollLeft
 }
 
 async function scrollToTop() {
@@ -230,18 +275,27 @@ async function scrollToBottom() {
   update()
 }
 
-function handleScroll() {
+function flushScrollFrame() {
+  scrollFrameId = undefined
   const wrap = wrapRef.value
   if (!wrap) {
     return
   }
 
-  update()
+  syncScrollbarPosition(wrap)
   activateScrollbar()
   emit('scroll', {
     scrollTop: wrap.scrollTop,
     scrollLeft: wrap.scrollLeft,
   })
+}
+
+function handleScroll() {
+  if (scrollFrameId !== undefined) {
+    return
+  }
+
+  scrollFrameId = requestAnimationFrame(flushScrollFrame)
 }
 
 function handleTrackPointerDown(event: PointerEvent) {
@@ -254,11 +308,11 @@ function handleTrackPointerDown(event: PointerEvent) {
     return
   }
 
+  update()
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
   activateScrollbar()
   const nextThumbTop = event.clientY - rect.top - thumbHeight.value / 2
-  const scrollRange = maxScrollTop(wrap)
-  const thumbRange = maxThumbTop(wrap)
+  const { scrollRange, thumbRange } = verticalMetrics
   wrap.scrollTop
     = thumbRange > 0 ? (clamp(nextThumbTop, 0, thumbRange) / thumbRange) * scrollRange : 0
 }
@@ -273,11 +327,11 @@ function handleHorizontalTrackPointerDown(event: PointerEvent) {
     return
   }
 
+  update()
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
   activateScrollbar()
   const nextThumbLeft = event.clientX - rect.left - horizontalThumbWidth.value / 2
-  const scrollRange = maxScrollLeft(wrap)
-  const thumbRange = maxHorizontalThumbLeft(wrap)
+  const { scrollRange, thumbRange } = horizontalMetrics
   wrap.scrollLeft
     = thumbRange > 0 ? (clamp(nextThumbLeft, 0, thumbRange) / thumbRange) * scrollRange : 0
 }
@@ -289,6 +343,7 @@ function handleThumbPointerDown(event: PointerEvent) {
   }
 
   event.preventDefault()
+  update()
   dragging.value = true
   visible.value = true
   clearHideTimer()
@@ -303,6 +358,7 @@ function handleHorizontalThumbPointerDown(event: PointerEvent) {
   }
 
   event.preventDefault()
+  update()
   horizontalDragging.value = true
   visible.value = true
   clearHideTimer()
@@ -320,12 +376,11 @@ function handleThumbPointerMove(event: PointerEvent) {
     return
   }
 
-  const thumbRange = maxThumbTop(wrap)
+  const { scrollRange, thumbRange } = verticalMetrics
   if (thumbRange <= 0) {
     return
   }
 
-  const scrollRange = maxScrollTop(wrap)
   wrap.scrollTop = dragStartScrollTop + ((event.clientY - dragStartY) / thumbRange) * scrollRange
 }
 
@@ -339,12 +394,11 @@ function handleHorizontalThumbPointerMove(event: PointerEvent) {
     return
   }
 
-  const thumbRange = maxHorizontalThumbLeft(wrap)
+  const { scrollRange, thumbRange } = horizontalMetrics
   if (thumbRange <= 0) {
     return
   }
 
-  const scrollRange = maxScrollLeft(wrap)
   wrap.scrollLeft
     = horizontalDragStartScrollLeft
       + ((event.clientX - horizontalDragStartX) / thumbRange) * scrollRange
@@ -368,19 +422,33 @@ function handleHorizontalThumbPointerUp() {
   activateScrollbar()
 }
 
+function handleDocumentPointerMove(event: PointerEvent) {
+  handleThumbPointerMove(event)
+  handleHorizontalThumbPointerMove(event)
+}
+
+function handleDocumentPointerUp() {
+  handleThumbPointerUp()
+  handleHorizontalThumbPointerUp()
+}
+
 onMounted(async () => {
   await nextTick()
   update()
 })
 
+onBeforeUnmount(() => {
+  if (scrollFrameId !== undefined) {
+    cancelAnimationFrame(scrollFrameId)
+  }
+})
+
 useResizeObserver([wrapRef, viewRef], update)
-useScroll(wrapRef, { onScroll: handleScroll })
-useEventListener(document, 'pointermove', handleThumbPointerMove)
-useEventListener(document, 'pointerup', handleThumbPointerUp)
-useEventListener(document, 'pointermove', handleHorizontalThumbPointerMove)
-useEventListener(document, 'pointerup', handleHorizontalThumbPointerUp)
-useEventListener(rootRef, ['mouseenter', 'mousemove'], activateScrollbar)
-useEventListener(rootRef, 'mouseleave', hideScrollbar)
+useEventListener(wrapRef, 'scroll', handleScroll, { passive: true })
+useEventListener(dragDocument, 'pointermove', handleDocumentPointerMove)
+useEventListener(dragDocument, ['pointerup', 'pointercancel'], handleDocumentPointerUp)
+useEventListener(rootRef, 'mouseenter', handleRootMouseEnter)
+useEventListener(rootRef, 'mouseleave', handleRootMouseLeave)
 useEventListener(verticalTrackRef, 'mouseenter', () => handleTrackMouseEnter('vertical'))
 useEventListener(verticalTrackRef, 'mouseleave', () => handleTrackMouseLeave('vertical'))
 useEventListener(verticalTrackRef, 'pointerdown', handleTrackPointerDown)
