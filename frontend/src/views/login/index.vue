@@ -93,7 +93,7 @@ async function handleSubmit(): Promise<void> {
   --login-form-bg-c: color-mix(in srgb, var(--cp-bg-muted) 78%, var(--cp-info-bg));
   --login-form-shadow: color-mix(in srgb, var(--cp-text-primary) 20%, transparent);
   --login-form-line: color-mix(in srgb, var(--cp-info-border) 54%, transparent);
-  --login-logo-bg: color-mix(in srgb, var(--cp-info-bg) 74%, var(--cp-bg-surface));
+  --login-logo-bg: var(--cp-brand-mark-bg);
   --login-logo-text: var(--cp-accent-primary);
   --login-title: var(--cp-text-primary);
   --login-brand-title: var(--cp-text-strong);
@@ -159,7 +159,7 @@ async function handleSubmit(): Promise<void> {
   --login-form-bg-c: color-mix(in srgb, var(--cp-bg-page) 90%, transparent);
   --login-form-shadow: color-mix(in srgb, var(--cp-bg-dark) 70%, transparent);
   --login-form-line: color-mix(in srgb, var(--cp-info-text) 66%, transparent);
-  --login-logo-bg: color-mix(in srgb, var(--cp-bg-surface) 84%, transparent);
+  --login-logo-bg: var(--cp-brand-mark-bg);
   --login-logo-text: var(--cp-info-text);
   --login-title: var(--cp-text-strong);
   --login-brand-title: var(--cp-white);

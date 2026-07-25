@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowRight, Cat, CircleAlert, Eye, EyeOff, KeyRound, Mail, Moon, Sun } from '@lucide/vue'
+import { ArrowRight, CircleAlert, Eye, EyeOff, KeyRound, Mail, Moon, Sun } from '@lucide/vue'
 import { computed, shallowRef } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -58,7 +58,12 @@ function togglePasswordVisible(): void {
     <header class="flex min-w-0 items-center justify-between gap-4.5 max-[560px]:gap-3.5">
       <div class="flex min-w-0 items-center gap-3">
         <BaseMotionIcon aria-hidden="true" variant="brand" class="login-logo">
-          <Cat :size="20" :stroke-width="2.1" />
+          <img
+            src="/favicon.svg"
+            alt=""
+            class="block size-8 select-none"
+            draggable="false"
+          >
         </BaseMotionIcon>
         <span class="grid min-w-0 gap-1">
           <strong

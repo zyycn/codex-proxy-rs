@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import {
   ArrowUpCircle,
-  Cat,
   ChartNoAxesColumn,
   Info,
   KeyRound,
@@ -340,9 +339,14 @@ onBeforeUnmount(() => {
       <BaseMotionIcon
         aria-hidden="true"
         variant="brand"
-        class="inline-flex size-11 items-center justify-center relative -top-0.5 rounded-(--cp-icon-button-radius) bg-(--cp-bg-muted) text-(--cp-text-primary)"
+        class="inline-flex size-11 items-center justify-center relative -top-0.5 rounded-(--cp-icon-button-radius) bg-(--cp-brand-mark-bg)"
       >
-        <Cat :size="27" stroke-width="2" />
+        <img
+          src="/favicon.svg"
+          alt=""
+          class="block size-9 select-none"
+          draggable="false"
+        >
       </BaseMotionIcon>
       <span
         v-show="brandLabelVisible"
