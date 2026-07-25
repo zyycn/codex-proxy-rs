@@ -9,7 +9,9 @@ use futures::{StreamExt as _, future::BoxFuture};
 use gateway_admin::model::accounts::{
     AccountAvailability as AdminAccountAvailability, AccountRecord,
 };
-use gateway_admin::model::observability::{CurrencyCost, ProviderBillingInput};
+use gateway_admin::model::observability::{
+    CurrencyCost, DesktopReleaseStatus, ProviderBillingInput,
+};
 use gateway_admin::model::provider_credentials::{
     CompleteAuthorization, PrepareCredentialImport, PrepareCredentialRefresh,
     PrepareCredentialRotation, ProviderDocument, ProviderExportCredentialInput,
@@ -281,7 +283,9 @@ async fn xai_admin_provider_validates_known_billing_breakdown() {
     assert_eq!(profile.product, "Grok Build");
     assert_eq!(profile.version, "0.2.106");
     assert_eq!(profile.user_agent, "grok-shell/0.2.106 (linux; x86_64)");
-    assert!(profile.release.is_none());
+    let release = profile.release.expect("release status");
+    assert_eq!(release.status, DesktopReleaseStatus::Unchecked);
+    assert!(release.checked_at.is_none());
 
     let billing = admin
         .calculated_billing(&ProviderBillingInput {
