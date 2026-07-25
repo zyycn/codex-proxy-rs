@@ -2,7 +2,7 @@
 import type { useAccountOnboarding } from '../composables/useAccountOnboarding'
 import type { AccountRow } from '../constants'
 import { Openai, Xai } from '@boxicons/vue'
-import { Copy, Grid2X2, KeyRound, Upload } from '@lucide/vue'
+import { Copy, KeyRound, LayoutGrid, Upload } from '@lucide/vue'
 
 import { useClipboard, useFileDialog } from '@vueuse/core'
 import { computed, ref } from 'vue'
@@ -207,7 +207,7 @@ async function copyText(value: string, successText: string) {
     :hide-footer="isChoosingProvider"
   >
     <template #icon>
-      <Grid2X2 v-if="isBatch" class="text-(--cp-text-primary)" aria-hidden="true" :width="20" :height="20" />
+      <LayoutGrid v-if="isBatch" class="text-(--cp-text-primary)" aria-hidden="true" :width="20" :height="20" />
       <Xai v-else-if="isXai" class="text-(--cp-text-primary)" aria-hidden="true" :width="20" :height="20" />
       <Openai v-else class="text-(--cp-text-primary)" aria-hidden="true" :width="20" :height="20" />
     </template>

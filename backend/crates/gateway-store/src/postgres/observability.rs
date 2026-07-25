@@ -23,7 +23,8 @@ const MAX_PAGE_SIZE: u16 = 100;
 const MAX_FILTER_BYTES: usize = 256;
 const MAX_SEARCH_BYTES: usize = 512;
 const MAX_ACCOUNT_IDS: usize = 200;
-const DASHBOARD_ACCOUNT_LIMIT: u16 = 50;
+/// 概览卡只展示最近使用的四个账号；完整账号用量由账号管理页单独查询。
+const DASHBOARD_ACCOUNT_LIMIT: u16 = 4;
 const DIAGNOSTIC_LIMIT: i64 = 100;
 const ACCOUNT_USAGE_TIMELINE_HOURS: i64 = 24;
 

@@ -9,7 +9,7 @@ import { useUiStore } from '@/stores/modules/ui'
 
 import AppAboutModal from './components/AppAboutModal.vue'
 import AppSidebar from './components/AppSidebar.vue'
-import MobileSidebarToolbar from './components/MobileSidebarToolbar.vue'
+import FloatingSidebarToggle from './components/FloatingSidebarToggle.vue'
 import SystemUpdateModal from './components/SystemUpdateModal.vue'
 
 const uiStore = useUiStore()
@@ -77,12 +77,12 @@ watch(
       @open-about="aboutOpen = true"
       @open-system-update="openSystemUpdate"
     />
+    <FloatingSidebarToggle v-if="!mobileSidebarOpen" @open="openMobileSidebar" />
     <main class="h-dvh min-w-0 flex-1 overflow-hidden">
       <BaseScrollbar
         ref="pageScrollbarRef"
         view-class="flex min-h-full min-w-0 flex-col p-4 min-[961px]:p-6"
       >
-        <MobileSidebarToolbar v-if="!mobileSidebarOpen" @open="openMobileSidebar" />
         <RouterView v-slot="{ Component }">
           <component :is="Component" class="min-h-0 flex-1" />
         </RouterView>
