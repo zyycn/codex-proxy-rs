@@ -209,6 +209,7 @@ fn codex_model_json(profile: &PublicModelProfile, index: usize) -> Value {
 fn reasoning_effort_description(effort: &str) -> &'static str {
     match effort {
         "none" => "No reasoning",
+        "minimal" => "Minimal reasoning",
         "low" => "Fast responses with lighter reasoning",
         "medium" => "Balances speed and reasoning depth for everyday tasks",
         "high" => "Greater reasoning depth for complex problems",

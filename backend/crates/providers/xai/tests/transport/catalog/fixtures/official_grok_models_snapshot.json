@@ -12,6 +12,13 @@
       "apiBackend": "responses",
       "supportedInApi": true,
       "supportsReasoningEffort": true,
+      "reasoningEffort": "medium",
+      "reasoningEfforts": [
+        "low",
+        { "value": "medium", "label": "Balanced", "default": true },
+        "high",
+        { "id": "extended", "value": "xhigh", "label": "Extended" }
+      ],
       "supportsBackendSearch": true,
       "streamToolCalls": true,
       "hidden": false,

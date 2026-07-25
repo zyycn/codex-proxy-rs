@@ -261,6 +261,16 @@ fn official_fixture_should_use_actual_model_and_whitelisted_metadata() {
             (
                 model.capabilities().responses_api(),
                 model.capabilities().reasoning_effort(),
+                model
+                    .capabilities()
+                    .reasoning_efforts()
+                    .iter()
+                    .map(|effort| effort.as_str())
+                    .collect::<Vec<_>>(),
+                model
+                    .capabilities()
+                    .default_reasoning_effort()
+                    .map(|effort| effort.as_str()),
                 model.capabilities().backend_search(),
                 model.capabilities().streaming_tool_calls(),
             ),
@@ -278,6 +288,8 @@ fn official_fixture_should_use_actual_model_and_whitelisted_metadata() {
             (
                 GrokCatalogCapabilityEvidence::DeclaredNative,
                 GrokCatalogCapabilityEvidence::DeclaredNative,
+                vec!["low", "medium", "high", "xhigh"],
+                Some("medium"),
                 GrokCatalogCapabilityEvidence::DeclaredNative,
                 GrokCatalogCapabilityEvidence::DeclaredNative,
             ),
@@ -331,6 +343,35 @@ fn missing_capability_fields_should_remain_unknown() {
             GrokCatalogCapabilityEvidence::Unknown,
             None,
             None,
+        )
+    );
+}
+
+#[test]
+fn reasoning_effort_menu_should_be_capability_evidence_without_legacy_flag() {
+    let snapshot = parse_grok_model_catalog(
+        br#"{"object":"list","data":[{"id":"grok-reasoning","reasoningEfforts":[{"value":"xhigh","default":true},"low"]}]}"#,
+        None,
+    )
+    .expect("reasoning effort menu");
+    let capabilities = snapshot.models()[0].capabilities();
+
+    assert_eq!(
+        (
+            capabilities.reasoning_effort(),
+            capabilities
+                .reasoning_efforts()
+                .iter()
+                .map(|effort| effort.as_str())
+                .collect::<Vec<_>>(),
+            capabilities
+                .default_reasoning_effort()
+                .map(|effort| effort.as_str()),
+        ),
+        (
+            GrokCatalogCapabilityEvidence::DeclaredNative,
+            vec!["xhigh", "low"],
+            Some("xhigh"),
         )
     );
 }

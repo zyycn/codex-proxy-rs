@@ -67,7 +67,9 @@ impl ExecutionService for ModelsExecution {
             )
             .with_reasoning(
                 Some("medium".to_owned()),
-                ["low", "medium", "high"].map(str::to_owned).to_vec(),
+                ["low", "medium", "high", "xhigh"]
+                    .map(str::to_owned)
+                    .to_vec(),
             )
             .with_context_window_tokens(Some(500_000))
             .with_image_input(true)
@@ -138,6 +140,27 @@ async fn models_should_encode_provider_profiles_for_current_codex_clients() {
     assert_eq!(model["context_window"], 500_000);
     assert_eq!(model["apply_patch_tool_type"], "freeform");
     assert_eq!(model["service_tiers"], serde_json::json!([]));
+    assert_eq!(
+        model["supported_reasoning_levels"],
+        serde_json::json!([
+            {
+                "effort": "low",
+                "description": "Fast responses with lighter reasoning"
+            },
+            {
+                "effort": "medium",
+                "description": "Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+                "effort": "high",
+                "description": "Greater reasoning depth for complex problems"
+            },
+            {
+                "effort": "xhigh",
+                "description": "Extra high reasoning depth for complex problems"
+            }
+        ])
+    );
 }
 
 #[tokio::test]
