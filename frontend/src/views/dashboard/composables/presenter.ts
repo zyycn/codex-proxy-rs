@@ -39,8 +39,8 @@ const emptyCards: DashboardSummary['cards'] = {
   credentials: {
     total: '0',
     totalValue: 0,
-    enabled: '0',
-    enabledValue: 0,
+    available: '0',
+    availableValue: 0,
     unavailable: '0',
     unavailableValue: 0,
   },
@@ -147,9 +147,9 @@ function metricCards(
       tone: 'normal',
       details: [
         {
-          label: '启用',
-          value: credentials.enabled,
-          tone: credentials.enabledValue > 0 ? 'success' : 'normal',
+          label: '可用',
+          value: credentials.available,
+          tone: credentials.availableValue > 0 ? 'success' : 'normal',
         },
         {
           label: '不可用',

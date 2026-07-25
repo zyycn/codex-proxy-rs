@@ -476,7 +476,7 @@ pub trait ProviderCredentialStatePort: Send + Sync {
     ) -> BoxFuture<'a, Result<bool, ProviderStoreError>>;
 }
 
-/// 临时 cooldown 只保存调度截止时间；原因事实仍由 PostgreSQL 账号状态持有。
+/// 临时 cooldown 只保存可丢失的调度截止时间，不进入账号持久状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCooldown {
     account_id: ProviderAccountId,

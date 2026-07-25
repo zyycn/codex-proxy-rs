@@ -10,7 +10,6 @@ use gateway_core::{
         credential::ProviderAccountId,
         probe::{AccountProbe, AccountProbeRequest},
     },
-    error::GatewayErrorKind,
     routing::{ProviderKind, UpstreamModelId, snapshot::SnapshotControl},
 };
 
@@ -454,12 +453,9 @@ impl AccountsService for DefaultAccountsService {
                     }))
                     .collect(),
                 Err(error) => vec![AccountConnectionTestEvent::Failed {
-                    message: match error.kind() {
-                        GatewayErrorKind::InvalidRequest
-                        | GatewayErrorKind::Unsupported
-                        | GatewayErrorKind::ModelNotFound => error.safe_message().to_owned(),
-                        _ => "Provider connection test failed".to_owned(),
-                    },
+                    message: error.client_message().to_owned(),
+                    provider_error_code: error.client_error_code().map(ToOwned::to_owned),
+                    provider_error_type: error.client_error_type().map(ToOwned::to_owned),
                     account_status: status,
                 }],
             }
@@ -485,8 +481,7 @@ fn account_status(account: &AccountRecord, now: chrono::DateTime<Utc>) -> Accoun
             {
                 AccountStatus::Expired
             }
-            crate::model::accounts::AccountAvailability::Ready => AccountStatus::Active,
-            _ => AccountStatus::Attention,
+            _ => AccountStatus::Active,
         }
     }
 }

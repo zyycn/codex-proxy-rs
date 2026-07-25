@@ -136,6 +136,177 @@ pub struct ModelCapabilities {
     upstream_validates_features: bool,
 }
 
+/// Provider 为客户端模型目录提供的展示与交互能力。
+///
+/// 该值不参与路由，也不把任一 Provider 的 wire 类型带入 Core。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModelPresentation {
+    display_name: Option<String>,
+    description: Option<String>,
+    default_reasoning_effort: Option<String>,
+    supported_reasoning_efforts: Vec<String>,
+    context_window_tokens: Option<u64>,
+    image_input: bool,
+    agent_tools: bool,
+    parallel_tool_calls: bool,
+    search_tool: bool,
+    image_detail_original: bool,
+    verbosity: bool,
+    hidden: bool,
+}
+
+impl ModelPresentation {
+    #[must_use]
+    pub fn new(display_name: Option<String>, description: Option<String>) -> Self {
+        Self {
+            display_name,
+            description,
+            ..Self::default()
+        }
+    }
+
+    #[must_use]
+    pub fn with_reasoning(
+        mut self,
+        default_effort: Option<String>,
+        supported_efforts: Vec<String>,
+    ) -> Self {
+        self.default_reasoning_effort = default_effort;
+        self.supported_reasoning_efforts = supported_efforts;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_context_window_tokens(mut self, context_window_tokens: Option<u64>) -> Self {
+        self.context_window_tokens = context_window_tokens;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_image_input(mut self, image_input: bool) -> Self {
+        self.image_input = image_input;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_agent_tools(mut self, agent_tools: bool, parallel_tool_calls: bool) -> Self {
+        self.agent_tools = agent_tools;
+        self.parallel_tool_calls = parallel_tool_calls;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_search_tool(mut self, search_tool: bool) -> Self {
+        self.search_tool = search_tool;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_image_detail_original(mut self, image_detail_original: bool) -> Self {
+        self.image_detail_original = image_detail_original;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_verbosity(mut self, verbosity: bool) -> Self {
+        self.verbosity = verbosity;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_hidden(mut self, hidden: bool) -> Self {
+        self.hidden = hidden;
+        self
+    }
+
+    #[must_use]
+    pub fn display_name(&self) -> Option<&str> {
+        self.display_name.as_deref()
+    }
+
+    #[must_use]
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    #[must_use]
+    pub fn default_reasoning_effort(&self) -> Option<&str> {
+        self.default_reasoning_effort.as_deref()
+    }
+
+    #[must_use]
+    pub fn supported_reasoning_efforts(&self) -> &[String] {
+        &self.supported_reasoning_efforts
+    }
+
+    #[must_use]
+    pub const fn context_window_tokens(&self) -> Option<u64> {
+        self.context_window_tokens
+    }
+
+    #[must_use]
+    pub const fn image_input(&self) -> bool {
+        self.image_input
+    }
+
+    #[must_use]
+    pub const fn agent_tools(&self) -> bool {
+        self.agent_tools
+    }
+
+    #[must_use]
+    pub const fn parallel_tool_calls(&self) -> bool {
+        self.parallel_tool_calls
+    }
+
+    #[must_use]
+    pub const fn search_tool(&self) -> bool {
+        self.search_tool
+    }
+
+    #[must_use]
+    pub const fn image_detail_original(&self) -> bool {
+        self.image_detail_original
+    }
+
+    #[must_use]
+    pub const fn verbosity(&self) -> bool {
+        self.verbosity
+    }
+
+    #[must_use]
+    pub const fn hidden(&self) -> bool {
+        self.hidden
+    }
+}
+
+/// 一个公开模型及其 Provider 编译后的客户端画像。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicModelProfile {
+    model: PublicModelId,
+    presentation: ModelPresentation,
+}
+
+impl PublicModelProfile {
+    #[must_use]
+    pub const fn new(model: PublicModelId, presentation: ModelPresentation) -> Self {
+        Self {
+            model,
+            presentation,
+        }
+    }
+
+    #[must_use]
+    pub const fn model(&self) -> &PublicModelId {
+        &self.model
+    }
+
+    #[must_use]
+    pub const fn presentation(&self) -> &ModelPresentation {
+        &self.presentation
+    }
+}
+
 impl ModelCapabilities {
     #[must_use]
     pub fn new(operations: BTreeSet<OperationKind>, max_output_tokens: Option<u64>) -> Self {
@@ -205,6 +376,7 @@ pub struct ProviderModel {
     provider: ProviderKind,
     upstream_model: UpstreamModelId,
     capabilities: ModelCapabilities,
+    presentation: Option<ModelPresentation>,
 }
 
 impl ProviderModel {
@@ -218,7 +390,14 @@ impl ProviderModel {
             provider,
             upstream_model,
             capabilities,
+            presentation: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_presentation(mut self, presentation: ModelPresentation) -> Self {
+        self.presentation = Some(presentation);
+        self
     }
 
     #[must_use]
@@ -229,6 +408,11 @@ impl ProviderModel {
     #[must_use]
     pub const fn upstream_model(&self) -> &UpstreamModelId {
         &self.upstream_model
+    }
+
+    #[must_use]
+    pub const fn presentation(&self) -> Option<&ModelPresentation> {
+        self.presentation.as_ref()
     }
 }
 

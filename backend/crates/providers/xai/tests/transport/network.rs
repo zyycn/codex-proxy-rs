@@ -318,27 +318,28 @@ async fn inference_transport_should_classify_reasoning_decode_rejections() {
 }
 
 #[tokio::test]
-async fn inference_transport_should_reject_success_with_non_sse_content_type() {
+async fn inference_transport_should_not_reject_sse_bytes_only_because_content_type_is_wrong() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw("{}", "application/json"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n",
+            "application/json",
+        ))
         .expect(1)
         .mount(&server)
         .await;
     let origin = Url::parse(&server.uri()).expect("wiremock origin");
-    let error = inference_transport(&origin)
+    let chunks = inference_transport(&origin)
         .execute(inference_request(&origin))
         .await
-        .expect_err("successful non-SSE response must fail closed");
+        .expect("body syntax, rather than response metadata, determines the stream")
+        .into_body()
+        .collect::<Vec<_>>()
+        .await;
 
-    assert_eq!(
-        (error.kind(), error.send_state()),
-        (
-            GrokInferenceTransportErrorKind::Protocol,
-            UpstreamSendState::Sent,
-        )
-    );
+    assert_eq!(chunks.len(), 1);
+    assert!(chunks[0].is_ok());
 }
 
 #[tokio::test]

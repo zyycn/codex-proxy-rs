@@ -273,7 +273,10 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     if (event.type === 'error') {
       applyAccountStatus(event.accountStatus)
       connectionTestError.value = event.error || '测试连接失败'
-      appendConnectionTestLog(connectionTestError.value, 'danger')
+      const detail = event.providerErrorCode || event.providerErrorType
+        ? { code: event.providerErrorCode, type: event.providerErrorType }
+        : undefined
+      appendConnectionTestLog(connectionTestError.value, 'danger', detail)
       finishConnectionTest('error')
       clearConnectionTestRun()
     }

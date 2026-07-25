@@ -24,8 +24,8 @@ use gateway_core::routing::snapshot::{
     SnapshotSubscriptionError, SnapshotSubscriptionPort, runtime_revision_needs_refresh,
 };
 use gateway_core::routing::{
-    ConfigRevision, ModelCapabilities, ProviderKind, PublicModelId, RuntimeSnapshot,
-    UpstreamModelId,
+    ConfigRevision, ModelCapabilities, ModelPresentation, ProviderKind, PublicModelId,
+    RuntimeSnapshot, UpstreamModelId,
 };
 use gateway_core::task::WorkerKind;
 
@@ -135,13 +135,19 @@ impl Provider for PublishingCatalogProvider {
         if self.queries.fetch_add(1, Ordering::SeqCst) == 0 {
             self.generation.store(1, Ordering::SeqCst);
         }
-        Ok(vec![ProviderModelCapabilities::new(
-            UpstreamModelId::new("upstream-model").expect("model"),
-            ModelCapabilities::new(
-                std::collections::BTreeSet::from([OperationKind::Generate]),
+        Ok(vec![
+            ProviderModelCapabilities::new(
+                UpstreamModelId::new("upstream-model").expect("model"),
+                ModelCapabilities::new(
+                    std::collections::BTreeSet::from([OperationKind::Generate]),
+                    None,
+                ),
+            )
+            .with_presentation(ModelPresentation::new(
+                Some("Upstream Model".to_owned()),
                 None,
-            ),
-        )])
+            )),
+        ])
     }
 
     async fn execute(
@@ -214,6 +220,15 @@ fn compiler_retries_when_provider_publishes_catalog_during_compilation() {
             .get(&ProviderKind::new("alpha").expect("provider"))
             .map(|generation| generation.get()),
         Some(1),
+    );
+    let profiles =
+        snapshot.public_model_profiles_for_provider(&ProviderKind::new("alpha").expect("provider"));
+    assert_eq!(
+        profiles
+            .iter()
+            .map(|profile| profile.model().as_str())
+            .collect::<Vec<_>>(),
+        vec!["public-model", "upstream-model"],
     );
 }
 

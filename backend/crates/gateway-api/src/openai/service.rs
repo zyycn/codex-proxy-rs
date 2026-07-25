@@ -9,7 +9,7 @@ use gateway_core::engine::execution::{
 };
 use gateway_core::error::{GatewayError, GatewayErrorKind};
 use gateway_core::lifecycle::{ConnectionDraining, ConnectionGuard, ConnectionLifecycle};
-use gateway_core::routing::PublicModelId;
+use gateway_core::routing::{PublicModelId, PublicModelProfile};
 use uuid::Uuid;
 
 use super::auth::ClientApiKeyAuthError;
@@ -49,6 +49,13 @@ impl OpenAiService {
             .into_iter()
             .map(|model| model.as_str().to_owned())
             .collect()
+    }
+
+    pub(crate) fn public_model_profiles(
+        &self,
+        client: &AuthenticatedClient,
+    ) -> Vec<PublicModelProfile> {
+        self.execution.public_model_profiles(client)
     }
 
     pub(crate) fn contains_public_model(

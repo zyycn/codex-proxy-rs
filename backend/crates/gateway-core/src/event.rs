@@ -756,40 +756,11 @@ impl ProviderEvent {
     pub fn has_client_event(&self) -> bool {
         !self.canonical.is_empty() || self.wire.is_some()
     }
-
-    /// 返回是否包含足以冻结下游 commit barrier 的 canonical fact。
-    ///
-    /// 单独的 wire event 不能冻结边界：协议层在看到 `Started`
-    /// 携带的网关响应身份前无法安全编码它。Core 会保留这些
-    /// 事件，直到首个 canonical 可见增量或终态再一并交付。
-    #[must_use]
-    pub fn is_commit_significant(&self) -> bool {
-        self.canonical
-            .iter()
-            .any(GatewayEvent::is_commit_significant)
-    }
 }
 
 impl From<GatewayEvent> for ProviderEvent {
     fn from(event: GatewayEvent) -> Self {
         Self::canonical(event)
-    }
-}
-
-impl GatewayEvent {
-    /// 返回该 fact 是否足以冻结下游 commit barrier。
-    ///
-    /// 生命周期、结构与结算 facts 可以在换号前安全丢弃；首个可见增量或
-    /// Provider 正常终态才会使客户端输出不可撤回。
-    #[must_use]
-    pub const fn is_commit_significant(&self) -> bool {
-        matches!(
-            self,
-            Self::TextDelta(_)
-                | Self::ReasoningDelta(_)
-                | Self::ToolCallDelta(_)
-                | Self::Completed(_)
-        )
     }
 }
 

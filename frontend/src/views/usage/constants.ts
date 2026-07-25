@@ -108,7 +108,7 @@ export const opsErrorColumns = [
     cellClass:
       'whitespace-nowrap font-mono text-[12px] font-[650] tabular-nums text-(--cp-text-secondary)',
   },
-  { key: 'statusCode', label: '状态码', width: '96px', align: 'center' as const },
+  { key: 'upstreamStatusCode', label: '上游状态', width: '96px', align: 'center' as const },
   {
     key: 'failureClass',
     label: '失败分类',

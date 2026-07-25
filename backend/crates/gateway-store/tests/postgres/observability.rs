@@ -63,6 +63,57 @@ fn postgres_admin_observability_adapter_implements_terminal_port() {
 }
 
 #[tokio::test]
+async fn dashboard_account_metrics_should_partition_available_and_unavailable_accounts() {
+    let Some(database) = TestDatabase::create("dashboard_account_metrics").await else {
+        return;
+    };
+    let now = Utc::now();
+    sqlx::query(
+        "insert into provider_accounts (
+           id, provider_kind, name, upstream_user_id, authentication_kind,
+           provider_credentials_json, credential_revision, has_refresh_token,
+           access_token_expires_at, enabled, availability,
+           availability_observed_at, created_at, updated_at
+         ) values
+           ('acct_available', 'openai', 'available', 'user-available', 'oauth',
+            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'ready', $1, $1, $1),
+           ('acct_expired', 'openai', 'expired', 'user-expired', 'oauth',
+            '{}'::jsonb, 1, false, $1 - interval '1 day', true, 'ready', $1, $1, $1),
+           ('acct_banned', 'xai', 'banned', 'user-banned', 'oauth',
+            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'banned', $1, $1, $1),
+           ('acct_disabled', 'xai', 'disabled', 'user-disabled', 'oauth',
+            '{}'::jsonb, 1, false, $1 + interval '1 day', false, 'ready', $1, $1, $1)",
+    )
+    .bind(now)
+    .execute(&database.pool)
+    .await
+    .expect("seed account metric states");
+    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
+        .expect("dashboard range");
+
+    let metrics = repository
+        .dashboard_summary(range)
+        .await
+        .expect("dashboard summary")
+        .provider_accounts;
+
+    assert_eq!(
+        (
+            metrics.total,
+            metrics.enabled,
+            metrics.active,
+            metrics.unavailable,
+            metrics.expired,
+            metrics.disabled,
+            metrics.banned,
+        ),
+        (4, 3, 1, 3, 1, 1, 1),
+    );
+    database.close().await;
+}
+
+#[tokio::test]
 async fn calculated_usage_billing_facts_keep_only_completed_calculated_costs() {
     let Some(database) = TestDatabase::create("calculated_usage_billing_facts").await else {
         return;
@@ -589,6 +640,20 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
         .await
         .expect("ops errors");
     assert_eq!(errors.total, 2);
+    let request_error = errors
+        .items
+        .iter()
+        .find(|error| error.source == "model_request")
+        .expect("request error");
+    assert_eq!(request_error.client_status_code, Some(502));
+    assert_eq!(request_error.upstream_status_code, Some(429));
+    let attempt_error = errors
+        .items
+        .iter()
+        .find(|error| error.source == "ops_event")
+        .expect("attempt error");
+    assert_eq!(attempt_error.client_status_code, None);
+    assert_eq!(attempt_error.upstream_status_code, Some(429));
 
     database.close().await;
 }

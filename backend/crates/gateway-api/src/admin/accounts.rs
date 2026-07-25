@@ -174,7 +174,7 @@ pub struct AccountSummaryView {
     pub total: u64,
     pub active: u64,
     pub quota_exhausted: u64,
-    pub attention: u64,
+    pub unavailable: u64,
 }
 
 /// 一条安全账号视图。
@@ -543,10 +543,14 @@ impl From<DomainConnectionTestEvent> for AccountConnectionTestEvent {
             }),
             DomainConnectionTestEvent::Failed {
                 message,
+                provider_error_code,
+                provider_error_type,
                 account_status,
             } => serde_json::json!({
                 "type": "error",
                 "error": message,
+                "providerErrorCode": provider_error_code,
+                "providerErrorType": provider_error_type,
                 "accountStatus": account_status_name(account_status)
             }),
         };
@@ -1401,7 +1405,7 @@ fn account_page_data(
             total: result.summary.total,
             active: result.summary.active,
             quota_exhausted: result.summary.quota_exhausted,
-            attention: result.summary.attention,
+            unavailable: result.summary.unavailable,
         },
     }
 }
@@ -1798,7 +1802,6 @@ fn account_status_name(status: DomainAccountStatus) -> &'static str {
         DomainAccountStatus::QuotaExhausted => "quota_exhausted",
         DomainAccountStatus::Disabled => "disabled",
         DomainAccountStatus::Banned => "banned",
-        DomainAccountStatus::Attention => "attention",
     }
 }
 

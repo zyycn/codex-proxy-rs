@@ -276,6 +276,8 @@ mod actions {
             },
             DomainConnectionTestEvent::Failed {
                 message: "upstream unavailable".to_owned(),
+                provider_error_code: Some("usage_exhausted".to_owned()),
+                provider_error_type: Some("invalid_request_error".to_owned()),
                 account_status: AccountStatus::Active,
             },
         ]
@@ -302,7 +304,13 @@ mod actions {
                 }),
                 json!({ "type": "content", "text": "OK" }),
                 json!({ "type": "test_complete", "success": true, "accountStatus": "active" }),
-                json!({ "type": "error", "error": "upstream unavailable", "accountStatus": "active" }),
+                json!({
+                    "type": "error",
+                    "error": "upstream unavailable",
+                    "providerErrorCode": "usage_exhausted",
+                    "providerErrorType": "invalid_request_error",
+                    "accountStatus": "active"
+                }),
             ]
         );
     }

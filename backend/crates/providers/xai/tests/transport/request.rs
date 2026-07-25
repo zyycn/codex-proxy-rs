@@ -274,6 +274,104 @@ fn explicit_session_should_merge_client_tools_into_the_native_cache_route() {
 }
 
 #[test]
+fn function_parameters_should_remove_only_nullable_object_roots() {
+    let request = raw_request(json!({
+        "model": "client",
+        "input": "hello",
+        "tools": [{
+            "type": "function",
+            "name": "automation_update",
+            "parameters": {
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "title": {
+                                "anyOf": [{"type": "string"}, {"type": "null"}]
+                            }
+                        },
+                        "required": ["title"],
+                        "additionalProperties": false
+                    },
+                    {"type": "null"}
+                ]
+            }
+        }]
+    }));
+
+    let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
+        .expect("nullable object root");
+    let body = Value::Object(encoded.body().clone());
+
+    assert_eq!(
+        body.pointer("/tools/0/parameters/type"),
+        Some(&json!("object"))
+    );
+    assert_eq!(body.pointer("/tools/0/parameters/anyOf"), None);
+    assert_eq!(
+        body.pointer("/tools/0/parameters/properties/title/anyOf"),
+        Some(&json!([{"type": "string"}, {"type": "null"}]))
+    );
+}
+
+#[test]
+fn function_parameters_should_keep_local_object_refs_after_removing_null() {
+    let request = raw_request(json!({
+        "model": "client",
+        "input": "hello",
+        "tools": [{
+            "type": "function",
+            "name": "lookup",
+            "parameters": {
+                "$defs": {
+                    "Args": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}}
+                    }
+                },
+                "anyOf": [{"$ref": "#/$defs/Args"}, {"type": "null"}]
+            }
+        }]
+    }));
+
+    let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
+        .expect("nullable local object ref");
+    let body = Value::Object(encoded.body().clone());
+
+    assert_eq!(
+        body.pointer("/tools/0/parameters/type"),
+        Some(&json!("object"))
+    );
+    assert_eq!(
+        body.pointer("/tools/0/parameters/anyOf"),
+        Some(&json!([{"$ref": "#/$defs/Args"}]))
+    );
+}
+
+#[test]
+fn function_parameters_should_report_the_invalid_nullable_root_field() {
+    let request = raw_request(json!({
+        "model": "client",
+        "input": "hello",
+        "tools": [{
+            "type": "function",
+            "name": "invalid",
+            "parameters": {
+                "anyOf": [{"type": "object"}, {"type": "string"}, {"type": "null"}]
+            }
+        }]
+    }));
+
+    assert_eq!(
+        GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
+            .expect_err("nullable non-object root"),
+        GrokRequestEncodeError::InvalidRequestField {
+            field: "tools[].parameters"
+        }
+    );
+}
+
+#[test]
 fn explicit_session_should_enable_cache_after_codex_additional_tools_normalization() {
     let request = raw_request(json!({
         "model": "client",
@@ -721,7 +819,7 @@ fn compaction_history_should_reject_missing_empty_or_non_string_plaintext() {
         assert_eq!(
             GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
                 .expect_err("invalid compaction plaintext"),
-            GrokRequestEncodeError::InvalidRequestNormalization
+            GrokRequestEncodeError::InvalidRequestField { field: "input" }
         );
     }
 }
@@ -765,27 +863,42 @@ fn tool_search_history_should_load_returned_tools_at_the_original_turn() {
 
 #[test]
 fn unsupported_or_ambiguous_tool_contracts_should_fail_before_upstream_io() {
-    for body in [
-        json!({"model": "client", "input": "x", "tools": [{"type": "future_tool"}]}),
-        json!({"model": "client", "input": "x", "tools": [
-            {"type": "tool_search", "execution": "client"},
-            {"type": "tool_search", "execution": "server"}
-        ]}),
-        json!({"model": "client", "input": "x", "tools": [
-            {"type": "shell"}, {"type": "local_shell"}
-        ]}),
-        json!({"model": "client", "input": [{
-            "type": "apply_patch_call",
-            "call_id": "patch_1",
-            "operation": {"type": "update_file", "path": "a.txt"}
-        }]}),
-        json!({"model": "client", "input": [{"type": "compaction_trigger"}]}),
+    for (body, field) in [
+        (
+            json!({"model": "client", "input": "x", "tools": [{"type": "future_tool"}]}),
+            "tools",
+        ),
+        (
+            json!({"model": "client", "input": "x", "tools": [
+                {"type": "tool_search", "execution": "client"},
+                {"type": "tool_search", "execution": "server"}
+            ]}),
+            "tools",
+        ),
+        (
+            json!({"model": "client", "input": "x", "tools": [
+                {"type": "shell"}, {"type": "local_shell"}
+            ]}),
+            "tools",
+        ),
+        (
+            json!({"model": "client", "input": [{
+                "type": "apply_patch_call",
+                "call_id": "patch_1",
+                "operation": {"type": "update_file", "path": "a.txt"}
+            }]}),
+            "input",
+        ),
+        (
+            json!({"model": "client", "input": [{"type": "compaction_trigger"}]}),
+            "input",
+        ),
     ] {
         let request = raw_request(body);
         assert_eq!(
             GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
                 .expect_err("invalid tool contract"),
-            GrokRequestEncodeError::InvalidRequestNormalization
+            GrokRequestEncodeError::InvalidRequestField { field }
         );
     }
 }

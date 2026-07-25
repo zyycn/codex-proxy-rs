@@ -33,7 +33,8 @@ use provider_xai::{
     GrokCredentialFeedbackFuture, GrokCredentialRecovery, GrokCredentialRecoveryOutcome,
     GrokCredentialRepository, GrokInferenceRequest, GrokInferenceResponse, GrokInferenceTransport,
     GrokInferenceTransportError, GrokInferenceTransportErrorKind, GrokInferenceTransportFuture,
-    GrokModelCatalogRequest, GrokModelCatalogTransport, GrokModelCatalogTransportFuture,
+    GrokModelCatalogRequest, GrokModelCatalogTransport, GrokModelCatalogTransportError,
+    GrokModelCatalogTransportErrorKind, GrokModelCatalogTransportFuture,
     GrokModelCatalogTransportResponse, GrokSessionBinding, GrokSessionSelection,
     GrokSessionSelector, GrokSessionSelectorError, GrokSessionSelectorFuture, SecretValue,
     SelectedGrokSession,
@@ -352,6 +353,18 @@ impl GrokModelCatalogTransport for CatalogWithoutToolMetadataTransport {
     }
 }
 
+struct UnavailableCatalogTransport;
+
+impl GrokModelCatalogTransport for UnavailableCatalogTransport {
+    fn execute(&self, _: GrokModelCatalogRequest) -> GrokModelCatalogTransportFuture<'_> {
+        Box::pin(async {
+            Err(GrokModelCatalogTransportError::new(
+                GrokModelCatalogTransportErrorKind::Unavailable,
+            ))
+        })
+    }
+}
+
 struct StubRecovery {
     calls: AtomicUsize,
     outcome: GrokCredentialRecoveryOutcome,
@@ -500,6 +513,19 @@ fn operation_with_reasoning_effort(effort: &str) -> Operation {
             ("model".to_owned(), json!("client-model")),
             ("input".to_owned(), json!("hello")),
             ("reasoning".to_owned(), json!({"effort": effort})),
+        ]),
+    )
+    .expect("OpenAI payload");
+    Operation::Generate(GenerateRequest::from_protocol_payload(payload))
+}
+
+fn operation_with_invalid_tools() -> Operation {
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        Map::from_iter([
+            ("model".to_owned(), json!("client-model")),
+            ("input".to_owned(), json!("hello")),
+            ("tools".to_owned(), json!({"not": "an array"})),
         ]),
     )
     .expect("OpenAI payload");
@@ -1045,6 +1071,38 @@ async fn first_unauthorized_should_refresh_and_request_one_same_account_retry() 
     assert!(error.retries_same_account());
     assert_eq!(recovery.calls.load(Ordering::SeqCst), 1);
     assert!(selector.feedback.lock().expect("feedback").is_empty());
+}
+
+#[tokio::test]
+async fn unavailable_unauthorized_recovery_records_temporary_credential_feedback() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::Unauthorized,
+            UpstreamSendState::Sent,
+        )
+        .with_status(401)
+        .with_credential_recovery(),
+    );
+    let recovery = StubRecovery::new(GrokCredentialRecoveryOutcome::Unavailable);
+    let provider = provider_with_recovery(selector.clone(), transport, recovery.clone()).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::Unauthorized);
+    assert!(!error.retries_same_account());
+    assert_eq!(recovery.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        selector.feedback.lock().expect("feedback").as_slice(),
+        &[GrokCredentialFailure::Unauthorized]
+    );
 }
 
 #[tokio::test]
@@ -1629,6 +1687,37 @@ async fn provider_rejects_target_owned_by_other_provider() {
 }
 
 #[tokio::test]
+async fn provider_should_expose_safe_request_normalization_field_before_selection() {
+    let selector = StubSelector::success();
+    let provider = provider(selector.clone(), StubInferenceTransport::success()).await;
+    let error = match provider
+        .execute(
+            provider_request_with_operation("xai", operation_with_invalid_tools()),
+            context(CancellationToken::new(), None),
+        )
+        .await
+    {
+        Ok(_) => panic!("invalid tools must fail"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+    assert_eq!(
+        error.client_visible_upstream_error().map(|detail| (
+            detail.message(),
+            detail.code(),
+            detail.error_type()
+        )),
+        Some((
+            "Grok Build request field `tools` could not be normalized safely",
+            Some("invalid_request_normalization"),
+            Some("invalid_request_error"),
+        )),
+    );
+    assert_eq!(selector.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn provider_compiles_realtime_catalog_capabilities() {
     let provider = provider(StubSelector::success(), StubInferenceTransport::success()).await;
     let capabilities = provider
@@ -1645,6 +1734,41 @@ async fn provider_compiles_realtime_catalog_capabilities() {
             ))
             .is_some()
     );
+    let presentation = capabilities[0]
+        .presentation()
+        .expect("Grok model presentation");
+    assert_eq!(presentation.display_name(), Some("Grok 4.5"));
+    assert_eq!(
+        presentation.supported_reasoning_efforts(),
+        ["low", "medium", "high"]
+    );
+    assert_eq!(presentation.context_window_tokens(), Some(1_000_000));
+    assert!(presentation.agent_tools());
+}
+
+#[tokio::test]
+async fn provider_publishes_default_codex_profile_when_catalog_is_unavailable() {
+    let provider = provider_with_catalog_transport(
+        StubSelector::success(),
+        StubInferenceTransport::success(),
+        StubRecovery::new(GrokCredentialRecoveryOutcome::Unavailable),
+        Arc::new(UnavailableCatalogTransport),
+    )
+    .await;
+    let capabilities = provider
+        .query_model_capabilities()
+        .await
+        .expect("fallback capabilities");
+
+    assert_eq!(capabilities.len(), 1);
+    assert_eq!(capabilities[0].upstream_model().as_str(), MODEL);
+    let presentation = capabilities[0]
+        .presentation()
+        .expect("fallback Grok model presentation");
+    assert_eq!(presentation.display_name(), Some("Grok 4.5"));
+    assert_eq!(presentation.context_window_tokens(), Some(500_000));
+    assert!(presentation.agent_tools());
+    assert!(presentation.parallel_tool_calls());
 }
 
 #[tokio::test]

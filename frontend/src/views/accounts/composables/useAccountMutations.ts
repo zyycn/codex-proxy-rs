@@ -24,7 +24,6 @@ import { useAccountOnboarding } from './useAccountOnboarding'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 
-const attentionAccountStatuses = new Set(['expired', 'disabled', 'banned'])
 const accountStatusSortRank: Record<string, number> = {
   active: 0,
   quota_exhausted: 1,
@@ -250,13 +249,17 @@ export function useAccountMutations(options: {
         + Number(status === 'quota_exhausted')
         - Number(current.status === 'quota_exhausted'),
       ),
-      attention: Math.max(
+      unavailable: Math.max(
         0,
-        options.accountSummary.value.attention
-        + Number(attentionAccountStatuses.has(status))
-        - Number(attentionAccountStatuses.has(current.status)),
+        options.accountSummary.value.unavailable
+        + Number(isUnavailableAccountStatus(status))
+        - Number(isUnavailableAccountStatus(current.status)),
       ),
     }
+  }
+
+  function isUnavailableAccountStatus(status: string) {
+    return status === 'expired' || status === 'disabled' || status === 'banned'
   }
 
   function sortAccountsByStatus(rows: AccountRow[]) {
