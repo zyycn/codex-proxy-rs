@@ -84,6 +84,10 @@ pub(super) struct AdminTestFixture {
 
 impl AdminTestFixture {
     pub async fn new() -> Self {
+        Self::with_system(Arc::new(UnusedSystem)).await
+    }
+
+    pub async fn with_system(system: Arc<dyn SystemOperations>) -> Self {
         let api_key = Arc::new(Mutex::new(None));
         let auth = Arc::new(MemoryAuthStore::new(api_key.clone()));
         let settings = Arc::new(MemorySettingsStore::new(api_key));
@@ -113,7 +117,7 @@ impl AdminTestFixture {
             providers,
             Arc::new(NoopSnapshot),
             Arc::new(NoopProbe),
-            Arc::new(UnusedSystem),
+            system,
         )
         .await
         .expect("initialize test admin services");

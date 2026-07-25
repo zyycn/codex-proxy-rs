@@ -49,7 +49,7 @@ pub(crate) async fn download_file(
         .map_err(|error| super::internal(format!("failed to create download file: {error}")))?;
     let mut stream = response.bytes_stream();
     let mut downloaded = 0_u64;
-    let mut last_percent = 0_u8;
+    let mut next_progress = 10_u8;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|error| upstream(format!("download stream failed: {error}")))?;
         downloaded = downloaded.saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
@@ -59,9 +59,17 @@ pub(crate) async fn download_file(
         file.write_all(&chunk)
             .map_err(|error| super::internal(format!("failed to write download: {error}")))?;
         let percent = download_percent(downloaded, expected_size);
-        if percent > last_percent {
-            last_percent = percent;
-            events.emit_progress(operation_id, "downloading release archive", percent);
+        if percent >= next_progress || downloaded == expected_size {
+            events.emit_progress(
+                operation_id,
+                &format!(
+                    "已下载 {} / {} ({percent}%)",
+                    format_bytes(downloaded),
+                    format_bytes(expected_size)
+                ),
+                percent,
+            );
+            next_progress = percent.saturating_add(10);
         }
     }
     file.sync_all()
@@ -154,4 +162,16 @@ fn download_percent(downloaded: u64, total: u64) -> u8 {
             .min(100),
     )
     .unwrap_or(100)
+}
+
+pub(crate) fn format_bytes(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = KIB * 1024;
+    if bytes >= MIB {
+        return format!("{:.1} MiB", bytes as f64 / MIB as f64);
+    }
+    if bytes >= KIB {
+        return format!("{:.1} KiB", bytes as f64 / KIB as f64);
+    }
+    format!("{bytes} B")
 }

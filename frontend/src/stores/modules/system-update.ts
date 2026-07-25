@@ -1,4 +1,4 @@
-import { useEventSource } from '@vueuse/core'
+import { until, useEventSource } from '@vueuse/core'
 import { delay } from 'es-toolkit'
 import { defineStore } from 'pinia'
 
@@ -14,6 +14,7 @@ import { ApiError } from '@/api/request'
 import { errorMessage } from '@/utils/async'
 
 const maxUpdateLogs = 200
+const updateEventReadyTimeoutMs = 3_000
 const restartReadyTimeoutMs = 60_000
 const restartProbeTimeoutMs = 2_000
 const restartReadyPollIntervalMs = 500
@@ -106,19 +107,30 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     }
   })
 
-  function connectUpdateEvents(force = false) {
+  async function connectUpdateEvents(force = false) {
     if (force) {
       disconnectUpdateEvents()
     }
     else if (updateEventSource.value) {
-      return
+      return updateEventStatus.value === 'OPEN'
     }
 
     updateStreamError.value = ''
     openUpdateEventSource()
     if (!updateEventSource.value) {
       updateStreamError.value = '当前浏览器不支持实时更新日志'
+      return false
     }
+
+    if (updateEventStatus.value !== 'OPEN') {
+      await until(updateEventStatus).toBe('OPEN', {
+        timeout: updateEventReadyTimeoutMs,
+      })
+    }
+    const connected = updateEventStatus.value === 'OPEN'
+    if (!connected)
+      updateStreamError.value = '更新日志连接超时'
+    return connected
   }
 
   function disconnectUpdateEvents() {
@@ -186,7 +198,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
       return null
 
     clearUpdateLogs()
-    connectUpdateEvents(true)
+    await connectUpdateEvents(true)
     updating.value = true
     updateError.value = ''
     updateSuccess.value = false

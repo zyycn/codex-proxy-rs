@@ -205,6 +205,68 @@ async fn update_events_should_open_authenticated_sse_stream() {
 }
 
 #[tokio::test]
+async fn update_events_should_preserve_complete_release_stage_sequence() {
+    let server = MockServer::start().await;
+    let fixture = Fixture::new();
+    fixture
+        .mount_release(
+            &server,
+            TARGET_VERSION,
+            ArchiveKind::Safe,
+            ChecksumKind::Valid,
+        )
+        .await;
+    let service = fixture.service(&server);
+    let events = service.update_events();
+    service
+        .perform_update(Some(TARGET_VERSION.to_owned()))
+        .await
+        .expect("update");
+    let steps = events
+        .map(|event| event.step.expect("release update step"))
+        .collect::<Vec<_>>()
+        .await;
+
+    assert_eq!(
+        steps,
+        [
+            "release", "prepare", "asset", "asset", "verify", "prepare", "download", "download",
+            "download", "checksum", "checksum", "extract", "extract", "replace", "replace", "done",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn update_events_should_report_download_bytes_and_percent() {
+    let server = MockServer::start().await;
+    let fixture = Fixture::new();
+    fixture
+        .mount_release(
+            &server,
+            TARGET_VERSION,
+            ArchiveKind::Safe,
+            ChecksumKind::Valid,
+        )
+        .await;
+    let service = fixture.service(&server);
+    let events = service.update_events();
+    service
+        .perform_update(Some(TARGET_VERSION.to_owned()))
+        .await
+        .expect("update");
+    let progress = events
+        .filter_map(
+            |event| async move { event.progress_percent.map(|value| (value, event.message)) },
+        )
+        .collect::<Vec<_>>()
+        .await;
+
+    assert!(progress.iter().any(|(percent, message)| {
+        *percent == 100 && message.starts_with("已下载 ") && message.ends_with(" (100%)")
+    }));
+}
+
+#[tokio::test]
 async fn update_should_fail_when_release_checksum_is_missing() {
     let server = MockServer::start().await;
     let fixture = Fixture::new();
