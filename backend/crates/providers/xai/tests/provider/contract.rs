@@ -1827,7 +1827,7 @@ async fn provider_compiles_realtime_catalog_capabilities() {
     assert_eq!(presentation.display_name(), Some("Grok 4.5"));
     assert_eq!(
         presentation.supported_reasoning_efforts(),
-        ["low", "medium", "high"]
+        ["low", "medium", "high", "xhigh"]
     );
     assert_eq!(presentation.context_window_tokens(), Some(1_000_000));
     assert!(presentation.agent_tools());

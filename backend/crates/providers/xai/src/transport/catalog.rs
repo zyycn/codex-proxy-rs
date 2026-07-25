@@ -589,11 +589,42 @@ pub enum GrokCatalogApiBackend {
     Unknown,
 }
 
+/// Grok 官方目录允许声明的 reasoning effort。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GrokCatalogReasoningEffort {
+    None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+}
+
+impl GrokCatalogReasoningEffort {
+    /// 返回 Responses API 使用的规范值。
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
+}
+
 /// Grok 目录中允许进入控制面的能力证据。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrokCatalogCapabilities {
     responses_api: GrokCatalogCapabilityEvidence,
     reasoning_effort: GrokCatalogCapabilityEvidence,
+    reasoning_efforts: Vec<GrokCatalogReasoningEffort>,
+    default_reasoning_effort: Option<GrokCatalogReasoningEffort>,
     backend_search: GrokCatalogCapabilityEvidence,
     streaming_tool_calls: GrokCatalogCapabilityEvidence,
     api_backend: Option<GrokCatalogApiBackend>,
@@ -610,6 +641,18 @@ impl GrokCatalogCapabilities {
     #[must_use]
     pub const fn reasoning_effort(&self) -> GrokCatalogCapabilityEvidence {
         self.reasoning_effort
+    }
+
+    /// 返回上游声明的可选 reasoning effort，顺序与目录一致。
+    #[must_use]
+    pub fn reasoning_efforts(&self) -> &[GrokCatalogReasoningEffort] {
+        &self.reasoning_efforts
+    }
+
+    /// 返回上游声明或菜单推导出的默认 reasoning effort。
+    #[must_use]
+    pub const fn default_reasoning_effort(&self) -> Option<GrokCatalogReasoningEffort> {
+        self.default_reasoning_effort
     }
 
     /// 返回后端 search 支持证据。
@@ -850,11 +893,35 @@ struct GrokModelWire {
         alias = "supports_reasoning_effort"
     )]
     supports_reasoning_effort: Option<bool>,
+    #[serde(rename = "reasoningEffort", alias = "reasoning_effort")]
+    reasoning_effort: Option<GrokCatalogReasoningEffort>,
+    #[serde(default, rename = "reasoningEfforts", alias = "reasoning_efforts")]
+    reasoning_efforts: Vec<GrokReasoningEffortOptionWire>,
     #[serde(rename = "supportsBackendSearch", alias = "supports_backend_search")]
     supports_backend_search: Option<bool>,
     #[serde(rename = "streamToolCalls", alias = "stream_tool_calls")]
     stream_tool_calls: Option<bool>,
     hidden: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum GrokReasoningEffortOptionWire {
+    Bare(GrokCatalogReasoningEffort),
+    Detailed {
+        value: GrokCatalogReasoningEffort,
+        #[serde(default)]
+        default: bool,
+    },
+}
+
+impl GrokReasoningEffortOptionWire {
+    fn into_parts(self) -> (GrokCatalogReasoningEffort, bool) {
+        match self {
+            Self::Bare(value) => (value, false),
+            Self::Detailed { value, default } => (value, default),
+        }
+    }
 }
 
 /// 解析唯一受支持的 Grok 官方完整快照。
@@ -922,15 +989,36 @@ fn normalize_model(wire: GrokModelWire) -> Result<GrokCatalogModel, GrokModelCat
         .api_backend
         .filter(|backend| *backend != GrokCatalogApiBackend::Unknown);
     let responses_api = responses_evidence(wire.supported_in_api, api_backend);
+    let mut menu_default = None;
+    let reasoning_efforts = wire
+        .reasoning_efforts
+        .into_iter()
+        .map(|option| {
+            let (effort, is_default) = option.into_parts();
+            if is_default && menu_default.is_none() {
+                menu_default = Some(effort);
+            }
+            effort
+        })
+        .collect::<Vec<_>>();
+    let default_reasoning_effort = wire
+        .reasoning_effort
+        .or(menu_default)
+        .or_else(|| reasoning_efforts.first().copied());
+    let reasoning_effort = if reasoning_efforts.is_empty() {
+        GrokCatalogCapabilityEvidence::from_wire(wire.supports_reasoning_effort)
+    } else {
+        GrokCatalogCapabilityEvidence::DeclaredNative
+    };
 
     Ok(GrokCatalogModel {
         request_model,
         display_name: wire.name,
         capabilities: GrokCatalogCapabilities {
             responses_api,
-            reasoning_effort: GrokCatalogCapabilityEvidence::from_wire(
-                wire.supports_reasoning_effort,
-            ),
+            reasoning_effort,
+            reasoning_efforts,
+            default_reasoning_effort,
             backend_search: GrokCatalogCapabilityEvidence::from_wire(wire.supports_backend_search),
             streaming_tool_calls: GrokCatalogCapabilityEvidence::from_wire(wire.stream_tool_calls),
             api_backend,

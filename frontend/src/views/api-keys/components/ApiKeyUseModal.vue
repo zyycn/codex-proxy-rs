@@ -35,12 +35,22 @@ const configPath = computed(() =>
     ? '%userprofile%\\.codex\\config.toml'
     : '~/.codex/config.toml',
 )
-const authPath = computed(() =>
-  activePlatform.value === 'windows' ? '%userprofile%\\.codex\\auth.json' : '~/.codex/auth.json',
+const tokenPath = computed(() =>
+  activePlatform.value === 'windows'
+    ? '%userprofile%\\.codex\\codex-proxy.token'
+    : '~/.codex/codex-proxy.token',
 )
-const codexAuthJson = computed(() => JSON.stringify({ OPENAI_API_KEY: keyValue.value }, null, 2))
 const defaultModel = computed(() =>
   props.apiKey?.providerKind?.trim().toLowerCase() === 'xai' ? 'grok-4.5' : 'gpt-5.5',
+)
+const providerAuthToml = computed(() =>
+  activePlatform.value === 'windows'
+    ? `[model_providers.OpenAI.auth]
+command = "powershell.exe"
+args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Get-Content -Raw (Join-Path (Join-Path $env:USERPROFILE '.codex') 'codex-proxy.token')"]`
+    : `[model_providers.OpenAI.auth]
+command = "sh"
+args = ["-c", 'cat "$HOME/.codex/codex-proxy.token"']`,
 )
 
 const codexConfigToml = computed(
@@ -48,6 +58,7 @@ const codexConfigToml = computed(
 model = "${defaultModel.value}"
 review_model = "${defaultModel.value}"
 model_reasoning_effort = "xhigh"
+service_tier = "default"
 disable_response_storage = true
 network_access = "enabled"
 windows_wsl_setup_acknowledged = true
@@ -56,7 +67,8 @@ windows_wsl_setup_acknowledged = true
 name = "OpenAI"
 base_url = "${props.apiBaseUrl}"
 wire_api = "responses"
-requires_openai_auth = true
+
+${providerAuthToml.value}
 
 [features]
 goals = true`,
@@ -64,7 +76,7 @@ goals = true`,
 
 const visibleFiles = computed(() => [
   { path: configPath.value, content: codexConfigToml.value },
-  { path: authPath.value, content: codexAuthJson.value },
+  { path: tokenPath.value, content: keyValue.value },
 ])
 </script>
 

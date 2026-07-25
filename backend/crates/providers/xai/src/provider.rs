@@ -430,7 +430,9 @@ fn default_grok_model_presentation() -> ModelPresentation {
     )
     .with_reasoning(
         Some("medium".to_owned()),
-        ["low", "medium", "high"].map(str::to_owned).to_vec(),
+        ["low", "medium", "high", "xhigh"]
+            .map(str::to_owned)
+            .to_vec(),
     )
     .with_context_window_tokens(Some(500_000))
     .with_image_input(true)
@@ -444,17 +446,35 @@ fn grok_model_presentation(model: &GrokCatalogModel) -> ModelPresentation {
         DEFAULT_GROK_MODEL | "grok-4.5-latest" | "grok-4.5-build-free" | "grok-build-latest"
     );
     let reasoning_evidence = model.capabilities().reasoning_effort();
+    let catalog_reasoning_efforts = model
+        .capabilities()
+        .reasoning_efforts()
+        .iter()
+        .map(|effort| effort.as_str().to_owned())
+        .collect::<Vec<_>>();
+    let catalog_default_reasoning = model
+        .capabilities()
+        .default_reasoning_effort()
+        .map(|effort| effort.as_str().to_owned());
     let (default_reasoning, reasoning_efforts) = match reasoning_evidence {
+        GrokCatalogCapabilityEvidence::DeclaredNative if !catalog_reasoning_efforts.is_empty() => (
+            catalog_default_reasoning.or_else(|| catalog_reasoning_efforts.first().cloned()),
+            catalog_reasoning_efforts,
+        ),
         GrokCatalogCapabilityEvidence::DeclaredNative => (
-            Some("medium".to_owned()),
-            ["low", "medium", "high"].map(str::to_owned).to_vec(),
+            catalog_default_reasoning.or_else(|| Some("medium".to_owned())),
+            ["low", "medium", "high", "xhigh"]
+                .map(str::to_owned)
+                .to_vec(),
         ),
         GrokCatalogCapabilityEvidence::DeclaredUnsupported => {
             (Some("none".to_owned()), vec!["none".to_owned()])
         }
         GrokCatalogCapabilityEvidence::Unknown if known_grok_4_5 => (
-            Some("medium".to_owned()),
-            ["low", "medium", "high"].map(str::to_owned).to_vec(),
+            catalog_default_reasoning.or_else(|| Some("medium".to_owned())),
+            ["low", "medium", "high", "xhigh"]
+                .map(str::to_owned)
+                .to_vec(),
         ),
         GrokCatalogCapabilityEvidence::Unknown => (None, Vec::new()),
     };
