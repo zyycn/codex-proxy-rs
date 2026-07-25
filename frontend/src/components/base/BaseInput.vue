@@ -24,6 +24,11 @@ const props = withDefaults(
 
 const model = defineModel<string>({ default: '' })
 
+// number 输入也保持字符串契约，避免原生 v-model 隐式转换为 number。
+function updateModel(event: Event) {
+  model.value = (event.target as HTMLInputElement).value
+}
+
 const containerClasses = computed(() => [
   'relative inline-flex h-(--cp-input-height-default) w-full min-w-0 items-center gap-2.5 overflow-visible rounded-(--cp-input-radius-base) border-0 px-3.5 text-[13px] text-(--cp-text-primary) shadow-(--cp-shadow-input) transition-[background-color,box-shadow,color] duration-[160ms]',
   props.disabled
@@ -64,7 +69,7 @@ const inputClasses = computed(() => [
         <slot name="prefix" />
       </span>
       <input
-        v-model="model"
+        :value="model"
         class="base-input__field"
         :class="inputClasses"
         :name="name"
@@ -74,6 +79,7 @@ const inputClasses = computed(() => [
         :autocomplete="autocomplete"
         :aria-label="ariaLabel"
         :aria-invalid="error ? 'true' : undefined"
+        @input="updateModel"
       >
       <span v-if="$slots.suffix" :class="iconClasses">
         <slot name="suffix" />
