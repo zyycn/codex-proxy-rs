@@ -232,8 +232,15 @@ impl ProcessSystemOperations {
             .as_deref()
             .ok_or_else(|| conflict("update repository is not configured"))?;
         self.events
-            .info(None, Some("release"), "fetching latest release");
-        let release = fetch_latest(&self.config.github_api_base, repository).await?;
+            .info(None, Some("release"), "正在获取最新 Release 信息");
+        let release = match fetch_latest(&self.config.github_api_base, repository).await {
+            Ok(release) => release,
+            Err(error) => {
+                self.events
+                    .error_terminal(None, Some("release"), error.to_string());
+                return Err(error);
+            }
+        };
         let detail = detail_from_release(&self.config, &release);
         if detail.latest_version != target {
             self.events.warning_terminal(
@@ -258,12 +265,17 @@ impl ProcessSystemOperations {
             Some(&target),
             &self.config.version,
         )?;
+        self.events.info(
+            Some(&operation_id),
+            Some("prepare"),
+            format!("准备更新到 v{target}"),
+        );
         let result = self.install_release(&release, &target, &operation_id).await;
         match &result {
             Ok(()) => self.events.success_terminal(
                 Some(&operation_id),
                 Some("done"),
-                "release files replaced",
+                "更新文件已替换，等待服务重启生效",
             ),
             Err(error) => {
                 self.events
@@ -294,7 +306,23 @@ impl ProcessSystemOperations {
         version: &str,
         operation_id: &str,
     ) -> Result<(), OperationError> {
+        self.events.info(
+            Some(operation_id),
+            Some("asset"),
+            "正在选择匹配当前平台的更新包",
+        );
         let archive = select_archive(release, version)?;
+        self.events.info(
+            Some(operation_id),
+            Some("asset"),
+            format!(
+                "已选择更新包 {} ({})",
+                archive.name,
+                download::format_bytes(archive.size)
+            ),
+        );
+        self.events
+            .info(Some(operation_id), Some("verify"), "正在校验更新资源");
         if archive.size == 0 || archive.size > MAX_DOWNLOAD_SIZE {
             return Err(invalid("release archive size is invalid"));
         }
@@ -306,12 +334,16 @@ impl ProcessSystemOperations {
         if checksum.size == 0 || checksum.size > MAX_CHECKSUM_SIZE {
             return Err(invalid("release checksum size is invalid"));
         }
+        self.events
+            .info(Some(operation_id), Some("prepare"), "正在创建临时更新目录");
         fs::create_dir_all(&self.config.update_temp_dir)
             .map_err(|error| internal(format!("failed to prepare update temp dir: {error}")))?;
         let temp_root = fs::canonicalize(&self.config.update_temp_dir)
             .map_err(|error| internal(format!("failed to resolve update temp dir: {error}")))?;
         let temp = UpdateTempDir::create(&temp_root)?;
         let archive_path = temp.path().join(&archive.name);
+        self.events
+            .info(Some(operation_id), Some("download"), "开始下载更新包");
         download_file(
             &archive.browser_download_url,
             &archive_path,
@@ -321,6 +353,10 @@ impl ProcessSystemOperations {
             &self.events,
         )
         .await?;
+        self.events
+            .success(Some(operation_id), Some("download"), "更新包下载完成");
+        self.events
+            .info(Some(operation_id), Some("checksum"), "正在校验 checksum");
         verify_checksum(
             &archive_path,
             &archive.name,
@@ -329,12 +365,23 @@ impl ProcessSystemOperations {
             &self.config.github_api_base,
         )
         .await?;
+        self.events
+            .success(Some(operation_id), Some("checksum"), "checksum 校验通过");
+        self.events
+            .info(Some(operation_id), Some("extract"), "正在解压更新包");
         let extracted = extract_release(&archive_path, temp.path())?;
+        self.events
+            .success(Some(operation_id), Some("extract"), "更新包解压完成");
+        self.events
+            .info(Some(operation_id), Some("replace"), "正在替换应用文件");
         replace_release_files(
             &self.config.executable_path()?,
             &self.config.web_dist_dir,
             extracted,
-        )
+        )?;
+        self.events
+            .success(Some(operation_id), Some("replace"), "应用文件替换完成");
+        Ok(())
     }
 }
 
@@ -507,6 +554,17 @@ impl UpdateEvents {
     fn info(&self, operation_id: Option<&str>, step: Option<&str>, message: impl Into<String>) {
         self.emit(
             SystemUpdateEventLevel::Info,
+            operation_id,
+            step,
+            message,
+            None,
+            false,
+        );
+    }
+
+    fn success(&self, operation_id: Option<&str>, step: Option<&str>, message: impl Into<String>) {
+        self.emit(
+            SystemUpdateEventLevel::Success,
             operation_id,
             step,
             message,

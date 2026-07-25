@@ -206,6 +206,7 @@ struct SystemUpdateEventView {
     step: Option<String>,
     message: String,
     terminal: bool,
+    progress_percent: Option<u8>,
     at: String,
 }
 
@@ -408,6 +409,7 @@ impl From<SystemUpdateEvent> for SystemUpdateEventView {
             step: event.step,
             message: event.message,
             terminal: event.terminal,
+            progress_percent: event.progress_percent,
             at: event.occurred_at.to_rfc3339(),
         }
     }
@@ -421,6 +423,7 @@ impl SystemUpdateEventView {
             "step": self.step,
             "message": self.message,
             "terminal": self.terminal,
+            "progressPercent": self.progress_percent,
             "at": self.at,
         })
     }
