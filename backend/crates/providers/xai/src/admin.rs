@@ -11,8 +11,9 @@ use gateway_admin::model::accounts::{
     AccountAvailability as AdminAccountAvailability, AccountRecord,
 };
 use gateway_admin::model::observability::{
-    CalculatedBillingBreakdown, CurrencyCost, DashboardWireAttribute, DashboardWireProfile,
-    DashboardWireTarget, DecimalAmount, ProviderBillingInput,
+    CalculatedBillingBreakdown, CurrencyCost, DashboardDesktopRelease, DashboardWireAttribute,
+    DashboardWireProfile, DashboardWireTarget, DecimalAmount, DesktopReleaseStatus,
+    ProviderBillingInput,
 };
 use gateway_admin::model::provider_credentials::{
     AuthorizationMutationTarget, AuthorizationOwner, AuthorizationOwnerBinding,
@@ -57,6 +58,7 @@ use crate::credential::{
     PreparedGrokCredentialRotation, PreparedGrokCredentialRotationGuard, RedirectUriAllowlist,
     RotateManagedGrokCredential, SecretValue, VerifiedGrokAccount, VerifiedTokenSet,
 };
+use crate::transport::profile::{GrokCliReleaseSnapshot, GrokCliReleaseStatus};
 use crate::transport::{GROK_CLI_BASE_URL, XAI_PROVIDER_NAME, grok_billing_breakdown};
 
 const PENDING_SCHEMA_VERSION: u64 = 2;
@@ -66,6 +68,7 @@ const MAX_PENDING_TEXT_BYTES: usize = 512;
 pub(crate) struct XaiAdminProvider {
     provider_kind: ProviderKind,
     wire_profile: XaiWireProfileState,
+    cli_release: GrokCliReleaseStatus,
     accounts: Arc<dyn ProviderAccountStore>,
     repository: GrokCredentialRepository,
     oauth_config: GrokOAuthConfig,
@@ -95,10 +98,12 @@ impl XaiAdminProvider {
         wire_profile: XaiWireProfileState,
         accounts: Arc<dyn ProviderAccountStore>,
         services: XaiAdminServices,
+        cli_release: GrokCliReleaseStatus,
     ) -> Self {
         Self {
             provider_kind,
             wire_profile,
+            cli_release,
             accounts,
             repository: services.repository,
             oauth_config: services.oauth_config,
@@ -216,34 +221,42 @@ impl ProviderAdmin for XaiAdminProvider {
     }
 
     fn dashboard_wire_profile(&self) -> Option<DashboardWireProfile> {
+        let profile = self.wire_profile.snapshot();
+        let release = dashboard_cli_release(&profile.client_version, self.cli_release.snapshot());
         Some(DashboardWireProfile {
             provider: self.provider_kind.as_str().to_owned(),
             product: "Grok Build".to_owned(),
-            version: self.wire_profile.client_version(),
+            version: profile.client_version.clone(),
             build: None,
             target: DashboardWireTarget {
-                os_type: self.wire_profile.target_os(),
+                os_type: profile.target_os.clone(),
                 os_version: "—".to_owned(),
-                arch: self.wire_profile.target_arch(),
-                terminal: self.wire_profile.client_mode(),
+                arch: profile.target_arch.clone(),
+                terminal: profile.client_mode.clone(),
             },
-            user_agent: self.wire_profile.user_agent(),
+            user_agent: format!(
+                "{}/{} ({}; {})",
+                profile.client_identifier,
+                profile.client_version,
+                profile.target_os,
+                profile.target_arch
+            ),
             attributes: vec![
                 DashboardWireAttribute {
                     label: "客户端标识".to_owned(),
-                    value: self.wire_profile.client_identifier(),
+                    value: profile.client_identifier,
                 },
                 DashboardWireAttribute {
                     label: "运行模式".to_owned(),
-                    value: self.wire_profile.client_mode(),
+                    value: profile.client_mode,
                 },
                 DashboardWireAttribute {
                     label: "Token 认证".to_owned(),
                     value: "xai-grok-cli".to_owned(),
                 },
             ],
-            verified_at: Some(self.wire_profile.verified_at()),
-            release: None,
+            verified_at: Some(profile.verified_at),
+            release: Some(release),
         })
     }
 
@@ -769,6 +782,36 @@ fn validate_account_record(
     ProviderAccountId::new(account.id.clone())
         .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
     Ok(())
+}
+
+fn dashboard_cli_release(
+    profile_version: &str,
+    snapshot: GrokCliReleaseSnapshot,
+) -> DashboardDesktopRelease {
+    let status = if snapshot.checked_at.is_none() {
+        DesktopReleaseStatus::Unchecked
+    } else if snapshot.last_error.is_some() {
+        DesktopReleaseStatus::Failed
+    } else if snapshot.latest_version.as_deref() == Some(profile_version) {
+        DesktopReleaseStatus::Current
+    } else if snapshot.latest_version.is_some() {
+        DesktopReleaseStatus::UpdateAvailable
+    } else {
+        DesktopReleaseStatus::Failed
+    };
+    DashboardDesktopRelease {
+        status,
+        checked_at: snapshot.checked_at,
+        latest_version: snapshot.latest_version,
+        latest_build: None,
+        published_at: None,
+        minimum_system_version: None,
+        hardware_requirements: None,
+        download_url: None,
+        download_size: None,
+        signature_present: None,
+        error: snapshot.last_error,
+    }
 }
 
 fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, ProviderAdminError> {

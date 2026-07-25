@@ -100,6 +100,7 @@ pub async fn initialize(
             OfficialGrokCliReleaseTransport::new().map_err(|_| XaiInitializeError::Transport)?,
         ),
     ));
+    let cli_release_status = cli_release.status();
     let provider_kind =
         ProviderKind::new(XAI_PROVIDER_NAME).map_err(|_| XaiInitializeError::ProviderKind)?;
     let accounts: Arc<dyn ProviderAccountStore> = ports.accounts();
@@ -194,6 +195,7 @@ pub async fn initialize(
             catalog: Arc::clone(&catalog),
             runtime_policy,
         },
+        cli_release_status,
     ));
     let worker_contributions = provider::worker_contributions(
         refresh,
