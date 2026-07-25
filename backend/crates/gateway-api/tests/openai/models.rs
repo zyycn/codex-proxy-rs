@@ -164,6 +164,33 @@ async fn models_should_encode_provider_profiles_for_current_codex_clients() {
 }
 
 #[tokio::test]
+async fn models_with_provider_profiles_should_keep_the_openai_list_contract() {
+    let response = api_router(ModelsExecution::with_profiles())
+        .await
+        .oneshot(authorized_request("/v1/models"))
+        .await
+        .expect("list compatible models response");
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read compatible models body");
+    let value: serde_json::Value = serde_json::from_slice(&body).expect("models JSON");
+
+    assert_eq!(
+        serde_json::json!({
+            "object": value["object"],
+            "data": value["data"],
+        }),
+        serde_json::json!({
+            "object": "list",
+            "data": [
+                {"id":"model-a","object":"model","created":1700000000_i64,"owned_by":"gateway"},
+                {"id":"model-b","object":"model","created":1700000000_i64,"owned_by":"gateway"}
+            ]
+        })
+    );
+}
+
+#[tokio::test]
 async fn model_detail_should_keep_the_official_path_id_contract() {
     let response = api_router(ModelsExecution::new())
         .await
