@@ -4,8 +4,8 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
@@ -20,13 +20,14 @@ use crate::credential::discovery::MAX_OAUTH_RESPONSE_BYTES;
 use crate::{
     GrokBillingRequest, GrokBillingTransport, GrokBillingTransportError,
     GrokBillingTransportErrorKind, GrokBillingTransportFuture, GrokBillingTransportResponse,
+    GrokInferenceClientCacheStatus, GrokInferenceDnsObservation, GrokInferenceDnsSource,
     GrokInferenceRequest, GrokInferenceResponse, GrokInferenceTransport,
     GrokInferenceTransportError, GrokInferenceTransportErrorKind, GrokInferenceTransportFuture,
-    GrokModelCatalogRequest, GrokModelCatalogTransport, GrokModelCatalogTransportError,
-    GrokModelCatalogTransportErrorKind, GrokModelCatalogTransportFuture,
-    GrokModelCatalogTransportResponse, GrokSessionBinding, HttpMethod, MAX_GROK_BILLING_BYTES,
-    MAX_GROK_MODEL_CATALOG_BYTES, OAuthHttpRequest, OAuthHttpResponse, OAuthHttpTransport,
-    TransportFailure, TransportFailureKind, TransportFuture,
+    GrokInferenceTransportMetrics, GrokModelCatalogRequest, GrokModelCatalogTransport,
+    GrokModelCatalogTransportError, GrokModelCatalogTransportErrorKind,
+    GrokModelCatalogTransportFuture, GrokModelCatalogTransportResponse, GrokSessionBinding,
+    HttpMethod, MAX_GROK_BILLING_BYTES, MAX_GROK_MODEL_CATALOG_BYTES, OAuthHttpRequest,
+    OAuthHttpResponse, OAuthHttpTransport, TransportFailure, TransportFailureKind, TransportFuture,
 };
 use gateway_core::engine::UpstreamSendState;
 use gateway_core::error::SafeUpstreamValue;
@@ -42,6 +43,9 @@ pub(crate) const OFFICIAL_USERINFO_PATH: &str = "/oauth2/userinfo";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const OAUTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+const POOL_MAX_IDLE_PER_HOST: usize = 2;
+const HTTP2_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(15);
+const HTTP2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
 const MAX_INFERENCE_BODY_BYTES: usize = 256 * 1024 * 1024;
 const MAX_RETRY_AFTER_SECONDS: u64 = 120;
@@ -54,6 +58,10 @@ const TRUSTED_DOH_BOOTSTRAP: [SocketAddr; 2] = [
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 443),
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 4, 4)), 443),
 ];
+
+tokio::task_local! {
+    static REQUEST_DNS_OBSERVER: Arc<RequestDnsObserver>;
+}
 
 /// 构建严格 reqwest transport 失败。
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
@@ -314,12 +322,31 @@ impl ReqwestGrokInferenceTransport {
     fn client_for(
         &self,
         binding: &GrokSessionBinding,
-    ) -> Result<Client, GrokInferenceTransportError> {
-        self.clients
+    ) -> Result<(Client, GrokInferenceClientCacheStatus), GrokInferenceTransportError> {
+        let unbound_client = {
+            let mut clients = self
+                .clients
+                .lock()
+                .map_err(|_| inference_client_pool_unavailable())?;
+            if let Some(client) = clients.get(binding) {
+                return Ok((client, GrokInferenceClientCacheStatus::Hit));
+            }
+            clients.take_unbound()
+        };
+
+        let client = match unbound_client {
+            Some(client) => client,
+            None => self
+                .endpoint_policy
+                .build_inference_client(None)
+                .map_err(|_| inference_client_pool_unavailable_for_cache_miss())?,
+        };
+        let client = self
+            .clients
             .lock()
-            .map_err(|_| inference_client_pool_unavailable())?
-            .get_or_insert(binding, self.endpoint_policy.as_ref())
-            .map_err(|_| inference_client_pool_unavailable())
+            .map_err(|_| inference_client_pool_unavailable_for_cache_miss())?
+            .insert_if_absent(binding, client);
+        Ok((client, GrokInferenceClientCacheStatus::Miss))
     }
 }
 
@@ -342,47 +369,62 @@ impl GrokInferenceTransport for ReqwestGrokInferenceTransport {
                     UpstreamSendState::NotSent,
                 ));
             }
-            let client = self.client_for(request.binding())?;
+            let (client, client_cache_status) = self.client_for(request.binding())?;
             let mut builder = client
                 .post(request.endpoint().clone())
                 .body(request.body().to_vec());
             for header in request.headers() {
                 builder = builder.header(header.name(), header.value().expose());
             }
-            let response = builder
-                .send()
+            let dns_observer = Arc::new(RequestDnsObserver::default());
+            let headers_started_at = Instant::now();
+            let response = REQUEST_DNS_OBSERVER
+                .scope(Arc::clone(&dns_observer), builder.send())
                 .await
-                .map_err(classify_inference_reqwest_error)?;
+                .map_err(|error| {
+                    classify_inference_reqwest_error(error).with_transport_metrics(
+                        inference_transport_metrics(client_cache_status, None, &dns_observer),
+                    )
+                })?;
+            let transport_metrics = inference_transport_metrics(
+                client_cache_status,
+                Some(elapsed_millis(headers_started_at.elapsed())),
+                &dns_observer,
+            );
             if !response.status().is_success() {
-                return Err(classify_inference_status(response).await);
+                return Err(classify_inference_status(response)
+                    .await
+                    .with_transport_metrics(transport_metrics));
             }
             let http_version = upstream_http_version(response.version());
             let status_code = response.status().as_u16();
             let request_id = upstream_request_id(&response);
-            let body = response.bytes_stream().scan(0_usize, |observed, chunk| {
-                let item = match chunk {
-                    Ok(chunk)
-                        if observed
-                            .checked_add(chunk.len())
-                            .is_some_and(|total| total <= MAX_INFERENCE_BODY_BYTES) =>
-                    {
-                        *observed += chunk.len();
-                        Ok(chunk.to_vec())
-                    }
-                    Ok(_) => Err(GrokInferenceTransportError::new(
-                        GrokInferenceTransportErrorKind::Protocol,
-                        UpstreamSendState::Sent,
-                    )),
-                    Err(error) => Err(classify_inference_stream_error(&error)),
-                };
-                std::future::ready(Some(item))
-            });
-            Ok(GrokInferenceResponse::new(
-                Box::pin(body),
-                http_version,
-                status_code,
-                request_id,
-            ))
+            let body = response
+                .bytes_stream()
+                .scan(0_usize, move |observed, chunk| {
+                    let item = match chunk {
+                        Ok(chunk)
+                            if observed
+                                .checked_add(chunk.len())
+                                .is_some_and(|total| total <= MAX_INFERENCE_BODY_BYTES) =>
+                        {
+                            *observed += chunk.len();
+                            Ok(chunk.to_vec())
+                        }
+                        Ok(_) => Err(GrokInferenceTransportError::new(
+                            GrokInferenceTransportErrorKind::Protocol,
+                            UpstreamSendState::Sent,
+                        )
+                        .with_transport_metrics(transport_metrics)),
+                        Err(error) => Err(classify_inference_stream_error(&error)
+                            .with_transport_metrics(transport_metrics)),
+                    };
+                    std::future::ready(Some(item))
+                });
+            Ok(
+                GrokInferenceResponse::new(Box::pin(body), http_version, status_code, request_id)
+                    .with_transport_metrics(transport_metrics),
+            )
         })
     }
 }
@@ -406,22 +448,24 @@ impl BoundInferenceClients {
         }
     }
 
-    fn get_or_insert(
-        &mut self,
-        binding: &GrokSessionBinding,
-        endpoint_policy: &dyn GrokEndpointPolicy,
-    ) -> Result<Client, GrokReqwestTransportBuildError> {
+    fn get(&mut self, binding: &GrokSessionBinding) -> Option<Client> {
         if let Some(client) = self.by_binding.get(binding).cloned() {
             self.record_use(binding);
-            return Ok(client);
+            return Some(client);
         }
+        None
+    }
 
-        let client = match self.unbound_client.take() {
-            Some(client) => client,
-            None => endpoint_policy.build_inference_client(None)?,
-        };
+    fn take_unbound(&mut self) -> Option<Client> {
+        self.unbound_client.take()
+    }
+
+    fn insert_if_absent(&mut self, binding: &GrokSessionBinding, client: Client) -> Client {
+        if let Some(existing) = self.get(binding) {
+            return existing;
+        }
         self.insert(binding.clone(), client.clone());
-        Ok(client)
+        client
     }
 
     fn insert(&mut self, binding: GrokSessionBinding, client: Client) {
@@ -446,6 +490,29 @@ fn inference_client_pool_unavailable() -> GrokInferenceTransportError {
         GrokInferenceTransportErrorKind::Unavailable,
         UpstreamSendState::NotSent,
     )
+}
+
+fn inference_client_pool_unavailable_for_cache_miss() -> GrokInferenceTransportError {
+    inference_client_pool_unavailable().with_transport_metrics(
+        GrokInferenceTransportMetrics::default()
+            .with_client_cache_status(GrokInferenceClientCacheStatus::Miss),
+    )
+}
+
+fn inference_transport_metrics(
+    client_cache_status: GrokInferenceClientCacheStatus,
+    headers_ms: Option<u64>,
+    dns_observer: &RequestDnsObserver,
+) -> GrokInferenceTransportMetrics {
+    let mut metrics =
+        GrokInferenceTransportMetrics::default().with_client_cache_status(client_cache_status);
+    if let Some(headers_ms) = headers_ms {
+        metrics = metrics.with_headers_ms(headers_ms);
+    }
+    if let Some(dns) = dns_observer.observation() {
+        metrics = metrics.with_dns(dns);
+    }
+    metrics
 }
 
 /// 官方 Grok CLI proxy 模型目录 GET transport。
@@ -581,8 +648,11 @@ fn build_official_client(
         .no_proxy()
         .connect_timeout(CONNECT_TIMEOUT)
         .pool_idle_timeout(POOL_IDLE_TIMEOUT)
-        .pool_max_idle_per_host(128)
+        .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
         .http2_adaptive_window(true)
+        .http2_keep_alive_interval(HTTP2_KEEP_ALIVE_INTERVAL)
+        .http2_keep_alive_timeout(HTTP2_KEEP_ALIVE_TIMEOUT)
+        .http2_keep_alive_while_idle(true)
         .tcp_nodelay(true)
         .https_only(true)
         .dns_resolver(Arc::new(StrictDnsResolver::new(dns_policy)?));
@@ -626,6 +696,24 @@ struct StrictDnsResolver {
     trusted_doh: TrustedDohResolver,
 }
 
+#[derive(Debug, Default)]
+struct RequestDnsObserver {
+    observation: OnceLock<GrokInferenceDnsObservation>,
+}
+
+impl RequestDnsObserver {
+    fn record(&self, source: GrokInferenceDnsSource, duration: Duration) {
+        let _ = self.observation.set(GrokInferenceDnsObservation::new(
+            source,
+            elapsed_millis(duration),
+        ));
+    }
+
+    fn observation(&self) -> Option<GrokInferenceDnsObservation> {
+        self.observation.get().copied()
+    }
+}
+
 impl StrictDnsResolver {
     fn new(policy: GrokDnsResolutionPolicy) -> Result<Self, GrokReqwestTransportBuildError> {
         Ok(Self {
@@ -647,7 +735,9 @@ impl Resolve for StrictDnsResolver {
         }
         let policy = self.policy;
         let trusted_doh = self.trusted_doh.clone();
+        let observer = REQUEST_DNS_OBSERVER.try_with(Arc::clone).ok();
         Box::pin(async move {
+            let started_at = Instant::now();
             let system_addresses = match tokio::net::lookup_host((requested_host.as_str(), 0)).await
             {
                 Ok(addresses) => addresses.collect::<Vec<_>>(),
@@ -657,27 +747,41 @@ impl Resolve for StrictDnsResolver {
                 .iter()
                 .map(SocketAddr::ip)
                 .collect::<Vec<_>>();
-            match policy
+            let (source, result) = match policy
                 .plan_system_resolution(&requested_host, &system_ips)
                 .map_err(|_| safe_dns_error("DNS resolution rejected"))?
             {
-                GrokDnsResolutionPlan::System => {
-                    Ok(Box::new(system_addresses.into_iter()) as Addrs)
-                }
+                GrokDnsResolutionPlan::System => (
+                    GrokInferenceDnsSource::System,
+                    Ok(Box::new(system_addresses.into_iter()) as Addrs),
+                ),
                 GrokDnsResolutionPlan::TrustedDoh => {
-                    let addresses = trusted_doh.resolve(&requested_host).await?;
-                    policy
-                        .validate_trusted_doh_resolution(&requested_host, &addresses)
-                        .map_err(|_| safe_dns_error("trusted DNS result rejected"))?;
-                    Ok(Box::new(
-                        addresses
-                            .into_iter()
-                            .map(|address| SocketAddr::new(address, 0)),
-                    ) as Addrs)
+                    let result = match trusted_doh.resolve(&requested_host).await {
+                        Ok(addresses) => policy
+                            .validate_trusted_doh_resolution(&requested_host, &addresses)
+                            .map_err(|_| safe_dns_error("trusted DNS result rejected"))
+                            .map(|()| {
+                                Box::new(
+                                    addresses
+                                        .into_iter()
+                                        .map(|address| SocketAddr::new(address, 0)),
+                                ) as Addrs
+                            }),
+                        Err(error) => Err(error),
+                    };
+                    (GrokInferenceDnsSource::TrustedDoh, result)
                 }
+            };
+            if let Some(observer) = observer {
+                observer.record(source, started_at.elapsed());
             }
+            result
         })
     }
+}
+
+fn elapsed_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 #[derive(Clone)]

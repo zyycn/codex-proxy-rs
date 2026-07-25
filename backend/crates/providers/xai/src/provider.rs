@@ -21,7 +21,10 @@ use gateway_core::engine::{AttemptContext, ContinuationAttempt, UpstreamSendStat
 use gateway_core::error::{
     ClientVisibleUpstreamError, ContinuationFailure, ProviderError, ProviderErrorKind,
 };
-use gateway_core::event::{GatewayEvent, ProviderEvent, ProviderResponseObservation, ResponseMeta};
+use gateway_core::event::{
+    GatewayEvent, ProviderEvent, ProviderResponseMetadata, ProviderResponseObservation,
+    ProviderResponseTimings, ResponseMeta,
+};
 use gateway_core::operation::{
     Feature, GenerateRequest, Operation, OperationKind, ProviderSessionState,
 };
@@ -52,9 +55,9 @@ use crate::transport::{
     GROK_RESPONSES_URL, GrokCompactionDecodeError, GrokCompactionRequest,
     GrokCompactionSummaryDecoder, GrokCredentialFailure, GrokInferenceChunkStream,
     GrokInferenceRequest, GrokInferenceResponse, GrokInferenceTransport,
-    GrokInferenceTransportError, GrokInferenceTransportErrorKind, GrokProviderConfigError,
-    GrokRequestEncodeError, GrokResponsesRequest, GrokSessionAffinityKey, GrokSessionSelection,
-    GrokSessionSelector, GrokSessionSelectorError, SelectedGrokSession,
+    GrokInferenceTransportError, GrokInferenceTransportErrorKind, GrokInferenceTransportMetrics,
+    GrokProviderConfigError, GrokRequestEncodeError, GrokResponsesRequest, GrokSessionAffinityKey,
+    GrokSessionSelection, GrokSessionSelector, GrokSessionSelectorError, SelectedGrokSession,
 };
 use crate::{GrokCatalogCapabilityEvidence, GrokCatalogModel};
 
@@ -950,17 +953,11 @@ async fn start_grok_inference(
             return Err(GrokInferenceStartFailure { observation, error });
         }
     };
-    let mut observation = ProviderResponseObservation::new(
-        UpstreamTransport::new(HTTP_SSE_TRANSPORT).map_err(|_| GrokInferenceStartFailure {
+    let observation =
+        xai_response_observation(&response).map_err(|error| GrokInferenceStartFailure {
             observation: None,
-            error: protocol_sent(),
-        })?,
-    )
-    .with_http_version(response.http_version())
-    .with_status_code(response.status_code());
-    if let Some(request_id) = response.request_id().cloned() {
-        observation = observation.with_request_id(request_id);
-    }
+            error,
+        })?;
     Ok(AcceptedGrokInference {
         response,
         observation,
@@ -1277,17 +1274,7 @@ fn cold_http_sse_stream(
             }
         };
 
-        let mut observation = ProviderResponseObservation::new(
-            UpstreamTransport::new(HTTP_SSE_TRANSPORT).map_err(|_| provider_error(
-                ProviderErrorKind::Protocol,
-                UpstreamSendState::Sent,
-            ))?,
-        )
-        .with_http_version(response.http_version())
-        .with_status_code(response.status_code());
-        if let Some(request_id) = response.request_id().cloned() {
-            observation = observation.with_request_id(request_id);
-        }
+        let observation = xai_response_observation(&response)?;
         yield ProviderEvent::observation(observation);
 
         let mut body = response.into_body();
@@ -1383,7 +1370,68 @@ fn xai_error_observation(
     if let Some(request_id) = error.request_id().cloned() {
         observation = observation.with_request_id(request_id);
     }
-    Ok(observation)
+    Ok(with_xai_transport_metrics(
+        observation,
+        error.transport_metrics(),
+    ))
+}
+
+fn xai_response_observation(
+    response: &GrokInferenceResponse,
+) -> Result<ProviderResponseObservation, ProviderError> {
+    let mut observation = ProviderResponseObservation::new(
+        UpstreamTransport::new(HTTP_SSE_TRANSPORT)
+            .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent))?,
+    )
+    .with_http_version(response.http_version())
+    .with_status_code(response.status_code());
+    if let Some(request_id) = response.request_id().cloned() {
+        observation = observation.with_request_id(request_id);
+    }
+    Ok(with_xai_transport_metrics(
+        observation,
+        response.transport_metrics(),
+    ))
+}
+
+fn with_xai_transport_metrics(
+    mut observation: ProviderResponseObservation,
+    metrics: GrokInferenceTransportMetrics,
+) -> ProviderResponseObservation {
+    observation = observation.with_timings(ProviderResponseTimings {
+        headers_ms: metrics.headers_ms(),
+        ..ProviderResponseTimings::default()
+    });
+    if let Some(metadata) = xai_transport_metadata(metrics) {
+        observation = observation.with_provider_metadata(metadata);
+    }
+    observation
+}
+
+fn xai_transport_metadata(
+    metrics: GrokInferenceTransportMetrics,
+) -> Option<ProviderResponseMetadata> {
+    let mut metadata = Map::new();
+    if let Some(status) = metrics.client_cache_status() {
+        metadata.insert(
+            "clientCache".to_owned(),
+            Value::String(status.as_str().to_owned()),
+        );
+    }
+    if let Some(dns) = metrics.dns() {
+        metadata.insert(
+            "dnsSource".to_owned(),
+            Value::String(dns.source().as_str().to_owned()),
+        );
+        metadata.insert("dnsMs".to_owned(), Value::from(dns.duration_ms()));
+    }
+    if let Some(headers_ms) = metrics.headers_ms() {
+        metadata.insert("upstreamHeadersMs".to_owned(), Value::from(headers_ms));
+    }
+    if metadata.is_empty() {
+        return None;
+    }
+    ProviderResponseMetadata::new(serde_json::to_string(&Value::Object(metadata)).ok()?)
 }
 
 async fn record_failure(

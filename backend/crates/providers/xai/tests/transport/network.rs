@@ -16,11 +16,12 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use provider_xai::{
     FailClosedTokenVerifier, FormField, GrokBillingClient, GrokDnsResolutionPlan,
-    GrokDnsResolutionPolicy, GrokEndpointPolicy, GrokInferenceRequest, GrokInferenceTransport,
-    GrokInferenceTransportErrorKind, GrokModelCatalogSession, GrokOAuthClient, GrokOAuthConfig,
-    GrokReqwestTransportBuildError, GrokSessionBinding, HttpMethod, OAuthHttpRequest,
-    OAuthHttpTransport, OfficialGrokEndpointPolicy, ReqwestGrokInferenceTransport,
-    ReqwestGrokModelCatalogTransport, ReqwestOAuthTransport, SecretValue,
+    GrokDnsResolutionPolicy, GrokEndpointPolicy, GrokInferenceClientCacheStatus,
+    GrokInferenceRequest, GrokInferenceTransport, GrokInferenceTransportErrorKind,
+    GrokModelCatalogSession, GrokOAuthClient, GrokOAuthConfig, GrokReqwestTransportBuildError,
+    GrokSessionBinding, HttpMethod, OAuthHttpRequest, OAuthHttpTransport,
+    OfficialGrokEndpointPolicy, ReqwestGrokInferenceTransport, ReqwestGrokModelCatalogTransport,
+    ReqwestOAuthTransport, SecretValue,
 };
 
 use crate::support::loopback_endpoint_policy;
@@ -90,6 +91,43 @@ async fn inference_transport_should_stream_one_official_shape_response() {
 }
 
 #[tokio::test]
+async fn inference_transport_should_report_account_client_cache_miss_then_hit() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw("data: [DONE]\n\n", "text/event-stream"),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    let origin = Url::parse(&server.uri()).expect("wiremock origin");
+    let transport = inference_transport(&origin);
+
+    let first = transport
+        .execute(inference_request(&origin))
+        .await
+        .expect("first response");
+    let first_metrics = first.transport_metrics();
+    assert_eq!(
+        first_metrics.client_cache_status(),
+        Some(GrokInferenceClientCacheStatus::Miss)
+    );
+    assert!(first_metrics.headers_ms().is_some());
+    first.into_body().collect::<Vec<_>>().await;
+
+    let second = transport
+        .execute(inference_request(&origin))
+        .await
+        .expect("second response");
+    assert_eq!(
+        second.transport_metrics().client_cache_status(),
+        Some(GrokInferenceClientCacheStatus::Hit)
+    );
+    second.into_body().collect::<Vec<_>>().await;
+}
+
+#[tokio::test]
 async fn inference_transport_should_reuse_one_client_only_within_the_same_binding() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -105,6 +143,7 @@ async fn inference_transport_should_reuse_one_client_only_within_the_same_bindin
     let endpoint_policy: Arc<dyn GrokEndpointPolicy> = Arc::new(CountingEndpointPolicy {
         inner: loopback_endpoint_policy(&origin),
         inference_client_builds: Arc::clone(&client_builds),
+        concurrency: None,
     });
     let transport = ReqwestGrokInferenceTransport::new(endpoint_policy).expect("transport");
 
@@ -132,6 +171,7 @@ async fn inference_transport_should_evict_the_least_recent_binding_at_the_fixed_
     let endpoint_policy: Arc<dyn GrokEndpointPolicy> = Arc::new(CountingEndpointPolicy {
         inner: loopback_endpoint_policy(&origin),
         inference_client_builds: Arc::clone(&client_builds),
+        concurrency: None,
     });
     let transport = ReqwestGrokInferenceTransport::new(endpoint_policy).expect("transport");
 
@@ -154,6 +194,62 @@ async fn inference_transport_should_evict_the_least_recent_binding_at_the_fixed_
         ),
         (distinct_bindings, distinct_bindings + 1),
     );
+}
+
+#[tokio::test]
+async fn inference_transport_should_build_distinct_cold_account_clients_concurrently() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw("data: [DONE]\n\n", "text/event-stream"),
+        )
+        .expect(3)
+        .mount(&server)
+        .await;
+    let origin = Url::parse(&server.uri()).expect("wiremock origin");
+    let concurrency = Arc::new(BuildConcurrency::new(Duration::from_millis(100)));
+    let endpoint_policy: Arc<dyn GrokEndpointPolicy> = Arc::new(CountingEndpointPolicy {
+        inner: loopback_endpoint_policy(&origin),
+        inference_client_builds: Arc::new(AtomicUsize::new(0)),
+        concurrency: Some(Arc::clone(&concurrency)),
+    });
+    let transport = Arc::new(
+        ReqwestGrokInferenceTransport::new(endpoint_policy).expect("concurrent transport"),
+    );
+    execute_inference(&transport, &origin, "account-primer").await;
+
+    let start = Arc::new(std::sync::Barrier::new(2));
+    let first = {
+        let start = Arc::clone(&start);
+        let transport = Arc::clone(&transport);
+        let origin = origin.clone();
+        tokio::task::spawn_blocking(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("first request runtime");
+            start.wait();
+            runtime.block_on(execute_inference(&transport, &origin, "account-cold-a"));
+        })
+    };
+    let second = {
+        let start = Arc::clone(&start);
+        let transport = Arc::clone(&transport);
+        let origin = origin.clone();
+        tokio::task::spawn_blocking(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("second request runtime");
+            start.wait();
+            runtime.block_on(execute_inference(&transport, &origin, "account-cold-b"));
+        })
+    };
+    first.await.expect("first task");
+    second.await.expect("second task");
+
+    assert!(concurrency.max_active.load(Ordering::SeqCst) >= 2);
 }
 
 #[tokio::test]
@@ -201,6 +297,11 @@ async fn inference_transport_should_classify_http_failures_without_retaining_bod
                 Some(gateway_core::event::UpstreamHttpVersion::Http11),
             )
         );
+        assert_eq!(
+            error.transport_metrics().client_cache_status(),
+            Some(GrokInferenceClientCacheStatus::Miss)
+        );
+        assert!(error.transport_metrics().headers_ms().is_some());
         assert!(!rendered.contains(&secret));
     }
 }
@@ -535,6 +636,24 @@ async fn execute_inference(transport: &ReqwestGrokInferenceTransport, origin: &U
 struct CountingEndpointPolicy {
     inner: Arc<dyn GrokEndpointPolicy>,
     inference_client_builds: Arc<AtomicUsize>,
+    concurrency: Option<Arc<BuildConcurrency>>,
+}
+
+#[derive(Debug)]
+struct BuildConcurrency {
+    delay: Duration,
+    active: AtomicUsize,
+    max_active: AtomicUsize,
+}
+
+impl BuildConcurrency {
+    fn new(delay: Duration) -> Self {
+        Self {
+            delay,
+            active: AtomicUsize::new(0),
+            max_active: AtomicUsize::new(0),
+        }
+    }
 }
 
 impl GrokEndpointPolicy for CountingEndpointPolicy {
@@ -550,7 +669,15 @@ impl GrokEndpointPolicy for CountingEndpointPolicy {
         timeout: Option<Duration>,
     ) -> Result<Client, GrokReqwestTransportBuildError> {
         self.inference_client_builds.fetch_add(1, Ordering::SeqCst);
-        self.inner.build_inference_client(timeout)
+        let Some(concurrency) = &self.concurrency else {
+            return self.inner.build_inference_client(timeout);
+        };
+        let active = concurrency.active.fetch_add(1, Ordering::SeqCst) + 1;
+        concurrency.max_active.fetch_max(active, Ordering::SeqCst);
+        std::thread::sleep(concurrency.delay);
+        let result = self.inner.build_inference_client(timeout);
+        concurrency.active.fetch_sub(1, Ordering::SeqCst);
+        result
     }
 
     fn validate_oauth(&self, url: &Url) -> bool {

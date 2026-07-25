@@ -31,13 +31,14 @@ use gateway_core::routing::{
 use provider_xai::{
     GrokBuildProvider, GrokCredentialCatalogCache, GrokCredentialFailure,
     GrokCredentialFeedbackFuture, GrokCredentialRecovery, GrokCredentialRecoveryOutcome,
-    GrokCredentialRepository, GrokInferenceRequest, GrokInferenceResponse, GrokInferenceTransport,
+    GrokCredentialRepository, GrokInferenceClientCacheStatus, GrokInferenceDnsObservation,
+    GrokInferenceDnsSource, GrokInferenceRequest, GrokInferenceResponse, GrokInferenceTransport,
     GrokInferenceTransportError, GrokInferenceTransportErrorKind, GrokInferenceTransportFuture,
-    GrokModelCatalogRequest, GrokModelCatalogTransport, GrokModelCatalogTransportError,
-    GrokModelCatalogTransportErrorKind, GrokModelCatalogTransportFuture,
-    GrokModelCatalogTransportResponse, GrokSessionBinding, GrokSessionSelection,
-    GrokSessionSelector, GrokSessionSelectorError, GrokSessionSelectorFuture, SecretValue,
-    SelectedGrokSession,
+    GrokInferenceTransportMetrics, GrokModelCatalogRequest, GrokModelCatalogTransport,
+    GrokModelCatalogTransportError, GrokModelCatalogTransportErrorKind,
+    GrokModelCatalogTransportFuture, GrokModelCatalogTransportResponse, GrokSessionBinding,
+    GrokSessionSelection, GrokSessionSelector, GrokSessionSelectorError, GrokSessionSelectorFuture,
+    SecretValue, SelectedGrokSession,
 };
 use serde_json::{Map, json};
 
@@ -48,6 +49,17 @@ use crate::support::{
 const MODEL: &str = "grok-4.5";
 const CATALOG_FIXTURE: &[u8] =
     include_bytes!("../transport/catalog/fixtures/official_grok_models_snapshot.json");
+
+fn observed_transport_metrics() -> GrokInferenceTransportMetrics {
+    GrokInferenceTransportMetrics::default()
+        .with_headers_ms(42)
+        .with_client_cache_status(GrokInferenceClientCacheStatus::Miss)
+        .with_dns(GrokInferenceDnsObservation::new(
+            GrokInferenceDnsSource::System,
+            7,
+        ))
+}
+
 const CATALOG_WITHOUT_TOOL_METADATA: &[u8] = br#"{
   "object": "list",
   "data": [{
@@ -246,6 +258,7 @@ impl GrokSessionSelector for StubSelector {
 
 enum InferenceMode {
     Success,
+    SuccessWithMetrics(GrokInferenceTransportMetrics),
     SuccessBody(Vec<u8>),
     Error(GrokInferenceTransportError),
     StreamError(GrokInferenceTransportError),
@@ -263,6 +276,14 @@ impl StubInferenceTransport {
             calls: AtomicUsize::new(0),
             requests: Mutex::new(Vec::new()),
             modes: Mutex::new(VecDeque::from([InferenceMode::Success])),
+        })
+    }
+
+    fn success_with_metrics(metrics: GrokInferenceTransportMetrics) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            requests: Mutex::new(Vec::new()),
+            modes: Mutex::new(VecDeque::from([InferenceMode::SuccessWithMetrics(metrics)])),
         })
     }
 
@@ -309,6 +330,13 @@ impl GrokInferenceTransport for StubInferenceTransport {
                     200,
                     None,
                 )),
+                InferenceMode::SuccessWithMetrics(metrics) => Ok(GrokInferenceResponse::new(
+                    Box::pin(stream::iter([Ok(SUCCESS_SSE.to_vec())])),
+                    UpstreamHttpVersion::Http2,
+                    200,
+                    None,
+                )
+                .with_transport_metrics(metrics)),
                 InferenceMode::SuccessBody(body) => Ok(GrokInferenceResponse::new(
                     Box::pin(stream::iter([Ok(body)])),
                     UpstreamHttpVersion::Http2,
@@ -719,7 +747,7 @@ async fn execute_forwards_required_account_to_selector() {
 #[tokio::test]
 async fn execute_returns_cold_stream_and_records_selected_account() {
     let selector = StubSelector::success();
-    let transport = StubInferenceTransport::success();
+    let transport = StubInferenceTransport::success_with_metrics(observed_transport_metrics());
     let provider = provider(selector, transport.clone()).await;
     let mut stream = provider
         .execute(
@@ -744,6 +772,23 @@ async fn execute_returns_cold_stream_and_records_selected_account() {
     assert_eq!(observation.transport().as_str(), "http_sse");
     assert_eq!(observation.http_version(), Some(UpstreamHttpVersion::Http2));
     assert_eq!(observation.status_code(), Some(200));
+    assert_eq!(observation.timings().headers_ms, Some(42));
+    let metadata: serde_json::Value = serde_json::from_str(
+        observation
+            .provider_metadata()
+            .expect("xAI transport metadata")
+            .as_json(),
+    )
+    .expect("valid metadata JSON");
+    assert_eq!(
+        metadata,
+        json!({
+            "clientCache": "miss",
+            "dnsSource": "system",
+            "dnsMs": 7,
+            "upstreamHeadersMs": 42
+        })
+    );
     assert!(
         events
             .iter()
@@ -751,6 +796,48 @@ async fn execute_returns_cold_stream_and_records_selected_account() {
             .flat_map(|event| event.canonical_facts())
             .any(|event| matches!(event, GatewayEvent::Completed(_)))
     );
+}
+
+#[tokio::test]
+async fn transport_error_observation_should_retain_available_metrics() {
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::Unavailable,
+            UpstreamSendState::Sent,
+        )
+        .with_status(503)
+        .with_transport_metrics(observed_transport_metrics()),
+    );
+    let provider = provider(StubSelector::success(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("provider stream");
+
+    let event = stream
+        .next()
+        .await
+        .expect("observation event")
+        .expect("observation must succeed");
+    let observation = event.response_observation().expect("transport observation");
+    assert_eq!(observation.status_code(), Some(503));
+    assert_eq!(observation.timings().headers_ms, Some(42));
+    let metadata: serde_json::Value = serde_json::from_str(
+        observation
+            .provider_metadata()
+            .expect("xAI transport metadata")
+            .as_json(),
+    )
+    .expect("valid metadata JSON");
+    assert_eq!(metadata["clientCache"], "miss");
+    assert_eq!(metadata["dnsSource"], "system");
+    assert_eq!(metadata["dnsMs"], 7);
+
+    let error = next_provider_error(&mut stream).await;
+    assert_eq!(error.kind(), ProviderErrorKind::Unavailable);
 }
 
 #[tokio::test]
