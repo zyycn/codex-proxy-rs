@@ -27,6 +27,7 @@ thiserror = "2.0.18"
 uuid = { version = "1.23.3", features = ["v7"] }
 
 [dev-dependencies]
+serde_json = { version = "1.0.150", features = ["preserve_order"] }
 tokio = { version = "1.52.3", default-features = false, features = ["macros", "rt"] }
 
 [lints]

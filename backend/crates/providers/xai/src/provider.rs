@@ -18,13 +18,16 @@ use gateway_core::engine::provider::{
     UpstreamTransport,
 };
 use gateway_core::engine::{AttemptContext, ContinuationAttempt, UpstreamSendState};
-use gateway_core::error::{ContinuationFailure, ProviderError, ProviderErrorKind};
+use gateway_core::error::{
+    ClientVisibleUpstreamError, ContinuationFailure, ProviderError, ProviderErrorKind,
+};
 use gateway_core::event::{GatewayEvent, ProviderEvent, ProviderResponseObservation, ResponseMeta};
 use gateway_core::operation::{
     Feature, GenerateRequest, Operation, OperationKind, ProviderSessionState,
 };
 use gateway_core::routing::{
-    ModelCapabilities, ProviderCandidate, ProviderKind, SupportLevel, UpstreamModelId,
+    ModelCapabilities, ModelPresentation, ProviderCandidate, ProviderKind, SupportLevel,
+    UpstreamModelId,
 };
 use gateway_core::task::{
     ScheduledTask, WorkerContribution, WorkerCycleContext, WorkerDefinitionError, WorkerId,
@@ -35,7 +38,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use url::Url;
 
-use crate::GrokCatalogCapabilityEvidence;
 use crate::XaiWireProfileState;
 use crate::credential::{
     GrokCredentialCatalogError, GrokCredentialCatalogService, GrokCredentialQuotaService,
@@ -54,8 +56,10 @@ use crate::transport::{
     GrokRequestEncodeError, GrokResponsesRequest, GrokSessionAffinityKey, GrokSessionSelection,
     GrokSessionSelector, GrokSessionSelectorError, SelectedGrokSession,
 };
+use crate::{GrokCatalogCapabilityEvidence, GrokCatalogModel};
 
 const HTTP_SSE_TRANSPORT: &str = "http_sse";
+const DEFAULT_GROK_MODEL: &str = "grok-4.5";
 const XAI_SESSION_STATE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const XAI_SESSION_OUTPUT_LIMIT: usize = 4_096;
 const MIN_REASONING_CIPHERTEXT_BYTES: usize = 50;
@@ -138,38 +142,15 @@ impl Provider for GrokBuildProvider {
     async fn query_model_capabilities(
         &self,
     ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
-        let models = self.catalog.query_models().await.map_err(|_| {
-            provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
-        })?;
+        let Ok(models) = self.catalog.query_models().await else {
+            return Ok(vec![default_grok_model_capabilities()?]);
+        };
+        if models.is_empty() {
+            return Ok(vec![default_grok_model_capabilities()?]);
+        }
         Ok(models
             .into_iter()
-            .map(|model| {
-                let mut operations = BTreeSet::new();
-                if model.capabilities().responses_api()
-                    == GrokCatalogCapabilityEvidence::DeclaredNative
-                {
-                    operations.insert(OperationKind::Generate);
-                }
-                let capabilities = ModelCapabilities::new(
-                    operations,
-                    model
-                        .limits()
-                        .max_output_tokens()
-                        .map(std::num::NonZeroU64::get),
-                )
-                .with_feature(
-                    Feature::Reasoning,
-                    support(model.capabilities().reasoning_effort()),
-                )
-                .with_feature(
-                    Feature::Tools,
-                    tool_support(model.capabilities().streaming_tool_calls()),
-                )
-                .with_feature(Feature::Vision, SupportLevel::Unknown)
-                .with_feature(Feature::JsonSchema, SupportLevel::Unknown)
-                .with_feature(Feature::NativeContinuation, SupportLevel::Native);
-                ProviderModelCapabilities::new(model.request_model().clone(), capabilities)
-            })
+            .map(compile_grok_model_capabilities)
             .collect())
     }
 
@@ -401,6 +382,112 @@ fn tool_support(evidence: GrokCatalogCapabilityEvidence) -> SupportLevel {
         // the client-only tool shapes before sending.
         GrokCatalogCapabilityEvidence::Unknown => SupportLevel::Emulated,
     }
+}
+
+fn compile_grok_model_capabilities(model: GrokCatalogModel) -> ProviderModelCapabilities {
+    let mut operations = BTreeSet::new();
+    if model.capabilities().responses_api() == GrokCatalogCapabilityEvidence::DeclaredNative {
+        operations.insert(OperationKind::Generate);
+    }
+    let capabilities = ModelCapabilities::new(
+        operations,
+        model
+            .limits()
+            .max_output_tokens()
+            .map(std::num::NonZeroU64::get),
+    )
+    .with_feature(
+        Feature::Reasoning,
+        support(model.capabilities().reasoning_effort()),
+    )
+    .with_feature(
+        Feature::Tools,
+        tool_support(model.capabilities().streaming_tool_calls()),
+    )
+    .with_feature(Feature::Vision, SupportLevel::Unknown)
+    .with_feature(Feature::JsonSchema, SupportLevel::Unknown)
+    .with_feature(Feature::NativeContinuation, SupportLevel::Native);
+    ProviderModelCapabilities::new(model.request_model().clone(), capabilities)
+        .with_presentation(grok_model_presentation(&model))
+}
+
+fn default_grok_model_capabilities() -> Result<ProviderModelCapabilities, ProviderError> {
+    let model = UpstreamModelId::new(DEFAULT_GROK_MODEL.to_owned())
+        .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
+    let capabilities = ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), None)
+        .with_upstream_feature_validation();
+    Ok(ProviderModelCapabilities::new(model, capabilities)
+        .with_presentation(default_grok_model_presentation()))
+}
+
+fn default_grok_model_presentation() -> ModelPresentation {
+    ModelPresentation::new(
+        Some("Grok 4.5".to_owned()),
+        Some("xAI Grok 4.5 frontier model with reasoning and vision.".to_owned()),
+    )
+    .with_reasoning(
+        Some("medium".to_owned()),
+        ["low", "medium", "high"].map(str::to_owned).to_vec(),
+    )
+    .with_context_window_tokens(Some(500_000))
+    .with_image_input(true)
+    .with_agent_tools(true, true)
+}
+
+fn grok_model_presentation(model: &GrokCatalogModel) -> ModelPresentation {
+    let slug = model.request_model().as_str();
+    let known_grok_4_5 = matches!(
+        slug,
+        DEFAULT_GROK_MODEL | "grok-4.5-latest" | "grok-4.5-build-free" | "grok-build-latest"
+    );
+    let reasoning_evidence = model.capabilities().reasoning_effort();
+    let (default_reasoning, reasoning_efforts) = match reasoning_evidence {
+        GrokCatalogCapabilityEvidence::DeclaredNative => (
+            Some("medium".to_owned()),
+            ["low", "medium", "high"].map(str::to_owned).to_vec(),
+        ),
+        GrokCatalogCapabilityEvidence::DeclaredUnsupported => {
+            (Some("none".to_owned()), vec!["none".to_owned()])
+        }
+        GrokCatalogCapabilityEvidence::Unknown if known_grok_4_5 => (
+            Some("medium".to_owned()),
+            ["low", "medium", "high"].map(str::to_owned).to_vec(),
+        ),
+        GrokCatalogCapabilityEvidence::Unknown => (None, Vec::new()),
+    };
+    let context_window_tokens = model
+        .limits()
+        .context_window_tokens()
+        .map(std::num::NonZeroU64::get)
+        .or(known_grok_4_5.then_some(500_000));
+    let tool_evidence = model.capabilities().streaming_tool_calls();
+
+    ModelPresentation::new(
+        model
+            .display_name()
+            .map(str::to_owned)
+            .or_else(|| known_grok_4_5.then(|| "Grok 4.5".to_owned())),
+        model
+            .metadata()
+            .description()
+            .map(str::to_owned)
+            .or_else(|| {
+                known_grok_4_5
+                    .then(|| "xAI Grok 4.5 frontier model with reasoning and vision.".to_owned())
+            }),
+    )
+    .with_reasoning(default_reasoning, reasoning_efforts)
+    .with_context_window_tokens(context_window_tokens)
+    .with_image_input(known_grok_4_5)
+    .with_agent_tools(
+        tool_evidence != GrokCatalogCapabilityEvidence::DeclaredUnsupported,
+        tool_evidence == GrokCatalogCapabilityEvidence::DeclaredNative
+            || (known_grok_4_5 && tool_evidence == GrokCatalogCapabilityEvidence::Unknown),
+    )
+    .with_search_tool(
+        model.capabilities().backend_search() == GrokCatalogCapabilityEvidence::DeclaredNative,
+    )
+    .with_hidden(model.metadata().hidden().unwrap_or(false))
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -692,16 +779,12 @@ fn attach_xai_session_update(
             .into_iter()
             .map(XaiReplayItem::ClientInput),
     );
-    transcript.extend(
-        capture
-            .output_items
-            .into_values()
-            .filter_map(|item| portable_output_item(item, false))
-            .map(|item| XaiReplayItem::AccountOutput {
-                account_id: capture.account_id.clone(),
-                item,
-            }),
-    );
+    transcript.extend(capture.output_items.into_values().map(|item| {
+        XaiReplayItem::AccountOutput {
+            account_id: capture.account_id.clone(),
+            item,
+        }
+    }));
     let state = XaiSessionState {
         account_id: capture.account_id,
         session_id: capture.session_id,
@@ -722,7 +805,11 @@ fn capture_output_item(event: &ProviderEvent, capture: &mut GrokSessionCapture) 
         .or_else(|| wire.data().get("type").and_then(Value::as_str));
     if event_type == Some("response.output_item.done")
         && capture.output_items.len() < XAI_SESSION_OUTPUT_LIMIT
-        && let Some(item) = wire.data().get("item").cloned()
+        && let Some(item) = wire
+            .data()
+            .get("item")
+            .cloned()
+            .and_then(|item| portable_output_item(item, false))
     {
         let index = wire
             .data()
@@ -743,16 +830,17 @@ fn capture_output_item(event: &ProviderEvent, capture: &mut GrokSessionCapture) 
         .and_then(Value::as_array)
         .filter(|output| !output.is_empty())
     {
-        capture.output_items.clear();
-        capture.output_items.extend(
-            output
-                .iter()
-                .take(XAI_SESSION_OUTPUT_LIMIT)
-                .enumerate()
-                .filter_map(|(index, item)| {
-                    u32::try_from(index).ok().map(|index| (index, item.clone()))
-                }),
-        );
+        for (index, item) in output.iter().take(XAI_SESSION_OUTPUT_LIMIT).enumerate() {
+            let Some(index) = u32::try_from(index).ok() else {
+                break;
+            };
+            if capture.output_items.contains_key(&index) {
+                continue;
+            }
+            if let Some(item) = portable_output_item(item.clone(), false) {
+                capture.output_items.insert(index, item);
+            }
+        }
     }
 }
 
@@ -1351,8 +1439,10 @@ async fn recover_or_record_failure(
             .await
         {
             GrokCredentialRecoveryOutcome::Recovered => error.with_same_account_retry(),
-            GrokCredentialRecoveryOutcome::Rejected
-            | GrokCredentialRecoveryOutcome::Unavailable => error,
+            GrokCredentialRecoveryOutcome::Rejected => error,
+            GrokCredentialRecoveryOutcome::Unavailable => {
+                record_failure(selector, session, error).await
+            }
         };
     }
     record_failure(selector, session, error).await
@@ -1415,10 +1505,23 @@ fn ensure_sent_context(context: &AttemptContext) -> Result<(), ProviderError> {
 fn map_request_error(error: GrokRequestEncodeError) -> ProviderError {
     let kind = match error {
         GrokRequestEncodeError::InvalidProtocolPayload
-        | GrokRequestEncodeError::InvalidRequestNormalization => ProviderErrorKind::InvalidRequest,
+        | GrokRequestEncodeError::InvalidRequestNormalization
+        | GrokRequestEncodeError::InvalidRequestField { .. } => ProviderErrorKind::InvalidRequest,
         GrokRequestEncodeError::Serialization => ProviderErrorKind::Protocol,
     };
-    provider_error(kind, UpstreamSendState::NotSent)
+    let provider_error = provider_error(kind, UpstreamSendState::NotSent);
+    if kind != ProviderErrorKind::InvalidRequest {
+        return provider_error;
+    }
+    let detail = ClientVisibleUpstreamError::new(
+        error.to_string(),
+        Some("invalid_request_normalization".to_owned()),
+        Some("invalid_request_error".to_owned()),
+    );
+    match detail {
+        Ok(detail) => provider_error.with_client_visible_upstream_error(detail),
+        Err(_) => provider_error,
+    }
 }
 
 fn map_selection_error(error: GrokSessionSelectorError) -> ProviderError {

@@ -2,13 +2,14 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::{TimeDelta, Utc};
-use futures::future::BoxFuture;
+use futures::{StreamExt as _, future::BoxFuture};
 use gateway_core::{
     engine::{
         credential::{OpaqueProviderData, ProviderAccountId},
         probe::{AccountProbe, AccountProbeRequest, AccountProbeResult},
     },
-    error::GatewayError,
+    error::{ClientVisibleUpstreamError, GatewayError, GatewayErrorKind},
+    operation::{GenerateRequest, Operation, ProtocolPayload},
     routing::ProviderKind,
 };
 
@@ -17,9 +18,9 @@ use gateway_admin::{
     model::{
         MutationContext, Revision,
         accounts::{
-            AccountAvailability, AccountListQuery, AccountPage, AccountRecord, AccountSummary,
-            AccountUsage, AccountUsageWindowQuery, AccountUsageWindowResult, DeleteAccounts,
-            SetAccountEnabled,
+            AccountAvailability, AccountConnectionTestEvent, AccountListQuery, AccountPage,
+            AccountRecord, AccountSummary, AccountUsage, AccountUsageWindowQuery,
+            AccountUsageWindowResult, DeleteAccounts, SetAccountEnabled,
         },
         observability::TimeRange,
         provider_credentials::{
@@ -48,6 +49,7 @@ use gateway_admin::{
         },
     },
 };
+use serde_json::{Map, json};
 
 pub(super) type EventLog = Arc<Mutex<Vec<&'static str>>>;
 
@@ -159,10 +161,22 @@ impl ProviderAdmin for FakeProviderAdmin {
 
     fn connection_test_operation(
         &self,
-        _: &gateway_core::routing::UpstreamModelId,
-        _: &str,
+        model: &gateway_core::routing::UpstreamModelId,
+        input: &str,
     ) -> Result<gateway_core::operation::Operation, ProviderAdminError> {
-        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+        let payload = ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([
+                ("model".to_owned(), json!(model.as_str())),
+                ("input".to_owned(), json!(input)),
+                ("stream".to_owned(), json!(true)),
+                ("store".to_owned(), json!(false)),
+            ]),
+        )
+        .map_err(|_| ProviderAdminError::new(ProviderAdminErrorKind::Invalid))?;
+        Ok(Operation::Generate(GenerateRequest::from_protocol_payload(
+            payload,
+        )))
     }
 
     fn dashboard_wire_profile(
@@ -395,7 +409,7 @@ impl AccountStore for FakeAccountStore {
                 total: 1,
                 active: 1,
                 quota_exhausted: 0,
-                attention: 0,
+                unavailable: 0,
             },
         })
     }
@@ -683,6 +697,37 @@ fn provider_registry_should_reject_duplicate_kind() {
     assert!(matches!(
         result,
         Err(error) if error.kind() == ProviderAdminErrorKind::Conflict
+    ));
+}
+
+#[tokio::test]
+async fn connection_test_should_preserve_safe_provider_error_details() {
+    let provider = FakeProviderAdmin::new("xai", events());
+    let store = FakeAccountStore::new("xai", events());
+    let services =
+        accounts_service_with_probe(provider, store, Arc::new(FailingAccountProbe)).await;
+
+    let events = services
+        .accounts()
+        .test_connection(
+            ProviderAccountId::new("acct_test").expect("account ID"),
+            gateway_core::routing::UpstreamModelId::new("grok-4.5").expect("model"),
+        )
+        .await
+        .expect("connection test stream")
+        .collect::<Vec<_>>()
+        .await;
+
+    assert!(matches!(
+        events.last(),
+        Some(AccountConnectionTestEvent::Failed {
+            message,
+            provider_error_code: Some(code),
+            provider_error_type: Some(error_type),
+            ..
+        }) if message == "included usage exhausted"
+            && code == "usage_exhausted"
+            && error_type == "invalid_request_error"
     ));
 }
 
@@ -1006,11 +1051,19 @@ async fn accounts_service(
     provider: Arc<FakeProviderAdmin>,
     store: Arc<FakeAccountStore>,
 ) -> AdminServices {
+    accounts_service_with_probe(provider, store, Arc::new(SuccessfulAccountProbe)).await
+}
+
+async fn accounts_service_with_probe(
+    provider: Arc<FakeProviderAdmin>,
+    store: Arc<FakeAccountStore>,
+    probe: Arc<dyn AccountProbe>,
+) -> AdminServices {
     super::AdminHarness::new()
         .accounts(store)
         .settings(Arc::new(StaticSettingsStore))
         .provider(provider)
-        .probe(Arc::new(SuccessfulAccountProbe))
+        .probe(probe)
         .build()
         .await
 }
@@ -1026,6 +1079,29 @@ impl AccountProbe for SuccessfulAccountProbe {
             Ok(AccountProbeResult {
                 text: vec!["OK".to_owned()],
             })
+        })
+    }
+}
+
+struct FailingAccountProbe;
+
+impl AccountProbe for FailingAccountProbe {
+    fn probe(
+        &self,
+        _: AccountProbeRequest,
+    ) -> BoxFuture<'_, Result<AccountProbeResult, GatewayError>> {
+        Box::pin(async {
+            let detail = ClientVisibleUpstreamError::new(
+                "included usage exhausted",
+                Some("usage_exhausted".to_owned()),
+                Some("invalid_request_error".to_owned()),
+            )
+            .expect("safe provider error");
+            Err(GatewayError::new(
+                GatewayErrorKind::RateLimited,
+                "upstream capacity is temporarily unavailable",
+            )
+            .with_client_visible_upstream_error(detail))
         })
     }
 }

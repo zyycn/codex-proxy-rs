@@ -23,7 +23,8 @@ use provider_xai::{
 };
 
 use crate::support::{
-    MemoryGrokCatalogCache, MemoryProviderAccountStore, account_id, create_input, seed_input,
+    MemoryCooldownPort, MemoryGrokCatalogCache, MemoryProviderAccountStore, account_id,
+    create_input, seed_input,
 };
 
 struct SchedulingCoordinator {
@@ -88,6 +89,7 @@ struct SelectorFixture {
     cache: Arc<MemoryGrokCatalogCache>,
     selector: GrokAccountSessionSelector,
     coordinator: Arc<SchedulingCoordinator>,
+    cooldowns: Arc<MemoryCooldownPort>,
     feedback: Arc<AccountFeedbackStats>,
 }
 
@@ -137,6 +139,7 @@ impl SelectorFixture {
             signals: Mutex::new(signals),
             denied: Mutex::new(BTreeSet::new()),
         });
+        let cooldowns = Arc::new(MemoryCooldownPort::default());
         let catalog_cache: Arc<dyn GrokCredentialCatalogCache> = cache.clone();
         let lease_port: Arc<dyn ProviderLeasePort> = coordinator.clone();
         let quota = Arc::new(crate::support::grok_quota_service(
@@ -150,6 +153,7 @@ impl SelectorFixture {
             catalog_cache,
             quota,
             lease_port,
+            cooldowns.clone(),
             Arc::clone(&feedback),
         );
         Self {
@@ -157,6 +161,7 @@ impl SelectorFixture {
             cache,
             selector,
             coordinator,
+            cooldowns,
             feedback,
         }
     }
@@ -257,7 +262,7 @@ async fn required_account_overrides_smart_selection_without_fallback() {
 }
 
 #[tokio::test]
-async fn unauthorized_feedback_marks_only_selected_account_invalid() {
+async fn unauthorized_feedback_records_runtime_cooldown_without_persisting_account_state() {
     let fixture = SelectorFixture::new(&["feedback-a", "feedback-b"]).await;
     let session = fixture
         .selector
@@ -275,7 +280,7 @@ async fn unauthorized_feedback_marks_only_selected_account_invalid() {
             .account(&selected)
             .expect("selected")
             .availability(),
-        AccountAvailability::Invalid
+        AccountAvailability::Ready
     );
     let other = [account_id("feedback-a"), account_id("feedback-b")]
         .into_iter()
@@ -285,11 +290,18 @@ async fn unauthorized_feedback_marks_only_selected_account_invalid() {
         fixture.store.account(&other).expect("other").availability(),
         AccountAvailability::Ready
     );
+    assert!(
+        fixture
+            .cooldowns
+            .cooldown(&selected)
+            .is_some_and(|cooldown| cooldown.until() > SystemTime::now())
+    );
 }
 
 #[tokio::test]
-async fn rate_limit_feedback_applies_bounded_cooldown() {
-    let fixture = SelectorFixture::new(&["rate-limit"]).await;
+async fn cooldown_for_superseded_credential_does_not_block_rotated_account() {
+    let fixture = SelectorFixture::new(&["revision-fence"]).await;
+    let id = account_id("revision-fence");
     let session = fixture
         .selector
         .select(fixture.request(BTreeSet::new()))
@@ -300,24 +312,83 @@ async fn rate_limit_feedback_applies_bounded_cooldown() {
         .record_failure(
             &session,
             GrokCredentialFailure::RateLimited {
+                retry_after: Some(Duration::from_secs(60)),
+            },
+        )
+        .await;
+
+    let current = fixture
+        .store
+        .load_credential(&id, CredentialRevision::new(1).expect("revision"))
+        .await
+        .expect("current credential");
+    let prepared = GrokCredentialAdmin
+        .prepare_rotation(&RotateManagedGrokCredential {
+            current,
+            secret: provider_xai::GrokOAuthSecret {
+                access_token: provider_xai::SecretValue::new("new-access"),
+                refresh_token: provider_xai::SecretValue::new("new-refresh"),
+                id_token: None,
+                scope: provider_xai::OFFICIAL_SCOPES.join(" "),
+            },
+            verified_account: crate::support::profile("subject-revision-fence"),
+            next_refresh_at: chrono::Utc::now() + chrono::Duration::minutes(30),
+        })
+        .expect("rotate");
+    assert!(matches!(
+        fixture
+            .store
+            .compare_and_swap_credential(prepared.credential)
+            .await
+            .expect("persist rotation"),
+        CredentialCasOutcome::Updated(revision) if revision.get() == 2
+    ));
+
+    let next = fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+        .expect("replacement credential should not inherit cooldown");
+    assert_eq!(next.account_id(), &id);
+    assert!(fixture.cooldowns.cooldown(&id).is_none());
+}
+
+#[tokio::test]
+async fn rate_limit_feedback_records_runtime_cooldown_without_persisting_account_state() {
+    let fixture = SelectorFixture::new(&["rate-limit", "available"]).await;
+    let session = fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+        .expect("session");
+    let selected = session.account_id().clone();
+    fixture
+        .selector
+        .record_failure(
+            &session,
+            GrokCredentialFailure::RateLimited {
                 retry_after: Some(Duration::from_secs(5)),
             },
         )
         .await;
-    let account = fixture
-        .store
-        .account(session.account_id())
-        .expect("account");
-    assert_eq!(account.availability(), AccountAvailability::Cooldown);
+    let account = fixture.store.account(&selected).expect("account");
+    assert_eq!(account.availability(), AccountAvailability::Ready);
     assert!(
-        account
-            .cooldown_until()
-            .is_some_and(|until| until > SystemTime::now())
+        fixture
+            .cooldowns
+            .cooldown(&selected)
+            .is_some_and(|cooldown| cooldown.until() > SystemTime::now())
     );
+    let next = fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+        .expect("runtime cooldown should leave the other account available");
+    assert_ne!(next.account_id(), &selected);
 }
 
 #[tokio::test]
-async fn interrupted_stream_feedback_applies_account_cooldown() {
+async fn interrupted_stream_feedback_records_runtime_cooldown_without_persisting_account_state() {
     let fixture = SelectorFixture::new(&["stream-interrupted"]).await;
     let session = fixture
         .selector
@@ -333,12 +404,20 @@ async fn interrupted_stream_feedback_applies_account_cooldown() {
         .store
         .account(session.account_id())
         .expect("account");
-    assert_eq!(account.availability(), AccountAvailability::Cooldown);
+    assert_eq!(account.availability(), AccountAvailability::Ready);
     assert!(
-        account
-            .cooldown_until()
-            .is_some_and(|until| until > SystemTime::now())
+        fixture
+            .cooldowns
+            .cooldown(session.account_id())
+            .is_some_and(|cooldown| cooldown.until() > SystemTime::now())
     );
+    assert!(matches!(
+        fixture
+            .selector
+            .select(fixture.request(BTreeSet::new()))
+            .await,
+        Err(GrokSessionSelectorError::NoEligibleSession)
+    ));
 }
 
 #[tokio::test]

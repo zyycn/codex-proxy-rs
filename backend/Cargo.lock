@@ -1152,6 +1152,7 @@ dependencies = [
  "rand_core 0.6.4",
  "secrecy",
  "serde",
+ "serde_json",
  "subtle",
  "thiserror",
  "tokio",

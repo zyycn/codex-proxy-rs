@@ -356,12 +356,6 @@ impl GrokInferenceTransport for ReqwestGrokInferenceTransport {
             if !response.status().is_success() {
                 return Err(classify_inference_status(response).await);
             }
-            if !is_event_stream(&response) {
-                return Err(GrokInferenceTransportError::new(
-                    GrokInferenceTransportErrorKind::Protocol,
-                    UpstreamSendState::Sent,
-                ));
-            }
             let http_version = upstream_http_version(response.version());
             let status_code = response.status().as_u16();
             let request_id = upstream_request_id(&response);
@@ -1107,15 +1101,6 @@ fn retry_after(response: &Response) -> Option<Duration> {
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|seconds| (1..=MAX_RETRY_AFTER_SECONDS).contains(seconds))
         .map(Duration::from_secs)
-}
-
-fn is_event_stream(response: &Response) -> bool {
-    response
-        .headers()
-        .get(CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/event-stream"))
 }
 
 fn is_json_response(response: &Response) -> bool {

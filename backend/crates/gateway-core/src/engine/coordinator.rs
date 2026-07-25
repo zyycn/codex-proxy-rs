@@ -1,6 +1,6 @@
 //! 唯一的账号重试、发送与下游 commit barrier owner。
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::BTreeSet;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
@@ -67,12 +67,6 @@ where
         let continuation_attempt =
             initial_continuation_attempt(&operation, &plan, continuation.as_ref());
         let image_generation_requested = operation.image_generation_requested();
-        let commit_policy = if continuation_attempt == ContinuationAttempt::None {
-            StreamCommitPolicy::FirstCanonicalEvent
-        } else {
-            StreamCommitPolicy::UntilOutputOrTerminal
-        };
-
         let mut session = ResponseExecutionSession {
             engine: Arc::clone(&self.engine),
             request_id,
@@ -86,7 +80,6 @@ where
             required_account,
             continuation,
             continuation_attempt,
-            commit_policy,
             account_state_owner,
             cancellation,
             attempts: 0,
@@ -106,7 +99,6 @@ where
             upstream_response_id: None,
             last_account_exhaustion: None,
             provider_attempt_outcomes: Vec::new(),
-            before_commit: VecDeque::new(),
         };
 
         if session.cancellation.is_cancelled() {
@@ -141,12 +133,6 @@ struct FailureFinalization {
     provider_response_id: Option<String>,
 }
 
-#[derive(Clone, Copy)]
-enum StreamCommitPolicy {
-    FirstCanonicalEvent,
-    UntilOutputOrTerminal,
-}
-
 /// API 可逐事件消费的 Core 执行会话。
 ///
 /// API 只能提交下游 delivery 边界；账号重试、断流终结与
@@ -164,7 +150,6 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     required_account: Option<crate::engine::credential::ProviderAccountId>,
     continuation: Option<ContinuationBinding>,
     continuation_attempt: ContinuationAttempt,
-    commit_policy: StreamCommitPolicy,
     account_state_owner: Option<ProviderAccountStateOwner>,
     cancellation: CancellationToken,
     attempts: u32,
@@ -184,7 +169,6 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     upstream_response_id: Option<String>,
     last_account_exhaustion: Option<ProviderError>,
     provider_attempt_outcomes: Vec<ProviderAttemptOutcome>,
-    before_commit: VecDeque<ProviderEvent>,
 }
 
 impl<S: ?Sized> ResponseExecutionSession<S>
@@ -203,15 +187,6 @@ where
         if self.finalized {
             return Ok(None);
         }
-        if self.downstream_committed_at.is_some()
-            && let Some(event) = self.before_commit.pop_front()
-        {
-            return Ok(Some(CoordinatedEvent::single(
-                event,
-                CommitRequirement::AlreadyCommitted,
-            )));
-        }
-
         loop {
             match self.pull().await? {
                 PullOutcome::Event(event) => {
@@ -221,25 +196,13 @@ where
                             CommitRequirement::AlreadyCommitted,
                         )));
                     }
-                    let commit_significant = match self.commit_policy {
-                        StreamCommitPolicy::FirstCanonicalEvent => event.has_canonical_facts(),
-                        StreamCommitPolicy::UntilOutputOrTerminal => event.is_commit_significant(),
-                    };
-                    self.before_commit.push_back(event);
-                    if !commit_significant {
-                        continue;
-                    }
                     self.delivery_pending = true;
-                    let events = self.before_commit.drain(..).collect();
-                    return CoordinatedEvent::try_batch(
-                        events,
+                    return Ok(Some(CoordinatedEvent::single(
+                        event,
                         CommitRequirement::CommitBeforeDelivery,
-                    )
-                    .map(Some);
+                    )));
                 }
-                PullOutcome::AttemptDiscarded => {
-                    self.before_commit.clear();
-                }
+                PullOutcome::AttemptDiscarded => {}
                 PullOutcome::End => {
                     if self.downstream_committed_at.is_some() {
                         self.finish_success().await?;
@@ -953,7 +916,6 @@ where
         self.timings.first_text_ms = None;
         self.timings.first_token_ms = None;
         self.upstream_complete = false;
-        self.before_commit.clear();
     }
 
     async fn finish_success(&mut self) -> Result<(), EngineError> {

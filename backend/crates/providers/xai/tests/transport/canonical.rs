@@ -115,6 +115,42 @@ fn decoder_should_normalize_text_usage_and_completion() {
 }
 
 #[test]
+fn decoder_should_emit_each_complete_text_event_without_waiting_for_the_stream_end() {
+    let mut decoder = GrokCanonicalDecoder::new("grok-4.5");
+    let created = decoder
+        .push(
+            concat!(
+                "event: response.created\n",
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_live\",\"model\":\"grok-4.5\"}}\n\n",
+            )
+            .as_bytes(),
+        )
+        .expect("created event");
+    let delta = decoder
+        .push(
+            concat!(
+                "event: response.output_text.delta\n",
+                "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"live\"}\n\n",
+            )
+            .as_bytes(),
+        )
+        .expect("text delta");
+
+    assert!(
+        created
+            .iter()
+            .filter_map(ProviderEvent::wire_event)
+            .any(|event| event.event_type() == Some("response.created"))
+    );
+    assert!(delta.iter().any(|event| {
+        event.wire_event().is_some_and(|wire| {
+            wire.event_type() == Some("response.output_text.delta")
+                && wire.data().get("delta") == Some(&serde_json::json!("live"))
+        })
+    }));
+}
+
+#[test]
 fn decoder_should_preserve_image_tool_tokens_in_canonical_usage() {
     let body = concat!(
         "event: response.created\n",
@@ -413,6 +449,72 @@ fn decoder_should_restore_custom_apply_patch_arguments_as_raw_input() {
         event.event_type() == Some("response.output_item.done")
             && event.data().pointer("/item/type") == Some(&serde_json::json!("custom_tool_call"))
             && event.data().pointer("/item/input") == Some(&serde_json::json!(patch))
+    }));
+}
+
+#[test]
+fn decoder_should_buffer_only_custom_arguments_until_the_done_event() {
+    let request = tool_request(serde_json::json!({
+        "model": "client",
+        "input": "render",
+        "tools": [{"type": "custom", "name": "render"}]
+    }));
+    let mut decoder = GrokCanonicalDecoder::for_request("grok-4.5", &request);
+    decoder
+        .push(
+            concat!(
+                "event: response.created\n",
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_render\",\"model\":\"grok-4.5\"}}\n\n",
+            )
+            .as_bytes(),
+        )
+        .expect("custom response created");
+    let added = decoder
+        .push(
+            concat!(
+                "event: response.output_item.added\n",
+                "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"item_render\",\"type\":\"function_call\",\"call_id\":\"call_render\",\"name\":\"render\"}}\n\n",
+            )
+            .as_bytes(),
+        )
+        .expect("custom item added");
+    let first_delta = decoder
+        .push(
+            concat!(
+                "event: response.function_call_arguments.delta\n",
+                "data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"item_render\",\"call_id\":\"call_render\",\"output_index\":0,\"delta\":\"{\\\"input\\\":\\\"hel\"}\n\n",
+            )
+            .as_bytes(),
+        )
+        .expect("first custom argument delta");
+    let second_delta = decoder
+        .push(
+            concat!(
+                "event: response.function_call_arguments.delta\n",
+                "data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"item_render\",\"call_id\":\"call_render\",\"output_index\":0,\"delta\":\"lo\\\"}\"}\n\n",
+            )
+            .as_bytes(),
+        )
+        .expect("second custom argument delta");
+    let done = decoder
+        .push(
+            concat!(
+                "event: response.function_call_arguments.done\n",
+                "data: {\"type\":\"response.function_call_arguments.done\",\"item_id\":\"item_render\",\"call_id\":\"call_render\",\"output_index\":0,\"arguments\":\"{\\\"input\\\":\\\"hello\\\"}\"}\n\n",
+            )
+            .as_bytes(),
+        )
+        .expect("custom argument done");
+
+    assert!(wire_events(&added).iter().any(|event| {
+        event.event_type() == Some("response.output_item.added")
+            && event.data().pointer("/item/type") == Some(&serde_json::json!("custom_tool_call"))
+    }));
+    assert!(first_delta.is_empty());
+    assert!(second_delta.is_empty());
+    assert!(wire_events(&done).iter().any(|event| {
+        event.event_type() == Some("response.custom_tool_call_input.done")
+            && event.data().get("input") == Some(&serde_json::json!("hello"))
     }));
 }
 

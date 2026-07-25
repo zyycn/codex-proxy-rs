@@ -33,8 +33,8 @@ const overviewItems = computed(() => [
     icon: Gauge,
   },
   {
-    label: '需处理',
-    value: formatCount(props.summary.attention),
+    label: '不可用账号',
+    value: formatCount(props.summary.unavailable),
     caption: '过期 / 禁用 / 封禁',
     tone: 'danger',
     icon: AlertTriangle,

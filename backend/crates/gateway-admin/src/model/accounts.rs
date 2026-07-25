@@ -29,7 +29,6 @@ pub enum AccountStatus {
     QuotaExhausted,
     Disabled,
     Banned,
-    Attention,
 }
 
 /// 账号列表排序字段。
@@ -184,7 +183,7 @@ pub struct AccountSummary {
     pub total: u64,
     pub active: u64,
     pub quota_exhausted: u64,
-    pub attention: u64,
+    pub unavailable: u64,
 }
 
 /// 账号启停写入命令。
@@ -222,6 +221,8 @@ pub enum AccountConnectionTestEvent {
     },
     Failed {
         message: String,
+        provider_error_code: Option<String>,
+        provider_error_type: Option<String>,
         account_status: AccountStatus,
     },
 }

@@ -20,8 +20,8 @@ use provider_xai::{
 };
 
 use crate::support::{
-    MemoryGrokCatalogCache, MemoryProviderAccountStore, create_input, credential_object,
-    runtime_policy, seed_input,
+    MemoryCooldownPort, MemoryGrokCatalogCache, MemoryProviderAccountStore, create_input,
+    credential_object, runtime_policy, seed_input,
 };
 
 const OFFICIAL_FIXTURE: &[u8] =
@@ -169,11 +169,13 @@ async fn fixture_many(
         available: lease_available,
         calls: AtomicUsize::new(0),
     });
+    let cooldowns = Arc::new(MemoryCooldownPort::default());
     let service = GrokCredentialRefreshService::new(
         repository.clone(),
         refresher_port,
         catalog,
         leases,
+        cooldowns,
         runtime_policy(),
     );
     (store, repository, refresher, service)
@@ -380,10 +382,11 @@ async fn banned_failure_marks_account_banned() {
 }
 
 #[tokio::test]
-async fn ambiguous_refresh_fails_closed_and_is_not_retried() {
+async fn ambiguous_refresh_uses_runtime_cooldown_without_persisting_account_state() {
     let input = due_input("ambiguous");
     let id = input.account_id.clone();
-    let (store, _, _, service) = fixture(input, [Err(GrokRefreshFailure::Ambiguous)], true).await;
+    let (store, _, refresher, service) =
+        fixture(input, [Err(GrokRefreshFailure::Ambiguous)], true).await;
     let outcomes = service.refresh_due().await.expect("refresh");
     assert!(matches!(
         outcomes.as_slice(),
@@ -391,8 +394,9 @@ async fn ambiguous_refresh_fails_closed_and_is_not_retried() {
     ));
     assert_eq!(
         store.account(&id).expect("account").availability(),
-        AccountAvailability::Invalid
+        AccountAvailability::Unknown
     );
+    assert_eq!(store.account(&id).expect("account").revision().get(), 1);
     assert!(
         service
             .refresh_due()
@@ -400,6 +404,7 @@ async fn ambiguous_refresh_fails_closed_and_is_not_retried() {
             .expect("second cycle")
             .is_empty()
     );
+    assert_eq!(refresher.prepare_calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

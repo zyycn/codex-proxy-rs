@@ -57,7 +57,7 @@ function latencyDisplay(value: unknown) {
     <template v-if="record">
       <section class="rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5">
         <div class="flex flex-wrap items-center gap-3">
-          <UsageStatusCodeBadge :status-code="record.statusCode" />
+          <UsageStatusCodeBadge :status-code="record.upstreamStatusCode" />
           <span class="text-[12px] font-bold text-(--cp-text-secondary)">
             客户端 {{ display(record.clientStatusCode) }}
           </span>

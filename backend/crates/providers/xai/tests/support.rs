@@ -15,9 +15,9 @@ use gateway_core::engine::credential::{
 };
 use gateway_core::error::{StoreError, StoreErrorKind};
 use gateway_core::provider_ports::{
-    ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderSessionAffinityKey,
-    ProviderSessionAffinityPort, ProviderSessionExclusionPort, ProviderSessionExclusions,
-    ProviderStoreError,
+    ProviderCooldown, ProviderCooldownPort, ProviderRefreshPolicy, ProviderRuntimePolicyPort,
+    ProviderSessionAffinityKey, ProviderSessionAffinityPort, ProviderSessionExclusionPort,
+    ProviderSessionExclusions, ProviderStoreError,
 };
 use gateway_core::routing::ProviderKind;
 use provider_xai::{
@@ -550,6 +550,17 @@ pub struct TestSessionAffinity;
 
 pub struct TestSessionExclusions;
 
+#[derive(Default)]
+pub struct MemoryCooldownPort {
+    cooldowns: Mutex<BTreeMap<ProviderAccountId, ProviderCooldown>>,
+}
+
+impl MemoryCooldownPort {
+    pub fn cooldown(&self, account_id: &ProviderAccountId) -> Option<ProviderCooldown> {
+        lock(&self.cooldowns).get(account_id).cloned()
+    }
+}
+
 impl ProviderSessionAffinityPort for TestSessionAffinity {
     fn load<'a>(
         &'a self,
@@ -610,6 +621,50 @@ impl ProviderSessionExclusionPort for TestSessionExclusions {
         _expected_revision: &'a str,
     ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
         Box::pin(async { Ok(false) })
+    }
+}
+
+impl ProviderCooldownPort for MemoryCooldownPort {
+    fn put_if_later(
+        &self,
+        cooldown: ProviderCooldown,
+    ) -> futures::future::BoxFuture<'_, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            let mut cooldowns = lock(&self.cooldowns);
+            let should_write = cooldowns.get(cooldown.account_id()).is_none_or(|current| {
+                current.credential_revision() < cooldown.credential_revision()
+                    || (current.credential_revision() == cooldown.credential_revision()
+                        && current.until() < cooldown.until())
+            });
+            if should_write {
+                cooldowns.insert(cooldown.account_id().clone(), cooldown);
+            }
+            Ok(should_write)
+        })
+    }
+
+    fn read<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+    ) -> futures::future::BoxFuture<'a, Result<Option<ProviderCooldown>, ProviderStoreError>> {
+        Box::pin(async move { Ok(self.cooldown(account_id)) })
+    }
+
+    fn clear<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+        through_revision: CredentialRevision,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            let mut cooldowns = lock(&self.cooldowns);
+            let should_remove = cooldowns
+                .get(account_id)
+                .is_some_and(|current| current.credential_revision() <= through_revision);
+            if should_remove {
+                cooldowns.remove(account_id);
+            }
+            Ok(should_remove)
+        })
     }
 }
 

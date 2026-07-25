@@ -801,8 +801,8 @@ pub struct DashboardCardsView {
 pub struct DashboardCredentialsCardView {
     pub total: String,
     pub total_value: u64,
-    pub enabled: String,
-    pub enabled_value: u64,
+    pub available: String,
+    pub available_value: u64,
     pub unavailable: String,
     pub unavailable_value: u64,
 }
@@ -1235,7 +1235,6 @@ pub struct OpsErrorView {
     pub account_id: Option<String>,
     pub route: String,
     pub model: Option<String>,
-    pub status_code: Option<i64>,
     pub client_status_code: Option<i64>,
     pub upstream_status_code: Option<i64>,
     pub transport: Option<String>,
@@ -1954,7 +1953,6 @@ fn usage_page_view(
 }
 
 fn ops_error_view(error: domain::OpsError) -> OpsErrorView {
-    let status = error.status_code.map(i64::from);
     OpsErrorView {
         id: error.event_id,
         request_id: error.request_id,
@@ -1964,9 +1962,8 @@ fn ops_error_view(error: domain::OpsError) -> OpsErrorView {
         account_id: error.provider_account_ref,
         route: error.operation,
         model: error.upstream_model_id,
-        status_code: status,
-        client_status_code: None,
-        upstream_status_code: None,
+        client_status_code: error.client_status_code.map(i64::from),
+        upstream_status_code: error.upstream_status_code.map(i64::from),
         transport: error.upstream_transport,
         attempt_index: error.attempt_index,
         failure_class: error.failure_kind,
@@ -2290,8 +2287,8 @@ fn dashboard_view(result: domain::DashboardResult, kind: TrendKind) -> Dashboard
             credentials: DashboardCredentialsCardView {
                 total: format_compact_number(provider_accounts.total),
                 total_value: provider_accounts.total,
-                enabled: format_compact_number(provider_accounts.enabled),
-                enabled_value: provider_accounts.enabled,
+                available: format_compact_number(provider_accounts.active),
+                available_value: provider_accounts.active,
                 unavailable: format_compact_number(provider_accounts.unavailable),
                 unavailable_value: provider_accounts.unavailable,
             },

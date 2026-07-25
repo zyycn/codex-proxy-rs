@@ -1,4 +1,4 @@
-//! PostgreSQL 账号 cooldown 事实的可丢失 Redis 热缓存。
+//! 请求调度用的可丢失账号 cooldown Redis 存储。
 
 use std::{sync::Arc, time::SystemTime};
 
@@ -243,7 +243,7 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
     }
 }
 
-/// PostgreSQL 账号事实到可丢失 cooldown cache 的 write-through adapter。
+/// 账号状态写入到可丢失 cooldown cache 的桥接 adapter。
 pub struct CooldownCachingProviderAccountStore {
     authoritative: Arc<dyn ProviderAccountStore>,
     cooldowns: Arc<dyn CredentialCooldownRepository>,

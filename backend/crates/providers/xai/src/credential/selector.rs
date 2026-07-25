@@ -7,10 +7,11 @@ use std::time::{Duration, SystemTime};
 use chrono::Utc;
 use gateway_core::engine::credential::{
     AccountCandidate, AccountFeedbackStats, AccountSelectionContext, AccountSelector,
+    ProviderAccount, ProviderAccountId,
 };
 use gateway_core::provider_ports::{
-    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
-    ProviderSchedulingLeaseRequest,
+    ProviderCooldown, ProviderCooldownPort, ProviderLeaseAcquisition, ProviderLeasePort,
+    ProviderLeaseRequest, ProviderSchedulingLeaseRequest,
 };
 use gateway_core::routing::ProviderKind;
 
@@ -26,6 +27,7 @@ use crate::{
 const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 const MAX_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(24 * 60 * 60);
 const STREAM_INTERRUPTION_COOLDOWN: Duration = Duration::from_secs(30);
+const UNAUTHORIZED_COOLDOWN: Duration = Duration::from_secs(60);
 
 /// 仅经 Core account port、TTL catalog cache 和 Redis lease 选择一个 OAuth session。
 pub struct GrokAccountSessionSelector {
@@ -34,6 +36,7 @@ pub struct GrokAccountSessionSelector {
     catalog_cache: Arc<dyn GrokCredentialCatalogCache>,
     quota: Arc<GrokCredentialQuotaService>,
     scheduling: Arc<dyn ProviderLeasePort>,
+    cooldowns: Arc<dyn ProviderCooldownPort>,
     account_feedback: Arc<AccountFeedbackStats>,
 }
 
@@ -45,6 +48,7 @@ impl GrokAccountSessionSelector {
         catalog_cache: Arc<dyn GrokCredentialCatalogCache>,
         quota: Arc<GrokCredentialQuotaService>,
         scheduling: Arc<dyn ProviderLeasePort>,
+        cooldowns: Arc<dyn ProviderCooldownPort>,
         account_feedback: Arc<AccountFeedbackStats>,
     ) -> Self {
         Self {
@@ -53,6 +57,7 @@ impl GrokAccountSessionSelector {
             catalog_cache,
             quota,
             scheduling,
+            cooldowns,
             account_feedback,
         }
     }
@@ -94,8 +99,10 @@ impl GrokAccountSessionSelector {
             .load_state(&self.provider_kind, &account_ids)
             .await
             .map_err(|_| GrokSessionSelectorError::Unavailable)?;
+        let runtime_cooldowns = self.runtime_cooldowns(&catalog_eligible).await;
         let mut candidates = catalog_eligible
             .into_iter()
+            .filter(|account| !runtime_cooldowns.contains(account.id()))
             .map(|account| {
                 let health = self
                     .account_feedback
@@ -195,6 +202,43 @@ impl GrokAccountSessionSelector {
             Err(GrokSessionSelectorError::NoEligibleSession)
         }
     }
+
+    async fn runtime_cooldowns(
+        &self,
+        accounts: &[ProviderAccount],
+    ) -> std::collections::BTreeSet<ProviderAccountId> {
+        let now = SystemTime::now();
+        let mut cooled = std::collections::BTreeSet::new();
+        for account in accounts {
+            let Ok(Some(cooldown)) = self.cooldowns.read(account.id()).await else {
+                continue;
+            };
+            if cooldown.credential_revision() != account.revision() {
+                if cooldown.credential_revision() < account.revision() {
+                    let _ = self.cooldowns.clear(account.id(), account.revision()).await;
+                }
+                continue;
+            }
+            if cooldown.until() > now {
+                cooled.insert(account.id().clone());
+            }
+        }
+        cooled
+    }
+
+    async fn record_runtime_cooldown(&self, session: &SelectedGrokSession, duration: Duration) {
+        let cooldown_until = SystemTime::now()
+            .checked_add(duration)
+            .unwrap_or_else(SystemTime::now);
+        let _ = self
+            .cooldowns
+            .put_if_later(ProviderCooldown::new(
+                session.account_id().clone(),
+                session.credential_revision(),
+                cooldown_until,
+            ))
+            .await;
+    }
 }
 
 impl fmt::Debug for GrokAccountSessionSelector {
@@ -205,6 +249,7 @@ impl fmt::Debug for GrokAccountSessionSelector {
             .field("catalog_cache", &"[TTL_CACHE]")
             .field("quota", &self.quota)
             .field("scheduling", &"[SCHEDULING_PORT]")
+            .field("cooldowns", &"[COOLDOWN_PORT]")
             .finish()
     }
 }
@@ -221,12 +266,12 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
     ) -> GrokCredentialFeedbackFuture<'a> {
         Box::pin(async move {
             let observed_at = Utc::now();
-            let (availability, reason, cooldown_until) = match failure {
-                GrokCredentialFailure::Unauthorized => (
-                    GrokCredentialAvailability::Invalid,
-                    "upstream_unauthorized",
-                    None,
-                ),
+            let persistent = match failure {
+                GrokCredentialFailure::Unauthorized => {
+                    self.record_runtime_cooldown(session, UNAUTHORIZED_COOLDOWN)
+                        .await;
+                    return;
+                }
                 GrokCredentialFailure::QuotaExhausted => (
                     GrokCredentialAvailability::QuotaExhausted,
                     "upstream_quota_exhausted",
@@ -236,26 +281,16 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
                     let retry_after = retry_after
                         .unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN)
                         .min(MAX_RATE_LIMIT_COOLDOWN);
-                    let cooldown_until = chrono::Duration::from_std(retry_after)
-                        .ok()
-                        .and_then(|duration| observed_at.checked_add_signed(duration));
-                    (
-                        GrokCredentialAvailability::Cooldown,
-                        "upstream_rate_limited",
-                        cooldown_until,
-                    )
+                    self.record_runtime_cooldown(session, retry_after).await;
+                    return;
                 }
                 GrokCredentialFailure::StreamInterrupted => {
-                    let cooldown_until = chrono::Duration::from_std(STREAM_INTERRUPTION_COOLDOWN)
-                        .ok()
-                        .and_then(|duration| observed_at.checked_add_signed(duration));
-                    (
-                        GrokCredentialAvailability::Cooldown,
-                        "upstream_stream_interrupted",
-                        cooldown_until,
-                    )
+                    self.record_runtime_cooldown(session, STREAM_INTERRUPTION_COOLDOWN)
+                        .await;
+                    return;
                 }
             };
+            let (availability, reason, cooldown_until) = persistent;
             let _ = self
                 .repository
                 .update_state(&UpdateGrokCredentialState {

@@ -1006,6 +1006,51 @@ fn authenticated_native_continuation_reaches_every_attempt_context() {
 }
 
 #[test]
+fn streaming_native_continuation_delivers_started_event_before_later_output() {
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let (coordinator, _, _) = coordinator(vec![Script::Stream {
+        account_id: "acct_one",
+        items: complete_stream(None),
+    }]);
+    let continuation = NativeContinuationPin::new(
+        PreviousResponseId::new("previous-response").expect("previous response"),
+        SafeUpstreamValue::new("upstream-response").expect("upstream response"),
+        ProviderKind::new("openai").expect("provider"),
+        ProviderAccountId::new("acct_one").expect("account"),
+    );
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        Some(ContinuationBinding::Pinned(continuation)),
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+
+    let first = block_on(session.next_event())
+        .expect("first event")
+        .expect("started event");
+    assert_eq!(
+        first.commit_requirement(),
+        CommitRequirement::CommitBeforeDelivery
+    );
+    let events = first.into_provider_events();
+    assert!(matches!(
+        events.as_slice(),
+        [event]
+            if matches!(event.canonical_facts(), [GatewayEvent::Started(_)])
+    ));
+
+    block_on(session.commit_downstream(Some(200))).expect("commit started event");
+    while block_on(session.next_event())
+        .expect("remaining event")
+        .is_some()
+    {}
+}
+
+#[test]
 fn native_continuation_replays_owner_before_safely_switching_account() {
     let Operation::Generate(generate) = generate_operation() else {
         panic!("generate operation");

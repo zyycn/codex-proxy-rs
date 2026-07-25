@@ -103,6 +103,7 @@ pub async fn initialize(
         ProviderKind::new(XAI_PROVIDER_NAME).map_err(|_| XaiInitializeError::ProviderKind)?;
     let accounts: Arc<dyn ProviderAccountStore> = ports.accounts();
     let leases = ports.leases();
+    let cooldowns = ports.cooldowns();
     let account_feedback = ports.account_feedback();
     let runtime_policy = ports.runtime_policy();
     let repository = GrokCredentialRepository::new(Arc::clone(&accounts));
@@ -135,6 +136,7 @@ pub async fn initialize(
         catalog_cache,
         Arc::clone(&quota),
         Arc::clone(&leases),
+        Arc::clone(&cooldowns),
         Arc::clone(&account_feedback),
     ));
     let inference: Arc<dyn GrokInferenceTransport> = Arc::new(
@@ -162,6 +164,7 @@ pub async fn initialize(
         refresher,
         Arc::clone(&catalog),
         Arc::clone(&leases),
+        cooldowns,
         Arc::clone(&runtime_policy),
     ));
     let credential_recovery: Arc<dyn GrokCredentialRecovery> = refresh.clone();

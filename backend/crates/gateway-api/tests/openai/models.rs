@@ -10,19 +10,28 @@ use gateway_core::engine::execution::{
     StartedExecution,
 };
 use gateway_core::error::{GatewayError, GatewayErrorKind};
-use gateway_core::routing::PublicModelId;
+use gateway_core::routing::{ModelPresentation, PublicModelId, PublicModelProfile};
 use tower::ServiceExt;
 
 use super::{api_router, authenticated_client};
 
 struct ModelsExecution {
     client: AuthenticatedClient,
+    profiles: bool,
 }
 
 impl ModelsExecution {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             client: authenticated_client("sk_models_test"),
+            profiles: false,
+        })
+    }
+
+    fn with_profiles() -> Arc<Self> {
+        Arc::new(Self {
+            client: authenticated_client("sk_models_test"),
+            profiles: true,
         })
     }
 }
@@ -44,6 +53,26 @@ impl ExecutionService for ModelsExecution {
             .into_iter()
             .map(|model| PublicModelId::new(model).expect("model"))
             .collect()
+    }
+
+    fn public_model_profiles(&self, _: &AuthenticatedClient) -> Vec<PublicModelProfile> {
+        if !self.profiles {
+            return Vec::new();
+        }
+        vec![PublicModelProfile::new(
+            PublicModelId::new("grok-4.5").expect("model"),
+            ModelPresentation::new(
+                Some("Grok 4.5".to_owned()),
+                Some("xAI Grok 4.5 frontier model.".to_owned()),
+            )
+            .with_reasoning(
+                Some("medium".to_owned()),
+                ["low", "medium", "high"].map(str::to_owned).to_vec(),
+            )
+            .with_context_window_tokens(Some(500_000))
+            .with_image_input(true)
+            .with_agent_tools(true, true),
+        )]
     }
 
     fn contains_public_model(&self, _: &AuthenticatedClient, model: &PublicModelId) -> bool {
@@ -89,6 +118,26 @@ async fn models_should_encode_the_service_visible_catalog() {
             ]
         })
     );
+}
+
+#[tokio::test]
+async fn models_should_encode_provider_profiles_for_current_codex_clients() {
+    let response = api_router(ModelsExecution::with_profiles())
+        .await
+        .oneshot(authorized_request("/v1/models?client_version=0.145.0"))
+        .await
+        .expect("list Codex models response");
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read Codex models body");
+    let value: serde_json::Value = serde_json::from_slice(&body).expect("models JSON");
+    let model = &value["models"][0];
+
+    assert_eq!(model["slug"], "grok-4.5");
+    assert_eq!(model["default_reasoning_level"], "medium");
+    assert_eq!(model["context_window"], 500_000);
+    assert_eq!(model["apply_patch_tool_type"], "freeform");
+    assert_eq!(model["service_tiers"], serde_json::json!([]));
 }
 
 #[tokio::test]

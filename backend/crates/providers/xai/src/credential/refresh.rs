@@ -12,9 +12,10 @@ use gateway_core::engine::credential::{
     AccountAvailability, CredentialRevision, ProviderAccountId,
 };
 use gateway_core::provider_ports::{
-    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
-    ProviderRefreshCapacityRequest, ProviderRefreshLeaseRequest, ProviderRefreshPolicy,
-    ProviderRuntimePolicyPort, ProviderStoreError, provider_refresh_retry_at,
+    ProviderCooldown, ProviderCooldownPort, ProviderLeaseAcquisition, ProviderLeasePort,
+    ProviderLeaseRequest, ProviderRefreshCapacityRequest, ProviderRefreshLeaseRequest,
+    ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError,
+    provider_refresh_retry_at,
 };
 
 use super::catalog::GrokCredentialCatalogService;
@@ -36,6 +37,7 @@ const MAX_REFRESH_EXCLUSIONS: usize = 400;
 const MAX_SECRET_BYTES: usize = 64 * 1_024;
 const DISCOVERY_NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(5);
 const REFRESH_RETRY_DELAY: Duration = Duration::from_secs(10 * 60);
+const REFRESH_AMBIGUITY_COOLDOWN: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// 一个到期且已按 revision 读取明文 RT 的 xAI account。
 pub struct DueGrokCredential {
@@ -274,6 +276,7 @@ pub struct GrokCredentialRefreshService {
     refresher: Arc<dyn GrokCredentialRefresher>,
     catalog: Arc<GrokCredentialCatalogService>,
     leases: Arc<dyn ProviderLeasePort>,
+    cooldowns: Arc<dyn ProviderCooldownPort>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
 }
 
@@ -283,6 +286,7 @@ impl GrokCredentialRefreshService {
         refresher: Arc<dyn GrokCredentialRefresher>,
         catalog: Arc<GrokCredentialCatalogService>,
         leases: Arc<dyn ProviderLeasePort>,
+        cooldowns: Arc<dyn ProviderCooldownPort>,
         runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     ) -> Self {
         Self {
@@ -290,6 +294,7 @@ impl GrokCredentialRefreshService {
             refresher,
             catalog,
             leases,
+            cooldowns,
             runtime_policy,
         }
     }
@@ -297,9 +302,6 @@ impl GrokCredentialRefreshService {
     pub async fn refresh_due(
         &self,
     ) -> Result<Vec<GrokCredentialRefreshOutcome>, GrokCredentialRefreshError> {
-        if !self.prepare_cycle_if_due().await? {
-            return Ok(Vec::new());
-        }
         self.refresh_due_excluding(&[]).await
     }
 
@@ -455,8 +457,21 @@ impl GrokCredentialRefreshService {
             .into_iter()
             .map(|account_id| GrokCredentialRefreshOutcome::Failed { account_id })
             .collect::<Vec<_>>();
-        outcomes.reserve(batch.credentials.len());
-        let refreshed = stream::iter(batch.credentials.into_iter().map(|credential| async move {
+        let mut credentials = Vec::with_capacity(batch.credentials.len());
+        for credential in batch.credentials {
+            if !self.runtime_cooldown_active(&credential).await {
+                credentials.push(credential);
+            }
+        }
+        if credentials.is_empty() {
+            return Ok(outcomes);
+        }
+        self.refresher
+            .prepare_cycle()
+            .await
+            .map_err(|_| GrokCredentialRefreshError::Preparation)?;
+        outcomes.reserve(credentials.len());
+        let refreshed = stream::iter(credentials.into_iter().map(|credential| async move {
             let account_id = credential.account_id.clone();
             (
                 account_id,
@@ -539,14 +554,11 @@ impl GrokCredentialRefreshService {
                 )
                 .await
             }
-            Err(GrokRefreshFailure::Ambiguous) => self
-                .persist_terminal_failure(
-                    credential,
-                    GrokCredentialAvailability::Invalid,
-                    "refresh_ambiguous",
-                )
-                .await
-                .map(|_| GrokCredentialRefreshOutcome::Ambiguous { account_id }),
+            Err(GrokRefreshFailure::Ambiguous) => {
+                self.record_runtime_cooldown(&credential, REFRESH_AMBIGUITY_COOLDOWN)
+                    .await;
+                Ok(GrokCredentialRefreshOutcome::Ambiguous { account_id })
+            }
             Err(GrokRefreshFailure::Transient) => {
                 if self
                     .persist_backoff(&credential, "refresh-transient")
@@ -644,6 +656,36 @@ impl GrokCredentialRefreshService {
         })
     }
 
+    async fn runtime_cooldown_active(&self, credential: &DueGrokCredential) -> bool {
+        let Ok(Some(cooldown)) = self.cooldowns.read(credential.account_id()).await else {
+            return false;
+        };
+        if cooldown.credential_revision() != credential.credential_revision() {
+            if cooldown.credential_revision() < credential.credential_revision() {
+                let _ = self
+                    .cooldowns
+                    .clear(credential.account_id(), credential.credential_revision())
+                    .await;
+            }
+            return false;
+        }
+        cooldown.until() > SystemTime::now()
+    }
+
+    async fn record_runtime_cooldown(&self, credential: &DueGrokCredential, duration: Duration) {
+        let cooldown_until = SystemTime::now()
+            .checked_add(duration)
+            .unwrap_or_else(SystemTime::now);
+        let _ = self
+            .cooldowns
+            .put_if_later(ProviderCooldown::new(
+                credential.account_id.clone(),
+                credential.credential_revision,
+                cooldown_until,
+            ))
+            .await;
+    }
+
     async fn persist_terminal_failure(
         &self,
         credential: DueGrokCredential,
@@ -721,10 +763,12 @@ impl GrokCredentialRecovery for GrokCredentialRefreshService {
                 GrokCredentialRefreshOutcome::Refreshed { .. }
                 | GrokCredentialRefreshOutcome::Stale { .. },
             ) => GrokCredentialRecoveryOutcome::Recovered,
-            Ok(
-                GrokCredentialRefreshOutcome::Invalidated { .. }
-                | GrokCredentialRefreshOutcome::Ambiguous { .. },
-            ) => GrokCredentialRecoveryOutcome::Rejected,
+            Ok(GrokCredentialRefreshOutcome::Invalidated { .. }) => {
+                GrokCredentialRecoveryOutcome::Rejected
+            }
+            Ok(GrokCredentialRefreshOutcome::Ambiguous { .. }) => {
+                GrokCredentialRecoveryOutcome::Unavailable
+            }
             Ok(
                 GrokCredentialRefreshOutcome::Transient { .. }
                 | GrokCredentialRefreshOutcome::Rejected { .. }

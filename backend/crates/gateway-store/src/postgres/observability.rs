@@ -661,7 +661,8 @@ pub struct OpsErrorRecord {
     pub upstream_model_id: Option<String>,
     pub upstream_transport: Option<String>,
     pub failure_kind: String,
-    pub status_code: Option<u16>,
+    pub client_status_code: Option<u16>,
+    pub upstream_status_code: Option<u16>,
     pub provider_error_code: Option<String>,
     pub client_response_id: Option<String>,
     pub upstream_request_id: Option<String>,
@@ -1627,7 +1628,8 @@ fn admin_ops_error(error: OpsErrorRecord) -> admin_observability::OpsError {
         upstream_model_id: error.upstream_model_id,
         upstream_transport: error.upstream_transport,
         failure_kind: error.failure_kind,
-        status_code: error.status_code,
+        client_status_code: error.client_status_code,
+        upstream_status_code: error.upstream_status_code,
         provider_error_code: error.provider_error_code,
         client_response_id: error.client_response_id,
         upstream_request_id: error.upstream_request_id,
@@ -1978,8 +1980,12 @@ async fn provider_account_metrics(
     let row = sqlx::query(
         "select count(*)::bigint as total,
                 count(*) filter (where enabled)::bigint as enabled,
-                count(*) filter (where not enabled or availability <> 'ready')::bigint
-                  as unavailable,
+                count(*) filter (
+                  where not (
+                    enabled and availability = 'ready'
+                      and (access_token_expires_at is null or access_token_expires_at > $1)
+                  )
+                )::bigint as unavailable,
                 count(*) filter (
                   where enabled and availability = 'ready'
                     and (access_token_expires_at is null or access_token_expires_at > $1)
@@ -2922,7 +2928,7 @@ const OPS_ERRORS_CTE: &str = "with errors as (
               mr.provider_kind,
               mr.provider_account_ref, mr.upstream_model_id, mr.upstream_transport,
               coalesce(mr.error_kind, 'failed') as failure_kind,
-              coalesce(mr.upstream_status_code, mr.client_status_code) as status_code,
+              mr.client_status_code, mr.upstream_status_code,
               mr.provider_error_code, mr.client_response_id, mr.upstream_request_id,
               mr.latency_ms, coalesce(mr.error_message, mr.error_kind, 'request failed') as message,
               1::integer as occurrence_count,
@@ -2933,7 +2939,8 @@ const OPS_ERRORS_CTE: &str = "with errors as (
        select 'ops_event'::text, oe.id, oe.model_request_id, oe.attempt_index,
               mr.client_api_key_ref, oe.component, oe.operation,
               oe.provider_kind, oe.provider_account_ref,
-              oe.upstream_model_id, null::text, oe.failure_kind, oe.status_code,
+              oe.upstream_model_id, null::text, oe.failure_kind,
+              null::integer as client_status_code, oe.status_code as upstream_status_code,
               oe.provider_error_code, mr.client_response_id, oe.upstream_request_id,
               oe.latency_ms, oe.message, oe.occurrence_count, oe.created_at,
               'ops_event:' || oe.id
@@ -2948,7 +2955,8 @@ async fn list_ops_errors(pool: &PgPool, query: OpsErrorQuery) -> StoreResult<Ops
         " select source, event_id, request_id, attempt_index, client_api_key_ref,
                  component, operation, provider_kind, provider_account_ref,
                  upstream_model_id, upstream_transport,
-                 failure_kind, status_code, provider_error_code, client_response_id,
+                 failure_kind, client_status_code, upstream_status_code,
+                 provider_error_code, client_response_id,
                  upstream_request_id, latency_ms, message, occurrence_count, occurred_at,
                  stable_sort_id
           from errors e where e.occurred_at >= ",
@@ -3047,7 +3055,7 @@ fn push_ops_filter(statement: &mut QueryBuilder<Postgres>, filter: &OpsErrorFilt
         statement.push_bind(i32::try_from(index).unwrap_or(i32::MAX));
     }
     if let Some(status) = filter.status_code {
-        statement.push(" and e.status_code = ");
+        statement.push(" and e.upstream_status_code = ");
         statement.push_bind(i32::from(status));
     }
     if let Some(search) = &filter.search {
@@ -3148,7 +3156,8 @@ fn ops_error_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<OpsErrorRecord
         upstream_model_id: get(row, "upstream_model_id")?,
         upstream_transport: get(row, "upstream_transport")?,
         failure_kind: get(row, "failure_kind")?,
-        status_code: optional_status(row, "status_code")?,
+        client_status_code: optional_status(row, "client_status_code")?,
+        upstream_status_code: optional_status(row, "upstream_status_code")?,
         provider_error_code: get(row, "provider_error_code")?,
         client_response_id: get(row, "client_response_id")?,
         upstream_request_id: get(row, "upstream_request_id")?,

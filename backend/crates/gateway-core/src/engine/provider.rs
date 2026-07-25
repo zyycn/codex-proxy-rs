@@ -20,7 +20,9 @@ use crate::error::{
 };
 use crate::event::{EventSequenceValidator, ProviderEvent};
 use crate::operation::Operation;
-use crate::routing::{ModelCapabilities, ProviderCandidate, ProviderKind, UpstreamModelId};
+use crate::routing::{
+    ModelCapabilities, ModelPresentation, ProviderCandidate, ProviderKind, UpstreamModelId,
+};
 
 /// Box 只出现在 Provider Registry 的统一 event envelope 边界。
 pub type EventStream =
@@ -433,6 +435,7 @@ pub struct ProviderRequestObservation {
 pub struct ProviderModelCapabilities {
     upstream_model: UpstreamModelId,
     capabilities: ModelCapabilities,
+    presentation: Option<ModelPresentation>,
 }
 
 /// Provider 实时目录成功发布后的进程内单调代次。
@@ -459,7 +462,14 @@ impl ProviderModelCapabilities {
         Self {
             upstream_model,
             capabilities,
+            presentation: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_presentation(mut self, presentation: ModelPresentation) -> Self {
+        self.presentation = Some(presentation);
+        self
     }
 
     #[must_use]
@@ -470,6 +480,11 @@ impl ProviderModelCapabilities {
     #[must_use]
     pub const fn capabilities(&self) -> &ModelCapabilities {
         &self.capabilities
+    }
+
+    #[must_use]
+    pub const fn presentation(&self) -> Option<&ModelPresentation> {
+        self.presentation.as_ref()
     }
 }
 

@@ -231,11 +231,15 @@ async fn compile_runtime_snapshot(
             continue;
         };
         provider_models.extend(models.into_iter().map(|model| {
-            ProviderModel::new(
+            let compiled = ProviderModel::new(
                 provider.clone(),
                 model.upstream_model().clone(),
                 model.capabilities().clone(),
-            )
+            );
+            match model.presentation().cloned() {
+                Some(presentation) => compiled.with_presentation(presentation),
+                None => compiled,
+            }
         }));
     }
 
@@ -287,6 +291,8 @@ pub struct RuntimeSnapshot {
     account_selection_policy: AccountSelectionPolicy,
     providers: Arc<BTreeSet<ProviderKind>>,
     provider_models: Arc<BTreeMap<ProviderKind, BTreeMap<UpstreamModelId, ModelCapabilities>>>,
+    provider_model_presentations:
+        Arc<BTreeMap<ProviderKind, BTreeMap<UpstreamModelId, super::ModelPresentation>>>,
     model_mappings: Arc<BTreeMap<String, String>>,
     provider_catalog_generations: Arc<BTreeMap<ProviderKind, ProviderCatalogGeneration>>,
     client_policies: Arc<BTreeMap<ClientApiKeyId, ClientPolicy>>,
@@ -313,23 +319,36 @@ impl RuntimeSnapshot {
 
         let mut model_map =
             BTreeMap::<ProviderKind, BTreeMap<UpstreamModelId, ModelCapabilities>>::new();
+        let mut presentation_map =
+            BTreeMap::<ProviderKind, BTreeMap<UpstreamModelId, super::ModelPresentation>>::new();
         for model in provider_models {
-            if !provider_set.contains(model.provider()) {
+            let ProviderModel {
+                provider,
+                upstream_model,
+                capabilities,
+                presentation,
+            } = model;
+            if !provider_set.contains(&provider) {
                 return Err(RoutingError::NotFound {
                     entity: "provider",
-                    id: model.provider().to_string(),
+                    id: provider.to_string(),
                 });
             }
-            let models = model_map.entry(model.provider).or_default();
-            let upstream_model = model.upstream_model;
+            let models = model_map.entry(provider.clone()).or_default();
             if models
-                .insert(upstream_model.clone(), model.capabilities)
+                .insert(upstream_model.clone(), capabilities)
                 .is_some()
             {
                 return Err(RoutingError::DuplicateEntity {
                     entity: "provider model",
                     id: upstream_model.to_string(),
                 });
+            }
+            if let Some(presentation) = presentation {
+                presentation_map
+                    .entry(provider)
+                    .or_default()
+                    .insert(upstream_model, presentation);
             }
         }
 
@@ -350,6 +369,7 @@ impl RuntimeSnapshot {
             account_selection_policy,
             providers: Arc::new(provider_set),
             provider_models: Arc::new(model_map),
+            provider_model_presentations: Arc::new(presentation_map),
             model_mappings: Arc::new(BTreeMap::new()),
             provider_catalog_generations: Arc::new(BTreeMap::new()),
             client_policies: Arc::new(client_policy_map),
@@ -400,6 +420,38 @@ impl RuntimeSnapshot {
                 .filter_map(|model| PublicModelId::new(model.clone()).ok()),
         );
         models.into_iter().collect()
+    }
+
+    /// 返回 Provider 已明确声明画像的公开模型；没有画像时不猜测 Provider 语义。
+    #[must_use]
+    pub fn public_model_profiles_for_provider(
+        &self,
+        provider: &ProviderKind,
+    ) -> Vec<super::PublicModelProfile> {
+        let Some(presentations) = self.provider_model_presentations.get(provider) else {
+            return Vec::new();
+        };
+        let mut profiles = BTreeMap::new();
+        for (model, presentation) in presentations {
+            if let Ok(public_model) = PublicModelId::new(model.as_str().to_owned()) {
+                profiles.insert(public_model, presentation.clone());
+            }
+        }
+        for alias in self.model_mappings.keys() {
+            let target = self.mapped_model(alias);
+            let Some(presentation) = presentations.iter().find_map(|(model, presentation)| {
+                (model.as_str() == target).then_some(presentation)
+            }) else {
+                continue;
+            };
+            if let Ok(public_model) = PublicModelId::new(alias.clone()) {
+                profiles.insert(public_model, presentation.clone());
+            }
+        }
+        profiles
+            .into_iter()
+            .map(|(model, presentation)| super::PublicModelProfile::new(model, presentation))
+            .collect()
     }
 
     #[must_use]

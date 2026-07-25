@@ -29,7 +29,9 @@ use crate::event::{GatewayEvent, ProviderEvent, ProviderResponseHeader};
 use crate::operation::{Operation, ProviderSessionState};
 use crate::policy::{ClientApiKeyId, ClientPolicy};
 use crate::routing::snapshot::RuntimeSnapshotHandle;
-use crate::routing::{ProviderKind, PublicModelId, RoutingContext, RuntimeSnapshot};
+use crate::routing::{
+    ProviderKind, PublicModelId, PublicModelProfile, RoutingContext, RuntimeSnapshot,
+};
 
 const MODEL_REQUEST_DEADLINE: Duration = Duration::from_secs(10 * 60);
 const CONTINUATION_AFFINITY_TIMEOUT: Duration = Duration::from_millis(100);
@@ -139,6 +141,9 @@ pub trait ExecutionService: Send + Sync {
         plaintext: &str,
     ) -> Result<AuthenticatedClient, ClientAuthenticationError>;
     fn public_models(&self, client: &AuthenticatedClient) -> Vec<PublicModelId>;
+    fn public_model_profiles(&self, _client: &AuthenticatedClient) -> Vec<PublicModelProfile> {
+        Vec::new()
+    }
     fn contains_public_model(&self, client: &AuthenticatedClient, model: &PublicModelId) -> bool;
     fn start(
         &self,
@@ -566,6 +571,12 @@ impl ExecutionService for DefaultExecutionService {
         client
             .snapshot
             .public_models_for_provider(client.policy.provider_kind())
+    }
+
+    fn public_model_profiles(&self, client: &AuthenticatedClient) -> Vec<PublicModelProfile> {
+        client
+            .snapshot
+            .public_model_profiles_for_provider(client.policy.provider_kind())
     }
 
     fn contains_public_model(&self, client: &AuthenticatedClient, model: &PublicModelId) -> bool {

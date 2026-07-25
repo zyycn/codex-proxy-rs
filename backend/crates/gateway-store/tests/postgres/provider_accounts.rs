@@ -126,13 +126,13 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     beta.availability = ProviderAccountAvailability::Banned;
     let mut charlie = account("acct_charlie", "user-charlie");
     charlie.email = Some("charlie@example.invalid".to_owned());
-    let mut attention = account("acct_attention", "user-attention");
-    attention.email = Some("attention@example.invalid".to_owned());
-    attention.availability = ProviderAccountAvailability::Invalid;
+    let mut invalid = account("acct_invalid", "user-invalid");
+    invalid.email = Some("invalid@example.invalid".to_owned());
+    invalid.availability = ProviderAccountAvailability::Invalid;
     let mut quota_exhausted = account("acct_quota_exhausted", "user-quota-exhausted");
     quota_exhausted.email = Some("quota-exhausted@example.invalid".to_owned());
     quota_exhausted.availability = ProviderAccountAvailability::QuotaExhausted;
-    for account in [alpha, beta, charlie, attention, quota_exhausted] {
+    for account in [alpha, beta, charlie, invalid, quota_exhausted] {
         repository
             .insert_provider_account(account)
             .await
@@ -214,9 +214,8 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     assert_eq!(usage_page.config_revision.get(), 1);
     assert_eq!(usage_page.total, 5);
     assert_eq!(usage_page.summary.total, 5);
-    assert_eq!(usage_page.summary.active, 2);
+    assert_eq!(usage_page.summary.active, 3);
     assert_eq!(usage_page.summary.quota_exhausted, 1);
-    assert_eq!(usage_page.summary.attention, 1);
     assert_eq!(
         usage_page
             .items
@@ -277,19 +276,6 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
         .await
         .expect("filter banned accounts");
     assert_eq!(banned.items[0].id, "acct_beta");
-    let attention = store
-        .list_accounts(AccountListQuery {
-            page: 1,
-            page_size: PageSize::new(10).expect("page size"),
-            provider_kind: None,
-            search: None,
-            status: Some(AccountStatus::Attention),
-            sort: None,
-        })
-        .await
-        .expect("filter attention accounts");
-    assert_eq!(attention.items[0].id, "acct_attention");
-
     database.close().await;
 }
 

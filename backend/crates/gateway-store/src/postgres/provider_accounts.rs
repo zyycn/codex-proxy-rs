@@ -1700,10 +1700,8 @@ fn admin_account_status(
             .is_some_and(|expires_at| expires_at <= now)
     {
         AdminAccountStatus::Expired
-    } else if account.availability == ProviderAccountAvailability::Ready {
-        AdminAccountStatus::Active
     } else {
-        AdminAccountStatus::Attention
+        AdminAccountStatus::Active
     }
 }
 
@@ -1728,7 +1726,7 @@ fn admin_account_summary(
             .count(),
     )
     .unwrap_or(u64::MAX);
-    let attention = u64::try_from(
+    let unavailable = u64::try_from(
         accounts
             .iter()
             .filter(|account| {
@@ -1746,7 +1744,7 @@ fn admin_account_summary(
         total,
         active,
         quota_exhausted,
-        attention,
+        unavailable,
     }
 }
 
@@ -1797,7 +1795,6 @@ const fn admin_account_status_name(status: AdminAccountStatus) -> &'static str {
         AdminAccountStatus::QuotaExhausted => "quota_exhausted",
         AdminAccountStatus::Disabled => "disabled",
         AdminAccountStatus::Banned => "banned",
-        AdminAccountStatus::Attention => "attention",
     }
 }
 

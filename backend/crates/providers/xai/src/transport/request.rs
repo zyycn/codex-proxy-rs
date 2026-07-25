@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use gateway_core::operation::GenerateRequest;
@@ -279,6 +279,18 @@ pub enum GrokRequestEncodeError {
     /// Responses compatibility fields could not be normalized safely.
     #[error("Grok Build request normalization failed")]
     InvalidRequestNormalization,
+    /// 请求中的具体字段无法安全转换为 Grok Build 接受的形态。
+    #[error("Grok Build request field `{field}` could not be normalized safely")]
+    InvalidRequestField { field: &'static str },
+}
+
+impl GrokRequestEncodeError {
+    fn at_field(self, field: &'static str) -> Self {
+        match self {
+            Self::InvalidRequestNormalization => Self::InvalidRequestField { field },
+            error => error,
+        }
+    }
 }
 
 fn sanitize_account_identity(body: &mut Map<String, Value>) {
@@ -548,11 +560,12 @@ fn normalize_responses_request(
         }
         let text = text
             .as_object_mut()
-            .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
+            .ok_or(GrokRequestEncodeError::InvalidRequestField { field: "text" })?;
         if text.get("format").is_none_or(Value::is_null) {
             text.insert(
                 "format".to_owned(),
-                normalize_response_format(response_format)?,
+                normalize_response_format(response_format)
+                    .map_err(|error| error.at_field("response_format"))?,
             );
         }
     }
@@ -711,20 +724,22 @@ impl GrokResponseTransform {
                 .stream_calls
                 .get_mut(&primary)
                 .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
-            if matches!(
-                state.identity.kind,
-                ToolKind::ToolSearch | ToolKind::Custom | ToolKind::ApplyPatch
-            ) {
-                state.arguments.push_str(
-                    value
-                        .get("delta")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default(),
-                );
-                if state.identity.kind == ToolKind::Custom {
-                    state.last_delta = value.as_object().cloned();
+            match state.identity.kind {
+                ToolKind::Custom => {
+                    state.arguments.push_str(
+                        value
+                            .get("delta")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                    );
+                    state.last_delta = value.as_object().cloned().map(|mut payload| {
+                        payload.remove("delta");
+                        payload
+                    });
+                    return Ok(Vec::new());
                 }
-                return Ok(Vec::new());
+                ToolKind::ToolSearch | ToolKind::ApplyPatch => return Ok(Vec::new()),
+                ToolKind::Function => {}
             }
         }
 
@@ -767,6 +782,10 @@ impl GrokResponseTransform {
                             &input,
                         ),
                     });
+                    if let Some(state) = self.stream_calls.get_mut(&primary) {
+                        state.arguments.clear();
+                        state.last_delta = None;
+                    }
                     return Ok(output);
                 }
                 ToolKind::Function => {}
@@ -783,9 +802,16 @@ impl GrokResponseTransform {
             return self.rewrite_apply_patch_done_event(value);
         }
 
+        let completed_call = (event_type == "response.output_item.done")
+            .then(|| value.get("item").and_then(Value::as_object))
+            .flatten()
+            .and_then(|item| self.primary_stream_call(item));
         self.rewrite_response_value(&mut value)?;
         if let Some(response) = value.get_mut("response").and_then(Value::as_object_mut) {
             self.restore_visible_tools(response);
+        }
+        if let Some(primary) = completed_call {
+            self.take_stream_call(&primary);
         }
         Ok(vec![GrokTransformedWireEvent {
             event_type: event_type.to_owned(),
@@ -845,6 +871,18 @@ impl GrokResponseTransform {
         );
         self.stream_keys.insert(primary.clone(), primary.clone());
         Some(primary)
+    }
+
+    fn primary_stream_call(&self, item: &Map<String, Value>) -> Option<String> {
+        ["id", "call_id"]
+            .into_iter()
+            .filter_map(|field| item.get(field).and_then(Value::as_str))
+            .find_map(|key| self.stream_keys.get(key).cloned())
+    }
+
+    fn take_stream_call(&mut self, primary: &str) -> Option<StreamCallState> {
+        self.stream_keys.retain(|_, owner| owner != primary);
+        self.stream_calls.remove(primary)
     }
 
     fn rewrite_response_value(&self, value: &mut Value) -> Result<(), GrokRequestEncodeError> {
@@ -953,15 +991,11 @@ impl GrokResponseTransform {
             .and_then(Value::as_object)
             .cloned()
             .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
-        let primary = ["id", "call_id"]
-            .into_iter()
-            .find_map(|field| original_item.get(field).and_then(Value::as_str))
-            .and_then(|key| self.stream_keys.get(key))
-            .cloned();
-        let mut added = primary
-            .as_ref()
-            .and_then(|key| self.stream_calls.get(key))
-            .and_then(|state| state.added_payload.clone())
+        let state = self
+            .primary_stream_call(&original_item)
+            .and_then(|primary| self.take_stream_call(&primary));
+        let mut added = state
+            .and_then(|state| state.added_payload)
             .unwrap_or_else(|| {
                 Map::from_iter([(
                     "type".to_owned(),
@@ -1148,20 +1182,27 @@ impl ToolNormalizer {
         mut self,
         payload: &mut Map<String, Value>,
     ) -> Result<GrokResponseTransform, GrokRequestEncodeError> {
-        let (tools, had_tools) = optional_array(payload.get("tools"))?;
+        let (tools, had_tools) =
+            optional_array(payload.get("tools")).map_err(|error| error.at_field("tools"))?;
         if had_tools {
             self.response.visible_tools.clone_from(&tools);
         }
-        let client_search = inspect_tool_search(&tools)?;
-        self.normalize_client_search_parallel(payload, client_search)?;
+        let client_search = inspect_tool_search(&tools).map_err(|error| error.at_field("tools"))?;
+        self.normalize_client_search_parallel(payload, client_search)
+            .map_err(|error| error.at_field("parallel_tool_calls"))?;
 
         let mut normalized_tools = Vec::with_capacity(tools.len());
         for raw_tool in &tools {
-            normalized_tools.extend(self.normalize_tool(raw_tool, "", client_search, false)?);
+            normalized_tools.extend(
+                self.normalize_tool(raw_tool, "", client_search, false)
+                    .map_err(|error| error.at_field("tools"))?,
+            );
         }
 
         if let Some(Value::Array(items)) = payload.get("input") {
-            let normalized = self.normalize_input_items(items)?;
+            let normalized = self
+                .normalize_input_items(items)
+                .map_err(|error| error.at_field("input"))?;
             normalized_tools.extend(normalized.loaded_tools);
             self.response.visible_tools.extend(normalized.visible_tools);
             payload.insert("input".to_owned(), Value::Array(normalized.items));
@@ -1169,11 +1210,14 @@ impl ToolNormalizer {
             .get("input")
             .is_some_and(|input| !input.is_null() && !input.is_string())
         {
-            return Err(GrokRequestEncodeError::InvalidRequestNormalization);
+            return Err(GrokRequestEncodeError::InvalidRequestField { field: "input" });
         }
 
         if self.client_search_tool.is_some() {
-            normalized_tools.push(Value::Object(self.build_client_search_function()?));
+            normalized_tools.push(Value::Object(
+                self.build_client_search_function()
+                    .map_err(|error| error.at_field("tools"))?,
+            ));
         }
         normalized_tools = dedupe_normalized_tools(normalized_tools);
         if normalized_tools.is_empty() {
@@ -1184,7 +1228,8 @@ impl ToolNormalizer {
         } else {
             payload.insert("tools".to_owned(), Value::Array(normalized_tools.clone()));
         }
-        self.normalize_tool_choice(payload, &normalized_tools)?;
+        self.normalize_tool_choice(payload, &normalized_tools)
+            .map_err(|error| error.at_field("tool_choice"))?;
         Ok(self.response)
     }
 
@@ -1299,6 +1344,11 @@ impl ToolNormalizer {
             return Ok(Vec::new());
         }
         let mut converted = without_defer_loading(tool);
+        if let Some(parameters) = converted.get("parameters").cloned()
+            && let Some(normalized) = normalize_function_parameters_root(&parameters)?
+        {
+            converted.insert("parameters".to_owned(), normalized);
+        }
         let alias = self.alias(ToolIdentity::new(ToolKind::Function, namespace, name));
         converted.insert("name".to_owned(), Value::String(alias));
         Ok(vec![Value::Object(converted)])
@@ -1445,6 +1495,136 @@ fn optional_array(value: Option<&Value>) -> Result<(Vec<Value>, bool), GrokReque
         None | Some(Value::Null) => Ok((Vec::new(), false)),
         Some(Value::Array(values)) => Ok((values.clone(), true)),
         Some(_) => Err(GrokRequestEncodeError::InvalidRequestNormalization),
+    }
+}
+
+/// Grok Build 要求 function parameters 的根节点必为 object；Codex 会为可选参数
+/// 生成 `object | null`，这里只移除根节点 nullability，嵌套字段保持原样。
+fn normalize_function_parameters_root(
+    value: &Value,
+) -> Result<Option<Value>, GrokRequestEncodeError> {
+    let Some(schema) = value.as_object() else {
+        return Ok(None);
+    };
+    let mut normalized = schema.clone();
+    let mut changed = false;
+
+    if let Some(types) = normalized.get("type").and_then(Value::as_array).cloned() {
+        let removed_null = types.iter().any(|value| value.as_str() == Some("null"));
+        if removed_null {
+            let remaining = types
+                .into_iter()
+                .filter(|value| value.as_str() != Some("null"))
+                .collect::<Vec<_>>();
+            if remaining.len() != 1 || remaining[0].as_str() != Some("object") {
+                return Err(invalid_function_parameters_root());
+            }
+            normalized.insert("type".to_owned(), Value::String("object".to_owned()));
+            changed = true;
+        }
+    }
+
+    for keyword in ["anyOf", "oneOf"] {
+        let Some(branches) = normalized.get(keyword).and_then(Value::as_array).cloned() else {
+            continue;
+        };
+        let removed_null = branches.iter().any(is_null_only_schema);
+        if !removed_null {
+            continue;
+        }
+        let remaining = branches
+            .into_iter()
+            .filter(|branch| !is_null_only_schema(branch))
+            .collect::<Vec<_>>();
+        if remaining.is_empty()
+            || remaining.iter().any(|branch| {
+                branch.as_object().is_none_or(|branch| {
+                    !is_object_root_schema(branch, &normalized, &mut BTreeSet::new())
+                })
+            })
+        {
+            return Err(invalid_function_parameters_root());
+        }
+        if remaining.len() == 1 && normalized.len() == 1 {
+            normalized = remaining[0]
+                .as_object()
+                .cloned()
+                .ok_or_else(invalid_function_parameters_root)?;
+            normalized.insert("type".to_owned(), Value::String("object".to_owned()));
+        } else {
+            normalized.insert(keyword.to_owned(), Value::Array(remaining));
+            normalized.insert("type".to_owned(), Value::String("object".to_owned()));
+        }
+        changed = true;
+    }
+
+    Ok(changed.then_some(Value::Object(normalized)))
+}
+
+fn is_null_only_schema(value: &Value) -> bool {
+    let Some(schema) = value.as_object() else {
+        return false;
+    };
+    match schema.get("type") {
+        Some(Value::String(kind)) => kind == "null",
+        Some(Value::Array(types)) if !types.is_empty() => {
+            types.iter().all(|kind| kind.as_str() == Some("null"))
+        }
+        _ => false,
+    }
+}
+
+fn is_object_root_schema(
+    schema: &Map<String, Value>,
+    root: &Map<String, Value>,
+    visited: &mut BTreeSet<String>,
+) -> bool {
+    match schema.get("type") {
+        Some(Value::String(kind)) => return kind == "object",
+        Some(Value::Array(types)) if !types.is_empty() => {
+            return types.iter().all(|kind| kind.as_str() == Some("object"));
+        }
+        Some(_) => return false,
+        None => {}
+    }
+    if schema.contains_key("properties") {
+        return true;
+    }
+    let Some(reference) = schema.get("$ref").and_then(Value::as_str) else {
+        return false;
+    };
+    if !visited.insert(reference.to_owned()) {
+        return false;
+    }
+    resolve_local_schema_ref(root, reference)
+        .is_some_and(|resolved| is_object_root_schema(resolved, root, visited))
+}
+
+fn resolve_local_schema_ref<'a>(
+    root: &'a Map<String, Value>,
+    reference: &str,
+) -> Option<&'a Map<String, Value>> {
+    if reference == "#" {
+        return Some(root);
+    }
+    let path = reference.strip_prefix("#/")?;
+    let mut segments = path.split('/');
+    let first = decode_json_pointer_segment(segments.next()?);
+    let mut current = root.get(&first)?;
+    for segment in segments {
+        let segment = decode_json_pointer_segment(segment);
+        current = current.as_object()?.get(&segment)?;
+    }
+    current.as_object()
+}
+
+fn decode_json_pointer_segment(segment: &str) -> String {
+    segment.replace("~1", "/").replace("~0", "~")
+}
+
+const fn invalid_function_parameters_root() -> GrokRequestEncodeError {
+    GrokRequestEncodeError::InvalidRequestField {
+        field: "tools[].parameters",
     }
 }
 
