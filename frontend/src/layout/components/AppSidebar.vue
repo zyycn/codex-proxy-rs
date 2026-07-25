@@ -118,7 +118,11 @@ const sidebarEl = ref<HTMLElement | null>(null)
 const brandLabelEl = ref<HTMLElement | null>(null)
 const navSignalEl = useTemplateRef<HTMLElement>('navSignal')
 const isCollapsed = computed(() => !props.mobile && Boolean(props.collapsed))
-const sidebarWidth = computed(() => (isCollapsed.value ? 88 : 256))
+const collapsedSidebarWidth = 88
+const expandedSidebarWidth = 251
+const sidebarWidth = computed(() =>
+  isCollapsed.value ? collapsedSidebarWidth : expandedSidebarWidth,
+)
 const brandLabelVisible = shallowRef(!isCollapsed.value)
 const themeToggleLabel = computed(() =>
   effectiveTheme.value === 'dark' ? '切换浅色模式' : '切换暗黑模式',
@@ -209,7 +213,7 @@ function animateSidebarWidth(collapsed: boolean) {
     return
   }
 
-  const targetWidth = collapsed ? 88 : 256
+  const targetWidth = collapsed ? collapsedSidebarWidth : expandedSidebarWidth
   const currentWidth = sidebarEl.value.getBoundingClientRect().width
 
   if (prefersReducedMotion()) {
@@ -326,7 +330,7 @@ onBeforeUnmount(() => {
     class="z-20 h-dvh shrink-0 flex-col overflow-hidden bg-(--cp-bg-surface) px-4 shadow-(--cp-shadow-sidebar)"
     :class="[
       mobile ? 'flex' : 'hidden min-[961px]:flex',
-      isCollapsed ? 'w-22 basis-22 items-center' : 'w-64 basis-64',
+      isCollapsed ? 'w-22 basis-22 items-center' : 'w-[251px] basis-[251px]',
     ]"
   >
     <div

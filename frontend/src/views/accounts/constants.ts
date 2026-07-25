@@ -98,7 +98,8 @@ export const accountColumns = [
     sortable: true,
     flex: 1.2,
     minWidth: '160px',
-    format: (_value: unknown, row: AccountRow) => row.usage.lastUsedAtDisplay,
+    format: (_value: unknown, row: AccountRow) => optionalAccountCell(row.usage.lastUsedAtDisplay),
+    emptyText: '',
     cellClass: `${relaxedCellClass} text-(--cp-text-secondary)`,
   },
   {
@@ -108,6 +109,8 @@ export const accountColumns = [
     sortKey: 'expiresAt',
     flex: 1.2,
     minWidth: '160px',
+    format: value => optionalAccountCell(value),
+    emptyText: '',
     cellClass: `${relaxedCellClass} text-(--cp-text-secondary)`,
   },
   {
@@ -200,4 +203,8 @@ function accountProviderLabel(value?: string | null) {
   if (value === 'xai')
     return 'xAI'
   return value || '—'
+}
+
+function optionalAccountCell(value: unknown) {
+  return value === '—' || value === '-' ? '' : value
 }
