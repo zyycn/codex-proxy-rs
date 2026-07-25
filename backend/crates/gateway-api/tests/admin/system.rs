@@ -38,7 +38,7 @@ fn update_request_should_preserve_target_version_for_domain_validation() {
 }
 
 #[tokio::test]
-async fn update_event_stream_should_preserve_download_progress_percent() {
+async fn update_event_stream_should_preserve_event_id_and_download_progress_percent() {
     let fixture = AdminTestFixture::with_system(Arc::new(ProgressSystem)).await;
     fixture.auth.insert_session("valid-session");
     let response = app(fixture.state())
@@ -57,6 +57,10 @@ async fn update_event_stream_should_preserve_download_progress_percent() {
         .expect("update event body");
     let body = String::from_utf8(body.to_vec()).expect("UTF-8 event stream");
 
+    assert!(
+        body.contains(r#""id":"update-progress-1""#),
+        "unexpected update event stream: {body}"
+    );
     assert!(
         body.contains(r#""progressPercent":40"#),
         "unexpected update event stream: {body}"
