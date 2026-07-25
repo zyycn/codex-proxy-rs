@@ -9,6 +9,10 @@ const props = defineProps<{
   summary: Awaited<ReturnType<typeof getUsageRecordSummary>>
 }>()
 
+function averageLatencyDisplay(value: string) {
+  return !value || value === '—' || value === '-' ? '0 ms' : value
+}
+
 const items = computed(() => [
   {
     key: 'requests',
@@ -38,7 +42,7 @@ const items = computed(() => [
     key: 'latency',
     label: '平均耗时',
     icon: Timer,
-    value: props.summary.averageLatencyMs,
+    value: averageLatencyDisplay(props.summary.averageLatencyMs),
     detail: '成功请求平均值',
     tone: 'text-(--cp-normal-text) bg-(--cp-normal-bg)',
   },
