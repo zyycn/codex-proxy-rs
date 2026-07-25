@@ -201,6 +201,7 @@ struct RestartAcceptedView {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SystemUpdateEventView {
+    id: String,
     operation_id: Option<String>,
     level: &'static str,
     step: Option<String>,
@@ -404,6 +405,7 @@ where
 impl From<SystemUpdateEvent> for SystemUpdateEventView {
     fn from(event: SystemUpdateEvent) -> Self {
         Self {
+            id: event.id,
             operation_id: event.operation_id,
             level: update_event_level_name(event.level),
             step: event.step,
@@ -418,6 +420,7 @@ impl From<SystemUpdateEvent> for SystemUpdateEventView {
 impl SystemUpdateEventView {
     fn into_json(self) -> serde_json::Value {
         serde_json::json!({
+            "id": self.id,
             "operationId": self.operation_id,
             "level": self.level,
             "step": self.step,
