@@ -136,6 +136,7 @@ const requestBars = computed(() => {
     }
   })
 })
+const hasDailyRequests = computed(() => requestBars.value.some(bar => bar.requestCount > 0))
 </script>
 
 <template>
@@ -197,6 +198,7 @@ const requestBars = computed(() => {
         </strong>
       </div>
       <div
+        v-if="hasDailyRequests"
         class="flex items-stretch gap-px"
         :class="[trackShapeClass, !isCompact ? 'mt-2' : 'mt-auto']"
         role="img"
@@ -215,6 +217,11 @@ const requestBars = computed(() => {
           />
         </span>
       </div>
+      <span
+        v-else
+        class="block font-mono tabular-nums text-(--cp-text-muted)"
+        :class="[valueClass, !isCompact ? 'mt-2' : 'mt-auto']"
+      >—</span>
     </template>
 
     <div v-else :class="headerClass">

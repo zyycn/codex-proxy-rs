@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Openai, Xai } from '@boxicons/vue'
-import { Grid2X2 } from '@lucide/vue'
+import { LayoutGrid } from '@lucide/vue'
 
 withDefaults(
   defineProps<{
@@ -17,6 +17,11 @@ const emit = defineEmits<{
 
 const providers = [
   {
+    value: 'batch' as const,
+    label: '批量导入',
+    icon: LayoutGrid,
+  },
+  {
     value: 'openai' as const,
     label: 'OpenAI',
     icon: Openai,
@@ -25,11 +30,6 @@ const providers = [
     value: 'xai' as const,
     label: 'xAI',
     icon: Xai,
-  },
-  {
-    value: 'batch' as const,
-    label: '批量导入',
-    icon: Grid2X2,
   },
 ]
 </script>
