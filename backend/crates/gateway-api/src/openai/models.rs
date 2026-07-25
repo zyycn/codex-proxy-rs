@@ -39,7 +39,15 @@ pub(crate) async fn models(State(state): State<ApiState>, headers: HeaderMap) ->
             .enumerate()
             .map(|(index, profile)| codex_model_json(profile, index))
             .collect::<Vec<_>>();
-        return (StatusCode::OK, Json(json!({ "models": models }))).into_response();
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "object": "list",
+                "data": data,
+                "models": models,
+            })),
+        )
+            .into_response();
     }
 
     (
