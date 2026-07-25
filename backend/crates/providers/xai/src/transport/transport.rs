@@ -79,6 +79,117 @@ impl fmt::Debug for GrokInferenceRequest {
 pub type GrokInferenceChunkStream =
     Pin<Box<dyn Stream<Item = Result<Vec<u8>, GrokInferenceTransportError>> + Send + 'static>>;
 
+/// Whether the account-isolated inference client was already cached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrokInferenceClientCacheStatus {
+    /// The binding reused its existing account-isolated client.
+    Hit,
+    /// The binding was absent when the request first checked the cache.
+    Miss,
+}
+
+impl GrokInferenceClientCacheStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Hit => "hit",
+            Self::Miss => "miss",
+        }
+    }
+}
+
+/// Resolver that supplied the addresses used by the request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrokInferenceDnsSource {
+    /// The system resolver returned an entirely public address set.
+    System,
+    /// The system result was unusable and the trusted DoH fallback supplied addresses.
+    TrustedDoh,
+}
+
+impl GrokInferenceDnsSource {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::TrustedDoh => "trusted_doh",
+        }
+    }
+}
+
+/// DNS work observed while opening an upstream connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GrokInferenceDnsObservation {
+    source: GrokInferenceDnsSource,
+    duration_ms: u64,
+}
+
+impl GrokInferenceDnsObservation {
+    #[must_use]
+    pub const fn new(source: GrokInferenceDnsSource, duration_ms: u64) -> Self {
+        Self {
+            source,
+            duration_ms,
+        }
+    }
+
+    #[must_use]
+    pub const fn source(self) -> GrokInferenceDnsSource {
+        self.source
+    }
+
+    #[must_use]
+    pub const fn duration_ms(self) -> u64 {
+        self.duration_ms
+    }
+}
+
+/// Low-cardinality transport timings and pool facts for one inference request.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GrokInferenceTransportMetrics {
+    headers_ms: Option<u64>,
+    client_cache_status: Option<GrokInferenceClientCacheStatus>,
+    dns: Option<GrokInferenceDnsObservation>,
+}
+
+impl GrokInferenceTransportMetrics {
+    #[must_use]
+    pub const fn with_headers_ms(mut self, headers_ms: u64) -> Self {
+        self.headers_ms = Some(headers_ms);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_client_cache_status(
+        mut self,
+        status: GrokInferenceClientCacheStatus,
+    ) -> Self {
+        self.client_cache_status = Some(status);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_dns(mut self, dns: GrokInferenceDnsObservation) -> Self {
+        self.dns = Some(dns);
+        self
+    }
+
+    #[must_use]
+    pub const fn headers_ms(self) -> Option<u64> {
+        self.headers_ms
+    }
+
+    #[must_use]
+    pub const fn client_cache_status(self) -> Option<GrokInferenceClientCacheStatus> {
+        self.client_cache_status
+    }
+
+    #[must_use]
+    pub const fn dns(self) -> Option<GrokInferenceDnsObservation> {
+        self.dns
+    }
+}
+
 /// Accepted inference response. Non-success HTTP responses must be returned as
 /// [`GrokInferenceTransportError`] instead.
 pub struct GrokInferenceResponse {
@@ -86,6 +197,7 @@ pub struct GrokInferenceResponse {
     http_version: UpstreamHttpVersion,
     status_code: u16,
     request_id: Option<SafeUpstreamValue>,
+    transport_metrics: GrokInferenceTransportMetrics,
 }
 
 impl GrokInferenceResponse {
@@ -102,7 +214,17 @@ impl GrokInferenceResponse {
             http_version,
             status_code,
             request_id,
+            transport_metrics: GrokInferenceTransportMetrics::default(),
         }
+    }
+
+    #[must_use]
+    pub const fn with_transport_metrics(
+        mut self,
+        transport_metrics: GrokInferenceTransportMetrics,
+    ) -> Self {
+        self.transport_metrics = transport_metrics;
+        self
     }
 
     #[must_use]
@@ -120,6 +242,11 @@ impl GrokInferenceResponse {
         self.request_id.as_ref()
     }
 
+    #[must_use]
+    pub const fn transport_metrics(&self) -> GrokInferenceTransportMetrics {
+        self.transport_metrics
+    }
+
     pub fn into_body(self) -> GrokInferenceChunkStream {
         self.body
     }
@@ -132,6 +259,7 @@ impl fmt::Debug for GrokInferenceResponse {
             .field("http_version", &self.http_version)
             .field("status_code", &self.status_code)
             .field("request_id", &self.request_id)
+            .field("transport_metrics", &self.transport_metrics)
             .field("body", &"[SSE STREAM]")
             .finish()
     }
@@ -174,6 +302,7 @@ pub struct GrokInferenceTransportError {
     http_version: Option<UpstreamHttpVersion>,
     request_id: Option<SafeUpstreamValue>,
     upstream_code: Option<SafeUpstreamValue>,
+    transport_metrics: GrokInferenceTransportMetrics,
     credential_recovery_required: bool,
     sensitive_context_redacted: bool,
 }
@@ -190,6 +319,11 @@ impl GrokInferenceTransportError {
             http_version: None,
             request_id: None,
             upstream_code: None,
+            transport_metrics: GrokInferenceTransportMetrics {
+                headers_ms: None,
+                client_cache_status: None,
+                dns: None,
+            },
             credential_recovery_required: false,
             sensitive_context_redacted: false,
         }
@@ -226,6 +360,15 @@ impl GrokInferenceTransportError {
     #[must_use]
     pub fn with_upstream_code(mut self, code: SafeUpstreamValue) -> Self {
         self.upstream_code = Some(code);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_transport_metrics(
+        mut self,
+        transport_metrics: GrokInferenceTransportMetrics,
+    ) -> Self {
+        self.transport_metrics = transport_metrics;
         self
     }
 
@@ -282,6 +425,11 @@ impl GrokInferenceTransportError {
     }
 
     #[must_use]
+    pub const fn transport_metrics(&self) -> GrokInferenceTransportMetrics {
+        self.transport_metrics
+    }
+
+    #[must_use]
     pub const fn requires_credential_recovery(&self) -> bool {
         self.credential_recovery_required
     }
@@ -304,6 +452,7 @@ impl fmt::Debug for GrokInferenceTransportError {
             .field("http_version", &self.http_version)
             .field("request_id", &self.request_id)
             .field("upstream_code", &self.upstream_code)
+            .field("transport_metrics", &self.transport_metrics)
             .field(
                 "credential_recovery_required",
                 &self.credential_recovery_required,

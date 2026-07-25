@@ -49,6 +49,8 @@ pub use session::{
     GrokSessionSelector, GrokSessionSelectorError, GrokSessionSelectorFuture, SelectedGrokSession,
 };
 pub use transport::{
-    GrokInferenceChunkStream, GrokInferenceRequest, GrokInferenceResponse, GrokInferenceTransport,
+    GrokInferenceChunkStream, GrokInferenceClientCacheStatus, GrokInferenceDnsObservation,
+    GrokInferenceDnsSource, GrokInferenceRequest, GrokInferenceResponse, GrokInferenceTransport,
     GrokInferenceTransportError, GrokInferenceTransportErrorKind, GrokInferenceTransportFuture,
+    GrokInferenceTransportMetrics,
 };
