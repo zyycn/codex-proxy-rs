@@ -172,3 +172,57 @@ async fn audit_failure_should_revoke_new_session_before_returning_it() {
     );
     assert_eq!(fixture.auth.session_count(), 0);
 }
+
+#[tokio::test]
+async fn login_route_should_bucket_throttling_by_client_ip() {
+    use std::net::SocketAddr;
+
+    use axum::{body::Body, extract::ConnectInfo, http::Request};
+    use tower::ServiceExt as _;
+
+    #[derive(Clone)]
+    struct AuthState(gateway_admin::AdminServices);
+
+    impl gateway_api::admin::AdminSessionState for AuthState {
+        fn admin_services(&self) -> &gateway_admin::AdminServices {
+            &self.0
+        }
+    }
+
+    let fixture = AdminTestFixture::new().await;
+    let app = gateway_api::admin::auth::router::<AuthState>()
+        .with_state(AuthState(fixture.services.clone()));
+
+    let failed_login_from = |ip: [u8; 4]| {
+        let app = app.clone();
+        async move {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/api/admin/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"username":"admin_1","password":"wrong-password"}"#,
+                ))
+                .expect("build login request");
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(SocketAddr::from((ip, 50_000))));
+            app.oneshot(request).await.expect("login response").status()
+        }
+    };
+
+    for _ in 0..4 {
+        assert_eq!(
+            failed_login_from([10, 0, 0, 1]).await,
+            axum::http::StatusCode::UNAUTHORIZED
+        );
+    }
+    assert_eq!(
+        failed_login_from([10, 0, 0, 1]).await,
+        axum::http::StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        failed_login_from([10, 0, 0, 2]).await,
+        axum::http::StatusCode::UNAUTHORIZED
+    );
+}
