@@ -21,7 +21,7 @@ use crate::{
             UsageCalculatedBillingFact, UsageDetail, UsageFilter, UsageInsights, UsageInsightsCost,
             UsageInsightsCostPoint, UsageInsightsHealth, UsageInsightsHealthPoint,
             UsageInsightsPerformance, UsageInsightsPerformancePoint, UsageOverview, UsagePage,
-            UsageQuery, UsageSummary,
+            UsageQuery, UsageSummary, china_day_start,
         },
         provider_credentials::ProviderQuotaRequest,
     },
@@ -38,7 +38,6 @@ const HEALTH_TIMELINE_SLOTS: i64 = 24 * 4;
 const HEALTH_TIMELINE_MIN_SAMPLE_SIZE: u64 = 10;
 const HEALTH_TIMELINE_UNAVAILABLE_FAILURE_THRESHOLD: u64 = 3;
 const HEALTH_TIMELINE_STABLE_RELIABILITY: f64 = 99.0;
-const CHINA_OFFSET_SECONDS: i64 = 8 * 60 * 60;
 
 /// API 消费的观测控制面服务。
 #[async_trait]
@@ -831,11 +830,6 @@ fn service_failure_count(metrics: &RequestMetrics) -> u64 {
     metrics
         .failure_count
         .saturating_sub(metrics.caller_error_count)
-}
-
-fn china_day_start(value: DateTime<Utc>) -> DateTime<Utc> {
-    let elapsed = (value.timestamp() + CHINA_OFFSET_SECONDS).rem_euclid(24 * 60 * 60);
-    value - Duration::seconds(elapsed) - Duration::nanoseconds(i64::from(value.nanosecond()))
 }
 
 fn quarter_hour_start(value: DateTime<Utc>) -> DateTime<Utc> {

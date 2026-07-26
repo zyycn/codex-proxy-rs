@@ -15,7 +15,7 @@ use gateway_admin::{
             DashboardRuntimeSlots, DiagnosticDimension, DiagnosticObservation, Granularity,
             HealthStatus, OpsErrorPage, OpsErrorQuery, RequestMetricPoint, RequestMetrics,
             TimeRange, TrendKind, UsageCalculatedBillingFact, UsageDetail, UsageFilter,
-            UsageOverview, UsagePage, UsageQuery,
+            UsageOverview, UsagePage, UsageQuery, china_day_start,
         },
         settings::{
             AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RotationStrategy,
@@ -533,11 +533,6 @@ fn diagnostic(name: &str, request_count: u64) -> DiagnosticObservation {
         cost_coverage: CostCoverage::default(),
         costs: Vec::new(),
     }
-}
-
-fn china_day_start(value: DateTime<Utc>) -> DateTime<Utc> {
-    let elapsed = (value.timestamp() + 8 * 60 * 60).rem_euclid(24 * 60 * 60);
-    value - Duration::seconds(elapsed) - Duration::nanoseconds(i64::from(value.nanosecond()))
 }
 
 fn quarter_hour_start(value: DateTime<Utc>) -> DateTime<Utc> {

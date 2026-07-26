@@ -36,6 +36,10 @@ pub trait AuthService: Send + Sync {
     async fn logout(&self, session_id: &str) -> Result<(), AdminError>;
 }
 
+/// 会话有效期上限(366 天);超出的配置按上限截断,保证 TTL 构造与
+/// `Utc::now() + session_ttl` 永不越界。
+const MAX_SESSION_TTL_MINUTES: i64 = 366 * 24 * 60;
+
 /// 单管理员认证策略的最终实现。
 pub(crate) struct DefaultAuthService {
     default_admin_user_id: String,
@@ -51,8 +55,8 @@ impl DefaultAuthService {
         store: Arc<dyn AuthStore>,
     ) -> Self {
         let minutes = i64::try_from(session_ttl_minutes)
-            .unwrap_or(i64::MAX)
-            .max(1);
+            .unwrap_or(MAX_SESSION_TTL_MINUTES)
+            .clamp(1, MAX_SESSION_TTL_MINUTES);
         Self {
             default_admin_user_id: default_admin_user_id.into(),
             session_ttl: Duration::minutes(minutes),
