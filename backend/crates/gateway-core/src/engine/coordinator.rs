@@ -93,6 +93,7 @@ where
             excluded_accounts: BTreeSet::new(),
             credential_recovery_attempted_accounts: BTreeSet::new(),
             current: None,
+            send_state_watermark: UpstreamSendState::NotSent,
             downstream_committed_at: None,
             client_status_code: None,
             delivery_pending: false,
@@ -165,6 +166,8 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     excluded_accounts: BTreeSet<crate::engine::credential::ProviderAccountId>,
     credential_recovery_attempted_accounts: BTreeSet<crate::engine::credential::ProviderAccountId>,
     current: Option<CurrentAttempt>,
+    /// 请求级发送状态水位；跨 attempt 单调不降，终态写回不得低于此档。
+    send_state_watermark: UpstreamSendState,
     downstream_committed_at: Option<SystemTime>,
     client_status_code: Option<u16>,
     delivery_pending: bool,
@@ -682,6 +685,7 @@ where
                 .mark_send_state(&self.request_id, UpstreamSendState::Sent)
                 .await?;
             current.send_observed = true;
+            self.send_state_watermark = UpstreamSendState::Sent;
         }
         Ok(())
     }
@@ -694,6 +698,7 @@ where
                 .mark_send_state(&self.request_id, UpstreamSendState::Sent)
                 .await?;
             current.send_observed = true;
+            self.send_state_watermark = UpstreamSendState::Sent;
         }
         Ok(())
     }
@@ -787,6 +792,7 @@ where
         } else {
             error.send_state()
         };
+        let send_state = self.raise_send_watermark(send_state);
         self.engine
             .store()
             .mark_send_state(&self.request_id, send_state)
@@ -996,6 +1002,7 @@ where
         error: &ProviderError,
         send_state: UpstreamSendState,
     ) -> Result<(), EngineError> {
+        let send_state = self.raise_send_watermark(send_state);
         let outcome = if error.kind() == ProviderErrorKind::Cancelled {
             ExecutionOutcome::Cancelled
         } else if self.downstream_committed_at.is_some() {
@@ -1048,6 +1055,7 @@ where
         } else {
             UpstreamSendState::Ambiguous
         };
+        let send_state = self.raise_send_watermark(send_state);
         if self.attempts > 0 {
             self.engine
                 .store()
@@ -1168,9 +1176,7 @@ where
     }
 
     fn current_send_state(&self) -> UpstreamSendState {
-        if self.attempts == 0 {
-            UpstreamSendState::NotSent
-        } else if self
+        let observed = if self
             .current
             .as_ref()
             .is_some_and(|current| current.send_observed)
@@ -1178,7 +1184,15 @@ where
             UpstreamSendState::Sent
         } else {
             UpstreamSendState::NotSent
-        }
+        };
+        escalate_send_state(self.send_state_watermark, observed)
+    }
+
+    /// 抬升并返回请求级发送水位；attempt 间切换（`current` 被取走）后，
+    /// 后续终态沿用已达到的最高档，不会把已落库的 `sent` 写回 `not_sent`。
+    fn raise_send_watermark(&mut self, observed: UpstreamSendState) -> UpstreamSendState {
+        self.send_state_watermark = escalate_send_state(self.send_state_watermark, observed);
+        self.send_state_watermark
     }
 
     fn record_current_provider_success(&mut self) {
@@ -1304,6 +1318,18 @@ fn provider_engine_error(error: &ProviderError) -> EngineError {
 fn provider_proved_replay_safe(error: &ProviderError) -> bool {
     error.send_state() == UpstreamSendState::NotSent
         || (error.send_state() != UpstreamSendState::Ambiguous && error.replay_is_safe())
+}
+
+/// 发送状态合并档位：`Sent` > `Ambiguous` > `NotSent`。
+/// 只要任一 attempt 达到过高档，请求整体就不允许回落到低档。
+const fn escalate_send_state(a: UpstreamSendState, b: UpstreamSendState) -> UpstreamSendState {
+    match (a, b) {
+        (UpstreamSendState::Sent, _) | (_, UpstreamSendState::Sent) => UpstreamSendState::Sent,
+        (UpstreamSendState::Ambiguous, _) | (_, UpstreamSendState::Ambiguous) => {
+            UpstreamSendState::Ambiguous
+        }
+        (UpstreamSendState::NotSent, UpstreamSendState::NotSent) => UpstreamSendState::NotSent,
+    }
 }
 
 fn observe_event_timing(timings: &mut ModelRequestTimings, event: &GatewayEvent, elapsed_ms: u64) {
