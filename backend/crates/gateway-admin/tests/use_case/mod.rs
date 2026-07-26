@@ -210,18 +210,6 @@ impl AuthStore for BootstrapAuthStore {
         Err(unavailable("admin session"))
     }
 
-    async fn login_source_is_throttled(&self, _: &str, _: u32, _: u64) -> AdminStoreResult<bool> {
-        Ok(false)
-    }
-
-    async fn record_login_failure(&self, _: &str, _: u32, _: u64) -> AdminStoreResult<bool> {
-        Err(unavailable("login failure"))
-    }
-
-    async fn clear_login_failures(&self, _: &str) -> AdminStoreResult<()> {
-        Ok(())
-    }
-
     async fn append_audit_event(&self, _: AdminAuditEvent) -> AdminStoreResult<()> {
         Ok(())
     }

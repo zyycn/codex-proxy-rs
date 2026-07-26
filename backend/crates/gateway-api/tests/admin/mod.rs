@@ -146,7 +146,6 @@ impl AdminSessionState for AdminTestState {
 pub(super) struct MemoryAuthStore {
     password_hash: Mutex<Option<String>>,
     sessions: Mutex<BTreeMap<String, AdminSession>>,
-    failures: Mutex<BTreeMap<String, u32>>,
     audits: Mutex<Vec<AdminAuditEvent>>,
     api_key: Arc<Mutex<Option<AdminApiKey>>>,
     fail_audit: AtomicBool,
@@ -157,7 +156,6 @@ impl MemoryAuthStore {
         Self {
             password_hash: Mutex::new(None),
             sessions: Mutex::new(BTreeMap::new()),
-            failures: Mutex::new(BTreeMap::new()),
             audits: Mutex::new(Vec::new()),
             api_key,
             fail_audit: AtomicBool::new(false),
@@ -237,37 +235,6 @@ impl AuthStore for MemoryAuthStore {
 
     async fn delete_session(&self, session_id: &str) -> AdminStoreResult<Option<AdminSession>> {
         Ok(self.sessions.lock().expect("sessions").remove(session_id))
-    }
-
-    async fn login_source_is_throttled(
-        &self,
-        source: &str,
-        failure_limit: u32,
-        _: u64,
-    ) -> AdminStoreResult<bool> {
-        Ok(self
-            .failures
-            .lock()
-            .expect("failures")
-            .get(source)
-            .is_some_and(|count| *count >= failure_limit))
-    }
-
-    async fn record_login_failure(
-        &self,
-        source: &str,
-        failure_limit: u32,
-        _: u64,
-    ) -> AdminStoreResult<bool> {
-        let mut failures = self.failures.lock().expect("failures");
-        let count = failures.entry(source.to_owned()).or_default();
-        *count = count.saturating_add(1);
-        Ok(*count >= failure_limit)
-    }
-
-    async fn clear_login_failures(&self, source: &str) -> AdminStoreResult<()> {
-        self.failures.lock().expect("failures").remove(source);
-        Ok(())
     }
 
     async fn append_audit_event(&self, event: AdminAuditEvent) -> AdminStoreResult<()> {

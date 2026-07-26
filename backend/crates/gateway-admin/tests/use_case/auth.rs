@@ -15,7 +15,6 @@ struct MemoryAuthStore {
     password_hash: Mutex<Option<String>>,
     sessions: Mutex<BTreeMap<String, AdminSession>>,
     audits: Mutex<Vec<AdminAuditEvent>>,
-    failures: Mutex<u32>,
 }
 
 #[async_trait]
@@ -66,31 +65,6 @@ impl AuthStore for MemoryAuthStore {
         Ok(self.sessions.lock().expect("sessions").remove(session_id))
     }
 
-    async fn login_source_is_throttled(
-        &self,
-        _: &str,
-        failure_limit: u32,
-        _: u64,
-    ) -> AdminStoreResult<bool> {
-        Ok(*self.failures.lock().expect("failures") >= failure_limit)
-    }
-
-    async fn record_login_failure(
-        &self,
-        _: &str,
-        failure_limit: u32,
-        _: u64,
-    ) -> AdminStoreResult<bool> {
-        let mut failures = self.failures.lock().expect("failures");
-        *failures += 1;
-        Ok(*failures >= failure_limit)
-    }
-
-    async fn clear_login_failures(&self, _: &str) -> AdminStoreResult<()> {
-        *self.failures.lock().expect("failures") = 0;
-        Ok(())
-    }
-
     async fn append_audit_event(&self, event: AdminAuditEvent) -> AdminStoreResult<()> {
         self.audits.lock().expect("audits").push(event);
         Ok(())
@@ -107,7 +81,6 @@ async fn successful_login_should_create_expiring_session_and_audit() {
         .login(LoginCommand {
             username: Some("admin".to_owned()),
             password: "strong-test-password".to_owned(),
-            source: "127.0.0.1".to_owned(),
         })
         .await
         .expect("login");
@@ -142,7 +115,6 @@ async fn repeated_default_initialization_should_not_replace_password() {
             .login(LoginCommand {
                 username: Some("admin".to_owned()),
                 password: "first-strong-password".to_owned(),
-                source: "127.0.0.1".to_owned(),
             })
             .await
             .is_ok()

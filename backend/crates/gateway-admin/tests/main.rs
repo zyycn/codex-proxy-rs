@@ -87,7 +87,6 @@ fn login_command_debug_should_redact_password() {
     let command = LoginCommand {
         username: None,
         password: "secret-password".to_owned(),
-        source: "127.0.0.1".to_owned(),
     };
     assert!(!format!("{command:?}").contains("secret-password"));
 }

@@ -855,44 +855,6 @@ impl AuthStore for AdminAuthStoreAdapter {
             .map_err(|error| admin_store_error("admin session", error))
     }
 
-    async fn login_source_is_throttled(
-        &self,
-        source: &str,
-        failure_limit: u32,
-        window_seconds: u64,
-    ) -> AdminStoreResult<bool> {
-        redis::AdminAuthStateRepository::login_source_is_throttled(
-            &self.state,
-            source,
-            failure_limit,
-            window_seconds,
-        )
-        .await
-        .map_err(|error| admin_store_error("admin login throttle", error))
-    }
-
-    async fn record_login_failure(
-        &self,
-        source: &str,
-        failure_limit: u32,
-        window_seconds: u64,
-    ) -> AdminStoreResult<bool> {
-        redis::AdminAuthStateRepository::record_login_failure(
-            &self.state,
-            source,
-            failure_limit,
-            window_seconds,
-        )
-        .await
-        .map_err(|error| admin_store_error("admin login throttle", error))
-    }
-
-    async fn clear_login_failures(&self, source: &str) -> AdminStoreResult<()> {
-        redis::AdminAuthStateRepository::clear_login_failures(&self.state, source)
-            .await
-            .map_err(|error| admin_store_error("admin login throttle", error))
-    }
-
     async fn append_audit_event(&self, event: AdminAuditModel) -> AdminStoreResult<()> {
         let config_revision = event
             .config_revision

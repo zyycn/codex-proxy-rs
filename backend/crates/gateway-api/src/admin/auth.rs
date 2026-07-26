@@ -1,12 +1,11 @@
 //! 管理员登录、会话与管理请求鉴权接线。
 
-use std::{fmt, net::SocketAddr};
+use std::fmt;
 
 use axum::{
-    Extension, Json, Router,
-    extract::{ConnectInfo, FromRequestParts, Request, State},
+    Json, Router,
+    extract::{FromRequestParts, State},
     http::{HeaderMap, HeaderValue, StatusCode, header::SET_COOKIE, request::Parts},
-    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -186,84 +185,29 @@ impl Default for AdminLogoutData {
     }
 }
 
-/// 请求上下文解析出的客户端登录来源。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AdminLoginSource(String);
-
-impl AdminLoginSource {
-    #[must_use]
-    pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
-    }
-
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
 /// 构造固定 GET/POST 管理员认证路由。
 pub fn router<S>() -> Router<S>
 where
     S: AdminSessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route(
-            "/api/admin/auth/login",
-            post(login::<S>).layer(middleware::from_fn(attach_login_source)),
-        )
+        .route("/api/admin/auth/login", post(login::<S>))
         .route("/api/admin/auth/status", get(session_status::<S>))
         .route("/api/admin/auth/logout", post(logout::<S>))
 }
 
-/// 登录失败限流以 socket 对端为计数桶，使不同来源的失败互不影响；
-/// 转发头（X-Forwarded-For 等）可由客户端伪造，不参与来源判定。
-/// 经反向代理部署时所有请求同源于代理地址，退化为共享单桶。
-/// IPv6 按 /64 前缀聚合——单前缀内 2^64 地址不应各得独立配额，否则
-/// 直连 IPv6 客户端可逐地址轮换绕过限流。
-async fn attach_login_source(mut request: Request, next: Next) -> Response {
-    if let Some(ConnectInfo(peer)) = request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .copied()
-    {
-        request
-            .extensions_mut()
-            .insert(AdminLoginSource::new(login_bucket_key(peer.ip())));
-    }
-    next.run(request).await
-}
-
-fn login_bucket_key(ip: std::net::IpAddr) -> String {
-    match ip {
-        std::net::IpAddr::V4(v4) => v4.to_string(),
-        std::net::IpAddr::V6(v6) => {
-            let prefix = u128::from(v6) & !((1_u128 << 64) - 1);
-            format!("{}/64", std::net::Ipv6Addr::from(prefix))
-        }
-    }
-}
-
 async fn login<S>(
     State(state): State<S>,
-    source: Option<Extension<AdminLoginSource>>,
     Json(payload): Json<AdminLoginRequest>,
 ) -> Result<Response, AdminError>
 where
     S: AdminSessionState + Send + Sync,
 {
-    let source = source
-        .as_ref()
-        .map_or("unknown", |Extension(source)| source.as_str());
     let (username, password) = payload.into_parts();
     let session = state
         .admin_services()
         .auth()
-        .login(LoginCommand {
-            username,
-            password,
-            source: source.to_owned(),
-        })
+        .login(LoginCommand { username, password })
         .await
         .map_err(map_login_error)?;
     let mut response = AdminResponse::new(
@@ -332,7 +276,6 @@ fn admin_session_cookie(headers: &HeaderMap) -> Option<String> {
 fn map_login_error(error: LoginError) -> AdminError {
     match error {
         LoginError::InvalidCredentials => AdminError::invalid_admin_credentials(),
-        LoginError::Throttled => AdminError::too_many_login_attempts(),
         LoginError::Unavailable => AdminError::internal("Failed to create admin session"),
     }
 }
