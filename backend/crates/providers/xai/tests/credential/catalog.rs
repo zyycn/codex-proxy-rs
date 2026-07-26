@@ -3,17 +3,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use futures::future::join_all;
+use futures::future::{BoxFuture, join_all};
 use gateway_core::engine::credential::{
     AccountAvailability, AccountStateChange, CredentialCasUpdate, CredentialRevision,
     OpaqueProviderData, ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
     QuotaObservation,
 };
-use gateway_core::routing::ConfigRevision;
+use gateway_core::provider_ports::{
+    ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderStoreError,
+};
 use provider_xai::{
     GrokBillingRequest, GrokBillingTransport, GrokBillingTransportError,
     GrokBillingTransportErrorKind, GrokBillingTransportFuture, GrokBillingTransportResponse,
-    GrokCatalogScope, GrokCredentialCatalogCache, GrokCredentialCatalogError,
+    GrokCatalogCache, GrokCatalogScope, GrokCredentialCatalogCache, GrokCredentialCatalogError,
     GrokCredentialCatalogSeed, GrokCredentialRepository, GrokModelCatalogRequest,
     GrokModelCatalogTransport, GrokModelCatalogTransportError, GrokModelCatalogTransportErrorKind,
     GrokModelCatalogTransportFuture, GrokModelCatalogTransportResponse, GrokPlanCatalog,
@@ -122,6 +124,31 @@ impl GrokBillingTransport for QueueBillingTransport {
     }
 }
 
+/// 每次读取都返回同一份无法解码的 catalog 文档的存储端口。
+struct CorruptCatalogCachePort;
+
+impl ProviderCatalogCachePort for CorruptCatalogCachePort {
+    fn replace<'a>(
+        &'a self,
+        _key: &'a ProviderCatalogCacheKey,
+        _catalog: &'a OpaqueProviderData,
+        _ttl: Duration,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn read<'a>(
+        &'a self,
+        _key: &'a ProviderCatalogCacheKey,
+    ) -> BoxFuture<'a, Result<Option<OpaqueProviderData>, ProviderStoreError>> {
+        Box::pin(async {
+            let mut document = serde_json::Map::new();
+            document.insert("version".to_owned(), serde_json::json!("corrupt"));
+            Ok(Some(OpaqueProviderData::new(document)))
+        })
+    }
+}
+
 enum BillingMutation {
     State(AccountStateChange),
     Credential(CredentialCasUpdate),
@@ -204,7 +231,7 @@ async fn concurrent_cold_scheduling_hydration_reads_quota_once() {
 }
 
 #[tokio::test]
-async fn synchronization_caches_each_plan_and_returns_strict_union() {
+async fn catalog_query_caches_each_plan_and_returns_strict_union() {
     let (store, repository) =
         repository_with_accounts(&[("catalog-a", "subject-a"), ("catalog-b", "subject-b")]).await;
     let cache = MemoryGrokCatalogCache::shared();
@@ -217,17 +244,13 @@ async fn synchronization_caches_each_plan_and_returns_strict_union() {
     ]);
     let service = crate::support::grok_catalog_service(repository, transport, cache_port);
     assert_eq!(service.catalog_generation().get(), 0);
-    let snapshot = service
-        .synchronize(ConfigRevision::new(7).expect("config revision"))
-        .await
-        .expect("catalog sync");
+    let models = service.query_models().await.expect("catalog sync");
     assert_eq!(service.catalog_generation().get(), 1);
     service.query_models().await.expect("same catalog sync");
     assert_eq!(service.catalog_generation().get(), 1);
 
-    assert_eq!(snapshot.plans().len(), 1);
-    assert_eq!(snapshot.models().len(), 1);
-    assert_eq!(snapshot.models()[0].request_model().as_str(), "grok-4.5");
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].request_model().as_str(), "grok-4.5");
     let account = store
         .account(&account_id("catalog-a"))
         .expect("created account");
@@ -290,6 +313,35 @@ async fn single_account_catalog_read_miss_does_not_call_upstream() {
             .expect("read cache")
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn corrupt_catalog_cache_entry_reads_as_miss_and_refetches() {
+    let (store, repository) =
+        repository_with_accounts(&[("catalog-corrupt", "subject-corrupt")]).await;
+    let account = store
+        .account(&account_id("catalog-corrupt"))
+        .expect("created account");
+    let scope = GrokCatalogScope::for_account(&account).expect("catalog scope");
+    let cache = GrokCatalogCache::new(Arc::new(CorruptCatalogCachePort)).expect("provider cache");
+    assert!(
+        cache
+            .read(&scope)
+            .await
+            .expect("corrupt cache entry must degrade to a miss")
+            .is_none()
+    );
+
+    let transport = QueueCatalogTransport::from_bodies([OFFICIAL_FIXTURE.to_vec()]);
+    let service =
+        crate::support::grok_catalog_service(repository, transport.clone(), Arc::new(cache));
+    let catalog = service
+        .cached_or_refresh_account_catalog(&account)
+        .await
+        .expect("corrupt cache entry falls back to a live refresh");
+
+    assert_eq!(catalog.seed().models(), ["grok-4.5"]);
+    assert_eq!(transport.calls(), 1);
 }
 
 #[tokio::test]
@@ -424,9 +476,7 @@ async fn disabled_accounts_are_not_sent_to_catalog_transport() {
         cache_port,
     );
     assert!(matches!(
-        service
-            .synchronize(ConfigRevision::new(1).expect("revision"))
-            .await,
+        service.query_models().await,
         Err(GrokCredentialCatalogError::NoEligibleCredential)
     ));
 }
@@ -453,12 +503,12 @@ async fn quota_exhausted_account_remains_eligible_for_catalog_discovery() {
         MemoryGrokCatalogCache::shared(),
     );
 
-    let snapshot = service
-        .synchronize(ConfigRevision::new(1).expect("revision"))
+    let models = service
+        .query_models()
         .await
         .expect("discover catalog through quota exhausted account");
 
-    assert_eq!(snapshot.models().len(), 1);
+    assert_eq!(models.len(), 1);
 }
 
 #[tokio::test]
@@ -471,9 +521,7 @@ async fn one_upstream_failure_rejects_the_whole_catalog_cycle() {
         cache_port,
     );
     assert!(matches!(
-        service
-            .synchronize(ConfigRevision::new(1).expect("revision"))
-            .await,
+        service.query_models().await,
         Err(GrokCredentialCatalogError::Upstream)
     ));
 }
@@ -505,9 +553,7 @@ async fn conflicting_facts_for_same_slug_fail_closed() {
         MemoryGrokCatalogCache::shared(),
     );
     assert!(matches!(
-        service
-            .synchronize(ConfigRevision::new(1).expect("revision"))
-            .await,
+        service.query_models().await,
         Err(GrokCredentialCatalogError::ConflictingModelFacts)
     ));
 }
