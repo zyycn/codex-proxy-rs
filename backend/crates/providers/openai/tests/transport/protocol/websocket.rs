@@ -91,6 +91,32 @@ fn websocket_response_create_payload_should_keep_explicit_empty_instructions() {
 }
 
 #[test]
+fn websocket_response_create_payload_text_should_match_merged_map_serialization() {
+    // body 自带 type 键与未知字段：文本帧必须与「合并 Map 再序列化」逐字节一致。
+    let request = CodexResponsesRequest::from_body(
+        json!({
+            "model": "gpt-test",
+            "type": "client-supplied",
+            "x_unknown": {"nested": [1, 2.5, "3"]},
+            "input": []
+        })
+        .as_object()
+        .expect("request object")
+        .clone(),
+    );
+
+    let merged = serde_json::to_string(
+        &provider_openai::transport::protocol::websocket::websocket_response_create_payload(
+            &request,
+        ),
+    )
+    .expect("merged payload");
+    let streamed = websocket_response_create_payload_text(&request).expect("streamed payload");
+
+    assert_eq!(streamed, merged);
+}
+
+#[test]
 fn required_websocket_audit_should_forbid_http_fallback() {
     let request = CodexResponsesRequest::from_body(
         json!({
@@ -138,8 +164,7 @@ fn websocket_metadata_turn_state_should_accept_case_insensitive_header() {
     let event = json!({
         "type": "response.metadata",
         "headers": {"X-Codex-Turn-State": ["turn-from-metadata"]}
-    })
-    .to_string();
+    });
 
     assert_eq!(
         websocket_metadata_turn_state(&event).as_deref(),
@@ -155,16 +180,14 @@ fn websocket_completed_id_should_read_the_id_without_validating_the_response_sha
             "id": "resp_valid",
             "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
         }
-    })
-    .to_string();
+    });
     let invalid_usage = json!({
         "type": "response.completed",
         "response": {
             "id": "resp_invalid",
             "usage": {"input_tokens": "bad", "output_tokens": 1, "total_tokens": 1}
         }
-    })
-    .to_string();
+    });
 
     assert_eq!(
         websocket_response_completed_id(&valid),
@@ -226,16 +249,14 @@ fn websocket_completed_id_should_leave_unreadable_completion_untracked() {
         "response": {
             "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
         }
-    })
-    .to_string();
+    });
     let incomplete_usage = json!({
         "type": "response.completed",
         "response": {
             "id": "resp_incomplete_usage",
             "usage": {"input_tokens": 1, "output_tokens": 1}
         }
-    })
-    .to_string();
+    });
 
     assert_eq!(websocket_response_completed_id(&missing_id), None);
     assert_eq!(

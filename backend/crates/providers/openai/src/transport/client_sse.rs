@@ -31,7 +31,7 @@ use crate::transport::{
         CodexWebSocketConnection, CodexWebSocketPool, CodexWebSocketPoolKey,
         DEFAULT_INITIAL_EVENT_TIMEOUT, WEBSOCKET_FAST_PATH_BUDGET, WebSocketOriginBreaker,
         WebSocketPoolDecision, execute_prepared_response_create_request_stream,
-        post_send_ambiguous, prepare_response_create_request_with_pool,
+        post_send_ambiguous, prepare_response_create_request_with_pool, websocket_audit_dir,
         write_websocket_audit_artifact_from_env,
     },
 };
@@ -176,13 +176,17 @@ impl CodexBackendClient {
             &websocket_request,
         )
         .map_err(CodexClientError::WebSocketEncode)?;
-        let artifact = websocket_audit_artifact_from_attempt(
-            &websocket_request,
-            websocket_create.connection().opening_audit_snapshot(),
-            websocket_payload_audit_snapshot(&websocket_request),
-        );
-        if let Err(error) = write_websocket_audit_artifact_from_env(&artifact).await {
-            tracing::warn!(error = %error, "Failed to write Codex WebSocket audit artifact");
+        // 审计未启用时跳过 artifact 构造：payload 快照会深拷贝整个请求 body，
+        // 且位于首字节前的关键路径上。
+        if websocket_audit_dir().is_some() {
+            let artifact = websocket_audit_artifact_from_attempt(
+                &websocket_request,
+                websocket_create.connection().opening_audit_snapshot(),
+                websocket_payload_audit_snapshot(&websocket_request),
+            );
+            if let Err(error) = write_websocket_audit_artifact_from_env(&artifact).await {
+                tracing::warn!(error = %error, "Failed to write Codex WebSocket audit artifact");
+            }
         }
         let connection_profile = websocket_connection_profile(&headers);
         let pool_key =

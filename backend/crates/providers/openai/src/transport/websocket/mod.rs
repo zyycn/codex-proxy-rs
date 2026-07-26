@@ -12,7 +12,7 @@ mod pump;
 
 pub use self::{
     audit::{
-        WS_AUDIT_DIR_ENV, write_websocket_audit_artifact_for_dir,
+        WS_AUDIT_DIR_ENV, websocket_audit_dir, write_websocket_audit_artifact_for_dir,
         write_websocket_audit_artifact_from_env,
     },
     breaker::{
