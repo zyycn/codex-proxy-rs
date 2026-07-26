@@ -29,8 +29,8 @@ pub use catalog::{
     GROK_FREE_ROLLING_WINDOW_SECONDS, GrokBillingPresentation, GrokCatalogCache,
     GrokCatalogCacheError, GrokCatalogScope, GrokCredentialCatalogCache,
     GrokCredentialCatalogError, GrokCredentialCatalogSeed, GrokCredentialCatalogService,
-    GrokCredentialCatalogSnapshot, GrokCredentialQuotaService, GrokPlanCatalog, GrokQuotaError,
-    GrokQuotaPeriodKind, GrokQuotaSnapshot,
+    GrokCredentialQuotaService, GrokPlanCatalog, GrokQuotaError, GrokQuotaPeriodKind,
+    GrokQuotaSnapshot,
 };
 pub use discovery::DiscoveryDocument;
 pub use error::{

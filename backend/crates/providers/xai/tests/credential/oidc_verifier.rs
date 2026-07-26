@@ -50,6 +50,34 @@ async fn authorization_code_should_validate_es256_and_cache_jwks() {
 }
 
 #[tokio::test]
+async fn jwks_with_unknown_members_should_still_verify() {
+    let server = MockServer::start().await;
+    let endpoint = endpoints(&server);
+    let key = TestKey::new(23, "extended-key");
+    let mut jwks = key.jwks();
+    jwks["cache_max_age"] = json!(3600);
+    jwks["keys"][0]["x5t"] = json!("thumbprint");
+    jwks["keys"][0]["key_ops"] = json!(["verify"]);
+    mount_jwks(&server, jwks, 1).await;
+    let verifier = verifier(&endpoint.origin, CACHE_TTL);
+    let nonce = SecretValue::new("unknown-member-nonce".to_owned());
+    let algorithms = vec!["ES256".to_owned()];
+    let token = SecretValue::new(key.sign(&valid_claims(&nonce), Algorithm::ES256));
+    let access_token = SecretValue::new("access-token".to_owned());
+
+    let evidence = verifier
+        .verify(
+            auth_context(&endpoint, &algorithms, &nonce),
+            TokenCandidate::new(&access_token, Some(&token), None),
+        )
+        .await
+        .expect("JWKS with unknown members must still verify");
+
+    assert_eq!(evidence.method(), VerificationMethod::IdToken);
+    assert_eq!(evidence.subject(), "user-123");
+}
+
+#[tokio::test]
 async fn fresh_cache_miss_should_refresh_once_for_key_rotation() {
     let server = MockServer::start().await;
     let endpoint = endpoints(&server);

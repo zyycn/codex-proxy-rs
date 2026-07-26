@@ -348,14 +348,13 @@ impl CachedJwk {
     }
 }
 
+// RFC 7517 要求忽略 JWKS 与 JWK 的未知成员；字段本身的强校验在 parse_jwks。
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct JwksWire {
     keys: Vec<JwkWire>,
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct JwkWire {
     kty: String,
     #[serde(rename = "use")]

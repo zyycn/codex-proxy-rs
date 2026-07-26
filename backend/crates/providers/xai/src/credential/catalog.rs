@@ -15,7 +15,7 @@ use gateway_core::engine::provider::ProviderCatalogGeneration;
 use gateway_core::provider_ports::{
     ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCatalogScope,
 };
-use gateway_core::routing::{ConfigRevision, ProviderKind};
+use gateway_core::routing::ProviderKind;
 use tokio::sync::Mutex;
 
 use super::repository::{GrokCredentialRepository, LoadedGrokCredential};
@@ -796,12 +796,25 @@ impl GrokCredentialCatalogCache for GrokCatalogCache {
         &self,
         scope: &GrokCatalogScope,
     ) -> Result<Option<GrokPlanCatalog>, GrokCatalogCacheError> {
-        self.port
+        let Some(document) = self
+            .port
             .read(&self.key(scope))
             .await
             .map_err(|_| GrokCatalogCacheError::Unavailable)?
-            .map(|document| Self::decode(scope, document))
-            .transpose()
+        else {
+            return Ok(None);
+        };
+        // cache 只保存可重建 TTL 数据：损坏条目按 miss 丢弃，由调用方实时重建。
+        match Self::decode(scope, document) {
+            Ok(catalog) => Ok(Some(catalog)),
+            Err(_) => {
+                tracing::warn!(
+                    scope = scope.as_str(),
+                    "discarding corrupt xAI model catalog cache entry"
+                );
+                Ok(None)
+            }
+        }
     }
 
     async fn observed_model_support(
@@ -822,37 +835,6 @@ pub enum GrokCatalogCacheError {
     Unavailable,
     #[error("xAI model catalog cache data is invalid")]
     InvalidData,
-}
-
-/// 一次 Provider 同步得到的套餐目录和严格模型并集。
-#[derive(Clone, Debug)]
-pub struct GrokCredentialCatalogSnapshot {
-    config_revision: ConfigRevision,
-    observed_at: DateTime<Utc>,
-    plans: Vec<GrokPlanCatalog>,
-    models: Vec<GrokCatalogModel>,
-}
-
-impl GrokCredentialCatalogSnapshot {
-    #[must_use]
-    pub const fn config_revision(&self) -> ConfigRevision {
-        self.config_revision
-    }
-
-    #[must_use]
-    pub const fn observed_at(&self) -> DateTime<Utc> {
-        self.observed_at
-    }
-
-    #[must_use]
-    pub fn plans(&self) -> &[GrokPlanCatalog] {
-        &self.plans
-    }
-
-    #[must_use]
-    pub fn models(&self) -> &[GrokCatalogModel] {
-        &self.models
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1011,26 +993,12 @@ impl GrokCredentialCatalogService {
             .map_err(|_| GrokCredentialCatalogError::Cache)
     }
 
-    /// 实时拉取全部 eligible OAuth account；结果只写可重建 TTL cache，不写 PostgreSQL。
-    pub async fn synchronize(
-        &self,
-        config_revision: ConfigRevision,
-    ) -> Result<GrokCredentialCatalogSnapshot, GrokCredentialCatalogError> {
-        let catalog = self.fetch_and_cache().await?;
-        Ok(GrokCredentialCatalogSnapshot {
-            config_revision,
-            observed_at: catalog.observed_at,
-            plans: catalog.plans,
-            models: catalog.models,
-        })
-    }
-
     /// Provider Registry 构建 RuntimeSnapshot 时使用的实时能力目录。
     pub async fn query_models(&self) -> Result<Vec<GrokCatalogModel>, GrokCredentialCatalogError> {
-        Ok(self.fetch_and_cache().await?.models)
+        self.fetch_and_cache().await
     }
 
-    async fn fetch_and_cache(&self) -> Result<FetchedProviderCatalog, GrokCredentialCatalogError> {
+    async fn fetch_and_cache(&self) -> Result<Vec<GrokCatalogModel>, GrokCredentialCatalogError> {
         let candidates = self
             .repository
             .list_loaded_for_provider()
@@ -1047,27 +1015,19 @@ impl GrokCredentialCatalogService {
         fetched.sort_by(|left, right| left.scope.cmp(&right.scope));
         let models = strict_model_union(&fetched)?;
         let observed_at = Utc::now();
-        let plans = fetched
-            .into_iter()
-            .map(|fetched| GrokPlanCatalog {
-                scope: fetched.scope,
-                observed_at,
-                seed: fetched.seed,
-            })
-            .collect::<Vec<_>>();
-        for plan in &plans {
+        for fetched in fetched {
             self.cache
-                .replace(plan.clone())
+                .replace(GrokPlanCatalog {
+                    scope: fetched.scope,
+                    observed_at,
+                    seed: fetched.seed,
+                })
                 .await
                 .map_err(|_| GrokCredentialCatalogError::Cache)?;
         }
         self.publish_models(&models);
 
-        Ok(FetchedProviderCatalog {
-            observed_at,
-            plans,
-            models,
-        })
+        Ok(models)
     }
 
     async fn refresh_scope_catalog(
@@ -1134,12 +1094,6 @@ struct FetchedCredentialCatalog {
     scope: GrokCatalogScope,
     snapshot: GrokModelCatalogSnapshot,
     seed: GrokCredentialCatalogSeed,
-}
-
-struct FetchedProviderCatalog {
-    observed_at: DateTime<Utc>,
-    plans: Vec<GrokPlanCatalog>,
-    models: Vec<GrokCatalogModel>,
 }
 
 fn catalog_candidates_by_scope(
