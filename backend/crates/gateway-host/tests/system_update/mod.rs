@@ -18,7 +18,8 @@ use tar::{Builder, EntryType, Header};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-const TARGET_VERSION: &str = "9.9.9";
+const TARGET_VERSION: &str = "1.9.9";
+const CROSS_MAJOR_VERSION: &str = "2.0.0";
 
 #[tokio::test]
 async fn restart_should_not_shutdown_when_replacement_spawn_fails() {
@@ -172,6 +173,43 @@ async fn update_detail_should_use_cached_release_when_not_refreshed() {
     service.update_detail(true).await.expect("prime cache");
 
     assert!(service.update_detail(false).await.is_ok());
+}
+
+#[tokio::test]
+async fn update_detail_should_withhold_cross_major_release() {
+    let server = MockServer::start().await;
+    let fixture = Fixture::new();
+    fixture
+        .mount_release_once(&server, CROSS_MAJOR_VERSION)
+        .await;
+
+    let detail = fixture
+        .service(&server)
+        .update_detail(true)
+        .await
+        .expect("detail");
+    assert_eq!(detail.latest_version, CROSS_MAJOR_VERSION);
+    assert!(!detail.has_update);
+    assert!(detail.warning.is_some());
+}
+
+#[tokio::test]
+async fn update_should_reject_cross_major_target_before_fetching_release() {
+    let fixture = Fixture::new();
+    let service = ProcessSystemOperations::new(
+        CancellationToken::new(),
+        fixture.config("http://127.0.0.1:1/repos"),
+    );
+
+    let error = service
+        .perform_update(Some(CROSS_MAJOR_VERSION.to_owned()))
+        .await
+        .expect_err("cross-major target must be rejected");
+    assert_eq!(error.kind(), SystemOperationErrorKind::Conflict);
+    assert_eq!(
+        fs::read(fixture.executable()).expect("binary"),
+        b"old-binary"
+    );
 }
 
 #[tokio::test]
@@ -397,7 +435,7 @@ async fn update_should_reject_when_confirmed_target_differs_from_remote_latest()
     let server = MockServer::start().await;
     let fixture = Fixture::new();
     fixture
-        .mount_release(&server, "9.9.8", ArchiveKind::Safe, ChecksumKind::Valid)
+        .mount_release(&server, "1.9.8", ArchiveKind::Safe, ChecksumKind::Valid)
         .await;
 
     assert!(
