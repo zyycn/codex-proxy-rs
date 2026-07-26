@@ -1,15 +1,17 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use chrono::Utc;
 use gateway_core::engine::credential::{
-    AccountAvailability, CredentialCasOutcome, CredentialRevision, ProviderAccountStore,
+    AccountAvailability, CredentialCasOutcome, CredentialCasUpdate, CredentialRevision,
+    ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
 };
 use gateway_core::provider_ports::{
-    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderStoreError,
+    ProviderCredentialState, ProviderCredentialStatePort, ProviderLeaseAcquisition,
+    ProviderLeasePort, ProviderLeaseRequest, ProviderStoreError,
 };
 use provider_xai::{
     GrokCredentialCatalogCache, GrokCredentialRecovery, GrokCredentialRecoveryOutcome,
@@ -141,10 +143,110 @@ async fn fixture(
     fixture_many([input], responses, lease_available).await
 }
 
+/// 真实累加连续失败计数的测试 double，用于断言退避的指数增长与成功清零。
+#[derive(Default)]
+struct CountingCredentialState {
+    counts: Mutex<BTreeMap<String, u32>>,
+    cleared: Mutex<Vec<String>>,
+}
+
+impl CountingCredentialState {
+    fn count(&self, account_id: &ProviderAccountId) -> u32 {
+        self.counts
+            .lock()
+            .expect("backoff counts lock")
+            .get(account_id.as_str())
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn was_cleared(&self, account_id: &ProviderAccountId) -> bool {
+        self.cleared
+            .lock()
+            .expect("cleared accounts lock")
+            .iter()
+            .any(|id| id == account_id.as_str())
+    }
+}
+
+impl ProviderCredentialStatePort for CountingCredentialState {
+    fn replace(
+        &self,
+        _state: ProviderCredentialState,
+    ) -> futures::future::BoxFuture<'_, Result<(), ProviderStoreError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn read<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+    ) -> futures::future::BoxFuture<'a, Result<Option<ProviderCredentialState>, ProviderStoreError>>
+    {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn clear<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn record_refresh_backoff<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+        _window: Duration,
+    ) -> futures::future::BoxFuture<'a, Result<u32, ProviderStoreError>> {
+        Box::pin(async move {
+            let mut counts = self.counts.lock().expect("backoff counts lock");
+            let entry = counts.entry(account_id.as_str().to_owned()).or_insert(0);
+            *entry += 1;
+            Ok(*entry)
+        })
+    }
+
+    fn clear_refresh_backoff<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+    ) -> futures::future::BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            self.counts
+                .lock()
+                .expect("backoff counts lock")
+                .remove(account_id.as_str());
+            self.cleared
+                .lock()
+                .expect("cleared accounts lock")
+                .push(account_id.as_str().to_owned());
+            Ok(())
+        })
+    }
+}
+
 async fn fixture_many(
     inputs: impl IntoIterator<Item = provider_xai::CreateGrokCredential>,
     responses: impl IntoIterator<Item = Result<GrokRefreshTokens, GrokRefreshFailure>>,
     lease_available: bool,
+) -> (
+    Arc<MemoryProviderAccountStore>,
+    GrokCredentialRepository,
+    Arc<QueueRefresher>,
+    GrokCredentialRefreshService,
+) {
+    fixture_many_with_state(
+        inputs,
+        responses,
+        lease_available,
+        Arc::new(CountingCredentialState::default()),
+    )
+    .await
+}
+
+async fn fixture_many_with_state(
+    inputs: impl IntoIterator<Item = provider_xai::CreateGrokCredential>,
+    responses: impl IntoIterator<Item = Result<GrokRefreshTokens, GrokRefreshFailure>>,
+    lease_available: bool,
+    credential_state: Arc<dyn ProviderCredentialStatePort>,
 ) -> (
     Arc<MemoryProviderAccountStore>,
     GrokCredentialRepository,
@@ -176,9 +278,38 @@ async fn fixture_many(
         catalog,
         leases,
         cooldowns,
+        credential_state,
         runtime_policy(),
     );
     (store, repository, refresher, service)
+}
+
+/// 用 store 的 CAS 把 next_refresh_at 复位到过去，使已退避到未来的账号再次到期。
+async fn force_due(store: &MemoryProviderAccountStore, id: &ProviderAccountId) {
+    let account = store.account(id).expect("account to reset");
+    let credential = store.credential(id).expect("credential to reset");
+    let update = CredentialCasUpdate::new(
+        id.clone(),
+        account.revision(),
+        ProviderAccountUpdate {
+            account_id: id.clone(),
+            name: account.name().to_owned(),
+            email: account.email().map(str::to_owned),
+            plan_type: account.plan_type().map(str::to_owned),
+        },
+        credential,
+        true,
+        account.access_token_expires_at(),
+        Some(SystemTime::now() - Duration::from_secs(1)),
+    )
+    .expect("valid due-time reset");
+    assert!(matches!(
+        store
+            .compare_and_swap_credential(update)
+            .await
+            .expect("reset next_refresh_at to the past"),
+        CredentialCasOutcome::Updated(_)
+    ));
 }
 
 #[tokio::test]
@@ -421,6 +552,95 @@ async fn pre_send_transient_failure_applies_bounded_cooldown() {
             .next_refresh_at()
             .is_some_and(|retry| retry > std::time::SystemTime::now())
     );
+}
+
+#[tokio::test]
+async fn refresh_backoff_grows_exponentially_across_attempts() {
+    let input = due_input("backoff-growth");
+    let id = input.account_id.clone();
+    let counting = Arc::new(CountingCredentialState::default());
+    let (store, _, _, service) = fixture_many_with_state(
+        [input],
+        [
+            Err(GrokRefreshFailure::Transient),
+            Err(GrokRefreshFailure::Transient),
+        ],
+        true,
+        counting.clone(),
+    )
+    .await;
+
+    let before_first = SystemTime::now();
+    let first = service.refresh_due().await.expect("first refresh cycle");
+    assert!(matches!(
+        first.as_slice(),
+        [GrokCredentialRefreshOutcome::Transient { .. }]
+    ));
+    let first_delay = store
+        .account(&id)
+        .expect("account after first defer")
+        .next_refresh_at()
+        .expect("first retry scheduled")
+        .duration_since(before_first)
+        .expect("first delay is in the future");
+    assert_eq!(counting.count(&id), 1);
+
+    force_due(&store, &id).await;
+
+    let before_second = SystemTime::now();
+    let second = service.refresh_due().await.expect("second refresh cycle");
+    assert!(matches!(
+        second.as_slice(),
+        [GrokCredentialRefreshOutcome::Transient { .. }]
+    ));
+    let second_delay = store
+        .account(&id)
+        .expect("account after second defer")
+        .next_refresh_at()
+        .expect("second retry scheduled")
+        .duration_since(before_second)
+        .expect("second delay is in the future");
+    assert_eq!(counting.count(&id), 2);
+
+    // base=5s、factor=3：第二次（attempt=2）应比第一次（attempt=1）显著更久。
+    assert!(
+        second_delay > first_delay * 2,
+        "second backoff {second_delay:?} should grow well beyond first {first_delay:?}"
+    );
+}
+
+#[tokio::test]
+async fn successful_refresh_clears_backoff_counter() {
+    let input = due_input("backoff-clear");
+    let id = input.account_id.clone();
+    let counting = Arc::new(CountingCredentialState::default());
+    let (store, _, _, service) = fixture_many_with_state(
+        [input],
+        [
+            Err(GrokRefreshFailure::Transient),
+            Ok(success_tokens(Some("cleared-refresh"))),
+        ],
+        true,
+        counting.clone(),
+    )
+    .await;
+
+    let first = service.refresh_due().await.expect("first refresh cycle");
+    assert!(matches!(
+        first.as_slice(),
+        [GrokCredentialRefreshOutcome::Transient { .. }]
+    ));
+    assert_eq!(counting.count(&id), 1);
+
+    force_due(&store, &id).await;
+
+    let second = service.refresh_due().await.expect("second refresh cycle");
+    assert!(matches!(
+        second.as_slice(),
+        [GrokCredentialRefreshOutcome::Refreshed { .. }]
+    ));
+    assert!(counting.was_cleared(&id));
+    assert_eq!(counting.count(&id), 0);
 }
 
 #[tokio::test]

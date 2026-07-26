@@ -168,6 +168,7 @@ pub async fn initialize(
         Arc::clone(&catalog),
         Arc::clone(&leases),
         cooldowns,
+        ports.credential_state(),
         Arc::clone(&runtime_policy),
     ));
     let credential_recovery: Arc<dyn GrokCredentialRecovery> = refresh.clone();

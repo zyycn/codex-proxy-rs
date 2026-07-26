@@ -12,10 +12,10 @@ use gateway_core::engine::credential::{
     AccountAvailability, CredentialRevision, ProviderAccountId,
 };
 use gateway_core::provider_ports::{
-    ProviderCooldown, ProviderCooldownPort, ProviderLeaseAcquisition, ProviderLeasePort,
-    ProviderLeaseRequest, ProviderRefreshCapacityRequest, ProviderRefreshLeaseRequest,
-    ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError,
-    provider_refresh_retry_at,
+    ProviderCooldown, ProviderCooldownPort, ProviderCredentialStatePort, ProviderLeaseAcquisition,
+    ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshCapacityRequest,
+    ProviderRefreshLeaseRequest, ProviderRefreshPolicy, ProviderRuntimePolicyPort,
+    ProviderStoreError, provider_refresh_backoff_at,
 };
 
 use super::catalog::GrokCredentialCatalogService;
@@ -36,7 +36,8 @@ const MAX_REFRESH_BATCH: u32 = 100;
 const MAX_REFRESH_EXCLUSIONS: usize = 400;
 const MAX_SECRET_BYTES: usize = 64 * 1_024;
 const DISCOVERY_NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(5);
-const REFRESH_RETRY_DELAY: Duration = Duration::from_secs(10 * 60);
+/// 连续失败计数窗口；静默满窗后计数过期归零。
+const REFRESH_BACKOFF_WINDOW: Duration = Duration::from_secs(30 * 60);
 const REFRESH_AMBIGUITY_COOLDOWN: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// 一个到期且已按 revision 读取明文 RT 的 xAI account。
@@ -277,6 +278,7 @@ pub struct GrokCredentialRefreshService {
     catalog: Arc<GrokCredentialCatalogService>,
     leases: Arc<dyn ProviderLeasePort>,
     cooldowns: Arc<dyn ProviderCooldownPort>,
+    credential_state: Arc<dyn ProviderCredentialStatePort>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
 }
 
@@ -287,6 +289,7 @@ impl GrokCredentialRefreshService {
         catalog: Arc<GrokCredentialCatalogService>,
         leases: Arc<dyn ProviderLeasePort>,
         cooldowns: Arc<dyn ProviderCooldownPort>,
+        credential_state: Arc<dyn ProviderCredentialStatePort>,
         runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     ) -> Self {
         Self {
@@ -295,6 +298,7 @@ impl GrokCredentialRefreshService {
             catalog,
             leases,
             cooldowns,
+            credential_state,
             runtime_policy,
         }
     }
@@ -639,6 +643,10 @@ impl GrokCredentialRefreshService {
         {
             let _ = self.catalog.cache_seed(&account_id, seed).await;
         }
+        let _ = self
+            .credential_state
+            .clear_refresh_backoff(&account_id)
+            .await;
         Ok(GrokCredentialRefreshOutcome::Refreshed {
             account_id,
             credential_revision: record.credential_revision,
@@ -718,10 +726,15 @@ impl GrokCredentialRefreshService {
         credential: &DueGrokCredential,
         reason: &'static str,
     ) -> Result<bool, GrokCredentialRefreshError> {
-        let retry_at = provider_refresh_retry_at(
+        let attempt = self
+            .credential_state
+            .record_refresh_backoff(&credential.account_id, REFRESH_BACKOFF_WINDOW)
+            .await
+            .unwrap_or(1);
+        let retry_at = provider_refresh_backoff_at(
             &credential.account_id,
             SystemTime::now(),
-            REFRESH_RETRY_DELAY,
+            attempt,
             reason,
         )?;
         match self
