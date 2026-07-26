@@ -17,7 +17,6 @@ export function useDashboard() {
   const trend = shallowRef(dashboardTrendView(null))
   const loading = shallowRef(false)
   const refreshing = shallowRef(false)
-  const trendLoading = shallowRef(false)
   const lastRefreshedAt = shallowRef('')
   let trendRequestId = 0
 
@@ -75,7 +74,6 @@ export function useDashboard() {
     activeTrendKind.value = trendKind
     const requestId = ++trendRequestId
     try {
-      trendLoading.value = true
       const result = await getDashboardTrend({ kind: trendKind })
       if (isCurrentTrendRequest(requestId, trendKind))
         trend.value = dashboardTrendView(result)
@@ -83,26 +81,16 @@ export function useDashboard() {
     catch {
       // 趋势请求失败时保留当前趋势，下一次刷新继续尝试。
     }
-    finally {
-      if (isCurrentTrendRequest(requestId, trendKind))
-        trendLoading.value = false
-    }
   }
 
   async function loadDashboardSnapshot() {
     const trendKind = activeTrendKind.value
     const requestId = ++trendRequestId
-    try {
-      const summary = await getDashboardSummary({ kind: trendKind })
-      snapshot.value = dashboardSnapshotView(summary)
-      lastRefreshedAt.value = formatDateTime()
-      if (isCurrentTrendRequest(requestId, trendKind)) {
-        trend.value = dashboardTrendView(summary.trend)
-      }
-    }
-    finally {
-      if (isCurrentTrendRequest(requestId, trendKind))
-        trendLoading.value = false
+    const summary = await getDashboardSummary({ kind: trendKind })
+    snapshot.value = dashboardSnapshotView(summary)
+    lastRefreshedAt.value = formatDateTime()
+    if (isCurrentTrendRequest(requestId, trendKind)) {
+      trend.value = dashboardTrendView(summary.trend)
     }
   }
 
@@ -121,7 +109,6 @@ export function useDashboard() {
   return {
     loading,
     refreshing,
-    trendLoading,
     activeTrendKind,
     lastRefreshedAt,
     metrics,

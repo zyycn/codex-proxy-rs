@@ -7,27 +7,12 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
 
 import BaseChart from '@/components/charts/BaseChart.vue'
+import { metricToneIconClasses, metricToneValueClasses } from '../constants'
 import AnimatedMetricValue from './AnimatedMetricValue.vue'
 
 const props = defineProps<{
   metric: MetricCardView
 }>()
-
-const iconToneClasses: Record<MetricTone, string> = {
-  normal: 'bg-(--cp-normal-bg) text-(--cp-normal)',
-  info: 'bg-(--cp-info-bg) text-(--cp-info)',
-  success: 'bg-(--cp-success-bg) text-(--cp-success)',
-  warning: 'bg-(--cp-warning-bg) text-(--cp-warning)',
-  danger: 'bg-(--cp-danger-bg) text-(--cp-danger)',
-}
-
-const detailToneClasses: Record<MetricTone, string> = {
-  normal: 'text-(--cp-normal-text)',
-  info: 'text-(--cp-info-text)',
-  success: 'text-(--cp-success-text)',
-  warning: 'text-(--cp-warning-text)',
-  danger: 'text-(--cp-danger-text)',
-}
 
 const trendToneClasses: Record<MetricTone, string> = {
   normal: 'bg-(--cp-normal-text)',
@@ -89,7 +74,7 @@ const sparklineOption = computed<EChartsOption | null>(() => {
       <BaseMotionIcon
         aria-hidden="true"
         class="inline-flex size-8.5 shrink-0 items-center justify-center rounded-[10px]"
-        :class="iconToneClasses[metric.tone]"
+        :class="metricToneIconClasses[metric.tone]"
       >
         <component :is="metric.icon" :size="18" />
       </BaseMotionIcon>
@@ -135,7 +120,7 @@ const sparklineOption = computed<EChartsOption | null>(() => {
         }}</span>
         <b
           class="min-w-0 truncate font-mono text-xs leading-none font-bold tabular-nums"
-          :class="metric.details[0]?.tone ? detailToneClasses[metric.details[0].tone] : undefined"
+          :class="metric.details[0]?.tone ? metricToneValueClasses[metric.details[0].tone] : undefined"
         >
           {{ metric.details[0]?.value }}
         </b>
@@ -148,7 +133,7 @@ const sparklineOption = computed<EChartsOption | null>(() => {
         }}</span>
         <b
           class="min-w-0 truncate font-mono text-xs leading-none font-bold tabular-nums"
-          :class="metric.details[1]?.tone ? detailToneClasses[metric.details[1].tone] : undefined"
+          :class="metric.details[1]?.tone ? metricToneValueClasses[metric.details[1].tone] : undefined"
         >
           {{ metric.details[1]?.value }}
         </b>

@@ -16,7 +16,6 @@ import { useDashboard } from './composables/useDashboard'
 const {
   loading,
   refreshing,
-  trendLoading,
   activeTrendKind,
   metrics,
   trendPoints,
@@ -69,7 +68,6 @@ const {
         v-model:kind="activeTrendKind"
         :points="trendPoints"
         :summary="trendSummary"
-        :loading="trendLoading"
         @trend-change="loadTrend"
       />
       <WireProfileCard :profiles="wireProfiles" />

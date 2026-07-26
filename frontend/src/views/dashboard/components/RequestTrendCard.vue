@@ -14,7 +14,6 @@ type TrendView = ReturnType<typeof dashboardTrendView>
 const props = defineProps<{
   points: TrendView['points']
   summary: TrendView['summary']
-  loading?: boolean
 }>()
 
 const emit = defineEmits<{

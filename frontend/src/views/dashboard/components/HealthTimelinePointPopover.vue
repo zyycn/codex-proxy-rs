@@ -18,40 +18,8 @@ const eligibleRequests = computed(() => props.point.successRequests + props.poin
 const observedRequests = computed(
   () => eligibleRequests.value + props.point.cancelledRequests + props.point.callerErrorRequests,
 )
-const outcomeSegments = computed(() => {
-  const total = observedRequests.value
-  if (total === 0)
-    return []
-
-  return [
-    {
-      label: '成功',
-      value: props.point.successRequests,
-      className: 'bg-(--cp-success)',
-    },
-    {
-      label: '服务失败',
-      value: props.point.failedRequests,
-      className: 'bg-(--cp-danger)',
-    },
-    {
-      label: '客户端取消',
-      value: props.point.cancelledRequests,
-      className: 'bg-(--cp-normal)',
-    },
-    {
-      label: '调用方错误',
-      value: props.point.callerErrorRequests,
-      className: 'bg-(--cp-info)',
-    },
-  ]
-    .filter(item => item.value > 0)
-    .map(item => ({
-      ...item,
-      percentage: (item.value / total) * 100,
-    }))
-})
-const metricItems = computed(() => [
+// 四类结果的标签/取值/配色单一来源；分段条与明细行都由此派生。
+const outcomeMeta = computed(() => [
   {
     label: '成功',
     value: props.point.successRequests,
@@ -77,6 +45,20 @@ const metricItems = computed(() => [
     valueClass: 'text-(--cp-info-text)',
   },
 ])
+const outcomeSegments = computed(() => {
+  const total = observedRequests.value
+  if (total === 0)
+    return []
+
+  return outcomeMeta.value
+    .map(item => ({ label: item.label, value: item.value, className: item.dotClass }))
+    .filter(item => item.value > 0)
+    .map(item => ({
+      ...item,
+      percentage: (item.value / total) * 100,
+    }))
+})
+const metricItems = outcomeMeta
 </script>
 
 <template>
