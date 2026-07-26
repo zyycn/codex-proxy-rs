@@ -1,8 +1,14 @@
+use axum::{
+    body::Body,
+    http::{Request, StatusCode, header::AUTHORIZATION},
+};
 use gateway_api::openai::responses::ResponseCreateFrameError;
 use gateway_core::operation::Operation;
 use serde_json::json;
+use tower::ServiceExt;
 
 use super::decode_response_create;
+use crate::openai::{api_router, models::ModelsExecution};
 
 #[test]
 fn response_create_should_default_to_the_websocket_streaming_contract() {
@@ -140,4 +146,85 @@ fn response_create_should_reject_non_boolean_stream_without_disclosing_body_valu
     assert_eq!(error, ResponseCreateFrameError::StreamingRequired);
     assert!(!rendered.contains(prompt));
     assert!(!rendered.contains(opaque_stream_value));
+}
+
+// `serve_responses_websocket`/`forward_execution` 只有拿到 `hyper::upgrade::OnUpgrade`
+// 的真实 HTTP/1.1 升级连接才会运行;本 crate 的依赖图按 axum `ws` feature 编译
+// hyper(无 `http1`),测试进程内不存在能完成升级的服务端,`hyper::upgrade` 也不
+// 提供公开构造器。集成测试因此止步于 upgrade 边界:会话循环内的事件转发、错误帧
+// 与断连取消仍未被覆盖,需要 dev 依赖开启 `http1` 或 socket 泛化后才能落地。
+
+const TEST_WEBSOCKET_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAA==";
+
+fn upgrade_request(authorization: &str) -> Request<Body> {
+    Request::get("/v1/responses")
+        .header(AUTHORIZATION, authorization)
+        .header("connection", "upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", TEST_WEBSOCKET_KEY)
+        .body(Body::empty())
+        .expect("build WebSocket upgrade request")
+}
+
+#[tokio::test]
+async fn get_responses_should_route_to_the_websocket_upgrade_boundary() {
+    let response = api_router(ModelsExecution::new())
+        .await
+        .oneshot(upgrade_request("Bearer sk_models_test"))
+        .await
+        .expect("route WebSocket upgrade request");
+
+    // oneshot 请求不携带升级状态;426 证明 GET /v1/responses 进入的是
+    // WebSocketUpgrade 边界而不是普通 HTTP handler。
+    assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
+}
+
+#[tokio::test]
+async fn websocket_upgradability_should_be_checked_before_authentication() {
+    let response = api_router(ModelsExecution::new())
+        .await
+        .oneshot(upgrade_request("Bearer sk_invalid"))
+        .await
+        .expect("route unauthenticated upgrade request");
+
+    // 升级能力在 extractor 阶段先于 handler 内的 API Key 认证被校验,
+    // 无效凭据得到的仍是升级失败而不是 401。
+    assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
+}
+
+#[tokio::test]
+async fn websocket_upgrade_should_reject_malformed_handshakes() {
+    let missing_connection = Request::get("/v1/responses")
+        .header(AUTHORIZATION, "Bearer sk_models_test")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", TEST_WEBSOCKET_KEY)
+        .body(Body::empty())
+        .expect("build request without connection header");
+    let unsupported_version = Request::get("/v1/responses")
+        .header(AUTHORIZATION, "Bearer sk_models_test")
+        .header("connection", "upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "12")
+        .header("sec-websocket-key", TEST_WEBSOCKET_KEY)
+        .body(Body::empty())
+        .expect("build request with unsupported version");
+    let missing_key = Request::get("/v1/responses")
+        .header(AUTHORIZATION, "Bearer sk_models_test")
+        .header("connection", "upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .body(Body::empty())
+        .expect("build request without websocket key");
+
+    for request in [missing_connection, unsupported_version, missing_key] {
+        let response = api_router(ModelsExecution::new())
+            .await
+            .oneshot(request)
+            .await
+            .expect("route malformed WebSocket handshake");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 }
