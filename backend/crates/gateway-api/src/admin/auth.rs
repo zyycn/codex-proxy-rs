@@ -1,11 +1,12 @@
 //! 管理员登录、会话与管理请求鉴权接线。
 
-use std::fmt;
+use std::{fmt, net::SocketAddr};
 
 use axum::{
     Extension, Json, Router,
-    extract::{FromRequestParts, State},
+    extract::{ConnectInfo, FromRequestParts, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header::SET_COOKIE, request::Parts},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -207,9 +208,28 @@ where
     S: AdminSessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/api/admin/auth/login", post(login::<S>))
+        .route(
+            "/api/admin/auth/login",
+            post(login::<S>).layer(middleware::from_fn(attach_login_source)),
+        )
         .route("/api/admin/auth/status", get(session_status::<S>))
         .route("/api/admin/auth/logout", post(logout::<S>))
+}
+
+/// 登录失败限流以 socket 对端 IP 为计数桶，使不同来源的失败互不影响；
+/// 转发头（X-Forwarded-For 等）可由客户端伪造，不参与来源判定。
+/// 经反向代理部署时所有请求同源于代理地址，退化为共享单桶。
+async fn attach_login_source(mut request: Request, next: Next) -> Response {
+    if let Some(ConnectInfo(peer)) = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .copied()
+    {
+        request
+            .extensions_mut()
+            .insert(AdminLoginSource::new(peer.ip().to_string()));
+    }
+    next.run(request).await
 }
 
 async fn login<S>(
