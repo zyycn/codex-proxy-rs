@@ -135,6 +135,12 @@ async fn models_should_encode_provider_profiles_for_current_codex_clients() {
     let value: serde_json::Value = serde_json::from_slice(&body).expect("models JSON");
     let model = &value["models"][0];
 
+    assert_eq!(
+        value
+            .as_object()
+            .map(|catalog| catalog.keys().map(String::as_str).collect::<Vec<_>>()),
+        Some(vec!["models"])
+    );
     assert_eq!(model["slug"], "grok-4.5");
     assert_eq!(model["default_reasoning_level"], "medium");
     assert_eq!(model["context_window"], 500_000);
@@ -164,6 +170,21 @@ async fn models_should_encode_provider_profiles_for_current_codex_clients() {
 }
 
 #[tokio::test]
+async fn models_should_keep_the_codex_contract_when_profiles_are_empty() {
+    let response = api_router(ModelsExecution::new())
+        .await
+        .oneshot(authorized_request("/v1/models?client_version=0.145.0"))
+        .await
+        .expect("list empty Codex models response");
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read empty Codex models body");
+    let value: serde_json::Value = serde_json::from_slice(&body).expect("Codex models JSON");
+
+    assert_eq!(value, serde_json::json!({ "models": [] }));
+}
+
+#[tokio::test]
 async fn models_with_provider_profiles_should_keep_the_openai_list_contract() {
     let response = api_router(ModelsExecution::with_profiles())
         .await
@@ -176,10 +197,7 @@ async fn models_with_provider_profiles_should_keep_the_openai_list_contract() {
     let value: serde_json::Value = serde_json::from_slice(&body).expect("models JSON");
 
     assert_eq!(
-        serde_json::json!({
-            "object": value["object"],
-            "data": value["data"],
-        }),
+        value,
         serde_json::json!({
             "object": "list",
             "data": [
