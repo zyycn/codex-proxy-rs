@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, sync::Mutex};
 
 use async_trait::async_trait;
+use chrono::{TimeDelta, Utc};
 
 use gateway_admin::{
     model::{
@@ -118,5 +119,35 @@ async fn repeated_default_initialization_should_not_replace_password() {
             })
             .await
             .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn login_with_huge_session_ttl_should_clamp_expiry_instead_of_panicking() {
+    let store = std::sync::Arc::new(MemoryAuthStore::default());
+    let services = super::AdminHarness::new()
+        .auth(store.clone())
+        .session_ttl_minutes(i64::MAX as u64)
+        .build()
+        .await;
+
+    let before = Utc::now();
+    let result = services
+        .auth()
+        .login(LoginCommand {
+            username: Some("admin".to_owned()),
+            password: "strong-test-password".to_owned(),
+        })
+        .await
+        .expect("login with huge session TTL");
+
+    assert!(result.expires_at > before);
+    assert!(result.expires_at <= before + TimeDelta::days(366) + TimeDelta::minutes(1));
+    assert!(
+        services
+            .auth()
+            .validate_session(Some(&result.session_id))
+            .await
+            .expect("validate")
     );
 }

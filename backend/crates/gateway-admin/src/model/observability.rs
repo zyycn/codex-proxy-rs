@@ -2,9 +2,19 @@
 
 use std::{num::NonZeroU32, str::FromStr};
 
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, TimeDelta, Timelike as _, Utc};
 
 use super::{AdminModelError, PageSize};
+
+/// 观测日界所用的东八区(UTC+8)固定偏移秒数。
+const CHINA_OFFSET_SECONDS: i64 = 8 * 60 * 60;
+
+/// 将 UTC 时刻截断到东八区(UTC+8)当日零点,返回值仍为 UTC。
+#[must_use]
+pub fn china_day_start(value: DateTime<Utc>) -> DateTime<Utc> {
+    let elapsed = (value.timestamp() + CHINA_OFFSET_SECONDS).rem_euclid(24 * 60 * 60);
+    value - TimeDelta::seconds(elapsed) - TimeDelta::nanoseconds(i64::from(value.nanosecond()))
+}
 
 /// 外部观测查询的 UTC 时间范围。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

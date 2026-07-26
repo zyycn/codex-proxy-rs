@@ -69,6 +69,7 @@ use gateway_core::{
 
 pub(super) struct AdminHarness {
     default_password: String,
+    session_ttl_minutes: u64,
     accounts: Arc<dyn AccountStore>,
     auth: Arc<dyn AuthStore>,
     client_keys: Arc<dyn ClientKeyStore>,
@@ -84,6 +85,7 @@ impl AdminHarness {
         let unavailable = Arc::new(UnavailableStore);
         Self {
             default_password: "strong-test-password".to_owned(),
+            session_ttl_minutes: 60,
             accounts: unavailable.clone(),
             auth: Arc::new(BootstrapAuthStore::default()),
             client_keys: unavailable.clone(),
@@ -100,6 +102,11 @@ impl AdminHarness {
 
     pub(super) fn default_password(mut self, password: &str) -> Self {
         self.default_password = password.to_owned();
+        self
+    }
+
+    pub(super) fn session_ttl_minutes(mut self, minutes: u64) -> Self {
+        self.session_ttl_minutes = minutes;
         self
     }
 
@@ -148,7 +155,7 @@ impl AdminHarness {
     pub(super) async fn build(self) -> AdminServices {
         gateway_admin::initialize(
             AdminConfig {
-                session_ttl_minutes: 60,
+                session_ttl_minutes: self.session_ttl_minutes,
                 default_username: "admin".to_owned(),
                 default_password: InitialAdminPassword::new(self.default_password),
             },
