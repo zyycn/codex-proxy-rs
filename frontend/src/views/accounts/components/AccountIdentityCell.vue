@@ -14,14 +14,12 @@ const props = withDefaults(
     account: AccountIdentity
     size?: 'md' | 'lg'
     showPlan?: boolean
-    showAvatar?: boolean
     titleMode?: 'local-part' | 'email'
     metaPosition?: 'title' | 'secondary'
   }>(),
   {
     size: 'md',
     showPlan: false,
-    showAvatar: true,
     titleMode: 'local-part',
     metaPosition: 'title',
   },
@@ -72,7 +70,6 @@ const avatarClass = computed(() => {
 <template>
   <div class="flex min-w-0 items-center gap-3">
     <span
-      v-if="showAvatar"
       class="inline-flex shrink-0 items-center justify-center rounded-lg font-[820]"
       :class="[avatarSizeClass, avatarClass]"
     >

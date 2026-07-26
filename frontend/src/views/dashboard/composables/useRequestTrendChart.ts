@@ -4,6 +4,7 @@ import type { dashboardTrendView, normalizeDashboardTrendKind } from './presente
 import { usePreferredReducedMotion } from '@vueuse/core'
 import { computed, shallowRef, watch } from 'vue'
 
+import { tooltipIndex } from '@/components/charts/tooltip'
 import { useThemeColor } from '@/composables/useThemeColor'
 
 type TrendKind = ReturnType<typeof normalizeDashboardTrendKind>
@@ -512,13 +513,6 @@ function tooltipValue(source: unknown, key: string) {
     return ''
   const value = (source as Record<string, unknown>)[key]
   return typeof value === 'number' || typeof value === 'string' ? String(value) : ''
-}
-
-function tooltipIndex(source: unknown) {
-  if (typeof source !== 'object' || source === null || !('dataIndex' in source))
-    return -1
-  const value = (source as Record<string, unknown>).dataIndex
-  return typeof value === 'number' ? value : -1
 }
 
 function trendPointProperty(point: TrendPoint | undefined, key: string) {

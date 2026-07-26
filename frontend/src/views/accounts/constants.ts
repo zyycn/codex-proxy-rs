@@ -162,7 +162,7 @@ export function orderedPanelQuotaWindows(windows: AccountQuotaWindow[]) {
   )
 }
 
-export function quotaWindowPercent(window: AccountQuotaWindow) {
+function quotaWindowPercent(window: AccountQuotaWindow) {
   return clamp(window.usedPercent ?? 0, 0, 100)
 }
 

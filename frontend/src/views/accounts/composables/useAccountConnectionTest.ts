@@ -39,6 +39,28 @@ interface AccountConnectionTestOptions {
   onAccountStatus: (accountId: string, status: string) => void
 }
 
+// 后端把"选账号阶段失败"和"上游真的挂了"拆成了不同 providerErrorCode，
+// 前者是可自愈的等待，不该让人以为上游不可用。
+const CONNECTION_TEST_ERROR_HINTS: Record<string, string> = {
+  account_cooling_down: '账号冷却中',
+  account_capacity_busy: '账号并发已占满或请求间隔未到，请稍后重试',
+  no_eligible_account: '该账号没有可用于所选模型的凭据',
+  account_selector_unavailable: '账号调度状态暂时不可读，请稍后重试',
+}
+
+function connectionTestErrorText(event: any) {
+  const fallback = event.error || '测试连接失败'
+  const hint = CONNECTION_TEST_ERROR_HINTS[event.providerErrorCode]
+  if (!hint)
+    return fallback
+  if (event.providerErrorCode !== 'account_cooling_down')
+    return hint
+  const seconds = /retry in (\d+)s/.exec(fallback)?.[1]
+  return seconds
+    ? `${hint}，约 ${seconds} 秒后自动恢复（上游流被中断后触发）`
+    : `${hint}（上游流被中断后触发）`
+}
+
 export function useAccountConnectionTest(options: AccountConnectionTestOptions) {
   const showConnectionTestModal = shallowRef(false)
   const testingAccount = shallowRef<any>(null)
@@ -262,7 +284,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
         finishConnectionTest('success')
       }
       else {
-        connectionTestError.value = event.error || '测试连接失败'
+        connectionTestError.value = connectionTestErrorText(event)
         appendConnectionTestLog(connectionTestError.value, 'danger')
         finishConnectionTest('error')
       }
@@ -271,9 +293,9 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     }
     if (event.type === 'error') {
       applyAccountStatus(event.accountStatus)
-      connectionTestError.value = event.error || '测试连接失败'
+      connectionTestError.value = connectionTestErrorText(event)
       const detail = event.providerErrorCode || event.providerErrorType
-        ? { code: event.providerErrorCode, type: event.providerErrorType }
+        ? { code: event.providerErrorCode, type: event.providerErrorType, message: event.error }
         : undefined
       appendConnectionTestLog(connectionTestError.value, 'danger', detail)
       finishConnectionTest('error')

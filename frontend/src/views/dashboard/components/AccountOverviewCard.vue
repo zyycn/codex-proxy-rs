@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { dashboardSnapshotView } from '../composables/presenter'
+import type { dashboardSnapshotView, MetricTone } from '../composables/presenter'
 import { CircleCheck, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
 import { clamp } from 'es-toolkit'
 
@@ -9,6 +9,7 @@ import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import AccountIdentityCell from '@/views/accounts/components/AccountIdentityCell.vue'
 import AccountUsageWindow from '@/views/accounts/components/AccountUsageWindow.vue'
+import { metricToneIconClasses, metricToneValueClasses } from '../constants'
 
 type DashboardSnapshot = ReturnType<typeof dashboardSnapshotView>
 
@@ -68,6 +69,14 @@ const strategyLabel = computed(() => {
   }
   return map[s] || s
 })
+
+function toneIconClass(tone: string) {
+  return metricToneIconClasses[tone as MetricTone]
+}
+
+function toneValueClass(tone: string) {
+  return metricToneValueClasses[tone as MetricTone]
+}
 
 const statusRows = computed(() => {
   const p = props.pool
@@ -141,22 +150,6 @@ const statusBars = computed(() => {
     { pct: unavailable, cls: 'bg-(--cp-danger)' },
   ].filter(b => b.pct > 0)
 })
-
-const rowToneClasses: Record<string, string> = {
-  normal: 'bg-(--cp-normal-bg) text-(--cp-normal)',
-  info: 'bg-(--cp-info-bg) text-(--cp-info)',
-  success: 'bg-(--cp-success-bg) text-(--cp-success)',
-  warning: 'bg-(--cp-warning-bg) text-(--cp-warning)',
-  danger: 'bg-(--cp-danger-bg) text-(--cp-danger)',
-}
-
-const valueToneClasses: Record<string, string> = {
-  normal: 'text-(--cp-normal-text)',
-  info: 'text-(--cp-info-text)',
-  success: 'text-(--cp-success-text)',
-  warning: 'text-(--cp-warning-text)',
-  danger: 'text-(--cp-danger-text)',
-}
 </script>
 
 <template>
@@ -330,7 +323,7 @@ const valueToneClasses: Record<string, string> = {
           >
             <span
               class="inline-flex size-7 items-center justify-center rounded-[9px]"
-              :class="rowToneClasses[row.tone]"
+              :class="toneIconClass(row.tone)"
             >
               <component :is="row.icon" :size="16" />
             </span>
@@ -344,7 +337,7 @@ const valueToneClasses: Record<string, string> = {
             </span>
             <strong
               class="col-start-4 text-right font-mono text-[17px] leading-[1.15] font-[760] tabular-nums"
-              :class="valueToneClasses[row.tone]"
+              :class="toneValueClass(row.tone)"
             >{{ row.value }}</strong>
           </div>
         </div>

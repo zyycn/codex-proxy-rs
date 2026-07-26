@@ -85,15 +85,4 @@ export function usageLegend(theme: UsageChartPalette, data: string[]) {
   }
 }
 
-export function tooltipRows(params: unknown): Record<string, unknown>[] {
-  const values = Array.isArray(params) ? params : [params]
-  return values.filter(
-    (value): value is Record<string, unknown> => typeof value === 'object' && value !== null,
-  )
-}
-
-export function tooltipIndex(source: unknown) {
-  if (typeof source !== 'object' || source === null || !('dataIndex' in source))
-    return -1
-  return typeof source.dataIndex === 'number' ? source.dataIndex : -1
-}
+export { tooltipIndex, tooltipRows } from '@/components/charts/tooltip'

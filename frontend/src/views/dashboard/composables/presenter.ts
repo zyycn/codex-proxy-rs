@@ -231,7 +231,7 @@ function recentTrendWindow(points: DashboardTrendPoint[]) {
   )
 }
 
-export function formatDashboardCompactNumber(value: number) {
+function formatDashboardCompactNumber(value: number) {
   const normalized = Math.max(0, Math.round(value))
   if (normalized < 1_000)
     return new Intl.NumberFormat('zh-CN').format(normalized)

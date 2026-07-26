@@ -1,3 +1,22 @@
+import type { MetricTone } from './composables/presenter'
+
+// tone 到 Tailwind 类的唯一映射；仪表盘各卡片共用。
+export const metricToneIconClasses: Record<MetricTone, string> = {
+  normal: 'bg-(--cp-normal-bg) text-(--cp-normal)',
+  info: 'bg-(--cp-info-bg) text-(--cp-info)',
+  success: 'bg-(--cp-success-bg) text-(--cp-success)',
+  warning: 'bg-(--cp-warning-bg) text-(--cp-warning)',
+  danger: 'bg-(--cp-danger-bg) text-(--cp-danger)',
+}
+
+export const metricToneValueClasses: Record<MetricTone, string> = {
+  normal: 'text-(--cp-normal-text)',
+  info: 'text-(--cp-info-text)',
+  success: 'text-(--cp-success-text)',
+  warning: 'text-(--cp-warning-text)',
+  danger: 'text-(--cp-danger-text)',
+}
+
 export type HealthStatus
   = 'future' | 'no_data' | 'unavailable' | 'unstable' | 'low_sample' | 'stable'
 
