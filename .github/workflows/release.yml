@@ -630,7 +630,7 @@ jobs:
           make_latest: ${{ needs.release-info.outputs.prerelease == 'true' && 'false' || 'true' }}
           body: |
             > [!WARNING]
-            > **Upgrading from 2.x?** 3.x is a clean break: the 2.x database schema and configuration are not migrated, and the one-click self-update cannot cross major versions — do not trigger it from a 2.x admin UI. Deploy 3.x fresh (new `.runtime/` data directory) and re-import or re-authorize provider accounts and client keys. See the [upgrade notes](https://github.com/${{ github.repository }}/blob/main/deploy/README.md#镜像升级与源码构建).
+            > **Upgrading across major versions?** Database schema and configuration are only compatible within a major version, and the one-click self-update refuses cross-major targets (releases before 3.0 lack this gate — do not use their built-in update to reach a newer major). Deploy the new major fresh (new `.runtime/` data directory) and re-import or re-authorize provider accounts and client keys. See the [upgrade notes](https://github.com/${{ github.repository }}/blob/main/deploy/README.md#镜像升级与源码构建).
 
             ## 📥 Installation
 
