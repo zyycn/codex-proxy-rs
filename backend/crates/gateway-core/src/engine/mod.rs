@@ -598,6 +598,9 @@ pub trait ExecutionStore: Send + Sync {
     async fn record_attempt(&self, attempt: AttemptRecord) -> Result<(), StoreError>;
     /// 请求插入与首次 attempt 合并持久化；两者写同一行，支持合并写的
     /// store 可覆写为单次往返，缩短首 token 前的关键路径。
+    ///
+    /// 覆写实现应保证原子性：默认的两步实现里第二步失败会留下一条
+    /// `running` 请求行，由 deadline 回收器收敛。
     async fn create_model_request_with_attempt(
         &self,
         request: NewModelRequest,
