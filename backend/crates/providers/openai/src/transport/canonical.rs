@@ -273,7 +273,7 @@ impl CodexCanonicalDecoder {
         self.merge_timing_signals(signals);
         if matches!(event_type, Some("response.failed" | "error")) {
             let failure = ResponsesSseFailure::from_event(event_type.unwrap_or_default(), &value);
-            if let Ok(wire) = Self::wire_for_event(event, value, raw_sse_frame) {
+            if let Some(wire) = Self::wire_for_event(event, value, raw_sse_frame) {
                 output.push(ProviderEvent::wire(wire));
             }
             return Err(CodexCanonicalError::Upstream(failure));
@@ -282,7 +282,7 @@ impl CodexCanonicalDecoder {
         if let Some(event_type) = event_type {
             let _ = self.decode_event(event_type, &value, &mut canonical);
         }
-        let Ok(wire) = Self::wire_for_event(event, value, raw_sse_frame) else {
+        let Some(wire) = Self::wire_for_event(event, value, raw_sse_frame) else {
             return Ok(());
         };
         output.push(if canonical.is_empty() {
@@ -301,28 +301,47 @@ impl CodexCanonicalDecoder {
         self.timing_signals.text_output |= signals.text_output;
     }
 
+    /// 构造下发的 wire event。
+    ///
+    /// 上游事件名或 SSE id 不满足 wire 安全约束时剥离该元数据继续下发，
+    /// 而不是把整帧静默丢弃；raw 帧存在时原始字节仍原样透传，JSON 正文
+    /// 继续供旁路观测使用。
     fn wire_for_event(
         event: SseEvent,
         value: Value,
         raw_sse_frame: Option<Bytes>,
-    ) -> Result<ProtocolWireEvent, gateway_core::error::IdentifierError> {
+    ) -> Option<ProtocolWireEvent> {
+        let event_type = event.event.filter(|name| {
+            ProtocolWireEvent::json("openai", Some(name.clone()), Value::Null).is_ok()
+        });
+        let sse_id = event.id.filter(|id| {
+            ProtocolWireEvent::json_with_sse_metadata(
+                "openai",
+                None,
+                Value::Null,
+                Some(id.clone()),
+                None,
+            )
+            .is_ok()
+        });
         match raw_sse_frame {
             Some(raw_sse_frame) => ProtocolWireEvent::json_with_raw_sse_metadata(
                 "openai",
-                event.event,
+                event_type,
                 value,
                 raw_sse_frame,
-                event.id,
+                sse_id,
                 event.retry,
             ),
             None => ProtocolWireEvent::json_with_sse_metadata(
                 "openai",
-                event.event,
+                event_type,
                 value,
-                event.id,
+                sse_id,
                 event.retry,
             ),
         }
+        .ok()
     }
 
     fn failure(

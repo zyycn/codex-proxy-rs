@@ -46,6 +46,43 @@ fn openai_config_rejects_noncanonical_versions_and_empty_fields() {
 }
 
 #[test]
+fn openai_config_restricts_upstream_base_url_to_https_or_loopback_http() {
+    for base_url in [
+        "http://internal.example.com/backend-api",
+        "http://10.0.0.7/backend-api",
+        "https://chatgpt.com/backend-api?debug=1",
+        "https://user:pass@chatgpt.com/backend-api",
+        "https://chatgpt.com/backend-api#fragment",
+        "ftp://chatgpt.com/backend-api",
+    ] {
+        let mut config = valid_config();
+        config.api.base_url = base_url.to_owned();
+        assert!(
+            config
+                .resolve_and_validate(Path::new("/srv/gateway"))
+                .is_err(),
+            "expected {base_url} to be rejected"
+        );
+    }
+
+    for base_url in [
+        "https://chatgpt.com/backend-api",
+        "http://127.0.0.1:8080/backend-api",
+        "http://localhost:8080/backend-api",
+        "http://[::1]:8080/backend-api",
+    ] {
+        let mut config = valid_config();
+        config.api.base_url = base_url.to_owned();
+        assert!(
+            config
+                .resolve_and_validate(Path::new("/srv/gateway"))
+                .is_ok(),
+            "expected {base_url} to be accepted"
+        );
+    }
+}
+
+#[test]
 fn openai_config_keeps_the_quota_exhaustion_scheduling_switch() {
     let mut config = valid_config();
     config.quota.skip_exhausted = false;

@@ -129,6 +129,44 @@ fn raw_sse_passthrough_should_forward_unparseable_frames_without_failure() {
 }
 
 #[test]
+fn raw_sse_passthrough_should_forward_frames_with_unsafe_event_metadata() {
+    // 上游事件名超出 wire 安全上限（256 字节）时剥离该元数据继续下发，
+    // 原始帧字节仍原样透传，而不是整帧静默丢弃。
+    let event_name = "x".repeat(300);
+    let frame = format!("event: {event_name}\ndata: {{\"type\":\"noise\",\"marker\":1}}\n\n");
+
+    let events = CodexCanonicalDecoder::new("fallback")
+        .with_raw_sse_passthrough()
+        .push(frame.as_bytes())
+        .expect("unsafe event metadata must not abort transparent transport");
+    let wire = events[0].wire_event().expect("wire event");
+
+    assert_eq!(
+        wire.raw_sse_frame().map(AsRef::as_ref),
+        Some(frame.as_bytes())
+    );
+    assert!(wire.has_json_data());
+    assert_eq!(wire.event_type(), None);
+}
+
+#[test]
+fn decoder_should_strip_unsafe_event_metadata_instead_of_dropping_the_event() {
+    // 无 raw 帧的路径（WebSocket JSON 投影）同样不允许因元数据违规丢事件：
+    // 剥离事件名后 JSON 正文仍完整下发。
+    let event_name = "y".repeat(300);
+    let frame = format!("event: {event_name}\ndata: {{\"type\":\"noise\",\"marker\":1}}\n\n");
+
+    let events = CodexCanonicalDecoder::new("fallback")
+        .push(frame.as_bytes())
+        .expect("unsafe event metadata must not drop the event");
+    let wire = events[0].wire_event().expect("wire event");
+
+    assert_eq!(wire.event_type(), None);
+    assert!(wire.has_json_data());
+    assert_eq!(wire.data()["marker"], serde_json::json!(1));
+}
+
+#[test]
 fn decoder_should_emit_calculated_cost_for_complete_known_model_usage() {
     let body = concat!(
         "event: response.created\n",

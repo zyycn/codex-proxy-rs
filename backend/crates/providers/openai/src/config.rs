@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use url::Url;
+use url::{Host, Url};
 
 use crate::credential::CodexQuotaRefreshPolicy;
 use crate::transport::profile::{CodexWireProfile, CodexWireProfileState};
@@ -132,7 +132,22 @@ impl CodexApiConfig {
     fn validate(&self) -> Result<(), OpenAiConfigError> {
         let url = Url::parse(&self.base_url)
             .map_err(|_| OpenAiConfigError::InvalidField("openai.api.base_url"))?;
-        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        // 上游地址只接受 https；明文 http 仅放行本机回环（本地联调），
+        // 避免把上游指向内网明文服务。凭据/查询串会污染端点拼接，一并拒绝。
+        let is_loopback_host = match url.host() {
+            Some(Host::Domain("localhost")) => true,
+            Some(Host::Ipv4(address)) => address.is_loopback(),
+            Some(Host::Ipv6(address)) => address.is_loopback(),
+            Some(Host::Domain(_)) | None => false,
+        };
+        let is_loopback_http = url.scheme() == "http" && is_loopback_host;
+        let is_secure_public = url.scheme() == "https" && url.host_str().is_some();
+        if !(is_loopback_http || is_secure_public)
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
             return Err(OpenAiConfigError::InvalidField("openai.api.base_url"));
         }
         Ok(())

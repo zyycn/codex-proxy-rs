@@ -10,6 +10,7 @@ use std::{
 
 use crate::transport::profile::CodexWireProfileState;
 use bytes::Bytes;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use futures::{Stream, StreamExt};
 use gateway_protocol::openai::{
     WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY, events::retry_after_seconds_from_body,
@@ -491,9 +492,31 @@ pub(super) fn retry_after_seconds(headers: &HeaderMap, body: Option<&str>) -> Op
     headers
         .get(RETRY_AFTER)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .filter(|seconds| *seconds > 0)
+        .and_then(parse_retry_after)
         .or_else(|| body.and_then(retry_after_seconds_from_body))
+}
+
+/// 解析 RFC 7231 `Retry-After` 值：delay-seconds 或 HTTP-date，统一换算为剩余秒数。
+pub(super) fn parse_retry_after(value: &str) -> Option<u64> {
+    let value = value.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return (seconds > 0).then_some(seconds);
+    }
+    let remaining = parse_http_date(value)?.signed_duration_since(Utc::now());
+    u64::try_from(remaining.num_seconds())
+        .ok()
+        .filter(|seconds| *seconds > 0)
+}
+
+/// IMF-fixdate 优先；RFC 7231 要求接收方兼容过时的 RFC 850 与 asctime 形式。
+fn parse_http_date(value: &str) -> Option<DateTime<Utc>> {
+    if let Ok(date) = DateTime::parse_from_rfc2822(value) {
+        return Some(date.with_timezone(&Utc));
+    }
+    ["%A, %d-%b-%y %H:%M:%S GMT", "%a %b %e %H:%M:%S %Y"]
+        .iter()
+        .find_map(|format| NaiveDateTime::parse_from_str(value, format).ok())
+        .map(|date| date.and_utc())
 }
 
 pub(super) fn truncate_for_error(body: &str) -> String {
