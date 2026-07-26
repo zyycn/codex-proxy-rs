@@ -1,3 +1,4 @@
+mod architecture;
 mod bootstrap;
 
 use std::{
@@ -21,7 +22,11 @@ fn app_tree_matches_frozen_terminal_manifest() {
     );
     assert_eq!(
         rust_files(&root.join("tests")),
-        BTreeSet::from([PathBuf::from("bootstrap.rs"), PathBuf::from("main.rs")]),
+        BTreeSet::from([
+            PathBuf::from("architecture.rs"),
+            PathBuf::from("bootstrap.rs"),
+            PathBuf::from("main.rs"),
+        ]),
     );
 }
 
