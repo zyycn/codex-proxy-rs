@@ -213,3 +213,26 @@ async fn settings_should_accept_admin_api_key_header() {
 
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn admin_auth_should_accept_a_configured_request_id_header_name() {
+    use axum::http::HeaderName;
+    use tower_http::request_id::{MakeRequestUuid, SetRequestIdLayer};
+
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    // 部署把 api.request_id_header 改名后，注入的 header 不再叫 x-request-id；
+    // 管理请求仍须拿到请求上下文，而不是退化为 500。
+    let custom = HeaderName::from_static("x-trace-id");
+    let app = app(fixture.state()).layer(SetRequestIdLayer::new(custom, MakeRequestUuid));
+    let unlabelled = Request::builder()
+        .method(Method::GET)
+        .uri("/api/admin/settings")
+        .header(header::COOKIE, "cpr_admin_session=valid-session")
+        .body(Body::empty())
+        .expect("build settings request");
+
+    let response = app.oneshot(unlabelled).await.expect("settings response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+}

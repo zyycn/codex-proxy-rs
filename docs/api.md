@@ -23,8 +23,8 @@ Client Key 固定绑定一个 Provider：`openai` 或 `xai`。同一次请求不
 - `x-api-key: <admin-api-key>`。
 
 请求无需自带 `x-request-id`；缺失时服务端自动生成 UUID 并在响应头回传同一 request ID。
-`api.request_id_header` 只改变注入与回传的 header 名，而管理端鉴权固定读取 `x-request-id`，
-因此启用管理端时该配置必须保持默认值。管理端响应统一带 `Cache-Control: no-store`。
+`api.request_id_header` 可改变注入与回传的 header 名，管理端鉴权不依赖该名字。
+管理端响应统一带 `Cache-Control: no-store`。
 
 配置了 CORS 白名单 origin 时，跨域请求以凭据模式放行，仅允许 `GET`/`POST` 方法和
 `authorization`、`content-type`、`x-api-key` 与 request ID 四个请求头，不使用通配符。
