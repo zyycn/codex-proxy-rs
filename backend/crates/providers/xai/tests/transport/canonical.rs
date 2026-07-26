@@ -709,7 +709,7 @@ fn decoder_should_classify_failed_event_without_retaining_body() {
         "event: response.created\n",
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n",
         "event: response.failed\n",
-        "data: {\"type\":\"response.failed\",\"error\":{\"code\":\"rate_limit_exceeded\",\"message\":\"secret\"}}\n\n",
+        "data: {\"type\":\"response.failed\",\"error\":{\"code\":\"rate_limit_exceeded\",\"type\":\"server_error\",\"message\":\"secret\"}}\n\n",
     );
     let error = GrokCanonicalDecoder::new("fallback")
         .push(body.as_bytes())
@@ -723,5 +723,48 @@ fn decoder_should_classify_failed_event_without_retaining_body() {
         error.upstream_code().map(|code| code.as_str()),
         Some("rate_limit_exceeded")
     );
+    let visible = error
+        .client_visible_upstream_error()
+        .expect("structured upstream message is client-visible");
+    assert_eq!(visible.message(), "secret");
+    assert_eq!(visible.code(), Some("rate_limit_exceeded"));
+    assert_eq!(visible.error_type(), Some("server_error"));
     assert!(!format!("{error:?}").contains("secret"));
+}
+
+#[test]
+fn decoder_should_scrub_account_fingerprints_from_failure_messages() {
+    let body = concat!(
+        "event: error\n",
+        "data: {\"type\":\"error\",\"code\":\"rate_limit_exceeded\",\"message\":\"Too many requests for team 00000000-0000-0000-0000-000000000013 and model grok-4.\\nRequests per Second (actual/limit): 2/2\"}\n\n",
+    );
+    let error = GrokCanonicalDecoder::new("fallback")
+        .push(body.as_bytes())
+        .expect_err("error event must surface");
+
+    let visible = error
+        .client_visible_upstream_error()
+        .expect("structured upstream message is client-visible");
+    assert_eq!(
+        visible.message(),
+        "Too many requests for team [redacted] and model grok-4. Requests per Second (actual/limit): 2/2"
+    );
+    assert!(!format!("{error:?}").contains("00000000-0000"));
+}
+
+#[test]
+fn decoder_should_omit_client_details_for_unstructured_failures() {
+    let body = concat!(
+        "event: response.failed\n",
+        "data: {\"type\":\"response.failed\",\"error\":{\"code\":\"internal_error\"}}\n\n",
+    );
+    let error = GrokCanonicalDecoder::new("fallback")
+        .push(body.as_bytes())
+        .expect_err("failed response must surface");
+
+    assert!(error.client_visible_upstream_error().is_none());
+    assert_eq!(
+        error.upstream_code().map(|code| code.as_str()),
+        Some("internal_error")
+    );
 }

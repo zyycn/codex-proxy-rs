@@ -7,7 +7,9 @@ use gateway_core::accounting::{
     CurrencyCode, Decimal, Money, ProviderReportedCost, Usage,
 };
 use gateway_core::engine::UpstreamSendState;
-use gateway_core::error::{ProviderError, ProviderErrorKind, SafeUpstreamValue};
+use gateway_core::error::{
+    ClientVisibleUpstreamError, ProviderError, ProviderErrorKind, SafeUpstreamValue,
+};
 use gateway_core::event::{
     ContentItem, ContentKind, FinishReason, GatewayEvent, ProtocolWireEvent, ProviderEvent,
     ReasoningDelta, ResponseMeta, TextDelta, ToolCallDelta,
@@ -781,11 +783,7 @@ fn incomplete_finish_reason(response: &Value) -> FinishReason {
 }
 
 fn upstream_event_error(value: &Value) -> ProviderError {
-    let code = value
-        .pointer("/error/code")
-        .or_else(|| value.pointer("/response/error/code"))
-        .or_else(|| value.get("code"))
-        .and_then(Value::as_str);
+    let code = upstream_error_field(value, "code");
     let kind = match code {
         Some("invalid_request" | "invalid_prompt") => ProviderErrorKind::InvalidRequest,
         Some("unsupported" | "unsupported_feature") => ProviderErrorKind::Unsupported,
@@ -800,7 +798,73 @@ fn upstream_event_error(value: &Value) -> ProviderError {
     if let Some(code) = code.and_then(|code| SafeUpstreamValue::new(code.to_owned()).ok()) {
         error = error.with_upstream_code(code);
     }
+    // 结构化 message/code/type 供原客户端展示与重试分类；message 先脱去
+    // 账号指纹（上游限流文案内嵌 team UUID），非结构化正文不透出。
+    if let Some(message) = upstream_error_field(value, "message")
+        && let Ok(client_error) = ClientVisibleUpstreamError::new(
+            scrub_account_fingerprints(message),
+            code.map(str::to_owned),
+            upstream_error_field(value, "type").map(str::to_owned),
+        )
+    {
+        error = error.with_client_visible_upstream_error(client_error);
+    }
     error
+}
+
+fn upstream_error_field<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
+    value
+        .pointer(&format!("/error/{field}"))
+        .or_else(|| value.pointer(&format!("/response/error/{field}")))
+        .or_else(|| value.get(field))
+        .and_then(Value::as_str)
+}
+
+const UUID_TEXT_LEN: usize = 36;
+
+/// 把 message 中的 UUID 替换为占位符，控制字符归一为空格，
+/// 使文本满足客户端可见错误的约束且不携带可定位账号的标识。
+fn scrub_account_fingerprints(message: &str) -> String {
+    let bytes = message.as_bytes();
+    let mut scrubbed = String::with_capacity(message.len());
+    let mut index = 0;
+    while index < message.len() {
+        if uuid_at(bytes, index) {
+            scrubbed.push_str("[redacted]");
+            index += UUID_TEXT_LEN;
+            continue;
+        }
+        let character = message[index..].chars().next().expect("char boundary");
+        scrubbed.push(if character.is_control() {
+            ' '
+        } else {
+            character
+        });
+        index += character.len_utf8();
+    }
+    scrubbed
+}
+
+fn uuid_at(bytes: &[u8], index: usize) -> bool {
+    let Some(candidate) = bytes.get(index..index + UUID_TEXT_LEN) else {
+        return false;
+    };
+    if index > 0 && bytes[index - 1].is_ascii_alphanumeric() {
+        return false;
+    }
+    if bytes
+        .get(index + UUID_TEXT_LEN)
+        .is_some_and(u8::is_ascii_alphanumeric)
+    {
+        return false;
+    }
+    candidate.iter().enumerate().all(|(offset, byte)| {
+        if matches!(offset, 8 | 13 | 18 | 23) {
+            *byte == b'-'
+        } else {
+            byte.is_ascii_hexdigit()
+        }
+    })
 }
 
 fn protocol_error(_error: impl std::fmt::Debug) -> ProviderError {
