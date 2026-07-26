@@ -116,7 +116,10 @@ impl WorkerSupervisor {
         let handles = std::mem::take(&mut *lock_unpoisoned(&self.handles));
         let deadline = tokio::time::Instant::now() + timeout;
         for (_, mut handle) in handles {
-            if tokio::time::timeout_at(deadline, &mut handle).await.is_err() {
+            if tokio::time::timeout_at(deadline, &mut handle)
+                .await
+                .is_err()
+            {
                 handle.abort();
                 let _ = handle.await;
             }
