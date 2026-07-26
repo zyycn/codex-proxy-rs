@@ -1,19 +1,16 @@
 <script setup lang="ts">
-import { ChevronDown, Download, Search, Trash2, Upload } from '@lucide/vue'
+import { ChevronDown } from '@lucide/vue'
 import { ref } from 'vue'
 
-import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
-import BaseInput from '@/components/base/BaseInput.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
-import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
-import ProviderFilterSegmented from '@/components/ProviderFilterSegmented.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import AccountConnectionTestModal from './components/AccountConnectionTestModal.vue'
 import AccountCreateModal from './components/AccountCreateModal.vue'
+import AccountFilters from './components/AccountFilters.vue'
 import AccountIdentityCell from './components/AccountIdentityCell.vue'
 import AccountOverviewCards from './components/AccountOverviewCards.vue'
 import AccountPlanBadge from './components/AccountPlanBadge.vue'
@@ -26,7 +23,7 @@ import { useAccountConnectionTest } from './composables/useAccountConnectionTest
 import { useAccountMutations } from './composables/useAccountMutations'
 import { useAccountsQuery } from './composables/useAccountsQuery'
 import { useAccountsTable } from './composables/useAccountsTable'
-import { accountColumns, accountStatusFilterOptions } from './constants'
+import { accountColumns } from './constants'
 
 const selectedIds = ref<Set<string>>(new Set())
 const {
@@ -137,60 +134,17 @@ const {
       body-class="flex min-h-0 flex-1 px-4 pb-3 md:px-5"
     >
       <template #header>
-        <div
-          class="flex w-full flex-col gap-3 md:flex-row md:flex-wrap md:items-center"
-          role="group"
-          aria-label="账号筛选与操作"
-        >
-          <div class="flex min-w-0 items-center gap-2 md:flex-none md:gap-3">
-            <BaseInput
-              v-model="searchQuery"
-              placeholder="搜索邮箱或 ID..."
-              class="min-w-0 flex-1 [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] md:w-80 md:flex-none"
-            >
-              <template #prefix>
-                <Search class="size-4.5 text-(--cp-text-tertiary)" />
-              </template>
-            </BaseInput>
-
-            <BaseSelect
-              v-model="statusQuery"
-              :options="accountStatusFilterOptions"
-              aria-label="按账号状态筛选"
-              class="w-34 shrink-0 [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] md:w-40"
-            />
-
-            <ProviderFilterSegmented
-              v-model="providerQuery"
-              class="w-31 shrink-0"
-            />
-          </div>
-
-          <div class="flex shrink-0 self-end items-center justify-end gap-2 md:ml-auto">
-            <BaseButton
-              v-if="selectedIds.size > 0"
-              variant="danger"
-              :disabled="batchDeleting"
-              @click="showDeleteModal = true"
-            >
-              <Trash2 class="size-4" />
-              删除选中 ({{ selectedIds.size }})
-            </BaseButton>
-            <BaseButton
-              v-if="selectedIds.size > 0"
-              variant="default"
-              :loading="exportingAccounts"
-              @click="handleExportAccounts"
-            >
-              <Download class="size-4" />
-              导出选中 ({{ selectedIds.size }})
-            </BaseButton>
-            <BaseButton variant="primary" @click="openCreateAccount">
-              <Upload class="size-4" />
-              导入账号
-            </BaseButton>
-          </div>
-        </div>
+        <AccountFilters
+          v-model:search="searchQuery"
+          v-model:status="statusQuery"
+          v-model:provider="providerQuery"
+          :selected-count="selectedIds.size"
+          :batch-deleting="batchDeleting"
+          :exporting-accounts="exportingAccounts"
+          @delete-selected="showDeleteModal = true"
+          @export-selected="handleExportAccounts"
+          @create="openCreateAccount"
+        />
       </template>
 
       <template #body>

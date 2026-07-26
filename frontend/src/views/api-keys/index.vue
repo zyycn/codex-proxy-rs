@@ -1,16 +1,13 @@
 <script setup lang="ts">
-import { computed, ref, shallowRef, watch } from 'vue'
+import { ref } from 'vue'
 
-import { API_BASE_URL } from '@/api/constants'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
-import { toast } from '@/components/base/BaseToast'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { usePageSelection } from '@/composables/usePageSelection'
-import { errorMessage } from '@/utils/async'
 import ApiKeyActions from './components/ApiKeyActions.vue'
 import ApiKeyCreateModal from './components/ApiKeyCreateModal.vue'
 import ApiKeyFilters from './components/ApiKeyFilters.vue'
@@ -20,11 +17,10 @@ import ApiKeyStatusBadge from './components/ApiKeyStatusBadge.vue'
 import ApiKeyUseModal from './components/ApiKeyUseModal.vue'
 import { useApiKeyMutations } from './composables/useApiKeyMutations'
 import { useApiKeysQuery } from './composables/useApiKeysQuery'
+import { useApiKeyUse } from './composables/useApiKeyUse'
 import { apiKeyColumns } from './constants'
-import { buildCodexCcSwitchImportDeeplink } from './utils/ccswitchImport'
 
 const selectedIds = ref<Set<string>>(new Set())
-const showUseKeyModal = shallowRef(false)
 
 const {
   loading,
@@ -63,76 +59,24 @@ const {
   revealPlaintextKey,
   copyApiKey,
 } = useApiKeyMutations({ selectedIds, configRevision, reload: loadApiKeys })
-const selectedUseKey = shallowRef<(typeof apiKeys.value)[number] | null>(null)
 
 const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll } = usePageSelection(
   apiKeys,
   selectedIds,
 )
 
-const serviceRootUrl = computed(() => resolveServiceRootUrl())
-const openAiBaseUrl = computed(() => `${serviceRootUrl.value}/v1`)
-
-function resolveServiceRootUrl() {
-  const normalizedApiBase = API_BASE_URL.trim().replace(/\/+$/, '')
-
-  if (/^https?:\/\//i.test(normalizedApiBase)) {
-    return normalizedApiBase
-  }
-
-  if (typeof window === 'undefined') {
-    return normalizedApiBase
-  }
-
-  const origin = window.location.origin.replace(/\/+$/, '')
-  if (!normalizedApiBase) {
-    return origin
-  }
-
-  return `${origin}${normalizedApiBase.startsWith('/') ? normalizedApiBase : `/${normalizedApiBase}`}`
-}
-
-function importCreatedKeyToCcs() {
-  if (!createdKey.value)
-    return
-
-  window.location.href = buildCodexCcSwitchImportDeeplink({
-    apiKey: createdKey.value,
-    baseUrl: openAiBaseUrl.value,
-    providerName: createdKeyName.value || 'codex-proxy-rs',
-    providerKind: createdKeyProviderKind.value,
-  })
-}
-
-async function openUseKeyModal(apiKey: (typeof apiKeys.value)[number]) {
-  try {
-    const key = await revealPlaintextKey(apiKey)
-    selectedUseKey.value = { ...apiKey, key }
-    showUseKeyModal.value = true
-  }
-  catch (error: unknown) {
-    toast.error(errorMessage(error, '读取完整密钥失败'))
-  }
-}
-
-async function importToCcs(apiKey: (typeof apiKeys.value)[number]) {
-  try {
-    const key = await revealPlaintextKey(apiKey)
-    window.location.href = buildCodexCcSwitchImportDeeplink({
-      apiKey: key,
-      baseUrl: openAiBaseUrl.value,
-      providerName: apiKey.name || apiKey.prefix || 'codex-proxy-rs',
-      providerKind: apiKey.providerKind,
-    })
-  }
-  catch (error: unknown) {
-    toast.error(errorMessage(error, '读取完整密钥失败'))
-  }
-}
-
-watch(showUseKeyModal, (open) => {
-  if (!open)
-    selectedUseKey.value = null
+const {
+  showUseKeyModal,
+  selectedUseKey,
+  openAiBaseUrl,
+  importCreatedKeyToCcs,
+  openUseKeyModal,
+  importToCcs,
+} = useApiKeyUse({
+  createdKey,
+  createdKeyName,
+  createdKeyProviderKind,
+  revealPlaintextKey,
 })
 </script>
 

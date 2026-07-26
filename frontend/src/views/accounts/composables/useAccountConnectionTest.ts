@@ -6,6 +6,7 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { getAccountModels, refreshAccountModels } from '@/api'
 import { API_BASE_URL } from '@/api/constants'
 import { toast } from '@/components/base/BaseToast'
+import { useIdSet } from '@/composables/useIdSet'
 import { errorMessage, withMinimumDuration } from '@/utils/async'
 import { formatDateTime, formatTime } from '@/utils/date'
 
@@ -49,7 +50,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
   const connectionTestStartedAt = shallowRef('')
   const connectionTestFinishedAt = shallowRef('')
   const connectionTestDurationMs = shallowRef<number | null>(null)
-  const testingConnectionIds = ref<Set<string>>(new Set())
+  const testingConnections = useIdSet<string>()
   const loadingConnectionTestModels = shallowRef(false)
   const refreshingConnectionTestModels = shallowRef(false)
   const connectionTestSelectedModel = shallowRef('')
@@ -218,9 +219,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     connectionTestRun = undefined
     closeConnectionTestEventSource()
     if (run) {
-      const next = new Set(testingConnectionIds.value)
-      next.delete(run.accountId)
-      testingConnectionIds.value = next
+      testingConnections.remove(run.accountId)
       run.resolve()
     }
   }
@@ -350,7 +349,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
       connectionTestError.value = '请先选择测试模型'
       return
     }
-    if (testingConnectionIds.value.has(account.id))
+    if (testingConnections.has(account.id))
       return
     abortConnectionTest()
     connectionTestStatus.value = 'running'
@@ -364,7 +363,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     connectionTestStartedAt.value = formatDateTime()
     connectionTestFinishedAt.value = ''
     appendConnectionTestLog('准备发送测试请求', 'info')
-    testingConnectionIds.value = new Set(testingConnectionIds.value).add(account.id)
+    testingConnections.add(account.id)
     try {
       await withMinimumDuration(
         () =>
@@ -436,7 +435,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     connectionTestStartedAt,
     connectionTestFinishedAt,
     connectionTestDurationMs,
-    testingConnectionIds,
+    testingConnectionIds: testingConnections.ids,
     loadingConnectionTestModels,
     refreshingConnectionTestModels,
     connectionTestSelectedModel,
