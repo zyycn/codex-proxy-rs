@@ -1,4 +1,4 @@
-use std::{env, str::FromStr};
+use std::str::FromStr;
 
 use gateway_store::postgres::connect_and_migrate;
 use sqlx::{
@@ -26,7 +26,7 @@ pub(super) struct TestDatabase {
 
 impl TestDatabase {
     pub(super) async fn create(label: &str) -> Option<Self> {
-        let database_url = env::var("CPR_TEST_DATABASE_URL").ok()?;
+        let database_url = crate::support::test_env("CPR_TEST_DATABASE_URL")?;
         let schema = format!("cpr_store_{label}_{}", Uuid::new_v4().simple());
         let admin = PgPoolOptions::new()
             .max_connections(1)
@@ -87,7 +87,7 @@ impl TestDatabase {
 
 #[tokio::test]
 async fn connect_and_migrate_should_apply_0001_once_and_reopen_cleanly() {
-    let Ok(database_url) = env::var("CPR_TEST_DATABASE_URL") else {
+    let Some(database_url) = crate::support::test_env("CPR_TEST_DATABASE_URL") else {
         return;
     };
     let database = format!("cpr_store_migrator_{}", Uuid::new_v4().simple());

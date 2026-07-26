@@ -157,7 +157,7 @@ async fn repository_with_policy(
     threshold: u32,
     open_duration: Duration,
 ) -> Option<(RedisProviderCircuitRepository, ConnectionManager, String)> {
-    let redis_url = std::env::var("CPR_TEST_REDIS_URL").ok()?;
+    let redis_url = crate::support::test_env("CPR_TEST_REDIS_URL")?;
     let client = redis::Client::open(redis_url).expect("valid CPR_TEST_REDIS_URL");
     let connection = client
         .get_connection_manager()

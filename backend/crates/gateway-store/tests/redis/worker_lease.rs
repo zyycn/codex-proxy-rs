@@ -15,8 +15,8 @@ use uuid::Uuid;
 #[tokio::test]
 async fn store_bundle_worker_plan_and_leader_lease_are_single_use_and_fenced() {
     let (Some(database_url), Some(redis_url)) = (
-        std::env::var("CPR_TEST_DATABASE_URL").ok(),
-        std::env::var("CPR_TEST_REDIS_URL").ok(),
+        crate::support::test_env("CPR_TEST_DATABASE_URL"),
+        crate::support::test_env("CPR_TEST_REDIS_URL"),
     ) else {
         return;
     };

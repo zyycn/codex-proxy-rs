@@ -132,7 +132,7 @@ async fn repository() -> Option<(
     ConnectionManager,
     String,
 )> {
-    let redis_url = std::env::var("CPR_TEST_REDIS_URL").ok()?;
+    let redis_url = crate::support::test_env("CPR_TEST_REDIS_URL")?;
     let client = redis::Client::open(redis_url).ok()?;
     let connection: ConnectionManager = client.get_connection_manager().await.ok()?;
     let namespace = format!("gateway-store-test-{}", Uuid::new_v4());

@@ -113,7 +113,7 @@ async fn affinity_repository() -> Option<(
     ConnectionManager,
     String,
 )> {
-    let redis_url = std::env::var("CPR_TEST_REDIS_URL").ok()?;
+    let redis_url = crate::support::test_env("CPR_TEST_REDIS_URL")?;
     let client = redis::Client::open(redis_url).expect("valid CPR_TEST_REDIS_URL");
     let connection = client
         .get_connection_manager()
