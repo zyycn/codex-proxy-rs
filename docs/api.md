@@ -1,6 +1,6 @@
 # Codex Proxy RS 接口
 
-本文列出 v3.0.0 当前公开 HTTP 接口。路由事实以
+本文列出 v3 当前公开 HTTP 接口。路由事实以
 `backend/crates/gateway-api/src` 中的 router 为准。
 
 ## 1. 鉴权与公共约定
@@ -22,8 +22,12 @@ Client Key 固定绑定一个 Provider：`openai` 或 `xai`。同一次请求不
 - 浏览器登录后得到的 `cpr_admin_session` Cookie；
 - `x-api-key: <admin-api-key>`。
 
-已鉴权的管理请求还必须携带非空 `x-request-id`。管理端响应统一带
-`Cache-Control: no-store`。
+请求无需自带 `x-request-id`；缺失时服务端自动生成 UUID 并在响应头回传同一 request ID。
+`api.request_id_header` 只改变注入与回传的 header 名，而管理端鉴权固定读取 `x-request-id`，
+因此启用管理端时该配置必须保持默认值。管理端响应统一带 `Cache-Control: no-store`。
+
+配置了 CORS 白名单 origin 时，跨域请求以凭据模式放行，仅允许 `GET`/`POST` 方法和
+`authorization`、`content-type`、`x-api-key` 与 request ID 四个请求头，不使用通配符。
 
 普通成功响应使用以下信封：
 
@@ -36,8 +40,8 @@ Client Key 固定绑定一个 Provider：`openai` 或 `xai`。同一次请求不
 ```
 
 错误响应仍使用 `code`、`message`、`data`，其中 `data` 为 `null`。稳定业务码包括参数错误
-`40001`、会话缺失 `40101`、资源不存在 `40401`、revision 冲突 `40901`、上游失败 `50201`
-和依赖不可用 `50301`。
+`40001`、会话缺失 `40101`、登录凭据错误 `40102`、管理 API Key 错误 `40103`、资源不存在
+`40401`、revision 冲突 `40901`、内部错误 `50001`、上游失败 `50201` 和依赖不可用 `50301`。
 
 ### 配置 revision
 
@@ -60,12 +64,17 @@ Client Key 固定绑定一个 Provider：`openai` 或 `xai`。同一次请求不
 | `POST` | `/v1/responses` | OpenAI Responses JSON；`stream=true` 返回 SSE，否则返回完整 JSON |
 | `GET` | `/v1/responses` | 通过 HTTP Upgrade 建立 Responses WebSocket |
 | `POST` | `/v1/responses/review` | 使用同一 Responses 合同发起 review 子代理请求 |
-| `GET` | `/v1/models` | 返回当前 Client Key 所属 Provider 的可用公开模型 |
+| `GET` | `/v1/models` | 返回当前 Client Key 所属 Provider 的可用公开模型；有两种响应形态，见下 |
 | `GET` | `/v1/models/catalog` | 返回 Codex 客户端使用的模型目录 |
 | `GET` | `/v1/models/{model_id}/info` | 返回 Codex 客户端使用的单模型信息 |
 | `GET` | `/v1/models/{model_id}` | 返回 OpenAI 兼容的单模型详情 |
 
-OpenAI 路径保留客户端 Responses wire 语义；xAI 所需的协议转换只在 xAI Provider 内完成。模型映射
+`GET /v1/models` 默认返回 OpenAI 兼容列表 `{"object": "list", "data": [...]}`；请求携带非空
+`client_version` query 参数（Codex 客户端）时改为返回 Codex 专用目录合同 `{"models": [...]}`。
+
+OpenAI 路径保留客户端 Responses wire 语义，上游事件字节在 HTTP SSE 与 WebSocket 两条链路上都
+原样转发；xAI 是 Grok wire 与 Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成，
+上游结构化错误的 message/code/type 会透传给客户端，其中内嵌的账号指纹 UUID 已脱敏。模型映射
 是全局精确映射，未命中时模型名原样交给所属 Provider。
 
 ## 4. 管理员认证
@@ -111,6 +120,7 @@ OpenAI 路径保留客户端 Responses wire 语义；xAI 所需的协议转换�
 
 - OpenAI 接受 OAuth 账号文档、账号 bundle 和 Agent Identity；
 - xAI 从单账号 object 或 `accounts` 数组中提取 OAuth token；包装中的代理、并发、优先级等字段不参与认证；
+- xAI 批量导入逐条独立校验：失败条目跳过并记录日志，不中断其余条目，仅当没有任何条目成功时整个导入才报错；
 - xAI API Key 不是受支持的账号 credential；
 - 导入仍会通过 Provider 的身份或刷新链路校验，不能只凭文件外形写入账号。
 
@@ -220,6 +230,9 @@ auditRetentionDays
 request/response/upstream ID、outcome 与搜索文本。诊断 `dimension` 可取 `model`、`account`、
 `apiKey`、`provider`、`transport`、`failureClass`、`status`。
 
+汇总与洞察中的请求数与 outcome 分布覆盖筛选范围内全部请求；token、缓存、延迟与成本聚合仅统计
+已完整交付客户端的成功响应。
+
 ## 9. 版本、更新与重启
 
 | 方法 | 路由 | 主要 query/body | 说明 |
@@ -232,5 +245,6 @@ request/response/upstream ID、outcome 与搜索文本。诊断 `dimension` 可�
 | `POST` | `/api/admin/system/rollback` | 无 | 回滚到保留的上一版本 |
 | `POST` | `/api/admin/system/restart` | 无 | 请求进程重启 |
 
-在线更新仅在当前部署模式、Release 资产和进程重启能力都满足要求时可用。仓库发版流程见
+在线更新仅在当前部署模式、Release 资产和进程重启能力都满足要求时可用，且只在同一 major 版本内
+提供：跨大版本目标会以 `40901` 冲突拒绝，需按发布说明手动迁移。仓库发版流程见
 [部署文档](../deploy/README.md) 与根目录 [README](../README.md)。
