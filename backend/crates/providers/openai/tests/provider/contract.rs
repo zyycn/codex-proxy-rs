@@ -25,11 +25,16 @@ use provider_openai::transport::CodexWebSocketPool;
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use provider_openai::{CodexProvider, OFFICIAL_CODEX_BASE_URL};
 use serde_json::{Map, json};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::support::{
     MemoryAccountStore, MemorySessionAffinity, MemorySessionExclusions, TestLeaseCoordinator,
     account_policy, agent_identity_service_with_pool, catalog_cache, profile, secret,
 };
+
+const OFFICIAL_FIXTURE: &[u8] =
+    include_bytes!("../transport/fixtures/official_models_snapshot.json");
 
 fn wire_profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
@@ -53,6 +58,18 @@ fn provider_with_affinity(
     store: &Arc<MemoryAccountStore>,
     session_affinity: Arc<MemorySessionAffinity>,
 ) -> CodexProvider {
+    provider_with_affinity_and_base_url(store, session_affinity, OFFICIAL_CODEX_BASE_URL.to_owned())
+}
+
+fn provider_with_base_url(store: &Arc<MemoryAccountStore>, base_url: String) -> CodexProvider {
+    provider_with_affinity_and_base_url(store, Arc::new(MemorySessionAffinity::default()), base_url)
+}
+
+fn provider_with_affinity_and_base_url(
+    store: &Arc<MemoryAccountStore>,
+    session_affinity: Arc<MemorySessionAffinity>,
+    base_url: String,
+) -> CodexProvider {
     let profile = wire_profile();
     let http = reqwest::Client::builder()
         .no_proxy()
@@ -64,7 +81,7 @@ fn provider_with_affinity(
         store.repository(),
         profile.clone(),
         http.clone(),
-        OFFICIAL_CODEX_BASE_URL.to_owned(),
+        base_url.clone(),
         Arc::clone(&agent_identity),
         catalog_cache(),
     ));
@@ -72,7 +89,7 @@ fn provider_with_affinity(
         store.repository(),
         profile.clone(),
         http.clone(),
-        OFFICIAL_CODEX_BASE_URL.to_owned(),
+        base_url.clone(),
         Arc::clone(&agent_identity),
     ));
     let account_feedback = Arc::new(AccountFeedbackStats::default());
@@ -98,7 +115,7 @@ fn provider_with_affinity(
         account_feedback,
         http,
         profile,
-        OFFICIAL_CODEX_BASE_URL.to_owned(),
+        base_url,
         websocket_pool,
     )
     .expect("official OpenAI provider")
@@ -361,4 +378,47 @@ fn request_observation_preserves_the_raw_reasoning_effort() {
         observation.reasoning_effort.as_deref(),
         Some("future-value")
     );
+}
+
+#[tokio::test]
+async fn provider_compiles_catalog_presentation_for_codex_models() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_presentation").await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_raw(OFFICIAL_FIXTURE.to_vec(), "application/json"),
+        )
+        .mount(&server)
+        .await;
+    let provider = provider_with_base_url(&store, server.uri());
+
+    let capabilities = provider
+        .query_model_capabilities()
+        .await
+        .expect("capabilities");
+
+    assert_eq!(capabilities.len(), 1);
+    assert_eq!(capabilities[0].upstream_model().as_str(), "gpt-5.4");
+    let presentation = capabilities[0]
+        .presentation()
+        .expect("Codex model presentation");
+    assert_eq!(presentation.display_name(), Some("GPT-5.4"));
+    assert_eq!(
+        presentation.description(),
+        Some("Frontier agentic coding model.")
+    );
+    assert_eq!(presentation.supported_reasoning_efforts(), ["low", "high"]);
+    assert_eq!(presentation.default_reasoning_effort(), Some("low"));
+    assert_eq!(presentation.context_window_tokens(), Some(272_000));
+    assert!(presentation.image_input());
+    assert!(presentation.agent_tools());
+    assert!(presentation.parallel_tool_calls());
+    assert!(presentation.search_tool());
+    assert!(presentation.image_detail_original());
+    assert!(presentation.verbosity());
+    assert!(!presentation.hidden());
 }

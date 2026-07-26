@@ -35,6 +35,21 @@ impl Respond for ReplacingCatalogResponder {
     }
 }
 
+/// 按调用顺序为不同套餐 scope 返回不同的目录正文。
+struct SequencedCatalogResponder {
+    calls: Arc<AtomicUsize>,
+    bodies: [&'static [u8]; 2],
+}
+
+impl Respond for SequencedCatalogResponder {
+    fn respond(&self, _: &Request) -> ResponseTemplate {
+        let index = self.calls.fetch_add(1, Ordering::SeqCst).min(1);
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .set_body_raw(self.bodies[index].to_vec(), "application/json")
+    }
+}
+
 fn wire_profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
         originator: "codex_cli_rs".to_owned(),
@@ -75,12 +90,22 @@ fn service_with_catalog_cache(
 }
 
 async fn seed_account(store: &Arc<MemoryAccountStore>, account_id: &str) -> ProviderAccount {
+    seed_account_with_plan(store, account_id, "pro").await
+}
+
+async fn seed_account_with_plan(
+    store: &Arc<MemoryAccountStore>,
+    account_id: &str,
+    plan: &str,
+) -> ProviderAccount {
+    let mut verified_account = profile(&format!("chatgpt-{account_id}"));
+    verified_account.plan_type = Some(plan.to_owned());
     store
         .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: account_id.to_owned(),
             name: account_id.to_owned(),
             secret: secret(&format!("access-{account_id}")),
-            verified_account: profile(&format!("chatgpt-{account_id}")),
+            verified_account,
             next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
@@ -191,6 +216,68 @@ async fn plan_catalog_refresh_stops_after_three_failed_accounts() {
         .expect_err("three failed accounts stop the refresh");
 
     assert!(matches!(error, CodexCredentialCatalogError::Upstream));
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn cross_plan_presentation_drift_unions_on_the_first_seen_model() {
+    let store = Arc::new(MemoryAccountStore::default());
+    seed_account_with_plan(&store, "acct_union_plus", "plus").await;
+    seed_account_with_plan(&store, "acct_union_pro", "pro").await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(SequencedCatalogResponder {
+            calls: Arc::new(AtomicUsize::new(0)),
+            bodies: [
+                br#"{"models":[{"slug":"gpt-5.4","display_name":"GPT-5.4 Plus","description":"plus copy","supported_in_api":true}]}"#,
+                br#"{"models":[{"slug":"gpt-5.4","display_name":"GPT-5.4 Pro","description":"pro copy","supported_in_api":true,"context_window":272000}]}"#,
+            ],
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+
+    let snapshot = service
+        .synchronize()
+        .await
+        .expect("presentation drift must not wedge the union");
+
+    assert_eq!(snapshot.models().len(), 1);
+    assert_eq!(snapshot.models()[0].display_name(), "GPT-5.4 Plus");
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn cross_plan_responses_api_conflict_still_fails_the_union() {
+    let store = Arc::new(MemoryAccountStore::default());
+    seed_account_with_plan(&store, "acct_conflict_plus", "plus").await;
+    seed_account_with_plan(&store, "acct_conflict_pro", "pro").await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(SequencedCatalogResponder {
+            calls: Arc::new(AtomicUsize::new(0)),
+            bodies: [
+                br#"{"models":[{"slug":"gpt-5.4","display_name":"GPT-5.4","supported_in_api":true}]}"#,
+                br#"{"models":[{"slug":"gpt-5.4","display_name":"GPT-5.4","supported_in_api":false}]}"#,
+            ],
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+
+    let error = service
+        .synchronize()
+        .await
+        .expect_err("routing facts must still agree across plans");
+
+    assert!(matches!(
+        error,
+        CodexCredentialCatalogError::ConflictingModelFacts
+    ));
     server.verify().await;
 }
 

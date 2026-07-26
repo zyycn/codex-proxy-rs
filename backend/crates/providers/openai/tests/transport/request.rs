@@ -208,6 +208,65 @@ fn encoder_should_ignore_legacy_context_aliases_and_metadata_fallbacks() {
 }
 
 #[test]
+fn header_context_should_win_over_body_topline_aliases() {
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        Map::from_iter([
+            ("model".to_owned(), json!("client-model")),
+            ("input".to_owned(), json!("prompt")),
+            ("turnState".to_owned(), json!("body-turn-state")),
+            ("turnMetadata".to_owned(), json!("body-turn-metadata")),
+        ]),
+    )
+    .expect("OpenAI payload")
+    .with_context(Map::from_iter([
+        (
+            "turn_state".to_owned(),
+            Value::String("header-turn-state".to_owned()),
+        ),
+        (
+            "turn_metadata".to_owned(),
+            Value::String("header-turn-metadata".to_owned()),
+        ),
+    ]));
+    let request = GenerateRequest::from_protocol_payload(payload);
+
+    let encoded = encode_generate_request(&request, "gpt-test").expect("encode");
+
+    assert_eq!(encoded.turn_state.as_deref(), Some("header-turn-state"));
+    assert_eq!(
+        encoded.turn_metadata.as_deref(),
+        Some("header-turn-metadata")
+    );
+}
+
+#[test]
+fn body_topline_alias_should_only_fill_an_absent_header_context() {
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        Map::from_iter([
+            ("model".to_owned(), json!("client-model")),
+            ("input".to_owned(), json!("prompt")),
+            ("turnState".to_owned(), json!("body-turn-state")),
+        ]),
+    )
+    .expect("OpenAI payload")
+    .with_context(Map::from_iter([(
+        "turn_metadata".to_owned(),
+        Value::String("header-turn-metadata".to_owned()),
+    )]));
+    let request = GenerateRequest::from_protocol_payload(payload);
+
+    let encoded = encode_generate_request(&request, "gpt-test").expect("encode");
+
+    assert_eq!(encoded.turn_state.as_deref(), Some("body-turn-state"));
+    assert_eq!(
+        encoded.turn_metadata.as_deref(),
+        Some("header-turn-metadata")
+    );
+}
+
+#[test]
 fn encoder_should_project_explicit_websocket_transport_without_touching_body() {
     let payload = ProtocolPayload::json_object(
         "openai",

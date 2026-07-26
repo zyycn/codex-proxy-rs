@@ -14,6 +14,8 @@ use provider_openai::credential::{
 };
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use serde_json::json;
+use wiremock::matchers::{header, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::support::{MemoryAccountStore, profile, secret};
 
@@ -150,11 +152,19 @@ fn quota_service_with_http(
     store: &Arc<MemoryAccountStore>,
     http: reqwest::Client,
 ) -> CodexCredentialQuotaService {
+    quota_service_with_base_url(store, http, OFFICIAL_CODEX_BASE_URL.to_owned())
+}
+
+fn quota_service_with_base_url(
+    store: &Arc<MemoryAccountStore>,
+    http: reqwest::Client,
+    base_url: String,
+) -> CodexCredentialQuotaService {
     CodexCredentialQuotaService::new(
         store.repository(),
         wire_profile(),
         http,
-        OFFICIAL_CODEX_BASE_URL.to_owned(),
+        base_url,
         crate::support::agent_identity_service(store),
     )
 }
@@ -432,4 +442,73 @@ async fn periodic_quota_synchronization_throttles_the_same_exhausted_account() {
     let summary = service.synchronize().await.expect("throttled quota cycle");
 
     assert_eq!(summary, CodexQuotaSyncSummary::default());
+}
+
+#[tokio::test]
+async fn invalid_quota_json_for_one_account_does_not_abort_the_batch() {
+    let store = Arc::new(MemoryAccountStore::default());
+    for account_id in ["acct_quota_batch_bad", "acct_quota_batch_good"] {
+        create_account(&store, account_id).await;
+        let account = store.account(account_id).expect("created account");
+        store
+            .apply_state_change(AccountStateChange {
+                account_id: account.id().clone(),
+                expected_revision: account.revision(),
+                availability: AccountAvailability::QuotaExhausted,
+                reason: Some("quota_exhausted".to_owned()),
+                cooldown_until: None,
+                observed_at: SystemTime::now(),
+            })
+            .await
+            .expect("mark account exhausted");
+    }
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .and(header("authorization", "Bearer token-acct_quota_batch_bad"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"rate_limit": {"allowed": "not-a-boolean"}})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .and(header(
+            "authorization",
+            "Bearer token-acct_quota_batch_good",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": true,
+                "primary_window": {"used_percent": 25.0, "reset_at": 1_900_000_000}
+            }
+        })))
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    let summary = service
+        .synchronize()
+        .await
+        .expect("batch must survive one invalid account");
+
+    assert_eq!(summary.updated, 1);
+    assert_eq!(summary.transient, 1);
+    let good = store
+        .account("acct_quota_batch_good")
+        .expect("good account");
+    let snapshot = service
+        .read_account(good.id())
+        .await
+        .expect("read good quota")
+        .expect("good quota persisted");
+    assert_eq!(snapshot.fact().remaining_percent(), Some(75));
 }

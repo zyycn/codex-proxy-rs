@@ -473,57 +473,35 @@ fn replace_metadata_field(metadata: &mut Map<String, Value>, key: &str, value: O
     }
 }
 
+// 迁移契约是 header-authoritative:连接边界解析出的协议上下文(官方请求头)
+// 优先;body 顶层别名只在 header 缺失时兜底(例如 WebSocket 帧无法逐轮携带
+// 请求头的场景)。
 fn apply_protocol_context(request: &mut CodexResponsesRequest, context: &Map<String, Value>) {
-    request.turn_state = request
-        .turn_state
-        .take()
-        .or_else(|| context_string(context, "turn_state"));
-    request.turn_metadata = request
-        .turn_metadata
-        .take()
-        .or_else(|| context_string(context, "turn_metadata"));
-    request.beta_features = request
-        .beta_features
-        .take()
-        .or_else(|| context_string(context, "beta_features"));
-    request.version = request
-        .version
-        .take()
-        .or_else(|| context_string(context, "version"));
-    request.include_timing_metrics = request
-        .include_timing_metrics
-        .take()
-        .or_else(|| context_string(context, "include_timing_metrics"));
-    request.codex_window_id = request
-        .codex_window_id
-        .take()
-        .or_else(|| context_string(context, "codex_window_id"));
-    request.parent_thread_id = request
-        .parent_thread_id
-        .take()
-        .or_else(|| context_string(context, "parent_thread_id"));
+    request.turn_state =
+        context_string(context, "turn_state").or_else(|| request.turn_state.take());
+    request.turn_metadata =
+        context_string(context, "turn_metadata").or_else(|| request.turn_metadata.take());
+    request.beta_features =
+        context_string(context, "beta_features").or_else(|| request.beta_features.take());
+    request.version = context_string(context, "version").or_else(|| request.version.take());
+    request.include_timing_metrics = context_string(context, "include_timing_metrics")
+        .or_else(|| request.include_timing_metrics.take());
+    request.codex_window_id =
+        context_string(context, "codex_window_id").or_else(|| request.codex_window_id.take());
+    request.parent_thread_id =
+        context_string(context, "parent_thread_id").or_else(|| request.parent_thread_id.take());
     let prompt_cache_key = request.prompt_cache_key().map(ToOwned::to_owned);
-    request.client_conversation_id = request
-        .client_conversation_id
-        .take()
-        .or_else(|| context_string(context, "conversation_id"))
+    request.client_conversation_id = context_string(context, "conversation_id")
+        .or_else(|| request.client_conversation_id.take())
         .or(prompt_cache_key);
-    request.client_session_id = request
-        .client_session_id
-        .take()
-        .or_else(|| context_string(context, "session_id"));
-    request.client_thread_id = request
-        .client_thread_id
-        .take()
-        .or_else(|| context_string(context, "thread_id"));
-    request.client_request_id = request
-        .client_request_id
-        .take()
-        .or_else(|| context_string(context, "client_request_id"));
-    request.client_turn_id = request
-        .client_turn_id
-        .take()
-        .or_else(|| context_string(context, "turn_id"));
+    request.client_session_id =
+        context_string(context, "session_id").or_else(|| request.client_session_id.take());
+    request.client_thread_id =
+        context_string(context, "thread_id").or_else(|| request.client_thread_id.take());
+    request.client_request_id =
+        context_string(context, "client_request_id").or_else(|| request.client_request_id.take());
+    request.client_turn_id =
+        context_string(context, "turn_id").or_else(|| request.client_turn_id.take());
     request.responses_lite =
         context_string(context, "responses_lite").or_else(|| request.responses_lite.take());
     request.memgen_request =
