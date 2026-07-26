@@ -818,10 +818,12 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         let failure_rate_limit_headers = response.rate_limit_headers.clone();
         let rate_limit_updates = response.rate_limit_header_updates;
         let turn_state_updates = response.turn_state_update;
-        let mut decoder = CodexCanonicalDecoder::new(upstream_model.as_str());
-        if response.transport == CodexBackendTransport::HttpSse {
-            decoder = decoder.with_raw_sse_passthrough();
-        }
+        // HTTP SSE 与 WebSocket 两条上游都启用 raw 透传：OpenAI 线路保持透明代理。
+        // WS 的 body 由 reducer 以 encode_sse_event(&event, raw) 逐字节内嵌上游原文
+        // （transport/protocol/websocket.rs），push_frames 抽出的 data 即上游原始 JSON，
+        // 下游按字节转发，避免 serde 往返改写数值/精度（大整数→f64、logprobs 等）。
+        let mut decoder =
+            CodexCanonicalDecoder::new(upstream_model.as_str()).with_raw_sse_passthrough();
         loop {
             let Some(stream_deadline) = remaining(context.deadline()) else {
                 Err(provider_error(ProviderErrorKind::Timeout, UpstreamSendState::Sent))?;
@@ -2194,7 +2196,6 @@ impl ScheduledTask for OpenAiOAuthRefreshTask {
                     matches!(
                         outcome,
                         CodexCredentialRefreshOutcome::Transient { .. }
-                            | CodexCredentialRefreshOutcome::Ambiguous { .. }
                             | CodexCredentialRefreshOutcome::Failed { .. }
                     )
                 })

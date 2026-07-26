@@ -474,6 +474,19 @@ pub trait ProviderCredentialStatePort: Send + Sync {
         &'a self,
         account_id: &'a ProviderAccountId,
     ) -> BoxFuture<'a, Result<bool, ProviderStoreError>>;
+
+    /// 记录一次瞬态刷新失败并返回窗口内累计失败次数；每次失败刷新 TTL。
+    fn record_refresh_backoff<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+        window: Duration,
+    ) -> BoxFuture<'a, Result<u32, ProviderStoreError>>;
+
+    /// 凭据完整成功轮换后清零失败计数，退避窗口重新从 base 起步。
+    fn clear_refresh_backoff<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>>;
 }
 
 /// 临时 cooldown 只保存可丢失的调度截止时间，不进入账号持久状态。
@@ -590,6 +603,33 @@ impl ProviderRefreshPolicy {
             .checked_sub(Duration::from_secs(lead))
             .ok_or_else(|| invalid_refresh_policy("schedule access token refresh"))
     }
+}
+
+/// 指数退避基准延迟；attempt=1 即为该值。
+const REFRESH_BACKOFF_BASE_DELAY: Duration = Duration::from_secs(5);
+/// 每多一次连续失败，基准延迟乘以该因子。
+const REFRESH_BACKOFF_FACTOR: u32 = 3;
+/// 退避延迟上限，避免连续失败时无限增长。
+const REFRESH_BACKOFF_CAP: Duration = Duration::from_secs(300);
+
+/// 基于连续失败计数的指数退避重试时刻；复用 `provider_refresh_retry_at` 的稳定扰动。
+///
+/// `attempt` 为窗口内累计失败次数（0 与 1 等价，均取基准延迟）。延迟按
+/// `base * factor^(attempt-1)` 增长并封顶到 `REFRESH_BACKOFF_CAP`。
+pub fn provider_refresh_backoff_at(
+    account_id: &ProviderAccountId,
+    observed_at: SystemTime,
+    attempt: u32,
+    reason: &'static str,
+) -> Result<SystemTime, ProviderStoreError> {
+    let exponent = attempt.saturating_sub(1);
+    let multiplier = REFRESH_BACKOFF_FACTOR.saturating_pow(exponent);
+    let scaled_seconds = REFRESH_BACKOFF_BASE_DELAY
+        .as_secs()
+        .saturating_mul(u64::from(multiplier))
+        .min(REFRESH_BACKOFF_CAP.as_secs());
+    let base_delay = Duration::from_secs(scaled_seconds);
+    provider_refresh_retry_at(account_id, observed_at, base_delay, reason)
 }
 
 /// 临时失败后的持久重试时刻；稳定扰动避免多实例同频重试。

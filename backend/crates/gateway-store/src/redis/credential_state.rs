@@ -1,5 +1,7 @@
 //! Provider account availability 的可重建 Redis cache fence。
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use redis::{Script, aio::ConnectionManager};
@@ -26,6 +28,12 @@ redis.call('HSET', KEYS[1],
   'observed_at_ms', ARGV[4])
 redis.call('PEXPIRE', KEYS[1], ARGV[5])
 return 1
+"#;
+
+const RECORD_REFRESH_BACKOFF_SCRIPT: &str = r#"
+local n = redis.call('INCR', KEYS[1])
+redis.call('PEXPIRE', KEYS[1], ARGV[1])
+return n
 "#;
 
 const MAX_PROVIDER_CATALOG_BYTES: usize = 1024 * 1024;
@@ -130,6 +138,14 @@ impl RedisCredentialStateRepository {
     fn key(&self, provider_account_id: &str) -> StoreResult<String> {
         let fingerprint = resource_fingerprint("credential state cache", provider_account_id)?;
         Ok(format!("{}:account:{fingerprint}:state", self.namespace))
+    }
+
+    fn backoff_key(&self, provider_account_id: &str) -> StoreResult<String> {
+        let fingerprint = resource_fingerprint("credential refresh backoff", provider_account_id)?;
+        Ok(format!(
+            "{}:account:{fingerprint}:refresh-backoff",
+            self.namespace
+        ))
     }
 
     fn catalog_key(&self, key: &RedisProviderCatalogCacheKey) -> StoreResult<String> {
@@ -338,6 +354,48 @@ impl ProviderCredentialStatePort for RedisCredentialStateRepository {
             CredentialStateRepository::clear_credential_state(self, account_id.as_str())
                 .await
                 .map_err(|_| provider_unavailable("clear credential state"))
+        })
+    }
+
+    fn record_refresh_backoff<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+        window: Duration,
+    ) -> futures::future::BoxFuture<'a, Result<u32, ProviderStoreError>> {
+        Box::pin(async move {
+            let window_millis = u64::try_from(window.as_millis())
+                .ok()
+                .filter(|millis| *millis > 0)
+                .ok_or_else(|| provider_invalid("record refresh backoff"))?;
+            let key = self
+                .backoff_key(account_id.as_str())
+                .map_err(|_| provider_unavailable("record refresh backoff"))?;
+            let mut connection = self.connection.clone();
+            let count = Script::new(RECORD_REFRESH_BACKOFF_SCRIPT)
+                .key(key)
+                .arg(window_millis)
+                .invoke_async::<i64>(&mut connection)
+                .await
+                .map_err(|_| provider_unavailable("record refresh backoff"))?;
+            Ok(u32::try_from(count).unwrap_or(u32::MAX))
+        })
+    }
+
+    fn clear_refresh_backoff<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+    ) -> futures::future::BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            let key = self
+                .backoff_key(account_id.as_str())
+                .map_err(|_| provider_unavailable("clear refresh backoff"))?;
+            let mut connection = self.connection.clone();
+            redis::cmd("DEL")
+                .arg(key)
+                .query_async::<i64>(&mut connection)
+                .await
+                .map_err(|_| provider_unavailable("clear refresh backoff"))?;
+            Ok(())
         })
     }
 }

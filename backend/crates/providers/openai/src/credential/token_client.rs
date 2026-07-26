@@ -307,7 +307,13 @@ fn parse_token_pair(body: &[u8]) -> Result<TokenPair, ()> {
     })
 }
 
-fn classify_refresh_failure(_status: StatusCode, body: &[u8]) -> RefreshFailure {
+fn classify_refresh_failure(status: StatusCode, body: &[u8]) -> RefreshFailure {
+    // 服务器错误与限流按状态码判为瞬态：5xx/CDN/网关页正文不是权威 OAuth 错误响应，
+    // 不能据其把账号永久终态（对齐官方 codex-rs：只 401/明确 expired/reused 才 Permanent）。
+    if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
+        return RefreshFailure::Transport;
+    }
+    // 4xx：正文才是权威 OAuth 错误响应，据其区分真过期/封禁与其余瞬态。
     let lower = String::from_utf8_lossy(body).to_ascii_lowercase();
     if lower.contains("account has been deactivated") {
         return RefreshFailure::Banned;

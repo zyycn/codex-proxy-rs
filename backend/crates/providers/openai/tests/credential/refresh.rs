@@ -1,13 +1,13 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
-use gateway_core::engine::credential::AccountAvailability;
+use gateway_core::engine::credential::{AccountAvailability, ProviderAccountId};
 use gateway_core::provider_ports::{
-    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshLeaseRequest,
-    ProviderStoreError,
+    ProviderCredentialState, ProviderCredentialStatePort, ProviderLeaseAcquisition,
+    ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshLeaseRequest, ProviderStoreError,
 };
 use provider_openai::credential::token_client::{RefreshFailure, TokenPair, TokenRefresher};
 use provider_openai::credential::{
@@ -214,6 +214,85 @@ impl ProviderLeasePort for RefreshLeases {
     }
 }
 
+/// 真实累加连续失败计数的测试 double，用于断言退避的指数增长与成功清零。
+#[derive(Default)]
+struct CountingCredentialState {
+    counts: Mutex<HashMap<String, u32>>,
+    cleared: Mutex<Vec<String>>,
+}
+
+impl CountingCredentialState {
+    fn count(&self, account_id: &str) -> u32 {
+        self.counts
+            .lock()
+            .expect("backoff counts lock")
+            .get(account_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn was_cleared(&self, account_id: &str) -> bool {
+        self.cleared
+            .lock()
+            .expect("cleared accounts lock")
+            .iter()
+            .any(|id| id == account_id)
+    }
+}
+
+impl ProviderCredentialStatePort for CountingCredentialState {
+    fn replace(
+        &self,
+        _state: ProviderCredentialState,
+    ) -> BoxFuture<'_, Result<(), ProviderStoreError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn read<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<Option<ProviderCredentialState>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn clear<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn record_refresh_backoff<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+        _window: Duration,
+    ) -> BoxFuture<'a, Result<u32, ProviderStoreError>> {
+        Box::pin(async move {
+            let mut counts = self.counts.lock().expect("backoff counts lock");
+            let entry = counts.entry(account_id.as_str().to_owned()).or_insert(0);
+            *entry += 1;
+            Ok(*entry)
+        })
+    }
+
+    fn clear_refresh_backoff<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            self.counts
+                .lock()
+                .expect("backoff counts lock")
+                .remove(account_id.as_str());
+            self.cleared
+                .lock()
+                .expect("cleared accounts lock")
+                .push(account_id.as_str().to_owned());
+            Ok(())
+        })
+    }
+}
+
 async fn setup(
     outcome: Result<TokenPair, RefreshFailure>,
     lease_available: bool,
@@ -242,6 +321,7 @@ async fn setup(
             available: lease_available,
             requests: Mutex::new(Vec::new()),
         }),
+        Arc::new(CountingCredentialState::default()),
         runtime_policy(),
     );
     (store, refresher, service)
@@ -307,6 +387,7 @@ async fn refreshed_identity_rejection_revision_fences_account_as_invalid() {
             available: true,
             requests: Mutex::new(Vec::new()),
         }),
+        Arc::new(CountingCredentialState::default()),
         runtime_policy(),
     );
 
@@ -336,6 +417,7 @@ async fn unavailable_signature_verification_persists_refresh_backoff() {
             available: true,
             requests: Mutex::new(Vec::new()),
         }),
+        Arc::new(CountingCredentialState::default()),
         runtime_policy(),
     );
     let before = SystemTime::now();
@@ -344,15 +426,16 @@ async fn unavailable_signature_verification_persists_refresh_backoff() {
 
     assert!(matches!(
         outcomes.as_slice(),
-        [CodexCredentialRefreshOutcome::Ambiguous { .. }]
+        [CodexCredentialRefreshOutcome::Transient { .. }]
     ));
     let account = store.account("acct_refresh").expect("deferred account");
-    assert_eq!(account.revision().get(), 1);
-    assert_eq!(account.availability(), AccountAvailability::Invalid);
+    assert_eq!(account.revision().get(), 2);
+    // JWKS/签名边界短暂不可用是瞬态：账号保持可用、不被永久失效，仅推进退避重试。
+    assert_eq!(account.availability(), AccountAvailability::Ready);
     assert!(
         account
             .next_refresh_at()
-            .is_some_and(|retry| retry < before)
+            .is_some_and(|retry| retry > before)
     );
 }
 
@@ -382,6 +465,7 @@ async fn unavailable_usage_preserves_rotated_tokens_and_persists_backoff() {
             available: true,
             requests: Mutex::new(Vec::new()),
         }),
+        Arc::new(CountingCredentialState::default()),
         runtime_policy(),
     );
     let before = SystemTime::now();
@@ -445,6 +529,7 @@ async fn permanent_refresh_failure_cannot_overwrite_a_newer_credential_revision(
             available: true,
             requests: Mutex::new(Vec::new()),
         }),
+        Arc::new(CountingCredentialState::default()),
         runtime_policy(),
     );
 
@@ -489,16 +574,18 @@ async fn proven_pre_send_transport_failure_uses_short_cooldown() {
 }
 
 #[tokio::test]
-async fn ambiguous_refresh_does_not_mutate_tokens_or_account_state() {
+async fn transient_refresh_defers_without_invalidating_account() {
     let (store, refresher, service) = setup(Err(RefreshFailure::Transport), true).await;
     let outcomes = service.refresh_due().await.expect("refresh due");
+    // 上游瞬态（含可能已发出的 ambiguous）不再永久失效账号，改为退避重试。
     assert!(matches!(
         outcomes.as_slice(),
-        [CodexCredentialRefreshOutcome::Ambiguous { .. }]
+        [CodexCredentialRefreshOutcome::Transient { .. }]
     ));
     let account = store.account("acct_refresh").expect("account");
-    assert_eq!(account.revision().get(), 1);
-    assert_eq!(account.availability(), AccountAvailability::Invalid);
+    assert_eq!(account.revision().get(), 2);
+    assert_eq!(account.availability(), AccountAvailability::Ready);
+    // 已退避到未来，本轮不再 due，且未重复兑换 token。
     assert!(
         service
             .refresh_due()
@@ -572,6 +659,7 @@ async fn malformed_account_refresh_does_not_stop_later_accounts() {
             available: true,
             requests: Mutex::new(Vec::new()),
         }),
+        Arc::new(CountingCredentialState::default()),
         runtime_policy(),
     );
 
@@ -595,4 +683,127 @@ async fn malformed_account_refresh_does_not_stop_later_accounts() {
             .get(),
         2
     );
+}
+
+async fn seed_due_account(store: &MemoryAccountStore) {
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_refresh".to_owned(),
+            name: "refresh".to_owned(),
+            secret: secret("old-access"),
+            verified_account: profile("chatgpt-acct_refresh"),
+            next_refresh_at: Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
+            enabled: true,
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn refresh_backoff_grows_exponentially_across_attempts() {
+    let store = Arc::new(MemoryAccountStore::default());
+    seed_due_account(&store).await;
+    let credential_state = Arc::new(CountingCredentialState::default());
+    let state_port: Arc<dyn ProviderCredentialStatePort> = credential_state.clone();
+    let service = CodexCredentialRefreshService::new(
+        store.repository(),
+        Arc::new(Refresher::scripted([
+            Err(RefreshFailure::Transport),
+            Err(RefreshFailure::Transport),
+        ])),
+        Arc::new(VerifiedIdentity),
+        Arc::new(RefreshLeases {
+            available: true,
+            requests: Mutex::new(Vec::new()),
+        }),
+        state_port,
+        runtime_policy(),
+    );
+
+    let before_first = SystemTime::now();
+    let first = service.refresh_due().await.expect("first refresh cycle");
+    assert!(matches!(
+        first.as_slice(),
+        [CodexCredentialRefreshOutcome::Transient { .. }]
+    ));
+    let first_account = store.account("acct_refresh").expect("account after first defer");
+    let first_delay = first_account
+        .next_refresh_at()
+        .expect("first retry scheduled")
+        .duration_since(before_first)
+        .expect("first delay is in the future");
+    assert_eq!(credential_state.count("acct_refresh"), 1);
+
+    // 已退避到未来的账号真实调度不会再次到期，这里手动复位以触发第二次退避。
+    store
+        .repository()
+        .defer_refresh(&first_account, SystemTime::now() - Duration::from_secs(1))
+        .await
+        .expect("reset next_refresh_at to the past");
+
+    let before_second = SystemTime::now();
+    let second = service.refresh_due().await.expect("second refresh cycle");
+    assert!(matches!(
+        second.as_slice(),
+        [CodexCredentialRefreshOutcome::Transient { .. }]
+    ));
+    let second_delay = store
+        .account("acct_refresh")
+        .expect("account after second defer")
+        .next_refresh_at()
+        .expect("second retry scheduled")
+        .duration_since(before_second)
+        .expect("second delay is in the future");
+    assert_eq!(credential_state.count("acct_refresh"), 2);
+
+    // base=5s、factor=3：第二次（attempt=2）应比第一次（attempt=1）显著更久。
+    assert!(
+        second_delay > first_delay * 2,
+        "second backoff {second_delay:?} should grow well beyond first {first_delay:?}"
+    );
+}
+
+#[tokio::test]
+async fn successful_refresh_clears_backoff_counter() {
+    let store = Arc::new(MemoryAccountStore::default());
+    seed_due_account(&store).await;
+    let credential_state = Arc::new(CountingCredentialState::default());
+    let state_port: Arc<dyn ProviderCredentialStatePort> = credential_state.clone();
+    let service = CodexCredentialRefreshService::new(
+        store.repository(),
+        Arc::new(Refresher::scripted([
+            Err(RefreshFailure::Transport),
+            Ok(success_tokens()),
+        ])),
+        Arc::new(VerifiedIdentity),
+        Arc::new(RefreshLeases {
+            available: true,
+            requests: Mutex::new(Vec::new()),
+        }),
+        state_port,
+        runtime_policy(),
+    );
+
+    // 第一次瞬态失败 → 计数累加到 1。
+    let first = service.refresh_due().await.expect("first refresh cycle");
+    assert!(matches!(
+        first.as_slice(),
+        [CodexCredentialRefreshOutcome::Transient { .. }]
+    ));
+    assert_eq!(credential_state.count("acct_refresh"), 1);
+
+    // 复位到期后成功刷新，退避计数被清零。
+    let deferred = store.account("acct_refresh").expect("deferred account");
+    store
+        .repository()
+        .defer_refresh(&deferred, SystemTime::now() - Duration::from_secs(1))
+        .await
+        .expect("reset next_refresh_at to the past");
+
+    let second = service.refresh_due().await.expect("second refresh cycle");
+    assert!(matches!(
+        second.as_slice(),
+        [CodexCredentialRefreshOutcome::Refreshed { .. }]
+    ));
+    assert!(credential_state.was_cleared("acct_refresh"));
+    assert_eq!(credential_state.count("acct_refresh"), 0);
 }

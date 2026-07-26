@@ -64,6 +64,7 @@ pub async fn initialize(
     let session_exclusions = ports.session_exclusions();
     let account_feedback = ports.account_feedback();
     let runtime_policy = ports.runtime_policy();
+    let credential_state = ports.credential_state();
     let profile = config.wire_profile_state();
     let session_identity = config
         .session_identity()
@@ -170,6 +171,7 @@ pub async fn initialize(
         refresher,
         Arc::clone(&identity),
         Arc::clone(&leases),
+        credential_state,
         Arc::clone(&runtime_policy),
     ));
     let pending = Arc::new(OpenAiOAuthPendingStore::new(

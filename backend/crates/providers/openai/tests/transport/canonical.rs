@@ -3,6 +3,7 @@ use gateway_core::event::{ContentKind, FinishReason, GatewayEvent, ProviderEvent
 use provider_openai::transport::canonical::{
     CodexCanonicalDecoder, CodexCanonicalError, CodexCanonicalFailure, CodexCanonicalOutcome,
 };
+use provider_openai::transport::protocol::websocket::websocket_event_to_sse_frame;
 
 const METADATA_PREFIX_FIXTURE: &str = include_str!(
     "../../../../gateway-api/tests/openai/responses/fixtures/http_sse/metadata_only_prefix.sse"
@@ -61,6 +62,51 @@ fn raw_sse_passthrough_should_keep_original_bytes_alongside_canonical_facts() {
         events[1].canonical_facts(),
         [GatewayEvent::Started(metadata)] if metadata.response_id() == "resp_raw"
     ));
+}
+
+#[test]
+fn websocket_raw_passthrough_should_preserve_upstream_number_bytes() {
+    // OpenAI 线路透明代理：WebSocket 上游帧经 reducer→SSE→decoder(raw 透传) 后，
+    // data 段必须与上游原文逐字节一致，不得经 serde 往返改写数值/精度。
+    // `1e3` 若被重序列化会变成 `1000.0`——用它作为字节改写的探针。
+    let upstream =
+        r#"{"type":"response.created","response":{"id":"resp_ws_raw","model":"gpt-test","x_precision":1e3}}"#;
+    let frame =
+        websocket_event_to_sse_frame(upstream).expect("client-visible WS event yields an SSE frame");
+
+    let events = CodexCanonicalDecoder::new("fallback")
+        .with_raw_sse_passthrough()
+        .push(frame.as_bytes())
+        .expect("WS-derived SSE frame should remain deliverable");
+    let wire = events
+        .iter()
+        .filter_map(ProviderEvent::wire_event)
+        .find(|wire| wire.has_json_data())
+        .expect("response.created wire");
+    let raw = wire.raw_sse_frame().map(AsRef::as_ref).expect("raw frame bytes");
+    let raw = std::str::from_utf8(raw).expect("utf8 raw frame");
+
+    assert!(raw.contains("1e3"), "raw frame must keep upstream `1e3` verbatim: {raw}");
+    assert!(
+        !raw.contains("1000.0"),
+        "raw frame must not re-serialize the number via serde: {raw}"
+    );
+    assert!(matches!(
+        wire_for_response_created(&events),
+        [GatewayEvent::Started(metadata)] if metadata.response_id() == "resp_ws_raw"
+    ));
+}
+
+fn wire_for_response_created(events: &[ProviderEvent]) -> &[GatewayEvent] {
+    events
+        .iter()
+        .find(|event| {
+            event
+                .wire_event()
+                .and_then(|wire| wire.event_type())
+                == Some("response.created")
+        })
+        .map_or(&[], ProviderEvent::canonical_facts)
 }
 
 #[test]
