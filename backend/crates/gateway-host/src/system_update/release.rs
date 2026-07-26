@@ -121,12 +121,13 @@ pub(crate) fn detail_from_release(
     release: &GitHubRelease,
 ) -> SystemUpdateDetail {
     let latest = normalize_version(&release.tag_name);
-    let available = (config.update_channel != "stable" || !release.prerelease)
+    let newer = (config.update_channel != "stable" || !release.prerelease)
         && version_is_newer(&config.version, &latest).unwrap_or(false);
+    let cross_major = versions_cross_major(&config.version, &latest).unwrap_or(false);
     SystemUpdateDetail {
         current_version: config.version.clone(),
-        latest_version: latest,
-        has_update: available,
+        latest_version: latest.clone(),
+        has_update: newer && !cross_major,
         deployment_mode: config.deployment_mode.clone(),
         build_type: config.build_type.clone(),
         release_url: release.html_url.clone(),
@@ -134,7 +135,9 @@ pub(crate) fn detail_from_release(
         cached: false,
         update_supported: config.update_support_error().is_none(),
         unsupported_reason: config.update_support_error(),
-        warning: None,
+        warning: (newer && cross_major).then(|| {
+            format!("检测到新的大版本 v{latest}：跨大版本升级不提供自动更新，请按发布说明手动迁移")
+        }),
     }
 }
 
@@ -263,6 +266,13 @@ fn version_is_newer(current: &str, latest: &str) -> Option<bool> {
     let current = semver::Version::parse(&normalize_version(current)).ok()?;
     let latest = semver::Version::parse(&normalize_version(latest)).ok()?;
     Some(latest > current)
+}
+
+/// 自动更新只在同 major 内提供；跨大版本的配置与数据迁移契约不保证兼容。
+pub(crate) fn versions_cross_major(current: &str, latest: &str) -> Option<bool> {
+    let current = semver::Version::parse(&normalize_version(current)).ok()?;
+    let latest = semver::Version::parse(&normalize_version(latest)).ok()?;
+    Some(current.major != latest.major)
 }
 
 fn repository_character(character: char) -> bool {

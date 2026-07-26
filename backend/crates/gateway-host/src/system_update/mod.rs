@@ -33,6 +33,7 @@ use self::download::{MAX_CHECKSUM_SIZE, MAX_DOWNLOAD_SIZE, download_file, verify
 use self::process::{environment_value, spawn_replacement};
 use self::release::{
     ReleaseCache, confirmed_target, detail_from_release, fetch_latest, select_archive,
+    versions_cross_major,
 };
 use self::state::{
     OperationFileLock, UpdateTempDir, finish, operation_id, read_status, set_running,
@@ -226,6 +227,11 @@ impl ProcessSystemOperations {
             return Err(conflict(reason));
         }
         let target = confirmed_target(target_version)?;
+        if versions_cross_major(&self.config.version, &target).unwrap_or(false) {
+            let reason = "跨大版本升级不提供自动更新，请按发布说明手动迁移";
+            self.events.error_terminal(None, Some("preflight"), reason);
+            return Err(conflict(reason));
+        }
         let repository = self
             .config
             .update_repository
