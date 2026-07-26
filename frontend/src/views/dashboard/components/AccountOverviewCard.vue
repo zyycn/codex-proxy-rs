@@ -140,7 +140,7 @@ const statusBars = computed(() => {
   if (!p || p.total === 0)
     return []
   const active = (p.active / p.total) * 100
-  const refreshing = (p.refreshing / p.total) * 100
+  const refreshing = ((p.refreshing ?? 0) / p.total) * 100
   const quota = (p.quotaExhausted / p.total) * 100
   const unavailable = ((p.expired + p.disabled + p.banned) / p.total) * 100
   return [

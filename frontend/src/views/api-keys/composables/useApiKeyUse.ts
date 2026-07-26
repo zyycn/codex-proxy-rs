@@ -7,7 +7,8 @@ import { toast } from '@/components/base/BaseToast'
 import { errorMessage } from '@/utils/async'
 import { buildCodexCcSwitchImportDeeplink } from '../utils/ccswitchImport'
 
-type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number]
+// “使用密钥”弹窗展示明文时，在列表行上补挂 reveal 得到的完整 key。
+type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number] & { key?: string }
 
 // 密钥使用与 CCSwitch 导入编排：服务根地址推导、deeplink 跳转、
 // “使用密钥”弹窗的明文补全与打开。

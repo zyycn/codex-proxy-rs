@@ -1,6 +1,7 @@
 import { clamp, sumBy } from 'es-toolkit'
 
-export type TableRow = Record<string, unknown>
+// 行类型保持结构化约束；动态列 key 的取值统一走 cellValue。
+export type TableRow = object
 
 export interface BaseTableColumn<Row extends TableRow = TableRow> {
   key: string
@@ -111,7 +112,7 @@ export function alignClass<Row extends TableRow>(column: BaseTableColumn<Row>) {
 }
 
 export function cellValue(row: TableRow, key: string) {
-  return row[key]
+  return (row as Record<string, unknown>)[key]
 }
 
 function isEmptyCellValue(value: unknown) {

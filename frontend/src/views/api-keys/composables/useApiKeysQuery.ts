@@ -14,7 +14,10 @@ export function useApiKeysQuery() {
   const pageSize = shallowRef(20)
   const total = shallowRef(0)
   const apiKeys = shallowRef<
-    Array<Awaited<ReturnType<typeof getApiKeys>>['items'][number]>
+    Array<Awaited<ReturnType<typeof getApiKeys>>['items'][number] & {
+      createdAtDisplay: string
+      lastUsedAtDisplay: string
+    }>
   >([])
   const loading = shallowRef(false)
   const configRevision = shallowRef(0)

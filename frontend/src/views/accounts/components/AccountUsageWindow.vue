@@ -167,7 +167,7 @@ const requestBars = computed(() => {
         :aria-label="window.labelDisplay"
         aria-valuemin="0"
         aria-valuemax="100"
-        :aria-valuenow="window.usedPercent"
+        :aria-valuenow="window.usedPercent ?? undefined"
       >
         <div
           class="h-full rounded-full transition-[width,background-color] duration-200"
