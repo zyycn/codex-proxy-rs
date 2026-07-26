@@ -989,7 +989,7 @@ async fn next_grok_chunk(
     selector: &dyn GrokSessionSelector,
     session: &SelectedGrokSession,
     context: &AttemptContext,
-) -> Result<Option<Vec<u8>>, ProviderError> {
+) -> Result<Option<bytes::Bytes>, ProviderError> {
     let Some(stream_deadline) = remaining(context.deadline()) else {
         return Err(provider_error(
             ProviderErrorKind::Timeout,

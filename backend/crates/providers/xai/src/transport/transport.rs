@@ -77,7 +77,7 @@ impl fmt::Debug for GrokInferenceRequest {
 
 /// Stream of raw SSE byte chunks returned after the POST is accepted.
 pub type GrokInferenceChunkStream =
-    Pin<Box<dyn Stream<Item = Result<Vec<u8>, GrokInferenceTransportError>> + Send + 'static>>;
+    Pin<Box<dyn Stream<Item = Result<bytes::Bytes, GrokInferenceTransportError>> + Send + 'static>>;
 
 /// Whether the account-isolated inference client was already cached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

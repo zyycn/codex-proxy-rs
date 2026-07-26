@@ -2158,6 +2158,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "base64",
+ "bytes",
  "chrono",
  "futures",
  "gateway-admin",

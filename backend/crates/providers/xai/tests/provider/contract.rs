@@ -325,20 +325,20 @@ impl GrokInferenceTransport for StubInferenceTransport {
         Box::pin(async move {
             match mode {
                 InferenceMode::Success => Ok(GrokInferenceResponse::new(
-                    Box::pin(stream::iter([Ok(SUCCESS_SSE.to_vec())])),
+                    Box::pin(stream::iter([Ok(bytes::Bytes::from_static(SUCCESS_SSE))])),
                     UpstreamHttpVersion::Http2,
                     200,
                     None,
                 )),
                 InferenceMode::SuccessWithMetrics(metrics) => Ok(GrokInferenceResponse::new(
-                    Box::pin(stream::iter([Ok(SUCCESS_SSE.to_vec())])),
+                    Box::pin(stream::iter([Ok(bytes::Bytes::from_static(SUCCESS_SSE))])),
                     UpstreamHttpVersion::Http2,
                     200,
                     None,
                 )
                 .with_transport_metrics(metrics)),
                 InferenceMode::SuccessBody(body) => Ok(GrokInferenceResponse::new(
-                    Box::pin(stream::iter([Ok(body)])),
+                    Box::pin(stream::iter([Ok(bytes::Bytes::from(body))])),
                     UpstreamHttpVersion::Http2,
                     200,
                     None,

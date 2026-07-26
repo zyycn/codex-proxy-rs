@@ -409,7 +409,8 @@ impl GrokInferenceTransport for ReqwestGrokInferenceTransport {
                                 .is_some_and(|total| total <= MAX_INFERENCE_BODY_BYTES) =>
                         {
                             *observed += chunk.len();
-                            Ok(chunk.to_vec())
+                            // Bytes 直传，长流不再逐 chunk 复制到 Vec。
+                            Ok(chunk)
                         }
                         Ok(_) => Err(GrokInferenceTransportError::new(
                             GrokInferenceTransportErrorKind::Protocol,
