@@ -1,7 +1,7 @@
 //! HTTP 监听、OS signal、原子连接注册与优雅 drain。
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use axum::Router;
@@ -122,13 +122,18 @@ pub(crate) async fn serve_router(
         shutdown_connections.begin_draining();
     };
     // axum 的优雅关闭会无限等待存量连接结束，而 SSE 等长响应体不观察
-    // 取消信号：慢客户端可以把关闭拖住直到被 SIGKILL。drain 截止点从
-    // 取消信号起算，逾期即放弃等待，存量连接随进程退出终止。
+    // 取消信号：慢客户端可以把关闭拖住直到被 SIGKILL。整个 drain（axum
+    // 优雅关闭 + 游离 guard 等待）共享同一个从取消信号起算的绝对截止点，
+    // 逾期即放弃等待，存量连接随进程退出终止。
+    let drain_deadline_at = Arc::new(OnceLock::new());
     let drain_deadline = {
         let cancellation = cancellation.clone();
+        let deadline_at = Arc::clone(&drain_deadline_at);
         async move {
             cancellation.cancelled().await;
-            tokio::time::sleep(drain_timeout).await;
+            let deadline = tokio::time::Instant::now() + drain_timeout;
+            let _ = deadline_at.set(deadline);
+            tokio::time::sleep_until(deadline).await;
         }
     };
     let serve = axum::serve(
@@ -141,7 +146,10 @@ pub(crate) async fn serve_router(
         result = serve => {
             result.map_err(ServeError::Serve)?;
             connections.begin_draining();
-            connections.wait_until_idle(drain_timeout).await;
+            let remaining = drain_deadline_at.get().map_or(drain_timeout, |deadline| {
+                deadline.saturating_duration_since(tokio::time::Instant::now())
+            });
+            connections.wait_until_idle(remaining).await;
         }
         () = drain_deadline => {
             tracing::warn!(
