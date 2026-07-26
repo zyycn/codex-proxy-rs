@@ -78,52 +78,80 @@ impl RetentionRepository for PgRetentionRepository {
             });
         }
 
-        let mut transaction = self
-            .pool
-            .begin()
-            .await
-            .map_err(|_| postgres_unavailable("begin retention transaction"))?;
-        let model_requests = sqlx::query(
+        // 分批删除，每批独立提交：清理是幂等的，无需跨表原子性；
+        // 有界批量避免百万行单事务的长锁与 WAL 峰值。
+        let model_requests = purge_in_batches(
+            &self.pool,
             "delete from model_requests
-             where outcome <> 'running'
-               and completed_at < $1 - ($2 * interval '1 day')",
+             where ctid in (
+               select ctid from model_requests
+                where outcome <> 'running'
+                  and completed_at < $1 - ($2 * interval '1 day')
+                limit $3
+             )",
+            now,
+            settings.usage_retention_days,
+            "delete expired model requests",
         )
-        .bind(now)
-        .bind(i64::from(settings.usage_retention_days))
-        .execute(&mut *transaction)
-        .await
-        .map_err(|_| postgres_unavailable("delete expired model requests"))?
-        .rows_affected();
-        let ops_events = sqlx::query(
+        .await?;
+        let ops_events = purge_in_batches(
+            &self.pool,
             "delete from ops_events
-             where model_request_id is null
-               and created_at < $1 - ($2 * interval '1 day')",
+             where ctid in (
+               select ctid from ops_events
+                where model_request_id is null
+                  and created_at < $1 - ($2 * interval '1 day')
+                limit $3
+             )",
+            now,
+            settings.ops_event_retention_days,
+            "delete expired ops events",
         )
-        .bind(now)
-        .bind(i64::from(settings.ops_event_retention_days))
-        .execute(&mut *transaction)
-        .await
-        .map_err(|_| postgres_unavailable("delete expired ops events"))?
-        .rows_affected();
-        let admin_audit_events = sqlx::query(
+        .await?;
+        let admin_audit_events = purge_in_batches(
+            &self.pool,
             "delete from admin_audit_events
-             where created_at < $1 - ($2 * interval '1 day')",
+             where ctid in (
+               select ctid from admin_audit_events
+                where created_at < $1 - ($2 * interval '1 day')
+                limit $3
+             )",
+            now,
+            settings.audit_retention_days,
+            "delete expired admin audit events",
         )
-        .bind(now)
-        .bind(i64::from(settings.audit_retention_days))
-        .execute(&mut *transaction)
-        .await
-        .map_err(|_| postgres_unavailable("delete expired admin audit events"))?
-        .rows_affected();
-        transaction
-            .commit()
-            .await
-            .map_err(|_| postgres_unavailable("commit retention transaction"))?;
+        .await?;
         Ok(RetentionReport {
             model_requests,
             ops_events,
             admin_audit_events,
         })
+    }
+}
+
+const RETENTION_DELETE_BATCH_ROWS: i64 = 10_000;
+
+async fn purge_in_batches(
+    pool: &PgPool,
+    delete_sql: &'static str,
+    now: DateTime<Utc>,
+    retention_days: u32,
+    label: &'static str,
+) -> StoreResult<u64> {
+    let mut total = 0u64;
+    loop {
+        let deleted = sqlx::query(delete_sql)
+            .bind(now)
+            .bind(i64::from(retention_days))
+            .bind(RETENTION_DELETE_BATCH_ROWS)
+            .execute(pool)
+            .await
+            .map_err(|_| postgres_unavailable(label))?
+            .rows_affected();
+        total += deleted;
+        if deleted < RETENTION_DELETE_BATCH_ROWS.unsigned_abs() {
+            return Ok(total);
+        }
     }
 }
 

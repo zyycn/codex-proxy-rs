@@ -3,7 +3,9 @@
 use async_trait::async_trait;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 
-use crate::{Revision, StoreBackend, StoreError, StoreResult, postgres_unavailable};
+use crate::{
+    Revision, StoreBackend, StoreError, StorePoolConfig, StoreResult, postgres_unavailable,
+};
 
 mod admin_security_audit;
 mod admission_recovery;
@@ -29,12 +31,19 @@ pub use snapshot::*;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
-/// 建立 PostgreSQL pool 并只执行冻结的 `0001_initial.sql` migration 集。
-pub async fn connect_and_migrate(database_url: &str) -> StoreResult<PgPool> {
+/// 建立 PostgreSQL pool 并只执行冻结的 migration 集。
+pub async fn connect_and_migrate(
+    database_url: &str,
+    pool_config: StorePoolConfig,
+) -> StoreResult<PgPool> {
     if database_url.trim().is_empty() {
         return Err(postgres_unavailable("connect PostgreSQL"));
     }
     let pool = PgPoolOptions::new()
+        .max_connections(pool_config.max_connections)
+        .acquire_timeout(std::time::Duration::from_secs(
+            pool_config.acquire_timeout_seconds,
+        ))
         .connect(database_url)
         .await
         .map_err(|_| postgres_unavailable("connect PostgreSQL"))?;

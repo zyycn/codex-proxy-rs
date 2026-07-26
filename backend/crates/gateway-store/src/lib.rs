@@ -86,6 +86,37 @@ pub type StoreResult<T> = Result<T, StoreError>;
 pub struct StoreConfig {
     database: StoreConnectionConfig,
     redis: StoreConnectionConfig,
+    #[serde(default)]
+    pool: StorePoolConfig,
+}
+
+/// PostgreSQL 连接池预算；acquire 超时决定池耗尽时快速失败而非排队积压。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct StorePoolConfig {
+    pub max_connections: u32,
+    pub acquire_timeout_seconds: u64,
+}
+
+impl Default for StorePoolConfig {
+    fn default() -> Self {
+        Self {
+            max_connections: 10,
+            acquire_timeout_seconds: 5,
+        }
+    }
+}
+
+impl StorePoolConfig {
+    fn validate(&self) -> StoreResult<()> {
+        if self.max_connections == 0 || self.acquire_timeout_seconds == 0 {
+            return Err(StoreError::InvalidData {
+                entity: "store config",
+                message: "pool limits must be positive".to_owned(),
+            });
+        }
+        Ok(())
+    }
 }
 
 impl StoreConfig {
@@ -104,6 +135,7 @@ impl StoreConfig {
         }
         self.database.validate("database")?;
         self.redis.validate("redis")?;
+        self.pool.validate()?;
         Ok(())
     }
 
@@ -227,7 +259,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
     const REDIS_NAMESPACE: &str = "codex-proxy-rs";
 
     config.resolve_and_validate(std::path::Path::new("."))?;
-    let pool = postgres::connect_and_migrate(&config.database_url()?).await?;
+    let pool = postgres::connect_and_migrate(&config.database_url()?, config.pool).await?;
     let redis_client = ::redis::Client::open(config.redis_url()?)
         .map_err(|_| redis_unavailable("create Redis client"))?;
     let redis_connection = redis_client

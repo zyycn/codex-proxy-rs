@@ -759,35 +759,32 @@ impl ObservabilityRepository for PgObservabilityRepository {
         range: ObservabilityRange,
     ) -> StoreResult<DashboardObservation> {
         let filter = UsageRecordFilter::default();
-        let requests = request_metrics(&self.pool, range, &filter).await?;
-        let attempts = attempt_metrics(&self.pool, range, &filter).await?;
-        let provider_accounts = provider_account_metrics(&self.pool, range.end).await?;
-        let trend = request_metric_series(&self.pool, range, &filter).await?;
         let account_usage_range = ObservabilityRange::new(
             range.end - TimeDelta::hours(ACCOUNT_USAGE_TIMELINE_HOURS),
             range.end,
         )?;
-        let account_usage = provider_account_usage(
-            &self.pool,
+        let account_usage_query =
             ProviderAccountUsageQuery::recent(account_usage_range, DASHBOARD_ACCOUNT_LIMIT)?
-                .with_hourly_request_buckets()?,
-        )
-        .await?;
-        let recent_requests = list_usage_records(
-            &self.pool,
-            UsageRecordQuery {
-                range,
-                filter: UsageRecordFilter {
-                    outcome: Some("succeeded".to_owned()),
-                    ..UsageRecordFilter::default()
-                },
-                cursor: None,
-                page: ObservabilityPageNumber::new(1)?,
-                page_size: ObservabilityPageSize::new(10)?,
+                .with_hourly_request_buckets()?;
+        let recent_query = UsageRecordQuery {
+            range,
+            filter: UsageRecordFilter {
+                outcome: Some("succeeded".to_owned()),
+                ..UsageRecordFilter::default()
             },
-        )
-        .await?
-        .items;
+            cursor: None,
+            page: ObservabilityPageNumber::new(1)?,
+            page_size: ObservabilityPageSize::new(10)?,
+        };
+        // 六路独立查询并发执行；页面延迟由最慢一路决定而非各路之和。
+        let (requests, attempts, provider_accounts, trend, account_usage, recent_requests) = futures::try_join!(
+            request_metrics(&self.pool, range, &filter),
+            attempt_metrics(&self.pool, range, &filter),
+            provider_account_metrics(&self.pool, range.end),
+            request_metric_series(&self.pool, range, &filter),
+            provider_account_usage(&self.pool, account_usage_query),
+            async { Ok(list_usage_records(&self.pool, recent_query).await?.items) },
+        )?;
         Ok(DashboardObservation {
             range,
             requests,

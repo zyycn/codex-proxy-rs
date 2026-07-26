@@ -58,6 +58,12 @@ impl TestDatabase {
             .execute(&mut *migration)
             .await
             .expect("apply terminal migration");
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/0002_retention_delete_indexes.sql"
+        ))
+        .execute(&mut *migration)
+        .await
+        .expect("apply retention index migration");
         migration.commit().await.expect("commit terminal migration");
         Some(Self {
             admin,
@@ -102,7 +108,7 @@ async fn connect_and_migrate_should_apply_0001_once_and_reopen_cleanly() {
         .database(&database)
         .to_url_lossy()
         .to_string();
-    let first = connect_and_migrate(&isolated_url)
+    let first = connect_and_migrate(&isolated_url, gateway_store::StorePoolConfig::default())
         .await
         .expect("apply 0001 through production migrator");
     let first_table_count = sqlx::query_scalar::<_, i64>(
@@ -113,7 +119,7 @@ async fn connect_and_migrate_should_apply_0001_once_and_reopen_cleanly() {
     .expect("count migrated tables");
     first.close().await;
 
-    let second = connect_and_migrate(&isolated_url)
+    let second = connect_and_migrate(&isolated_url, gateway_store::StorePoolConfig::default())
         .await
         .expect("reopen database through production migrator");
     let migration_count =
@@ -131,7 +137,7 @@ async fn connect_and_migrate_should_apply_0001_once_and_reopen_cleanly() {
     .expect("drop migration test database");
     admin.close().await;
 
-    assert_eq!((first_table_count, migration_count), (8, 1));
+    assert_eq!((first_table_count, migration_count), (8, 2));
 }
 
 #[test]
