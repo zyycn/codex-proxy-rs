@@ -1,11 +1,10 @@
 import type { Ref } from 'vue'
 import type { getApiKeys } from '@/api'
-import { useClipboard } from '@vueuse/core'
-
 import { ref, shallowRef, watch } from 'vue'
 import { createApiKey, deleteApiKey, disableApiKey, enableApiKey, revealApiKey } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
+import { useCopyText } from '@/composables/useCopyText'
 import { useIdSet } from '@/composables/useIdSet'
 import { errorMessage } from '@/utils/async'
 
@@ -16,7 +15,7 @@ export function useApiKeyMutations(options: {
   configRevision: Ref<number>
   reload: () => Promise<unknown>
 }) {
-  const { copy } = useClipboard()
+  const copyText = useCopyText()
   const loadApiKeys = options.reload
   const showCreateModal = shallowRef(false)
   const showDeleteModal = shallowRef(false)
@@ -173,18 +172,7 @@ export function useApiKeyMutations(options: {
   }
 
   async function copyToClipboard(text: string) {
-    if (!text) {
-      toast.error('复制失败')
-      return
-    }
-
-    try {
-      await copy(text)
-      toast.success('已复制到剪贴板')
-    }
-    catch {
-      toast.error('复制失败')
-    }
+    await copyText(text, { successText: '已复制到剪贴板', emptyErrorText: '复制失败' })
   }
 
   async function revealPlaintextKey(apiKey: ApiKeyRow) {

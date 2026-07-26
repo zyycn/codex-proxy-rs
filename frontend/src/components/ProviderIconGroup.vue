@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Key, Openai, Robot, Xai } from '@boxicons/vue'
 import { computed } from 'vue'
+import { providerDisplayName } from '@/utils/providers'
 
 const props = withDefaults(
   defineProps<{
@@ -24,13 +25,9 @@ const iconContainerClass = computed(() =>
 )
 const iconClass = computed(() => (props.size === 'sm' ? 'size-3' : 'size-4'))
 
-const providerLabel = computed(() => {
-  if (normalizedProvider.value === 'openai')
-    return 'OpenAI'
-  if (normalizedProvider.value === 'xai')
-    return 'xAI'
-  return props.provider?.trim() || '未知平台'
-})
+const providerLabel = computed(
+  () => providerDisplayName(normalizedProvider.value) ?? (props.provider?.trim() || '未知平台'),
+)
 
 const authenticationLabel = computed(() => {
   if (normalizedAuthenticationKind.value === 'agent_identity')

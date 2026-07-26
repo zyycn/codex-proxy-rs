@@ -1,3 +1,5 @@
+import { providerDisplayName } from '@/utils/providers'
+
 const compactNumberFormatter = new Intl.NumberFormat('zh-CN', {
   notation: 'compact',
   maximumFractionDigits: 1,
@@ -17,11 +19,7 @@ export function formatPercent(value?: number | null) {
 }
 
 export function formatProvider(value?: string | null) {
-  if (value === 'openai')
-    return 'OpenAI'
-  if (value === 'xai')
-    return 'xAI'
-  return value || '—'
+  return providerDisplayName(value) ?? (value || '—')
 }
 
 export function formatDuration(value?: number | null) {

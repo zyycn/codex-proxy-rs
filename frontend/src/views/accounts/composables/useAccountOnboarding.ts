@@ -9,6 +9,7 @@ import {
 import { ApiError } from '@/api/request'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
+import { providerDisplayName } from '@/utils/providers'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 type ImportProvider = 'openai' | 'xai'
@@ -199,7 +200,7 @@ export function useAccountOnboarding(options: {
         const message = error instanceof Error && error.message
           ? error.message
           : '导入失败'
-        failures.push(`${entry.provider === 'xai' ? 'xAI' : 'OpenAI'}：${message}`)
+        failures.push(`${providerDisplayName(entry.provider) ?? 'OpenAI'}：${message}`)
       }
     }
 

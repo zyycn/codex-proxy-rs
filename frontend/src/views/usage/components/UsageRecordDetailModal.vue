@@ -1,15 +1,13 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts'
 import type { getUsageRecordDetail } from '@/api'
-import { storeToRefs } from 'pinia'
 
 import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
-import { useUiStore } from '@/stores/modules/ui'
-import { readCssVariable } from '@/utils/css'
+import { useThemeColor } from '@/composables/useThemeColor'
 import {
   usageAccountText,
   usageBilling,
@@ -32,7 +30,7 @@ const props = defineProps<{
 
 const open = defineModel<boolean>({ default: false })
 
-const { themeRevision } = storeToRefs(useUiStore())
+const themeColor = useThemeColor()
 
 const requestText = computed(() => props.record ? visibleRequestText(props.record) : '')
 const responseText = computed(() => props.record ? visibleResponseText(props.record) : '')
@@ -227,11 +225,6 @@ function displayValue(value: unknown) {
 
 function fieldValueClass(mono?: boolean) {
   return [fieldValueBaseClass, mono ? 'font-mono tabular-nums' : undefined]
-}
-
-function themeColor(name: string, fallback: string) {
-  void themeRevision.value
-  return readCssVariable(name, fallback)
 }
 </script>
 

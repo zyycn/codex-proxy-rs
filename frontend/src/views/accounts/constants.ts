@@ -1,6 +1,7 @@
 import type { getAccounts } from '@/api'
 import type { BaseTableColumn } from '@/components/base/BaseTable/columns'
 import { clamp } from 'es-toolkit'
+import { providerDisplayName } from '@/utils/providers'
 
 export type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 export type AccountQuotaWindow = AccountRow['quota']['windows'][number]
@@ -198,11 +199,7 @@ function groupOrder(window: AccountQuotaWindow, order: Map<string, number>) {
 }
 
 function accountProviderLabel(value?: string | null) {
-  if (value === 'openai')
-    return 'OpenAI'
-  if (value === 'xai')
-    return 'xAI'
-  return value || '—'
+  return providerDisplayName(value) ?? (value || '—')
 }
 
 function optionalAccountCell(value: unknown) {

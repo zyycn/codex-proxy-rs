@@ -45,7 +45,6 @@ export function useAccountsQuery() {
     page: query.page.value,
     pageSize: query.pageSize.value,
     total: query.total.value,
-    pageSizes: [10, 20, 50, 100],
   }))
 
   function handlePageChange(page: number) {
