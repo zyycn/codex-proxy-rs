@@ -15,13 +15,13 @@ use tower::ServiceExt;
 
 use super::{api_router, authenticated_client};
 
-struct ModelsExecution {
+pub(super) struct ModelsExecution {
     client: AuthenticatedClient,
     profiles: bool,
 }
 
 impl ModelsExecution {
-    fn new() -> Arc<Self> {
+    pub(super) fn new() -> Arc<Self> {
         Arc::new(Self {
             client: authenticated_client("sk_models_test"),
             profiles: false,

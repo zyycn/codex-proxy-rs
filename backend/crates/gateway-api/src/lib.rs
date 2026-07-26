@@ -16,7 +16,7 @@ use gateway_core::engine::execution::ExecutionService;
 use gateway_core::health::{HealthProbe, WorkerHealthSource};
 use gateway_core::lifecycle::ConnectionLifecycle;
 use serde::Deserialize;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::timeout::TimeoutLayer;
@@ -146,11 +146,17 @@ pub fn initialize(
                     .map_err(|_| ApiError::Config(ApiConfigError::InvalidCorsOrigin))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        // credentials 模式禁止通配 allow_headers；显式列出鉴权与内容协商头。
         router = router.layer(
             CorsLayer::new()
                 .allow_origin(origins)
                 .allow_methods([Method::GET, Method::POST])
-                .allow_headers(Any)
+                .allow_headers([
+                    axum::http::header::AUTHORIZATION,
+                    axum::http::header::CONTENT_TYPE,
+                    HeaderName::from_static("x-api-key"),
+                    request_id_header.clone(),
+                ])
                 .allow_credentials(true),
         );
     }
