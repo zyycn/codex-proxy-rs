@@ -303,6 +303,41 @@ fn decoder_should_fail_closed_for_non_integer_provider_cost() {
 }
 
 #[test]
+fn decoder_should_tolerate_content_field_error_without_breaking_stream() {
+    // 内容事件的字段校验失败（此处空 delta）不应打断已开始的客户端流。
+    // 旧行为在此断整条流；修复后跳过该事件的 canonical 提取、wire 原样转发，并继续解出终态。
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_a3\",\"model\":\"grok-code-test\"}}\n\n",
+        "event: response.output_text.delta\n",
+        "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"\"}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_a3\",\"model\":\"grok-code-test\",\"status\":\"completed\"}}\n\n",
+    );
+    let events = GrokCanonicalDecoder::new("fallback")
+        .push(body.as_bytes())
+        .expect("content field error must not break the stream");
+    // 空 delta 的 wire 帧仍原样转发给客户端（透明）。
+    assert!(
+        wire_events(&events)
+            .iter()
+            .any(|wire| wire.data().get("delta") == Some(&serde_json::json!(""))),
+        "malformed delta wire frame should still be forwarded to the client"
+    );
+    // 终态仍被解出。
+    let canonical: Vec<GatewayEvent> = events
+        .into_iter()
+        .flat_map(|event| event.into_parts().0)
+        .collect();
+    assert!(
+        canonical
+            .iter()
+            .any(|event| matches!(event, GatewayEvent::Completed(_))),
+        "stream should still reach completion after a tolerated content error"
+    );
+}
+
+#[test]
 fn decoder_should_normalize_function_call_and_tool_finish() {
     let body = concat!(
         "event: response.created\n",

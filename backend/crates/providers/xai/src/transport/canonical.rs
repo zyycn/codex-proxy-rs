@@ -211,10 +211,13 @@ impl GrokCanonicalDecoder {
                 continue;
             };
             let event_type = event_type.to_owned();
-            let transformed = self
+            // 无法转换的上游帧跳过而非断流（转换失败多为畸形帧），避免打断客户端流。
+            let Ok(transformed) = self
                 .response_transform
                 .rewrite_stream_event(&event_type, value)
-                .map_err(protocol_error)?;
+            else {
+                continue;
+            };
             for (index, transformed) in transformed.into_iter().enumerate() {
                 let transformed_type = transformed.event_type().to_owned();
                 if !client_visible_event(&transformed_type) {
@@ -222,7 +225,23 @@ impl GrokCanonicalDecoder {
                 }
                 let value = transformed.into_value();
                 let mut canonical = Vec::new();
-                self.decode_event(&transformed_type, &value, &mut canonical)?;
+                // 终态事件（completed/incomplete）保留 fail-closed：用量/计费校验失败仍断流。
+                // 其余内容事件容忍字段校验失败——正常上游变体（空 delta、重复 index、
+                // 缺字段等）不应打断已开始的客户端流：跳过 canonical 提取、wire 原样转发。
+                // 真·上游错误（response.failed/error）为非 Protocol 类别，仍按终态传播。
+                let terminal_event = matches!(
+                    transformed_type.as_str(),
+                    "response.completed" | "response.incomplete"
+                );
+                match self.decode_event(&transformed_type, &value, &mut canonical) {
+                    Ok(()) => {}
+                    Err(error)
+                        if !terminal_event && error.kind() == ProviderErrorKind::Protocol =>
+                    {
+                        canonical.clear();
+                    }
+                    Err(error) => return Err(error),
+                }
                 let wire_event = if transformed_type == event_type {
                     event.event.clone()
                 } else {
