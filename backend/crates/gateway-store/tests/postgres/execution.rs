@@ -50,6 +50,22 @@ async fn merged_first_attempt_insert_should_match_sequential_semantics() {
     };
     let repository = PgExecutionStore::new(database.pool.clone());
     let started_at = Utc::now();
+    sqlx::query(
+        "insert into provider_accounts (
+           id, provider_kind, name, email, upstream_user_id,
+           upstream_account_id, plan_type, authentication_kind,
+           provider_credentials_json, credential_revision,
+           has_refresh_token, access_token_expires_at, enabled, availability,
+           availability_observed_at, created_at, updated_at
+         ) values (
+           'acct_merged', 'openai', 'merged', null, 'user-merged', null, null, 'oauth',
+           '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'ready', $1, $1, $1
+         )",
+    )
+    .bind(started_at)
+    .execute(&database.pool)
+    .await
+    .expect("seed provider account");
     let request = NewModelRequest {
         id: "req_merged".to_owned(),
         client_api_key_id: None,
@@ -111,8 +127,8 @@ async fn merged_first_attempt_insert_should_match_sequential_semantics() {
             model_request_id: "req_merged".to_owned(),
             attempt_count: 2,
             provider_kind: "openai".to_owned(),
-            provider_account_id: Some("acct_next".to_owned()),
-            provider_account_ref: Some("acct_next".to_owned()),
+            provider_account_id: Some("acct_merged".to_owned()),
+            provider_account_ref: Some("acct_merged".to_owned()),
             upstream_model_id: "gpt-test".to_owned(),
             upstream_transport: "http_sse".to_owned(),
             http_version: None,

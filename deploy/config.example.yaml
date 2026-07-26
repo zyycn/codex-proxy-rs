@@ -36,6 +36,10 @@ store:
     # Docker 内由 CPR_REDIS_URL 覆盖；密码不要写进 URL。
     url: 'redis://127.0.0.1:6379/'
     password: &redis_password ''
+  # 可选：PostgreSQL 连接池预算；省略时 max_connections=10、acquire_timeout_seconds=5。
+  # pool:
+  #   max_connections: 10
+  #   acquire_timeout_seconds: 5
 
 admin:
   session_ttl_minutes: 1440
