@@ -1651,7 +1651,10 @@ async fn request_metrics(
     filter: &UsageRecordFilter,
 ) -> StoreResult<RequestMetrics> {
     filter.validate()?;
-    let mut query = QueryBuilder::<Postgres>::new(
+    // 结果计数覆盖范围内全部请求（成功率/失败率的分母分子）；用量、缓存、
+    // 延迟与成本聚合仅统计用量事实（已完整交付客户端的成功响应）。
+    let fact = completed_usage_fact_predicate("mr");
+    let mut query = QueryBuilder::<Postgres>::new(format!(
         "select count(*)::bigint as request_count,
                 count(*) filter (where outcome = 'succeeded')::bigint as success_count,
                 count(*) filter (where outcome = 'failed')::bigint as failure_count,
@@ -1659,40 +1662,43 @@ async fn request_metrics(
                 count(*) filter (where outcome = 'incomplete')::bigint as incomplete_count,
                 count(*) filter (where client_status_code between 400 and 499)::bigint
                   as caller_error_count,
-                coalesce(sum(input_tokens), 0)::bigint as input_tokens,
-                coalesce(sum(output_tokens), 0)::bigint as output_tokens,
-                coalesce(sum(cached_tokens), 0)::bigint as cached_tokens,
-                coalesce(sum(cache_write_tokens), 0)::bigint as cache_write_tokens,
-                coalesce(sum(reasoning_tokens), 0)::bigint as reasoning_tokens,
-                coalesce(sum(total_tokens), 0)::bigint as total_tokens,
-                coalesce(sum(first_token_ms), 0)::bigint as first_token_latency_sum,
-                count(first_token_ms)::bigint as first_token_latency_count,
-                coalesce(sum(latency_ms), 0)::bigint as latency_sum,
-                count(latency_ms)::bigint as latency_count,
-                max(latency_ms)::bigint as max_latency_ms,
-                min(latency_ms)::bigint as min_latency_ms,
-                count(*) filter (where input_tokens is not null)::bigint
+                coalesce(sum(input_tokens) filter (where {fact}), 0)::bigint as input_tokens,
+                coalesce(sum(output_tokens) filter (where {fact}), 0)::bigint as output_tokens,
+                coalesce(sum(cached_tokens) filter (where {fact}), 0)::bigint as cached_tokens,
+                coalesce(sum(cache_write_tokens) filter (where {fact}), 0)::bigint
+                  as cache_write_tokens,
+                coalesce(sum(reasoning_tokens) filter (where {fact}), 0)::bigint
+                  as reasoning_tokens,
+                coalesce(sum(total_tokens) filter (where {fact}), 0)::bigint as total_tokens,
+                coalesce(sum(first_token_ms) filter (where {fact}), 0)::bigint
+                  as first_token_latency_sum,
+                count(first_token_ms) filter (where {fact})::bigint as first_token_latency_count,
+                coalesce(sum(latency_ms) filter (where {fact}), 0)::bigint as latency_sum,
+                count(latency_ms) filter (where {fact})::bigint as latency_count,
+                max(latency_ms) filter (where {fact})::bigint as max_latency_ms,
+                min(latency_ms) filter (where {fact})::bigint as min_latency_ms,
+                count(*) filter (where {fact} and input_tokens is not null)::bigint
                   as cache_eligible_request_count,
-                count(*) filter (where input_tokens is not null and cached_tokens > 0)::bigint
+                count(*) filter (where {fact} and input_tokens is not null
+                                   and cached_tokens > 0)::bigint
                   as cache_hit_request_count,
                 percentile_cont(0.50) within group (order by latency_ms)
-                  as latency_p50_ms,
+                  filter (where {fact}) as latency_p50_ms,
                 percentile_cont(0.95) within group (order by latency_ms)
-                  as latency_p95_ms,
+                  filter (where {fact}) as latency_p95_ms,
                 percentile_cont(0.99) within group (order by latency_ms)
-                  as latency_p99_ms,
+                  filter (where {fact}) as latency_p99_ms,
                 percentile_cont(0.50) within group (order by first_token_ms)
-                  as first_token_p50_ms,
+                  filter (where {fact}) as first_token_p50_ms,
                 percentile_cont(0.95) within group (order by first_token_ms)
-                  as first_token_p95_ms,
+                  filter (where {fact}) as first_token_p95_ms,
                 percentile_cont(0.99) within group (order by first_token_ms)
-                  as first_token_p99_ms
-         from model_requests mr where mr.started_at >= ",
-    );
+                  filter (where {fact}) as first_token_p99_ms
+         from model_requests mr where mr.started_at >= "
+    ));
     query.push_bind(range.start);
     query.push(" and mr.started_at < ");
     query.push_bind(range.end);
-    push_completed_usage_fact_filter(&mut query, "mr");
     push_usage_filter(&mut query, filter, "mr");
     let row = query
         .build()
@@ -1709,9 +1715,12 @@ async fn request_metric_series(
 ) -> StoreResult<Vec<RequestMetricPoint>> {
     filter.validate()?;
     let granularity = granularity_for(range);
+    // 与 request_metrics 同一契约：结果计数覆盖全部请求，用量/延迟/成本
+    // 聚合仅统计用量事实。
+    let fact = completed_usage_fact_predicate("mr");
     let mut query = QueryBuilder::<Postgres>::new("select date_bin(");
     query.push_bind(granularity.sql_interval());
-    query.push(
+    query.push(format!(
         "::interval, mr.started_at, timestamptz '1970-01-01 00:00:00+00') as bucket_start,
                 count(*)::bigint as request_count,
                 count(*) filter (where outcome = 'succeeded')::bigint as success_count,
@@ -1720,46 +1729,49 @@ async fn request_metric_series(
                 count(*) filter (where outcome = 'incomplete')::bigint as incomplete_count,
                 count(*) filter (where client_status_code between 400 and 499)::bigint
                   as caller_error_count,
-                coalesce(sum(input_tokens), 0)::bigint as input_tokens,
-                coalesce(sum(output_tokens), 0)::bigint as output_tokens,
-                coalesce(sum(cached_tokens), 0)::bigint as cached_tokens,
-                coalesce(sum(cache_write_tokens), 0)::bigint as cache_write_tokens,
-                coalesce(sum(reasoning_tokens), 0)::bigint as reasoning_tokens,
-                coalesce(sum(total_tokens), 0)::bigint as total_tokens,
-                coalesce(sum(first_token_ms), 0)::bigint as first_token_latency_sum,
-                count(first_token_ms)::bigint as first_token_latency_count,
-                coalesce(sum(latency_ms), 0)::bigint as latency_sum,
-                count(latency_ms)::bigint as latency_count,
-                max(latency_ms)::bigint as max_latency_ms,
-                min(latency_ms)::bigint as min_latency_ms,
-                count(*) filter (where input_tokens is not null)::bigint
+                coalesce(sum(input_tokens) filter (where {fact}), 0)::bigint as input_tokens,
+                coalesce(sum(output_tokens) filter (where {fact}), 0)::bigint as output_tokens,
+                coalesce(sum(cached_tokens) filter (where {fact}), 0)::bigint as cached_tokens,
+                coalesce(sum(cache_write_tokens) filter (where {fact}), 0)::bigint
+                  as cache_write_tokens,
+                coalesce(sum(reasoning_tokens) filter (where {fact}), 0)::bigint
+                  as reasoning_tokens,
+                coalesce(sum(total_tokens) filter (where {fact}), 0)::bigint as total_tokens,
+                coalesce(sum(first_token_ms) filter (where {fact}), 0)::bigint
+                  as first_token_latency_sum,
+                count(first_token_ms) filter (where {fact})::bigint as first_token_latency_count,
+                coalesce(sum(latency_ms) filter (where {fact}), 0)::bigint as latency_sum,
+                count(latency_ms) filter (where {fact})::bigint as latency_count,
+                max(latency_ms) filter (where {fact})::bigint as max_latency_ms,
+                min(latency_ms) filter (where {fact})::bigint as min_latency_ms,
+                count(*) filter (where {fact} and input_tokens is not null)::bigint
                   as cache_eligible_request_count,
-                count(*) filter (where input_tokens is not null and cached_tokens > 0)::bigint
+                count(*) filter (where {fact} and input_tokens is not null
+                                   and cached_tokens > 0)::bigint
                   as cache_hit_request_count,
                 percentile_cont(0.50) within group (order by latency_ms)
-                  as latency_p50_ms,
+                  filter (where {fact}) as latency_p50_ms,
                 percentile_cont(0.95) within group (order by latency_ms)
-                  as latency_p95_ms,
+                  filter (where {fact}) as latency_p95_ms,
                 percentile_cont(0.99) within group (order by latency_ms)
-                  as latency_p99_ms,
+                  filter (where {fact}) as latency_p99_ms,
                 percentile_cont(0.50) within group (order by first_token_ms)
-                  as first_token_p50_ms,
+                  filter (where {fact}) as first_token_p50_ms,
                 percentile_cont(0.95) within group (order by first_token_ms)
-                  as first_token_p95_ms,
+                  filter (where {fact}) as first_token_p95_ms,
                 percentile_cont(0.99) within group (order by first_token_ms)
-                  as first_token_p99_ms,
-                count(*) filter (where cost_source = 'provider_reported')::bigint
+                  filter (where {fact}) as first_token_p99_ms,
+                count(*) filter (where {fact} and cost_source = 'provider_reported')::bigint
                   as provider_reported_count,
-                count(*) filter (where cost_source = 'calculated')::bigint
+                count(*) filter (where {fact} and cost_source = 'calculated')::bigint
                   as calculated_count,
-                count(*) filter (where cost_source = 'unavailable')::bigint
+                count(*) filter (where {fact} and cost_source = 'unavailable')::bigint
                   as unavailable_count
-         from model_requests mr where mr.started_at >= ",
-    );
+         from model_requests mr where mr.started_at >= "
+    ));
     query.push_bind(range.start);
     query.push(" and mr.started_at < ");
     query.push_bind(range.end);
-    push_completed_usage_fact_filter(&mut query, "mr");
     push_usage_filter(&mut query, filter, "mr");
     query.push(" group by bucket_start order by bucket_start");
     let rows = query
@@ -2249,8 +2261,14 @@ fn push_usage_filter(query: &mut QueryBuilder<Postgres>, filter: &UsageRecordFil
 /// `model_requests` 同时承担执行审计：包括上游已发送、但尚未收到首个事件就断开的
 /// WebSocket 请求。这些失败仍必须留给 Ops Errors 和调度健康度分析，不能混入用量、
 /// 成本、账号使用次数或请求明细。
+fn completed_usage_fact_predicate(alias: &str) -> String {
+    format!(
+        "{alias}.outcome = 'succeeded' and {alias}.downstream_committed_at is not null and {alias}.client_status_code between 200 and 399"
+    )
+}
+
 fn push_completed_usage_fact_filter(query: &mut QueryBuilder<Postgres>, alias: &str) {
-    query.push(format!(" and {alias}.outcome = 'succeeded' and {alias}.downstream_committed_at is not null and {alias}.client_status_code between 200 and 399"));
+    query.push(format!(" and {}", completed_usage_fact_predicate(alias)));
 }
 
 async fn provider_account_usage(
