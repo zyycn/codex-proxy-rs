@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import type { UsageDisplayRecord } from '../constants'
-import { Archive, ArrowDown, ArrowUp, Info } from '@lucide/vue'
+import type { UsageDisplayRecord } from '../utils/records'
+import { Archive, ArrowDown, ArrowUp } from '@lucide/vue'
 
 import { computed } from 'vue'
-import BasePopover from '@/components/base/BasePopover.vue'
-import { usageTokenDetails } from '../constants'
+import { usageTokenDetails } from '../utils/records'
+import UsageDetailPopover from './UsageDetailPopover.vue'
 
 const props = defineProps<{
   record: UsageDisplayRecord
@@ -39,41 +39,21 @@ const tokenItems = computed(() => [
       </span>
     </div>
 
-    <BasePopover
-      trigger="hover"
-      placement="right"
-      width="196px"
-      panel-class="!p-3 text-(--cp-text-primary)"
-    >
-      <template #trigger>
-        <button
-          type="button"
-          class="inline-flex size-4 items-center justify-center rounded-full bg-(--cp-info-bg) text-(--cp-info) outline-none hover:bg-(--cp-default-bg-hover)"
-          aria-label="查看 Token 明细"
-        >
-          <Info class="size-3" />
-        </button>
-      </template>
-
-      <div class="grid gap-2 text-[12px] leading-none">
-        <p class="m-0 font-[760] text-(--cp-text-primary)">
-          Token 明细
-        </p>
-        <div class="grid gap-1.5 text-(--cp-text-secondary)">
-          <div v-for="item in tokenItems" :key="item.label" class="flex justify-between gap-4">
-            <span class="whitespace-nowrap">{{ item.label }}</span>
-            <span class="whitespace-nowrap font-mono font-[760] text-(--cp-text-primary)">
-              {{ item.value }}
-            </span>
-          </div>
-        </div>
-        <div class="mt-1 flex justify-between border-t border-(--cp-divider-subtle) pt-2">
-          <span class="whitespace-nowrap text-(--cp-text-secondary)">总 Token</span>
-          <span class="whitespace-nowrap font-mono font-[760] text-(--cp-info-text)">
-            {{ tokenDetails.totalTokensDisplay }}
+    <UsageDetailPopover title="Token 明细" width="196px" trigger-label="查看 Token 明细">
+      <div class="grid gap-1.5 text-(--cp-text-secondary)">
+        <div v-for="item in tokenItems" :key="item.label" class="flex justify-between gap-4">
+          <span class="whitespace-nowrap">{{ item.label }}</span>
+          <span class="whitespace-nowrap font-mono font-[760] text-(--cp-text-primary)">
+            {{ item.value }}
           </span>
         </div>
       </div>
-    </BasePopover>
+      <div class="mt-1 flex justify-between border-t border-(--cp-divider-subtle) pt-2">
+        <span class="whitespace-nowrap text-(--cp-text-secondary)">总 Token</span>
+        <span class="whitespace-nowrap font-mono font-[760] text-(--cp-info-text)">
+          {{ tokenDetails.totalTokensDisplay }}
+        </span>
+      </div>
+    </UsageDetailPopover>
   </div>
 </template>

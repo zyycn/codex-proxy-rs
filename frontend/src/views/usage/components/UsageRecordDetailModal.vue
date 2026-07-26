@@ -5,9 +5,9 @@ import type { getUsageRecordDetail } from '@/api'
 import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
-import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { useThemeColor } from '@/composables/useThemeColor'
+import { displayValue, fieldLabelClass, fieldValueBaseClass, fieldValueClass } from '../utils/detail'
 import {
   usageAccountText,
   usageBilling,
@@ -21,7 +21,9 @@ import {
   usageUserAgent,
   visibleRequestText,
   visibleResponseText,
-} from '../constants'
+} from '../utils/records'
+import UsageDetailCodePanel from './UsageDetailCodePanel.vue'
+import UsageDetailFieldGrid from './UsageDetailFieldGrid.vue'
 import UsageStatusCodeBadge from './UsageStatusCodeBadge.vue'
 
 const props = defineProps<{
@@ -43,12 +45,6 @@ const latencyDetails = computed(() => props.record ? usageLatencyDetails(props.r
 
 const panelClass = 'rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5'
 const panelTitleClass = 'm-0 text-[12px] leading-none font-[780] text-(--cp-text-secondary)'
-const fieldLabelClass = 'text-[11px] leading-none font-bold text-(--cp-text-muted)'
-const fieldValueBaseClass
-  = 'mt-1.5 mb-0 min-w-0 truncate text-[12px] leading-none font-[700] text-(--cp-text-primary)'
-const codeBlockViewClass = 'rounded-(--cp-input-radius-base) bg-(--cp-bg-surface) px-3 py-2.5'
-const codeBlockClass
-  = 'm-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.65] text-(--cp-text-primary)'
 
 const accountDisplay = computed(() => props.record ? usageAccountText(props.record) : '—')
 const overviewItems = computed(() => [
@@ -216,16 +212,6 @@ const tokenDonutOption = computed<EChartsOption>(() => {
     ],
   }
 })
-
-function displayValue(value: unknown) {
-  if (value === undefined || value === null || value === '')
-    return '—'
-  return String(value)
-}
-
-function fieldValueClass(mono?: boolean) {
-  return [fieldValueBaseClass, mono ? 'font-mono tabular-nums' : undefined]
-}
 </script>
 
 <template>
@@ -284,16 +270,7 @@ function fieldValueClass(mono?: boolean) {
             <h3 :class="panelTitleClass">
               {{ modelRouteGroup.title }}
             </h3>
-            <dl class="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
-              <div v-for="item in modelRouteGroup.items" :key="item.label" class="min-w-0">
-                <dt :class="fieldLabelClass">
-                  {{ item.label }}
-                </dt>
-                <dd :class="fieldValueClass(item.mono)" :title="displayValue(item.value)">
-                  {{ displayValue(item.value) }}
-                </dd>
-              </div>
-            </dl>
+            <UsageDetailFieldGrid :items="modelRouteGroup.items" />
           </section>
 
           <section class="flex min-h-0 flex-1 flex-col" :class="[panelClass]">
@@ -345,32 +322,14 @@ function fieldValueClass(mono?: boolean) {
             <h3 :class="panelTitleClass">
               {{ clientUpstreamGroup.title }}
             </h3>
-            <dl class="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
-              <div v-for="item in clientUpstreamGroup.items" :key="item.label" class="min-w-0">
-                <dt :class="fieldLabelClass">
-                  {{ item.label }}
-                </dt>
-                <dd :class="fieldValueClass(item.mono)" :title="displayValue(item.value)">
-                  {{ displayValue(item.value) }}
-                </dd>
-              </div>
-            </dl>
+            <UsageDetailFieldGrid :items="clientUpstreamGroup.items" />
           </section>
 
           <section :class="panelClass">
             <h3 :class="panelTitleClass">
               费用
             </h3>
-            <dl class="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
-              <div v-for="item in billingItems" :key="item.label" class="min-w-0">
-                <dt :class="fieldLabelClass">
-                  {{ item.label }}
-                </dt>
-                <dd :class="fieldValueClass(item.mono)" :title="displayValue(item.value)">
-                  {{ displayValue(item.value) }}
-                </dd>
-              </div>
-            </dl>
+            <UsageDetailFieldGrid :items="billingItems" />
           </section>
         </div>
       </section>
@@ -380,31 +339,20 @@ function fieldValueClass(mono?: boolean) {
         class="grid min-h-0 grid-cols-1 gap-3 lg:grid-cols-2"
       >
         <div v-if="requestText" class="min-h-0" :class="[panelClass]">
-          <h3 class="mb-3" :class="panelTitleClass">
-            请求内容
-          </h3>
-          <BaseScrollbar max-height="180px" :view-class="codeBlockViewClass">
-            <pre :class="codeBlockClass">{{ requestText }}</pre>
-          </BaseScrollbar>
+          <UsageDetailCodePanel title="请求内容" max-height="180px" :content="requestText" />
         </div>
 
         <div v-if="responseText" class="min-h-0" :class="[panelClass]">
-          <h3 class="mb-3" :class="panelTitleClass">
-            响应内容
-          </h3>
-          <BaseScrollbar max-height="180px" :view-class="codeBlockViewClass">
-            <pre :class="codeBlockClass">{{ responseText }}</pre>
-          </BaseScrollbar>
+          <UsageDetailCodePanel title="响应内容" max-height="180px" :content="responseText" />
         </div>
       </section>
 
       <section v-if="record.metadata" class="min-h-0" :class="[panelClass]">
-        <h3 class="mb-3" :class="panelTitleClass">
-          元数据
-        </h3>
-        <BaseScrollbar max-height="min(32dvh, 340px)" :view-class="codeBlockViewClass">
-          <pre :class="codeBlockClass">{{ JSON.stringify(record.metadata, null, 2) }}</pre>
-        </BaseScrollbar>
+        <UsageDetailCodePanel
+          title="元数据"
+          max-height="min(32dvh, 340px)"
+          :content="JSON.stringify(record.metadata, null, 2)"
+        />
       </section>
     </template>
 

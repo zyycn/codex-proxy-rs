@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Eye, Minimize2 } from '@lucide/vue'
+import { Eye } from '@lucide/vue'
 import { shallowRef, watch } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -7,32 +7,17 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
-import BaseTable from '@/components/base/BaseTable/index.vue'
 import ProviderFilterSegmented from '@/components/ProviderFilterSegmented.vue'
-import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import OpsErrorPanel from './components/OpsErrorPanel.vue'
-import UsageBillingCell from './components/UsageBillingCell.vue'
-import UsageClientIpCell from './components/UsageClientIpCell.vue'
 import UsageFilters from './components/UsageFilters.vue'
 import UsageInsightsGrid from './components/UsageInsightsGrid.vue'
-import UsageLatencyCell from './components/UsageLatencyCell.vue'
-import UsageModelCell from './components/UsageModelCell.vue'
-import UsageReasoningEffortCell from './components/UsageReasoningEffortCell.vue'
 import UsageRecordDetailModal from './components/UsageRecordDetailModal.vue'
+import UsageRecordsTable from './components/UsageRecordsTable.vue'
 import UsageSummaryCards from './components/UsageSummaryCards.vue'
-import UsageTokenCell from './components/UsageTokenCell.vue'
 import { useUsageRecordDetail } from './composables/useUsageRecordDetail'
 import { useUsageRecordsTable } from './composables/useUsageRecordsTable'
 import { useUsageTimeRange } from './composables/useUsageTimeRange'
-import {
-  usageAccountText,
-  usageAuthenticationKind,
-  usageIsCompact,
-  usageRecordColumns,
-  usageRecordType,
-  usageRecordTypeClass,
-  usageTimeRangeOptions,
-} from './constants'
+import { usageRecordColumns, usageTimeRangeOptions } from './constants'
 
 const recordView = shallowRef('success')
 const recordViewOptions = [
@@ -127,7 +112,7 @@ watch(timeRange, () => {
             @refresh="refreshUsageRecords"
           />
 
-          <BaseTable
+          <UsageRecordsTable
             class="min-h-0 flex-1"
             :columns="usageRecordColumns"
             :rows="records"
@@ -138,69 +123,6 @@ watch(timeRange, () => {
             @page-change="handlePageChange"
             @page-size-change="handlePageSizeChange"
           >
-            <template #provider="{ row }">
-              <ProviderIconGroup
-                :provider="String(row.provider || '')"
-                :authentication-kind="usageAuthenticationKind(row)"
-              />
-            </template>
-
-            <template #accountEmail="{ row }">
-              <span
-                class="block max-w-full truncate font-mono text-[12px] leading-none font-[720] text-(--cp-text-primary)"
-                :title="usageAccountText(row)"
-              >
-                {{ usageAccountText(row) }}
-              </span>
-            </template>
-
-            <template #clientIp="{ row }">
-              <UsageClientIpCell :record="row" />
-            </template>
-
-            <template #model="{ row }">
-              <UsageModelCell :record="row" />
-            </template>
-
-            <template #reasoningEffort="{ row }">
-              <UsageReasoningEffortCell :record="row" />
-            </template>
-
-            <template #route="{ row }">
-              <div class="inline-flex max-w-full items-center gap-1.5 whitespace-nowrap">
-                <code class="font-mono text-[12px] font-[650]">{{ row.route || '—' }}</code>
-                <span
-                  v-if="usageIsCompact(row)"
-                  class="inline-flex shrink-0 text-(--cp-warning-text)"
-                  title="压缩请求"
-                  aria-label="压缩请求"
-                >
-                  <Minimize2 class="size-3.5" stroke-width="2.4" />
-                </span>
-              </div>
-            </template>
-
-            <template #recordType="{ row }">
-              <span
-                class="inline-flex h-6 min-w-12 items-center justify-center rounded-full px-2 text-[12px] leading-none font-bold"
-                :class="usageRecordTypeClass(row)"
-              >
-                {{ usageRecordType(row) }}
-              </span>
-            </template>
-
-            <template #tokenDetails="{ row }">
-              <UsageTokenCell :record="row" />
-            </template>
-
-            <template #billing="{ row }">
-              <UsageBillingCell :record="row" />
-            </template>
-
-            <template #latency="{ row }">
-              <UsageLatencyCell :record="row" />
-            </template>
-
             <template #actions="{ row }">
               <div class="flex items-center justify-start">
                 <BaseButton
@@ -214,7 +136,7 @@ watch(timeRange, () => {
                 </BaseButton>
               </div>
             </template>
-          </BaseTable>
+          </UsageRecordsTable>
         </div>
 
         <div v-show="recordView === 'errors'" class="min-h-130 flex-1">

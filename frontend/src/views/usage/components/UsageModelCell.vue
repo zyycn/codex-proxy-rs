@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import type { UsageDisplayRecord } from '../constants'
+import type { UsageDisplayRecord } from '../utils/records'
 import { CornerDownRight } from '@lucide/vue'
 
 import { computed } from 'vue'
-import { usageModelDisplay } from '../constants'
+import { usageModelDisplay } from '../utils/records'
 
 const props = defineProps<{
   record: UsageDisplayRecord
