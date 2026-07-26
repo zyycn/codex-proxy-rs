@@ -451,6 +451,9 @@ impl ModelRequestRepository for PgExecutionStore {
         attempt: ModelRequestAttemptStart,
     ) -> StoreResult<u32> {
         attempt.validate()?;
+        // upstream_send_state 是请求级单调水位（sent > ambiguous > not_sent），
+        // 由 mark/finalize 抬升；开启新 attempt 不得把已持久化的 sent 重置回
+        // not_sent——崩溃恢复的终态写回会原样继承本列。
         let count = sqlx::query_scalar::<_, i32>(
             "update model_requests
              set provider_kind = $2,
@@ -459,8 +462,7 @@ impl ModelRequestRepository for PgExecutionStore {
                  upstream_model_id = $5,
                  upstream_transport = $6,
                  http_version = $7,
-                 attempt_count = $8,
-                 upstream_send_state = 'not_sent'
+                 attempt_count = $8
              where id = $1 and outcome = 'running' and downstream_committed_at is null
                and $8 = attempt_count + 1
              returning attempt_count",

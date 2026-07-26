@@ -787,12 +787,15 @@ where
             self.last_account_exhaustion = Some(error.clone());
         }
         self.record_provider_failure(current.metadata.provider().clone(), error.kind());
-        let send_state = if current.send_observed {
+        // attempt_send_state 是本 attempt 自身的发送事实，驱动重试门；
+        // 持久化与终态用请求级水位，二者不可混用（水位会把早先 attempt 的
+        // sent 传染给本 attempt，从而错误放行/拦截重试）。
+        let attempt_send_state = if current.send_observed {
             UpstreamSendState::Sent
         } else {
             error.send_state()
         };
-        let send_state = self.raise_send_watermark(send_state);
+        let send_state = self.raise_send_watermark(attempt_send_state);
         self.engine
             .store()
             .mark_send_state(&self.request_id, send_state)
@@ -801,14 +804,14 @@ where
         let continuation_retry = self.prepare_continuation_retry(
             &current,
             &error,
-            send_state,
+            attempt_send_state,
             provider_proved_replay_safe,
         );
         let ordinary_retry = self.required_account.is_none()
             && self.continuation_attempt == ContinuationAttempt::None
             && self.downstream_committed_at.is_none()
             && !self.delivery_pending
-            && send_state != UpstreamSendState::Ambiguous
+            && attempt_send_state != UpstreamSendState::Ambiguous
             && (self.operation.retry_safety() == RetrySafety::Idempotent
                 || provider_proved_replay_safe)
             && self.attempts < self.plan.max_attempts().get();
@@ -816,7 +819,7 @@ where
             && provider_proved_replay_safe
             && self.downstream_committed_at.is_none()
             && !self.delivery_pending
-            && send_state != UpstreamSendState::Ambiguous
+            && attempt_send_state != UpstreamSendState::Ambiguous
             && self.attempts < self.plan.max_attempts().get()
             && current
                 .metadata
