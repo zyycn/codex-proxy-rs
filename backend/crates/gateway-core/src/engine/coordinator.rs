@@ -381,7 +381,7 @@ where
             }
 
             let boundary = {
-                let current = self.current.as_mut().ok_or(EngineError::EmptyRoutingPlan)?;
+                let current = self.current.as_mut().ok_or(EngineError::NoActiveAttempt)?;
                 poll_stream_item(
                     &mut current.stream,
                     self.cancellation.clone(),
@@ -678,7 +678,7 @@ where
         if let GatewayEvent::ProviderCost(observed) = event {
             self.cost = observed.into_estimate();
         }
-        let current = self.current.as_mut().ok_or(EngineError::EmptyRoutingPlan)?;
+        let current = self.current.as_mut().ok_or(EngineError::NoActiveAttempt)?;
         if !current.send_observed {
             self.engine
                 .store()
@@ -691,7 +691,7 @@ where
     }
 
     async fn observe_wire_event(&mut self) -> Result<(), EngineError> {
-        let current = self.current.as_mut().ok_or(EngineError::EmptyRoutingPlan)?;
+        let current = self.current.as_mut().ok_or(EngineError::NoActiveAttempt)?;
         if !current.send_observed {
             self.engine
                 .store()
@@ -779,7 +779,7 @@ where
 
     /// 返回 `true` 表示调用方必须丢弃本 attempt 已收集的未提交事件。
     async fn handle_stream_error(&mut self, error: ProviderError) -> Result<bool, EngineError> {
-        let current = self.current.take().ok_or(EngineError::EmptyRoutingPlan)?;
+        let current = self.current.take().ok_or(EngineError::NoActiveAttempt)?;
         if matches!(
             error.kind(),
             ProviderErrorKind::RateLimited | ProviderErrorKind::QuotaExhausted
@@ -930,6 +930,7 @@ where
         self.timings.first_reasoning_ms = None;
         self.timings.first_text_ms = None;
         self.timings.first_token_ms = None;
+        self.timings.provider_processing_ms = None;
         self.upstream_complete = false;
     }
 
@@ -959,8 +960,7 @@ where
             .current
             .as_ref()
             .and_then(|current| current.response_observation.as_ref())
-            .and_then(ProviderResponseObservation::status_code)
-            .or(Some(200));
+            .and_then(ProviderResponseObservation::status_code);
         let (upstream_transport, http_version, websocket_pool) =
             self.current_transport_observation();
         let provider_metadata_json = self.current_provider_metadata_json();

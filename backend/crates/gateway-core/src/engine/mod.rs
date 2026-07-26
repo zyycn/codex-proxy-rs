@@ -673,11 +673,7 @@ impl CoordinatedEvent {
         }
     }
 
-    /// 创建一个必须在同一下游提交边界内按序编码的事件批次。
-    ///
-    /// # Errors
-    ///
-    /// 空批次无法建立交付边界。
+    /// 将一批 provider 事件合并为单个提交单元；空批次是无效投递状态。
     pub fn try_batch(
         events: Vec<ProviderEvent>,
         commit_requirement: CommitRequirement,
@@ -728,6 +724,8 @@ pub enum EngineError {
     Deadline,
     #[error("routing plan has no candidate")]
     EmptyRoutingPlan,
+    #[error("no provider attempt is active")]
+    NoActiveAttempt,
     #[error("downstream delivery must be committed before execution can continue")]
     DownstreamCommitRequired,
     #[error("downstream delivery cannot be committed in the current state")]

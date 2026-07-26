@@ -98,6 +98,7 @@ pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {
         | EngineError::ContinuationPinMismatch
         | EngineError::RequiredAccountMismatch
         | EngineError::DownstreamCommitRequired
+        | EngineError::NoActiveAttempt
         | EngineError::InvalidDeliveryState => {
             GatewayError::new(GatewayErrorKind::Internal, "gateway execution failed")
         }

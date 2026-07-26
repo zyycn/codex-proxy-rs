@@ -15,18 +15,20 @@ use gateway_core::engine::continuation::{
 use gateway_core::engine::credential::{
     AccountSelectionPolicy, CredentialRevision, ProviderAccountId, RotationStrategy,
 };
+use gateway_core::engine::execution::gateway_error_from_engine;
 use gateway_core::engine::provider::{
     Provider, ProviderCallMetadata, ProviderCatalogGeneration, ProviderModelCapabilities,
     ProviderRegistry, ProviderRequest, ProviderResource, ProviderStream, UpstreamTransport,
 };
 use gateway_core::engine::{
     AttemptContext, AttemptCoordinator, AttemptRecord, CancellationToken, CommitRequirement,
-    ContinuationAttempt, ExecutionOutcome, ExecutionStore, GatewayEngine, IntermediateFailure,
-    ModelRequestFinalization, ModelRequestId, NewModelRequest, ProviderAttemptOutcome,
-    RecoveryReport, UpstreamSendState,
+    ContinuationAttempt, EngineError, ExecutionOutcome, ExecutionStore, GatewayEngine,
+    IntermediateFailure, ModelRequestFinalization, ModelRequestId, NewModelRequest,
+    ProviderAttemptOutcome, RecoveryReport, UpstreamSendState,
 };
 use gateway_core::error::{
-    ContinuationFailure, ProviderError, ProviderErrorKind, SafeUpstreamValue, StoreError,
+    ContinuationFailure, GatewayErrorKind, ProviderError, ProviderErrorKind, SafeUpstreamValue,
+    StoreError,
 };
 use gateway_core::event::{
     ContentItem, ContentKind, GatewayEvent, ProtocolWireEvent, ProviderEvent,
@@ -855,6 +857,7 @@ fn discarded_attempt_observation_does_not_leak_into_retry_result() {
         connect_ms: Some(11),
         headers_ms: Some(13),
         first_event_ms: Some(987_654),
+        provider_processing_ms: Some(41),
         ..ProviderResponseTimings::default()
     });
     let second_observation = ProviderResponseObservation::new(
@@ -910,6 +913,7 @@ fn discarded_attempt_observation_does_not_leak_into_retry_result() {
     assert_eq!(finalization.transport_decision_wait_ms, None);
     assert_eq!(finalization.connect_ms, None);
     assert_eq!(finalization.headers_ms, None);
+    assert_eq!(finalization.provider_processing_ms, None);
     assert!(
         finalization
             .first_event_ms
@@ -946,6 +950,44 @@ fn websocket_success_keeps_client_http_status_absent() {
     let state = store.state.lock().expect("store lock");
     assert_eq!(state.committed_statuses, vec![None]);
     assert_eq!(state.finalizations[0].client_status_code, None);
+}
+
+#[test]
+fn success_without_response_observation_persists_no_upstream_status() {
+    let operation = operation(RetrySafety::Idempotent);
+    let route_plan = plan(&operation);
+    let (coordinator, store, _) = coordinator(vec![Script::Stream {
+        account_id: "acct_one",
+        items: complete_stream(None),
+    }]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+
+    block_on(session.collect_uncommitted()).expect("collect response");
+    block_on(session.commit_downstream(Some(200))).expect("commit response");
+
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
+    assert_eq!(state.finalizations[0].upstream_status_code, None);
+}
+
+#[test]
+fn missing_attempt_is_classified_internal_not_no_available_provider() {
+    assert_eq!(
+        gateway_error_from_engine(&EngineError::EmptyRoutingPlan).kind(),
+        GatewayErrorKind::NoAvailableProvider
+    );
+    assert_eq!(
+        gateway_error_from_engine(&EngineError::NoActiveAttempt).kind(),
+        GatewayErrorKind::Internal
+    );
 }
 
 #[test]
