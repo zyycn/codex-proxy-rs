@@ -600,6 +600,9 @@ pub enum GrokCatalogReasoningEffort {
     High,
     Xhigh,
     Max,
+    /// 上游新增、当前 adapter 尚未识别的 effort；不进入能力投影。
+    #[serde(other)]
+    Unknown,
 }
 
 impl GrokCatalogReasoningEffort {
@@ -614,6 +617,7 @@ impl GrokCatalogReasoningEffort {
             Self::High => "high",
             Self::Xhigh => "xhigh",
             Self::Max => "max",
+            Self::Unknown => "unknown",
         }
     }
 }
@@ -990,19 +994,24 @@ fn normalize_model(wire: GrokModelWire) -> Result<GrokCatalogModel, GrokModelCat
         .filter(|backend| *backend != GrokCatalogApiBackend::Unknown);
     let responses_api = responses_evidence(wire.supported_in_api, api_backend);
     let mut menu_default = None;
+    // 未识别的 effort 值不进入能力投影，也不作为默认值候选。
     let reasoning_efforts = wire
         .reasoning_efforts
         .into_iter()
-        .map(|option| {
+        .filter_map(|option| {
             let (effort, is_default) = option.into_parts();
+            if effort == GrokCatalogReasoningEffort::Unknown {
+                return None;
+            }
             if is_default && menu_default.is_none() {
                 menu_default = Some(effort);
             }
-            effort
+            Some(effort)
         })
         .collect::<Vec<_>>();
     let default_reasoning_effort = wire
         .reasoning_effort
+        .filter(|effort| *effort != GrokCatalogReasoningEffort::Unknown)
         .or(menu_default)
         .or_else(|| reasoning_efforts.first().copied());
     let reasoning_effort = if reasoning_efforts.is_empty() {
