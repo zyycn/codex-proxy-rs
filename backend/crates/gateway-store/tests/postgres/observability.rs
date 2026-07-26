@@ -174,7 +174,9 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
         .await
         .expect("admin dashboard summary");
     assert_eq!(dashboard.range, range);
-    assert_eq!(dashboard.requests.request_count, 1);
+    assert_eq!(dashboard.requests.request_count, 3);
+    assert_eq!(dashboard.requests.success_count, 2);
+    assert_eq!(dashboard.requests.failure_count, 1);
     assert_eq!(dashboard.requests.first_token_latency_sum_ms, 120);
     assert_eq!(dashboard.requests.latency_sum_ms, 900);
     assert_eq!(dashboard.requests.min_latency_ms, Some(900));
@@ -217,6 +219,13 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
             .iter()
             .map(|point| point.metrics.request_count)
             .sum::<u64>(),
+        3,
+    );
+    assert_eq!(
+        dashboard_trend
+            .iter()
+            .map(|point| point.metrics.failure_count)
+            .sum::<u64>(),
         1,
     );
 
@@ -235,7 +244,7 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
             .iter()
             .map(|point| point.metrics.request_count)
             .sum::<u64>(),
-        1,
+        2,
     );
     assert_eq!(
         trend
@@ -442,7 +451,10 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
         .dashboard_summary(range)
         .await
         .expect("dashboard summary");
-    assert_eq!(dashboard.requests.request_count, 1);
+    assert_eq!(dashboard.requests.request_count, 3);
+    assert_eq!(dashboard.requests.success_count, 2);
+    assert_eq!(dashboard.requests.failure_count, 1);
+    assert_eq!(dashboard.requests.caller_error_count, 0);
     assert_eq!(dashboard.requests.cache_eligible_request_count, 1);
     assert_eq!(dashboard.requests.cache_hit_request_count, 1);
     assert_eq!(dashboard.requests.cache_hit_request_rate(), Some(1.0));
@@ -500,6 +512,14 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
             .trend
             .iter()
             .map(|point| point.metrics.request_count)
+            .sum::<u64>(),
+        3
+    );
+    assert_eq!(
+        dashboard
+            .trend
+            .iter()
+            .map(|point| point.metrics.failure_count)
             .sum::<u64>(),
         1
     );
@@ -592,7 +612,8 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
         .expect("usage summary");
     assert_eq!(overview.attempts.attempt_count, 4);
     assert_eq!(overview.attempts.failure_count, 2);
-    assert_eq!(overview.requests.request_count, 1);
+    assert_eq!(overview.requests.request_count, 3);
+    assert_eq!(overview.requests.failure_count, 1);
 
     let succeeded = repository
         .usage_summary(
