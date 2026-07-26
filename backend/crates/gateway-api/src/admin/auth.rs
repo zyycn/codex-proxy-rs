@@ -216,9 +216,11 @@ where
         .route("/api/admin/auth/logout", post(logout::<S>))
 }
 
-/// 登录失败限流以 socket 对端 IP 为计数桶，使不同来源的失败互不影响；
+/// 登录失败限流以 socket 对端为计数桶，使不同来源的失败互不影响；
 /// 转发头（X-Forwarded-For 等）可由客户端伪造，不参与来源判定。
 /// 经反向代理部署时所有请求同源于代理地址，退化为共享单桶。
+/// IPv6 按 /64 前缀聚合——单前缀内 2^64 地址不应各得独立配额，否则
+/// 直连 IPv6 客户端可逐地址轮换绕过限流。
 async fn attach_login_source(mut request: Request, next: Next) -> Response {
     if let Some(ConnectInfo(peer)) = request
         .extensions()
@@ -227,9 +229,19 @@ async fn attach_login_source(mut request: Request, next: Next) -> Response {
     {
         request
             .extensions_mut()
-            .insert(AdminLoginSource::new(peer.ip().to_string()));
+            .insert(AdminLoginSource::new(login_bucket_key(peer.ip())));
     }
     next.run(request).await
+}
+
+fn login_bucket_key(ip: std::net::IpAddr) -> String {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.to_string(),
+        std::net::IpAddr::V6(v6) => {
+            let prefix = u128::from(v6) & !((1_u128 << 64) - 1);
+            format!("{}/64", std::net::Ipv6Addr::from(prefix))
+        }
+    }
 }
 
 async fn login<S>(
