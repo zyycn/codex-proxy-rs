@@ -65,6 +65,21 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
+      # 已应用迁移的字节被 sqlx 启动校验钉死：改动已发布迁移会让所有
+      # 存量部署重启即失败。冻结清单保证旧文件不被改、新文件必须入册。
+      - name: Migration freeze check
+        working-directory: backend/migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum --check --strict .frozen-sha256
+          for file in *.sql; do
+            if ! awk '{print $2}' .frozen-sha256 | grep -Fxq "$file"; then
+              echo "::error file=backend/migrations/$file::migration $file is not frozen; append its sha256 to backend/migrations/.frozen-sha256"
+              exit 1
+            fi
+          done
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@1a3a6d54512beeaffd394f8d516ca16f2c506a20 # 1.97
         with:
