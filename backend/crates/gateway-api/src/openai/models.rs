@@ -2,11 +2,12 @@
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use gateway_core::routing::{PublicModelId, PublicModelProfile};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::ApiState;
@@ -19,22 +20,30 @@ use super::{
 const MODEL_CREATED_TIMESTAMP: i64 = 1_700_000_000;
 const CODEX_BASE_INSTRUCTIONS: &str = "You are Codex, a coding agent. Follow the user's instructions and use the available tools to complete software engineering tasks. Inspect relevant files before editing, preserve unrelated changes, and verify the result.";
 
-/// `GET /v1/models`。
-pub(crate) async fn models(State(state): State<ApiState>, headers: HeaderMap) -> Response {
+#[derive(Debug, Deserialize)]
+pub(crate) struct ModelsQuery {
+    client_version: Option<String>,
+}
+
+/// `GET /v1/models`。Codex 携带 `client_version` 时返回其专用目录合同。
+pub(crate) async fn models(
+    State(state): State<ApiState>,
+    Query(query): Query<ModelsQuery>,
+    headers: HeaderMap,
+) -> Response {
     let service = state.openai();
     let client = match authenticate_client(service, &headers) {
         Ok(client) => client,
         Err(error) => return authentication_error_response(error),
     };
-    let data = service
-        .public_models(&client)
-        .into_iter()
-        .map(|model| openai_model_json(&model))
-        .collect::<Vec<_>>();
-    let profiles = service.public_model_profiles(&client);
 
-    if !profiles.is_empty() {
-        let models = profiles
+    if query
+        .client_version
+        .as_deref()
+        .is_some_and(|version| !version.trim().is_empty())
+    {
+        let models = service
+            .public_model_profiles(&client)
             .iter()
             .enumerate()
             .map(|(index, profile)| codex_model_json(profile, index))
@@ -42,14 +51,17 @@ pub(crate) async fn models(State(state): State<ApiState>, headers: HeaderMap) ->
         return (
             StatusCode::OK,
             Json(json!({
-                "object": "list",
-                "data": data,
                 "models": models,
             })),
         )
             .into_response();
     }
 
+    let data = service
+        .public_models(&client)
+        .into_iter()
+        .map(|model| openai_model_json(&model))
+        .collect::<Vec<_>>();
     (
         StatusCode::OK,
         Json(json!({

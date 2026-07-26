@@ -17,21 +17,35 @@ const { toggleTheme } = uiStore
 
 const username = shallowRef('')
 const password = shallowRef('')
+const loginPending = shallowRef(false)
 const canSubmit = computed<boolean>(() => !!username.value.trim() && !!password.value.trim())
-const submitDisabled = computed<boolean>(() => authStore.loading || !canSubmit.value)
+const loginLoading = computed<boolean>(() => authStore.loading || loginPending.value)
+const submitDisabled = computed<boolean>(() => loginLoading.value || !canSubmit.value)
 
 async function handleSubmit(): Promise<void> {
-  if (!canSubmit.value) {
+  if (!canSubmit.value || loginPending.value) {
     return
   }
 
+  loginPending.value = true
   const success = await authStore.login({
     username: username.value.trim(),
     password: password.value,
   })
 
-  if (success) {
-    router.push('/')
+  if (!success) {
+    loginPending.value = false
+    return
+  }
+
+  try {
+    await router.push('/')
+  }
+  finally {
+    // 成功时登录页会卸载；导航失败并停留当前页时才恢复按钮。
+    if (router.currentRoute.value.path === '/login') {
+      loginPending.value = false
+    }
   }
 }
 </script>
@@ -48,7 +62,7 @@ async function handleSubmit(): Promise<void> {
         v-model:username="username"
         v-model:password="password"
         :error="authStore.error"
-        :loading="authStore.loading"
+        :loading="loginLoading"
         :submit-disabled="submitDisabled"
         :effective-theme="effectiveTheme"
         @submit="handleSubmit"
