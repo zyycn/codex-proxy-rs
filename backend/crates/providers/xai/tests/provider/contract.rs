@@ -1331,6 +1331,60 @@ async fn selector_capacity_failure_occurs_before_visible_upstream_send() {
 }
 
 #[tokio::test]
+async fn selection_failures_carry_a_distinguishable_client_error_code() {
+    let cases = [
+        (
+            GrokSessionSelectorError::AccountCoolingDown {
+                retry_after: Some(Duration::from_secs(12)),
+            },
+            "account_cooling_down",
+        ),
+        (
+            GrokSessionSelectorError::CapacityUnavailable {
+                retry_after: Some(Duration::from_millis(20)),
+            },
+            "account_capacity_busy",
+        ),
+        (
+            GrokSessionSelectorError::NoEligibleSession,
+            "no_eligible_account",
+        ),
+        (
+            GrokSessionSelectorError::Unavailable,
+            "account_selector_unavailable",
+        ),
+    ];
+    for (failure, expected_code) in cases {
+        let transport = StubInferenceTransport::success();
+        let provider = provider(StubSelector::failing(failure), transport.clone()).await;
+        let error = match provider
+            .execute(
+                provider_request("xai"),
+                context(CancellationToken::new(), None),
+            )
+            .await
+        {
+            Ok(_) => panic!("selection must fail"),
+            Err(error) => error,
+        };
+        let detail = error
+            .client_visible_upstream_error()
+            .expect("client visible detail");
+        assert_eq!(error.kind(), ProviderErrorKind::Unavailable);
+        assert_eq!(detail.code(), Some(expected_code));
+        assert_eq!(detail.error_type(), Some("account_unavailable_error"));
+        assert_eq!(transport.calls.load(Ordering::SeqCst), 0);
+        if expected_code == "account_cooling_down" {
+            assert!(
+                detail.message().contains("retry in 13s"),
+                "{}",
+                detail.message()
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn native_previous_response_is_rejected_before_selection() {
     let selector = StubSelector::success();
     let provider = provider(selector.clone(), StubInferenceTransport::success()).await;

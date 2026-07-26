@@ -39,8 +39,7 @@ interface AccountConnectionTestOptions {
   onAccountStatus: (accountId: string, status: string) => void
 }
 
-// 后端把"选账号阶段失败"和"上游真的挂了"拆成了不同 providerErrorCode，
-// 前者是可自愈的等待，不该让人以为上游不可用。
+// providerErrorCode 到测试弹窗提示文案的映射。
 const CONNECTION_TEST_ERROR_HINTS: Record<string, string> = {
   account_cooling_down: '账号冷却中',
   account_capacity_busy: '账号并发已占满或请求间隔未到，请稍后重试',
