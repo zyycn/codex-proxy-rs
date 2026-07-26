@@ -44,7 +44,7 @@ const billing = computed(() => props.record ? usageBilling(props.record) : null)
 const latencyDetails = computed(() => props.record ? usageLatencyDetails(props.record) : null)
 
 const panelClass = 'rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5'
-const panelTitleClass = 'm-0 text-[12px] leading-none font-[780] text-(--cp-text-secondary)'
+const panelTitleClass = 'm-0 text-[12px] leading-none font-heavy text-(--cp-text-secondary)'
 
 const accountDisplay = computed(() => props.record ? usageAccountText(props.record) : '—')
 const overviewItems = computed(() => [
@@ -229,7 +229,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
         <div class="min-w-0">
           <span :class="fieldLabelClass">账号</span>
           <p
-            class="mt-1.5 mb-0 truncate font-mono text-[13px] leading-none font-[760] text-(--cp-text-primary)"
+            class="mt-1.5 mb-0 truncate font-mono text-[13px] leading-none font-heavy text-(--cp-text-primary)"
             :title="displayValue(accountDisplay)"
           >
             {{ displayValue(accountDisplay) }}

@@ -65,7 +65,7 @@ function latencyDisplay(value: unknown) {
             上游 {{ display(record.upstreamStatusCode) }}
           </span>
         </div>
-        <p class="mt-3 mb-0 text-[13px] leading-relaxed font-[680] text-(--cp-text-primary)">
+        <p class="mt-3 mb-0 text-[13px] leading-relaxed font-bold text-(--cp-text-primary)">
           {{ display(record.message) }}
         </p>
       </section>
@@ -83,7 +83,7 @@ function latencyDisplay(value: unknown) {
             {{ field.label }}
           </dt>
           <dd
-            class="mt-1.5 mb-0 truncate font-mono text-[12px] leading-normal font-[650] text-(--cp-text-primary)"
+            class="mt-1.5 mb-0 truncate font-mono text-[12px] leading-normal font-emphasis text-(--cp-text-primary)"
             :title="display(field.value)"
           >
             {{ display(field.value) }}
@@ -95,7 +95,7 @@ function latencyDisplay(value: unknown) {
         v-if="metadataText"
         class="mt-3 rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5"
       >
-        <h3 class="m-0 text-[12px] leading-none font-[780] text-(--cp-text-secondary)">
+        <h3 class="m-0 text-[12px] leading-none font-heavy text-(--cp-text-secondary)">
           Metadata
         </h3>
         <BaseScrollbar

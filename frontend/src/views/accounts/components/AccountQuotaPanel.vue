@@ -24,11 +24,11 @@ const quotaWindows = computed(() => orderedPanelQuotaWindows(props.account.quota
   <section class="rounded-lg bg-(--cp-bg-surface) p-4 shadow-(--cp-shadow-control)">
     <div class="mb-3 flex items-center justify-between gap-3">
       <div>
-        <h3 class="m-0 text-[14px] font-[760] text-(--cp-text-primary)">
+        <h3 class="m-0 text-[14px] font-heavy text-(--cp-text-primary)">
           账号额度
         </h3>
         <p
-          class="m-0 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] font-[620] text-(--cp-text-secondary)"
+          class="m-0 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] font-emphasis text-(--cp-text-secondary)"
         >
           <span>{{ account.provider === 'xai' ? 'xAI 用量窗口' : 'Codex 额度' }}</span>
           <template v-if="account.provider === 'openai'">

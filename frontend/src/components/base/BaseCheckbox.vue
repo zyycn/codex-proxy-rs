@@ -40,7 +40,7 @@ function toggle() {
 <template>
   <button
     type="button"
-    class="group inline-flex min-h-4 min-w-4 appearance-none items-center gap-2.5 border-0 bg-transparent p-0 text-[13px] leading-none font-[650] transition-opacity outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)"
+    class="group inline-flex min-h-4 min-w-4 appearance-none items-center gap-2.5 border-0 bg-transparent p-0 text-[13px] leading-none font-emphasis transition-opacity outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)"
     :class="disabled ? 'cursor-not-allowed opacity-55' : 'cursor-pointer'"
     role="checkbox"
     :aria-checked="indeterminate ? 'mixed' : model"

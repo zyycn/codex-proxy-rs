@@ -60,7 +60,7 @@ function paginationButtonClass(disabled: boolean) {
 
 function paginationPageClass(page: number) {
   return [
-    'inline-flex size-8 items-center justify-center rounded-(--cp-input-radius-base) border-0 text-xs font-[720] leading-none transition-colors duration-150 outline-none',
+    'inline-flex size-8 items-center justify-center rounded-(--cp-input-radius-base) border-0 text-xs font-bold leading-none transition-colors duration-150 outline-none',
     page === currentPage.value
       ? 'cursor-default bg-(--cp-info) text-(--cp-info-on)'
       : 'cursor-pointer bg-(--cp-bg-subtle) text-(--cp-text-primary) hover:bg-(--cp-default-bg-hover) focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)',
@@ -73,7 +73,7 @@ function paginationPageClass(page: number) {
     class="mt-2 flex min-h-10 shrink-0 flex-wrap items-center justify-between gap-3 px-0 py-1"
   >
     <div
-      class="flex min-w-0 items-center gap-2.5 text-[12px] font-[650] text-(--cp-text-secondary)"
+      class="flex min-w-0 items-center gap-2.5 text-[12px] font-emphasis text-(--cp-text-secondary)"
     >
       <span class="whitespace-nowrap">共 {{ pagination.total }} 条</span>
     </div>
@@ -103,7 +103,7 @@ function paginationPageClass(page: number) {
         <template v-for="(item, index) in pagerItems" :key="`${item}-${index}`">
           <span
             v-if="item === 'ellipsis'"
-            class="inline-flex size-8 items-center justify-center text-xs font-[720] text-(--cp-text-muted)"
+            class="inline-flex size-8 items-center justify-center text-xs font-bold text-(--cp-text-muted)"
           >
             ...
           </span>

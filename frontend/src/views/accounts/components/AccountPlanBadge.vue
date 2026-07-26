@@ -23,8 +23,8 @@ const label = computed(() => props.planType?.trim() || 'Free')
 
 const sizeClass = computed(() =>
   props.size === 'sm'
-    ? 'h-5 rounded-full px-1.75 text-[11px] font-[720]'
-    : 'h-5.5 rounded-full px-2 text-[11px] font-[760]',
+    ? 'h-5 rounded-full px-1.75 text-[11px] font-bold'
+    : 'h-5.5 rounded-full px-2 text-[11px] font-heavy',
 )
 
 const paletteClass = computed(() => {

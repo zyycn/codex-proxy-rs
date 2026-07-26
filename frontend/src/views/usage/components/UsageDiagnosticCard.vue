@@ -147,7 +147,7 @@ function diagnosticNameDisplay(name: string) {
         <template #nameDisplay="{ row }">
           <div class="inline-grid max-w-full min-w-0 gap-1" :title="row.nameDisplay.full">
             <code
-              class="block max-w-full truncate font-mono text-[12px] leading-none font-[760] text-(--cp-text-primary)"
+              class="block max-w-full truncate font-mono text-[12px] leading-none font-heavy text-(--cp-text-primary)"
             >
               {{ row.nameDisplay.primary }}
             </code>
@@ -172,10 +172,10 @@ function diagnosticNameDisplay(name: string) {
             class="grid justify-items-end gap-1 font-mono leading-none tabular-nums"
             :title="`成功 ${formatCompactNumber(row.successCount)}`"
           >
-            <strong class="font-[720] text-(--cp-text-primary)">
+            <strong class="font-bold text-(--cp-text-primary)">
               {{ formatCompactNumber(row.requestCount) }}
             </strong>
-            <small class="text-[10px] font-[650] text-(--cp-text-muted)">
+            <small class="text-[10px] font-emphasis text-(--cp-text-muted)">
               {{ formatPercent(row.requestShare) }}
             </small>
           </span>
@@ -184,13 +184,13 @@ function diagnosticNameDisplay(name: string) {
         <template #errorCount="{ row }">
           <span class="grid justify-items-end gap-1 font-mono leading-none tabular-nums">
             <strong
-              class="font-[720]"
+              class="font-bold"
               :class="row.errorCount > 0 ? 'text-(--cp-danger-text)' : 'text-(--cp-text-primary)'"
             >
               {{ formatCompactNumber(row.errorCount) }}
             </strong>
             <small
-              class="text-[10px] font-[650]"
+              class="text-[10px] font-emphasis"
               :class="row.errorRate > 0 ? 'text-(--cp-danger-text)' : 'text-(--cp-text-muted)'"
             >
               {{ formatPercent(row.errorRate) }}
@@ -199,13 +199,13 @@ function diagnosticNameDisplay(name: string) {
         </template>
 
         <template #latencyP95Ms="{ row }">
-          <span class="font-mono font-[680] tabular-nums text-(--cp-warning-text)">
+          <span class="font-mono font-bold tabular-nums text-(--cp-warning-text)">
             {{ formatDuration(row.latencyP95Ms) }}
           </span>
         </template>
 
         <template #estimatedCost="{ row }">
-          <span class="font-mono font-[680] tabular-nums text-(--cp-success-text)">
+          <span class="font-mono font-bold tabular-nums text-(--cp-success-text)">
             {{ formatUsd(row.estimatedCost) }}
           </span>
         </template>

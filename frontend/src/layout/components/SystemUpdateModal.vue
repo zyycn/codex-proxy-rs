@@ -328,15 +328,15 @@ watch(
       <section class="grid gap-4 rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-4">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="min-w-0">
-            <p class="m-0 text-[11px] leading-none font-[760] text-(--cp-text-muted)">
+            <p class="m-0 text-[11px] leading-none font-heavy text-(--cp-text-muted)">
               Codex Proxy RS
             </p>
-            <p class="mt-2 mb-0 text-lg leading-none font-[780] text-(--cp-text-primary)">
+            <p class="mt-2 mb-0 text-lg leading-none font-heavy text-(--cp-text-primary)">
               应用包更新
             </p>
           </div>
           <span
-            class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[12px] font-[760]"
+            class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[12px] font-heavy"
             :class="statusView.badge"
           >
             <component :is="statusView.icon" class="size-3.5" :class="statusView.iconClass" />
@@ -351,7 +351,7 @@ watch(
             class="min-w-0 rounded-(--cp-input-radius-base) bg-(--cp-bg-surface) px-3 py-2.5"
           >
             <div class="flex min-w-0 items-center justify-between gap-2">
-              <p class="m-0 truncate text-[11px] leading-none font-[760] text-(--cp-text-muted)">
+              <p class="m-0 truncate text-[11px] leading-none font-heavy text-(--cp-text-muted)">
                 {{ item.label }}
               </p>
               <a
@@ -359,14 +359,14 @@ watch(
                 :href="item.releaseUrl"
                 target="_blank"
                 rel="noreferrer"
-                class="inline-flex shrink-0 items-center gap-1 text-[11px] leading-none font-[720] text-(--cp-info-text) transition-colors hover:text-(--cp-info)"
+                class="inline-flex shrink-0 items-center gap-1 text-[11px] leading-none font-bold text-(--cp-info-text) transition-colors hover:text-(--cp-info)"
               >
                 发布页
                 <ExternalLink class="size-3" />
               </a>
             </div>
             <p
-              class="mt-2 mb-0 truncate font-mono text-[13px] leading-none font-[720] text-(--cp-text-primary)"
+              class="mt-2 mb-0 truncate font-mono text-[13px] leading-none font-bold text-(--cp-text-primary)"
               :title="item.title || item.value"
             >
               {{ item.value }}
@@ -376,7 +376,7 @@ watch(
 
         <p
           v-if="updateError || updateInfo?.warning"
-          class="m-0 rounded-(--cp-input-radius-base) bg-(--cp-danger-bg) px-3 py-2 text-[12px] leading-normal font-[720] text-(--cp-danger-text)"
+          class="m-0 rounded-(--cp-input-radius-base) bg-(--cp-danger-bg) px-3 py-2 text-[12px] leading-normal font-bold text-(--cp-danger-text)"
         >
           {{ updateError || updateInfo?.warning }}
         </p>
@@ -387,10 +387,10 @@ watch(
         class="grid gap-2 rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5"
       >
         <div class="flex items-center justify-between gap-3">
-          <p class="m-0 text-[13px] font-[760] text-(--cp-text-primary)">
+          <p class="m-0 text-[13px] font-heavy text-(--cp-text-primary)">
             发布说明
           </p>
-          <span class="font-mono text-[11px] font-[650] text-(--cp-text-muted)">
+          <span class="font-mono text-[11px] font-emphasis text-(--cp-text-muted)">
             {{ displayValue(updateInfo?.latestVersion) }}
           </span>
         </div>
@@ -406,12 +406,12 @@ watch(
         <header class="flex items-center justify-between gap-3 px-4 pt-3.5 pb-2.5">
           <div class="flex min-w-0 items-center gap-2">
             <Terminal class="size-4 shrink-0 text-(--cp-success)" />
-            <p class="m-0 text-[13px] leading-none font-[760] text-(--cp-text-primary)">
+            <p class="m-0 text-[13px] leading-none font-heavy text-(--cp-text-primary)">
               更新进度
             </p>
           </div>
           <span
-            class="inline-flex h-6 items-center gap-1.5 rounded-full bg-(--cp-bg-subtle) px-2 text-[11px] leading-none font-[720] text-(--cp-text-secondary)"
+            class="inline-flex h-6 items-center gap-1.5 rounded-full bg-(--cp-bg-subtle) px-2 text-[11px] leading-none font-bold text-(--cp-text-secondary)"
             :title="updateStreamError || streamStatusLabel"
           >
             <i
@@ -509,17 +509,17 @@ watch(
           :key="item.key"
           class="flex min-w-0 items-center justify-between gap-3"
         >
-          <span class="text-[12px] leading-none font-[720] text-(--cp-text-muted)">
+          <span class="text-[12px] leading-none font-bold text-(--cp-text-muted)">
             {{ item.label }}
           </span>
           <span
-            class="truncate font-mono text-[13px] leading-none font-[760] text-(--cp-text-primary)"
+            class="truncate font-mono text-[13px] leading-none font-heavy text-(--cp-text-primary)"
           >
             {{ item.value }}
           </span>
         </div>
       </div>
-      <p class="m-0 text-[12px] leading-relaxed font-[650] text-(--cp-text-muted)">
+      <p class="m-0 text-[12px] leading-relaxed font-emphasis text-(--cp-text-muted)">
         点击确认后弹窗会关闭，并按远端最新目标版本开始更新
       </p>
     </div>
@@ -530,7 +530,7 @@ watch(
 .release-notes {
   color: var(--cp-text-primary);
   font-size: 12px;
-  font-weight: 620;
+  font-weight: var(--font-weight-emphasis);
   line-height: 1.65;
   overflow-wrap: anywhere;
 }
@@ -554,7 +554,7 @@ watch(
   margin: 12px 0 6px;
   color: var(--cp-text-primary);
   font-size: 12px;
-  font-weight: 780;
+  font-weight: var(--font-weight-heavy);
   line-height: 1.4;
 }
 
@@ -574,7 +574,7 @@ watch(
 
 .release-notes :deep(a) {
   color: var(--cp-info-text);
-  font-weight: 720;
+  font-weight: 700;
   text-decoration: none;
 }
 

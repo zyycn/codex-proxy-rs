@@ -79,11 +79,11 @@ const {
               ]"
             />
             <span class="grid min-w-0 gap-1">
-              <span class="truncate text-[10px] leading-none font-[680] text-(--cp-text-secondary)">
+              <span class="truncate text-[10px] leading-none font-bold text-(--cp-text-secondary)">
                 {{ item.label }}
               </span>
               <strong
-                class="truncate font-mono text-[15px] leading-none font-[760] tabular-nums text-(--cp-text-primary)"
+                class="truncate font-mono text-[15px] leading-none font-heavy tabular-nums text-(--cp-text-primary)"
                 :title="item.value"
               >
                 {{ item.value }}

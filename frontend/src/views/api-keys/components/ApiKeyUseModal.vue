@@ -89,7 +89,7 @@ const visibleFiles = computed(() => [
         >
           <div class="flex items-center justify-between gap-3 px-4 py-2.5">
             <span
-              class="min-w-0 truncate font-mono text-[12px] font-[650] text-(--cp-text-secondary)"
+              class="min-w-0 truncate font-mono text-[12px] font-emphasis text-(--cp-text-secondary)"
             >
               {{ file.path }}
             </span>
@@ -108,7 +108,7 @@ const visibleFiles = computed(() => [
             view-class="mx-3 mb-3 rounded-(--cp-input-radius-base) bg-(--cp-bg-surface) px-3.5 py-3 shadow-(--cp-shadow-input)"
           >
             <pre
-              class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.65] font-[650] text-(--cp-text-primary)"
+              class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.65] font-emphasis text-(--cp-text-primary)"
             >{{ file.content }}</pre>
           </BaseScrollbar>
         </section>

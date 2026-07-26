@@ -15,7 +15,7 @@ const latencyDetails = computed(() => usageLatencyDetails(props.record))
 <template>
   <div class="flex items-center justify-end gap-1.5">
     <div
-      class="grid grid-cols-[auto_auto] items-center justify-end gap-x-2 gap-y-1.5 font-mono text-[12px] leading-none font-[760] tabular-nums"
+      class="grid grid-cols-[auto_auto] items-center justify-end gap-x-2 gap-y-1.5 font-mono text-[12px] leading-none font-heavy tabular-nums"
     >
       <span class="text-[11px] text-(--cp-text-muted)">{{ latencyDetails.firstOutputLabel }}</span>
       <span class="text-(--cp-text-secondary)">{{ latencyDetails.firstOutputDisplay }}</span>
@@ -34,7 +34,7 @@ const latencyDetails = computed(() => usageLatencyDetails(props.record))
           class="flex justify-between gap-4"
         >
           <span class="whitespace-nowrap">{{ item.label }}</span>
-          <span class="whitespace-nowrap font-mono font-[760] text-(--cp-text-primary)">
+          <span class="whitespace-nowrap font-mono font-heavy text-(--cp-text-primary)">
             {{ item.value }}
           </span>
         </div>
@@ -45,7 +45,7 @@ const latencyDetails = computed(() => usageLatencyDetails(props.record))
 
       <div class="flex justify-between border-t border-(--cp-divider-subtle) pt-2">
         <span class="whitespace-nowrap text-(--cp-text-secondary)">总耗时</span>
-        <span class="whitespace-nowrap font-mono font-[760] text-(--cp-info-text)">
+        <span class="whitespace-nowrap font-mono font-heavy text-(--cp-info-text)">
           {{ latencyDetails.totalDisplay }}
         </span>
       </div>
@@ -54,7 +54,7 @@ const latencyDetails = computed(() => usageLatencyDetails(props.record))
         v-if="latencyDetails.transportItems.length"
         class="grid gap-1.5 border-t border-(--cp-divider-subtle) pt-2 text-(--cp-text-secondary)"
       >
-        <p class="m-0 font-[760] text-(--cp-text-primary)">
+        <p class="m-0 font-heavy text-(--cp-text-primary)">
           传输观测
         </p>
         <div
@@ -63,7 +63,7 @@ const latencyDetails = computed(() => usageLatencyDetails(props.record))
           class="flex justify-between gap-4"
         >
           <span class="whitespace-nowrap">{{ item.label }}</span>
-          <span class="whitespace-nowrap font-mono font-[760] text-(--cp-text-primary)">
+          <span class="whitespace-nowrap font-mono font-heavy text-(--cp-text-primary)">
             {{ item.value }}
           </span>
         </div>

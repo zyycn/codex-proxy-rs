@@ -13,7 +13,7 @@ defineProps<{
     <span class="text-[13px] font-bold text-(--cp-text-primary)">
       {{ apiKey.name }}
     </span>
-    <span v-if="apiKey.label" class="text-[12px] font-[650] text-(--cp-text-tertiary)">
+    <span v-if="apiKey.label" class="text-[12px] font-emphasis text-(--cp-text-tertiary)">
       {{ apiKey.label }}
     </span>
   </div>

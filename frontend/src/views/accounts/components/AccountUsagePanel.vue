@@ -11,7 +11,7 @@ defineProps<{
     class="grid gap-4 rounded-lg bg-(--cp-bg-surface) p-4 shadow-(--cp-shadow-control) xl:grid-cols-[0.52fr_1.48fr]"
   >
     <div>
-      <h3 class="m-0 mb-3 text-[14px] font-[760] text-(--cp-text-primary)">
+      <h3 class="m-0 mb-3 text-[14px] font-heavy text-(--cp-text-primary)">
         Token 结构
       </h3>
       <div class="grid gap-2">
@@ -52,13 +52,13 @@ defineProps<{
       class="min-w-0 pt-4 shadow-[inset_0_1px_0_var(--cp-divider-subtle)] xl:pt-0 xl:pl-4 xl:shadow-[inset_1px_0_0_var(--cp-divider-subtle)]"
     >
       <div class="mb-3 flex items-center justify-between">
-        <h3 class="m-0 text-[14px] font-[760] text-(--cp-text-primary)">
+        <h3 class="m-0 text-[14px] font-heavy text-(--cp-text-primary)">
           模型使用排行
         </h3>
       </div>
 
       <div
-        class="grid grid-cols-[1.2fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pb-2 text-[11px] font-[760] text-(--cp-text-secondary) shadow-[inset_0_-1px_0_var(--cp-divider-subtle)]"
+        class="grid grid-cols-[1.2fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pb-2 text-[11px] font-heavy text-(--cp-text-secondary) shadow-[inset_0_-1px_0_var(--cp-divider-subtle)]"
       >
         <span>模型</span>
         <span>调用</span>
@@ -72,7 +72,7 @@ defineProps<{
       </div>
       <div
         v-if="account.usage.models.length === 0"
-        class="pt-3 text-[12px] font-[650] text-(--cp-text-muted)"
+        class="pt-3 text-[12px] font-emphasis text-(--cp-text-muted)"
       >
         -
       </div>
@@ -80,7 +80,7 @@ defineProps<{
         <div
           v-for="model in account.usage.models"
           :key="model.model"
-          class="grid grid-cols-[1.2fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pt-3 text-[12px] font-[650] text-(--cp-text-primary)"
+          class="grid grid-cols-[1.2fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pt-3 text-[12px] font-emphasis text-(--cp-text-primary)"
         >
           <span class="truncate">{{ model.model }}</span>
           <span>{{ model.requestCountDisplay }}</span>

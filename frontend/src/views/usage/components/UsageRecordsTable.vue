@@ -38,7 +38,7 @@ defineProps<{
 
     <template #accountEmail="{ row }">
       <span
-        class="block max-w-full truncate font-mono text-[12px] leading-none font-[720] text-(--cp-text-primary)"
+        class="block max-w-full truncate font-mono text-[12px] leading-none font-bold text-(--cp-text-primary)"
         :title="usageAccountText(row)"
       >
         {{ usageAccountText(row) }}
@@ -59,7 +59,7 @@ defineProps<{
 
     <template #route="{ row }">
       <div class="inline-flex max-w-full items-center gap-1.5 whitespace-nowrap">
-        <code class="font-mono text-[12px] font-[650]">{{ row.route || '—' }}</code>
+        <code class="font-mono text-[12px] font-emphasis">{{ row.route || '—' }}</code>
         <span
           v-if="usageIsCompact(row)"
           class="inline-flex shrink-0 text-(--cp-warning-text)"

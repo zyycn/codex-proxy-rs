@@ -82,7 +82,7 @@ const managedHeaderLayoutClasses = computed(() => {
             <div class="min-w-0 pt-0.5">
               <h2
                 v-if="props.title || $slots.title"
-                class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)"
+                class="m-0 text-xl leading-[1.15] font-heavy text-(--cp-text-primary)"
               >
                 <slot name="title">
                   {{ props.title }}
@@ -90,7 +90,7 @@ const managedHeaderLayoutClasses = computed(() => {
               </h2>
               <p
                 v-if="props.description || $slots.description"
-                class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)"
+                class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-emphasis text-(--cp-text-secondary)"
               >
                 <slot name="description">
                   {{ props.description }}

@@ -26,14 +26,14 @@ export const usageRecordColumns = [
     label: '推理强度',
     width: '98px',
     ellipsis: false,
-    cellClass: 'whitespace-nowrap text-[12px] font-[700] text-(--cp-text-primary)',
+    cellClass: 'whitespace-nowrap text-[12px] font-bold text-(--cp-text-primary)',
   },
   {
     key: 'route',
     label: '端点',
     width: '185px',
     ellipsis: false,
-    cellClass: 'font-mono text-[12px] font-[650]',
+    cellClass: 'font-mono text-[12px] font-emphasis',
   },
   {
     key: 'recordType',
@@ -69,7 +69,7 @@ export const usageRecordColumns = [
     width: '190px',
     ellipsis: false,
     cellClass:
-      'whitespace-nowrap font-mono text-[12px] font-[650] tabular-nums text-(--cp-text-secondary)',
+      'whitespace-nowrap font-mono text-[12px] font-emphasis tabular-nums text-(--cp-text-secondary)',
   },
   {
     key: 'clientIp',
@@ -83,7 +83,7 @@ export const usageRecordColumns = [
     width: '340px',
     ellipsis: false,
     cellClass:
-      'whitespace-normal break-words text-[12px] leading-[1.45] font-[650] text-(--cp-text-secondary)',
+      'whitespace-normal break-words text-[12px] leading-[1.45] font-emphasis text-(--cp-text-secondary)',
   },
   {
     key: 'actions',
@@ -101,44 +101,44 @@ export const opsErrorColumns = [
     label: '时间',
     width: '190px',
     cellClass:
-      'whitespace-nowrap font-mono text-[12px] font-[650] tabular-nums text-(--cp-text-secondary)',
+      'whitespace-nowrap font-mono text-[12px] font-emphasis tabular-nums text-(--cp-text-secondary)',
   },
   { key: 'upstreamStatusCode', label: '上游状态', width: '96px', align: 'center' as const },
   {
     key: 'failureClass',
     label: '失败分类',
     width: '170px',
-    cellClass: 'font-mono text-[12px] font-[650]',
+    cellClass: 'font-mono text-[12px] font-emphasis',
   },
   {
     key: 'kind',
     label: '事件',
     width: '170px',
-    cellClass: 'font-mono text-[12px] font-[650]',
+    cellClass: 'font-mono text-[12px] font-emphasis',
   },
   {
     key: 'route',
     label: '端点',
     width: '190px',
-    cellClass: 'font-mono text-[12px] font-[650]',
+    cellClass: 'font-mono text-[12px] font-emphasis',
   },
   {
     key: 'model',
     label: '模型',
     width: '180px',
-    cellClass: 'font-mono text-[12px] font-[650]',
+    cellClass: 'font-mono text-[12px] font-emphasis',
   },
   {
     key: 'accountId',
     label: '账号 ID',
     width: '230px',
-    cellClass: 'font-mono text-[12px] font-[650]',
+    cellClass: 'font-mono text-[12px] font-emphasis',
   },
   {
     key: 'requestId',
     label: '请求 ID',
     width: '250px',
-    cellClass: 'font-mono text-[12px] font-[650]',
+    cellClass: 'font-mono text-[12px] font-emphasis',
   },
   { key: 'message', label: '消息', minWidth: '300px', flex: 1 },
   {

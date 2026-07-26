@@ -63,7 +63,7 @@ function connectionLogClass(tone: string) {
       <section class="rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3">
         <div class="grid gap-2">
           <div class="flex min-h-8 items-center justify-between gap-3">
-            <span class="text-[12px] font-[760] text-(--cp-text-muted)">
+            <span class="text-[12px] font-heavy text-(--cp-text-muted)">
               测试模型
             </span>
             <BaseButton
@@ -105,18 +105,18 @@ function connectionLogClass(tone: string) {
               />
             </span>
             <div class="min-w-0">
-              <p class="m-0 text-[16px] font-[780] text-(--cp-text-primary)">
+              <p class="m-0 text-[16px] font-heavy text-(--cp-text-primary)">
                 {{ statusView.label }}
               </p>
               <p
-                class="mt-1.5 mb-0 text-[13px] leading-normal font-[650] text-(--cp-text-secondary)"
+                class="mt-1.5 mb-0 text-[13px] leading-normal font-emphasis text-(--cp-text-secondary)"
               >
                 {{ statusView.description }}
               </p>
             </div>
           </div>
           <span
-            class="inline-flex h-7 shrink-0 items-center rounded-full px-2.5 text-[12px] font-[760]"
+            class="inline-flex h-7 shrink-0 items-center rounded-full px-2.5 text-[12px] font-heavy"
             :class="statusView.badge"
           >
             {{ status === 'running' ? '检测中' : statusView.label }}
@@ -125,37 +125,37 @@ function connectionLogClass(tone: string) {
 
         <div class="mt-4 grid gap-3 sm:grid-cols-3">
           <div class="rounded-lg bg-(--cp-bg-surface) px-3 py-2.5">
-            <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">
+            <p class="m-0 text-[11px] font-heavy text-(--cp-text-muted)">
               开始时间
             </p>
-            <p class="mt-1.5 mb-0 font-mono text-[12px] font-[650] text-(--cp-text-primary)">
+            <p class="mt-1.5 mb-0 font-mono text-[12px] font-emphasis text-(--cp-text-primary)">
               {{ startedAt || '-' }}
             </p>
           </div>
           <div class="rounded-lg bg-(--cp-bg-surface) px-3 py-2.5">
-            <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">
+            <p class="m-0 text-[11px] font-heavy text-(--cp-text-muted)">
               完成时间
             </p>
-            <p class="mt-1.5 mb-0 font-mono text-[12px] font-[650] text-(--cp-text-primary)">
+            <p class="mt-1.5 mb-0 font-mono text-[12px] font-emphasis text-(--cp-text-primary)">
               {{ finishedAt || '-' }}
             </p>
           </div>
           <div class="rounded-lg bg-(--cp-bg-surface) px-3 py-2.5">
-            <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">
+            <p class="m-0 text-[11px] font-heavy text-(--cp-text-muted)">
               响应耗时
             </p>
-            <p class="mt-1.5 mb-0 font-mono text-[12px] font-[650] text-(--cp-text-primary)">
+            <p class="mt-1.5 mb-0 font-mono text-[12px] font-emphasis text-(--cp-text-primary)">
               {{ durationMs !== null ? `${durationMs}ms` : '-' }}
             </p>
           </div>
         </div>
 
         <div class="mt-3 rounded-lg bg-(--cp-bg-surface) px-3 py-2.5">
-          <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">
+          <p class="m-0 text-[11px] font-heavy text-(--cp-text-muted)">
             测试模型
           </p>
           <p
-            class="mt-1.5 mb-0 truncate font-mono text-[12px] font-[650] text-(--cp-text-primary)"
+            class="mt-1.5 mb-0 truncate font-mono text-[12px] font-emphasis text-(--cp-text-primary)"
             :title="model || '-'"
           >
             {{ model || '-' }}
@@ -163,18 +163,18 @@ function connectionLogClass(tone: string) {
         </div>
 
         <div class="mt-3 rounded-lg bg-(--cp-bg-surface) px-3 py-2.5">
-          <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">
+          <p class="m-0 text-[11px] font-heavy text-(--cp-text-muted)">
             事件轨迹
           </p>
           <BaseScrollbar max-height="260px" view-class="pt-2 pr-2">
-            <div v-if="logs.length === 0" class="text-[12px] font-[650] text-(--cp-text-muted)">
+            <div v-if="logs.length === 0" class="text-[12px] font-emphasis text-(--cp-text-muted)">
               -
             </div>
             <div v-else class="flex flex-col gap-1.5">
               <div
                 v-for="item in logs"
                 :key="item.key"
-                class="grid grid-cols-[54px_minmax(0,1fr)] gap-2 text-[12px] leading-[1.45] font-[650]"
+                class="grid grid-cols-[54px_minmax(0,1fr)] gap-2 text-[12px] leading-[1.45] font-emphasis"
               >
                 <span class="font-mono text-(--cp-text-muted)">{{ item.time }}</span>
                 <div class="min-w-0">
@@ -184,7 +184,7 @@ function connectionLogClass(tone: string) {
                   <div v-if="item.detail" class="mt-2 rounded-lg bg-(--cp-bg-subtle) px-3 py-2">
                     <BaseScrollbar max-height="138px" view-class="pr-2">
                       <pre
-                        class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[11px] leading-[1.6] font-[620] text-(--cp-text-primary)"
+                        class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[11px] leading-[1.6] font-emphasis text-(--cp-text-primary)"
                       >{{ item.detail }}</pre>
                     </BaseScrollbar>
                   </div>
@@ -195,12 +195,12 @@ function connectionLogClass(tone: string) {
         </div>
 
         <div v-if="error" class="mt-3 rounded-lg bg-(--cp-danger-bg) px-3 py-2.5">
-          <p class="m-0 text-[11px] font-[760] text-(--cp-danger-text)">
+          <p class="m-0 text-[11px] font-heavy text-(--cp-danger-text)">
             错误信息
           </p>
           <BaseScrollbar max-height="118px" view-class="pt-1.5 pr-2">
             <p
-              class="m-0 wrap-break-word text-[12px] leading-[1.55] font-[650] text-(--cp-danger-text)"
+              class="m-0 wrap-break-word text-[12px] leading-[1.55] font-emphasis text-(--cp-danger-text)"
             >
               {{ error }}
             </p>

@@ -353,17 +353,17 @@ onBeforeUnmount(() => {
         ref="brandLabelEl"
         class="grid min-w-33 content-center overflow-hidden"
       >
-        <strong class="text-base leading-[1.1] font-[760] text-(--cp-text-primary)">
+        <strong class="text-base leading-[1.1] font-heavy text-(--cp-text-primary)">
           Codex Proxy
         </strong>
         <span class="mt-1.5 flex h-4.5 min-w-0 items-center gap-2">
-          <span class="shrink-0 text-xs leading-none font-[650] text-(--cp-text-secondary)">
+          <span class="shrink-0 text-xs leading-none font-emphasis text-(--cp-text-secondary)">
             Rust build
           </span>
           <button
             v-if="hasVersionLabel"
             type="button"
-            class="inline-flex h-4.5 min-w-0 cursor-pointer items-center gap-1 rounded-(--cp-input-radius-small) border-0 px-1.5 font-mono text-[10px] leading-none font-[720] transition-colors outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)"
+            class="inline-flex h-4.5 min-w-0 cursor-pointer items-center gap-1 rounded-(--cp-input-radius-small) border-0 px-1.5 font-mono text-[10px] leading-none font-bold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)"
             :class="[
               hasUpdate
                 ? 'bg-(--cp-success-bg) text-(--cp-success-text) hover:bg-(--cp-success-bg-hover)'
@@ -427,7 +427,7 @@ onBeforeUnmount(() => {
       >
         <span
           v-if="!isCollapsed"
-          class="inline-flex whitespace-nowrap h-7 items-center gap-1.5 rounded-lg bg-(--cp-success-bg) px-2.5 text-xs leading-none font-[650] text-(--cp-success-text)"
+          class="inline-flex whitespace-nowrap h-7 items-center gap-1.5 rounded-lg bg-(--cp-success-bg) px-2.5 text-xs leading-none font-emphasis text-(--cp-success-text)"
         >
           <i class="size-1.5 rounded-full bg-(--cp-success)" />
           在线

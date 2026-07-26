@@ -35,7 +35,7 @@ const textareaClasses = computed(() => [
   'hover:bg-[var(--cp-input-current-bg-hover,var(--cp-input-context-bg-hover))] hover:shadow-(--cp-shadow-input-hover) focus:bg-(--cp-input-soft-bg-focus) focus:shadow-(--cp-shadow-input-focus)',
   'disabled:cursor-not-allowed disabled:bg-(--cp-disabled-bg) disabled:text-(--cp-disabled-text) disabled:shadow-none',
   sizeClasses[props.size],
-  'text-[13px] leading-[1.55] font-[650]',
+  'text-[13px] leading-[1.55] font-emphasis',
   props.error ? 'bg-(--cp-input-error-soft-bg) shadow-(--cp-shadow-input-error)' : undefined,
 ])
 </script>
@@ -51,7 +51,7 @@ const textareaClasses = computed(() => [
       :aria-label="ariaLabel"
       :aria-invalid="error ? 'true' : undefined"
     />
-    <span v-if="error" class="text-xs leading-[1.15] font-[650] text-(--cp-danger-text)">
+    <span v-if="error" class="text-xs leading-[1.15] font-emphasis text-(--cp-danger-text)">
       {{ error }}
     </span>
   </div>
