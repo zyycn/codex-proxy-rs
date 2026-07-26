@@ -32,25 +32,14 @@ fn admin_auth_state_rejects_invalid_ttl_boundaries() {
             .block_on(repository.store_admin_session("expired-session", &session))
             .is_err()
     );
-    assert!(
-        runtime
-            .block_on(repository.record_login_failure("source", 0, 60))
-            .is_err()
-    );
-    assert!(
-        runtime
-            .block_on(repository.record_login_failure("source", 5, 0))
-            .is_err()
-    );
 }
 
 #[tokio::test]
-async fn admin_auth_state_keeps_fixed_ttl_and_atomic_failure_window() {
+async fn admin_auth_state_keeps_fixed_ttl_and_opaque_keys() {
     let Some((repository, mut connection, namespace)) = admin_auth_repository().await else {
         return;
     };
     let session_id = "session-real-secret-id";
-    let source = "203.0.113.7";
     let password = "must-never-enter-redis";
     let admin_api_key = "admin-must-never-enter-redis";
     let session = AdminSessionRecord {
@@ -70,29 +59,14 @@ async fn admin_auth_state_keeps_fixed_ttl_and_atomic_failure_window() {
         Some(session.clone())
     );
 
-    for attempt in 1..=5 {
-        let throttled = repository
-            .record_login_failure(source, 5, 60)
-            .await
-            .expect("record failure");
-        assert_eq!(throttled, attempt == 5);
-    }
-    assert!(
-        repository
-            .login_source_is_throttled(source, 5, 60)
-            .await
-            .expect("read failure window")
-    );
-
     let keys = redis::cmd("KEYS")
         .arg(format!("{namespace}:*"))
         .query_async::<Vec<String>>(&mut connection)
         .await
         .expect("list isolated test keys");
-    assert_eq!(keys.len(), 2);
+    assert_eq!(keys.len(), 1);
     for key in &keys {
         assert!(!key.contains(session_id));
-        assert!(!key.contains(source));
         let ttl = redis::cmd("PTTL")
             .arg(key)
             .query_async::<i64>(&mut connection)
@@ -105,21 +79,10 @@ async fn admin_auth_state_keeps_fixed_ttl_and_atomic_failure_window() {
             .await
             .expect("read isolated test value");
         assert!(!value.contains(session_id));
-        assert!(!value.contains(source));
         assert!(!value.contains(password));
         assert!(!value.contains(admin_api_key));
     }
 
-    repository
-        .clear_login_failures(source)
-        .await
-        .expect("clear failure window");
-    assert!(
-        !repository
-            .login_source_is_throttled(source, 5, 60)
-            .await
-            .expect("read cleared failure window")
-    );
     assert_eq!(
         repository
             .delete_admin_session(session_id)

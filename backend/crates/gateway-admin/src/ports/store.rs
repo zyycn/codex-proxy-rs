@@ -156,7 +156,7 @@ pub trait AccountStore: Send + Sync {
     ) -> AdminStoreResult<()>;
 }
 
-/// 管理员密码、会话、登录限流和安全审计。
+/// 管理员密码、会话和安全审计。
 #[async_trait]
 pub trait AuthStore: Send + Sync {
     async fn load_password_hash(&self, admin_user_id: &str) -> AdminStoreResult<Option<String>>;
@@ -175,22 +175,6 @@ pub trait AuthStore: Send + Sync {
     -> AdminStoreResult<()>;
 
     async fn delete_session(&self, session_id: &str) -> AdminStoreResult<Option<AdminSession>>;
-
-    async fn login_source_is_throttled(
-        &self,
-        source: &str,
-        failure_limit: u32,
-        window_seconds: u64,
-    ) -> AdminStoreResult<bool>;
-
-    async fn record_login_failure(
-        &self,
-        source: &str,
-        failure_limit: u32,
-        window_seconds: u64,
-    ) -> AdminStoreResult<bool>;
-
-    async fn clear_login_failures(&self, source: &str) -> AdminStoreResult<()>;
 
     async fn append_audit_event(&self, event: AdminAuditEvent) -> AdminStoreResult<()>;
 }

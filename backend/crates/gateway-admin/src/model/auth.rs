@@ -39,7 +39,6 @@ impl AdminRequestContext {
 pub struct LoginCommand {
     pub username: Option<String>,
     pub password: String,
-    pub source: String,
 }
 
 impl std::fmt::Debug for LoginCommand {
@@ -48,7 +47,6 @@ impl std::fmt::Debug for LoginCommand {
             .debug_struct("LoginCommand")
             .field("username", &self.username)
             .field("password", &"[REDACTED]")
-            .field("source", &self.source)
             .finish()
     }
 }
@@ -65,8 +63,6 @@ pub struct LoginResult {
 pub enum LoginError {
     #[error("invalid administrator credentials")]
     InvalidCredentials,
-    #[error("administrator login is throttled")]
-    Throttled,
     #[error("administrator authentication is unavailable")]
     Unavailable,
 }

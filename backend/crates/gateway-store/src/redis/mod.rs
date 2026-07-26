@@ -1,7 +1,7 @@
 //! 可丢失、可从 PostgreSQL 或 Provider 重建的 Redis 协调状态。
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use redis::{Script, aio::ConnectionManager};
+use redis::aio::ConnectionManager;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -33,17 +33,6 @@ pub use runtime_change::*;
 use crate::{StoreError, StoreResult, redis_unavailable, require_nonempty};
 
 pub(crate) const MAX_REDIS_EXACT_INTEGER: u64 = (1_u64 << 53) - 1;
-const RECORD_ADMIN_LOGIN_FAILURE_SCRIPT: &str = r#"
-local count = redis.call('INCR', KEYS[1])
-local ttl = redis.call('PTTL', KEYS[1])
-if count == 1 or ttl < 0 then
-  redis.call('PEXPIRE', KEYS[1], ARGV[2])
-end
-if count >= tonumber(ARGV[1]) then
-  return 1
-end
-return 0
-"#;
 
 /// Redis 中可丢失的管理员会话事实；认证秘密不属于该结构。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,7 +60,7 @@ impl AdminSessionRecord {
     }
 }
 
-/// 管理员会话与登录失败窗口的 Redis 基础设施端口。
+/// 管理员会话的 Redis 基础设施端口。
 #[async_trait]
 pub trait AdminAuthStateRepository: Send + Sync {
     async fn load_admin_session(&self, session_id: &str)
@@ -85,22 +74,9 @@ pub trait AdminAuthStateRepository: Send + Sync {
         &self,
         session_id: &str,
     ) -> StoreResult<Option<AdminSessionRecord>>;
-    async fn login_source_is_throttled(
-        &self,
-        source: &str,
-        failure_limit: u32,
-        window_seconds: u64,
-    ) -> StoreResult<bool>;
-    async fn record_login_failure(
-        &self,
-        source: &str,
-        failure_limit: u32,
-        window_seconds: u64,
-    ) -> StoreResult<bool>;
-    async fn clear_login_failures(&self, source: &str) -> StoreResult<()>;
 }
 
-/// Redis 管理员会话与登录失败窗口 adapter。
+/// Redis 管理员会话 adapter。
 #[derive(Clone)]
 pub struct RedisAdminAuthStateRepository {
     connection: ConnectionManager,
@@ -118,11 +94,6 @@ impl RedisAdminAuthStateRepository {
     fn session_key(&self, session_id: &str) -> StoreResult<String> {
         let fingerprint = resource_fingerprint("admin session", session_id)?;
         Ok(format!("{}:session:{{{fingerprint}}}", self.namespace))
-    }
-
-    fn failure_key(&self, source: &str) -> StoreResult<String> {
-        let fingerprint = resource_fingerprint("admin login failure", source)?;
-        Ok(format!("{}:failure:{{{fingerprint}}}", self.namespace))
     }
 }
 
@@ -179,54 +150,6 @@ impl AdminAuthStateRepository for RedisAdminAuthStateRepository {
             .map(|value| decode_admin_session(&value))
             .transpose()
     }
-
-    async fn login_source_is_throttled(
-        &self,
-        source: &str,
-        failure_limit: u32,
-        window_seconds: u64,
-    ) -> StoreResult<bool> {
-        validate_failure_policy(failure_limit, window_seconds)?;
-        let key = self.failure_key(source)?;
-        let mut connection = self.connection.clone();
-        let failures = redis::cmd("GET")
-            .arg(key)
-            .query_async::<Option<u64>>(&mut connection)
-            .await
-            .map_err(|_| redis_unavailable("load admin login failure window"))?
-            .unwrap_or_default();
-        Ok(failures >= u64::from(failure_limit))
-    }
-
-    async fn record_login_failure(
-        &self,
-        source: &str,
-        failure_limit: u32,
-        window_seconds: u64,
-    ) -> StoreResult<bool> {
-        let window_millis = validate_failure_policy(failure_limit, window_seconds)?;
-        let key = self.failure_key(source)?;
-        let mut connection = self.connection.clone();
-        let throttled = Script::new(RECORD_ADMIN_LOGIN_FAILURE_SCRIPT)
-            .key(key)
-            .arg(failure_limit)
-            .arg(window_millis)
-            .invoke_async::<i64>(&mut connection)
-            .await
-            .map_err(|_| redis_unavailable("record admin login failure"))?;
-        Ok(throttled == 1)
-    }
-
-    async fn clear_login_failures(&self, source: &str) -> StoreResult<()> {
-        let key = self.failure_key(source)?;
-        let mut connection = self.connection.clone();
-        redis::cmd("DEL")
-            .arg(key)
-            .query_async::<i64>(&mut connection)
-            .await
-            .map_err(|_| redis_unavailable("clear admin login failures"))?;
-        Ok(())
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -257,17 +180,6 @@ fn decode_admin_session(value: &str) -> StoreResult<AdminSessionRecord> {
         admin_user_id: wire.admin_user_id,
         expires_at,
     })
-}
-
-fn validate_failure_policy(failure_limit: u32, window_seconds: u64) -> StoreResult<u64> {
-    if failure_limit == 0 {
-        return Err(admin_auth_invalid("login failure limit must be positive"));
-    }
-    let window_millis = window_seconds
-        .checked_mul(1_000)
-        .filter(|value| *value > 0 && *value <= MAX_REDIS_EXACT_INTEGER)
-        .ok_or_else(|| admin_auth_invalid("login failure window is outside the supported range"))?;
-    Ok(window_millis)
 }
 
 fn admin_auth_invalid(message: &str) -> StoreError {

@@ -51,7 +51,6 @@ async fn default_auth_service_should_initialize_login_validate_and_logout() {
     let service = fixture.services.auth();
     let session = service
         .login(LoginCommand {
-            source: "127.0.0.1".to_owned(),
             username: Some("admin_1".to_owned()),
             password: "strong-admin-password".to_owned(),
         })
@@ -82,42 +81,6 @@ async fn default_auth_service_should_initialize_login_validate_and_logout() {
             .expect("validate logged-out session")
     );
     assert_eq!(fixture.auth.audit_count(), 2);
-}
-
-#[tokio::test]
-async fn default_auth_service_should_throttle_repeated_invalid_identity() {
-    let fixture = AdminTestFixture::new().await;
-    for attempt in 1..=5 {
-        let error = fixture
-            .services
-            .auth()
-            .login(LoginCommand {
-                source: "shared-source".to_owned(),
-                username: Some("wrong-user".to_owned()),
-                password: "wrong-password".to_owned(),
-            })
-            .await
-            .expect_err("invalid login");
-        if attempt < 5 {
-            assert_eq!(error, LoginError::InvalidCredentials);
-        } else {
-            assert_eq!(error, LoginError::Throttled);
-        }
-    }
-    assert_eq!(
-        fixture
-            .services
-            .auth()
-            .login(LoginCommand {
-                source: "shared-source".to_owned(),
-                username: None,
-                password: "anything".to_owned(),
-            })
-            .await
-            .expect_err("source remains throttled"),
-        LoginError::Throttled
-    );
-    assert_eq!(fixture.auth.session_count(), 0);
 }
 
 #[tokio::test]
@@ -162,7 +125,6 @@ async fn audit_failure_should_revoke_new_session_before_returning_it() {
             .services
             .auth()
             .login(LoginCommand {
-                source: "source".to_owned(),
                 username: None,
                 password: "strong-admin-password".to_owned(),
             })
@@ -171,117 +133,4 @@ async fn audit_failure_should_revoke_new_session_before_returning_it() {
         LoginError::Unavailable
     );
     assert_eq!(fixture.auth.session_count(), 0);
-}
-
-#[tokio::test]
-async fn login_route_should_bucket_throttling_by_client_ip() {
-    use std::net::SocketAddr;
-
-    use axum::{body::Body, extract::ConnectInfo, http::Request};
-    use tower::ServiceExt as _;
-
-    #[derive(Clone)]
-    struct AuthState(gateway_admin::AdminServices);
-
-    impl gateway_api::admin::AdminSessionState for AuthState {
-        fn admin_services(&self) -> &gateway_admin::AdminServices {
-            &self.0
-        }
-    }
-
-    let fixture = AdminTestFixture::new().await;
-    let app = gateway_api::admin::auth::router::<AuthState>()
-        .with_state(AuthState(fixture.services.clone()));
-
-    let failed_login_from = |ip: [u8; 4]| {
-        let app = app.clone();
-        async move {
-            let mut request = Request::builder()
-                .method("POST")
-                .uri("/api/admin/auth/login")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"username":"admin_1","password":"wrong-password"}"#,
-                ))
-                .expect("build login request");
-            request
-                .extensions_mut()
-                .insert(ConnectInfo(SocketAddr::from((ip, 50_000))));
-            app.oneshot(request).await.expect("login response").status()
-        }
-    };
-
-    for _ in 0..4 {
-        assert_eq!(
-            failed_login_from([10, 0, 0, 1]).await,
-            axum::http::StatusCode::UNAUTHORIZED
-        );
-    }
-    assert_eq!(
-        failed_login_from([10, 0, 0, 1]).await,
-        axum::http::StatusCode::TOO_MANY_REQUESTS
-    );
-    assert_eq!(
-        failed_login_from([10, 0, 0, 2]).await,
-        axum::http::StatusCode::UNAUTHORIZED
-    );
-}
-
-#[tokio::test]
-async fn login_route_should_aggregate_ipv6_sources_by_64_prefix() {
-    use std::net::{Ipv6Addr, SocketAddr};
-
-    use axum::{body::Body, extract::ConnectInfo, http::Request};
-    use tower::ServiceExt as _;
-
-    #[derive(Clone)]
-    struct AuthState(gateway_admin::AdminServices);
-
-    impl gateway_api::admin::AdminSessionState for AuthState {
-        fn admin_services(&self) -> &gateway_admin::AdminServices {
-            &self.0
-        }
-    }
-
-    let fixture = AdminTestFixture::new().await;
-    let app = gateway_api::admin::auth::router::<AuthState>()
-        .with_state(AuthState(fixture.services.clone()));
-
-    let failed_login_from = |ip: Ipv6Addr| {
-        let app = app.clone();
-        async move {
-            let mut request = Request::builder()
-                .method("POST")
-                .uri("/api/admin/auth/login")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"username":"admin_1","password":"wrong-password"}"#,
-                ))
-                .expect("build login request");
-            request
-                .extensions_mut()
-                .insert(ConnectInfo(SocketAddr::from((ip, 50_000))));
-            app.oneshot(request).await.expect("login response").status()
-        }
-    };
-
-    // 同一 /64 内轮换低 64 位不应各得独立配额：五次即触发限流。
-    for suffix in 0..4 {
-        assert_eq!(
-            failed_login_from(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, suffix)).await,
-            axum::http::StatusCode::UNAUTHORIZED
-        );
-    }
-    assert_eq!(
-        failed_login_from(Ipv6Addr::new(
-            0x2001, 0xdb8, 0, 0, 0xffff, 0xffff, 0xffff, 0xffff
-        ))
-        .await,
-        axum::http::StatusCode::TOO_MANY_REQUESTS
-    );
-    // 不同 /64 前缀是独立桶。
-    assert_eq!(
-        failed_login_from(Ipv6Addr::new(0x2001, 0xdb8, 0, 1, 0, 0, 0, 1)).await,
-        axum::http::StatusCode::UNAUTHORIZED
-    );
 }

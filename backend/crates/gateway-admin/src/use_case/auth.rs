@@ -22,9 +22,6 @@ use crate::{
 
 use super::map_store_error;
 
-const LOGIN_FAILURE_LIMIT: u32 = 5;
-const LOGIN_FAILURE_WINDOW_SECONDS: u64 = 15 * 60;
-
 /// API 鉴权与管理员登录消费的统一服务。
 #[async_trait]
 pub trait AuthService: Send + Sync {
@@ -61,19 +58,6 @@ impl DefaultAuthService {
             session_ttl: Duration::minutes(minutes),
             store,
         }
-    }
-
-    async fn record_failed_login(&self, source: &str) -> Result<LoginError, LoginError> {
-        let throttled = self
-            .store
-            .record_login_failure(source, LOGIN_FAILURE_LIMIT, LOGIN_FAILURE_WINDOW_SECONDS)
-            .await
-            .map_err(|_| LoginError::Unavailable)?;
-        Ok(if throttled {
-            LoginError::Throttled
-        } else {
-            LoginError::InvalidCredentials
-        })
     }
 
     fn auth_audit(&self, action: &str, occurred_at: chrono::DateTime<Utc>) -> AdminAuditEvent {
@@ -137,22 +121,13 @@ impl AuthService for DefaultAuthService {
     }
 
     async fn login(&self, command: LoginCommand) -> Result<LoginResult, LoginError> {
-        let source = normalized_login_source(&command.source);
-        if self
-            .store
-            .login_source_is_throttled(source, LOGIN_FAILURE_LIMIT, LOGIN_FAILURE_WINDOW_SECONDS)
-            .await
-            .map_err(|_| LoginError::Unavailable)?
-        {
-            return Err(LoginError::Throttled);
-        }
         if command
             .username
             .as_deref()
             .unwrap_or(&self.default_admin_user_id)
             != self.default_admin_user_id
         {
-            return Err(self.record_failed_login(source).await?);
+            return Err(LoginError::InvalidCredentials);
         }
         let hash = self
             .store
@@ -161,13 +136,9 @@ impl AuthService for DefaultAuthService {
             .map_err(|_| LoginError::Unavailable)?
             .ok_or(LoginError::InvalidCredentials)?;
         if !verify_admin_password(&command.password, &hash).map_err(|_| LoginError::Unavailable)? {
-            return Err(self.record_failed_login(source).await?);
+            return Err(LoginError::InvalidCredentials);
         }
 
-        self.store
-            .clear_login_failures(source)
-            .await
-            .map_err(|_| LoginError::Unavailable)?;
         let session_id = random_session_token();
         let expires_at = Utc::now() + self.session_ttl;
         self.store
@@ -245,9 +216,4 @@ fn valid_admin_api_key_shape(value: &str) -> bool {
     value.len() == 70
         && value.starts_with("admin-")
         && value[6..].bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn normalized_login_source(source: &str) -> &str {
-    let source = source.trim();
-    if source.is_empty() { "unknown" } else { source }
 }
