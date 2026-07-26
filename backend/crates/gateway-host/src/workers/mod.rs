@@ -108,22 +108,16 @@ impl WorkerSupervisor {
         Ok(())
     }
 
-    /// 先协作取消；超时后 abort 不合作任务，lease 依赖 TTL 兜底。
+    /// 先协作取消；所有任务共享同一绝对截止点，逾期任务被 abort，
+    /// lease 依赖 TTL 兜底。每个句柄恰好 join 一次：已在截止点前退出的
+    /// 不会被二次 poll，逾期的在 abort 后等待其真正终止。
     pub async fn shutdown(&self, timeout: Duration) {
         self.cancellation.cancel();
-        let mut handles = std::mem::take(&mut *lock_unpoisoned(&self.handles));
-        let joined = tokio::time::timeout(timeout, async {
-            for (_, handle) in &mut handles {
-                let _ = handle.await;
-            }
-        })
-        .await
-        .is_ok();
-        if !joined {
-            for (_, handle) in &handles {
+        let handles = std::mem::take(&mut *lock_unpoisoned(&self.handles));
+        let deadline = tokio::time::Instant::now() + timeout;
+        for (_, mut handle) in handles {
+            if tokio::time::timeout_at(deadline, &mut handle).await.is_err() {
                 handle.abort();
-            }
-            for (_, handle) in handles {
                 let _ = handle.await;
             }
         }

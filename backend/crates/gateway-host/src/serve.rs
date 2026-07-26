@@ -121,16 +121,36 @@ pub(crate) async fn serve_router(
         wait_for_shutdown(&shutdown_cancellation).await;
         shutdown_connections.begin_draining();
     };
-    axum::serve(
+    // axum 的优雅关闭会无限等待存量连接结束，而 SSE 等长响应体不观察
+    // 取消信号：慢客户端可以把关闭拖住直到被 SIGKILL。drain 截止点从
+    // 取消信号起算，逾期即放弃等待，存量连接随进程退出终止。
+    let drain_deadline = {
+        let cancellation = cancellation.clone();
+        async move {
+            cancellation.cancelled().await;
+            tokio::time::sleep(drain_timeout).await;
+        }
+    };
+    let serve = axum::serve(
         listener,
         router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown)
-    .await
-    .map_err(ServeError::Serve)?;
-
-    connections.begin_draining();
-    connections.wait_until_idle(drain_timeout).await;
+    .with_graceful_shutdown(shutdown);
+    tokio::select! {
+        biased;
+        result = serve => {
+            result.map_err(ServeError::Serve)?;
+            connections.begin_draining();
+            connections.wait_until_idle(drain_timeout).await;
+        }
+        () = drain_deadline => {
+            tracing::warn!(
+                target: "gateway_shutdown",
+                timeout_secs = drain_timeout.as_secs(),
+                "优雅 drain 超时，放弃等待存量连接"
+            );
+        }
+    }
     Ok(())
 }
 

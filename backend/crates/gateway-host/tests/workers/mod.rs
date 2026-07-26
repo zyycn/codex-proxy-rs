@@ -627,6 +627,53 @@ async fn shutdown_timeout_aborts_uncooperative_task_and_drops_guard() {
 }
 
 #[tokio::test]
+async fn shutdown_timeout_must_not_rejoin_workers_that_already_exited() {
+    // 挂死任务放在 join 顺序最末的 kind（Retention），保证超时触发时
+    // 排在它前面的合作任务句柄都已被 join 过一次。
+    let hung = HungTask {
+        entered: Arc::new(AtomicBool::new(false)),
+        notification: Arc::new(Notify::new()),
+    };
+    let cooperative = CancellationTask {
+        entered: Arc::new(AtomicUsize::new(0)),
+        observed: Arc::new(AtomicUsize::new(0)),
+    };
+    let mut plan = ACTIVE_KINDS
+        .into_iter()
+        .map(|kind| {
+            if kind == WorkerKind::Retention {
+                registration(kind, kind.as_str(), hung.clone(), test_schedule(), true)
+            } else {
+                registration(
+                    kind,
+                    kind.as_str(),
+                    cooperative.clone(),
+                    test_schedule(),
+                    true,
+                )
+            }
+        })
+        .collect::<Vec<_>>();
+    plan.push(WorkerContribution::Disabled {
+        kind: WorkerKind::OpsFlush,
+        reason: WorkerDisabledReason::NoBufferedOpsEvents,
+    });
+    let leases = Arc::new(FakeLeasePort::default());
+    let supervisor = supervisor();
+    supervisor.start(plan, leases.clone()).expect("complete plan");
+    hung.notification.notified().await;
+    wait_until(|| cooperative.entered.load(Ordering::SeqCst) == ACTIVE_KINDS.len() - 1).await;
+
+    supervisor.shutdown(Duration::from_millis(100)).await;
+
+    assert_eq!(
+        cooperative.observed.load(Ordering::SeqCst),
+        ACTIVE_KINDS.len() - 1
+    );
+    assert!(lock_unpoisoned(&leases.active_guards).is_empty());
+}
+
+#[tokio::test]
 async fn running_worker_becomes_unhealthy_when_last_success_is_stale() {
     let task = SucceedsThenHangsTask {
         runs: Arc::new(AtomicUsize::new(0)),
