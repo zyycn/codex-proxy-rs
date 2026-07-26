@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use filetime::FileTime;
@@ -80,6 +81,49 @@ async fn restart_should_spawn_replacement_before_shutdown_outside_docker() {
 }
 
 #[tokio::test]
+async fn restart_should_conflict_while_another_system_operation_is_running() {
+    let fixture = Fixture::new();
+    // 裸 TCP 监听不回包：update 持有操作锁后停在 release 拉取阶段，accept
+    // 信号保证断言时锁一定已被占用。
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("release listener");
+    let api_base = format!("http://{}/repos", listener.local_addr().expect("addr"));
+    let (connected_tx, connected_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let connection = listener.accept().await;
+        let _ = connected_tx.send(());
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        drop(connection);
+    });
+    let mut config = fixture.config(&api_base);
+    config.self_restart_enabled = true;
+    config.deployment_mode = "docker".to_owned();
+    let shutdown = CancellationToken::new();
+    let service = Arc::new(ProcessSystemOperations::new(shutdown.clone(), config));
+    let update = tokio::spawn({
+        let service = Arc::clone(&service);
+        async move {
+            service
+                .perform_update(Some(TARGET_VERSION.to_owned()))
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(5), connected_rx)
+        .await
+        .expect("update reaches release fetch while holding the operation lock")
+        .expect("connected signal");
+
+    let error = service.restart().await.expect_err("restart during update");
+    assert_eq!(error.kind(), SystemOperationErrorKind::Conflict);
+    assert!(!shutdown.is_cancelled());
+
+    update.abort();
+    let _ = update.await;
+    service.restart().await.expect("restart after lock release");
+}
+
+#[tokio::test]
 async fn rollback_should_restore_binary_web_and_version_state() {
     let server = MockServer::start().await;
     let fixture = Fixture::new();
@@ -133,6 +177,40 @@ async fn update_detail_should_fallback_to_cache_when_refresh_fetch_fails() {
             .latest_version,
         TARGET_VERSION
     );
+}
+
+#[tokio::test]
+async fn update_detail_should_offer_latest_non_draft_prerelease_on_preview_channel() {
+    let server = MockServer::start().await;
+    let fixture = Fixture::new();
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repository/releases"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {
+                "tag_name": "v1.2.0-beta.2",
+                "name": "Draft 1.2.0-beta.2",
+                "prerelease": true,
+                "draft": true,
+                "assets": [],
+            },
+            {
+                "tag_name": "v1.1.0-beta.1",
+                "name": "Release 1.1.0-beta.1",
+                "body": "notes",
+                "html_url": "https://github.com/owner/repository/releases",
+                "prerelease": true,
+                "assets": [],
+            },
+        ])))
+        .mount(&server)
+        .await;
+    let mut config = fixture.config(&format!("{}/repos", server.uri()));
+    config.update_channel = "preview".to_owned();
+    let service = ProcessSystemOperations::new(CancellationToken::new(), config);
+
+    let detail = service.update_detail(true).await.expect("detail");
+    assert_eq!(detail.latest_version, "1.1.0-beta.1");
+    assert!(detail.has_update);
 }
 
 #[tokio::test]

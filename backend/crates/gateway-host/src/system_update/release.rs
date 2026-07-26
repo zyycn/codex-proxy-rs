@@ -20,6 +20,8 @@ pub(crate) struct GitHubRelease {
     pub(crate) html_url: Option<String>,
     pub(crate) prerelease: bool,
     #[serde(default)]
+    pub(crate) draft: bool,
+    #[serde(default)]
     pub(crate) assets: Vec<GitHubAsset>,
 }
 
@@ -57,7 +59,7 @@ impl ReleaseCache {
         if !refresh && let Some(detail) = self.cached(&key).await {
             return Ok(detail);
         }
-        match fetch_latest(&config.github_api_base, repository).await {
+        match fetch_latest(&config.github_api_base, repository, &config.update_channel).await {
             Ok(release) => {
                 let detail = detail_from_release(config, &release);
                 *self.entry.lock().await = Some(CachedRelease {
@@ -85,13 +87,27 @@ impl ReleaseCache {
 pub(crate) async fn fetch_latest(
     api_base: &str,
     repository: &str,
+    update_channel: &str,
 ) -> Result<GitHubRelease, OperationError> {
     validate_api_base(api_base).map_err(conflict)?;
     validate_repository(repository)?;
-    let url = format!(
-        "{}/{repository}/releases/latest",
-        api_base.trim_end_matches('/')
-    );
+    let base = api_base.trim_end_matches('/');
+    // GitHub 的 /releases/latest 永远只返回正式版；preview 渠道需要覆盖
+    // prerelease，因此改查列表端点并取最新一条非草稿 Release。
+    if update_channel == "preview" {
+        let releases: Vec<GitHubRelease> =
+            fetch_release_json(&format!("{base}/{repository}/releases?per_page=10")).await?;
+        return releases
+            .into_iter()
+            .find(|release| !release.draft)
+            .ok_or_else(|| upstream("no published release available"));
+    }
+    fetch_release_json(&format!("{base}/{repository}/releases/latest")).await
+}
+
+async fn fetch_release_json<T: serde::de::DeserializeOwned>(
+    url: &str,
+) -> Result<T, OperationError> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none())
@@ -111,7 +127,7 @@ pub(crate) async fn fetch_latest(
         )));
     }
     response
-        .json::<GitHubRelease>()
+        .json::<T>()
         .await
         .map_err(|error| upstream(format!("invalid GitHub release response: {error}")))
 }
