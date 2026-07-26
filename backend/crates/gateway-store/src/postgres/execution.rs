@@ -295,6 +295,12 @@ pub struct ModelRequestRecoveryReport {
 #[async_trait]
 pub trait ModelRequestRepository: Send + Sync {
     async fn insert_model_request(&self, request: NewModelRequest) -> StoreResult<()>;
+    /// 请求行与首次 attempt 列一次插入；`attempt.attempt_count` 必须为 1。
+    async fn insert_model_request_with_first_attempt(
+        &self,
+        request: NewModelRequest,
+        attempt: ModelRequestAttemptStart,
+    ) -> StoreResult<()>;
     async fn begin_model_request_attempt(
         &self,
         attempt: ModelRequestAttemptStart,
@@ -380,6 +386,63 @@ impl ModelRequestRepository for PgExecutionStore {
         .execute(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("insert model request"))?;
+        Ok(())
+    }
+
+    async fn insert_model_request_with_first_attempt(
+        &self,
+        request: NewModelRequest,
+        attempt: ModelRequestAttemptStart,
+    ) -> StoreResult<()> {
+        request.validate()?;
+        attempt.validate()?;
+        if attempt.attempt_count != 1 || attempt.model_request_id != request.id {
+            return Err(invalid("first attempt must target the inserted request"));
+        }
+        sqlx::query(
+            "insert into model_requests (
+               id, client_api_key_id, client_api_key_ref, config_revision, protocol,
+               operation, endpoint, client_transport, requested_model_id,
+               client_ip, user_agent, reasoning_effort,
+               reasoning_preset, request_kind, subagent_kind, compact,
+               image_generation_requested, started_at, deadline_at,
+               provider_kind, provider_account_id, provider_account_ref,
+               upstream_model_id, upstream_transport, http_version,
+               attempt_count, upstream_send_state
+             ) values (
+               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::inet, $11, $12,
+               $13, $14, $15, $16, $17, $18, $19,
+               $20, $21, $22, $23, $24, $25, 1, 'not_sent'
+             )",
+        )
+        .bind(request.id)
+        .bind(request.client_api_key_id)
+        .bind(request.client_api_key_ref)
+        .bind(to_i64(request.config_revision, "config_revision")?)
+        .bind(request.protocol)
+        .bind(request.operation)
+        .bind(request.endpoint)
+        .bind(request.client_transport)
+        .bind(request.requested_model_id)
+        .bind(request.client_ip)
+        .bind(request.user_agent)
+        .bind(request.reasoning_effort)
+        .bind(request.reasoning_preset)
+        .bind(request.request_kind)
+        .bind(request.subagent_kind)
+        .bind(request.compact)
+        .bind(request.image_generation_requested)
+        .bind(request.started_at)
+        .bind(request.deadline_at)
+        .bind(attempt.provider_kind)
+        .bind(attempt.provider_account_id)
+        .bind(attempt.provider_account_ref)
+        .bind(attempt.upstream_model_id)
+        .bind(attempt.upstream_transport)
+        .bind(attempt.http_version)
+        .execute(&self.pool)
+        .await
+        .map_err(|_| postgres_unavailable("insert model request with first attempt"))?;
         Ok(())
     }
 
@@ -632,53 +695,15 @@ impl ExecutionStore for PgExecutionStore {
         &self,
         request: CoreNewModelRequest,
     ) -> Result<(), CoreStoreError> {
-        self.insert_model_request(NewModelRequest {
-            id: request.id.as_str().to_owned(),
-            client_api_key_id: request
-                .client_api_key_id
-                .as_ref()
-                .map(|id| id.as_str().to_owned()),
-            client_api_key_ref: request.client_api_key_ref.as_str().to_owned(),
-            config_revision: request.config_revision.get(),
-            protocol: request.protocol,
-            operation: request.operation.as_str().to_owned(),
-            endpoint: request.endpoint,
-            client_transport: request.client_transport,
-            requested_model_id: request.requested_model.as_str().to_owned(),
-            client_ip: request.client_ip.map(|address| address.to_string()),
-            user_agent: request.user_agent,
-            reasoning_effort: request.reasoning_effort,
-            reasoning_preset: request.reasoning_preset,
-            request_kind: request.request_kind,
-            subagent_kind: request.subagent_kind,
-            compact: request.compact,
-            image_generation_requested: request.image_generation_requested,
-            started_at: DateTime::<Utc>::from(request.started_at),
-            deadline_at: DateTime::<Utc>::from(request.deadline_at),
-        })
-        .await
-        .map_err(core_store_error)
+        self.insert_model_request(new_model_request_row(request))
+            .await
+            .map_err(core_store_error)
     }
 
     async fn record_attempt(&self, attempt: CoreAttemptRecord) -> Result<(), CoreStoreError> {
         let expected_count = attempt.attempt_count.get();
         let persisted = self
-            .begin_model_request_attempt(ModelRequestAttemptStart {
-                model_request_id: attempt.request_id.as_str().to_owned(),
-                attempt_count: expected_count,
-                provider_kind: attempt.provider_kind.as_str().to_owned(),
-                provider_account_id: attempt
-                    .provider_account_id
-                    .as_ref()
-                    .map(|id| id.as_str().to_owned()),
-                provider_account_ref: attempt
-                    .provider_account_ref
-                    .as_ref()
-                    .map(|id| id.as_str().to_owned()),
-                upstream_model_id: attempt.upstream_model_id.as_str().to_owned(),
-                upstream_transport: attempt.upstream_transport,
-                http_version: attempt.http_version,
-            })
+            .begin_model_request_attempt(attempt_start_row(attempt))
             .await
             .map_err(core_store_error)?;
         if persisted == expected_count {
@@ -686,6 +711,24 @@ impl ExecutionStore for PgExecutionStore {
         } else {
             Err(CoreStoreError::new(CoreStoreErrorKind::InvalidState))
         }
+    }
+
+    async fn create_model_request_with_attempt(
+        &self,
+        request: CoreNewModelRequest,
+        attempt: CoreAttemptRecord,
+    ) -> Result<(), CoreStoreError> {
+        // 合并写只对首次 attempt 成立（插入即带 attempt 列）；其余走基础两步。
+        if attempt.attempt_count.get() != 1 {
+            self.create_model_request(request).await?;
+            return self.record_attempt(attempt).await;
+        }
+        self.insert_model_request_with_first_attempt(
+            new_model_request_row(request),
+            attempt_start_row(attempt),
+        )
+        .await
+        .map_err(core_store_error)
     }
 
     async fn mark_send_state(
@@ -935,6 +978,52 @@ fn core_store_error(error: StoreError) -> CoreStoreError {
         }
     };
     CoreStoreError::new(kind)
+}
+
+fn new_model_request_row(request: CoreNewModelRequest) -> NewModelRequest {
+    NewModelRequest {
+        id: request.id.as_str().to_owned(),
+        client_api_key_id: request
+            .client_api_key_id
+            .as_ref()
+            .map(|id| id.as_str().to_owned()),
+        client_api_key_ref: request.client_api_key_ref.as_str().to_owned(),
+        config_revision: request.config_revision.get(),
+        protocol: request.protocol,
+        operation: request.operation.as_str().to_owned(),
+        endpoint: request.endpoint,
+        client_transport: request.client_transport,
+        requested_model_id: request.requested_model.as_str().to_owned(),
+        client_ip: request.client_ip.map(|address| address.to_string()),
+        user_agent: request.user_agent,
+        reasoning_effort: request.reasoning_effort,
+        reasoning_preset: request.reasoning_preset,
+        request_kind: request.request_kind,
+        subagent_kind: request.subagent_kind,
+        compact: request.compact,
+        image_generation_requested: request.image_generation_requested,
+        started_at: DateTime::<Utc>::from(request.started_at),
+        deadline_at: DateTime::<Utc>::from(request.deadline_at),
+    }
+}
+
+fn attempt_start_row(attempt: CoreAttemptRecord) -> ModelRequestAttemptStart {
+    ModelRequestAttemptStart {
+        model_request_id: attempt.request_id.as_str().to_owned(),
+        attempt_count: attempt.attempt_count.get(),
+        provider_kind: attempt.provider_kind.as_str().to_owned(),
+        provider_account_id: attempt
+            .provider_account_id
+            .as_ref()
+            .map(|id| id.as_str().to_owned()),
+        provider_account_ref: attempt
+            .provider_account_ref
+            .as_ref()
+            .map(|id| id.as_str().to_owned()),
+        upstream_model_id: attempt.upstream_model_id.as_str().to_owned(),
+        upstream_transport: attempt.upstream_transport,
+        http_version: attempt.http_version,
+    }
 }
 
 fn optional_i64(value: Option<u64>, field: &'static str) -> StoreResult<Option<i64>> {

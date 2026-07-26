@@ -868,7 +868,7 @@ fn attach_continuation_session_state(operation: &mut Operation, pin: &NativeCont
     {
         return;
     }
-    *operation = operation.clone().with_provider_session_state(state.clone());
+    operation.set_provider_session_state(state.clone());
 }
 
 pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {

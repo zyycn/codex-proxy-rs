@@ -596,6 +596,16 @@ pub struct RecoveryReport {
 pub trait ExecutionStore: Send + Sync {
     async fn create_model_request(&self, request: NewModelRequest) -> Result<(), StoreError>;
     async fn record_attempt(&self, attempt: AttemptRecord) -> Result<(), StoreError>;
+    /// 请求插入与首次 attempt 合并持久化；两者写同一行，支持合并写的
+    /// store 可覆写为单次往返，缩短首 token 前的关键路径。
+    async fn create_model_request_with_attempt(
+        &self,
+        request: NewModelRequest,
+        attempt: AttemptRecord,
+    ) -> Result<(), StoreError> {
+        self.create_model_request(request).await?;
+        self.record_attempt(attempt).await
+    }
     async fn mark_send_state(
         &self,
         request_id: &ModelRequestId,
