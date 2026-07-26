@@ -8,9 +8,9 @@ use chrono::{DateTime, Utc};
 use futures::{StreamExt as _, stream};
 use gateway_core::engine::credential::{AccountAvailability, ProviderAccount, ProviderAccountId};
 use gateway_core::provider_ports::{
-    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
+    ProviderCredentialStatePort, ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
     ProviderRefreshCapacityRequest, ProviderRefreshLeaseRequest, ProviderRefreshPolicy,
-    ProviderRuntimePolicyPort, ProviderStoreError, provider_refresh_retry_at,
+    ProviderRuntimePolicyPort, ProviderStoreError, provider_refresh_backoff_at,
 };
 use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
@@ -25,7 +25,8 @@ use super::types::{CodexCredentialPrincipal, CodexOAuthSecret, RotateCodexCreden
 
 const PROVIDER_NAME: &str = "openai";
 const MAX_REFRESH_BATCH: u32 = 1_000;
-const REFRESH_RETRY_DELAY: Duration = Duration::from_secs(10 * 60);
+/// 连续失败计数窗口；每次瞬态失败刷新该 TTL，静默满窗后计数自动归零。
+const REFRESH_BACKOFF_WINDOW: Duration = Duration::from_secs(30 * 60);
 
 pub struct DueCodexCredential {
     pub account: ProviderAccount,
@@ -59,9 +60,6 @@ pub enum CodexCredentialRefreshOutcome {
     Transient {
         account_id: String,
     },
-    Ambiguous {
-        account_id: String,
-    },
     LeaseUnavailable {
         account_id: String,
     },
@@ -88,6 +86,7 @@ pub struct CodexCredentialRefreshService {
     refresher: Arc<dyn TokenRefresher>,
     identity: Arc<dyn CodexAccountIdentityVerifier>,
     leases: Arc<dyn ProviderLeasePort>,
+    credential_state: Arc<dyn ProviderCredentialStatePort>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
 }
 
@@ -97,6 +96,7 @@ impl CodexCredentialRefreshService {
         refresher: Arc<dyn TokenRefresher>,
         identity: Arc<dyn CodexAccountIdentityVerifier>,
         leases: Arc<dyn ProviderLeasePort>,
+        credential_state: Arc<dyn ProviderCredentialStatePort>,
         runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     ) -> Self {
         Self {
@@ -104,6 +104,7 @@ impl CodexCredentialRefreshService {
             refresher,
             identity,
             leases,
+            credential_state,
             runtime_policy,
         }
     }
@@ -206,13 +207,16 @@ impl CodexCredentialRefreshService {
                 }
             }
             Err(RefreshFailure::Transport) => {
-                self.persist_terminal(
-                    &due.account,
-                    AccountAvailability::Invalid,
-                    "refresh_ambiguous",
-                    CodexCredentialRefreshOutcome::Ambiguous { account_id },
-                )
-                .await
+                // 上游瞬态（429/5xx/超时/畸形响应等，可能已发出）不再永久失效账号：
+                // 保留现有凭据、推进退避重试，仅 invalid_grant/banned 才终态。
+                if self
+                    .defer_refresh(&due.account, "transport-ambiguous")
+                    .await?
+                {
+                    Ok(CodexCredentialRefreshOutcome::Transient { account_id })
+                } else {
+                    Ok(CodexCredentialRefreshOutcome::Stale { account_id })
+                }
             }
         }
     }
@@ -326,25 +330,34 @@ impl CodexCredentialRefreshService {
                     .await;
             }
             Err(CodexIdentityVerificationError::Unavailable) => {
-                return self
-                    .persist_terminal(
-                        &due.account,
-                        AccountAvailability::Invalid,
-                        "refreshed_identity_unavailable",
-                        CodexCredentialRefreshOutcome::Ambiguous {
-                            account_id: due.account.id().to_string(),
-                        },
-                    )
-                    .await;
+                // JWKS/签名边界短暂不可用是瞬态：保留现有凭据、推进退避重试，
+                // 不再永久失效账号（defer_refresh 正是为“签名边界不可用”而设计）。
+                return if self
+                    .defer_refresh(&due.account, "identity-unavailable")
+                    .await?
+                {
+                    Ok(CodexCredentialRefreshOutcome::Transient {
+                        account_id: due.account.id().to_string(),
+                    })
+                } else {
+                    Ok(CodexCredentialRefreshOutcome::Stale {
+                        account_id: due.account.id().to_string(),
+                    })
+                };
             }
         };
         let profile = match verification {
             CodexIdentityVerification::Complete(profile) => profile,
             CodexIdentityVerification::SignedOnly(signed) => {
-                let retry_at = provider_refresh_retry_at(
+                let attempt = self
+                    .credential_state
+                    .record_refresh_backoff(due.account.id(), REFRESH_BACKOFF_WINDOW)
+                    .await
+                    .unwrap_or(1);
+                let retry_at = provider_refresh_backoff_at(
                     due.account.id(),
                     SystemTime::now(),
-                    REFRESH_RETRY_DELAY,
+                    attempt,
                     "identity-completion",
                 )?;
                 match self
@@ -388,10 +401,17 @@ impl CodexCredentialRefreshService {
             })
             .await;
         match result {
-            Ok(revision) => Ok(CodexCredentialRefreshOutcome::Refreshed {
-                account_id: due.account.id().to_string(),
-                credential_revision: revision.get(),
-            }),
+            Ok(revision) => {
+                // 凭据完整成功轮换：清零连续失败计数，退避窗口重新从 base 起步。
+                let _ = self
+                    .credential_state
+                    .clear_refresh_backoff(due.account.id())
+                    .await;
+                Ok(CodexCredentialRefreshOutcome::Refreshed {
+                    account_id: due.account.id().to_string(),
+                    credential_revision: revision.get(),
+                })
+            }
             Err(CredentialRepositoryError::RevisionConflict) => {
                 Ok(CodexCredentialRefreshOutcome::Stale {
                     account_id: due.account.id().to_string(),
@@ -443,12 +463,13 @@ impl CodexCredentialRefreshService {
         account: &ProviderAccount,
         reason: &'static str,
     ) -> Result<bool, CodexCredentialRefreshError> {
-        let retry_at = provider_refresh_retry_at(
-            account.id(),
-            SystemTime::now(),
-            REFRESH_RETRY_DELAY,
-            reason,
-        )?;
+        let attempt = self
+            .credential_state
+            .record_refresh_backoff(account.id(), REFRESH_BACKOFF_WINDOW)
+            .await
+            .unwrap_or(1);
+        let retry_at =
+            provider_refresh_backoff_at(account.id(), SystemTime::now(), attempt, reason)?;
         match self.repository.defer_refresh(account, retry_at).await {
             Ok(_) => Ok(true),
             Err(CredentialRepositoryError::RevisionConflict) => Ok(false),

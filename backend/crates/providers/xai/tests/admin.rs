@@ -775,6 +775,21 @@ impl ProviderCredentialStatePort for TestCredentialState {
     ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
         Box::pin(async { Ok(false) })
     }
+
+    fn record_refresh_backoff<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _window: Duration,
+    ) -> BoxFuture<'a, Result<u32, ProviderStoreError>> {
+        Box::pin(async { Ok(1) })
+    }
+
+    fn clear_refresh_backoff<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 struct TestCooldown;

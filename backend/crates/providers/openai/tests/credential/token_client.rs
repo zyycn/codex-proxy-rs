@@ -221,6 +221,24 @@ async fn token_revoked_text_without_invalid_grant_should_remain_temporary() {
     assert_eq!(failure, RefreshFailure::Transport);
 }
 
+#[tokio::test]
+async fn server_error_or_rate_limit_must_stay_transient_even_with_oauth_error_body() {
+    // 5xx/429（含 CDN/网关页恰好嵌入 invalid_grant 字样）按状态码判瞬态，
+    // 不因正文子串把账号永久终态——正文只在 4xx 时才是权威 OAuth 错误。
+    for status in [500, 502, 503, 429] {
+        let failure = refresh_failure(
+            status,
+            r#"{"error":"invalid_grant","error_description":"refresh_token_expired"}"#,
+        )
+        .await;
+        assert_eq!(
+            failure,
+            RefreshFailure::Transport,
+            "status {status} must classify as transient"
+        );
+    }
+}
+
 async fn refresh_failure(status: u16, body: &str) -> RefreshFailure {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
