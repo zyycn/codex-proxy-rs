@@ -1620,6 +1620,8 @@ fn rate_limited_account_exhaustion_survives_a_later_empty_selection() {
     assert_eq!(state.attempts.len(), 1);
     assert_eq!(state.intermediate_failures, 1);
     assert_eq!(state.finalizations.len(), 1);
+    // attempt-1 已把 sent 落库；attempt-2 空选路终态不得降级回 not_sent。
+    assert_eq!(state.finalizations[0].send_state, UpstreamSendState::Sent);
     assert_eq!(state.finalizations[0].upstream_status_code, Some(429));
     assert_eq!(
         state.finalizations[0].provider_error_code.as_deref(),
