@@ -11,6 +11,7 @@ autotests = false
 async-stream = "0.3.6"
 async-trait = "0.1.89"
 base64 = "0.22.1"
+bytes = "1.9.0"
 chrono = { version = "0.4.45", features = ["clock", "serde"] }
 futures = "0.3.32"
 gateway-admin = { path = "../../gateway-admin" }

@@ -658,23 +658,20 @@ impl CodexCredentialQuotaService {
         if outcome == QuotaWriteOutcome::Conflict {
             return Ok(false);
         }
-        let Some(current) = self.store.get_account(account.id()).await? else {
-            return Ok(false);
-        };
-        if current.revision() != account.revision() {
-            return Ok(false);
-        }
+        // quota CAS 以 account.revision 为 fence，成功即证明该 revision 在写入时
+        // 仍是当前凭据；后续状态写回带同一 fence，轮换竞态下安全失败。
+        // 可用性判断使用选择时的账号快照，偏差在下一次响应或 quota 轮询收敛。
         self.scheduling
-            .observe(current.id().clone(), current.revision(), observed_at, fact);
+            .observe(account.id().clone(), account.revision(), observed_at, fact);
         if let Some(availability) = quota_success_availability(
-            current.availability(),
-            current.cooldown_until(),
+            account.availability(),
+            account.cooldown_until(),
             fact.exhausted(),
             observed_at,
         ) {
             self.repository
                 .apply_state(
-                    &current,
+                    account,
                     availability,
                     fact.exhausted().then_some("quota_exhausted".to_owned()),
                     None,
