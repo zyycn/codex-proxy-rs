@@ -7,6 +7,7 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import { formatDateTime } from '@/utils/date'
+import { providerDisplayName } from '@/utils/providers'
 
 interface WireProfile {
   provider: string
@@ -163,11 +164,7 @@ watch(
 )
 
 function providerLabel(provider: string) {
-  if (provider === 'openai')
-    return 'OpenAI'
-  if (provider === 'xai')
-    return 'xAI'
-  return provider
+  return providerDisplayName(provider) ?? provider
 }
 </script>
 

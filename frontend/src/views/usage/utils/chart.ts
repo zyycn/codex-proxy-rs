@@ -68,6 +68,23 @@ export function usageValueAxis(
   }
 }
 
+export function usageLegend(theme: UsageChartPalette, data: string[]) {
+  return {
+    top: 0,
+    right: 4,
+    itemWidth: 8,
+    itemHeight: 8,
+    icon: 'circle' as const,
+    data,
+    textStyle: {
+      color: theme.textSecondary,
+      fontSize: 11,
+      fontFamily: 'Inter Variable, Inter, system-ui, sans-serif',
+      fontWeight: 650,
+    },
+  }
+}
+
 export function tooltipRows(params: unknown): Record<string, unknown>[] {
   const values = Array.isArray(params) ? params : [params]
   return values.filter(

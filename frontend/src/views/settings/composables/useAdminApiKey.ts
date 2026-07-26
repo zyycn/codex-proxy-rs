@@ -1,4 +1,3 @@
-import { useClipboard } from '@vueuse/core'
 import { onMounted, reactive, shallowRef } from 'vue'
 
 import {
@@ -7,6 +6,7 @@ import {
   regenerateAdminApiKey,
 } from '@/api'
 import { toast } from '@/components/base/BaseToast'
+import { useCopyText } from '@/composables/useCopyText'
 import { errorMessage } from '@/utils/async'
 
 export function useAdminApiKey() {
@@ -16,7 +16,7 @@ export function useAdminApiKey() {
   const showDeleteModal = shallowRef(false)
   const generatedKey = shallowRef('')
   const status = reactive({ exists: false })
-  const { copy } = useClipboard()
+  const copyText = useCopyText()
 
   async function loadStatus() {
     try {
@@ -71,16 +71,7 @@ export function useAdminApiKey() {
   }
 
   async function copyGeneratedKey() {
-    if (!generatedKey.value)
-      return
-
-    try {
-      await copy(generatedKey.value)
-      toast.success('已复制')
-    }
-    catch (error: unknown) {
-      toast.error(errorMessage(error, '复制失败'))
-    }
+    await copyText(generatedKey.value, { successText: '已复制', errorFromException: true })
   }
 
   onMounted(() => {

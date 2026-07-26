@@ -13,6 +13,7 @@ import {
   tooltipIndex,
   tooltipRows,
   usageCategoryAxis,
+  usageLegend,
   usageTooltip,
   usageValueAxis,
 } from '../utils/chart'
@@ -72,20 +73,7 @@ const chartOption = computed<EChartsOption>(() => {
   return {
     animationDuration: 240,
     grid: { left: 0, right: 0, top: 40, bottom: 0, containLabel: true },
-    legend: {
-      top: 0,
-      right: 4,
-      itemWidth: 8,
-      itemHeight: 8,
-      icon: 'circle',
-      data: legend,
-      textStyle: {
-        color: theme.textSecondary,
-        fontSize: 11,
-        fontFamily: 'Inter Variable, Inter, system-ui, sans-serif',
-        fontWeight: 650,
-      },
-    },
+    legend: usageLegend(theme, legend),
     tooltip: usageTooltip(theme, formatTooltip),
     xAxis: usageCategoryAxis(
       points.value.map(point => point.label),

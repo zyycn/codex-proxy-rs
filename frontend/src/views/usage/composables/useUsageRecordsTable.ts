@@ -55,7 +55,6 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     page: page.value,
     pageSize: pageSize.value,
     total: totalRecords.value,
-    pageSizes: [10, 20, 50, 100],
   }))
 
   async function loadUsageRecords(loadOptions: UsageLoadOptions = {}) {

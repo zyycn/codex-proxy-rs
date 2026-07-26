@@ -2,11 +2,9 @@ import type { BarSeriesOption, EChartsOption, LineSeriesOption } from 'echarts'
 import type { Ref } from 'vue'
 import type { dashboardTrendView, normalizeDashboardTrendKind } from './presenter'
 import { usePreferredReducedMotion } from '@vueuse/core'
-import { storeToRefs } from 'pinia'
 import { computed, shallowRef, watch } from 'vue'
 
-import { useUiStore } from '@/stores/modules/ui'
-import { readCssVariable } from '@/utils/css'
+import { useThemeColor } from '@/composables/useThemeColor'
 
 type TrendKind = ReturnType<typeof normalizeDashboardTrendKind>
 type TrendView = ReturnType<typeof dashboardTrendView>
@@ -52,7 +50,7 @@ export function useRequestTrendChart(options: {
   onTrendChange: (kind: TrendKind) => void
 }) {
   const { points, summary, activeKind } = options
-  const { themeRevision } = storeToRefs(useUiStore())
+  const themeColor = useThemeColor()
   const preferredMotion = usePreferredReducedMotion()
   const pinnedSummaryLabel = shallowRef<string>()
 
@@ -186,11 +184,6 @@ export function useRequestTrendChart(options: {
     if (activeKind.value === 'errors')
       return `${Math.round(value)}%`
     return formatAxisCompact(value)
-  }
-
-  function themeColor(name: string, fallback: string) {
-    void themeRevision.value
-    return readCssVariable(name, fallback)
   }
 
   function formatTooltip(params: unknown) {

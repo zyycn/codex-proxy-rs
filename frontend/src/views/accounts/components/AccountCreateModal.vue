@@ -4,7 +4,7 @@ import type { AccountRow } from '../constants'
 import { Openai, Xai } from '@boxicons/vue'
 import { Copy, KeyRound, LayoutGrid, Upload } from '@lucide/vue'
 
-import { useClipboard, useFileDialog } from '@vueuse/core'
+import { useFileDialog } from '@vueuse/core'
 import { computed, ref } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
@@ -13,7 +13,7 @@ import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
-import { toast } from '@/components/base/BaseToast'
+import { useCopyText } from '@/composables/useCopyText'
 import { accountProviderModeOptions } from '../composables/useAccountOnboarding'
 import AccountProviderChooser from './AccountProviderChooser.vue'
 
@@ -41,7 +41,7 @@ const emit = defineEmits<{
 }>()
 const open = defineModel<boolean>({ default: false })
 const form = defineModel<CreateForm>('form', { required: true })
-const { copy } = useClipboard()
+const copyWithToast = useCopyText()
 
 const fileError = ref('')
 const { open: openImportFile, onChange: onImportFileChange } = useFileDialog({
@@ -184,15 +184,7 @@ onImportFileChange((files) => {
 })
 
 async function copyText(value: string, successText: string) {
-  if (!value)
-    return
-  try {
-    await copy(value)
-    toast.success(successText)
-  }
-  catch {
-    toast.error('复制失败')
-  }
+  await copyWithToast(value, { successText })
 }
 </script>
 
