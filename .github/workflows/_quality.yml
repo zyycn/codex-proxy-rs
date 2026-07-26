@@ -64,12 +64,16 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ inputs.ref }}
+          # PR 场景需要 base 提交做冻结清单的 append-only 比对。
+          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
 
       # 已应用迁移的字节被 sqlx 启动校验钉死：改动已发布迁移会让所有
       # 存量部署重启即失败。冻结清单保证旧文件不被改、新文件必须入册。
       - name: Migration freeze check
         working-directory: backend/migrations
         shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           sha256sum --check --strict .frozen-sha256
@@ -79,6 +83,22 @@ jobs:
               exit 1
             fi
           done
+          # 清单自证不足以防「改迁移 + 同 PR 刷新清单行」：校验对新哈希通过。
+          # 对 PR，断言 .frozen-sha256 相对 base 只增不改——base 里的每一行
+          # 必须原样保留（改哈希＝删行，删迁移＝删行，都会被挡）。
+          if [ -n "${BASE_SHA:-}" ]; then
+            base_manifest="$(git show "${BASE_SHA}:backend/migrations/.frozen-sha256" 2>/dev/null || true)"
+            if [ -n "$base_manifest" ]; then
+              while IFS= read -r line; do
+                [ -z "$line" ] && continue
+                if ! grep -Fxq "$line" .frozen-sha256; then
+                  file="$(printf '%s' "$line" | awk '{print $2}')"
+                  echo "::error file=backend/migrations/.frozen-sha256::frozen migration $file was modified or removed; released migrations are append-only — add a new numbered migration instead"
+                  exit 1
+                fi
+              done <<< "$base_manifest"
+            fi
+          fi
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@1a3a6d54512beeaffd394f8d516ca16f2c506a20 # 1.97
