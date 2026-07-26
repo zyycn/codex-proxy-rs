@@ -725,7 +725,9 @@ async fn refresh_backoff_grows_exponentially_across_attempts() {
         first.as_slice(),
         [CodexCredentialRefreshOutcome::Transient { .. }]
     ));
-    let first_account = store.account("acct_refresh").expect("account after first defer");
+    let first_account = store
+        .account("acct_refresh")
+        .expect("account after first defer");
     let first_delay = first_account
         .next_refresh_at()
         .expect("first retry scheduled")

@@ -818,10 +818,10 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         let failure_rate_limit_headers = response.rate_limit_headers.clone();
         let rate_limit_updates = response.rate_limit_header_updates;
         let turn_state_updates = response.turn_state_update;
-        // HTTP SSE 与 WebSocket 两条上游都启用 raw 透传：OpenAI 线路保持透明代理。
-        // WS 的 body 由 reducer 以 encode_sse_event(&event, raw) 逐字节内嵌上游原文
-        // （transport/protocol/websocket.rs），push_frames 抽出的 data 即上游原始 JSON，
-        // 下游按字节转发，避免 serde 往返改写数值/精度（大整数→f64、logprobs 等）。
+        // OpenAI 线路为透明代理：HTTP SSE 与 WebSocket 两条上游均启用 raw 透传，
+        // 下游按字节转发上游原文，避免 serde 往返改写数值/精度（大整数→f64、logprobs 等）。
+        // WS 帧由 reducer 以 encode_sse_event(&event, raw) 逐字节内嵌上游原始 JSON
+        // （transport/protocol/websocket.rs），push_frames 抽出的 data 即上游原文。
         let mut decoder =
             CodexCanonicalDecoder::new(upstream_model.as_str()).with_raw_sse_passthrough();
         loop {
