@@ -543,6 +543,16 @@ pub struct IntermediateFailure {
     pub latency: Duration,
 }
 
+/// 不属于任何 `model_requests` 行的管理端账号探测失败。
+#[derive(Debug)]
+pub struct ProbeFailure {
+    pub provider_kind: ProviderKind,
+    pub account_id: ProviderAccountId,
+    pub upstream_model_id: UpstreamModelId,
+    pub error: ProviderError,
+    pub latency: Duration,
+}
+
 /// `model_requests` 可用的毫秒级阶段耗时。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModelRequestTimings {
@@ -629,6 +639,10 @@ pub trait ExecutionStore: Send + Sync {
         &self,
         failure: IntermediateFailure,
     ) -> Result<(), StoreError>;
+    /// 记录不挂在 `model_requests` 上的账号探测失败；默认丢弃。
+    async fn record_probe_failure(&self, _failure: ProbeFailure) -> Result<(), StoreError> {
+        Ok(())
+    }
     async fn finalize_model_request(
         &self,
         finalization: ModelRequestFinalization,

@@ -24,12 +24,15 @@ use gateway_core::engine::execution::{
     ProviderCircuitError, ProviderCircuitPort, provider_failure_affects_circuit,
 };
 use gateway_core::engine::probe::{AccountProbe, AccountProbeRequest};
-use gateway_core::engine::provider::ProviderRegistry;
-use gateway_core::engine::{
-    AttemptRecord, ExecutionStore, IntermediateFailure, ModelRequestFinalization, ModelRequestId,
-    NewModelRequest, RecoveryReport, UpstreamSendState,
+use gateway_core::engine::provider::{
+    Provider, ProviderCatalogGeneration, ProviderModelCapabilities, ProviderRegistry,
+    ProviderRequest, ProviderStream,
 };
-use gateway_core::error::{GatewayErrorKind, ProviderErrorKind, StoreError};
+use gateway_core::engine::{
+    AttemptContext, AttemptRecord, ExecutionStore, IntermediateFailure, ModelRequestFinalization,
+    ModelRequestId, NewModelRequest, ProbeFailure, RecoveryReport, UpstreamSendState,
+};
+use gateway_core::error::{GatewayErrorKind, ProviderError, ProviderErrorKind, StoreError};
 use gateway_core::operation::{GenerateRequest, Operation, OperationKind, ProtocolPayload};
 use gateway_core::policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits};
 use gateway_core::routing::snapshot::RuntimeSnapshotHandle;
@@ -79,6 +82,64 @@ fn account_probe_should_not_write_to_the_persistent_execution_store() {
 }
 
 #[test]
+fn probe_failures_should_be_observable_without_a_model_request_row() {
+    let store = Arc::new(TrackingExecutionStore::default());
+    let providers = ProviderRegistry::new([Arc::new(FailingProvider) as Arc<dyn Provider>])
+        .expect("provider registry");
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(probe_snapshot()),
+        store.clone(),
+        providers,
+        Arc::new(UnusedAdmissions),
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+
+    let error = block_on(service.probe(AccountProbeRequest {
+        account_id: ProviderAccountId::new("acct_probe").expect("account ID"),
+        provider_kind: ProviderKind::new("openai").expect("provider kind"),
+        upstream_model: UpstreamModelId::new("gpt-probe").expect("model ID"),
+        operation: probe_operation(),
+    }))
+    .expect_err("the provider rejects every probe");
+
+    assert_eq!(error.kind(), GatewayErrorKind::UpstreamUnavailable);
+    assert!(!store.touched.load(Ordering::SeqCst));
+    assert_eq!(store.probe_failures(), vec!["transport".to_owned()]);
+}
+
+struct FailingProvider;
+
+#[async_trait]
+impl Provider for FailingProvider {
+    fn name(&self) -> &'static str {
+        "openai"
+    }
+
+    fn catalog_generation(&self) -> ProviderCatalogGeneration {
+        ProviderCatalogGeneration::default()
+    }
+
+    async fn query_model_capabilities(
+        &self,
+    ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
+        Ok(Vec::new())
+    }
+
+    async fn execute(
+        &self,
+        _request: ProviderRequest,
+        _context: AttemptContext,
+    ) -> Result<ProviderStream, ProviderError> {
+        Err(ProviderError::new(
+            ProviderErrorKind::Transport,
+            UpstreamSendState::NotSent,
+        ))
+    }
+}
+
+#[test]
 fn successful_authentication_should_record_client_key_usage() {
     let usage = Arc::new(RecordingClientApiKeyUsage::default());
     let service = DefaultExecutionService::new(
@@ -121,11 +182,19 @@ impl ClientApiKeyUsageSink for RecordingClientApiKeyUsage {
 #[derive(Default)]
 struct TrackingExecutionStore {
     touched: AtomicBool,
+    probe_failures: Mutex<Vec<String>>,
 }
 
 impl TrackingExecutionStore {
     fn touch(&self) {
         self.touched.store(true, Ordering::SeqCst);
+    }
+
+    fn probe_failures(&self) -> Vec<String> {
+        self.probe_failures
+            .lock()
+            .expect("probe failures lock")
+            .clone()
     }
 }
 
@@ -167,6 +236,14 @@ impl ExecutionStore for TrackingExecutionStore {
 
     async fn record_intermediate_failure(&self, _: IntermediateFailure) -> Result<(), StoreError> {
         self.touch();
+        Ok(())
+    }
+
+    async fn record_probe_failure(&self, failure: ProbeFailure) -> Result<(), StoreError> {
+        self.probe_failures
+            .lock()
+            .expect("probe failures lock")
+            .push(failure.error.kind().as_str().to_owned());
         Ok(())
     }
 
