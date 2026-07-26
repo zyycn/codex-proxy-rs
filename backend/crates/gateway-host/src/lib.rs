@@ -2,7 +2,7 @@
 
 pub mod config;
 mod logging;
-mod serve;
+pub mod serve;
 pub mod system_update;
 pub mod workers;
 

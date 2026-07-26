@@ -239,7 +239,13 @@ impl ProcessSystemOperations {
             .ok_or_else(|| conflict("update repository is not configured"))?;
         self.events
             .info(None, Some("release"), "正在获取最新 Release 信息");
-        let release = match fetch_latest(&self.config.github_api_base, repository).await {
+        let release = match fetch_latest(
+            &self.config.github_api_base,
+            repository,
+            &self.config.update_channel,
+        )
+        .await
+        {
             Ok(release) => release,
             Err(error) => {
                 self.events
@@ -495,6 +501,12 @@ impl SystemOperations for ProcessSystemOperations {
     }
 
     async fn restart(&self) -> Result<SystemOperationAccepted, OperationError> {
+        // 与 update/rollback 互斥：更新替换文件期间触发自重启会让新进程
+        // 载入半成品产物。
+        let _operation = self
+            .operation_lock
+            .try_lock()
+            .map_err(|_| conflict("system operation is already running"))?;
         if !self.config.self_restart_enabled {
             return Err(conflict("self restart is disabled"));
         }
