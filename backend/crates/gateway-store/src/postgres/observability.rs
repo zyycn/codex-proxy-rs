@@ -776,11 +776,14 @@ impl ObservabilityRepository for PgObservabilityRepository {
             page: ObservabilityPageNumber::new(1)?,
             page_size: ObservabilityPageSize::new(10)?,
         };
-        // 六路独立查询并发执行；页面延迟由最慢一路决定而非各路之和。
-        let (requests, attempts, provider_accounts, trend, account_usage, recent_requests) = futures::try_join!(
+        // 分两批并发：页面延迟从六路之和降为两批各自最慢者之和，同时单次
+        // 渲染最多占用 3 个池连接，不与数据面写路径争抢整个连接池。
+        let (requests, attempts, provider_accounts) = futures::try_join!(
             request_metrics(&self.pool, range, &filter),
             attempt_metrics(&self.pool, range, &filter),
             provider_account_metrics(&self.pool, range.end),
+        )?;
+        let (trend, account_usage, recent_requests) = futures::try_join!(
             request_metric_series(&self.pool, range, &filter),
             provider_account_usage(&self.pool, account_usage_query),
             async { Ok(list_usage_records(&self.pool, recent_query).await?.items) },
