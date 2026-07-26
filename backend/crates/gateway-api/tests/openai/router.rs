@@ -2,11 +2,14 @@ use axum::{
     Router,
     body::{Body, Bytes},
     extract::DefaultBodyLimit,
-    http::{Request, StatusCode},
+    http::{Method, Request, StatusCode},
     routing::post,
 };
 use gateway_api::openai::router::MAX_CLIENT_REQUEST_BODY_BYTES;
 use tower::ServiceExt;
+
+use super::api_router_with_origins;
+use super::models::ModelsExecution;
 
 fn body_limit_app() -> Router {
     Router::new()
@@ -49,4 +52,51 @@ async fn responses_body_limit_should_reject_one_byte_over_sixteen_mibibytes() {
         .expect("route over-limit request");
 
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
+async fn configured_cors_origin_assembles_router_and_answers_preflight() {
+    let router = api_router_with_origins(
+        ModelsExecution::new(),
+        vec!["https://app.example.com".into()],
+    )
+    .await;
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method(Method::OPTIONS)
+                .uri("/v1/models")
+                .header("origin", "https://app.example.com")
+                .header("access-control-request-method", "GET")
+                .header("access-control-request-headers", "authorization")
+                .body(Body::empty())
+                .expect("build preflight request"),
+        )
+        .await
+        .expect("route preflight request");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok()),
+        Some("https://app.example.com")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-credentials")
+            .and_then(|value| value.to_str().ok()),
+        Some("true")
+    );
+    let allow_headers = response
+        .headers()
+        .get("access-control-allow-headers")
+        .and_then(|value| value.to_str().ok())
+        .expect("allow-headers present");
+    assert!(allow_headers.contains("authorization"));
+    assert!(allow_headers.contains("x-api-key"));
+    assert!(allow_headers.contains("x-request-id"));
 }

@@ -39,11 +39,18 @@ use gateway_core::routing::{
 };
 
 pub(super) async fn api_router(execution: Arc<dyn ExecutionService>) -> axum::Router {
+    api_router_with_origins(execution, Vec::new()).await
+}
+
+pub(super) async fn api_router_with_origins(
+    execution: Arc<dyn ExecutionService>,
+    cors_allowed_origins: Vec<String>,
+) -> axum::Router {
     let admin = crate::admin::AdminTestFixture::new().await;
     gateway_api::initialize(
         gateway_api::ApiConfig {
             asset_directory: std::env::temp_dir(),
-            cors_allowed_origins: Vec::new(),
+            cors_allowed_origins,
             request_timeout_seconds: None,
             request_id_header: "x-request-id".to_owned(),
         },
