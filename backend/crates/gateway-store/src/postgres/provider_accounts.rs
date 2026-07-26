@@ -1661,6 +1661,7 @@ fn admin_account_status(
     } else if account.availability == ProviderAccountAvailability::QuotaExhausted {
         AdminAccountStatus::QuotaExhausted
     } else if account.availability == ProviderAccountAvailability::Expired
+        || account.availability == ProviderAccountAvailability::Invalid
         || account
             .access_token_expires_at
             .is_some_and(|expires_at| expires_at <= now)

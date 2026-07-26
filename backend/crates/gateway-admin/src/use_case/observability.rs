@@ -104,7 +104,7 @@ impl ObservabilityService for DefaultObservabilityService {
             self.store.dashboard_runtime_slots(range.end),
         )
         .map_err(|error| map_store_error(error, "dashboard"))?;
-        self.enrich_billing(&mut observation.recent_requests)?;
+        self.enrich_billing(&mut observation.recent_requests);
         self.enrich_dashboard_quotas(&mut observation.account_usage)
             .await;
         let today_start = china_day_start(observation.range.end);
@@ -176,7 +176,7 @@ impl ObservabilityService for DefaultObservabilityService {
             .list_usage_records(query)
             .await
             .map_err(|error| map_store_error(error, "usage records"))?;
-        self.enrich_billing(&mut page.items)?;
+        self.enrich_billing(&mut page.items);
         Ok(page)
     }
 
@@ -189,7 +189,7 @@ impl ObservabilityService for DefaultObservabilityService {
             .usage_record_detail(request_id)
             .await
             .map_err(|error| map_store_error(error, "usage record"))?;
-        self.enrich_billing(std::slice::from_mut(&mut detail.request))?;
+        self.enrich_billing(std::slice::from_mut(&mut detail.request));
         Ok(detail)
     }
 
@@ -491,10 +491,9 @@ impl DefaultObservabilityService {
         }
     }
 
-    fn enrich_billing(
-        &self,
-        records: &mut [crate::model::observability::UsageRecord],
-    ) -> Result<(), AdminError> {
+    /// 逐条尽力把 calculated 总额升级为完整分解；单条脏数据（非法 Provider kind
+    /// 或费用规则失败）只保留该条已存的总额，不影响整页返回。
+    fn enrich_billing(&self, records: &mut [crate::model::observability::UsageRecord]) {
         for record in records {
             let Some(UsageBilling::Total { source, total }) = record.billing.as_ref() else {
                 continue;
@@ -508,8 +507,9 @@ impl DefaultObservabilityService {
             ) else {
                 continue;
             };
-            let provider_kind = ProviderKind::new(provider.to_owned())
-                .map_err(|_| AdminError::internal("Stored Provider kind is invalid"))?;
+            let Ok(provider_kind) = ProviderKind::new(provider.to_owned()) else {
+                continue;
+            };
             let input = ProviderBillingInput {
                 upstream_model_id: upstream_model_id.clone(),
                 input_tokens: record.input_tokens,
@@ -518,15 +518,10 @@ impl DefaultObservabilityService {
                 cache_write_tokens: record.cache_write_tokens,
                 total: total.clone(),
             };
-            if let Some(breakdown) = self
-                .providers
-                .calculated_billing(&provider_kind, &input)
-                .map_err(|error| map_provider_error(error, "usage billing"))?
-            {
+            if let Ok(Some(breakdown)) = self.providers.calculated_billing(&provider_kind, &input) {
                 record.billing = Some(UsageBilling::Calculated(Box::new(breakdown)));
             }
         }
-        Ok(())
     }
 }
 

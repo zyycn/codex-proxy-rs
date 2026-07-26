@@ -214,7 +214,7 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     assert_eq!(usage_page.config_revision.get(), 1);
     assert_eq!(usage_page.total, 5);
     assert_eq!(usage_page.summary.total, 5);
-    assert_eq!(usage_page.summary.active, 3);
+    assert_eq!(usage_page.summary.active, 2);
     assert_eq!(usage_page.summary.quota_exhausted, 1);
     assert_eq!(
         usage_page
