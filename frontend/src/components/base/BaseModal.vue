@@ -212,7 +212,7 @@ onBeforeUnmount(() => {
               </slot>
             </span>
             <div class="min-w-0" :class="variant === 'default' ? 'col-span-2' : ''">
-              <h2 class="m-0 text-lg leading-[1.15] font-[760] text-(--cp-text-primary)">
+              <h2 class="m-0 text-lg leading-[1.15] font-heavy text-(--cp-text-primary)">
                 {{ title }}
               </h2>
               <p

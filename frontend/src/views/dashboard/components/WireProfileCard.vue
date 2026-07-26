@@ -209,10 +209,10 @@ function providerLabel(provider: string) {
               >
                 <Box aria-hidden="true" class="size-3.75 text-(--cp-text-secondary)" />
               </span>
-              <span class="truncate text-[11px] leading-none font-[760]">{{ profile.product }}</span>
+              <span class="truncate text-[11px] leading-none font-heavy">{{ profile.product }}</span>
             </div>
             <span
-              class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[12px] leading-none font-[720]"
+              class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[12px] leading-none font-bold"
               :class="releaseStatus.tone"
               :title="releaseStatus.title"
             >
@@ -224,14 +224,14 @@ function providerLabel(provider: string) {
           <div class="grid min-h-0 content-center">
             <div class="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1.5">
               <strong
-                class="block max-w-full wrap-break-word font-mono text-[27px] leading-[1.05] font-[790] tabular-nums text-(--cp-text-primary)"
+                class="block max-w-full wrap-break-word font-mono text-[27px] leading-[1.05] font-heavy tabular-nums text-(--cp-text-primary)"
                 :title="profile.version"
               >
                 {{ profile.version }}
               </strong>
               <span
                 v-if="profile.build"
-                class="shrink-0 font-mono text-[10px] leading-none font-[650] tabular-nums text-(--cp-text-muted)"
+                class="shrink-0 font-mono text-[10px] leading-none font-emphasis tabular-nums text-(--cp-text-muted)"
               >
                 Build {{ profile.build }}
               </span>
@@ -246,13 +246,13 @@ function providerLabel(provider: string) {
           >
             <div v-if="profile.provider === 'xai'" class="min-w-0">
               <dt
-                class="flex items-center gap-1.5 text-[10px] leading-none font-[720] text-(--cp-text-muted)"
+                class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-(--cp-text-muted)"
               >
                 <ShieldCheck aria-hidden="true" class="size-3.25 text-(--cp-info)" />
                 认证协议
               </dt>
               <dd
-                class="mt-2 mb-0 truncate font-mono text-[14px] leading-none font-[720] tabular-nums text-(--cp-text-primary)"
+                class="mt-2 mb-0 truncate font-mono text-[14px] leading-none font-bold tabular-nums text-(--cp-text-primary)"
                 :title="authProtocol"
               >
                 {{ authProtocol }}
@@ -261,19 +261,19 @@ function providerLabel(provider: string) {
 
             <div class="min-w-0">
               <dt
-                class="flex items-center gap-1.5 text-[10px] leading-none font-[720] text-(--cp-text-muted)"
+                class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-(--cp-text-muted)"
               >
                 <Monitor aria-hidden="true" class="size-3.25 text-(--cp-normal)" />
                 {{ profile.provider === 'openai' ? '模拟运行环境' : '运行环境' }}
               </dt>
               <dd
-                class="mt-2 mb-0 truncate font-mono text-[14px] leading-none font-[720] tabular-nums text-(--cp-text-primary)"
+                class="mt-2 mb-0 truncate font-mono text-[14px] leading-none font-bold tabular-nums text-(--cp-text-primary)"
                 :title="runtimeEnvironment.title"
               >
                 {{ runtimeEnvironment.primary }}
                 <span
                   v-if="runtimeEnvironment.details.length"
-                  class="text-[11px] font-[650] text-(--cp-text-secondary)"
+                  class="text-[11px] font-emphasis text-(--cp-text-secondary)"
                 >
                   <template v-for="detail in runtimeEnvironment.details" :key="detail">
                     · {{ detail }}
@@ -284,13 +284,13 @@ function providerLabel(provider: string) {
 
             <div class="min-w-0">
               <dt
-                class="flex items-center gap-1.5 text-[10px] leading-none font-[720] text-(--cp-text-muted)"
+                class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-(--cp-text-muted)"
               >
                 <Terminal aria-hidden="true" class="size-3.25 text-(--cp-info)" />
                 {{ profile.provider === 'openai' ? 'Codex Core' : 'Grok Client' }}
               </dt>
               <dd
-                class="mt-2 mb-0 truncate font-mono text-[16px] leading-none font-[760] tabular-nums text-(--cp-text-primary)"
+                class="mt-2 mb-0 truncate font-mono text-[16px] leading-none font-heavy tabular-nums text-(--cp-text-primary)"
                 :title="clientIdentity"
               >
                 {{ clientIdentity }}
@@ -300,7 +300,7 @@ function providerLabel(provider: string) {
 
           <footer
             v-if="verifiedLabel || checkedLabel"
-            class="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[10px] leading-none font-[650] text-(--cp-text-muted)"
+            class="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[10px] leading-none font-emphasis text-(--cp-text-muted)"
           >
             <span v-if="verifiedLabel" :title="profile.userAgent">{{ verifiedLabel }}</span>
             <span v-if="checkedLabel">{{ checkedLabel }}</span>

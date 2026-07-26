@@ -227,7 +227,7 @@ async function copyText(value: string, successText: string) {
               <KeyRound class="size-4" />
             </div>
             <div class="min-w-0 flex-1">
-              <p class="m-0 text-[13px] font-[720] text-(--cp-text-primary)">
+              <p class="m-0 text-[13px] font-bold text-(--cp-text-primary)">
                 {{ oauthPanelTitle }}
               </p>
               <p class="m-0 mt-1 text-[12px] leading-[1.55] font-medium text-(--cp-text-secondary)">
@@ -268,7 +268,7 @@ async function copyText(value: string, successText: string) {
               view-class="rounded-(--cp-input-radius-base) bg-(--cp-input-current-bg,var(--cp-input-context-bg)) px-3.5 py-3 shadow-(--cp-shadow-input)"
             >
               <pre
-                class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.6] font-[650] text-(--cp-text-secondary)"
+                class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.6] font-emphasis text-(--cp-text-secondary)"
               >{{ oauthAuthUrl }}</pre>
             </BaseScrollbar>
           </BaseFormItem>

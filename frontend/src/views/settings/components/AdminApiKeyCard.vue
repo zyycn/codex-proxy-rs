@@ -70,11 +70,11 @@ const emit = defineEmits<{
             <KeyRound class="size-4" />
           </BaseMotionIcon>
           <div class="min-w-0">
-            <p class="m-0 text-[13px] leading-[1.15] font-[720] text-(--cp-text-primary)">
+            <p class="m-0 text-[13px] leading-[1.15] font-bold text-(--cp-text-primary)">
               {{ status.exists ? '已启用' : '未生成' }}
             </p>
             <p
-              class="mt-1.5 mb-0 truncate text-[12px] leading-[1.15] font-[650] text-(--cp-text-secondary)"
+              class="mt-1.5 mb-0 truncate text-[12px] leading-[1.15] font-emphasis text-(--cp-text-secondary)"
             >
               {{
                 loading
@@ -89,12 +89,12 @@ const emit = defineEmits<{
       </div>
 
       <div v-if="generatedKey" class="grid gap-2">
-        <p class="m-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)">
+        <p class="m-0 text-[13px] leading-[1.15] font-emphasis text-(--cp-text-secondary)">
           完整 Key 仅显示一次，请立即保存
         </p>
         <div class="flex min-w-0 items-center gap-2">
           <code
-            class="min-w-0 flex-1 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2.5 font-mono text-[12px] leading-normal font-[650] break-all text-(--cp-text-primary)"
+            class="min-w-0 flex-1 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2.5 font-mono text-[12px] leading-normal font-emphasis break-all text-(--cp-text-primary)"
           >
             {{ generatedKey }}
           </code>

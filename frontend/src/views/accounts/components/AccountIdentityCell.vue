@@ -70,14 +70,14 @@ const avatarClass = computed(() => {
 <template>
   <div class="flex min-w-0 items-center gap-3">
     <span
-      class="inline-flex shrink-0 items-center justify-center rounded-lg font-[820]"
+      class="inline-flex shrink-0 items-center justify-center rounded-lg font-extrabold"
       :class="[avatarSizeClass, avatarClass]"
     >
       {{ initial }}
     </span>
     <div class="min-w-0 flex-1">
       <div class="flex min-w-0 items-center gap-2">
-        <span class="min-w-0 flex-1 truncate text-[14px] font-[760] text-(--cp-text-primary)">
+        <span class="min-w-0 flex-1 truncate text-[14px] font-heavy text-(--cp-text-primary)">
           {{ displayTitle }}
         </span>
         <span
@@ -95,7 +95,7 @@ const avatarClass = computed(() => {
         <slot name="meta" />
         <AccountPlanBadge v-if="showPlan" :plan-type="account.planType" size="sm" />
       </div>
-      <div v-else-if="secondaryText" class="truncate font-[650]" :class="secondaryClass">
+      <div v-else-if="secondaryText" class="truncate font-emphasis" :class="secondaryClass">
         {{ secondaryText }}
       </div>
     </div>

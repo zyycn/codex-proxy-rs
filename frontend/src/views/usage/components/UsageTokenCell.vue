@@ -43,14 +43,14 @@ const tokenItems = computed(() => [
       <div class="grid gap-1.5 text-(--cp-text-secondary)">
         <div v-for="item in tokenItems" :key="item.label" class="flex justify-between gap-4">
           <span class="whitespace-nowrap">{{ item.label }}</span>
-          <span class="whitespace-nowrap font-mono font-[760] text-(--cp-text-primary)">
+          <span class="whitespace-nowrap font-mono font-heavy text-(--cp-text-primary)">
             {{ item.value }}
           </span>
         </div>
       </div>
       <div class="mt-1 flex justify-between border-t border-(--cp-divider-subtle) pt-2">
         <span class="whitespace-nowrap text-(--cp-text-secondary)">总 Token</span>
-        <span class="whitespace-nowrap font-mono font-[760] text-(--cp-info-text)">
+        <span class="whitespace-nowrap font-mono font-heavy text-(--cp-info-text)">
           {{ tokenDetails.totalTokensDisplay }}
         </span>
       </div>

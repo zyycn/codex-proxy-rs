@@ -6,6 +6,10 @@
   --font-sans:
     'Inter Variable', Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  /* 界面字重刻度：正文强调 650 / 加粗 700(font-bold) / 重标题 760 / 极重 800(font-extrabold)。
+     新代码从这四档取值，不再使用任意字重。 */
+  --font-weight-emphasis: 650;
+  --font-weight-heavy: 760;
   --color-cp-page: var(--cp-bg-page);
   --color-cp-surface: var(--cp-bg-surface);
   --color-cp-subtle: var(--cp-bg-subtle);

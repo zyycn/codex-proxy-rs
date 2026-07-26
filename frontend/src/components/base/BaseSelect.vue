@@ -70,7 +70,7 @@ const sizeConfig: Record<
 const selectedOption = computed(() => props.options.find(option => option.value === model.value))
 
 const triggerClasses = computed(() => [
-  'relative inline-flex w-full min-w-0 items-center gap-2 overflow-visible border-0 text-left font-[650] leading-none shadow-(--cp-shadow-input) outline-none transition-[background-color,box-shadow,color] duration-[160ms]',
+  'relative inline-flex w-full min-w-0 items-center gap-2 overflow-visible border-0 text-left font-emphasis leading-none shadow-(--cp-shadow-input) outline-none transition-[background-color,box-shadow,color] duration-[160ms]',
   sizeConfig[props.size].trigger,
   props.disabled
     ? 'cursor-not-allowed bg-(--cp-disabled-bg) text-(--cp-disabled-text) shadow-none'
@@ -228,7 +228,7 @@ function handleTriggerKeydown(event: KeyboardEvent) {
 
 function optionClasses(option: SelectOption, index: number) {
   return [
-    'flex w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 px-3 text-left font-[650] leading-none outline-none transition-colors',
+    'flex w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 px-3 text-left font-emphasis leading-none outline-none transition-colors',
     sizeConfig[props.size].option,
     option.disabled
       ? 'cursor-not-allowed bg-transparent text-(--cp-disabled-text)'
@@ -315,7 +315,7 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
         >
           <div
             v-if="options.length === 0"
-            class="flex h-8.5 items-center rounded-(--cp-input-radius-small) px-3 text-[13px] leading-none font-[650] text-(--cp-text-muted)"
+            class="flex h-8.5 items-center rounded-(--cp-input-radius-small) px-3 text-[13px] leading-none font-emphasis text-(--cp-text-muted)"
           >
             {{ emptyText }}
           </div>

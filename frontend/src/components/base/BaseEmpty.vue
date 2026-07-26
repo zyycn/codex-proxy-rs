@@ -29,7 +29,7 @@ const resolvedIcon = computed(() => props.icon ?? Inbox)
     >
       <component :is="resolvedIcon" :size="compact ? 16 : 18" />
     </span>
-    <p class="m-0 text-[13px] leading-[1.15] font-[760] text-(--cp-text-primary)">
+    <p class="m-0 text-[13px] leading-[1.15] font-heavy text-(--cp-text-primary)">
       {{ resolvedTitle }}
     </p>
     <p

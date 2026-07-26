@@ -87,11 +87,11 @@ watch(timeRange, () => {
       <template #header>
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">
+            <h2 class="m-0 text-xl leading-[1.15] font-heavy text-(--cp-text-primary)">
               请求明细
             </h2>
             <p
-              class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)"
+              class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-emphasis text-(--cp-text-secondary)"
             >
               成功请求与失败请求明细
             </p>

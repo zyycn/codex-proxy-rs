@@ -40,14 +40,14 @@ withDefaults(
     </div>
     <p
       v-if="description"
-      class="mt-0 mb-2 text-xs leading-[1.35] font-[650] text-(--cp-text-muted)"
+      class="mt-0 mb-2 text-xs leading-[1.35] font-emphasis text-(--cp-text-muted)"
     >
       {{ description }}
     </p>
     <div class="min-w-0">
       <slot />
     </div>
-    <p v-if="error" class="mt-2 mb-0 text-xs leading-[1.35] font-[650] text-(--cp-danger-text)">
+    <p v-if="error" class="mt-2 mb-0 text-xs leading-[1.35] font-emphasis text-(--cp-danger-text)">
       {{ error }}
     </p>
   </div>

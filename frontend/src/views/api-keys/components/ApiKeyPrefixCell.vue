@@ -15,7 +15,7 @@ const emit = defineEmits<{
 
 <template>
   <div class="flex items-center gap-2">
-    <code class="block min-w-0 truncate font-mono text-[12px] font-[650] text-(--cp-text-primary)">
+    <code class="block min-w-0 truncate font-mono text-[12px] font-emphasis text-(--cp-text-primary)">
       {{ prefix }}••••••••••••••••
     </code>
     <BaseButton

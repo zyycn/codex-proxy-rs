@@ -40,7 +40,7 @@ const PANEL_CLASS = [
   'pl-3',
   'text-xs',
   'leading-[1.15]',
-  'font-[760]',
+  'font-heavy',
   'text-(--cp-text-secondary)',
 ].join(' ')
 const MARK_CLASS = [

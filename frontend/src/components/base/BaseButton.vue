@@ -70,7 +70,7 @@ const loadingIconSize: Record<ButtonSize, number> = {
 }
 
 const classes = computed(() => [
-  'inline-flex items-center justify-center border-0 font-[720] leading-[1.15] transition-[background-color,box-shadow,color,opacity,transform] duration-150 cursor-pointer outline-none motion-safe:active:translate-y-px motion-safe:active:scale-[0.985]',
+  'inline-flex items-center justify-center border-0 font-bold leading-[1.15] transition-[background-color,box-shadow,color,opacity,transform] duration-150 cursor-pointer outline-none motion-safe:active:translate-y-px motion-safe:active:scale-[0.985]',
   props.iconOnly ? iconOnlySizeClasses[props.size] : sizeClasses[props.size],
   props.iconOnly ? '' : 'rounded-(--cp-button-radius-base)',
   'focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)',

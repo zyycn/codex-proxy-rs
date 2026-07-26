@@ -94,7 +94,7 @@ function showDetail(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][nu
         />
       </template>
       <template #failureClass="{ row }">
-        <span class="font-mono text-[12px] font-[680] text-(--cp-danger-text)">
+        <span class="font-mono text-[12px] font-bold text-(--cp-danger-text)">
           {{ row.failureClass || '—' }}
         </span>
       </template>

@@ -52,14 +52,14 @@ const dotClass = computed(() => {
 <template>
   <span
     v-if="variant === 'pill'"
-    class="inline-flex h-7 shrink-0 items-center rounded-full px-2.5 text-[12px] font-[760]"
+    class="inline-flex h-7 shrink-0 items-center rounded-full px-2.5 text-[12px] font-heavy"
     :class="textClass"
   >
     {{ label }}
   </span>
   <span
     v-else
-    class="inline-flex min-w-16 items-center gap-1.5 text-[12px] leading-none font-[650]"
+    class="inline-flex min-w-16 items-center gap-1.5 text-[12px] leading-none font-emphasis"
     :class="textClass"
   >
     <span class="size-1.5 rounded-full" :class="dotClass" />

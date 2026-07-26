@@ -53,15 +53,15 @@ const linkItems = [
     <div class="grid gap-5">
       <section class="flex min-w-0 items-center gap-3">
         <span
-          class="inline-flex size-9 shrink-0 items-center justify-center rounded-(--cp-icon-button-radius) bg-(--cp-bg-subtle) font-mono text-[15px] leading-none font-[820] text-(--cp-text-primary)"
+          class="inline-flex size-9 shrink-0 items-center justify-center rounded-(--cp-icon-button-radius) bg-(--cp-bg-subtle) font-mono text-[15px] leading-none font-extrabold text-(--cp-text-primary)"
         >
           Z
         </span>
         <div class="min-w-0">
-          <p class="m-0 truncate text-[15px] leading-none font-[780] text-(--cp-text-primary)">
+          <p class="m-0 truncate text-[15px] leading-none font-heavy text-(--cp-text-primary)">
             {{ author }}
           </p>
-          <p class="mt-1.5 mb-0 text-[12px] leading-none font-[650] text-(--cp-text-secondary)">
+          <p class="mt-1.5 mb-0 text-[12px] leading-none font-emphasis text-(--cp-text-secondary)">
             Built by Zyy · Codex Proxy RS
           </p>
         </div>
@@ -80,11 +80,11 @@ const linkItems = [
               <component :is="item.icon" class="size-5" />
             </span>
             <div class="min-w-0">
-              <p class="m-0 text-[11px] leading-none font-[760] text-(--cp-text-muted)">
+              <p class="m-0 text-[11px] leading-none font-heavy text-(--cp-text-muted)">
                 {{ item.label }}
               </p>
               <p
-                class="mt-2 mb-0 truncate font-mono text-[12px] leading-none font-[720] text-(--cp-text-primary)"
+                class="mt-2 mb-0 truncate font-mono text-[12px] leading-none font-bold text-(--cp-text-primary)"
                 :title="item.value"
               >
                 {{ item.value }}
@@ -104,7 +104,7 @@ const linkItems = [
         </div>
       </section>
 
-      <p class="m-0 font-mono text-[11px] leading-none font-[650] text-(--cp-text-muted)">
+      <p class="m-0 font-mono text-[11px] leading-none font-emphasis text-(--cp-text-muted)">
         {{ versionLine }}
       </p>
     </div>

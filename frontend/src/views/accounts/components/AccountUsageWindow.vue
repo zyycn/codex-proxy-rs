@@ -60,16 +60,16 @@ const rootClass = computed(() =>
 )
 const headerClass = computed(() =>
   isCompact.value
-    ? 'mb-1 flex items-center justify-between gap-2 text-[11px] leading-none font-[720]'
-    : 'flex items-center justify-between gap-3 text-[12px] font-[720]',
+    ? 'mb-1 flex items-center justify-between gap-2 text-[11px] leading-none font-bold'
+    : 'flex items-center justify-between gap-3 text-[12px] font-bold',
 )
 const labelClass = computed(() =>
   isCompact.value ? 'text-(--cp-text-muted)' : 'text-(--cp-text-secondary)',
 )
 const valueClass = computed(() =>
   isCompact.value
-    ? 'text-[10px] leading-none font-[780]'
-    : 'text-[12px] font-[780]',
+    ? 'text-[10px] leading-none font-heavy'
+    : 'text-[12px] font-heavy',
 )
 const trackShapeClass = computed(() =>
   isCompact.value
@@ -177,7 +177,7 @@ const requestBars = computed(() => {
       </div>
       <div
         v-if="!isCompact && window.resetAtDisplay !== '—'"
-        class="mt-3 text-[12px] font-[620] text-(--cp-text-secondary)"
+        class="mt-3 text-[12px] font-emphasis text-(--cp-text-secondary)"
       >
         重置时间: {{ window.resetAtDisplay }}
       </div>

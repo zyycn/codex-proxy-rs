@@ -30,7 +30,7 @@ defineProps<{
     </template>
 
     <div class="grid gap-2 text-[12px] leading-none">
-      <p class="m-0 font-[760] text-(--cp-text-primary)">
+      <p class="m-0 font-heavy text-(--cp-text-primary)">
         {{ title }}
       </p>
       <slot />

@@ -54,7 +54,7 @@ const canReauthorize = computed(() => props.account.provider === 'openai')
       <template #default="{ close }">
         <button
           type="button"
-          class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
+          class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-emphasis text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
           :disabled="testing"
           @click.stop="(close(), emit('test', account))"
         >
@@ -65,7 +65,7 @@ const canReauthorize = computed(() => props.account.provider === 'openai')
         <button
           v-if="canRefreshToken"
           type="button"
-          class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
+          class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-emphasis text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
           :disabled="refreshing"
           @click.stop="(close(), emit('refresh', account.id))"
         >
@@ -78,7 +78,7 @@ const canReauthorize = computed(() => props.account.provider === 'openai')
         <button
           v-if="canReauthorize"
           type="button"
-          class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover)"
+          class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-emphasis text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover)"
           @click.stop="(close(), emit('reauthorize', account))"
         >
           <KeyRound class="size-3.5 text-(--cp-text-muted)" />
@@ -86,7 +86,7 @@ const canReauthorize = computed(() => props.account.provider === 'openai')
         </button>
         <button
           type="button"
-          class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
+          class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-emphasis text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
           :disabled="updatingStatus"
           @click.stop="(close(), emit('toggleSchedule', account))"
         >

@@ -15,7 +15,7 @@ const modelDisplay = computed(() => usageModelDisplay(props.record))
 <template>
   <div class="inline-grid max-w-full gap-1">
     <code
-      class="block max-w-full truncate font-mono text-[12px] leading-none font-[760] text-(--cp-text-primary)"
+      class="block max-w-full truncate font-mono text-[12px] leading-none font-heavy text-(--cp-text-primary)"
     >
       {{ modelDisplay.primary }}
     </code>

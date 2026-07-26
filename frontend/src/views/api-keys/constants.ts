@@ -33,7 +33,7 @@ export const apiKeyColumns = [
     sortKey: 'createdAt',
     width: '176px',
     minWidth: '176px',
-    cellClass: 'font-mono text-[12px] font-[650] tabular-nums text-(--cp-text-secondary)',
+    cellClass: 'font-mono text-[12px] font-emphasis tabular-nums text-(--cp-text-secondary)',
   },
   {
     key: 'lastUsedAtDisplay',
@@ -42,7 +42,7 @@ export const apiKeyColumns = [
     sortKey: 'lastUsedAt',
     width: '176px',
     minWidth: '176px',
-    cellClass: 'font-mono text-[12px] font-[650] tabular-nums text-(--cp-text-secondary)',
+    cellClass: 'font-mono text-[12px] font-emphasis tabular-nums text-(--cp-text-secondary)',
   },
   {
     key: 'actions',

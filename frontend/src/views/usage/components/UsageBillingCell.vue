@@ -50,7 +50,7 @@ function itemValueClass(tone?: string, accent?: boolean) {
 
 <template>
   <div class="flex items-center justify-end gap-1.5">
-    <span class="font-mono text-[12px] font-[760] tabular-nums text-(--cp-success-text)">
+    <span class="font-mono text-[12px] font-heavy tabular-nums text-(--cp-success-text)">
       {{ usageBillingText(record) }}
     </span>
 
@@ -58,7 +58,7 @@ function itemValueClass(tone?: string, accent?: boolean) {
       <div class="grid gap-1.5 text-(--cp-text-secondary)">
         <div v-for="item in amountItems" :key="item.label" class="flex justify-between gap-4">
           <span>{{ item.label }}</span>
-          <span class="font-mono font-[760]" :class="itemValueClass(undefined, item.accent)">
+          <span class="font-mono font-heavy" :class="itemValueClass(undefined, item.accent)">
             {{ item.value }}
           </span>
         </div>
@@ -66,7 +66,7 @@ function itemValueClass(tone?: string, accent?: boolean) {
       <div class="mt-1 grid gap-1.5 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) p-2 text-(--cp-text-secondary)">
         <div v-for="item in billingItems" :key="item.label" class="flex justify-between gap-4">
           <span>{{ item.label }}</span>
-          <span class="font-mono font-[760]" :class="itemValueClass(item.tone)">
+          <span class="font-mono font-heavy" :class="itemValueClass(item.tone)">
             {{ item.value }}
           </span>
         </div>

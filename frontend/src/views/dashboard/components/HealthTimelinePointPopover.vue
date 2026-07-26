@@ -70,17 +70,17 @@ const metricItems = outcomeMeta
     <header class="flex items-center justify-between gap-3 bg-(--cp-bg-subtle) px-3.5 py-3">
       <div class="flex min-w-0 items-center gap-2">
         <span class="size-2 shrink-0 rounded-full" :class="status.cellClass" />
-        <strong class="font-mono text-[13px] leading-none font-[780] text-(--cp-text-primary)">
+        <strong class="font-mono text-[13px] leading-none font-heavy text-(--cp-text-primary)">
           {{ point.time }}
         </strong>
         <span
-          class="inline-flex h-5 items-center rounded-full px-2 text-[10px] leading-none font-[760]"
+          class="inline-flex h-5 items-center rounded-full px-2 text-[10px] leading-none font-heavy"
           :class="status.badgeClass"
         >
           {{ status.label }}
         </span>
       </div>
-      <span class="shrink-0 text-[10px] leading-none font-[650] text-(--cp-text-muted)">
+      <span class="shrink-0 text-[10px] leading-none font-emphasis text-(--cp-text-muted)">
         15 分钟
       </span>
     </header>
@@ -88,22 +88,22 @@ const metricItems = outcomeMeta
     <div class="grid gap-3.5 px-3.5 py-3.5">
       <div class="flex items-end justify-between gap-4">
         <div>
-          <p class="m-0 text-[11px] leading-none font-[650] text-(--cp-text-muted)">
+          <p class="m-0 text-[11px] leading-none font-emphasis text-(--cp-text-muted)">
             有效请求可用性
           </p>
           <strong
-            class="mt-2 block font-mono text-[25px] leading-none font-[790] tabular-nums"
+            class="mt-2 block font-mono text-[25px] leading-none font-heavy tabular-nums"
             :class="healthReliabilityValueClass(point.successRequests, point.failedRequests)"
           >
             {{ point.reliabilityDisplay }}
           </strong>
         </div>
         <div class="text-right">
-          <span class="block text-[10px] leading-none font-[650] text-(--cp-text-muted)">
+          <span class="block text-[10px] leading-none font-emphasis text-(--cp-text-muted)">
             有效请求
           </span>
           <strong
-            class="mt-2 block font-mono text-[15px] leading-none font-[760] tabular-nums text-(--cp-text-primary)"
+            class="mt-2 block font-mono text-[15px] leading-none font-heavy tabular-nums text-(--cp-text-primary)"
           >
             {{ formatHealthCount(eligibleRequests) }}
           </strong>
@@ -130,11 +130,11 @@ const metricItems = outcomeMeta
           class="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-2.5 py-2.5"
         >
           <span class="size-1.5 rounded-full" :class="item.dotClass" />
-          <span class="truncate text-[10px] leading-none font-[650] text-(--cp-text-secondary)">
+          <span class="truncate text-[10px] leading-none font-emphasis text-(--cp-text-secondary)">
             {{ item.label }}
           </span>
           <strong
-            class="font-mono text-[12px] leading-none font-[760] tabular-nums"
+            class="font-mono text-[12px] leading-none font-heavy tabular-nums"
             :class="item.valueClass"
           >
             {{ formatHealthCount(item.value) }}
@@ -143,7 +143,7 @@ const metricItems = outcomeMeta
       </div>
 
       <p
-        class="m-0 border-t border-(--cp-divider-subtle) pt-3 text-[10px] leading-[1.45] font-[650] text-(--cp-text-muted)"
+        class="m-0 border-t border-(--cp-divider-subtle) pt-3 text-[10px] leading-[1.45] font-emphasis text-(--cp-text-muted)"
       >
         客户端取消与调用方错误单独记录，不计入可用性。
       </p>

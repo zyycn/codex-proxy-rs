@@ -47,7 +47,7 @@ const authenticationLabel = computed(() => {
     >
       <Openai v-if="normalizedProvider === 'openai'" :class="iconClass" aria-hidden="true" />
       <Xai v-else-if="normalizedProvider === 'xai'" :class="iconClass" aria-hidden="true" />
-      <span v-else class="text-[10px] font-[760] text-(--cp-text-muted)">?</span>
+      <span v-else class="text-[10px] font-heavy text-(--cp-text-muted)">?</span>
     </span>
 
     <span
@@ -66,7 +66,7 @@ const authenticationLabel = computed(() => {
         :class="iconClass"
         aria-hidden="true"
       />
-      <span v-else class="text-[10px] font-[760] text-(--cp-text-muted)">?</span>
+      <span v-else class="text-[10px] font-heavy text-(--cp-text-muted)">?</span>
     </span>
 
     <span class="sr-only">

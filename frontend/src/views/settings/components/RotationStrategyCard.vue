@@ -43,9 +43,9 @@ const model = defineModel<RotationStrategy | ''>({ required: true })
               :class="model === option.value ? 'bg-(--cp-info) opacity-100' : 'opacity-0'"
             />
           </span>
-          <span class="text-[14px] leading-[1.15] font-[760]">{{ option.label }}</span>
+          <span class="text-[14px] leading-[1.15] font-heavy">{{ option.label }}</span>
         </span>
-        <span class="mt-2 block text-[13px] leading-normal font-[650] text-(--cp-text-secondary)">
+        <span class="mt-2 block text-[13px] leading-normal font-emphasis text-(--cp-text-secondary)">
           {{ option.description }}
         </span>
       </button>

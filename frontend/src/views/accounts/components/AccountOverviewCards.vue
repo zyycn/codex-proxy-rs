@@ -70,15 +70,15 @@ function overviewIconClass(tone: string) {
     >
       <div class="flex h-full items-stretch justify-between gap-3 px-5 py-3">
         <div class="flex min-w-0 flex-col justify-between">
-          <p class="m-0 text-[12px] leading-none font-[760] text-(--cp-text-secondary)">
+          <p class="m-0 text-[12px] leading-none font-heavy text-(--cp-text-secondary)">
             {{ item.label }}
           </p>
           <strong
-            class="block font-mono text-[26px] leading-none font-[820] text-(--cp-text-primary)"
+            class="block font-mono text-[26px] leading-none font-extrabold text-(--cp-text-primary)"
           >
             {{ item.value }}
           </strong>
-          <p class="m-0 truncate text-[12px] leading-none font-[650] text-(--cp-text-muted)">
+          <p class="m-0 truncate text-[12px] leading-none font-emphasis text-(--cp-text-muted)">
             {{ item.caption }}
           </p>
         </div>

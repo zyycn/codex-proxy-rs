@@ -75,7 +75,7 @@ const items = computed(() => [
         >
           {{ item.value }}
         </strong>
-        <span class="block truncate text-[12px] leading-none font-[650] text-(--cp-text-secondary)">
+        <span class="block truncate text-[12px] leading-none font-emphasis text-(--cp-text-secondary)">
           {{ item.detail }}
         </span>
       </div>

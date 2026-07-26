@@ -216,7 +216,7 @@ onBeforeUnmount(() => {
     <template #actions>
       <div class="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div
-          class="flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-none font-[650] text-(--cp-text-muted)"
+          class="flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-none font-emphasis text-(--cp-text-muted)"
         >
           <span
             v-for="item in healthLegend"
@@ -233,7 +233,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="flex shrink-0 items-center gap-3">
           <strong
-            class="font-mono text-sm leading-none font-[760] tabular-nums"
+            class="font-mono text-sm leading-none font-heavy tabular-nums"
             :class="healthReliabilityValueClass(timeline.successRequests, timeline.failedRequests)"
           >
             {{ timeline.reliabilityDisplay }}

@@ -64,7 +64,7 @@ function selectOption(value: string) {
     <button
       v-for="option in options"
       :key="option.value"
-      class="relative z-10 inline-flex min-w-0 items-center justify-center gap-1.5 rounded-(--cp-input-radius-base) border-0 bg-transparent px-3 text-xs leading-none font-[650] transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border)"
+      class="relative z-10 inline-flex min-w-0 items-center justify-center gap-1.5 rounded-(--cp-input-radius-base) border-0 bg-transparent px-3 text-xs leading-none font-emphasis transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border)"
       :class="[
         size === 'input' ? 'h-8' : 'h-7',
         model === option.value
