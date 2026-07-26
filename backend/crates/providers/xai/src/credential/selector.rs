@@ -72,17 +72,30 @@ impl GrokAccountSessionSelector {
             .await
             .map_err(|_| GrokSessionSelectorError::Unavailable)?;
         self.quota.prepare_scheduling(&accounts).await;
+        // 目录支持度按套餐 scope 去重后并发批量读取，避免逐账号串行往返。
+        let account_scopes = accounts
+            .iter()
+            .map(|account| GrokCatalogScope::for_account(account).ok())
+            .collect::<Vec<_>>();
+        let unique_scopes = account_scopes
+            .iter()
+            .flatten()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        let support_reads = futures::future::join_all(unique_scopes.iter().map(|scope| {
+            self.catalog_cache
+                .observed_model_support(scope, request.upstream_model().as_str())
+        }))
+        .await;
+        let support_by_scope = unique_scopes
+            .into_iter()
+            .zip(support_reads)
+            .collect::<std::collections::BTreeMap<_, _>>();
         let mut catalog_eligible = Vec::new();
-        for account in accounts {
-            let support = match GrokCatalogScope::for_account(&account) {
-                Ok(scope) => {
-                    self.catalog_cache
-                        .observed_model_support(&scope, request.upstream_model().as_str())
-                        .await
-                }
-                Err(error) => Err(error),
-            };
-            if !matches!(support, Ok(Some(false))) {
+        for (account, scope) in accounts.into_iter().zip(account_scopes) {
+            let unsupported = scope
+                .is_some_and(|scope| matches!(support_by_scope.get(&scope), Some(Ok(Some(false)))));
+            if !unsupported {
                 catalog_eligible.push(account);
             }
         }
@@ -220,9 +233,16 @@ impl GrokAccountSessionSelector {
         accounts: &[ProviderAccount],
     ) -> std::collections::BTreeMap<ProviderAccountId, SystemTime> {
         let now = SystemTime::now();
+        // 冷却状态并发批量读取，避免逐账号串行往返。
+        let reads = futures::future::join_all(
+            accounts
+                .iter()
+                .map(|account| self.cooldowns.read(account.id())),
+        )
+        .await;
         let mut cooled = std::collections::BTreeMap::new();
-        for account in accounts {
-            let Ok(Some(cooldown)) = self.cooldowns.read(account.id()).await else {
+        for (account, read) in accounts.iter().zip(reads) {
+            let Ok(Some(cooldown)) = read else {
                 continue;
             };
             if cooldown.credential_revision() != account.revision() {

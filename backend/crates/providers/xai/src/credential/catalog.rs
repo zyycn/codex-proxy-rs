@@ -1008,22 +1008,46 @@ impl GrokCredentialCatalogService {
             .filter(eligible_catalog_candidate)
             .collect::<Vec<_>>();
         let groups = catalog_candidates_by_scope(candidates)?;
+        // 单个套餐失败只跳过该套餐，不阻断其他套餐的目录同步。
         let mut fetched = Vec::with_capacity(groups.len());
+        let mut last_error = None;
         for (scope, candidates) in groups {
-            fetched.push(self.fetch_scope_catalog(scope, candidates).await?);
+            match self.fetch_scope_catalog(scope.clone(), candidates).await {
+                Ok(catalog) => fetched.push(catalog),
+                Err(error) => {
+                    tracing::warn!(
+                        scope = scope.as_str(),
+                        error = %error,
+                        "skipping failed xAI plan catalog scope"
+                    );
+                    last_error = Some(error);
+                }
+            }
+        }
+        if fetched.is_empty() {
+            return Err(last_error.unwrap_or(GrokCredentialCatalogError::NoEligibleCredential));
         }
         fetched.sort_by(|left, right| left.scope.cmp(&right.scope));
         let models = strict_model_union(&fetched)?;
         let observed_at = Utc::now();
         for fetched in fetched {
-            self.cache
+            let scope = fetched.scope.clone();
+            if self
+                .cache
                 .replace(GrokPlanCatalog {
                     scope: fetched.scope,
                     observed_at,
                     seed: fetched.seed,
                 })
                 .await
-                .map_err(|_| GrokCredentialCatalogError::Cache)?;
+                .is_err()
+            {
+                // cache 是可重建 TTL 数据，单套餐写入失败不阻断目录发布。
+                tracing::warn!(
+                    scope = scope.as_str(),
+                    "failed to cache xAI plan catalog scope"
+                );
+            }
         }
         self.publish_models(&models);
 
