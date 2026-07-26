@@ -211,7 +211,7 @@ impl GrokCanonicalDecoder {
                 continue;
             };
             let event_type = event_type.to_owned();
-            // 无法转换的上游帧跳过而非断流（转换失败多为畸形帧），避免打断客户端流。
+            // 无法转换的上游帧（多为畸形帧）直接丢弃，保持已开始的客户端流不中断。
             let Ok(transformed) = self
                 .response_transform
                 .rewrite_stream_event(&event_type, value)
@@ -225,10 +225,10 @@ impl GrokCanonicalDecoder {
                 }
                 let value = transformed.into_value();
                 let mut canonical = Vec::new();
-                // 终态事件（completed/incomplete）保留 fail-closed：用量/计费校验失败仍断流。
+                // 终态事件（completed/incomplete）fail-closed：用量/计费校验失败即断流。
                 // 其余内容事件容忍字段校验失败——正常上游变体（空 delta、重复 index、
-                // 缺字段等）不应打断已开始的客户端流：跳过 canonical 提取、wire 原样转发。
-                // 真·上游错误（response.failed/error）为非 Protocol 类别，仍按终态传播。
+                // 缺字段等）不打断已开始的客户端流：跳过 canonical 提取、wire 原样转发。
+                // 真·上游错误（response.failed/error）为非 Protocol 类别，按终态传播。
                 let terminal_event = matches!(
                     transformed_type.as_str(),
                     "response.completed" | "response.incomplete"

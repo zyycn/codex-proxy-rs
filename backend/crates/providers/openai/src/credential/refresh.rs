@@ -25,7 +25,7 @@ use super::types::{CodexCredentialPrincipal, CodexOAuthSecret, RotateCodexCreden
 
 const PROVIDER_NAME: &str = "openai";
 const MAX_REFRESH_BATCH: u32 = 1_000;
-/// 连续失败计数窗口；每次瞬态失败刷新该 TTL，静默满窗后计数自动归零。
+/// 连续失败计数窗口；每次瞬态失败刷新该 TTL，静默满窗后计数过期归零。
 const REFRESH_BACKOFF_WINDOW: Duration = Duration::from_secs(30 * 60);
 
 pub struct DueCodexCredential {
@@ -207,8 +207,8 @@ impl CodexCredentialRefreshService {
                 }
             }
             Err(RefreshFailure::Transport) => {
-                // 上游瞬态（429/5xx/超时/畸形响应等，可能已发出）不再永久失效账号：
-                // 保留现有凭据、推进退避重试，仅 invalid_grant/banned 才终态。
+                // 上游瞬态（429/5xx/超时/畸形响应等，发送状态未知）保留现有凭据、
+                // 推进退避重试；仅 invalid_grant/banned 才终态失效账号。
                 if self
                     .defer_refresh(&due.account, "transport-ambiguous")
                     .await?
@@ -330,8 +330,8 @@ impl CodexCredentialRefreshService {
                     .await;
             }
             Err(CodexIdentityVerificationError::Unavailable) => {
-                // JWKS/签名边界短暂不可用是瞬态：保留现有凭据、推进退避重试，
-                // 不再永久失效账号（defer_refresh 正是为“签名边界不可用”而设计）。
+                // JWKS/签名边界短暂不可用属瞬态：保留现有凭据、推进退避重试，
+                // 不终态失效账号。
                 return if self
                     .defer_refresh(&due.account, "identity-unavailable")
                     .await?
@@ -402,7 +402,7 @@ impl CodexCredentialRefreshService {
             .await;
         match result {
             Ok(revision) => {
-                // 凭据完整成功轮换：清零连续失败计数，退避窗口重新从 base 起步。
+                // 凭据完整成功轮换后清零连续失败计数，退避窗口重新从 base 起步。
                 let _ = self
                     .credential_state
                     .clear_refresh_backoff(due.account.id())
