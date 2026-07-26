@@ -20,10 +20,10 @@ use crate::engine::coordinator::ResponseExecutionSession;
 use crate::engine::probe::{AccountProbe, AccountProbeRequest, AccountProbeResult};
 use crate::engine::provider::ProviderRegistry;
 use crate::engine::{
-    AttemptCoordinator, AttemptRecord, CancellationToken, CommitRequirement, CoordinatedEvent,
-    EngineError, ExecutionStore, GatewayEngine, IntermediateFailure, ModelRequestFinalization,
-    ModelRequestId, NewModelRequest, ProbeFailure, ProviderAccountId, ProviderAttemptOutcome,
-    RecoveryReport, UpstreamSendState,
+    AttemptCoordinator, AttemptRecord, CancellationToken, CoordinatedEvent, EngineError,
+    ExecutionStore, GatewayEngine, IntermediateFailure, ModelRequestFinalization, ModelRequestId,
+    NewModelRequest, ProbeFailure, ProviderAccountId, ProviderAttemptOutcome, RecoveryReport,
+    UpstreamSendState,
 };
 use crate::error::{GatewayError, GatewayErrorKind, ProviderErrorKind, StoreError};
 use crate::event::{GatewayEvent, ProviderEvent, ProviderResponseHeader};
@@ -942,9 +942,4 @@ pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {
         }
         _ => GatewayError::new(GatewayErrorKind::Internal, "request execution failed"),
     }
-}
-
-#[must_use]
-pub const fn commit_requirement(event: &CoordinatedEvent) -> CommitRequirement {
-    event.commit_requirement()
 }
