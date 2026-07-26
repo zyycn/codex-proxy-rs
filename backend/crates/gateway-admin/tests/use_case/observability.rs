@@ -1,4 +1,5 @@
 use std::{
+    num::NonZeroU32,
     str::FromStr as _,
     sync::{Arc, Mutex},
 };
@@ -9,13 +10,14 @@ use chrono::{DateTime, Duration, Timelike as _, Utc};
 use gateway_admin::{
     AdminServices,
     model::{
-        MutationContext, Revision,
+        MutationContext, PageSize, Revision,
         observability::{
             AccountPoolMetrics, AttemptMetrics, CostCoverage, CurrencyCost, DashboardObservation,
             DashboardRuntimeSlots, DiagnosticDimension, DiagnosticObservation, Granularity,
-            HealthStatus, OpsErrorPage, OpsErrorQuery, RequestMetricPoint, RequestMetrics,
-            TimeRange, TrendKind, UsageCalculatedBillingFact, UsageDetail, UsageFilter,
-            UsageOverview, UsagePage, UsageQuery, china_day_start,
+            HealthStatus, OpsErrorPage, OpsErrorQuery, PageNumber, RequestMetricPoint,
+            RequestMetrics, RequestOutcome, TimeRange, TrendKind, UsageBilling,
+            UsageCalculatedBillingFact, UsageDetail, UsageFilter, UsageOverview, UsagePage,
+            UsageQuery, UsageRecord, china_day_start,
         },
         settings::{
             AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RotationStrategy,
@@ -318,12 +320,46 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
     assert_eq!(diagnostics.items[1].request_share, 0.25);
 }
 
+#[tokio::test]
+async fn usage_records_should_tolerate_records_that_fail_billing_enrichment() {
+    let now = Utc::now();
+    let store = Arc::new(FixtureObservabilityStore::new(observation_range(now)));
+    let invalid_kind = "x".repeat(65);
+    store.replace_usage_records(vec![
+        calculated_total_record("request_invalid_kind", Some(&invalid_kind), now),
+        calculated_total_record("request_unregistered_kind", Some("anthropic"), now),
+        calculated_total_record("request_enriched", Some("openai"), now),
+    ]);
+    let services = observability_services_with_calculated_billing(store).await;
+
+    let page = services
+        .observability()
+        .usage_records(usage_query(now))
+        .await
+        .expect("one bad record must not fail the whole usage list");
+
+    assert_eq!(page.items.len(), 3);
+    assert!(
+        matches!(page.items[0].billing, Some(UsageBilling::Total { .. })),
+        "invalid Provider kind keeps the stored total"
+    );
+    assert!(
+        matches!(page.items[1].billing, Some(UsageBilling::Total { .. })),
+        "unregistered Provider kind keeps the stored total"
+    );
+    assert!(
+        matches!(page.items[2].billing, Some(UsageBilling::Calculated(_))),
+        "healthy record is still enriched"
+    );
+}
+
 struct FixtureObservabilityStore {
     trend: Mutex<Vec<RequestMetricPoint>>,
     overview: Mutex<UsageOverview>,
     calculated_billing_facts: Mutex<Vec<UsageCalculatedBillingFact>>,
     diagnostics: Mutex<Vec<DiagnosticObservation>>,
     runtime_slots: Mutex<Option<DashboardRuntimeSlots>>,
+    usage_records: Mutex<Vec<UsageRecord>>,
 }
 
 impl FixtureObservabilityStore {
@@ -339,6 +375,7 @@ impl FixtureObservabilityStore {
             calculated_billing_facts: Mutex::new(Vec::new()),
             diagnostics: Mutex::new(Vec::new()),
             runtime_slots: Mutex::new(None),
+            usage_records: Mutex::new(Vec::new()),
         }
     }
 
@@ -363,6 +400,10 @@ impl FixtureObservabilityStore {
 
     fn replace_runtime_slots(&self, runtime_slots: Option<DashboardRuntimeSlots>) {
         *self.runtime_slots.lock().expect("runtime slots") = runtime_slots;
+    }
+
+    fn replace_usage_records(&self, records: Vec<UsageRecord>) {
+        *self.usage_records.lock().expect("usage records") = records;
     }
 }
 
@@ -412,7 +453,13 @@ impl ObservabilityStore for FixtureObservabilityStore {
     }
 
     async fn list_usage_records(&self, _: UsageQuery) -> AdminStoreResult<UsagePage> {
-        Err(super::unavailable("usage records"))
+        let items = self.usage_records.lock().expect("usage records").clone();
+        let total = u64::try_from(items.len()).unwrap_or(u64::MAX);
+        Ok(UsagePage {
+            items,
+            total,
+            next_cursor: None,
+        })
     }
 
     async fn usage_record_detail(&self, _: &str) -> AdminStoreResult<UsageDetail> {
@@ -509,6 +556,96 @@ async fn observability_services_with_calculated_billing(
 
 fn observation_range(end: DateTime<Utc>) -> TimeRange {
     TimeRange::new(end - Duration::hours(24), end).expect("observation range")
+}
+
+fn usage_query(now: DateTime<Utc>) -> UsageQuery {
+    UsageQuery {
+        range: observation_range(now),
+        filter: UsageFilter::default(),
+        cursor: None,
+        page: PageNumber::new(NonZeroU32::new(1).expect("page number")),
+        page_size: PageSize::new(50).expect("page size"),
+    }
+}
+
+fn calculated_total_record(
+    id: &str,
+    provider_kind: Option<&str>,
+    now: DateTime<Utc>,
+) -> UsageRecord {
+    UsageRecord {
+        id: id.to_owned(),
+        client_api_key_ref: "key_billing".to_owned(),
+        config_revision: 1,
+        protocol: "openai".to_owned(),
+        operation: "generate".to_owned(),
+        endpoint: "/v1/responses".to_owned(),
+        client_transport: "http_sse".to_owned(),
+        requested_model_id: "gpt-5.5".to_owned(),
+        provider_kind: provider_kind.map(str::to_owned),
+        provider_account_ref: None,
+        provider_account_name: None,
+        provider_account_email: None,
+        provider_account_authentication_kind: None,
+        upstream_model_id: Some("gpt-5.5".to_owned()),
+        upstream_transport: None,
+        http_version: None,
+        websocket_pool: None,
+        provider_metadata_json: None,
+        attempt_count: 1,
+        upstream_send_state: "sent".to_owned(),
+        downstream_committed_at: None,
+        outcome: RequestOutcome::Succeeded,
+        client_status_code: Some(200),
+        upstream_status_code: Some(200),
+        client_response_id: None,
+        upstream_request_id: None,
+        upstream_response_id: None,
+        error_kind: None,
+        provider_error_code: None,
+        error_message: None,
+        retry_after_ms: None,
+        input_tokens: Some(800),
+        output_tokens: Some(200),
+        cached_tokens: Some(0),
+        cache_write_tokens: Some(0),
+        reasoning_tokens: Some(0),
+        image_input_tokens: None,
+        image_output_tokens: None,
+        total_tokens: Some(1_000),
+        cost_source: "calculated".to_owned(),
+        cost_amount: None,
+        cost_currency: None,
+        billing: Some(UsageBilling::Total {
+            source: "calculated".to_owned(),
+            total: CurrencyCost {
+                currency: "USD".to_owned(),
+                amount: gateway_admin::model::observability::DecimalAmount::from_str("1.25")
+                    .expect("billing total"),
+            },
+        }),
+        transport_decision_wait_ms: None,
+        connect_ms: None,
+        headers_ms: None,
+        first_event_ms: None,
+        first_reasoning_ms: None,
+        first_text_ms: None,
+        first_token_ms: None,
+        provider_processing_ms: None,
+        latency_ms: Some(100),
+        client_ip: None,
+        user_agent: None,
+        reasoning_effort: None,
+        reasoning_preset: None,
+        request_kind: None,
+        subagent_kind: None,
+        compact: false,
+        image_generation_requested: false,
+        image_generation_succeeded: None,
+        started_at: now,
+        deadline_at: now,
+        completed_at: Some(now),
+    }
 }
 
 fn health_metric_point(bucket_start: DateTime<Utc>, metrics: RequestMetrics) -> RequestMetricPoint {
