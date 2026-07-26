@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use futures::executor::block_on;
 
 use gateway_core::accounting::{CalculatedCost, CostSource, ProviderReportedCost, Usage};
@@ -223,6 +224,11 @@ enum Script {
         account_id: &'static str,
         items: Vec<Result<GatewayEvent, ProviderError>>,
     },
+    /// 产出 `items` 后永久悬挂的流；用于逼出会话级 deadline。
+    HangingStream {
+        account_id: &'static str,
+        items: Vec<Result<GatewayEvent, ProviderError>>,
+    },
     ObservedStream {
         account_id: &'static str,
         items: Vec<Result<ProviderEvent, ProviderError>>,
@@ -295,6 +301,30 @@ impl Provider for ScriptedProvider {
                             .into_iter()
                             .map(|event| event.map(ProviderEvent::from)),
                     )),
+                    (),
+                ))
+            }
+            Script::HangingStream { account_id, items } => {
+                let candidate = request.candidate();
+                let metadata = ProviderCallMetadata::new(
+                    candidate.provider().clone(),
+                    candidate.upstream_model().clone(),
+                    ProviderResource::Account {
+                        id: ProviderAccountId::new(account_id).expect("account id"),
+                        revision: CredentialRevision::new(1).expect("revision"),
+                    },
+                    UpstreamTransport::new("http_sse").expect("transport"),
+                );
+                Ok(ProviderStream::new(
+                    metadata,
+                    Box::pin(
+                        futures::stream::iter(
+                            items
+                                .into_iter()
+                                .map(|event| event.map(ProviderEvent::from)),
+                        )
+                        .chain(futures::stream::pending()),
+                    ),
                     (),
                 ))
             }
@@ -1567,6 +1597,62 @@ fn recovered_credential_retries_the_same_account_exactly_once() {
 }
 
 #[test]
+fn retryable_error_after_credential_recovery_switches_account_instead_of_terminating() {
+    let operation = operation(RetrySafety::NonIdempotent);
+    let route_plan = plan(&operation);
+    let (coordinator, store, provider) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::Unauthorized,
+                UpstreamSendState::Sent,
+            )
+            .with_status(401)
+            .with_replay_safe()
+            .with_same_account_retry())],
+        },
+        Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::RateLimited,
+                UpstreamSendState::Sent,
+            )
+            .with_status(429)
+            .with_replay_safe())],
+        },
+        Script::Stream {
+            account_id: "acct_second",
+            items: complete_stream(None),
+        },
+    ]);
+
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+    block_on(session.collect_uncommitted()).expect("third attempt succeeds on another account");
+    block_on(session.commit_downstream(Some(200))).expect("commit response");
+
+    let contexts = provider.contexts.lock().expect("contexts lock");
+    let first = ProviderAccountId::new("acct_first").expect("account");
+    assert_eq!(contexts.len(), 3);
+    assert_eq!(contexts[1].required_account(), Some(&first));
+    assert!(contexts[1].credential_recovery_attempted());
+    // recovery 钉账号只绑定 replay attempt；replay 上的 429 之后必须能换号。
+    assert_eq!(contexts[2].required_account(), None);
+    assert!(contexts[2].excluded_accounts().contains(&first));
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.attempts.len(), 3);
+    assert_eq!(state.intermediate_failures, 2);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
+}
+
+#[test]
 fn non_idempotent_explicit_429_rejection_rotates_account_before_output() {
     let operation = operation(RetrySafety::NonIdempotent);
     let route_plan = plan(&operation);
@@ -1994,4 +2080,72 @@ fn expired_deadline_finalizes_without_calling_provider() {
     assert_eq!(state.created, 0);
     assert!(state.attempts.is_empty());
     assert!(state.finalizations.is_empty());
+}
+
+#[test]
+fn deadline_after_commit_is_incomplete_without_provider_circuit_failure() {
+    let operation = operation(RetrySafety::Idempotent);
+    let route_plan = plan(&operation);
+    let (coordinator, store, _) = coordinator(vec![Script::HangingStream {
+        account_id: "acct_first",
+        items: vec![Ok(GatewayEvent::Started(ResponseMeta::new(
+            "response-1",
+            "gpt-5",
+        )))],
+    }]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_millis(300)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+    let first = block_on(session.next_event())
+        .expect("first event")
+        .expect("started event");
+    assert_eq!(
+        first.commit_requirement(),
+        CommitRequirement::CommitBeforeDelivery
+    );
+    block_on(session.commit_downstream(Some(200))).expect("commit started event");
+
+    let error = block_on(session.next_event()).expect_err("deadline elapses mid-stream");
+
+    assert!(matches!(error, EngineError::Deadline));
+    // 网关自身请求预算到期不是上游超时；已在交付中的长流集中到期
+    // 不得作为 provider Timeout 计入熔断。
+    assert!(session.provider_attempt_outcomes().is_empty());
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Incomplete);
+    assert!(state.finalizations[0].committed);
+}
+
+#[test]
+fn deadline_before_first_event_records_no_provider_circuit_failure() {
+    let operation = operation(RetrySafety::Idempotent);
+    let route_plan = plan(&operation);
+    let (coordinator, store, _) = coordinator(vec![Script::HangingStream {
+        account_id: "acct_first",
+        items: Vec::new(),
+    }]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_millis(300)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+
+    let error = block_on(session.next_event()).expect_err("deadline elapses before first event");
+
+    assert!(matches!(error, EngineError::Deadline));
+    assert!(session.provider_attempt_outcomes().is_empty());
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.attempts.len(), 1);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Failed);
+    assert!(!state.finalizations[0].committed);
 }

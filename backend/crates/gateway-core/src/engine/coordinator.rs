@@ -92,6 +92,7 @@ where
             attempts: 0,
             excluded_accounts: BTreeSet::new(),
             credential_recovery_attempted_accounts: BTreeSet::new(),
+            recovery_account: None,
             current: None,
             send_state_watermark: UpstreamSendState::NotSent,
             downstream_committed_at: None,
@@ -165,6 +166,10 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     attempts: u32,
     excluded_accounts: BTreeSet<crate::engine::credential::ProviderAccountId>,
     credential_recovery_attempted_accounts: BTreeSet<crate::engine::credential::ProviderAccountId>,
+    /// 凭据恢复后的一次性同账号钉选；只约束紧随其后的 replay attempt，
+    /// attempt 建立时即被消费，后续可重试错误仍可换号消耗剩余重试预算。
+    /// 与 `required_account`（外部指定、贯穿整个请求）语义不同，不可合并。
+    recovery_account: Option<crate::engine::credential::ProviderAccountId>,
     current: Option<CurrentAttempt>,
     /// 请求级发送状态水位；跨 attempt 单调不降，终态写回不得低于此档。
     send_state_watermark: UpstreamSendState,
@@ -397,7 +402,9 @@ where
                     return Err(EngineError::Cancelled);
                 }
                 PollBoundary::Deadline => {
-                    self.record_current_provider_failure(ProviderErrorKind::Timeout);
+                    // 会话 deadline 是网关自身的请求预算，不是上游超时；
+                    // 真正的上游超时会作为流错误进入 `handle_stream_error` 记账。
+                    // 这里不写 provider 失败，避免长流集中到期误触 provider 熔断。
                     self.finish_interruption(EngineError::Deadline).await?;
                     return Err(EngineError::Deadline);
                 }
@@ -474,6 +481,12 @@ where
             .checked_add(1)
             .and_then(NonZeroU32::new)
             .ok_or(EngineError::EmptyRoutingPlan)?;
+        // recovery 钉选在此被一次性消费，只绑定本次 replay attempt；
+        // 外部 required_account 每次 attempt 都重新生效。
+        let pinned_account = self
+            .recovery_account
+            .take()
+            .or_else(|| self.required_account.clone());
         let context = AttemptContext::new(
             RequestAttemptContext::new(self.request_id.clone(), self.client_api_key_ref.clone())
                 .with_timing_started_at(self.timing_started_at),
@@ -482,15 +495,15 @@ where
             self.plan.account_selection_policy(),
             AccountAttemptContext::new(
                 self.excluded_accounts.clone(),
-                self.required_account.clone(),
+                pinned_account.clone(),
                 self.account_state_owner.clone(),
             )
-            .with_credential_recovery_attempted(
-                self.required_account.as_ref().is_some_and(|account| {
+            .with_credential_recovery_attempted(pinned_account.as_ref().is_some_and(
+                |account| {
                     self.credential_recovery_attempted_accounts
                         .contains(account)
-                }),
-            ),
+                },
+            )),
             self.continuation.clone(),
             self.cancellation.clone(),
         )
@@ -523,10 +536,9 @@ where
                 return Err(EngineError::Cancelled);
             }
             ProviderBoundary::Deadline => {
-                self.record_provider_failure(
-                    candidate.provider().clone(),
-                    ProviderErrorKind::Timeout,
-                );
+                // 网关预算到期同样不是候选 Provider 的上游超时，不计入熔断；
+                // Provider 自身的握手/传输超时会以 `ProviderErrorKind::Timeout`
+                // 错误返回并在下方 `Result` 分支记账。
                 self.finish_interruption(EngineError::Deadline).await?;
                 return Err(EngineError::Deadline);
             }
@@ -573,8 +585,7 @@ where
         }
 
         let metadata = stream.metadata().clone();
-        if self
-            .required_account
+        if pinned_account
             .as_ref()
             .is_some_and(|required| metadata.provider_account_id() != Some(required))
         {
@@ -836,7 +847,9 @@ where
                 if let Some(account) = current.metadata.provider_account_id() {
                     self.credential_recovery_attempted_accounts
                         .insert(account.clone());
-                    self.required_account = Some(account.clone());
+                    // 只钉住紧随其后的 replay attempt；replay 再遇可重试错误时，
+                    // ordinary/continuation 重试门不受影响，仍可换号。
+                    self.recovery_account = Some(account.clone());
                 }
             } else if !continuation_retry
                 && let Some(account) = current.metadata.provider_account_id()
@@ -1206,16 +1219,6 @@ where
         if let Some(provider_kind) = provider_kind {
             self.provider_attempt_outcomes
                 .push(ProviderAttemptOutcome::Succeeded { provider_kind });
-        }
-    }
-
-    fn record_current_provider_failure(&mut self, error_kind: ProviderErrorKind) {
-        let provider_kind = self
-            .current
-            .as_ref()
-            .map(|current| current.metadata.provider().clone());
-        if let Some(provider_kind) = provider_kind {
-            self.record_provider_failure(provider_kind, error_kind);
         }
     }
 
