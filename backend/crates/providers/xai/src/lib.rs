@@ -18,7 +18,7 @@ use gateway_core::routing::ProviderKind;
 use gateway_core::task::WorkerContribution;
 
 use crate::admin::{XaiAdminProvider, XaiAdminServices};
-use crate::transport::profile::{GrokCliReleaseService, OfficialGrokCliReleaseTransport};
+use crate::transport::profile::OfficialGrokCliReleaseTransport;
 
 pub use config::{XaiConfig, XaiConfigError, XaiWireProfileConfig};
 pub use transport::XaiWireProfileState;
@@ -50,7 +50,10 @@ pub use credential::{
     VerifiedTokenSet, parse_oauth_error, parse_refresh_success,
 };
 pub use provider::GrokBuildProvider;
-pub use transport::profile::{GROK_CLI_RELEASE_URL, GrokCliReleaseError};
+pub use transport::profile::{
+    GROK_CLI_RELEASE_URL, GrokCliReleaseError, GrokCliReleaseService, GrokCliReleaseSnapshot,
+    GrokCliReleaseStatus, GrokCliReleaseTransport,
+};
 pub use transport::{
     GROK_BILLING_URL, GROK_CLI_BASE_URL, GROK_MODEL_CATALOG_URL, GrokBillingClient,
     GrokBillingError, GrokBillingRequest, GrokBillingSnapshot, GrokBillingTransport,
