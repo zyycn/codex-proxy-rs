@@ -105,7 +105,7 @@ jobs:
               require_string(platform, key, "#{platforms_path}: platforms[#{index}]")
             end
             archive = platform["archive"]
-            fail("#{platforms_path}: platforms[#{index}].archive must be tar.gz or zip") unless ["tar.gz", "zip"].include?(archive)
+            fail("#{platforms_path}: platforms[#{index}].archive must be tar.gz") unless archive == "tar.gz"
             platform_key = "#{platform["os"]}-#{platform["arch"]}"
             fail("#{platforms_path}: duplicate platform #{platform_key}") if seen_platforms[platform_key]
             seen_platforms[platform_key] = true
@@ -324,7 +324,6 @@ jobs:
           import pathlib
           import shutil
           import tarfile
-          import zipfile
 
           APP_NAME = "codex-proxy-rs"
 
@@ -360,8 +359,7 @@ jobs:
 
               binary_dest = package_root / platform["binary"]
               shutil.copy2(binary_src, binary_dest)
-              if platform["os"] != "windows":
-                  binary_dest.chmod(0o755)
+              binary_dest.chmod(0o755)
               shutil.copytree(frontend_dir, web_dist, dirs_exist_ok=True)
 
               archive_name = f"{APP_NAME}_{version}_{platform['os']}_{platform['arch']}.{platform['archive']}"
@@ -369,11 +367,6 @@ jobs:
               if platform["archive"] == "tar.gz":
                   with tarfile.open(archive_path, "w:gz") as archive:
                       archive.add(package_root, arcname=APP_NAME)
-              elif platform["archive"] == "zip":
-                  with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
-                      for path in sorted(package_root.rglob("*")):
-                          if path.is_file():
-                              archive.write(path, path.relative_to(package_dir))
               else:
                   raise SystemExit(f"Unsupported archive format: {platform['archive']}")
               archives.append(archive_path)

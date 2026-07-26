@@ -298,7 +298,6 @@ fn repository_character(character: char) -> bool {
 fn platform_os_aliases() -> &'static [&'static str] {
     match env::consts::OS {
         "macos" => &["macos", "darwin"],
-        "windows" => &["windows", "win32"],
         "linux" => &["linux"],
         _ => &[env::consts::OS],
     }

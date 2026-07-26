@@ -4,7 +4,7 @@
 
 ## 1. 系统边界
 
-Codex Proxy RS 是单进程、可多副本部署的多 Provider AI 网关：
+Codex Proxy RS 是单进程、单副本部署的多 Provider AI 网关：
 
 - 客户端面提供 OpenAI Responses 兼容的 JSON、SSE、WebSocket 与模型目录协议。
 - 管理面提供 `/api/admin/*` 和 Vue 静态管理端。
@@ -14,6 +14,8 @@ Codex Proxy RS 是单进程、可多副本部署的多 Provider AI 网关：
 - OpenAI CLI 使用官方 npm 包 `@openai/codex`，OpenAI Desktop 使用官方 appcast，xAI CLI 使用官方 npm 包 `@xai-official/grok`。检查失败保留上一份成功画像；检查成功后 OAuth、catalog、quota/billing、inference 与 Dashboard 自动采用最新版本。
 - PostgreSQL 是业务与配置事实的唯一权威存储。
 - Redis 只保存可丢失、可重建或有自然过期时间的协调状态。
+
+部署假定：单副本。带 lease 的周期任务只做单周期互斥而非跨周期 leader 选举，N 副本会让同一任务最坏以 N 倍频率执行（见第 10 节）；自更新只替换并重启处理该请求的那个副本，其余副本停留在旧版本。不要以多副本方式运行本网关。
 
 Gateway Engine 不识别具体 Provider 协议；Provider 不拥有客户端 admission、跨 Provider 路由或业务重试预算。
 
