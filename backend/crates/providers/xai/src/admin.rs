@@ -318,7 +318,10 @@ impl ProviderAdmin for XaiAdminProvider {
         let mut credentials = Vec::new();
         // 逐条目独立成败：verify 会真实轮换 RT，后续条目的任何失败都不得
         // 丢弃已轮换成功的凭据（旧 RT 已被上游作废，丢弃即不可逆报废）。
-        // 失败条目跳过；仅当没有任何条目成功时返回首个失败。
+        // 失败条目跳过；仅当没有任何条目成功时返回首个失败。响应只携带
+        // 成功计数，每个被跳过的条目在此逐条留日志——尤其 verify 成功后
+        // 才失败/被去重的条目，其源文件里的 RT 已被轮换作废，运维只能从
+        // 日志得知需要重新授权。
         let mut first_failure: Option<ProviderAdminError> = None;
         for entry in document.into_entries() {
             let name = entry.name().to_owned();
@@ -330,12 +333,24 @@ impl ProviderAdmin for XaiAdminProvider {
             {
                 Ok(tokens) => tokens,
                 Err(error) => {
+                    tracing::warn!(
+                        target: "xai_admin",
+                        account = name.as_str(),
+                        class = ?error.class(),
+                        "导入条目验证失败，已跳过"
+                    );
                     first_failure.get_or_insert_with(|| map_failure_class(error.class()));
                     continue;
                 }
             };
-            // 同一账号的另一份 grant：账号已由更早条目入册，本条目跳过。
+            // 同一账号的另一份 grant：账号已由更早条目入册，本条目跳过；
+            // 本条目若经历了 refresh，其源文件 RT 已作废。
             if !subjects.insert(tokens.evidence().subject().to_owned()) {
+                tracing::warn!(
+                    target: "xai_admin",
+                    account = name.as_str(),
+                    "导入条目与更早条目属同一账号，已跳过；该条目的 refresh token 可能已被轮换作废"
+                );
                 continue;
             }
             let account = VerifiedGrokAccount {
@@ -351,6 +366,11 @@ impl ProviderAdmin for XaiAdminProvider {
             let prepared = match GrokCredentialAdmin.prepare_verified_account(&account, policy) {
                 Ok(prepared) => prepared,
                 Err(error) => {
+                    tracing::warn!(
+                        target: "xai_admin",
+                        account = account.name.as_str(),
+                        "已验证条目本地入册失败，已跳过；其 refresh token 已被轮换，需重新授权该账号"
+                    );
                     first_failure.get_or_insert_with(|| map_repository_error(error));
                     continue;
                 }
@@ -358,6 +378,11 @@ impl ProviderAdmin for XaiAdminProvider {
             match prepared_create(prepared, Utc::now()) {
                 Ok(credential) => credentials.push(credential),
                 Err(error) => {
+                    tracing::warn!(
+                        target: "xai_admin",
+                        account = account.name.as_str(),
+                        "已验证条目序列化失败，已跳过；其 refresh token 已被轮换，需重新授权该账号"
+                    );
                     first_failure.get_or_insert(error);
                 }
             }
