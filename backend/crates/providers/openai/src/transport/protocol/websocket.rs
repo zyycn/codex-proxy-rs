@@ -50,43 +50,32 @@ pub struct WebSocketAuditArtifact {
 
 /// 将一条公开 WebSocket JSON 事件编码为 SSE 帧。
 pub fn websocket_event_to_sse_frame(raw: &str) -> Option<String> {
-    let event = websocket_event_type(raw)?;
-    if is_internal_websocket_event(&event) {
-        return None;
-    }
-    if websocket_event_should_skip(raw) {
-        return None;
-    }
-    Some(encode_sse_event(&event, raw))
+    let value = serde_json::from_str::<Value>(raw).ok()?;
+    websocket_event_frame(&value, raw)
 }
 
-pub(crate) fn websocket_event_type(raw: &str) -> Option<String> {
-    serde_json::from_str::<Value>(raw).ok().and_then(|value| {
-        value
-            .get("type")
-            .and_then(Value::as_str)
-            .map(ToString::to_string)
-    })
+/// 同上，复用已解析的事件 JSON；`data` 段逐字节内嵌 `raw` 原文。
+///
+/// 仅剥离传输层内部帧：`codex.rate_limits` 与承载 turn_state 的
+/// `response.metadata` 不下发客户端；业务事件一律原样转发，不做 schema 校验。
+pub(crate) fn websocket_event_frame(value: &Value, raw: &str) -> Option<String> {
+    let event = websocket_event_type(value)?;
+    if is_internal_websocket_event(event) || event == "response.metadata" {
+        return None;
+    }
+    Some(encode_sse_event(event, raw))
+}
+
+pub(crate) fn websocket_event_type(value: &Value) -> Option<&str> {
+    value.get("type").and_then(Value::as_str)
 }
 
 fn is_internal_websocket_event(event: &str) -> bool {
     event == "codex.rate_limits"
 }
 
-/// 判断 WebSocket 事件是否应在转发前剥离。
-///
-/// 仅剥离传输层内部帧：`response.metadata` 承载 turn_state，由上层提取转存到
-/// 会话状态，不下发客户端。业务事件一律原样转发，不做 schema 校验。
-/// （`codex.rate_limits` 内部事件由 `is_internal_websocket_event` 单独剥离。）
-fn websocket_event_should_skip(raw: &str) -> bool {
-    websocket_event_type(raw).as_deref() == Some("response.metadata")
-}
-
 /// 提取 `response.metadata` 帧中的字符串响应头。
-pub fn websocket_metadata_headers(raw: &str) -> Vec<(String, String)> {
-    let Ok(value) = serde_json::from_str::<Value>(raw) else {
-        return Vec::new();
-    };
+pub fn websocket_metadata_headers(value: &Value) -> Vec<(String, String)> {
     if value.get("type").and_then(Value::as_str) != Some("response.metadata") {
         return Vec::new();
     }
@@ -100,9 +89,8 @@ pub fn websocket_metadata_headers(raw: &str) -> Vec<(String, String)> {
 }
 
 /// 从 `response.metadata` 帧中提取 `x-codex-turn-state`。
-pub fn websocket_metadata_turn_state(raw: &str) -> Option<String> {
-    let value = serde_json::from_str::<Value>(raw).ok()?;
-    websocket_metadata_headers(raw)
+pub fn websocket_metadata_turn_state(value: &Value) -> Option<String> {
+    websocket_metadata_headers(value)
         .into_iter()
         .find_map(|(name, value)| {
             name.eq_ignore_ascii_case("x-codex-turn-state")
@@ -128,8 +116,7 @@ fn json_value_as_string(value: &Value) -> Option<String> {
 /// 从 `response.completed` 旁路提取 response ID，供连接池记录续接能力。
 ///
 /// 该值不参与客户端 wire 的可交付性判断；无法读取时只是不记录连接内续接状态。
-pub fn websocket_response_completed_id(raw: &str) -> Option<String> {
-    let value = serde_json::from_str::<Value>(raw).ok()?;
+pub fn websocket_response_completed_id(value: &Value) -> Option<String> {
     if value.get("type").and_then(Value::as_str) != Some("response.completed") {
         return None;
     }
@@ -179,11 +166,39 @@ pub fn websocket_response_create_payload(request: &CodexResponsesRequest) -> Val
     Value::Object(payload)
 }
 
+/// 借用原始 body 序列化 `response.create` 帧，不复制字段。
+///
+/// 输出与序列化 [`websocket_response_create_payload`] 的合并 Map 逐字节一致：
+/// body 自带 `type` 键时以 body 值置于首位，其余字段按插入顺序原样透传。
+struct ResponseCreateFrame<'a> {
+    body: &'a Map<String, Value>,
+}
+
+impl serde::Serialize for ResponseCreateFrame<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap as _;
+        let mut map = serializer.serialize_map(Some(self.body.len() + 1))?;
+        match self.body.get("type") {
+            Some(body_type) => map.serialize_entry("type", body_type)?,
+            None => map.serialize_entry("type", "response.create")?,
+        }
+        for (key, value) in self.body {
+            if key == "type" {
+                continue;
+            }
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
+    }
+}
+
 /// 生成 Responses WebSocket `response.create` 文本帧内容。
 pub fn websocket_response_create_payload_text(
     request: &CodexResponsesRequest,
 ) -> Result<String, serde_json::Error> {
-    serde_json::to_string(&websocket_response_create_payload(request))
+    serde_json::to_string(&ResponseCreateFrame {
+        body: request.body(),
+    })
 }
 
 fn websocket_payload_keys(request: &CodexResponsesRequest) -> Vec<String> {

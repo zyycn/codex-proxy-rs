@@ -879,7 +879,8 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             };
             if let (Some(capture), Some(updates)) =
                 (session_capture.as_mut(), turn_state_updates.as_ref())
-                && let Some(turn_state) = updates.lock().await.clone()
+                // take：仅在上游写入过新 turn_state 时更新 capture，避免逐 chunk 克隆。
+                && let Some(turn_state) = updates.lock().await.take()
             {
                 capture.turn_state = Some(turn_state);
             }
@@ -996,7 +997,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         }
         if let (Some(capture), Some(updates)) =
             (session_capture.as_mut(), turn_state_updates.as_ref())
-            && let Some(turn_state) = updates.lock().await.clone()
+            && let Some(turn_state) = updates.lock().await.take()
         {
             capture.turn_state = Some(turn_state);
         }

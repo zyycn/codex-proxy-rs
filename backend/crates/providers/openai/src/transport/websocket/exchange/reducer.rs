@@ -1,9 +1,10 @@
 //! WebSocket aggregate/stream 共用事件归约器。
 
 use gateway_protocol::openai::events;
+use serde_json::Value;
 
 use crate::transport::protocol::websocket::{
-    websocket_event_to_sse_frame, websocket_event_type, websocket_metadata_headers,
+    websocket_event_frame, websocket_event_type, websocket_metadata_headers,
     websocket_metadata_turn_state, websocket_response_completed_id,
 };
 use crate::transport::response_meta;
@@ -33,40 +34,41 @@ pub(super) fn reduce_websocket_event(
     metadata: &mut CodexWebSocketConnectionMetadata,
     continuation: &mut WebSocketContinuationState,
 ) -> Result<ExchangeAction, CodexWebSocketExchangeError> {
-    if let Some(headers) = websocket_rate_limit_event_headers(raw) {
+    // 每帧只解析一次 JSON，后续提取全部复用同一 Value；
+    // 不可解析的帧不承载可路由的事件类型，忽略。
+    let Ok(value) = serde_json::from_str::<Value>(raw) else {
+        return Ok(ExchangeAction::Ignore);
+    };
+    if let Some(parsed) = events::parse_rate_limits_event(&value) {
+        let headers = events::rate_limits_to_header_pairs(&parsed);
         metadata.rate_limit_headers.extend(headers.iter().cloned());
         return Ok(ExchangeAction::RateLimits(headers));
     }
 
     response_meta::merge_response_metadata(
         &mut metadata.response_metadata,
-        websocket_metadata_headers(raw),
+        websocket_metadata_headers(&value),
     );
-    if let Some(turn_state) = websocket_metadata_turn_state(raw) {
+    if let Some(turn_state) = websocket_metadata_turn_state(&value) {
         metadata.turn_state = Some(turn_state.clone());
         return Ok(ExchangeAction::TurnState(turn_state));
     }
 
-    let event = websocket_event_type(raw);
-    if event.as_deref() == Some("response.completed")
-        && let Some(response_id) = websocket_response_completed_id(raw)
+    let event = websocket_event_type(&value);
+    if event == Some("response.completed")
+        && let Some(response_id) = websocket_response_completed_id(&value)
     {
         continuation.record_completed(response_id);
     }
 
-    let terminal = match event.as_deref() {
+    let terminal = match event {
         Some("response.completed") => Some(WebSocketTerminalKind::Completed),
         Some("response.incomplete") => Some(WebSocketTerminalKind::Incomplete),
         Some("response.failed" | "error") => Some(WebSocketTerminalKind::Failed),
         _ => None,
     };
-    Ok(match websocket_event_to_sse_frame(raw) {
+    Ok(match websocket_event_frame(&value, raw) {
         Some(frame) => ExchangeAction::Forward { frame, terminal },
         None => ExchangeAction::Ignore,
     })
-}
-
-fn websocket_rate_limit_event_headers(raw: &str) -> Option<Vec<(String, String)>> {
-    events::parse_rate_limits_event_raw(raw)
-        .map(|parsed| events::rate_limits_to_header_pairs(&parsed))
 }

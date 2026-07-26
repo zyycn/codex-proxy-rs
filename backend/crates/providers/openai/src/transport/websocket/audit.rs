@@ -3,6 +3,7 @@
 use std::{
     io,
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
 use chrono::Utc;
@@ -18,6 +19,19 @@ use super::model::CodexWebSocketConnection;
 const REDACTED_HEADER_VALUE: &str = "<redacted>";
 /// WebSocket audit artifact 输出目录环境变量。
 pub const WS_AUDIT_DIR_ENV: &str = "CODEX_PROXY_WS_AUDIT_DIR";
+
+static WS_AUDIT_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// 返回进程级审计输出目录；未配置时调用方应整体跳过 artifact 构造。
+pub fn websocket_audit_dir() -> Option<&'static Path> {
+    WS_AUDIT_DIR
+        .get_or_init(|| {
+            std::env::var_os(WS_AUDIT_DIR_ENV)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        })
+        .as_deref()
+}
 
 /// 显式写入 WebSocket audit artifact。
 pub async fn write_websocket_audit_artifact_for_dir(
@@ -39,14 +53,7 @@ pub async fn write_websocket_audit_artifact_for_dir(
 pub async fn write_websocket_audit_artifact_from_env(
     artifact: &WebSocketAuditArtifact,
 ) -> io::Result<Option<PathBuf>> {
-    let Some(dir) = std::env::var_os(WS_AUDIT_DIR_ENV)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-    else {
-        return Ok(None);
-    };
-
-    write_websocket_audit_artifact_for_dir(Some(&dir), artifact).await
+    write_websocket_audit_artifact_for_dir(websocket_audit_dir(), artifact).await
 }
 
 impl CodexWebSocketConnection {
