@@ -283,7 +283,7 @@ fn minimal_oauth_credential_should_not_require_a_source_format() {
 }
 
 #[test]
-fn oauth_account_document_should_not_require_unique_source_names() {
+fn duplicate_refresh_token_entries_should_collapse_to_the_first() {
     let mut document: serde_json::Value =
         serde_json::from_slice(&oauth_account_document()).expect("fixture JSON");
     let duplicate = document["accounts"][0].clone();
@@ -292,10 +292,29 @@ fn oauth_account_document_should_not_require_unique_source_names() {
         .expect("accounts array")
         .push(duplicate);
 
+    // 同一 refresh token 重复出现时解析层去重，避免逐条 RT exchange
+    // 让先完成的轮换被后续重复条目作废。
     let parsed = GrokOAuthImportDocument::parse_json(
         &serde_json::to_vec(&document).expect("serialize fixture"),
     )
-    .expect("upstream identity verification owns duplicate detection");
+    .expect("duplicate refresh tokens collapse at parse");
+    assert_eq!(parsed.into_entries().len(), 1);
+
+    // 不同 refresh token 的同名条目不受影响，重复检测仍归上游身份验证。
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&oauth_account_document()).expect("fixture JSON");
+    let mut distinct = document["accounts"][0].clone();
+    distinct["credentials"]["refresh_token"] =
+        serde_json::Value::String("fixture-refresh-token-second".to_owned());
+    document["accounts"]
+        .as_array_mut()
+        .expect("accounts array")
+        .push(distinct);
+
+    let parsed = GrokOAuthImportDocument::parse_json(
+        &serde_json::to_vec(&document).expect("serialize fixture"),
+    )
+    .expect("distinct refresh tokens keep their entries");
 
     assert_eq!(parsed.into_entries().len(), 2);
 }
