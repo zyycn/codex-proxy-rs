@@ -72,26 +72,50 @@ pub const DONE_SSE_FRAME: &str = "data: [DONE]\n\n";
 #[derive(Debug, Default)]
 pub struct SseEventDecoder {
     pending: Vec<u8>,
+    /// `pending` 中已确认不含帧分隔符的前缀长度。新数据到达时从该边界
+    /// 回退分隔符最大跨界宽度继续扫描，大帧跨多个 chunk 不会被反复重扫。
+    scanned: usize,
 }
 
 impl SseEventDecoder {
+    /// 返回从 `consumed` 起的下一个完整帧结束位置（含分隔符），并推进扫描边界。
+    fn next_frame_end(&mut self, consumed: usize) -> Option<usize> {
+        // `\r\n\r\n` 分隔符可能跨 chunk 边界，扫描起点回退 3 字节。
+        let from = self.scanned.saturating_sub(3).max(consumed);
+        match sse_frame_separator_bytes(&self.pending[from..]) {
+            Some((position, separator_len)) => {
+                let end = from + position + separator_len;
+                self.scanned = end;
+                Some(end)
+            }
+            None => {
+                self.scanned = self.pending.len();
+                None
+            }
+        }
+    }
+
+    fn commit_consumed(&mut self, consumed: usize) {
+        if consumed != 0 {
+            self.pending.drain(..consumed);
+            self.scanned = self.scanned.saturating_sub(consumed);
+        }
+    }
+
     /// 追加一个字节块并返回其中已经完整的事件。
     pub fn push(&mut self, chunk: &[u8]) -> Result<Vec<SseEvent>, SseError> {
         self.pending.extend_from_slice(chunk);
         let mut events = Vec::new();
         let mut consumed = 0usize;
 
-        while let Some(frame_len) = sse_frame_end(&self.pending[consumed..]) {
-            let end = consumed.saturating_add(frame_len);
+        while let Some(end) = self.next_frame_end(consumed) {
             let frame = std::str::from_utf8(&self.pending[consumed..end])
                 .map_err(|error| SseError::ParseError(error.to_string()))?;
             events.extend(parse_sse_events(frame)?);
             consumed = end;
         }
 
-        if consumed != 0 {
-            self.pending.drain(..consumed);
-        }
+        self.commit_consumed(consumed);
         if self.pending.len() > MAX_SSE_EVENT_BUFFER_BYTES {
             return Err(SseError::BufferExceeded {
                 max_bytes: MAX_SSE_EVENT_BUFFER_BYTES,
@@ -110,8 +134,7 @@ impl SseEventDecoder {
         let mut frames = Vec::new();
         let mut consumed = 0usize;
 
-        while let Some(frame_len) = sse_frame_end(&self.pending[consumed..]) {
-            let end = consumed.saturating_add(frame_len);
+        while let Some(end) = self.next_frame_end(consumed) {
             let raw = self.pending[consumed..end].to_vec();
             let events = std::str::from_utf8(&raw)
                 .ok()
@@ -121,9 +144,7 @@ impl SseEventDecoder {
             consumed = end;
         }
 
-        if consumed != 0 {
-            self.pending.drain(..consumed);
-        }
+        self.commit_consumed(consumed);
         if self.pending.len() > MAX_SSE_EVENT_BUFFER_BYTES {
             return Err(SseError::BufferExceeded {
                 max_bytes: MAX_SSE_EVENT_BUFFER_BYTES,
@@ -134,6 +155,7 @@ impl SseEventDecoder {
 
     /// 流结束时解析尚未带空行分隔符的最后一帧。
     pub fn finish(&mut self) -> Result<Vec<SseEvent>, SseError> {
+        self.scanned = 0;
         if self.pending.is_empty() {
             return Ok(Vec::new());
         }
@@ -147,6 +169,7 @@ impl SseEventDecoder {
     ///
     /// 与 [`Self::push_frames`] 一致，旁路解析失败不会丢弃原始帧。
     pub fn finish_frames(&mut self) -> Result<Vec<SseFrame>, SseError> {
+        self.scanned = 0;
         if self.pending.is_empty() {
             return Ok(Vec::new());
         }

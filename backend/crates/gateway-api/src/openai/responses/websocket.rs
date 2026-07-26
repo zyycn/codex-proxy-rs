@@ -549,9 +549,7 @@ fn decode_response_create_inner(
     if matches!(body.get("stream"), Some(value) if value.as_bool() != Some(true)) {
         return Err(ResponseCreateFrameError::StreamingRequired);
     }
-    let encoded = serde_json::to_vec(&Value::Object(body))
-        .map_err(|_| ResponseCreateFrameError::InvalidJson)?;
-    super::request::decode_request_inner(&encoded, false, request_headers)
+    super::request::decode_request_object(body, false, request_headers)
         .map_err(ResponseCreateFrameError::Request)
 }
 

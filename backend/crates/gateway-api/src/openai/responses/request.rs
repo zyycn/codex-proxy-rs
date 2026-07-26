@@ -310,9 +310,18 @@ pub(super) fn decode_request_inner(
 ) -> Result<DecodedResponsesRequest, RequestDecodeError> {
     let value =
         serde_json::from_slice::<Value>(body).map_err(|_| RequestDecodeError::MalformedJson)?;
-    let Value::Object(mut object) = value else {
+    let Value::Object(object) = value else {
         return Err(RequestDecodeError::ExpectedObject);
     };
+    decode_request_object(object, review, request_headers)
+}
+
+/// 解码已解析的顶层 object；WebSocket 帧解码复用此内核，避免序列化往返。
+pub(super) fn decode_request_object(
+    mut object: Map<String, Value>,
+    review: bool,
+    request_headers: &OpenAiRequestHeaders,
+) -> Result<DecodedResponsesRequest, RequestDecodeError> {
     // `use_websocket` 只影响本地 transport。无论值是否可识别，都不得进入上游 body。
     let use_websocket = object
         .remove("use_websocket")
