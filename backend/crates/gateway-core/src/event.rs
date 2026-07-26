@@ -715,12 +715,6 @@ impl ProviderEvent {
         &self.canonical
     }
 
-    /// 返回 Core 可改写客户端响应身份的全部 facts。
-    #[must_use]
-    pub fn canonical_facts_mut(&mut self) -> &mut [GatewayEvent] {
-        &mut self.canonical
-    }
-
     /// 返回协议原生表达。
     #[must_use]
     pub fn wire_event(&self) -> Option<&ProtocolWireEvent> {

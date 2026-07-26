@@ -235,9 +235,6 @@ pub enum SseError {
     /// 解析错误。
     #[error("SSE parse error: {0}")]
     ParseError(String),
-    /// 用量提取错误。
-    #[error("Usage extraction error: {0}")]
-    UsageExtraction(String),
 }
 
 #[derive(Debug, Default)]

@@ -14,7 +14,6 @@ path = "tests/main.rs"
 [dependencies]
 async-trait = "0.1.89"
 bytes = "1.11.1"
-chrono = "0.4.45"
 futures = "0.3.32"
 futures-timer = "3.0.3"
 serde = { version = "1.0.228", features = ["derive"] }

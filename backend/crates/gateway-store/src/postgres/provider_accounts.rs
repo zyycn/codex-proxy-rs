@@ -460,10 +460,6 @@ pub trait ProviderAccountRepository: Send + Sync {
         &self,
         update: ProviderCredentialUpdate,
     ) -> StoreResult<Revision>;
-    async fn update_provider_account_observation(
-        &self,
-        observation: ProviderAccountObservation,
-    ) -> StoreResult<bool>;
     async fn apply_provider_account_state(
         &self,
         update: ProviderAccountStateUpdate,
@@ -652,36 +648,6 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
             kind: ConflictKind::StaleRevision,
         })?;
         Revision::new(to_u64(next)?)
-    }
-
-    async fn update_provider_account_observation(
-        &self,
-        observation: ProviderAccountObservation,
-    ) -> StoreResult<bool> {
-        observation.validate()?;
-        let result = sqlx::query(
-            "update provider_accounts
-             set availability = $2, availability_reason = $3, cooldown_until = $4,
-                 provider_quota_json = $5, availability_observed_at = $6,
-                 quota_observed_at = $7,
-                 updated_at = greatest(now(), $6, coalesce($7, $6))
-             where id = $1",
-        )
-        .bind(observation.account_id)
-        .bind(observation.availability.as_str())
-        .bind(observation.availability_reason)
-        .bind(observation.cooldown_until)
-        .bind(
-            observation
-                .provider_quota_json
-                .map(|quota| quota.as_value()),
-        )
-        .bind(observation.availability_observed_at)
-        .bind(observation.quota_observed_at)
-        .execute(&self.pool)
-        .await
-        .map_err(|_| postgres_unavailable("update provider account observation"))?;
-        Ok(result.rows_affected() == 1)
     }
 
     async fn apply_provider_account_state(

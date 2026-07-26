@@ -366,21 +366,6 @@ fn is_tool_execution_event(event_type: &str) -> bool {
         )
 }
 
-/// 从 Codex SSE 收集出的非流式 Responses 结果。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CollectedResponse {
-    /// 收集到 `response.completed`。
-    Completed(Value),
-    /// 收集到 `response.incomplete`。
-    Incomplete(Value),
-    /// 收集到 `response.failed` 或 `error`。
-    Failed(ResponsesSseFailure),
-    /// SSE 未包含成功终止响应。
-    MissingCompleted,
-    /// 完成响应为空。
-    Empty,
-}
-
 /// Codex Responses SSE 失败事件。
 #[derive(Clone, PartialEq, Eq)]
 pub struct ResponsesSseFailure {

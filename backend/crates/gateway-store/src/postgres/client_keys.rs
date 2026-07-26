@@ -310,17 +310,12 @@ impl UpdateClientApiKeyDetails {
 
 #[async_trait]
 pub trait ClientApiKeyRepository: Send + Sync {
-    async fn authenticate_client_api_key(
-        &self,
-        key: &str,
-    ) -> StoreResult<Option<ClientApiKeySecret>>;
     async fn list_client_api_keys(
         &self,
         query: ClientApiKeyListQuery,
     ) -> StoreResult<ClientApiKeyPage>;
     async fn get_client_api_key(&self, id: &str) -> StoreResult<Option<ClientApiKeyRecord>>;
     async fn reveal_client_api_key(&self, id: &str) -> StoreResult<Option<ClientApiKeySecret>>;
-    async fn insert_client_api_key(&self, key: NewClientApiKey) -> StoreResult<()>;
     async fn update_client_api_key(&self, key: UpdateClientApiKey) -> StoreResult<bool>;
     async fn touch_client_api_keys(
         &self,
@@ -342,22 +337,6 @@ impl PgClientApiKeyRepository {
 
 #[async_trait]
 impl ClientApiKeyRepository for PgClientApiKeyRepository {
-    async fn authenticate_client_api_key(
-        &self,
-        key: &str,
-    ) -> StoreResult<Option<ClientApiKeySecret>> {
-        validate_key(key)?;
-        let row = sqlx::query_as::<_, (String, String, String, bool, i64, i64)>(
-            "select id, key, provider_kind, enabled, max_concurrency, requests_per_minute
-             from client_api_keys where key = $1",
-        )
-        .bind(key)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|_| postgres_unavailable("authenticate client API key"))?;
-        row.map(client_secret_from_row).transpose()
-    }
-
     async fn list_client_api_keys(
         &self,
         query: ClientApiKeyListQuery,
@@ -430,27 +409,6 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         .map_err(|_| postgres_unavailable("get client API key"))?
         .map(client_record_from_row)
         .transpose()
-    }
-
-    async fn insert_client_api_key(&self, key: NewClientApiKey) -> StoreResult<()> {
-        key.validate()?;
-        sqlx::query(
-            "insert into client_api_keys (
-               id, name, label, provider_kind, key, enabled, max_concurrency, requests_per_minute,
-               last_used_at, created_at, updated_at
-             ) values ($1, $2, $3, $4, $5, true, $6, $7, null, now(), now())",
-        )
-        .bind(key.id)
-        .bind(key.name)
-        .bind(key.label)
-        .bind(key.provider_kind)
-        .bind(key.key)
-        .bind(to_i64(key.max_concurrency)?)
-        .bind(to_i64(key.requests_per_minute)?)
-        .execute(&self.pool)
-        .await
-        .map_err(|_| postgres_unavailable("insert client API key"))?;
-        Ok(())
     }
 
     async fn update_client_api_key(&self, key: UpdateClientApiKey) -> StoreResult<bool> {
