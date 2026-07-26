@@ -660,7 +660,9 @@ async fn shutdown_timeout_must_not_rejoin_workers_that_already_exited() {
     });
     let leases = Arc::new(FakeLeasePort::default());
     let supervisor = supervisor();
-    supervisor.start(plan, leases.clone()).expect("complete plan");
+    supervisor
+        .start(plan, leases.clone())
+        .expect("complete plan");
     hung.notification.notified().await;
     wait_until(|| cooperative.entered.load(Ordering::SeqCst) == ACTIVE_KINDS.len() - 1).await;
 
