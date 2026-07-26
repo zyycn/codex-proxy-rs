@@ -77,7 +77,9 @@ services:
     restart: unless-stopped
     user: '10001:10001'
     init: true
-    stop_grace_period: 30s
+    # 关闭是串行两段：HTTP drain（host.drain_timeout_seconds=30s）之后 worker join
+    # （host.worker_shutdown_timeout_seconds=30s），宽限期必须大于两者之和。
+    stop_grace_period: 75s
     depends_on:
       postgres:
         condition: service_healthy
