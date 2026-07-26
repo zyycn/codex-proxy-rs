@@ -14,6 +14,7 @@ use gateway_admin::{
     model::auth::{AdminPrincipal, AdminRequestContext, LoginCommand, LoginError},
 };
 use serde::{Deserialize, Serialize};
+use tower_http::request_id::RequestId;
 
 use super::{AdminEnvelope, AdminError, AdminResponse};
 
@@ -51,20 +52,30 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let principal = require_admin_auth(state, &parts.headers).await?;
-        let request_id = parts
-            .headers
-            .get(REQUEST_ID_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
+        let request_id = admin_request_id(parts)
             .ok_or_else(|| AdminError::internal("Missing admin request context"))?;
         Ok(Self {
             context: AdminRequestContext {
                 principal,
-                request_id: request_id.to_owned(),
+                request_id,
             },
         })
     }
+}
+
+/// request-id 层按配置的 header 名注入，同时写入与名字无关的扩展；
+/// 优先读扩展，使自定义 header 名不会让管理请求失去请求上下文。
+/// header 回退覆盖未装配该层的调用方。
+fn admin_request_id(parts: &Parts) -> Option<String> {
+    parts
+        .extensions
+        .get::<RequestId>()
+        .map(RequestId::header_value)
+        .or_else(|| parts.headers.get(REQUEST_ID_HEADER))
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 pub async fn require_admin_session<S>(state: &S, headers: &HeaderMap) -> Result<String, AdminError>
