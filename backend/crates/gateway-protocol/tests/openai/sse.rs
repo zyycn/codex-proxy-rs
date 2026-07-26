@@ -108,6 +108,29 @@ fn incremental_decoder_should_decode_across_arbitrary_chunk_boundaries() {
 }
 
 #[test]
+fn incremental_decoder_should_find_separators_split_at_every_byte_boundary() {
+    // CRLF 分隔符按单字节到达时必须仍被识别；帧内容跨任意多次 push 不丢失。
+    let body = b"event: one\r\ndata: first\r\n\r\nevent: two\ndata: second\n\ndata: third\r\n\r\n";
+    let mut decoder = SseEventDecoder::default();
+    let mut events = Vec::new();
+    for byte in body {
+        events.extend(decoder.push(&[*byte]).expect("single-byte chunk"));
+    }
+
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| (event.event.as_deref(), event.data.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (Some("one"), "first"),
+            (Some("two"), "second"),
+            (None, "third"),
+        ]
+    );
+}
+
+#[test]
 fn raw_frame_decoder_should_preserve_exact_frame_across_chunk_boundaries() {
     let raw = b": keep-alive\r\nid: evt_1\r\nevent: response.future\r\nretry: 250\r\ndata: { \"type\": \"response.future\", \"opaque\": true }\r\n\r\n";
     let mut decoder = SseEventDecoder::default();
