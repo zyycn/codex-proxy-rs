@@ -1,6 +1,23 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use provider_openai::transport::CodexUpstreamDiagnostics;
+use provider_openai::transport::diagnostics::{
+    CodexFailureCategory, CodexUpstreamFailure, CodexUpstreamSendPhase,
+};
 use reqwest::header::{HeaderMap, HeaderValue};
+
+fn classify(status: u16, body: &str) -> CodexFailureCategory {
+    let status = reqwest::StatusCode::from_u16(status).expect("status code");
+    CodexUpstreamFailure::from_response(
+        status,
+        body,
+        None,
+        &CodexUpstreamDiagnostics::with_status(status.as_u16()),
+        &[],
+        &[],
+        CodexUpstreamSendPhase::AfterPayload,
+    )
+    .category()
+}
 
 fn trace_header<'a>(diagnostics: &'a CodexUpstreamDiagnostics, name: &str) -> Option<&'a str> {
     diagnostics
@@ -87,4 +104,42 @@ fn diagnostics_should_ignore_malformed_identity_error_json() {
     let diagnostics = CodexUpstreamDiagnostics::from_headers(Some(403), &headers);
 
     assert_eq!(diagnostics.identity_error_code, None);
+}
+
+#[test]
+fn unauthorized_substring_in_a_server_error_body_is_not_credential_expiry() {
+    assert_eq!(
+        classify(
+            500,
+            r#"{"error":{"message":"upstream proxy replied: unauthorized"}}"#
+        ),
+        CodexFailureCategory::Unavailable
+    );
+}
+
+#[test]
+fn http_401_classifies_as_credential_expiry_without_body_evidence() {
+    assert_eq!(classify(401, ""), CodexFailureCategory::CredentialExpired);
+}
+
+#[test]
+fn auth_text_with_http_403_still_classifies_as_credential_expiry() {
+    assert_eq!(
+        classify(
+            403,
+            r#"{"error":{"message":"unauthorized: token expired"}}"#
+        ),
+        CodexFailureCategory::CredentialExpired
+    );
+}
+
+#[test]
+fn structured_expiry_code_classifies_without_an_auth_status() {
+    assert_eq!(
+        classify(
+            500,
+            r#"{"error":{"code":"token_expired","message":"internal"}}"#
+        ),
+        CodexFailureCategory::CredentialExpired
+    );
 }

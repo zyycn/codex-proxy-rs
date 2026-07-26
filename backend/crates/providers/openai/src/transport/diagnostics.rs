@@ -82,8 +82,9 @@ pub enum CodexUpstreamSendPhase {
     Ambiguous,
 }
 
+/// Transport 边界对上游失败的账号级分类。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CodexFailureCategory {
+pub enum CodexFailureCategory {
     ModelUnsupported,
     CredentialExpired,
     IdentityVerificationRequired,
@@ -99,7 +100,8 @@ pub(crate) enum CodexFailureCategory {
     Transport,
 }
 
-pub(crate) struct CodexUpstreamFailure {
+/// 一次已分类的上游拒绝及其可持久化事实。
+pub struct CodexUpstreamFailure {
     pub(crate) status: Option<StatusCode>,
     pub(crate) code: Option<String>,
     pub(crate) client_message: Option<String>,
@@ -115,7 +117,8 @@ pub(crate) struct CodexUpstreamFailure {
 }
 
 impl CodexUpstreamFailure {
-    pub(crate) fn from_response(
+    /// 用完整 HTTP 响应事实构造并分类一次上游拒绝。
+    pub fn from_response(
         status: StatusCode,
         body: &str,
         retry_after_seconds: Option<u64>,
@@ -187,11 +190,15 @@ impl CodexUpstreamFailure {
         }
     }
 
-    pub(crate) const fn category(&self) -> CodexFailureCategory {
+    /// 返回账号级失败分类。
+    #[must_use]
+    pub const fn category(&self) -> CodexFailureCategory {
         self.category
     }
 
-    pub(crate) const fn replay_is_safe(&self) -> bool {
+    /// 返回该拒绝是否允许换号重放。
+    #[must_use]
+    pub const fn replay_is_safe(&self) -> bool {
         match self.send_phase {
             CodexUpstreamSendPhase::BeforePayload => true,
             CodexUpstreamSendPhase::Ambiguous => false,
@@ -379,8 +386,26 @@ fn classify_upstream_failure(
     if identity_signals.into_iter().any(is_banned_account) {
         return CodexFailureCategory::Banned;
     }
-    if identity_signals.into_iter().any(is_expired_credential)
+    // message/body 是自由文本，正文里偶然出现 "unauthorized" 不能证明凭证过期；
+    // 只有结构化 code/type、身份错误头，或配合 401/403 状态的文本才算数。
+    let structured_auth_signals = [
+        identity_code.as_str(),
+        identity_authorization.as_str(),
+        code.as_str(),
+        error_type.as_str(),
+    ];
+    let auth_status = matches!(
+        status,
+        Some(StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+    );
+    if structured_auth_signals
+        .into_iter()
+        .any(is_expired_credential)
         || status == Some(StatusCode::UNAUTHORIZED)
+        || (auth_status
+            && [message.as_str(), body.as_str()]
+                .into_iter()
+                .any(is_expired_credential))
     {
         return CodexFailureCategory::CredentialExpired;
     }

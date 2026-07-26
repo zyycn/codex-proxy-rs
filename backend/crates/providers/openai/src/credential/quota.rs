@@ -532,59 +532,17 @@ impl CodexCredentialQuotaService {
             let observed_at = SystemTime::now();
             match self.fetch_usage_with_recovery(&client, &account).await {
                 Ok(FetchedCodexQuota { account, value }) => {
-                    let fact = parse_codex_quota_usage(&value)?;
-                    let object = value
-                        .as_object()
-                        .cloned()
-                        .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
-                    let outcome = self
-                        .store
-                        .compare_and_swap_quota(QuotaObservation {
-                            account_id: account.id().clone(),
-                            expected_revision: account.revision(),
-                            quota: Some(OpaqueProviderData::new(object)),
-                            observed_at: Some(observed_at),
-                        })
-                        .await?;
-                    if outcome == QuotaWriteOutcome::Conflict {
-                        summary.stale += 1;
-                        continue;
-                    }
-                    let Some(current) = self.store.get_account(account.id()).await? else {
-                        summary.stale += 1;
-                        continue;
-                    };
-                    if current.revision() != account.revision() {
-                        summary.stale += 1;
-                        continue;
-                    }
-                    self.scheduling.observe(
-                        current.id().clone(),
-                        current.revision(),
-                        observed_at,
-                        fact,
-                    );
-                    if fact.exhausted() {
-                        summary.exhausted += 1;
-                    } else {
-                        summary.updated += 1;
-                    }
-                    if let Some(availability) = quota_success_availability(
-                        current.availability(),
-                        current.cooldown_until(),
-                        fact.exhausted(),
-                        SystemTime::now(),
-                    ) {
-                        let _ = self
-                            .repository
-                            .apply_state(
-                                &current,
-                                availability,
-                                fact.exhausted().then_some("quota_exhausted".to_owned()),
-                                None,
-                                observed_at,
-                            )
-                            .await;
+                    // 单账号解析或落库失败只影响该账号；其余账号继续同步。
+                    if let Err(error) = self
+                        .apply_fetched_quota(&account, &value, observed_at, &mut summary)
+                        .await
+                    {
+                        summary.transient += 1;
+                        tracing::warn!(
+                            account_id = %account.id(),
+                            error = %error,
+                            "OpenAI quota synchronization skipped one account"
+                        );
                     }
                 }
                 Err(CodexQuotaFetchError::InvalidCredential) => {
@@ -620,6 +578,67 @@ impl CodexCredentialQuotaService {
             }
         }
         Ok(summary)
+    }
+
+    /// 解析并 revision-fenced 落库单账号的 Provider quota JSON。
+    async fn apply_fetched_quota(
+        &self,
+        account: &ProviderAccount,
+        value: &Value,
+        observed_at: SystemTime,
+        summary: &mut CodexQuotaSyncSummary,
+    ) -> Result<(), CodexCredentialQuotaError> {
+        let fact = parse_codex_quota_usage(value)?;
+        let object = value
+            .as_object()
+            .cloned()
+            .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
+        let outcome = self
+            .store
+            .compare_and_swap_quota(QuotaObservation {
+                account_id: account.id().clone(),
+                expected_revision: account.revision(),
+                quota: Some(OpaqueProviderData::new(object)),
+                observed_at: Some(observed_at),
+            })
+            .await?;
+        if outcome == QuotaWriteOutcome::Conflict {
+            summary.stale += 1;
+            return Ok(());
+        }
+        let Some(current) = self.store.get_account(account.id()).await? else {
+            summary.stale += 1;
+            return Ok(());
+        };
+        if current.revision() != account.revision() {
+            summary.stale += 1;
+            return Ok(());
+        }
+        self.scheduling
+            .observe(current.id().clone(), current.revision(), observed_at, fact);
+        if fact.exhausted() {
+            summary.exhausted += 1;
+        } else {
+            summary.updated += 1;
+        }
+        if let Some(availability) = quota_success_availability(
+            current.availability(),
+            current.cooldown_until(),
+            fact.exhausted(),
+            SystemTime::now(),
+        ) {
+            let _ = self
+                .repository
+                .apply_state(
+                    &current,
+                    availability,
+                    fact.exhausted().then_some("quota_exhausted".to_owned()),
+                    None,
+                    observed_at,
+                )
+                .await;
+        }
+        Ok(())
     }
 
     /// 把正常推理响应携带的限流事实合并进 Provider 原始 quota JSON。

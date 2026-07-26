@@ -27,7 +27,7 @@ use gateway_core::event::{
 };
 use gateway_core::operation::{GenerateRequest, Operation, OperationKind, ProviderSessionState};
 use gateway_core::provider_ports::ProviderSessionAffinityKey;
-use gateway_core::routing::{ModelCapabilities, ProviderKind, UpstreamModelId};
+use gateway_core::routing::{ModelCapabilities, ModelPresentation, ProviderKind, UpstreamModelId};
 use gateway_core::task::{
     DaemonRestartPolicy, DaemonTask, ScheduledTask, WorkerContribution, WorkerCycleContext,
     WorkerDefinitionError, WorkerId, WorkerKind, WorkerLeaseRequest, WorkerRegistration,
@@ -50,7 +50,9 @@ use crate::credential::{
 use crate::transport::canonical::{
     CodexCanonicalDecoder, CodexCanonicalError, CodexCanonicalOutcome,
 };
-use crate::transport::catalog::{CodexCatalogCapabilityEvidence, CodexCatalogModel};
+use crate::transport::catalog::{
+    CodexCatalogCapabilityEvidence, CodexCatalogModel, CodexCatalogVisibility,
+};
 use crate::transport::diagnostics::{
     CodexFailureCategory, CodexUpstreamFailure, CodexUpstreamSendPhase,
 };
@@ -1543,6 +1545,46 @@ fn compile_model_capabilities(model: &CodexCatalogModel) -> ProviderModelCapabil
     }
     let capabilities = ModelCapabilities::new(operations, None).with_upstream_feature_validation();
     ProviderModelCapabilities::new(model.request_model().clone(), capabilities)
+        .with_presentation(codex_model_presentation(model))
+}
+
+fn codex_model_presentation(model: &CodexCatalogModel) -> ModelPresentation {
+    let capabilities = model.capabilities();
+    let reasoning_efforts = capabilities.reasoning_efforts().to_vec();
+    // Codex 目录不声明默认 effort；有 medium 时对齐官方 picker 缺省，否则取首项。
+    let default_reasoning = reasoning_efforts
+        .iter()
+        .find(|effort| effort.as_str() == "medium")
+        .or_else(|| reasoning_efforts.first())
+        .cloned();
+    let hidden = matches!(
+        model.metadata().visibility(),
+        Some(CodexCatalogVisibility::Hide | CodexCatalogVisibility::None)
+    );
+
+    ModelPresentation::new(
+        Some(model.display_name().to_owned()),
+        model.metadata().description().map(str::to_owned),
+    )
+    .with_reasoning(default_reasoning, reasoning_efforts)
+    .with_context_window_tokens(
+        model
+            .limits()
+            .context_window_tokens()
+            .map(std::num::NonZeroU64::get),
+    )
+    .with_image_input(capabilities.image_input() == CodexCatalogCapabilityEvidence::DeclaredNative)
+    // Codex Responses 工具协议随 API 支持一并可用；只有明确不支持才关闭。
+    .with_agent_tools(
+        capabilities.responses_api() != CodexCatalogCapabilityEvidence::DeclaredUnsupported,
+        capabilities.parallel_tool_calls() == CodexCatalogCapabilityEvidence::DeclaredNative,
+    )
+    .with_search_tool(capabilities.web_search() == CodexCatalogCapabilityEvidence::DeclaredNative)
+    .with_image_detail_original(
+        capabilities.image_detail_original() == CodexCatalogCapabilityEvidence::DeclaredNative,
+    )
+    .with_verbosity(capabilities.verbosity() == CodexCatalogCapabilityEvidence::DeclaredNative)
+    .with_hidden(hidden)
 }
 
 fn selected_transport(request: &CodexResponsesRequest) -> CodexProviderTransport {
