@@ -31,15 +31,17 @@
 - `gateway-api` 不写具体 Provider 分支。
 - Core 冻结 RuntimeSnapshot、RoutePlan、retry/fallback 与 downstream commit 边界。
 - Provider 每次 `execute` 只选择一个 credential 并返回 cold canonical stream。
+- OpenAI 数据面是透明代理：请求 body 逐字段（含未知字段与顺序）原样透传，HTTP SSE 与 WebSocket 的上游业务事件逐字节原样转发；xAI 是 Grok wire 与 Responses wire 的翻译层，向客户端转发结构化上游错误 message/code/type，message 先擦除 UUID 账号指纹。
 - 换号只由 Core 在下游 commit 前按重放安全性决定。
 - fallback 只允许同一 Provider kind 内的账号；不跨 Provider，也不存在 Provider Instance 层。
-- OpenAI continuation 为 native → replay owner → replay any；xAI 使用客户端完整历史。
+- continuation 升级链由 Core 冻结：native（原生 handle 绑定原账号）→ replay owner（原账号完整 transcript 重放）→ replay any（transcript 已可携带，允许换账号）；两个 Provider 都实现全链，xAI 的 transcript 由不透明 session state 承载，跨账号重放前做脱敏投影。
 - Provider wire profile 以配置为启动基线，并由共享运行时状态统一发布。OpenAI CLI 读取 `@openai/codex`、Desktop 读取官方 appcast、xAI CLI 读取 `@xai-official/grok`；发现新版本后自动更新对应版本字段，所有消费边界不得维护独立常量。
 - `downstream_committed_at` 是不可撤回交付承诺，不是首字节已经写达的证明。
 
 ## 存储
 
-- PostgreSQL 只有 `0001_initial.sql` 定义的七张终态业务表。
+- PostgreSQL 业务表只有 `0001_initial.sql` 定义的七张；后续编号迁移只做增量（如 `0002` 的保留期删除索引）。
+- 已应用迁移按字节冻结：`backend/migrations/.frozen-sha256` 是冻结清单，CI 相对 PR base 做 append-only 校验；schema 变更一律新增编号迁移，规则见 `backend/migrations/README.md`。
 - `config_revision` 只用于会改变调度快照或安全配置的管理 mutation。
 - quota、cooldown、catalog generation、自动 refresh 不推进全局 revision。
 - refresh 只推进账号 `credential_revision`；Redis cooldown 是可丢失热缓存。
@@ -55,13 +57,17 @@
 ## 验证
 
 ```bash
-cargo +1.97.0 fmt --manifest-path backend/Cargo.toml -- --check
+cargo +1.97.0 fmt --all --manifest-path backend/Cargo.toml -- --check
 cargo +1.97.0 clippy --manifest-path backend/Cargo.toml --all-targets --all-features --locked -- -D warnings
-cargo +1.97.0 test --manifest-path backend/Cargo.toml --workspace --all-targets --locked
+cargo +1.97.0 test --manifest-path backend/Cargo.toml --test main --locked
 pnpm --dir frontend format:check
 pnpm --dir frontend build
 docker compose -f deploy/compose.yaml config --quiet
 ```
+
+每个 package 的集成测试统一挂在单一 `main` 测试目标下（`autotests = false`）。
+`gateway-store` 的 PostgreSQL/Redis 集成测试需要 `CPR_TEST_DATABASE_URL`、
+`CPR_TEST_REDIS_URL`；本地未设置时静默跳过，CI 缺失则直接失败。
 
 真实账号测试只从仓库外路径读取，不打印或复制 credential。
 

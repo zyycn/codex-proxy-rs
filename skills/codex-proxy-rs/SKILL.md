@@ -19,10 +19,12 @@ description: Codex Proxy RS 仓库开发指南。Use when changing or auditing i
 - `gateway-api` 只做协议适配；`gateway-core` 编排；Provider 独占 credential、catalog 与 transport；`gateway-store` 实现持久化端口。
 - Provider 每次调用只选择一个 credential，不隐藏换号、业务 retry 或跨 Provider fallback。
 - PostgreSQL 是持久化权威；Redis 只保存可恢复协调状态和 OAuth pending flow。
+- 已应用的数据库迁移按字节冻结（清单 `backend/migrations/.frozen-sha256`，CI 做 append-only 校验）；
+  schema 变更一律新增编号迁移，规则见 `backend/migrations/README.md`。
 - 当前只有 `openai` 与 `xai` 两个 Provider；账号归属 Provider，不存在 Provider Instance 层。
 - OpenAI 的 OAuth 与 Agent Identity credential 由 `providers/openai` 独占解析；账号导出使用 CPR 文档，Agent Identity
   只输出运行所需身份材料，不伪造 OAuth 字段。
-- 测试放在各 package 的 `tests/`。禁止在生产 `src/` 写 test-only 代码。
+- 测试放在各 package 的 `tests/`，统一挂在单一 `main` 集成测试目标下（`--test main`）。禁止在生产 `src/` 写 test-only 代码。
 - Vue 使用 `<script setup lang="ts">`、现有基础组件和主题 token。
 - README 面向使用者，保持简短；长期架构只写入 `docs/architecture.md`。
 - 完整 HTTP/Admin 路由与敏感导入/导出格式写入 `docs/api.md`。
@@ -41,16 +43,16 @@ description: Codex Proxy RS 仓库开发指南。Use when changing or auditing i
 从仓库根目录执行：
 
 ```bash
-cargo +1.97.0 fmt --manifest-path backend/Cargo.toml -- --check
+cargo +1.97.0 fmt --all --manifest-path backend/Cargo.toml -- --check
 cargo +1.97.0 clippy --manifest-path backend/Cargo.toml --all-targets --all-features --locked -- -D warnings
-cargo +1.97.0 test --manifest-path backend/Cargo.toml --locked
+cargo +1.97.0 test --manifest-path backend/Cargo.toml --test main --locked
 pnpm --dir frontend format:check
 pnpm --dir frontend build
 docker compose -f deploy/compose.yaml config --quiet
 ```
 
-后端完整测试需要 PostgreSQL、Redis，以及与 `deploy/config.yaml` 一致的
-`CPR_TEST_DATABASE_URL`、`CPR_TEST_REDIS_URL`。
+PostgreSQL/Redis 集成测试需要指向本地实例的 `CPR_TEST_DATABASE_URL`、
+`CPR_TEST_REDIS_URL`；本地未设置时这些测试静默跳过，CI 缺失则直接失败。
 
 ## Git 与发布
 

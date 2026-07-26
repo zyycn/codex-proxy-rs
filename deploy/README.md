@@ -5,7 +5,7 @@
 - `config.yaml`：应用行为与真实凭据，由 `config.example.yaml` 复制得到并被 Git 忽略。
 - `compose.yaml`：镜像、容器网络、端口、目录映射、健康检查和资源限制。
 
-项目不使用 `.env` 配置文件。Compose 中的少量环境变量只描述容器内部拓扑，不是用户配置入口。
+项目不使用 `.env` 配置文件。Compose 中的少量环境变量只描述容器内部拓扑与发布链路装配，不是用户配置入口。
 
 ## 准备
 
@@ -70,6 +70,17 @@ curl -i http://127.0.0.1:8080/healthz
 不要把未脱敏的 `docker compose config` 或 `docker inspect` 输出上传到工单；它们会包含
 PostgreSQL/Redis 启动密码。日常校验使用 `config --quiet`。
 
+## 优雅关停
+
+收到停止信号后，应用先停止接收新连接并 drain 存量连接；整个 drain 共享一个从停止信号
+起算的绝对截止点（`host.drain_timeout_seconds`，默认 30 秒），逾期放弃等待，存量连接随
+进程退出终止。drain 结束后才关停后台 worker，预算为
+`host.worker_shutdown_timeout_seconds`（默认 30 秒），两段预算按最坏情况串联。
+
+Compose 的 `stop_grace_period` 为 30 秒，覆盖空闲与常规负载下的关停；若存量长连接把两段
+预算全部用满（合计 60 秒），Docker 会在宽限期结束时 SIGKILL。要求最坏情况下也完整走完
+drain 与 worker 收尾时，把 `stop_grace_period` 调到大于两个超时之和。
+
 ## 本地开发
 
 本地 PostgreSQL 和 Redis 可继续由 Compose 启动：
@@ -81,7 +92,9 @@ cargo run -p codex-proxy-rs
 ```
 
 后端会从当前目录向上查找 `deploy/config.yaml`。相对数据和日志目录以该文件所在目录解析；
-Compose 只把监听地址和数据库、Redis 地址固定覆盖为容器内部服务名。
+Compose 把监听地址和数据库、Redis 地址固定覆盖为容器内部服务名，并把前端静态目录指向
+容器内构建产物。PG/Redis 集成测试所需的 `CPR_TEST_DATABASE_URL` / `CPR_TEST_REDIS_URL`
+约定见 [迁移文档](../backend/migrations/README.md)。
 
 ## 持久化与备份
 

@@ -26,7 +26,7 @@
 | 协议     | OpenAI Responses JSON、SSE、WebSocket 与模型目录                             |
 | Provider | 固定 OpenAI、xAI 两个 Provider；各自管理 OAuth、账号、额度与模型目录          |
 | 路由     | Client Key 绑定 Provider、全局模型映射、会话亲和与同 Provider 安全 fallback   |
-| 透明边界 | OpenAI 保持 Responses 语义透明；xAI 的协议适配只驻留在 `providers/xai`         |
+| 透明边界 | OpenAI SSE 与 WebSocket 均原样转发上游字节；xAI 在 `providers/xai` 内做 Grok 与 Responses 协议转换 |
 | 延续     | OpenAI native/replay continuation；xAI 使用客户端提交的完整历史                |
 | 管理     | Client Key、账号、模型目录、设置、观测、系统更新与 OAuth                       |
 | 计量     | 模型请求 Token、费用、延迟、账号与 Provider 归因                               |
@@ -91,7 +91,7 @@ curl -i http://127.0.0.1:8080/healthz
 2. 在账号页选择对应 Provider：OpenAI 支持 OAuth、账号文件与 Agent Identity；xAI 支持 OAuth
    和兼容账号文件导入。
 3. 按需配置客户端模型到上游模型的全局映射；未命中映射的模型名原样透传。
-4. 创建 `sk_...` Client Key，绑定 `openai` 或 `xai`，并设置模型范围、速率与并发限制。
+4. 创建 `sk_...` Client Key，绑定 `openai` 或 `xai`，并设置速率与并发限制。
 
 > [!IMPORTANT]
 > xAI 使用 OAuth session，不支持把 xAI API Key 作为上游 credential。
@@ -158,7 +158,7 @@ docker compose -f deploy/compose.yaml up -d
 ```
 
 > [!IMPORTANT]
-> `.runtime/` 保存 PostgreSQL、Redis、日志、OpenAI 会话锚点和自更新状态。删除该目录会永久清除
+> `.runtime/` 保存 PostgreSQL、Redis、日志、OpenAI 会话锚点密钥和自更新状态。删除该目录会永久清除
 > 运行状态。
 
 > [!WARNING]
