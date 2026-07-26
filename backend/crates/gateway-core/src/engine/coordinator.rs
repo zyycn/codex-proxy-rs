@@ -23,6 +23,7 @@ use crate::event::{
 };
 use crate::operation::{Operation, ProviderSessionState, RetrySafety};
 use crate::routing::RoutingPlan;
+use futures::future::Fuse;
 use futures::{FutureExt, StreamExt, pin_mut, select_biased};
 use futures_timer::Delay;
 
@@ -73,6 +74,12 @@ where
             client_api_key_ref,
             timing_started_at,
             deadline,
+            deadline_timer: Delay::new(
+                deadline
+                    .duration_since(SystemTime::now())
+                    .unwrap_or(Duration::ZERO),
+            )
+            .fuse(),
             pending_request: Some(request),
             request_persisted: false,
             operation,
@@ -143,6 +150,8 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     client_api_key_ref: crate::policy::ClientApiKeyId,
     timing_started_at: Instant,
     deadline: SystemTime,
+    /// 会话级 deadline 计时器；deadline 固定，帧循环内复用而非逐事件新建。
+    deadline_timer: Fuse<Delay>,
     pending_request: Option<NewModelRequest>,
     request_persisted: bool,
     operation: Operation,
@@ -374,6 +383,7 @@ where
                     &mut current.stream,
                     self.cancellation.clone(),
                     self.deadline,
+                    &mut self.deadline_timer,
                 )
                 .await
             };
@@ -614,21 +624,30 @@ where
                 account.clone(),
             ));
         }
-        self.persist_request().await?;
-        self.engine
-            .store()
-            .record_attempt(AttemptRecord {
-                request_id: self.request_id.clone(),
-                attempt_count: next_attempt,
-                trigger,
-                provider_kind: metadata.provider().clone(),
-                provider_account_id: metadata.provider_account_id().cloned(),
-                provider_account_ref: metadata.provider_account_id().cloned(),
-                upstream_model_id: metadata.upstream_model().clone(),
-                upstream_transport: metadata.transport().as_str().to_owned(),
-                http_version: None,
-            })
-            .await?;
+        let attempt_record = AttemptRecord {
+            request_id: self.request_id.clone(),
+            attempt_count: next_attempt,
+            trigger,
+            provider_kind: metadata.provider().clone(),
+            provider_account_id: metadata.provider_account_id().cloned(),
+            provider_account_ref: metadata.provider_account_id().cloned(),
+            upstream_model_id: metadata.upstream_model().clone(),
+            upstream_transport: metadata.transport().as_str().to_owned(),
+            http_version: None,
+        };
+        if self.request_persisted {
+            self.engine.store().record_attempt(attempt_record).await?;
+        } else {
+            let request = self
+                .pending_request
+                .take()
+                .ok_or(EngineError::InvalidDeliveryState)?;
+            self.engine
+                .store()
+                .create_model_request_with_attempt(request, attempt_record)
+                .await?;
+            self.request_persisted = true;
+        }
         self.attempts = next_attempt.get();
         self.current = Some(CurrentAttempt {
             stream,
@@ -639,19 +658,6 @@ where
             send_observed: false,
             response_observation: None,
         });
-        Ok(())
-    }
-
-    async fn persist_request(&mut self) -> Result<(), EngineError> {
-        if self.request_persisted {
-            return Ok(());
-        }
-        let request = self
-            .pending_request
-            .take()
-            .ok_or(EngineError::InvalidDeliveryState)?;
-        self.engine.store().create_model_request(request).await?;
-        self.request_persisted = true;
         Ok(())
     }
 
@@ -1225,17 +1231,17 @@ async fn poll_stream_item(
     stream: &mut ProviderStream,
     cancellation: CancellationToken,
     deadline: SystemTime,
+    mut deadline_timer: &mut Fuse<Delay>,
 ) -> PollBoundary {
-    let Ok(remaining) = deadline.duration_since(SystemTime::now()) else {
+    if SystemTime::now() >= deadline {
         return PollBoundary::Deadline;
-    };
+    }
     let next = stream.next().fuse();
     let cancelled = cancellation.cancelled().fuse();
-    let timeout = Delay::new(remaining).fuse();
-    pin_mut!(next, cancelled, timeout);
+    pin_mut!(next, cancelled);
     select_biased! {
         _ = cancelled => PollBoundary::Cancelled,
-        _ = timeout => PollBoundary::Deadline,
+        _ = deadline_timer => PollBoundary::Deadline,
         item = next => PollBoundary::Item(item),
     }
 }

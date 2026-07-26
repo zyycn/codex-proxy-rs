@@ -4,7 +4,9 @@ use gateway_core::engine::{
     ExecutionOutcome, ExecutionStore, ModelRequestFinalization as CoreModelRequestFinalization,
     ModelRequestId, ModelRequestTimings as CoreModelRequestTimings, UpstreamSendState,
 };
-use gateway_store::postgres::{ModelRequestRepository, NewModelRequest, PgExecutionStore};
+use gateway_store::postgres::{
+    ModelRequestAttemptStart, ModelRequestRepository, NewModelRequest, PgExecutionStore,
+};
 
 use super::TestDatabase;
 
@@ -39,6 +41,86 @@ fn model_request_rejects_mismatched_client_key_live_id() {
         deadline_at: started_at + Duration::seconds(30),
     };
     assert!(request.validate().is_err());
+}
+
+#[tokio::test]
+async fn merged_first_attempt_insert_should_match_sequential_semantics() {
+    let Some(database) = TestDatabase::create("execution_merged_insert").await else {
+        return;
+    };
+    let repository = PgExecutionStore::new(database.pool.clone());
+    let started_at = Utc::now();
+    let request = NewModelRequest {
+        id: "req_merged".to_owned(),
+        client_api_key_id: None,
+        client_api_key_ref: "key_merged".to_owned(),
+        config_revision: 1,
+        protocol: "openai".to_owned(),
+        operation: "responses".to_owned(),
+        endpoint: "/v1/responses".to_owned(),
+        client_transport: "http_sse".to_owned(),
+        requested_model_id: "coding".to_owned(),
+        client_ip: None,
+        user_agent: None,
+        reasoning_effort: None,
+        reasoning_preset: None,
+        request_kind: None,
+        subagent_kind: None,
+        compact: false,
+        image_generation_requested: false,
+        started_at,
+        deadline_at: started_at + Duration::seconds(30),
+    };
+    let attempt = ModelRequestAttemptStart {
+        model_request_id: "req_merged".to_owned(),
+        attempt_count: 1,
+        provider_kind: "openai".to_owned(),
+        provider_account_id: Some("acct_merged".to_owned()),
+        provider_account_ref: Some("acct_merged".to_owned()),
+        upstream_model_id: "gpt-test".to_owned(),
+        upstream_transport: "http_sse".to_owned(),
+        http_version: None,
+    };
+
+    repository
+        .insert_model_request_with_first_attempt(request, attempt)
+        .await
+        .expect("merged insert");
+
+    let (attempt_count, send_state, provider_kind, outcome): (i32, String, String, String) =
+        sqlx::query_as(
+            "select attempt_count, upstream_send_state, provider_kind, outcome
+             from model_requests where id = 'req_merged'",
+        )
+        .fetch_one(&database.pool)
+        .await
+        .expect("load merged request");
+    assert_eq!(
+        (
+            attempt_count,
+            send_state.as_str(),
+            provider_kind.as_str(),
+            outcome.as_str()
+        ),
+        (1, "not_sent", "openai", "running")
+    );
+
+    // 后续 attempt 沿用常规 CAS 递增路径。
+    let second = repository
+        .begin_model_request_attempt(ModelRequestAttemptStart {
+            model_request_id: "req_merged".to_owned(),
+            attempt_count: 2,
+            provider_kind: "openai".to_owned(),
+            provider_account_id: Some("acct_next".to_owned()),
+            provider_account_ref: Some("acct_next".to_owned()),
+            upstream_model_id: "gpt-test".to_owned(),
+            upstream_transport: "http_sse".to_owned(),
+            http_version: None,
+        })
+        .await
+        .expect("second attempt");
+    assert_eq!(second, 2);
+    database.close().await;
 }
 
 #[tokio::test]

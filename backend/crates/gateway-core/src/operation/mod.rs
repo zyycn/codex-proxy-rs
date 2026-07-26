@@ -269,8 +269,13 @@ impl GenerateRequest {
     /// 附着同一客户端连接上一轮由 Provider 返回的不透明状态。
     #[must_use]
     pub fn with_provider_session_state(mut self, state: ProviderSessionState) -> Self {
-        Arc::make_mut(&mut self.payload).provider_session_state = Some(state);
+        self.set_provider_session_state(state);
         self
+    }
+
+    /// 原地附着会话状态；payload 独占时不复制正文。
+    pub fn set_provider_session_state(&mut self, state: ProviderSessionState) {
+        Arc::make_mut(&mut self.payload).provider_session_state = Some(state);
     }
 
     /// 返回最大输出 token 数。
@@ -594,6 +599,13 @@ impl Operation {
         match self {
             Self::Generate(request) => Self::Generate(request.with_provider_session_state(state)),
             operation => operation,
+        }
+    }
+
+    /// 原地附着 Provider 私有状态；payload 独占时不复制正文。
+    pub fn set_provider_session_state(&mut self, state: ProviderSessionState) {
+        if let Self::Generate(request) = self {
+            request.set_provider_session_state(state);
         }
     }
 
