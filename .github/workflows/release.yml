@@ -629,6 +629,9 @@ jobs:
           prerelease: ${{ needs.release-info.outputs.prerelease == 'true' }}
           make_latest: ${{ needs.release-info.outputs.prerelease == 'true' && 'false' || 'true' }}
           body: |
+            > [!WARNING]
+            > **Upgrading from 2.x?** 3.x is a clean break: the 2.x database schema and configuration are not migrated, and the one-click self-update cannot cross major versions — do not trigger it from a 2.x admin UI. Deploy 3.x fresh (new `.runtime/` data directory) and re-import or re-authorize provider accounts and client keys. See the [upgrade notes](https://github.com/${{ github.repository }}/blob/main/deploy/README.md#镜像升级与源码构建).
+
             ## 📥 Installation
 
             **Docker:**
