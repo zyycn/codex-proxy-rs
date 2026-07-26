@@ -59,6 +59,10 @@ const SESSION_FIELDS: &[&str] = &[
 const FOREIGN_CLIENT_METADATA_FIELDS: &[&str] = &["x-openai-subagent"];
 const MAX_SESSION_SEED_BYTES: usize = 1_024;
 const GROK_CACHE_ROUTE_TOOLS: &[&str] = &["web_search", "x_search"];
+/// Grok CLI 在历史条目上注入、Grok Build 无法反序列化的内部键；只在已知
+/// 注入位置剥离，避免误伤工具 schema 或输出中恰好同名的键。
+const GROK_INTERNAL_HISTORY_KEYS: &[&str] =
+    &["phase", "internal_chat_message_metadata_passthrough"];
 
 /// 保留客户端 OpenAI Responses object 的 xAI 上游请求。
 pub struct GrokResponsesRequest {
@@ -324,17 +328,16 @@ fn enable_grok_prompt_cache_route(body: &mut Map<String, Value>) {
     let Value::Array(tools) = tools else {
         return;
     };
-    let had_client_tools = !tools.is_empty();
+    // 缓存路由不得改变模型可调用的工具集：客户端带工具时无法既保留其
+    // tool_choice 语义又阻止注入的原生搜索被调用，因此直接不注入。
+    if !tools.is_empty() {
+        return;
+    }
     for tool in GROK_CACHE_ROUTE_TOOLS {
-        if !has_tool_type(tools, tool) {
-            tools.push(json_object([("type", Value::String((*tool).to_owned()))]));
-        }
+        tools.push(json_object([("type", Value::String((*tool).to_owned()))]));
     }
-    // 无客户端工具时禁用工具调用，使原生搜索声明只承担缓存路由作用；
-    // 混合工具请求保留客户端原有的 tool_choice 语义。
-    if !had_client_tools {
-        body.insert("tool_choice".to_owned(), Value::String("none".to_owned()));
-    }
+    // 禁用工具调用，使原生搜索声明只承担缓存路由作用。
+    body.insert("tool_choice".to_owned(), Value::String("none".to_owned()));
 }
 
 fn explicit_session_seed(request: &GenerateRequest, body: &Map<String, Value>) -> Option<String> {
@@ -2212,11 +2215,14 @@ impl ToolNormalizer {
             role => role,
         };
         let content = self.normalize_message_content(item.get("content"), role)?;
-        Ok(Map::from_iter([
-            ("type".to_owned(), Value::String("message".to_owned())),
-            ("role".to_owned(), Value::String(role.to_owned())),
-            ("content".to_owned(), content),
-        ]))
+        // 透明代理合法形态：只覆盖归一化字段并剥离 Grok 注入键，未知官方
+        // 字段原样保留。
+        let mut converted = item.clone();
+        strip_grok_internal_keys(&mut converted);
+        converted.insert("type".to_owned(), Value::String("message".to_owned()));
+        converted.insert("role".to_owned(), Value::String(role.to_owned()));
+        converted.insert("content".to_owned(), content);
+        Ok(converted)
     }
 
     fn normalize_message_content(
@@ -2322,12 +2328,14 @@ impl ToolNormalizer {
         if !namespace.is_empty() {
             name = self.alias(ToolIdentity::new(ToolKind::Function, namespace, &name));
         }
-        Ok(Map::from_iter([
-            ("type".to_owned(), Value::String("function_call".to_owned())),
-            ("call_id".to_owned(), Value::String(call_id.to_owned())),
-            ("name".to_owned(), Value::String(name)),
-            ("arguments".to_owned(), Value::String(arguments)),
-        ]))
+        let mut converted = item.clone();
+        strip_grok_internal_keys(&mut converted);
+        converted.remove("namespace");
+        converted.insert("type".to_owned(), Value::String("function_call".to_owned()));
+        converted.insert("call_id".to_owned(), Value::String(call_id.to_owned()));
+        converted.insert("name".to_owned(), Value::String(name));
+        converted.insert("arguments".to_owned(), Value::String(arguments));
+        Ok(converted)
     }
 
     fn normalize_custom_tool_call_input(
@@ -2348,12 +2356,15 @@ impl ToolNormalizer {
         )]))
         .map_err(|_| GrokRequestEncodeError::InvalidRequestNormalization)?;
         let alias = self.alias(identity);
-        Ok(Map::from_iter([
-            ("type".to_owned(), Value::String("function_call".to_owned())),
-            ("call_id".to_owned(), Value::String(call_id.to_owned())),
-            ("name".to_owned(), Value::String(alias)),
-            ("arguments".to_owned(), Value::String(arguments)),
-        ]))
+        let mut converted = item.clone();
+        strip_grok_internal_keys(&mut converted);
+        converted.remove("namespace");
+        converted.remove("input");
+        converted.insert("type".to_owned(), Value::String("function_call".to_owned()));
+        converted.insert("call_id".to_owned(), Value::String(call_id.to_owned()));
+        converted.insert("name".to_owned(), Value::String(alias));
+        converted.insert("arguments".to_owned(), Value::String(arguments));
+        Ok(converted)
     }
 
     fn normalize_function_call_output_input(
@@ -2370,14 +2381,15 @@ impl ToolNormalizer {
             }
             output => Value::String(encode_tool_output(output)?),
         };
-        Ok(Map::from_iter([
-            (
-                "type".to_owned(),
-                Value::String("function_call_output".to_owned()),
-            ),
-            ("call_id".to_owned(), Value::String(call_id.to_owned())),
-            ("output".to_owned(), output),
-        ]))
+        let mut converted = item.clone();
+        strip_grok_internal_keys(&mut converted);
+        converted.insert(
+            "type".to_owned(),
+            Value::String("function_call_output".to_owned()),
+        );
+        converted.insert("call_id".to_owned(), Value::String(call_id.to_owned()));
+        converted.insert("output".to_owned(), output);
+        Ok(converted)
     }
 
     fn normalize_function_output_blocks(
@@ -2606,6 +2618,8 @@ fn require_content_source(
 fn sanitize_reasoning_input(item: &Map<String, Value>) -> Map<String, Value> {
     let mut converted =
         copy_non_null_history_fields(item, &["id", "summary", "content", "encrypted_content"]);
+    // Grok CLI 会在 summary/content 条目上注入 phase 等内部键。
+    strip_grok_internal_entry_keys(&mut converted, &["summary", "content"]);
     converted.insert("type".to_owned(), Value::String("reasoning".to_owned()));
     if converted
         .get("encrypted_content")
@@ -2679,6 +2693,14 @@ fn sanitize_native_history_input(item: &Map<String, Value>, item_type: &str) -> 
         _ => &[],
     };
     let mut converted = copy_non_null_history_fields(item, fields);
+    // Grok CLI 会在 shell_call 的 action object 里注入内部键与 null 占位
+    // 字段（如 `timeout_ms: null`）；只在这一层剥离，深层内容原样保留。
+    if item_type == "shell_call"
+        && let Some(Value::Object(action)) = converted.get_mut("action")
+    {
+        strip_grok_internal_keys(action);
+        action.retain(|_, value| !value.is_null());
+    }
     converted.insert("type".to_owned(), Value::String(item_type.to_owned()));
     converted
 }
@@ -2688,36 +2710,28 @@ fn copy_non_null_history_fields(item: &Map<String, Value>, fields: &[&str]) -> M
         .iter()
         .filter_map(|field| {
             item.get(*field)
-                .and_then(sanitize_history_json_value)
-                .map(|value| ((*field).to_owned(), value))
+                .filter(|value| !value.is_null())
+                .map(|value| ((*field).to_owned(), value.clone()))
         })
         .collect()
 }
 
-fn sanitize_history_json_value(value: &Value) -> Option<Value> {
-    match value {
-        Value::Null => None,
-        Value::Object(object) => Some(Value::Object(
-            object
-                .iter()
-                .filter(|(key, _)| {
-                    !matches!(
-                        key.as_str(),
-                        "phase" | "internal_chat_message_metadata_passthrough"
-                    )
-                })
-                .filter_map(|(key, value)| {
-                    sanitize_history_json_value(value).map(|value| (key.clone(), value))
-                })
-                .collect(),
-        )),
-        Value::Array(values) => Some(Value::Array(
-            values
-                .iter()
-                .filter_map(sanitize_history_json_value)
-                .collect(),
-        )),
-        value => Some(value.clone()),
+fn strip_grok_internal_keys(object: &mut Map<String, Value>) {
+    for key in GROK_INTERNAL_HISTORY_KEYS {
+        object.remove(*key);
+    }
+}
+
+fn strip_grok_internal_entry_keys(converted: &mut Map<String, Value>, fields: &[&str]) {
+    for field in fields {
+        let Some(Value::Array(entries)) = converted.get_mut(*field) else {
+            continue;
+        };
+        for entry in entries {
+            if let Some(object) = entry.as_object_mut() {
+                strip_grok_internal_keys(object);
+            }
+        }
     }
 }
 

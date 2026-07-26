@@ -241,7 +241,7 @@ fn explicit_session_should_enable_the_noop_native_cache_route() {
 }
 
 #[test]
-fn explicit_session_should_merge_client_tools_into_the_native_cache_route() {
+fn explicit_session_should_not_add_invokable_cache_tools_to_client_tool_requests() {
     let request = raw_request(json!({
         "model": "client",
         "prompt_cache_key": "conversation-42",
@@ -258,17 +258,14 @@ fn explicit_session_should_merge_client_tools_into_the_native_cache_route() {
         GrokResponsesRequest::encode(&request, "grok-4.5", &client_key()).expect("request");
     let body = Value::Object(encoded.body().clone());
 
+    // 缓存路由不得扩大模型可调用的工具集：带客户端工具时不注入原生搜索。
     assert_eq!(
         body.pointer("/tools"),
-        Some(&json!([
-            {
-                "type": "function",
-                "name": "read_file",
-                "parameters": {"type": "object"}
-            },
-            {"type": "web_search"},
-            {"type": "x_search"}
-        ]))
+        Some(&json!([{
+            "type": "function",
+            "name": "read_file",
+            "parameters": {"type": "object"}
+        }]))
     );
     assert_eq!(body.pointer("/tool_choice"), Some(&json!("auto")));
 }
@@ -372,7 +369,7 @@ fn function_parameters_should_report_the_invalid_nullable_root_field() {
 }
 
 #[test]
-fn explicit_session_should_enable_cache_after_codex_additional_tools_normalization() {
+fn explicit_session_should_not_inject_cache_tools_after_codex_additional_tools_normalization() {
     let request = raw_request(json!({
         "model": "client",
         "prompt_cache_key": "conversation-42",
@@ -405,8 +402,8 @@ fn explicit_session_should_enable_cache_after_codex_additional_tools_normalizati
         Some(&json!(["patch"]))
     );
     assert_eq!(body.pointer("/tools/1/name"), Some(&json!("read_file")));
-    assert_eq!(body.pointer("/tools/2/type"), Some(&json!("web_search")));
-    assert_eq!(body.pointer("/tools/3/type"), Some(&json!("x_search")));
+    // 归一化装载的会话工具视同客户端工具：不再追加可被调用的原生搜索。
+    assert_eq!(body.pointer("/tools/2"), None);
     assert_eq!(body.pointer("/tool_choice"), Some(&json!("auto")));
 }
 
@@ -660,7 +657,7 @@ fn history_should_rebuild_codex_calls_outputs_shell_and_private_fields() {
             {"type": "local_shell"}
         ],
         "input": [
-            {"type": "message", "role": "assistant", "id": "drop", "content": [
+            {"type": "message", "role": "assistant", "id": "msg_1", "content": [
                 {"type": "output_text", "text": "done"},
                 {"type": "refusal", "refusal": "no"}
             ]},
@@ -680,7 +677,7 @@ fn history_should_rebuild_codex_calls_outputs_shell_and_private_fields() {
     let body = Value::Object(encoded.body().clone());
 
     assert_eq!(body.pointer("/input/0/content"), Some(&json!("done\nno")));
-    assert_eq!(body.pointer("/input/0/id"), None);
+    assert_eq!(body.pointer("/input/0/id"), Some(&json!("msg_1")));
     assert_eq!(body.pointer("/input/1/type"), Some(&json!("function_call")));
     assert_eq!(
         body.pointer("/input/1/arguments"),
@@ -710,6 +707,130 @@ fn history_should_rebuild_codex_calls_outputs_shell_and_private_fields() {
     assert_eq!(body.pointer("/input/7/status"), None);
     assert_eq!(body.pointer("/input/7/summary/0/phase"), None);
     assert_eq!(body.pointer("/input/8/role"), Some(&json!("developer")));
+}
+
+#[test]
+fn history_rebuild_should_preserve_unknown_fields_and_strip_grok_internal_keys() {
+    let request = raw_request(json!({
+        "model": "client",
+        "input": [
+            {
+                "type": "message", "role": "assistant", "status": "completed",
+                "phase": "final_answer",
+                "internal_chat_message_metadata_passthrough": {"turn_id": "t1"},
+                "future_message_field": {"keep": true},
+                "content": [{"type": "output_text", "text": "hi"}]
+            },
+            {
+                "type": "function_call", "id": "fc_1", "call_id": "call_1",
+                "name": "read_file", "arguments": "{}",
+                "future_call_field": 7,
+                "internal_chat_message_metadata_passthrough": {"turn_id": "t1"}
+            },
+            {
+                "type": "function_call_output", "id": "fco_1", "call_id": "call_1",
+                "output": "ok", "future_output_field": true,
+                "internal_chat_message_metadata_passthrough": {"turn_id": "t1"}
+            },
+            {
+                "type": "custom_tool_call", "id": "ctc_1", "call_id": "call_2",
+                "name": "render", "input": "raw", "status": "completed",
+                "future_custom_field": "keep",
+                "internal_chat_message_metadata_passthrough": {"turn_id": "t1"}
+            }
+        ]
+    }));
+
+    let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
+        .expect("history normalization");
+    let body = Value::Object(encoded.body().clone());
+
+    for pointer in [
+        "/input/0/phase",
+        "/input/0/internal_chat_message_metadata_passthrough",
+        "/input/1/internal_chat_message_metadata_passthrough",
+        "/input/2/internal_chat_message_metadata_passthrough",
+        "/input/3/internal_chat_message_metadata_passthrough",
+        "/input/3/input",
+    ] {
+        assert_eq!(body.pointer(pointer), None, "field survived at {pointer}");
+    }
+    assert_eq!(
+        body.pointer("/input/0/future_message_field"),
+        Some(&json!({"keep": true}))
+    );
+    assert_eq!(body.pointer("/input/0/status"), Some(&json!("completed")));
+    assert_eq!(body.pointer("/input/0/content"), Some(&json!("hi")));
+    assert_eq!(body.pointer("/input/1/id"), Some(&json!("fc_1")));
+    assert_eq!(body.pointer("/input/1/future_call_field"), Some(&json!(7)));
+    assert_eq!(
+        body.pointer("/input/2/future_output_field"),
+        Some(&json!(true))
+    );
+    assert_eq!(body.pointer("/input/2/output"), Some(&json!("ok")));
+    assert_eq!(body.pointer("/input/3/type"), Some(&json!("function_call")));
+    assert_eq!(
+        body.pointer("/input/3/future_custom_field"),
+        Some(&json!("keep"))
+    );
+    assert_eq!(
+        body.pointer("/input/3/arguments"),
+        Some(&json!("{\"input\":\"raw\"}"))
+    );
+}
+
+#[test]
+fn history_sanitizer_should_only_strip_known_grok_injection_sites() {
+    let request = raw_request(json!({
+        "model": "client",
+        "input": [
+            {"type": "mcp_list_tools", "id": "ml_1", "server_label": "srv", "tools": [
+                {
+                    "name": "deploy",
+                    "input_schema": {
+                        "properties": {"phase": {"type": "string"}},
+                        "required": ["phase"]
+                    }
+                }
+            ]},
+            {
+                "type": "mcp_call", "id": "mc_1", "name": "deploy",
+                "server_label": "srv", "arguments": "{}",
+                "output": {"result": null, "phase": "keep"}
+            },
+            {
+                "type": "shell_call", "id": "sh_1", "call_id": "call_9",
+                "status": "completed",
+                "action": {
+                    "commands": ["pwd"],
+                    "timeout_ms": null,
+                    "internal_chat_message_metadata_passthrough": {"turn_id": "t1"}
+                }
+            }
+        ]
+    }));
+
+    let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
+        .expect("history normalization");
+    let body = Value::Object(encoded.body().clone());
+
+    // 工具 schema 里恰好叫 phase 的属性与语义 null 不再被误删。
+    assert_eq!(
+        body.pointer("/input/0/tools/0/input_schema/properties/phase"),
+        Some(&json!({"type": "string"}))
+    );
+    assert_eq!(body.pointer("/input/1/output/result"), Some(&Value::Null));
+    assert_eq!(body.pointer("/input/1/output/phase"), Some(&json!("keep")));
+    // shell_call action 是已知注入点：内部键与 null 占位字段仍被剥离。
+    assert_eq!(
+        body.pointer("/input/2/action/commands/0"),
+        Some(&json!("pwd"))
+    );
+    assert_eq!(body.pointer("/input/2/action/timeout_ms"), None);
+    assert_eq!(
+        body.pointer("/input/2/action/internal_chat_message_metadata_passthrough"),
+        None
+    );
 }
 
 #[test]

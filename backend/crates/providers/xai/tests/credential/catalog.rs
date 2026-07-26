@@ -512,7 +512,7 @@ async fn quota_exhausted_account_remains_eligible_for_catalog_discovery() {
 }
 
 #[tokio::test]
-async fn one_upstream_failure_rejects_the_whole_catalog_cycle() {
+async fn sole_plan_failure_rejects_the_catalog_cycle() {
     let (_, repository) = repository_with_accounts(&[("failed", "subject-failed")]).await;
     let cache_port: Arc<dyn GrokCredentialCatalogCache> = MemoryGrokCatalogCache::shared();
     let service = crate::support::grok_catalog_service(
@@ -524,6 +524,63 @@ async fn one_upstream_failure_rejects_the_whole_catalog_cycle() {
         service.query_models().await,
         Err(GrokCredentialCatalogError::Upstream)
     ));
+}
+
+#[tokio::test]
+async fn failed_plan_scope_is_skipped_and_surviving_plans_still_cache() {
+    let store = MemoryProviderAccountStore::shared();
+    let account_store: Arc<dyn ProviderAccountStore> = store.clone();
+    let repository = GrokCredentialRepository::new(account_store);
+    // "plan:pro" 按 scope 排序在 "plan:standard" 之前，先消费失败响应。
+    let mut pro = create_input("plan-pro", "subject-pro");
+    pro.account.plan_type = Some("pro".to_owned());
+    seed_input(&store, &pro).await.expect("create pro account");
+    seed_input(&store, &create_input("plan-standard", "subject-standard"))
+        .await
+        .expect("create standard account");
+    let transport = QueueCatalogTransport::from_results([
+        Err(GrokModelCatalogTransportError::new(
+            GrokModelCatalogTransportErrorKind::Unavailable,
+        )),
+        Ok(GrokModelCatalogTransportResponse::new(
+            OFFICIAL_FIXTURE.to_vec(),
+            None,
+        )),
+    ]);
+    let cache = MemoryGrokCatalogCache::shared();
+    let cache_port: Arc<dyn GrokCredentialCatalogCache> = cache.clone();
+    let service = crate::support::grok_catalog_service(repository, transport.clone(), cache_port);
+
+    let models = service
+        .query_models()
+        .await
+        .expect("surviving plan still refreshes the catalog");
+
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].request_model().as_str(), "grok-4.5");
+    assert_eq!(transport.calls(), 2);
+    let standard = store
+        .account(&account_id("plan-standard"))
+        .expect("created account");
+    let standard_scope = GrokCatalogScope::for_account(&standard).expect("catalog scope");
+    assert_eq!(
+        cache
+            .observed_model_support(&standard_scope, "grok-4.5")
+            .await
+            .expect("cache lookup"),
+        Some(true)
+    );
+    let pro = store
+        .account(&account_id("plan-pro"))
+        .expect("created account");
+    let pro_scope = GrokCatalogScope::for_account(&pro).expect("catalog scope");
+    assert_eq!(
+        cache
+            .observed_model_support(&pro_scope, "grok-4.5")
+            .await
+            .expect("cache lookup"),
+        None
+    );
 }
 
 #[tokio::test]
