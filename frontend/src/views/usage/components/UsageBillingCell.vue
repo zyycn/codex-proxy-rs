@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import type { UsageDisplayRecord } from '../constants'
-import { Info } from '@lucide/vue'
+import type { UsageDisplayRecord } from '../utils/records'
 
 import { computed } from 'vue'
-import BasePopover from '@/components/base/BasePopover.vue'
-import { usageBilling, usageBillingText } from '../constants'
+import { usageBilling, usageBillingText } from '../utils/records'
+import UsageDetailPopover from './UsageDetailPopover.vue'
 
 const props = defineProps<{
   record: UsageDisplayRecord
@@ -55,44 +54,23 @@ function itemValueClass(tone?: string, accent?: boolean) {
       {{ usageBillingText(record) }}
     </span>
 
-    <BasePopover
-      v-if="billing"
-      trigger="hover"
-      placement="right"
-      width="248px"
-      panel-class="!p-3 text-(--cp-text-primary)"
-    >
-      <template #trigger>
-        <button
-          type="button"
-          class="inline-flex size-4 items-center justify-center rounded-full bg-(--cp-info-bg) text-(--cp-info) outline-none hover:bg-(--cp-default-bg-hover)"
-          aria-label="查看费用明细"
-        >
-          <Info class="size-3" />
-        </button>
-      </template>
-
-      <div class="grid gap-2 text-[12px] leading-none">
-        <p class="m-0 font-[760] text-(--cp-text-primary)">
-          计费明细
-        </p>
-        <div class="grid gap-1.5 text-(--cp-text-secondary)">
-          <div v-for="item in amountItems" :key="item.label" class="flex justify-between gap-4">
-            <span>{{ item.label }}</span>
-            <span class="font-mono font-[760]" :class="itemValueClass(undefined, item.accent)">
-              {{ item.value }}
-            </span>
-          </div>
-        </div>
-        <div class="mt-1 grid gap-1.5 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) p-2 text-(--cp-text-secondary)">
-          <div v-for="item in billingItems" :key="item.label" class="flex justify-between gap-4">
-            <span>{{ item.label }}</span>
-            <span class="font-mono font-[760]" :class="itemValueClass(item.tone)">
-              {{ item.value }}
-            </span>
-          </div>
+    <UsageDetailPopover v-if="billing" title="计费明细" width="248px" trigger-label="查看费用明细">
+      <div class="grid gap-1.5 text-(--cp-text-secondary)">
+        <div v-for="item in amountItems" :key="item.label" class="flex justify-between gap-4">
+          <span>{{ item.label }}</span>
+          <span class="font-mono font-[760]" :class="itemValueClass(undefined, item.accent)">
+            {{ item.value }}
+          </span>
         </div>
       </div>
-    </BasePopover>
+      <div class="mt-1 grid gap-1.5 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) p-2 text-(--cp-text-secondary)">
+        <div v-for="item in billingItems" :key="item.label" class="flex justify-between gap-4">
+          <span>{{ item.label }}</span>
+          <span class="font-mono font-[760]" :class="itemValueClass(item.tone)">
+            {{ item.value }}
+          </span>
+        </div>
+      </div>
+    </UsageDetailPopover>
   </div>
 </template>

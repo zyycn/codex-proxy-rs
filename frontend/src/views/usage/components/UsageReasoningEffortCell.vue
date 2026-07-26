@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import type { UsageDisplayRecord } from '../constants'
+import type { UsageDisplayRecord } from '../utils/records'
 
 import { Bot } from '@lucide/vue'
-import { usageIsSubagent, usageReasoningEffort } from '../constants'
+import { usageIsSubagent, usageReasoningEffort } from '../utils/records'
 
 defineProps<{
   record: UsageDisplayRecord

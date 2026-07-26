@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import type { UsageDisplayRecord } from '../constants'
+import type { UsageDisplayRecord } from '../utils/records'
 
 import { computed } from 'vue'
-import { usageClientIp } from '../constants'
+import { usageClientIp } from '../utils/records'
 
 const props = defineProps<{
   record: UsageDisplayRecord
