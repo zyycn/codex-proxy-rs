@@ -221,6 +221,79 @@ async fn content_length_over_limit_error_body_should_keep_only_safe_metadata() {
 }
 
 #[tokio::test]
+async fn retry_after_http_date_should_be_converted_to_remaining_seconds() {
+    let server = MockServer::start().await;
+    let retry_at = (Utc::now() + chrono::TimeDelta::seconds(90))
+        .format("%a, %d %b %Y %H:%M:%S GMT")
+        .to_string();
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("retry-after", retry_at.as_str())
+                .set_body_raw(
+                    r#"{"error":{"message":"rate limited"}}"#,
+                    "application/json",
+                ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let error = client(&server.uri())
+        .fetch_usage(context())
+        .await
+        .expect_err("http-date rate limit");
+
+    let CodexClientError::Upstream {
+        status,
+        retry_after_seconds,
+        ..
+    } = error
+    else {
+        panic!("expected an upstream rate-limit error");
+    };
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    let seconds = retry_after_seconds.expect("http-date retry-after should yield seconds");
+    assert!(
+        (1..=90).contains(&seconds),
+        "expected remaining seconds within 90s, got {seconds}"
+    );
+}
+
+#[tokio::test]
+async fn retry_after_http_date_in_the_past_should_be_ignored() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("retry-after", "Mon, 01 Jan 2001 00:00:00 GMT")
+                .set_body_raw(
+                    r#"{"error":{"message":"rate limited"}}"#,
+                    "application/json",
+                ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let error = client(&server.uri())
+        .fetch_usage(context())
+        .await
+        .expect_err("http-date rate limit");
+
+    let CodexClientError::Upstream {
+        retry_after_seconds,
+        ..
+    } = error
+    else {
+        panic!("expected an upstream rate-limit error");
+    };
+    assert_eq!(retry_after_seconds, None);
+}
+
+#[tokio::test]
 async fn chunked_body_over_limit_should_be_rejected_without_content_length() {
     let (base_url, server) = spawn_chunked_server(usage_body(MAX_CODEX_USAGE_BODY_BYTES + 1));
 

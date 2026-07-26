@@ -18,7 +18,8 @@ use crate::{
         responses::CodexResponsesRequest, websocket::websocket_response_create_payload_text,
     },
     transport::{
-        diagnostics::CodexUpstreamSendPhase, endpoints::CODEX_RESPONSES_PATH, response_meta, tls,
+        client::parse_retry_after, diagnostics::CodexUpstreamSendPhase,
+        endpoints::CODEX_RESPONSES_PATH, response_meta, tls,
     },
 };
 
@@ -185,8 +186,7 @@ fn websocket_opening_error(response: &WsResponse<Option<Vec<u8>>>) -> CodexWebSo
         .headers()
         .get("retry-after")
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|seconds| *seconds > 0)
+        .and_then(parse_retry_after)
         .or_else(|| events::retry_after_seconds_from_body(&body));
     CodexWebSocketExchangeError::upstream(
         status_code,

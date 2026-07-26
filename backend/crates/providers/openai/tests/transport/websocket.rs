@@ -424,6 +424,51 @@ async fn websocket_execute_response_create_request_should_preserve_opening_error
 }
 
 #[tokio::test]
+async fn websocket_opening_error_should_convert_http_date_retry_after_to_seconds() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let retry_at = (chrono::Utc::now() + chrono::TimeDelta::seconds(120))
+        .format("%a, %d %b %Y %H:%M:%S GMT")
+        .to_string();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let _request = read_http_request(&mut stream).await;
+        let body = r#"{"error":{"message":"rate limited"}}"#;
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 429 Too Many Requests\r\nretry-after: {retry_at}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    });
+    let prepared = prepared_websocket_request(&format!("http://{addr}"));
+
+    let error = execute_response_create_request(&prepared)
+        .await
+        .expect_err("failed opening should surface upstream status");
+    server.await.unwrap();
+
+    let CodexClientError::Upstream {
+        status,
+        retry_after_seconds,
+        ..
+    } = error
+    else {
+        panic!("expected upstream opening error");
+    };
+    assert_eq!(status, reqwest::StatusCode::TOO_MANY_REQUESTS);
+    let seconds = retry_after_seconds.expect("http-date retry-after should yield seconds");
+    assert!(
+        (1..=120).contains(&seconds),
+        "expected remaining seconds within 120s, got {seconds}"
+    );
+}
+
+#[tokio::test]
 async fn websocket_execute_response_create_request_should_reject_binary_event() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
