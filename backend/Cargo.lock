@@ -1189,7 +1189,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
- "chrono",
  "futures",
  "futures-timer",
  "serde",
@@ -1225,7 +1224,6 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
- "uuid",
  "wiremock",
 ]
 
@@ -2151,7 +2149,6 @@ dependencies = [
  "url",
  "uuid",
  "wiremock",
- "zeroize",
 ]
 
 [[package]]

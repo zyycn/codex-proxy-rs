@@ -339,17 +339,6 @@ impl GrokCredentialRefreshService {
         self.refresh_one_with_policy(credential, policy).await
     }
 
-    pub async fn prepare_cycle_if_due(&self) -> Result<bool, GrokCredentialRefreshError> {
-        if !self.repository.has_due_refresh().await? {
-            return Ok(false);
-        }
-        self.refresher
-            .prepare_cycle()
-            .await
-            .map_err(|_| GrokCredentialRefreshError::Preparation)?;
-        Ok(true)
-    }
-
     /// 手工刷新一个指定 revision；只返回 Provider 验证后的 CAS command，不写 Store。
     pub async fn prepare_manual_refresh(
         &self,
@@ -781,22 +770,6 @@ impl GrokCredentialRecovery for GrokCredentialRefreshService {
 }
 
 impl GrokCredentialRepository {
-    pub async fn has_due_refresh(&self) -> Result<bool, GrokCredentialRepositoryError> {
-        Ok(self
-            .list_all_accounts()
-            .await?
-            .iter()
-            .any(|account| account_due(account, SystemTime::now())))
-    }
-
-    pub async fn list_due_refresh(
-        &self,
-    ) -> Result<Vec<DueGrokCredential>, GrokCredentialRepositoryError> {
-        self.list_due_refresh_batch_excluding(&[])
-            .await
-            .map(|batch| batch.credentials)
-    }
-
     async fn list_due_refresh_batch_excluding(
         &self,
         excluded_account_ids: &[ProviderAccountId],

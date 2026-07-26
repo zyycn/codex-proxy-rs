@@ -11,7 +11,6 @@ mod admin_security_audit;
 mod admission_recovery;
 mod client_keys;
 mod execution;
-mod history;
 mod observability;
 mod ops_events;
 mod provider_accounts;
