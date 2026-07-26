@@ -22,7 +22,8 @@ use crate::engine::provider::ProviderRegistry;
 use crate::engine::{
     AttemptCoordinator, AttemptRecord, CancellationToken, CommitRequirement, CoordinatedEvent,
     EngineError, ExecutionStore, GatewayEngine, IntermediateFailure, ModelRequestFinalization,
-    ModelRequestId, NewModelRequest, ProviderAttemptOutcome, RecoveryReport, UpstreamSendState,
+    ModelRequestId, NewModelRequest, ProbeFailure, ProviderAccountId, ProviderAttemptOutcome,
+    RecoveryReport, UpstreamSendState,
 };
 use crate::error::{GatewayError, GatewayErrorKind, ProviderErrorKind, StoreError};
 use crate::event::{GatewayEvent, ProviderEvent, ProviderResponseHeader};
@@ -31,6 +32,7 @@ use crate::policy::{ClientApiKeyId, ClientPolicy};
 use crate::routing::snapshot::RuntimeSnapshotHandle;
 use crate::routing::{
     ProviderKind, PublicModelId, PublicModelProfile, RoutingContext, RuntimeSnapshot,
+    UpstreamModelId,
 };
 
 const MODEL_REQUEST_DEADLINE: Duration = Duration::from_secs(10 * 60);
@@ -187,6 +189,8 @@ pub struct DefaultExecutionService {
     snapshots: RuntimeSnapshotHandle,
     coordinator: Arc<AttemptCoordinator<dyn ExecutionStore>>,
     probe_coordinator: Arc<AttemptCoordinator<dyn ExecutionStore>>,
+    /// probe 自身走 transient store，探测失败仍写入持久 store 的 ops_events。
+    observations: Arc<dyn ExecutionStore>,
     providers: ProviderRegistry,
     admissions: Arc<dyn ClientAdmissionPort>,
     circuits: Arc<dyn ProviderCircuitPort>,
@@ -205,6 +209,7 @@ impl DefaultExecutionService {
         continuation: Arc<dyn NativeContinuationPort>,
         client_api_key_usage: Arc<dyn ClientApiKeyUsageSink>,
     ) -> Self {
+        let observations = Arc::clone(&execution);
         let engine = GatewayEngine::<dyn ExecutionStore>::new(execution, providers.clone());
         let transient: Arc<dyn ExecutionStore> = Arc::new(TransientExecutionStore);
         let probe_engine = GatewayEngine::<dyn ExecutionStore>::new(transient, providers.clone());
@@ -212,6 +217,7 @@ impl DefaultExecutionService {
             snapshots,
             coordinator: Arc::new(AttemptCoordinator::new(engine)),
             probe_coordinator: Arc::new(AttemptCoordinator::new(probe_engine)),
+            observations,
             providers,
             admissions,
             circuits,
@@ -417,6 +423,11 @@ impl DefaultExecutionService {
             upstream_model,
             operation,
         } = request;
+        let observed = ProbeObservation {
+            provider_kind: provider_kind.clone(),
+            account_id: account_id.clone(),
+            upstream_model: upstream_model.clone(),
+        };
         let snapshot = self.snapshots.acquire().map_err(|_| {
             GatewayError::new(
                 GatewayErrorKind::Internal,
@@ -464,7 +475,7 @@ impl DefaultExecutionService {
             started_at,
             deadline_at,
         };
-        let mut session = self
+        let mut session = match self
             .probe_coordinator
             .start(
                 new_request,
@@ -475,18 +486,33 @@ impl DefaultExecutionService {
                 CancellationToken::new(),
             )
             .await
-            .map_err(|error| gateway_error_from_engine(&error))?;
+        {
+            Ok(session) => session,
+            Err(error) => {
+                return Err(self
+                    .observe_probe_failure(&observed, started_at, &error)
+                    .await);
+            }
+        };
         let events = session.collect_uncommitted().await;
         publish_provider_attempt_outcomes(
             self.circuits.as_ref(),
             session.provider_attempt_outcomes(),
         )
         .await;
-        let events = events.map_err(|error| gateway_error_from_engine(&error))?;
-        session
-            .commit_downstream(Some(200))
-            .await
-            .map_err(|error| gateway_error_from_engine(&error))?;
+        let events = match events {
+            Ok(events) => events,
+            Err(error) => {
+                return Err(self
+                    .observe_probe_failure(&observed, started_at, &error)
+                    .await);
+            }
+        };
+        if let Err(error) = session.commit_downstream(Some(200)).await {
+            return Err(self
+                .observe_probe_failure(&observed, started_at, &error)
+                .await);
+        }
         Ok(AccountProbeResult {
             text: events
                 .into_iter()
@@ -498,6 +524,34 @@ impl DefaultExecutionService {
                 .collect(),
         })
     }
+
+    /// 探测失败先落库再转成客户端错误；转换会丢掉上游状态码与 provider code。
+    async fn observe_probe_failure(
+        &self,
+        observed: &ProbeObservation,
+        started_at: SystemTime,
+        error: &EngineError,
+    ) -> GatewayError {
+        if let EngineError::Provider(provider_error) = error {
+            let _ = self
+                .observations
+                .record_probe_failure(ProbeFailure {
+                    provider_kind: observed.provider_kind.clone(),
+                    account_id: observed.account_id.clone(),
+                    upstream_model_id: observed.upstream_model.clone(),
+                    error: provider_error.clone(),
+                    latency: started_at.elapsed().unwrap_or_default(),
+                })
+                .await;
+        }
+        gateway_error_from_engine(error)
+    }
+}
+
+struct ProbeObservation {
+    provider_kind: ProviderKind,
+    account_id: ProviderAccountId,
+    upstream_model: UpstreamModelId,
 }
 
 struct TransientExecutionStore;
