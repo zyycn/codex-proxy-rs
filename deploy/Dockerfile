@@ -33,24 +33,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --locked --bin codex-proxy-rs \
     && cp "${CARGO_TARGET_DIR}/release/codex-proxy-rs" /tmp/codex-proxy-rs
 
-FROM backend-builder AS release-asset-builder
-
-ARG TARGETOS
-ARG TARGETARCH
-
-WORKDIR /out
-COPY --from=frontend-builder /app/frontend/dist /tmp/release/codex-proxy-rs/web/dist
-RUN test -n "${CPR_VERSION}" \
-    && test -n "${TARGETOS}" \
-    && test -n "${TARGETARCH}" \
-    && cp /tmp/codex-proxy-rs /tmp/release/codex-proxy-rs/ \
-    && tar -czf "/out/codex-proxy-rs_${CPR_VERSION}_${TARGETOS}_${TARGETARCH}.tar.gz" \
-        -C /tmp/release codex-proxy-rs
-
-FROM scratch AS release-asset
-
-COPY --from=release-asset-builder /out /
-
 FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS runtime-base
 
 ENV TZ=Asia/Shanghai

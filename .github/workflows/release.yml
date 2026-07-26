@@ -29,6 +29,7 @@ jobs:
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
+      docker_version: ${{ steps.version.outputs.docker_version }}
       build_time: ${{ steps.version.outputs.build_time }}
       git_sha: ${{ steps.version.outputs.git_sha }}
       platform_matrix: ${{ steps.version.outputs.platform_matrix }}
@@ -146,6 +147,8 @@ jobs:
 
           puts "tag=#{release_tag}"
           puts "version=#{version}"
+          # Docker tags forbid "+", so semver build metadata maps to "-" in image tags.
+          puts "docker_version=#{version.tr("+", "-")}"
           puts "build_time=#{Time.now.utc.iso8601}"
           puts "git_sha=#{git_sha.strip}"
           puts "platform_matrix=#{matrix}"
@@ -539,7 +542,7 @@ jobs:
         id: manifest
         shell: bash
         env:
-          VERSION: ${{ needs.release-info.outputs.version }}
+          DOCKER_VERSION: ${{ needs.release-info.outputs.docker_version }}
           GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
           DOCKER_PLATFORMS: ${{ needs.release-info.outputs.docker_platforms }}
           PRERELEASE: ${{ needs.release-info.outputs.prerelease }}
@@ -562,7 +565,7 @@ jobs:
           fi
 
           target_args=(
-            -t "${image}:${VERSION}"
+            -t "${image}:${DOCKER_VERSION}"
             -t "${image}:sha-${GIT_SHA}"
           )
           if [ "$PRERELEASE" != true ]; then
@@ -570,7 +573,7 @@ jobs:
           fi
           docker buildx imagetools create "${target_args[@]}" "${sources[@]}"
 
-          inspect_output="$(docker buildx imagetools inspect "${image}:${VERSION}")"
+          inspect_output="$(docker buildx imagetools inspect "${image}:${DOCKER_VERSION}")"
           platform_list="$(awk '$1 == "Platform:" { print $2 }' <<< "${inspect_output}")"
           for platform in "${platforms[@]}"; do
             if ! grep -Eq "^${platform}(/|$)" <<< "${platform_list}"; then
@@ -580,7 +583,7 @@ jobs:
             fi
           done
 
-          digest="$(docker buildx imagetools inspect "${image}:${VERSION}" --format '{{ .Manifest.Digest }}')"
+          digest="$(docker buildx imagetools inspect "${image}:${DOCKER_VERSION}" --format '{{ .Manifest.Digest }}')"
           if [ -z "${digest}" ]; then
             echo "missing image digest"
             exit 1
@@ -598,7 +601,7 @@ jobs:
         shell: bash
         env:
           DIGEST: ${{ steps.manifest.outputs.digest }}
-          VERSION: ${{ needs.release-info.outputs.version }}
+          DOCKER_VERSION: ${{ needs.release-info.outputs.docker_version }}
           GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
           PRERELEASE: ${{ needs.release-info.outputs.prerelease }}
         run: |
@@ -609,7 +612,7 @@ jobs:
           fi
 
           image="${REGISTRY}/${IMAGE_NAME}"
-          tags=("${image}:${VERSION}" "${image}:sha-${GIT_SHA}")
+          tags=("${image}:${DOCKER_VERSION}" "${image}:sha-${GIT_SHA}")
           if [ "$PRERELEASE" != true ]; then
             tags+=("${image}:latest")
           fi
@@ -637,7 +640,7 @@ jobs:
             **Docker:**
             ```bash
             # GitHub Container Registry
-            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.release-info.outputs.version }}
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.release-info.outputs.docker_version }}
             ```
 
             **Manual download:**
