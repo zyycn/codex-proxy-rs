@@ -116,6 +116,13 @@ Provider schema 以明文 JSON 保存于 PostgreSQL。Redis 只保存可重建�
 
 ## 镜像升级与源码构建
 
+> [!WARNING]
+> 以下命令只适用于同一大版本内的升级。跨大版本（如 2.x → 3.x）是 clean break：
+> 数据库 schema 与配置在大版本之间不迁移，直接换镜像会导致服务无法启动；内置一键
+> 自更新在 3.x 起拒绝跨大版本目标，而 2.x 界面里的一键更新没有这道门禁，不要用它
+> 升 3.x。跨大版本请全新部署（全新 `.runtime/` 数据目录），并重新导入或重新授权
+> Provider 账号与客户端 Key。
+
 ```bash
 docker compose -f deploy/compose.yaml build codex-proxy-rs
 docker compose -f deploy/compose.yaml up -d

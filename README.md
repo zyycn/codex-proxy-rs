@@ -161,6 +161,12 @@ docker compose -f deploy/compose.yaml up -d
 > `.runtime/` 保存 PostgreSQL、Redis、日志、OpenAI 会话锚点和自更新状态。删除该目录会永久清除
 > 运行状态。
 
+> [!WARNING]
+> 跨大版本（如 2.x → 3.x）不是原地升级：数据库 schema 与配置在大版本之间不迁移，内置
+> 一键自更新也会拒绝跨大版本目标（2.x 界面里的一键更新没有这道门禁，不要用它升 3.x）。
+> 升级到新的大版本需要全新部署（全新 `.runtime/` 数据目录），并重新导入或重新授权
+> Provider 账号与客户端 Key。
+
 Compose 默认只绑定 `127.0.0.1`。公网接入应使用 HTTPS 反向代理，转发 WebSocket
 upgrade 与真实客户端 IP；不要暴露 PostgreSQL 或 Redis。
 
