@@ -1,4 +1,4 @@
-<script setup lang="ts" generic="Row extends Record<string, unknown> = Record<string, unknown>">
+<script setup lang="ts" generic="Row extends object = Record<string, unknown>">
 import type { BaseTableColumn, BaseTableSort, ResolvedTableColumn } from './columns'
 import type { BaseTablePagination as BaseTablePaginationConfig } from './pagination'
 
@@ -149,7 +149,7 @@ function getRowKey(row: Row, index: number) {
     return props.rowKey(row, index)
   }
 
-  const value = row[props.rowKey]
+  const value = cellValue(row, props.rowKey)
   return typeof value === 'string' || typeof value === 'number' ? value : index
 }
 

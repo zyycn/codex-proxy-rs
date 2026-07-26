@@ -70,7 +70,13 @@ http.interceptors.response.use(
   },
 )
 
-function isApiEnvelope(value: any) {
+interface ApiEnvelope {
+  code: number
+  message: string
+  data: unknown
+}
+
+function isApiEnvelope(value: unknown): value is ApiEnvelope {
   return (
     typeof value === 'object'
     && value !== null
@@ -80,14 +86,14 @@ function isApiEnvelope(value: any) {
   )
 }
 
-export default async function request(config: AxiosRequestConfig) {
-  const response = await http.request({
+export default async function request<T = unknown>(config: AxiosRequestConfig): Promise<T> {
+  const response = await http.request<unknown>({
     ...config,
   })
 
   if (isApiEnvelope(response.data)) {
-    return response.data.data
+    return response.data.data as T
   }
 
-  return response.data
+  return response.data as T
 }
