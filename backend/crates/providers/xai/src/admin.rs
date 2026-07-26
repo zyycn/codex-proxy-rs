@@ -316,36 +316,56 @@ impl ProviderAdmin for XaiAdminProvider {
             .map_err(map_provider_store_error)?;
         let mut subjects = BTreeSet::new();
         let mut credentials = Vec::new();
+        // 逐条目独立成败：verify 会真实轮换 RT，后续条目的任何失败都不得
+        // 丢弃已轮换成功的凭据（旧 RT 已被上游作废，丢弃即不可逆报废）。
+        // 失败条目跳过；仅当没有任何条目成功时返回首个失败。
+        let mut first_failure: Option<ProviderAdminError> = None;
         for entry in document.into_entries() {
             let name = entry.name().to_owned();
             let email = entry.email().map(str::to_owned);
-            let tokens = self
+            let tokens = match self
                 .oauth
                 .verify_imported_credential(&discovery, entry.into_candidate())
                 .await
-                .map_err(|error| map_failure_class(error.class()))?;
+            {
+                Ok(tokens) => tokens,
+                Err(error) => {
+                    first_failure.get_or_insert_with(|| map_failure_class(error.class()));
+                    continue;
+                }
+            };
+            // 同一账号的另一份 grant：账号已由更早条目入册，本条目跳过。
             if !subjects.insert(tokens.evidence().subject().to_owned()) {
-                return Err(provider_error(ProviderAdminErrorKind::Invalid));
+                continue;
             }
-            let prepared = GrokCredentialAdmin
-                .prepare_verified_account(
-                    &VerifiedGrokAccount {
-                        account_id: ProviderAccountId::new(format!(
-                            "acct_{}",
-                            Uuid::now_v7().simple()
-                        ))
-                        .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?,
-                        name,
-                        email,
-                        upstream_account_id: None,
-                        plan_type: None,
-                        tokens,
-                        enabled: true,
-                    },
-                    policy,
-                )
-                .map_err(map_repository_error)?;
-            credentials.push(prepared_create(prepared, Utc::now())?);
+            let account = VerifiedGrokAccount {
+                account_id: ProviderAccountId::new(format!("acct_{}", Uuid::now_v7().simple()))
+                    .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?,
+                name,
+                email,
+                upstream_account_id: None,
+                plan_type: None,
+                tokens,
+                enabled: true,
+            };
+            let prepared = match GrokCredentialAdmin.prepare_verified_account(&account, policy) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    first_failure.get_or_insert_with(|| map_repository_error(error));
+                    continue;
+                }
+            };
+            match prepared_create(prepared, Utc::now()) {
+                Ok(credential) => credentials.push(credential),
+                Err(error) => {
+                    first_failure.get_or_insert(error);
+                }
+            }
+        }
+        if credentials.is_empty() {
+            return Err(
+                first_failure.unwrap_or_else(|| provider_error(ProviderAdminErrorKind::Invalid))
+            );
         }
         Ok(PreparedCredentialImport {
             provider_kind: self.provider_kind.clone(),

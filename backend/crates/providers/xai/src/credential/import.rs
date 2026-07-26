@@ -172,6 +172,12 @@ impl GrokOAuthImportDocument {
                 entries.push(entry);
             }
         }
+        // 同一 refresh token 的重复条目只保留首个：RT exchange 会作废旧
+        // grant，重复条目逐条交换会让先完成的轮换被后续条目作废。
+        let mut seen_refresh_tokens = HashSet::new();
+        entries.retain(|entry| {
+            seen_refresh_tokens.insert(entry.candidate.refresh_token.expose().to_owned())
+        });
         if entries.is_empty() {
             return Err(GrokOAuthImportError::InvalidField("document"));
         }
