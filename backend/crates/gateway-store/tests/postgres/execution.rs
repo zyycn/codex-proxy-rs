@@ -121,7 +121,14 @@ async fn merged_first_attempt_insert_should_match_sequential_semantics() {
         (1, "not_sent", "openai", "running")
     );
 
-    // 后续 attempt 沿用常规 CAS 递增路径。
+    // 后续 attempt 沿用常规 CAS 递增路径；已持久化的 sent 水位不被重试重置。
+    repository
+        .mark_upstream_send_state(
+            "req_merged",
+            gateway_store::postgres::UpstreamSendState::Sent,
+        )
+        .await
+        .expect("mark sent before retry");
     let second = repository
         .begin_model_request_attempt(ModelRequestAttemptStart {
             model_request_id: "req_merged".to_owned(),
@@ -136,6 +143,13 @@ async fn merged_first_attempt_insert_should_match_sequential_semantics() {
         .await
         .expect("second attempt");
     assert_eq!(second, 2);
+    let send_state: String = sqlx::query_scalar(
+        "select upstream_send_state from model_requests where id = 'req_merged'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("load send state after retry");
+    assert_eq!(send_state, "sent");
     database.close().await;
 }
 
