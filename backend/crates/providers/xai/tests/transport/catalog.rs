@@ -377,6 +377,30 @@ fn reasoning_effort_menu_should_be_capability_evidence_without_legacy_flag() {
 }
 
 #[test]
+fn unknown_reasoning_effort_values_should_not_fail_the_snapshot() {
+    let snapshot = parse_grok_model_catalog(
+        br#"{"object":"list","data":[{"id":"grok-reasoning","reasoningEffort":"ultra","reasoningEfforts":[{"value":"ultra","default":true},"low","hyper"]}]}"#,
+        None,
+    )
+    .expect("unknown effort values must not break catalog parsing");
+    let capabilities = snapshot.models()[0].capabilities();
+
+    assert_eq!(
+        (
+            capabilities
+                .reasoning_efforts()
+                .iter()
+                .map(|effort| effort.as_str())
+                .collect::<Vec<_>>(),
+            capabilities
+                .default_reasoning_effort()
+                .map(|effort| effort.as_str()),
+        ),
+        (vec!["low"], Some("low"))
+    );
+}
+
+#[test]
 fn model_id_should_take_priority_over_catalog_id() {
     let snapshot = parse_grok_model_catalog(
         br#"{"object":"list","data":[{"id":"catalog-entry","modelId":"grok-4-fast"}]}"#,
