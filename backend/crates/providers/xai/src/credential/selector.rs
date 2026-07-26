@@ -102,7 +102,7 @@ impl GrokAccountSessionSelector {
         let runtime_cooldowns = self.runtime_cooldowns(&catalog_eligible).await;
         let mut candidates = catalog_eligible
             .into_iter()
-            .filter(|account| !runtime_cooldowns.contains(account.id()))
+            .filter(|account| !runtime_cooldowns.contains_key(account.id()))
             .map(|account| {
                 let health = self
                     .account_feedback
@@ -197,18 +197,30 @@ impl GrokAccountSessionSelector {
         }
 
         if capacity_denied {
-            Err(GrokSessionSelectorError::CapacityUnavailable { retry_after })
-        } else {
-            Err(GrokSessionSelectorError::NoEligibleSession)
+            return Err(GrokSessionSelectorError::CapacityUnavailable { retry_after });
         }
+        // 钉死账号时只看该账号，否则取最早退出 cooldown 的候选。
+        let cooled_until = match request.required_account() {
+            Some(required) => runtime_cooldowns.get(required).copied(),
+            None => runtime_cooldowns.values().copied().min(),
+        };
+        if let Some(until) = cooled_until {
+            return Err(GrokSessionSelectorError::AccountCoolingDown {
+                retry_after: until
+                    .duration_since(SystemTime::now())
+                    .ok()
+                    .filter(|remaining| !remaining.is_zero()),
+            });
+        }
+        Err(GrokSessionSelectorError::NoEligibleSession)
     }
 
     async fn runtime_cooldowns(
         &self,
         accounts: &[ProviderAccount],
-    ) -> std::collections::BTreeSet<ProviderAccountId> {
+    ) -> std::collections::BTreeMap<ProviderAccountId, SystemTime> {
         let now = SystemTime::now();
-        let mut cooled = std::collections::BTreeSet::new();
+        let mut cooled = std::collections::BTreeMap::new();
         for account in accounts {
             let Ok(Some(cooldown)) = self.cooldowns.read(account.id()).await else {
                 continue;
@@ -220,7 +232,7 @@ impl GrokAccountSessionSelector {
                 continue;
             }
             if cooldown.until() > now {
-                cooled.insert(account.id().clone());
+                cooled.insert(account.id().clone(), cooldown.until());
             }
         }
         cooled

@@ -411,13 +411,16 @@ async fn interrupted_stream_feedback_records_runtime_cooldown_without_persisting
             .cooldown(session.account_id())
             .is_some_and(|cooldown| cooldown.until() > SystemTime::now())
     );
-    assert!(matches!(
-        fixture
-            .selector
-            .select(fixture.request(BTreeSet::new()))
-            .await,
-        Err(GrokSessionSelectorError::NoEligibleSession)
-    ));
+    let retry_after = match fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+    {
+        Err(GrokSessionSelectorError::AccountCoolingDown { retry_after }) => retry_after,
+        other => panic!("expected AccountCoolingDown, got {other:?}"),
+    };
+    let retry_after = retry_after.expect("retry_after");
+    assert!(retry_after <= Duration::from_secs(30));
 }
 
 #[tokio::test]

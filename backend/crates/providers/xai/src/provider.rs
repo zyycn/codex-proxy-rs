@@ -1592,21 +1592,55 @@ fn map_request_error(error: GrokRequestEncodeError) -> ProviderError {
     }
 }
 
+/// 将选择阶段失败映射为带结构化 code 与 retry_after 的 Provider 错误。
 fn map_selection_error(error: GrokSessionSelectorError) -> ProviderError {
-    match error {
-        GrokSessionSelectorError::CapacityUnavailable { retry_after } => {
-            let error = provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent);
-            match retry_after {
-                Some(retry_after) => error.with_retry_after(retry_after),
-                None => error,
-            }
-        }
-        GrokSessionSelectorError::NoEligibleSession | GrokSessionSelectorError::Unavailable => {
-            provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
-        }
+    let (retry_after, message, code) = match error {
+        GrokSessionSelectorError::AccountCoolingDown { retry_after } => (
+            retry_after,
+            cooling_down_message(retry_after),
+            "account_cooling_down",
+        ),
+        GrokSessionSelectorError::CapacityUnavailable { retry_after } => (
+            retry_after,
+            "account is at its concurrency or request-interval limit".to_owned(),
+            "account_capacity_busy",
+        ),
+        GrokSessionSelectorError::NoEligibleSession => (
+            None,
+            "no account is eligible for the requested model".to_owned(),
+            "no_eligible_account",
+        ),
+        GrokSessionSelectorError::Unavailable => (
+            None,
+            "account scheduling state is temporarily unreadable".to_owned(),
+            "account_selector_unavailable",
+        ),
         GrokSessionSelectorError::InvalidSession => {
-            provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
+            return provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent);
         }
+    };
+    let error = provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent);
+    let error = match retry_after {
+        Some(retry_after) => error.with_retry_after(retry_after),
+        None => error,
+    };
+    match ClientVisibleUpstreamError::new(
+        message,
+        Some(code.to_owned()),
+        Some("account_unavailable_error".to_owned()),
+    ) {
+        Ok(detail) => error.with_client_visible_upstream_error(detail),
+        Err(_) => error,
+    }
+}
+
+fn cooling_down_message(retry_after: Option<Duration>) -> String {
+    match retry_after {
+        Some(retry_after) => format!(
+            "account is cooling down after an interrupted upstream stream; retry in {}s",
+            retry_after.as_secs().saturating_add(1)
+        ),
+        None => "account is cooling down after an interrupted upstream stream".to_owned(),
     }
 }
 

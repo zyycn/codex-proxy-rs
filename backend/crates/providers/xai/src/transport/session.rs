@@ -311,6 +311,12 @@ pub enum GrokSessionSelectorError {
         /// Optional selector-derived delay.
         retry_after: Option<Duration>,
     },
+    /// Every eligible session is inside its runtime cooldown window.
+    #[error("Grok Build account is cooling down")]
+    AccountCoolingDown {
+        /// Remaining cooldown of the earliest recovering session.
+        retry_after: Option<Duration>,
+    },
     /// Session metadata or Provider-owned plaintext secret is invalid.
     #[error("Grok Build session data is invalid")]
     InvalidSession,
