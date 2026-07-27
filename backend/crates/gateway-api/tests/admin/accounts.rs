@@ -147,7 +147,7 @@ mod actions {
     }
 
     #[test]
-    fn account_actions_should_require_frozen_account_ids_and_revision() {
+    fn account_actions_should_require_frozen_account_ids_and_reject_unknown_revision() {
         let id: AccountIdQuery =
             serde_json::from_value(json!({ "accountId": "acct_1" })).expect("decode ID query");
         assert!(id.validate().is_ok());
@@ -155,13 +155,16 @@ mod actions {
             serde_json::from_value(json!({ "accountId": "legacy-id" })).expect("decode action");
         assert_eq!(action.validate().unwrap_err().field(), "accountId");
         let refresh: AccountRefreshRequest = serde_json::from_value(json!({
-            "accountId": "acct_1",
-            "expectedConfigRevision": 0
+            "accountId": "acct_1"
         }))
         .expect("decode refresh");
-        assert_eq!(
-            refresh.validate().unwrap_err().field(),
-            "expectedConfigRevision"
+        assert!(refresh.validate().is_ok());
+        assert!(
+            serde_json::from_value::<AccountRefreshRequest>(json!({
+                "accountId": "acct_1",
+                "expectedConfigRevision": 0
+            }))
+            .is_err()
         );
     }
 
@@ -169,7 +172,6 @@ mod actions {
     fn account_import_should_use_provider_and_opaque_data_fields() {
         let valid: AccountImportRequest = serde_json::from_value(json!({
             "provider": "openai",
-            "expectedConfigRevision": 7,
             "data": {
                 "providerOwnedUnknownField": {"nested": [1, 2, 3]},
                 "accounts": [{"credentials": {"access_token": "provider-validates-this"}}]
@@ -180,7 +182,6 @@ mod actions {
 
         let invalid: AccountImportRequest = serde_json::from_value(json!({
             "provider": "xai",
-            "expectedConfigRevision": 7,
             "data": []
         }))
         .expect("decode invalid account import");
@@ -188,8 +189,15 @@ mod actions {
         assert!(
             serde_json::from_value::<AccountImportRequest>(json!({
                 "provider": "openai",
-                "expectedConfigRevision": 7,
                 "document": {}
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<AccountImportRequest>(json!({
+                "provider": "openai",
+                "expectedConfigRevision": 7,
+                "data": {}
             }))
             .is_err()
         );
@@ -199,16 +207,14 @@ mod actions {
     fn account_deletion_should_validate_one_provider_batch_and_emit_account_ids() {
         let request: AccountDeletionRequest = serde_json::from_value(json!({
             "provider": "xai",
-            "accountIds": ["acct_1", "acct_2"],
-            "expectedConfigRevision": 8
+            "accountIds": ["acct_1", "acct_2"]
         }))
         .expect("decode account deletion");
         assert!(request.validate().is_ok());
 
         let duplicate: AccountDeletionRequest = serde_json::from_value(json!({
             "provider": "xai",
-            "accountIds": ["acct_1", "acct_1"],
-            "expectedConfigRevision": 8
+            "accountIds": ["acct_1", "acct_1"]
         }))
         .expect("decode duplicate account deletion");
         assert_eq!(duplicate.validate().unwrap_err().field(), "accountIds");
@@ -223,7 +229,6 @@ mod actions {
         assert_eq!(
             serde_json::to_value(response).expect("serialize account deletion"),
             json!({
-                "configRevision": 9,
                 "deletedCount": 2,
                 "accountIds": ["acct_1", "acct_2"]
             })
@@ -239,7 +244,6 @@ mod actions {
         assert_eq!(
             serde_json::to_value(response).expect("serialize account import"),
             json!({
-                "configRevision": 8,
                 "importedCount": 1,
                 "accountIds": ["acct_imported"]
             })

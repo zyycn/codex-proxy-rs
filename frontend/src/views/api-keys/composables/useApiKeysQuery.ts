@@ -20,7 +20,6 @@ export function useApiKeysQuery() {
     }>
   >([])
   const loading = shallowRef(false)
-  const configRevision = shallowRef(0)
   const cursors = new Map<number, string | undefined>([[1, undefined]])
   let requestSequence = 0
 
@@ -59,13 +58,8 @@ export function useApiKeysQuery() {
       createdAtDisplay: formatDateTime(item.createdAt),
       lastUsedAtDisplay: item.lastUsedAt ? formatDateTime(item.lastUsedAt) : '—',
     }))
-    configRevision.value = result.configRevision
     total.value = result.total
     page.value = targetPage
-  }
-
-  function paginationRevisionChanged(result: Awaited<ReturnType<typeof getApiKeys>>) {
-    return configRevision.value > 0 && result.configRevision !== configRevision.value
   }
 
   async function execute(targetPage = page.value) {
@@ -83,10 +77,6 @@ export function useApiKeysQuery() {
         result = await fetchPage(cursors.get(currentPage), requestedPageSize, requestedSearch)
         if (requestId !== requestSequence)
           return false
-        if (paginationRevisionChanged(result)) {
-          resetCursorPagination()
-          return execute(1)
-        }
 
         if (!result.nextCursor) {
           applyPage(result, currentPage)
@@ -100,11 +90,6 @@ export function useApiKeysQuery() {
       result = await fetchPage(cursors.get(currentPage), requestedPageSize, requestedSearch)
       if (requestId !== requestSequence)
         return false
-      if (paginationRevisionChanged(result)) {
-        resetCursorPagination()
-        if (currentPage !== 1)
-          return execute(1)
-      }
 
       if (result.nextCursor)
         cursors.set(currentPage + 1, result.nextCursor)
@@ -162,7 +147,6 @@ export function useApiKeysQuery() {
     loading,
     apiKeys,
     loadApiKeys: reloadFromStart,
-    configRevision,
     searchQuery,
     sort,
     apiKeyPagination,

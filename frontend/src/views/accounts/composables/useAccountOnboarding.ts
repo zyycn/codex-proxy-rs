@@ -6,7 +6,6 @@ import {
   importAccounts,
   startAccountOAuth,
 } from '@/api'
-import { ApiError } from '@/api/request'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { providerDisplayName } from '@/utils/providers'
@@ -21,11 +20,9 @@ interface MixedImportDocument {
 
 export function useAccountOnboarding(options: {
   reload: () => Promise<unknown>
-  configRevision: { value: number }
 }) {
   const createModalOpen = shallowRef(false)
   const reauthorizingAccount = shallowRef<AccountRow | null>(null)
-  const configRevision = options.configRevision
   const creatingAccountAction = useAsyncAction()
   const authorizingOAuthAction = useAsyncAction()
   const creatingAccount = creatingAccountAction.loading
@@ -70,7 +67,7 @@ export function useAccountOnboarding(options: {
       async () => {
         const input = await newAccountInput()
         const account = reauthorizingAccount.value
-        const result = await withConflictRefresh(() => startAccountOAuth({
+        const result = await startAccountOAuth({
           ...input,
           ...(account
             ? {
@@ -78,7 +75,7 @@ export function useAccountOnboarding(options: {
                 expectedCredentialRevision: account.credentialRevision,
               }
             : {}),
-        }))
+        })
 
         createForm.value = {
           ...createForm.value,
@@ -104,12 +101,11 @@ export function useAccountOnboarding(options: {
         const callbackUrl = createForm.value.oauthCallback.trim()
         if (!callbackUrl)
           throw new Error('请粘贴 OAuth 回调地址')
-        const result = await withConflictRefresh(() => completeAccountOAuth({
+        await completeAccountOAuth({
           provider: createForm.value.provider,
           flowId: createForm.value.oauthFlowId,
           callbackUrl,
-        }))
-        commitConfigRevision(result.configRevision)
+        })
         await finishCreate(
           reauthorizingAccount.value
             ? '账号重新授权成功'
@@ -144,24 +140,10 @@ export function useAccountOnboarding(options: {
     void handleAuthorizeOAuth()
   }
 
-  async function requireConfigRevision() {
-    if (configRevision.value <= 0)
-      await options.reload()
-    if (configRevision.value <= 0)
-      throw new Error('当前配置 revision 不可用')
-    return configRevision.value
-  }
-
-  function commitConfigRevision(revision: number) {
-    if (revision > 0)
-      configRevision.value = revision
-  }
-
   async function newAccountInput() {
     const account = reauthorizingAccount.value
     return {
       provider: createForm.value.provider,
-      expectedConfigRevision: await requireConfigRevision(),
       name: account?.name || account?.email || `${createForm.value.provider} OAuth`,
     }
   }
@@ -170,14 +152,12 @@ export function useAccountOnboarding(options: {
     const data = parseImportJson(createForm.value.importText)
     if (Array.isArray(data) || typeof data !== 'object' || data === null)
       throw new Error('导入文件必须是 JSON object')
-    const expectedConfigRevision = await requireConfigRevision()
-    const result = await withConflictRefresh(() => importAccounts({
+    const result = await importAccounts({
       provider: createForm.value.provider,
-      expectedConfigRevision,
       data,
-    }))
-    commitConfigRevision(result.configRevision)
-    return createForm.value.provider === 'xai' ? 'xAI 账号已导入' : 'OpenAI 账号已导入'
+    })
+    const provider = createForm.value.provider === 'xai' ? 'xAI' : 'OpenAI'
+    return `${provider} 账号已导入 ${result.importedCount} 个`
   }
 
   async function importMixedAccountDocument() {
@@ -187,13 +167,10 @@ export function useAccountOnboarding(options: {
 
     for (const entry of documents) {
       try {
-        const expectedConfigRevision = await requireConfigRevision()
-        const result = await withConflictRefresh(() => importAccounts({
+        const result = await importAccounts({
           provider: entry.provider,
-          expectedConfigRevision,
           data: entry.document,
-        }))
-        commitConfigRevision(result.configRevision)
+        })
         importedCount += result.importedCount
       }
       catch (error) {
@@ -220,18 +197,6 @@ export function useAccountOnboarding(options: {
     toast.success(message)
   }
 
-  async function withConflictRefresh<T>(task: () => Promise<T>) {
-    try {
-      return await task()
-    }
-    catch (error) {
-      if (error instanceof ApiError && error.status === 409) {
-        await options.reload()
-      }
-      throw error
-    }
-  }
-
   watch(
     () => createForm.value.provider,
     () => {
@@ -250,14 +215,11 @@ export function useAccountOnboarding(options: {
     reauthorizingAccount,
     creatingAccount,
     authorizingOAuth,
-    configRevision,
     createForm,
     handleCreate,
     handleAuthorizeOAuth,
     openCreateAccount,
     openReauthorizeAccount,
-    requireConfigRevision,
-    commitConfigRevision,
   }
 }
 

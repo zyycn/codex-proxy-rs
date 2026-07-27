@@ -12,7 +12,6 @@ type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number]
 
 export function useApiKeyMutations(options: {
   selectedIds: Ref<Set<string>>
-  configRevision: Ref<number>
   reload: () => Promise<unknown>
 }) {
   const copyText = useCopyText()
@@ -50,13 +49,6 @@ export function useApiKeyMutations(options: {
     }
   })
 
-  function currentRevision() {
-    if (options.configRevision.value <= 0) {
-      throw new Error('配置版本尚未加载，请刷新后重试')
-    }
-    return options.configRevision.value
-  }
-
   async function handleCreate() {
     if (creatingKey.value)
       return
@@ -70,7 +62,6 @@ export function useApiKeyMutations(options: {
         const name = createForm.value.name.trim()
         const providerKind = createForm.value.providerKind
         const result = await createApiKey({
-          expectedConfigRevision: currentRevision(),
           name,
           label: createForm.value.label.trim() || undefined,
           providerKind,
@@ -78,7 +69,6 @@ export function useApiKeyMutations(options: {
           requestsPerMinute: 0,
         })
 
-        options.configRevision.value = result.configRevision
         createdKey.value = result.plaintextKey
         createdKeyName.value = name
         createdKeyProviderKind.value = providerKind
@@ -145,22 +135,18 @@ export function useApiKeyMutations(options: {
   }
 
   async function deleteKey(keyId: string) {
-    const deleted = await deleteApiKey({
+    await deleteApiKey({
       id: keyId,
-      expectedConfigRevision: currentRevision(),
     })
-    options.configRevision.value = deleted.configRevision
   }
 
   async function handleToggleStatus(key: ApiKeyRow) {
     await updatingStatusKeys.run(key.id, async () => {
       try {
         const mutation = key.enabled ? disableApiKey : enableApiKey
-        const result = await mutation({
+        await mutation({
           id: key.id,
-          expectedConfigRevision: currentRevision(),
         })
-        options.configRevision.value = result.configRevision
         await loadApiKeys()
         toast.success(key.enabled ? '已禁用' : '已启用')
       }

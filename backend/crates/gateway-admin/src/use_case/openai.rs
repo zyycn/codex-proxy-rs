@@ -112,7 +112,6 @@ impl OpenAiService for DefaultOpenAiService {
         command: ImportCredentials,
     ) -> Result<CredentialImportResult, AdminError> {
         let context = command.context;
-        let expected_config_revision = command.expected_config_revision;
         let prepared = self
             .provider
             .prepare_import(PrepareCredentialImport {
@@ -127,13 +126,7 @@ impl OpenAiService for DefaultOpenAiService {
         )?;
         let result = self
             .accounts
-            .commit_credential_import(
-                CredentialImportCommit {
-                    expected_config_revision,
-                    prepared,
-                },
-                &context,
-            )
+            .commit_credential_import(CredentialImportCommit { prepared }, &context)
             .await
             .map_err(|error| map_store_error(error, "OpenAI credential import"))?;
         publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
@@ -200,7 +193,6 @@ impl OpenAiService for DefaultOpenAiService {
         command: RotateCredential,
     ) -> Result<CredentialMutationResult, AdminError> {
         let context = command.mutation.context;
-        let expected_config_revision = command.mutation.expected_config_revision;
         let account_id = command.mutation.account_id;
         let details = required_credential(
             self.accounts.as_ref(),
@@ -227,7 +219,6 @@ impl OpenAiService for DefaultOpenAiService {
         validate_prepared_rotation(&account, &prepared, "OpenAI credential rotation")?;
         let result = commit_credential_rotation(
             self.accounts.as_ref(),
-            expected_config_revision,
             prepared,
             &context,
             "OpenAI credential rotation",

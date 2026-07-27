@@ -335,12 +335,7 @@ async fn xai_admin_provider_restores_full_pending_envelope_and_binds_owner() {
         .get("mutation")
         .and_then(Value::as_object)
         .expect("pending mutation");
-    assert_eq!(
-        mutation
-            .get("expected_config_revision")
-            .and_then(Value::as_u64),
-        Some(7)
-    );
+    assert_eq!(mutation.get("expected_config_revision"), None);
     assert_eq!(
         mutation.get("started_request_id").and_then(Value::as_str),
         Some("request-start")
@@ -555,7 +550,6 @@ fn pending_payload(flow_id: &str, owner_ref: &str) -> OpaqueProviderData {
         "expires_at": (Utc::now() + chrono::Duration::minutes(30)).to_rfc3339(),
         "server_state": server_state,
         "mutation": {
-            "expected_config_revision": 7,
             "provider_kind": "xai",
             "target": {
                 "kind": "create",

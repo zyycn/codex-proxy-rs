@@ -518,7 +518,6 @@ impl SettingsStore for FixtureSettingsStore {
 
     async fn replace_admin_api_key(
         &self,
-        _: Revision,
         _: AdminApiKey,
         _: &MutationContext,
     ) -> AdminStoreResult<AdminApiKeyMutation> {
@@ -527,7 +526,6 @@ impl SettingsStore for FixtureSettingsStore {
 
     async fn delete_admin_api_key(
         &self,
-        _: Revision,
         _: &MutationContext,
     ) -> AdminStoreResult<AdminApiKeyMutation> {
         Err(super::unavailable("admin API key"))

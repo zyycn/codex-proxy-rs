@@ -114,11 +114,10 @@ credential 更新使用 `credential_revision` CAS。认证永久失败、封禁�
 
 `refresh_token_expires_at` 不是公共 SQL 列或 Core 权威状态。xAI 可在 `provider_credentials_json` 内保存它作为 Provider 私有提示；真正失效以 refresh endpoint 返回的永久错误为准。
 
-## 7. 控制面与 revision
+## 7. 控制面与内部 revision
 
-管理写入使用 `expected_config_revision` 做全局乐观并发控制。会改变调度快照或安全配置的写入，必须在同一 PostgreSQL 事务中：
+Admin API 不要求客户端提交配置 revision，也不向客户端暴露配置 revision。会改变调度快照或安全配置的写入，必须在同一 PostgreSQL 事务中：
 
-- 校验 expected revision；
 - 执行业务 mutation；
 - 推进 `runtime_settings.config_revision`；
 - 写入脱敏 `admin_audit_events`。

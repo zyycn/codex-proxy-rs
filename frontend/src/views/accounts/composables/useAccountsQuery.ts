@@ -11,7 +11,6 @@ export function useAccountsQuery() {
   const searchQuery = shallowRef('')
   const providerQuery = shallowRef('')
   const statusQuery = shallowRef('')
-  const configRevision = shallowRef(0)
   const sort = shallowRef<BaseTableSort>()
   const accountSummary = shallowRef({
     total: 0,
@@ -34,7 +33,6 @@ export function useAccountsQuery() {
       }),
     onSuccess: (result) => {
       accountSummary.value = result.summary
-      configRevision.value = result.configRevision || configRevision.value
     },
     onError: (error) => {
       toast.error(errorMessage(error, '账号加载失败'))
@@ -94,7 +92,6 @@ export function useAccountsQuery() {
     statusQuery,
     sort,
     accountSummary,
-    configRevision,
     accountPagination,
     handlePageChange,
     handlePageSizeChange,

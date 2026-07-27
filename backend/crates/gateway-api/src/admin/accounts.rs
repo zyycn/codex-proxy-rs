@@ -161,7 +161,6 @@ fn parse_sort_direction(value: &str) -> Option<SortDirection> {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountPageData {
-    pub config_revision: u64,
     pub items: Vec<AccountView>,
     pub page: PageMeta,
     pub summary: AccountSummaryView,
@@ -391,31 +390,21 @@ impl AccountActionRequest {
     }
 }
 
-/// 手工 OAuth 刷新会变更持久 credential，因此必须携带配置 CAS revision。
+/// 手工 OAuth 刷新会变更持久 credential。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountRefreshRequest {
     pub account_id: String,
-    pub expected_config_revision: u64,
 }
 
 impl AccountRefreshRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
-        require_account_id(&self.account_id, "accountId")?;
-        if self.expected_config_revision == 0 {
-            return Err(WireValidationError::new("expectedConfigRevision"));
-        }
-        Ok(())
+        require_account_id(&self.account_id, "accountId")
     }
 
-    fn into_command(self) -> Result<(Revision, ProviderAccountId), WireValidationError> {
+    fn into_command(self) -> Result<ProviderAccountId, WireValidationError> {
         self.validate()?;
-        Ok((
-            Revision::new(self.expected_config_revision)
-                .map_err(|_| WireValidationError::new("expectedConfigRevision"))?,
-            ProviderAccountId::new(self.account_id)
-                .map_err(|_| WireValidationError::new("accountId"))?,
-        ))
+        ProviderAccountId::new(self.account_id).map_err(|_| WireValidationError::new("accountId"))
     }
 }
 
@@ -460,7 +449,6 @@ pub struct AccountModelsData {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountRefreshData {
-    pub config_revision: u64,
     pub account: AccountView,
 }
 
@@ -579,14 +567,12 @@ impl AccountProvider {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountImportRequest {
     pub provider: String,
-    pub expected_config_revision: u64,
     pub data: Value,
 }
 
 impl AccountImportRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
         AccountProvider::parse(&self.provider)?;
-        require_positive(self.expected_config_revision, "expectedConfigRevision")?;
         if !self.data.is_object()
             || serde_json::to_vec(&self.data)
                 .map_or(true, |encoded| encoded.len() > MAX_IMPORT_DATA_BYTES)
@@ -606,10 +592,6 @@ impl AccountImportRequest {
             provider,
             ImportCredentials {
                 context,
-                expected_config_revision: revision(
-                    self.expected_config_revision,
-                    "expectedConfigRevision",
-                )?,
                 document: provider_document(self.data, "data")?,
             },
         ))
@@ -620,7 +602,6 @@ impl AccountImportRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartAccountAuthorizationRequest {
     pub provider: String,
-    pub expected_config_revision: u64,
     pub name: String,
     pub account_id: Option<String>,
     pub expected_credential_revision: Option<u64>,
@@ -629,7 +610,6 @@ pub struct StartAccountAuthorizationRequest {
 impl StartAccountAuthorizationRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
         AccountProvider::parse(&self.provider)?;
-        require_positive(self.expected_config_revision, "expectedConfigRevision")?;
         require_text(&self.name, MAX_NAME_BYTES, "name")?;
         match (
             self.account_id.as_deref(),
@@ -663,10 +643,6 @@ impl StartAccountAuthorizationRequest {
             provider,
             StartAuthorization {
                 context,
-                expected_config_revision: revision(
-                    self.expected_config_revision,
-                    "expectedConfigRevision",
-                )?,
                 name: self.name,
                 reauthorization,
             },
@@ -721,14 +697,12 @@ impl CompleteAccountAuthorizationRequest {
 pub struct AccountMutationRequest {
     pub provider: String,
     pub account_id: String,
-    pub expected_config_revision: u64,
 }
 
 impl AccountMutationRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
         AccountProvider::parse(&self.provider)?;
-        require_account_id(&self.account_id, "accountId")?;
-        require_positive(self.expected_config_revision, "expectedConfigRevision")
+        require_account_id(&self.account_id, "accountId")
     }
 
     fn into_command(
@@ -741,10 +715,6 @@ impl AccountMutationRequest {
             provider,
             CredentialMutation {
                 context,
-                expected_config_revision: revision(
-                    self.expected_config_revision,
-                    "expectedConfigRevision",
-                )?,
                 account_id: ProviderAccountId::new(self.account_id)
                     .map_err(|_| WireValidationError::new("accountId"))?,
             },
@@ -757,7 +727,6 @@ impl AccountMutationRequest {
 pub struct AccountDeletionRequest {
     pub provider: String,
     pub account_ids: Vec<String>,
-    pub expected_config_revision: u64,
 }
 
 impl AccountDeletionRequest {
@@ -773,7 +742,7 @@ impl AccountDeletionRequest {
                 return Err(WireValidationError::new("accountIds"));
             }
         }
-        require_positive(self.expected_config_revision, "expectedConfigRevision")
+        Ok(())
     }
 
     fn into_command(
@@ -786,10 +755,6 @@ impl AccountDeletionRequest {
             provider,
             CredentialDeletion {
                 context,
-                expected_config_revision: revision(
-                    self.expected_config_revision,
-                    "expectedConfigRevision",
-                )?,
                 account_ids: self
                     .account_ids
                     .into_iter()
@@ -806,7 +771,6 @@ impl AccountDeletionRequest {
 pub struct RotateAccountRequest {
     pub provider: String,
     pub account_id: String,
-    pub expected_config_revision: u64,
     pub expected_credential_revision: u64,
     pub access_token: String,
     pub refresh_token: Option<String>,
@@ -818,7 +782,6 @@ impl RotateAccountRequest {
             return Err(WireValidationError::new("provider"));
         }
         require_account_id(&self.account_id, "accountId")?;
-        require_positive(self.expected_config_revision, "expectedConfigRevision")?;
         require_positive(
             self.expected_credential_revision,
             "expectedCredentialRevision",
@@ -840,10 +803,6 @@ impl RotateAccountRequest {
         Ok(RotateCredential {
             mutation: CredentialMutation {
                 context,
-                expected_config_revision: revision(
-                    self.expected_config_revision,
-                    "expectedConfigRevision",
-                )?,
                 account_id: ProviderAccountId::new(self.account_id)
                     .map_err(|_| WireValidationError::new("accountId"))?,
             },
@@ -859,7 +818,6 @@ impl RotateAccountRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountImportData {
-    pub config_revision: u64,
     pub imported_count: usize,
     pub account_ids: Vec<String>,
 }
@@ -872,7 +830,6 @@ impl From<CredentialImportResult> for AccountImportData {
             .map(|account_id| account_id.to_string())
             .collect::<Vec<_>>();
         Self {
-            config_revision: result.config_revision.get(),
             imported_count: account_ids.len(),
             account_ids,
         }
@@ -900,7 +857,6 @@ impl From<AuthorizationStarted> for AccountAuthorizationData {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountMutationData {
-    pub config_revision: u64,
     pub account_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential_revision: Option<u64>,
@@ -909,7 +865,6 @@ pub struct AccountMutationData {
 impl From<CredentialMutationResult> for AccountMutationData {
     fn from(result: CredentialMutationResult) -> Self {
         Self {
-            config_revision: result.config_revision.get(),
             account_id: result.account_id.to_string(),
             credential_revision: result.credential_revision.map(Revision::get),
         }
@@ -919,7 +874,6 @@ impl From<CredentialMutationResult> for AccountMutationData {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountDeletionData {
-    pub config_revision: u64,
     pub deleted_count: usize,
     pub account_ids: Vec<String>,
 }
@@ -932,7 +886,6 @@ impl From<CredentialDeletionResult> for AccountDeletionData {
             .map(|account_id| account_id.to_string())
             .collect::<Vec<_>>();
         Self {
-            config_revision: result.config_revision.get(),
             deleted_count: account_ids.len(),
             account_ids,
         }
@@ -1264,15 +1217,11 @@ async fn refresh_account<S>(
 where
     S: AdminSessionState + Send + Sync,
 {
-    let (expected_config_revision, account_id) = request.into_command().map_err(map_wire_error)?;
+    let account_id = request.into_command().map_err(map_wire_error)?;
     let result = state
         .admin_services()
         .accounts()
-        .refresh(
-            &auth.context().mutation_context(),
-            expected_config_revision,
-            account_id,
-        )
+        .refresh(&auth.context().mutation_context(), account_id)
         .await
         .map_err(map_service_error)?;
     let data = account_refresh_data(result, Utc::now());
@@ -1394,7 +1343,6 @@ fn account_page_data(
         u32::try_from(result.total.div_ceil(u64::from(page_size))).unwrap_or(u32::MAX)
     };
     AccountPageData {
-        config_revision: result.config_revision.get(),
         items: result
             .items
             .into_iter()
@@ -1412,7 +1360,6 @@ fn account_page_data(
 
 fn account_refresh_data(result: AccountRefreshResult, now: DateTime<Utc>) -> AccountRefreshData {
     AccountRefreshData {
-        config_revision: result.config_revision.get(),
         account: account_view(result.account, now),
     }
 }

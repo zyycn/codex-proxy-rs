@@ -179,7 +179,7 @@ pub trait AuthStore: Send + Sync {
     async fn append_audit_event(&self, event: AdminAuditEvent) -> AdminStoreResult<()>;
 }
 
-/// Client API Key 管理及其 revision CAS 写入。
+/// Client API Key 管理写入。
 #[async_trait]
 pub trait ClientKeyStore: Send + Sync {
     async fn list_client_keys(&self, query: ClientKeyListQuery) -> AdminStoreResult<ClientKeyPage>;
@@ -265,7 +265,7 @@ pub trait ObservabilityStore: Send + Sync {
     async fn list_ops_errors(&self, query: OpsErrorQuery) -> AdminStoreResult<OpsErrorPage>;
 }
 
-/// Runtime settings 与管理员 API Key 的 revision CAS 写入。
+/// Runtime settings 与管理员 API Key 写入。
 #[async_trait]
 pub trait SettingsStore: Send + Sync {
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings>;
@@ -280,14 +280,12 @@ pub trait SettingsStore: Send + Sync {
 
     async fn replace_admin_api_key(
         &self,
-        expected_config_revision: Revision,
         key: AdminApiKey,
         context: &MutationContext,
     ) -> AdminStoreResult<AdminApiKeyMutation>;
 
     async fn delete_admin_api_key(
         &self,
-        expected_config_revision: Revision,
         context: &MutationContext,
     ) -> AdminStoreResult<AdminApiKeyMutation>;
 }

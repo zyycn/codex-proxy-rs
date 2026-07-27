@@ -141,7 +141,6 @@ impl fmt::Debug for ClientKeySecret {
 /// API 提交的 Client Key 创建命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateClientKey {
-    pub expected_config_revision: Revision,
     pub name: String,
     pub label: Option<String>,
     pub provider_kind: ProviderKind,
@@ -151,7 +150,6 @@ pub struct CreateClientKey {
 /// 管理用例生成 ID 与明文后的持久化命令。
 #[derive(Clone, PartialEq, Eq)]
 pub struct NewClientKey {
-    pub expected_config_revision: Revision,
     pub id: ClientApiKeyId,
     pub name: String,
     pub label: Option<String>,
@@ -175,7 +173,6 @@ impl fmt::Debug for NewClientKey {
 /// 修改 Client Key 的公开策略字段。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateClientKey {
-    pub expected_config_revision: Revision,
     pub id: ClientApiKeyId,
     pub name: String,
     pub label: Option<String>,
@@ -186,7 +183,6 @@ pub struct UpdateClientKey {
 /// 修改 Client Key 启用状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetClientKeyEnabled {
-    pub expected_config_revision: Revision,
     pub id: ClientApiKeyId,
     pub enabled: bool,
 }
@@ -194,7 +190,6 @@ pub struct SetClientKeyEnabled {
 /// 删除 Client Key。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeleteClientKey {
-    pub expected_config_revision: Revision,
     pub id: ClientApiKeyId,
 }
 

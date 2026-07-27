@@ -582,7 +582,6 @@ impl SettingsStore for AdminSettingsStoreAdapter {
         };
         let snapshot = postgres::ControlPlaneRepository::replace_control_plane(
             &self.control_plane,
-            store_revision(command.expected_config_revision)?,
             replacement,
         )
         .await
@@ -592,32 +591,24 @@ impl SettingsStore for AdminSettingsStoreAdapter {
 
     async fn replace_admin_api_key(
         &self,
-        expected_config_revision: AdminRevision,
         key: AdminApiKey,
         context: &MutationContext,
     ) -> AdminStoreResult<AdminApiKeyMutation> {
-        self.replace_admin_api_key_value(
-            expected_config_revision,
-            Some(key.expose_for_auth().to_owned()),
-            context,
-        )
-        .await
+        self.replace_admin_api_key_value(Some(key.expose_for_auth().to_owned()), context)
+            .await
     }
 
     async fn delete_admin_api_key(
         &self,
-        expected_config_revision: AdminRevision,
         context: &MutationContext,
     ) -> AdminStoreResult<AdminApiKeyMutation> {
-        self.replace_admin_api_key_value(expected_config_revision, None, context)
-            .await
+        self.replace_admin_api_key_value(None, context).await
     }
 }
 
 impl AdminSettingsStoreAdapter {
     async fn replace_admin_api_key_value(
         &self,
-        expected_config_revision: AdminRevision,
         admin_api_key: Option<String>,
         context: &MutationContext,
     ) -> AdminStoreResult<AdminApiKeyMutation> {
@@ -639,7 +630,6 @@ impl AdminSettingsStoreAdapter {
         };
         let snapshot = postgres::ControlPlaneRepository::replace_control_plane(
             &self.control_plane,
-            store_revision(expected_config_revision)?,
             postgres::ControlPlaneReplacement {
                 settings: update,
                 audit: mutation_audit(

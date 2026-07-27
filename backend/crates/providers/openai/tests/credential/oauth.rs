@@ -172,7 +172,6 @@ fn owner_context(request_id: &str) -> MutationContext {
 fn create_mutation(request_id: &str) -> PendingAuthorizationMutation {
     let context = owner_context(request_id);
     PendingAuthorizationMutation::new(
-        Revision::new(1).expect("revision"),
         ProviderKind::new("openai").expect("provider"),
         AuthorizationMutationTarget::Create {
             name: "OAuth Account".to_owned(),
@@ -184,7 +183,6 @@ fn create_mutation(request_id: &str) -> PendingAuthorizationMutation {
 fn reauthorization_mutation(request_id: &str, account_id: &str) -> PendingAuthorizationMutation {
     let context = owner_context(request_id);
     PendingAuthorizationMutation::new(
-        Revision::new(1).expect("revision"),
         ProviderKind::new("openai").expect("provider"),
         AuthorizationMutationTarget::Reauthorize {
             account_id: ProviderAccountId::new(account_id).expect("account id"),

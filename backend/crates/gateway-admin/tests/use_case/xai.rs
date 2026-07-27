@@ -8,9 +8,7 @@ use gateway_admin::{
     ports::provider::ProviderAdminErrorKind,
 };
 
-use super::accounts::{
-    FakeAccountStore, FakeProviderAdmin, context, document, events, recorded, revision,
-};
+use super::accounts::{FakeAccountStore, FakeProviderAdmin, context, document, events, recorded};
 
 #[tokio::test]
 async fn xai_disable_should_commit_then_notify_the_stateless_provider() {
@@ -47,7 +45,6 @@ async fn xai_import_should_prepare_before_atomic_store_commit() {
         .xai()
         .import_document(ImportCredentials {
             context: context("import-xai"),
-            expected_config_revision: revision(3),
             document: document(),
         })
         .await
@@ -84,7 +81,6 @@ async fn xai_import_should_refresh_quota_for_every_imported_account() {
         .xai()
         .import_document(ImportCredentials {
             context: context("import-xai-batch"),
-            expected_config_revision: revision(1),
             document: document(),
         })
         .await
@@ -119,7 +115,6 @@ async fn xai_import_should_remain_successful_when_quota_refresh_fails() {
         .xai()
         .import_document(ImportCredentials {
             context: context("import-xai-quota-failure"),
-            expected_config_revision: revision(1),
             document: document(),
         })
         .await
@@ -140,7 +135,6 @@ async fn service(provider: Arc<FakeProviderAdmin>, store: Arc<FakeAccountStore>)
 fn mutation(account_id: &str) -> CredentialMutation {
     CredentialMutation {
         context: context("request-xai"),
-        expected_config_revision: revision(1),
         account_id: ProviderAccountId::new(account_id).expect("account ID"),
     }
 }

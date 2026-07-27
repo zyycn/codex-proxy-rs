@@ -399,6 +399,7 @@ fn compile_grok_model_capabilities(model: GrokCatalogModel) -> ProviderModelCapa
             .max_output_tokens()
             .map(std::num::NonZeroU64::get),
     )
+    .with_upstream_feature_validation()
     .with_feature(
         Feature::Reasoning,
         support(model.capabilities().reasoning_effort()),
@@ -441,10 +442,7 @@ fn default_grok_model_presentation() -> ModelPresentation {
 
 fn grok_model_presentation(model: &GrokCatalogModel) -> ModelPresentation {
     let slug = model.request_model().as_str();
-    let known_grok_4_5 = matches!(
-        slug,
-        DEFAULT_GROK_MODEL | "grok-4.5-latest" | "grok-4.5-build-free" | "grok-build-latest"
-    );
+    let known_grok_4_5 = is_known_grok_4_5_model(slug);
     let reasoning_evidence = model.capabilities().reasoning_effort();
     let catalog_reasoning_efforts = model
         .capabilities()
@@ -511,6 +509,13 @@ fn grok_model_presentation(model: &GrokCatalogModel) -> ModelPresentation {
         model.capabilities().backend_search() == GrokCatalogCapabilityEvidence::DeclaredNative,
     )
     .with_hidden(model.metadata().hidden().unwrap_or(false))
+}
+
+fn is_known_grok_4_5_model(slug: &str) -> bool {
+    matches!(
+        slug,
+        DEFAULT_GROK_MODEL | "grok-4.5-latest" | "grok-4.5-build-free" | "grok-build-latest"
+    )
 }
 
 #[derive(Clone, Serialize, Deserialize)]

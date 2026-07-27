@@ -101,7 +101,6 @@ pub struct CredentialDetails {
 /// Provider 正式文档批量导入命令。
 pub struct ImportCredentials {
     pub context: MutationContext,
-    pub expected_config_revision: Revision,
     pub document: ProviderDocument,
 }
 
@@ -110,7 +109,6 @@ impl fmt::Debug for ImportCredentials {
         formatter
             .debug_struct("ImportCredentials")
             .field("context", &self.context)
-            .field("expected_config_revision", &self.expected_config_revision)
             .field("document", &self.document)
             .finish()
     }
@@ -169,7 +167,6 @@ pub struct PreparedCredentialImport {
 /// Admin 交给 Store 的导入事务命令。
 #[derive(Debug, Clone, PartialEq)]
 pub struct CredentialImportCommit {
-    pub expected_config_revision: Revision,
     pub prepared: PreparedCredentialImport,
 }
 
@@ -254,7 +251,6 @@ pub enum AuthorizationMutationTarget {
 /// 必须完整进入 Provider opaque pending payload、并在 complete 后原样恢复的事务信封。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingAuthorizationMutation {
-    expected_config_revision: Revision,
     provider_kind: ProviderKind,
     target: AuthorizationMutationTarget,
     owner_binding: AuthorizationOwnerBinding,
@@ -263,22 +259,15 @@ pub struct PendingAuthorizationMutation {
 impl PendingAuthorizationMutation {
     #[must_use]
     pub const fn new(
-        expected_config_revision: Revision,
         provider_kind: ProviderKind,
         target: AuthorizationMutationTarget,
         owner_binding: AuthorizationOwnerBinding,
     ) -> Self {
         Self {
-            expected_config_revision,
             provider_kind,
             target,
             owner_binding,
         }
-    }
-
-    #[must_use]
-    pub const fn expected_config_revision(&self) -> Revision {
-        self.expected_config_revision
     }
 
     #[must_use]
@@ -301,7 +290,6 @@ impl PendingAuthorizationMutation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartAuthorization {
     pub context: MutationContext,
-    pub expected_config_revision: Revision,
     pub name: String,
     pub reauthorization: Option<ReauthorizationTarget>,
 }
@@ -406,7 +394,6 @@ impl fmt::Debug for CompleteAuthorization {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialMutation {
     pub context: MutationContext,
-    pub expected_config_revision: Revision,
     pub account_id: ProviderAccountId,
 }
 
@@ -422,7 +409,6 @@ pub struct CredentialMutationResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialDeletion {
     pub context: MutationContext,
-    pub expected_config_revision: Revision,
     pub account_ids: Vec<ProviderAccountId>,
 }
 
@@ -520,7 +506,6 @@ impl fmt::Debug for PreparedCredentialRotation {
 /// Admin 交给 Store 的轮换或 refresh 事务命令。
 #[derive(Debug, Clone, PartialEq)]
 pub struct CredentialRotationCommit {
-    pub expected_config_revision: Revision,
     pub prepared: PreparedCredentialRotationFacts,
 }
 

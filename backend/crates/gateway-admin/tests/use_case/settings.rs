@@ -2,7 +2,7 @@ use async_trait::async_trait;
 
 use gateway_admin::{
     model::{
-        AdminErrorKind, MutationContext, Revision,
+        AdminErrorKind, MutationContext,
         settings::{
             AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RotationStrategy,
             RuntimeSettings,
@@ -33,7 +33,6 @@ impl SettingsStore for UnusedSettingsStore {
 
     async fn replace_admin_api_key(
         &self,
-        _: Revision,
         _: AdminApiKey,
         _: &MutationContext,
     ) -> AdminStoreResult<AdminApiKeyMutation> {
@@ -42,7 +41,6 @@ impl SettingsStore for UnusedSettingsStore {
 
     async fn delete_admin_api_key(
         &self,
-        _: Revision,
         _: &MutationContext,
     ) -> AdminStoreResult<AdminApiKeyMutation> {
         Err(unused())
@@ -63,7 +61,6 @@ async fn settings_should_reject_zero_refresh_margin_before_store_call() {
                 request_id: "request-settings".to_owned(),
             },
             ReplaceRuntimeSettings {
-                expected_config_revision: Revision::new(1).expect("revision"),
                 model_mappings: Default::default(),
                 refresh_margin_seconds: 0,
                 refresh_concurrency: 1,

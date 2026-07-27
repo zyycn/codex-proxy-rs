@@ -36,7 +36,7 @@ use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
 
 use crate::{
     StoreError, StoreResult, admin_revision, admin_store_error, mutation_audit,
-    postgres_unavailable, require_nonempty, store_revision,
+    postgres_unavailable, require_nonempty,
 };
 
 use super::{ControlPlaneRepository, PgControlPlaneRepository};
@@ -633,7 +633,6 @@ impl ClientKeyStore for PgAdminClientKeyStore {
         let revision = self
             .control_plane
             .create_client_api_key(
-                store_revision(command.expected_config_revision)?,
                 NewClientApiKey {
                     id: id.as_str().to_owned(),
                     name: command.name,
@@ -676,7 +675,6 @@ impl ClientKeyStore for PgAdminClientKeyStore {
         let revision = self
             .control_plane
             .update_client_api_key(
-                store_revision(command.expected_config_revision)?,
                 UpdateClientApiKeyDetails {
                     id: id.as_str().to_owned(),
                     name: command.name,
@@ -716,7 +714,6 @@ impl ClientKeyStore for PgAdminClientKeyStore {
         let revision = self
             .control_plane
             .set_client_api_key_enabled(
-                store_revision(command.expected_config_revision)?,
                 id.as_str(),
                 command.enabled,
                 mutation_audit(
@@ -739,7 +736,6 @@ impl ClientKeyStore for PgAdminClientKeyStore {
     ) -> AdminStoreResult<gateway_admin::model::Revision> {
         self.control_plane
             .delete_client_api_key(
-                store_revision(command.expected_config_revision)?,
                 command.id.as_str(),
                 mutation_audit(
                     context,

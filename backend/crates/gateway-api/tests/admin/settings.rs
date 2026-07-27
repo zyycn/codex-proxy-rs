@@ -37,7 +37,6 @@ async fn response_json(response: axum::response::Response) -> Value {
 
 fn update_body() -> Value {
     json!({
-        "expectedConfigRevision": 7,
         "modelMappings": {
             "gpt-5.4": "gpt-5.5",
             "grok-latest": "grok-4.5"
@@ -64,22 +63,11 @@ fn settings_request_should_reject_unknown_rotation_strategy() {
 }
 
 #[test]
-fn settings_request_should_require_positive_revision() {
+fn settings_request_should_reject_unknown_revision_field() {
     let mut body = update_body();
-    body["expectedConfigRevision"] = json!(0);
-    let request: UpdateRuntimeSettingsRequest =
-        serde_json::from_value(body).expect("decode settings");
-    assert_eq!(
-        request.validate().unwrap_err().field(),
-        "expectedConfigRevision"
-    );
+    body["expectedConfigRevision"] = json!(7);
 
-    let mut missing = update_body();
-    missing
-        .as_object_mut()
-        .expect("settings object")
-        .remove("expectedConfigRevision");
-    assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(missing).is_err());
+    assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body).is_err());
 }
 
 #[test]
@@ -124,7 +112,7 @@ async fn settings_post_should_replace_global_model_mappings() {
         .expect("settings update response");
     let data = response_json(response).await["data"].clone();
 
-    assert_eq!(data["configRevision"], 8);
+    assert!(data.get("configRevision").is_none());
     assert_eq!(data["modelMappings"]["gpt-5.4"], "gpt-5.5");
     assert_eq!(data["modelMappings"]["grok-latest"], "grok-4.5");
 }

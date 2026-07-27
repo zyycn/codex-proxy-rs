@@ -10,12 +10,8 @@ use axum::{
     routing::{get, post},
 };
 use chrono::{DateTime, Utc};
-use gateway_admin::model::{
-    Revision,
-    settings::{
-        ModelMappings as DomainModelMappings, ReplaceRuntimeSettings, RotationStrategy,
-        RuntimeSettings,
-    },
+use gateway_admin::model::settings::{
+    ModelMappings as DomainModelMappings, ReplaceRuntimeSettings, RotationStrategy, RuntimeSettings,
 };
 use gateway_core::routing::{PublicModelId, UpstreamModelId};
 use serde::{Deserialize, Serialize};
@@ -32,7 +28,6 @@ pub type ModelMappings = BTreeMap<String, String>;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettingsView {
-    pub config_revision: u64,
     pub model_mappings: ModelMappings,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u64,
@@ -49,7 +44,6 @@ pub struct RuntimeSettingsView {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateRuntimeSettingsRequest {
-    pub expected_config_revision: u64,
     pub model_mappings: ModelMappings,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u64,
@@ -64,9 +58,6 @@ pub struct UpdateRuntimeSettingsRequest {
 impl UpdateRuntimeSettingsRequest {
     /// 校验公共运行参数。
     pub fn validate(&self) -> Result<(), WireValidationError> {
-        if self.expected_config_revision == 0 {
-            return Err(WireValidationError::new("expectedConfigRevision"));
-        }
         validate_model_mappings(&self.model_mappings)?;
         for (value, field) in [
             (self.refresh_margin_seconds, "refreshMarginSeconds"),
@@ -93,8 +84,6 @@ impl UpdateRuntimeSettingsRequest {
     fn into_command(self) -> Result<ReplaceRuntimeSettings, WireValidationError> {
         self.validate()?;
         Ok(ReplaceRuntimeSettings {
-            expected_config_revision: Revision::new(self.expected_config_revision)
-                .map_err(|_| WireValidationError::new("settingsRevisionOverflow"))?,
             model_mappings: domain_model_mappings(self.model_mappings)?,
             refresh_margin_seconds: self.refresh_margin_seconds,
             refresh_concurrency: u32::try_from(self.refresh_concurrency)
@@ -117,7 +106,6 @@ impl UpdateRuntimeSettingsRequest {
 impl From<RuntimeSettings> for RuntimeSettingsView {
     fn from(settings: RuntimeSettings) -> Self {
         Self {
-            config_revision: settings.config_revision.get(),
             model_mappings: wire_model_mappings(settings.model_mappings),
             refresh_margin_seconds: settings.refresh_margin_seconds,
             refresh_concurrency: u64::from(settings.refresh_concurrency),
@@ -358,7 +346,6 @@ fn valid_model_name(value: &str, max_len: usize) -> bool {
 
 fn map_wire_error(error: WireValidationError) -> AdminError {
     let message = match error.field() {
-        "settingsRevisionOverflow" => "expectedConfigRevision must be positive".to_owned(),
         "settingsRefreshConcurrencyOverflow" => "Invalid refreshConcurrency".to_owned(),
         "settingsMaxConcurrencyOverflow" => "Invalid maxConcurrentPerAccount".to_owned(),
         "settingsUsageRetentionOverflow" => "Invalid usageRetentionDays".to_owned(),

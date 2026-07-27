@@ -279,8 +279,9 @@ impl SettingsStore for MemorySettingsStore {
         command: ReplaceRuntimeSettings,
         _: &MutationContext,
     ) -> AdminStoreResult<RuntimeSettings> {
+        let mut settings = self.settings.lock().expect("settings");
         let updated = RuntimeSettings {
-            config_revision: next_revision(command.expected_config_revision),
+            config_revision: next_revision(settings.config_revision),
             model_mappings: command.model_mappings,
             refresh_margin_seconds: command.refresh_margin_seconds,
             refresh_concurrency: command.refresh_concurrency,
@@ -292,31 +293,31 @@ impl SettingsStore for MemorySettingsStore {
             audit_retention_days: command.audit_retention_days,
             updated_at: Utc::now(),
         };
-        *self.settings.lock().expect("settings") = updated.clone();
+        *settings = updated.clone();
         Ok(updated)
     }
 
     async fn replace_admin_api_key(
         &self,
-        expected_config_revision: Revision,
         key: AdminApiKey,
         _: &MutationContext,
     ) -> AdminStoreResult<AdminApiKeyMutation> {
         *self.api_key.lock().expect("API key") = Some(key);
+        let revision = self.settings.lock().expect("settings").config_revision;
         Ok(AdminApiKeyMutation {
-            config_revision: next_revision(expected_config_revision),
+            config_revision: next_revision(revision),
             exists: true,
         })
     }
 
     async fn delete_admin_api_key(
         &self,
-        expected_config_revision: Revision,
         _: &MutationContext,
     ) -> AdminStoreResult<AdminApiKeyMutation> {
         *self.api_key.lock().expect("API key") = None;
+        let revision = self.settings.lock().expect("settings").config_revision;
         Ok(AdminApiKeyMutation {
-            config_revision: next_revision(expected_config_revision),
+            config_revision: next_revision(revision),
             exists: false,
         })
     }

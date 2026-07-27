@@ -114,7 +114,6 @@ async fn openai_import_should_prepare_before_atomic_store_commit() {
         .openai()
         .import_document(ImportCredentials {
             context: context("import-openai"),
-            expected_config_revision: revision(1),
             document: document(),
         })
         .await
@@ -151,7 +150,6 @@ async fn openai_import_should_refresh_quota_for_every_imported_account() {
         .openai()
         .import_document(ImportCredentials {
             context: context("import-openai-batch"),
-            expected_config_revision: revision(1),
             document: document(),
         })
         .await
@@ -193,7 +191,6 @@ async fn openai_import_should_remain_successful_when_quota_refresh_fails() {
         .openai()
         .import_document(ImportCredentials {
             context: context("import-openai-quota-failure"),
-            expected_config_revision: revision(1),
             document: document(),
         })
         .await
@@ -218,7 +215,6 @@ async fn openai_import_provider_error_should_not_touch_store_transaction() {
         .openai()
         .import_document(ImportCredentials {
             context: context("import-openai-error"),
-            expected_config_revision: revision(1),
             document: document(),
         })
         .await
@@ -237,7 +233,6 @@ async fn openai_reauthorization_should_restore_pending_envelope_and_hold_guard_t
         .openai()
         .start_authorization(StartAuthorization {
             context: context("oauth-start-openai"),
-            expected_config_revision: revision(7),
             name: "reauthorize".to_owned(),
             reauthorization: Some(ReauthorizationTarget {
                 account_id: ProviderAccountId::new("acct_test").expect("account ID"),
@@ -248,7 +243,6 @@ async fn openai_reauthorization_should_restore_pending_envelope_and_hold_guard_t
         .expect("start reauthorization");
 
     let pending = provider.pending().expect("pending envelope");
-    assert_eq!(pending.expected_config_revision(), revision(7));
     assert_eq!(pending.provider_kind().as_str(), "openai");
     assert_eq!(
         pending.owner_binding().started_request_id(),
@@ -284,7 +278,6 @@ async fn openai_reauthorization_should_restore_pending_envelope_and_hold_guard_t
             "guard.finish",
         ]
     );
-    assert_eq!(store.authorization_revision(), Some(revision(7)));
     assert_eq!(store.audit_requests(), ["oauth-complete-openai"]);
 }
 
@@ -299,7 +292,6 @@ async fn service(provider: Arc<FakeProviderAdmin>, store: Arc<FakeAccountStore>)
 fn mutation(account_id: &str) -> CredentialMutation {
     CredentialMutation {
         context: context("request-openai"),
-        expected_config_revision: revision(1),
         account_id: ProviderAccountId::new(account_id).expect("account ID"),
     }
 }
@@ -307,7 +299,6 @@ fn mutation(account_id: &str) -> CredentialMutation {
 fn deletion(account_id: &str) -> CredentialDeletion {
     CredentialDeletion {
         context: context("request-openai"),
-        expected_config_revision: revision(1),
         account_ids: vec![ProviderAccountId::new(account_id).expect("account ID")],
     }
 }

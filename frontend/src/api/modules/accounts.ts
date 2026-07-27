@@ -134,14 +134,12 @@ export interface AccountSummary {
 }
 
 export interface AccountListResponse {
-  configRevision: number
   items: Account[]
   page: AccountPageMeta
   summary: AccountSummary
 }
 
 export interface AccountRefreshResponse {
-  configRevision: number
   account: Account
   result?: string
   error?: string
@@ -156,19 +154,16 @@ export interface AccountModelsResponse {
 }
 
 export interface AccountImportResponse {
-  configRevision: number
   importedCount: number
   accountIds: string[]
 }
 
 export interface AccountMutationResponse {
-  configRevision: number
   accountId: string
   credentialRevision?: number
 }
 
 export interface AccountDeletionResponse {
-  configRevision: number
   deletedCount: number
   accountIds: string[]
 }
