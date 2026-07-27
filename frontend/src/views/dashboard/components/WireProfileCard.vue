@@ -241,7 +241,7 @@ function providerLabel(provider: string) {
           <dl
             class="m-0 grid min-w-0 gap-5 sm:gap-7"
             :class="profile.provider === 'xai'
-              ? 'sm:grid-cols-[0.72fr_0.9fr_1.18fr]'
+              ? 'sm:grid-cols-[0.62fr_1.28fr_0.94fr]'
               : 'sm:grid-cols-[0.72fr_1.28fr]'"
           >
             <div v-if="profile.provider === 'xai'" class="min-w-0">

@@ -249,7 +249,7 @@ const statusBars = computed(() => {
               </AccountIdentityCell>
 
               <span
-                class="grid min-w-0 grid-cols-[minmax(0,0.82fr)_minmax(0,0.64fr)_minmax(104px,1fr)] items-end gap-3 xl:contents"
+                class="grid min-w-0 grid-cols-[minmax(0,0.82fr)_minmax(0,0.64fr)_minmax(104px,1fr)] items-start gap-3 xl:contents"
               >
                 <span class="grid min-w-0 gap-1">
                   <span class="text-[11px] leading-none font-bold text-(--cp-text-muted)">
@@ -273,7 +273,6 @@ const statusBars = computed(() => {
                   :window="account.usageWindow"
                   :show-local-value="false"
                   variant="compact"
-                  class="xl:h-7.25"
                 />
               </span>
             </article>
