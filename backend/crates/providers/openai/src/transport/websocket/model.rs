@@ -13,7 +13,7 @@ pub struct CodexWebSocketConnection {
     pub(super) headers: Vec<(String, String)>,
 }
 
-/// Prepared Responses WebSocket request descriptor.
+/// 已构造完成的 Responses WebSocket 请求描述。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexWebSocketRequest {
     pub(super) connection: CodexWebSocketConnection,

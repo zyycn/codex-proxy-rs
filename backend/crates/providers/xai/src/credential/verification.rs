@@ -7,10 +7,10 @@ use url::Url;
 
 use crate::{SecretValue, VerificationFailure};
 
-/// OAuth flow whose initial access token is being verified.
+/// 正在验证首个 access token 的 OAuth 流程。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerificationFlow {
-    /// Authorization Code + PKCE with a mandatory nonce-bound ID token.
+    /// Authorization Code + PKCE；必须携带与 nonce 绑定的 ID token。
     AuthorizationCode,
     /// 已有 token 的导入；必须通过官方 user-info 验证当前 access token。
     CredentialImport,
@@ -18,17 +18,17 @@ pub enum VerificationFlow {
     CredentialImportRefreshed,
 }
 
-/// Trusted verification mechanism reported by the injected verifier.
+/// 注入的校验器报告的可信验证机制。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerificationMethod {
-    /// Full JWT/JWKS validation including issuer, audience, expiry, and nonce.
+    /// 完整 JWT/JWKS 校验，含 issuer、audience、过期时间与 nonce。
     IdToken,
-    /// Authoritative official user-info lookup using the access token.
+    /// 用 access token 查询官方权威 user-info。
     UserInfo,
 }
 
-/// Evidence produced by a trusted verifier. Identity is redacted from debug
-/// output and is not derived by this crate through unverified JWT decoding.
+/// 可信校验器产出的验证证据。身份在 debug 输出中脱敏，且本 crate 不会通过
+/// 未经验证的 JWT 解码推导身份。
 #[derive(Clone)]
 pub struct VerificationEvidence {
     method: VerificationMethod,
@@ -36,7 +36,7 @@ pub struct VerificationEvidence {
 }
 
 impl VerificationEvidence {
-    /// Creates evidence after full ID-token verification.
+    /// 完整 ID token 校验通过后创建证据。
     #[must_use]
     pub fn id_token(subject: String) -> Self {
         Self {
@@ -45,7 +45,7 @@ impl VerificationEvidence {
         }
     }
 
-    /// Creates evidence after an authoritative official user-info lookup.
+    /// 官方权威 user-info 查询通过后创建证据。
     #[must_use]
     pub fn user_info(subject: String) -> Self {
         Self {
@@ -54,13 +54,13 @@ impl VerificationEvidence {
         }
     }
 
-    /// Returns the verification method.
+    /// 返回验证机制。
     #[must_use]
     pub const fn method(&self) -> VerificationMethod {
         self.method
     }
 
-    /// Exposes the verified subject at the credential construction boundary.
+    /// 在凭据构造边界暴露已验证的 subject。
     #[must_use]
     pub fn subject(&self) -> &str {
         self.subject.expose()
@@ -77,7 +77,7 @@ impl fmt::Debug for VerificationEvidence {
     }
 }
 
-/// Immutable trust context supplied to a token verifier.
+/// 传给 token 校验器的不可变信任上下文。
 #[derive(Debug, Clone, Copy)]
 pub struct TokenVerificationContext<'a> {
     flow: VerificationFlow,
@@ -110,51 +110,51 @@ impl<'a> TokenVerificationContext<'a> {
         }
     }
 
-    /// Returns the flow being verified.
+    /// 返回正在验证的流程。
     #[must_use]
     pub const fn flow(&self) -> VerificationFlow {
         self.flow
     }
 
-    /// Returns the exact expected issuer.
+    /// 返回精确匹配的预期 issuer。
     #[must_use]
     pub fn issuer(&self) -> &Url {
         self.issuer
     }
 
-    /// Returns the exact expected audience/client identifier.
+    /// 返回精确匹配的预期 audience/client 标识。
     #[must_use]
     pub const fn client_id(&self) -> &str {
         self.client_id
     }
 
-    /// Returns the same-origin JWKS URL from validated discovery.
+    /// 返回已校验发现文档中的同源 JWKS URL。
     #[must_use]
     pub fn jwks_uri(&self) -> &Url {
         self.jwks_uri
     }
 
-    /// Returns the same-origin authoritative user-info URL from discovery.
+    /// 返回发现文档中的同源权威 user-info URL。
     #[must_use]
     pub fn userinfo_endpoint(&self) -> &Url {
         self.userinfo_endpoint
     }
 
-    /// Returns discovery-advertised algorithms. Implementations must intersect
-    /// them with a local cryptographic allowlist and reject `none`.
+    /// 返回发现文档声明的算法。实现必须与本地密码学 allowlist 取交集，并拒绝
+    /// `none`。
     #[must_use]
     pub const fn signing_algorithms(&self) -> &[String] {
         self.signing_algorithms
     }
 
-    /// Returns the expected nonce for authorization-code flows.
+    /// 返回 Authorization Code 流程的预期 nonce。
     #[must_use]
     pub const fn expected_nonce(&self) -> Option<&SecretValue> {
         self.expected_nonce
     }
 }
 
-/// Borrowed token material available only to the trusted verification port.
+/// 仅向可信校验端口开放的借用 token 材料。
 pub struct TokenCandidate<'a> {
     access_token: &'a SecretValue,
     id_token: Option<&'a SecretValue>,
@@ -174,19 +174,19 @@ impl<'a> TokenCandidate<'a> {
         }
     }
 
-    /// Returns the access token for authoritative user-info verification.
+    /// 返回用于权威 user-info 验证的 access token。
     #[must_use]
     pub const fn access_token(&self) -> &SecretValue {
         self.access_token
     }
 
-    /// Returns the ID token for full JWT/JWKS validation, when provided.
+    /// 返回用于完整 JWT/JWKS 校验的 ID token（若存在）。
     #[must_use]
     pub const fn id_token(&self) -> Option<&SecretValue> {
         self.id_token
     }
 
-    /// Returns the server-provided lifetime.
+    /// 返回服务端给出的有效期。
     #[must_use]
     pub const fn expires_in(&self) -> Option<Duration> {
         self.expires_in
@@ -204,14 +204,14 @@ impl fmt::Debug for TokenCandidate<'_> {
     }
 }
 
-/// Future returned by a token verification port.
+/// token 校验端口返回的 future。
 pub type VerificationFuture<'a> =
     Pin<Box<dyn Future<Output = Result<VerificationEvidence, VerificationFailure>> + Send + 'a>>;
 
-/// Trust boundary for full JWT/JWKS or authoritative user-info validation.
+/// 完整 JWT/JWKS 或权威 user-info 校验的信任边界。
 pub trait TokenVerifier: Send + Sync {
-    /// Verifies an initial token set. Implementations must never base64-decode
-    /// JWT claims without signature and claim validation.
+    /// 验证初始 token 集合。实现不得在未做签名与 claim 校验的情况下 base64 解码
+    /// JWT claims。
     fn verify<'a>(
         &'a self,
         context: TokenVerificationContext<'a>,
@@ -219,7 +219,7 @@ pub trait TokenVerifier: Send + Sync {
     ) -> VerificationFuture<'a>;
 }
 
-/// Default verifier that makes incomplete wiring fail closed.
+/// 默认校验器，未完成接线时 fail closed。
 #[derive(Debug, Default)]
 pub struct FailClosedTokenVerifier;
 

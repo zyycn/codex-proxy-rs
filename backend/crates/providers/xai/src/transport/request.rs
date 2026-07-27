@@ -270,17 +270,16 @@ impl fmt::Debug for GrokResponsesRequest {
     }
 }
 
-/// Generate-to-Responses encoding error that never retains option or prompt
-/// values.
+/// Generate 到 Responses 的编码错误，不保留 option 与 prompt 值。
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
 pub enum GrokRequestEncodeError {
     /// 数据面只接受 OpenAI adapter 保留的原始 Responses object。
     #[error("Grok Build request is missing its OpenAI protocol payload")]
     InvalidProtocolPayload,
-    /// JSON serialization unexpectedly failed.
+    /// JSON 序列化意外失败。
     #[error("Grok Build request serialization failed")]
     Serialization,
-    /// Responses compatibility fields could not be normalized safely.
+    /// Responses 兼容字段无法安全归一化。
     #[error("Grok Build request normalization failed")]
     InvalidRequestNormalization,
     /// 请求中的具体字段无法安全转换为 Grok Build 接受的形态。

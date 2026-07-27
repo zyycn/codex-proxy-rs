@@ -4,16 +4,16 @@ use url::{Host, Url};
 
 use crate::ConfigError;
 
-/// Official first-party OIDC issuer used by Grok Build.
+/// Grok Build 使用的官方第一方 OIDC issuer。
 pub const OFFICIAL_ISSUER: &str = "https://auth.x.ai";
 
-/// Official public OAuth client identifier embedded in Grok Build.
+/// Grok Build 内置的官方 public OAuth client 标识。
 pub const OFFICIAL_CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
 
 /// 官方桌面客户端使用的固定 loopback OAuth 回调地址。
 pub const OFFICIAL_REDIRECT_URI: &str = "http://127.0.0.1:56121/callback";
 
-/// Official first-party OAuth scope set used by current Grok Build clients.
+/// 当前 Grok Build 客户端使用的官方第一方 OAuth scope 集合。
 pub const OFFICIAL_SCOPES: &[&str] = &[
     "openid",
     "profile",
@@ -23,12 +23,12 @@ pub const OFFICIAL_SCOPES: &[&str] = &[
     "api:access",
 ];
 
-/// Exact redirect URI that has passed syntax and local allowlist checks.
+/// 已通过语法与本地 allowlist 校验的精确回调 URI。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AllowedRedirectUri(Url);
 
 impl AllowedRedirectUri {
-    /// Returns the exact redirect URI sent during authorization and exchange.
+    /// 返回授权与 token 交换时发送的精确回调 URI。
     #[must_use]
     pub fn as_url(&self) -> &Url {
         &self.0
@@ -39,20 +39,19 @@ impl AllowedRedirectUri {
     }
 }
 
-/// Explicit callback allowlist. Public HTTPS callbacks and dynamic loopback
-/// callbacks must be inserted before a flow can start.
+/// 显式回调 allowlist。公网 HTTPS 回调与动态 loopback 回调必须先登记才能启动流程。
 #[derive(Debug, Clone)]
 pub struct RedirectUriAllowlist {
     entries: Vec<Url>,
 }
 
 impl RedirectUriAllowlist {
-    /// Validates and constructs an exact redirect allowlist.
+    /// 校验并构造精确回调 allowlist。
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError::InvalidRedirectUri`] for non-HTTPS public URIs,
-    /// user-info, query strings, fragments, or malformed values.
+    /// 公网 URI 非 HTTPS、含 user-info、query、fragment 或格式非法时返回
+    /// [`ConfigError::InvalidRedirectUri`]。
     pub fn new<I, S>(uris: I) -> Result<Self, ConfigError>
     where
         I: IntoIterator<Item = S>,
@@ -66,11 +65,11 @@ impl RedirectUriAllowlist {
         Ok(Self { entries })
     }
 
-    /// Validates a candidate and requires an exact local allowlist match.
+    /// 校验候选 URI，并要求与本地 allowlist 精确匹配。
     ///
     /// # Errors
     ///
-    /// Returns a configuration error when the URI is invalid or absent.
+    /// URI 非法或未登记时返回配置错误。
     pub fn authorize(&self, candidate: &str) -> Result<AllowedRedirectUri, ConfigError> {
         let candidate = validate_redirect_uri(candidate)?;
         if self.entries.iter().any(|entry| entry == &candidate) {
@@ -81,36 +80,36 @@ impl RedirectUriAllowlist {
     }
 }
 
-/// Immutable official Grok Build OAuth configuration.
+/// 不可变的官方 Grok Build OAuth 配置。
 #[derive(Clone)]
 pub struct GrokOAuthConfig {
     issuer: Url,
 }
 
 impl GrokOAuthConfig {
-    /// Builds the fixed official issuer, client, and scope configuration.
+    /// 构造固定的官方 issuer、client 与 scope 配置。
     ///
     /// # Errors
     ///
-    /// Returns an error when the fixed official issuer cannot be constructed.
+    /// 固定官方 issuer 无法构造时返回错误。
     pub fn official() -> Result<Self, ConfigError> {
         let issuer = Url::parse(OFFICIAL_ISSUER).map_err(|_| ConfigError::UntrustedIssuer)?;
         Ok(Self { issuer })
     }
 
-    /// Returns the fixed issuer URL.
+    /// 返回固定的 issuer URL。
     #[must_use]
     pub fn issuer(&self) -> &Url {
         &self.issuer
     }
 
-    /// Returns the official public client identifier.
+    /// 返回官方 public client 标识。
     #[must_use]
     pub const fn client_id(&self) -> &'static str {
         OFFICIAL_CLIENT_ID
     }
 
-    /// Returns the official scope set.
+    /// 返回官方 scope 集合。
     #[must_use]
     pub const fn scopes(&self) -> &'static [&'static str] {
         OFFICIAL_SCOPES

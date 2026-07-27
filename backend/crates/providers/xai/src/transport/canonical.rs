@@ -1,4 +1,4 @@
-//! Official Grok Responses SSE to gateway canonical events.
+//! 官方 Grok Responses SSE 到网关 canonical 事件的转换。
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -128,7 +128,7 @@ fn usd_price_per_million(per_token_ticks: u128) -> Option<Money> {
     usd_money(per_token_ticks.checked_mul(1_000_000)?)
 }
 
-/// Incremental decoder for one official Grok Responses attempt.
+/// 单次官方 Grok Responses 尝试的增量解码器。
 ///
 /// 每个上游 event 同时保留 OpenAI wire，并在可识别时附加 canonical facts。
 pub struct GrokCanonicalDecoder {
@@ -158,8 +158,8 @@ impl GrokCanonicalDecoder {
         }
     }
 
-    /// Creates a decoder that restores request-scoped tool aliases before the
-    /// canonical and wire projections observe each upstream event.
+    /// 创建在 canonical 与 wire 投影处理每个上游 event 前先还原请求级 tool 别名的
+    /// 解码器。
     #[must_use]
     pub fn for_request(fallback_model: impl Into<String>, request: &GrokResponsesRequest) -> Self {
         Self {

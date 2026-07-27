@@ -1,4 +1,4 @@
-//! External OIDC verifier contracts.
+//! 外置的 OIDC verifier 契约。
 
 use std::time::Duration;
 

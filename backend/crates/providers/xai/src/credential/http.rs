@@ -7,16 +7,16 @@ use zeroize::Zeroizing;
 
 use crate::SecretValue;
 
-/// HTTP methods needed by the OAuth protocol.
+/// OAuth 协议所需的 HTTP 方法。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HttpMethod {
-    /// Read-only discovery request.
+    /// 只读的发现请求。
     Get,
-    /// Form-encoded OAuth request.
+    /// form 编码的 OAuth 请求。
     Post,
 }
 
-/// A request header whose value is public protocol metadata.
+/// 值为公开协议元数据的请求头。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpHeader {
     name: &'static str,
@@ -24,7 +24,7 @@ pub struct HttpHeader {
 }
 
 impl HttpHeader {
-    /// Creates a public request header.
+    /// 创建公开请求头。
     #[must_use]
     pub fn new(name: &'static str, value: impl Into<String>) -> Self {
         Self {
@@ -33,30 +33,30 @@ impl HttpHeader {
         }
     }
 
-    /// Returns the header name.
+    /// 返回请求头名称。
     #[must_use]
     pub fn name(&self) -> &'static str {
         self.name
     }
 
-    /// Returns the public header value.
+    /// 返回公开的请求头值。
     #[must_use]
     pub fn value(&self) -> &str {
         &self.value
     }
 }
 
-/// A public or sensitive form field value.
+/// 公开或敏感的 form 字段值。
 #[derive(Clone)]
 pub enum FormValue {
-    /// Non-sensitive protocol metadata.
+    /// 非敏感的协议元数据。
     Public(String),
-    /// Authorization code, verifier, or token.
+    /// authorization code、verifier 或 token。
     Secret(SecretValue),
 }
 
 impl FormValue {
-    /// Exposes a value at the HTTP encoder boundary.
+    /// 在 HTTP 编码边界暴露值。
     #[must_use]
     pub fn expose(&self) -> &str {
         match self {
@@ -75,7 +75,7 @@ impl fmt::Debug for FormValue {
     }
 }
 
-/// One `application/x-www-form-urlencoded` field.
+/// 单个 `application/x-www-form-urlencoded` 字段。
 #[derive(Debug, Clone)]
 pub struct FormField {
     name: &'static str,
@@ -83,7 +83,7 @@ pub struct FormField {
 }
 
 impl FormField {
-    /// Creates a public field.
+    /// 创建公开字段。
     #[must_use]
     pub fn public(name: &'static str, value: impl Into<String>) -> Self {
         Self {
@@ -92,7 +92,7 @@ impl FormField {
         }
     }
 
-    /// Creates a sensitive field.
+    /// 创建敏感字段。
     #[must_use]
     pub fn secret(name: &'static str, value: SecretValue) -> Self {
         Self {
@@ -101,20 +101,20 @@ impl FormField {
         }
     }
 
-    /// Returns the form field name.
+    /// 返回 form 字段名。
     #[must_use]
     pub fn name(&self) -> &'static str {
         self.name
     }
 
-    /// Returns the form field value.
+    /// 返回 form 字段值。
     #[must_use]
     pub fn value(&self) -> &FormValue {
         &self.value
     }
 }
 
-/// A transport-neutral OAuth HTTP request.
+/// 与 transport 无关的 OAuth HTTP 请求。
 #[derive(Debug, Clone)]
 pub struct OAuthHttpRequest {
     method: HttpMethod,
@@ -142,39 +142,39 @@ impl OAuthHttpRequest {
         }
     }
 
-    /// Returns the request method.
+    /// 返回请求方法。
     #[must_use]
     pub const fn method(&self) -> HttpMethod {
         self.method
     }
 
-    /// Returns the validated destination URL.
+    /// 返回已校验的目标 URL。
     #[must_use]
     pub fn url(&self) -> &Url {
         &self.url
     }
 
-    /// Returns public request headers.
+    /// 返回公开请求头。
     #[must_use]
     pub fn headers(&self) -> &[HttpHeader] {
         &self.headers
     }
 
-    /// Returns form fields. Transport implementations must not log them.
+    /// 返回 form 字段。transport 实现不得记录这些值。
     #[must_use]
     pub fn form(&self) -> &[FormField] {
         &self.form
     }
 }
 
-/// A response body that is zeroized and omitted from debug output.
+/// 响应体会被清零，且不出现在 debug 输出中。
 pub struct OAuthHttpResponse {
     status: u16,
     body: Zeroizing<Vec<u8>>,
 }
 
 impl OAuthHttpResponse {
-    /// Constructs a response from a status code and raw body.
+    /// 由状态码与原始响应体构造响应。
     #[must_use]
     pub fn new(status: u16, body: impl Into<Vec<u8>>) -> Self {
         Self {
@@ -183,7 +183,7 @@ impl OAuthHttpResponse {
         }
     }
 
-    /// Returns the HTTP status code.
+    /// 返回 HTTP 状态码。
     #[must_use]
     pub const fn status(&self) -> u16 {
         self.status
@@ -205,51 +205,48 @@ impl fmt::Debug for OAuthHttpResponse {
     }
 }
 
-/// Whether an HTTP failure definitely occurred before sending or may have
-/// consumed a one-time authorization artifact.
+/// 区分 HTTP 失败确定发生在发送前，还是可能已消费一次性授权凭据。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportFailureKind {
-    /// No request bytes were sent, so a coordinator may safely retry.
+    /// 未发送任何请求字节，协调方可安全重试。
     NotSent,
-    /// The server may have consumed a code or rotating refresh token.
+    /// 服务端可能已消费 code 或轮换的 refresh token。
     Ambiguous,
-    /// A timeout occurred and send state is unknown.
+    /// 发生超时，发送状态未知。
     Timeout,
-    /// TLS establishment or validation failed before an accepted response.
+    /// 在收到有效响应前 TLS 建立或校验失败。
     Tls,
 }
 
-/// A deliberately low-cardinality, secret-free transport error.
+/// 有意保持低基数且不含密钥的 transport 错误。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransportFailure {
     kind: TransportFailureKind,
 }
 
 impl TransportFailure {
-    /// Creates a transport failure without retaining a potentially sensitive
-    /// third-party error message.
+    /// 创建 transport 失败，不保留可能敏感的第三方错误信息。
     #[must_use]
     pub const fn new(kind: TransportFailureKind) -> Self {
         Self { kind }
     }
 
-    /// Returns the send-state classification.
+    /// 返回发送状态分类。
     #[must_use]
     pub const fn kind(self) -> TransportFailureKind {
         self.kind
     }
 }
 
-/// Future returned by an OAuth HTTP transport.
+/// OAuth HTTP transport 返回的 Future。
 pub type TransportFuture<'a> =
     Pin<Box<dyn Future<Output = Result<OAuthHttpResponse, TransportFailure>> + Send + 'a>>;
 
-/// Replaceable HTTP boundary for OAuth protocol requests.
+/// OAuth 协议请求的可替换 HTTP 边界。
 ///
-/// Implementations must enforce TLS, bounded response bodies, and proxy/IP
-/// affinity outside this crate. They must never log form values or response
-/// bodies.
+/// 实现方需在本 crate 之外保证 TLS、有界响应体与 proxy/IP 亲和性，
+/// 且不得记录 form 值或响应体。
 pub trait OAuthHttpTransport: Send + Sync {
-    /// Executes one request without hidden retries.
+    /// 执行一次请求，不做隐式重试。
     fn execute(&self, request: OAuthHttpRequest) -> TransportFuture<'_>;
 }

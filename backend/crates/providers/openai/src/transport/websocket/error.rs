@@ -10,7 +10,7 @@ use crate::transport::diagnostics::CodexUpstreamSendPhase;
 
 use super::PreviousResponseUnavailableReason;
 
-/// Responses WebSocket exchange error.
+/// Responses WebSocket 交互错误。
 #[derive(Debug, Error)]
 pub enum CodexWebSocketExchangeError {
     /// opening request 无法构造。
@@ -98,7 +98,7 @@ pub enum CodexWebSocketExchangeError {
 /// WebSocket 上游错误帧载荷。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexWebSocketUpstreamError {
-    /// HTTP-style upstream status code.
+    /// 上游返回的 HTTP 风格状态码。
     pub status_code: u16,
     /// 推导出的重试秒数。
     pub retry_after_seconds: Option<u64>,

@@ -159,7 +159,7 @@ impl GrokDnsResolutionPolicy {
 #[error("Grok official DNS resolution was rejected")]
 pub struct GrokDnsResolutionError;
 
-/// HTTP client construction and endpoint validation are one injected security boundary.
+/// HTTP client 构造与端点校验合为一个可注入的安全边界。
 pub trait GrokEndpointPolicy: fmt::Debug + Send + Sync {
     fn build_oauth_client(
         &self,

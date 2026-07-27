@@ -12,7 +12,7 @@ use crate::{
 const MAX_TOKEN_BYTES: usize = 64 * 1024;
 const MAX_TOKEN_LIFETIME_SECONDS: u64 = 366 * 24 * 60 * 60;
 
-/// Optional team principal fields sent during refresh.
+/// refresh 请求可选携带的 team principal 字段。
 #[derive(Clone, PartialEq, Eq)]
 pub struct OAuthPrincipal {
     principal_type: String,
@@ -30,12 +30,12 @@ impl fmt::Debug for OAuthPrincipal {
 }
 
 impl OAuthPrincipal {
-    /// Creates validated principal metadata.
+    /// 创建校验过的 principal 元数据。
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError::InvalidPrincipal`] for empty, oversized, or
-    /// control-character-bearing values.
+    /// 值为空、超长或含控制字符时返回
+    /// [`ConfigError::InvalidPrincipal`]。
     pub fn new(
         principal_type: impl Into<String>,
         principal_id: impl Into<String>,
@@ -52,27 +52,27 @@ impl OAuthPrincipal {
         })
     }
 
-    /// Returns the official principal type value.
+    /// 返回官方 principal 类型值。
     #[must_use]
     pub fn principal_type(&self) -> &str {
         &self.principal_type
     }
 
-    /// Returns the official principal identifier.
+    /// 返回官方 principal 标识。
     #[must_use]
     pub fn principal_id(&self) -> &str {
         &self.principal_id
     }
 }
 
-/// Input for one refresh-token exchange.
+/// 单次 refresh token 交换的输入。
 #[derive(Clone)]
 pub struct RefreshTokenGrant {
     refresh_token: SecretValue,
 }
 
 impl RefreshTokenGrant {
-    /// Creates a refresh grant for an existing verified credential.
+    /// 为已验证的现有凭据创建 refresh grant。
     #[must_use]
     pub fn new(refresh_token: SecretValue) -> Self {
         Self { refresh_token }
@@ -92,7 +92,7 @@ impl fmt::Debug for RefreshTokenGrant {
     }
 }
 
-/// Initial token set that crossed the mandatory verification boundary.
+/// 已通过强制验证边界的初始 token set。
 #[derive(Clone)]
 pub struct VerifiedTokenSet {
     access_token: SecretValue,
@@ -119,13 +119,13 @@ impl VerifiedTokenSet {
         }
     }
 
-    /// Returns the verified access token.
+    /// 返回已验证的 access token。
     #[must_use]
     pub fn access_token(&self) -> &SecretValue {
         &self.access_token
     }
 
-    /// Returns the optional refresh token.
+    /// 返回可选的 refresh token。
     #[must_use]
     pub fn refresh_token(&self) -> Option<&SecretValue> {
         self.refresh_token.as_ref()
@@ -143,13 +143,13 @@ impl VerifiedTokenSet {
         &self.scope
     }
 
-    /// Returns the server-provided lifetime.
+    /// 返回服务端下发的有效期。
     #[must_use]
     pub const fn expires_in(&self) -> Option<Duration> {
         self.expires_in
     }
 
-    /// Returns trusted identity verification evidence.
+    /// 返回可信身份验证证据。
     #[must_use]
     pub const fn evidence(&self) -> &VerificationEvidence {
         &self.evidence
@@ -173,8 +173,8 @@ impl fmt::Debug for VerifiedTokenSet {
     }
 }
 
-/// Result of refreshing an already verified credential. An omitted refresh
-/// token means the caller must retain the existing one under revision CAS.
+/// 刷新已验证凭据的结果。未返回 refresh token 时，调用方须在 revision CAS 下
+/// 保留原有 refresh token。
 #[derive(Clone)]
 pub struct RefreshedTokenSet {
     access_token: SecretValue,
@@ -183,19 +183,19 @@ pub struct RefreshedTokenSet {
 }
 
 impl RefreshedTokenSet {
-    /// Returns the replacement access token.
+    /// 返回替换后的 access token。
     #[must_use]
     pub fn access_token(&self) -> &SecretValue {
         &self.access_token
     }
 
-    /// Returns a rotated refresh token when the server supplied one.
+    /// 服务端下发轮换 refresh token 时返回它。
     #[must_use]
     pub fn rotated_refresh_token(&self) -> Option<&SecretValue> {
         self.rotated_refresh_token.as_ref()
     }
 
-    /// Returns the replacement access-token lifetime.
+    /// 返回替换后 access token 的有效期。
     #[must_use]
     pub const fn expires_in(&self) -> Option<Duration> {
         self.expires_in

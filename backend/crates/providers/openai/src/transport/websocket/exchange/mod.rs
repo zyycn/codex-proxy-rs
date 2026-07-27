@@ -24,11 +24,11 @@ const WEBSOCKET_STREAM_BUFFER: usize = 16;
 
 pub(super) use self::stream::{WebSocketStreamPoolReturn, stream_websocket_response};
 
-/// Responses WebSocket live SSE exchange result.
+/// Responses WebSocket live SSE 交互结果。
 pub struct CodexWebSocketStreamingExchange {
     /// 关联请求日志与底层 pump 生命周期日志的连接标识。
     pub(crate) websocket_connection_id: Uuid,
-    /// Live SSE bytes converted from WebSocket events.
+    /// 由 WebSocket 事件转换出的 live SSE 字节流。
     pub body: CodexWebSocketSseStream,
     /// 上游 metadata 帧中的最新 turn state。
     pub turn_state: Option<String>,
@@ -50,12 +50,12 @@ pub struct CodexWebSocketStreamingExchange {
     pub response_metadata: CodexResponseMetadata,
 }
 
-/// Responses WebSocket live SSE byte stream.
+/// Responses WebSocket live SSE 字节流。
 pub type CodexWebSocketSseStream =
     Pin<Box<dyn Stream<Item = Result<Bytes, CodexWebSocketExchangeError>> + Send + 'static>>;
-/// WebSocket live stream rate-limit header updates.
+/// live 流中的限流头动态更新。
 pub type CodexWebSocketRateLimitHeaderUpdates = Arc<Mutex<Vec<(String, String)>>>;
-/// WebSocket live stream turn-state update.
+/// live 流中的 turn state 动态更新。
 pub type CodexWebSocketTurnStateUpdate = Arc<Mutex<Option<String>>>;
 
 pub(super) fn reusable_websocket_metadata(

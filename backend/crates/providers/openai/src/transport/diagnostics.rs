@@ -1,4 +1,4 @@
-//! Upstream response diagnostics captured at the transport boundary.
+//! 在 transport 边界采集的上游响应诊断信息。
 
 use super::protocol::responses::ResponsesSseFailure;
 use base64::{Engine as _, engine::general_purpose::STANDARD};

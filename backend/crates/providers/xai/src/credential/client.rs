@@ -9,7 +9,7 @@ use crate::{
     VerificationMethod, VerifiedTokenSet,
 };
 
-/// Transport-agnostic official Grok Build OAuth protocol client.
+/// 与 transport 无关的官方 Grok Build OAuth 协议客户端。
 #[derive(Clone)]
 pub struct GrokOAuthClient {
     config: GrokOAuthConfig,
@@ -19,7 +19,7 @@ pub struct GrokOAuthClient {
 }
 
 impl GrokOAuthClient {
-    /// Creates a client with explicit HTTP and token verification trust ports.
+    /// 创建客户端，显式注入 HTTP 与 token 验证两个信任端口。
     #[must_use]
     pub fn new(
         config: GrokOAuthConfig,
@@ -35,18 +35,18 @@ impl GrokOAuthClient {
         }
     }
 
-    /// Returns the immutable official provider configuration.
+    /// 返回不可变的官方 provider 配置。
     #[must_use]
     pub const fn config(&self) -> &GrokOAuthConfig {
         &self.config
     }
 
-    /// Fetches and validates official same-origin OIDC discovery.
+    /// 拉取并校验官方同源 OIDC 发现文档。
     ///
     /// # Errors
     ///
-    /// Fails on transport errors, non-success status, malformed JSON, issuer
-    /// mismatch, cross-origin endpoints, missing JWKS, or insecure algorithms.
+    /// transport 失败、非成功状态、JSON 非法、issuer 不匹配、端点跨 origin、
+    /// 缺少 JWKS 或算法不安全时返回错误。
     pub async fn discover(&self) -> Result<DiscoveryDocument, OAuthError> {
         let response = self
             .execute(
@@ -63,12 +63,11 @@ impl GrokOAuthClient {
         DiscoveryDocument::parse(&self.config, response.body())
     }
 
-    /// Starts Authorization Code + PKCE without performing network I/O.
+    /// 启动 Authorization Code + PKCE，不产生网络 I/O。
     ///
     /// # Errors
     ///
-    /// Returns an entropy error if secure random state, nonce, or verifier
-    /// generation fails.
+    /// 安全随机 state、nonce 或 verifier 生成失败时返回熵不可用错误。
     pub fn start_authorization_code(
         &self,
         discovery: &DiscoveryDocument,
@@ -78,13 +77,13 @@ impl GrokOAuthClient {
         PendingAuthorization::start(&self.config, discovery, redirect_uri, principal)
     }
 
-    /// Exchanges a state-validated authorization grant exactly once, then
-    /// requires nonce-bound ID-token verification before returning credentials.
+    /// 对已校验 state 的授权 grant 只做一次交换，返回凭据前强制通过
+    /// nonce 绑定的 ID token 验证。
     ///
     /// # Errors
     ///
-    /// Fails on transport/protocol errors, missing ID token, failed verification,
-    /// or any non-success OAuth response. No automatic retry is performed.
+    /// transport/协议错误、缺少 ID token、验证失败或任何非成功 OAuth 响应时
+    /// 返回错误。不做自动重试。
     pub async fn exchange_authorization_code(
         &self,
         discovery: &DiscoveryDocument,
@@ -216,13 +215,13 @@ impl GrokOAuthClient {
         Ok(VerifiedTokenSet::new(tokens, evidence, scope))
     }
 
-    /// Exchanges a refresh token once. The caller must serialize refreshes and
-    /// persist rotated tokens through credential-revision CAS.
+    /// 执行一次 refresh token 交换。调用方须串行化刷新，并通过 credential
+    /// revision CAS 持久化轮换后的 token。
     ///
     /// # Errors
     ///
-    /// Returns a classified OAuth error. Ambiguous transport failures must not
-    /// be retried automatically because the refresh token may have rotated.
+    /// 返回已分类的 OAuth 错误。refresh token 可能已轮换，Ambiguous 类
+    /// transport 失败不得自动重试。
     pub async fn refresh(
         &self,
         discovery: &DiscoveryDocument,

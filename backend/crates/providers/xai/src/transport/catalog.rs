@@ -356,7 +356,7 @@ impl GrokBillingTransportError {
     }
 }
 
-/// Billing transport future。
+/// 计费 transport 的 future。
 pub type GrokBillingTransportFuture<'a> = Pin<
     Box<
         dyn Future<Output = Result<GrokBillingTransportResponse, GrokBillingTransportError>>

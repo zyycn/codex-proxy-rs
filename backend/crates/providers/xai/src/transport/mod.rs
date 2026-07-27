@@ -1,4 +1,4 @@
-//! Grok Build CLI Responses provider boundary.
+//! Grok Build CLI Responses provider 边界。
 
 pub(crate) mod canonical;
 pub(crate) mod catalog;

@@ -1,4 +1,4 @@
-//! Codex HTTP Responses WebSocket transport。
+//! Codex Responses WebSocket 传输。
 
 mod audit;
 mod breaker;

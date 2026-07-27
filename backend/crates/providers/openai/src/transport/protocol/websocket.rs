@@ -13,7 +13,7 @@ pub struct OpeningAuditSnapshot {
     pub request_line: String,
     /// 请求头顺序。
     pub header_order: Vec<String>,
-    /// 红action后的请求头。
+    /// 脱敏后的请求头。
     pub headers: Vec<OpeningAuditHeader>,
 }
 
@@ -31,11 +31,11 @@ pub struct OpeningAuditHeader {
 pub struct PayloadAuditSnapshot {
     /// 按构造顺序记录的顶层字段。
     pub top_level_keys: Vec<String>,
-    /// 红action后的 JSON payload。
+    /// 脱敏后的 JSON payload。
     pub body: Value,
 }
 
-/// WebSocket audit artifact.
+/// WebSocket 审计产物。
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct WebSocketAuditArtifact {
     /// 实际选择的传输模式。

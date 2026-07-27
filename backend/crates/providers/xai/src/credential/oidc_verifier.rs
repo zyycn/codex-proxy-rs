@@ -43,12 +43,8 @@ pub struct ReqwestOidcTokenVerifier {
 }
 
 impl ReqwestOidcTokenVerifier {
-    /// 构建只允许访问 `auth.x.ai` 官方验证端点的 verifier。
-    ///
-    /// # Errors
-    ///
-    /// TLS client 初始化失败时返回 transport build error。
-    /// 构建使用显式 endpoint policy 与 JWKS cache TTL 的 verifier。
+    /// 构建 verifier；使用显式 endpoint policy 与 JWKS cache TTL，只允许访问
+    /// `auth.x.ai` 官方验证端点。
     ///
     /// # Errors
     ///
