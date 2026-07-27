@@ -12,8 +12,7 @@ use gateway_admin::{
     model::{
         MutationContext, Revision as AdminRevision,
         accounts::{
-            AccountAvailability as AdminAccountAvailability, AccountCost,
-            AccountListQuery as AdminAccountListQuery, AccountModelUsage, AccountPage,
+            AccountCost, AccountListQuery as AdminAccountListQuery, AccountModelUsage, AccountPage,
             AccountRecord, AccountRequestBucket, AccountSort as AdminAccountSort,
             AccountSortField as AdminAccountSortField, AccountStatus as AdminAccountStatus,
             AccountSummary, AccountUsage, AccountUsageWindowQuery, AccountUsageWindowResult,
@@ -35,8 +34,8 @@ use gateway_admin::{
 use sqlx::{PgPool, Postgres, Row, Transaction};
 
 use gateway_core::engine::credential::{
-    AccountAvailability as CoreAccountAvailability, AccountStateChange, CredentialCasOutcome,
-    CredentialCasUpdate, CredentialRevision as CoreCredentialRevision, LoadedCredential,
+    AccountAvailability, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
+    CredentialRevision as CoreCredentialRevision, LoadedCredential,
     NewProviderAccount as CoreNewProviderAccount, OpaqueProviderData, PlaintextCredential,
     ProviderAccount as CoreProviderAccount, ProviderAccountId as CoreProviderAccountId,
     ProviderAccountStore, ProviderAccountUpdate as CoreProviderAccountUpdate, QuotaObservation,
@@ -121,43 +120,9 @@ impl ProviderAccountAdminScope {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderAccountAvailability {
-    Unknown,
-    Ready,
-    Cooldown,
-    QuotaExhausted,
-    Expired,
-    Banned,
-    Invalid,
-}
-
-impl ProviderAccountAvailability {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Unknown => "unknown",
-            Self::Ready => "ready",
-            Self::Cooldown => "cooldown",
-            Self::QuotaExhausted => "quota_exhausted",
-            Self::Expired => "expired",
-            Self::Banned => "banned",
-            Self::Invalid => "invalid",
-        }
-    }
-
-    fn parse(value: &str) -> StoreResult<Self> {
-        match value {
-            "unknown" => Ok(Self::Unknown),
-            "ready" => Ok(Self::Ready),
-            "cooldown" => Ok(Self::Cooldown),
-            "quota_exhausted" => Ok(Self::QuotaExhausted),
-            "expired" => Ok(Self::Expired),
-            "banned" => Ok(Self::Banned),
-            "invalid" => Ok(Self::Invalid),
-            _ => Err(invalid("unknown availability value")),
-        }
-    }
+/// 解析数据库 availability 列；字符串映射本体唯一归属 gateway-core。
+fn parse_availability(value: &str) -> StoreResult<AccountAvailability> {
+    AccountAvailability::parse(value).ok_or_else(|| invalid("unknown availability value"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,7 +140,7 @@ pub struct ProviderAccountSummary {
     pub access_token_expires_at: Option<DateTime<Utc>>,
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
-    pub availability: ProviderAccountAvailability,
+    pub availability: AccountAvailability,
     pub availability_reason: Option<String>,
     pub cooldown_until: Option<DateTime<Utc>>,
     pub availability_observed_at: DateTime<Utc>,
@@ -220,7 +185,7 @@ pub struct NewProviderAccount {
     pub access_token_expires_at: Option<DateTime<Utc>>,
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
-    pub availability: ProviderAccountAvailability,
+    pub availability: AccountAvailability,
     pub availability_reason: Option<String>,
     pub cooldown_until: Option<DateTime<Utc>>,
     pub availability_observed_at: DateTime<Utc>,
@@ -259,9 +224,7 @@ impl NewProviderAccount {
         if !self.has_refresh_token && self.next_refresh_at.is_some() {
             return Err(invalid("next_refresh_at requires a refresh token"));
         }
-        if (self.availability == ProviderAccountAvailability::Cooldown)
-            != self.cooldown_until.is_some()
-        {
+        if (self.availability == AccountAvailability::Cooldown) != self.cooldown_until.is_some() {
             return Err(invalid(
                 "cooldown_until must be present exactly for cooldown availability",
             ));
@@ -394,7 +357,7 @@ impl fmt::Debug for ProviderCredentialUpdate {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderAccountObservation {
     pub account_id: String,
-    pub availability: ProviderAccountAvailability,
+    pub availability: AccountAvailability,
     pub availability_reason: Option<String>,
     pub cooldown_until: Option<DateTime<Utc>>,
     pub provider_quota_json: Option<JsonObject>,
@@ -406,7 +369,7 @@ pub struct ProviderAccountObservation {
 pub struct ProviderAccountStateUpdate {
     pub account_id: String,
     pub expected_revision: Revision,
-    pub availability: ProviderAccountAvailability,
+    pub availability: AccountAvailability,
     pub availability_reason: Option<String>,
     pub cooldown_until: Option<DateTime<Utc>>,
     pub availability_observed_at: DateTime<Utc>,
@@ -415,9 +378,7 @@ pub struct ProviderAccountStateUpdate {
 impl ProviderAccountStateUpdate {
     pub fn validate(&self) -> StoreResult<()> {
         require_nonempty(ENTITY, "account_id", &self.account_id)?;
-        if (self.availability == ProviderAccountAvailability::Cooldown)
-            != self.cooldown_until.is_some()
-        {
+        if (self.availability == AccountAvailability::Cooldown) != self.cooldown_until.is_some() {
             return Err(invalid(
                 "cooldown availability and cooldown_until must agree",
             ));
@@ -429,9 +390,7 @@ impl ProviderAccountStateUpdate {
 impl ProviderAccountObservation {
     pub fn validate(&self) -> StoreResult<()> {
         require_nonempty(ENTITY, "account_id", &self.account_id)?;
-        if (self.availability == ProviderAccountAvailability::Cooldown)
-            != self.cooldown_until.is_some()
-        {
+        if (self.availability == AccountAvailability::Cooldown) != self.cooldown_until.is_some() {
             return Err(invalid(
                 "cooldown availability and cooldown_until must agree",
             ));
@@ -1225,9 +1184,10 @@ impl AccountStore for PgAdminAccountStore {
             .into_iter()
             .filter(|account| account.provider_kind == provider_kind.as_str())
             .filter(|account| {
-                query.availability.as_ref().is_none_or(|expected| {
-                    expected.matches(admin_account_availability(account.availability))
-                })
+                query
+                    .availability
+                    .as_ref()
+                    .is_none_or(|expected| expected.matches(account.availability))
             })
             .filter(|account| {
                 query
@@ -1602,12 +1562,12 @@ fn admin_account_status(
 ) -> AdminAccountStatus {
     if !account.enabled {
         AdminAccountStatus::Disabled
-    } else if account.availability == ProviderAccountAvailability::Banned {
+    } else if account.availability == AccountAvailability::Banned {
         AdminAccountStatus::Banned
-    } else if account.availability == ProviderAccountAvailability::QuotaExhausted {
+    } else if account.availability == AccountAvailability::QuotaExhausted {
         AdminAccountStatus::QuotaExhausted
-    } else if account.availability == ProviderAccountAvailability::Expired
-        || account.availability == ProviderAccountAvailability::Invalid
+    } else if account.availability == AccountAvailability::Expired
+        || account.availability == AccountAvailability::Invalid
         || account
             .access_token_expires_at
             .is_some_and(|expires_at| expires_at <= now)
@@ -1732,7 +1692,7 @@ fn admin_account_record(summary: ProviderAccountSummary) -> AdminStoreResult<Acc
         access_token_expires_at: summary.access_token_expires_at,
         next_refresh_at: summary.next_refresh_at,
         enabled: summary.enabled,
-        availability: admin_account_availability(summary.availability),
+        availability: summary.availability,
         availability_reason: summary.availability_reason,
         cooldown_until: summary.cooldown_until,
         availability_observed_at: summary.availability_observed_at,
@@ -1757,7 +1717,7 @@ fn prepared_account(credential: PreparedCredentialCreate) -> StoreResult<NewProv
         access_token_expires_at: credential.access_token_expires_at,
         next_refresh_at: credential.next_refresh_at,
         enabled: credential.enabled,
-        availability: provider_account_availability(credential.availability),
+        availability: credential.availability,
         availability_reason: credential.availability_reason,
         cooldown_until: credential.cooldown_until,
         availability_observed_at: credential.availability_observed_at,
@@ -1770,34 +1730,6 @@ fn provider_document_json(document: ProviderDocument) -> StoreResult<JsonObject>
         serde_json::Value::Object(document.into_provider_data().into_inner()),
         CREDENTIALS_MAX_BYTES,
     )
-}
-
-const fn provider_account_availability(
-    availability: AdminAccountAvailability,
-) -> ProviderAccountAvailability {
-    match availability {
-        AdminAccountAvailability::Unknown => ProviderAccountAvailability::Unknown,
-        AdminAccountAvailability::Ready => ProviderAccountAvailability::Ready,
-        AdminAccountAvailability::Cooldown => ProviderAccountAvailability::Cooldown,
-        AdminAccountAvailability::QuotaExhausted => ProviderAccountAvailability::QuotaExhausted,
-        AdminAccountAvailability::Expired => ProviderAccountAvailability::Expired,
-        AdminAccountAvailability::Banned => ProviderAccountAvailability::Banned,
-        AdminAccountAvailability::Invalid => ProviderAccountAvailability::Invalid,
-    }
-}
-
-const fn admin_account_availability(
-    availability: ProviderAccountAvailability,
-) -> AdminAccountAvailability {
-    match availability {
-        ProviderAccountAvailability::Unknown => AdminAccountAvailability::Unknown,
-        ProviderAccountAvailability::Ready => AdminAccountAvailability::Ready,
-        ProviderAccountAvailability::Cooldown => AdminAccountAvailability::Cooldown,
-        ProviderAccountAvailability::QuotaExhausted => AdminAccountAvailability::QuotaExhausted,
-        ProviderAccountAvailability::Expired => AdminAccountAvailability::Expired,
-        ProviderAccountAvailability::Banned => AdminAccountAvailability::Banned,
-        ProviderAccountAvailability::Invalid => AdminAccountAvailability::Invalid,
-    }
 }
 
 fn admin_account_usage(usage: ProviderAccountUsageObservation) -> AdminStoreResult<AccountUsage> {
@@ -2214,7 +2146,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                 .map(DateTime::<Utc>::from),
             next_refresh_at: account.account.next_refresh_at().map(DateTime::<Utc>::from),
             enabled: account.account.enabled(),
-            availability: availability_from_core(account.account.availability()),
+            availability: account.account.availability(),
             availability_reason: None,
             cooldown_until: account.account.cooldown_until().map(DateTime::<Utc>::from),
             availability_observed_at: Utc::now(),
@@ -2416,7 +2348,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                 account_id: change.account_id.as_str().to_owned(),
                 expected_revision: Revision::new(change.expected_revision.get())
                     .map_err(core_store_error)?,
-                availability: availability_from_core(change.availability),
+                availability: change.availability,
                 availability_reason: change.reason,
                 cooldown_until: change.cooldown_until.map(DateTime::<Utc>::from),
                 availability_observed_at: DateTime::<Utc>::from(change.observed_at),
@@ -2527,37 +2459,13 @@ fn core_account_from_summary(
     )
     .with_runtime_state(
         summary.enabled,
-        availability_to_core(summary.availability),
+        summary.availability,
         summary.cooldown_until.map(Into::into),
     )
     .with_refresh_schedule(
         summary.has_refresh_token,
         summary.next_refresh_at.map(Into::into),
     ))
-}
-
-const fn availability_to_core(value: ProviderAccountAvailability) -> CoreAccountAvailability {
-    match value {
-        ProviderAccountAvailability::Unknown => CoreAccountAvailability::Unknown,
-        ProviderAccountAvailability::Ready => CoreAccountAvailability::Ready,
-        ProviderAccountAvailability::Cooldown => CoreAccountAvailability::Cooldown,
-        ProviderAccountAvailability::QuotaExhausted => CoreAccountAvailability::QuotaExhausted,
-        ProviderAccountAvailability::Expired => CoreAccountAvailability::Expired,
-        ProviderAccountAvailability::Banned => CoreAccountAvailability::Banned,
-        ProviderAccountAvailability::Invalid => CoreAccountAvailability::Invalid,
-    }
-}
-
-const fn availability_from_core(value: CoreAccountAvailability) -> ProviderAccountAvailability {
-    match value {
-        CoreAccountAvailability::Unknown => ProviderAccountAvailability::Unknown,
-        CoreAccountAvailability::Ready => ProviderAccountAvailability::Ready,
-        CoreAccountAvailability::Cooldown => ProviderAccountAvailability::Cooldown,
-        CoreAccountAvailability::QuotaExhausted => ProviderAccountAvailability::QuotaExhausted,
-        CoreAccountAvailability::Expired => ProviderAccountAvailability::Expired,
-        CoreAccountAvailability::Banned => ProviderAccountAvailability::Banned,
-        CoreAccountAvailability::Invalid => ProviderAccountAvailability::Invalid,
-    }
 }
 
 fn core_store_error(error: StoreError) -> CoreStoreError {
@@ -2600,7 +2508,7 @@ fn account_summary_from_row(row: sqlx::postgres::PgRow) -> StoreResult<ProviderA
         access_token_expires_at: get(&row, "access_token_expires_at")?,
         next_refresh_at: get(&row, "next_refresh_at")?,
         enabled: get(&row, "enabled")?,
-        availability: ProviderAccountAvailability::parse(&availability)?,
+        availability: parse_availability(&availability)?,
         availability_reason: get(&row, "availability_reason")?,
         cooldown_until: get(&row, "cooldown_until")?,
         availability_observed_at: get(&row, "availability_observed_at")?,

@@ -6,9 +6,7 @@ use std::time::{Duration, SystemTime};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
 use futures::{StreamExt as _, future::BoxFuture};
-use gateway_admin::model::accounts::{
-    AccountAvailability as AdminAccountAvailability, AccountRecord,
-};
+use gateway_admin::model::accounts::AccountRecord;
 use gateway_admin::model::observability::{
     CurrencyCost, DesktopReleaseStatus, ProviderBillingInput,
 };
@@ -620,25 +618,13 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
         access_token_expires_at: account.access_token_expires_at().map(DateTime::<Utc>::from),
         next_refresh_at: account.next_refresh_at().map(DateTime::<Utc>::from),
         enabled: account.enabled(),
-        availability: admin_availability(account.availability()),
+        availability: account.availability(),
         availability_reason: None,
         cooldown_until: account.cooldown_until().map(DateTime::<Utc>::from),
         availability_observed_at: now,
         quota_observed_at: None,
         created_at: now,
         updated_at: now,
-    }
-}
-
-const fn admin_availability(value: AccountAvailability) -> AdminAccountAvailability {
-    match value {
-        AccountAvailability::Unknown => AdminAccountAvailability::Unknown,
-        AccountAvailability::Ready => AdminAccountAvailability::Ready,
-        AccountAvailability::Cooldown => AdminAccountAvailability::Cooldown,
-        AccountAvailability::QuotaExhausted => AdminAccountAvailability::QuotaExhausted,
-        AccountAvailability::Expired => AdminAccountAvailability::Expired,
-        AccountAvailability::Banned => AdminAccountAvailability::Banned,
-        AccountAvailability::Invalid => AdminAccountAvailability::Invalid,
     }
 }
 

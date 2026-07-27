@@ -18,9 +18,9 @@ use futures::{Stream, StreamExt as _};
 use gateway_admin::model::{
     AdminError as AdminServiceError, AdminErrorKind, PageSize, Revision,
     accounts::{
-        AccountAvailability, AccountConnectionTestEvent as DomainConnectionTestEvent, AccountCost,
-        AccountListQuery, AccountModelUsage, AccountSort, AccountSortField,
-        AccountStatus as DomainAccountStatus, AccountUsage, SortDirection,
+        AccountConnectionTestEvent as DomainConnectionTestEvent, AccountCost, AccountListQuery,
+        AccountModelUsage, AccountSort, AccountSortField, AccountStatus as DomainAccountStatus,
+        AccountUsage, SortDirection,
     },
     provider_credentials::{
         AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountRefreshResult,
@@ -1407,7 +1407,7 @@ fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
         status: status.clone(),
         display_status: status,
         token_refreshing: false,
-        availability: account_availability_name(account.availability).to_owned(),
+        availability: account.availability.as_str().to_owned(),
         enabled: account.enabled,
         credential_revision: account.credential_revision.get(),
         state_revision: None,
@@ -1749,18 +1749,6 @@ fn account_status_name(status: DomainAccountStatus) -> &'static str {
         DomainAccountStatus::QuotaExhausted => "quota_exhausted",
         DomainAccountStatus::Disabled => "disabled",
         DomainAccountStatus::Banned => "banned",
-    }
-}
-
-fn account_availability_name(availability: AccountAvailability) -> &'static str {
-    match availability {
-        AccountAvailability::Unknown => "unknown",
-        AccountAvailability::Ready => "ready",
-        AccountAvailability::Cooldown => "cooldown",
-        AccountAvailability::QuotaExhausted => "quota_exhausted",
-        AccountAvailability::Expired => "expired",
-        AccountAvailability::Banned => "banned",
-        AccountAvailability::Invalid => "invalid",
     }
 }
 

@@ -55,10 +55,7 @@ impl CredentialStateCache {
             "provider_account_id",
             &self.provider_account_id,
         )?;
-        if !matches!(
-            self.availability.as_str(),
-            "unknown" | "ready" | "cooldown" | "quota_exhausted" | "expired" | "banned" | "invalid"
-        ) {
+        if AccountAvailability::parse(&self.availability).is_none() {
             return Err(invalid("availability is not registered"));
         }
         Ok(())
