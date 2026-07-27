@@ -635,9 +635,19 @@ fn callback_parts(value: &str) -> Result<(SecretString, SecretString), CodexOAut
     let mut state = None;
     for (key, value) in url.query_pairs() {
         match key.as_ref() {
-            "code" if code.is_none() => code = Some(value.into_owned()),
-            "state" if state.is_none() => state = Some(value.into_owned()),
-            _ => return Err(CodexOAuthAdminError::UpstreamRejected),
+            "code" => {
+                if code.replace(value.into_owned()).is_some() {
+                    return Err(CodexOAuthAdminError::UpstreamRejected);
+                }
+            }
+            "state" => {
+                if state.replace(value.into_owned()).is_some() {
+                    return Err(CodexOAuthAdminError::UpstreamRejected);
+                }
+            }
+            // OAuth 服务可能附加 `scope`、`iss` 等标准参数。
+            // 固定回调地址与唯一的 `code`/`state` 才是安全边界，无关参数不参与校验。
+            _ => {}
         }
     }
     let code = code.filter(|value| valid_secret(value));
@@ -718,8 +728,11 @@ fn map_exchange_error(error: AuthorizationCodeExchangeError) -> CodexOAuthAdminE
     }
 }
 
-fn map_identity_error(_: CodexIdentityVerificationError) -> CodexOAuthAdminError {
-    CodexOAuthAdminError::UpstreamRejected
+fn map_identity_error(error: CodexIdentityVerificationError) -> CodexOAuthAdminError {
+    match error {
+        CodexIdentityVerificationError::Rejected => CodexOAuthAdminError::UpstreamRejected,
+        CodexIdentityVerificationError::Unavailable => CodexOAuthAdminError::UpstreamUnavailable,
+    }
 }
 
 fn map_admin_error(_: CodexCredentialAdminError) -> CodexOAuthAdminError {
