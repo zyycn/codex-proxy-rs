@@ -440,7 +440,7 @@ fn valid_id_token_header(header: &jsonwebtoken::Header) -> bool {
         && header.zip.is_none()
         && header.url.is_none()
         && header.nonce.is_none()
-        && header.extras.is_empty()
+        && header.extras.inner().is_empty()
 }
 
 fn valid_audience(audience: &AudienceClaim, azp: Option<&str>) -> bool {

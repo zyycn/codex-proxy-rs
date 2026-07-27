@@ -962,7 +962,7 @@ fn valid_signed_token_header(header: &jsonwebtoken::Header) -> bool {
         && header.zip.is_none()
         && header.url.is_none()
         && header.nonce.is_none()
-        && header.extras.is_empty()
+        && header.extras.inner().is_empty()
 }
 
 fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
