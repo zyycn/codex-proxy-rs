@@ -10,7 +10,9 @@ use gateway_core::engine::execution::{
     StartedExecution,
 };
 use gateway_core::error::{GatewayError, GatewayErrorKind};
-use gateway_core::routing::{ModelPresentation, PublicModelId, PublicModelProfile};
+use gateway_core::routing::{
+    ModelPresentation, ModelServiceTier, PublicModelId, PublicModelProfile,
+};
 use tower::ServiceExt;
 
 use super::{api_router, authenticated_client};
@@ -73,7 +75,15 @@ impl ExecutionService for ModelsExecution {
             )
             .with_context_window_tokens(Some(500_000))
             .with_image_input(true)
-            .with_agent_tools(true, true),
+            .with_agent_tools(true, true)
+            .with_service_tiers(vec![
+                ModelServiceTier::new(
+                    "priority",
+                    "Fast",
+                    "Route the request through Codex fast mode.",
+                )
+                .with_speed_tier("fast"),
+            ]),
         )]
     }
 
@@ -145,7 +155,15 @@ async fn models_should_encode_provider_profiles_for_current_codex_clients() {
     assert_eq!(model["default_reasoning_level"], "medium");
     assert_eq!(model["context_window"], 500_000);
     assert_eq!(model["apply_patch_tool_type"], "freeform");
-    assert_eq!(model["service_tiers"], serde_json::json!([]));
+    assert_eq!(model["additional_speed_tiers"], serde_json::json!(["fast"]));
+    assert_eq!(
+        model["service_tiers"],
+        serde_json::json!([{
+            "id": "priority",
+            "name": "Fast",
+            "description": "Route the request through Codex fast mode."
+        }])
+    );
     assert_eq!(
         model["supported_reasoning_levels"],
         serde_json::json!([

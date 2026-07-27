@@ -93,6 +93,21 @@ fn encoder_should_strip_openai_only_client_metadata_before_grok_build() {
 }
 
 #[test]
+fn encoder_should_strip_openai_service_tier_before_grok_build() {
+    let request = raw_request(json!({
+        "model": "client-model",
+        "input": "hello",
+        "service_tier": "priority"
+    }));
+
+    let encoded = GrokResponsesRequest::encode(&request, "grok-routed", &client_key())
+        .expect("sanitized request");
+    let body = Value::Object(encoded.body().clone());
+
+    assert_eq!(body.pointer("/service_tier"), None);
+}
+
+#[test]
 fn account_identity_should_be_removed_without_touching_prompt_content() {
     let request = raw_request(json!({
         "model": "client-model",

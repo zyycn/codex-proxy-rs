@@ -177,14 +177,9 @@ impl Provider for CodexProvider {
                     input.extend(encoded.input().iter().cloned());
                     encoded.set_input(input);
                 }
-                let reasoning_effort = encoded
-                    .reasoning()
-                    .and_then(|reasoning| reasoning.get("effort"))
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_owned);
-                (encoded.semantics(), reasoning_effort)
+                let semantics = encoded.semantics();
+                let reasoning_effort = semantics.reasoning_effort.clone();
+                (semantics, reasoning_effort)
             })
             .unwrap_or_default();
         ProviderRequestObservation {

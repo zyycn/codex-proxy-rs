@@ -193,9 +193,10 @@ impl GrokResponsesRequest {
         if should_consume_terminal_compaction_trigger {
             consume_terminal_compaction_trigger(&mut body)?;
         }
-        // `provider_options` 是已废弃的网关私有 envelope，不是 xAI 上游协议字段。
+        // 这些字段属于 Codex/OpenAI 侧请求控制，不是 xAI 上游协议字段。
         // OpenAI 透明路径会保留未知字段；这里只在 xAI adapter 内做最小剥离。
         body.remove("provider_options");
+        body.remove("service_tier");
         let session_seed = explicit_session_seed(request, &body);
         let enable_cache_route = allow_cache_route && session_seed.is_some();
         let identity = resolve_session_identity(

@@ -72,6 +72,27 @@ const CATALOG_WITHOUT_FEATURE_METADATA: &[u8] = br#"{
     "supportsReasoningEffort": true
   }]
 }"#;
+const CATALOG_WITH_FEATURE_REASONING_OPTIONS: &[u8] = br#"{
+  "object": "list",
+  "data": [{
+    "id": "grok-4.5",
+    "model": "grok-4.5",
+    "contextWindow": 500000,
+    "maxCompletionTokens": 131072,
+    "apiBackend": "responses",
+    "supportedInApi": true,
+    "reasoningEfforts": ["high", {"value": "medium", "default": true}, "low"],
+    "features": {
+      "reasoning": true,
+      "reasoningEffortOptions": {
+        "supportedEfforts": ["low", "medium", "high", "xhigh"],
+        "defaultEffort": "high"
+      }
+    },
+    "supportsReasoningEffort": true,
+    "streamToolCalls": true
+  }]
+}"#;
 const SUCCESS_SSE: &[u8] = concat!(
     "event: response.created\n",
     "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_xai\",\"model\":\"grok-4.5\"}}\n\n",
@@ -381,6 +402,19 @@ impl GrokModelCatalogTransport for CatalogWithoutFeatureMetadataTransport {
     }
 }
 
+struct CatalogWithFeatureReasoningOptionsTransport;
+
+impl GrokModelCatalogTransport for CatalogWithFeatureReasoningOptionsTransport {
+    fn execute(&self, _: GrokModelCatalogRequest) -> GrokModelCatalogTransportFuture<'_> {
+        Box::pin(async {
+            Ok(GrokModelCatalogTransportResponse::new(
+                CATALOG_WITH_FEATURE_REASONING_OPTIONS,
+                None,
+            ))
+        })
+    }
+}
+
 struct UnavailableCatalogTransport;
 
 impl GrokModelCatalogTransport for UnavailableCatalogTransport {
@@ -547,6 +581,13 @@ fn operation_with_reasoning_effort(effort: &str) -> Operation {
     Operation::Generate(GenerateRequest::from_protocol_payload(payload))
 }
 
+fn object(value: serde_json::Value) -> Map<String, serde_json::Value> {
+    let serde_json::Value::Object(object) = value else {
+        panic!("request body must be an object");
+    };
+    object
+}
+
 fn operation_with_invalid_tools() -> Operation {
     let payload = ProtocolPayload::json_object(
         "openai",
@@ -706,6 +747,35 @@ async fn request_observation_preserves_raw_xai_reasoning_effort() {
         observation.reasoning_effort.as_deref(),
         Some("future-value")
     );
+}
+
+#[tokio::test]
+async fn request_observation_preserves_codex_semantics_for_xai() {
+    let provider = provider(StubSelector::success(), StubInferenceTransport::success()).await;
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        object(json!({
+            "model": "client-model",
+            "reasoning": {"effort": "xhigh"},
+            "input": [
+                {"type": "message", "role": "user", "content": "history"},
+                {"type": "compaction_trigger"}
+            ]
+        })),
+    )
+    .expect("OpenAI payload")
+    .with_context(Map::from_iter([(
+        "turn_metadata".to_owned(),
+        json!("{\"request_kind\":\"compaction\",\"subagent_kind\":\"compact\"}"),
+    )]));
+    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
+
+    let observation = provider.request_observation(&operation);
+
+    assert_eq!(observation.reasoning_effort.as_deref(), Some("xhigh"));
+    assert_eq!(observation.request_kind.as_deref(), Some("compaction"));
+    assert_eq!(observation.subagent_kind.as_deref(), Some("compact"));
+    assert!(observation.compact);
 }
 
 fn operation_with_state(body: serde_json::Value, state: ProviderSessionState) -> Operation {
@@ -1924,9 +1994,35 @@ async fn provider_publishes_default_codex_profile_when_catalog_is_unavailable() 
         .presentation()
         .expect("fallback Grok model presentation");
     assert_eq!(presentation.display_name(), Some("Grok 4.5"));
+    assert_eq!(presentation.default_reasoning_effort(), None);
+    assert!(presentation.supported_reasoning_efforts().is_empty());
     assert_eq!(presentation.context_window_tokens(), Some(500_000));
     assert!(presentation.agent_tools());
     assert!(presentation.parallel_tool_calls());
+}
+
+#[tokio::test]
+async fn provider_publishes_reasoning_efforts_from_feature_options() {
+    let provider = provider_with_catalog_transport(
+        StubSelector::success(),
+        StubInferenceTransport::success(),
+        StubRecovery::new(GrokCredentialRecoveryOutcome::Unavailable),
+        Arc::new(CatalogWithFeatureReasoningOptionsTransport),
+    )
+    .await;
+    let capabilities = provider
+        .query_model_capabilities()
+        .await
+        .expect("capabilities");
+    let presentation = capabilities[0]
+        .presentation()
+        .expect("Grok model presentation");
+
+    assert_eq!(presentation.default_reasoning_effort(), Some("high"));
+    assert_eq!(
+        presentation.supported_reasoning_efforts(),
+        ["low", "medium", "high", "xhigh"]
+    );
 }
 
 #[tokio::test]
