@@ -136,6 +136,36 @@ fn local_provider_capacity_exhaustion_should_map_to_service_unavailable() {
 }
 
 #[test]
+fn local_provider_capacity_exhaustion_should_preserve_safe_provider_detail() {
+    let detail = ClientVisibleUpstreamError::new(
+        "no account is eligible for the requested model",
+        Some("no_eligible_account".to_owned()),
+        Some("account_unavailable_error".to_owned()),
+    )
+    .expect("safe provider detail");
+    let error = EngineError::Provider(
+        ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
+            .with_client_visible_upstream_error(detail),
+    );
+    let gateway = gateway_error_from_engine(&error);
+
+    assert_eq!(gateway.kind(), GatewayErrorKind::NoAvailableProvider);
+    assert_eq!(
+        gateway.client_message(),
+        "no account is eligible for the requested model"
+    );
+    assert_eq!(gateway.client_error_code(), Some("no_eligible_account"));
+    assert_eq!(
+        gateway.client_error_type(),
+        Some("account_unavailable_error")
+    );
+    assert_eq!(
+        gateway.safe_message(),
+        "no upstream provider is currently available for this request"
+    );
+}
+
+#[test]
 fn no_eligible_provider_account_should_map_to_service_unavailable() {
     let error = EngineError::Provider(ProviderError::new(
         ProviderErrorKind::NoEligibleAccount,
