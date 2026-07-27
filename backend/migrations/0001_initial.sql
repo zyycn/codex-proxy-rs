@@ -411,6 +411,9 @@ create index model_requests_outcome_idx
 create index model_requests_running_deadline_idx
   on model_requests (deadline_at, id)
   where outcome = 'running';
+create index model_requests_retention_idx
+  on model_requests (completed_at)
+  where outcome <> 'running';
 create unique index model_requests_client_response_uq
   on model_requests (client_response_id)
   where client_response_id is not null;
@@ -484,6 +487,9 @@ create index ops_events_failure_idx
 create index ops_events_account_ref_idx
   on ops_events (provider_account_ref, created_at desc, id desc)
   where provider_account_ref is not null;
+create index ops_events_retention_idx
+  on ops_events (created_at)
+  where model_request_id is null;
 
 insert into runtime_settings (id, updated_at)
 values (1, now());
