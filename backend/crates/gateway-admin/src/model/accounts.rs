@@ -9,17 +9,8 @@ use gateway_core::routing::ProviderKind;
 
 use super::{PageSize, Revision, observability::TimeRange};
 
-/// Provider 账号当前可用性。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AccountAvailability {
-    Unknown,
-    Ready,
-    Cooldown,
-    QuotaExhausted,
-    Expired,
-    Banned,
-    Invalid,
-}
+/// Provider 账号当前可用性；权威定义与字符串编解码在 gateway-core，此处仅复用。
+pub use gateway_core::engine::credential::AccountAvailability;
 
 /// 管理页使用的归一化账号状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

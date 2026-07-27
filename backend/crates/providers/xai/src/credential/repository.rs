@@ -6,10 +6,10 @@ use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
-    CredentialRevision, LoadedCredential, NewProviderAccount, OpaqueProviderData,
-    PlaintextCredential, ProviderAccount, ProviderAccountId, ProviderAccountStore,
-    ProviderAccountUpdate, QuotaObservation, QuotaWriteOutcome,
+    AccountStateChange, CredentialCasOutcome, CredentialCasUpdate, CredentialRevision,
+    LoadedCredential, NewProviderAccount, OpaqueProviderData, PlaintextCredential, ProviderAccount,
+    ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate, QuotaObservation,
+    QuotaWriteOutcome,
 };
 use gateway_core::error::StoreErrorKind;
 use gateway_core::provider_ports::ProviderRefreshPolicy;
@@ -170,7 +170,7 @@ impl GrokCredentialAdmin {
         )
         .with_runtime_state(
             input.enabled,
-            availability(input.initial_availability),
+            input.initial_availability.into(),
             input.initial_cooldown_until.map(to_system_time),
         )
         .with_refresh_schedule(true, Some(to_system_time(input.next_refresh_at)));
@@ -440,7 +440,7 @@ impl GrokCredentialRepository {
             .apply_state_change(AccountStateChange {
                 account_id: input.account_id.clone(),
                 expected_revision: input.expected_revision,
-                availability: availability(input.availability),
+                availability: input.availability.into(),
                 reason: input.availability_reason.clone(),
                 cooldown_until: input.cooldown_until.map(to_system_time),
                 observed_at: to_system_time(input.observed_at),
@@ -837,18 +837,6 @@ fn validate_cooldown(
         ));
     }
     Ok(())
-}
-
-fn availability(value: GrokCredentialAvailability) -> AccountAvailability {
-    match value {
-        GrokCredentialAvailability::Unknown => AccountAvailability::Unknown,
-        GrokCredentialAvailability::Ready => AccountAvailability::Ready,
-        GrokCredentialAvailability::Cooldown => AccountAvailability::Cooldown,
-        GrokCredentialAvailability::QuotaExhausted => AccountAvailability::QuotaExhausted,
-        GrokCredentialAvailability::Expired => AccountAvailability::Expired,
-        GrokCredentialAvailability::Banned => AccountAvailability::Banned,
-        GrokCredentialAvailability::Invalid => AccountAvailability::Invalid,
-    }
 }
 
 fn ensure_xai(account: &ProviderAccount) -> Result<(), GrokCredentialRepositoryError> {

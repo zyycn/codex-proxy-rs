@@ -17,9 +17,9 @@ use gateway_admin::{
     ports::store::AccountStore,
 };
 use gateway_core::engine::credential::{
-    CredentialCasOutcome, CredentialCasUpdate, CredentialRevision, OpaqueProviderData,
-    PlaintextCredential, ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
-    QuotaObservation, QuotaWriteOutcome,
+    AccountAvailability, CredentialCasOutcome, CredentialCasUpdate, CredentialRevision,
+    OpaqueProviderData, PlaintextCredential, ProviderAccountId, ProviderAccountStore,
+    ProviderAccountUpdate, QuotaObservation, QuotaWriteOutcome,
 };
 use gateway_core::routing::ProviderKind;
 use gateway_store::{
@@ -27,9 +27,9 @@ use gateway_store::{
     postgres::{
         AdminAuditActorKind, AdminAuditEvent, DeleteProviderAccounts, ImportProviderAccounts,
         NewProviderAccount, PgAdminAccountStore, PgProviderAccountRepository,
-        ProviderAccountAdminRepository, ProviderAccountAdminScope, ProviderAccountAvailability,
-        ProviderAccountObservation, ProviderAccountRepository, ProviderCredentialUpdate,
-        RotateProviderAccount, SetProviderAccountEnabled, UpdateProviderAccount,
+        ProviderAccountAdminRepository, ProviderAccountAdminScope, ProviderAccountObservation,
+        ProviderAccountRepository, ProviderCredentialUpdate, RotateProviderAccount,
+        SetProviderAccountEnabled, UpdateProviderAccount,
     },
 };
 use serde_json::json;
@@ -123,15 +123,15 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     let mut beta = account("acct_beta", "user-beta");
     beta.provider_kind = "xai".to_owned();
     beta.email = Some("beta@example.invalid".to_owned());
-    beta.availability = ProviderAccountAvailability::Banned;
+    beta.availability = AccountAvailability::Banned;
     let mut charlie = account("acct_charlie", "user-charlie");
     charlie.email = Some("charlie@example.invalid".to_owned());
     let mut invalid = account("acct_invalid", "user-invalid");
     invalid.email = Some("invalid@example.invalid".to_owned());
-    invalid.availability = ProviderAccountAvailability::Invalid;
+    invalid.availability = AccountAvailability::Invalid;
     let mut quota_exhausted = account("acct_quota_exhausted", "user-quota-exhausted");
     quota_exhausted.email = Some("quota-exhausted@example.invalid".to_owned());
-    quota_exhausted.availability = ProviderAccountAvailability::QuotaExhausted;
+    quota_exhausted.availability = AccountAvailability::QuotaExhausted;
     for account in [alpha, beta, charlie, invalid, quota_exhausted] {
         repository
             .insert_provider_account(account)
@@ -292,10 +292,10 @@ async fn terminal_credential_list_preserves_grouped_filters_and_unpaged_collecti
         );
         credential.provider_kind = "xai".to_owned();
         credential.availability = match index {
-            0 => ProviderAccountAvailability::Expired,
-            1 => ProviderAccountAvailability::Banned,
-            2 => ProviderAccountAvailability::Invalid,
-            _ => ProviderAccountAvailability::Ready,
+            0 => AccountAvailability::Expired,
+            1 => AccountAvailability::Banned,
+            2 => AccountAvailability::Invalid,
+            _ => AccountAvailability::Ready,
         };
         repository
             .insert_provider_account(credential)
@@ -644,7 +644,7 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
     let mut updated = account("acct_admin_reimport", "user-admin-upsert");
     updated.name = "updated import".to_owned();
     updated.provider_credentials_json = credential_json("updated-import-secret");
-    updated.availability = ProviderAccountAvailability::Banned;
+    updated.availability = AccountAvailability::Banned;
     updated.availability_reason = Some("upstream_account_deactivated".to_owned());
     let imported = repository
         .import_provider_accounts(ImportProviderAccounts {
@@ -716,7 +716,7 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
             access_token_expires_at: Some(Utc::now() + TimeDelta::minutes(5)),
             next_refresh_at: None,
             enabled: true,
-            availability: ProviderAccountAvailability::Ready,
+            availability: AccountAvailability::Ready,
             availability_reason: None,
             cooldown_until: None,
             availability_observed_at: Utc::now(),
@@ -821,7 +821,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
     };
 
     let mut cooldown_account = account("acct_admin_b", "user-admin-b");
-    cooldown_account.availability = ProviderAccountAvailability::Cooldown;
+    cooldown_account.availability = AccountAvailability::Cooldown;
     cooldown_account.cooldown_until = Some(Utc::now() + TimeDelta::minutes(10));
     let imported = repository
         .import_provider_accounts(ImportProviderAccounts {
@@ -961,7 +961,7 @@ fn account(id: &str, upstream_user_id: &str) -> NewProviderAccount {
         access_token_expires_at: Some(Utc::now() + TimeDelta::hours(1)),
         next_refresh_at: None,
         enabled: true,
-        availability: ProviderAccountAvailability::Ready,
+        availability: AccountAvailability::Ready,
         availability_reason: None,
         cooldown_until: None,
         availability_observed_at: Utc::now(),
@@ -1094,7 +1094,7 @@ fn provider_credentials_are_redacted_from_debug() {
 fn cooldown_observation_requires_expiry() {
     let observation = ProviderAccountObservation {
         account_id: "account-1".to_owned(),
-        availability: ProviderAccountAvailability::Cooldown,
+        availability: AccountAvailability::Cooldown,
         availability_reason: None,
         cooldown_until: None,
         provider_quota_json: None,

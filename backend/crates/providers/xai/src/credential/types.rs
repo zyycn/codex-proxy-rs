@@ -4,8 +4,8 @@ use std::fmt;
 
 use chrono::{DateTime, Utc};
 use gateway_core::engine::credential::{
-    CredentialCasUpdate, CredentialRevision, LoadedCredential, ProviderAccountId,
-    ProviderAccountUpdate,
+    AccountAvailability, CredentialCasUpdate, CredentialRevision, LoadedCredential,
+    ProviderAccountId, ProviderAccountUpdate,
 };
 use gateway_core::provider_ports::ProviderLeaseGuard;
 use serde::{Deserialize, Serialize};
@@ -73,6 +73,21 @@ pub enum GrokCredentialAvailability {
     Expired,
     Banned,
     Invalid,
+}
+
+/// Grok 可用性语义翻入内核标准态的唯一汇入点。
+impl From<GrokCredentialAvailability> for AccountAvailability {
+    fn from(value: GrokCredentialAvailability) -> Self {
+        match value {
+            GrokCredentialAvailability::Unknown => Self::Unknown,
+            GrokCredentialAvailability::Ready => Self::Ready,
+            GrokCredentialAvailability::Cooldown => Self::Cooldown,
+            GrokCredentialAvailability::QuotaExhausted => Self::QuotaExhausted,
+            GrokCredentialAvailability::Expired => Self::Expired,
+            GrokCredentialAvailability::Banned => Self::Banned,
+            GrokCredentialAvailability::Invalid => Self::Invalid,
+        }
+    }
 }
 
 /// 创建一个明文 OAuth Provider account。

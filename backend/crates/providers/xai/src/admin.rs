@@ -7,9 +7,7 @@ use std::time::SystemTime;
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, TimeDelta, Utc};
-use gateway_admin::model::accounts::{
-    AccountAvailability as AdminAccountAvailability, AccountRecord,
-};
+use gateway_admin::model::accounts::AccountRecord;
 use gateway_admin::model::observability::{
     CalculatedBillingBreakdown, CurrencyCost, DashboardDesktopRelease, DashboardWireAttribute,
     DashboardWireProfile, DashboardWireTarget, DecimalAmount, DesktopReleaseStatus,
@@ -29,9 +27,8 @@ use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind};
 use gateway_core::accounting::Money;
 use gateway_core::engine::credential::{
-    AccountAvailability, CredentialRevision, LoadedCredential, NewProviderAccount,
-    OpaqueProviderData, PlaintextCredential, ProviderAccount, ProviderAccountId,
-    ProviderAccountStore,
+    CredentialRevision, LoadedCredential, NewProviderAccount, OpaqueProviderData,
+    PlaintextCredential, ProviderAccount, ProviderAccountId, ProviderAccountStore,
 };
 use gateway_core::error::StoreErrorKind;
 use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
@@ -773,7 +770,7 @@ fn prepared_create(
         access_token_expires_at: account.access_token_expires_at().map(DateTime::<Utc>::from),
         next_refresh_at: account.next_refresh_at().map(Into::into),
         enabled: account.enabled(),
-        availability: admin_availability(account.availability()),
+        availability: account.availability(),
         availability_reason: None,
         cooldown_until: account.cooldown_until().map(Into::into),
         availability_observed_at: observed_at,
@@ -880,7 +877,7 @@ fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, Provi
     )
     .with_runtime_state(
         account.enabled,
-        core_availability(account.availability),
+        account.availability,
         account.cooldown_until.map(Into::into),
     )
     .with_refresh_schedule(
@@ -899,36 +896,12 @@ fn account_matches_record(account: &ProviderAccount, record: &AccountRecord) -> 
         && account.upstream_account_id() == record.upstream_account_id.as_deref()
         && account.plan_type() == record.plan_type.as_deref()
         && account.enabled() == record.enabled
-        && admin_availability(account.availability()) == record.availability
+        && account.availability() == record.availability
         && account.cooldown_until().map(DateTime::<Utc>::from) == record.cooldown_until
         && account.access_token_expires_at().map(DateTime::<Utc>::from)
             == record.access_token_expires_at
         && account.next_refresh_at().map(DateTime::<Utc>::from) == record.next_refresh_at
         && account.has_refresh_token() == record.has_refresh_token
-}
-
-const fn admin_availability(value: AccountAvailability) -> AdminAccountAvailability {
-    match value {
-        AccountAvailability::Unknown => AdminAccountAvailability::Unknown,
-        AccountAvailability::Ready => AdminAccountAvailability::Ready,
-        AccountAvailability::Cooldown => AdminAccountAvailability::Cooldown,
-        AccountAvailability::QuotaExhausted => AdminAccountAvailability::QuotaExhausted,
-        AccountAvailability::Expired => AdminAccountAvailability::Expired,
-        AccountAvailability::Banned => AdminAccountAvailability::Banned,
-        AccountAvailability::Invalid => AdminAccountAvailability::Invalid,
-    }
-}
-
-const fn core_availability(value: AdminAccountAvailability) -> AccountAvailability {
-    match value {
-        AdminAccountAvailability::Unknown => AccountAvailability::Unknown,
-        AdminAccountAvailability::Ready => AccountAvailability::Ready,
-        AdminAccountAvailability::Cooldown => AccountAvailability::Cooldown,
-        AdminAccountAvailability::QuotaExhausted => AccountAvailability::QuotaExhausted,
-        AdminAccountAvailability::Expired => AccountAvailability::Expired,
-        AdminAccountAvailability::Banned => AccountAvailability::Banned,
-        AdminAccountAvailability::Invalid => AccountAvailability::Invalid,
-    }
 }
 
 fn project_quota(
