@@ -362,6 +362,73 @@ async fn passive_rate_limit_headers_update_quota_and_account_state_with_revision
 }
 
 #[tokio::test]
+async fn passive_rate_limit_headers_replace_stale_secondary_window() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_passive_quota_snapshot").await;
+    let account = store
+        .account("acct_passive_quota_snapshot")
+        .expect("account");
+    let baseline = json!({
+        "rate_limit": {
+            "primary_window": {
+                "used_percent": 91,
+                "reset_at": 1_900_000_000,
+                "limit_window_seconds": 2_592_000
+            },
+            "secondary_window": {
+                "used_percent": 43,
+                "reset_at": 1_900_000_000,
+                "limit_window_seconds": 2_592_000
+            }
+        }
+    });
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: Some(OpaqueProviderData::new(
+                baseline.as_object().expect("quota object").clone(),
+            )),
+            observed_at: Some(SystemTime::now()),
+        })
+        .await
+        .expect("persist baseline quota");
+    let service = quota_service(&store);
+    let headers = vec![
+        ("x-codex-active-limit".to_owned(), "codex".to_owned()),
+        ("x-codex-primary-used-percent".to_owned(), "92".to_owned()),
+        (
+            "x-codex-primary-window-minutes".to_owned(),
+            "43200".to_owned(),
+        ),
+        (
+            "x-codex-primary-reset-at".to_owned(),
+            "1900000000".to_owned(),
+        ),
+    ];
+
+    assert!(
+        service
+            .synchronize_passive_headers(&account, &headers)
+            .await
+            .expect("passive quota")
+    );
+    let snapshot = service
+        .read_account(account.id())
+        .await
+        .expect("read quota")
+        .expect("quota snapshot");
+    let monthly = snapshot
+        .windows()
+        .iter()
+        .filter(|window| window.kind() == CodexQuotaWindowKind::Monthly)
+        .collect::<Vec<_>>();
+
+    assert_eq!(monthly.len(), 1);
+    assert_eq!(monthly[0].used_percent(), Some(92.0));
+}
+
+#[tokio::test]
 async fn synchronize_without_accounts_is_a_noop_before_network_io() {
     let store = Arc::new(MemoryAccountStore::default());
 

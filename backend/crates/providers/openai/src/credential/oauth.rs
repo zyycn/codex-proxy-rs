@@ -635,16 +635,8 @@ fn callback_parts(value: &str) -> Result<(SecretString, SecretString), CodexOAut
     let mut state = None;
     for (key, value) in url.query_pairs() {
         match key.as_ref() {
-            "code" => {
-                if code.replace(value.into_owned()).is_some() {
-                    return Err(CodexOAuthAdminError::UpstreamRejected);
-                }
-            }
-            "state" => {
-                if state.replace(value.into_owned()).is_some() {
-                    return Err(CodexOAuthAdminError::UpstreamRejected);
-                }
-            }
+            "code" => set_unique_callback_parameter(&mut code, value.into_owned())?,
+            "state" => set_unique_callback_parameter(&mut state, value.into_owned())?,
             // OAuth 服务可能附加 `scope`、`iss` 等标准参数。
             // 固定回调地址与唯一的 `code`/`state` 才是安全边界，无关参数不参与校验。
             _ => {}
@@ -656,6 +648,16 @@ fn callback_parts(value: &str) -> Result<(SecretString, SecretString), CodexOAut
         (Some(code), Some(state)) => Ok((SecretString::from(code), SecretString::from(state))),
         _ => Err(CodexOAuthAdminError::UpstreamRejected),
     }
+}
+
+fn set_unique_callback_parameter(
+    target: &mut Option<String>,
+    value: String,
+) -> Result<(), CodexOAuthAdminError> {
+    if target.replace(value).is_some() {
+        return Err(CodexOAuthAdminError::UpstreamRejected);
+    }
+    Ok(())
 }
 
 fn random_secret() -> Result<String, CodexOAuthAdminError> {

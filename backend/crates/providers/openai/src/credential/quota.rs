@@ -973,13 +973,11 @@ fn merge_passive_quota(
         .and_then(|value| value.as_array().cloned())
         .unwrap_or_default();
     for (limit_id, details) in &rate_limits.limits {
+        let Some(rate_limit) = passive_rate_limit_snapshot(details) else {
+            continue;
+        };
         if Some(limit_id.as_str()) == active_limit {
-            let mut value = quota
-                .remove("rate_limit")
-                .and_then(|value| value.as_object().cloned())
-                .unwrap_or_default();
-            merge_rate_limit_details(&mut value, details);
-            quota.insert("rate_limit".to_owned(), Value::Object(value));
+            quota.insert("rate_limit".to_owned(), Value::Object(rate_limit));
             continue;
         }
         let index = additional.iter().position(|item| {
@@ -1000,12 +998,7 @@ fn merge_passive_quota(
         if let Some(name) = details.limit_name.as_ref() {
             item.insert("limit_name".to_owned(), Value::String(name.clone()));
         }
-        let mut value = item
-            .remove("rate_limit")
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        merge_rate_limit_details(&mut value, details);
-        item.insert("rate_limit".to_owned(), Value::Object(value));
+        item.insert("rate_limit".to_owned(), Value::Object(rate_limit));
         match index {
             Some(index) => additional[index] = Value::Object(item),
             None => additional.push(Value::Object(item)),
@@ -1018,12 +1011,14 @@ fn merge_passive_quota(
     quota
 }
 
-fn merge_rate_limit_details(target: &mut Map<String, Value>, details: &RateLimitDetails) {
+fn passive_rate_limit_snapshot(details: &RateLimitDetails) -> Option<Map<String, Value>> {
+    // 响应头的窗口属于同一次上游观测；跨响应合并会制造不存在的额度窗口。
+    let mut snapshot = Map::new();
     if let Some(allowed) = details.allowed {
-        target.insert("allowed".to_owned(), Value::Bool(allowed));
+        snapshot.insert("allowed".to_owned(), Value::Bool(allowed));
     }
     if let Some(limit_reached) = details.limit_reached {
-        target.insert("limit_reached".to_owned(), Value::Bool(limit_reached));
+        snapshot.insert("limit_reached".to_owned(), Value::Bool(limit_reached));
     }
     for (field, window) in [
         ("primary_window", details.primary),
@@ -1032,28 +1027,29 @@ fn merge_rate_limit_details(target: &mut Map<String, Value>, details: &RateLimit
         let Some(window) = window else {
             continue;
         };
-        let mut value = target
-            .remove(field)
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        merge_rate_limit_window(&mut value, window);
-        target.insert(field.to_owned(), Value::Object(value));
+        snapshot.insert(
+            field.to_owned(),
+            Value::Object(passive_rate_limit_window(window)),
+        );
     }
+    (!snapshot.is_empty()).then_some(snapshot)
 }
 
-fn merge_rate_limit_window(target: &mut Map<String, Value>, window: RateLimitWindow) {
+fn passive_rate_limit_window(window: RateLimitWindow) -> Map<String, Value> {
+    let mut snapshot = Map::new();
     if let Some(number) = serde_json::Number::from_f64(window.used_percent) {
-        target.insert("used_percent".to_owned(), Value::Number(number));
+        snapshot.insert("used_percent".to_owned(), Value::Number(number));
     }
     if let Some(seconds) = window
         .window_minutes
         .and_then(|minutes| minutes.checked_mul(60))
     {
-        target.insert("limit_window_seconds".to_owned(), Value::from(seconds));
+        snapshot.insert("limit_window_seconds".to_owned(), Value::from(seconds));
     }
     if let Some(reset_at) = window.reset_at {
-        target.insert("reset_at".to_owned(), Value::from(reset_at));
+        snapshot.insert("reset_at".to_owned(), Value::from(reset_at));
     }
+    snapshot
 }
 
 fn quota_success_availability(
