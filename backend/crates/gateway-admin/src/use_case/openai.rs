@@ -13,7 +13,8 @@ use crate::{
             CredentialDeletionResult, CredentialDetails, CredentialImportCommit,
             CredentialImportResult, CredentialListQuery, CredentialMutation,
             CredentialMutationResult, CredentialPage, ImportCredentials, PrepareCredentialImport,
-            PrepareCredentialRotation, ProviderQuotaRequest, RotateCredential, StartAuthorization,
+            PrepareCredentialRotation, PreparedAuthorizationCredential, ProviderQuotaRequest,
+            RotateCredential, StartAuthorization,
         },
     },
     ports::{provider::ProviderAdmin, store::AccountStore},
@@ -83,6 +84,27 @@ impl DefaultOpenAiService {
             snapshot,
         }
     }
+
+    async fn observe_initial_quotas(&self, account_ids: &[ProviderAccountId], request_id: &str) {
+        for account_id in account_ids {
+            if let Err(error) = self
+                .provider
+                .quota(ProviderQuotaRequest {
+                    account_id: account_id.clone(),
+                    refresh: true,
+                    rolling_usage: None,
+                })
+                .await
+            {
+                tracing::warn!(
+                    request_id,
+                    account_id = %account_id.as_str(),
+                    quota_error = ?error.kind(),
+                    "OpenAI initial quota observation failed"
+                );
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -130,17 +152,9 @@ impl OpenAiService for DefaultOpenAiService {
             .await
             .map_err(|error| map_store_error(error, "OpenAI credential import"))?;
         publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
-        // 导入已经提交，额度属于可重建观察事实；单个账号查询失败由周期任务重试。
-        for account_id in &result.credential_ids {
-            let _ = self
-                .provider
-                .quota(ProviderQuotaRequest {
-                    account_id: account_id.clone(),
-                    refresh: true,
-                    rolling_usage: None,
-                })
-                .await;
-        }
+        // 导入完成后立即做一次观察；失败不回滚已经提交的 credential。
+        self.observe_initial_quotas(&result.credential_ids, &context.request_id)
+            .await;
         Ok(result)
     }
 
@@ -177,6 +191,10 @@ impl OpenAiService for DefaultOpenAiService {
             &prepared,
             "OpenAI authorization",
         )?;
+        let creates_account = matches!(
+            &prepared.credential,
+            PreparedAuthorizationCredential::Create(_)
+        );
         let result = commit_authorization(
             self.accounts.as_ref(),
             prepared,
@@ -185,6 +203,13 @@ impl OpenAiService for DefaultOpenAiService {
         )
         .await?;
         publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
+        if creates_account {
+            self.observe_initial_quotas(
+                std::slice::from_ref(&result.account_id),
+                &context.request_id,
+            )
+            .await;
+        }
         Ok(result)
     }
 

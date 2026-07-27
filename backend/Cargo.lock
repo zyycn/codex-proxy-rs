@@ -1194,6 +1194,7 @@ dependencies = [
  "subtle",
  "thiserror",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

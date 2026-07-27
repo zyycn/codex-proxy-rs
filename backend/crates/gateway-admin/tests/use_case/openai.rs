@@ -204,6 +204,83 @@ async fn openai_import_should_remain_successful_when_quota_refresh_fails() {
 }
 
 #[tokio::test]
+async fn openai_authorization_create_should_observe_initial_quota() {
+    let events = events();
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    let store = FakeAccountStore::new("openai", events.clone());
+    let services = service(provider.clone(), store.clone()).await;
+
+    services
+        .openai()
+        .start_authorization(StartAuthorization {
+            context: context("oauth-start-openai-create"),
+            name: "new OpenAI credential".to_owned(),
+            reauthorization: None,
+        })
+        .await
+        .expect("start authorization");
+    services
+        .openai()
+        .complete_authorization(CompleteAuthorization {
+            context: context("oauth-start-openai-create"),
+            flow_id: "flow-test".to_owned(),
+            callback_url: "http://localhost/callback?code=test&state=test".to_owned(),
+        })
+        .await
+        .expect("complete authorization");
+
+    assert_eq!(
+        recorded(&events),
+        [
+            "provider.start_authorization",
+            "provider.complete_authorization",
+            "store.commit_authorization",
+            "provider.quota",
+        ]
+    );
+    assert_eq!(
+        provider.quota_requests(),
+        [ProviderQuotaRequest {
+            account_id: ProviderAccountId::new("acct_prepared").expect("account ID"),
+            refresh: true,
+            rolling_usage: None,
+        }]
+    );
+    assert_eq!(store.audit_requests(), ["oauth-start-openai-create"]);
+}
+
+#[tokio::test]
+async fn openai_authorization_create_should_remain_successful_when_initial_quota_fails() {
+    let events = events();
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    provider.fail_next_quota(ProviderAdminErrorKind::Unavailable);
+    let store = FakeAccountStore::new("openai", events);
+    let services = service(provider.clone(), store).await;
+
+    services
+        .openai()
+        .start_authorization(StartAuthorization {
+            context: context("oauth-start-openai-quota-failure"),
+            name: "new OpenAI credential".to_owned(),
+            reauthorization: None,
+        })
+        .await
+        .expect("start authorization");
+    let result = services
+        .openai()
+        .complete_authorization(CompleteAuthorization {
+            context: context("oauth-start-openai-quota-failure"),
+            flow_id: "flow-test".to_owned(),
+            callback_url: "http://localhost/callback?code=test&state=test".to_owned(),
+        })
+        .await
+        .expect("quota observation must not fail authorization");
+
+    assert_eq!(result.account_id.as_str(), "acct_prepared");
+    assert_eq!(provider.quota_requests().len(), 1);
+}
+
+#[tokio::test]
 async fn openai_import_provider_error_should_not_touch_store_transaction() {
     let events = events();
     let provider = FakeProviderAdmin::new("openai", events.clone());
