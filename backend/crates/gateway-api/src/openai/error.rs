@@ -75,10 +75,14 @@ pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {
             if error.kind() == ProviderErrorKind::Unavailable
                 && error.send_state() == UpstreamSendState::NotSent =>
         {
-            GatewayError::new(
+            let gateway = GatewayError::new(
                 GatewayErrorKind::NoAvailableProvider,
                 "no upstream provider is currently available for this request",
-            )
+            );
+            match error.client_visible_upstream_error() {
+                Some(upstream) => gateway.with_client_visible_upstream_error(upstream.clone()),
+                None => gateway,
+            }
         }
         EngineError::Provider(error) => GatewayError::from_provider(error),
         EngineError::Cancelled => {

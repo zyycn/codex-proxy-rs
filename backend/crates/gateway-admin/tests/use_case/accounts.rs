@@ -347,9 +347,13 @@ pub(super) struct FakeAccountStore {
 
 impl FakeAccountStore {
     pub(super) fn new(kind: &str, events: EventLog) -> Arc<Self> {
+        Self::with_account(account_record(kind), events)
+    }
+
+    fn with_account(account: AccountRecord, events: EventLog) -> Arc<Self> {
         Arc::new(Self {
             events,
-            account: account_record(kind),
+            account,
             fail_commit: Mutex::new(false),
             audit_requests: Mutex::new(Vec::new()),
             quota_window_usage: Mutex::new(Vec::new()),
@@ -686,9 +690,11 @@ fn provider_registry_should_reject_duplicate_kind() {
 }
 
 #[tokio::test]
-async fn connection_test_should_preserve_safe_provider_error_details() {
+async fn connection_test_should_probe_unavailable_account() {
     let provider = FakeProviderAdmin::new("xai", events());
-    let store = FakeAccountStore::new("xai", events());
+    let mut account = account_record("xai");
+    account.availability = AccountAvailability::QuotaExhausted;
+    let store = FakeAccountStore::with_account(account, events());
     let services =
         accounts_service_with_probe(provider, store, Arc::new(FailingAccountProbe)).await;
 
@@ -709,7 +715,7 @@ async fn connection_test_should_preserve_safe_provider_error_details() {
             message,
             provider_error_code: Some(code),
             provider_error_type: Some(error_type),
-            ..
+            account_status: gateway_admin::model::accounts::AccountStatus::QuotaExhausted,
         }) if message == "included usage exhausted"
             && code == "usage_exhausted"
             && error_type == "invalid_request_error"
