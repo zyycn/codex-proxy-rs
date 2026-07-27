@@ -58,12 +58,6 @@ impl TestDatabase {
             .execute(&mut *migration)
             .await
             .expect("apply terminal migration");
-        sqlx::raw_sql(include_str!(
-            "../../../../migrations/0002_retention_delete_indexes.sql"
-        ))
-        .execute(&mut *migration)
-        .await
-        .expect("apply retention index migration");
         migration.commit().await.expect("commit terminal migration");
         Some(Self {
             admin,
@@ -86,7 +80,7 @@ impl TestDatabase {
 }
 
 #[tokio::test]
-async fn connect_and_migrate_should_apply_0001_once_and_reopen_cleanly() {
+async fn connect_and_migrate_should_apply_initial_migration_once_and_reopen_cleanly() {
     let Some(database_url) = crate::support::test_env("CPR_TEST_DATABASE_URL") else {
         return;
     };
@@ -110,7 +104,7 @@ async fn connect_and_migrate_should_apply_0001_once_and_reopen_cleanly() {
         .to_string();
     let first = connect_and_migrate(&isolated_url, gateway_store::StorePoolConfig::default())
         .await
-        .expect("apply 0001 through production migrator");
+        .expect("apply initial migration through production migrator");
     let first_table_count = sqlx::query_scalar::<_, i64>(
         "select count(*) from information_schema.tables where table_schema = 'public'",
     )
@@ -137,7 +131,7 @@ async fn connect_and_migrate_should_apply_0001_once_and_reopen_cleanly() {
     .expect("drop migration test database");
     admin.close().await;
 
-    assert_eq!((first_table_count, migration_count), (8, 2));
+    assert_eq!((first_table_count, migration_count), (8, 1));
 }
 
 #[test]
