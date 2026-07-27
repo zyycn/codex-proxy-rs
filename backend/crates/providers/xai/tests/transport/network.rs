@@ -1,4 +1,4 @@
-//! External reqwest network policy contracts.
+//! 外置的 reqwest 网络策略契约。
 
 use std::cell::Cell;
 use std::net::IpAddr;

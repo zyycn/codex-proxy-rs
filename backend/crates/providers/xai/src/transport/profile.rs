@@ -1,4 +1,4 @@
-//! Grok CLI runtime wire profile.
+//! Grok CLI 运行时 wire profile。
 
 use std::{
     sync::{Arc, RwLock},

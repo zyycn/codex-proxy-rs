@@ -1,4 +1,4 @@
-//! `gateway-core` Provider adapter for official Grok Build sessions.
+//! 官方 Grok Build 会话的 `gateway-core` Provider adapter。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -70,12 +70,10 @@ const MIN_REASONING_CIPHERTEXT_ENTROPY: f64 = 0.85;
 const REASONING_DECODE_FAILED_CODE: &str = "reasoning_decode_failed";
 const RESPONSE_NOT_FOUND_CODE: &str = "not_found";
 
-/// Official Grok Build provider with injected session selection and HTTP SSE
-/// transport ports.
+/// 官方 Grok Build Provider；会话选择与 HTTP SSE transport 均由外部注入。
 ///
-/// Each call selects exactly one OAuth session and prepares exactly one visible
-/// upstream POST. Retries, credential rotation, endpoint fallback, and public
-/// xAI API-key inference are deliberately outside this adapter.
+/// 每次调用只选择一个 OAuth 会话，只准备一次可见的上游 POST。重试、凭据轮换、
+/// endpoint fallback 以及公开 xAI API key 推理都不在该 adapter 内。
 pub struct GrokBuildProvider {
     selector: Arc<dyn GrokSessionSelector>,
     transport: Arc<dyn GrokInferenceTransport>,
@@ -88,7 +86,7 @@ pub struct GrokBuildProvider {
 }
 
 impl GrokBuildProvider {
-    /// Creates a provider over explicit session and transport boundaries.
+    /// 在显式的会话与 transport 边界上创建 Provider。
     pub fn new(
         selector: Arc<dyn GrokSessionSelector>,
         transport: Arc<dyn GrokInferenceTransport>,
@@ -380,9 +378,8 @@ fn tool_support(evidence: GrokCatalogCapabilityEvidence) -> SupportLevel {
     match evidence {
         GrokCatalogCapabilityEvidence::DeclaredNative => SupportLevel::Native,
         GrokCatalogCapabilityEvidence::DeclaredUnsupported => SupportLevel::Unsupported,
-        // Grok Build's Responses tool protocol remains available when the
-        // optional catalog field is omitted; the request adapter normalizes
-        // the client-only tool shapes before sending.
+        // catalog 省略该可选字段时，Grok Build 的 Responses 工具协议仍可用；
+        // 请求 adapter 会在发送前规范化仅客户端侧的工具结构。
         GrokCatalogCapabilityEvidence::Unknown => SupportLevel::Emulated,
     }
 }

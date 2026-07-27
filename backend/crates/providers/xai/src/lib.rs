@@ -1,4 +1,4 @@
-//! Official Grok Build OAuth Provider boundary.
+//! 官方 Grok Build OAuth Provider 边界。
 
 mod admin;
 pub mod config;

@@ -60,7 +60,7 @@ end
 return 1
 "#;
 
-/// Redis-backed, best-effort native response continuation affinity.
+/// 基于 Redis 的 best-effort 原生响应 continuation 亲和。
 #[derive(Clone)]
 pub struct RedisNativeContinuationRepository {
     connection: ConnectionManager,

@@ -2,188 +2,188 @@ use thiserror::Error;
 
 use crate::TransportFailureKind;
 
-/// Static OAuth operation labels used for safe telemetry and classification.
+/// OAuth 操作标签，用于脱敏遥测与错误分类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OAuthOperation {
-    /// OpenID Provider discovery.
+    /// OpenID Provider 发现。
     Discovery,
-    /// Authorization-code token exchange.
+    /// Authorization Code 换取 token。
     AuthorizationCodeToken,
-    /// Refresh-token exchange.
+    /// Refresh token 换取 token。
     RefreshToken,
     /// 已有 OAuth token 的受控导入验证。
     CredentialImport,
 }
 
-/// Stable OAuth error codes that are safe to expose to control-plane logic.
+/// 可安全暴露给控制面的稳定 OAuth 错误码。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OAuthErrorCode {
-    /// The human rejected authorization.
+    /// 用户拒绝授权。
     AccessDenied,
-    /// A code or refresh token is invalid or already consumed.
+    /// code 或 refresh token 无效或已被消费。
     InvalidGrant,
-    /// The configured public client is rejected.
+    /// 配置的 public client 被拒绝。
     InvalidClient,
-    /// The requested official scope set is rejected.
+    /// 请求的官方 scope 集合被拒绝。
     InvalidScope,
-    /// The authorization server is temporarily unavailable.
+    /// 授权服务器暂时不可用。
     TemporarilyUnavailable,
-    /// An unrecognized code whose raw server text is intentionally discarded.
+    /// 无法识别的错误码；不保留服务端原文。
     Other,
 }
 
-/// High-level action a coordinator may take after a failure.
+/// 失败后协调方可采取的处置类别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureClass {
-    /// Safe transient failure; a later, separately coordinated attempt may run.
+    /// 瞬时失败，允许后续独立协调的重试。
     Transient,
-    /// Send state is ambiguous and the one-time artifact must not be replayed.
+    /// 发送状态不确定，一次性凭据不得重放。
     Ambiguous,
-    /// Credential material is permanently rejected at its current revision.
+    /// 当前 revision 的凭据被永久拒绝。
     CredentialPermanent,
-    /// Provider/client configuration is permanently rejected.
+    /// Provider 或 client 配置被永久拒绝。
     ConfigurationPermanent,
-    /// The human denied or must restart the interactive flow.
+    /// 用户已拒绝，或需要重新发起交互流程。
     UserActionRequired,
-    /// Protocol or trust-boundary validation failed closed.
+    /// 协议或信任边界校验失败并 fail closed。
     Security,
-    /// The official deployment does not offer the requested flow.
+    /// 官方部署不提供该流程。
     Unsupported,
 }
 
-/// Configuration failures detected before any network request.
+/// 发起网络请求前检出的配置错误。
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ConfigError {
-    /// Redirect URI is malformed, insecure, or contains forbidden components.
+    /// 回调 URI 格式非法、不安全或包含禁止成分。
     #[error("invalid OAuth redirect URI")]
     InvalidRedirectUri,
-    /// Redirect URI was not explicitly registered in the local allowlist.
+    /// 回调 URI 未登记在本地 allowlist。
     #[error("OAuth redirect URI is not allowlisted")]
     RedirectUriNotAllowlisted,
-    /// Issuer differs from the official Grok Build issuer.
+    /// issuer 不是官方 Grok Build issuer。
     #[error("OIDC issuer is not the official Grok Build issuer")]
     UntrustedIssuer,
-    /// A discovered endpoint leaves the official issuer origin.
+    /// 发现文档中的端点离开了官方 issuer origin。
     #[error("OIDC discovery returned an untrusted endpoint")]
     UntrustedEndpoint,
-    /// Optional team principal metadata is empty or contains unsafe text.
+    /// 可选的 team principal 元数据为空或含不安全文本。
     #[error("invalid OAuth principal metadata")]
     InvalidPrincipal,
 }
 
-/// Safe, field-oriented protocol validation errors.
+/// 按字段定位的脱敏协议校验错误。
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolViolation {
-    /// JSON could not be decoded into the expected wire schema.
+    /// JSON 无法解析为预期 wire 结构。
     #[error("OAuth response is not valid JSON")]
     InvalidJson,
-    /// A required wire field is absent.
+    /// 缺少必需的 wire 字段。
     #[error("OAuth response is missing field `{0}`")]
     MissingField(&'static str),
-    /// A wire field violates its format or size contract.
+    /// wire 字段违反格式或长度约束。
     #[error("OAuth response contains invalid field `{0}`")]
     InvalidField(&'static str),
-    /// A response exceeded the bounded parser limit.
+    /// 响应超出解析器的体积上限。
     #[error("OAuth response exceeds the maximum body size")]
     ResponseTooLarge,
-    /// The discovery document permits the insecure `none` signing algorithm.
+    /// 发现文档允许不安全的 `none` 签名算法。
     #[error("OIDC discovery advertises an insecure signing algorithm")]
     InsecureSigningAlgorithm,
 }
 
-/// Callback failures that never retain the authorization code or state value.
+/// 回调失败原因；不保留 code 与 state 值。
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum CallbackRejection {
-    /// Query contains repeated security-sensitive keys.
+    /// query 中出现重复的安全敏感参数。
     #[error("OAuth callback contains a duplicate parameter")]
     DuplicateParameter,
-    /// Provider callback omitted the one-time state.
+    /// 回调缺少一次性 state。
     #[error("OAuth callback is missing state")]
     MissingState,
-    /// Provider callback omitted the authorization code.
+    /// 回调缺少 authorization code。
     #[error("OAuth callback is missing code")]
     MissingCode,
-    /// One-time state does not match the pending flow.
+    /// 一次性 state 与 pending flow 不匹配。
     #[error("OAuth callback state mismatch")]
     StateMismatch,
-    /// Authorization server returned `access_denied`.
+    /// 授权服务器返回 `access_denied`。
     #[error("OAuth authorization was denied")]
     AccessDenied,
-    /// Authorization server returned another callback error.
+    /// 授权服务器返回其他回调错误。
     #[error("OAuth authorization callback was rejected")]
     ProviderRejected,
 }
 
-/// Reasons an unverified token set cannot cross the credential boundary.
+/// 未验证 token 集合无法通过凭据边界的原因。
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum VerificationFailure {
-    /// No JWT/JWKS or authoritative user-info verifier was wired.
+    /// 未注入 JWT/JWKS 或权威 user-info 校验器。
     #[error("token verification is unavailable; refusing unverified credentials")]
     Unavailable,
-    /// Authorization-code response omitted its required ID token.
+    /// Authorization Code 响应缺少必需的 ID token。
     #[error("authorization-code response is missing an ID token")]
     MissingIdToken,
-    /// The verifier rejected signature, issuer, audience, nonce, expiry, or identity.
+    /// 校验器拒绝了签名、issuer、audience、nonce、过期时间或身份。
     #[error("token verification failed")]
     Rejected,
-    /// Authorization-code flow was not verified through an ID token.
+    /// Authorization Code 流程未经 ID token 验证。
     #[error("authorization-code flow requires verified ID-token evidence")]
     WrongEvidence,
 }
 
-/// Secret-free OAuth protocol error.
+/// 不含密钥的 OAuth 协议错误。
 #[derive(Debug, Error)]
 pub enum OAuthError {
-    /// Local trust or redirect configuration is invalid.
+    /// 本地信任或回调配置非法。
     #[error(transparent)]
     Configuration(#[from] ConfigError),
-    /// Replaceable transport failed without retaining its raw error message.
+    /// 可替换 transport 失败；不保留原始错误信息。
     #[error("OAuth transport failed during {operation:?}: {kind:?}")]
     Transport {
-        /// Operation being executed.
+        /// 执行中的操作。
         operation: OAuthOperation,
-        /// Safe send-state classification.
+        /// 脱敏的发送状态分类。
         kind: TransportFailureKind,
     },
-    /// Non-success HTTP response without a recognized OAuth code.
+    /// 非成功 HTTP 响应，且没有可识别的 OAuth 错误码。
     #[error("OAuth endpoint returned HTTP {status} during {operation:?}")]
     HttpStatus {
-        /// Operation being executed.
+        /// 执行中的操作。
         operation: OAuthOperation,
-        /// HTTP status code.
+        /// HTTP 状态码。
         status: u16,
     },
-    /// Recognized OAuth error response.
+    /// 可识别的 OAuth 错误响应。
     #[error("OAuth endpoint returned {code:?} during {operation:?}")]
     Server {
-        /// Operation being executed.
+        /// 执行中的操作。
         operation: OAuthOperation,
-        /// HTTP status code.
+        /// HTTP 状态码。
         status: u16,
-        /// Stable OAuth error code.
+        /// 稳定 OAuth 错误码。
         code: OAuthErrorCode,
     },
-    /// Callback was rejected before token exchange.
+    /// token 交换前回调即被拒绝。
     #[error(transparent)]
     Callback(#[from] CallbackRejection),
-    /// Wire response violated the strict parser contract.
+    /// wire 响应违反严格解析契约。
     #[error("{operation:?} protocol violation: {violation}")]
     Protocol {
-        /// Operation being parsed.
+        /// 解析中的操作。
         operation: OAuthOperation,
-        /// Safe field-oriented reason.
+        /// 按字段定位的脱敏原因。
         violation: ProtocolViolation,
     },
-    /// Token set failed the mandatory verification boundary.
+    /// token 集合未通过强制验证边界。
     #[error(transparent)]
     Verification(#[from] VerificationFailure),
-    /// Cryptographically secure entropy was unavailable before a flow started.
+    /// 流程启动前无法获得安全随机数。
     #[error("secure OAuth entropy is unavailable")]
     EntropyUnavailable,
 }
 
 impl OAuthError {
-    /// Returns a low-cardinality failure class for orchestration decisions.
+    /// 返回供编排决策使用的低基数失败类别。
     #[must_use]
     pub fn class(&self) -> FailureClass {
         match self {

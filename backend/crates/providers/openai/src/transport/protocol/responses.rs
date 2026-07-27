@@ -60,7 +60,7 @@ pub struct CodexResponsesRequest {
     pub responses_lite: Option<String>,
     /// Memory consolidation 请求语义；HTTP 与 WebSocket opening 均使用 header。
     pub memgen_request: Option<String>,
-    /// codex window id。
+    /// Codex window ID。
     pub codex_window_id: Option<String>,
     /// 父线程 ID。
     pub parent_thread_id: Option<String>,

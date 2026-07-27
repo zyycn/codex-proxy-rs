@@ -14,7 +14,7 @@ use crate::{
 
 const MAX_CALLBACK_VALUE_BYTES: usize = 64 * 1024;
 
-/// Parsed callback whose code and state remain redacted in debug output.
+/// 已解析的回调；code 与 state 在 debug 输出中保持脱敏。
 pub struct AuthorizationCallback {
     code: Option<SecretValue>,
     state: Option<SecretValue>,
@@ -22,13 +22,13 @@ pub struct AuthorizationCallback {
 }
 
 impl AuthorizationCallback {
-    /// Parses an OAuth callback query while rejecting duplicate security fields.
-    /// Raw server descriptions are intentionally discarded.
+    /// 解析 OAuth 回调 query，并拒绝重复的安全敏感参数。
+    /// 服务端原始描述文本一律丢弃。
     ///
     /// # Errors
     ///
-    /// Returns [`CallbackRejection::DuplicateParameter`] for repeated `code`,
-    /// `state`, or `error` keys.
+    /// `code`、`state` 或 `error` 键重复出现时返回
+    /// [`CallbackRejection::DuplicateParameter`]。
     pub fn parse(query: &str) -> Result<Self, CallbackRejection> {
         let mut code = None;
         let mut state = None;
@@ -72,7 +72,7 @@ impl fmt::Debug for AuthorizationCallback {
     }
 }
 
-/// Authorization Code + PKCE state awaiting one callback.
+/// 等待一次回调的 Authorization Code + PKCE 状态。
 pub struct PendingAuthorization {
     authorization_url: Url,
     redirect_uri: AllowedRedirectUri,
@@ -122,7 +122,7 @@ impl PendingAuthorization {
         })
     }
 
-    /// Returns the URL that an administrator opens at the official issuer.
+    /// 返回管理员需在官方 issuer 打开的 URL。
     #[must_use]
     pub fn authorization_url(&self) -> &Url {
         &self.authorization_url
@@ -180,12 +180,11 @@ impl PendingAuthorization {
         })
     }
 
-    /// Consumes the one-time flow and validates mandatory callback state.
+    /// 消费一次性流程并校验必需的回调 state。
     ///
     /// # Errors
     ///
-    /// Returns a callback rejection for missing/mismatched state, provider
-    /// denial, or a missing code.
+    /// state 缺失或不匹配、provider 拒绝、code 缺失时返回回调拒绝错误。
     pub fn accept_callback(
         self,
         callback: AuthorizationCallback,
@@ -247,7 +246,7 @@ impl fmt::Debug for PendingAuthorization {
     }
 }
 
-/// State-validated authorization grant ready for one token exchange.
+/// 已通过 state 校验、可用于一次 token 交换的授权 grant。
 pub struct AuthorizationCodeGrant {
     code: SecretValue,
     redirect_uri: AllowedRedirectUri,

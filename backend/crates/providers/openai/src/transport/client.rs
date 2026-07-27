@@ -35,7 +35,7 @@ use super::websocket::{
 };
 
 // ---------------------------------------------------------------------------
-// Constants
+// 常量
 // ---------------------------------------------------------------------------
 
 const MAX_UPSTREAM_ERROR_BODY_BYTES: usize = 1024 * 1024;
@@ -82,7 +82,7 @@ pub fn build_reqwest_client() -> Result<Client, CustomCaError> {
 }
 
 // ---------------------------------------------------------------------------
-// Error types
+// 错误类型
 // ---------------------------------------------------------------------------
 
 /// Codex 上游 HTTP 客户端错误。
@@ -245,7 +245,7 @@ pub type CodexBackendSseStream =
     Pin<Box<dyn Stream<Item = CodexClientResult<Bytes>> + Send + 'static>>;
 
 // ---------------------------------------------------------------------------
-// Request context & response types
+// 请求上下文与响应类型
 // ---------------------------------------------------------------------------
 
 /// 单次 Codex 上游请求的上下文。
@@ -253,7 +253,7 @@ pub type CodexBackendSseStream =
 pub struct CodexRequestContext<'a> {
     /// Provider 已构造并脱敏持有的完整 Authorization 值。
     pub authorization: &'a str,
-    /// ChatGPT account id。
+    /// ChatGPT 账号 ID。
     pub account_id: Option<&'a str>,
     /// 代理请求 ID。
     pub request_id: &'a str,
@@ -261,11 +261,11 @@ pub struct CodexRequestContext<'a> {
     pub turn_state: Option<&'a str>,
     /// 客户端 turn metadata；其中 installation ID 已按当前账号处理。
     pub turn_metadata: Option<&'a str>,
-    /// x-codex-beta-features。
+    /// x-codex-beta-features 头值。
     pub beta_features: Option<&'a str>,
-    /// x-responsesapi-include-timing-metrics。
+    /// x-responsesapi-include-timing-metrics 头值。
     pub include_timing_metrics: Option<&'a str>,
-    /// version。
+    /// 客户端版本号。
     pub version: Option<&'a str>,
     /// 客户端 window ID。
     pub codex_window_id: Option<&'a str>,
@@ -335,9 +335,9 @@ impl fmt::Debug for CodexRequestContext<'_> {
 /// Codex Responses 实际使用的上游传输。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexBackendTransport {
-    /// HTTP SSE transport.
+    /// HTTP SSE 传输。
     HttpSse,
-    /// WebSocket transport.
+    /// WebSocket 传输。
     WebSocket,
 }
 
@@ -382,10 +382,10 @@ pub struct CodexTransportMetrics {
     pub http_version: Option<String>,
 }
 
-/// Live stream rate-limit updates captured after the response headers.
+/// 响应头之后在 live 流中采集的限流更新。
 pub type CodexRateLimitHeaderUpdates = CodexWebSocketRateLimitHeaderUpdates;
 
-/// Live stream turn-state updates captured after the response headers.
+/// 响应头之后在 live 流中采集的 turn state 更新。
 pub type CodexTurnStateUpdate = CodexWebSocketTurnStateUpdate;
 
 /// Codex Responses 上游 live SSE 响应。
@@ -449,7 +449,7 @@ pub(super) struct PreparedWebSocketRoute {
 }
 
 // ---------------------------------------------------------------------------
-// Response helpers
+// 响应辅助函数
 // ---------------------------------------------------------------------------
 
 pub(super) fn log_websocket_pool_decision(
@@ -587,7 +587,7 @@ pub(super) async fn read_capped_error_body(
 }
 
 // ---------------------------------------------------------------------------
-// Request helpers
+// 请求辅助函数
 // ---------------------------------------------------------------------------
 
 pub(super) fn websocket_upstream_request(request: &CodexResponsesRequest) -> CodexResponsesRequest {
@@ -649,7 +649,7 @@ pub(super) fn openai_subagent_from_metadata(client_metadata: Option<&Value>) -> 
 }
 
 // ---------------------------------------------------------------------------
-// Error conversion helpers
+// 错误转换辅助函数
 // ---------------------------------------------------------------------------
 
 pub(super) fn websocket_exchange_error_to_client_error(

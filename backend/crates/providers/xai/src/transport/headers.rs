@@ -35,17 +35,17 @@ impl fmt::Debug for GrokClientIdentity {
     }
 }
 
-/// Public or sensitive official Grok request header value.
+/// 官方 Grok 请求头的公开或敏感取值。
 #[derive(Clone)]
 pub enum GrokHeaderValue {
-    /// Non-sensitive protocol metadata.
+    /// 非敏感的协议元数据。
     Public(String),
-    /// OAuth, identity, or session value that must be redacted.
+    /// 必须脱敏的 OAuth、身份或会话值。
     Sensitive(SecretValue),
 }
 
 impl GrokHeaderValue {
-    /// Exposes a value only at the injected HTTP transport boundary.
+    /// 仅在注入的 HTTP transport 边界处暴露取值。
     #[must_use]
     pub fn expose(&self) -> &str {
         match self {
@@ -64,7 +64,7 @@ impl fmt::Debug for GrokHeaderValue {
     }
 }
 
-/// One official Grok CLI proxy request header.
+/// 一个官方 Grok CLI 代理请求头。
 #[derive(Debug, Clone)]
 pub struct GrokHeader {
     name: &'static str,
@@ -72,13 +72,13 @@ pub struct GrokHeader {
 }
 
 impl GrokHeader {
-    /// Returns the static header name.
+    /// 返回静态 header 名。
     #[must_use]
     pub const fn name(&self) -> &'static str {
         self.name
     }
 
-    /// Returns the typed header value.
+    /// 返回类型化的 header 值。
     #[must_use]
     pub const fn value(&self) -> &GrokHeaderValue {
         &self.value

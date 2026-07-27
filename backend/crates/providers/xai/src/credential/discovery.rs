@@ -5,8 +5,7 @@ use crate::{GrokOAuthConfig, OAuthError, OAuthOperation, ProtocolViolation};
 
 pub(crate) const MAX_OAUTH_RESPONSE_BYTES: usize = 64 * 1024;
 
-/// A discovery document whose issuer and endpoints have passed the official
-/// Grok Build origin policy.
+/// issuer 与端点均已通过官方 Grok Build origin 策略校验的发现文档。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveryDocument {
     issuer: Url,
@@ -70,38 +69,37 @@ impl DiscoveryDocument {
         })
     }
 
-    /// Returns the validated issuer from the discovery document.
+    /// 返回发现文档中已校验的 issuer。
     #[must_use]
     pub fn issuer(&self) -> &Url {
         &self.issuer
     }
 
-    /// Returns the validated authorization endpoint.
+    /// 返回已校验的 authorization 端点。
     #[must_use]
     pub fn authorization_endpoint(&self) -> &Url {
         &self.authorization_endpoint
     }
 
-    /// Returns the validated token endpoint.
+    /// 返回已校验的 token 端点。
     #[must_use]
     pub fn token_endpoint(&self) -> &Url {
         &self.token_endpoint
     }
 
-    /// Returns the validated JWKS endpoint required by an ID-token verifier.
+    /// 返回 ID token 校验器所需的已校验 JWKS 端点。
     #[must_use]
     pub fn jwks_uri(&self) -> &Url {
         &self.jwks_uri
     }
 
-    /// Returns the validated authoritative user-info endpoint.
+    /// 返回已校验的权威 user-info 端点。
     #[must_use]
     pub fn userinfo_endpoint(&self) -> &Url {
         &self.userinfo_endpoint
     }
 
-    /// Returns algorithms advertised by discovery. The verifier must still
-    /// enforce its own cryptographic allowlist.
+    /// 返回发现文档声明的算法；校验器仍须强制自身的密码学 allowlist。
     #[must_use]
     pub fn signing_algorithms(&self) -> &[String] {
         &self.signing_algorithms

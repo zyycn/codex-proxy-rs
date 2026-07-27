@@ -2,19 +2,18 @@ use std::fmt;
 
 use zeroize::Zeroizing;
 
-/// An in-memory secret whose debug output is always redacted and whose buffer
-/// is zeroized on drop.
+/// 内存中的 secret；debug 输出恒为脱敏，缓冲区在 drop 时清零。
 #[derive(Clone)]
 pub struct SecretValue(Zeroizing<String>);
 
 impl SecretValue {
-    /// Wraps an owned secret value.
+    /// 包装持有所有权的 secret 值。
     #[must_use]
     pub fn new(value: impl Into<String>) -> Self {
         Self(Zeroizing::new(value.into()))
     }
 
-    /// Exposes the secret only at an explicit protocol or transport boundary.
+    /// 仅在明确的协议或 transport 边界暴露 secret。
     #[must_use]
     pub fn expose(&self) -> &str {
         self.0.as_str()
