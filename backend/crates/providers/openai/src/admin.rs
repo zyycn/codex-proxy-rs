@@ -250,11 +250,22 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 command.document.into_provider_data().into_inner(),
             ))
             .await
+            .inspect_err(|error| {
+                log_import_failure("prepare_document", credential_admin_error_code(*error));
+            })
             .map_err(map_credential_admin_error)?;
         let observed_at = Utc::now();
         let mut credentials = Vec::with_capacity(prepared.accounts().len());
         for account in prepared.into_accounts() {
-            let account = self.preserve_existing_installation_id(account).await?;
+            let account = self
+                .preserve_existing_installation_id(account)
+                .await
+                .inspect_err(|error| {
+                    log_import_failure(
+                        "preserve_installation_id",
+                        provider_admin_error_code(error.kind()),
+                    );
+                })?;
             credentials.push(prepared_create(account, observed_at)?);
         }
         Ok(PreparedCredentialImport {
@@ -286,6 +297,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
         &self,
         command: CompleteAuthorization,
     ) -> Result<PreparedAuthorizationCommit, ProviderAdminError> {
+        let request_id = command.context.request_id.clone();
         let binding = AuthorizationOwnerBinding::from_context(&command.context);
         let completed = self
             .oauth
@@ -295,6 +307,14 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 callback_url: SecretString::from(command.callback_url),
             })
             .await
+            .inspect_err(|error| {
+                tracing::warn!(
+                    request_id = %request_id,
+                    oauth_stage = "complete_authorization",
+                    oauth_error = oauth_error_code(error),
+                    "OpenAI OAuth authorization completion failed"
+                );
+            })
             .map_err(map_oauth_error)?;
         let credential = match completed.credential {
             CompletedCodexOAuthCredential::Create(credential) => {
@@ -1211,6 +1231,44 @@ fn map_credential_admin_error(error: CodexCredentialAdminError) -> ProviderAdmin
     })
 }
 
+const fn credential_admin_error_code(error: CodexCredentialAdminError) -> &'static str {
+    match error {
+        CodexCredentialAdminError::InvalidInput => "invalid_input",
+        CodexCredentialAdminError::IdentityMismatch => "identity_mismatch",
+        CodexCredentialAdminError::InvalidCredential => "invalid_credential",
+        CodexCredentialAdminError::NotFound => "not_found",
+        CodexCredentialAdminError::RevisionConflict => "revision_conflict",
+        CodexCredentialAdminError::StoreUnavailable => "store_unavailable",
+        CodexCredentialAdminError::MissingRefreshToken => "missing_refresh_token",
+        CodexCredentialAdminError::RefreshLeaseUnavailable => "refresh_lease_unavailable",
+        CodexCredentialAdminError::RefreshRejected => "refresh_rejected",
+        CodexCredentialAdminError::AccountBanned => "account_banned",
+        CodexCredentialAdminError::RefreshUnavailable => "refresh_unavailable",
+        CodexCredentialAdminError::RefreshAmbiguous => "refresh_ambiguous",
+        CodexCredentialAdminError::IdentityRejected => "identity_rejected",
+        CodexCredentialAdminError::IdentityUnavailable => "identity_unavailable",
+    }
+}
+
+const fn provider_admin_error_code(kind: ProviderAdminErrorKind) -> &'static str {
+    match kind {
+        ProviderAdminErrorKind::Invalid => "invalid",
+        ProviderAdminErrorKind::Unsupported => "unsupported",
+        ProviderAdminErrorKind::NotFound => "not_found",
+        ProviderAdminErrorKind::Conflict => "conflict",
+        ProviderAdminErrorKind::Unavailable => "unavailable",
+        ProviderAdminErrorKind::Internal => "internal",
+    }
+}
+
+fn log_import_failure(stage: &'static str, error: &'static str) {
+    tracing::warn!(
+        import_stage = stage,
+        import_error = error,
+        "OpenAI credential import preparation failed"
+    );
+}
+
 fn map_oauth_error(error: CodexOAuthAdminError) -> ProviderAdminError {
     use CodexOAuthAdminError as Error;
     provider_admin_error(match error {
@@ -1223,6 +1281,20 @@ fn map_oauth_error(error: CodexOAuthAdminError) -> ProviderAdminError {
             ProviderAdminErrorKind::Unavailable
         }
     })
+}
+
+const fn oauth_error_code(error: &CodexOAuthAdminError) -> &'static str {
+    match error {
+        CodexOAuthAdminError::InvalidInput => "invalid_input",
+        CodexOAuthAdminError::NotFound => "not_found",
+        CodexOAuthAdminError::Conflict => "conflict",
+        CodexOAuthAdminError::FlowExpired => "flow_expired",
+        CodexOAuthAdminError::UpstreamRejected => "upstream_rejected",
+        CodexOAuthAdminError::UpstreamUnavailable => "upstream_unavailable",
+        CodexOAuthAdminError::Ambiguous => "ambiguous",
+        CodexOAuthAdminError::StorageUnavailable => "storage_unavailable",
+        CodexOAuthAdminError::Credential => "credential",
+    }
 }
 
 fn map_quota_error(error: CodexCredentialQuotaError) -> ProviderAdminError {

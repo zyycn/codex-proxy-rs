@@ -266,6 +266,129 @@ async fn completion_returns_verified_core_account_without_writing_store() {
 }
 
 #[tokio::test]
+async fn completion_accepts_unrelated_oauth_callback_parameters() {
+    let service = service();
+    let started = started(&service).await;
+    let state = Url::parse(&started.authorization_url)
+        .expect("authorization URL")
+        .query_pairs()
+        .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
+        .expect("state");
+
+    let prepared = service
+        .complete_authorization(CompleteCodexOAuthAuthorization {
+            owner_ref: owner_ref(),
+            flow_id: started.flow_id,
+            callback_url: SecretString::from(format!(
+                "http://localhost:1455/auth/callback?code=authorization-code&state={state}&scope=openid%20profile&iss=https%3A%2F%2Fauth.openai.com"
+            )),
+        })
+        .await
+        .expect("complete OAuth with standard callback parameters");
+
+    assert!(matches!(
+        prepared.credential,
+        CompletedCodexOAuthCredential::Create(_)
+    ));
+}
+
+#[tokio::test]
+async fn completion_rejects_repeated_code_callback_parameter() {
+    let service = service();
+    let started = started(&service).await;
+    let state = Url::parse(&started.authorization_url)
+        .expect("authorization URL")
+        .query_pairs()
+        .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
+        .expect("state");
+
+    let error = service
+        .complete_authorization(CompleteCodexOAuthAuthorization {
+            owner_ref: owner_ref(),
+            flow_id: started.flow_id,
+            callback_url: SecretString::from(format!(
+                "http://localhost:1455/auth/callback?code=authorization-code&code=another-code&state={state}"
+            )),
+        })
+        .await
+        .expect_err("repeated code");
+
+    assert_eq!(error, CodexOAuthAdminError::UpstreamRejected);
+}
+
+#[tokio::test]
+async fn completion_rejects_repeated_state_callback_parameter() {
+    let service = service();
+    let started = started(&service).await;
+    let state = Url::parse(&started.authorization_url)
+        .expect("authorization URL")
+        .query_pairs()
+        .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
+        .expect("state");
+
+    let error = service
+        .complete_authorization(CompleteCodexOAuthAuthorization {
+            owner_ref: owner_ref(),
+            flow_id: started.flow_id,
+            callback_url: SecretString::from(format!(
+                "http://localhost:1455/auth/callback?code=authorization-code&state={state}&state=another-state-value"
+            )),
+        })
+        .await
+        .expect_err("repeated state");
+
+    assert_eq!(error, CodexOAuthAdminError::UpstreamRejected);
+}
+
+struct UnavailableVerifier;
+
+#[async_trait]
+impl CodexAccountIdentityVerifier for UnavailableVerifier {
+    async fn verify(
+        &self,
+        _: &CodexOAuthSecret,
+        _: &CodexIdentityExpectation,
+    ) -> Result<CodexIdentityVerification, CodexIdentityVerificationError> {
+        Err(CodexIdentityVerificationError::Unavailable)
+    }
+
+    async fn verify_authorization(
+        &self,
+        _: &CodexOAuthSecret,
+        _: &SecretString,
+        _: &SecretString,
+        _: &CodexIdentityExpectation,
+    ) -> Result<CodexIdentityVerification, CodexIdentityVerificationError> {
+        Err(CodexIdentityVerificationError::Unavailable)
+    }
+}
+
+#[tokio::test]
+async fn completion_classifies_unavailable_identity_verification_as_upstream_unavailable() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let service = service_with_store(store, Arc::new(UnavailableVerifier));
+    let started = started(&service).await;
+    let state = Url::parse(&started.authorization_url)
+        .expect("authorization URL")
+        .query_pairs()
+        .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
+        .expect("state");
+
+    let error = service
+        .complete_authorization(CompleteCodexOAuthAuthorization {
+            owner_ref: owner_ref(),
+            flow_id: started.flow_id,
+            callback_url: SecretString::from(format!(
+                "http://localhost:1455/auth/callback?code=authorization-code&state={state}"
+            )),
+        })
+        .await
+        .expect_err("identity verification unavailable");
+
+    assert_eq!(error, CodexOAuthAdminError::UpstreamUnavailable);
+}
+
+#[tokio::test]
 async fn callback_state_mismatch_fails_closed_and_consumes_flow() {
     let service = service();
     let started = started(&service).await;
