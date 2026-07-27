@@ -359,6 +359,37 @@ async fn inference_transport_should_scope_forbidden_failures_from_safe_metadata(
 }
 
 #[tokio::test]
+async fn inference_transport_should_classify_free_usage_429_as_quota_exhausted() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+            "error": {
+                "code": "subscription:free-usage-exhausted",
+                "message": "You have used all your free usage"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let origin = Url::parse(&server.uri()).expect("wiremock origin");
+    let error = inference_transport(&origin)
+        .execute(inference_request(&origin))
+        .await
+        .expect_err("free usage exhaustion must fail");
+
+    assert_eq!(
+        error.kind(),
+        GrokInferenceTransportErrorKind::QuotaExhausted
+    );
+    assert_eq!(error.status(), Some(429));
+    assert_eq!(
+        error.upstream_code().map(|code| code.as_str()),
+        Some("subscription_free_usage_exhausted")
+    );
+}
+
+#[tokio::test]
 async fn inference_transport_should_bound_retry_after_to_the_safe_window() {
     for (header, expected) in [
         ("120", Some(Duration::from_secs(120))),
