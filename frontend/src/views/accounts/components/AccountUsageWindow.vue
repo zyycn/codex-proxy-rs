@@ -8,7 +8,7 @@ import {
   quotaWindowPercentTextClass,
 } from '../constants'
 
-type UsageWindowVariant = 'compact' | 'detail'
+type UsageWindowVariant = 'compact' | 'detail' | 'metric'
 type UsageWindowMode = 'quota' | 'local' | 'unknown'
 
 const props = withDefaults(
@@ -24,6 +24,7 @@ const props = withDefaults(
 )
 
 const isCompact = computed(() => props.variant === 'compact')
+const isMetric = computed(() => props.variant === 'metric')
 const localUsage = computed<AccountLocalUsage | null>(() => {
   const value = props.window?.localUsage
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -55,32 +56,56 @@ const quotaLocalUsageVisible = computed(() =>
   && localUsage.value.totalTokens > 0,
 )
 
+function variantValue(metric: string, compact: string, detail: string) {
+  if (isMetric.value)
+    return metric
+  if (isCompact.value)
+    return compact
+  return detail
+}
+
 const rootClass = computed(() =>
-  isCompact.value ? 'flex min-w-0 flex-col' : 'rounded-lg bg-(--cp-bg-subtle) p-2',
+  variantValue(
+    'grid min-w-0 grid-rows-[11px_14px] gap-1',
+    'flex min-w-0 flex-col',
+    'rounded-lg bg-(--cp-bg-subtle) p-2',
+  ),
 )
 const headerClass = computed(() =>
-  isCompact.value
-    ? 'mb-1 flex items-center justify-between gap-2 text-[11px] leading-none font-bold'
-    : 'flex items-center justify-between gap-3 text-[12px] font-bold',
+  variantValue(
+    'flex items-center justify-between gap-2 text-[11px] leading-none font-bold',
+    'mb-1 flex items-center justify-between gap-2 text-[11px] leading-none font-bold',
+    'flex items-center justify-between gap-3 text-[12px] font-bold',
+  ),
 )
 const labelClass = computed(() =>
-  isCompact.value ? 'text-(--cp-text-muted)' : 'text-(--cp-text-secondary)',
+  isCompact.value || isMetric.value ? 'text-(--cp-text-muted)' : 'text-(--cp-text-secondary)',
 )
 const valueClass = computed(() =>
-  isCompact.value
-    ? 'text-[10px] leading-none font-heavy'
-    : 'text-[12px] font-heavy',
+  variantValue(
+    'text-[11px] leading-none font-bold',
+    'text-[10px] leading-none font-heavy',
+    'text-[12px] font-heavy',
+  ),
+)
+const trackOffsetClass = computed(() =>
+  variantValue('self-center', 'mt-auto', 'mt-2'),
 )
 const trackShapeClass = computed(() =>
-  isCompact.value
-    ? 'h-1 w-full overflow-hidden rounded-full'
-    : 'h-2 overflow-hidden rounded-full',
+  variantValue(
+    'h-1.5 w-full overflow-hidden rounded-full',
+    'h-1 w-full overflow-hidden rounded-full',
+    'h-2 overflow-hidden rounded-full',
+  ),
 )
 const trackClass = computed(() => `${trackShapeClass.value} bg-(--cp-default-border)`)
 const barStyle = computed(() => {
   if (!props.window)
     return undefined
-  return quotaWindowBarStyle(props.window, isCompact.value ? '4px' : '8px')
+  return quotaWindowBarStyle(
+    props.window,
+    variantValue('6px', '4px', '8px'),
+  )
 })
 const barClass = computed(() => props.window ? quotaWindowBarClass(props.window) : undefined)
 const percentTextClass = computed(() =>
@@ -162,7 +187,7 @@ const requestBars = computed(() => {
         </span>
       </div>
       <div
-        :class="[trackClass, !isCompact ? 'mt-2' : 'mt-auto']"
+        :class="[trackClass, trackOffsetClass]"
         role="progressbar"
         :aria-label="window.labelDisplay"
         aria-valuemin="0"
@@ -198,7 +223,7 @@ const requestBars = computed(() => {
       </div>
       <div
         class="flex items-stretch gap-px"
-        :class="[trackShapeClass, !isCompact ? 'mt-2' : 'mt-auto']"
+        :class="[trackShapeClass, trackOffsetClass]"
         role="img"
         :aria-label="requestTimelineTitle"
         :title="requestTimelineTitle"
