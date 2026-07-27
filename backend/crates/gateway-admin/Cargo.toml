@@ -14,7 +14,7 @@ path = "tests/main.rs"
 [dependencies]
 argon2 = "0.5.3"
 async-trait = "0.1.89"
-base64 = "0.22.1"
+base64 = "0.23.0"
 chrono = "0.4.45"
 futures = "0.3.32"
 gateway-core = { path = "../gateway-core" }
