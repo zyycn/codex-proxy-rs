@@ -25,7 +25,7 @@ tokio = { version = "1.52.3", default-features = false, features = ["rt-multi-th
 
 [dev-dependencies]
 config = { version = "0.15.23", default-features = false, features = ["yaml"] }
-syn = { version = "2.0.118", features = ["full"] }
+syn = { version = "3.0.3", features = ["full"] }
 tempfile = "3.27.0"
 
 [lints]
