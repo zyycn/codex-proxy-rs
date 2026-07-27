@@ -1714,6 +1714,7 @@ fn explicit_rejection_is_replay_safe(kind: ProviderErrorKind, status: u16) -> bo
         (ProviderErrorKind::Unauthorized, 401)
             | (ProviderErrorKind::QuotaExhausted, 402)
             | (ProviderErrorKind::QuotaExhausted, 403)
+            | (ProviderErrorKind::QuotaExhausted, 429)
             | (ProviderErrorKind::RateLimited, 429)
     )
 }

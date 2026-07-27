@@ -1209,6 +1209,23 @@ async fn explicit_http_429_marks_provider_error_replay_safe() {
 }
 
 #[tokio::test]
+async fn explicit_quota_http_429_marks_provider_error_replay_safe() {
+    let error = mapped_transport_error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::QuotaExhausted,
+            UpstreamSendState::Sent,
+        )
+        .with_status(429),
+        false,
+    )
+    .await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::QuotaExhausted);
+    assert_eq!(error.upstream_status(), Some(429));
+    assert!(error.replay_is_safe());
+}
+
+#[tokio::test]
 async fn explicit_http_408_does_not_mark_provider_error_replay_safe() {
     let error = mapped_transport_error(
         GrokInferenceTransportError::new(

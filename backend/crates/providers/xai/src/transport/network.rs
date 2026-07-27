@@ -1003,7 +1003,13 @@ async fn classify_inference_status(response: Response) -> GrokInferenceTransport
         StatusCode::REQUEST_TIMEOUT | StatusCode::GATEWAY_TIMEOUT => {
             GrokInferenceTransportErrorKind::Timeout
         }
-        StatusCode::TOO_MANY_REQUESTS => GrokInferenceTransportErrorKind::RateLimited,
+        StatusCode::TOO_MANY_REQUESTS => {
+            if quota_exhausted(&metadata) {
+                GrokInferenceTransportErrorKind::QuotaExhausted
+            } else {
+                GrokInferenceTransportErrorKind::RateLimited
+            }
+        }
         status if status.is_server_error() => GrokInferenceTransportErrorKind::Unavailable,
         _ => GrokInferenceTransportErrorKind::Protocol,
     };
@@ -1070,17 +1076,10 @@ fn first_string(object: &serde_json::Map<String, Value>, fields: &[&str]) -> Opt
 }
 
 fn classify_forbidden(metadata: &InferenceErrorMetadata) -> GrokInferenceTransportErrorKind {
-    let text = forbidden_metadata_text(metadata);
+    let text = inference_metadata_text(metadata);
     if credential_rejected(&text) {
         GrokInferenceTransportErrorKind::Unauthorized
-    } else if contains_any(
-        &text,
-        &[
-            "subscription:free-usage-exhausted",
-            "used all the included free usage for model",
-            "personal-team-blocked:spending-limit",
-        ],
-    ) {
+    } else if quota_exhausted(metadata) {
         GrokInferenceTransportErrorKind::QuotaExhausted
     } else {
         GrokInferenceTransportErrorKind::PermissionDenied
@@ -1088,7 +1087,7 @@ fn classify_forbidden(metadata: &InferenceErrorMetadata) -> GrokInferenceTranspo
 }
 
 fn forbidden_requires_recovery(metadata: &InferenceErrorMetadata) -> bool {
-    let text = forbidden_metadata_text(metadata);
+    let text = inference_metadata_text(metadata);
     credential_rejected(&text)
         || text.contains("access to the chat endpoint is denied")
         || text.trim_matches([' ', '.', '!', '\t', '\r', '\n']) == "access denied"
@@ -1101,7 +1100,23 @@ fn reasoning_decode_failed(metadata: &InferenceErrorMetadata) -> bool {
     })
 }
 
-fn forbidden_metadata_text(metadata: &InferenceErrorMetadata) -> String {
+fn quota_exhausted(metadata: &InferenceErrorMetadata) -> bool {
+    contains_any(
+        &inference_metadata_text(metadata),
+        &[
+            "subscription:free-usage-exhausted",
+            "subscription_free_usage_exhausted",
+            "free-usage-exhausted",
+            "free_usage_exhausted",
+            "used all the included free usage",
+            "used all your free usage",
+            "personal-team-blocked:spending-limit",
+            "personal_team_blocked_spending_limit",
+        ],
+    )
+}
+
+fn inference_metadata_text(metadata: &InferenceErrorMetadata) -> String {
     [
         metadata.code.as_deref().unwrap_or_default(),
         metadata.error_type.as_deref().unwrap_or_default(),
