@@ -342,7 +342,6 @@ pub(super) struct FakeAccountStore {
     account: AccountRecord,
     fail_commit: Mutex<bool>,
     audit_requests: Mutex<Vec<String>>,
-    authorization_revision: Mutex<Option<Revision>>,
     quota_window_usage: Mutex<Vec<AccountUsageWindowResult>>,
 }
 
@@ -353,7 +352,6 @@ impl FakeAccountStore {
             account: account_record(kind),
             fail_commit: Mutex::new(false),
             audit_requests: Mutex::new(Vec::new()),
-            authorization_revision: Mutex::new(None),
             quota_window_usage: Mutex::new(Vec::new()),
         })
     }
@@ -364,13 +362,6 @@ impl FakeAccountStore {
 
     pub(super) fn audit_requests(&self) -> Vec<String> {
         self.audit_requests.lock().expect("audit requests").clone()
-    }
-
-    pub(super) fn authorization_revision(&self) -> Option<Revision> {
-        *self
-            .authorization_revision
-            .lock()
-            .expect("authorization revision")
     }
 
     pub(super) fn set_quota_window_usage(&self, usage: Vec<AccountUsageWindowResult>) {
@@ -519,10 +510,6 @@ impl AccountStore for FakeAccountStore {
     ) -> AdminStoreResult<CredentialMutationResult> {
         self.record("store.commit_authorization");
         self.record_context(context);
-        *self
-            .authorization_revision
-            .lock()
-            .expect("authorization revision") = Some(command.pending.expected_config_revision());
         self.require_commit()?;
         let (account_id, credential_revision) = match command.credential {
             AuthorizationCredentialCommit::Create(credential) => (credential.account_id, None),
@@ -627,7 +614,6 @@ impl SettingsStore for StaticSettingsStore {
 
     async fn replace_admin_api_key(
         &self,
-        _: Revision,
         _: AdminApiKey,
         _: &MutationContext,
     ) -> AdminStoreResult<AdminApiKeyMutation> {
@@ -636,7 +622,6 @@ impl SettingsStore for StaticSettingsStore {
 
     async fn delete_admin_api_key(
         &self,
-        _: Revision,
         _: &MutationContext,
     ) -> AdminStoreResult<AdminApiKeyMutation> {
         Err(store_unavailable())
@@ -769,7 +754,6 @@ async fn accounts_refresh_should_keep_guard_through_store_commit() {
         .accounts()
         .refresh(
             &context("refresh-request"),
-            revision(1),
             ProviderAccountId::new("acct_test").expect("account ID"),
         )
         .await
@@ -882,7 +866,6 @@ async fn accounts_refresh_provider_failure_should_not_call_store_commit() {
         .accounts()
         .refresh(
             &context("refresh-provider-error"),
-            revision(1),
             ProviderAccountId::new("acct_test").expect("account ID"),
         )
         .await
@@ -895,7 +878,7 @@ async fn accounts_refresh_provider_failure_should_not_call_store_commit() {
 }
 
 #[tokio::test]
-async fn accounts_refresh_store_failure_should_drop_guard_after_cas_attempt() {
+async fn accounts_refresh_store_failure_should_drop_guard_after_commit_attempt() {
     let events = events();
     let provider = FakeProviderAdmin::new("openai", events.clone());
     let store = FakeAccountStore::new("openai", events.clone());
@@ -906,11 +889,10 @@ async fn accounts_refresh_store_failure_should_drop_guard_after_cas_attempt() {
         .accounts()
         .refresh(
             &context("refresh-store-error"),
-            revision(1),
             ProviderAccountId::new("acct_test").expect("account ID"),
         )
         .await
-        .expect_err("Store CAS must fail");
+        .expect_err("Store commit must fail");
 
     assert_eq!(
         recorded(&events),
@@ -1039,7 +1021,7 @@ fn prepared_create_with_id(
 
 fn rotation_result(command: CredentialRotationCommit) -> CredentialMutationResult {
     CredentialMutationResult {
-        config_revision: revision(command.expected_config_revision.get() + 1),
+        config_revision: revision(2),
         account_id: command.prepared.account_id,
         credential_revision: Some(revision(
             command.prepared.expected_credential_revision.get() + 1,

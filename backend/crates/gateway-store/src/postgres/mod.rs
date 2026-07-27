@@ -74,27 +74,23 @@ pub trait ControlPlaneRepository: Send + Sync {
 
     async fn replace_control_plane(
         &self,
-        expected_revision: Revision,
         replacement: ControlPlaneReplacement,
     ) -> StoreResult<ControlPlaneSnapshot>;
 
     async fn create_client_api_key(
         &self,
-        expected_revision: Revision,
         key: NewClientApiKey,
         audit: AdminAuditEvent,
     ) -> StoreResult<Revision>;
 
     async fn update_client_api_key(
         &self,
-        expected_revision: Revision,
         key: UpdateClientApiKeyDetails,
         audit: AdminAuditEvent,
     ) -> StoreResult<Revision>;
 
     async fn set_client_api_key_enabled(
         &self,
-        expected_revision: Revision,
         id: &str,
         enabled: bool,
         audit: AdminAuditEvent,
@@ -102,7 +98,6 @@ pub trait ControlPlaneRepository: Send + Sync {
 
     async fn delete_client_api_key(
         &self,
-        expected_revision: Revision,
         id: &str,
         audit: AdminAuditEvent,
     ) -> StoreResult<Revision>;
@@ -142,7 +137,6 @@ impl ControlPlaneRepository for PgControlPlaneRepository {
 
     async fn replace_control_plane(
         &self,
-        expected_revision: Revision,
         replacement: ControlPlaneReplacement,
     ) -> StoreResult<ControlPlaneSnapshot> {
         replacement.settings.validate()?;
@@ -152,12 +146,9 @@ impl ControlPlaneRepository for PgControlPlaneRepository {
             .await
             .map_err(|_| postgres_unavailable("begin control plane replacement"))?;
         let result = async {
-            let revision = update_runtime_settings_in_transaction(
-                &mut transaction,
-                expected_revision,
-                &replacement.settings,
-            )
-            .await?;
+            let revision =
+                update_runtime_settings_in_transaction(&mut transaction, &replacement.settings)
+                    .await?;
             append_admin_audit_event_in_transaction(&mut transaction, replacement.audit, revision)
                 .await?;
             load_control_plane_in_transaction(&mut transaction).await
@@ -183,41 +174,29 @@ impl ControlPlaneRepository for PgControlPlaneRepository {
 
     async fn create_client_api_key(
         &self,
-        expected_revision: Revision,
         key: NewClientApiKey,
         audit: AdminAuditEvent,
     ) -> StoreResult<Revision> {
-        self.apply_targeted_mutation(
-            expected_revision,
-            ControlPlaneMutation::CreateClientApiKey(key),
-            audit,
-        )
-        .await
+        self.apply_targeted_mutation(ControlPlaneMutation::CreateClientApiKey(key), audit)
+            .await
     }
 
     async fn update_client_api_key(
         &self,
-        expected_revision: Revision,
         key: UpdateClientApiKeyDetails,
         audit: AdminAuditEvent,
     ) -> StoreResult<Revision> {
-        self.apply_targeted_mutation(
-            expected_revision,
-            ControlPlaneMutation::UpdateClientApiKey(key),
-            audit,
-        )
-        .await
+        self.apply_targeted_mutation(ControlPlaneMutation::UpdateClientApiKey(key), audit)
+            .await
     }
 
     async fn set_client_api_key_enabled(
         &self,
-        expected_revision: Revision,
         id: &str,
         enabled: bool,
         audit: AdminAuditEvent,
     ) -> StoreResult<Revision> {
         self.apply_targeted_mutation(
-            expected_revision,
             ControlPlaneMutation::SetClientApiKeyEnabled {
                 id: id.to_owned(),
                 enabled,
@@ -229,12 +208,10 @@ impl ControlPlaneRepository for PgControlPlaneRepository {
 
     async fn delete_client_api_key(
         &self,
-        expected_revision: Revision,
         id: &str,
         audit: AdminAuditEvent,
     ) -> StoreResult<Revision> {
         self.apply_targeted_mutation(
-            expected_revision,
             ControlPlaneMutation::DeleteClientApiKey(id.to_owned()),
             audit,
         )
@@ -252,7 +229,6 @@ enum ControlPlaneMutation {
 impl PgControlPlaneRepository {
     async fn apply_targeted_mutation(
         &self,
-        expected_revision: Revision,
         mutation: ControlPlaneMutation,
         audit: AdminAuditEvent,
     ) -> StoreResult<Revision> {
@@ -262,8 +238,7 @@ impl PgControlPlaneRepository {
             .await
             .map_err(|_| postgres_unavailable("begin targeted control plane mutation"))?;
         let result = async {
-            let revision =
-                bump_config_revision_in_transaction(&mut transaction, expected_revision).await?;
+            let revision = bump_config_revision_in_transaction(&mut transaction).await?;
             match mutation {
                 ControlPlaneMutation::CreateClientApiKey(key) => {
                     insert_client_api_key_in_transaction(&mut transaction, &key).await?;

@@ -485,25 +485,21 @@ pub trait ProviderAccountAdminRepository: Send + Sync {
 
     async fn import_provider_accounts(
         &self,
-        expected_config_revision: Revision,
         command: ImportProviderAccounts,
     ) -> StoreResult<ProviderAccountAdminImport>;
 
     async fn rotate_provider_account(
         &self,
-        expected_config_revision: Revision,
         command: RotateProviderAccount,
     ) -> StoreResult<ProviderAccountAdminRotation>;
 
     async fn set_provider_account_enabled_admin(
         &self,
-        expected_config_revision: Revision,
         command: SetProviderAccountEnabled,
     ) -> StoreResult<Revision>;
 
     async fn delete_provider_accounts_admin(
         &self,
-        expected_config_revision: Revision,
         command: DeleteProviderAccounts,
     ) -> StoreResult<Revision>;
 }
@@ -767,7 +763,6 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
 
     async fn import_provider_accounts(
         &self,
-        expected_config_revision: Revision,
         command: ImportProviderAccounts,
     ) -> StoreResult<ProviderAccountAdminImport> {
         command.validate()?;
@@ -777,9 +772,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
             .await
             .map_err(|_| postgres_unavailable("begin provider account admin import"))?;
         let result = async {
-            let revision =
-                bump_config_revision_in_transaction(&mut transaction, expected_config_revision)
-                    .await?;
+            let revision = bump_config_revision_in_transaction(&mut transaction).await?;
             let mut account_ids = Vec::with_capacity(command.accounts.len());
             for account in &command.accounts {
                 account_ids
@@ -798,7 +791,6 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
 
     async fn rotate_provider_account(
         &self,
-        expected_config_revision: Revision,
         command: RotateProviderAccount,
     ) -> StoreResult<ProviderAccountAdminRotation> {
         command.scope.validate()?;
@@ -814,9 +806,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
             .await
             .map_err(|_| postgres_unavailable("begin provider account admin rotation"))?;
         let result = async {
-            let config_revision =
-                bump_config_revision_in_transaction(&mut transaction, expected_config_revision)
-                    .await?;
+            let config_revision = bump_config_revision_in_transaction(&mut transaction).await?;
             let credential_revision = rotate_provider_account_in_transaction(
                 &mut transaction,
                 &command.scope,
@@ -841,7 +831,6 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
 
     async fn set_provider_account_enabled_admin(
         &self,
-        expected_config_revision: Revision,
         command: SetProviderAccountEnabled,
     ) -> StoreResult<Revision> {
         command.scope.validate()?;
@@ -852,9 +841,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
             .await
             .map_err(|_| postgres_unavailable("begin provider account admin state change"))?;
         let result = async {
-            let revision =
-                bump_config_revision_in_transaction(&mut transaction, expected_config_revision)
-                    .await?;
+            let revision = bump_config_revision_in_transaction(&mut transaction).await?;
             set_provider_account_enabled_in_transaction(
                 &mut transaction,
                 &command.scope,
@@ -872,7 +859,6 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
 
     async fn delete_provider_accounts_admin(
         &self,
-        expected_config_revision: Revision,
         command: DeleteProviderAccounts,
     ) -> StoreResult<Revision> {
         command.scope.validate()?;
@@ -883,9 +869,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
             .await
             .map_err(|_| postgres_unavailable("begin provider account admin deletion"))?;
         let result = async {
-            let revision =
-                bump_config_revision_in_transaction(&mut transaction, expected_config_revision)
-                    .await?;
+            let revision = bump_config_revision_in_transaction(&mut transaction).await?;
             delete_provider_accounts_in_transaction(
                 &mut transaction,
                 &command.scope,
@@ -1032,7 +1016,6 @@ impl PgAdminAccountStore {
 
     async fn commit_prepared_import(
         &self,
-        expected_config_revision: AdminRevision,
         prepared: PreparedCredentialImport,
         context: &MutationContext,
         action: &str,
@@ -1046,22 +1029,19 @@ impl PgAdminAccountStore {
             .map_err(|error| admin_store_error(ENTITY, error))?;
         let imported = self
             .accounts
-            .import_provider_accounts(
-                store_revision(expected_config_revision)?,
-                ImportProviderAccounts {
-                    scope: ProviderAccountAdminScope {
-                        provider_kind: provider_kind.clone(),
-                    },
-                    accounts,
-                    audit: mutation_audit(
-                        context,
-                        action,
-                        "provider_account",
-                        &provider_kind,
-                        vec!["credentials".to_owned()],
-                    ),
+            .import_provider_accounts(ImportProviderAccounts {
+                scope: ProviderAccountAdminScope {
+                    provider_kind: provider_kind.clone(),
                 },
-            )
+                accounts,
+                audit: mutation_audit(
+                    context,
+                    action,
+                    "provider_account",
+                    &provider_kind,
+                    vec!["credentials".to_owned()],
+                ),
+            })
             .await
             .map_err(|error| admin_store_error(ENTITY, error))?;
         Ok(CredentialImportResult {
@@ -1083,7 +1063,6 @@ impl PgAdminAccountStore {
 
     async fn commit_prepared_rotation(
         &self,
-        expected_config_revision: AdminRevision,
         prepared: PreparedCredentialRotationFacts,
         context: &MutationContext,
         action: &str,
@@ -1094,36 +1073,31 @@ impl PgAdminAccountStore {
         };
         let rotation = self
             .accounts
-            .rotate_provider_account(
-                store_revision(expected_config_revision)?,
-                RotateProviderAccount {
-                    scope,
-                    profile: UpdateProviderAccount {
-                        id: account_id.as_str().to_owned(),
-                        name: prepared.name,
-                        email: prepared.email,
-                        plan_type: prepared.plan_type,
-                    },
-                    credential: ProviderCredentialUpdate {
-                        account_id: account_id.as_str().to_owned(),
-                        expected_revision: store_revision(prepared.expected_credential_revision)?,
-                        provider_credentials_json: provider_document_json(
-                            prepared.provider_material,
-                        )
-                        .map_err(|error| admin_store_error(ENTITY, error))?,
-                        has_refresh_token: prepared.has_refresh_token,
-                        access_token_expires_at: prepared.access_token_expires_at,
-                        next_refresh_at: prepared.next_refresh_at,
-                    },
-                    audit: mutation_audit(
-                        context,
-                        action,
-                        "provider_account",
-                        account_id.as_str(),
-                        vec!["credentials".to_owned()],
-                    ),
+            .rotate_provider_account(RotateProviderAccount {
+                scope,
+                profile: UpdateProviderAccount {
+                    id: account_id.as_str().to_owned(),
+                    name: prepared.name,
+                    email: prepared.email,
+                    plan_type: prepared.plan_type,
                 },
-            )
+                credential: ProviderCredentialUpdate {
+                    account_id: account_id.as_str().to_owned(),
+                    expected_revision: store_revision(prepared.expected_credential_revision)?,
+                    provider_credentials_json: provider_document_json(prepared.provider_material)
+                        .map_err(|error| admin_store_error(ENTITY, error))?,
+                    has_refresh_token: prepared.has_refresh_token,
+                    access_token_expires_at: prepared.access_token_expires_at,
+                    next_refresh_at: prepared.next_refresh_at,
+                },
+                audit: mutation_audit(
+                    context,
+                    action,
+                    "provider_account",
+                    account_id.as_str(),
+                    vec!["credentials".to_owned()],
+                ),
+            })
             .await
             .map_err(|error| admin_store_error(ENTITY, error))?;
         Ok(CredentialMutationResult {
@@ -1383,13 +1357,8 @@ impl AccountStore for PgAdminAccountStore {
         command: CredentialImportCommit,
         context: &MutationContext,
     ) -> AdminStoreResult<CredentialImportResult> {
-        self.commit_prepared_import(
-            command.expected_config_revision,
-            command.prepared,
-            context,
-            "import_document",
-        )
-        .await
+        self.commit_prepared_import(command.prepared, context, "import_document")
+            .await
     }
 
     async fn commit_authorization(
@@ -1397,13 +1366,11 @@ impl AccountStore for PgAdminAccountStore {
         command: AuthorizationCommit,
         context: &MutationContext,
     ) -> AdminStoreResult<CredentialMutationResult> {
-        let expected_config_revision = command.pending.expected_config_revision();
         match command.credential {
             AuthorizationCredentialCommit::Create(credential) => {
                 let account_id = credential.account_id.clone();
                 let result = self
                     .commit_prepared_import(
-                        expected_config_revision,
                         PreparedCredentialImport {
                             provider_kind: credential.provider_kind.clone(),
                             credentials: vec![credential],
@@ -1431,13 +1398,8 @@ impl AccountStore for PgAdminAccountStore {
                 })
             }
             AuthorizationCredentialCommit::Reauthorize(prepared) => {
-                self.commit_prepared_rotation(
-                    expected_config_revision,
-                    prepared,
-                    context,
-                    "reauthorize",
-                )
-                .await
+                self.commit_prepared_rotation(prepared, context, "reauthorize")
+                    .await
             }
         }
     }
@@ -1447,13 +1409,8 @@ impl AccountStore for PgAdminAccountStore {
         command: CredentialRotationCommit,
         context: &MutationContext,
     ) -> AdminStoreResult<CredentialMutationResult> {
-        self.commit_prepared_rotation(
-            command.expected_config_revision,
-            command.prepared,
-            context,
-            "rotate_credential",
-        )
-        .await
+        self.commit_prepared_rotation(command.prepared, context, "rotate_credential")
+            .await
     }
 
     async fn commit_credential_refresh(
@@ -1461,13 +1418,8 @@ impl AccountStore for PgAdminAccountStore {
         command: CredentialRotationCommit,
         context: &MutationContext,
     ) -> AdminStoreResult<CredentialMutationResult> {
-        self.commit_prepared_rotation(
-            command.expected_config_revision,
-            command.prepared,
-            context,
-            "refresh_credential",
-        )
-        .await
+        self.commit_prepared_rotation(command.prepared, context, "refresh_credential")
+            .await
     }
 
     async fn set_account_enabled(
@@ -1478,21 +1430,18 @@ impl AccountStore for PgAdminAccountStore {
         let scope = self.required_scope(&command.account_id).await?;
         let action = if command.enabled { "enable" } else { "disable" };
         self.accounts
-            .set_provider_account_enabled_admin(
-                store_revision(command.expected_config_revision)?,
-                SetProviderAccountEnabled {
-                    scope,
-                    account_id: command.account_id.clone(),
-                    enabled: command.enabled,
-                    audit: mutation_audit(
-                        context,
-                        action,
-                        "provider_account",
-                        &command.account_id,
-                        vec!["enabled".to_owned()],
-                    ),
-                },
-            )
+            .set_provider_account_enabled_admin(SetProviderAccountEnabled {
+                scope,
+                account_id: command.account_id.clone(),
+                enabled: command.enabled,
+                audit: mutation_audit(
+                    context,
+                    action,
+                    "provider_account",
+                    &command.account_id,
+                    vec!["enabled".to_owned()],
+                ),
+            })
             .await
             .map_err(|error| admin_store_error(ENTITY, error))
             .and_then(admin_revision)
@@ -1517,20 +1466,17 @@ impl AccountStore for PgAdminAccountStore {
             "provider_accounts".to_owned()
         };
         self.accounts
-            .delete_provider_accounts_admin(
-                store_revision(command.expected_config_revision)?,
-                DeleteProviderAccounts {
-                    scope,
-                    account_ids: command.account_ids,
-                    audit: mutation_audit(
-                        context,
-                        "delete",
-                        "provider_account",
-                        &audit_target,
-                        Vec::new(),
-                    ),
-                },
-            )
+            .delete_provider_accounts_admin(DeleteProviderAccounts {
+                scope,
+                account_ids: command.account_ids,
+                audit: mutation_audit(
+                    context,
+                    "delete",
+                    "provider_account",
+                    &audit_target,
+                    Vec::new(),
+                ),
+            })
             .await
             .map_err(|error| admin_store_error(ENTITY, error))
             .and_then(admin_revision)

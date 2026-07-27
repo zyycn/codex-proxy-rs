@@ -108,7 +108,6 @@ async fn pending_authorization(
         },
     };
     Ok(PendingAuthorizationMutation::new(
-        command.expected_config_revision,
         provider_kind.clone(),
         target,
         crate::model::provider_credentials::AuthorizationOwnerBinding::from_context(
@@ -215,20 +214,13 @@ async fn commit_authorization(
 
 async fn commit_credential_rotation(
     accounts: &dyn AccountStore,
-    expected_config_revision: crate::model::Revision,
     prepared: PreparedCredentialRotation,
     context: &MutationContext,
     resource: &'static str,
 ) -> Result<CredentialMutationResult, AdminError> {
     let (facts, guard) = prepared.into_parts();
     match accounts
-        .commit_credential_rotation(
-            CredentialRotationCommit {
-                expected_config_revision,
-                prepared: facts,
-            },
-            context,
-        )
+        .commit_credential_rotation(CredentialRotationCommit { prepared: facts }, context)
         .await
     {
         Ok(result) => {
@@ -244,20 +236,13 @@ async fn commit_credential_rotation(
 
 async fn commit_credential_refresh(
     accounts: &dyn AccountStore,
-    expected_config_revision: crate::model::Revision,
     prepared: PreparedCredentialRotation,
     context: &MutationContext,
     resource: &'static str,
 ) -> Result<CredentialMutationResult, AdminError> {
     let (facts, guard) = prepared.into_parts();
     match accounts
-        .commit_credential_refresh(
-            CredentialRotationCommit {
-                expected_config_revision,
-                prepared: facts,
-            },
-            context,
-        )
+        .commit_credential_refresh(CredentialRotationCommit { prepared: facts }, context)
         .await
     {
         Ok(result) => {
@@ -289,7 +274,6 @@ async fn set_credential_enabled(
     let revision = accounts
         .set_account_enabled(
             SetAccountEnabled {
-                expected_config_revision: command.expected_config_revision,
                 account_id: account_id.as_str().to_owned(),
                 enabled,
             },
@@ -320,7 +304,6 @@ async fn delete_credentials(
     let revision = accounts
         .delete_accounts(
             DeleteAccounts {
-                expected_config_revision: command.expected_config_revision,
                 account_ids: account_ids
                     .iter()
                     .map(|account_id| account_id.as_str().to_owned())

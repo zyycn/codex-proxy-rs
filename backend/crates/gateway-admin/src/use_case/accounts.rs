@@ -15,7 +15,7 @@ use gateway_core::{
 
 use crate::{
     model::{
-        AdminError, MutationContext, Revision,
+        AdminError, MutationContext,
         accounts::{
             AccountConnectionTestEvent, AccountConnectionTestEventStream, AccountListQuery,
             AccountRecord, AccountStatus, AccountUsageWindowQuery,
@@ -54,7 +54,6 @@ pub trait AccountsService: Send + Sync {
     async fn refresh(
         &self,
         context: &MutationContext,
-        expected_config_revision: Revision,
         account_id: ProviderAccountId,
     ) -> Result<AccountRefreshResult, AdminError>;
 
@@ -354,7 +353,6 @@ impl AccountsService for DefaultAccountsService {
     async fn refresh(
         &self,
         context: &MutationContext,
-        expected_config_revision: Revision,
         account_id: ProviderAccountId,
     ) -> Result<AccountRefreshResult, AdminError> {
         let (account, provider) = self.provider_for_account(&account_id).await?;
@@ -367,7 +365,6 @@ impl AccountsService for DefaultAccountsService {
         validate_prepared_rotation(&account, &prepared, "provider credential refresh")?;
         let result = commit_credential_refresh(
             self.accounts.as_ref(),
-            expected_config_revision,
             prepared,
             context,
             "provider credential refresh",

@@ -15,14 +15,12 @@ export interface ApiKey {
 }
 
 export interface ApiKeyListResponse {
-  configRevision: number
   items: ApiKey[]
   nextCursor: string | null
   total: number
 }
 
 export interface ApiKeyCreateResponse {
-  configRevision: number
   id: string
   prefix: string
   plaintextKey: string
@@ -34,7 +32,6 @@ export interface ApiKeyRevealResponse {
 }
 
 export interface ApiKeyMutationResponse {
-  configRevision: number
   id: string
 }
 

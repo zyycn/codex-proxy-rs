@@ -13,7 +13,6 @@ import {
   refreshAccount,
   refreshAccountQuota,
 } from '@/api'
-import { ApiError } from '@/api/request'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useDownload } from '@/composables/useDownload'
@@ -39,14 +38,12 @@ export function useAccountMutations(options: {
   sort: Ref<BaseTableSort | undefined>
   selectedIds: Ref<Set<string>>
   totalAccounts: Ref<number>
-  configRevision: Ref<number>
   reload: () => Promise<unknown>
 }) {
   const loadAccounts = options.reload
   const { downloadJson } = useDownload()
   const onboarding = useAccountOnboarding({
     reload: loadAccounts,
-    configRevision: options.configRevision,
   })
   const selectedAccountsById = new Map<string, AccountRow>()
   const showDeleteModal = ref(false)
@@ -169,10 +166,8 @@ export function useAccountMutations(options: {
         const result = await withMinimumDuration(() =>
           refreshAccount({
             accountId,
-            expectedConfigRevision: options.configRevision.value,
           }),
         )
-        onboarding.commitConfigRevision(result.configRevision)
         await loadAccounts()
         if (result.result === 'skipped') {
           toast.warning(result.error || 'Token 正在刷新中')
@@ -308,22 +303,12 @@ export function useAccountMutations(options: {
     const payload = {
       provider: account.provider,
       accountId: account.id,
-      expectedConfigRevision: await onboarding.requireConfigRevision(),
     }
-    try {
-      const result = action === 'enable'
-        ? await enableAccount(payload)
-        : await disableAccount(payload)
-      if (!result)
-        throw new Error(`不支持的 Provider：${account.provider}`)
-      onboarding.commitConfigRevision(result.configRevision)
-    }
-    catch (error) {
-      if (error instanceof ApiError && error.status === 409) {
-        await loadAccounts()
-      }
-      throw error
-    }
+    const result = action === 'enable'
+      ? await enableAccount(payload)
+      : await disableAccount(payload)
+    if (!result)
+      throw new Error(`不支持的 Provider：${account.provider}`)
   }
 
   async function deleteAccountBatch(accounts: AccountRow[]) {
@@ -333,20 +318,10 @@ export function useAccountMutations(options: {
     const payload = {
       provider: account.provider,
       accountIds: accounts.map(account => account.id),
-      expectedConfigRevision: await onboarding.requireConfigRevision(),
     }
-    try {
-      const result = await deleteAccounts(payload)
-      if (!result)
-        throw new Error(`不支持的 Provider：${account.provider}`)
-      onboarding.commitConfigRevision(result.configRevision)
-    }
-    catch (error) {
-      if (error instanceof ApiError && error.status === 409) {
-        await loadAccounts()
-      }
-      throw error
-    }
+    const result = await deleteAccounts(payload)
+    if (!result)
+      throw new Error(`不支持的 Provider：${account.provider}`)
   }
 
   function accountDeletionGroups(accounts: AccountRow[]) {

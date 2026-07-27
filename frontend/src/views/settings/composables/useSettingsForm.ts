@@ -13,7 +13,6 @@ export function useSettingsForm() {
   const error = shallowRef('')
   const mappings = ref<Array<{ requestedModel: string, upstreamModel: string }>>([])
   const form = reactive({
-    configRevision: 0,
     refreshMarginSeconds: null as number | null,
     refreshConcurrency: null as number | null,
     maxConcurrentPerAccount: null as number | null,
@@ -44,7 +43,6 @@ export function useSettingsForm() {
   const requestIntervalMsValue = numericModel('requestIntervalMs')
 
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
-    form.configRevision = data.configRevision
     form.refreshMarginSeconds = data.refreshMarginSeconds
     form.refreshConcurrency = data.refreshConcurrency
     form.maxConcurrentPerAccount = data.maxConcurrentPerAccount
@@ -117,7 +115,6 @@ export function useSettingsForm() {
     try {
       saving.value = true
       const result = await updateSettings({
-        expectedConfigRevision: form.configRevision,
         modelMappings: mappingPayload(),
         refreshMarginSeconds,
         refreshConcurrency,

@@ -60,11 +60,11 @@ fn observed_transport_metrics() -> GrokInferenceTransportMetrics {
         ))
 }
 
-const CATALOG_WITHOUT_TOOL_METADATA: &[u8] = br#"{
+const CATALOG_WITHOUT_FEATURE_METADATA: &[u8] = br#"{
   "object": "list",
   "data": [{
-    "id": "grok-4.5-catalog-entry",
-    "model": "grok-4.5",
+    "id": "grok-catalog-entry",
+    "model": "grok-catalog-entry",
     "contextWindow": 1000000,
     "maxCompletionTokens": 131072,
     "apiBackend": "responses",
@@ -368,13 +368,13 @@ impl GrokModelCatalogTransport for StaticCatalogTransport {
     }
 }
 
-struct CatalogWithoutToolMetadataTransport;
+struct CatalogWithoutFeatureMetadataTransport;
 
-impl GrokModelCatalogTransport for CatalogWithoutToolMetadataTransport {
+impl GrokModelCatalogTransport for CatalogWithoutFeatureMetadataTransport {
     fn execute(&self, _: GrokModelCatalogRequest) -> GrokModelCatalogTransportFuture<'_> {
         Box::pin(async {
             Ok(GrokModelCatalogTransportResponse::new(
-                CATALOG_WITHOUT_TOOL_METADATA,
+                CATALOG_WITHOUT_FEATURE_METADATA,
                 None,
             ))
         })
@@ -1918,7 +1918,7 @@ async fn missing_catalog_tool_metadata_keeps_build_tools_routable() {
         StubSelector::success(),
         StubInferenceTransport::success(),
         StubRecovery::new(GrokCredentialRecoveryOutcome::Unavailable),
-        Arc::new(CatalogWithoutToolMetadataTransport),
+        Arc::new(CatalogWithoutFeatureMetadataTransport),
     )
     .await;
     let capabilities = provider
@@ -1931,6 +1931,32 @@ async fn missing_catalog_tool_metadata_keeps_build_tools_routable() {
             .match_requirements(
                 &gateway_core::operation::CapabilityRequirements::new(OperationKind::Generate,)
                     .require(Feature::Tools)
+            )
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn missing_catalog_feature_metadata_keeps_build_responses_routable() {
+    let provider = provider_with_catalog_transport(
+        StubSelector::success(),
+        StubInferenceTransport::success(),
+        StubRecovery::new(GrokCredentialRecoveryOutcome::Unavailable),
+        Arc::new(CatalogWithoutFeatureMetadataTransport),
+    )
+    .await;
+    let capabilities = provider
+        .query_model_capabilities()
+        .await
+        .expect("capabilities");
+
+    assert!(
+        capabilities[0]
+            .capabilities()
+            .match_requirements(
+                &gateway_core::operation::CapabilityRequirements::new(OperationKind::Generate)
+                    .require(Feature::Vision)
+                    .require(Feature::JsonSchema)
             )
             .is_some()
     );

@@ -449,7 +449,6 @@ impl SettingsStore for UnavailableStore {
 
     async fn replace_admin_api_key(
         &self,
-        _: Revision,
         _: AdminApiKey,
         _: &MutationContext,
     ) -> AdminStoreResult<AdminApiKeyMutation> {
@@ -458,7 +457,6 @@ impl SettingsStore for UnavailableStore {
 
     async fn delete_admin_api_key(
         &self,
-        _: Revision,
         _: &MutationContext,
     ) -> AdminStoreResult<AdminApiKeyMutation> {
         Err(unavailable("admin API key"))

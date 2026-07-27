@@ -12,7 +12,7 @@ use gateway_core::provider_ports::{
     ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError, ProviderStoreErrorKind,
 };
 
-use crate::{ConflictKind, Revision, StoreError, StoreResult, postgres_unavailable};
+use crate::{Revision, StoreError, StoreResult, postgres_unavailable};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
@@ -111,11 +111,8 @@ impl RuntimeSettingsUpdate {
 pub trait RuntimeSettingsRepository: Send + Sync {
     async fn load_runtime_settings(&self) -> StoreResult<RuntimeSettings>;
 
-    async fn update_runtime_settings(
-        &self,
-        expected_revision: Revision,
-        update: RuntimeSettingsUpdate,
-    ) -> StoreResult<Revision>;
+    async fn update_runtime_settings(&self, update: RuntimeSettingsUpdate)
+    -> StoreResult<Revision>;
 }
 
 #[derive(Clone)]
@@ -169,7 +166,6 @@ impl RuntimeSettingsRepository for PgRuntimeSettingsRepository {
 
     async fn update_runtime_settings(
         &self,
-        expected_revision: Revision,
         update: RuntimeSettingsUpdate,
     ) -> StoreResult<Revision> {
         let mut transaction = self
@@ -177,9 +173,7 @@ impl RuntimeSettingsRepository for PgRuntimeSettingsRepository {
             .begin()
             .await
             .map_err(|_| postgres_unavailable("begin runtime settings update"))?;
-        let revision =
-            update_runtime_settings_in_transaction(&mut transaction, expected_revision, &update)
-                .await?;
+        let revision = update_runtime_settings_in_transaction(&mut transaction, &update).await?;
         transaction
             .commit()
             .await
@@ -228,28 +222,26 @@ pub(crate) async fn load_runtime_settings_in_transaction(
 
 pub(crate) async fn update_runtime_settings_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
-    expected_revision: Revision,
     update: &RuntimeSettingsUpdate,
 ) -> StoreResult<Revision> {
     update.validate()?;
     let next = sqlx::query_scalar::<_, i64>(
         "update runtime_settings
              set config_revision = config_revision + 1,
-                 admin_api_key = $2,
-                 refresh_margin_seconds = $3,
-                 refresh_concurrency = $4,
-                 max_concurrent_per_account = $5,
-                 request_interval_ms = $6,
-                 rotation_strategy = $7,
-                 model_mappings_json = $8,
-                 usage_retention_days = $9,
-                 ops_event_retention_days = $10,
-                 audit_retention_days = $11,
-                 updated_at = now()
-             where id = 1 and config_revision = $1
-             returning config_revision",
+	                 admin_api_key = $1,
+	                 refresh_margin_seconds = $2,
+	                 refresh_concurrency = $3,
+	                 max_concurrent_per_account = $4,
+	                 request_interval_ms = $5,
+	                 rotation_strategy = $6,
+	                 model_mappings_json = $7,
+	                 usage_retention_days = $8,
+	                 ops_event_retention_days = $9,
+	                 audit_retention_days = $10,
+	             updated_at = now()
+	             where id = 1
+	             returning config_revision",
     )
-    .bind(i64::try_from(expected_revision.get()).map_err(|_| invalid_numeric())?)
     .bind(update.admin_api_key.as_deref())
     .bind(i64::try_from(update.refresh_margin_seconds).map_err(|_| invalid_numeric())?)
     .bind(i64::from(update.refresh_concurrency))
@@ -263,32 +255,28 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
-    .ok_or_else(|| StoreError::Conflict {
+    .ok_or_else(|| StoreError::NotFound {
         entity: "runtime settings",
         id: "1".to_owned(),
-        kind: ConflictKind::StaleRevision,
     })?;
     Revision::new(u64::try_from(next).map_err(|_| invalid_numeric())?)
 }
 
 pub(crate) async fn bump_config_revision_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
-    expected_revision: Revision,
 ) -> StoreResult<Revision> {
     let next = sqlx::query_scalar::<_, i64>(
         "update runtime_settings
          set config_revision = config_revision + 1, updated_at = now()
-         where id = 1 and config_revision = $1
+         where id = 1
          returning config_revision",
     )
-    .bind(i64::try_from(expected_revision.get()).map_err(|_| invalid_numeric())?)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("bump config revision in transaction"))?
-    .ok_or_else(|| StoreError::Conflict {
+    .ok_or_else(|| StoreError::NotFound {
         entity: "runtime settings",
         id: "1".to_owned(),
-        kind: ConflictKind::StaleRevision,
     })?;
     Revision::new(u64::try_from(next).map_err(|_| invalid_numeric())?)
 }

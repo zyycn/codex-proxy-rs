@@ -4,14 +4,11 @@ use std::fmt;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
-use gateway_admin::model::{
-    Revision,
-    client_keys::{
-        ClientKeyCursor, ClientKeyCursorValue as DomainCursorValue, ClientKeyListQuery,
-        ClientKeyMutation, ClientKeyPage, ClientKeyPageSize, ClientKeyRecord, ClientKeySecret,
-        ClientKeySort as DomainSort, ClientKeySortField as DomainSortField, CreateClientKey,
-        CreatedClientKey, DeleteClientKey, SetClientKeyEnabled, SortDirection, UpdateClientKey,
-    },
+use gateway_admin::model::client_keys::{
+    ClientKeyCursor, ClientKeyCursorValue as DomainCursorValue, ClientKeyListQuery,
+    ClientKeyMutation, ClientKeyPage, ClientKeyPageSize, ClientKeyRecord, ClientKeySecret,
+    ClientKeySort as DomainSort, ClientKeySortField as DomainSortField, CreateClientKey,
+    CreatedClientKey, DeleteClientKey, SetClientKeyEnabled, SortDirection, UpdateClientKey,
 };
 use gateway_core::{
     policy::{ClientApiKeyId, RateLimits},
@@ -138,7 +135,6 @@ impl ClientKeySort {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateClientKeyRequest {
-    expected_config_revision: u64,
     name: String,
     label: Option<String>,
     provider_kind: String,
@@ -149,14 +145,12 @@ pub struct CreateClientKeyRequest {
 impl CreateClientKeyRequest {
     /// 校验 wire 边界并直接构造管理用例命令。
     pub fn into_command(self) -> Result<CreateClientKey, WireValidationError> {
-        validate_revision(self.expected_config_revision)?;
         validate_required_text(&self.name, "name")?;
         validate_optional_text(self.label.as_deref(), "label")?;
         validate_provider_kind(&self.provider_kind)?;
         validate_limit(self.max_concurrency, "maxConcurrency")?;
         validate_limit(self.requests_per_minute, "requestsPerMinute")?;
         Ok(CreateClientKey {
-            expected_config_revision: revision(self.expected_config_revision)?,
             name: self.name,
             label: self.label,
             provider_kind: ProviderKind::new(self.provider_kind)
@@ -174,7 +168,6 @@ impl CreateClientKeyRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateClientKeyRequest {
     id: String,
-    expected_config_revision: u64,
     name: String,
     label: Option<String>,
     provider_kind: String,
@@ -186,14 +179,12 @@ impl UpdateClientKeyRequest {
     /// 校验 wire 边界并直接构造管理用例命令。
     pub fn into_command(self) -> Result<UpdateClientKey, WireValidationError> {
         validate_required_text(&self.id, "id")?;
-        validate_revision(self.expected_config_revision)?;
         validate_required_text(&self.name, "name")?;
         validate_optional_text(self.label.as_deref(), "label")?;
         validate_provider_kind(&self.provider_kind)?;
         validate_limit(self.max_concurrency, "maxConcurrency")?;
         validate_limit(self.requests_per_minute, "requestsPerMinute")?;
         Ok(UpdateClientKey {
-            expected_config_revision: revision(self.expected_config_revision)?,
             id: client_key_id(self.id, "clientKeyMutationNotFound")?,
             name: self.name,
             label: self.label,
@@ -207,12 +198,11 @@ impl UpdateClientKeyRequest {
     }
 }
 
-/// 只携带 ID 与配置 revision 的 Client Key mutation 请求。
+/// 只携带 ID 的 Client Key mutation 请求。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ClientKeyRevisionRequest {
+pub struct ClientKeyMutationRequest {
     id: String,
-    expected_config_revision: u64,
 }
 
 /// 读取一次完整 Key 的 ID query。
@@ -233,20 +223,15 @@ impl ClientKeyIdQuery {
     }
 }
 
-impl ClientKeyRevisionRequest {
-    /// 校验请求并取出 ID 与 revision。
-    pub fn into_parts(self) -> Result<(String, u64), WireValidationError> {
+impl ClientKeyMutationRequest {
+    /// 校验请求并取出 ID。
+    pub fn into_id(self) -> Result<String, WireValidationError> {
         validate_required_text(&self.id, "id")?;
-        validate_revision(self.expected_config_revision)?;
-        Ok((self.id, self.expected_config_revision))
+        Ok(self.id)
     }
 
-    fn into_command_parts(self) -> Result<(ClientApiKeyId, Revision), WireValidationError> {
-        let (id, expected_config_revision) = self.into_parts()?;
-        Ok((
-            client_key_id(id, "clientKeyMutationNotFound")?,
-            revision(expected_config_revision)?,
-        ))
+    fn into_domain_id(self) -> Result<ClientApiKeyId, WireValidationError> {
+        client_key_id(self.into_id()?, "clientKeyMutationNotFound")
     }
 }
 
@@ -289,7 +274,6 @@ impl From<ClientKeyRecord> for ClientKeyView {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientKeyListData {
-    config_revision: u64,
     items: Vec<ClientKeyView>,
     next_cursor: Option<String>,
     total: u64,
@@ -298,14 +282,8 @@ pub struct ClientKeyListData {
 impl ClientKeyListData {
     /// 构造 Client Key 列表响应。
     #[must_use]
-    pub fn new(
-        config_revision: u64,
-        items: Vec<ClientKeyView>,
-        next_cursor: Option<String>,
-        total: u64,
-    ) -> Self {
+    pub fn new(items: Vec<ClientKeyView>, next_cursor: Option<String>, total: u64) -> Self {
         Self {
-            config_revision,
             items,
             next_cursor,
             total,
@@ -325,7 +303,6 @@ impl TryFrom<ClientKeyPage> for ClientKeyListData {
             .map(encode_client_key_cursor)
             .transpose()?;
         Ok(Self::new(
-            page.config_revision.get(),
             page.items.into_iter().map(Into::into).collect(),
             next_cursor,
             page.total,
@@ -337,7 +314,6 @@ impl TryFrom<ClientKeyPage> for ClientKeyListData {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreatedClientKeyData {
-    config_revision: u64,
     id: String,
     prefix: String,
     plaintext_key: String,
@@ -346,9 +322,8 @@ pub struct CreatedClientKeyData {
 impl CreatedClientKeyData {
     /// 构造一次性创建响应。
     #[must_use]
-    pub fn new(config_revision: u64, id: String, prefix: String, plaintext_key: String) -> Self {
+    pub fn new(id: String, prefix: String, plaintext_key: String) -> Self {
         Self {
-            config_revision,
             id,
             prefix,
             plaintext_key,
@@ -359,7 +334,6 @@ impl CreatedClientKeyData {
 impl From<CreatedClientKey> for CreatedClientKeyData {
     fn from(created: CreatedClientKey) -> Self {
         Self::new(
-            created.config_revision.get(),
             created.secret.record.id.to_string(),
             created.secret.record.prefix.clone(),
             created.secret.expose_for_response().to_owned(),
@@ -371,7 +345,6 @@ impl fmt::Debug for CreatedClientKeyData {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CreatedClientKeyData")
-            .field("config_revision", &self.config_revision)
             .field("id", &self.id)
             .field("prefix", &self.prefix)
             .field("plaintext_key", &"[REDACTED]")
@@ -417,24 +390,20 @@ impl fmt::Debug for RevealedClientKeyData {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MutatedClientKeyData {
-    config_revision: u64,
     id: String,
 }
 
 impl MutatedClientKeyData {
     /// 构造 mutation 响应。
     #[must_use]
-    pub fn new(config_revision: u64, id: String) -> Self {
-        Self {
-            config_revision,
-            id,
-        }
+    pub fn new(id: String) -> Self {
+        Self { id }
     }
 }
 
 impl From<ClientKeyMutation> for MutatedClientKeyData {
     fn from(mutation: ClientKeyMutation) -> Self {
-        Self::new(mutation.config_revision.get(), mutation.id.to_string())
+        Self::new(mutation.id.to_string())
     }
 }
 
@@ -580,18 +549,6 @@ fn wire_cursor(cursor: ClientKeyCursor) -> Result<ClientKeyCursorData, WireValid
     };
     validate_client_key_cursor(&cursor)?;
     Ok(cursor)
-}
-
-fn validate_revision(value: u64) -> Result<(), WireValidationError> {
-    if value == 0 {
-        return Err(WireValidationError::new("expectedConfigRevision"));
-    }
-    Ok(())
-}
-
-fn revision(value: u64) -> Result<Revision, WireValidationError> {
-    validate_revision(value)?;
-    Revision::new(value).map_err(|_| WireValidationError::new("expectedConfigRevision"))
 }
 
 fn client_key_id(
@@ -768,23 +725,19 @@ where
 async fn disable_client_key<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(payload): Json<ClientKeyRevisionRequest>,
+    Json(payload): Json<ClientKeyMutationRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
 {
-    let (id, expected_config_revision) = payload.into_command_parts().map_err(map_wire_error)?;
+    let id = payload.into_domain_id().map_err(map_wire_error)?;
     mutation_response(
         state
             .admin_services()
             .client_keys()
             .set_enabled(
                 &auth.context().mutation_context(),
-                SetClientKeyEnabled {
-                    expected_config_revision,
-                    id,
-                    enabled: false,
-                },
+                SetClientKeyEnabled { id, enabled: false },
             )
             .await,
     )
@@ -793,23 +746,19 @@ where
 async fn enable_client_key<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(payload): Json<ClientKeyRevisionRequest>,
+    Json(payload): Json<ClientKeyMutationRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
 {
-    let (id, expected_config_revision) = payload.into_command_parts().map_err(map_wire_error)?;
+    let id = payload.into_domain_id().map_err(map_wire_error)?;
     mutation_response(
         state
             .admin_services()
             .client_keys()
             .set_enabled(
                 &auth.context().mutation_context(),
-                SetClientKeyEnabled {
-                    expected_config_revision,
-                    id,
-                    enabled: true,
-                },
+                SetClientKeyEnabled { id, enabled: true },
             )
             .await,
     )
@@ -818,23 +767,17 @@ where
 async fn delete_client_key<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(payload): Json<ClientKeyRevisionRequest>,
+    Json(payload): Json<ClientKeyMutationRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
 {
-    let (id, expected_config_revision) = payload.into_command_parts().map_err(map_wire_error)?;
+    let id = payload.into_domain_id().map_err(map_wire_error)?;
     mutation_response(
         state
             .admin_services()
             .client_keys()
-            .delete(
-                &auth.context().mutation_context(),
-                DeleteClientKey {
-                    expected_config_revision,
-                    id,
-                },
-            )
+            .delete(&auth.context().mutation_context(), DeleteClientKey { id })
             .await,
     )
 }
@@ -854,9 +797,6 @@ fn map_wire_error(error: WireValidationError) -> AdminError {
         "cursor" => AdminError::bad_request("Invalid client key cursor"),
         "clientKeyRevealNotFound" => AdminError::not_found("Client API key was not found"),
         "clientKeyMutationNotFound" => AdminError::not_found("client API key was not found"),
-        "expectedConfigRevision" => {
-            AdminError::bad_request("expectedConfigRevision must be positive")
-        }
         _ => AdminError::bad_request("Invalid client API key request"),
     }
 }

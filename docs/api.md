@@ -41,13 +41,13 @@ Client Key 固定绑定一个 Provider：`openai` 或 `xai`。同一次请求不
 
 错误响应仍使用 `code`、`message`、`data`，其中 `data` 为 `null`。稳定业务码包括参数错误
 `40001`、会话缺失 `40101`、登录凭据错误 `40102`、管理 API Key 错误 `40103`、资源不存在
-`40401`、revision 冲突 `40901`、内部错误 `50001`、上游失败 `50201` 和依赖不可用 `50301`。
+`40401`、业务冲突 `40901`、内部错误 `50001`、上游失败 `50201` 和依赖不可用 `50301`。
 
-### 配置 revision
+### 管理写入一致性
 
-会改变路由快照或安全配置的 mutation 使用 `expectedConfigRevision` 做乐观并发控制。客户端应从
-账号、Client Key 或设置查询结果读取最新 `configRevision`；收到 `40901` 后重新读取，不应盲目重试
-旧 revision。
+Admin API 不暴露全局配置版本，mutation 请求也不要求客户端提供全局配置版本。会改变路由快照或安全配置的写入由后端在事务内推进内部配置 revision，并用于快照发布与审计。
+
+单个 credential 的轮换或重新授权仍使用 `expectedCredentialRevision`，它只保护该 credential 本身，不是全局配置锁。
 
 ## 2. 健康检查
 
@@ -95,12 +95,12 @@ OpenAI 路径保留客户端 Responses wire 语义，上游事件字节在 HTTP 
 | `GET` | `/api/admin/accounts` | `page`、`pageSize`、`provider`、`search`、`status`、排序字段 | 分页查询账号与汇总 |
 | `GET` | `/api/admin/accounts/detail` | `accountId` | 查询账号详情、额度和本地用量 |
 | `GET` | `/api/admin/accounts/export` | `accountIds`、`confirm=export_sensitive_accounts` | 显式导出最多 200 个账号的敏感 Provider 文档 |
-| `POST` | `/api/admin/accounts/import` | `{ provider, expectedConfigRevision, data }` | 导入或按上游身份更新账号 |
-| `POST` | `/api/admin/accounts/refresh` | `{ accountId, expectedConfigRevision }` | 手工刷新账号 credential |
+| `POST` | `/api/admin/accounts/import` | `{ provider, data }` | 导入或按上游身份更新账号 |
+| `POST` | `/api/admin/accounts/refresh` | `{ accountId }` | 手工刷新账号 credential |
 | `POST` | `/api/admin/accounts/rotate` | OpenAI rotation 字段 | 手工替换 OpenAI OAuth token |
-| `POST` | `/api/admin/accounts/enable` | `{ provider, accountId, expectedConfigRevision }` | 启用账号 |
-| `POST` | `/api/admin/accounts/disable` | `{ provider, accountId, expectedConfigRevision }` | 禁用账号 |
-| `POST` | `/api/admin/accounts/delete` | `{ provider, accountIds, expectedConfigRevision }` | 批量删除 1–200 个账号 |
+| `POST` | `/api/admin/accounts/enable` | `{ provider, accountId }` | 启用账号 |
+| `POST` | `/api/admin/accounts/disable` | `{ provider, accountId }` | 禁用账号 |
+| `POST` | `/api/admin/accounts/delete` | `{ provider, accountIds }` | 批量删除 1–200 个账号 |
 | `GET` | `/api/admin/accounts/quota` | `accountId` | 读取当前额度，不强制访问上游 |
 | `POST` | `/api/admin/accounts/quota/refresh` | `{ accountId }` | 立即刷新该账号额度 |
 | `GET` | `/api/admin/accounts/models` | `accountId` | 优先读取该 Provider + 套餐的模型 cache，缺失时有限实时拉取 |
@@ -150,7 +150,6 @@ OpenAI rotation 请求字段为：
 {
   "provider": "openai",
   "accountId": "acct_...",
-  "expectedConfigRevision": 1,
   "expectedCredentialRevision": 1,
   "accessToken": "...",
   "refreshToken": "..."
@@ -162,7 +161,6 @@ OAuth start 使用：
 ```json
 {
   "provider": "openai",
-  "expectedConfigRevision": 1,
   "name": "account name",
   "accountId": null,
   "expectedCredentialRevision": null
@@ -179,18 +177,17 @@ OAuth start 使用：
 | `POST` | `/api/admin/client-keys/create` | 创建字段 | 创建绑定 Provider 的 Client Key |
 | `GET` | `/api/admin/client-keys/reveal` | `id` | 显式读取完整明文 Key |
 | `POST` | `/api/admin/client-keys/update` | 更新字段 | 原子更新名称、Provider 和限额 |
-| `POST` | `/api/admin/client-keys/enable` | `{ id, expectedConfigRevision }` | 启用 |
-| `POST` | `/api/admin/client-keys/disable` | `{ id, expectedConfigRevision }` | 禁用 |
-| `POST` | `/api/admin/client-keys/delete` | `{ id, expectedConfigRevision }` | 删除 |
+| `POST` | `/api/admin/client-keys/enable` | `{ id }` | 启用 |
+| `POST` | `/api/admin/client-keys/disable` | `{ id }` | 禁用 |
+| `POST` | `/api/admin/client-keys/delete` | `{ id }` | 删除 |
 
-创建字段为 `expectedConfigRevision`、`name`、可选 `label`、`providerKind`、`maxConcurrency`、
-`requestsPerMinute`。更新请求再增加 `id`。创建和 reveal 响应会返回完整明文 Key，调用方必须立即安全保存。
+创建字段为 `name`、可选 `label`、`providerKind`、`maxConcurrency`、`requestsPerMinute`。更新请求再增加 `id`。创建和 reveal 响应会返回完整明文 Key，调用方必须立即安全保存。
 
 ## 7. 运行设置
 
 | 方法 | 路由 | 说明 |
 | --- | --- | --- |
-| `GET` | `/api/admin/settings` | 读取运行设置与 `configRevision` |
+| `GET` | `/api/admin/settings` | 读取运行设置 |
 | `POST` | `/api/admin/settings/update` | 原子替换全部运行设置 |
 | `GET` | `/api/admin/settings/admin-api-key` | 只返回管理 API Key 是否存在 |
 | `POST` | `/api/admin/settings/admin-api-key/delete` | 删除管理 API Key |
@@ -199,7 +196,6 @@ OAuth start 使用：
 设置更新字段包括：
 
 ```text
-expectedConfigRevision
 modelMappings
 refreshMarginSeconds
 refreshConcurrency

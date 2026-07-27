@@ -942,7 +942,6 @@ struct PendingDocument {
 #[serde(deny_unknown_fields)]
 struct PendingMutationDocument {
     schema_version: u64,
-    expected_config_revision: u64,
     provider_kind: String,
     target: PendingTargetDocument,
     owner: PendingOwnerDocument,
@@ -1024,10 +1023,6 @@ fn encode_mutation(mutation: &PendingAuthorizationMutation) -> Map<String, Value
     document.insert(
         "schema_version".to_owned(),
         Value::Number(Number::from(PENDING_DOCUMENT_SCHEMA_VERSION)),
-    );
-    document.insert(
-        "expected_config_revision".to_owned(),
-        Value::Number(Number::from(mutation.expected_config_revision().get())),
     );
     document.insert(
         "provider_kind".to_owned(),
@@ -1119,8 +1114,6 @@ fn decode_mutation(
     if document.schema_version != PENDING_DOCUMENT_SCHEMA_VERSION {
         return Err(CodexOAuthPendingStoreError::InvalidValue);
     }
-    let expected_config_revision = Revision::new(document.expected_config_revision)
-        .map_err(|_| CodexOAuthPendingStoreError::InvalidValue)?;
     let provider_kind = ProviderKind::new(document.provider_kind)
         .map_err(|_| CodexOAuthPendingStoreError::InvalidValue)?;
     let target = match document.target {
@@ -1147,7 +1140,6 @@ fn decode_mutation(
         request_id: document.started_request_id,
     };
     Ok(PendingAuthorizationMutation::new(
-        expected_config_revision,
         provider_kind,
         target,
         AuthorizationOwnerBinding::from_context(&context),

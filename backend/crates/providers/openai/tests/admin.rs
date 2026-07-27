@@ -329,7 +329,6 @@ async fn openai_admin_provider_persists_the_full_pending_envelope_and_binds_owne
     let started = bundle
         .admin_provider()
         .start_authorization(PendingAuthorizationMutation::new(
-            Revision::new(7).expect("revision"),
             ProviderKind::new("openai").expect("provider"),
             AuthorizationMutationTarget::Create {
                 name: "OAuth account".to_owned(),
@@ -346,12 +345,7 @@ async fn openai_admin_provider_persists_the_full_pending_envelope_and_binds_owne
             .get("mutation")
             .and_then(Value::as_object)
             .expect("pending mutation");
-        assert_eq!(
-            mutation
-                .get("expected_config_revision")
-                .and_then(Value::as_u64),
-            Some(7)
-        );
+        assert!(mutation.get("expected_config_revision").is_none());
         assert_eq!(
             mutation.get("started_request_id").and_then(Value::as_str),
             Some("request-start")

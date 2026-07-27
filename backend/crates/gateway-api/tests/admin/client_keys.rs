@@ -1,6 +1,6 @@
 use chrono::{DateTime, TimeZone as _, Utc};
 use gateway_api::admin::client_keys::{
-    self, ClientKeyCursorData, ClientKeyCursorValue, ClientKeyListData, ClientKeyRevisionRequest,
+    self, ClientKeyCursorData, ClientKeyCursorValue, ClientKeyListData, ClientKeyMutationRequest,
     ClientKeySort, ClientKeySortDirection, ClientKeySortField, ClientKeyView,
     CreateClientKeyRequest, CreatedClientKeyData, ListClientKeysQuery, MutatedClientKeyData,
     RevealedClientKeyData, UpdateClientKeyRequest, decode_client_key_cursor,
@@ -101,9 +101,8 @@ fn client_key_queries_should_reject_unknown_zero_and_oversized_fields() {
 }
 
 #[test]
-fn client_key_mutations_should_validate_revision_text_limits_and_unknown_fields() {
+fn client_key_mutations_should_validate_text_limits_and_unknown_fields() {
     let valid = serde_json::from_value::<CreateClientKeyRequest>(json!({
-        "expectedConfigRevision": 7,
         "name": "terminal key",
         "label": "production",
         "providerKind": "openai",
@@ -113,22 +112,11 @@ fn client_key_mutations_should_validate_revision_text_limits_and_unknown_fields(
     .expect("deserialize create")
     .into_command()
     .expect("validate create");
-    assert_eq!(valid.expected_config_revision.get(), 7);
+    assert_eq!(valid.name, "terminal key");
 
     for (payload, field) in [
         (
             json!({
-                "expectedConfigRevision": 0,
-                "name": "key",
-                "providerKind": "openai",
-                "maxConcurrency": 0,
-                "requestsPerMinute": 0
-            }),
-            "expectedConfigRevision",
-        ),
-        (
-            json!({
-                "expectedConfigRevision": 1,
                 "name": " ",
                 "providerKind": "openai",
                 "maxConcurrency": 0,
@@ -138,7 +126,6 @@ fn client_key_mutations_should_validate_revision_text_limits_and_unknown_fields(
         ),
         (
             json!({
-                "expectedConfigRevision": 1,
                 "name": "key",
                 "providerKind": "openai",
                 "maxConcurrency": u64::MAX,
@@ -170,14 +157,23 @@ fn client_key_mutations_should_validate_revision_text_limits_and_unknown_fields(
         }))
         .is_err()
     );
-    let revision = serde_json::from_value::<ClientKeyRevisionRequest>(json!({
-        "id": "key_1",
-        "expectedConfigRevision": 3
+    assert!(
+        serde_json::from_value::<CreateClientKeyRequest>(json!({
+            "expectedConfigRevision": 7,
+            "name": "terminal key",
+            "providerKind": "openai",
+            "maxConcurrency": 2,
+            "requestsPerMinute": 60
+        }))
+        .is_err()
+    );
+    let mutation_id = serde_json::from_value::<ClientKeyMutationRequest>(json!({
+        "id": "key_1"
     }))
-    .expect("deserialize revision mutation")
-    .into_parts()
-    .expect("validate revision mutation");
-    assert_eq!(revision, ("key_1".to_owned(), 3));
+    .expect("deserialize mutation")
+    .into_id()
+    .expect("validate mutation");
+    assert_eq!(mutation_id, "key_1");
 }
 
 #[test]
@@ -225,9 +221,9 @@ fn client_key_responses_should_keep_shape_and_redact_creation_debug() {
         updated_at: created_at,
         last_used_at: Some(created_at),
     });
-    let list = serde_json::to_value(ClientKeyListData::new(9, vec![view], None, 1))
-        .expect("serialize list");
-    assert_eq!(list["configRevision"], 9);
+    let list =
+        serde_json::to_value(ClientKeyListData::new(vec![view], None, 1)).expect("serialize list");
+    assert!(list.get("configRevision").is_none());
     assert_eq!(list["total"], 1);
     assert_eq!(list["items"][0]["id"], "key_visible");
     assert_eq!(list["items"][0]["providerKind"], "openai");
@@ -248,7 +244,6 @@ fn client_key_responses_should_keep_shape_and_redact_creation_debug() {
 
     let plaintext = format!("sk_{}", "a".repeat(43));
     let created = CreatedClientKeyData::new(
-        10,
         "key_created".to_owned(),
         "sk_aaaaaaaaa".to_owned(),
         plaintext.clone(),
@@ -263,9 +258,9 @@ fn client_key_responses_should_keep_shape_and_redact_creation_debug() {
         json!({ "id": "key_created", "plaintextKey": plaintext })
     );
     assert_eq!(
-        serde_json::to_value(MutatedClientKeyData::new(11, "key_created".to_owned()))
+        serde_json::to_value(MutatedClientKeyData::new("key_created".to_owned()))
             .expect("serialize mutation"),
-        json!({ "configRevision": 11, "id": "key_created" })
+        json!({ "id": "key_created" })
     );
 }
 

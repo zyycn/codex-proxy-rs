@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime};
 use chrono::{TimeDelta, Utc};
 use gateway_admin::{
     model::{
-        MutationActor, MutationContext, PageSize, Revision as AdminRevision,
+        MutationActor, MutationContext, PageSize,
         accounts::{
             AccountListQuery, AccountSort, AccountSortField, AccountStatus,
             AccountUsageWindowQuery, DeleteAccounts, SetAccountEnabled as AdminSetAccountEnabled,
@@ -14,7 +14,7 @@ use gateway_admin::{
             CredentialAvailabilityFilter, CredentialListQuery, CredentialListWindow,
         },
     },
-    ports::store::{AccountStore, AdminStoreErrorKind},
+    ports::store::AccountStore,
 };
 use gateway_core::engine::credential::{
     CredentialCasOutcome, CredentialCasUpdate, CredentialRevision, OpaqueProviderData,
@@ -525,7 +525,6 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
     let revision = store
         .set_account_enabled(
             AdminSetAccountEnabled {
-                expected_config_revision: AdminRevision::new(1).expect("initial revision"),
                 account_id: "acct_terminal_mutation".to_owned(),
                 enabled: false,
             },
@@ -542,32 +541,9 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
     .expect("read disabled state");
     assert!(!enabled);
 
-    let error = store
-        .delete_accounts(
-            DeleteAccounts {
-                expected_config_revision: AdminRevision::new(1).expect("stale revision"),
-                account_ids: vec!["acct_terminal_mutation".to_owned()],
-            },
-            &context,
-        )
-        .await
-        .expect_err("stale delete must roll back");
-    assert_eq!(error.kind(), AdminStoreErrorKind::StaleRevision);
-    assert_eq!(current_revision(&database.pool).await, 2);
-    assert_eq!(
-        account_count(&database.pool, "acct_terminal_mutation").await,
-        1
-    );
-    let audit_count: i64 = sqlx::query_scalar("select count(*) from admin_audit_events")
-        .fetch_one(&database.pool)
-        .await
-        .expect("count audit rows after rollback");
-    assert_eq!(audit_count, 1);
-
     let revision = store
         .delete_accounts(
             DeleteAccounts {
-                expected_config_revision: revision,
                 account_ids: vec!["acct_terminal_mutation".to_owned()],
             },
             &context,
@@ -616,7 +592,6 @@ async fn terminal_admin_delete_removes_enabled_accounts_in_one_transaction() {
     let revision = PgAdminAccountStore::new(database.pool.clone())
         .delete_accounts(
             DeleteAccounts {
-                expected_config_revision: AdminRevision::new(1).expect("initial revision"),
                 account_ids: vec![
                     "acct_enabled_delete_a".to_owned(),
                     "acct_enabled_delete_b".to_owned(),
@@ -649,18 +624,14 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
         provider_kind: "openai".to_owned(),
     };
     let imported = repository
-        .import_provider_accounts(
-            Revision::new(1).expect("initial revision"),
-            ImportProviderAccounts {
-                scope: scope.clone(),
-                accounts: vec![account("acct_admin_upsert", "user-admin-upsert")],
-                audit: audit("audit_admin_upsert_create", "import", "acct_admin_upsert"),
-            },
-        )
+        .import_provider_accounts(ImportProviderAccounts {
+            scope: scope.clone(),
+            accounts: vec![account("acct_admin_upsert", "user-admin-upsert")],
+            audit: audit("audit_admin_upsert_create", "import", "acct_admin_upsert"),
+        })
         .await
         .expect("create imported account");
     assert_eq!(imported.account_ids, ["acct_admin_upsert"]);
-    let revision = imported.config_revision;
     sqlx::query(
         "update provider_accounts
          set provider_quota_json = '{}'::jsonb, quota_observed_at = now(), updated_at = now()
@@ -676,14 +647,11 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
     updated.availability = ProviderAccountAvailability::Banned;
     updated.availability_reason = Some("upstream_account_deactivated".to_owned());
     let imported = repository
-        .import_provider_accounts(
-            revision,
-            ImportProviderAccounts {
-                scope: scope.clone(),
-                accounts: vec![updated],
-                audit: audit("audit_admin_upsert_update", "import", "acct_admin_upsert"),
-            },
-        )
+        .import_provider_accounts(ImportProviderAccounts {
+            scope: scope.clone(),
+            accounts: vec![updated],
+            audit: audit("audit_admin_upsert_update", "import", "acct_admin_upsert"),
+        })
         .await
         .expect("update the same imported identity");
     assert_eq!(imported.account_ids, ["acct_admin_upsert"]);
@@ -715,14 +683,11 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
     assert_eq!(row.5.as_deref(), Some("upstream_account_deactivated"));
 
     repository
-        .import_provider_accounts(
-            revision,
-            ImportProviderAccounts {
-                scope,
-                accounts: vec![account("acct_admin_upsert", "another-user")],
-                audit: audit("audit_admin_upsert_rebind", "import", "acct_admin_upsert"),
-            },
-        )
+        .import_provider_accounts(ImportProviderAccounts {
+            scope,
+            accounts: vec![account("acct_admin_upsert", "another-user")],
+            audit: audit("audit_admin_upsert_rebind", "import", "acct_admin_upsert"),
+        })
         .await
         .expect_err("an existing account ID must not be rebound");
     assert_eq!(current_revision(&database.pool).await, 3);
@@ -859,18 +824,14 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
     cooldown_account.availability = ProviderAccountAvailability::Cooldown;
     cooldown_account.cooldown_until = Some(Utc::now() + TimeDelta::minutes(10));
     let imported = repository
-        .import_provider_accounts(
-            Revision::new(1).expect("initial revision"),
-            ImportProviderAccounts {
-                scope: scope.clone(),
-                accounts: vec![account("acct_admin_a", "user-admin-a"), cooldown_account],
-                audit: audit("audit_account_batch", "import_batch", "provider_accounts"),
-            },
-        )
+        .import_provider_accounts(ImportProviderAccounts {
+            scope: scope.clone(),
+            accounts: vec![account("acct_admin_a", "user-admin-a"), cooldown_account],
+            audit: audit("audit_account_batch", "import_batch", "provider_accounts"),
+        })
         .await
         .expect("import provider accounts");
-    let revision = imported.config_revision;
-    assert_eq!(revision.get(), 2);
+    assert_eq!(imported.config_revision.get(), 2);
     let ready: (bool, String, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
         "select enabled, availability, cooldown_until from provider_accounts where id = $1",
     )
@@ -891,21 +852,18 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
     assert!(cooldown.2.is_some());
 
     repository
-        .import_provider_accounts(
-            revision,
-            ImportProviderAccounts {
-                scope: scope.clone(),
-                accounts: vec![
-                    account("acct_admin_transient", "user-admin-transient"),
-                    account("acct_admin_a", "user-admin-duplicate"),
-                ],
-                audit: audit(
-                    "audit_account_failed_batch",
-                    "import_batch",
-                    "provider_accounts",
-                ),
-            },
-        )
+        .import_provider_accounts(ImportProviderAccounts {
+            scope: scope.clone(),
+            accounts: vec![
+                account("acct_admin_transient", "user-admin-transient"),
+                account("acct_admin_a", "user-admin-duplicate"),
+            ],
+            audit: audit(
+                "audit_account_failed_batch",
+                "import_batch",
+                "provider_accounts",
+            ),
+        })
         .await
         .expect_err("duplicate batch row must roll back the entire import");
     assert_eq!(current_revision(&database.pool).await, 2);
@@ -918,15 +876,12 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
         provider_kind: "xai".to_owned(),
     };
     let wrong_scope_error = repository
-        .rotate_provider_account(
-            revision,
-            RotateProviderAccount {
-                scope: wrong_scope,
-                profile: profile("acct_admin_a", "wrong scope"),
-                credential: credential_update("acct_admin_a", 1, "wrong-scope-secret"),
-                audit: audit("audit_wrong_scope", "rotate", "acct_admin_a"),
-            },
-        )
+        .rotate_provider_account(RotateProviderAccount {
+            scope: wrong_scope,
+            profile: profile("acct_admin_a", "wrong scope"),
+            credential: credential_update("acct_admin_a", 1, "wrong-scope-secret"),
+            audit: audit("audit_wrong_scope", "rotate", "acct_admin_a"),
+        })
         .await
         .expect_err("Provider endpoint must not rotate another Provider account");
     assert!(matches!(
@@ -939,32 +894,27 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
     assert_eq!(current_revision(&database.pool).await, 2);
 
     let rotation = repository
-        .rotate_provider_account(
-            revision,
-            RotateProviderAccount {
-                scope: scope.clone(),
-                profile: profile("acct_admin_a", "rotated account"),
-                credential: credential_update("acct_admin_a", 1, "rotated-secret"),
-                audit: audit("audit_account_rotate", "rotate", "acct_admin_a"),
-            },
-        )
+        .rotate_provider_account(RotateProviderAccount {
+            scope: scope.clone(),
+            profile: profile("acct_admin_a", "rotated account"),
+            credential: credential_update("acct_admin_a", 1, "rotated-secret"),
+            audit: audit("audit_account_rotate", "rotate", "acct_admin_a"),
+        })
         .await
         .expect("rotate provider account");
     assert_eq!(rotation.config_revision.get(), 3);
     assert_eq!(rotation.credential_revision.get(), 2);
 
     let revision = repository
-        .set_provider_account_enabled_admin(
-            rotation.config_revision,
-            SetProviderAccountEnabled {
-                scope: scope.clone(),
-                account_id: "acct_admin_a".to_owned(),
-                enabled: false,
-                audit: audit("audit_account_disable", "disable", "acct_admin_a"),
-            },
-        )
+        .set_provider_account_enabled_admin(SetProviderAccountEnabled {
+            scope: scope.clone(),
+            account_id: "acct_admin_a".to_owned(),
+            enabled: false,
+            audit: audit("audit_account_disable", "disable", "acct_admin_a"),
+        })
         .await
         .expect("disable provider account");
+    assert_eq!(revision.get(), 4);
     let exports = repository
         .export_provider_accounts(
             scope.clone(),
@@ -977,14 +927,11 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
     assert!(!format!("{exports:?}").contains("rotated-secret"));
 
     let revision = repository
-        .delete_provider_accounts_admin(
-            revision,
-            DeleteProviderAccounts {
-                scope,
-                account_ids: vec!["acct_admin_a".to_owned(), "acct_admin_b".to_owned()],
-                audit: audit("audit_account_delete", "delete", "provider_accounts"),
-            },
-        )
+        .delete_provider_accounts_admin(DeleteProviderAccounts {
+            scope,
+            account_ids: vec!["acct_admin_a".to_owned(), "acct_admin_b".to_owned()],
+            audit: audit("audit_account_delete", "delete", "provider_accounts"),
+        })
         .await
         .expect("delete selected accounts regardless of enabled state");
     assert_eq!(revision.get(), 5);

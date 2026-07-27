@@ -1071,7 +1071,6 @@ struct PendingDocument {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PendingMutationDocument {
-    expected_config_revision: u64,
     provider_kind: String,
     target: PendingTargetDocument,
     owner: PendingOwnerDocument,
@@ -1126,10 +1125,6 @@ fn encode_pending(pending: &StoredXaiAuthorization) -> Map<String, Value> {
 
 fn encode_mutation(mutation: &PendingAuthorizationMutation) -> Map<String, Value> {
     let mut document = Map::new();
-    document.insert(
-        "expected_config_revision".to_owned(),
-        Value::Number(Number::from(mutation.expected_config_revision().get())),
-    );
     document.insert(
         "provider_kind".to_owned(),
         Value::String(mutation.provider_kind().as_str().to_owned()),
@@ -1256,8 +1251,6 @@ fn decode_mutation(
         request_id: document.started_request_id,
     };
     Ok(PendingAuthorizationMutation::new(
-        Revision::new(document.expected_config_revision)
-            .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?,
         provider_kind,
         target,
         AuthorizationOwnerBinding::from_context(&context),

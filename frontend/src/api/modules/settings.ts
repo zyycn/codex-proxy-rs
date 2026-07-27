@@ -3,7 +3,6 @@ import request from '../request'
 export type RotationStrategy = 'smart' | 'quota_reset_priority' | 'round_robin' | 'sticky'
 
 export interface RuntimeSettings {
-  configRevision: number
   modelMappings: Record<string, string>
   refreshMarginSeconds: number
   refreshConcurrency: number

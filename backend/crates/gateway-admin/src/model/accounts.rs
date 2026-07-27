@@ -189,7 +189,6 @@ pub struct AccountSummary {
 /// 账号启停写入命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetAccountEnabled {
-    pub expected_config_revision: Revision,
     pub account_id: String,
     pub enabled: bool,
 }
@@ -197,7 +196,6 @@ pub struct SetAccountEnabled {
 /// 账号批量删除命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeleteAccounts {
-    pub expected_config_revision: Revision,
     pub account_ids: Vec<String>,
 }
 

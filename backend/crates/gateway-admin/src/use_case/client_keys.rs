@@ -94,7 +94,6 @@ impl ClientKeyService for DefaultClientKeyService {
             .store
             .create_client_key(
                 NewClientKey {
-                    expected_config_revision: command.expected_config_revision,
                     id,
                     name: command.name,
                     label: command.label,

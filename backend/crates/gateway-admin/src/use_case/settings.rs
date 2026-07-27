@@ -86,13 +86,12 @@ impl SettingsService for DefaultSettingsService {
         &self,
         context: &MutationContext,
     ) -> Result<RegeneratedAdminApiKey, AdminError> {
-        let settings = self.load().await?;
         let mut bytes = [0_u8; 32];
         OsRng.fill_bytes(&mut bytes);
         let key = AdminApiKey::new(format!("admin-{}", hex::encode(bytes)));
         let mutation = self
             .store
-            .replace_admin_api_key(settings.config_revision, key.clone(), context)
+            .replace_admin_api_key(key.clone(), context)
             .await
             .map_err(|error| map_store_error(error, "administrator API key"))?;
         publish_committed(self.snapshot.as_ref(), mutation.config_revision).await?;
@@ -103,10 +102,9 @@ impl SettingsService for DefaultSettingsService {
         &self,
         context: &MutationContext,
     ) -> Result<AdminApiKeyMutation, AdminError> {
-        let settings = self.load().await?;
         let mutation = self
             .store
-            .delete_admin_api_key(settings.config_revision, context)
+            .delete_admin_api_key(context)
             .await
             .map_err(|error| map_store_error(error, "administrator API key"))?;
         publish_committed(self.snapshot.as_ref(), mutation.config_revision).await?;

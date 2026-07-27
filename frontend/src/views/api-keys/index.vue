@@ -26,7 +26,6 @@ const {
   loading,
   apiKeys,
   loadApiKeys,
-  configRevision,
   searchQuery,
   sort,
   apiKeyPagination,
@@ -58,7 +57,7 @@ const {
   copyToClipboard,
   revealPlaintextKey,
   copyApiKey,
-} = useApiKeyMutations({ selectedIds, configRevision, reload: loadApiKeys })
+} = useApiKeyMutations({ selectedIds, reload: loadApiKeys })
 
 const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll } = usePageSelection(
   apiKeys,

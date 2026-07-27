@@ -36,7 +36,6 @@ const {
   statusQuery,
   sort,
   accountSummary,
-  configRevision,
   accountPagination,
   handlePageChange,
   handlePageSizeChange,
@@ -78,7 +77,6 @@ const {
   sort,
   selectedIds,
   totalAccounts,
-  configRevision,
   reload: loadAccounts,
 })
 
