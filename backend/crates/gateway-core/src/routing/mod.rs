@@ -152,7 +152,59 @@ pub struct ModelPresentation {
     search_tool: bool,
     image_detail_original: bool,
     verbosity: bool,
+    service_tiers: Vec<ModelServiceTier>,
     hidden: bool,
+}
+
+/// Provider 声明给 Codex 客户端的服务档位。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelServiceTier {
+    id: String,
+    name: String,
+    description: String,
+    speed_tier: Option<String>,
+}
+
+impl ModelServiceTier {
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            description: description.into(),
+            speed_tier: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_speed_tier(mut self, speed_tier: impl Into<String>) -> Self {
+        self.speed_tier = Some(speed_tier.into());
+        self
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+
+    #[must_use]
+    pub fn speed_tier(&self) -> Option<&str> {
+        self.speed_tier.as_deref()
+    }
 }
 
 impl ModelPresentation {
@@ -210,6 +262,12 @@ impl ModelPresentation {
     #[must_use]
     pub const fn with_verbosity(mut self, verbosity: bool) -> Self {
         self.verbosity = verbosity;
+        self
+    }
+
+    #[must_use]
+    pub fn with_service_tiers(mut self, service_tiers: Vec<ModelServiceTier>) -> Self {
+        self.service_tiers = service_tiers;
         self
     }
 
@@ -272,6 +330,11 @@ impl ModelPresentation {
     #[must_use]
     pub const fn verbosity(&self) -> bool {
         self.verbosity
+    }
+
+    #[must_use]
+    pub fn service_tiers(&self) -> &[ModelServiceTier] {
+        &self.service_tiers
     }
 
     #[must_use]

@@ -1,12 +1,11 @@
 use std::fmt;
 
-use gateway_protocol::openai::events;
+use gateway_protocol::openai::{
+    CodexResponsesRequestSemantics as CodexRequestSemantics,
+    codex_responses_request_semantics_with_turn_metadata, events,
+};
 use serde::Serialize;
 use serde_json::{Map, Value};
-
-const MULTI_AGENT_MODE_OPEN_TAG: &str = "<multi_agent_mode>";
-const MULTI_AGENT_MODE_CLOSE_TAG: &str = "</multi_agent_mode>";
-const PROACTIVE_MULTI_AGENT_MODE_PREFIX: &str = "Proactive multi-agent delegation is active.";
 
 /// Codex Responses 上游请求体。
 ///
@@ -91,19 +90,6 @@ pub enum PreviousResponseScope {
     Persisted,
     ConnectionLocal,
     ExternalUnknown,
-}
-
-/// Responses 请求携带的 Codex 运行语义。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CodexRequestSemantics {
-    /// Codex turn metadata 中的请求类型。
-    pub request_kind: Option<String>,
-    /// Codex turn metadata 中的子代理类型。
-    pub subagent_kind: Option<String>,
-    /// Codex 客户端选择的推理预设。
-    pub reasoning_preset: Option<&'static str>,
-    /// 请求是否为远端压缩。
-    pub compact: bool,
 }
 
 impl Serialize for CodexResponsesRequest {
@@ -608,32 +594,10 @@ impl CodexResponsesRequest {
 
     /// 提取 Codex 请求类型、子代理类型、推理预设与压缩语义。
     pub fn semantics(&self) -> CodexRequestSemantics {
-        let turn_metadata = self.turn_metadata.as_deref().or_else(|| {
-            self.client_metadata()?
-                .get("x-codex-turn-metadata")?
-                .as_str()
-        });
-        let effort = self
-            .reasoning()
-            .and_then(|value| value.get("effort"))
-            .and_then(Value::as_str);
-        let proactive_multi_agent = self
-            .latest_multi_agent_mode()
-            .is_some_and(|mode| mode.starts_with(PROACTIVE_MULTI_AGENT_MODE_PREFIX));
-        let compact_trigger = self
-            .input()
-            .iter()
-            .any(|item| item.get("type").and_then(Value::as_str) == Some("compaction_trigger"));
-        codex_request_semantics_from_parts(
-            turn_metadata,
-            effort,
-            proactive_multi_agent,
-            compact_trigger,
+        codex_responses_request_semantics_with_turn_metadata(
+            self.body(),
+            self.turn_metadata.as_deref(),
         )
-    }
-
-    fn latest_multi_agent_mode(&self) -> Option<&str> {
-        latest_multi_agent_mode(self.input().iter())
     }
 
     /// 设置 / 合并 client metadata。
@@ -663,62 +627,4 @@ impl CodexResponsesRequest {
             }
         }
     }
-}
-
-fn non_empty_owned_string(value: &str) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()).then(|| value.to_string())
-}
-
-pub(crate) fn codex_request_semantics_from_parts(
-    turn_metadata: Option<&str>,
-    effort: Option<&str>,
-    proactive_multi_agent: bool,
-    compact_trigger: bool,
-) -> CodexRequestSemantics {
-    let turn_metadata = turn_metadata.and_then(|value| serde_json::from_str::<Value>(value).ok());
-    let request_kind = turn_metadata
-        .as_ref()
-        .and_then(|metadata| metadata.get("request_kind"))
-        .and_then(Value::as_str)
-        .and_then(non_empty_owned_string);
-    let subagent_kind = turn_metadata
-        .as_ref()
-        .and_then(|metadata| metadata.get("subagent_kind"))
-        .and_then(Value::as_str)
-        .and_then(non_empty_owned_string);
-    let reasoning_preset =
-        (subagent_kind.is_none() && effort == Some("max") && proactive_multi_agent)
-            .then_some("ultra");
-    let compact = request_kind.as_deref() == Some("compaction") || compact_trigger;
-    CodexRequestSemantics {
-        request_kind,
-        subagent_kind,
-        reasoning_preset,
-        compact,
-    }
-}
-
-fn latest_multi_agent_mode<'a>(
-    input: impl DoubleEndedIterator<Item = &'a Value>,
-) -> Option<&'a str> {
-    input.rev().find_map(|item| {
-        if item.get("role").and_then(Value::as_str) != Some("developer") {
-            return None;
-        }
-        item.get("content")?
-            .as_array()?
-            .iter()
-            .rev()
-            .filter_map(|content| content.get("text").and_then(Value::as_str))
-            .find_map(multi_agent_mode_from_text)
-    })
-}
-
-fn multi_agent_mode_from_text(text: &str) -> Option<&str> {
-    let close = text.rfind(MULTI_AGENT_MODE_CLOSE_TAG)?;
-    let before_close = &text[..close];
-    let open = before_close.rfind(MULTI_AGENT_MODE_OPEN_TAG)?;
-    let body = &before_close[open + MULTI_AGENT_MODE_OPEN_TAG.len()..];
-    Some(body.trim())
 }

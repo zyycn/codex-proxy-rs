@@ -377,6 +377,35 @@ fn reasoning_effort_menu_should_be_capability_evidence_without_legacy_flag() {
 }
 
 #[test]
+fn reasoning_effort_options_should_read_official_features_shape() {
+    let snapshot = parse_grok_model_catalog(
+        br#"{"object":"list","data":[{"id":"grok-4.5","reasoningEfforts":["high"],"features":{"reasoning":true,"reasoningEffortOptions":{"supportedEfforts":["low","medium","high","xhigh"],"defaultEffort":"high"}}}]}"#,
+        None,
+    )
+    .expect("official feature reasoning options should parse");
+    let capabilities = snapshot.models()[0].capabilities();
+
+    assert_eq!(
+        (
+            capabilities.reasoning_effort(),
+            capabilities
+                .reasoning_efforts()
+                .iter()
+                .map(|effort| effort.as_str())
+                .collect::<Vec<_>>(),
+            capabilities
+                .default_reasoning_effort()
+                .map(|effort| effort.as_str()),
+        ),
+        (
+            GrokCatalogCapabilityEvidence::DeclaredNative,
+            vec!["low", "medium", "high", "xhigh"],
+            Some("high"),
+        )
+    );
+}
+
+#[test]
 fn unknown_reasoning_effort_values_should_not_fail_the_snapshot() {
     let snapshot = parse_grok_model_catalog(
         br#"{"object":"list","data":[{"id":"grok-reasoning","reasoningEffort":"ultra","reasoningEfforts":[{"value":"ultra","default":true},"low","hyper"]}]}"#,

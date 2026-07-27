@@ -901,11 +901,27 @@ struct GrokModelWire {
     reasoning_effort: Option<GrokCatalogReasoningEffort>,
     #[serde(default, rename = "reasoningEfforts", alias = "reasoning_efforts")]
     reasoning_efforts: Vec<GrokReasoningEffortOptionWire>,
+    features: Option<GrokModelFeaturesWire>,
     #[serde(rename = "supportsBackendSearch", alias = "supports_backend_search")]
     supports_backend_search: Option<bool>,
     #[serde(rename = "streamToolCalls", alias = "stream_tool_calls")]
     stream_tool_calls: Option<bool>,
     hidden: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GrokModelFeaturesWire {
+    reasoning: Option<bool>,
+    #[serde(rename = "reasoningEffortOptions", alias = "reasoning_effort_options")]
+    reasoning_effort_options: Option<GrokReasoningEffortOptionsWire>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GrokReasoningEffortOptionsWire {
+    #[serde(default, rename = "supportedEfforts", alias = "supported_efforts")]
+    supported_efforts: Vec<GrokCatalogReasoningEffort>,
+    #[serde(rename = "defaultEffort", alias = "default_effort")]
+    default_effort: Option<GrokCatalogReasoningEffort>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -993,29 +1009,49 @@ fn normalize_model(wire: GrokModelWire) -> Result<GrokCatalogModel, GrokModelCat
         .api_backend
         .filter(|backend| *backend != GrokCatalogApiBackend::Unknown);
     let responses_api = responses_evidence(wire.supported_in_api, api_backend);
-    let mut menu_default = None;
+    let features = wire.features;
+    let feature_reasoning = features.as_ref().and_then(|features| features.reasoning);
+    let feature_reasoning_options = features.and_then(|features| features.reasoning_effort_options);
+
+    let mut top_level_menu_default = None;
     // 未识别的 effort 值不进入能力投影，也不作为默认值候选。
-    let reasoning_efforts = wire
-        .reasoning_efforts
-        .into_iter()
-        .filter_map(|option| {
-            let (effort, is_default) = option.into_parts();
-            if effort == GrokCatalogReasoningEffort::Unknown {
-                return None;
-            }
-            if is_default && menu_default.is_none() {
-                menu_default = Some(effort);
-            }
-            Some(effort)
+    let top_level_reasoning_efforts =
+        reasoning_effort_menu(wire.reasoning_efforts, &mut top_level_menu_default);
+    let (feature_reasoning_efforts, feature_default_reasoning_effort) = feature_reasoning_options
+        .map_or_else(
+            || (Vec::new(), None),
+            |options| {
+                (
+                    options
+                        .supported_efforts
+                        .into_iter()
+                        .filter(|effort| *effort != GrokCatalogReasoningEffort::Unknown)
+                        .collect::<Vec<_>>(),
+                    options
+                        .default_effort
+                        .filter(|effort| *effort != GrokCatalogReasoningEffort::Unknown),
+                )
+            },
+        );
+    let reasoning_efforts = if feature_reasoning_efforts.is_empty() {
+        top_level_reasoning_efforts
+    } else {
+        feature_reasoning_efforts
+    };
+    let default_reasoning_effort = feature_default_reasoning_effort
+        .or_else(|| {
+            wire.reasoning_effort
+                .filter(|effort| *effort != GrokCatalogReasoningEffort::Unknown)
         })
-        .collect::<Vec<_>>();
-    let default_reasoning_effort = wire
-        .reasoning_effort
-        .filter(|effort| *effort != GrokCatalogReasoningEffort::Unknown)
-        .or(menu_default)
+        .or(top_level_menu_default)
+        .or_else(|| reasoning_efforts.first().copied());
+    let default_reasoning_effort = default_reasoning_effort
+        .filter(|default| reasoning_efforts.iter().any(|effort| effort == default))
         .or_else(|| reasoning_efforts.first().copied());
     let reasoning_effort = if reasoning_efforts.is_empty() {
-        GrokCatalogCapabilityEvidence::from_wire(wire.supports_reasoning_effort)
+        GrokCatalogCapabilityEvidence::from_wire(
+            wire.supports_reasoning_effort.or(feature_reasoning),
+        )
     } else {
         GrokCatalogCapabilityEvidence::DeclaredNative
     };
@@ -1042,6 +1078,25 @@ fn normalize_model(wire: GrokModelWire) -> Result<GrokCatalogModel, GrokModelCat
             hidden: wire.hidden,
         },
     })
+}
+
+fn reasoning_effort_menu(
+    values: Vec<GrokReasoningEffortOptionWire>,
+    menu_default: &mut Option<GrokCatalogReasoningEffort>,
+) -> Vec<GrokCatalogReasoningEffort> {
+    values
+        .into_iter()
+        .filter_map(|option| {
+            let (effort, is_default) = option.into_parts();
+            if effort == GrokCatalogReasoningEffort::Unknown {
+                return None;
+            }
+            if is_default && menu_default.is_none() {
+                *menu_default = Some(effort);
+            }
+            Some(effort)
+        })
+        .collect()
 }
 
 fn responses_evidence(

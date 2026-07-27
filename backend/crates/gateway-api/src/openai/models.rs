@@ -189,6 +189,22 @@ fn codex_model_json(profile: &PublicModelProfile, index: usize) -> Value {
     } else {
         vec!["text"]
     };
+    let additional_speed_tiers = presentation
+        .service_tiers()
+        .iter()
+        .filter_map(|tier| tier.speed_tier())
+        .collect::<Vec<_>>();
+    let service_tiers = presentation
+        .service_tiers()
+        .iter()
+        .map(|tier| {
+            json!({
+                "id": tier.id(),
+                "name": tier.name(),
+                "description": tier.description(),
+            })
+        })
+        .collect::<Vec<_>>();
 
     json!({
         "slug": id,
@@ -200,8 +216,8 @@ fn codex_model_json(profile: &PublicModelProfile, index: usize) -> Value {
         "visibility": if presentation.hidden() { "hide" } else { "list" },
         "supported_in_api": true,
         "priority": index.saturating_add(1),
-        "additional_speed_tiers": [],
-        "service_tiers": [],
+        "additional_speed_tiers": additional_speed_tiers,
+        "service_tiers": service_tiers,
         "availability_nux": Value::Null,
         "upgrade": Value::Null,
         "base_instructions": CODEX_BASE_INSTRUCTIONS,

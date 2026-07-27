@@ -37,6 +37,7 @@ use gateway_core::task::{
     WorkerKind, WorkerLeaseRequest, WorkerRegistration, WorkerRunnable, WorkerSchedule,
     WorkerTaskError,
 };
+use gateway_protocol::openai::codex_responses_request_semantics;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use url::Url;
@@ -124,19 +125,17 @@ impl Provider for GrokBuildProvider {
         let Operation::Generate(request) = operation else {
             return ProviderRequestObservation::default();
         };
-        let reasoning_effort = request
-            .protocol_payload()
-            .body()
-            .get("reasoning")
-            .and_then(Value::as_object)
-            .and_then(|reasoning| reasoning.get("effort"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned);
+        let payload = request.protocol_payload();
+        if payload.protocol() != "openai" {
+            return ProviderRequestObservation::default();
+        }
+        let semantics = codex_responses_request_semantics(payload.body(), payload.context());
         ProviderRequestObservation {
-            reasoning_effort,
-            ..ProviderRequestObservation::default()
+            reasoning_effort: semantics.reasoning_effort,
+            reasoning_preset: semantics.reasoning_preset.map(str::to_owned),
+            request_kind: semantics.request_kind,
+            subagent_kind: semantics.subagent_kind,
+            compact: semantics.compact,
         }
     }
 
@@ -426,12 +425,6 @@ fn default_grok_model_presentation() -> ModelPresentation {
         Some("Grok 4.5".to_owned()),
         Some("xAI Grok 4.5 frontier model with reasoning and vision.".to_owned()),
     )
-    .with_reasoning(
-        Some("medium".to_owned()),
-        ["low", "medium", "high", "xhigh"]
-            .map(str::to_owned)
-            .to_vec(),
-    )
     .with_context_window_tokens(Some(500_000))
     .with_image_input(true)
     .with_agent_tools(true, true)
@@ -452,25 +445,20 @@ fn grok_model_presentation(model: &GrokCatalogModel) -> ModelPresentation {
         .default_reasoning_effort()
         .map(|effort| effort.as_str().to_owned());
     let (default_reasoning, reasoning_efforts) = match reasoning_evidence {
-        GrokCatalogCapabilityEvidence::DeclaredNative if !catalog_reasoning_efforts.is_empty() => (
-            catalog_default_reasoning.or_else(|| catalog_reasoning_efforts.first().cloned()),
-            catalog_reasoning_efforts,
-        ),
-        GrokCatalogCapabilityEvidence::DeclaredNative => (
-            catalog_default_reasoning.or_else(|| Some("medium".to_owned())),
-            ["low", "medium", "high", "xhigh"]
-                .map(str::to_owned)
-                .to_vec(),
-        ),
+        GrokCatalogCapabilityEvidence::DeclaredNative if !catalog_reasoning_efforts.is_empty() => {
+            let default_reasoning = catalog_default_reasoning
+                .filter(|default| {
+                    catalog_reasoning_efforts
+                        .iter()
+                        .any(|effort| effort == default)
+                })
+                .or_else(|| catalog_reasoning_efforts.first().cloned());
+            (default_reasoning, catalog_reasoning_efforts)
+        }
+        GrokCatalogCapabilityEvidence::DeclaredNative => (None, Vec::new()),
         GrokCatalogCapabilityEvidence::DeclaredUnsupported => {
             (Some("none".to_owned()), vec!["none".to_owned()])
         }
-        GrokCatalogCapabilityEvidence::Unknown if known_grok_4_5 => (
-            catalog_default_reasoning.or_else(|| Some("medium".to_owned())),
-            ["low", "medium", "high", "xhigh"]
-                .map(str::to_owned)
-                .to_vec(),
-        ),
         GrokCatalogCapabilityEvidence::Unknown => (None, Vec::new()),
     };
     let context_window_tokens = model
