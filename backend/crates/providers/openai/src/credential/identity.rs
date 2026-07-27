@@ -116,6 +116,24 @@ impl CodexSignedIdentity {
     pub const fn access_token_expires_at(&self) -> DateTime<Utc> {
         self.access_token_expires_at
     }
+
+    fn into_import_profile(self) -> Result<CodexAccountProfile, CodexIdentityVerificationError> {
+        let chatgpt_account_id = self
+            .claimed_account_id
+            .ok_or(CodexIdentityVerificationError::Rejected)?;
+        let chatgpt_user_id = self
+            .claimed_user_id
+            .ok_or(CodexIdentityVerificationError::Rejected)?;
+        Ok(CodexAccountProfile {
+            email: self.email,
+            oauth_subject: self.oauth_subject,
+            poid: self.poid,
+            chatgpt_account_id,
+            chatgpt_user_id,
+            plan_type: self.plan_type,
+            access_token_expires_at: Some(self.access_token_expires_at),
+        })
+    }
 }
 
 /// 导入文档或现有 credential 对认证结果施加的一致性约束。
@@ -255,6 +273,19 @@ pub trait CodexAccountIdentityVerifier: Send + Sync {
         secret: &CodexOAuthSecret,
         expectation: &CodexIdentityExpectation,
     ) -> Result<CodexIdentityVerification, CodexIdentityVerificationError>;
+
+    /// 为无状态导入补全 OAuth 账号事实。
+    ///
+    /// 导入不信任导出文件中的身份投影；实现必须只使用已验签的 token
+    /// 与官方认证接口返回的事实生成可持久化 profile。
+    async fn verify_import(
+        &self,
+        secret: &CodexOAuthSecret,
+    ) -> Result<CodexAccountProfile, CodexIdentityVerificationError> {
+        self.verify(secret, &CodexIdentityExpectation::default())
+            .await?
+            .into_complete()
+    }
 
     async fn verify_authorization(
         &self,
@@ -578,6 +609,31 @@ impl CodexAccountIdentityVerifier for CodexAccountIdentityService {
     ) -> Result<CodexIdentityVerification, CodexIdentityVerificationError> {
         let signed = self.signed.verify_access(secret).await?;
         self.complete(secret, signed, expectation).await
+    }
+
+    async fn verify_import(
+        &self,
+        secret: &CodexOAuthSecret,
+    ) -> Result<CodexAccountProfile, CodexIdentityVerificationError> {
+        let signed = self.signed.verify_access(secret).await?;
+        let expectation = CodexIdentityExpectation::imported(
+            signed.claimed_account_id.clone(),
+            signed.claimed_user_id.clone(),
+        )?;
+        let fallback = signed.clone().into_import_profile().ok();
+        match self.accounts.fetch(secret, &expectation).await {
+            Ok(account) => match complete_profile(signed, account, &expectation) {
+                Ok(profile) => Ok(profile),
+                Err(_) => fallback.ok_or(CodexIdentityVerificationError::Rejected),
+            },
+            // `/wham/usage` 是导入时的补全来源，不是 token 有效性的裁决者。AT
+            // 已完成官方验签且带有完整账号声明时，接口拒绝、暂时不可用或返回默认
+            // workspace 的冲突投影，都不能阻止恢复该 OAuth 账号。
+            Err(
+                CodexIdentityVerificationError::Rejected
+                | CodexIdentityVerificationError::Unavailable,
+            ) => fallback.ok_or(CodexIdentityVerificationError::Rejected),
+        }
     }
 
     async fn verify_authorization(

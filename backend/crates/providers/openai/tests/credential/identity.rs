@@ -265,6 +265,55 @@ async fn account_identity_rejects_imported_workspace_conflict() {
 }
 
 #[tokio::test]
+async fn import_identity_uses_signed_claims_when_usage_rejects_the_request() {
+    let (signed, _) = verifier();
+    let service = CodexAccountIdentityService::new(
+        Arc::new(signed),
+        Arc::new(StaticAccountSource {
+            result: Err(CodexIdentityVerificationError::Rejected),
+        }),
+    );
+
+    let profile = service
+        .verify_import(&secret(
+            &claims(get_current_timestamp() + 3_600),
+            Some("refresh-token"),
+        ))
+        .await
+        .expect("signed import identity");
+
+    assert_eq!(profile.chatgpt_account_id, "account-signed");
+    assert_eq!(profile.chatgpt_user_id, "user-signed");
+}
+
+#[tokio::test]
+async fn import_identity_keeps_signed_workspace_when_usage_returns_a_different_workspace() {
+    let (signed, _) = verifier();
+    let service = CodexAccountIdentityService::new(
+        Arc::new(signed),
+        Arc::new(StaticAccountSource {
+            result: Ok(CodexAuthenticatedAccount {
+                chatgpt_account_id: "account-default".to_owned(),
+                chatgpt_user_id: "user-default".to_owned(),
+                email: None,
+                plan_type: None,
+            }),
+        }),
+    );
+
+    let profile = service
+        .verify_import(&secret(
+            &claims(get_current_timestamp() + 3_600),
+            Some("refresh-token"),
+        ))
+        .await
+        .expect("signed import identity");
+
+    assert_eq!(profile.chatgpt_account_id, "account-signed");
+    assert_eq!(profile.chatgpt_user_id, "user-signed");
+}
+
+#[tokio::test]
 async fn account_identity_keeps_usage_unavailable_out_of_ready_profile() {
     let (signed, _) = verifier();
     let service = CodexAccountIdentityService::new(

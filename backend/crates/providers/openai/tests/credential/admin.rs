@@ -628,7 +628,7 @@ pub(super) fn unused_import_refresher() -> Arc<ManualRefresher> {
 }
 
 #[tokio::test]
-async fn formal_cpr_import_is_strict_and_uses_the_single_core_write_shape() {
+async fn oauth_import_uses_only_tokens_and_verified_identity() {
     let refresher = unused_import_refresher();
     let prepared = import_service(refresher.clone())
         .prepare_import_document(serde_json::json!({
@@ -645,15 +645,16 @@ async fn formal_cpr_import_is_strict_and_uses_the_single_core_write_shape() {
                 "accessTokenExpiresAt": "2100-01-01T00:00:00+00:00",
                 "status": "disabled",
                 "addedAt": "2026-07-18T10:47:01+08:00",
-                "updatedAt": "2026-07-19T11:00:00+08:00"
+                "updatedAt": "2026-07-19T11:00:00+08:00",
+                "unrelated": { "value": true }
             }]
         }))
         .await
         .expect("CPR import");
     assert_eq!(prepared.accounts().len(), 1);
     let account = &prepared.accounts()[0];
-    assert_eq!(account.account.id().as_str(), "acct_cpr_import");
-    assert!(!account.account.enabled());
+    assert!(account.account.id().as_str().starts_with("acct_"));
+    assert!(account.account.enabled());
     assert_eq!(account.account.upstream_account_id(), Some("chatgpt-cpr"));
     let runtime = CodexCredentialCodec::decode(&account.credential).expect("credential");
     assert_eq!(
@@ -666,33 +667,6 @@ async fn formal_cpr_import_is_strict_and_uses_the_single_core_write_shape() {
         "token-cpr"
     );
     assert!(refresher.seen.lock().expect("seen tokens").is_empty());
-
-    let error = import_service(unused_import_refresher())
-        .prepare_import_document(serde_json::json!({
-            "sourceFormat": "cpr",
-            "accounts": [{"token": "token-cpr", "unexpected": true}]
-        }))
-        .await
-        .expect_err("unknown CPR account key");
-    assert_eq!(error, CodexCredentialAdminError::InvalidInput);
-}
-
-#[tokio::test]
-async fn cpr_import_uses_verified_token_identity_instead_of_stale_export_projections() {
-    let error = import_service(unused_import_refresher())
-        .prepare_import_document(serde_json::json!({
-            "sourceFormat": "cpr",
-            "accounts": [{
-                "id": "acct_verified_identity",
-                "accountId": "user-chatgpt-cpr",
-                "userId": "user-chatgpt-cpr",
-                "token": "token-cpr"
-            }]
-        }))
-        .await
-        .expect_err("stale document identity must not override authenticated identity");
-
-    assert_eq!(error, CodexCredentialAdminError::IdentityRejected);
 }
 
 #[tokio::test]
@@ -744,7 +718,7 @@ async fn cpr_batch_allows_distinct_users_in_the_same_workspace() {
 }
 
 #[tokio::test]
-async fn credential_bundle_and_auth_document_normalize_to_the_same_core_accounts() {
+async fn oauth_import_extracts_tokens_without_parsing_source_projections() {
     let bundle = import_service(unused_import_refresher())
         .prepare_import_document(serde_json::json!({
             "exported_at": "2026-07-03T15:46:38.717Z",
@@ -754,7 +728,7 @@ async fn credential_bundle_and_auth_document_normalize_to_the_same_core_accounts
                 "platform": "openai",
                 "type": "oauth",
                 "credentials": {
-                    "at": "token-bundle",
+                    "access_token": "token-bundle",
                     "refresh_token": "refresh-bundle",
                     "chatgpt_account_id": "chatgpt-bundle",
                     "chatgpt_user_id": "user-chatgpt-bundle"

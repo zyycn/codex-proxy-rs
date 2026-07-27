@@ -24,6 +24,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 secrecy = { version = "0.10.3", features = ["serde"] }
 subtle = "2.6.1"
 thiserror = "2.0.18"
+tracing = "0.1.44"
 uuid = { version = "1.23.3", features = ["v7"] }
 
 [dev-dependencies]
