@@ -40,13 +40,19 @@
 
 ## 存储
 
-- PostgreSQL 业务表只有 `0001_initial.sql` 定义的七张；后续编号迁移只做增量（如 `0002` 的保留期删除索引）。
+- PostgreSQL 业务表只有 `0001_initial.sql` 定义的七张；后续编号迁移只做增量。当前 `0002` 删除
+  opaque response ID 索引，`0003` 把 response ID 改为 bytes，`0004` 增加响应观测的 service tier。
 - 已应用迁移按字节冻结：`backend/migrations/.frozen-sha256` 是冻结清单，CI 相对 PR base 做 append-only 校验；schema 变更一律新增编号迁移，规则见 `backend/migrations/README.md`。
 - `config_revision` 只用于会改变调度快照或安全配置的管理 mutation。
 - quota、cooldown、catalog generation、自动 refresh 不推进全局 revision。
 - refresh 只推进账号 `credential_revision`；Redis cooldown 是可丢失热缓存。
-- OAuth pending 使用 Provider 域隔离 SHA-256 key、固定三字段 Hash 和原子一次消费。
-- 真实 secret 不进入日志、Debug、fixture、文档或 audit details；测试只能使用合成值。
+- OAuth pending 使用 Provider 域隔离 SHA-256 key；基础 Hash 保存 owner、过期时间和 Provider payload，
+  complete 先原子 claim，失败释放 claim，账号事务提交后才消费。
+- 数据面 PostgreSQL execution observation 与 Redis admission release/circuit feedback 使用有界 OpsFlush
+  队列；队列可丢失、可观测且不是权威状态，不得让 Store 失败改写客户端协议结果。native
+  continuation 直接写 Redis，并限制每次记录的索引清理量。
+- 真实 secret 不进入日志、Debug、fixture、文档或 audit details；默认测试使用合成值，外部 access-token
+  签名检查是唯一显式 opt-in 例外。
 
 ## 前端
 
@@ -57,9 +63,11 @@
 ## 验证
 
 ```bash
-cargo +1.97.0 fmt --all --manifest-path backend/Cargo.toml -- --check
-cargo +1.97.0 clippy --manifest-path backend/Cargo.toml --all-targets --all-features --locked -- -D warnings
-cargo +1.97.0 test --manifest-path backend/Cargo.toml --test main --locked
+cd backend
+cargo fmt --check
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --test main --locked
+cd ..
 pnpm --dir frontend format:check
 pnpm --dir frontend build
 docker compose -f deploy/compose.yaml config --quiet
@@ -69,11 +77,6 @@ docker compose -f deploy/compose.yaml config --quiet
 `gateway-store` 的 PostgreSQL/Redis 集成测试需要 `CPR_TEST_DATABASE_URL`、
 `CPR_TEST_REDIS_URL`；本地未设置时静默跳过，CI 缺失则直接失败。
 
-真实账号测试只从仓库外路径读取，不打印或复制 credential。
-
-真实数据面验证使用两个显式 ignored 测试：
-
-- `admin::real_openai_conversation_crosses_production_provider_boundaries`
-- `admin::real_xai_conversation_crosses_production_provider_boundaries`
-
-两者覆盖真实 catalog、selector、生产 SSE transport、canonical event、usage 和 completed；xAI 测试还要求 `XAI_ALLOW_DESTRUCTIVE_FIXTURE_REFRESH=1`，因为验证过程可能轮换 refresh token。
+自动化测试不发送真实对话，也不轮换生产 refresh token。OpenAI identity 有一个可选的
+`CODEX_REAL_ACCOUNT_FILE` 外部文件签名检查，只验证官方 JWKS，不经过 selector 或数据面；未设置时
+直接跳过。线上链路验收使用隔离的操作员请求，并按 request ID 对照服务日志和观测记录。
