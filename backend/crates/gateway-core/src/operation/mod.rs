@@ -302,7 +302,7 @@ impl GenerateRequest {
         self.body()
             .get("previous_response_id")
             .and_then(Value::as_str)
-            .is_some_and(|response_id| !response_id.is_empty())
+            .is_some()
     }
 
     /// 返回客户端是否请求了图片生成工具。

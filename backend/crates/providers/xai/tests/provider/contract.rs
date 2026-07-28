@@ -1628,8 +1628,8 @@ async fn native_previous_response_is_rejected_before_selection() {
     let selector = StubSelector::success();
     let provider = provider(selector.clone(), StubInferenceTransport::success()).await;
     let pin = NativeContinuationPin::new(
-        PreviousResponseId::new("resp_previous").expect("response ID"),
-        SafeUpstreamValue::new("resp_upstream_previous").expect("upstream response ID"),
+        PreviousResponseId::new("resp_previous"),
+        PreviousResponseId::new("resp_upstream_previous"),
         ProviderKind::new("openai").expect("provider"),
         account_id("provider"),
     );
@@ -1661,8 +1661,8 @@ async fn native_previous_response_pins_account_and_sends_upstream_handle() {
     let transport = StubInferenceTransport::success();
     let provider = provider(selector.clone(), transport.clone()).await;
     let pin = NativeContinuationPin::new(
-        PreviousResponseId::new("resp_previous").expect("response ID"),
-        SafeUpstreamValue::new("resp_upstream_previous").expect("upstream response ID"),
+        PreviousResponseId::new("resp_previous"),
+        PreviousResponseId::new("resp_upstream_previous"),
         ProviderKind::new("xai").expect("provider"),
         account_id("provider"),
     );
@@ -1706,8 +1706,8 @@ async fn native_previous_response_does_not_allow_quota_or_rate_limit_account_rot
     );
     let provider = provider(StubSelector::success(), transport).await;
     let pin = NativeContinuationPin::new(
-        PreviousResponseId::new("resp_previous").expect("response ID"),
-        SafeUpstreamValue::new("resp_upstream_previous").expect("upstream response ID"),
+        PreviousResponseId::new("resp_previous"),
+        PreviousResponseId::new("resp_upstream_previous"),
         ProviderKind::new("xai").expect("provider"),
         account_id("provider"),
     );
@@ -1732,9 +1732,8 @@ async fn native_previous_response_does_not_allow_quota_or_rate_limit_account_rot
 async fn external_previous_response_is_rejected_before_selection() {
     let selector = StubSelector::success();
     let provider = provider(selector.clone(), StubInferenceTransport::success()).await;
-    let binding = ContinuationBinding::External(
-        PreviousResponseId::new("external-provider-response").expect("response ID"),
-    );
+    let binding =
+        ContinuationBinding::External(PreviousResponseId::new("external-provider-response"));
     let error = match provider
         .execute(
             provider_request("xai"),
@@ -1797,8 +1796,8 @@ async fn connection_state_inherits_session_and_recovers_reasoning_on_pinned_acco
         .expect("connection session state");
 
     let pin = NativeContinuationPin::new(
-        PreviousResponseId::new("resp_gateway_first").expect("response ID"),
-        SafeUpstreamValue::new("resp_state").expect("upstream response ID"),
+        PreviousResponseId::new("resp_gateway_first"),
+        PreviousResponseId::new("resp_state"),
         ProviderKind::new("xai").expect("provider"),
         account_id("provider"),
     );
@@ -1921,8 +1920,8 @@ async fn replay_owner_should_reencode_custom_apply_patch_call_for_grok() {
         .await
         .expect("connection session state");
     let pin = NativeContinuationPin::new(
-        PreviousResponseId::new("resp_gateway_patch").expect("response ID"),
-        SafeUpstreamValue::new("resp_custom_patch").expect("upstream response ID"),
+        PreviousResponseId::new("resp_gateway_patch"),
+        PreviousResponseId::new("resp_custom_patch"),
         ProviderKind::new("xai").expect("provider"),
         account_id("provider"),
     );
@@ -1996,8 +1995,8 @@ async fn missing_native_response_should_be_replay_safe_for_the_same_account() {
     )
     .expect("session state");
     let pin = NativeContinuationPin::new(
-        PreviousResponseId::new("resp_gateway_first").expect("response ID"),
-        SafeUpstreamValue::new("resp_upstream_first").expect("upstream response ID"),
+        PreviousResponseId::new("resp_gateway_first"),
+        PreviousResponseId::new("resp_upstream_first"),
         ProviderKind::new("xai").expect("provider"),
         account_id("provider"),
     );

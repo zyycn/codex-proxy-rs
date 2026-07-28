@@ -58,6 +58,18 @@ impl TestDatabase {
             .execute(&mut *migration)
             .await
             .expect("apply terminal migration");
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/0002_drop_opaque_response_id_index.sql"
+        ))
+        .execute(&mut *migration)
+        .await
+        .expect("apply opaque response ID migration");
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/0003_store_opaque_response_ids_as_bytes.sql"
+        ))
+        .execute(&mut *migration)
+        .await
+        .expect("apply opaque response storage migration");
         migration.commit().await.expect("commit terminal migration");
         Some(Self {
             admin,
@@ -80,7 +92,7 @@ impl TestDatabase {
 }
 
 #[tokio::test]
-async fn connect_and_migrate_should_apply_initial_migration_once_and_reopen_cleanly() {
+async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly() {
     let Some(database_url) = crate::support::test_env("CPR_TEST_DATABASE_URL") else {
         return;
     };
@@ -104,7 +116,7 @@ async fn connect_and_migrate_should_apply_initial_migration_once_and_reopen_clea
         .to_string();
     let first = connect_and_migrate(&isolated_url, gateway_store::StorePoolConfig::default())
         .await
-        .expect("apply initial migration through production migrator");
+        .expect("apply migrations through production migrator");
     let first_table_count = sqlx::query_scalar::<_, i64>(
         "select count(*) from information_schema.tables where table_schema = 'public'",
     )
@@ -121,6 +133,28 @@ async fn connect_and_migrate_should_apply_initial_migration_once_and_reopen_clea
             .fetch_one(&second)
             .await
             .expect("count successful migrations");
+    let response_id_types = sqlx::query_scalar::<_, String>(
+        "select data_type
+         from information_schema.columns
+         where table_schema = 'public'
+           and table_name = 'model_requests'
+           and column_name in ('client_response_id', 'upstream_response_id')
+         order by column_name",
+    )
+    .fetch_all(&second)
+    .await
+    .expect("load opaque response ID column types");
+    let raw_response_id_index_exists = sqlx::query_scalar::<_, bool>(
+        "select exists (
+           select 1
+           from pg_indexes
+           where schemaname = 'public'
+             and indexname = 'model_requests_client_response_uq'
+         )",
+    )
+    .fetch_one(&second)
+    .await
+    .expect("check removed raw response ID index");
     second.close().await;
 
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
@@ -131,13 +165,20 @@ async fn connect_and_migrate_should_apply_initial_migration_once_and_reopen_clea
     .expect("drop migration test database");
     admin.close().await;
 
-    assert_eq!((first_table_count, migration_count), (8, 1));
+    assert_eq!((first_table_count, migration_count), (8, 3));
+    assert_eq!(response_id_types, ["bytea", "bytea"]);
+    assert!(!raw_response_id_index_exists);
 }
 
 #[test]
-fn initial_migration_should_leave_transaction_ownership_to_sqlx() {
-    let transaction_statements = include_str!("../../../../migrations/0001_initial.sql")
-        .lines()
+fn migrations_should_leave_transaction_ownership_to_sqlx() {
+    let transaction_statements = [
+        include_str!("../../../../migrations/0001_initial.sql"),
+        include_str!("../../../../migrations/0002_drop_opaque_response_id_index.sql"),
+        include_str!("../../../../migrations/0003_store_opaque_response_ids_as_bytes.sql"),
+    ]
+    .into_iter()
+    .flat_map(str::lines)
         .map(str::trim)
         .filter(|line| matches!(*line, "begin;" | "commit;"))
         .count();

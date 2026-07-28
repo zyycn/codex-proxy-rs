@@ -8,29 +8,32 @@ use std::fmt;
 use futures::future::BoxFuture;
 
 use crate::engine::credential::ProviderAccountId;
-use crate::error::{IdentifierError, SafeUpstreamValue, validate_text};
 use crate::operation::ProviderSessionState;
 use crate::routing::ProviderKind;
 
-/// 客户端传入的 previous response ID。
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// 客户端或 Provider 传递的 opaque response handle。
+///
+/// Codex 定义这个值的语义和格式。网关只将其作为亲和查找键或同账号上游
+/// continuation 的载体，不得按私有长度、字符集或前缀规则拒绝、归一化或改写。
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PreviousResponseId(String);
 
 impl PreviousResponseId {
-    /// 校验并创建 previous response ID。
-    ///
-    /// # Errors
-    ///
-    /// ID 为空、过长或包含控制字符时返回错误。
-    pub fn new(value: impl Into<String>) -> Result<Self, IdentifierError> {
-        let value = value.into();
-        validate_text(&value, 256, false, None)?;
-        Ok(Self(value))
+    /// 按原样创建 opaque response handle。
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
     }
 
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl fmt::Debug for PreviousResponseId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PreviousResponseId(<redacted>)")
     }
 }
 
@@ -52,7 +55,7 @@ pub struct NativeContinuationPin {
     /// 客户端提交、用于查找可丢失会话亲和记录的 response ID。
     previous_response_id: PreviousResponseId,
     /// Provider 原生 response handle。
-    upstream_response_id: SafeUpstreamValue,
+    upstream_response_id: PreviousResponseId,
     provider: ProviderKind,
     account: ProviderAccountId,
     scope: NativeContinuationScope,
@@ -63,7 +66,7 @@ impl NativeContinuationPin {
     #[must_use]
     pub const fn new(
         previous_response_id: PreviousResponseId,
-        upstream_response_id: SafeUpstreamValue,
+        upstream_response_id: PreviousResponseId,
         provider: ProviderKind,
         account: ProviderAccountId,
     ) -> Self {
@@ -98,7 +101,7 @@ impl NativeContinuationPin {
 
     /// 返回只允许发送给已冻结 Provider 目标的原生上游 handle。
     #[must_use]
-    pub const fn upstream_response_id(&self) -> &SafeUpstreamValue {
+    pub const fn upstream_response_id(&self) -> &PreviousResponseId {
         &self.upstream_response_id
     }
 

@@ -12,7 +12,6 @@ use gateway_core::engine::continuation::{
     NativeContinuationStoreError, PreviousResponseId,
 };
 use gateway_core::engine::credential::ProviderAccountId;
-use gateway_core::error::SafeUpstreamValue;
 use gateway_core::operation::ProviderSessionState;
 use gateway_core::routing::ProviderKind;
 use redis::aio::ConnectionManager;
@@ -110,6 +109,9 @@ impl NativeContinuationPort for RedisNativeContinuationRepository {
         previous_response_id: &'a PreviousResponseId,
     ) -> BoxFuture<'a, Result<Option<NativeContinuationPin>, NativeContinuationStoreError>> {
         Box::pin(async move {
+            if previous_response_id.as_str().is_empty() {
+                return Ok(None);
+            }
             let fingerprint = self.entry_fingerprint(previous_response_id.as_str())?;
             let mut connection = self.connection.clone();
             let payload = redis::cmd("GET")
@@ -128,6 +130,9 @@ impl NativeContinuationPort for RedisNativeContinuationRepository {
         pin: NativeContinuationPin,
     ) -> BoxFuture<'a, Result<(), NativeContinuationStoreError>> {
         Box::pin(async move {
+            if pin.previous_response_id().as_str().is_empty() {
+                return Ok(());
+            }
             let fingerprint = self.entry_fingerprint(pin.previous_response_id().as_str())?;
             let payload = encode_pin(&pin)?;
             if payload.len() > MAX_RECORD_BYTES {
@@ -186,8 +191,7 @@ fn decode_pin(
         serde_json::from_str(payload).map_err(|_| NativeContinuationStoreError)?;
     let provider = ProviderKind::new(wire.provider).map_err(|_| NativeContinuationStoreError)?;
     let account = ProviderAccountId::new(wire.account).map_err(|_| NativeContinuationStoreError)?;
-    let upstream_response_id = SafeUpstreamValue::new(wire.upstream_response_id)
-        .map_err(|_| NativeContinuationStoreError)?;
+    let upstream_response_id = PreviousResponseId::new(wire.upstream_response_id);
     let scope = parse_scope(&wire.scope)?;
     let mut pin = NativeContinuationPin::new(
         previous_response_id.clone(),

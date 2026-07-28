@@ -650,6 +650,54 @@ fn success_updates_one_model_request_and_persists_usage() {
     );
 }
 
+#[test]
+fn success_preserves_opaque_upstream_response_id_and_builds_native_pin() {
+    let response_id = format!("resp_{}\0opaque", "x".repeat(4_096));
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let (coordinator, store, _) = coordinator(vec![Script::Stream {
+        account_id: "acct_one",
+        items: vec![
+            Ok(GatewayEvent::Started(ResponseMeta::new(
+                response_id.clone(),
+                "gpt-5",
+            ))),
+            Ok(GatewayEvent::Completed(ResponseMeta::new(
+                response_id.clone(),
+                "gpt-5",
+            ))),
+        ],
+    }]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+
+    block_on(session.collect_uncommitted()).expect("collect opaque response");
+    let provider_state = ProviderSessionState::new("openai", Map::new()).expect("provider state");
+    let pin = session
+        .native_continuation_pin(&provider_state)
+        .expect("native continuation pin");
+    assert_eq!(pin.previous_response_id().as_str(), response_id);
+    assert_eq!(pin.upstream_response_id().as_str(), response_id);
+
+    block_on(session.commit_downstream(Some(200))).expect("commit response");
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(
+        state.finalizations[0].client_response_id,
+        Some(response_id.clone())
+    );
+    assert_eq!(
+        state.finalizations[0].upstream_response_id,
+        Some(response_id)
+    );
+}
+
 fn finalized_image_request(image_output_tokens: Option<u64>) -> FinalState {
     let operation = image_generate_operation();
     let route_plan = plan(&operation);
@@ -1092,8 +1140,8 @@ fn authenticated_native_continuation_reaches_every_attempt_context() {
         items: complete_stream(None),
     }]);
     let continuation = NativeContinuationPin::new(
-        PreviousResponseId::new("previous-secret-id").expect("previous response"),
-        SafeUpstreamValue::new("provider-native-id").expect("upstream response"),
+        PreviousResponseId::new("previous-secret-id"),
+        PreviousResponseId::new("provider-native-id"),
         ProviderKind::new("openai").expect("provider"),
         ProviderAccountId::new("acct_one").expect("account"),
     );
@@ -1149,8 +1197,8 @@ fn streaming_native_continuation_delivers_started_event_before_later_output() {
         items: complete_stream(None),
     }]);
     let continuation = NativeContinuationPin::new(
-        PreviousResponseId::new("previous-response").expect("previous response"),
-        SafeUpstreamValue::new("upstream-response").expect("upstream response"),
+        PreviousResponseId::new("previous-response"),
+        PreviousResponseId::new("upstream-response"),
         ProviderKind::new("openai").expect("provider"),
         ProviderAccountId::new("acct_one").expect("account"),
     );
@@ -1225,8 +1273,8 @@ fn native_continuation_replays_owner_before_safely_switching_account() {
         },
     ]);
     let continuation = NativeContinuationPin::new(
-        PreviousResponseId::new("previous-secret-id").expect("previous response"),
-        SafeUpstreamValue::new("provider-native-id").expect("upstream response"),
+        PreviousResponseId::new("previous-secret-id"),
+        PreviousResponseId::new("provider-native-id"),
         ProviderKind::new("openai").expect("provider"),
         ProviderAccountId::new("acct_one").expect("account"),
     );
@@ -2174,8 +2222,8 @@ fn atomic_response_failed_keeps_collect_uncommitted_error_semantics() {
 #[test]
 fn native_continuation_explicit_429_is_not_retried() {
     let continuation = NativeContinuationPin::new(
-        PreviousResponseId::new("previous-secret-id").expect("previous response"),
-        SafeUpstreamValue::new("provider-native-id").expect("upstream response"),
+        PreviousResponseId::new("previous-secret-id"),
+        PreviousResponseId::new("provider-native-id"),
         ProviderKind::new("openai").expect("provider"),
         ProviderAccountId::new("acct_first").expect("account"),
     );
@@ -2196,9 +2244,8 @@ fn native_continuation_explicit_429_is_not_retried() {
 
 #[test]
 fn external_continuation_explicit_429_is_not_retried() {
-    let continuation = ContinuationBinding::External(
-        PreviousResponseId::new("external-provider-response").expect("previous response"),
-    );
+    let opaque_response_id = format!("resp_{}\0opaque", "x".repeat(257));
+    let continuation = ContinuationBinding::External(PreviousResponseId::new(opaque_response_id));
     let (store, provider) = terminal_non_idempotent_failure(
         vec![Err(ProviderError::new(
             ProviderErrorKind::RateLimited,

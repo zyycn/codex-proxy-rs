@@ -345,7 +345,6 @@ pub(super) fn decode_request_object(
     let continuation = object
         .get("previous_response_id")
         .and_then(Value::as_str)
-        .filter(|response_id| !response_id.is_empty())
         .map(|response_id| ContinuationIntent::PreviousResponseId(response_id.to_owned()))
         .unwrap_or(ContinuationIntent::None);
 

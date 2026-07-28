@@ -443,9 +443,8 @@ where
         }
         let account = current.metadata.provider_account_id()?.clone();
         let response_id = self.upstream_response_id.as_deref()?;
-        let previous_response_id = PreviousResponseId::new(response_id.to_owned()).ok()?;
-        let upstream_response_id =
-            crate::error::SafeUpstreamValue::new(response_id.to_owned()).ok()?;
+        let previous_response_id = PreviousResponseId::new(response_id.to_owned());
+        let upstream_response_id = PreviousResponseId::new(response_id.to_owned());
         Some(
             NativeContinuationPin::new(
                 previous_response_id,
@@ -905,11 +904,7 @@ where
             GatewayEvent::Started(metadata) | GatewayEvent::Completed(metadata) => metadata,
             _ => return Ok(()),
         };
-        let response_id = crate::error::SafeUpstreamValue::new(metadata.response_id().to_owned())
-            .map_err(|_| {
-            ProviderError::new(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
-        })?;
-        let response_id = response_id.as_str();
+        let response_id = metadata.response_id();
         if response_id.is_empty() {
             return Ok(());
         }

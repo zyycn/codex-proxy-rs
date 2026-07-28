@@ -2,7 +2,6 @@ use gateway_core::engine::continuation::{
     NativeContinuationPin, NativeContinuationPort, NativeContinuationScope, PreviousResponseId,
 };
 use gateway_core::engine::credential::ProviderAccountId;
-use gateway_core::error::SafeUpstreamValue;
 use gateway_core::operation::ProviderSessionState;
 use gateway_core::routing::ProviderKind;
 use gateway_store::redis::RedisNativeContinuationRepository;
@@ -16,7 +15,7 @@ async fn native_continuation_round_trips_opaque_state_without_exposing_response_
         return;
     };
     let previous_response_id =
-        PreviousResponseId::new("resp-client-visible-secret").expect("previous response ID");
+        PreviousResponseId::new(format!("resp_{}\0client-visible-secret", "x".repeat(257)));
     let state = ProviderSessionState::new(
         "openai",
         Map::from_iter([(
@@ -30,7 +29,7 @@ async fn native_continuation_round_trips_opaque_state_without_exposing_response_
         .record(
             NativeContinuationPin::new(
                 previous_response_id.clone(),
-                SafeUpstreamValue::new("resp-upstream-handle").expect("upstream response ID"),
+                previous_response_id.clone(),
                 ProviderKind::new("openai").expect("provider"),
                 ProviderAccountId::new("acct_primary").expect("account"),
             )
@@ -47,7 +46,7 @@ async fn native_continuation_round_trips_opaque_state_without_exposing_response_
         .expect("stored continuation");
     assert_eq!(
         resolved.upstream_response_id().as_str(),
-        "resp-upstream-handle"
+        previous_response_id.as_str()
     );
     assert_eq!(resolved.account().as_str(), "acct_primary");
     assert_eq!(resolved.session_state(), Some(&state));
@@ -55,7 +54,7 @@ async fn native_continuation_round_trips_opaque_state_without_exposing_response_
     let keys = namespace_keys(&mut connection, &namespace).await;
     assert!(
         keys.iter()
-            .all(|key| !key.contains("resp-client-visible-secret"))
+            .all(|key| !key.contains("client-visible-secret"))
     );
     let entry_key = keys
         .iter()
@@ -72,13 +71,39 @@ async fn native_continuation_round_trips_opaque_state_without_exposing_response_
 }
 
 #[tokio::test]
+async fn empty_opaque_continuation_is_a_store_miss_without_a_redis_record() {
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    let response_id = PreviousResponseId::new("");
+
+    assert!(
+        repository
+            .resolve(&response_id)
+            .await
+            .expect("resolve")
+            .is_none()
+    );
+    repository
+        .record(NativeContinuationPin::new(
+            response_id.clone(),
+            response_id,
+            ProviderKind::new("openai").expect("provider"),
+            ProviderAccountId::new("acct_primary").expect("account"),
+        ))
+        .await
+        .expect("empty opaque handle is not a store error");
+    assert!(namespace_keys(&mut connection, &namespace).await.is_empty());
+}
+
+#[tokio::test]
 async fn native_continuation_rejects_provider_state_for_a_different_provider() {
     let Some((repository, mut connection, namespace)) = repository().await else {
         return;
     };
     let pin = NativeContinuationPin::new(
-        PreviousResponseId::new("resp-mismatched-state").expect("previous response ID"),
-        SafeUpstreamValue::new("resp-upstream-handle").expect("upstream response ID"),
+        PreviousResponseId::new("resp-mismatched-state"),
+        PreviousResponseId::new("resp-upstream-handle"),
         ProviderKind::new("openai").expect("provider"),
         ProviderAccountId::new("acct_primary").expect("account"),
     )
