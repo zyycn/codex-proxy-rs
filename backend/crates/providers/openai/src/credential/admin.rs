@@ -11,7 +11,8 @@ use std::time::SystemTime;
 use chrono::{DateTime, FixedOffset, Utc};
 use gateway_core::engine::credential::{
     AccountAvailability, CredentialCasUpdate, CredentialRevision, LoadedCredential,
-    NewProviderAccount, ProviderAccount, ProviderAccountId, ProviderAccountUpdate,
+    NewProviderAccount, ProviderAccount, ProviderAccountId, ProviderAccountIdentity,
+    ProviderAccountUpdate,
 };
 use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeaseGuard, ProviderLeasePort, ProviderLeaseRequest,
@@ -286,6 +287,7 @@ impl std::fmt::Debug for RotateManagedCodexCredential {
 pub struct PreparedCodexCredentialRotation {
     pub profile: ProviderAccountUpdate,
     pub credential: CredentialCasUpdate,
+    pub replacement_identity: Option<ProviderAccountIdentity>,
     refresh_guards: Option<ProviderRefreshGuards>,
 }
 
@@ -300,6 +302,7 @@ impl std::fmt::Debug for PreparedCodexCredentialRotation {
             .debug_struct("PreparedCodexCredentialRotation")
             .field("profile", &self.profile)
             .field("credential", &self.credential)
+            .field("replacement_identity", &self.replacement_identity)
             .field(
                 "refresh_guards",
                 &self.refresh_guards.as_ref().map(|_| "<held>"),
@@ -316,11 +319,13 @@ impl PreparedCodexCredentialRotation {
     ) -> (
         ProviderAccountUpdate,
         CredentialCasUpdate,
+        Option<ProviderAccountIdentity>,
         PreparedCodexCredentialRotationGuard,
     ) {
         (
             self.profile,
             self.credential,
+            self.replacement_identity,
             PreparedCodexCredentialRotationGuard(self.refresh_guards),
         )
     }
@@ -494,7 +499,7 @@ impl CodexCredentialAdmin {
         self.prepare_oauth_rotation(input, false)
     }
 
-    /// 完整 OAuth 授权允许认证主体投影更新，但不允许目标账号或用户发生变化。
+    /// 完整 OAuth 授权按目标数据 ID 替换凭据与上游账号身份。
     pub(crate) fn prepare_reauthorization(
         &self,
         input: RotateManagedCodexCredential,
@@ -505,7 +510,7 @@ impl CodexCredentialAdmin {
     fn prepare_oauth_rotation(
         &self,
         input: RotateManagedCodexCredential,
-        replace_principal: bool,
+        replace_identity: bool,
     ) -> Result<PreparedCodexCredentialRotation, CodexCredentialAdminError> {
         let access_token_expires_at =
             required_time(input.verified_account.access_token_expires_at)?;
@@ -516,16 +521,23 @@ impl CodexCredentialAdmin {
             .ok_or(CodexCredentialAdminError::IdentityMismatch)?;
         if input.current.account.provider().as_str() != PROVIDER_NAME
             || input.current.account.authentication_kind() != CODEX_AUTHENTICATION_KIND_OAUTH
-            || input.current.account.upstream_account_id()
-                != Some(input.verified_account.chatgpt_account_id.as_str())
-            || input.current.account.upstream_user_id() != input.verified_account.chatgpt_user_id
-            || (!replace_principal
-                && (oauth.principal.oauth_subject != input.verified_account.oauth_subject
+            || (!replace_identity
+                && (input.current.account.upstream_account_id()
+                    != Some(input.verified_account.chatgpt_account_id.as_str())
+                    || input.current.account.upstream_user_id()
+                        != input.verified_account.chatgpt_user_id
+                    || oauth.principal.oauth_subject != input.verified_account.oauth_subject
                     || oauth.principal.poid != input.verified_account.poid))
         {
             return Err(CodexCredentialAdminError::IdentityMismatch);
         }
-        if replace_principal {
+        let replacement_identity = replace_identity.then(|| {
+            ProviderAccountIdentity::new(
+                input.verified_account.chatgpt_user_id.clone(),
+                Some(input.verified_account.chatgpt_account_id.clone()),
+            )
+        });
+        if replace_identity {
             oauth
                 .principal
                 .oauth_subject
@@ -567,6 +579,7 @@ impl CodexCredentialAdmin {
         Ok(PreparedCodexCredentialRotation {
             profile,
             credential,
+            replacement_identity,
             refresh_guards: None,
         })
     }

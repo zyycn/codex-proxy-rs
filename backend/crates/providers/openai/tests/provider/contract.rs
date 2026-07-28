@@ -7,7 +7,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::Utc;
 use futures::StreamExt;
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountFeedbackStats, ProviderAccountId,
+    AccountAvailability, AccountFeedbackStats, ProviderAccountId, ProviderAccountStore as _,
 };
 use gateway_core::engine::provider::{Provider as _, ProviderRequest};
 use gateway_core::engine::{
@@ -1218,8 +1218,8 @@ async fn response_failed_after_semantic_output_is_exposed_and_not_replay_safe() 
 async fn disabled_account_diagnostic_uses_upstream_without_persisting_account_state() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_disabled_diagnostic";
-    create_account_with_enabled(&store, account_id, false).await;
-    let account = store.account(account_id).expect("disabled test account");
+    create_account(&store, account_id).await;
+    let account = store.account(account_id).expect("test account");
     store
         .repository()
         .apply_state(
@@ -1231,6 +1231,10 @@ async fn disabled_account_diagnostic_uses_upstream_without_persisting_account_st
         )
         .await
         .expect("seed quota-exhausted state");
+    store
+        .set_enabled(account.id(), false)
+        .await
+        .expect("disable test account");
 
     let affinity = Arc::new(MemorySessionAffinity::default());
     let server = MockServer::start().await;

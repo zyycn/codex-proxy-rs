@@ -504,6 +504,12 @@ impl ProviderAccountStore for CooldownCachingProviderAccountStore {
         let availability = change.availability;
         let cooldown_until = change.cooldown_until;
         self.authoritative.apply_state_change(change).await?;
+        let Some(account) = self.authoritative.get_account(&account_id).await? else {
+            return Ok(());
+        };
+        if !account.enabled() {
+            return Ok(());
+        }
         self.mirror(
             &account_id,
             credential_revision,

@@ -600,10 +600,10 @@ async fn reauthorization_uses_revision_advanced_after_start_for_prepared_rotatio
     );
 }
 
-struct RebindingVerifier;
+struct ReplacementIdentityVerifier;
 
 #[async_trait]
-impl CodexAccountIdentityVerifier for RebindingVerifier {
+impl CodexAccountIdentityVerifier for ReplacementIdentityVerifier {
     async fn verify(
         &self,
         _: &CodexOAuthSecret,
@@ -617,8 +617,9 @@ impl CodexAccountIdentityVerifier for RebindingVerifier {
         _: &CodexOAuthSecret,
         _: &SecretString,
         _: &SecretString,
-        _: &CodexIdentityExpectation,
+        expectation: &CodexIdentityExpectation,
     ) -> Result<CodexIdentityVerification, CodexIdentityVerificationError> {
+        assert_eq!(expectation, &CodexIdentityExpectation::default());
         Ok(CodexIdentityVerification::Complete(profile(
             "chatgpt-different-owner",
         )))
@@ -699,7 +700,7 @@ async fn reauthorization_updates_changed_free_principal_for_same_account() {
 }
 
 #[tokio::test]
-async fn reauthorization_rejects_identity_rebinding() {
+async fn reauthorization_rebinds_target_record_to_authorized_identity() {
     let store = Arc::new(MemoryAccountStore::default());
     store
         .seed_oauth_credential(ImportCodexOAuthCredential {
@@ -711,7 +712,7 @@ async fn reauthorization_rejects_identity_rebinding() {
             enabled: true,
         })
         .await;
-    let service = service_with_store(store, Arc::new(RebindingVerifier));
+    let service = service_with_store(store, Arc::new(ReplacementIdentityVerifier));
     let started = service
         .start_authorization(StartCodexOAuthAuthorization {
             mutation: reauthorization_mutation("request-rebind", "acct_oauth_rebind"),
@@ -723,7 +724,7 @@ async fn reauthorization_rejects_identity_rebinding() {
         .query_pairs()
         .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
         .expect("state");
-    let error = service
+    let completed = service
         .complete_authorization(CompleteCodexOAuthAuthorization {
             owner_ref: owner_ref(),
             flow_id: started.flow_id,
@@ -732,6 +733,24 @@ async fn reauthorization_rejects_identity_rebinding() {
             )),
         })
         .await
-        .expect_err("identity rebind");
-    assert_eq!(error, CodexOAuthAdminError::Credential);
+        .expect("complete identity replacement");
+    let CompletedCodexOAuthCredential::Reauthorize(prepared) = completed.credential else {
+        panic!("expected prepared reauthorization");
+    };
+    assert_eq!(
+        prepared.credential.account_id().as_str(),
+        "acct_oauth_rebind"
+    );
+    let replacement = prepared
+        .replacement_identity
+        .as_ref()
+        .expect("replacement identity");
+    assert_eq!(
+        replacement.upstream_account_id(),
+        Some("chatgpt-different-owner")
+    );
+    assert_eq!(
+        replacement.upstream_user_id(),
+        "user-chatgpt-different-owner"
+    );
 }

@@ -44,6 +44,46 @@ impl fmt::Display for ProviderAccountId {
     }
 }
 
+/// credential 轮换时可选替换的上游账号身份。
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProviderAccountIdentity {
+    upstream_user_id: String,
+    upstream_account_id: Option<String>,
+}
+
+impl fmt::Debug for ProviderAccountIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProviderAccountIdentity")
+            .field("upstream_user_id", &"<redacted>")
+            .field(
+                "upstream_account_id",
+                &self.upstream_account_id.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
+}
+
+impl ProviderAccountIdentity {
+    #[must_use]
+    pub const fn new(upstream_user_id: String, upstream_account_id: Option<String>) -> Self {
+        Self {
+            upstream_user_id,
+            upstream_account_id,
+        }
+    }
+
+    #[must_use]
+    pub fn upstream_user_id(&self) -> &str {
+        &self.upstream_user_id
+    }
+
+    #[must_use]
+    pub fn upstream_account_id(&self) -> Option<&str> {
+        self.upstream_account_id.as_deref()
+    }
+}
+
 /// `provider_accounts.credential_revision` 的正数 CAS revision。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CredentialRevision(NonZeroU64);

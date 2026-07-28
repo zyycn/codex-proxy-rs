@@ -586,7 +586,7 @@ fn prepared_rotation(
     prepared: crate::credential::PreparedCodexCredentialRotation,
     provider_kind: ProviderKind,
 ) -> Result<PreparedCredentialRotation, ProviderAdminError> {
-    let (profile, credential, guard) = prepared.into_parts();
+    let (profile, credential, replacement_identity, guard) = prepared.into_parts();
     let (
         account_id,
         expected_revision,
@@ -606,6 +606,7 @@ fn prepared_rotation(
             account_id,
             provider_kind,
             expected_credential_revision,
+            replacement_identity,
             name: profile.name,
             email: profile.email,
             plan_type: profile.plan_type,

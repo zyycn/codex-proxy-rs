@@ -942,6 +942,7 @@ fn prepared_rotation(
             provider_kind,
             expected_credential_revision: Revision::new(expected_revision.get())
                 .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?,
+            replacement_identity: None,
             name: profile.name,
             email: profile.email,
             plan_type: profile.plan_type,

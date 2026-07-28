@@ -155,6 +155,7 @@ impl FakeProviderAdmin {
                     .current_credential_revision
                     .lock()
                     .expect("current credential revision"),
+                replacement_identity: None,
                 name: account.name.clone(),
                 email: account.email.clone(),
                 plan_type: account.plan_type.clone(),
@@ -798,6 +799,35 @@ async fn connection_test_should_probe_unavailable_account() {
         }) if message == "included usage exhausted"
             && code == "usage_exhausted"
             && error_type == "invalid_request_error"
+    ));
+}
+
+#[tokio::test]
+async fn connection_test_should_preserve_disabled_account_status() {
+    let provider = FakeProviderAdmin::new("xai", events());
+    let mut account = account_record("xai");
+    account.enabled = false;
+    let store = FakeAccountStore::with_account(account, events());
+    let services =
+        accounts_service_with_probe(provider, store, Arc::new(FailingAccountProbe)).await;
+
+    let events = services
+        .accounts()
+        .test_connection(
+            ProviderAccountId::new("acct_test").expect("account ID"),
+            gateway_core::routing::UpstreamModelId::new("grok-4.5").expect("model"),
+        )
+        .await
+        .expect("connection test stream")
+        .collect::<Vec<_>>()
+        .await;
+
+    assert!(matches!(
+        events.last(),
+        Some(AccountConnectionTestEvent::Failed {
+            account_status: gateway_admin::model::accounts::AccountStatus::Disabled,
+            ..
+        })
     ));
 }
 

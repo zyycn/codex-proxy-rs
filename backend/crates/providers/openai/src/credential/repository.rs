@@ -237,6 +237,9 @@ impl CodexCredentialRepository {
         cooldown_until: Option<SystemTime>,
         observed_at: SystemTime,
     ) -> Result<(), CredentialRepositoryError> {
+        if !account.enabled() {
+            return Ok(());
+        }
         self.store
             .apply_state_change(AccountStateChange {
                 account_id: account.id().clone(),

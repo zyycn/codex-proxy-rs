@@ -50,9 +50,13 @@ impl ProviderAccountStore for CooldownTestAccountStore {
 
     async fn get_account(
         &self,
-        _account: &ProviderAccountId,
+        account: &ProviderAccountId,
     ) -> Result<Option<ProviderAccount>, CoreStoreError> {
-        unreachable!("cooldown tests do not get one account")
+        Ok(self
+            .accounts
+            .iter()
+            .find(|candidate| candidate.id() == account)
+            .cloned())
     }
 
     async fn list_accounts(&self) -> Result<Vec<ProviderAccount>, CoreStoreError> {
@@ -191,9 +195,25 @@ fn composition_fixture(
     Arc<CooldownTestCache>,
     Arc<Mutex<Vec<&'static str>>>,
 ) {
+    composition_fixture_with_accounts(
+        vec![ready_test_account("acct_cooldown_composition")],
+        fail_state_write,
+        fail_cache,
+    )
+}
+
+fn composition_fixture_with_accounts(
+    accounts: Vec<ProviderAccount>,
+    fail_state_write: bool,
+    fail_cache: bool,
+) -> (
+    CooldownCachingProviderAccountStore,
+    Arc<CooldownTestCache>,
+    Arc<Mutex<Vec<&'static str>>>,
+) {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let authoritative = Arc::new(CooldownTestAccountStore {
-        accounts: Vec::new(),
+        accounts,
         calls: Arc::clone(&calls),
         fail_state_write,
     });
@@ -247,6 +267,31 @@ async fn cooldown_composition_keeps_postgres_terminal_when_redis_fails() {
         .expect("Redis is only a cache");
 
     assert_eq!(*calls.lock().expect("calls lock"), ["postgres", "redis"]);
+}
+
+#[tokio::test]
+async fn disabled_account_state_write_does_not_change_runtime_cooldown() {
+    let disabled = test_provider_account("acct_cooldown_composition").with_runtime_state(
+        false,
+        AccountAvailability::Ready,
+        None,
+    );
+    let (store, cache, calls) = composition_fixture_with_accounts(vec![disabled], false, false);
+
+    store
+        .apply_state_change(cooldown_state_change(60))
+        .await
+        .expect("disabled state write is a no-op");
+
+    assert_eq!(*calls.lock().expect("calls lock"), ["postgres"]);
+    assert!(cache.cached.lock().expect("cached lock").is_empty());
+    assert!(
+        cache
+            .invalidated
+            .lock()
+            .expect("invalidated lock")
+            .is_empty()
+    );
 }
 
 #[tokio::test]

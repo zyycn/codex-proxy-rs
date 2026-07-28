@@ -9,7 +9,8 @@ use gateway_core::engine::credential::{
     AccountFeedbackStats, AccountQuotaSignals, AccountRuntimeSignals, AccountSchedulingBlocker,
     AccountSelectionContext, AccountSelectionPolicy, AccountSelector, CredentialCasUpdate,
     CredentialRevision, OpaqueProviderData, PlaintextCredential, PreferredAccountSelection,
-    ProviderAccount, ProviderAccountId, ProviderAccountUpdate, RotationStrategy,
+    ProviderAccount, ProviderAccountId, ProviderAccountIdentity, ProviderAccountUpdate,
+    RotationStrategy,
 };
 use gateway_core::routing::ProviderKind;
 
@@ -71,6 +72,18 @@ fn opaque_provider_data_should_not_expose_quota_values_in_debug() {
     let quota = OpaqueProviderData::new(object);
 
     assert!(!format!("{quota:?}").contains("private-window"));
+}
+
+#[test]
+fn provider_account_identity_debug_should_redact_upstream_ids() {
+    let identity = ProviderAccountIdentity::new(
+        "private-user-id".to_owned(),
+        Some("private-account-id".to_owned()),
+    );
+    let debug = format!("{identity:?}");
+
+    assert!(!debug.contains("private-user-id"));
+    assert!(!debug.contains("private-account-id"));
 }
 
 #[test]
