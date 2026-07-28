@@ -36,8 +36,9 @@ use gateway_core::provider_ports::{
     NewOAuthPendingFlow, OAuthPendingClaimOutcome, OAuthPendingConsumeOutcome,
     OAuthPendingFlowPort, OAuthPendingPutOutcome, OAuthPendingReleaseOutcome,
     ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCooldown, ProviderCooldownPort,
-    ProviderCredentialState, ProviderCredentialStatePort, ProviderRefreshPolicy,
-    ProviderRuntimePolicyPort, ProviderStoreError, ProviderStorePorts,
+    ProviderCooldownScope, ProviderCredentialState, ProviderCredentialStatePort,
+    ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderScopedCooldown, ProviderStoreError,
+    ProviderStorePorts,
 };
 use gateway_core::routing::{
     ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RoutingContext,
@@ -897,6 +898,30 @@ impl ProviderCooldownPort for TestCooldown {
     fn clear<'a>(
         &'a self,
         _account_id: &'a ProviderAccountId,
+        _through_revision: CredentialRevision,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn put_scoped_if_later(
+        &self,
+        _cooldown: ProviderScopedCooldown,
+    ) -> BoxFuture<'_, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn read_scoped<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _scope: &'a ProviderCooldownScope,
+    ) -> BoxFuture<'a, Result<Option<ProviderScopedCooldown>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn clear_scoped<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _scope: &'a ProviderCooldownScope,
         _through_revision: CredentialRevision,
     ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
         Box::pin(async { Ok(false) })

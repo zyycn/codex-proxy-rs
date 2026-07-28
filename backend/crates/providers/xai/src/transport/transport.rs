@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use futures::Stream;
 use gateway_core::engine::UpstreamSendState;
-use gateway_core::error::SafeUpstreamValue;
+use gateway_core::error::{ClientVisibleUpstreamError, SafeUpstreamValue};
 use gateway_core::event::UpstreamHttpVersion;
 use url::Url;
 use zeroize::Zeroizing;
@@ -278,8 +278,18 @@ pub enum GrokInferenceTransportErrorKind {
     PermissionDenied,
     /// 会话级或 Provider 级限流。
     RateLimited,
-    /// 账号额度或配额耗尽。
+    /// 账号付费额度或 spending limit 耗尽。
     QuotaExhausted,
+    /// 账号订阅级免费额度耗尽。
+    FreeQuotaExhausted,
+    /// 当前账号只耗尽了指定模型的免费额度。
+    ModelQuotaExhausted,
+    /// 当前账号只缺少指定模型的访问权限。
+    ModelAccessDenied,
+    /// 上游要求付费，但没有给出可证明账号额度耗尽的稳定信号。
+    PaymentRequired,
+    /// 当前请求被内容安全策略拒绝，不代表账号或模型不可用。
+    SafetyRejected,
     /// 截止时间或 transport 超时。
     Timeout,
     /// 网络/TLS/连接失败。
@@ -301,7 +311,8 @@ pub struct GrokInferenceTransportError {
     retry_after: Option<Duration>,
     http_version: Option<UpstreamHttpVersion>,
     request_id: Option<SafeUpstreamValue>,
-    upstream_code: Option<SafeUpstreamValue>,
+    upstream_code: Option<Box<SafeUpstreamValue>>,
+    client_visible_upstream_error: Option<Box<ClientVisibleUpstreamError>>,
     transport_metrics: GrokInferenceTransportMetrics,
     credential_recovery_required: bool,
     sensitive_context_redacted: bool,
@@ -319,6 +330,7 @@ impl GrokInferenceTransportError {
             http_version: None,
             request_id: None,
             upstream_code: None,
+            client_visible_upstream_error: None,
             transport_metrics: GrokInferenceTransportMetrics {
                 headers_ms: None,
                 client_cache_status: None,
@@ -359,7 +371,14 @@ impl GrokInferenceTransportError {
     /// 附着从错误 JSON 中提取并清洗后的稳定机器码。
     #[must_use]
     pub fn with_upstream_code(mut self, code: SafeUpstreamValue) -> Self {
-        self.upstream_code = Some(code);
+        self.upstream_code = Some(Box::new(code));
+        self
+    }
+
+    /// 附着仅供原客户端协议展示的结构化上游错误。
+    #[must_use]
+    pub fn with_client_visible_upstream_error(mut self, error: ClientVisibleUpstreamError) -> Self {
+        self.client_visible_upstream_error = Some(Box::new(error));
         self
     }
 
@@ -420,8 +439,13 @@ impl GrokInferenceTransportError {
     }
 
     #[must_use]
-    pub const fn upstream_code(&self) -> Option<&SafeUpstreamValue> {
-        self.upstream_code.as_ref()
+    pub fn upstream_code(&self) -> Option<&SafeUpstreamValue> {
+        self.upstream_code.as_deref()
+    }
+
+    #[must_use]
+    pub fn client_visible_upstream_error(&self) -> Option<&ClientVisibleUpstreamError> {
+        self.client_visible_upstream_error.as_deref()
     }
 
     #[must_use]
@@ -452,6 +476,13 @@ impl fmt::Debug for GrokInferenceTransportError {
             .field("http_version", &self.http_version)
             .field("request_id", &self.request_id)
             .field("upstream_code", &self.upstream_code)
+            .field(
+                "client_visible_upstream_error",
+                &self
+                    .client_visible_upstream_error
+                    .as_ref()
+                    .map(|_| "<present>"),
+            )
             .field("transport_metrics", &self.transport_metrics)
             .field(
                 "credential_recovery_required",

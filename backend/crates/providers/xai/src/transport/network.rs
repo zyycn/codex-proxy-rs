@@ -30,8 +30,10 @@ use crate::{
     OAuthHttpResponse, OAuthHttpTransport, TransportFailure, TransportFailureKind, TransportFuture,
 };
 use gateway_core::engine::UpstreamSendState;
-use gateway_core::error::SafeUpstreamValue;
+use gateway_core::error::{ClientVisibleUpstreamError, SafeUpstreamValue};
 use gateway_core::event::UpstreamHttpVersion;
+
+use super::scrub_account_fingerprints;
 
 pub(crate) const OFFICIAL_OAUTH_HOST: &str = "auth.x.ai";
 const OFFICIAL_INFERENCE_HOST: &str = "cli-chat-proxy.grok.com";
@@ -990,29 +992,22 @@ async fn classify_inference_status(response: Response) -> GrokInferenceTransport
         Ok(BoundedBody::TooLarge) | Err(_) => Vec::new(),
     };
     let metadata = inference_error_metadata(&body);
-    let credential_recovery_required = status == StatusCode::UNAUTHORIZED
-        || (status == StatusCode::FORBIDDEN && forbidden_requires_recovery(&metadata));
     let kind = match status {
         StatusCode::BAD_REQUEST
         | StatusCode::NOT_FOUND
         | StatusCode::CONFLICT
         | StatusCode::UNPROCESSABLE_ENTITY => GrokInferenceTransportErrorKind::InvalidRequest,
         StatusCode::UNAUTHORIZED => GrokInferenceTransportErrorKind::Unauthorized,
-        StatusCode::PAYMENT_REQUIRED => GrokInferenceTransportErrorKind::QuotaExhausted,
-        StatusCode::FORBIDDEN => classify_forbidden(&metadata),
+        StatusCode::PAYMENT_REQUIRED => classify_payment_required(&metadata),
+        StatusCode::FORBIDDEN => classify_forbidden(&metadata, &body),
         StatusCode::REQUEST_TIMEOUT | StatusCode::GATEWAY_TIMEOUT => {
             GrokInferenceTransportErrorKind::Timeout
         }
-        StatusCode::TOO_MANY_REQUESTS => {
-            if quota_exhausted(&metadata) {
-                GrokInferenceTransportErrorKind::QuotaExhausted
-            } else {
-                GrokInferenceTransportErrorKind::RateLimited
-            }
-        }
+        StatusCode::TOO_MANY_REQUESTS => classify_too_many_requests(&metadata),
         status if status.is_server_error() => GrokInferenceTransportErrorKind::Unavailable,
         _ => GrokInferenceTransportErrorKind::Protocol,
     };
+    let credential_recovery_required = kind == GrokInferenceTransportErrorKind::Unauthorized;
     let mut error = GrokInferenceTransportError::new(kind, UpstreamSendState::Sent)
         .with_status(status_code)
         .with_response_facts(http_version, request_id)
@@ -1022,6 +1017,15 @@ async fn classify_inference_status(response: Response) -> GrokInferenceTransport
     } else {
         metadata.code.as_deref().and_then(normalize_failure_code)
     };
+    if let Some(message) = metadata.client_message.as_deref()
+        && let Ok(detail) = ClientVisibleUpstreamError::new(
+            scrub_account_fingerprints(message),
+            upstream_code.clone(),
+            metadata.error_type.clone(),
+        )
+    {
+        error = error.with_client_visible_upstream_error(detail);
+    }
     if let Some(code) = upstream_code.and_then(|code| SafeUpstreamValue::new(code).ok()) {
         error = error.with_upstream_code(code);
     }
@@ -1039,6 +1043,8 @@ struct InferenceErrorMetadata {
     code: Option<String>,
     error_type: Option<String>,
     message: Option<String>,
+    // 仅结构化 JSON 的 message 可进入客户端协议；纯文本正文只参与内部分类。
+    client_message: Option<String>,
 }
 
 fn inference_error_metadata(body: &[u8]) -> InferenceErrorMetadata {
@@ -1053,6 +1059,9 @@ fn inference_error_metadata(body: &[u8]) -> InferenceErrorMetadata {
         return InferenceErrorMetadata::default();
     };
     let nested = root.get("error").and_then(Value::as_object);
+    let message = nested
+        .and_then(|error| first_string(error, &["message", "error"]))
+        .or_else(|| first_string(root, &["message", "error"]));
     InferenceErrorMetadata {
         code: nested
             .and_then(|error| first_string(error, &["code", "error_code"]))
@@ -1060,9 +1069,8 @@ fn inference_error_metadata(body: &[u8]) -> InferenceErrorMetadata {
         error_type: nested
             .and_then(|error| first_string(error, &["type", "error_type"]))
             .or_else(|| first_string(root, &["type", "error_type"])),
-        message: nested
-            .and_then(|error| first_string(error, &["message", "error"]))
-            .or_else(|| first_string(root, &["message", "error"])),
+        client_message: message.clone(),
+        message,
     }
 }
 
@@ -1075,22 +1083,53 @@ fn first_string(object: &serde_json::Map<String, Value>, fields: &[&str]) -> Opt
         .map(ToOwned::to_owned)
 }
 
-fn classify_forbidden(metadata: &InferenceErrorMetadata) -> GrokInferenceTransportErrorKind {
-    let text = inference_metadata_text(metadata);
-    if credential_rejected(&text) {
-        GrokInferenceTransportErrorKind::Unauthorized
-    } else if quota_exhausted(metadata) {
+fn classify_payment_required(metadata: &InferenceErrorMetadata) -> GrokInferenceTransportErrorKind {
+    if model_quota_exhausted(metadata) {
+        GrokInferenceTransportErrorKind::ModelQuotaExhausted
+    } else if paid_quota_exhausted(metadata) {
         GrokInferenceTransportErrorKind::QuotaExhausted
+    } else if free_quota_exhausted(metadata) {
+        GrokInferenceTransportErrorKind::FreeQuotaExhausted
+    } else {
+        GrokInferenceTransportErrorKind::PaymentRequired
+    }
+}
+
+fn classify_forbidden(
+    metadata: &InferenceErrorMetadata,
+    body: &[u8],
+) -> GrokInferenceTransportErrorKind {
+    let text = inference_metadata_text(metadata);
+    let body_text = String::from_utf8_lossy(body).to_ascii_lowercase();
+    if safety_rejected(&text) || safety_rejected(&body_text) {
+        GrokInferenceTransportErrorKind::SafetyRejected
+    } else if credential_rejected(&text) {
+        GrokInferenceTransportErrorKind::Unauthorized
+    } else if model_quota_exhausted(metadata) {
+        GrokInferenceTransportErrorKind::ModelQuotaExhausted
+    } else if paid_quota_exhausted(metadata) {
+        GrokInferenceTransportErrorKind::QuotaExhausted
+    } else if free_quota_exhausted(metadata) {
+        GrokInferenceTransportErrorKind::FreeQuotaExhausted
+    } else if model_access_denied(metadata) {
+        GrokInferenceTransportErrorKind::ModelAccessDenied
     } else {
         GrokInferenceTransportErrorKind::PermissionDenied
     }
 }
 
-fn forbidden_requires_recovery(metadata: &InferenceErrorMetadata) -> bool {
-    let text = inference_metadata_text(metadata);
-    credential_rejected(&text)
-        || text.contains("access to the chat endpoint is denied")
-        || text.trim_matches([' ', '.', '!', '\t', '\r', '\n']) == "access denied"
+fn classify_too_many_requests(
+    metadata: &InferenceErrorMetadata,
+) -> GrokInferenceTransportErrorKind {
+    if model_quota_exhausted(metadata) {
+        GrokInferenceTransportErrorKind::ModelQuotaExhausted
+    } else if paid_quota_exhausted(metadata) {
+        GrokInferenceTransportErrorKind::QuotaExhausted
+    } else if free_quota_exhausted(metadata) {
+        GrokInferenceTransportErrorKind::FreeQuotaExhausted
+    } else {
+        GrokInferenceTransportErrorKind::RateLimited
+    }
 }
 
 fn reasoning_decode_failed(metadata: &InferenceErrorMetadata) -> bool {
@@ -1100,7 +1139,17 @@ fn reasoning_decode_failed(metadata: &InferenceErrorMetadata) -> bool {
     })
 }
 
-fn quota_exhausted(metadata: &InferenceErrorMetadata) -> bool {
+fn paid_quota_exhausted(metadata: &InferenceErrorMetadata) -> bool {
+    contains_any(
+        &inference_metadata_text(metadata),
+        &[
+            "personal-team-blocked:spending-limit",
+            "personal_team_blocked_spending_limit",
+        ],
+    )
+}
+
+fn free_quota_exhausted(metadata: &InferenceErrorMetadata) -> bool {
     contains_any(
         &inference_metadata_text(metadata),
         &[
@@ -1110,9 +1159,26 @@ fn quota_exhausted(metadata: &InferenceErrorMetadata) -> bool {
             "free_usage_exhausted",
             "used all the included free usage",
             "used all your free usage",
-            "personal-team-blocked:spending-limit",
-            "personal_team_blocked_spending_limit",
         ],
+    )
+}
+
+fn model_quota_exhausted(metadata: &InferenceErrorMetadata) -> bool {
+    inference_metadata_text(metadata).contains("used all the included free usage for model")
+}
+
+fn model_access_denied(metadata: &InferenceErrorMetadata) -> bool {
+    metadata.message.as_deref().is_some_and(|message| {
+        let message = message.to_ascii_lowercase();
+        message.contains("access to the chat endpoint is denied")
+            || message.trim_matches([' ', '.', '!', '\t', '\r', '\n']) == "access denied"
+    })
+}
+
+fn safety_rejected(text: &str) -> bool {
+    contains_any(
+        text,
+        &["content violates usage guidelines", "safety_check_type_"],
     )
 }
 

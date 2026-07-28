@@ -10,9 +10,10 @@ use gateway_core::engine::credential::{
     QuotaWriteOutcome, RotationStrategy,
 };
 use gateway_core::provider_ports::{
-    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderSchedulingState,
-    ProviderStoreError,
+    ProviderCooldownScope, ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
+    ProviderSchedulingState, ProviderStoreError,
 };
+use gateway_core::routing::UpstreamModelId;
 use provider_xai::{
     GrokAccountSessionSelector, GrokBillingRequest, GrokBillingTransport,
     GrokBillingTransportError, GrokBillingTransportErrorKind, GrokBillingTransportFuture,
@@ -119,7 +120,8 @@ impl SelectorFixture {
                 .replace(GrokPlanCatalog::new(
                     GrokCatalogScope::for_account(&account).expect("catalog scope"),
                     Utc::now(),
-                    GrokCredentialCatalogSeed::new(["grok-4.5"], None).expect("catalog"),
+                    GrokCredentialCatalogSeed::new(["grok-4.5", "grok-4.6"], None)
+                        .expect("catalog"),
                 ))
                 .await
                 .expect("cache catalog");
@@ -184,8 +186,31 @@ impl SelectorFixture {
         required_account: Option<ProviderAccountId>,
         strategy: RotationStrategy,
     ) -> GrokSessionSelection {
+        self.request_for_model_with_policy("grok-4.5", excluded, required_account, strategy)
+    }
+
+    fn request_for_model(
+        &self,
+        upstream_model: &str,
+        required_account: Option<ProviderAccountId>,
+    ) -> GrokSessionSelection {
+        self.request_for_model_with_policy(
+            upstream_model,
+            BTreeSet::new(),
+            required_account,
+            RotationStrategy::Smart,
+        )
+    }
+
+    fn request_for_model_with_policy(
+        &self,
+        upstream_model: &str,
+        excluded: BTreeSet<ProviderAccountId>,
+        required_account: Option<ProviderAccountId>,
+        strategy: RotationStrategy,
+    ) -> GrokSessionSelection {
         GrokSessionSelection::new(
-            gateway_core::routing::UpstreamModelId::new("grok-4.5").expect("model"),
+            UpstreamModelId::new(upstream_model).expect("model"),
             excluded,
             required_account,
             AccountSelectionPolicy::new(
@@ -385,6 +410,131 @@ async fn rate_limit_feedback_records_runtime_cooldown_without_persisting_account
         .await
         .expect("runtime cooldown should leave the other account available");
     assert_ne!(next.account_id(), &selected);
+}
+
+#[tokio::test]
+async fn unknown_payment_required_feedback_only_records_runtime_account_cooldown() {
+    let fixture = SelectorFixture::new(&["payment-required", "available"]).await;
+    let session = fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+        .expect("session");
+    let selected = session.account_id().clone();
+    fixture
+        .selector
+        .record_failure(
+            &session,
+            GrokCredentialFailure::PaymentRequired {
+                retry_after: Some(Duration::from_secs(5)),
+            },
+        )
+        .await;
+
+    assert_eq!(
+        fixture
+            .store
+            .account(&selected)
+            .expect("selected account")
+            .availability(),
+        AccountAvailability::Ready
+    );
+    assert!(fixture.cooldowns.cooldown(&selected).is_some());
+    let next = fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+        .expect("another account remains available");
+    assert_ne!(next.account_id(), &selected);
+}
+
+#[tokio::test]
+async fn model_quota_feedback_blocks_only_the_failed_account_and_model() {
+    let fixture = SelectorFixture::new(&["model-quota", "available"]).await;
+    let failed_model = UpstreamModelId::new("grok-4.5").expect("failed model");
+    let session = fixture
+        .selector
+        .select(fixture.request_for_model(failed_model.as_str(), None))
+        .await
+        .expect("session");
+    let selected = session.account_id().clone();
+    fixture
+        .selector
+        .record_failure(
+            &session,
+            GrokCredentialFailure::ModelQuotaExhausted {
+                upstream_model: failed_model.clone(),
+                retry_after: Some(Duration::from_secs(5)),
+            },
+        )
+        .await;
+
+    assert_eq!(
+        fixture
+            .store
+            .account(&selected)
+            .expect("selected account")
+            .availability(),
+        AccountAvailability::Ready
+    );
+    let scope = ProviderCooldownScope::upstream_model(failed_model);
+    assert!(
+        fixture
+            .cooldowns
+            .scoped_cooldown(&selected, &scope)
+            .is_some()
+    );
+    let unrelated_model = fixture
+        .selector
+        .select(fixture.request_for_model("grok-4.6", Some(selected.clone())))
+        .await
+        .expect("same account remains valid for another model");
+    assert_eq!(unrelated_model.account_id(), &selected);
+    let failed_model_retry = fixture
+        .selector
+        .select(fixture.request_for_model("grok-4.5", None))
+        .await
+        .expect("another account serves the failed model");
+    assert_ne!(failed_model_retry.account_id(), &selected);
+}
+
+#[tokio::test]
+async fn model_access_feedback_reports_model_cooldown_without_blocking_the_account() {
+    let fixture = SelectorFixture::new(&["model-access"]).await;
+    let model = UpstreamModelId::new("grok-4.5").expect("model");
+    let session = fixture
+        .selector
+        .select(fixture.request_for_model(model.as_str(), None))
+        .await
+        .expect("session");
+    fixture
+        .selector
+        .record_failure(
+            &session,
+            GrokCredentialFailure::ModelAccessDenied {
+                upstream_model: model,
+                retry_after: None,
+            },
+        )
+        .await;
+
+    assert_eq!(
+        fixture
+            .store
+            .account(session.account_id())
+            .expect("account")
+            .availability(),
+        AccountAvailability::Ready
+    );
+    assert!(matches!(
+        fixture
+            .selector
+            .select(fixture.request_for_model("grok-4.5", None))
+            .await,
+        Err(GrokSessionSelectorError::ModelCoolingDown {
+            retry_after: Some(_)
+        })
+    ));
 }
 
 #[tokio::test]

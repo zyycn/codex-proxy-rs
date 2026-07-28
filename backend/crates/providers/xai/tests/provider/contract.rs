@@ -18,7 +18,8 @@ use gateway_core::engine::{
     UpstreamSendState,
 };
 use gateway_core::error::{
-    ContinuationFailure, ProviderError, ProviderErrorKind, SafeUpstreamValue,
+    ClientVisibleUpstreamError, ContinuationFailure, ProviderError, ProviderErrorKind,
+    SafeUpstreamValue,
 };
 use gateway_core::event::{GatewayEvent, UpstreamHttpVersion};
 use gateway_core::operation::{
@@ -1293,6 +1294,157 @@ async fn explicit_quota_http_429_marks_provider_error_replay_safe() {
     assert_eq!(error.kind(), ProviderErrorKind::QuotaExhausted);
     assert_eq!(error.upstream_status(), Some(429));
     assert!(error.replay_is_safe());
+}
+
+#[tokio::test]
+async fn unknown_http_402_is_retryable_without_account_quota_feedback() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::PaymentRequired,
+            UpstreamSendState::Sent,
+        )
+        .with_status(402),
+    );
+    let provider = provider(selector.clone(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::PermissionDenied);
+    assert!(error.replay_is_safe());
+    assert_eq!(
+        selector.feedback.lock().expect("feedback").as_slice(),
+        &[GrokCredentialFailure::PaymentRequired { retry_after: None }]
+    );
+}
+
+#[tokio::test]
+async fn model_quota_transport_failure_preserves_model_scoped_feedback() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::ModelQuotaExhausted,
+            UpstreamSendState::Sent,
+        )
+        .with_status(403),
+    );
+    let provider = provider(selector.clone(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::QuotaExhausted);
+    assert!(error.replay_is_safe());
+    assert_eq!(
+        selector.feedback.lock().expect("feedback").as_slice(),
+        &[GrokCredentialFailure::ModelQuotaExhausted {
+            upstream_model: UpstreamModelId::new("grok-4.5").expect("model"),
+            retry_after: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn model_access_denial_is_retryable_without_credential_recovery() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::ModelAccessDenied,
+            UpstreamSendState::Sent,
+        )
+        .with_status(403),
+    );
+    let provider = provider(selector.clone(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::PermissionDenied);
+    assert!(error.replay_is_safe());
+    assert_eq!(
+        selector.feedback.lock().expect("feedback").as_slice(),
+        &[GrokCredentialFailure::ModelAccessDenied {
+            upstream_model: UpstreamModelId::new("grok-4.5").expect("model"),
+            retry_after: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn safety_rejection_does_not_rotate_or_mutate_account_state() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::SafetyRejected,
+            UpstreamSendState::Sent,
+        )
+        .with_status(403),
+    );
+    let provider = provider(selector.clone(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::PermissionDenied);
+    assert!(!error.replay_is_safe());
+    assert!(selector.feedback.lock().expect("feedback").is_empty());
+}
+
+#[tokio::test]
+async fn transport_error_should_preserve_client_visible_upstream_detail() {
+    let detail = ClientVisibleUpstreamError::new(
+        "You have run out of credits",
+        Some("personal_team_blocked_spending_limit".to_owned()),
+        Some("insufficient_quota".to_owned()),
+    )
+    .expect("safe upstream detail");
+    let error = mapped_transport_error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::QuotaExhausted,
+            UpstreamSendState::Sent,
+        )
+        .with_status(402)
+        .with_client_visible_upstream_error(detail),
+        false,
+    )
+    .await;
+    let detail = error
+        .client_visible_upstream_error()
+        .expect("mapped client-visible detail");
+
+    assert_eq!(
+        (detail.message(), detail.code(), detail.error_type()),
+        (
+            "You have run out of credits",
+            Some("personal_team_blocked_spending_limit"),
+            Some("insufficient_quota"),
+        )
+    );
 }
 
 #[tokio::test]

@@ -10,10 +10,11 @@ use gateway_core::engine::credential::{
     AccountSelectionContext, AccountSelector, ProviderAccount, ProviderAccountId,
 };
 use gateway_core::provider_ports::{
-    ProviderCooldown, ProviderCooldownPort, ProviderLeaseAcquisition, ProviderLeasePort,
-    ProviderLeaseRequest, ProviderSchedulingLeaseRequest,
+    ProviderCooldown, ProviderCooldownPort, ProviderCooldownScope, ProviderLeaseAcquisition,
+    ProviderLeasePort, ProviderLeaseRequest, ProviderSchedulingLeaseRequest,
+    ProviderScopedCooldown,
 };
-use gateway_core::routing::ProviderKind;
+use gateway_core::routing::{ProviderKind, UpstreamModelId};
 
 use super::catalog::{GrokCatalogScope, GrokCredentialCatalogCache, GrokCredentialQuotaService};
 use super::repository::GrokCredentialRepository;
@@ -28,6 +29,22 @@ const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 const MAX_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(24 * 60 * 60);
 const STREAM_INTERRUPTION_COOLDOWN: Duration = Duration::from_secs(30);
 const UNAUTHORIZED_COOLDOWN: Duration = Duration::from_secs(60);
+const PAYMENT_REQUIRED_COOLDOWN: Duration = Duration::from_secs(60);
+const MODEL_ACCESS_DENIED_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+const MODEL_QUOTA_COOLDOWN: Duration = Duration::from_secs(24 * 60 * 60);
+const MAX_MODEL_COOLDOWN: Duration = Duration::from_secs(24 * 60 * 60);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeCooldownScope {
+    Account,
+    Model,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeCooldown {
+    until: SystemTime,
+    scope: RuntimeCooldownScope,
+}
 
 /// 仅经 Core account port、TTL catalog cache 和 Redis lease 选择一个 OAuth session。
 pub struct GrokAccountSessionSelector {
@@ -124,7 +141,8 @@ impl GrokAccountSessionSelector {
         let runtime_cooldowns = if diagnostic {
             std::collections::BTreeMap::new()
         } else {
-            self.runtime_cooldowns(&catalog_eligible).await
+            self.runtime_cooldowns(&catalog_eligible, request.upstream_model())
+                .await
         };
         let mut candidates = catalog_eligible
             .into_iter()
@@ -234,16 +252,26 @@ impl GrokAccountSessionSelector {
             return Err(GrokSessionSelectorError::CapacityUnavailable { retry_after });
         }
         // 钉死账号时只看该账号，否则取最早退出 cooldown 的候选。
-        let cooled_until = match request.required_account() {
+        let cooled = match request.required_account() {
             Some(required) => runtime_cooldowns.get(required).copied(),
-            None => runtime_cooldowns.values().copied().min(),
+            None => runtime_cooldowns
+                .values()
+                .copied()
+                .min_by_key(|item| item.until),
         };
-        if let Some(until) = cooled_until {
-            return Err(GrokSessionSelectorError::AccountCoolingDown {
-                retry_after: until
-                    .duration_since(SystemTime::now())
-                    .ok()
-                    .filter(|remaining| !remaining.is_zero()),
+        if let Some(cooled) = cooled {
+            let retry_after = cooled
+                .until
+                .duration_since(SystemTime::now())
+                .ok()
+                .filter(|remaining| !remaining.is_zero());
+            return Err(match cooled.scope {
+                RuntimeCooldownScope::Account => {
+                    GrokSessionSelectorError::AccountCoolingDown { retry_after }
+                }
+                RuntimeCooldownScope::Model => {
+                    GrokSessionSelectorError::ModelCoolingDown { retry_after }
+                }
             });
         }
         Err(GrokSessionSelectorError::NoEligibleSession)
@@ -252,28 +280,56 @@ impl GrokAccountSessionSelector {
     async fn runtime_cooldowns(
         &self,
         accounts: &[ProviderAccount],
-    ) -> std::collections::BTreeMap<ProviderAccountId, SystemTime> {
+        upstream_model: &UpstreamModelId,
+    ) -> std::collections::BTreeMap<ProviderAccountId, RuntimeCooldown> {
         let now = SystemTime::now();
-        // 冷却状态并发批量读取，避免逐账号串行往返。
-        let reads = futures::future::join_all(
+        let model_scope = ProviderCooldownScope::upstream_model(upstream_model.clone());
+        // 账号级和当前模型级冷却都并发批量读取，避免逐账号串行往返。
+        let account_reads = futures::future::join_all(
             accounts
                 .iter()
                 .map(|account| self.cooldowns.read(account.id())),
-        )
-        .await;
+        );
+        let model_reads = futures::future::join_all(
+            accounts
+                .iter()
+                .map(|account| self.cooldowns.read_scoped(account.id(), &model_scope)),
+        );
+        let (account_reads, model_reads) = futures::join!(account_reads, model_reads);
         let mut cooled = std::collections::BTreeMap::new();
-        for (account, read) in accounts.iter().zip(reads) {
-            let Ok(Some(cooldown)) = read else {
-                continue;
-            };
-            if cooldown.credential_revision() != account.revision() {
-                if cooldown.credential_revision() < account.revision() {
-                    let _ = self.cooldowns.clear(account.id(), account.revision()).await;
+        for ((account, account_read), model_read) in
+            accounts.iter().zip(account_reads).zip(model_reads)
+        {
+            if let Ok(Some(cooldown)) = account_read {
+                if cooldown.credential_revision() != account.revision() {
+                    if cooldown.credential_revision() < account.revision() {
+                        let _ = self.cooldowns.clear(account.id(), account.revision()).await;
+                    }
+                } else if cooldown.until() > now {
+                    insert_runtime_cooldown(
+                        &mut cooled,
+                        account.id(),
+                        cooldown.until(),
+                        RuntimeCooldownScope::Account,
+                    );
                 }
-                continue;
             }
-            if cooldown.until() > now {
-                cooled.insert(account.id().clone(), cooldown.until());
+            if let Ok(Some(cooldown)) = model_read {
+                if cooldown.credential_revision() != account.revision() {
+                    if cooldown.credential_revision() < account.revision() {
+                        let _ = self
+                            .cooldowns
+                            .clear_scoped(account.id(), &model_scope, account.revision())
+                            .await;
+                    }
+                } else if cooldown.until() > now {
+                    insert_runtime_cooldown(
+                        &mut cooled,
+                        account.id(),
+                        cooldown.until(),
+                        RuntimeCooldownScope::Model,
+                    );
+                }
             }
         }
         cooled
@@ -288,6 +344,26 @@ impl GrokAccountSessionSelector {
             .put_if_later(ProviderCooldown::new(
                 session.account_id().clone(),
                 session.credential_revision(),
+                cooldown_until,
+            ))
+            .await;
+    }
+
+    async fn record_model_runtime_cooldown(
+        &self,
+        session: &SelectedGrokSession,
+        upstream_model: UpstreamModelId,
+        duration: Duration,
+    ) {
+        let cooldown_until = SystemTime::now()
+            .checked_add(duration)
+            .unwrap_or_else(SystemTime::now);
+        let _ = self
+            .cooldowns
+            .put_scoped_if_later(ProviderScopedCooldown::new(
+                session.account_id().clone(),
+                session.credential_revision(),
+                ProviderCooldownScope::upstream_model(upstream_model),
                 cooldown_until,
             ))
             .await;
@@ -333,6 +409,43 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
                     "upstream_quota_exhausted",
                     None,
                 ),
+                GrokCredentialFailure::FreeQuotaExhausted => (
+                    GrokCredentialAvailability::QuotaExhausted,
+                    "upstream_free_quota_exhausted",
+                    None,
+                ),
+                GrokCredentialFailure::PaymentRequired { retry_after } => {
+                    let retry_after = bounded_cooldown(
+                        retry_after,
+                        PAYMENT_REQUIRED_COOLDOWN,
+                        MAX_RATE_LIMIT_COOLDOWN,
+                    );
+                    self.record_runtime_cooldown(session, retry_after).await;
+                    return;
+                }
+                GrokCredentialFailure::ModelQuotaExhausted {
+                    upstream_model,
+                    retry_after,
+                } => {
+                    let retry_after =
+                        bounded_cooldown(retry_after, MODEL_QUOTA_COOLDOWN, MAX_MODEL_COOLDOWN);
+                    self.record_model_runtime_cooldown(session, upstream_model, retry_after)
+                        .await;
+                    return;
+                }
+                GrokCredentialFailure::ModelAccessDenied {
+                    upstream_model,
+                    retry_after,
+                } => {
+                    let retry_after = bounded_cooldown(
+                        retry_after,
+                        MODEL_ACCESS_DENIED_COOLDOWN,
+                        MAX_MODEL_COOLDOWN,
+                    );
+                    self.record_model_runtime_cooldown(session, upstream_model, retry_after)
+                        .await;
+                    return;
+                }
                 GrokCredentialFailure::RateLimited { retry_after } => {
                     let retry_after = retry_after
                         .unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN)
@@ -412,5 +525,31 @@ fn minimum_retry_after(left: Option<Duration>, right: Option<Duration>) -> Optio
         (Some(left), Some(right)) => Some(left.min(right)),
         (Some(value), None) | (None, Some(value)) => Some(value),
         (None, None) => None,
+    }
+}
+
+fn bounded_cooldown(
+    retry_after: Option<Duration>,
+    default: Duration,
+    maximum: Duration,
+) -> Duration {
+    retry_after
+        .filter(|duration| !duration.is_zero())
+        .unwrap_or(default)
+        .min(maximum)
+}
+
+fn insert_runtime_cooldown(
+    cooldowns: &mut std::collections::BTreeMap<ProviderAccountId, RuntimeCooldown>,
+    account_id: &ProviderAccountId,
+    until: SystemTime,
+    scope: RuntimeCooldownScope,
+) {
+    let replacement = RuntimeCooldown { until, scope };
+    if cooldowns
+        .get(account_id)
+        .is_none_or(|current| current.until < until)
+    {
+        cooldowns.insert(account_id.clone(), replacement);
     }
 }

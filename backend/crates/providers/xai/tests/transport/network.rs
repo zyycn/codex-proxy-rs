@@ -257,7 +257,7 @@ async fn inference_transport_should_classify_http_failures_without_retaining_bod
     let cases = [
         (400, GrokInferenceTransportErrorKind::InvalidRequest),
         (401, GrokInferenceTransportErrorKind::Unauthorized),
-        (402, GrokInferenceTransportErrorKind::QuotaExhausted),
+        (402, GrokInferenceTransportErrorKind::PaymentRequired),
         (403, GrokInferenceTransportErrorKind::PermissionDenied),
         (408, GrokInferenceTransportErrorKind::Timeout),
         (429, GrokInferenceTransportErrorKind::RateLimited),
@@ -302,8 +302,80 @@ async fn inference_transport_should_classify_http_failures_without_retaining_bod
             Some(GrokInferenceClientCacheStatus::Miss)
         );
         assert!(error.transport_metrics().headers_ms().is_some());
+        assert!(error.client_visible_upstream_error().is_none());
         assert!(!rendered.contains(&secret));
     }
+}
+
+#[tokio::test]
+async fn inference_transport_should_expose_safe_flat_json_error_details() {
+    let server = MockServer::start().await;
+    let message = "You have run out of credits or need a Grok subscription";
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(ResponseTemplate::new(402).set_body_json(json!({
+            "code": "personal-team-blocked:spending-limit",
+            "error": message,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let origin = Url::parse(&server.uri()).expect("wiremock origin");
+    let error = inference_transport(&origin)
+        .execute(inference_request(&origin))
+        .await
+        .expect_err("spending limit response must fail");
+    let detail = error
+        .client_visible_upstream_error()
+        .expect("structured error detail");
+    let rendered = format!("{error:?}\n{error}");
+
+    assert_eq!(
+        error.kind(),
+        GrokInferenceTransportErrorKind::QuotaExhausted
+    );
+    assert_eq!(
+        (detail.message(), detail.code(), detail.error_type()),
+        (message, Some("personal_team_blocked_spending_limit"), None,)
+    );
+    assert!(!rendered.contains(message));
+}
+
+#[tokio::test]
+async fn inference_transport_should_scrub_nested_json_error_details() {
+    let server = MockServer::start().await;
+    let account_fingerprint = "123e4567-e89b-12d3-a456-426614174000";
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+            "error": {
+                "code": "rate-limit:burst",
+                "type": "rate_limit_error",
+                "message": format!("team {account_fingerprint}\nrate limited"),
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let origin = Url::parse(&server.uri()).expect("wiremock origin");
+    let error = inference_transport(&origin)
+        .execute(inference_request(&origin))
+        .await
+        .expect_err("rate limit response must fail");
+    let detail = error
+        .client_visible_upstream_error()
+        .expect("structured error detail");
+    let rendered = format!("{error:?}\n{error}");
+
+    assert_eq!(
+        (detail.message(), detail.code(), detail.error_type()),
+        (
+            "team [redacted] rate limited",
+            Some("rate_limit_burst"),
+            Some("rate_limit_error"),
+        )
+    );
+    assert!(!rendered.contains(account_fingerprint));
 }
 
 #[tokio::test]
@@ -317,14 +389,20 @@ async fn inference_transport_should_scope_forbidden_failures_from_safe_metadata(
         ),
         (
             json!({"error": {"code": "usage_exhausted", "message": "used all the included free usage for model"}}),
-            GrokInferenceTransportErrorKind::QuotaExhausted,
+            GrokInferenceTransportErrorKind::ModelQuotaExhausted,
             false,
             Some("usage_exhausted"),
         ),
         (
             json!({"error": {"code": "permission_denied", "message": "access to the chat endpoint is denied"}}),
-            GrokInferenceTransportErrorKind::PermissionDenied,
-            true,
+            GrokInferenceTransportErrorKind::ModelAccessDenied,
+            false,
+            Some("permission_denied"),
+        ),
+        (
+            json!({"error": {"code": "permission_denied", "message": "request rejected", "details": {"check": "SAFETY_CHECK_TYPE_INPUT"}}}),
+            GrokInferenceTransportErrorKind::SafetyRejected,
+            false,
             Some("permission_denied"),
         ),
         (
@@ -359,7 +437,62 @@ async fn inference_transport_should_scope_forbidden_failures_from_safe_metadata(
 }
 
 #[tokio::test]
-async fn inference_transport_should_classify_free_usage_429_as_quota_exhausted() {
+async fn inference_transport_should_keep_unknown_402_out_of_account_quota_state() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(ResponseTemplate::new(402).set_body_json(json!({
+            "error": {
+                "code": "payment_required",
+                "type": "billing_error",
+                "message": "Payment is required for this request"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let origin = Url::parse(&server.uri()).expect("wiremock origin");
+    let error = inference_transport(&origin)
+        .execute(inference_request(&origin))
+        .await
+        .expect_err("payment-required response must fail");
+
+    assert_eq!(
+        (error.kind(), error.requires_credential_recovery()),
+        (GrokInferenceTransportErrorKind::PaymentRequired, false)
+    );
+}
+
+#[tokio::test]
+async fn inference_transport_should_classify_model_quota_for_403_and_429() {
+    for status in [403, 429] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(json!({
+                "error": {
+                    "code": "subscription:free-usage-exhausted",
+                    "message": "You have used all the included free usage for model grok-4.5"
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let origin = Url::parse(&server.uri()).expect("wiremock origin");
+        let error = inference_transport(&origin)
+            .execute(inference_request(&origin))
+            .await
+            .expect_err("model quota response must fail");
+
+        assert_eq!(
+            error.kind(),
+            GrokInferenceTransportErrorKind::ModelQuotaExhausted
+        );
+    }
+}
+
+#[tokio::test]
+async fn inference_transport_should_classify_free_usage_429_as_account_free_quota_exhausted() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
@@ -380,7 +513,7 @@ async fn inference_transport_should_classify_free_usage_429_as_quota_exhausted()
 
     assert_eq!(
         error.kind(),
-        GrokInferenceTransportErrorKind::QuotaExhausted
+        GrokInferenceTransportErrorKind::FreeQuotaExhausted
     );
     assert_eq!(error.status(), Some(429));
     assert_eq!(

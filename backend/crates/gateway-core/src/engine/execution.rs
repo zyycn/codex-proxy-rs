@@ -525,7 +525,8 @@ impl DefaultExecutionService {
         })
     }
 
-    /// 探测失败先落库再转成客户端错误；转换会丢掉上游状态码与 provider code。
+    /// 探测失败先记录完整分类事实，再仅把 Provider 显式标记为客户端可见的
+    /// 结构化 message/code/type 带入协议错误。
     async fn observe_probe_failure(
         &self,
         observed: &ProbeObservation,
