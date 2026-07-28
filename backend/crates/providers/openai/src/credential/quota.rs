@@ -178,6 +178,14 @@ impl CodexQuotaFact {
     }
 }
 
+fn quota_fact_is_active_exhaustion(fact: CodexQuotaFact, now: SystemTime) -> bool {
+    fact.exhausted()
+        && fact
+            .resets_at()
+            .map(SystemTime::from)
+            .is_none_or(|reset_at| reset_at > now)
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CodexQuotaSyncSummary {
     pub updated: u64,
@@ -502,10 +510,20 @@ fn quota_refresh_candidate(
         return None;
     }
     let observation = observations.and_then(|observations| observations.get(account.id()));
+    let snapshot = quota_snapshot_for_account(&account, observation);
     let kind = match account.availability() {
         AccountAvailability::QuotaExhausted => CodexQuotaRefreshKind::Exhausted {
-            reset_at: quota_reset_at_from_observation(&account, observation),
+            reset_at: quota_reset_at_from_snapshot(snapshot.as_ref()),
         },
+        AccountAvailability::Cooldown
+            if snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.fact().exhausted()) =>
+        {
+            CodexQuotaRefreshKind::Exhausted {
+                reset_at: quota_reset_at_from_snapshot(snapshot.as_ref()),
+            }
+        }
         AccountAvailability::Ready
             if observations.is_some() && quota_observation_is_stale(&account, observation, now) =>
         {
@@ -516,15 +534,30 @@ fn quota_refresh_candidate(
     Some(CodexQuotaRefreshCandidate { account, kind })
 }
 
-fn quota_reset_at_from_observation(
+fn quota_snapshot_for_account(
     account: &ProviderAccount,
     observation: Option<&QuotaObservation>,
-) -> Option<SystemTime> {
+) -> Option<CodexAccountQuotaSnapshot> {
     observation
         .filter(|observation| observation.expected_revision == account.revision())
         .and_then(quota_snapshot_from_observation)
+}
+
+fn quota_reset_at_from_snapshot(
+    snapshot: Option<&CodexAccountQuotaSnapshot>,
+) -> Option<SystemTime> {
+    snapshot
         .and_then(|snapshot| snapshot.fact().resets_at())
         .map(SystemTime::from)
+}
+
+fn quota_observation_confirms_active_exhaustion(
+    account: &ProviderAccount,
+    observation: Option<&QuotaObservation>,
+    now: SystemTime,
+) -> bool {
+    quota_snapshot_for_account(account, observation)
+        .is_some_and(|snapshot| quota_fact_is_active_exhaustion(snapshot.fact(), now))
 }
 
 fn quota_observation_is_stale(
@@ -674,7 +707,7 @@ impl CodexCredentialQuotaService {
     }
 
     pub async fn synchronize(&self) -> Result<CodexQuotaSyncSummary, CodexCredentialQuotaError> {
-        let accounts = self.repository.list_for_provider().await?;
+        let mut accounts = self.repository.list_for_provider().await?;
         let mut summary = CodexQuotaSyncSummary::default();
         let now = SystemTime::now();
         let account_ids = accounts
@@ -694,6 +727,8 @@ impl CodexCredentialQuotaService {
                 None
             }
         };
+        self.reconcile_persisted_exhaustion(&mut accounts, observations.as_ref(), now)
+            .await;
         let accounts =
             self.scheduling
                 .reserve_periodic_refreshes(accounts, observations.as_ref(), now);
@@ -730,6 +765,9 @@ impl CodexCredentialQuotaService {
                 }
                 Err(CodexQuotaFetchError::Upstream { account, error }) => {
                     let (availability, reason, cooldown) = classify_error(&error, observed_at);
+                    let preserve_exhaustion = account.availability()
+                        == AccountAvailability::QuotaExhausted
+                        && availability == Some(AccountAvailability::Cooldown);
                     match availability {
                         Some(AccountAvailability::Invalid | AccountAvailability::Banned) => {
                             summary.invalid += 1;
@@ -740,6 +778,9 @@ impl CodexCredentialQuotaService {
                             summary.transient += 1;
                             continue;
                         }
+                    }
+                    if preserve_exhaustion {
+                        continue;
                     }
                     let _ = self
                         .repository
@@ -755,6 +796,63 @@ impl CodexCredentialQuotaService {
             }
         }
         Ok(summary)
+    }
+
+    async fn reconcile_persisted_exhaustion(
+        &self,
+        accounts: &mut [ProviderAccount],
+        observations: Option<&BTreeMap<ProviderAccountId, QuotaObservation>>,
+        observed_at: SystemTime,
+    ) {
+        let Some(observations) = observations else {
+            return;
+        };
+        for account in accounts {
+            if account.availability() != AccountAvailability::Cooldown
+                || !quota_observation_confirms_active_exhaustion(
+                    account,
+                    observations.get(account.id()),
+                    observed_at,
+                )
+            {
+                continue;
+            }
+            let Ok(Some(current)) = self.store.get_account(account.id()).await else {
+                continue;
+            };
+            if current.revision() != account.revision()
+                || current.availability() != AccountAvailability::Cooldown
+            {
+                continue;
+            }
+            if !matches!(
+                self.has_active_exhaustion(&current, observed_at).await,
+                Ok(true)
+            ) {
+                continue;
+            }
+            if let Err(error) = self
+                .repository
+                .apply_state(
+                    &current,
+                    AccountAvailability::QuotaExhausted,
+                    Some("quota_exhausted".to_owned()),
+                    None,
+                    observed_at,
+                )
+                .await
+            {
+                tracing::warn!(
+                    account_id = %account.id(),
+                    error = %error,
+                    "OpenAI persisted quota exhaustion reconciliation failed"
+                );
+                continue;
+            }
+            let enabled = current.enabled();
+            *account =
+                current.with_runtime_state(enabled, AccountAvailability::QuotaExhausted, None);
+        }
     }
 
     /// 解析并 revision-fenced 落库单账号的 Provider quota JSON。
@@ -894,6 +992,30 @@ impl CodexCredentialQuotaService {
             .await?
             .filter(|account| account.provider().as_str() == "openai")
             .ok_or(CodexCredentialQuotaError::NotFound)?;
+        self.read_snapshot_for(&account).await
+    }
+
+    pub(super) async fn has_active_exhaustion(
+        &self,
+        account: &ProviderAccount,
+        now: SystemTime,
+    ) -> Result<bool, CodexCredentialQuotaError> {
+        match self.read_snapshot_for(account).await {
+            Ok(snapshot) => Ok(snapshot
+                .is_some_and(|snapshot| quota_fact_is_active_exhaustion(snapshot.fact(), now))),
+            Err(CodexCredentialQuotaError::RevisionConflict) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn read_snapshot_for(
+        &self,
+        account: &ProviderAccount,
+    ) -> Result<Option<CodexAccountQuotaSnapshot>, CodexCredentialQuotaError> {
+        if account.provider().as_str() != "openai" {
+            return Err(CodexCredentialQuotaError::NotFound);
+        }
+        let account_id = account.id();
         let Some(observation) = self
             .store
             .get_quotas(std::slice::from_ref(account_id))
