@@ -927,6 +927,7 @@ async fn start_grok_inference(
     transport: &dyn GrokInferenceTransport,
     credential_recovery: &dyn GrokCredentialRecovery,
     request: GrokInferenceRequest,
+    upstream_model: &UpstreamModelId,
     context: &AttemptContext,
     session: &SelectedGrokSession,
 ) -> Result<AcceptedGrokInference, GrokInferenceStartFailure> {
@@ -965,6 +966,7 @@ async fn start_grok_inference(
         InferenceBoundary::Response(Ok(response)) => response,
         InferenceBoundary::Response(Err(error)) => {
             let observation = xai_error_observation(&error).ok();
+            let credential_failure = transport_credential_failure(&error, upstream_model);
             let error =
                 map_continuation_failure(context, map_transport_error_for_context(error, context));
             let error = recover_or_record_failure(
@@ -972,6 +974,7 @@ async fn start_grok_inference(
                 credential_recovery,
                 session,
                 error,
+                credential_failure,
                 context.credential_recovery_attempted(),
             )
             .await;
@@ -993,6 +996,7 @@ async fn next_grok_chunk(
     body: &mut GrokInferenceChunkStream,
     selector: &dyn GrokSessionSelector,
     session: &SelectedGrokSession,
+    upstream_model: &UpstreamModelId,
     context: &AttemptContext,
 ) -> Result<Option<bytes::Bytes>, ProviderError> {
     let Some(stream_deadline) = remaining(context.deadline()) else {
@@ -1014,10 +1018,12 @@ async fn next_grok_chunk(
         )),
         chunk = body.next() => match chunk {
             Some(Ok(chunk)) => Ok(Some(chunk)),
-            Some(Err(error)) => {
-                let error = map_stream_error(error);
-                Err(record_stream_failure(selector, session, error).await)
-            }
+            Some(Err(error)) => Err(map_and_record_stream_transport_failure(
+                selector,
+                session,
+                error,
+                upstream_model,
+            ).await),
             None => Ok(None),
         },
     }
@@ -1067,6 +1073,7 @@ fn cold_compaction_http_sse_stream(
             transport.as_ref(),
             credential_recovery.as_ref(),
             inference_request,
+            &upstream_model,
             &context,
             &session,
         )
@@ -1092,6 +1099,7 @@ fn cold_compaction_http_sse_stream(
             &mut body,
             selector.as_ref(),
             &session,
+            &upstream_model,
             &context,
         )
         .await
@@ -1287,6 +1295,7 @@ fn cold_http_sse_stream(
             InferenceBoundary::Response(Ok(response)) => response,
             InferenceBoundary::Response(Err(error)) => {
                 let observation = xai_error_observation(&error)?;
+                let credential_failure = transport_credential_failure(&error, &upstream_model);
                 let error =
                     map_continuation_failure(&context, map_transport_error_for_context(error, &context));
                 let error = recover_or_record_failure(
@@ -1294,6 +1303,7 @@ fn cold_http_sse_stream(
                     credential_recovery.as_ref(),
                     &session,
                     error,
+                    credential_failure,
                     context.credential_recovery_attempted(),
                 )
                 .await;
@@ -1328,10 +1338,12 @@ fn cold_http_sse_stream(
                 )),
                 chunk = body.next() => match chunk {
                     Some(Ok(chunk)) => Ok(Some(chunk)),
-                    Some(Err(error)) => {
-                        let error = map_stream_error(error);
-                        Err(record_stream_failure(selector.as_ref(), &session, error).await)
-                    },
+                    Some(Err(error)) => Err(map_and_record_stream_transport_failure(
+                        selector.as_ref(),
+                        &session,
+                        error,
+                        &upstream_model,
+                    ).await),
                     None => Ok(None),
                 },
             }?;
@@ -1495,6 +1507,18 @@ async fn record_failure(
     error
 }
 
+async fn record_credential_failure(
+    selector: &dyn GrokSessionSelector,
+    session: &SelectedGrokSession,
+    error: ProviderError,
+    failure: GrokCredentialFailure,
+) -> ProviderError {
+    if session.allows_account_state_mutation() {
+        selector.record_failure(session, failure).await;
+    }
+    error
+}
+
 async fn record_stream_failure(
     selector: &dyn GrokSessionSelector,
     session: &SelectedGrokSession,
@@ -1524,6 +1548,7 @@ async fn recover_or_record_failure(
     recovery: &dyn GrokCredentialRecovery,
     session: &SelectedGrokSession,
     error: ProviderError,
+    credential_failure: Option<GrokCredentialFailure>,
     recovery_attempted: bool,
 ) -> ProviderError {
     if !session.allows_account_state_mutation() {
@@ -1536,12 +1561,68 @@ async fn recover_or_record_failure(
         {
             GrokCredentialRecoveryOutcome::Recovered => error.with_same_account_retry(),
             GrokCredentialRecoveryOutcome::Rejected => error,
-            GrokCredentialRecoveryOutcome::Unavailable => {
-                record_failure(selector, session, error).await
-            }
+            GrokCredentialRecoveryOutcome::Unavailable => match credential_failure {
+                Some(failure) => record_credential_failure(selector, session, error, failure).await,
+                None => error,
+            },
         };
     }
-    record_failure(selector, session, error).await
+    match credential_failure {
+        Some(failure) => record_credential_failure(selector, session, error, failure).await,
+        None => error,
+    }
+}
+
+fn transport_credential_failure(
+    error: &GrokInferenceTransportError,
+    upstream_model: &UpstreamModelId,
+) -> Option<GrokCredentialFailure> {
+    match error.kind() {
+        GrokInferenceTransportErrorKind::Unauthorized => Some(GrokCredentialFailure::Unauthorized),
+        GrokInferenceTransportErrorKind::RateLimited => Some(GrokCredentialFailure::RateLimited {
+            retry_after: error.retry_after(),
+        }),
+        GrokInferenceTransportErrorKind::QuotaExhausted => {
+            Some(GrokCredentialFailure::QuotaExhausted)
+        }
+        GrokInferenceTransportErrorKind::FreeQuotaExhausted => {
+            Some(GrokCredentialFailure::FreeQuotaExhausted)
+        }
+        GrokInferenceTransportErrorKind::PaymentRequired => {
+            Some(GrokCredentialFailure::PaymentRequired {
+                retry_after: error.retry_after(),
+            })
+        }
+        GrokInferenceTransportErrorKind::ModelQuotaExhausted => {
+            Some(GrokCredentialFailure::ModelQuotaExhausted {
+                upstream_model: upstream_model.clone(),
+                retry_after: error.retry_after(),
+            })
+        }
+        GrokInferenceTransportErrorKind::ModelAccessDenied => {
+            Some(GrokCredentialFailure::ModelAccessDenied {
+                upstream_model: upstream_model.clone(),
+                retry_after: error.retry_after(),
+            })
+        }
+        _ => None,
+    }
+}
+
+async fn map_and_record_stream_transport_failure(
+    selector: &dyn GrokSessionSelector,
+    session: &SelectedGrokSession,
+    error: GrokInferenceTransportError,
+    upstream_model: &UpstreamModelId,
+) -> ProviderError {
+    let request_scoped = error.kind() == GrokInferenceTransportErrorKind::SafetyRejected;
+    let credential_failure = transport_credential_failure(&error, upstream_model);
+    let error = map_stream_error(error);
+    match credential_failure {
+        Some(failure) => record_credential_failure(selector, session, error, failure).await,
+        None if request_scoped => error,
+        None => record_stream_failure(selector, session, error).await,
+    }
 }
 
 fn map_continuation_failure(context: &AttemptContext, error: ProviderError) -> ProviderError {
@@ -1628,6 +1709,11 @@ fn map_selection_error(error: GrokSessionSelectorError) -> ProviderError {
             cooling_down_message(retry_after),
             "account_cooling_down",
         ),
+        GrokSessionSelectorError::ModelCoolingDown { retry_after } => (
+            retry_after,
+            model_cooling_down_message(retry_after),
+            "model_cooling_down",
+        ),
         GrokSessionSelectorError::CapacityUnavailable { retry_after } => (
             retry_after,
             "account is at its concurrency or request-interval limit".to_owned(),
@@ -1665,10 +1751,20 @@ fn map_selection_error(error: GrokSessionSelectorError) -> ProviderError {
 fn cooling_down_message(retry_after: Option<Duration>) -> String {
     match retry_after {
         Some(retry_after) => format!(
-            "account is cooling down after an interrupted upstream stream; retry in {}s",
+            "account is cooling down after an upstream failure; retry in {}s",
             retry_after.as_secs().saturating_add(1)
         ),
-        None => "account is cooling down after an interrupted upstream stream".to_owned(),
+        None => "account is cooling down after an upstream failure".to_owned(),
+    }
+}
+
+fn model_cooling_down_message(retry_after: Option<Duration>) -> String {
+    match retry_after {
+        Some(retry_after) => format!(
+            "all eligible accounts are cooling down for this model; retry in {}s",
+            retry_after.as_secs().saturating_add(1)
+        ),
+        None => "all eligible accounts are cooling down for this model".to_owned(),
     }
 }
 
@@ -1690,13 +1786,19 @@ fn map_transport_error_with_state(
     forced_send_state: Option<UpstreamSendState>,
     allow_explicit_replay: bool,
 ) -> ProviderError {
-    let kind = match error.kind() {
+    let transport_kind = error.kind();
+    let kind = match transport_kind {
         GrokInferenceTransportErrorKind::InvalidRequest => ProviderErrorKind::InvalidRequest,
         GrokInferenceTransportErrorKind::Unsupported => ProviderErrorKind::Unsupported,
         GrokInferenceTransportErrorKind::Unauthorized => ProviderErrorKind::Unauthorized,
-        GrokInferenceTransportErrorKind::PermissionDenied => ProviderErrorKind::PermissionDenied,
+        GrokInferenceTransportErrorKind::PermissionDenied
+        | GrokInferenceTransportErrorKind::ModelAccessDenied
+        | GrokInferenceTransportErrorKind::PaymentRequired
+        | GrokInferenceTransportErrorKind::SafetyRejected => ProviderErrorKind::PermissionDenied,
         GrokInferenceTransportErrorKind::RateLimited => ProviderErrorKind::RateLimited,
-        GrokInferenceTransportErrorKind::QuotaExhausted => ProviderErrorKind::QuotaExhausted,
+        GrokInferenceTransportErrorKind::QuotaExhausted
+        | GrokInferenceTransportErrorKind::FreeQuotaExhausted
+        | GrokInferenceTransportErrorKind::ModelQuotaExhausted => ProviderErrorKind::QuotaExhausted,
         GrokInferenceTransportErrorKind::Timeout => ProviderErrorKind::Timeout,
         GrokInferenceTransportErrorKind::Transport => ProviderErrorKind::Transport,
         GrokInferenceTransportErrorKind::Protocol => ProviderErrorKind::Protocol,
@@ -1711,7 +1813,7 @@ fn map_transport_error_with_state(
         mapped = mapped.with_status(status);
         if allow_explicit_replay
             && forced_send_state.is_none()
-            && explicit_rejection_is_replay_safe(kind, status)
+            && explicit_rejection_is_replay_safe(transport_kind, status)
         {
             mapped = mapped.with_replay_safe();
         }
@@ -1725,6 +1827,9 @@ fn map_transport_error_with_state(
     if let Some(code) = error.upstream_code().cloned() {
         mapped = mapped.with_upstream_code(code);
     }
+    if let Some(detail) = error.client_visible_upstream_error().cloned() {
+        mapped = mapped.with_client_visible_upstream_error(detail);
+    }
     if error.requires_credential_recovery() {
         mapped = mapped.with_credential_recovery().with_replay_safe();
     }
@@ -1734,14 +1839,25 @@ fn map_transport_error_with_state(
     mapped
 }
 
-fn explicit_rejection_is_replay_safe(kind: ProviderErrorKind, status: u16) -> bool {
+fn explicit_rejection_is_replay_safe(kind: GrokInferenceTransportErrorKind, status: u16) -> bool {
     matches!(
         (kind, status),
-        (ProviderErrorKind::Unauthorized, 401)
-            | (ProviderErrorKind::QuotaExhausted, 402)
-            | (ProviderErrorKind::QuotaExhausted, 403)
-            | (ProviderErrorKind::QuotaExhausted, 429)
-            | (ProviderErrorKind::RateLimited, 429)
+        (GrokInferenceTransportErrorKind::Unauthorized, 401)
+            | (
+                GrokInferenceTransportErrorKind::QuotaExhausted,
+                402 | 403 | 429
+            )
+            | (
+                GrokInferenceTransportErrorKind::FreeQuotaExhausted,
+                402 | 403 | 429
+            )
+            | (
+                GrokInferenceTransportErrorKind::ModelQuotaExhausted,
+                402 | 403 | 429
+            )
+            | (GrokInferenceTransportErrorKind::PaymentRequired, 402)
+            | (GrokInferenceTransportErrorKind::ModelAccessDenied, 403)
+            | (GrokInferenceTransportErrorKind::RateLimited, 429)
     )
 }
 

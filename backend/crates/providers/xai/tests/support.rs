@@ -15,9 +15,10 @@ use gateway_core::engine::credential::{
 };
 use gateway_core::error::{StoreError, StoreErrorKind};
 use gateway_core::provider_ports::{
-    ProviderCooldown, ProviderCooldownPort, ProviderRefreshPolicy, ProviderRuntimePolicyPort,
-    ProviderSessionAffinityKey, ProviderSessionAffinityPort, ProviderSessionExclusionPort,
-    ProviderSessionExclusions, ProviderStoreError,
+    ProviderCooldown, ProviderCooldownPort, ProviderCooldownScope, ProviderRefreshPolicy,
+    ProviderRuntimePolicyPort, ProviderScopedCooldown, ProviderSessionAffinityKey,
+    ProviderSessionAffinityPort, ProviderSessionExclusionPort, ProviderSessionExclusions,
+    ProviderStoreError,
 };
 use gateway_core::routing::ProviderKind;
 use provider_xai::{
@@ -561,11 +562,23 @@ pub struct TestSessionExclusions;
 #[derive(Default)]
 pub struct MemoryCooldownPort {
     cooldowns: Mutex<BTreeMap<ProviderAccountId, ProviderCooldown>>,
+    scoped_cooldowns:
+        Mutex<BTreeMap<(ProviderAccountId, ProviderCooldownScope), ProviderScopedCooldown>>,
 }
 
 impl MemoryCooldownPort {
     pub fn cooldown(&self, account_id: &ProviderAccountId) -> Option<ProviderCooldown> {
         lock(&self.cooldowns).get(account_id).cloned()
+    }
+
+    pub fn scoped_cooldown(
+        &self,
+        account_id: &ProviderAccountId,
+        scope: &ProviderCooldownScope,
+    ) -> Option<ProviderScopedCooldown> {
+        lock(&self.scoped_cooldowns)
+            .get(&(account_id.clone(), scope.clone()))
+            .cloned()
     }
 }
 
@@ -670,6 +683,53 @@ impl ProviderCooldownPort for MemoryCooldownPort {
                 .is_some_and(|current| current.credential_revision() <= through_revision);
             if should_remove {
                 cooldowns.remove(account_id);
+            }
+            Ok(should_remove)
+        })
+    }
+
+    fn put_scoped_if_later(
+        &self,
+        cooldown: ProviderScopedCooldown,
+    ) -> futures::future::BoxFuture<'_, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            let key = (cooldown.account_id().clone(), cooldown.scope().clone());
+            let mut cooldowns = lock(&self.scoped_cooldowns);
+            let should_write = cooldowns.get(&key).is_none_or(|current| {
+                current.credential_revision() < cooldown.credential_revision()
+                    || (current.credential_revision() == cooldown.credential_revision()
+                        && current.until() < cooldown.until())
+            });
+            if should_write {
+                cooldowns.insert(key, cooldown);
+            }
+            Ok(should_write)
+        })
+    }
+
+    fn read_scoped<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+        scope: &'a ProviderCooldownScope,
+    ) -> futures::future::BoxFuture<'a, Result<Option<ProviderScopedCooldown>, ProviderStoreError>>
+    {
+        Box::pin(async move { Ok(self.scoped_cooldown(account_id, scope)) })
+    }
+
+    fn clear_scoped<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+        scope: &'a ProviderCooldownScope,
+        through_revision: CredentialRevision,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            let key = (account_id.clone(), scope.clone());
+            let mut cooldowns = lock(&self.scoped_cooldowns);
+            let should_remove = cooldowns
+                .get(&key)
+                .is_some_and(|current| current.credential_revision() <= through_revision);
+            if should_remove {
+                cooldowns.remove(&key);
             }
             Ok(should_remove)
         })

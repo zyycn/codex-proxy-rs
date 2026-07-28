@@ -54,3 +54,50 @@ pub use transport::{
     GrokInferenceTransportError, GrokInferenceTransportErrorKind, GrokInferenceTransportFuture,
     GrokInferenceTransportMetrics,
 };
+
+const UUID_TEXT_LEN: usize = 36;
+
+/// 把 message 中的 UUID 替换为占位符，控制字符归一为空格，
+/// 使文本满足客户端可见错误的约束且不携带可定位账号的标识。
+fn scrub_account_fingerprints(message: &str) -> String {
+    let bytes = message.as_bytes();
+    let mut scrubbed = String::with_capacity(message.len());
+    let mut index = 0;
+    while index < message.len() {
+        if uuid_at(bytes, index) {
+            scrubbed.push_str("[redacted]");
+            index += UUID_TEXT_LEN;
+            continue;
+        }
+        let character = message[index..].chars().next().expect("char boundary");
+        scrubbed.push(if character.is_control() {
+            ' '
+        } else {
+            character
+        });
+        index += character.len_utf8();
+    }
+    scrubbed
+}
+
+fn uuid_at(bytes: &[u8], index: usize) -> bool {
+    let Some(candidate) = bytes.get(index..index + UUID_TEXT_LEN) else {
+        return false;
+    };
+    if index > 0 && bytes[index - 1].is_ascii_alphanumeric() {
+        return false;
+    }
+    if bytes
+        .get(index + UUID_TEXT_LEN)
+        .is_some_and(u8::is_ascii_alphanumeric)
+    {
+        return false;
+    }
+    candidate.iter().enumerate().all(|(offset, byte)| {
+        if matches!(offset, 8 | 13 | 18 | 23) {
+            *byte == b'-'
+        } else {
+            byte.is_ascii_hexdigit()
+        }
+    })
+}

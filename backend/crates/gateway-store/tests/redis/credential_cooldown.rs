@@ -13,6 +13,7 @@ use gateway_core::{
         QuotaObservation, QuotaWriteOutcome,
     },
     error::{StoreError as CoreStoreError, StoreErrorKind},
+    provider_ports::{ProviderCooldownPort, ProviderCooldownScope, ProviderScopedCooldown},
     routing::ProviderKind,
 };
 use gateway_store::{
@@ -528,6 +529,109 @@ async fn credential_cooldown_read_removes_expired_grace_key() {
         None
     );
     assert!(namespace_keys(&mut connection, &namespace).await.is_empty());
+}
+
+#[tokio::test]
+async fn scoped_cooldown_isolated_by_model_and_revision_fenced() {
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    let account_id = ProviderAccountId::new("acct_scoped_cooldown").expect("valid account ID");
+    let revision = CredentialRevision::new(2).expect("positive revision");
+    let model_a = ProviderCooldownScope::upstream_model(
+        gateway_core::routing::UpstreamModelId::new("grok-4.5").expect("model"),
+    );
+    let model_b = ProviderCooldownScope::upstream_model(
+        gateway_core::routing::UpstreamModelId::new("grok-4.6").expect("model"),
+    );
+    let until_a: SystemTime = millisecond_precision(Utc::now() + Duration::seconds(30)).into();
+    let until_b: SystemTime = millisecond_precision(Utc::now() + Duration::seconds(60)).into();
+
+    assert!(
+        repository
+            .put_scoped_if_later(ProviderScopedCooldown::new(
+                account_id.clone(),
+                revision,
+                model_a.clone(),
+                until_a,
+            ))
+            .await
+            .expect("cache model A cooldown")
+    );
+    assert!(
+        !repository
+            .put_scoped_if_later(ProviderScopedCooldown::new(
+                account_id.clone(),
+                CredentialRevision::new(1).expect("stale revision"),
+                model_a.clone(),
+                until_b,
+            ))
+            .await
+            .expect("reject stale model A cooldown")
+    );
+    assert!(
+        repository
+            .put_scoped_if_later(ProviderScopedCooldown::new(
+                account_id.clone(),
+                revision,
+                model_b.clone(),
+                until_b,
+            ))
+            .await
+            .expect("cache model B cooldown")
+    );
+    assert_eq!(
+        repository
+            .read_scoped(&account_id, &model_a)
+            .await
+            .expect("read model A cooldown")
+            .expect("model A cooldown")
+            .until(),
+        until_a
+    );
+    assert_eq!(
+        repository
+            .read_scoped(&account_id, &model_b)
+            .await
+            .expect("read model B cooldown")
+            .expect("model B cooldown")
+            .until(),
+        until_b
+    );
+    assert!(
+        !repository
+            .clear_scoped(
+                &account_id,
+                &model_a,
+                CredentialRevision::new(1).expect("stale revision"),
+            )
+            .await
+            .expect("fence stale model A invalidation")
+    );
+    assert!(
+        repository
+            .clear_scoped(&account_id, &model_a, revision)
+            .await
+            .expect("clear model A cooldown")
+    );
+    assert!(
+        repository
+            .read_scoped(&account_id, &model_a)
+            .await
+            .expect("read cleared model A cooldown")
+            .is_none()
+    );
+    assert!(
+        repository
+            .read_scoped(&account_id, &model_b)
+            .await
+            .expect("read retained model B cooldown")
+            .is_some()
+    );
+    let keys = namespace_keys(&mut connection, &namespace).await;
+    assert_eq!(keys.len(), 1);
+    assert!(!keys[0].contains(account_id.as_str()));
+    assert!(!keys[0].contains(model_b.value()));
 }
 
 fn cooldown(account_id: &str, revision: u64, seconds: i64) -> CredentialCooldown {

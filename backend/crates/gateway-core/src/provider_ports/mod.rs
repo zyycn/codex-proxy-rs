@@ -13,7 +13,7 @@ use crate::engine::credential::{
     OpaqueProviderData, ProviderAccountId, ProviderAccountStore,
 };
 use crate::error::{IdentifierError, validate_text};
-use crate::routing::ProviderKind;
+use crate::routing::{ProviderKind, UpstreamModelId};
 
 const MAX_PENDING_FLOW_TTL: Duration = Duration::from_secs(30 * 60);
 
@@ -527,6 +527,80 @@ impl ProviderCooldown {
     }
 }
 
+/// 可丢失 cooldown 的细粒度作用域。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ProviderCooldownScope {
+    /// 只阻止同一账号调用指定上游模型。
+    UpstreamModel(UpstreamModelId),
+}
+
+impl ProviderCooldownScope {
+    #[must_use]
+    pub const fn upstream_model(model: UpstreamModelId) -> Self {
+        Self::UpstreamModel(model)
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::UpstreamModel(_) => "model",
+        }
+    }
+
+    #[must_use]
+    pub fn value(&self) -> &str {
+        match self {
+            Self::UpstreamModel(model) => model.as_str(),
+        }
+    }
+}
+
+/// 不进入账号持久状态的账号+作用域 cooldown。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderScopedCooldown {
+    account_id: ProviderAccountId,
+    credential_revision: CredentialRevision,
+    scope: ProviderCooldownScope,
+    until: SystemTime,
+}
+
+impl ProviderScopedCooldown {
+    #[must_use]
+    pub const fn new(
+        account_id: ProviderAccountId,
+        credential_revision: CredentialRevision,
+        scope: ProviderCooldownScope,
+        until: SystemTime,
+    ) -> Self {
+        Self {
+            account_id,
+            credential_revision,
+            scope,
+            until,
+        }
+    }
+
+    #[must_use]
+    pub const fn account_id(&self) -> &ProviderAccountId {
+        &self.account_id
+    }
+
+    #[must_use]
+    pub const fn credential_revision(&self) -> CredentialRevision {
+        self.credential_revision
+    }
+
+    #[must_use]
+    pub const fn scope(&self) -> &ProviderCooldownScope {
+        &self.scope
+    }
+
+    #[must_use]
+    pub const fn until(&self) -> SystemTime {
+        self.until
+    }
+}
+
 pub trait ProviderCooldownPort: Send + Sync {
     fn put_if_later(
         &self,
@@ -541,6 +615,24 @@ pub trait ProviderCooldownPort: Send + Sync {
     fn clear<'a>(
         &'a self,
         account_id: &'a ProviderAccountId,
+        through_revision: CredentialRevision,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>>;
+
+    fn put_scoped_if_later(
+        &self,
+        cooldown: ProviderScopedCooldown,
+    ) -> BoxFuture<'_, Result<bool, ProviderStoreError>>;
+
+    fn read_scoped<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+        scope: &'a ProviderCooldownScope,
+    ) -> BoxFuture<'a, Result<Option<ProviderScopedCooldown>, ProviderStoreError>>;
+
+    fn clear_scoped<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+        scope: &'a ProviderCooldownScope,
         through_revision: CredentialRevision,
     ) -> BoxFuture<'a, Result<bool, ProviderStoreError>>;
 }

@@ -300,8 +300,8 @@ pub type GrokSessionSelectorFuture<'a> = Pin<
     Box<dyn Future<Output = Result<SelectedGrokSession, GrokSessionSelectorError>> + Send + 'a>,
 >;
 
-/// 凭据维度的上游失败，可安全落库为可用性反馈。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 已脱敏的上游失败反馈；selector 决定账号持久状态或细粒度运行时 cooldown。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GrokCredentialFailure {
     /// 选中的 OAuth token 被拒绝。
     Unauthorized,
@@ -310,8 +310,25 @@ pub enum GrokCredentialFailure {
         /// 已解析并脱敏的延迟；不保留上游原始 header。
         retry_after: Option<Duration>,
     },
-    /// 选中的 OAuth 账号配额耗尽。
+    /// 选中的 OAuth 账号付费额度耗尽。
     QuotaExhausted,
+    /// 选中的 OAuth 账号订阅级免费额度耗尽。
+    FreeQuotaExhausted,
+    /// HTTP 402 没有给出可证明账号额度耗尽的稳定信号。
+    PaymentRequired {
+        /// 已解析并脱敏的延迟；缺失时由 selector 使用短暂默认值。
+        retry_after: Option<Duration>,
+    },
+    /// 选中账号只耗尽了指定模型的额度。
+    ModelQuotaExhausted {
+        upstream_model: UpstreamModelId,
+        retry_after: Option<Duration>,
+    },
+    /// 选中账号只缺少指定模型的访问权限。
+    ModelAccessDenied {
+        upstream_model: UpstreamModelId,
+        retry_after: Option<Duration>,
+    },
     /// 成功的 SSE 响应在终止 Responses 事件前结束。
     StreamInterrupted,
 }
@@ -325,7 +342,7 @@ pub trait GrokSessionSelector: Send + Sync {
     /// 执行一次选择，不做 Provider 内部回退。
     fn select(&self, request: GrokSessionSelection) -> GrokSessionSelectorFuture<'_>;
 
-    /// 持久化一条已分类的失败，不重试也不替换原错误。
+    /// 记录一条已分类的失败反馈，不重试也不替换原错误。
     fn record_failure<'a>(
         &'a self,
         session: &'a SelectedGrokSession,
@@ -359,6 +376,12 @@ pub enum GrokSessionSelectorError {
     #[error("Grok Build account is cooling down")]
     AccountCoolingDown {
         /// 最早恢复的会话剩余冷却时长。
+        retry_after: Option<Duration>,
+    },
+    /// 每个可用会话都只针对当前模型处于运行时冷却窗口内。
+    #[error("Grok Build model is cooling down for the available accounts")]
+    ModelCoolingDown {
+        /// 最早恢复的账号+模型组合剩余冷却时长。
         retry_after: Option<Duration>,
     },
     /// 会话元数据或 Provider 持有的明文密钥非法。
