@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use async_trait::async_trait;
 
 mod client_admission;
+mod coordination_buffer;
 mod credential_cooldown;
 mod credential_leases;
 mod credential_state;
@@ -20,6 +21,7 @@ mod runtime_change;
 pub(crate) mod worker_lease;
 
 pub use client_admission::*;
+pub use coordination_buffer::*;
 pub use credential_cooldown::*;
 pub use credential_leases::*;
 pub use credential_state::*;
