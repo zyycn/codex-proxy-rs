@@ -33,7 +33,9 @@ use gateway_core::engine::{
     AttemptContext, AttemptRecord, ExecutionStore, IntermediateFailure, ModelRequestFinalization,
     ModelRequestId, NewModelRequest, ProbeFailure, RecoveryReport, UpstreamSendState,
 };
-use gateway_core::error::{GatewayErrorKind, ProviderError, ProviderErrorKind, StoreError};
+use gateway_core::error::{
+    GatewayErrorKind, ProviderError, ProviderErrorKind, StoreError, StoreErrorKind,
+};
 use gateway_core::operation::{GenerateRequest, Operation, OperationKind, ProtocolPayload};
 use gateway_core::policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits};
 use gateway_core::routing::snapshot::RuntimeSnapshotHandle;
@@ -108,6 +110,37 @@ fn probe_failures_should_be_observable_without_a_model_request_row() {
     assert_eq!(error.kind(), GatewayErrorKind::UpstreamUnavailable);
     assert!(!store.touched.load(Ordering::SeqCst));
     assert_eq!(store.probe_failures(), vec!["transport".to_owned()]);
+}
+
+#[test]
+fn probe_observation_store_failure_preserves_the_provider_error() {
+    let store = Arc::new(TrackingExecutionStore {
+        fail_probe_observation: AtomicBool::new(true),
+        ..TrackingExecutionStore::default()
+    });
+    let providers = ProviderRegistry::new([Arc::new(FailingProvider) as Arc<dyn Provider>])
+        .expect("provider registry");
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(probe_snapshot()),
+        store.clone(),
+        providers,
+        Arc::new(UnusedAdmissions),
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+
+    let error = block_on(service.probe(AccountProbeRequest {
+        account_id: ProviderAccountId::new("acct_probe").expect("account ID"),
+        provider_kind: ProviderKind::new("openai").expect("provider kind"),
+        upstream_model: UpstreamModelId::new("gpt-probe").expect("model ID"),
+        operation: probe_operation(),
+    }))
+    .expect_err("the provider error must survive observation failure");
+
+    assert_eq!(error.kind(), GatewayErrorKind::UpstreamUnavailable);
+    assert!(!store.touched.load(Ordering::SeqCst));
+    assert!(store.probe_failures().is_empty());
 }
 
 struct FailingProvider;
@@ -289,6 +322,7 @@ impl ClientApiKeyUsageSink for RecordingClientApiKeyUsage {
 struct TrackingExecutionStore {
     touched: AtomicBool,
     probe_failures: Mutex<Vec<String>>,
+    fail_probe_observation: AtomicBool,
 }
 
 impl TrackingExecutionStore {
@@ -346,6 +380,9 @@ impl ExecutionStore for TrackingExecutionStore {
     }
 
     async fn record_probe_failure(&self, failure: ProbeFailure) -> Result<(), StoreError> {
+        if self.fail_probe_observation.load(Ordering::SeqCst) {
+            return Err(StoreError::new(StoreErrorKind::Unavailable));
+        }
         self.probe_failures
             .lock()
             .expect("probe failures lock")

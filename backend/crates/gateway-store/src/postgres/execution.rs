@@ -839,18 +839,6 @@ impl ExecutionStore for PgExecutionStore {
         let latency_ms = u64::try_from(failure.latency.as_millis())
             .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
         let provider_error_code = error.upstream_code().map(|code| code.as_str().to_owned());
-        tracing::warn!(
-            target: "gateway_probe",
-            provider_kind = failure.provider_kind.as_str(),
-            account_id = failure.account_id.as_str(),
-            upstream_model = failure.upstream_model_id.as_str(),
-            failure_kind = error.kind().as_str(),
-            send_state = ?error.send_state(),
-            upstream_status = ?error.upstream_status(),
-            provider_error_code = ?provider_error_code,
-            latency_ms,
-            "账号连接测试失败"
-        );
         super::OpsEventRepository::append_ops_event(
             &super::PgOpsEventRepository::new(self.pool.clone()),
             super::OpsEvent {

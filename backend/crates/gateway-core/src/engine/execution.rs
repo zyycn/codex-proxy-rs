@@ -544,16 +544,39 @@ impl DefaultExecutionService {
         error: &EngineError,
     ) -> GatewayError {
         if let EngineError::Provider(provider_error) = error {
-            let _ = self
+            let latency = started_at.elapsed().unwrap_or_default();
+            let latency_ms = u64::try_from(latency.as_millis()).unwrap_or(u64::MAX);
+            tracing::warn!(
+                target: "gateway_probe",
+                provider_kind = observed.provider_kind.as_str(),
+                account_id = observed.account_id.as_str(),
+                upstream_model = observed.upstream_model.as_str(),
+                failure_kind = provider_error.kind().as_str(),
+                send_state = ?provider_error.send_state(),
+                upstream_status = ?provider_error.upstream_status(),
+                provider_error_code = ?provider_error.upstream_code().map(|code| code.as_str()),
+                latency_ms,
+                "账号连接测试失败"
+            );
+            if let Err(store_error) = self
                 .observations
                 .record_probe_failure(ProbeFailure {
                     provider_kind: observed.provider_kind.clone(),
                     account_id: observed.account_id.clone(),
                     upstream_model_id: observed.upstream_model.clone(),
                     error: provider_error.clone(),
-                    latency: started_at.elapsed().unwrap_or_default(),
+                    latency,
                 })
-                .await;
+                .await
+            {
+                tracing::warn!(
+                    operation = "record_probe_failure",
+                    provider_kind = observed.provider_kind.as_str(),
+                    account_id = observed.account_id.as_str(),
+                    error_kind = ?store_error.kind(),
+                    "账号连接测试观测写入失败，测试结果不受影响"
+                );
+            }
         }
         gateway_error_from_engine(error)
     }
