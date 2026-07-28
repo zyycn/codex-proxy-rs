@@ -18,18 +18,14 @@ use gateway_core::provider_ports::{
     ProviderStoreError,
 };
 use gateway_core::routing::ProviderKind;
-use provider_openai::OFFICIAL_CODEX_BASE_URL;
 use provider_openai::credential::token_client::{RefreshFailure, TokenPair, TokenRefresher};
 use provider_openai::credential::{
-    CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY, CodexAccountIdentityService,
-    CodexAccountIdentityVerifier, CodexAgentIdentityAuthMode, CodexAgentIdentityCredentialData,
-    CodexCredentialAdmin, CodexCredentialAdminError, CodexCredentialAdminService,
-    CodexCredentialCodec, CodexIdentityExpectation, CodexIdentityVerification,
-    CodexIdentityVerificationError, CodexJwtIdentityVerifier, ExportManagedCodexCredential,
-    ImportCodexOAuthCredential, ReqwestCodexAuthenticatedAccountSource, ReqwestOpenAiJwksSource,
-    RotateManagedCodexCredential,
+    CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY, CodexAccountIdentityVerifier,
+    CodexAgentIdentityAuthMode, CodexAgentIdentityCredentialData, CodexCredentialAdmin,
+    CodexCredentialAdminError, CodexCredentialAdminService, CodexCredentialCodec,
+    CodexIdentityExpectation, CodexIdentityVerification, CodexIdentityVerificationError,
+    ExportManagedCodexCredential, ImportCodexOAuthCredential, RotateManagedCodexCredential,
 };
-use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::support::{MemoryAccountStore, codex_account, profile, runtime_policy, secret};
@@ -805,77 +801,4 @@ async fn cliproxyapi_codex_auth_file_is_recognized_as_an_openai_auth_document() 
     assert_eq!(account.upstream_account_id(), Some("chatgpt-cpa"));
     assert_eq!(account.email(), Some("chatgpt-cpa@example.com"));
     assert_eq!(account.authentication_kind(), "oauth");
-}
-
-#[tokio::test]
-#[ignore = "requires CODEX_REAL_ACCOUNT_FIXTURE and live official OpenAI OAuth/JWKS"]
-async fn real_cpr_fixture_import_contract() {
-    let fixture = std::env::var("CODEX_REAL_ACCOUNT_FIXTURE")
-        .expect("CODEX_REAL_ACCOUNT_FIXTURE must point to a CPR JSON document");
-    let payload = serde_json::from_slice::<serde_json::Value>(
-        &std::fs::read(fixture).expect("read CPR fixture"),
-    )
-    .expect("parse CPR fixture");
-    let refresher = Arc::new(
-        provider_openai::credential::token_client::official_openai_token_client()
-            .expect("official token client"),
-    );
-    let signed = Arc::new(CodexJwtIdentityVerifier::new(Box::new(
-        ReqwestOpenAiJwksSource::new().expect("official JWKS source"),
-    )));
-    let profile = CodexWireProfileState::new(CodexWireProfile {
-        originator: "codex_cli_rs".to_owned(),
-        codex_version: "0.144.0".to_owned(),
-        desktop_version: "1.0.0".to_owned(),
-        desktop_build: "1".to_owned(),
-        os_type: "linux".to_owned(),
-        os_version: "6.8".to_owned(),
-        arch: "x86_64".to_owned(),
-        terminal: "xterm".to_owned(),
-        verified_at: Utc
-            .with_ymd_and_hms(2026, 7, 18, 0, 0, 0)
-            .single()
-            .expect("fixture time"),
-    });
-    let accounts = Arc::new(
-        ReqwestCodexAuthenticatedAccountSource::new(profile, OFFICIAL_CODEX_BASE_URL.to_owned())
-            .expect("official authenticated account source"),
-    );
-    let verifier = Arc::new(CodexAccountIdentityService::new(signed, accounts));
-    let service = CodexCredentialAdminService::new(
-        refresher,
-        verifier,
-        Arc::new(ManualLeases {
-            requests: Mutex::new(Vec::new()),
-            drops: Arc::new(AtomicUsize::new(0)),
-            available: true,
-        }),
-        runtime_policy(),
-    );
-    let prepared = service
-        .prepare_import_document(payload)
-        .await
-        .expect("real CPR import");
-
-    assert!(!prepared.accounts().is_empty());
-    for account in prepared.accounts() {
-        assert_eq!(account.account.provider().as_str(), "openai");
-        assert!(account.account.id().as_str().starts_with("acct_"));
-        assert!(account.account.upstream_account_id().is_some());
-        assert!(!account.account.upstream_user_id().is_empty());
-        let runtime =
-            CodexCredentialCodec::decode(&account.credential).expect("new credential schema");
-        let principal = runtime.principal.as_ref().expect("OAuth principal");
-        assert!(principal.poid.is_some());
-        assert_ne!(
-            principal.poid.as_deref(),
-            account.account.upstream_account_id()
-        );
-        assert_eq!(
-            uuid::Uuid::parse_str(&runtime.installation_id)
-                .expect("random installation UUID")
-                .get_version_num(),
-            4
-        );
-    }
 }

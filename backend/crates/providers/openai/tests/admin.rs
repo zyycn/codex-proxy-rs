@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, TimeZone as _, Utc};
-use futures::{StreamExt as _, future::BoxFuture};
+use futures::future::BoxFuture;
 use gateway_admin::model::accounts::{
     AccountAvailability as AdminAccountAvailability, AccountRecord,
 };
@@ -20,18 +20,10 @@ use gateway_admin::model::provider_credentials::{
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::ProviderAdminErrorKind;
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountSelectionPolicy, CredentialRevision, NewProviderAccount,
-    OpaqueProviderData, PlaintextCredential, ProviderAccount, ProviderAccountId,
-    ProviderAccountStore, QuotaObservation, RotationStrategy,
+    CredentialRevision, OpaqueProviderData, ProviderAccount, ProviderAccountId,
+    ProviderAccountStore, QuotaObservation,
 };
-use gateway_core::engine::provider::ProviderRequest;
-use gateway_core::engine::{
-    AccountAttemptContext, AttemptContext, CancellationToken, ModelRequestId, RequestAttemptContext,
-};
-use gateway_core::event::GatewayEvent;
-use gateway_core::operation::OperationKind;
 use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
-use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
     NewOAuthPendingFlow, OAuthPendingClaimOutcome, OAuthPendingConsumeOutcome,
     OAuthPendingFlowPort, OAuthPendingPutOutcome, OAuthPendingReleaseOutcome,
@@ -40,158 +32,18 @@ use gateway_core::provider_ports::{
     ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderScopedCooldown, ProviderStoreError,
     ProviderStorePorts,
 };
-use gateway_core::routing::{
-    ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RoutingContext,
-    RuntimeSnapshot, UpstreamModelId,
-};
+use gateway_core::routing::{ProviderKind, UpstreamModelId};
 use gateway_core::task::{WorkerContribution, WorkerKind, WorkerRunnable};
 use provider_openai::config::{CodexWireProfileConfig, OpenAiConfig};
 use provider_openai::credential::ImportCodexOAuthCredential;
 use provider_openai::transport::profile::APPCAST_POLL_INTERVAL;
 use serde_json::{Map, Value, json};
-use std::collections::BTreeSet;
 use tempfile::TempDir;
 
 use crate::support::{
     MemoryAccountStore, MemorySessionAffinity, MemorySessionExclusions, TestLeaseCoordinator,
     profile, secret,
 };
-
-#[tokio::test]
-#[ignore = "requires CODEX_REAL_ACCOUNT_FIXTURE and consumes live OpenAI quota"]
-async fn real_openai_conversation_crosses_production_provider_boundaries() {
-    let fixture = std::env::var("CODEX_REAL_ACCOUNT_FIXTURE")
-        .expect("CODEX_REAL_ACCOUNT_FIXTURE must point to a CPR JSON document");
-    let payload = serde_json::from_slice::<Value>(&std::fs::read(fixture).expect("read fixture"))
-        .expect("parse fixture");
-    let Value::Object(document) = payload else {
-        panic!("real OpenAI fixture must be an object");
-    };
-    let store = Arc::new(MemoryAccountStore::default());
-    let config = valid_config();
-    let bundle = provider_openai::initialize(
-        config.config.clone(),
-        provider_ports_with(Arc::clone(&store), Arc::new(TestOAuthPending::default())),
-    )
-    .await
-    .expect("OpenAI bundle");
-    let prepared = bundle
-        .admin_provider()
-        .prepare_import(PrepareCredentialImport {
-            document: ProviderDocument::new(OpaqueProviderData::new(document)),
-        })
-        .await
-        .expect("prepare real OpenAI import");
-    for credential in prepared.credentials {
-        store
-            .create_account(prepared_account(credential))
-            .await
-            .expect("seed verified OpenAI account");
-    }
-
-    let models = bundle
-        .core_provider()
-        .query_model_capabilities()
-        .await
-        .expect("query live OpenAI catalog");
-    let model = models.first().expect("one live generation model");
-    let operation = bundle
-        .admin_provider()
-        .connection_test_operation(model.upstream_model(), "Reply with exactly CPR_REAL_OK.")
-        .expect("real connection operation");
-    let request = planned_real_request(model.upstream_model().clone(), operation);
-    let mut stream = bundle
-        .core_provider()
-        .execute(request, real_attempt_context())
-        .await
-        .expect("prepare real OpenAI stream");
-    let mut started = false;
-    let mut completed = false;
-    let mut usage = false;
-    let mut text = false;
-    while let Some(event) = stream.next().await {
-        for fact in event.expect("real OpenAI event").canonical_facts() {
-            match fact {
-                GatewayEvent::Started(_) => started = true,
-                GatewayEvent::TextDelta(_) => text = true,
-                GatewayEvent::Usage(_) => usage = true,
-                GatewayEvent::Completed(_) => completed = true,
-                _ => {}
-            }
-        }
-    }
-    assert!(started && text && usage && completed);
-}
-
-fn prepared_account(
-    value: gateway_admin::model::provider_credentials::PreparedCredentialCreate,
-) -> NewProviderAccount {
-    let account = ProviderAccount::new(
-        value.account_id,
-        value.provider_kind,
-        value.name,
-        value.upstream_user_id,
-        value.authentication_kind,
-        CredentialRevision::new(1).expect("initial revision"),
-        value.access_token_expires_at.map(Into::into),
-    )
-    .with_profile(value.email, value.upstream_account_id, value.plan_type)
-    .with_runtime_state(value.enabled, AccountAvailability::Ready, None)
-    .with_refresh_schedule(
-        value.has_refresh_token,
-        value.next_refresh_at.map(Into::into),
-    );
-    NewProviderAccount {
-        account,
-        credential: PlaintextCredential::new(
-            value.provider_material.into_provider_data().into_inner(),
-        ),
-    }
-}
-
-fn planned_real_request(upstream_model: UpstreamModelId, operation: Operation) -> ProviderRequest {
-    let provider = ProviderKind::new("openai").expect("provider");
-    let public_model = PublicModelId::new(upstream_model.as_str()).expect("public model");
-    let snapshot = RuntimeSnapshot::new(
-        ConfigRevision::new(1).expect("revision"),
-        AccountSelectionPolicy::new(
-            RotationStrategy::Smart,
-            NonZeroU32::new(1).expect("concurrency"),
-            Duration::ZERO,
-        ),
-        vec![provider.clone()],
-        vec![ProviderModel::new(
-            provider,
-            upstream_model,
-            ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), None),
-        )],
-        vec![],
-    )
-    .expect("snapshot");
-    let plan = snapshot
-        .plan(&public_model, &operation, &RoutingContext::default())
-        .expect("route plan");
-    ProviderRequest::new(operation, plan.candidates()[0].clone())
-}
-
-fn real_attempt_context() -> AttemptContext {
-    AttemptContext::new(
-        RequestAttemptContext::new(
-            ModelRequestId::new("req_real_openai_conversation").expect("request"),
-            ClientApiKeyId::new("real_test_client").expect("client"),
-        ),
-        NonZeroU32::new(1).expect("attempt"),
-        SystemTime::now() + Duration::from_secs(90),
-        AccountSelectionPolicy::new(
-            RotationStrategy::Smart,
-            NonZeroU32::new(1).expect("concurrency"),
-            Duration::ZERO,
-        ),
-        AccountAttemptContext::new(BTreeSet::new(), None, None),
-        None,
-        CancellationToken::new(),
-    )
-}
 
 #[tokio::test]
 async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions_once() {

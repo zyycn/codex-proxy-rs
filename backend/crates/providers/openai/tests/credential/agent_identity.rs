@@ -1,7 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -18,8 +17,7 @@ use provider_openai::credential::{
     CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY, CodexAgentIdentityAuthMode,
     CodexAgentIdentityCredentialData, CodexAgentIdentityError, CodexAgentIdentitySecret,
     CodexAgentIdentityTaskRegistrar, CodexAgentIdentityTaskService, CodexCredentialCodec,
-    CodexRuntimeAuthentication, OfficialCodexAgentIdentityTaskRegistrar,
-    is_agent_identity_task_invalid_response,
+    CodexRuntimeAuthentication, is_agent_identity_task_invalid_response,
 };
 use provider_openai::transport::CodexWebSocketPool;
 use reqwest::StatusCode;
@@ -259,57 +257,4 @@ async fn agent_identity_import_accepts_the_minimal_document_shape() {
     );
     assert_eq!(account.access_token_expires_at(), None);
     assert!(!format!("{prepared:?}").contains("agent_private_key"));
-}
-
-#[tokio::test]
-#[ignore = "requires CODEX_AGENT_IDENTITY_FIXTURE and CODEX_SUB2API_AGENT_FIXTURE; the first also registers a live task"]
-async fn real_agent_identity_documents_import_and_register_contract() {
-    let paths = [
-        std::env::var("CODEX_AGENT_IDENTITY_FIXTURE").expect("minimal Agent Identity fixture"),
-        std::env::var("CODEX_SUB2API_AGENT_FIXTURE").expect("Sub2API Agent Identity fixture"),
-    ];
-    let store = Arc::new(MemoryAccountStore::default());
-    let mut imported_accounts = Vec::new();
-    for path in paths {
-        let payload: Value =
-            serde_json::from_slice(&std::fs::read(path).expect("read Agent Identity fixture"))
-                .expect("parse Agent Identity fixture");
-        let prepared = import_service(unused_import_refresher())
-            .prepare_import_document(payload)
-            .await
-            .expect("prepare real Agent Identity import");
-        assert_eq!(prepared.accounts().len(), 1);
-        let account = prepared.accounts().first().expect("imported account");
-        assert_eq!(
-            account.account.authentication_kind(),
-            CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY
-        );
-        assert!(!format!("{prepared:?}").contains("agent_private_key"));
-        store
-            .create_account(NewProviderAccount {
-                account: account.account.clone(),
-                credential: account.credential.clone(),
-            })
-            .await
-            .expect("store imported Agent Identity account");
-        imported_accounts.push(account.account.clone());
-    }
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .expect("task registration client");
-    let registrar =
-        Arc::new(OfficialCodexAgentIdentityTaskRegistrar::new(client).expect("official registrar"));
-    let live_service = CodexAgentIdentityTaskService::new(
-        store.repository(),
-        registrar,
-        Arc::new(CodexWebSocketPool::default()),
-    );
-    for account in imported_accounts {
-        let _ = live_service
-            .prepare(&account)
-            .await
-            .expect("register or reuse live Agent Identity task");
-    }
 }
