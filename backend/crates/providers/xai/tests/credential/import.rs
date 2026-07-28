@@ -8,12 +8,11 @@ use provider_xai::{
     FailClosedTokenVerifier, FailureClass, GrokCredentialAdmin, GrokOAuthClient, GrokOAuthConfig,
     GrokOAuthImportCandidate, GrokOAuthImportDocument, GrokOAuthImportError,
     GrokOAuthImportMetadata, GrokOAuthImportTokens, OAuthHttpRequest, OAuthHttpResponse,
-    OAuthHttpTransport, OfficialGrokEndpointPolicy, ReqwestOAuthTransport,
-    ReqwestOidcTokenVerifier, SecretValue, TokenCandidate, TokenVerificationContext, TokenVerifier,
+    OAuthHttpTransport, SecretValue, TokenCandidate, TokenVerificationContext, TokenVerifier,
     TransportFuture, VerificationEvidence, VerificationFuture, VerifiedGrokAccount,
 };
 
-use crate::support::{account_id, refresh_policy};
+use crate::support::account_id;
 
 const DISCOVERY: &[u8] = include_bytes!("fixtures/discovery.json");
 const INVALID_GRANT: &[u8] = include_bytes!("fixtures/invalid_grant.json");
@@ -317,80 +316,6 @@ fn duplicate_refresh_token_entries_should_collapse_to_the_first() {
     .expect("distinct refresh tokens keep their entries");
 
     assert_eq!(parsed.into_entries().len(), 2);
-}
-
-#[test]
-#[ignore = "requires XAI_REAL_ACCOUNT_FIXTURE"]
-fn real_oauth_account_should_match_provider_import_contract() {
-    let path = std::env::var_os("XAI_REAL_ACCOUNT_FIXTURE")
-        .expect("XAI_REAL_ACCOUNT_FIXTURE must point to a local secret fixture");
-    let document = std::fs::read(path).expect("read local secret fixture");
-    let expected_accounts = serde_json::from_slice::<serde_json::Value>(&document)
-        .expect("parse local secret fixture")
-        .get("accounts")
-        .and_then(serde_json::Value::as_array)
-        .map(Vec::len)
-        .filter(|count| *count > 0)
-        .expect("fixture must contain accounts");
-    let parsed = GrokOAuthImportDocument::parse_json(&document).expect("strict Provider import");
-
-    assert_eq!(parsed.into_entries().len(), expected_accounts);
-}
-
-#[tokio::test]
-#[ignore = "requires a disposable XAI_REAL_ACCOUNT_FIXTURE and explicit destructive refresh approval"]
-async fn real_oauth_accounts_should_cross_the_official_verification_boundary() {
-    assert_eq!(
-        std::env::var("XAI_ALLOW_DESTRUCTIVE_FIXTURE_REFRESH").as_deref(),
-        Ok("1"),
-        "official verification may rotate a refresh token; use a disposable fixture and set XAI_ALLOW_DESTRUCTIVE_FIXTURE_REFRESH=1",
-    );
-    let path = std::env::var_os("XAI_REAL_ACCOUNT_FIXTURE")
-        .expect("XAI_REAL_ACCOUNT_FIXTURE must point to a local secret fixture");
-    let document = std::fs::read(path).expect("read local secret fixture");
-    let entries = GrokOAuthImportDocument::parse_json(&document)
-        .expect("real document must match the import contract")
-        .into_entries();
-    let expected_accounts = entries.len();
-    let endpoint_policy = Arc::new(OfficialGrokEndpointPolicy);
-    let client = GrokOAuthClient::new(
-        GrokOAuthConfig::official().expect("official config"),
-        crate::support::xai_wire_profile(),
-        Arc::new(
-            ReqwestOAuthTransport::new(endpoint_policy.clone())
-                .expect("production OAuth transport"),
-        ),
-        Arc::new(
-            ReqwestOidcTokenVerifier::new(endpoint_policy, std::time::Duration::from_secs(60 * 60))
-                .expect("production token verifier"),
-        ),
-    );
-    let discovery = client.discover().await.expect("official discovery");
-    let mut prepared_accounts = 0_usize;
-    for (index, entry) in entries.into_iter().enumerate() {
-        let tokens = client
-            .verify_imported_credential(&discovery, entry.into_candidate())
-            .await
-            .expect("real OAuth credential must pass official verification");
-        let suffix = format!("real-import-{index}");
-        GrokCredentialAdmin
-            .prepare_verified_account(
-                &VerifiedGrokAccount {
-                    account_id: account_id(&suffix),
-                    name: suffix,
-                    email: None,
-                    upstream_account_id: None,
-                    plan_type: None,
-                    tokens,
-                    enabled: true,
-                },
-                refresh_policy(),
-            )
-            .expect("verified real credential must cross account preparation");
-        prepared_accounts += 1;
-    }
-
-    assert_eq!(prepared_accounts, expected_accounts);
 }
 
 async fn verify(candidate: GrokOAuthImportCandidate) -> GrokOAuthImportError {

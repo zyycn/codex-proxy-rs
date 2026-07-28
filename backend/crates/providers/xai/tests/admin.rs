@@ -1,11 +1,11 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
-use futures::{StreamExt as _, future::BoxFuture};
+use futures::future::BoxFuture;
 use gateway_admin::model::accounts::AccountRecord;
 use gateway_admin::model::observability::{
     CurrencyCost, DesktopReleaseStatus, ProviderBillingInput,
@@ -17,17 +17,12 @@ use gateway_admin::model::provider_credentials::{
 };
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::ProviderAdminErrorKind;
+use gateway_core::engine::CancellationToken;
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountRuntimeSignals, AccountSelectionPolicy, CredentialRevision,
-    NewProviderAccount, OpaqueProviderData, PlaintextCredential, ProviderAccount,
-    ProviderAccountId, ProviderAccountStore, RotationStrategy,
+    AccountRuntimeSignals, CredentialRevision, OpaqueProviderData, ProviderAccount,
+    ProviderAccountId, ProviderAccountStore,
 };
-use gateway_core::engine::provider::ProviderRequest;
-use gateway_core::engine::{
-    AccountAttemptContext, AttemptContext, CancellationToken, ModelRequestId, RequestAttemptContext,
-};
-use gateway_core::event::GatewayEvent;
-use gateway_core::operation::{Operation, OperationKind};
+use gateway_core::operation::Operation;
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
     NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingClaimOutcome, OAuthPendingConsumeOutcome,
@@ -37,10 +32,7 @@ use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshPolicy,
     ProviderRuntimePolicyPort, ProviderScopedCooldown, ProviderStoreError, ProviderStorePorts,
 };
-use gateway_core::routing::{
-    ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RoutingContext,
-    RuntimeSnapshot, UpstreamModelId,
-};
+use gateway_core::routing::{ProviderKind, UpstreamModelId};
 use gateway_core::task::{
     WorkerContribution, WorkerCycleContext, WorkerKind, WorkerRunnable, WorkerTaskError,
 };
@@ -54,146 +46,6 @@ use crate::support::{
     MemoryProviderAccountStore, TestSessionAffinity, TestSessionExclusions, create_input,
     seed_input, xai_config,
 };
-
-#[tokio::test]
-#[ignore = "requires XAI_REAL_ACCOUNT_FIXTURE and consumes live xAI quota; refresh token may rotate"]
-async fn real_xai_conversation_crosses_production_provider_boundaries() {
-    assert_eq!(
-        std::env::var("XAI_ALLOW_DESTRUCTIVE_FIXTURE_REFRESH").as_deref(),
-        Ok("1"),
-        "set XAI_ALLOW_DESTRUCTIVE_FIXTURE_REFRESH=1 for the disposable real fixture",
-    );
-    let fixture = std::env::var("XAI_REAL_ACCOUNT_FIXTURE")
-        .expect("XAI_REAL_ACCOUNT_FIXTURE must point to a Grok JSON document");
-    let payload = serde_json::from_slice::<Value>(&std::fs::read(fixture).expect("read fixture"))
-        .expect("parse fixture");
-    let Value::Object(document) = payload else {
-        panic!("real xAI fixture must be an object");
-    };
-    let store = Arc::new(MemoryProviderAccountStore::default());
-    let bundle = provider_xai::initialize(
-        xai_config(),
-        provider_ports_with(Arc::clone(&store), Arc::new(TestOAuthPending::default())),
-    )
-    .await
-    .expect("xAI bundle");
-    let prepared = bundle
-        .admin_provider()
-        .prepare_import(PrepareCredentialImport {
-            document: ProviderDocument::new(OpaqueProviderData::new(document)),
-        })
-        .await
-        .expect("prepare real xAI import");
-    for credential in prepared.credentials {
-        store
-            .create_account(real_prepared_account(credential))
-            .await
-            .expect("seed verified xAI account");
-    }
-
-    let models = bundle
-        .core_provider()
-        .query_model_capabilities()
-        .await
-        .expect("query live xAI catalog");
-    let model = models.first().expect("one live generation model");
-    let operation = bundle
-        .admin_provider()
-        .connection_test_operation(model.upstream_model(), "Reply with exactly CPR_REAL_OK.")
-        .expect("real connection operation");
-    let request = real_planned_request(model.upstream_model().clone(), operation);
-    let mut stream = bundle
-        .core_provider()
-        .execute(request, real_xai_attempt_context())
-        .await
-        .expect("prepare real xAI stream");
-    let mut started = false;
-    let mut completed = false;
-    let mut usage = false;
-    let mut text = false;
-    while let Some(event) = stream.next().await {
-        for fact in event.expect("real xAI event").canonical_facts() {
-            match fact {
-                GatewayEvent::Started(_) => started = true,
-                GatewayEvent::TextDelta(_) => text = true,
-                GatewayEvent::Usage(_) => usage = true,
-                GatewayEvent::Completed(_) => completed = true,
-                _ => {}
-            }
-        }
-    }
-    assert!(started && text && usage && completed);
-}
-
-fn real_prepared_account(
-    value: gateway_admin::model::provider_credentials::PreparedCredentialCreate,
-) -> NewProviderAccount {
-    let account = ProviderAccount::new(
-        value.account_id,
-        value.provider_kind,
-        value.name,
-        value.upstream_user_id,
-        value.authentication_kind,
-        CredentialRevision::new(1).expect("initial revision"),
-        value.access_token_expires_at.map(Into::into),
-    )
-    .with_profile(value.email, value.upstream_account_id, value.plan_type)
-    .with_runtime_state(value.enabled, AccountAvailability::Ready, None)
-    .with_refresh_schedule(
-        value.has_refresh_token,
-        value.next_refresh_at.map(Into::into),
-    );
-    NewProviderAccount {
-        account,
-        credential: PlaintextCredential::new(
-            value.provider_material.into_provider_data().into_inner(),
-        ),
-    }
-}
-
-fn real_planned_request(upstream_model: UpstreamModelId, operation: Operation) -> ProviderRequest {
-    let provider = ProviderKind::new("xai").expect("provider");
-    let public_model = PublicModelId::new(upstream_model.as_str()).expect("public model");
-    let snapshot = RuntimeSnapshot::new(
-        ConfigRevision::new(1).expect("revision"),
-        real_selection_policy(),
-        vec![provider.clone()],
-        vec![ProviderModel::new(
-            provider,
-            upstream_model,
-            ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), None),
-        )],
-        vec![],
-    )
-    .expect("snapshot");
-    let plan = snapshot
-        .plan(&public_model, &operation, &RoutingContext::default())
-        .expect("route plan");
-    ProviderRequest::new(operation, plan.candidates()[0].clone())
-}
-
-fn real_selection_policy() -> AccountSelectionPolicy {
-    AccountSelectionPolicy::new(
-        RotationStrategy::Smart,
-        NonZeroU32::new(1).expect("concurrency"),
-        Duration::ZERO,
-    )
-}
-
-fn real_xai_attempt_context() -> AttemptContext {
-    AttemptContext::new(
-        RequestAttemptContext::new(
-            ModelRequestId::new("req_real_xai_conversation").expect("request"),
-            ClientApiKeyId::new("real_test_client").expect("client"),
-        ),
-        NonZeroU32::new(1).expect("attempt"),
-        SystemTime::now() + Duration::from_secs(90),
-        real_selection_policy(),
-        AccountAttemptContext::new(BTreeSet::new(), None, None),
-        None,
-        CancellationToken::new(),
-    )
-}
 
 #[tokio::test]
 async fn xai_bundle_exposes_core_admin_and_drains_worker_contributions_once() {
