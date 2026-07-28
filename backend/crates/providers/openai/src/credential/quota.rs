@@ -190,7 +190,7 @@ fn quota_fact_is_active_exhaustion(fact: CodexQuotaFact, now: SystemTime) -> boo
 pub struct CodexQuotaSyncSummary {
     pub updated: u64,
     pub exhausted: u64,
-    pub invalid: u64,
+    pub banned: u64,
     pub cooldown: u64,
     pub transient: u64,
     pub stale: u64,
@@ -207,6 +207,8 @@ impl CodexQuotaSyncSummary {
 pub enum CodexCredentialQuotaError {
     #[error("Codex quota response is invalid")]
     InvalidCredentialData,
+    #[error("Codex OAuth access token must be refreshed before querying quota")]
+    CredentialRefreshRequired,
     #[error(transparent)]
     Repository(#[from] CredentialRepositoryError),
     #[error("provider account store is unavailable")]
@@ -299,6 +301,38 @@ enum CodexQuotaFetchError {
         account: Box<ProviderAccount>,
         error: CodexClientError,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexQuotaStateTransition {
+    Banned { reason: &'static str },
+    Exhausted,
+    Cooldown { until: Option<SystemTime> },
+}
+
+impl CodexQuotaStateTransition {
+    const fn availability(self) -> AccountAvailability {
+        match self {
+            Self::Banned { .. } => AccountAvailability::Banned,
+            Self::Exhausted => AccountAvailability::QuotaExhausted,
+            Self::Cooldown { .. } => AccountAvailability::Cooldown,
+        }
+    }
+
+    const fn reason(self) -> &'static str {
+        match self {
+            Self::Banned { reason } => reason,
+            Self::Exhausted => "quota_exhausted",
+            Self::Cooldown { .. } => "quota_rate_limited",
+        }
+    }
+
+    const fn cooldown_until(self) -> Option<SystemTime> {
+        match self {
+            Self::Cooldown { until } => until,
+            Self::Banned { .. } | Self::Exhausted => None,
+        }
+    }
 }
 
 impl CodexQuotaSchedulingProjection {
@@ -764,20 +798,17 @@ impl CodexCredentialQuotaService {
                     summary.transient += 1;
                 }
                 Err(CodexQuotaFetchError::Upstream { account, error }) => {
-                    let (availability, reason, cooldown) = classify_error(&error, observed_at);
+                    let Some(transition) = quota_state_transition(&error, observed_at) else {
+                        summary.transient += 1;
+                        continue;
+                    };
                     let preserve_exhaustion = account.availability()
                         == AccountAvailability::QuotaExhausted
-                        && availability == Some(AccountAvailability::Cooldown);
-                    match availability {
-                        Some(AccountAvailability::Invalid | AccountAvailability::Banned) => {
-                            summary.invalid += 1;
-                        }
-                        Some(AccountAvailability::QuotaExhausted) => summary.exhausted += 1,
-                        Some(AccountAvailability::Cooldown) => summary.cooldown += 1,
-                        _ => {
-                            summary.transient += 1;
-                            continue;
-                        }
+                        && transition.availability() == AccountAvailability::Cooldown;
+                    match transition {
+                        CodexQuotaStateTransition::Banned { .. } => summary.banned += 1,
+                        CodexQuotaStateTransition::Exhausted => summary.exhausted += 1,
+                        CodexQuotaStateTransition::Cooldown { .. } => summary.cooldown += 1,
                     }
                     if preserve_exhaustion {
                         continue;
@@ -786,9 +817,9 @@ impl CodexCredentialQuotaService {
                         .repository
                         .apply_state(
                             &account,
-                            availability.expect("classified availability"),
-                            reason.map(str::to_owned),
-                            cooldown,
+                            transition.availability(),
+                            Some(transition.reason().to_owned()),
+                            transition.cooldown_until(),
                             observed_at,
                         )
                         .await;
@@ -1062,12 +1093,15 @@ impl CodexCredentialQuotaService {
             .await?
             .filter(|account| account.provider().as_str() == "openai")
             .ok_or(CodexCredentialQuotaError::NotFound)?;
+        let observed_at = SystemTime::now();
+        if !access_token_is_current(&account, observed_at) {
+            return Err(CodexCredentialQuotaError::CredentialRefreshRequired);
+        }
         let client = CodexBackendClient::new(
             self.http.clone(),
             self.base_url.clone(),
             self.profile.clone(),
         );
-        let observed_at = SystemTime::now();
         let FetchedCodexQuota { account, value } =
             match self.fetch_usage_with_recovery(&client, &account).await {
                 Ok(fetched) => fetched,
@@ -1078,15 +1112,14 @@ impl CodexCredentialQuotaService {
                     return Err(CodexCredentialQuotaError::Upstream);
                 }
                 Err(CodexQuotaFetchError::Upstream { account, error }) => {
-                    let (availability, reason, cooldown) = classify_error(&error, observed_at);
-                    if let Some(availability) = availability {
+                    if let Some(transition) = quota_state_transition(&error, observed_at) {
                         let _ = self
                             .repository
                             .apply_state(
                                 &account,
-                                availability,
-                                reason.map(str::to_owned),
-                                cooldown,
+                                transition.availability(),
+                                Some(transition.reason().to_owned()),
+                                transition.cooldown_until(),
                                 observed_at,
                             )
                             .await;
@@ -1218,10 +1251,13 @@ async fn fetch_usage_once(
 }
 
 fn eligible_periodic_quota_refresh(account: &ProviderAccount, now: SystemTime) -> bool {
-    account.enabled()
-        && account
-            .access_token_expires_at()
-            .is_none_or(|expires_at| expires_at > now)
+    account.enabled() && access_token_is_current(account, now)
+}
+
+fn access_token_is_current(account: &ProviderAccount, now: SystemTime) -> bool {
+    account
+        .access_token_expires_at()
+        .is_none_or(|expires_at| expires_at > now)
 }
 
 fn merge_passive_quota(
@@ -1377,14 +1413,10 @@ fn quota_success_availability(
     }
 }
 
-fn classify_error(
+fn quota_state_transition(
     error: &CodexClientError,
     observed_at: SystemTime,
-) -> (
-    Option<AccountAvailability>,
-    Option<&'static str>,
-    Option<SystemTime>,
-) {
+) -> Option<CodexQuotaStateTransition> {
     let CodexClientError::Upstream {
         status,
         retry_after_seconds,
@@ -1392,38 +1424,27 @@ fn classify_error(
         ..
     } = error
     else {
-        return (None, None, None);
+        return None;
     };
     if *status == StatusCode::PAYMENT_REQUIRED && is_deactivated_workspace(body) {
-        return (
-            Some(AccountAvailability::Banned),
-            Some("quota_deactivated_workspace"),
-            None,
-        );
+        return Some(CodexQuotaStateTransition::Banned {
+            reason: "quota_deactivated_workspace",
+        });
     }
     match *status {
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => (
-            Some(AccountAvailability::Invalid),
-            Some("quota_auth_rejected"),
-            None,
-        ),
-        StatusCode::PAYMENT_REQUIRED => (
-            Some(AccountAvailability::QuotaExhausted),
-            Some("quota_exhausted"),
-            None,
-        ),
+        StatusCode::PAYMENT_REQUIRED => Some(CodexQuotaStateTransition::Exhausted),
         StatusCode::TOO_MANY_REQUESTS => {
             let duration = Duration::from_secs(
                 retry_after_seconds.unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN.as_secs()),
             )
             .min(MAX_RATE_LIMIT_COOLDOWN);
-            (
-                Some(AccountAvailability::Cooldown),
-                Some("quota_rate_limited"),
-                observed_at.checked_add(duration),
-            )
+            Some(CodexQuotaStateTransition::Cooldown {
+                until: observed_at.checked_add(duration),
+            })
         }
-        _ => (None, None, None),
+        // quota/usage 接口只能产生额度域状态；鉴权拒绝不具备判定 RT
+        // 永久失效的证据，终态只能由 OAuth refresh/身份校验状态机写入。
+        _ => None,
     }
 }
 
