@@ -64,6 +64,7 @@ pub(super) struct FakeProviderAdmin {
     import_account_ids: Mutex<Vec<String>>,
     quota_requests: Mutex<Vec<ProviderQuotaRequest>>,
     quota: Mutex<ProviderQuota>,
+    current_credential_revision: Mutex<Revision>,
 }
 
 impl FakeProviderAdmin {
@@ -79,6 +80,7 @@ impl FakeProviderAdmin {
             import_account_ids: Mutex::new(vec!["acct_prepared".to_owned()]),
             quota_requests: Mutex::new(Vec::new()),
             quota: Mutex::new(empty_quota()),
+            current_credential_revision: Mutex::new(revision(1)),
         })
     }
 
@@ -122,6 +124,13 @@ impl FakeProviderAdmin {
             .expect("authorization retry") = true;
     }
 
+    pub(super) fn set_current_credential_revision(&self, revision: Revision) {
+        *self
+            .current_credential_revision
+            .lock()
+            .expect("current credential revision") = revision;
+    }
+
     fn export_inputs(&self) -> Vec<ProviderExportCredentialInput> {
         self.export_inputs.lock().expect("export inputs").clone()
     }
@@ -142,7 +151,10 @@ impl FakeProviderAdmin {
             PreparedCredentialRotationFacts {
                 account_id: ProviderAccountId::new(account.id.clone()).expect("account ID"),
                 provider_kind: account.provider_kind.clone(),
-                expected_credential_revision: account.credential_revision,
+                expected_credential_revision: *self
+                    .current_credential_revision
+                    .lock()
+                    .expect("current credential revision"),
                 name: account.name.clone(),
                 email: account.email.clone(),
                 plan_type: account.plan_type.clone(),
@@ -264,13 +276,9 @@ impl ProviderAdmin for FakeProviderAdmin {
             AuthorizationMutationTarget::Create { name } => {
                 PreparedAuthorizationCredential::Create(prepared_create(self.kind.clone(), name))
             }
-            AuthorizationMutationTarget::Reauthorize {
-                account_id,
-                expected_credential_revision,
-            } => {
+            AuthorizationMutationTarget::Reauthorize { account_id } => {
                 let mut account = account_record(self.kind.as_str());
                 account.id = account_id.as_str().to_owned();
-                account.credential_revision = *expected_credential_revision;
                 PreparedAuthorizationCredential::Reauthorize(self.prepared_rotation(&account))
             }
         };

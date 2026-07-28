@@ -381,9 +381,13 @@ async fn manual_refresh_returns_prepared_rotation_without_writing_store() {
     let id = input.account_id.clone();
     let (store, _, refresher, service) =
         fixture(input, [Ok(success_tokens(Some("manual-refresh")))], true).await;
+    let current = store
+        .load_current_credential(&id)
+        .await
+        .expect("load current credential");
 
     let prepared = service
-        .prepare_manual_refresh(&id, CredentialRevision::new(1).expect("revision"))
+        .prepare_manual_refresh(current)
         .await
         .expect("prepare manual refresh");
     assert_eq!(store.account(&id).expect("account").revision().get(), 1);
@@ -401,20 +405,35 @@ async fn manual_refresh_returns_prepared_rotation_without_writing_store() {
 }
 
 #[tokio::test]
-async fn manual_refresh_rejects_stale_revision_before_upstream_call() {
+async fn manual_refresh_preserves_snapshot_revision_as_the_final_cas_fence() {
     let input = due_input("manual-stale");
     let id = input.account_id.clone();
-    let (_, _, refresher, service) = fixture(input, [], true).await;
+    let (store, _, refresher, service) = fixture(
+        input,
+        [Ok(success_tokens(Some("manual-stale-refresh")))],
+        true,
+    )
+    .await;
+    let current = store
+        .load_current_credential(&id)
+        .await
+        .expect("load current credential");
+    force_due(&store, &id).await;
+
+    let prepared = service
+        .prepare_manual_refresh(current)
+        .await
+        .expect("prepare from current snapshot");
+    let (_, credential, _guard) = prepared.into_parts();
 
     assert!(matches!(
-        service
-            .prepare_manual_refresh(&id, CredentialRevision::new(2).expect("revision"))
-            .await,
-        Err(GrokCredentialRefreshError::Repository(
-            provider_xai::GrokCredentialRepositoryError::StaleCredentialRevision
-        ))
+        store
+            .compare_and_swap_credential(credential)
+            .await
+            .expect("attempt stale prepared rotation"),
+        CredentialCasOutcome::Conflict
     ));
-    assert_eq!(refresher.prepare_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(refresher.prepare_calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -423,11 +442,13 @@ async fn manual_refresh_preserves_failure_class_without_store_write() {
     let id = input.account_id.clone();
     let (store, _, _, service) =
         fixture(input, [Err(GrokRefreshFailure::InvalidGrant)], true).await;
+    let current = store
+        .load_current_credential(&id)
+        .await
+        .expect("load current credential");
 
     assert!(matches!(
-        service
-            .prepare_manual_refresh(&id, CredentialRevision::new(1).expect("revision"))
-            .await,
+        service.prepare_manual_refresh(current).await,
         Err(GrokCredentialRefreshError::ManualFailure(
             GrokRefreshFailure::InvalidGrant
         ))

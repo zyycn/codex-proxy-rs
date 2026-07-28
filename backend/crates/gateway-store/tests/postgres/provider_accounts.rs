@@ -769,6 +769,25 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
     assert_eq!(row.3["access_token"], "after-secret");
     assert_eq!(row.4, 2);
 
+    assert!(
+        repository
+            .load_credential(
+                &account_id,
+                CredentialRevision::new(1).expect("stale credential revision"),
+            )
+            .await
+            .is_err()
+    );
+    let current = repository
+        .load_current_credential(&account_id)
+        .await
+        .expect("load current credential without a caller revision");
+    assert_eq!(current.account.revision().get(), 2);
+    assert_eq!(
+        current.credential.expose_to_provider()["access_token"],
+        "after-secret"
+    );
+
     let stale = CredentialCasUpdate::new(
         account_id.clone(),
         CredentialRevision::new(1).expect("stale credential revision"),

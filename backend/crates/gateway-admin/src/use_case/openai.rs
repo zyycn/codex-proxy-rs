@@ -227,17 +227,11 @@ impl OpenAiService for DefaultOpenAiService {
             "OpenAI credential rotation",
         )
         .await?;
-        if details.credential.credential_revision != command.expected_credential_revision {
-            return Err(AdminError::conflict(
-                "OpenAI credential rotation revision is stale",
-            ));
-        }
         let account = details.credential;
         let prepared = self
             .provider
             .prepare_rotation(PrepareCredentialRotation {
                 account: account.clone(),
-                expected_credential_revision: command.expected_credential_revision,
                 provider_material: command.provider_material,
             })
             .await

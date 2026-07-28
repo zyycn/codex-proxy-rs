@@ -5,7 +5,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use gateway_admin::model::provider_credentials::{
     AuthorizationMutationTarget, AuthorizationOwnerBinding, PendingAuthorizationMutation,
 };
-use gateway_admin::model::{MutationActor, MutationContext, Revision};
+use gateway_admin::model::{MutationActor, MutationContext};
 use gateway_core::engine::credential::ProviderAccountId;
 use gateway_core::routing::ProviderKind;
 use provider_openai::credential::token_client::{
@@ -44,7 +44,6 @@ fn duplicate_pending(
         nonce: pending.nonce.clone(),
         code_verifier: pending.code_verifier.clone(),
         reauthorization_account_id: pending.reauthorization_account_id.clone(),
-        reauthorization_credential_revision: pending.reauthorization_credential_revision,
         mutation: pending.mutation.clone(),
     })
 }
@@ -69,12 +68,7 @@ impl CodexOAuthPendingStore for PendingStore {
                 state: pending.state().clone(),
                 nonce: pending.nonce().clone(),
                 code_verifier: pending.code_verifier().clone(),
-                reauthorization_account_id: pending
-                    .reauthorization()
-                    .map(|target| target.account_id().to_string()),
-                reauthorization_credential_revision: pending
-                    .reauthorization()
-                    .map(|target| target.credential_revision().get()),
+                reauthorization_account_id: pending.reauthorization().map(ToString::to_string),
                 mutation: pending.mutation().clone(),
             },
             None,
@@ -252,7 +246,6 @@ fn reauthorization_mutation(request_id: &str, account_id: &str) -> PendingAuthor
         ProviderKind::new("openai").expect("provider"),
         AuthorizationMutationTarget::Reauthorize {
             account_id: ProviderAccountId::new(account_id).expect("account id"),
-            expected_credential_revision: Revision::new(1).expect("revision"),
         },
         AuthorizationOwnerBinding::from_context(&context),
     )
@@ -530,7 +523,7 @@ fn oauth_command_debug_redacts_owner_flow_and_callback() {
 }
 
 #[tokio::test]
-async fn reauthorization_binds_account_revision_and_returns_only_prepared_rotation() {
+async fn reauthorization_uses_revision_advanced_after_start_for_prepared_rotation() {
     let store = Arc::new(MemoryAccountStore::default());
     store
         .seed_oauth_credential(ImportCodexOAuthCredential {
@@ -558,6 +551,8 @@ async fn reauthorization_binds_account_revision_and_returns_only_prepared_rotati
         })
         .await
         .expect("start reauthorization");
+    let advanced_revision = store.advance_credential_revision("acct_oauth_reauth").await;
+    assert_eq!(advanced_revision.get(), 2);
     let state = Url::parse(&started.authorization_url)
         .expect("authorization URL")
         .query_pairs()
@@ -581,7 +576,7 @@ async fn reauthorization_binds_account_revision_and_returns_only_prepared_rotati
         prepared.credential.account_id().as_str(),
         "acct_oauth_reauth"
     );
-    assert_eq!(prepared.credential.expected_revision().get(), 1);
+    assert_eq!(prepared.credential.expected_revision().get(), 2);
     let runtime =
         provider_openai::credential::CodexCredentialCodec::decode(prepared.credential.credential())
             .expect("prepared credential");
@@ -601,7 +596,7 @@ async fn reauthorization_binds_account_revision_and_returns_only_prepared_rotati
             .expect("unchanged account")
             .revision()
             .get(),
-        1
+        2
     );
 }
 

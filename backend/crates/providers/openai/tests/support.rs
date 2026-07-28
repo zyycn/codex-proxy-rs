@@ -67,6 +67,39 @@ impl MemoryAccountStore {
             .map(|stored| stored.account.clone())
     }
 
+    pub(crate) async fn advance_credential_revision(&self, id: &str) -> CredentialRevision {
+        let account_id = ProviderAccountId::new(id).expect("test account id");
+        let current = self
+            .load_current_credential(&account_id)
+            .await
+            .expect("current test credential");
+        let account = current.account;
+        let expected_revision = account.revision();
+        let update = CredentialCasUpdate::new(
+            account_id.clone(),
+            expected_revision,
+            ProviderAccountUpdate {
+                account_id,
+                name: account.name().to_owned(),
+                email: account.email().map(str::to_owned),
+                plan_type: account.plan_type().map(str::to_owned),
+            },
+            current.credential,
+            account.has_refresh_token(),
+            account.access_token_expires_at(),
+            account.next_refresh_at(),
+        )
+        .expect("valid test credential update");
+        match self
+            .compare_and_swap_credential(update)
+            .await
+            .expect("advance test credential revision")
+        {
+            CredentialCasOutcome::Updated(revision) => revision,
+            CredentialCasOutcome::Conflict => panic!("test credential revision conflicted"),
+        }
+    }
+
     pub(crate) fn quota_reads(&self) -> usize {
         self.quota_reads.load(Ordering::SeqCst)
     }
@@ -142,13 +175,21 @@ impl ProviderAccountStore for MemoryAccountStore {
         account: &ProviderAccountId,
         expected_revision: CredentialRevision,
     ) -> Result<LoadedCredential, StoreError> {
+        let loaded = self.load_current_credential(account).await?;
+        if loaded.account.revision() != expected_revision {
+            return Err(store_error(StoreErrorKind::Conflict));
+        }
+        Ok(loaded)
+    }
+
+    async fn load_current_credential(
+        &self,
+        account: &ProviderAccountId,
+    ) -> Result<LoadedCredential, StoreError> {
         let accounts = self.accounts.lock().expect("account store lock");
         let stored = accounts
             .get(account)
             .ok_or_else(|| store_error(StoreErrorKind::InvalidData))?;
-        if stored.account.revision() != expected_revision {
-            return Err(store_error(StoreErrorKind::Conflict));
-        }
         Ok(LoadedCredential {
             account: stored.account.clone(),
             credential: stored.credential.clone(),

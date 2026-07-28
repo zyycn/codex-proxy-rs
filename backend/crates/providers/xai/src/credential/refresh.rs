@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::{StreamExt as _, stream};
 use gateway_core::engine::credential::{
-    AccountAvailability, CredentialRevision, ProviderAccountId,
+    AccountAvailability, CredentialRevision, LoadedCredential, ProviderAccountId,
 };
 use gateway_core::provider_ports::{
     ProviderCooldown, ProviderCooldownPort, ProviderCredentialStatePort, ProviderLeaseAcquisition,
@@ -343,16 +343,13 @@ impl GrokCredentialRefreshService {
         self.refresh_one_with_policy(credential, policy).await
     }
 
-    /// 手工刷新一个指定 revision；只返回 Provider 验证后的 CAS command，不写 Store。
+    /// 手工刷新一次原子读取的当前 credential；只返回 Provider 验证后的 CAS command，不写 Store。
     pub async fn prepare_manual_refresh(
         &self,
-        account_id: &ProviderAccountId,
-        expected_revision: CredentialRevision,
+        current: LoadedCredential,
     ) -> Result<PreparedGrokCredentialRotation, GrokCredentialRefreshError> {
-        let current = self
-            .repository
-            .load_managed(account_id, expected_revision)
-            .await?;
+        let account_id = current.account.id().clone();
+        let expected_revision = current.account.revision();
         let loaded = super::repository::loaded_from_core(current.clone())?;
         let policy = self.runtime_policy.load_refresh_policy().await?;
         if loaded
@@ -407,7 +404,7 @@ impl GrokCredentialRefreshService {
             return Err(GrokCredentialRefreshError::InvalidRefreshResponse);
         }
         let (access_token_expires_at, next_refresh_at) =
-            refreshed_deadlines(account_id, tokens.expires_in, policy)
+            refreshed_deadlines(&account_id, tokens.expires_in, policy)
                 .ok_or(GrokCredentialRefreshError::InvalidRefreshResponse)?;
         let prepared = GrokCredentialAdmin
             .prepare_rotation(&RotateManagedGrokCredential {

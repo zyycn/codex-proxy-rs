@@ -11,7 +11,7 @@ use ed25519_dalek::pkcs8::EncodePrivateKey as _;
 use futures::future::BoxFuture;
 use gateway_core::engine::credential::{
     AccountAvailability, CredentialRevision, LoadedCredential, PlaintextCredential,
-    ProviderAccount, ProviderAccountId,
+    ProviderAccount, ProviderAccountId, ProviderAccountStore,
 };
 use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshLeaseRequest,
@@ -456,7 +456,6 @@ async fn manual_refresh_fixture(
         available,
     });
     let service = CodexCredentialAdminService::new(
-        store.repository(),
         refresher.clone(),
         Arc::new(ManualVerifier),
         leases.clone(),
@@ -478,11 +477,12 @@ async fn manual_refresh_prepares_revision_fenced_rotation_without_store_mutation
     let (store, refresher, leases, service) =
         manual_refresh_fixture(Ok(refreshed_tokens()), true).await;
     let account_id = ProviderAccountId::new("acct_manual_refresh").expect("account id");
+    let current = store
+        .load_current_credential(&account_id)
+        .await
+        .expect("current credential");
     let prepared = service
-        .manual_refresh(
-            account_id.clone(),
-            CredentialRevision::new(1).expect("revision"),
-        )
+        .manual_refresh(current)
         .await
         .expect("manual refresh");
 
@@ -528,24 +528,16 @@ async fn manual_refresh_prepares_revision_fenced_rotation_without_store_mutation
 }
 
 #[tokio::test]
-async fn manual_refresh_stale_revision_and_missing_lease_fail_before_exchange() {
-    let (_, stale_refresher, _, stale_service) =
-        manual_refresh_fixture(Ok(refreshed_tokens()), true).await;
-    let account_id = ProviderAccountId::new("acct_manual_refresh").expect("account id");
-    let stale = stale_service
-        .manual_refresh(
-            account_id.clone(),
-            CredentialRevision::new(2).expect("revision"),
-        )
-        .await
-        .expect_err("stale revision");
-    assert_eq!(stale, CodexCredentialAdminError::RevisionConflict);
-    assert!(stale_refresher.seen.lock().expect("seen tokens").is_empty());
-
-    let (_, unavailable_refresher, _, unavailable_service) =
+async fn manual_refresh_missing_lease_fails_before_exchange() {
+    let (store, unavailable_refresher, _, unavailable_service) =
         manual_refresh_fixture(Ok(refreshed_tokens()), false).await;
+    let account_id = ProviderAccountId::new("acct_manual_refresh").expect("account id");
+    let current = store
+        .load_current_credential(&account_id)
+        .await
+        .expect("current credential");
     let unavailable = unavailable_service
-        .manual_refresh(account_id, CredentialRevision::new(1).expect("revision"))
+        .manual_refresh(current)
         .await
         .expect_err("lease unavailable");
     assert_eq!(
@@ -606,9 +598,7 @@ impl CodexAccountIdentityVerifier for ImportVerifier {
 pub(super) fn import_service(
     refresher: Arc<ManualRefresher>,
 ) -> provider_openai::credential::CodexCredentialAdminService {
-    let store = Arc::new(MemoryAccountStore::default());
     CodexCredentialAdminService::new(
-        store.repository(),
         refresher,
         Arc::new(ImportVerifier),
         Arc::new(ManualLeases {
@@ -806,7 +796,6 @@ async fn real_cpr_fixture_import_contract() {
         &std::fs::read(fixture).expect("read CPR fixture"),
     )
     .expect("parse CPR fixture");
-    let store = Arc::new(MemoryAccountStore::default());
     let refresher = Arc::new(
         provider_openai::credential::token_client::official_openai_token_client()
             .expect("official token client"),
@@ -834,7 +823,6 @@ async fn real_cpr_fixture_import_contract() {
     );
     let verifier = Arc::new(CodexAccountIdentityService::new(signed, accounts));
     let service = CodexCredentialAdminService::new(
-        store.repository(),
         refresher,
         verifier,
         Arc::new(ManualLeases {

@@ -160,7 +160,6 @@ pub async fn initialize(
     let refresher: Arc<dyn TokenRefresher> = token_client.clone();
     let exchanger: Arc<dyn AuthorizationCodeExchanger> = token_client;
     let credential_admin = Arc::new(CodexCredentialAdminService::new(
-        repository.clone(),
         Arc::clone(&refresher),
         Arc::clone(&identity),
         Arc::clone(&leases),

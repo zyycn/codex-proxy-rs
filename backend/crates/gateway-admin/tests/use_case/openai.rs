@@ -6,7 +6,7 @@ use gateway_admin::{
     AdminServices,
     model::provider_credentials::{
         AuthorizationMutationTarget, CompleteAuthorization, CredentialDeletion, CredentialMutation,
-        ImportCredentials, ProviderQuotaRequest, ReauthorizationTarget, StartAuthorization,
+        ImportCredentials, ProviderQuotaRequest, StartAuthorization,
     },
     ports::provider::ProviderAdminErrorKind,
 };
@@ -351,7 +351,7 @@ async fn openai_import_provider_error_should_not_touch_store_transaction() {
 }
 
 #[tokio::test]
-async fn openai_reauthorization_should_restore_pending_envelope_and_hold_guard_through_commit() {
+async fn openai_reauthorization_should_commit_after_credential_revision_advances() {
     let events = events();
     let provider = FakeProviderAdmin::new("openai", events.clone());
     let store = FakeAccountStore::new("openai", events.clone());
@@ -361,10 +361,7 @@ async fn openai_reauthorization_should_restore_pending_envelope_and_hold_guard_t
         .start_authorization(StartAuthorization {
             context: context("oauth-start-openai"),
             name: "reauthorize".to_owned(),
-            reauthorization: Some(ReauthorizationTarget {
-                account_id: ProviderAccountId::new("acct_test").expect("account ID"),
-                credential_revision: revision(1),
-            }),
+            reauthorization: Some(ProviderAccountId::new("acct_test").expect("account ID")),
         })
         .await
         .expect("start reauthorization");
@@ -377,15 +374,14 @@ async fn openai_reauthorization_should_restore_pending_envelope_and_hold_guard_t
     );
     assert!(matches!(
         pending.target(),
-        AuthorizationMutationTarget::Reauthorize {
-            account_id,
-            expected_credential_revision,
-        } if account_id.as_str() == "acct_test"
-            && *expected_credential_revision == revision(1)
+        AuthorizationMutationTarget::Reauthorize { account_id }
+            if account_id.as_str() == "acct_test"
     ));
     assert!(!format!("{pending:?}").contains("admin-test"));
 
-    services
+    provider.set_current_credential_revision(revision(2));
+
+    let result = services
         .openai()
         .complete_authorization(CompleteAuthorization {
             context: context("oauth-complete-openai"),
@@ -394,6 +390,8 @@ async fn openai_reauthorization_should_restore_pending_envelope_and_hold_guard_t
         })
         .await
         .expect("complete reauthorization");
+
+    assert_eq!(result.credential_revision, Some(revision(3)));
 
     assert_eq!(
         recorded(&events),

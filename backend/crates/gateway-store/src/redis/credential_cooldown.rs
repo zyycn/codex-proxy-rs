@@ -348,6 +348,13 @@ impl ProviderAccountStore for CooldownCachingProviderAccountStore {
             .await
     }
 
+    async fn load_current_credential(
+        &self,
+        account: &ProviderAccountId,
+    ) -> Result<LoadedCredential, CoreStoreError> {
+        self.authoritative.load_current_credential(account).await
+    }
+
     async fn compare_and_swap_credential(
         &self,
         update: CredentialCasUpdate,

@@ -47,8 +47,6 @@ Client Key 固定绑定一个 Provider：`openai` 或 `xai`。同一次请求不
 
 Admin API 不暴露全局配置版本，mutation 请求也不要求客户端提供全局配置版本。会改变路由快照或安全配置的写入由后端在事务内推进内部配置 revision，并用于快照发布与审计。
 
-单个 credential 的轮换或重新授权仍使用 `expectedCredentialRevision`，它只保护该 credential 本身，不是全局配置锁。
-
 ## 2. 健康检查
 
 | 方法 | 路由 | 鉴权 | 说明 |
@@ -150,7 +148,6 @@ OpenAI rotation 请求字段为：
 {
   "provider": "openai",
   "accountId": "acct_...",
-  "expectedCredentialRevision": 1,
   "accessToken": "...",
   "refreshToken": "..."
 }
@@ -162,12 +159,11 @@ OAuth start 使用：
 {
   "provider": "openai",
   "name": "account name",
-  "accountId": null,
-  "expectedCredentialRevision": null
+  "accountId": null
 }
 ```
 
-重新授权已有账号时，`accountId` 与 `expectedCredentialRevision` 必须同时提供。
+重新授权已有账号时只需提供 `accountId`。
 
 ## 6. Client Key
 

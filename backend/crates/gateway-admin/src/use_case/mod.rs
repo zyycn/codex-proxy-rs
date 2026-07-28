@@ -90,17 +90,10 @@ async fn pending_authorization(
     resource: &'static str,
 ) -> Result<PendingAuthorizationMutation, AdminError> {
     let target = match &command.reauthorization {
-        Some(target) => {
-            let details =
-                required_credential(accounts, provider_kind, &target.account_id, resource).await?;
-            if details.credential.credential_revision != target.credential_revision {
-                return Err(AdminError::conflict(format!(
-                    "{resource} reauthorization target is stale"
-                )));
-            }
+        Some(account_id) => {
+            required_credential(accounts, provider_kind, account_id, resource).await?;
             AuthorizationMutationTarget::Reauthorize {
-                account_id: target.account_id.clone(),
-                expected_credential_revision: target.credential_revision,
+                account_id: account_id.clone(),
             }
         }
         None => AuthorizationMutationTarget::Create {
@@ -142,7 +135,6 @@ fn validate_prepared_rotation(
     let facts = prepared.facts();
     if facts.account_id.as_str() != account.id.as_str()
         || facts.provider_kind != account.provider_kind
-        || facts.expected_credential_revision != account.credential_revision
     {
         return Err(AdminError::conflict(format!(
             "{resource} prepared facts do not match the current credential"
@@ -179,16 +171,11 @@ async fn validate_authorization_commit(
             PreparedAuthorizationCredential::Create(credential),
         ) => credential.provider_kind == *provider_kind,
         (
-            AuthorizationMutationTarget::Reauthorize {
-                account_id,
-                expected_credential_revision,
-            },
+            AuthorizationMutationTarget::Reauthorize { account_id },
             PreparedAuthorizationCredential::Reauthorize(credential),
         ) => {
             let facts = credential.facts();
-            facts.provider_kind == *provider_kind
-                && facts.account_id == *account_id
-                && facts.expected_credential_revision == *expected_credential_revision
+            facts.provider_kind == *provider_kind && facts.account_id == *account_id
         }
         _ => false,
     };

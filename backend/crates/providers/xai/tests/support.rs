@@ -283,11 +283,19 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
         account: &ProviderAccountId,
         expected_revision: CredentialRevision,
     ) -> Result<LoadedCredential, StoreError> {
-        let accounts = lock(&self.accounts);
-        let stored = accounts.get(account).ok_or_else(invalid)?;
-        if stored.account.revision() != expected_revision {
+        let loaded = self.load_current_credential(account).await?;
+        if loaded.account.revision() != expected_revision {
             return Err(conflict());
         }
+        Ok(loaded)
+    }
+
+    async fn load_current_credential(
+        &self,
+        account: &ProviderAccountId,
+    ) -> Result<LoadedCredential, StoreError> {
+        let accounts = lock(&self.accounts);
+        let stored = accounts.get(account).ok_or_else(invalid)?;
         Ok(LoadedCredential {
             account: stored.account.clone(),
             credential: stored.credential.clone(),

@@ -602,6 +602,15 @@ pub trait ProviderAccountStore: Send + Sync {
         expected_revision: CredentialRevision,
     ) -> Result<LoadedCredential, StoreError>;
 
+    /// 读取账号当前 credential 及其 revision，不做任何版本比对。
+    ///
+    /// 管理写入必须在临近 CAS 时用它取 fence，而不是携带调用方持有的旧 revision：
+    /// 后台刷新随时会推进 revision，用陈旧快照会把正常的恢复操作误判为冲突。
+    async fn load_current_credential(
+        &self,
+        account: &ProviderAccountId,
+    ) -> Result<LoadedCredential, StoreError>;
+
     async fn compare_and_swap_credential(
         &self,
         update: CredentialCasUpdate,

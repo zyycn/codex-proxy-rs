@@ -105,12 +105,15 @@ mod actions {
     use gateway_admin::model::{
         Revision,
         accounts::{AccountConnectionTestEvent as DomainConnectionTestEvent, AccountStatus},
-        provider_credentials::{CredentialDeletionResult, CredentialImportResult},
+        provider_credentials::{
+            CredentialDeletionResult, CredentialImportResult, CredentialMutationResult,
+        },
     };
     use gateway_api::admin::accounts::{
         AccountActionRequest, AccountConnectionTestEvent, AccountDeletionData,
         AccountDeletionRequest, AccountExportData, AccountExportQuery, AccountIdQuery,
-        AccountImportData, AccountImportRequest, AccountRefreshRequest, AccountTestQuery,
+        AccountImportData, AccountImportRequest, AccountMutationData, AccountRefreshRequest,
+        AccountTestQuery, RotateAccountRequest, StartAccountAuthorizationRequest,
     };
     use gateway_core::engine::credential::ProviderAccountId;
     use serde_json::json;
@@ -165,6 +168,58 @@ mod actions {
                 "expectedConfigRevision": 0
             }))
             .is_err()
+        );
+    }
+
+    #[test]
+    fn credential_recovery_requests_should_not_accept_client_revision_fences() {
+        let authorization: StartAccountAuthorizationRequest = serde_json::from_value(json!({
+            "provider": "openai",
+            "name": "reauthorize",
+            "accountId": "acct_1"
+        }))
+        .expect("decode reauthorization");
+        assert!(authorization.validate().is_ok());
+        assert!(
+            serde_json::from_value::<StartAccountAuthorizationRequest>(json!({
+                "provider": "openai",
+                "name": "reauthorize",
+                "accountId": "acct_1",
+                "expectedCredentialRevision": 1
+            }))
+            .is_err()
+        );
+
+        let rotation: RotateAccountRequest = serde_json::from_value(json!({
+            "provider": "openai",
+            "accountId": "acct_1",
+            "accessToken": "header.payload.signature",
+            "refreshToken": "refresh-token"
+        }))
+        .expect("decode rotation");
+        assert!(rotation.validate().is_ok());
+        assert!(
+            serde_json::from_value::<RotateAccountRequest>(json!({
+                "provider": "openai",
+                "accountId": "acct_1",
+                "expectedCredentialRevision": 1,
+                "accessToken": "header.payload.signature"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn credential_mutation_response_should_not_expose_internal_revision() {
+        let response = AccountMutationData::from(CredentialMutationResult {
+            config_revision: Revision::new(8).expect("config revision"),
+            account_id: ProviderAccountId::new("acct_1").expect("account ID"),
+            credential_revision: Some(Revision::new(9).expect("credential revision")),
+        });
+
+        assert_eq!(
+            serde_json::to_value(response).expect("serialize credential mutation"),
+            json!({ "accountId": "acct_1" })
         );
     }
 
