@@ -399,6 +399,69 @@ fn complete_stream(total_tokens: Option<u64>) -> Vec<Result<GatewayEvent, Provid
     events
 }
 
+fn atomic_response_failed(response_id: &str, marker: &str) -> ProviderError {
+    let started = ProviderEvent::canonical_with_wire(
+        vec![GatewayEvent::Started(ResponseMeta::new(
+            response_id,
+            "gpt-5",
+        ))],
+        ProtocolWireEvent::json(
+            "openai",
+            Some("response.created".to_owned()),
+            json!({
+                "type": "response.created",
+                "response": {"id": response_id, "model": "gpt-5", "status": "in_progress"}
+            }),
+        )
+        .expect("started wire"),
+    );
+    let failed = ProviderEvent::wire(
+        ProtocolWireEvent::json(
+            "openai",
+            Some("response.failed".to_owned()),
+            json!({
+                "type": "response.failed",
+                "response": {
+                    "id": response_id,
+                    "status": "failed",
+                    "error": {"code": "rate_limit_exceeded", "message": marker}
+                }
+            }),
+        )
+        .expect("failed wire"),
+    );
+    ProviderError::new(ProviderErrorKind::RateLimited, UpstreamSendState::Sent)
+        .with_status(429)
+        .with_replay_safe()
+        .with_atomic_client_events(vec![started, failed])
+}
+
+fn bare_atomic_response_failed(response_id: &str) -> ProviderError {
+    let failed = ProviderEvent::canonical_with_wire(
+        vec![GatewayEvent::Started(ResponseMeta::new(
+            response_id,
+            "fallback-model",
+        ))],
+        ProtocolWireEvent::json(
+            "openai",
+            Some("response.failed".to_owned()),
+            json!({
+                "type": "response.failed",
+                "response": {
+                    "id": response_id,
+                    "status": "failed",
+                    "error": {"code": "rate_limit_exceeded", "message": "bare failure"}
+                }
+            }),
+        )
+        .expect("bare failed wire"),
+    );
+    ProviderError::new(ProviderErrorKind::RateLimited, UpstreamSendState::Sent)
+        .with_status(429)
+        .with_replay_safe()
+        .with_atomic_client_events(vec![failed])
+}
+
 fn image_stream(image_output_tokens: Option<u64>) -> Vec<Result<GatewayEvent, ProviderError>> {
     let mut usage = Usage::new();
     usage.input_tokens = Some(12);
@@ -1835,6 +1898,277 @@ fn explicit_429_after_structural_event_should_retry_before_commit() {
     assert_eq!(state.attempts.len(), 2);
     assert_eq!(state.intermediate_failures, 1);
     assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
+}
+
+#[test]
+fn atomic_response_failed_should_rotate_account_before_stream_commit() {
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let (coordinator, store, provider) = coordinator(vec![
+        Script::ObservedStream {
+            account_id: "acct_first",
+            items: vec![Err(atomic_response_failed(
+                "response-first-failed",
+                "first account failure",
+            ))],
+        },
+        Script::Stream {
+            account_id: "acct_second",
+            items: complete_stream(None),
+        },
+    ]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+
+    let first = block_on(session.next_event())
+        .expect("second account should produce the first delivery")
+        .expect("started event");
+    let delivered = first.into_provider_events();
+    assert!(delivered.iter().flat_map(ProviderEvent::canonical_facts).any(
+        |event| matches!(event, GatewayEvent::Started(meta) if meta.response_id() == "response-1")
+    ));
+    assert!(
+        !delivered
+            .iter()
+            .filter_map(ProviderEvent::wire_event)
+            .any(|wire| {
+                wire.data().pointer("/response/id").and_then(Value::as_str)
+                    == Some("response-first-failed")
+            })
+    );
+    block_on(session.commit_downstream(Some(200))).expect("commit second account");
+    while block_on(session.next_event())
+        .expect("successful stream")
+        .is_some()
+    {}
+
+    assert_eq!(provider.contexts.lock().expect("contexts lock").len(), 2);
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.commits, 1);
+    assert_eq!(state.intermediate_failures, 1);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
+}
+
+#[test]
+fn bare_atomic_response_failed_should_rotate_before_the_first_delivery() {
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let (coordinator, store, provider) = coordinator(vec![
+        Script::ObservedStream {
+            account_id: "acct_first",
+            items: vec![Err(bare_atomic_response_failed("response-bare-failed"))],
+        },
+        Script::Stream {
+            account_id: "acct_second",
+            items: complete_stream(None),
+        },
+    ]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+
+    let first = block_on(session.next_event())
+        .expect("second account should replace the bare failure")
+        .expect("second account started event");
+    assert!(first
+        .into_provider_events()
+        .iter()
+        .flat_map(ProviderEvent::canonical_facts)
+        .any(|event| matches!(event, GatewayEvent::Started(meta) if meta.response_id() == "response-1")));
+    block_on(session.commit_downstream(Some(200))).expect("commit second account");
+    while block_on(session.next_event())
+        .expect("successful stream")
+        .is_some()
+    {}
+
+    assert_eq!(provider.contexts.lock().expect("contexts lock").len(), 2);
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.intermediate_failures, 1);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
+}
+
+#[test]
+fn exhausted_atomic_response_failed_should_deliver_only_the_last_failure_once() {
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let scripts = (1..=route_plan.max_attempts().get())
+        .map(|attempt| {
+            let response_id = format!("response-attempt-{attempt}-failed");
+            let marker = if attempt == route_plan.max_attempts().get() {
+                "last upstream failure".to_owned()
+            } else {
+                format!("discarded failure {attempt}")
+            };
+            Script::ObservedStream {
+                account_id: "acct_failed",
+                items: vec![Err(atomic_response_failed(&response_id, &marker))],
+            }
+        })
+        .collect::<Vec<_>>();
+    let expected_attempts = route_plan.max_attempts().get();
+    let expected_last_response = format!("response-attempt-{expected_attempts}-failed");
+    let (coordinator, store, provider) = coordinator(scripts);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+
+    let terminal = block_on(session.next_event())
+        .expect("last failure remains deliverable")
+        .expect("terminal failure batch");
+    assert_eq!(
+        terminal.commit_requirement(),
+        CommitRequirement::CommitBeforeDelivery
+    );
+    let events = terminal.into_provider_events();
+    let failures = events
+        .iter()
+        .filter_map(ProviderEvent::wire_event)
+        .filter(|wire| wire.event_type() == Some("response.failed"))
+        .collect::<Vec<_>>();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(
+        failures[0]
+            .data()
+            .pointer("/response/id")
+            .and_then(Value::as_str),
+        Some(expected_last_response.as_str())
+    );
+    assert!(
+        failures[0]
+            .data()
+            .to_string()
+            .contains("last upstream failure")
+    );
+    block_on(session.commit_downstream(Some(200))).expect("commit original terminal failure");
+    let error = block_on(session.next_event()).expect_err("typed failure finalizes the request");
+    assert!(matches!(error, EngineError::Provider(_)));
+    assert!(session.is_finalized());
+
+    assert_eq!(
+        provider.contexts.lock().expect("contexts lock").len(),
+        usize::try_from(expected_attempts).expect("attempt count fits usize")
+    );
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(
+        state.intermediate_failures,
+        usize::try_from(expected_attempts - 1).expect("attempt count fits usize")
+    );
+    assert_eq!(state.commits, 1);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Incomplete);
+    assert!(state.finalizations[0].committed);
+}
+
+#[test]
+fn empty_selection_after_atomic_failure_should_deliver_the_last_upstream_wire() {
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let (coordinator, store, provider) = coordinator(vec![
+        Script::ObservedStream {
+            account_id: "acct_only",
+            items: vec![Err(bare_atomic_response_failed("response-only-failed"))],
+        },
+        Script::Error(ProviderError::new(
+            ProviderErrorKind::NoEligibleAccount,
+            UpstreamSendState::NotSent,
+        )),
+    ]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+
+    let terminal = block_on(session.next_event())
+        .expect("last account failure remains deliverable")
+        .expect("terminal failure batch");
+    let events = terminal.into_provider_events();
+    let failure = events
+        .iter()
+        .filter_map(ProviderEvent::wire_event)
+        .find(|wire| wire.event_type() == Some("response.failed"))
+        .expect("last upstream response.failed");
+    assert_eq!(
+        failure
+            .data()
+            .pointer("/response/id")
+            .and_then(Value::as_str),
+        Some("response-only-failed")
+    );
+    block_on(session.commit_downstream(Some(200))).expect("commit terminal failure");
+    assert!(matches!(
+        block_on(session.next_event()),
+        Err(EngineError::Provider(_))
+    ));
+
+    assert_eq!(provider.contexts.lock().expect("contexts lock").len(), 2);
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.attempts.len(), 1);
+    assert_eq!(state.intermediate_failures, 1);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Incomplete);
+    assert_eq!(
+        state.finalizations[0].client_response_id.as_deref(),
+        Some("response-only-failed")
+    );
+    assert_eq!(
+        state.finalizations[0].upstream_response_id.as_deref(),
+        Some("response-only-failed")
+    );
+}
+
+#[test]
+fn atomic_response_failed_keeps_collect_uncommitted_error_semantics() {
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let (coordinator, store, provider) = coordinator(vec![Script::ObservedStream {
+        account_id: "acct_required",
+        items: vec![Err(atomic_response_failed(
+            "response-required-failed",
+            "required account failure",
+        ))],
+    }]);
+    let required = ProviderAccountId::new("acct_required").expect("required account");
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        Some(required),
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+
+    let error = block_on(session.collect_uncommitted())
+        .expect_err("non-streaming collection must keep returning the typed failure");
+    assert!(matches!(error, EngineError::Provider(_)));
+    assert!(session.is_finalized());
+    assert_eq!(provider.contexts.lock().expect("contexts lock").len(), 1);
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.commits, 0);
+    assert_eq!(state.intermediate_failures, 0);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Failed);
 }
 
 #[test]

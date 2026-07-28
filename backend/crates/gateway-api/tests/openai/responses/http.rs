@@ -1056,6 +1056,86 @@ async fn streaming_upstream_wire_failure_should_not_be_rewritten_as_a_gateway_er
 }
 
 #[tokio::test]
+async fn atomic_uncommitted_upstream_failure_batch_should_be_forwarded_once() {
+    let trace = Arc::new(Trace::default());
+    let raw_created = Bytes::from_static(
+        b"event: response.created\r\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_atomic_api\",\"model\":\"public-model\",\"status\":\"in_progress\"}}\r\n\r\n",
+    );
+    let raw_failure = Bytes::from_static(
+        b"event: response.failed\r\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_atomic_api\",\"status\":\"failed\",\"error\":{\"code\":\"rate_limit_exceeded\",\"message\":\"atomic upstream marker\"}}}\r\n\r\n",
+    );
+    let started_wire = ProviderEvent::canonical_with_wire(
+        vec![started()],
+        ProtocolWireEvent::json_with_raw_sse_metadata(
+            "openai",
+            Some("response.created".to_owned()),
+            json!({
+                "type": "response.created",
+                "response": {
+                    "id": "resp_atomic_api",
+                    "model": "public-model",
+                    "status": "in_progress"
+                }
+            }),
+            raw_created.clone(),
+            None,
+            None,
+        )
+        .expect("valid upstream started wire"),
+    );
+    let failed_wire = ProviderEvent::wire(
+        ProtocolWireEvent::json_with_raw_sse_metadata(
+            "openai",
+            Some("response.failed".to_owned()),
+            json!({
+                "type": "response.failed",
+                "response": {
+                    "id": "resp_atomic_api",
+                    "status": "failed",
+                    "error": {
+                        "code": "rate_limit_exceeded",
+                        "message": "atomic upstream marker"
+                    }
+                }
+            }),
+            raw_failure.clone(),
+            None,
+            None,
+        )
+        .expect("valid upstream failure wire"),
+    );
+    let batch = CoordinatedEvent::try_batch(
+        vec![started_wire, failed_wire],
+        CommitRequirement::CommitBeforeDelivery,
+    )
+    .expect("atomic failure delivery");
+    let session = FakeSession::streaming(
+        Arc::clone(&trace),
+        vec![
+            NextStep::Event(batch),
+            NextStep::Error(EngineError::Provider(ProviderError::new(
+                ProviderErrorKind::RateLimited,
+                UpstreamSendState::Sent,
+            ))),
+        ],
+    );
+
+    let response = stream_execution_response(Box::new(session), None).await;
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read SSE body");
+    let body = String::from_utf8(body.to_vec()).expect("SSE is UTF-8");
+
+    assert_eq!(body.matches("atomic upstream marker").count(), 1);
+    assert_eq!(body.matches("event: response.failed").count(), 1);
+    assert!(body.contains(std::str::from_utf8(&raw_created).expect("created frame")));
+    assert!(body.contains(std::str::from_utf8(&raw_failure).expect("failure frame")));
+    assert!(!body.contains("upstream capacity is temporarily unavailable"));
+    assert!(body.ends_with("data: [DONE]\n\n"));
+    assert_eq!(trace.snapshot(), vec!["next_event", "commit", "next_error"]);
+}
+
+#[tokio::test]
 async fn streaming_second_commit_request_should_fail_and_finalize_once() {
     let trace = Arc::new(Trace::default());
     let session = FakeSession::streaming(

@@ -165,7 +165,9 @@ where
             client_response_id: None,
             upstream_response_id: None,
             last_account_exhaustion: None,
+            last_account_exhaustion_events: Vec::new(),
             provider_attempt_outcomes: Vec::new(),
+            pending_terminal_failure: None,
         };
 
         if session.cancellation.is_cancelled() {
@@ -243,7 +245,16 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     client_response_id: Option<String>,
     upstream_response_id: Option<String>,
     last_account_exhaustion: Option<ProviderError>,
+    /// 最近一次账号耗尽在重试时被丢弃的原始失败批次；只用于后续空选路终态。
+    last_account_exhaustion_events: Vec<ProviderEvent>,
     provider_attempt_outcomes: Vec<ProviderAttemptOutcome>,
+    /// 原子失败批次已交给协议层、但尚待下游提交后收敛的原 Provider 错误。
+    pending_terminal_failure: Option<PendingTerminalFailure>,
+}
+
+struct PendingTerminalFailure {
+    error: ProviderError,
+    send_state: UpstreamSendState,
 }
 
 impl<S: ?Sized> ResponseExecutionSession<S>
@@ -258,6 +269,12 @@ where
     pub async fn next_event(&mut self) -> Result<Option<CoordinatedEvent>, EngineError> {
         if self.delivery_pending {
             return Err(EngineError::DownstreamCommitRequired);
+        }
+        if let Some(pending) = self.pending_terminal_failure.take() {
+            let engine_error = provider_engine_error(&pending.error);
+            self.finish_provider_error_with_send_state(&pending.error, pending.send_state)
+                .await?;
+            return Err(engine_error);
         }
         if self.finalized {
             return Ok(None);
@@ -278,6 +295,21 @@ where
                     )));
                 }
                 PullOutcome::AttemptDiscarded => {}
+                PullOutcome::TerminalFailure {
+                    events,
+                    error,
+                    send_state,
+                } => {
+                    let requirement = if self.downstream_committed_at.is_some() {
+                        CommitRequirement::AlreadyCommitted
+                    } else {
+                        self.delivery_pending = true;
+                        CommitRequirement::CommitBeforeDelivery
+                    };
+                    self.pending_terminal_failure =
+                        Some(PendingTerminalFailure { error, send_state });
+                    return CoordinatedEvent::try_batch(events, requirement).map(Some);
+                }
                 PullOutcome::End => {
                     if self.downstream_committed_at.is_some() {
                         self.finish_success().await?;
@@ -306,6 +338,14 @@ where
             match self.pull().await? {
                 PullOutcome::Event(event) => events.push(event),
                 PullOutcome::AttemptDiscarded => events.clear(),
+                PullOutcome::TerminalFailure {
+                    error, send_state, ..
+                } => {
+                    let engine_error = provider_engine_error(&error);
+                    self.finish_provider_error_with_send_state(&error, send_state)
+                        .await?;
+                    return Err(engine_error);
+                }
                 PullOutcome::End => {
                     if events.is_empty() {
                         return Err(EngineError::InvalidDeliveryState);
@@ -434,13 +474,20 @@ where
             return Ok(());
         }
         self.delivery_pending = false;
+        if let Some(pending) = self.pending_terminal_failure.take() {
+            return self
+                .finish_provider_error_with_send_state(&pending.error, pending.send_state)
+                .await;
+        }
         self.finish_interruption(EngineError::Cancelled).await
     }
 
     async fn pull(&mut self) -> Result<PullOutcome, EngineError> {
         loop {
-            if self.current.is_none() {
-                self.prepare_attempt().await?;
+            if self.current.is_none()
+                && let Some(outcome) = self.prepare_attempt().await?
+            {
+                return Ok(outcome);
             }
 
             let boundary = {
@@ -470,10 +517,14 @@ where
                     if let Some(observation) = event.take_observation()
                         && let Err(error) = self.observe_response(observation)
                     {
-                        if self.handle_stream_error(error).await? {
-                            return Ok(PullOutcome::AttemptDiscarded);
+                        match self.handle_stream_error(error).await? {
+                            StreamErrorOutcome::AttemptDiscarded => {
+                                return Ok(PullOutcome::AttemptDiscarded);
+                            }
+                            terminal @ StreamErrorOutcome::TerminalFailure { .. } => {
+                                return Ok(terminal.into_pull_outcome());
+                            }
                         }
-                        continue;
                     }
                     let mut identity_error = None;
                     for fact in event.canonical_facts() {
@@ -483,10 +534,14 @@ where
                         }
                     }
                     if let Some(error) = identity_error {
-                        if self.handle_stream_error(error).await? {
-                            return Ok(PullOutcome::AttemptDiscarded);
+                        match self.handle_stream_error(error).await? {
+                            StreamErrorOutcome::AttemptDiscarded => {
+                                return Ok(PullOutcome::AttemptDiscarded);
+                            }
+                            terminal @ StreamErrorOutcome::TerminalFailure { .. } => {
+                                return Ok(terminal.into_pull_outcome());
+                            }
                         }
-                        continue;
                     }
                     for fact in event.canonical_facts() {
                         self.observe_event(fact).await?;
@@ -500,8 +555,13 @@ where
                     return Ok(PullOutcome::Event(event));
                 }
                 PollBoundary::Item(Some(Err(error))) => {
-                    if self.handle_stream_error(error).await? {
-                        return Ok(PullOutcome::AttemptDiscarded);
+                    match self.handle_stream_error(error).await? {
+                        StreamErrorOutcome::AttemptDiscarded => {
+                            return Ok(PullOutcome::AttemptDiscarded);
+                        }
+                        terminal @ StreamErrorOutcome::TerminalFailure { .. } => {
+                            return Ok(terminal.into_pull_outcome());
+                        }
                     }
                 }
                 PollBoundary::Item(None) => {
@@ -513,7 +573,7 @@ where
         }
     }
 
-    async fn prepare_attempt(&mut self) -> Result<(), EngineError> {
+    async fn prepare_attempt(&mut self) -> Result<Option<PullOutcome>, EngineError> {
         if self.attempts >= self.plan.max_attempts().get() {
             return Err(EngineError::EmptyRoutingPlan);
         }
@@ -615,6 +675,16 @@ where
                     if error.kind() == ProviderErrorKind::NoEligibleAccount
                         && let Some(exhaustion) = self.last_account_exhaustion.clone()
                     {
+                        let send_state = self.current_send_state();
+                        let mut events = std::mem::take(&mut self.last_account_exhaustion_events);
+                        if !events.is_empty() {
+                            self.observe_atomic_terminal_events(&mut events)?;
+                            return Ok(Some(PullOutcome::TerminalFailure {
+                                events,
+                                error: exhaustion,
+                                send_state,
+                            }));
+                        }
                         let engine_error = provider_engine_error(&exhaustion);
                         self.finish_provider_error(&exhaustion).await?;
                         return Err(engine_error);
@@ -739,10 +809,24 @@ where
             send_observed: false,
             response_observation: None,
         });
-        Ok(())
+        Ok(None)
     }
 
     async fn observe_event(&mut self, event: &GatewayEvent) -> Result<(), EngineError> {
+        self.observe_event_facts(event);
+        let current = self.current.as_mut().ok_or(EngineError::NoActiveAttempt)?;
+        if !current.send_observed {
+            self.engine
+                .store()
+                .mark_send_state(&self.request_id, UpstreamSendState::Sent)
+                .await?;
+            current.send_observed = true;
+            self.send_state_watermark = UpstreamSendState::Sent;
+        }
+        Ok(())
+    }
+
+    fn observe_event_facts(&mut self, event: &GatewayEvent) {
         let elapsed = elapsed_ms(self.timing_started_at);
         observe_event_timing(&mut self.timings, event, elapsed);
         if let GatewayEvent::Usage(observed) = event {
@@ -756,16 +840,6 @@ where
         if let GatewayEvent::ProviderCost(observed) = event {
             self.cost = observed.into_estimate();
         }
-        let current = self.current.as_mut().ok_or(EngineError::NoActiveAttempt)?;
-        if !current.send_observed {
-            self.engine
-                .store()
-                .mark_send_state(&self.request_id, UpstreamSendState::Sent)
-                .await?;
-            current.send_observed = true;
-            self.send_state_watermark = UpstreamSendState::Sent;
-        }
-        Ok(())
     }
 
     async fn observe_wire_event(&mut self) -> Result<(), EngineError> {
@@ -855,14 +929,22 @@ where
         Ok(())
     }
 
-    /// 返回 `true` 表示调用方必须丢弃本 attempt 已收集的未提交事件。
-    async fn handle_stream_error(&mut self, error: ProviderError) -> Result<bool, EngineError> {
+    /// 失败可重试时要求丢弃本 attempt；预算耗尽时可返回最后一批原始失败事件。
+    async fn handle_stream_error(
+        &mut self,
+        mut error: ProviderError,
+    ) -> Result<StreamErrorOutcome, EngineError> {
+        // 原始 wire 只能活在本次决策栈内；后续 clone、attempt 记录与终态对象均只
+        // 接触已剥离的稳定错误字段。
+        let mut atomic_client_events = error.take_atomic_client_events();
         let current = self.current.take().ok_or(EngineError::NoActiveAttempt)?;
-        if matches!(
+        let account_exhausted = matches!(
             error.kind(),
             ProviderErrorKind::RateLimited | ProviderErrorKind::QuotaExhausted
-        ) {
+        );
+        if account_exhausted {
             self.last_account_exhaustion = Some(error.clone());
+            self.last_account_exhaustion_events.clear();
         }
         self.record_provider_failure(current.metadata.provider().clone(), error.kind());
         // attempt_send_state 是本 attempt 自身的发送事实，驱动重试门；
@@ -910,6 +992,9 @@ where
         let retryable = continuation_retry || same_account_retry || ordinary_retry;
 
         if retryable {
+            if account_exhausted {
+                self.last_account_exhaustion_events = atomic_client_events;
+            }
             if same_account_retry {
                 if let Some(account) = current.metadata.provider_account_id() {
                     self.credential_recovery_attempted_accounts
@@ -946,14 +1031,40 @@ where
                 })
                 .await?;
             self.reset_uncommitted_observations();
-            return Ok(true);
+            return Ok(StreamErrorOutcome::AttemptDiscarded);
         }
 
         let engine_error = provider_engine_error(&error);
         self.current = Some(current);
+        if !atomic_client_events.is_empty() {
+            self.observe_atomic_terminal_events(&mut atomic_client_events)?;
+            return Ok(StreamErrorOutcome::TerminalFailure {
+                events: atomic_client_events,
+                error,
+                send_state,
+            });
+        }
         self.finish_provider_error_with_send_state(&error, send_state)
             .await?;
         Err(engine_error)
+    }
+
+    fn observe_atomic_terminal_events(
+        &mut self,
+        events: &mut [ProviderEvent],
+    ) -> Result<(), EngineError> {
+        for event in events {
+            if let Some(observation) = event.take_observation() {
+                self.observe_response(observation)
+                    .map_err(EngineError::Provider)?;
+            }
+            for fact in event.canonical_facts() {
+                self.observe_response_identity(fact)
+                    .map_err(EngineError::Provider)?;
+                self.observe_event_facts(fact);
+            }
+        }
+        Ok(())
     }
 
     fn prepare_continuation_retry(
@@ -1305,7 +1416,38 @@ where
 enum PullOutcome {
     Event(ProviderEvent),
     AttemptDiscarded,
+    TerminalFailure {
+        events: Vec<ProviderEvent>,
+        error: ProviderError,
+        send_state: UpstreamSendState,
+    },
     End,
+}
+
+enum StreamErrorOutcome {
+    AttemptDiscarded,
+    TerminalFailure {
+        events: Vec<ProviderEvent>,
+        error: ProviderError,
+        send_state: UpstreamSendState,
+    },
+}
+
+impl StreamErrorOutcome {
+    fn into_pull_outcome(self) -> PullOutcome {
+        match self {
+            Self::AttemptDiscarded => PullOutcome::AttemptDiscarded,
+            Self::TerminalFailure {
+                events,
+                error,
+                send_state,
+            } => PullOutcome::TerminalFailure {
+                events,
+                error,
+                send_state,
+            },
+        }
+    }
 }
 
 enum PollBoundary {

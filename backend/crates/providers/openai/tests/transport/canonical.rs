@@ -529,6 +529,40 @@ fn raw_sse_failure_should_keep_the_original_frame_before_reporting_the_typed_fai
 }
 
 #[test]
+fn bare_response_failed_should_project_started_identity_with_the_fallback_model() {
+    let raw = concat!(
+        "event: response.failed\n",
+        "data: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_bare_failed\",\"status\":\"failed\",\"error\":{\"code\":\"rate_limit_exceeded\",\"message\":\"bare failure\"}}}\n\n",
+    );
+
+    let failure = CodexCanonicalDecoder::new("fallback-model")
+        .push(raw.as_bytes())
+        .expect_err("bare response.failed remains a typed lifecycle failure");
+
+    assert!(matches!(
+        canonical_facts(failure.events()).as_slice(),
+        [GatewayEvent::Started(metadata)]
+            if metadata.response_id() == "resp_bare_failed"
+                && metadata.model() == "fallback-model"
+    ));
+}
+
+#[test]
+fn response_failed_without_identity_should_keep_the_upstream_typed_failure() {
+    let raw = concat!(
+        "event: response.failed\n",
+        "data: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"rate_limit_exceeded\",\"message\":\"missing identity\"}}}\n\n",
+    );
+
+    let failure = CodexCanonicalDecoder::new("fallback")
+        .push(raw.as_bytes())
+        .expect_err("missing identity must not replace the upstream lifecycle failure");
+
+    assert!(matches!(failure.error(), CodexCanonicalError::Upstream(_)));
+    assert!(canonical_facts(failure.events()).is_empty());
+}
+
+#[test]
 fn decoder_should_preserve_same_chunk_output_before_typed_failure() {
     let marker = "same-chunk-secret-marker";
     let body = format!(
