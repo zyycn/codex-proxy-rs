@@ -90,6 +90,8 @@ pub enum CodexFailureCategory {
     CredentialExpired,
     IdentityVerificationRequired,
     Banned,
+    /// 当前用量窗口已经耗尽，但存在自动恢复的重置时间。
+    UsageLimitExhausted,
     RateLimited,
     QuotaExhausted,
     CloudflareChallenge,
@@ -217,6 +219,7 @@ impl CodexUpstreamFailure {
                     | CodexFailureCategory::CredentialExpired
                     | CodexFailureCategory::IdentityVerificationRequired
                     | CodexFailureCategory::Banned
+                    | CodexFailureCategory::UsageLimitExhausted
                     | CodexFailureCategory::RateLimited
                     | CodexFailureCategory::QuotaExhausted
                     | CodexFailureCategory::CloudflareChallenge
@@ -424,22 +427,34 @@ fn classify_upstream_failure(
     if status == Some(StatusCode::NOT_FOUND) && body.trim().is_empty() {
         return CodexFailureCategory::CloudflarePathBlocked;
     }
-    if [code.as_str(), error_type.as_str()]
-        .into_iter()
-        .any(is_quota_signal)
-        || is_quota_message(&message)
-        || is_quota_message(&body)
+    let structured_failure_signals = [code.as_str(), error_type.as_str()];
+    if structured_failure_signals.into_iter().any(is_quota_signal)
         || status == Some(StatusCode::PAYMENT_REQUIRED)
     {
         return CodexFailureCategory::QuotaExhausted;
     }
-    if [code.as_str(), error_type.as_str()]
+    if structured_failure_signals
+        .into_iter()
+        .any(is_usage_limit_signal)
+    {
+        return CodexFailureCategory::UsageLimitExhausted;
+    }
+    if structured_failure_signals
         .into_iter()
         .any(is_rate_limit_signal)
-        || is_rate_limit_message(&message)
-        || is_rate_limit_message(&body)
-        || status == Some(StatusCode::TOO_MANY_REQUESTS)
     {
+        return CodexFailureCategory::RateLimited;
+    }
+    if is_usage_limit_message(&message) || is_usage_limit_message(&body) {
+        return CodexFailureCategory::UsageLimitExhausted;
+    }
+    if is_quota_message(&message) || is_quota_message(&body) {
+        return CodexFailureCategory::QuotaExhausted;
+    }
+    if is_rate_limit_message(&message) || is_rate_limit_message(&body) {
+        return CodexFailureCategory::RateLimited;
+    }
+    if status == Some(StatusCode::TOO_MANY_REQUESTS) {
         return CodexFailureCategory::RateLimited;
     }
     if is_upstream_overload(&code) || is_upstream_overload(&message) {
@@ -532,15 +547,19 @@ fn is_expired_credential(value: &str) -> bool {
         || value.contains("invalid api key")
 }
 
-fn is_rate_limit_signal(value: &str) -> bool {
+fn is_usage_limit_signal(value: &str) -> bool {
     matches!(
         value,
         "usage_limit_reached"
-            | "rate_limit_exceeded"
-            | "rate_limit_reached"
-            | "rate_limit_error"
             | "workspace_owner_usage_limit_reached"
             | "workspace_member_usage_limit_reached"
+    )
+}
+
+fn is_rate_limit_signal(value: &str) -> bool {
+    matches!(
+        value,
+        "rate_limit_exceeded" | "rate_limit_reached" | "rate_limit_error"
     )
 }
 
@@ -557,7 +576,11 @@ fn is_quota_signal(value: &str) -> bool {
 }
 
 fn is_rate_limit_message(value: &str) -> bool {
-    value.contains("rate limit") || value.contains("usage limit")
+    value.contains("rate limit")
+}
+
+fn is_usage_limit_message(value: &str) -> bool {
+    value.contains("usage limit")
 }
 
 fn is_quota_message(value: &str) -> bool {

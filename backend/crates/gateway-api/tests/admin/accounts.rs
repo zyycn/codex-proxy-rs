@@ -337,6 +337,9 @@ mod actions {
                 message: "upstream unavailable".to_owned(),
                 provider_error_code: Some("usage_exhausted".to_owned()),
                 provider_error_type: Some("invalid_request_error".to_owned()),
+                upstream_status: Some(429),
+                upstream_content_type: Some("application/json".to_owned()),
+                upstream_body: Some(r#"{"error":{"type":"usage_limit_reached"}}"#.to_owned()),
                 account_status: AccountStatus::Active,
             },
         ]
@@ -368,6 +371,9 @@ mod actions {
                     "error": "upstream unavailable",
                     "providerErrorCode": "usage_exhausted",
                     "providerErrorType": "invalid_request_error",
+                    "upstreamStatus": 429,
+                    "upstreamContentType": "application/json",
+                    "upstreamBody": r#"{"error":{"type":"usage_limit_reached"}}"#,
                     "accountStatus": "active"
                 }),
             ]

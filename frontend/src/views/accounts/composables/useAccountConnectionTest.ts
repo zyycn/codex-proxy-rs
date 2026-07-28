@@ -39,25 +39,12 @@ interface AccountConnectionTestOptions {
   onAccountStatus: (accountId: string, status: string) => void
 }
 
-// providerErrorCode 到测试弹窗提示文案的映射。
-const CONNECTION_TEST_ERROR_HINTS: Record<string, string> = {
-  account_cooling_down: '账号冷却中',
-  account_capacity_busy: '账号并发已占满或请求间隔未到，请稍后重试',
-  no_eligible_account: '该账号没有可用于所选模型的凭据',
-  account_selector_unavailable: '账号调度状态暂时不可读，请稍后重试',
-}
-
 function connectionTestErrorText(event: any) {
-  const fallback = event.error || '测试连接失败'
-  const hint = CONNECTION_TEST_ERROR_HINTS[event.providerErrorCode]
-  if (!hint)
-    return fallback
-  if (event.providerErrorCode !== 'account_cooling_down')
-    return hint
-  const seconds = /retry in (\d+)s/.exec(fallback)?.[1]
-  return seconds
-    ? `${hint}，约 ${seconds} 秒后自动恢复（上游流被中断后触发）`
-    : `${hint}（上游流被中断后触发）`
+  if (typeof event.upstreamBody === 'string' && event.upstreamBody.length > 0)
+    return event.upstreamBody
+  if (Number.isInteger(event.upstreamStatus))
+    return `HTTP ${event.upstreamStatus}`
+  return event.error || '测试连接失败'
 }
 
 export function useAccountConnectionTest(options: AccountConnectionTestOptions) {
@@ -293,8 +280,15 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     if (event.type === 'error') {
       applyAccountStatus(event.accountStatus)
       connectionTestError.value = connectionTestErrorText(event)
-      const detail = event.providerErrorCode || event.providerErrorType
-        ? { code: event.providerErrorCode, type: event.providerErrorType, message: event.error }
+      const detail = event.upstreamStatus || event.upstreamContentType || event.upstreamBody
+        || event.providerErrorCode || event.providerErrorType
+        ? {
+            status: event.upstreamStatus,
+            contentType: event.upstreamContentType,
+            body: event.upstreamBody,
+            code: event.providerErrorCode,
+            type: event.providerErrorType,
+          }
         : undefined
       appendConnectionTestLog(connectionTestError.value, 'danger', detail)
       finishConnectionTest('error')

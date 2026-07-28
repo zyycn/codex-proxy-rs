@@ -2191,6 +2191,7 @@ const fn provider_error_kind(category: CodexFailureCategory) -> ProviderErrorKin
         CodexFailureCategory::IdentityVerificationRequired | CodexFailureCategory::Banned => {
             ProviderErrorKind::PermissionDenied
         }
+        CodexFailureCategory::UsageLimitExhausted => ProviderErrorKind::QuotaExhausted,
         CodexFailureCategory::RateLimited => ProviderErrorKind::RateLimited,
         CodexFailureCategory::QuotaExhausted => ProviderErrorKind::QuotaExhausted,
         CodexFailureCategory::CloudflareChallenge
@@ -2221,6 +2222,11 @@ fn account_failure(
             Some(CodexAccountFailure::IdentityVerificationRequired)
         }
         CodexFailureCategory::Banned => Some(CodexAccountFailure::Banned),
+        CodexFailureCategory::UsageLimitExhausted => {
+            Some(CodexAccountFailure::UsageLimitExhausted {
+                retry_after: retry_after_seconds.map(Duration::from_secs),
+            })
+        }
         CodexFailureCategory::RateLimited => Some(CodexAccountFailure::RateLimited {
             retry_after: retry_after_seconds.map(Duration::from_secs),
         }),

@@ -256,9 +256,9 @@ impl fmt::Debug for ClientVisibleUpstreamError {
 
 /// 只供当前客户端请求使用的原始上游 HTTP 失败响应。
 ///
-/// 该值不属于稳定诊断事实，不能进入日志、探针或持久化。它刻意不实现
-/// [`Clone`]；[`ProviderError`] 的普通 clone 会丢弃它，只有最终失败的原对象
-/// 才能把响应交给协议 adapter。
+/// 该值不属于稳定诊断事实，不能进入日志或持久化。它刻意不实现 [`Clone`]；
+/// [`ProviderError`] 的普通 clone 会丢弃它，只有最终失败的原对象才能把响应交给
+/// 原客户端协议，或由认证管理端的账号连接测试显式复制到请求局部结果。
 #[derive(PartialEq, Eq)]
 pub struct ClientVisibleUpstreamResponse {
     status: u16,

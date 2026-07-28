@@ -58,9 +58,8 @@ use gateway_api::admin::AdminSessionState;
 use gateway_core::{
     engine::{
         credential::ProviderAccountId,
-        probe::{AccountProbe, AccountProbeRequest, AccountProbeResult},
+        probe::{AccountProbe, AccountProbeError, AccountProbeRequest, AccountProbeResult},
     },
-    error::GatewayError,
     policy::{ClientApiKeyId, RateLimits},
     routing::{
         ConfigRevision, ProviderKind, PublicModelId, UpstreamModelId, snapshot::SnapshotControl,
@@ -675,7 +674,7 @@ impl AccountProbe for NoopProbe {
     fn probe(
         &self,
         _: AccountProbeRequest,
-    ) -> BoxFuture<'_, Result<AccountProbeResult, GatewayError>> {
+    ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
         Box::pin(async { panic!("unused account probe") })
     }
 }

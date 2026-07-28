@@ -912,6 +912,16 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
     ));
     assert_eq!(current_revision(&database.pool).await, 2);
 
+    sqlx::query(
+        "update provider_accounts
+         set availability = 'expired', availability_reason = 'credential_expired'
+         where id = $1",
+    )
+    .bind("acct_admin_a")
+    .execute(&database.pool)
+    .await
+    .expect("seed stale credential state");
+
     let rotation = repository
         .rotate_provider_account(RotateProviderAccount {
             scope: scope.clone(),
@@ -923,6 +933,15 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
         .expect("rotate provider account");
     assert_eq!(rotation.config_revision.get(), 3);
     assert_eq!(rotation.credential_revision.get(), 2);
+    let restored: (String, Option<String>, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
+        "select availability, availability_reason, cooldown_until
+         from provider_accounts where id = $1",
+    )
+    .bind("acct_admin_a")
+    .fetch_one(&database.pool)
+    .await
+    .expect("load restored account state");
+    assert_eq!(restored, ("ready".to_owned(), None, None));
 
     let revision = repository
         .set_provider_account_enabled_admin(SetProviderAccountEnabled {
@@ -961,6 +980,63 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
         .await
         .expect("count provider account audits");
     assert_eq!(audit_count, 4);
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn verified_credential_rotation_preserves_quota_exhaustion() {
+    let Some(database) = TestDatabase::create("provider_account_rotation_quota").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let scope = ProviderAccountAdminScope {
+        provider_kind: "openai".to_owned(),
+    };
+    let mut exhausted = account("acct_rotation_quota", "user-rotation-quota");
+    exhausted.availability = AccountAvailability::QuotaExhausted;
+    exhausted.availability_reason = Some("quota_exhausted".to_owned());
+    repository
+        .import_provider_accounts(ImportProviderAccounts {
+            scope: scope.clone(),
+            accounts: vec![exhausted],
+            audit: audit(
+                "audit_rotation_quota_import",
+                "import",
+                "acct_rotation_quota",
+            ),
+        })
+        .await
+        .expect("import exhausted account");
+
+    repository
+        .rotate_provider_account(RotateProviderAccount {
+            scope,
+            profile: profile("acct_rotation_quota", "reauthorized account"),
+            credential: credential_update("acct_rotation_quota", 1, "reauthorized-secret"),
+            audit: audit(
+                "audit_rotation_quota_rotate",
+                "reauthorize",
+                "acct_rotation_quota",
+            ),
+        })
+        .await
+        .expect("rotate exhausted account credential");
+
+    let availability: (String, Option<String>) = sqlx::query_as(
+        "select availability, availability_reason from provider_accounts where id = $1",
+    )
+    .bind("acct_rotation_quota")
+    .fetch_one(&database.pool)
+    .await
+    .expect("load exhausted account after credential rotation");
+    assert_eq!(
+        availability,
+        (
+            "quota_exhausted".to_owned(),
+            Some("quota_exhausted".to_owned()),
+        ),
+    );
 
     database.close().await;
 }

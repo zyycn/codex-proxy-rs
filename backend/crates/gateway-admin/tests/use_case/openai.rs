@@ -411,8 +411,10 @@ async fn openai_reauthorization_should_commit_after_credential_revision_advances
             "store.commit_authorization",
             "guard.finish",
             "provider.account_facts_changed",
+            "provider.quota",
         ]
     );
+    assert_eq!(provider.quota_requests().len(), 1);
     assert_eq!(store.audit_requests(), ["oauth-complete-openai"]);
 }
 

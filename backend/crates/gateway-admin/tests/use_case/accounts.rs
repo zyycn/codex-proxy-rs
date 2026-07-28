@@ -6,7 +6,7 @@ use futures::{StreamExt as _, future::BoxFuture};
 use gateway_core::{
     engine::{
         credential::{OpaqueProviderData, ProviderAccountId},
-        probe::{AccountProbe, AccountProbeRequest, AccountProbeResult},
+        probe::{AccountProbe, AccountProbeError, AccountProbeRequest, AccountProbeResult},
     },
     error::{ClientVisibleUpstreamError, GatewayError, GatewayErrorKind},
     operation::{GenerateRequest, Operation, ProtocolPayload},
@@ -794,6 +794,7 @@ async fn connection_test_should_probe_unavailable_account() {
             provider_error_code: Some(code),
             provider_error_type: Some(error_type),
             account_status: gateway_admin::model::accounts::AccountStatus::QuotaExhausted,
+            ..
         }) if message == "included usage exhausted"
             && code == "usage_exhausted"
             && error_type == "invalid_request_error"
@@ -888,6 +889,36 @@ async fn accounts_list_should_return_complete_directory_semantics() {
     assert_eq!(
         account.status,
         gateway_admin::model::accounts::AccountStatus::Active
+    );
+}
+
+#[tokio::test]
+async fn accounts_list_should_prefer_usage_limit_exhaustion_over_stale_token_expiry() {
+    let provider = FakeProviderAdmin::new("openai", events());
+    let mut account = account_record("openai");
+    account.availability = AccountAvailability::Cooldown;
+    account.availability_reason = Some("usage_limit_exhausted".to_owned());
+    account.cooldown_until = Some(Utc::now() + TimeDelta::minutes(5));
+    account.access_token_expires_at = Some(Utc::now() - TimeDelta::minutes(5));
+    let store = FakeAccountStore::with_account(account, events());
+
+    let page = accounts_service(provider, store)
+        .await
+        .accounts()
+        .list(AccountListQuery {
+            page: 1,
+            page_size: gateway_admin::model::PageSize::new(20).expect("page size"),
+            provider_kind: None,
+            search: None,
+            status: None,
+            sort: None,
+        })
+        .await
+        .expect("usage-limited account directory");
+
+    assert_eq!(
+        page.items.first().expect("account item").status,
+        gateway_admin::model::accounts::AccountStatus::QuotaExhausted,
     );
 }
 
@@ -1141,7 +1172,7 @@ impl AccountProbe for SuccessfulAccountProbe {
     fn probe(
         &self,
         _: AccountProbeRequest,
-    ) -> BoxFuture<'_, Result<AccountProbeResult, GatewayError>> {
+    ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
         Box::pin(async {
             Ok(AccountProbeResult {
                 text: vec!["OK".to_owned()],
@@ -1156,7 +1187,7 @@ impl AccountProbe for FailingAccountProbe {
     fn probe(
         &self,
         _: AccountProbeRequest,
-    ) -> BoxFuture<'_, Result<AccountProbeResult, GatewayError>> {
+    ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
         Box::pin(async {
             let detail = ClientVisibleUpstreamError::new(
                 "included usage exhausted",
@@ -1167,7 +1198,8 @@ impl AccountProbe for FailingAccountProbe {
                 GatewayErrorKind::RateLimited,
                 "upstream capacity is temporarily unavailable",
             )
-            .with_client_visible_upstream_error(detail))
+            .with_client_visible_upstream_error(detail)
+            .into())
         })
     }
 }

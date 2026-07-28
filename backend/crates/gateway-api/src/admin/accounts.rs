@@ -531,12 +531,18 @@ impl From<DomainConnectionTestEvent> for AccountConnectionTestEvent {
                 message,
                 provider_error_code,
                 provider_error_type,
+                upstream_status,
+                upstream_content_type,
+                upstream_body,
                 account_status,
             } => serde_json::json!({
                 "type": "error",
                 "error": message,
                 "providerErrorCode": provider_error_code,
                 "providerErrorType": provider_error_type,
+                "upstreamStatus": upstream_status,
+                "upstreamContentType": upstream_content_type,
+                "upstreamBody": upstream_body,
                 "accountStatus": account_status_name(account_status)
             }),
         };

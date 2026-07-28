@@ -157,6 +157,92 @@ fn structured_quota_signal_takes_precedence_over_http_429() {
 }
 
 #[test]
+fn structured_usage_limit_type_is_resettable_quota_exhaustion() {
+    assert_eq!(
+        classify(
+            429,
+            r#"{"error":{"code":null,"type":"usage_limit_reached","message":"The usage limit has been reached"}}"#
+        ),
+        CodexFailureCategory::UsageLimitExhausted
+    );
+}
+
+#[test]
+fn usage_limit_message_without_a_type_is_resettable_quota_exhaustion() {
+    assert_eq!(
+        classify(
+            429,
+            r#"{"error":{"message":"The usage limit has been reached"}}"#
+        ),
+        CodexFailureCategory::UsageLimitExhausted
+    );
+}
+
+#[test]
 fn bare_http_429_remains_a_temporary_rate_limit() {
     assert_eq!(classify(429, ""), CodexFailureCategory::RateLimited);
+}
+
+#[test]
+fn sub2api_openai_account_failure_matrix_is_preserved() {
+    let cases = [
+        (
+            400,
+            r#"{"error":{"message":"Organization has been disabled"}}"#,
+            CodexFailureCategory::Banned,
+        ),
+        (
+            400,
+            r#"{"error":{"message":"Identity verification is required"}}"#,
+            CodexFailureCategory::IdentityVerificationRequired,
+        ),
+        (
+            400,
+            r#"{"error":{"message":"invalid request payload"}}"#,
+            CodexFailureCategory::InvalidRequest,
+        ),
+        (
+            401,
+            r#"{"error":{"code":"token_revoked","message":"token has been revoked"}}"#,
+            CodexFailureCategory::CredentialExpired,
+        ),
+        (
+            401,
+            r#"{"detail":"Unauthorized"}"#,
+            CodexFailureCategory::CredentialExpired,
+        ),
+        (
+            402,
+            r#"{"detail":{"code":"deactivated_workspace","message":"workspace disabled"}}"#,
+            CodexFailureCategory::Banned,
+        ),
+        (
+            402,
+            r#"{"error":{"message":"payment required"}}"#,
+            CodexFailureCategory::QuotaExhausted,
+        ),
+        (
+            403,
+            r#"{"error":{"message":"access forbidden"}}"#,
+            CodexFailureCategory::PermissionDenied,
+        ),
+        (
+            429,
+            r#"{"error":{"type":"usage_limit_reached","message":"quota window reached"}}"#,
+            CodexFailureCategory::UsageLimitExhausted,
+        ),
+        (
+            529,
+            r#"{"error":{"type":"server_error","message":"overloaded"}}"#,
+            CodexFailureCategory::Unavailable,
+        ),
+    ];
+
+    for (status, body, expected) in cases {
+        assert_eq!(
+            classify(status, body),
+            expected,
+            "status={status} body={body}"
+        );
+    }
 }

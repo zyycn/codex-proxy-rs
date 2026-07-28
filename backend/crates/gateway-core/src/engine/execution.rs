@@ -17,7 +17,10 @@ use crate::engine::continuation::{
     ContinuationBinding, NativeContinuationPin, NativeContinuationPort, PreviousResponseId,
 };
 use crate::engine::coordinator::ResponseExecutionSession;
-use crate::engine::probe::{AccountProbe, AccountProbeRequest, AccountProbeResult};
+use crate::engine::probe::{
+    AccountProbe, AccountProbeError, AccountProbeRequest, AccountProbeResult,
+    AccountProbeUpstreamResponse,
+};
 use crate::engine::provider::ProviderRegistry;
 use crate::engine::{
     AttemptCoordinator, AttemptRecord, CancellationToken, CoordinatedEvent, EngineError,
@@ -426,7 +429,7 @@ impl DefaultExecutionService {
     async fn probe_inner(
         &self,
         request: AccountProbeRequest,
-    ) -> Result<AccountProbeResult, GatewayError> {
+    ) -> Result<AccountProbeResult, AccountProbeError> {
         let AccountProbeRequest {
             account_id,
             provider_kind,
@@ -535,14 +538,19 @@ impl DefaultExecutionService {
         })
     }
 
-    /// 探测失败先记录完整分类事实，再仅把 Provider 显式标记为客户端可见的
-    /// 结构化 message/code/type 带入协议错误。
+    /// 探测失败先记录脱敏分类事实，再把请求局部的原始上游响应交给认证管理端。
     async fn observe_probe_failure(
         &self,
         observed: &ProbeObservation,
         started_at: SystemTime,
         error: &EngineError,
-    ) -> GatewayError {
+    ) -> AccountProbeError {
+        let upstream_response = match error {
+            EngineError::Provider(provider_error) => provider_error
+                .client_visible_upstream_response()
+                .map(AccountProbeUpstreamResponse::from_client_response),
+            _ => None,
+        };
         if let EngineError::Provider(provider_error) = error {
             let latency = started_at.elapsed().unwrap_or_default();
             let latency_ms = u64::try_from(latency.as_millis()).unwrap_or(u64::MAX);
@@ -578,7 +586,7 @@ impl DefaultExecutionService {
                 );
             }
         }
-        gateway_error_from_engine(error)
+        AccountProbeError::new(gateway_error_from_engine(error), upstream_response)
     }
 }
 
@@ -685,7 +693,7 @@ impl AccountProbe for DefaultExecutionService {
     fn probe(
         &self,
         request: AccountProbeRequest,
-    ) -> BoxFuture<'_, Result<AccountProbeResult, GatewayError>> {
+    ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
         Box::pin(async move { self.probe_inner(request).await })
     }
 }

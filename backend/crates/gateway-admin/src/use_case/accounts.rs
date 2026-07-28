@@ -452,12 +452,33 @@ impl AccountsService for DefaultAccountsService {
                         account_status: status,
                     }))
                     .collect(),
-                Err(error) => vec![AccountConnectionTestEvent::Failed {
-                    message: error.client_message().to_owned(),
-                    provider_error_code: error.client_error_code().map(ToOwned::to_owned),
-                    provider_error_type: error.client_error_type().map(ToOwned::to_owned),
-                    account_status: status,
-                }],
+                Err(error) => {
+                    let upstream_status = error
+                        .upstream_response()
+                        .map(gateway_core::engine::probe::AccountProbeUpstreamResponse::status);
+                    let upstream_content_type = error
+                        .upstream_response()
+                        .and_then(|response| response.content_type())
+                        .and_then(|value| std::str::from_utf8(value).ok())
+                        .map(ToOwned::to_owned);
+                    let upstream_body = error
+                        .upstream_response()
+                        .map(|response| String::from_utf8_lossy(response.body()).into_owned());
+                    let message = upstream_body
+                        .as_deref()
+                        .filter(|body| !body.is_empty())
+                        .unwrap_or_else(|| error.client_message())
+                        .to_owned();
+                    vec![AccountConnectionTestEvent::Failed {
+                        message,
+                        provider_error_code: error.client_error_code().map(ToOwned::to_owned),
+                        provider_error_type: error.client_error_type().map(ToOwned::to_owned),
+                        upstream_status,
+                        upstream_content_type,
+                        upstream_body,
+                        account_status: status,
+                    }]
+                }
             }
         })
         .flat_map(futures::stream::iter);
@@ -468,22 +489,25 @@ impl AccountsService for DefaultAccountsService {
 fn account_status(account: &AccountRecord, now: chrono::DateTime<Utc>) -> AccountStatus {
     if !account.enabled {
         AccountStatus::Disabled
+    } else if account.availability == crate::model::accounts::AccountAvailability::Banned {
+        AccountStatus::Banned
+    } else if account.availability == crate::model::accounts::AccountAvailability::QuotaExhausted
+        || (account.availability == crate::model::accounts::AccountAvailability::Cooldown
+            && account.availability_reason.as_deref() == Some("usage_limit_exhausted")
+            && account.cooldown_until.is_none_or(|until| until > now))
+    {
+        AccountStatus::QuotaExhausted
+    } else if matches!(
+        account.availability,
+        crate::model::accounts::AccountAvailability::Expired
+            | crate::model::accounts::AccountAvailability::Invalid
+    ) || account
+        .access_token_expires_at
+        .is_some_and(|expires_at| expires_at <= now)
+    {
+        AccountStatus::Expired
     } else {
-        match account.availability {
-            crate::model::accounts::AccountAvailability::Banned => AccountStatus::Banned,
-            crate::model::accounts::AccountAvailability::QuotaExhausted => {
-                AccountStatus::QuotaExhausted
-            }
-            crate::model::accounts::AccountAvailability::Expired
-            | crate::model::accounts::AccountAvailability::Invalid => AccountStatus::Expired,
-            _ if account
-                .access_token_expires_at
-                .is_some_and(|expires_at| expires_at <= now) =>
-            {
-                AccountStatus::Expired
-            }
-            _ => AccountStatus::Active,
-        }
+        AccountStatus::Active
     }
 }
 

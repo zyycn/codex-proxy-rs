@@ -227,6 +227,32 @@ fn retry_after_should_read_structured_response_delay() {
 }
 
 #[test]
+fn retry_after_should_read_string_reset_delay() {
+    let body = json!({
+        "error": {"type": "usage_limit_reached", "resets_in_seconds": "46"}
+    })
+    .to_string();
+
+    assert_eq!(retry_after_seconds_from_body(&body), Some(46));
+}
+
+#[test]
+fn retry_after_should_read_string_reset_timestamp() {
+    let reset_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock")
+        .as_secs()
+        + 60;
+    let body = json!({
+        "error": {"type": "usage_limit_reached", "resets_at": reset_at.to_string()}
+    })
+    .to_string();
+
+    let retry_after = retry_after_seconds_from_body(&body).expect("retry-after");
+    assert!((59..=60).contains(&retry_after));
+}
+
+#[test]
 fn retry_after_should_read_nested_error_delay() {
     let body = json!({
         "type": "error",
