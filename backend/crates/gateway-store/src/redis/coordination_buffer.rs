@@ -1,4 +1,7 @@
-//! 数据面 Redis 写副作用的有界非阻塞队列。
+//! 可由 TTL 或后续反馈收敛的 Redis 写副作用队列。
+//!
+//! Continuation affinity 决定下一轮 Provider 与账号，必须在响应 ID 可复用前
+//! 获得 Redis 确认，因此不属于本模块的可丢失副作用。
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -7,9 +10,6 @@ use futures::future::{BoxFuture, ready};
 use gateway_core::engine::admission::{
     ClientAdmissionDecision, ClientAdmissionError, ClientAdmissionPort, ClientAdmissionRecovery,
     ClientAdmissionRequest, ClientAdmissionRestoreResult,
-};
-use gateway_core::engine::continuation::{
-    NativeContinuationPin, NativeContinuationPort, NativeContinuationStoreError, PreviousResponseId,
 };
 use gateway_core::engine::execution::{
     ProviderCircuitDecision, ProviderCircuitError, ProviderCircuitPort,
@@ -247,97 +247,6 @@ impl DaemonTask for ProviderCircuitFeedbackWriter {
                 };
                 if let Err(error) = result {
                     tracing::warn!(%error, "Provider circuit feedback 后台写入失败");
-                }
-            }
-        })
-    }
-}
-
-/// Continuation resolve 仍直读 Redis；新 pin 只做有界入队。
-#[derive(Clone)]
-pub struct BufferedNativeContinuationPort {
-    inner: Arc<dyn NativeContinuationPort>,
-    sender: mpsc::Sender<NativeContinuationPin>,
-}
-
-impl BufferedNativeContinuationPort {
-    #[must_use]
-    pub fn new(inner: Arc<dyn NativeContinuationPort>) -> (Self, NativeContinuationWriter) {
-        Self::with_capacity(
-            inner,
-            NonZeroUsize::new(DEFAULT_QUEUE_CAPACITY).expect("queue capacity is non-zero"),
-        )
-    }
-
-    #[must_use]
-    pub fn with_capacity(
-        inner: Arc<dyn NativeContinuationPort>,
-        capacity: NonZeroUsize,
-    ) -> (Self, NativeContinuationWriter) {
-        let (sender, receiver) = mpsc::channel(capacity.get());
-        (
-            Self {
-                inner: Arc::clone(&inner),
-                sender,
-            },
-            NativeContinuationWriter {
-                inner,
-                receiver: Mutex::new(receiver),
-            },
-        )
-    }
-
-    fn enqueue(&self, pin: NativeContinuationPin) {
-        if let Err(error) = self.sender.try_send(pin) {
-            let reason = match error {
-                mpsc::error::TrySendError::Full(_) => "full",
-                mpsc::error::TrySendError::Closed(_) => "closed",
-            };
-            tracing::warn!(
-                operation = "record_native_continuation",
-                reason,
-                "Redis 协调队列不可用，已丢弃本次 continuation affinity"
-            );
-        }
-    }
-}
-
-impl NativeContinuationPort for BufferedNativeContinuationPort {
-    fn resolve<'a>(
-        &'a self,
-        previous_response_id: &'a PreviousResponseId,
-    ) -> BoxFuture<'a, Result<Option<NativeContinuationPin>, NativeContinuationStoreError>> {
-        self.inner.resolve(previous_response_id)
-    }
-
-    fn record<'a>(
-        &'a self,
-        pin: NativeContinuationPin,
-    ) -> BoxFuture<'a, Result<(), NativeContinuationStoreError>> {
-        self.enqueue(pin);
-        Box::pin(ready(Ok(())))
-    }
-}
-
-pub struct NativeContinuationWriter {
-    inner: Arc<dyn NativeContinuationPort>,
-    receiver: Mutex<mpsc::Receiver<NativeContinuationPin>>,
-}
-
-impl DaemonTask for NativeContinuationWriter {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
-        Box::pin(async move {
-            let mut receiver = self.receiver.lock().await;
-            loop {
-                let pin = tokio::select! {
-                    () = cancellation.cancelled() => return Ok(()),
-                    pin = receiver.recv() => pin,
-                };
-                let Some(pin) = pin else {
-                    return Err(WorkerTaskError::safe("native continuation queue closed"));
-                };
-                if let Err(error) = self.inner.record(pin).await {
-                    tracing::warn!(%error, "Continuation affinity 后台写入失败");
                 }
             }
         })
