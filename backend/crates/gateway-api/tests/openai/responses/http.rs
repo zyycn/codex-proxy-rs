@@ -109,6 +109,7 @@ struct CapturedClientContext {
     client_metadata: Option<Value>,
     protocol_context: Option<Value>,
     prompt_cache_key: Option<String>,
+    previous_response_id: Option<String>,
 }
 
 impl ExecutionService for ContextCaptureExecution {
@@ -152,6 +153,11 @@ impl ExecutionService for ContextCaptureExecution {
                         payload.body().get("input").cloned(),
                     )
                 });
+            let previous_response_id = request
+                .metadata
+                .previous_response_id
+                .as_ref()
+                .map(|value| value.as_str().to_owned());
             *self.observed.lock().expect("context capture lock") = Some(CapturedClientContext {
                 client_ip: request.metadata.client_ip,
                 user_agent: request.metadata.user_agent,
@@ -161,6 +167,7 @@ impl ExecutionService for ContextCaptureExecution {
                 client_metadata,
                 protocol_context,
                 prompt_cache_key,
+                previous_response_id,
             });
             Err(GatewayError::new(
                 GatewayErrorKind::Internal,
@@ -511,6 +518,7 @@ async fn request_context_should_resolve_forwarded_precedence_and_peer_fallback()
             client_metadata: None,
             protocol_context: None,
             prompt_cache_key: None,
+            previous_response_id: None,
         }
     );
 
@@ -530,6 +538,32 @@ async fn request_context_should_resolve_forwarded_precedence_and_peer_fallback()
             .client_ip,
         Some("192.0.2.10".parse().expect("expected peer IP"))
     );
+}
+
+#[tokio::test]
+async fn http_request_should_pass_opaque_previous_response_id_to_core() {
+    for response_id in [
+        format!("resp_{}", "x".repeat(257)),
+        "resp_control\0opaque".to_owned(),
+        String::new(),
+    ] {
+        let captured = captured_http_request(
+            "openai",
+            json!({
+                "model": "smart-code",
+                "input": "continue",
+                "previous_response_id": response_id.clone()
+            }),
+            HeaderMap::new(),
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            captured.previous_response_id.as_deref(),
+            Some(response_id.as_str())
+        );
+    }
 }
 
 #[tokio::test]

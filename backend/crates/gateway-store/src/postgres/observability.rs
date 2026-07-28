@@ -125,7 +125,6 @@ impl UsageRecordFilter {
             (self.model.as_deref(), "model filter"),
             (self.outcome.as_deref(), "outcome filter"),
             (self.transport.as_deref(), "transport filter"),
-            (self.response_id.as_deref(), "response ID filter"),
             (
                 self.upstream_request_id.as_deref(),
                 "upstream request ID filter",
@@ -189,7 +188,6 @@ impl OpsErrorFilter {
             (self.operation.as_deref(), "operation filter"),
             (self.model.as_deref(), "model filter"),
             (self.transport.as_deref(), "transport filter"),
-            (self.response_id.as_deref(), "response ID filter"),
             (
                 self.upstream_request_id.as_deref(),
                 "upstream request ID filter",
@@ -2234,9 +2232,9 @@ fn push_usage_filter(query: &mut QueryBuilder<Postgres>, filter: &UsageRecordFil
     }
     if let Some(value) = &filter.response_id {
         query.push(format!(" and ({alias}.client_response_id = "));
-        query.push_bind(value.clone());
+        query.push_bind(value.as_bytes().to_vec());
         query.push(format!(" or {alias}.upstream_response_id = "));
-        query.push_bind(value.clone());
+        query.push_bind(value.as_bytes().to_vec());
         query.push(")");
     }
     if let Some(value) = &filter.upstream_request_id {
@@ -2248,7 +2246,7 @@ fn push_usage_filter(query: &mut QueryBuilder<Postgres>, filter: &UsageRecordFil
             " and lower(concat_ws(' ', {alias}.id, {alias}.client_api_key_ref,
                     {alias}.requested_model_id, {alias}.provider_kind,
                     {alias}.provider_account_ref, {alias}.upstream_model_id,
-                    {alias}.client_response_id, {alias}.upstream_request_id,
+                    encode({alias}.client_response_id, 'escape'), {alias}.upstream_request_id,
                     {alias}.error_kind, {alias}.provider_error_code,
                     {alias}.error_message)) like "
         ));
@@ -3055,7 +3053,6 @@ fn push_ops_filter(statement: &mut QueryBuilder<Postgres>, filter: &OpsErrorFilt
         ("provider_kind", &filter.provider_kind),
         ("operation", &filter.operation),
         ("upstream_transport", &filter.transport),
-        ("client_response_id", &filter.response_id),
         ("upstream_request_id", &filter.upstream_request_id),
         ("failure_kind", &filter.failure_kind),
     ] {
@@ -3063,6 +3060,10 @@ fn push_ops_filter(statement: &mut QueryBuilder<Postgres>, filter: &OpsErrorFilt
             statement.push(format!(" and e.{column} = "));
             statement.push_bind(value.clone());
         }
+    }
+    if let Some(value) = &filter.response_id {
+        statement.push(" and e.client_response_id = ");
+        statement.push_bind(value.as_bytes().to_vec());
     }
     if let Some(model) = &filter.model {
         statement.push(" and e.upstream_model_id = ");
@@ -3116,9 +3117,9 @@ fn usage_record_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<UsageRecord
         outcome: get(row, "outcome")?,
         client_status_code: optional_status(row, "client_status_code")?,
         upstream_status_code: optional_status(row, "upstream_status_code")?,
-        client_response_id: get(row, "client_response_id")?,
+        client_response_id: opaque_response_id(row, "client_response_id")?,
         upstream_request_id: get(row, "upstream_request_id")?,
-        upstream_response_id: get(row, "upstream_response_id")?,
+        upstream_response_id: opaque_response_id(row, "upstream_response_id")?,
         error_kind: get(row, "error_kind")?,
         provider_error_code: get(row, "provider_error_code")?,
         error_message: get(row, "error_message")?,
@@ -3177,7 +3178,7 @@ fn ops_error_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<OpsErrorRecord
         client_status_code: optional_status(row, "client_status_code")?,
         upstream_status_code: optional_status(row, "upstream_status_code")?,
         provider_error_code: get(row, "provider_error_code")?,
-        client_response_id: get(row, "client_response_id")?,
+        client_response_id: opaque_response_id(row, "client_response_id")?,
         upstream_request_id: get(row, "upstream_request_id")?,
         latency_ms: optional_unsigned(row, "latency_ms")?,
         message: get(row, "message")?,
@@ -3216,6 +3217,16 @@ fn optional_decimal(
     get::<Option<String>>(row, column)?
         .map(|value| DecimalAmount::from_str(&value))
         .transpose()
+}
+
+fn opaque_response_id(
+    row: &sqlx::postgres::PgRow,
+    column: &'static str,
+) -> StoreResult<Option<String>> {
+    get::<Option<Vec<u8>>>(row, column)?
+        .map(String::from_utf8)
+        .transpose()
+        .map_err(|_| invalid(column))
 }
 
 fn validate_account_ids(account_ids: &[String]) -> StoreResult<()> {

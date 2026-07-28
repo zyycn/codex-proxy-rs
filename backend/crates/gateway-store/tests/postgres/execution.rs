@@ -389,6 +389,37 @@ fn successful_core_finalization(id: &str) -> CoreModelRequestFinalization {
 }
 
 #[tokio::test]
+async fn core_adapter_persists_opaque_response_ids_as_bytes() {
+    let Some(database) = TestDatabase::create("execution_opaque_response_id").await else {
+        return;
+    };
+    seed_running_request(&database.pool, "req_opaque_response_id")
+        .await
+        .expect("seed model request");
+    let store = PgExecutionStore::new(database.pool.clone());
+    let response_id = format!("resp_{}\0opaque", "x".repeat(4_096));
+    let mut finalization = successful_core_finalization("req_opaque_response_id");
+    finalization.client_response_id = Some(response_id.clone());
+    finalization.upstream_response_id = Some(response_id.clone());
+
+    ExecutionStore::finalize_model_request(&store, finalization)
+        .await
+        .expect("persist opaque response IDs");
+
+    let persisted: (Option<Vec<u8>>, Option<Vec<u8>>) = sqlx::query_as(
+        "select client_response_id, upstream_response_id
+         from model_requests where id = 'req_opaque_response_id'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("load opaque response IDs");
+    assert_eq!(persisted.0.as_deref(), Some(response_id.as_bytes()));
+    assert_eq!(persisted.1.as_deref(), Some(response_id.as_bytes()));
+
+    database.close().await;
+}
+
+#[tokio::test]
 async fn core_adapter_should_persist_only_object_provider_observation() {
     let Some(database) = TestDatabase::create("execution_provider_observation").await else {
         return;

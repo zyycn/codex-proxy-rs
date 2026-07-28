@@ -90,7 +90,7 @@ impl OpenAiService {
         let previous_response_id = match metadata.continuation() {
             ContinuationIntent::None => None,
             ContinuationIntent::PreviousResponseId(value) => {
-                PreviousResponseId::new(value.clone()).ok()
+                Some(PreviousResponseId::new(value.clone()))
             }
         };
         self.execution

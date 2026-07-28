@@ -191,25 +191,39 @@ fn decoder_should_preserve_unknown_nested_values_without_debug_disclosure() {
 }
 
 #[test]
-fn decoder_should_preserve_continuation_and_mark_the_routing_requirement() {
-    let decoded = generate_request(json!({
-        "model": "smart-code",
-        "input": "continue",
-        "previous_response_id": "resp_private_continuation"
-    }));
+fn decoder_should_preserve_opaque_continuation_and_mark_the_routing_requirement() {
+    for response_id in [
+        "resp_private_continuation".to_owned(),
+        format!("resp_{}\0opaque", "x".repeat(257)),
+        String::new(),
+    ] {
+        let decoded = generate_request(json!({
+            "model": "smart-code",
+            "input": "continue",
+            "previous_response_id": response_id.clone()
+        }));
 
-    assert!(matches!(
-        decoded.metadata().continuation(),
-        ContinuationIntent::PreviousResponseId(value) if value == "resp_private_continuation"
-    ));
-    assert!(
-        decoded
-            .operation()
-            .capability_requirements()
-            .features()
-            .contains(&Feature::NativeContinuation)
-    );
-    assert!(!format!("{decoded:?}").contains("resp_private_continuation"));
+        assert!(matches!(
+            decoded.metadata().continuation(),
+            ContinuationIntent::PreviousResponseId(value) if value == &response_id
+        ));
+        assert_eq!(
+            openai_wire_body(&decoded)
+                .get("previous_response_id")
+                .and_then(Value::as_str),
+            Some(response_id.as_str())
+        );
+        assert!(
+            decoded
+                .operation()
+                .capability_requirements()
+                .features()
+                .contains(&Feature::NativeContinuation)
+        );
+        if !response_id.is_empty() {
+            assert!(!format!("{decoded:?}").contains(&response_id));
+        }
+    }
 }
 
 #[test]

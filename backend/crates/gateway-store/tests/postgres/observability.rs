@@ -63,6 +63,49 @@ fn postgres_admin_observability_adapter_implements_terminal_port() {
 }
 
 #[tokio::test]
+async fn observability_preserves_and_filters_opaque_response_ids() {
+    let Some(database) = TestDatabase::create("observability_opaque_response_id").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_observability_facts(&database.pool, now)
+        .await
+        .expect("seed observability facts");
+    let response_id = format!("resp_{}\0opaque", "x".repeat(4_096));
+    sqlx::query(
+        "update model_requests
+         set client_response_id = $1, upstream_response_id = $1
+         where id = 'req_observe_success'",
+    )
+    .bind(response_id.as_bytes().to_vec())
+    .execute(&database.pool)
+    .await
+    .expect("persist opaque response IDs");
+    let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
+        .expect("observability range");
+    let repository = PgObservabilityRepository::new(database.pool.clone());
+
+    let records = repository
+        .list_usage_records(UsageRecordQuery {
+            range,
+            filter: UsageRecordFilter {
+                response_id: Some(response_id.clone()),
+                ..UsageRecordFilter::default()
+            },
+            cursor: None,
+            page: ObservabilityPageNumber::new(1).expect("page"),
+            page_size: ObservabilityPageSize::new(10).expect("page size"),
+        })
+        .await
+        .expect("filter opaque response ID");
+    assert_eq!(records.total, 1);
+    assert_eq!(records.items[0].client_response_id.as_deref(), Some(response_id.as_str()));
+    assert_eq!(records.items[0].upstream_response_id.as_deref(), Some(response_id.as_str()));
+
+    database.close().await;
+}
+
+#[tokio::test]
 async fn dashboard_account_metrics_should_partition_available_and_unavailable_accounts() {
     let Some(database) = TestDatabase::create("dashboard_account_metrics").await else {
         return;
