@@ -151,7 +151,7 @@ pub fn retry_after_seconds_from_value(value: &Value) -> Option<u64> {
         .or_else(|| {
             error
                 .get("resets_in_seconds")
-                .and_then(Value::as_u64)
+                .and_then(positive_u64)
                 .filter(|seconds| *seconds > 0)
         })
         .or_else(|| retry_after_seconds_from_resets_at(error))
@@ -437,12 +437,19 @@ fn nested_number_field(value: &Value, path: &[&str]) -> Option<u64> {
 }
 
 fn retry_after_seconds_from_resets_at(error: &Value) -> Option<u64> {
-    let resets_at = error.get("resets_at").and_then(Value::as_u64)?;
+    let resets_at = error.get("resets_at").and_then(positive_u64)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_secs();
     (resets_at > now).then_some(resets_at - now)
+}
+
+fn positive_u64(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|value| value.parse::<u64>().ok()))
+        .filter(|value| *value > 0)
 }
 
 fn retry_after_seconds_from_rate_limit_message(error: &Value) -> Option<u64> {

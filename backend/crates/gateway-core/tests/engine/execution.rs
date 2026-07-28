@@ -8,6 +8,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures::{executor::block_on, future::BoxFuture};
 use gateway_core::engine::admission::{
     ClientAdmissionDecision, ClientAdmissionError, ClientAdmissionPort, ClientAdmissionRecovery,
@@ -34,7 +35,8 @@ use gateway_core::engine::{
     ModelRequestId, NewModelRequest, ProbeFailure, RecoveryReport, UpstreamSendState,
 };
 use gateway_core::error::{
-    GatewayErrorKind, ProviderError, ProviderErrorKind, StoreError, StoreErrorKind,
+    ClientVisibleUpstreamResponse, GatewayErrorKind, ProviderError, ProviderErrorKind, StoreError,
+    StoreErrorKind,
 };
 use gateway_core::operation::{GenerateRequest, Operation, OperationKind, ProtocolPayload};
 use gateway_core::policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits};
@@ -108,6 +110,19 @@ fn probe_failures_should_be_observable_without_a_model_request_row() {
     .expect_err("the provider rejects every probe");
 
     assert_eq!(error.kind(), GatewayErrorKind::UpstreamUnavailable);
+    let upstream = error
+        .upstream_response()
+        .expect("probe must preserve its request-local upstream response");
+    assert_eq!(upstream.status(), 502);
+    assert_eq!(
+        upstream.content_type(),
+        Some(b"application/json".as_slice())
+    );
+    assert_eq!(
+        upstream.body(),
+        &Bytes::from_static(br#"{"error":{"message":"source upstream failure"}}"#),
+    );
+    assert!(!format!("{error:?}").contains("source upstream failure"));
     assert!(!store.touched.load(Ordering::SeqCst));
     assert_eq!(store.probe_failures(), vec!["transport".to_owned()]);
 }
@@ -166,10 +181,14 @@ impl Provider for FailingProvider {
         _request: ProviderRequest,
         _context: AttemptContext,
     ) -> Result<ProviderStream, ProviderError> {
-        Err(ProviderError::new(
-            ProviderErrorKind::Transport,
-            UpstreamSendState::NotSent,
-        ))
+        Err(
+            ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::NotSent)
+                .with_client_visible_upstream_response(ClientVisibleUpstreamResponse::new(
+                    502,
+                    Some(b"application/json".to_vec()),
+                    Bytes::from_static(br#"{"error":{"message":"source upstream failure"}}"#),
+                )),
+        )
     }
 }
 

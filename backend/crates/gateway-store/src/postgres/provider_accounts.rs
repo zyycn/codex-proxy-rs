@@ -1564,7 +1564,11 @@ fn admin_account_status(
         AdminAccountStatus::Disabled
     } else if account.availability == AccountAvailability::Banned {
         AdminAccountStatus::Banned
-    } else if account.availability == AccountAvailability::QuotaExhausted {
+    } else if account.availability == AccountAvailability::QuotaExhausted
+        || (account.availability == AccountAvailability::Cooldown
+            && account.availability_reason.as_deref() == Some("usage_limit_exhausted")
+            && account.cooldown_until.is_none_or(|until| until > now))
+    {
         AdminAccountStatus::QuotaExhausted
     } else if account.availability == AccountAvailability::Expired
         || account.availability == AccountAvailability::Invalid
@@ -1983,6 +1987,22 @@ async fn rotate_provider_account_in_transaction(
              has_refresh_token = $8,
              access_token_expires_at = $9,
              next_refresh_at = $10,
+             availability = case
+                 when availability <> 'quota_exhausted' then 'ready'
+                 else availability
+             end,
+             availability_reason = case
+                 when availability <> 'quota_exhausted' then null
+                 else availability_reason
+             end,
+             cooldown_until = case
+                 when availability <> 'quota_exhausted' then null
+                 else cooldown_until
+             end,
+             availability_observed_at = case
+                 when availability <> 'quota_exhausted' then now()
+                 else availability_observed_at
+             end,
              updated_at = now()
          where id = $1 and provider_kind = $2
            and credential_revision = $3

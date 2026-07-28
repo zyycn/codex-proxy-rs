@@ -60,7 +60,7 @@ use gateway_admin::{
 use gateway_core::{
     engine::{
         credential::ProviderAccountId,
-        probe::{AccountProbe, AccountProbeRequest, AccountProbeResult},
+        probe::{AccountProbe, AccountProbeError, AccountProbeRequest, AccountProbeResult},
     },
     error::{GatewayError, GatewayErrorKind},
     policy::ClientApiKeyId,
@@ -647,12 +647,13 @@ impl AccountProbe for UnavailableProbe {
     fn probe(
         &self,
         _: AccountProbeRequest,
-    ) -> BoxFuture<'_, Result<AccountProbeResult, GatewayError>> {
+    ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
         Box::pin(async {
             Err(GatewayError::new(
                 GatewayErrorKind::Internal,
                 "test account probe is unavailable",
-            ))
+            )
+            .into())
         })
     }
 }

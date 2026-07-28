@@ -13,8 +13,7 @@ use crate::{
             CredentialDeletionResult, CredentialDetails, CredentialImportCommit,
             CredentialImportResult, CredentialListQuery, CredentialMutation,
             CredentialMutationResult, CredentialPage, ImportCredentials, PrepareCredentialImport,
-            PrepareCredentialRotation, PreparedAuthorizationCredential, ProviderQuotaRequest,
-            RotateCredential, StartAuthorization,
+            PrepareCredentialRotation, ProviderQuotaRequest, RotateCredential, StartAuthorization,
         },
     },
     ports::{provider::ProviderAdmin, store::AccountStore},
@@ -195,10 +194,6 @@ impl OpenAiService for DefaultOpenAiService {
             "OpenAI authorization",
         )
         .await?;
-        let creates_account = matches!(
-            &prepared.credential,
-            PreparedAuthorizationCredential::Create(_)
-        );
         let result = commit_authorization(
             self.accounts.as_ref(),
             prepared,
@@ -210,13 +205,11 @@ impl OpenAiService for DefaultOpenAiService {
             .account_facts_changed(std::slice::from_ref(&result.account_id))
             .await;
         publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
-        if creates_account {
-            self.observe_initial_quotas(
-                std::slice::from_ref(&result.account_id),
-                &context.request_id,
-            )
-            .await;
-        }
+        self.observe_initial_quotas(
+            std::slice::from_ref(&result.account_id),
+            &context.request_id,
+        )
+        .await;
         Ok(result)
     }
 

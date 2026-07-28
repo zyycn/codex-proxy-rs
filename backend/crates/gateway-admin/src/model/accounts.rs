@@ -212,6 +212,9 @@ pub enum AccountConnectionTestEvent {
         message: String,
         provider_error_code: Option<String>,
         provider_error_type: Option<String>,
+        upstream_status: Option<u16>,
+        upstream_content_type: Option<String>,
+        upstream_body: Option<String>,
         account_status: AccountStatus,
     },
 }

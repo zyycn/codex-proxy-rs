@@ -56,6 +56,11 @@ pub enum CodexAccountFailure {
     Banned,
     /// 账号信用额度已耗尽。
     QuotaExhausted,
+    /// 当前用量窗口已耗尽；到重置时间后可自动恢复。
+    UsageLimitExhausted {
+        /// 上游返回的窗口重置时长。
+        retry_after: Option<Duration>,
+    },
     /// 账号触发临时用量限制。
     RateLimited {
         /// 上游明确返回的最短冷却时长。
@@ -702,9 +707,19 @@ impl CodexCredentialSelector {
                 None,
                 CookieRecovery::None,
             ),
+            CodexAccountFailure::UsageLimitExhausted { retry_after } => {
+                return self
+                    .record_resettable_limit_failure(
+                        account,
+                        retry_after,
+                        "usage_limit_exhausted",
+                        now,
+                    )
+                    .await;
+            }
             CodexAccountFailure::RateLimited { retry_after } => {
                 return self
-                    .record_rate_limit_failure(account, retry_after, now)
+                    .record_resettable_limit_failure(account, retry_after, "rate_limited", now)
                     .await;
             }
             CodexAccountFailure::CloudflareChallenge { retry_after } => {
@@ -743,23 +758,20 @@ impl CodexCredentialSelector {
         Ok(())
     }
 
-    async fn record_rate_limit_failure(
+    async fn record_resettable_limit_failure(
         &self,
         account: &ProviderAccount,
         retry_after: Option<Duration>,
+        reason: &'static str,
         observed_at: SystemTime,
     ) -> Result<(), CredentialSelectionError> {
         let current = self.current_account(account.id()).await?;
         if current.revision() != account.revision() {
             return Err(CredentialRepositoryError::RevisionConflict.into());
         }
-        if matches!(
-            current.availability(),
-            AccountAvailability::Invalid
-                | AccountAvailability::Expired
-                | AccountAvailability::Banned
-                | AccountAvailability::QuotaExhausted
-        ) {
+        // 一次真实 429 证明上游已经接受当前凭据，可纠正旧的认证/封禁终态。
+        // 结构化额度耗尽仍拥有更高优先级，不能被通用限流降级。
+        if current.availability() == AccountAvailability::QuotaExhausted {
             return Ok(());
         }
         let quota_exhausted = self
@@ -776,7 +788,7 @@ impl CodexCredentialSelector {
         } else {
             (
                 AccountAvailability::Cooldown,
-                Some("rate_limited".to_owned()),
+                Some(reason.to_owned()),
                 observed_at.checked_add(retry_after.unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN)),
             )
         };
@@ -847,6 +859,8 @@ impl CodexCredentialSelector {
                 AccountAvailability::Unknown
                     | AccountAvailability::Cooldown
                     | AccountAvailability::Expired
+                    | AccountAvailability::Invalid
+                    | AccountAvailability::Banned
             )
         {
             return;

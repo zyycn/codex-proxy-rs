@@ -766,6 +766,30 @@ fn rate_limited_failure_marks_account_cooldown_with_a_cooldown_deadline() {
 }
 
 #[test]
+fn usage_limit_exhaustion_is_a_resettable_account_cooldown() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_primary", "at-primary");
+    let account = store.account("acct_primary").expect("account");
+    let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
+
+    block_on(selector.record_failure(
+        &account,
+        CodexAccountFailure::UsageLimitExhausted {
+            retry_after: Some(Duration::from_secs(30)),
+        },
+    ))
+    .expect("record usage-limit exhaustion");
+
+    let account = store.account("acct_primary").expect("persisted account");
+    assert_eq!(account.availability(), AccountAvailability::Cooldown);
+    assert!(
+        account
+            .cooldown_until()
+            .is_some_and(|until| until > SystemTime::now())
+    );
+}
+
+#[test]
 fn rate_limited_failure_does_not_downgrade_persisted_quota_exhaustion() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_primary", "at-primary");
@@ -854,7 +878,7 @@ fn rate_limited_failure_ignores_exhaustion_after_its_reset_time() {
 }
 
 #[test]
-fn rate_limited_failure_preserves_terminal_account_state() {
+fn authenticated_rate_limit_recovers_stale_authentication_state() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_primary", "at-primary");
     let account = store.account("acct_primary").expect("account");
@@ -883,8 +907,43 @@ fn rate_limited_failure_preserves_terminal_account_state() {
             .account("acct_primary")
             .expect("persisted account")
             .availability(),
-        AccountAvailability::Invalid
+        AccountAvailability::Cooldown
     );
+}
+
+#[test]
+fn successful_upstream_response_recovers_non_quota_terminal_states() {
+    for stale in [
+        AccountAvailability::Expired,
+        AccountAvailability::Invalid,
+        AccountAvailability::Banned,
+    ] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_primary", "at-primary");
+        let account = store.account("acct_primary").expect("account");
+        block_on(store.apply_state_change(AccountStateChange {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            availability: stale,
+            reason: Some("stale_observation".to_owned()),
+            cooldown_until: None,
+            observed_at: SystemTime::now(),
+        }))
+        .expect("seed stale state");
+        let current = store.account("acct_primary").expect("stale account");
+        let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
+
+        block_on(selector.record_success(&current, None));
+
+        assert_eq!(
+            store
+                .account("acct_primary")
+                .expect("recovered account")
+                .availability(),
+            AccountAvailability::Ready,
+            "stale state {stale:?}",
+        );
+    }
 }
 
 #[test]
