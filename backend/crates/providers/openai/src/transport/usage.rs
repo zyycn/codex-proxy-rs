@@ -298,10 +298,13 @@ fn model_matches_rule(model: &str, rule: &str) -> bool {
         .is_some_and(|suffix| matches!(suffix.as_bytes().first(), Some(b'-' | b'.' | b':')))
 }
 
-fn normalize_service_tier(service_tier: Option<&str>) -> Option<String> {
+/// 规范化请求或响应携带的服务档位，供观测与计费共用。
+pub(crate) fn normalize_service_tier(service_tier: Option<&str>) -> Option<String> {
     service_tier
         .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .filter(|value| {
+            !value.is_empty() && value.len() <= 64 && !value.chars().any(char::is_control)
+        })
         .map(str::to_ascii_lowercase)
 }
 

@@ -68,6 +68,7 @@ use crate::transport::request::{
     scope_request_to_account,
 };
 use crate::transport::session::CodexSessionIdentity;
+use crate::transport::usage::normalize_service_tier;
 use crate::transport::websocket::{CodexWebSocketExchangeError, PreviousResponseUnavailableReason};
 use crate::transport::{
     CODEX_RESPONSES_PATH, CodexAccountSelectionTelemetry, CodexBackendClient,
@@ -822,8 +823,9 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         // 下游按字节转发上游原文，避免 serde 往返改写数值/精度（大整数→f64、logprobs 等）。
         // WS 帧由 reducer 以 encode_sse_event(&event, raw) 逐字节内嵌上游原始 JSON
         // （transport/protocol/websocket.rs），push_frames 抽出的 data 即上游原文。
-        let mut decoder =
-            CodexCanonicalDecoder::new(upstream_model.as_str()).with_raw_sse_passthrough();
+        let mut decoder = CodexCanonicalDecoder::new(upstream_model.as_str())
+            .with_requested_service_tier(request.service_tier())
+            .with_raw_sse_passthrough();
         let mut pre_commit_events = PreCommitClientEvents::new(stream_commit_policy);
         loop {
             let Some(stream_deadline) = remaining(context.deadline()) else {
@@ -895,7 +897,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             };
             pre_commit_events.observe_chunk(chunk_len);
             let service_tier_changed = observation_state
-                .observe_service_tier(decoder.response_service_tier());
+                .observe_upstream_service_tier(decoder.response_service_tier());
             let terminal_failure = canonical_failure.map(|(error, semantic_output_seen)| {
                 let atomic_upstream_failure = matches!(&error, CodexCanonicalError::Upstream(_));
                 (
@@ -990,8 +992,8 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             )
         });
         let timing_signals = decoder.take_timing_signals();
-        let service_tier_changed =
-            observation_state.observe_service_tier(decoder.response_service_tier());
+        let service_tier_changed = observation_state
+            .observe_upstream_service_tier(decoder.response_service_tier());
         let timing_changed = observation_state
             .observe_timing_signals(timing_signals, context.timing_started_at());
         let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
@@ -1070,7 +1072,8 @@ struct OpenAiResponseObservationState {
     requested_model: String,
     stream: bool,
     compact: bool,
-    service_tier: Option<String>,
+    requested_service_tier: Option<String>,
+    upstream_service_tier: Option<String>,
     rate_limit_headers: Vec<(String, String)>,
     account_id: String,
     attempt_index: u32,
@@ -1102,8 +1105,8 @@ impl OpenAiResponseObservationState {
             requested_model: request.model().to_owned(),
             stream: request.stream(),
             compact: semantics.compact,
-            // 请求档位保留在 requestSummary；一等观测只接受响应确认的实际档位。
-            service_tier: None,
+            requested_service_tier: normalize_service_tier(request.service_tier()),
+            upstream_service_tier: None,
             rate_limit_headers: selected_observation_headers(&response.rate_limit_headers),
             account_id: account_id.to_owned(),
             attempt_index,
@@ -1127,7 +1130,7 @@ impl OpenAiResponseObservationState {
         if let Some(metadata) = self.provider_metadata() {
             observation = observation.with_provider_metadata(metadata);
         }
-        if let Some(service_tier) = self.service_tier.as_deref() {
+        if let Some(service_tier) = self.effective_service_tier() {
             observation = observation.with_service_tier_if_valid(service_tier.to_owned());
         }
         Some(observation)
@@ -1158,15 +1161,21 @@ impl OpenAiResponseObservationState {
         changed
     }
 
-    fn observe_service_tier(&mut self, service_tier: Option<&str>) -> bool {
-        let Some(service_tier) = service_tier else {
+    fn observe_upstream_service_tier(&mut self, service_tier: Option<&str>) -> bool {
+        let Some(service_tier) = normalize_service_tier(service_tier) else {
             return false;
         };
-        if self.service_tier.as_deref() == Some(service_tier) {
+        if self.upstream_service_tier.as_deref() == Some(service_tier.as_str()) {
             return false;
         }
-        self.service_tier = Some(service_tier.to_owned());
+        self.upstream_service_tier = Some(service_tier);
         true
+    }
+
+    fn effective_service_tier(&self) -> Option<&str> {
+        self.requested_service_tier
+            .as_deref()
+            .or(self.upstream_service_tier.as_deref())
     }
 
     fn merge_rate_limit_headers(&mut self, updates: &[(String, String)]) -> bool {
@@ -1245,9 +1254,21 @@ impl OpenAiResponseObservationState {
             )),
         );
         metadata.insert("requestSummary".to_owned(), self.request_summary.clone());
-        if let Some(service_tier) = &self.service_tier {
+        if let Some(service_tier) = self.effective_service_tier() {
             metadata.insert(
                 "serviceTier".to_owned(),
+                Value::String(service_tier.to_owned()),
+            );
+        }
+        if let Some(service_tier) = &self.requested_service_tier {
+            metadata.insert(
+                "requestedServiceTier".to_owned(),
+                Value::String(service_tier.clone()),
+            );
+        }
+        if let Some(service_tier) = &self.upstream_service_tier {
+            metadata.insert(
+                "upstreamServiceTier".to_owned(),
                 Value::String(service_tier.clone()),
             );
         }

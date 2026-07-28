@@ -21,10 +21,9 @@ use thiserror::Error;
 use super::protocol::responses::{
     ResponseEventSignals, ResponsesSseFailure, response_event_signals,
 };
-use super::usage::openai_billing_breakdown;
+use super::usage::{normalize_service_tier, openai_billing_breakdown};
 
 const CONTENTS_PER_OUTPUT: u32 = 1_024;
-const MAX_SERVICE_TIER_BYTES: usize = 64;
 
 /// 单 attempt 的增量 Responses decoder。
 ///
@@ -42,6 +41,7 @@ pub struct CodexCanonicalDecoder {
     reasoning_output_seen: BTreeSet<u32>,
     usage_emitted: bool,
     semantic_output_seen: bool,
+    requested_service_tier: Option<String>,
     response_service_tier: Option<String>,
     timing_signals: ResponseEventSignals,
     raw_sse_passthrough: bool,
@@ -137,6 +137,7 @@ impl CodexCanonicalDecoder {
             reasoning_output_seen: BTreeSet::new(),
             usage_emitted: false,
             semantic_output_seen: false,
+            requested_service_tier: None,
             response_service_tier: None,
             timing_signals: ResponseEventSignals::default(),
             raw_sse_passthrough: false,
@@ -149,6 +150,13 @@ impl CodexCanonicalDecoder {
     #[must_use]
     pub fn with_raw_sse_passthrough(mut self) -> Self {
         self.raw_sse_passthrough = true;
+        self
+    }
+
+    /// 请求显式指定的档位优先用于计费；响应档位只在请求未指定时兜底。
+    #[must_use]
+    pub fn with_requested_service_tier(mut self, service_tier: Option<&str>) -> Self {
+        self.requested_service_tier = normalize_service_tier(service_tier);
         self
     }
 
@@ -308,19 +316,14 @@ impl CodexCanonicalDecoder {
     }
 
     fn observe_response_service_tier(&mut self, value: &Value) {
-        let Some(service_tier) = response_object(value)
-            .and_then(|response| response.get("service_tier"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| {
-                !value.is_empty()
-                    && value.len() <= MAX_SERVICE_TIER_BYTES
-                    && !value.chars().any(char::is_control)
-            })
-        else {
+        let Some(service_tier) = normalize_service_tier(
+            response_object(value)
+                .and_then(|response| response.get("service_tier"))
+                .and_then(Value::as_str),
+        ) else {
             return;
         };
-        self.response_service_tier = Some(service_tier.to_ascii_lowercase());
+        self.response_service_tier = Some(service_tier);
     }
 
     /// 构造下发的 wire event。
@@ -836,9 +839,9 @@ impl CodexCanonicalDecoder {
             .filter(|model| !model.is_empty())
             .unwrap_or(&self.fallback_model)
             .to_owned();
-        let service_tier = response
-            .get("service_tier")
-            .and_then(Value::as_str)
+        let service_tier = self
+            .requested_service_tier
+            .as_deref()
             .or(self.response_service_tier.as_deref());
         if let Some(breakdown) = usage
             .filter(|usage| billable_usage_is_complete(response, *usage))

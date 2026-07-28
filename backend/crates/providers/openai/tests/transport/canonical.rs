@@ -203,19 +203,66 @@ fn decoder_should_emit_calculated_cost_for_complete_known_model_usage() {
 }
 
 #[test]
-fn decoder_should_keep_response_service_tier_when_terminal_event_omits_it() {
+fn decoder_should_prefer_requested_service_tier_over_response_tier_for_billing() {
     let body = concat!(
         "event: response.created\n",
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_fast_cost\",\"model\":\"gpt-5.4\",\"service_tier\":\"priority\"}}\n\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_fast_cost\",\"model\":\"gpt-5.4\",\"service_tier\":\"default\"}}\n\n",
         "event: response.completed\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fast_cost\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"usage\":{\"input_tokens\":100,\"output_tokens\":10,\"input_tokens_details\":{\"cached_tokens\":25,\"cache_write_tokens\":0},\"total_tokens\":110}}}\n\n",
     );
-    let mut decoder = CodexCanonicalDecoder::new("fallback");
+    let mut decoder =
+        CodexCanonicalDecoder::new("fallback").with_requested_service_tier(Some("priority"));
     let events = decoder
         .push(body.as_bytes())
         .expect("canonical priority response");
 
+    assert_eq!(decoder.response_service_tier(), Some("default"));
+    assert!(canonical_facts(&events).into_iter().any(|event| matches!(
+        event,
+        GatewayEvent::CalculatedCost(cost)
+            if cost.total().amount().scaled() == 6_875_000
+    )));
+}
+
+#[test]
+fn decoder_should_use_response_service_tier_when_request_omits_it() {
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_response_tier_cost\",\"model\":\"gpt-5.4\",\"service_tier\":\"priority\"}}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_response_tier_cost\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"usage\":{\"input_tokens\":100,\"output_tokens\":10,\"input_tokens_details\":{\"cached_tokens\":25,\"cache_write_tokens\":0},\"total_tokens\":110}}}\n\n",
+    );
+    let mut decoder = CodexCanonicalDecoder::new("fallback");
+    let events = decoder
+        .push(body.as_bytes())
+        .expect("canonical response-tier priority response");
+
     assert_eq!(decoder.response_service_tier(), Some("priority"));
+    assert!(canonical_facts(&events).into_iter().any(|event| matches!(
+        event,
+        GatewayEvent::CalculatedCost(cost)
+            if cost.total().amount().scaled() == 6_875_000
+    )));
+}
+
+#[test]
+fn websocket_decoder_should_prefer_requested_service_tier_over_response_tier_for_billing() {
+    let created = websocket_event_to_sse_frame(
+        r#"{"type":"response.created","response":{"id":"resp_ws_fast_cost","model":"gpt-5.4","service_tier":"default"}}"#,
+    )
+    .expect("created frame");
+    let completed = websocket_event_to_sse_frame(
+        r#"{"type":"response.completed","response":{"id":"resp_ws_fast_cost","model":"gpt-5.4","status":"completed","usage":{"input_tokens":100,"output_tokens":10,"input_tokens_details":{"cached_tokens":25,"cache_write_tokens":0},"total_tokens":110}}}"#,
+    )
+    .expect("completed frame");
+    let mut decoder = CodexCanonicalDecoder::new("fallback")
+        .with_requested_service_tier(Some("priority"))
+        .with_raw_sse_passthrough();
+    let events = decoder
+        .push(format!("{created}{completed}").as_bytes())
+        .expect("canonical priority WebSocket response");
+
+    assert_eq!(decoder.response_service_tier(), Some("default"));
     assert!(canonical_facts(&events).into_iter().any(|event| matches!(
         event,
         GatewayEvent::CalculatedCost(cost)
