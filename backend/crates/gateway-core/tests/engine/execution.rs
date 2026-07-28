@@ -4,7 +4,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use async_trait::async_trait;
@@ -20,8 +20,9 @@ use gateway_core::engine::credential::{
     AccountSelectionPolicy, ProviderAccountId, RotationStrategy,
 };
 use gateway_core::engine::execution::{
-    ClientApiKeyUsageSink, DefaultExecutionService, ExecutionService, ProviderCircuitDecision,
-    ProviderCircuitError, ProviderCircuitPort, provider_failure_affects_circuit,
+    ClientApiKeyUsageSink, ClientTransport, DefaultExecutionService, ExecutionRequestMetadata,
+    ExecutionService, ProviderCircuitDecision, ProviderCircuitError, ProviderCircuitPort,
+    StartExecution, provider_failure_affects_circuit,
 };
 use gateway_core::engine::probe::{AccountProbe, AccountProbeRequest};
 use gateway_core::engine::provider::{
@@ -37,7 +38,7 @@ use gateway_core::operation::{GenerateRequest, Operation, OperationKind, Protoco
 use gateway_core::policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits};
 use gateway_core::routing::snapshot::RuntimeSnapshotHandle;
 use gateway_core::routing::{
-    ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, RuntimeSnapshot,
+    ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RuntimeSnapshot,
     UpstreamModelId,
 };
 use serde_json::json;
@@ -157,6 +158,111 @@ fn successful_authentication_should_record_client_key_usage() {
         .expect("successful authentication");
 
     assert_eq!(usage.recorded(), vec!["key_usage_test".to_owned()]);
+}
+
+#[test]
+fn circuit_store_failure_should_fail_open_during_request_start() {
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(start_snapshot()),
+        Arc::new(TrackingExecutionStore::default()),
+        ProviderRegistry::default(),
+        Arc::new(UnusedAdmissions),
+        Arc::new(FailingDecisionCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+    let client = service
+        .authenticate("sk_start_test")
+        .expect("authenticated client");
+
+    let started = block_on(service.start(StartExecution {
+        client,
+        public_model: PublicModelId::new("gpt-start").expect("public model"),
+        operation: start_operation(),
+        metadata: ExecutionRequestMetadata {
+            protocol: "openai".to_owned(),
+            endpoint: "/v1/responses".to_owned(),
+            transport: ClientTransport::HttpJson,
+            stream: false,
+            client_ip: None,
+            user_agent: None,
+            previous_response_id: None,
+        },
+    }))
+    .expect("recoverable circuit state must not reject the request");
+
+    assert!(!started.session.is_finalized());
+}
+
+#[test]
+fn slow_circuit_store_should_time_out_and_fail_open_during_request_start() {
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(start_snapshot()),
+        Arc::new(TrackingExecutionStore::default()),
+        ProviderRegistry::default(),
+        Arc::new(UnusedAdmissions),
+        Arc::new(PendingDecisionCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+    let client = service
+        .authenticate("sk_start_test")
+        .expect("authenticated client");
+    let started_at = Instant::now();
+
+    let started = block_on(service.start(StartExecution {
+        client,
+        public_model: PublicModelId::new("gpt-start").expect("public model"),
+        operation: start_operation(),
+        metadata: ExecutionRequestMetadata {
+            protocol: "openai".to_owned(),
+            endpoint: "/v1/responses".to_owned(),
+            transport: ClientTransport::HttpJson,
+            stream: false,
+            client_ip: None,
+            user_agent: None,
+            previous_response_id: None,
+        },
+    }))
+    .expect("slow recoverable circuit state must not reject the request");
+
+    assert!(started_at.elapsed() < Duration::from_secs(2));
+    assert!(!started.session.is_finalized());
+}
+
+#[test]
+fn stale_nonempty_catalog_should_not_block_a_new_model_during_request_start() {
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(start_snapshot()),
+        Arc::new(TrackingExecutionStore::default()),
+        ProviderRegistry::default(),
+        Arc::new(UnusedAdmissions),
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+    let client = service
+        .authenticate("sk_start_test")
+        .expect("authenticated client");
+    let model = "gpt-future-not-in-catalog";
+
+    let started = block_on(service.start(StartExecution {
+        client,
+        public_model: PublicModelId::from_client_wire(model).expect("client model"),
+        operation: start_operation_for_model(model),
+        metadata: ExecutionRequestMetadata {
+            protocol: "openai".to_owned(),
+            endpoint: "/v1/responses".to_owned(),
+            transport: ClientTransport::HttpJson,
+            stream: false,
+            client_ip: None,
+            user_agent: None,
+            previous_response_id: None,
+        },
+    }))
+    .expect("stale model catalog must not reject the request");
+
+    assert!(!started.session.is_finalized());
 }
 
 #[derive(Default)]
@@ -309,6 +415,56 @@ impl ProviderCircuitPort for UnusedCircuits {
     }
 }
 
+struct FailingDecisionCircuits;
+
+impl ProviderCircuitPort for FailingDecisionCircuits {
+    fn decision<'a>(
+        &'a self,
+        _: &'a ProviderKind,
+    ) -> BoxFuture<'a, Result<ProviderCircuitDecision, ProviderCircuitError>> {
+        Box::pin(async { Err(ProviderCircuitError) })
+    }
+
+    fn observe_failure<'a>(
+        &'a self,
+        _: &'a ProviderKind,
+    ) -> BoxFuture<'a, Result<(), ProviderCircuitError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn observe_success<'a>(
+        &'a self,
+        _: &'a ProviderKind,
+    ) -> BoxFuture<'a, Result<(), ProviderCircuitError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+struct PendingDecisionCircuits;
+
+impl ProviderCircuitPort for PendingDecisionCircuits {
+    fn decision<'a>(
+        &'a self,
+        _: &'a ProviderKind,
+    ) -> BoxFuture<'a, Result<ProviderCircuitDecision, ProviderCircuitError>> {
+        Box::pin(futures::future::pending())
+    }
+
+    fn observe_failure<'a>(
+        &'a self,
+        _: &'a ProviderKind,
+    ) -> BoxFuture<'a, Result<(), ProviderCircuitError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn observe_success<'a>(
+        &'a self,
+        _: &'a ProviderKind,
+    ) -> BoxFuture<'a, Result<(), ProviderCircuitError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
 struct UnusedContinuation;
 
 impl NativeContinuationPort for UnusedContinuation {
@@ -371,9 +527,52 @@ fn client_snapshot() -> RuntimeSnapshot {
     .expect("client snapshot")
 }
 
+fn start_snapshot() -> RuntimeSnapshot {
+    let provider = ProviderKind::new("openai").expect("provider kind");
+    let capabilities =
+        ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), Some(16_000));
+    RuntimeSnapshot::new(
+        ConfigRevision::new(1).expect("config revision"),
+        AccountSelectionPolicy::new(
+            RotationStrategy::Smart,
+            std::num::NonZeroU32::new(1).expect("concurrency"),
+            Duration::from_millis(1),
+        ),
+        vec![provider.clone()],
+        vec![ProviderModel::new(
+            provider.clone(),
+            UpstreamModelId::new("gpt-start").expect("model ID"),
+            capabilities,
+        )],
+        vec![ClientPolicy::new(
+            ClientApiKeyId::new("key_start_test").expect("client API key ID"),
+            PlaintextClientApiKey::new("sk_start_test").expect("plaintext client API key"),
+            provider,
+            true,
+            RateLimits::unlimited(),
+        )],
+    )
+    .expect("start snapshot")
+}
+
 fn probe_operation() -> Operation {
     let body = json!({
         "model": "gpt-probe",
+        "input": [{"type": "message", "role": "user", "content": "ping"}],
+    });
+    Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", body.as_object().expect("request object").clone())
+            .expect("OpenAI payload"),
+    ))
+}
+
+fn start_operation() -> Operation {
+    start_operation_for_model("gpt-start")
+}
+
+fn start_operation_for_model(model: &str) -> Operation {
+    let body = json!({
+        "model": model,
         "input": [{"type": "message", "role": "user", "content": "ping"}],
     });
     Operation::Generate(GenerateRequest::from_protocol_payload(

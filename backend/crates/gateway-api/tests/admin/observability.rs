@@ -326,6 +326,7 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
             upstream_transport: Some("http_sse".to_owned()),
             http_version: Some("h2".to_owned()),
             websocket_pool: Some("reuse".to_owned()),
+            service_tier: Some("priority".to_owned()),
             provider_metadata_json: Some(
                 serde_json::json!({
                     "effectiveModel": "grok-4.5",
@@ -402,6 +403,7 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
     assert_eq!(
         serde_json::json!({
             "route": value["data"]["items"][0]["route"],
+            "serviceTier": value["data"]["items"][0]["serviceTier"],
             "authenticationKind": value["data"]["items"][0]["authenticationKind"],
             "imageInputTokens": value["data"]["items"][0]["tokenDetails"]["imageInputTokens"],
             "imageOutputTokens": value["data"]["items"][0]["tokenDetails"]["imageOutputTokens"],
@@ -428,6 +430,7 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
         }),
         serde_json::json!({
             "route": "/v1/responses",
+            "serviceTier": "priority",
             "authenticationKind": "oauth",
             "imageInputTokens": 31,
             "imageOutputTokens": 9,

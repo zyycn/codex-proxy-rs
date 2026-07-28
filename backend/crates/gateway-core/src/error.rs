@@ -3,10 +3,11 @@
 use std::fmt;
 use std::time::Duration;
 
+use bytes::Bytes;
 use thiserror::Error;
 
 use crate::engine::UpstreamSendState;
-use crate::event::ProviderEvent;
+use crate::event::{ProviderEvent, ProviderResponseHeader};
 
 /// 应用层标识不满足约束。
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -175,22 +176,18 @@ pub enum ContinuationFailure {
     HistoryUnavailable,
 }
 
-/// Adapter 已明确分类为非 bearer、可用于诊断的上游值。
+/// Adapter 已明确分类为非 bearer 的不透明上游值。
+///
+/// Core 不解释或校验内容，只通过自定义 [`Debug`] 避免它意外进入日志。协议 adapter
+/// 可在原客户端响应中读取原值。
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct SafeUpstreamValue(String);
+pub struct OpaqueUpstreamValue(String);
 
-impl SafeUpstreamValue {
-    const MAX_BYTES: usize = 256;
-
-    /// 校验并创建诊断值。
-    ///
-    /// # Errors
-    ///
-    /// 空值、超长值或控制字符会返回 [`IdentifierError`]。
-    pub fn new(value: impl Into<String>) -> Result<Self, IdentifierError> {
-        let value = value.into();
-        validate_text(&value, Self::MAX_BYTES, false, None)?;
-        Ok(Self(value))
+impl OpaqueUpstreamValue {
+    /// 原样保存上游值。
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
     }
 
     /// 返回已经由 adapter 安全分类的原值。
@@ -200,9 +197,9 @@ impl SafeUpstreamValue {
     }
 }
 
-impl fmt::Debug for SafeUpstreamValue {
+impl fmt::Debug for OpaqueUpstreamValue {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("SafeUpstreamValue(<redacted-from-Debug>)")
+        formatter.write_str("OpaqueUpstreamValue(<redacted-from-Debug>)")
     }
 }
 
@@ -213,31 +210,23 @@ impl fmt::Debug for SafeUpstreamValue {
 #[derive(Clone, PartialEq, Eq)]
 pub struct ClientVisibleUpstreamError {
     message: String,
-    code: Option<SafeUpstreamValue>,
-    error_type: Option<SafeUpstreamValue>,
+    code: Option<OpaqueUpstreamValue>,
+    error_type: Option<OpaqueUpstreamValue>,
 }
 
 impl ClientVisibleUpstreamError {
-    const MAX_MESSAGE_BYTES: usize = 8_192;
-
-    /// 从结构化上游 `message`、`code` 和 `type` 创建客户端可见错误。
-    ///
-    /// # Errors
-    ///
-    /// message 为空、过长或含控制字符时返回错误；可选 code/type 不满足安全
-    /// 约束时会被省略，不会把整段上游 body 重新暴露。
+    /// 原样保存结构化上游 `message`、`code` 和 `type`。
+    #[must_use]
     pub fn new(
         message: impl Into<String>,
         code: Option<String>,
         error_type: Option<String>,
-    ) -> Result<Self, IdentifierError> {
-        let message = message.into();
-        validate_text(&message, Self::MAX_MESSAGE_BYTES, false, None)?;
-        Ok(Self {
-            message,
-            code: code.and_then(|value| SafeUpstreamValue::new(value).ok()),
-            error_type: error_type.and_then(|value| SafeUpstreamValue::new(value).ok()),
-        })
+    ) -> Self {
+        Self {
+            message: message.into(),
+            code: code.map(OpaqueUpstreamValue::new),
+            error_type: error_type.map(OpaqueUpstreamValue::new),
+        }
     }
 
     /// 返回原上游的结构化 message。
@@ -249,19 +238,87 @@ impl ClientVisibleUpstreamError {
     /// 返回原上游的结构化 code。
     #[must_use]
     pub fn code(&self) -> Option<&str> {
-        self.code.as_ref().map(SafeUpstreamValue::as_str)
+        self.code.as_ref().map(OpaqueUpstreamValue::as_str)
     }
 
     /// 返回原上游的结构化 type。
     #[must_use]
     pub fn error_type(&self) -> Option<&str> {
-        self.error_type.as_ref().map(SafeUpstreamValue::as_str)
+        self.error_type.as_ref().map(OpaqueUpstreamValue::as_str)
     }
 }
 
 impl fmt::Debug for ClientVisibleUpstreamError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ClientVisibleUpstreamError(<redacted-from-Debug>)")
+    }
+}
+
+/// 只供当前客户端请求使用的原始上游 HTTP 失败响应。
+///
+/// 该值不属于稳定诊断事实，不能进入日志、探针或持久化。它刻意不实现
+/// [`Clone`]；[`ProviderError`] 的普通 clone 会丢弃它，只有最终失败的原对象
+/// 才能把响应交给协议 adapter。
+#[derive(PartialEq, Eq)]
+pub struct ClientVisibleUpstreamResponse {
+    status: u16,
+    content_type: Option<Vec<u8>>,
+    headers: Vec<ProviderResponseHeader>,
+    body: Bytes,
+}
+
+impl ClientVisibleUpstreamResponse {
+    /// 保存 transport 实际收到的状态码、Content-Type 原值和正文。
+    #[must_use]
+    pub fn new(status: u16, content_type: Option<Vec<u8>>, body: Bytes) -> Self {
+        Self {
+            status,
+            content_type,
+            headers: Vec::new(),
+            body,
+        }
+    }
+
+    /// 附加 Provider 已剔除账号绑定与 framing 信息的普通响应头。
+    #[must_use]
+    pub fn with_headers(mut self, headers: Vec<ProviderResponseHeader>) -> Self {
+        self.headers = headers;
+        self
+    }
+
+    #[must_use]
+    pub const fn status(&self) -> u16 {
+        self.status
+    }
+
+    #[must_use]
+    pub fn content_type(&self) -> Option<&[u8]> {
+        self.content_type.as_deref()
+    }
+
+    #[must_use]
+    pub fn headers(&self) -> &[ProviderResponseHeader] {
+        &self.headers
+    }
+
+    #[must_use]
+    pub const fn body(&self) -> &Bytes {
+        &self.body
+    }
+}
+
+impl fmt::Debug for ClientVisibleUpstreamResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ClientVisibleUpstreamResponse")
+            .field("status", &self.status)
+            .field(
+                "content_type",
+                &self.content_type.as_ref().map(|_| "<present>"),
+            )
+            .field("header_count", &self.headers.len())
+            .field("body", &"<redacted>")
+            .finish()
     }
 }
 
@@ -274,22 +331,28 @@ impl fmt::Debug for ClientVisibleUpstreamError {
 /// 唯一例外是 [`ProviderError::with_atomic_client_events`]：它只承载尚未交付客户端、
 /// 必须与本错误一起完成重试判断的协议事件。Core 会在任何持久化或日志记录前取走
 /// 这些事件，不能把它们当作诊断上下文使用。
-#[derive(Clone)]
 pub struct ProviderError {
     kind: ProviderErrorKind,
     send_state: UpstreamSendState,
     upstream_status: Option<u16>,
-    upstream_code: Option<SafeUpstreamValue>,
-    upstream_request_id: Option<SafeUpstreamValue>,
-    upstream_response_id: Option<SafeUpstreamValue>,
+    upstream_values: Option<Box<ProviderErrorUpstreamValues>>,
     retry_after: Option<Duration>,
     continuation_failure: Option<ContinuationFailure>,
     replay_safe: bool,
+    pre_delivery_retry: bool,
     credential_recovery_required: bool,
     retry_same_account: bool,
     sensitive_context_redacted: bool,
     client_visible_upstream_error: Option<Box<ClientVisibleUpstreamError>>,
+    client_visible_upstream_response: Option<Box<ClientVisibleUpstreamResponse>>,
     atomic_client_events: Option<Box<AtomicClientEvents>>,
+}
+
+#[derive(Clone, Default)]
+struct ProviderErrorUpstreamValues {
+    code: Option<OpaqueUpstreamValue>,
+    request_id: Option<OpaqueUpstreamValue>,
+    response_id: Option<OpaqueUpstreamValue>,
 }
 
 #[derive(Clone)]
@@ -303,16 +366,16 @@ impl ProviderError {
             kind,
             send_state,
             upstream_status: None,
-            upstream_code: None,
-            upstream_request_id: None,
-            upstream_response_id: None,
+            upstream_values: None,
             retry_after: None,
             continuation_failure: None,
             replay_safe: false,
+            pre_delivery_retry: false,
             credential_recovery_required: false,
             retry_same_account: false,
             sensitive_context_redacted: false,
             client_visible_upstream_error: None,
+            client_visible_upstream_response: None,
             atomic_client_events: None,
         }
     }
@@ -328,23 +391,28 @@ impl ProviderError {
 
     /// 附加 adapter 已分类为安全的上游错误 code。
     #[must_use]
-    pub fn with_upstream_code(mut self, code: SafeUpstreamValue) -> Self {
-        self.upstream_code = Some(code);
+    pub fn with_upstream_code(mut self, code: OpaqueUpstreamValue) -> Self {
+        self.upstream_values_mut().code = Some(code);
         self
     }
 
     /// 附加 adapter 已分类为非 bearer 的上游 request ID。
     #[must_use]
-    pub fn with_upstream_request_id(mut self, request_id: SafeUpstreamValue) -> Self {
-        self.upstream_request_id = Some(request_id);
+    pub fn with_upstream_request_id(mut self, request_id: OpaqueUpstreamValue) -> Self {
+        self.upstream_values_mut().request_id = Some(request_id);
         self
     }
 
     /// 附加 adapter 已分类为非 bearer 的上游 response ID。
     #[must_use]
-    pub fn with_upstream_response_id(mut self, response_id: SafeUpstreamValue) -> Self {
-        self.upstream_response_id = Some(response_id);
+    pub fn with_upstream_response_id(mut self, response_id: OpaqueUpstreamValue) -> Self {
+        self.upstream_values_mut().response_id = Some(response_id);
         self
+    }
+
+    fn upstream_values_mut(&mut self) -> &mut ProviderErrorUpstreamValues {
+        self.upstream_values
+            .get_or_insert_with(|| Box::new(ProviderErrorUpstreamValues::default()))
     }
 
     /// 附加 Provider 建议的冷却时间。
@@ -368,6 +436,17 @@ impl ProviderError {
         self
     }
 
+    /// 允许 Core 仅在客户端尚未收到任何事件时执行一次受预算约束的换号恢复。
+    ///
+    /// 该标记不证明上游未执行，也不等价于 [`Self::with_replay_safe`]；它只表达
+    /// Provider 选择了“客户端无感恢复优先”的传输策略。Core 在 continuation、
+    /// 指定账号或下游已经进入提交状态时必须忽略它。
+    #[must_use]
+    pub const fn with_pre_delivery_retry(mut self) -> Self {
+        self.pre_delivery_retry = true;
+        self
+    }
+
     /// 要求 Core 在账号凭据已恢复后仅对原账号重放一次。
     #[must_use]
     pub const fn with_same_account_retry(mut self) -> Self {
@@ -386,6 +465,16 @@ impl ProviderError {
     #[must_use]
     pub fn with_client_visible_upstream_error(mut self, error: ClientVisibleUpstreamError) -> Self {
         self.client_visible_upstream_error = Some(Box::new(error));
+        self
+    }
+
+    /// 附加仅可返回给当前请求方的原始上游 HTTP 失败响应。
+    #[must_use]
+    pub fn with_client_visible_upstream_response(
+        mut self,
+        response: ClientVisibleUpstreamResponse,
+    ) -> Self {
+        self.client_visible_upstream_response = Some(Box::new(response));
         self
     }
 
@@ -427,20 +516,26 @@ impl ProviderError {
 
     /// 返回安全分类的上游错误 code。
     #[must_use]
-    pub fn upstream_code(&self) -> Option<&SafeUpstreamValue> {
-        self.upstream_code.as_ref()
+    pub fn upstream_code(&self) -> Option<&OpaqueUpstreamValue> {
+        self.upstream_values
+            .as_deref()
+            .and_then(|values| values.code.as_ref())
     }
 
     /// 返回安全分类的上游 request ID。
     #[must_use]
-    pub fn upstream_request_id(&self) -> Option<&SafeUpstreamValue> {
-        self.upstream_request_id.as_ref()
+    pub fn upstream_request_id(&self) -> Option<&OpaqueUpstreamValue> {
+        self.upstream_values
+            .as_deref()
+            .and_then(|values| values.request_id.as_ref())
     }
 
     /// 返回安全分类的上游 response ID。
     #[must_use]
-    pub fn upstream_response_id(&self) -> Option<&SafeUpstreamValue> {
-        self.upstream_response_id.as_ref()
+    pub fn upstream_response_id(&self) -> Option<&OpaqueUpstreamValue> {
+        self.upstream_values
+            .as_deref()
+            .and_then(|values| values.response_id.as_ref())
     }
 
     /// 返回 Provider 建议的冷却时间。
@@ -459,6 +554,12 @@ impl ProviderError {
     #[must_use]
     pub const fn replay_is_safe(&self) -> bool {
         self.replay_safe
+    }
+
+    /// 返回 Provider 是否允许在首个客户端事件前换号恢复传输失败。
+    #[must_use]
+    pub const fn allows_pre_delivery_retry(&self) -> bool {
+        self.pre_delivery_retry
     }
 
     /// 返回 Provider 是否已完成凭据恢复并要求原账号重放。
@@ -484,6 +585,12 @@ impl ProviderError {
         self.client_visible_upstream_error.as_deref()
     }
 
+    /// 返回只供当前协议响应使用的原始上游 HTTP 失败响应。
+    #[must_use]
+    pub fn client_visible_upstream_response(&self) -> Option<&ClientVisibleUpstreamResponse> {
+        self.client_visible_upstream_response.as_deref()
+    }
+
     /// 取走只供本次重试/提交决策使用的原子客户端事件。
     ///
     /// Core 必须在克隆错误、记录中间失败或构造终态前调用本方法，避免原始 wire
@@ -502,6 +609,27 @@ impl ProviderError {
     }
 }
 
+impl Clone for ProviderError {
+    fn clone(&self) -> Self {
+        Self {
+            kind: self.kind,
+            send_state: self.send_state,
+            upstream_status: self.upstream_status,
+            upstream_values: self.upstream_values.clone(),
+            retry_after: self.retry_after,
+            continuation_failure: self.continuation_failure,
+            replay_safe: self.replay_safe,
+            pre_delivery_retry: self.pre_delivery_retry,
+            credential_recovery_required: self.credential_recovery_required,
+            retry_same_account: self.retry_same_account,
+            sensitive_context_redacted: self.sensitive_context_redacted,
+            client_visible_upstream_error: self.client_visible_upstream_error.clone(),
+            client_visible_upstream_response: None,
+            atomic_client_events: None,
+        }
+    }
+}
+
 impl fmt::Debug for ProviderError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -511,25 +639,20 @@ impl fmt::Debug for ProviderError {
             .field("upstream_status", &self.upstream_status)
             .field(
                 "upstream_code",
-                &self.upstream_code.as_ref().map(|_| "<classified-safe>"),
+                &self.upstream_code().map(|_| "<classified-safe>"),
             )
             .field(
                 "upstream_request_id",
-                &self
-                    .upstream_request_id
-                    .as_ref()
-                    .map(|_| "<classified-safe>"),
+                &self.upstream_request_id().map(|_| "<classified-safe>"),
             )
             .field(
                 "upstream_response_id",
-                &self
-                    .upstream_response_id
-                    .as_ref()
-                    .map(|_| "<classified-safe>"),
+                &self.upstream_response_id().map(|_| "<classified-safe>"),
             )
             .field("retry_after", &self.retry_after)
             .field("continuation_failure", &self.continuation_failure)
             .field("replay_safe", &self.replay_safe)
+            .field("pre_delivery_retry", &self.pre_delivery_retry)
             .field(
                 "credential_recovery_required",
                 &self.credential_recovery_required,
@@ -543,6 +666,13 @@ impl fmt::Debug for ProviderError {
                 "client_visible_upstream_error",
                 &self
                     .client_visible_upstream_error
+                    .as_ref()
+                    .map(|_| "<present>"),
+            )
+            .field(
+                "client_visible_upstream_response",
+                &self
+                    .client_visible_upstream_response
                     .as_ref()
                     .map(|_| "<present>"),
             )

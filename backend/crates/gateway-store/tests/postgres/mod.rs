@@ -70,6 +70,12 @@ impl TestDatabase {
         .execute(&mut *migration)
         .await
         .expect("apply opaque response storage migration");
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/0004_add_model_request_service_tier.sql"
+        ))
+        .execute(&mut *migration)
+        .await
+        .expect("apply model request service tier migration");
         migration.commit().await.expect("commit terminal migration");
         Some(Self {
             admin,
@@ -165,7 +171,7 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
     .expect("drop migration test database");
     admin.close().await;
 
-    assert_eq!((first_table_count, migration_count), (8, 3));
+    assert_eq!((first_table_count, migration_count), (8, 4));
     assert_eq!(response_id_types, ["bytea", "bytea"]);
     assert!(!raw_response_id_index_exists);
 }
@@ -176,12 +182,13 @@ fn migrations_should_leave_transaction_ownership_to_sqlx() {
         include_str!("../../../../migrations/0001_initial.sql"),
         include_str!("../../../../migrations/0002_drop_opaque_response_id_index.sql"),
         include_str!("../../../../migrations/0003_store_opaque_response_ids_as_bytes.sql"),
+        include_str!("../../../../migrations/0004_add_model_request_service_tier.sql"),
     ]
     .into_iter()
     .flat_map(str::lines)
-        .map(str::trim)
-        .filter(|line| matches!(*line, "begin;" | "commit;"))
-        .count();
+    .map(str::trim)
+    .filter(|line| matches!(*line, "begin;" | "commit;"))
+    .count();
 
     assert_eq!(transaction_statements, 0);
 }

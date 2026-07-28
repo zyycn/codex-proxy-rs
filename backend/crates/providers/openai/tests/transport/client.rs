@@ -7,6 +7,7 @@ fn upstream_error_formatting_should_redact_body() {
     let error = CodexClientError::Upstream {
         status: reqwest::StatusCode::UNAUTHORIZED,
         body: secret.to_owned(),
+        client_response: None,
         retry_after_seconds: None,
         diagnostics: Box::default(),
         set_cookie_headers: vec!["session=secret".to_owned()],
@@ -40,6 +41,7 @@ fn request_context_debug_should_redact_all_identity_material() {
         thread_id: None,
         client_request_id: None,
         turn_id: None,
+        account_selection: Default::default(),
     };
     let debug = format!("{context:?}");
 

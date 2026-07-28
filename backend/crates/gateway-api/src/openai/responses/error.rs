@@ -152,9 +152,6 @@ pub enum ResponseEncodeError {
     /// 协议原生流缺少可返回的终态 response object。
     #[error("responses wire stream has no terminal response")]
     MissingWireTerminal,
-    /// 协议原生事件携带了不一致的响应身份。
-    #[error("responses wire stream changed its response identity")]
-    WireIdentityChanged,
     /// 终态 response object 无法序列化为完整 HTTP JSON 响应。
     #[error("responses wire terminal serialization failed")]
     Serialization,
@@ -167,7 +164,7 @@ impl ResponseEncodeError {
         ProtocolErrorBody {
             error: ProtocolError {
                 kind: "server_error",
-                code: "invalid_canonical_response",
+                code: "invalid_upstream_response",
                 message: "The gateway could not forward the upstream response.".to_owned(),
                 param: None,
             },

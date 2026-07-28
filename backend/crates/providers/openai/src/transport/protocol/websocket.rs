@@ -90,6 +90,9 @@ pub fn websocket_metadata_headers(value: &Value) -> Vec<(String, String)> {
 
 /// 从 `response.metadata` 帧中提取 `x-codex-turn-state`。
 pub fn websocket_metadata_turn_state(value: &Value) -> Option<String> {
+    if value.get("type").and_then(Value::as_str) != Some("response.metadata") {
+        return None;
+    }
     websocket_metadata_headers(value)
         .into_iter()
         .find_map(|(name, value)| {
@@ -123,7 +126,6 @@ pub fn websocket_response_completed_id(value: &Value) -> Option<String> {
     value
         .pointer("/response/id")
         .and_then(Value::as_str)
-        .filter(|id| !id.trim().is_empty())
         .map(ToOwned::to_owned)
 }
 

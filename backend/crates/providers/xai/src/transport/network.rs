@@ -30,7 +30,7 @@ use crate::{
     OAuthHttpResponse, OAuthHttpTransport, TransportFailure, TransportFailureKind, TransportFuture,
 };
 use gateway_core::engine::UpstreamSendState;
-use gateway_core::error::{ClientVisibleUpstreamError, SafeUpstreamValue};
+use gateway_core::error::{ClientVisibleUpstreamError, OpaqueUpstreamValue};
 use gateway_core::event::UpstreamHttpVersion;
 
 use super::scrub_account_fingerprints;
@@ -1017,17 +1017,15 @@ async fn classify_inference_status(response: Response) -> GrokInferenceTransport
     } else {
         metadata.code.as_deref().and_then(normalize_failure_code)
     };
-    if let Some(message) = metadata.client_message.as_deref()
-        && let Ok(detail) = ClientVisibleUpstreamError::new(
+    if let Some(message) = metadata.client_message.as_deref() {
+        error = error.with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
             scrub_account_fingerprints(message),
             upstream_code.clone(),
             metadata.error_type.clone(),
-        )
-    {
-        error = error.with_client_visible_upstream_error(detail);
+        ));
     }
-    if let Some(code) = upstream_code.and_then(|code| SafeUpstreamValue::new(code).ok()) {
-        error = error.with_upstream_code(code);
+    if let Some(code) = upstream_code {
+        error = error.with_upstream_code(OpaqueUpstreamValue::new(code));
     }
     if credential_recovery_required {
         error = error.with_credential_recovery();
@@ -1235,12 +1233,12 @@ fn upstream_http_version(version: reqwest::Version) -> UpstreamHttpVersion {
     }
 }
 
-fn upstream_request_id(response: &Response) -> Option<SafeUpstreamValue> {
+fn upstream_request_id(response: &Response) -> Option<OpaqueUpstreamValue> {
     ["x-request-id", "request-id", "cf-ray"]
         .into_iter()
         .find_map(|name| response.headers().get(name))
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| SafeUpstreamValue::new(value.to_owned()).ok())
+        .map(|value| OpaqueUpstreamValue::new(value.to_owned()))
 }
 
 async fn classify_model_catalog_status(response: Response) -> GrokModelCatalogTransportError {

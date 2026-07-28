@@ -1,5 +1,6 @@
 //! 在 transport 边界采集的上游响应诊断信息。
 
+use super::client::CodexClientVisibleUpstreamResponse;
 use super::protocol::responses::ResponsesSseFailure;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::{StatusCode, header::HeaderMap};
@@ -107,6 +108,7 @@ pub struct CodexUpstreamFailure {
     pub(crate) client_message: Option<String>,
     pub(crate) client_code: Option<String>,
     pub(crate) client_error_type: Option<String>,
+    pub(crate) client_response: Option<Box<CodexClientVisibleUpstreamResponse>>,
     pub(crate) identity_error_code: Option<String>,
     pub(crate) retry_after_seconds: Option<u64>,
     pub(crate) request_id: Option<String>,
@@ -118,11 +120,16 @@ pub struct CodexUpstreamFailure {
 
 impl CodexUpstreamFailure {
     /// 用完整 HTTP 响应事实构造并分类一次上游拒绝。
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the classifier consumes one flat set of transport response facts"
+    )]
     pub fn from_response(
         status: StatusCode,
         body: &str,
         retry_after_seconds: Option<u64>,
         diagnostics: &CodexUpstreamDiagnostics,
+        client_response: Option<&CodexClientVisibleUpstreamResponse>,
         set_cookie_headers: &[String],
         rate_limit_headers: &[(String, String)],
         send_phase: CodexUpstreamSendPhase,
@@ -141,6 +148,7 @@ impl CodexUpstreamFailure {
             client_message: fields.client_message,
             client_code: fields.code,
             client_error_type: fields.error_type,
+            client_response: client_response.cloned().map(Box::new),
             identity_error_code: diagnostics.identity_error_code.clone(),
             retry_after_seconds,
             request_id: diagnostics.request_id.clone(),
@@ -180,6 +188,7 @@ impl CodexUpstreamFailure {
             client_message: Some(fields.message),
             client_code: fields.code,
             client_error_type: fields.error_type,
+            client_response: None,
             identity_error_code: diagnostics.identity_error_code.clone(),
             retry_after_seconds: failure.retry_after_seconds,
             request_id: diagnostics.request_id.clone(),

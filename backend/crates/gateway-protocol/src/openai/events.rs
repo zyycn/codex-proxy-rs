@@ -317,11 +317,7 @@ pub fn is_rate_limit_header_name(name: &str) -> bool {
 
 /// 从内部 `codex.rate_limits` 事件中解析限流信息。
 pub fn parse_rate_limits_event(value: &Value) -> Option<ParsedRateLimits> {
-    if value
-        .get("type")
-        .and_then(Value::as_str)
-        .is_some_and(|event_type| event_type != "codex.rate_limits")
-    {
+    if value.get("type").and_then(Value::as_str) != Some("codex.rate_limits") {
         return None;
     }
 

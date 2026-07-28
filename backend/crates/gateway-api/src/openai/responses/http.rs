@@ -8,7 +8,7 @@ use axum::{
     body::{Body, Bytes},
     extract::{Extension, State, connect_info::ConnectInfo},
     http::{
-        HeaderMap, HeaderValue, StatusCode,
+        HeaderMap, HeaderName, HeaderValue, StatusCode,
         header::{CACHE_CONTROL, CONTENT_TYPE, USER_AGENT},
     },
     response::{IntoResponse, Response},
@@ -25,8 +25,8 @@ use crate::ApiState;
 use crate::openai::{
     auth::{authenticate_client, authentication_error_response},
     error::{
-        gateway_error_contract, gateway_error_from_engine, gateway_error_response,
-        protocol_error_response, runtime_unavailable_response,
+        engine_error_response, gateway_error_contract, gateway_error_from_engine,
+        gateway_error_response, protocol_error_response, runtime_unavailable_response,
     },
 };
 
@@ -180,7 +180,7 @@ pub async fn collect_execution_response(session: Box<dyn ExecutionSession>) -> R
     let events = match session.collect_uncommitted().await {
         Ok(events) => events,
         Err(error) => {
-            let response = gateway_error_response(&gateway_error_from_engine(&error));
+            let response = engine_error_response(&error);
             return execution.record_response_status(response).await;
         }
     };
@@ -206,7 +206,7 @@ pub async fn collect_execution_response(session: Box<dyn ExecutionSession>) -> R
         .await
     {
         execution.cancel_and_finalize().await;
-        let response = gateway_error_response(&gateway_error_from_engine(&error));
+        let response = engine_error_response(&error);
         return execution.record_response_status(response).await;
     }
     if !session.is_finalized() {
@@ -237,9 +237,7 @@ fn encode_collected_events(
 ) -> Result<Vec<u8>, BufferedResponseEncodeError> {
     let mut encoder = OpenAiResponsesEncoder::new();
     for event in events {
-        encoder
-            .push_sse(event)
-            .map_err(BufferedResponseEncodeError::Canonical)?;
+        encoder.push_sse(event);
     }
     let response = encoder
         .finish()
@@ -253,23 +251,25 @@ fn json_body_response(encoded: Vec<u8>, response_headers: &[ProviderResponseHead
     response
         .headers_mut()
         .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    apply_safe_response_headers(response, response_headers)
+    apply_response_headers(response, response_headers)
 }
 
-fn apply_safe_response_headers(
+fn apply_response_headers(
     mut response: Response,
     response_headers: &[ProviderResponseHeader],
 ) -> Response {
+    let connection_options = super::response_connection_options(response_headers);
     for header in response_headers {
-        let Some(name) = super::safe_response_header_name(header.name()) else {
+        if !super::response_header_is_forwardable(header.name(), &connection_options) {
+            continue;
+        }
+        let Ok(name) = HeaderName::from_bytes(header.name().as_bytes()) else {
             continue;
         };
-        let Ok(value) = HeaderValue::from_str(header.value().as_str()) else {
+        let Ok(value) = HeaderValue::from_bytes(header.value()) else {
             continue;
         };
-        response
-            .headers_mut()
-            .insert(axum::http::header::HeaderName::from_static(name), value);
+        response.headers_mut().append(name, value);
     }
     response
 }
@@ -295,7 +295,7 @@ pub async fn stream_execution_response(
             return response;
         }
         Err(error) => {
-            let response = gateway_error_response(&gateway_error_from_engine(&error));
+            let response = engine_error_response(&error);
             return execution.record_response_status(response).await;
         }
     };
@@ -310,18 +310,7 @@ pub async fn stream_execution_response(
     let mut encoder = OpenAiResponsesEncoder::new();
     let mut frames = Vec::new();
     for event in &first_events {
-        match encoder.push_sse(event) {
-            Ok(encoded) => frames.extend(encoded),
-            Err(error) => {
-                let response = protocol_error_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    error.protocol_body(),
-                );
-                let response = execution.record_response_status(response).await;
-                execution.cancel_and_finalize().await;
-                return response;
-            }
-        }
+        frames.extend(encoder.push_sse(event));
     }
     if frames.is_empty() {
         let response = internal_gateway_response("gateway commit batch encoded no output");
@@ -338,7 +327,7 @@ pub async fn stream_execution_response(
         .await
     {
         execution.cancel_and_finalize().await;
-        let response = gateway_error_response(&gateway_error_from_engine(&error));
+        let response = engine_error_response(&error);
         return execution.record_response_status(response).await;
     }
     let Some(session) = execution.into_session() else {
@@ -371,7 +360,7 @@ fn event_stream_response(body: Body, response_headers: &[ProviderResponseHeader]
     response
         .headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-    apply_safe_response_headers(response, response_headers)
+    apply_response_headers(response, response_headers)
 }
 
 fn internal_gateway_response(message: &'static str) -> Response {
@@ -403,15 +392,10 @@ impl PendingExecution {
     }
 
     async fn record_response_status(&mut self, response: Response) -> Response {
-        let Some(session) = self.session.as_mut() else {
-            return internal_gateway_response("gateway response session is unavailable");
-        };
-        if session
-            .record_client_status(response.status().as_u16())
-            .await
-            .is_err()
-        {
-            return internal_gateway_response("gateway client status could not be persisted");
+        if let Some(session) = self.session.as_mut() {
+            let _ = session
+                .record_client_status(response.status().as_u16())
+                .await;
         }
         response
     }
@@ -499,10 +483,16 @@ impl ResponsesStreamState {
                     .session
                     .as_ref()
                     .is_some_and(|session| session.is_finalized());
-                self.finish_with_gateway_error(GatewayError::new(
-                    GatewayErrorKind::Internal,
-                    "gateway response ended without a terminal event",
-                ));
+                if self.execution_terminal {
+                    self.pending
+                        .push_back(Bytes::from_static(DONE_SSE_FRAME.as_bytes()));
+                    self.output_finished = true;
+                } else {
+                    self.finish_with_gateway_error(GatewayError::new(
+                        GatewayErrorKind::Internal,
+                        "gateway response ended without finalizing the execution",
+                    ));
+                }
             }
             Err(error) => {
                 self.execution_terminal = self
@@ -521,18 +511,11 @@ impl ResponsesStreamState {
     }
 
     async fn push_event(&mut self, event: ProviderEvent) {
-        match self.encoder.push_sse(&event) {
-            Ok(frames) => {
-                if self.encoder.is_completed() {
-                    self.finish_completed(frames).await;
-                } else {
-                    self.pending.extend(frames);
-                }
-            }
-            Err(error) => {
-                self.cancel_execution().await;
-                self.finish_with_encode_error(error);
-            }
+        let frames = self.encoder.push_sse(&event);
+        if self.encoder.is_completed() {
+            self.finish_completed(frames).await;
+        } else {
+            self.pending.extend(frames);
         }
     }
 
@@ -602,20 +585,6 @@ impl ResponsesStreamState {
                 error.client_error_type().unwrap_or(default_type),
                 error.client_error_code().unwrap_or(default_code),
                 error.client_message(),
-            )));
-        self.pending
-            .push_back(Bytes::from_static(DONE_SSE_FRAME.as_bytes()));
-        self.output_finished = true;
-    }
-
-    fn finish_with_encode_error(&mut self, error: ResponseEncodeError) {
-        let protocol = error.protocol_body().error;
-        self.pending
-            .push_back(Bytes::from(response_failed_sse_event_with_id(
-                self.encoder.response_id(),
-                protocol.kind,
-                protocol.code,
-                &protocol.message,
             )));
         self.pending
             .push_back(Bytes::from_static(DONE_SSE_FRAME.as_bytes()));

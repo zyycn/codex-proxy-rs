@@ -168,6 +168,19 @@ impl ProviderAdmin for OpenAiAdminProvider {
         self.websocket_pool.evict_account(account_id.as_str()).await;
     }
 
+    async fn account_facts_changed(&self, account_ids: &[ProviderAccountId]) {
+        if account_ids.is_empty() {
+            return;
+        }
+        if let Err(error) = self.catalog.invalidate() {
+            tracing::warn!(
+                account_count = account_ids.len(),
+                error = %error,
+                "OpenAI model catalog invalidation failed after account commit"
+            );
+        }
+    }
+
     fn connection_test_operation(
         &self,
         upstream_model: &UpstreamModelId,
@@ -216,7 +229,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
             output_tokens,
             input.cached_tokens.unwrap_or_default(),
             input.cache_write_tokens.unwrap_or_default(),
-            None,
+            input.service_tier.as_deref(),
         ) else {
             return Ok(None);
         };

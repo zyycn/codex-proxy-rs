@@ -30,7 +30,11 @@ async fn openai_enable_should_use_scoped_store_without_provider_mutation() {
 
     assert_eq!(
         recorded(&events),
-        ["store.credential_details", "store.set_enabled"]
+        [
+            "store.credential_details",
+            "store.set_enabled",
+            "provider.account_facts_changed",
+        ]
     );
     assert_eq!(store.audit_requests(), ["request-openai"]);
 }
@@ -54,6 +58,7 @@ async fn openai_disable_should_commit_then_release_provider_resources() {
             "store.credential_details",
             "store.set_enabled",
             "provider.account_unavailable",
+            "provider.account_facts_changed",
         ]
     );
     assert_eq!(store.audit_requests(), ["request-openai"]);
@@ -78,6 +83,7 @@ async fn openai_delete_should_commit_then_release_provider_resources() {
             "store.credential_details",
             "store.delete",
             "provider.account_unavailable",
+            "provider.account_facts_changed",
         ]
     );
     assert_eq!(store.audit_requests(), ["request-openai"]);
@@ -124,6 +130,7 @@ async fn openai_import_should_prepare_before_atomic_store_commit() {
         [
             "provider.prepare_import",
             "store.commit_import",
+            "provider.account_facts_changed",
             "provider.quota",
         ]
     );
@@ -235,6 +242,7 @@ async fn openai_authorization_create_should_observe_initial_quota() {
             "provider.start_authorization",
             "provider.complete_authorization",
             "store.commit_authorization",
+            "provider.account_facts_changed",
             "provider.quota",
         ]
     );
@@ -324,6 +332,7 @@ async fn openai_authorization_store_failure_should_release_claim_for_retry() {
             "provider.complete_authorization",
             "store.commit_authorization",
             "authorization_guard.commit",
+            "provider.account_facts_changed",
             "provider.quota",
         ]
     );
@@ -401,6 +410,7 @@ async fn openai_reauthorization_should_commit_after_credential_revision_advances
             "provider.complete_authorization",
             "store.commit_authorization",
             "guard.finish",
+            "provider.account_facts_changed",
         ]
     );
     assert_eq!(store.audit_requests(), ["oauth-complete-openai"]);

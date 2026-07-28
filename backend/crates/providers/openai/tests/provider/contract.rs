@@ -3,6 +3,7 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::Utc;
 use futures::StreamExt;
 use gateway_core::engine::credential::{
@@ -11,11 +12,11 @@ use gateway_core::engine::credential::{
 use gateway_core::engine::provider::{Provider as _, ProviderRequest};
 use gateway_core::engine::{
     AccountAttemptContext, AttemptContext, CancellationToken, ContinuationAttempt, ModelRequestId,
-    RequestAttemptContext, UpstreamSendState,
+    ProviderAccountStateOwner, RequestAttemptContext, UpstreamSendState,
 };
 use gateway_core::error::ProviderErrorKind;
 use gateway_core::event::GatewayEvent;
-use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
+use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload, ProviderSessionState};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::{
     ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RoutingContext,
@@ -45,6 +46,10 @@ use crate::support::{
 
 const OFFICIAL_FIXTURE: &[u8] =
     include_bytes!("../transport/fixtures/official_models_snapshot.json");
+const CAPTURE_COMPLETED_SSE: &str = concat!(
+    "event: response.completed\n",
+    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_scope_capture\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
+);
 
 fn wire_profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
@@ -231,6 +236,78 @@ fn diagnostic_context(request_id: &str, account_id: &str) -> AttemptContext {
     )
 }
 
+fn context_with_state_owner(request_id: &str, owner_account_id: &str) -> AttemptContext {
+    let owner = ProviderAccountStateOwner::new(
+        ProviderKind::new("openai").expect("provider"),
+        ProviderAccountId::new(owner_account_id).expect("owner account id"),
+    );
+    AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new(request_id).expect("request id"),
+            ClientApiKeyId::new("key_openai_contract").expect("client key id"),
+        ),
+        NonZeroU32::new(1).expect("attempt"),
+        SystemTime::now() + Duration::from_secs(30),
+        account_policy(),
+        AccountAttemptContext::new(BTreeSet::new(), None, Some(owner)),
+        None,
+        CancellationToken::new(),
+    )
+}
+
+async fn capture_scoped_http_request(
+    request_id: &str,
+    selected_account_id: &str,
+    owner_account_id: &str,
+    body: Map<String, serde_json::Value>,
+    mut protocol_context: Map<String, serde_json::Value>,
+) -> wiremock::Request {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, selected_account_id).await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(CAPTURE_COMPLETED_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    protocol_context.insert("use_websocket".to_owned(), json!(false));
+    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", body)
+            .expect("OpenAI payload")
+            .with_context(protocol_context),
+    ));
+    let mut stream = provider_with_base_url(&store, server.uri())
+        .execute(
+            planned_request("openai", operation),
+            context_with_state_owner(request_id, owner_account_id),
+        )
+        .await
+        .expect("prepare scoped provider stream");
+    while let Some(event) = stream.next().await {
+        event.expect("scoped provider response");
+    }
+    let mut requests = server
+        .received_requests()
+        .await
+        .expect("captured scoped request");
+    assert_eq!(requests.len(), 1);
+    requests.pop().expect("single scoped request")
+}
+
+fn captured_header_values(request: &wiremock::Request, name: &str) -> Vec<Vec<u8>> {
+    request
+        .headers
+        .get_all(name)
+        .iter()
+        .map(|value| value.as_bytes().to_vec())
+        .collect()
+}
+
 async fn paused_chunked_sse_server(
     first_chunk: String,
     second_chunk: String,
@@ -270,6 +347,28 @@ async fn paused_chunked_sse_server(
             .expect("terminate chunked SSE response");
     });
     (base_url, release_sender, first_chunk_sent, server)
+}
+
+async fn truncated_chunked_sse_server() -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind truncated SSE listener");
+    let base_url = format!(
+        "http://{}",
+        listener.local_addr().expect("listener address")
+    );
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept SSE request");
+        read_http_request(&mut stream).await;
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n20\r\npartial",
+            )
+            .await
+            .expect("write truncated chunked response");
+        stream.flush().await.expect("flush truncated response");
+    });
+    (base_url, server)
 }
 
 async fn read_http_request(stream: &mut TcpStream) {
@@ -337,6 +436,34 @@ async fn cancelled_attempt_fails_before_account_selection_or_upstream_send() {
 
     assert_eq!(error.kind(), ProviderErrorKind::Cancelled);
     assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+}
+
+#[tokio::test]
+async fn truncated_http_stream_allows_account_rotation_only_before_client_delivery() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_truncated_stream").await;
+    let (base_url, server) = truncated_chunked_sse_server().await;
+    let mut stream = provider_with_base_url(&store, base_url)
+        .execute(
+            planned_request("openai", http_generate_operation()),
+            context("req_truncated_stream", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare HTTP stream");
+
+    let error = loop {
+        match stream.next().await {
+            Some(Ok(_)) => {}
+            Some(Err(error)) => break error,
+            None => panic!("truncated response must surface a transport error"),
+        }
+    };
+    server.await.expect("truncated SSE server");
+
+    assert_eq!(error.kind(), ProviderErrorKind::Transport);
+    assert_eq!(error.send_state(), UpstreamSendState::Sent);
+    assert!(error.allows_pre_delivery_retry());
+    assert!(!error.replay_is_safe());
 }
 
 #[tokio::test]
@@ -439,6 +566,192 @@ async fn opaque_provider_options_do_not_change_openai_account_selection() {
 }
 
 #[tokio::test]
+async fn same_account_scope_preserves_future_protocol_shapes() {
+    let request = capture_scoped_http_request(
+        "req_scope_same",
+        "acct_scope_same",
+        "acct_scope_same",
+        json!({
+            "model": "gpt-5.4",
+            "input": "hello",
+            "authorization": "client-extension-value",
+            "installation_id": "client-installation",
+            "turnState": {"future": true},
+            "turnMetadata": ["future", "shape"],
+            "x-codex-turn-state": 17,
+            "x-codex-turn-metadata": false,
+            "client_metadata": {
+                "token": "client-metadata-extension",
+                "x-codex-turn-state": {"future": "metadata"},
+                "x-codex-turn-metadata": [1, 2, 3],
+                "turnMetadata": {"opaque": true}
+            }
+        })
+        .as_object()
+        .expect("request object")
+        .clone(),
+        Map::new(),
+    )
+    .await;
+    let body: serde_json::Value =
+        serde_json::from_slice(&request.body).expect("captured JSON body");
+
+    assert_eq!(
+        body.get("authorization"),
+        Some(&json!("client-extension-value"))
+    );
+    assert_eq!(body.get("turnState"), Some(&json!({"future": true})));
+    assert_eq!(body.get("turnMetadata"), Some(&json!(["future", "shape"])));
+    assert_eq!(body.get("x-codex-turn-state"), Some(&json!(17)));
+    assert_eq!(body.get("x-codex-turn-metadata"), Some(&json!(false)));
+    assert_eq!(
+        body.pointer("/client_metadata/token"),
+        Some(&json!("client-metadata-extension"))
+    );
+    assert_eq!(
+        body.pointer("/client_metadata/x-codex-turn-state"),
+        Some(&json!({"future": "metadata"}))
+    );
+    assert_ne!(
+        body.get("installation_id"),
+        Some(&json!("client-installation"))
+    );
+}
+
+#[tokio::test]
+async fn cross_account_scope_removes_only_account_bound_body_fields() {
+    let request = capture_scoped_http_request(
+        "req_scope_switch",
+        "acct_scope_new",
+        "acct_scope_old",
+        json!({
+            "model": "gpt-5.4",
+            "input": "hello",
+            "authorization": "client-extension-value",
+            "conversation": "upstream-account-handle",
+            "conversation_id": "client-correlation",
+            "installation_id": "client-installation",
+            "client_metadata": ["future", "shape"],
+            "future_field": {"keep": true}
+        })
+        .as_object()
+        .expect("request object")
+        .clone(),
+        Map::new(),
+    )
+    .await;
+    let body: serde_json::Value =
+        serde_json::from_slice(&request.body).expect("captured JSON body");
+
+    assert!(body.get("authorization").is_none());
+    assert!(body.get("conversation").is_none());
+    assert_eq!(
+        body.get("conversation_id"),
+        Some(&json!("client-correlation"))
+    );
+    assert_eq!(
+        body.get("client_metadata"),
+        Some(&json!(["future", "shape"]))
+    );
+    assert_eq!(body.get("future_field"), Some(&json!({"keep": true})));
+    assert_ne!(
+        body.get("installation_id"),
+        Some(&json!("client-installation"))
+    );
+}
+
+#[tokio::test]
+async fn cross_account_scope_sanitizes_only_known_turn_metadata_fields() {
+    let request = capture_scoped_http_request(
+        "req_scope_metadata",
+        "acct_metadata_new",
+        "acct_metadata_old",
+        json!({
+            "model": "gpt-5.4",
+            "input": "hello",
+            "turnMetadata": r#"{"account_id":"old-account","future":{"keep":true}}"#,
+            "turn_metadata": "future-opaque-shape",
+            "x-codex-turn-metadata": r#"{"conversation":"old-conversation","safe":17}"#
+        })
+        .as_object()
+        .expect("request object")
+        .clone(),
+        Map::new(),
+    )
+    .await;
+    let body: serde_json::Value =
+        serde_json::from_slice(&request.body).expect("captured JSON body");
+    let turn_metadata = body
+        .get("turnMetadata")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+        .expect("sanitized turnMetadata");
+    let codex_turn_metadata = body
+        .get("x-codex-turn-metadata")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+        .expect("sanitized x-codex-turn-metadata");
+
+    assert_eq!(turn_metadata, json!({"future": {"keep": true}}));
+    assert_eq!(codex_turn_metadata, json!({"safe": 17}));
+    assert_eq!(
+        body.get("turn_metadata"),
+        Some(&json!("future-opaque-shape"))
+    );
+}
+
+#[tokio::test]
+async fn account_change_drops_only_account_bound_opaque_headers() {
+    let protocol_context = Map::from_iter([(
+        "opaque_request_headers".to_owned(),
+        json!([
+            ["x-codex-turn-state", STANDARD.encode(b"turn-first")],
+            ["x-codex-turn-state", STANDARD.encode(b"turn-\x80")],
+            [
+                "x-codex-turn-metadata",
+                STANDARD.encode(br#"{"installation_id":"client-installation","safe":true}"#)
+            ],
+            ["x-openai-future", STANDARD.encode(b"keep-on-switch")]
+        ]),
+    )]);
+    let body = json!({"model": "gpt-5.4", "input": "hello"})
+        .as_object()
+        .expect("request object")
+        .clone();
+    let same_account = capture_scoped_http_request(
+        "req_header_same",
+        "acct_header_same",
+        "acct_header_same",
+        body.clone(),
+        protocol_context.clone(),
+    )
+    .await;
+    let cross_account = capture_scoped_http_request(
+        "req_header_switch",
+        "acct_header_new",
+        "acct_header_old",
+        body,
+        protocol_context,
+    )
+    .await;
+
+    assert_eq!(
+        captured_header_values(&same_account, "x-codex-turn-state"),
+        vec![b"turn-first".to_vec(), b"turn-\x80".to_vec()]
+    );
+    assert_eq!(
+        captured_header_values(&same_account, "x-openai-future"),
+        vec![b"keep-on-switch".to_vec()]
+    );
+    assert!(captured_header_values(&cross_account, "x-codex-turn-state").is_empty());
+    assert!(captured_header_values(&cross_account, "x-codex-turn-metadata").is_empty());
+    assert_eq!(
+        captured_header_values(&cross_account, "x-openai-future"),
+        vec![b"keep-on-switch".to_vec()]
+    );
+}
+
+#[tokio::test]
 async fn prompt_cache_key_should_become_an_opaque_session_affinity_lookup_key() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_affinity").await;
@@ -484,7 +797,7 @@ async fn completed_response_persists_session_affinity_before_stream_consumer_sto
                 .insert_header("content-type", "text/event-stream")
                 .set_body_string(concat!(
                     "event: response.created\n",
-                    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_affinity\",\"model\":\"gpt-5.4\"}}\n\n",
+                    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_affinity\",\"model\":\"gpt-5.4\",\"service_tier\":\"default\"}}\n\n",
                     "event: response.completed\n",
                     "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_affinity\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
                 )),
@@ -498,6 +811,7 @@ async fn completed_response_persists_session_affinity_before_stream_consumer_sto
                 ("model".to_owned(), json!("gpt-5.4")),
                 ("input".to_owned(), json!("hello")),
                 ("prompt_cache_key".to_owned(), json!("affinity-key")),
+                ("service_tier".to_owned(), json!("priority")),
             ]),
         )
         .expect("OpenAI payload")
@@ -512,8 +826,15 @@ async fn completed_response_persists_session_affinity_before_stream_consumer_sto
             .await
             .expect("prepare provider stream");
 
+    let mut observed_service_tier = None;
     while let Some(event) = stream.next().await {
         let event = event.expect("provider event");
+        if let Some(service_tier) = event
+            .response_observation()
+            .and_then(|observation| observation.service_tier())
+        {
+            observed_service_tier = Some(service_tier.to_owned());
+        }
         if event
             .canonical_facts()
             .iter()
@@ -525,6 +846,7 @@ async fn completed_response_persists_session_affinity_before_stream_consumer_sto
     drop(stream);
 
     assert_eq!(affinity.binding_count(), 1);
+    assert_eq!(observed_service_tier.as_deref(), Some("default"));
 }
 
 #[tokio::test]
@@ -776,7 +1098,7 @@ async fn bare_response_failed_should_remain_an_atomic_replay_safe_failure() {
 }
 
 #[tokio::test]
-async fn continuation_prefetch_over_64_kib_without_a_boundary_should_fail_as_protocol_error() {
+async fn continuation_prefetch_over_64_kib_should_commit_wire_without_protocol_failure() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_prefetch_limit").await;
     let padding = "x".repeat(64 * 1024);
@@ -803,21 +1125,26 @@ async fn continuation_prefetch_over_64_kib_without_a_boundary_should_fail_as_pro
         )
         .await
         .expect("prepare provider stream");
-    let mut visible_before_error = 0;
-    let failure = loop {
-        match stream.next().await {
-            Some(Ok(event)) => visible_before_error += usize::from(event.has_client_event()),
-            Some(Err(error)) => break error,
-            None => panic!("oversized prefetch must fail"),
+    let visible = loop {
+        let event = timeout(Duration::from_secs(1), stream.next())
+            .await
+            .expect("prefetch threshold must release buffered wire")
+            .expect("provider stream remains open")
+            .expect("threshold cannot create a protocol failure");
+        if event.has_client_event() {
+            break event;
         }
     };
 
-    assert_eq!(visible_before_error, 0);
-    assert_eq!(failure.kind(), ProviderErrorKind::Protocol);
-    assert!(!failure.has_atomic_client_events());
-    let _ = release.send(());
-    server.abort();
-    let _ = server.await;
+    assert_eq!(
+        visible.wire_event().and_then(|wire| wire.event_type()),
+        Some("response.created")
+    );
+    release.send(()).expect("finish upstream response");
+    while let Some(event) = stream.next().await {
+        event.expect("clean upstream EOF cannot become a protocol failure");
+    }
+    server.await.expect("chunked SSE server");
 }
 
 #[tokio::test]
@@ -943,6 +1270,59 @@ async fn disabled_account_diagnostic_uses_upstream_without_persisting_account_st
     assert_eq!(affinity.binding_count(), 0);
 }
 
+#[tokio::test]
+async fn successful_response_preserves_quota_exhaustion_from_rate_limit_headers() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_success_exhausted";
+    create_account(&store, account_id).await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .insert_header("x-codex-active-limit", "codex")
+                .insert_header("x-codex-primary-used-percent", "100")
+                .insert_header("x-codex-primary-window-minutes", "300")
+                .insert_header("x-codex-primary-reset-at", "1900000000")
+                .insert_header("x-codex-limit-reached", "true")
+                .set_body_string(concat!(
+                    "event: response.created\n",
+                    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_success_exhausted\",\"model\":\"gpt-5.4\"}}\n\n",
+                    "event: response.completed\n",
+                    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_success_exhausted\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
+                )),
+        )
+        .mount(&server)
+        .await;
+
+    let mut stream = provider_with_base_url(&store, server.uri())
+        .execute(
+            planned_request("openai", http_generate_operation()),
+            context("req_success_exhausted", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare provider stream");
+    let mut completed = false;
+    while let Some(event) = stream.next().await {
+        let event = event.expect("successful upstream response");
+        completed |= event
+            .canonical_facts()
+            .iter()
+            .any(|event| matches!(event, GatewayEvent::Completed(_)));
+    }
+
+    assert!(completed);
+    assert_eq!(
+        store
+            .account(account_id)
+            .expect("account after successful response")
+            .availability(),
+        AccountAvailability::QuotaExhausted
+    );
+    assert!(store.has_quota(account_id));
+}
+
 #[test]
 fn request_observation_reads_openai_metadata_without_changing_the_operation() {
     let store = Arc::new(MemoryAccountStore::default());
@@ -986,6 +1366,42 @@ fn request_observation_preserves_the_raw_reasoning_effort() {
     assert_eq!(
         observation.reasoning_effort.as_deref(),
         Some("future-value")
+    );
+}
+
+#[test]
+fn request_observation_ignores_future_session_state_without_rewriting_the_protocol_body() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let generation = GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([
+                ("model".to_owned(), json!("gpt-test")),
+                ("previous_response_id".to_owned(), json!("resp_opaque")),
+            ]),
+        )
+        .expect("OpenAI payload"),
+    )
+    .with_provider_session_state(
+        ProviderSessionState::new(
+            "openai",
+            Map::from_iter([("future_session_shape".to_owned(), json!([1, 2, 3]))]),
+        )
+        .expect("provider session state"),
+    );
+    let operation = Operation::Generate(generation);
+
+    let _observation = provider(&store).request_observation(&operation);
+
+    let Operation::Generate(generation) = &operation else {
+        panic!("operation should remain a generate request");
+    };
+    assert_eq!(
+        generation
+            .protocol_payload()
+            .body()
+            .get("previous_response_id"),
+        Some(&json!("resp_opaque"))
     );
 }
 

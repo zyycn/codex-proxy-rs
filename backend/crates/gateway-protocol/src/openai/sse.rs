@@ -18,10 +18,11 @@ pub struct SseEvent {
     pub retry: Option<u64>,
 }
 
-/// 保留完整原始字节与旁路解析结果的单个 SSE 帧。
+/// 保留原始字节与旁路解析结果的 SSE wire 片段。
 ///
-/// 这用于需要原样转发的 transport；`events` 只供旁路观测，不能反过来重建
-/// `raw`。
+/// 通常一个片段就是完整 SSE 帧。单帧超过旁路观测预算时会拆成多个原始片段，
+/// 此时 `events` 为空；透明 transport 必须按顺序交付 `raw`，不能从 `events`
+/// 反向重建或否决原始数据。
 #[derive(Clone, PartialEq, Eq)]
 pub struct SseFrame {
     raw: Vec<u8>,
@@ -62,7 +63,7 @@ impl fmt::Debug for SseFrame {
     }
 }
 
-/// 单事件缓冲上限。
+/// 单事件旁路解析缓冲上限。
 pub const MAX_SSE_EVENT_BUFFER_BYTES: usize = 64 * 1024 * 1024;
 
 /// SSE 流结束标记帧。
@@ -75,6 +76,9 @@ pub struct SseEventDecoder {
     /// `pending` 中已确认不含帧分隔符的前缀长度。新数据到达时从该边界
     /// 回退分隔符最大跨界宽度继续扫描，大帧跨多个 chunk 不会被反复重扫。
     scanned: usize,
+    /// 超大未完成帧已开始直接交付；在遇到帧分隔符前只保留跨 chunk 扫描尾部，
+    /// 不再尝试解析该帧。
+    opaque_frame: bool,
 }
 
 impl SseEventDecoder {
@@ -129,28 +133,35 @@ impl SseEventDecoder {
     /// 与 [`Self::push`] 相比，此方法仅应由需要原样转发的 transport 使用；普通
     /// 解析路径无需为原始帧额外分配内存。旁路解析失败时仍保留原始帧，并以空
     /// event 列表表示不可观测，避免观测失败截断客户端字节流。
-    pub fn push_frames(&mut self, chunk: &[u8]) -> Result<Vec<SseFrame>, SseError> {
+    pub fn push_frames(&mut self, chunk: &[u8]) -> Vec<SseFrame> {
         self.pending.extend_from_slice(chunk);
         let mut frames = Vec::new();
+        if self.opaque_frame && !self.finish_opaque_frame(&mut frames) {
+            self.flush_opaque_prefix(&mut frames);
+            return frames;
+        }
         let mut consumed = 0usize;
 
         while let Some(end) = self.next_frame_end(consumed) {
             let raw = self.pending[consumed..end].to_vec();
-            let events = std::str::from_utf8(&raw)
-                .ok()
-                .and_then(|frame| parse_sse_events(frame).ok())
-                .unwrap_or_default();
+            let events = if raw.len() > MAX_SSE_EVENT_BUFFER_BYTES {
+                Vec::new()
+            } else {
+                std::str::from_utf8(&raw)
+                    .ok()
+                    .and_then(|frame| parse_sse_events(frame).ok())
+                    .unwrap_or_default()
+            };
             frames.push(SseFrame::new(raw, events));
             consumed = end;
         }
 
         self.commit_consumed(consumed);
         if self.pending.len() > MAX_SSE_EVENT_BUFFER_BYTES {
-            return Err(SseError::BufferExceeded {
-                max_bytes: MAX_SSE_EVENT_BUFFER_BYTES,
-            });
+            self.opaque_frame = true;
+            self.flush_opaque_prefix(&mut frames);
         }
-        Ok(frames)
+        frames
     }
 
     /// 流结束时解析尚未带空行分隔符的最后一帧。
@@ -168,17 +179,53 @@ impl SseEventDecoder {
     /// 在流结束时返回未带空行分隔符的最后一帧及其旁路解析结果。
     ///
     /// 与 [`Self::push_frames`] 一致，旁路解析失败不会丢弃原始帧。
-    pub fn finish_frames(&mut self) -> Result<Vec<SseFrame>, SseError> {
+    pub fn finish_frames(&mut self) -> Vec<SseFrame> {
         self.scanned = 0;
         if self.pending.is_empty() {
-            return Ok(Vec::new());
+            self.opaque_frame = false;
+            return Vec::new();
         }
         let raw = std::mem::take(&mut self.pending);
-        let events = std::str::from_utf8(&raw)
-            .ok()
-            .and_then(|frame| parse_sse_events(frame).ok())
-            .unwrap_or_default();
-        Ok(vec![SseFrame::new(raw, events)])
+        let events = if self.opaque_frame || raw.len() > MAX_SSE_EVENT_BUFFER_BYTES {
+            Vec::new()
+        } else {
+            std::str::from_utf8(&raw)
+                .ok()
+                .and_then(|frame| parse_sse_events(frame).ok())
+                .unwrap_or_default()
+        };
+        self.opaque_frame = false;
+        vec![SseFrame::new(raw, events)]
+    }
+
+    /// 继续透明交付一个已超出观测预算的帧，并在分隔符后恢复普通解析。
+    fn finish_opaque_frame(&mut self, frames: &mut Vec<SseFrame>) -> bool {
+        let Some((position, separator_len)) = sse_frame_separator_bytes(&self.pending) else {
+            return false;
+        };
+        let end = position + separator_len;
+        let remaining = self.pending.split_off(end);
+        let raw = std::mem::replace(&mut self.pending, remaining);
+        frames.push(SseFrame::new(raw, Vec::new()));
+        self.opaque_frame = false;
+        self.scanned = 0;
+        true
+    }
+
+    /// 仅保留分隔符可能跨 chunk 的最大前缀宽度，其余原始字节立即释放给下游。
+    fn flush_opaque_prefix(&mut self, frames: &mut Vec<SseFrame>) {
+        const SEPARATOR_CROSS_CHUNK_BYTES: usize = 3;
+        let emit_len = self
+            .pending
+            .len()
+            .saturating_sub(SEPARATOR_CROSS_CHUNK_BYTES);
+        if emit_len == 0 {
+            return;
+        }
+        let tail = self.pending.split_off(emit_len);
+        let raw = std::mem::replace(&mut self.pending, tail);
+        self.scanned = 0;
+        frames.push(SseFrame::new(raw, Vec::new()));
     }
 }
 
@@ -366,12 +413,12 @@ pub fn encode_sse_event_with_metadata(
     retry: Option<u64>,
 ) -> String {
     let mut frame = String::new();
-    if let Some(id) = id {
+    if let Some(id) = id.filter(|id| sse_id_is_representable(id)) {
         frame.push_str("id: ");
         frame.push_str(id);
         frame.push('\n');
     }
-    if !event.is_empty() {
+    if !event.is_empty() && sse_field_value_is_single_line(event) {
         frame.push_str("event: ");
         frame.push_str(event);
         frame.push('\n');
@@ -388,6 +435,14 @@ pub fn encode_sse_event_with_metadata(
     }
     frame.push('\n');
     frame
+}
+
+fn sse_field_value_is_single_line(value: &str) -> bool {
+    !value.contains(['\r', '\n'])
+}
+
+fn sse_id_is_representable(value: &str) -> bool {
+    sse_field_value_is_single_line(value) && !value.contains('\0')
 }
 
 fn track_event_buffer_bytes(current_bytes: &mut usize, line: &str) -> Result<(), SseError> {

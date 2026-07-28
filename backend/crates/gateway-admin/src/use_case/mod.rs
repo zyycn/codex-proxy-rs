@@ -307,6 +307,9 @@ async fn set_credential_enabled(
     if !enabled {
         provider.account_unavailable(&account_id).await;
     }
+    provider
+        .account_facts_changed(std::slice::from_ref(&account_id))
+        .await;
     Ok(CredentialMutationResult {
         config_revision: revision,
         account_id,
@@ -339,6 +342,7 @@ async fn delete_credentials(
     for account_id in &account_ids {
         provider.account_unavailable(account_id).await;
     }
+    provider.account_facts_changed(&account_ids).await;
     Ok(CredentialDeletionResult {
         config_revision: revision,
         account_ids,

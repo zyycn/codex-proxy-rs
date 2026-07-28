@@ -1,8 +1,9 @@
+use bytes::Bytes;
 use gateway_core::engine::provider::UpstreamTransport;
 use gateway_core::event::{
     ContentItem, ContentKind, EventSequenceError, EventSequenceValidator, GatewayEvent,
-    ProtocolWireEvent, ProviderEvent, ProviderResponseObservation, ReasoningDelta, ResponseMeta,
-    TextDelta, ToolCallDelta,
+    ProtocolWireEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseObservation,
+    ReasoningDelta, ResponseMeta, TextDelta, ToolCallDelta,
 };
 use serde_json::json;
 
@@ -22,6 +23,28 @@ fn provider_event_keeps_large_wire_and_observation_payloads_behind_one_indirecti
 }
 
 #[test]
+fn provider_response_header_should_preserve_opaque_name_and_bytes_without_debug_disclosure() {
+    let name = format!("x-future-{}\0", "n".repeat(512));
+    let value = Bytes::from_static(b"\xffopaque-response-header-secret");
+    let header = ProviderResponseHeader::new(name.clone(), value.clone());
+
+    assert_eq!(header.name(), name);
+    assert_eq!(header.value(), &value);
+    let rendered = format!("{header:?}");
+    assert!(!rendered.contains(&name));
+    assert!(!rendered.contains("opaque-response-header-secret"));
+}
+
+#[test]
+fn invalid_observed_service_tier_should_be_ignored() {
+    let observation =
+        ProviderResponseObservation::new(UpstreamTransport::new("http_sse").expect("transport"))
+            .with_service_tier_if_valid(format!("priority\0{}", "x".repeat(128)));
+
+    assert_eq!(observation.service_tier(), None);
+}
+
+#[test]
 fn protocol_wire_event_should_preserve_sse_metadata_without_exposing_id_in_debug() {
     let wire = ProtocolWireEvent::json_with_sse_metadata(
         "openai",
@@ -35,6 +58,23 @@ fn protocol_wire_event_should_preserve_sse_metadata_without_exposing_id_in_debug
     assert_eq!(wire.sse_id(), Some("upstream-event-id"));
     assert_eq!(wire.sse_retry(), Some(1_500));
     assert!(!format!("{wire:?}").contains("upstream-event-id"));
+}
+
+#[test]
+fn protocol_wire_event_should_preserve_opaque_sse_metadata() {
+    let event_type = format!("\0{}", "event".repeat(80));
+    let sse_id = "id\0with\r\ncontrols".to_owned();
+    let wire = ProtocolWireEvent::json_with_sse_metadata(
+        "openai",
+        Some(event_type.clone()),
+        json!({"type": "future.event"}),
+        Some(sse_id.clone()),
+        None,
+    )
+    .expect("internal protocol name is valid");
+
+    assert_eq!(wire.event_type(), Some(event_type.as_str()));
+    assert_eq!(wire.sse_id(), Some(sse_id.as_str()));
 }
 
 #[test]

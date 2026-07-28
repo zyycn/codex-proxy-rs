@@ -374,7 +374,15 @@ async fn selector_should_reuse_the_account_bound_to_the_same_session() {
         .await
         .expect("select bound account");
 
-    assert_eq!(second.account_id(), &first_account);
+    assert_eq!(
+        (
+            second.account_id().as_str(),
+            second.affinity_hit(),
+            second.escape_reason(),
+            second.account_switch(),
+        ),
+        (first_account.as_str(), true, None, false)
+    );
     assert_eq!(
         affinity
             .load(&ProviderKind::new("openai").expect("provider"), &key)
@@ -421,7 +429,15 @@ async fn selector_should_replace_a_busy_affinity_binding_after_the_fallback_succ
         .record_success(selected.account(), Some(&key))
         .await;
 
-    assert_eq!(selected.account_id().as_str(), "acct_second");
+    assert_eq!(
+        (
+            selected.account_id().as_str(),
+            selected.affinity_hit(),
+            selected.escape_reason(),
+            selected.account_switch(),
+        ),
+        ("acct_second", false, Some("lease_saturated"), true)
+    );
     assert_eq!(
         affinity
             .load(&provider, &key)
@@ -432,7 +448,7 @@ async fn selector_should_replace_a_busy_affinity_binding_after_the_fallback_succ
 }
 
 #[tokio::test]
-async fn selector_should_escape_an_unhealthy_affinity_account() {
+async fn selector_should_keep_a_schedulable_affinity_account_despite_soft_health_signals() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_first", "at-first");
     create_account(&store, "acct_second", "at-second");
@@ -473,9 +489,119 @@ async fn selector_should_escape_an_unhealthy_affinity_account() {
             session_affinity_key: Some(&key),
         })
         .await
-        .expect("select healthy fallback");
+        .expect("select bound account");
 
-    assert_eq!(selected.account_id().as_str(), "acct_second");
+    assert_eq!(
+        (
+            selected.account_id().as_str(),
+            selected.affinity_hit(),
+            selected.escape_reason(),
+            selected.account_switch(),
+        ),
+        ("acct_first", true, None, false)
+    );
+}
+
+#[tokio::test]
+async fn selector_should_escape_a_quota_exhausted_affinity_account() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_first", "at-first");
+    create_account(&store, "acct_second", "at-second");
+    let first = store.account("acct_first").expect("first account");
+    store
+        .apply_state_change(AccountStateChange {
+            account_id: first.id().clone(),
+            expected_revision: first.revision(),
+            availability: AccountAvailability::QuotaExhausted,
+            reason: Some("quota_exhausted".to_owned()),
+            cooldown_until: None,
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("mark first account exhausted");
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let provider = ProviderKind::new("openai").expect("provider");
+    let key = ProviderSessionAffinityKey::try_new("quota-session").expect("affinity key");
+    affinity
+        .bind(&provider, &key, first.id(), Duration::from_secs(60))
+        .await
+        .expect("seed affinity");
+    let selector =
+        selector_with_affinity(&store, Arc::new(TestLeaseCoordinator::default()), affinity);
+    let request_url =
+        Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("request URL");
+    let request_attempt = attempt(BTreeSet::new());
+
+    let selected = selector
+        .select(&SelectCodexCredential {
+            upstream_model: "gpt-5.4",
+            request_url: &request_url,
+            attempt: &request_attempt,
+            session_affinity_key: Some(&key),
+        })
+        .await
+        .expect("select fallback account");
+
+    assert_eq!(
+        (
+            selected.account_id().as_str(),
+            selected.affinity_hit(),
+            selected.escape_reason(),
+            selected.account_switch(),
+        ),
+        ("acct_second", false, Some("quota_exhausted"), true)
+    );
+}
+
+#[tokio::test]
+async fn selector_should_escape_an_affinity_account_during_cooldown() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_first", "at-first");
+    create_account(&store, "acct_second", "at-second");
+    let first = store.account("acct_first").expect("first account");
+    store
+        .apply_state_change(AccountStateChange {
+            account_id: first.id().clone(),
+            expected_revision: first.revision(),
+            availability: AccountAvailability::Cooldown,
+            reason: Some("rate_limited".to_owned()),
+            cooldown_until: Some(SystemTime::now() + Duration::from_secs(60)),
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("mark first account cooling down");
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let provider = ProviderKind::new("openai").expect("provider");
+    let key = ProviderSessionAffinityKey::try_new("cooldown-session").expect("affinity key");
+    affinity
+        .bind(&provider, &key, first.id(), Duration::from_secs(60))
+        .await
+        .expect("seed affinity");
+    let selector =
+        selector_with_affinity(&store, Arc::new(TestLeaseCoordinator::default()), affinity);
+    let request_url =
+        Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("request URL");
+    let request_attempt = attempt(BTreeSet::new());
+
+    let selected = selector
+        .select(&SelectCodexCredential {
+            upstream_model: "gpt-5.4",
+            request_url: &request_url,
+            attempt: &request_attempt,
+            session_affinity_key: Some(&key),
+        })
+        .await
+        .expect("select fallback account");
+
+    assert_eq!(
+        (
+            selected.account_id().as_str(),
+            selected.affinity_hit(),
+            selected.escape_reason(),
+            selected.account_switch(),
+        ),
+        ("acct_second", false, Some("cooldown"), true)
+    );
 }
 
 #[test]

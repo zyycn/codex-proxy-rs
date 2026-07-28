@@ -12,6 +12,7 @@ fn classify(status: u16, body: &str) -> CodexFailureCategory {
         body,
         None,
         &CodexUpstreamDiagnostics::with_status(status.as_u16()),
+        None,
         &[],
         &[],
         CodexUpstreamSendPhase::AfterPayload,

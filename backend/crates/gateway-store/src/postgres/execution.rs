@@ -224,6 +224,7 @@ pub struct ModelRequestFinalization {
     pub upstream_transport: Option<String>,
     pub http_version: Option<String>,
     pub websocket_pool: Option<String>,
+    pub service_tier: Option<String>,
     pub provider_metadata_json: Option<Value>,
     pub error_kind: Option<String>,
     pub provider_error_code: Option<String>,
@@ -275,6 +276,12 @@ impl ModelRequestFinalization {
             .is_some_and(|kind| !matches!(kind, "new" | "reuse"))
         {
             return Err(invalid("websocket pool must be new or reuse"));
+        }
+        if let Some(service_tier) = self.service_tier.as_deref() {
+            require_nonempty(ENTITY, "service_tier", service_tier)?;
+            if service_tier.len() > 64 || service_tier.chars().any(char::is_control) {
+                return Err(invalid("service tier is invalid"));
+            }
         }
         if self
             .provider_metadata_json
@@ -573,7 +580,7 @@ impl ModelRequestRepository for PgExecutionStore {
                  latency_ms = $35, completed_at = $36,
                  upstream_transport = coalesce($37, upstream_transport),
                  http_version = coalesce($38, http_version), websocket_pool = $39,
-                 provider_observation_json = $40
+                 service_tier = $40, provider_observation_json = $41
              where id = $1 and outcome = 'running'",
         )
         .bind(&finalization.model_request_id)
@@ -660,6 +667,7 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(finalization.upstream_transport)
         .bind(finalization.http_version)
         .bind(finalization.websocket_pool)
+        .bind(finalization.service_tier)
         .bind(finalization.provider_metadata_json.map(sqlx::types::Json))
         .execute(&self.pool)
         .await
@@ -927,6 +935,7 @@ impl ExecutionStore for PgExecutionStore {
                 upstream_transport: finalization.upstream_transport,
                 http_version: finalization.http_version,
                 websocket_pool: finalization.websocket_pool,
+                service_tier: finalization.service_tier,
                 provider_metadata_json,
                 error_kind,
                 provider_error_code: finalization.provider_error_code,

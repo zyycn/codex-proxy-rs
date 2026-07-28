@@ -29,6 +29,7 @@ async fn xai_disable_should_commit_then_notify_the_stateless_provider() {
             "store.credential_details",
             "store.set_enabled",
             "provider.account_unavailable",
+            "provider.account_facts_changed",
         ]
     );
     assert_eq!(store.audit_requests(), ["request-xai"]);

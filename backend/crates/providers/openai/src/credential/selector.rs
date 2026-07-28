@@ -7,8 +7,8 @@ use std::time::{Duration, SystemTime};
 
 use gateway_core::engine::credential::{
     AccountAvailability, AccountAvailabilityPolicy, AccountCandidate, AccountFeedbackStats,
-    AccountRuntimeSignals, AccountSelectionContext, AccountSelector, ProviderAccount,
-    ProviderAccountId,
+    AccountRuntimeSignals, AccountSchedulingBlocker, AccountSelectionContext, AccountSelector,
+    PreferredAccountSelection, ProviderAccount, ProviderAccountId,
 };
 use gateway_core::engine::{AttemptContext, ContinuationAttempt};
 use gateway_core::provider_ports::{
@@ -118,6 +118,118 @@ enum SessionAffinityLookup {
     Unavailable,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AffinityEscapeReason {
+    HardUnavailable,
+    QuotaExhausted,
+    Cooldown,
+    LeaseSaturated,
+    PinnedAccount,
+    SelectionInvariant,
+}
+
+impl AffinityEscapeReason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::HardUnavailable => "hard_unavailable",
+            Self::QuotaExhausted => "quota_exhausted",
+            Self::Cooldown => "cooldown",
+            Self::LeaseSaturated => "lease_saturated",
+            Self::PinnedAccount => "pinned_account",
+            Self::SelectionInvariant => "selection_invariant",
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct AffinitySelection {
+    bound_account: Option<ProviderAccountId>,
+    preferred_account: Option<ProviderAccountId>,
+    escape_reason: Option<AffinityEscapeReason>,
+}
+
+impl AffinitySelection {
+    fn preferred(account_id: ProviderAccountId) -> Self {
+        Self {
+            bound_account: Some(account_id.clone()),
+            preferred_account: Some(account_id),
+            escape_reason: None,
+        }
+    }
+
+    fn escaped(account_id: ProviderAccountId, reason: AffinityEscapeReason) -> Self {
+        Self {
+            bound_account: Some(account_id),
+            preferred_account: None,
+            escape_reason: Some(reason),
+        }
+    }
+
+    fn bound_account(&self) -> Option<&ProviderAccountId> {
+        self.bound_account.as_ref()
+    }
+
+    fn preferred_account(&self) -> Option<&ProviderAccountId> {
+        self.preferred_account.as_ref()
+    }
+
+    fn escape(&mut self, reason: AffinityEscapeReason) {
+        if self.bound_account.is_some() && self.escape_reason.is_none() {
+            self.escape_reason = Some(reason);
+            self.preferred_account = None;
+        }
+    }
+
+    fn observe_preferred_selection(&mut self, selection: PreferredAccountSelection) {
+        if self.bound_account.is_none() || self.escape_reason.is_some() {
+            return;
+        }
+        match selection {
+            PreferredAccountSelection::Hit => {}
+            PreferredAccountSelection::Blocked(AccountSchedulingBlocker::ConcurrencyLimit) => {
+                self.escape(AffinityEscapeReason::LeaseSaturated);
+            }
+            PreferredAccountSelection::Blocked(AccountSchedulingBlocker::RequestInterval) => {
+                self.escape(AffinityEscapeReason::Cooldown);
+            }
+            PreferredAccountSelection::Blocked(
+                AccountSchedulingBlocker::LocalAvailability | AccountSchedulingBlocker::Excluded,
+            )
+            | PreferredAccountSelection::Missing => {
+                self.escape(AffinityEscapeReason::HardUnavailable);
+            }
+            PreferredAccountSelection::NotRequested => {
+                self.escape(AffinityEscapeReason::SelectionInvariant);
+            }
+        }
+    }
+
+    fn observe_lease_busy(&mut self, account_id: &ProviderAccountId) {
+        if self.bound_account.as_ref() == Some(account_id) {
+            self.escape(AffinityEscapeReason::LeaseSaturated);
+        }
+    }
+
+    fn telemetry(&self, selected_account: &ProviderAccountId) -> AffinityTelemetry {
+        AffinityTelemetry {
+            affinity_hit: self.bound_account.as_ref() == Some(selected_account)
+                && self.escape_reason.is_none(),
+            escape_reason: self.escape_reason,
+            account_switch: self
+                .bound_account
+                .as_ref()
+                .is_some_and(|bound| bound != selected_account),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct AffinityTelemetry {
+    affinity_hit: bool,
+    escape_reason: Option<AffinityEscapeReason>,
+    account_switch: bool,
+}
+
 impl CodexCredentialSelector {
     #[must_use]
     // 选择器显式持有各能力边界，避免把 Provider 私有服务重新包装成通用容器。
@@ -169,15 +281,12 @@ impl CodexCredentialSelector {
             .into_iter()
             .filter(|account| {
                 account.provider() == &self.provider_kind
-                    && (diagnostic
-                        || !matches!(
-                            self.catalog.observed_model_support(
-                                account.id(),
-                                account.revision(),
-                                request.upstream_model,
-                            ),
-                            Ok(Some(false))
-                        ))
+                    && (diagnostic || {
+                        let observed_support = self
+                            .catalog
+                            .observed_model_support(account, request.upstream_model);
+                        matches!(observed_support, Ok(None | Some(true)))
+                    })
             })
             .collect::<Vec<_>>();
         if !diagnostic {
@@ -228,27 +337,15 @@ impl CodexCredentialSelector {
                 .collect::<Vec<_>>()
         });
         let scheduling_candidates = quota_exhausted_candidates.as_deref().unwrap_or(&candidates);
-        let affinity_account = if diagnostic {
-            None
+        let mut affinity = if diagnostic {
+            AffinitySelection::default()
         } else {
-            match request.session_affinity_key {
-                Some(key) => match self.lookup_session_affinity(key).await {
-                    SessionAffinityLookup::Bound(account_id)
-                        if scheduling_candidates.iter().any(|candidate| {
-                            candidate.account.id() == &account_id
-                                && candidate.account.is_schedulable(SystemTime::now())
-                        }) =>
-                    {
-                        Some(account_id)
-                    }
-                    SessionAffinityLookup::Bound(_) => {
-                        self.clear_session_affinity(key).await;
-                        None
-                    }
-                    SessionAffinityLookup::Missing | SessionAffinityLookup::Unavailable => None,
-                },
-                None => None,
-            }
+            self.resolve_session_affinity(
+                request.session_affinity_key,
+                &candidates,
+                SystemTime::now(),
+            )
+            .await
         };
         let cyber_policy_scope = self
             .prepare_cyber_policy_scope(cyber_policy_session_key)
@@ -289,7 +386,16 @@ impl CodexCredentialSelector {
                 }
             }
         }
-        let preferred = pinned_account.or(affinity_account);
+        if pinned_account
+            .as_ref()
+            .zip(affinity.bound_account())
+            .is_some_and(|(pinned, bound)| pinned != bound)
+        {
+            affinity.escape(AffinityEscapeReason::PinnedAccount);
+        }
+        let preferred = pinned_account
+            .clone()
+            .or_else(|| affinity.preferred_account().cloned());
         let mut shortest_retry = None;
 
         loop {
@@ -305,7 +411,7 @@ impl CodexCredentialSelector {
                     AccountAvailabilityPolicy::Enforce
                 },
             };
-            let Some(selected) = AccountSelector.select(scheduling_candidates, &context) else {
+            let Some(selection) = AccountSelector.select(scheduling_candidates, &context) else {
                 return match shortest_retry {
                     Some(retry_after) => Err(CredentialSelectionError::CapacityUnavailable {
                         retry_after: Some(retry_after),
@@ -313,6 +419,8 @@ impl CodexCredentialSelector {
                     None => Err(CredentialSelectionError::NoEligibleCredential),
                 };
             };
+            affinity.observe_preferred_selection(selection.preferred());
+            let selected = selection.candidate();
             let account = candidates
                 .iter()
                 .find(|candidate| candidate.account.id() == selected.account.id())
@@ -335,10 +443,24 @@ impl CodexCredentialSelector {
                 .await?
             {
                 ProviderLeaseAcquisition::Busy { retry_after } => {
+                    affinity.observe_lease_busy(account.id());
                     shortest_retry = minimum_duration(shortest_retry, retry_after);
                     excluded.insert(account.id().clone());
                 }
                 ProviderLeaseAcquisition::Acquired(guard) => {
+                    let affinity_telemetry = affinity.telemetry(account.id());
+                    tracing::info!(
+                        request_id = %request.attempt.request_id(),
+                        attempt_index = request.attempt.attempt_index().get(),
+                        rotation_strategy = policy.strategy().as_str(),
+                        account_id = %account.id(),
+                        affinity_hit = affinity_telemetry.affinity_hit,
+                        escape_reason = affinity_telemetry
+                            .escape_reason
+                            .map_or("", AffinityEscapeReason::as_str),
+                        account_switch = affinity_telemetry.account_switch,
+                        "OpenAI account selected"
+                    );
                     let (account, runtime) = if account.authentication_kind()
                         == CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY
                     {
@@ -376,11 +498,40 @@ impl CodexCredentialSelector {
                         cookies,
                         cyber_policy_scope,
                         allows_account_state_mutation,
+                        affinity_telemetry,
                         _guard: guard,
                     });
                 }
             }
         }
+    }
+
+    async fn resolve_session_affinity(
+        &self,
+        key: Option<&ProviderSessionAffinityKey>,
+        candidates: &[AccountCandidate],
+        now: SystemTime,
+    ) -> AffinitySelection {
+        let Some(key) = key else {
+            return AffinitySelection::default();
+        };
+        let SessionAffinityLookup::Bound(account_id) = self.lookup_session_affinity(key).await
+        else {
+            return AffinitySelection::default();
+        };
+        let Some(candidate) = candidates
+            .iter()
+            .find(|candidate| candidate.account.id() == &account_id)
+        else {
+            self.clear_session_affinity(key).await;
+            return AffinitySelection::escaped(account_id, AffinityEscapeReason::HardUnavailable);
+        };
+        if candidate.account.is_schedulable(now) {
+            return AffinitySelection::preferred(account_id);
+        }
+        let reason = affinity_unavailable_reason(&candidate.account, now);
+        self.clear_session_affinity(key).await;
+        AffinitySelection::escaped(account_id, reason)
     }
 
     async fn lookup_session_affinity(
@@ -687,6 +838,7 @@ impl CodexCredentialSelector {
         let Ok(current) = self.current_account(account.id()).await else {
             return;
         };
+        // QuotaExhausted 只能由结构化额度事实解除；一次成功响应本身不能证明额度已经恢复。
         if current.provider() != &self.provider_kind
             || current.revision() != account.revision()
             || !current.enabled()
@@ -694,7 +846,6 @@ impl CodexCredentialSelector {
                 current.availability(),
                 AccountAvailability::Unknown
                     | AccountAvailability::Cooldown
-                    | AccountAvailability::QuotaExhausted
                     | AccountAvailability::Expired
             )
         {
@@ -857,6 +1008,25 @@ fn quota_exhausted_scheduling_projection(account: &ProviderAccount) -> ProviderA
     account.clone()
 }
 
+fn affinity_unavailable_reason(account: &ProviderAccount, now: SystemTime) -> AffinityEscapeReason {
+    if !account.enabled()
+        || account
+            .access_token_expires_at()
+            .is_some_and(|expires_at| expires_at <= now)
+    {
+        return AffinityEscapeReason::HardUnavailable;
+    }
+    match account.availability() {
+        AccountAvailability::QuotaExhausted => AffinityEscapeReason::QuotaExhausted,
+        AccountAvailability::Cooldown => AffinityEscapeReason::Cooldown,
+        AccountAvailability::Unknown
+        | AccountAvailability::Ready
+        | AccountAvailability::Expired
+        | AccountAvailability::Banned
+        | AccountAvailability::Invalid => AffinityEscapeReason::HardUnavailable,
+    }
+}
+
 fn active_risk_recovery<'a>(
     recovery: &'a mut HashMap<String, RiskRecoveryState>,
     account_id: &str,
@@ -895,6 +1065,7 @@ pub struct CodexCredentialLease {
     installation_id: String,
     cyber_policy_scope: Option<CodexCyberPolicyScope>,
     allows_account_state_mutation: bool,
+    affinity_telemetry: AffinityTelemetry,
     _guard: Box<dyn ProviderLeaseGuard>,
 }
 
@@ -933,6 +1104,24 @@ impl CodexCredentialLease {
     #[must_use]
     pub(crate) const fn allows_account_state_mutation(&self) -> bool {
         self.allows_account_state_mutation
+    }
+
+    #[must_use]
+    pub const fn affinity_hit(&self) -> bool {
+        self.affinity_telemetry.affinity_hit
+    }
+
+    #[must_use]
+    pub const fn escape_reason(&self) -> Option<&'static str> {
+        match self.affinity_telemetry.escape_reason {
+            Some(reason) => Some(reason.as_str()),
+            None => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn account_switch(&self) -> bool {
+        self.affinity_telemetry.account_switch
     }
 }
 

@@ -250,15 +250,24 @@ async fn core_adapter_should_persist_calculated_cost_exactly() {
 
     let mut finalization = successful_core_finalization("req_calculated_cost");
     finalization.websocket_pool = Some("reuse".to_owned());
+    finalization.service_tier = Some("priority".to_owned());
     finalization.cost = CalculatedCost::from_usd_ticks(12_345)
         .expect("calculated cost")
         .into_estimate();
     ExecutionStore::finalize_model_request(&repository, finalization)
         .await
         .expect("persist calculated cost");
-    let persisted: (String, String, String, String, String, String) = sqlx::query_as(
+    let persisted: (
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+    ) = sqlx::query_as(
         "select cost_source, cost_amount::text, cost_currency, upstream_transport, http_version,
-                websocket_pool
+                websocket_pool, service_tier
          from model_requests where id = 'req_calculated_cost'",
     )
     .fetch_one(&database.pool)
@@ -274,6 +283,7 @@ async fn core_adapter_should_persist_calculated_cost_exactly() {
             "websocket".to_owned(),
             "HTTP/2".to_owned(),
             "reuse".to_owned(),
+            Some("priority".to_owned()),
         )
     );
     database.close().await;
@@ -376,6 +386,7 @@ fn successful_core_finalization(id: &str) -> CoreModelRequestFinalization {
         upstream_transport: Some("websocket".to_owned()),
         http_version: Some("HTTP/2".to_owned()),
         websocket_pool: None,
+        service_tier: None,
         provider_metadata_json: None,
         error: None,
         provider_error_code: None,

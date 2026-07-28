@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use bytes::Bytes;
 use gateway_protocol::openai::events;
 use tokio::time::timeout;
 use tokio_tungstenite::{Connector, connect_async_tls_with_config};
@@ -18,8 +19,10 @@ use crate::{
         responses::CodexResponsesRequest, websocket::websocket_response_create_payload_text,
     },
     transport::{
-        client::parse_retry_after, diagnostics::CodexUpstreamSendPhase,
-        endpoints::CODEX_RESPONSES_PATH, response_meta, tls,
+        client::{CodexClientVisibleUpstreamResponse, parse_retry_after},
+        diagnostics::CodexUpstreamSendPhase,
+        endpoints::CODEX_RESPONSES_PATH,
+        response_meta, tls,
     },
 };
 
@@ -171,17 +174,26 @@ fn websocket_config() -> WebSocketConfig {
     extensions.permessage_deflate = Some(DeflateConfig::default());
 
     let mut config = WebSocketConfig::default();
+    // 上游 Responses 事件属于 Codex 协议数据，不能沿用 tungstenite 的私有
+    // 64 MiB message / 16 MiB frame 默认限制提前中断本可继续的响应。
+    config.max_message_size = None;
+    config.max_frame_size = None;
     config.extensions = extensions;
     config
 }
 
 fn websocket_opening_error(response: &WsResponse<Option<Vec<u8>>>) -> CodexWebSocketExchangeError {
     let status_code = response.status().as_u16();
-    let body = response
+    let raw_body = response
         .body()
         .as_ref()
-        .map(|body| String::from_utf8_lossy(body).into_owned())
-        .unwrap_or_default();
+        .map_or_else(Bytes::new, |body| Bytes::copy_from_slice(body));
+    let body = String::from_utf8_lossy(&raw_body).into_owned();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .map(|value| value.as_bytes().to_vec());
+    let client_headers = response_meta::client_headers(response.headers());
     let retry_after_seconds = response
         .headers()
         .get("retry-after")
@@ -192,6 +204,16 @@ fn websocket_opening_error(response: &WsResponse<Option<Vec<u8>>>) -> CodexWebSo
         status_code,
         retry_after_seconds,
         body,
+        reqwest::StatusCode::from_u16(status_code)
+            .ok()
+            .map(|status| {
+                Box::new(CodexClientVisibleUpstreamResponse::new(
+                    status,
+                    content_type,
+                    client_headers,
+                    raw_body,
+                ))
+            }),
         response_meta::set_cookie_headers(response.headers()),
         response_meta::diagnostics(Some(status_code), response.headers()),
         CodexUpstreamSendPhase::BeforePayload,

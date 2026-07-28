@@ -1,8 +1,10 @@
+use bytes::Bytes;
 use gateway_core::engine::UpstreamSendState;
 use gateway_core::error::{
-    ClientVisibleUpstreamError, GatewayError, ProviderError, ProviderErrorKind, SafeUpstreamValue,
+    ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, GatewayError, OpaqueUpstreamValue,
+    ProviderError, ProviderErrorKind,
 };
-use gateway_core::event::{ProtocolWireEvent, ProviderEvent};
+use gateway_core::event::{ProtocolWireEvent, ProviderEvent, ProviderResponseHeader};
 use serde_json::json;
 
 #[test]
@@ -17,11 +19,20 @@ fn provider_error_debug_should_not_expose_sensitive_context() {
 #[test]
 fn provider_error_debug_should_not_print_classified_upstream_values() {
     let diagnostic = "request-visible-only-through-explicit-accessor";
-    let value = SafeUpstreamValue::new(diagnostic).expect("test diagnostic is valid");
+    let value = OpaqueUpstreamValue::new(diagnostic);
     let error = ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::Sent)
         .with_upstream_request_id(value);
 
     assert!(!format!("{error:?}").contains(diagnostic));
+}
+
+#[test]
+fn opaque_upstream_value_should_preserve_arbitrary_text_without_logging_it() {
+    let original = format!("\0{}\n", "x".repeat(9_000));
+    let value = OpaqueUpstreamValue::new(original.clone());
+
+    assert_eq!(value.as_str(), original);
+    assert!(!format!("{value:?}").contains(&original));
 }
 
 #[test]
@@ -60,17 +71,61 @@ fn provider_error_atomic_client_events_should_be_take_only_and_debug_redacted() 
 }
 
 #[test]
+fn provider_error_clone_should_drop_request_local_upstream_response() {
+    let marker = Bytes::from_static(b"raw-client-response-only");
+    let error = ProviderError::new(ProviderErrorKind::RateLimited, UpstreamSendState::Sent)
+        .with_client_visible_upstream_response(
+            ClientVisibleUpstreamResponse::new(
+                429,
+                Some(b"application/problem+json".to_vec()),
+                marker.clone(),
+            )
+            .with_headers(vec![ProviderResponseHeader::new(
+                "x-future-error",
+                Bytes::from_static(b"opaque-header-value"),
+            )]),
+        );
+
+    let cloned = error.clone();
+
+    assert_eq!(
+        error
+            .client_visible_upstream_response()
+            .map(ClientVisibleUpstreamResponse::body),
+        Some(&marker)
+    );
+    assert!(cloned.client_visible_upstream_response().is_none());
+    assert!(!format!("{error:?}").contains("raw-client-response-only"));
+    assert!(!format!("{error:?}").contains("opaque-header-value"));
+}
+
+#[test]
+fn provider_error_clone_should_drop_atomic_client_events() {
+    let event = ProviderEvent::wire(
+        ProtocolWireEvent::json(
+            "openai",
+            Some("response.failed".to_owned()),
+            json!({"type": "response.failed"}),
+        )
+        .expect("atomic wire"),
+    );
+    let error = ProviderError::new(ProviderErrorKind::RateLimited, UpstreamSendState::Sent)
+        .with_atomic_client_events(vec![event]);
+    let cloned = error.clone();
+
+    assert!(error.has_atomic_client_events());
+    assert!(!cloned.has_atomic_client_events());
+}
+
+#[test]
 fn gateway_error_should_keep_client_visible_upstream_fields_out_of_safe_diagnostics() {
     let message = "Your Codex quota is exhausted";
     let error = ProviderError::new(ProviderErrorKind::QuotaExhausted, UpstreamSendState::Sent)
-        .with_client_visible_upstream_error(
-            ClientVisibleUpstreamError::new(
-                message,
-                Some("quota_exhausted".to_owned()),
-                Some("rate_limit_error".to_owned()),
-            )
-            .expect("safe structured upstream error"),
-        );
+        .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+            message,
+            Some("quota_exhausted".to_owned()),
+            Some("rate_limit_error".to_owned()),
+        ));
     let gateway = GatewayError::from_provider(&error);
 
     assert_eq!(
@@ -81,4 +136,21 @@ fn gateway_error_should_keep_client_visible_upstream_fields_out_of_safe_diagnost
     assert_eq!(gateway.client_error_code(), Some("quota_exhausted"));
     assert_eq!(gateway.client_error_type(), Some("rate_limit_error"));
     assert!(!format!("{gateway:?}").contains(message));
+}
+
+#[test]
+fn client_visible_upstream_error_should_preserve_opaque_structured_fields() {
+    let message = format!("\0{}\n", "m".repeat(9_000));
+    let code = format!("\0{}", "c".repeat(300));
+    let error_type = String::new();
+    let detail = ClientVisibleUpstreamError::new(
+        message.clone(),
+        Some(code.clone()),
+        Some(error_type.clone()),
+    );
+
+    assert_eq!(detail.message(), message);
+    assert_eq!(detail.code(), Some(code.as_str()));
+    assert_eq!(detail.error_type(), Some(error_type.as_str()));
+    assert!(!format!("{detail:?}").contains(&message));
 }

@@ -64,6 +64,12 @@ pub trait ProviderAdmin: Send + Sync {
     /// 成功之后，不参与事务成败，也不得恢复或改写已经提交的账号状态。
     async fn account_unavailable(&self, account_id: &ProviderAccountId);
 
+    /// 账号资格事实已经由控制面提交，失效 Provider 持有的可重建派生状态。
+    ///
+    /// 该通知发生在 Store 事务成功之后、下一份 RuntimeSnapshot 编译之前；通知
+    /// 不参与已提交事务成败。没有账号派生状态的 Provider 可使用默认空实现。
+    async fn account_facts_changed(&self, _account_ids: &[ProviderAccountId]) {}
+
     /// 生成一次连接测试所需的 Provider-owned operation；Core 负责实际执行与落账。
     fn connection_test_operation(
         &self,

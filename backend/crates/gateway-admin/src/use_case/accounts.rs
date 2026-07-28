@@ -370,6 +370,9 @@ impl AccountsService for DefaultAccountsService {
             "provider credential refresh",
         )
         .await?;
+        provider
+            .account_facts_changed(std::slice::from_ref(&result.account_id))
+            .await;
         publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
         let account = self.load_directory_item(&result.account_id, false).await?;
         Ok(AccountRefreshResult {

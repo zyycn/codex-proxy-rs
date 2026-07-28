@@ -36,7 +36,7 @@ use crate::routing::{
 };
 
 const MODEL_REQUEST_DEADLINE: Duration = Duration::from_secs(10 * 60);
-const CONTINUATION_AFFINITY_TIMEOUT: Duration = Duration::from_millis(100);
+const REDIS_COORDINATION_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientTransport {
@@ -233,15 +233,6 @@ impl DefaultExecutionService {
         request.client.policy.authorize().map_err(|_| {
             GatewayError::new(GatewayErrorKind::PolicyDenied, "client API key is disabled")
         })?;
-        if !request.client.snapshot.contains_public_model_for_provider(
-            &request.public_model,
-            request.client.policy.provider_kind(),
-        ) {
-            return Err(GatewayError::new(
-                GatewayErrorKind::ModelNotFound,
-                "requested model was not found",
-            ));
-        }
         let started_at = SystemTime::now();
         let deadline_at = started_at
             .checked_add(MODEL_REQUEST_DEADLINE)
@@ -260,7 +251,7 @@ impl DefaultExecutionService {
         let continuation = match request.metadata.previous_response_id.as_ref() {
             Some(previous) => {
                 let resolve = self.continuation.resolve(previous).fuse();
-                let timeout = Delay::new(CONTINUATION_AFFINITY_TIMEOUT).fuse();
+                let timeout = Delay::new(REDIS_COORDINATION_TIMEOUT).fuse();
                 pin_mut!(resolve, timeout);
                 let pin = select_biased! {
                     result = resolve => result.ok().flatten(),
@@ -398,14 +389,33 @@ impl DefaultExecutionService {
         &self,
         provider_kind: &ProviderKind,
     ) -> Result<RoutingContext, GatewayError> {
-        let blocked_providers = match self.circuits.decision(provider_kind).await.map_err(|_| {
-            GatewayError::new(
-                GatewayErrorKind::NoAvailableProvider,
-                "provider health state is temporarily unavailable",
-            )
-        })? {
-            ProviderCircuitDecision::Allow => BTreeSet::new(),
-            ProviderCircuitDecision::BlockedUntil(_) => BTreeSet::from([provider_kind.clone()]),
+        let decision = self.circuits.decision(provider_kind).fuse();
+        let timeout = Delay::new(REDIS_COORDINATION_TIMEOUT).fuse();
+        pin_mut!(decision, timeout);
+        let decision = select_biased! {
+            result = decision => Some(result),
+            _ = timeout => None,
+        };
+        let blocked_providers = match decision {
+            Some(Ok(ProviderCircuitDecision::Allow)) => BTreeSet::new(),
+            Some(Ok(ProviderCircuitDecision::BlockedUntil(_))) => {
+                BTreeSet::from([provider_kind.clone()])
+            }
+            Some(Err(error)) => {
+                tracing::warn!(
+                    provider = provider_kind.as_str(),
+                    %error,
+                    "Provider circuit 读取失败，按可重建协调状态 fail-open"
+                );
+                BTreeSet::new()
+            }
+            None => {
+                tracing::warn!(
+                    provider = provider_kind.as_str(),
+                    "Provider circuit 读取超时，按可重建协调状态 fail-open"
+                );
+                BTreeSet::new()
+            }
         };
         Ok(RoutingContext {
             provider_kind: Some(provider_kind.clone()),
@@ -665,10 +675,13 @@ struct AdmissionLease {
 
 impl AdmissionLease {
     async fn release(self) {
-        let _ = self
+        if let Err(error) = self
             .port
             .release(&self.client_api_key_id, &self.model_request_id)
-            .await;
+            .await
+        {
+            tracing::warn!(%error, "Client admission 释放失败，依赖租约 TTL 收敛");
+        }
     }
 }
 
@@ -743,13 +756,7 @@ impl DefaultExecutionSession {
             return;
         };
         self.continuation_recorded = true;
-        let record = self.continuation.record(pin).fuse();
-        let timeout = Delay::new(CONTINUATION_AFFINITY_TIMEOUT).fuse();
-        pin_mut!(record, timeout);
-        select_biased! {
-            _ = record => {},
-            _ = timeout => {},
-        }
+        record_native_continuation(self.continuation.as_ref(), pin).await;
     }
 
     async fn finalize_detached(&mut self) {
@@ -757,8 +764,10 @@ impl DefaultExecutionSession {
             return;
         };
         core.cancel();
-        if !core.is_finalized() {
-            let _ = core.cancel_and_finalize().await;
+        if !core.is_finalized()
+            && let Err(error) = core.cancel_and_finalize().await
+        {
+            tracing::warn!(%error, "Detached execution 终态收敛失败");
         }
         let pending = core
             .provider_attempt_outcomes()
@@ -879,7 +888,32 @@ async fn publish_provider_attempt_outcomes(
             }
             Some(_) => continue,
         };
-        let _ = result;
+        if let Err(error) = result {
+            tracing::warn!(
+                provider = outcome.provider_kind().as_str(),
+                %error,
+                "Provider circuit feedback 写入失败，数据面不受影响"
+            );
+        }
+    }
+}
+
+async fn record_native_continuation(
+    continuation: &dyn NativeContinuationPort,
+    pin: NativeContinuationPin,
+) {
+    let record = continuation.record(pin).fuse();
+    let timeout = Delay::new(REDIS_COORDINATION_TIMEOUT).fuse();
+    pin_mut!(record, timeout);
+    select_biased! {
+        result = record => {
+            if let Err(error) = result {
+                tracing::warn!(%error, "Continuation affinity 写入失败，后续请求将退化为外部续接");
+            }
+        },
+        _ = timeout => {
+            tracing::warn!("Continuation affinity 后台写入超时，已丢弃本次亲和记录");
+        },
     }
 }
 

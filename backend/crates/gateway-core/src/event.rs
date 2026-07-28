@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use crate::accounting::{CalculatedCost, ProviderReportedCost, Usage};
 use crate::engine::provider::UpstreamTransport;
-use crate::error::{IdentifierError, SafeUpstreamValue, validate_text};
+use crate::error::{IdentifierError, OpaqueUpstreamValue, validate_text};
 use crate::operation::ProviderSessionState;
 
 /// 一次响应的稳定元数据。
@@ -199,7 +199,7 @@ impl ProtocolWireEvent {
     ///
     /// # Errors
     ///
-    /// 协议名或显式事件名为空、过长或含控制字符时返回错误。
+    /// 协议名不满足内部路由标识约束时返回错误。上游事件名保持不透明。
     pub fn json(
         protocol: impl Into<String>,
         event_type: Option<String>,
@@ -212,7 +212,7 @@ impl ProtocolWireEvent {
     ///
     /// # Errors
     ///
-    /// 协议名、显式事件名或 SSE ID 不满足 wire 安全约束时返回错误。
+    /// 协议名不满足内部路由标识约束时返回错误。SSE 元数据保持不透明。
     pub fn json_with_sse_metadata(
         protocol: impl Into<String>,
         event_type: Option<String>,
@@ -222,15 +222,6 @@ impl ProtocolWireEvent {
     ) -> Result<Self, IdentifierError> {
         let protocol = protocol.into();
         validate_text(&protocol, 64, true, None)?;
-        if let Some(event_type) = event_type.as_deref() {
-            validate_text(event_type, 256, true, None)?;
-        }
-        if sse_id
-            .as_deref()
-            .is_some_and(|id| id.contains(['\0', '\r', '\n']))
-        {
-            return Err(IdentifierError::ControlCharacter);
-        }
         Ok(Self {
             protocol,
             event_type,
@@ -440,24 +431,21 @@ impl fmt::Debug for ProviderResponseMetadata {
     }
 }
 
-/// Provider 已筛选、可由协议 adapter 再次按白名单表达的响应头。
+/// Provider 已筛选、可由协议 adapter 尝试表达的不透明响应头。
 #[derive(Clone, PartialEq, Eq)]
 pub struct ProviderResponseHeader {
     name: String,
-    value: SafeUpstreamValue,
+    value: Bytes,
 }
 
 impl ProviderResponseHeader {
-    /// 创建规范化的小写响应头；非 ASCII token 名称直接拒绝。
+    /// 保存 Provider 交付的原始名称和值；HTTP 可表达性由最终 adapter 判断。
     #[must_use]
-    pub fn new(name: impl Into<String>, value: SafeUpstreamValue) -> Option<Self> {
-        let name = name.into().trim().to_ascii_lowercase();
-        let valid = !name.is_empty()
-            && name.len() <= 64
-            && name
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
-        valid.then_some(Self { name, value })
+    pub fn new(name: impl Into<String>, value: Bytes) -> Self {
+        Self {
+            name: name.into(),
+            value,
+        }
     }
 
     #[must_use]
@@ -466,7 +454,7 @@ impl ProviderResponseHeader {
     }
 
     #[must_use]
-    pub const fn value(&self) -> &SafeUpstreamValue {
+    pub const fn value(&self) -> &Bytes {
         &self.value
     }
 }
@@ -475,7 +463,7 @@ impl fmt::Debug for ProviderResponseHeader {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ProviderResponseHeader")
-            .field("name", &self.name)
+            .field("name", &"<redacted>")
             .field("value", &"<redacted>")
             .finish()
     }
@@ -488,7 +476,8 @@ pub struct ProviderResponseObservation {
     http_version: Option<UpstreamHttpVersion>,
     websocket_pool: Option<WebSocketPoolKind>,
     status_code: Option<u16>,
-    request_id: Option<SafeUpstreamValue>,
+    request_id: Option<OpaqueUpstreamValue>,
+    service_tier: Option<String>,
     timings: ProviderResponseTimings,
     client_headers: Vec<ProviderResponseHeader>,
     provider_metadata: Option<ProviderResponseMetadata>,
@@ -503,6 +492,7 @@ impl ProviderResponseObservation {
             websocket_pool: None,
             status_code: None,
             request_id: None,
+            service_tier: None,
             timings: ProviderResponseTimings::default(),
             client_headers: Vec::new(),
             provider_metadata: None,
@@ -528,8 +518,33 @@ impl ProviderResponseObservation {
     }
 
     #[must_use]
-    pub fn with_request_id(mut self, request_id: SafeUpstreamValue) -> Self {
+    pub fn with_request_id(mut self, request_id: OpaqueUpstreamValue) -> Self {
         self.request_id = Some(request_id);
+        self
+    }
+
+    /// 附加 Provider 在响应中确认的服务档位。
+    ///
+    /// # Errors
+    ///
+    /// 档位为空、超过 64 字节或包含控制字符时返回错误。
+    pub fn try_with_service_tier(
+        mut self,
+        service_tier: impl Into<String>,
+    ) -> Result<Self, IdentifierError> {
+        let service_tier = service_tier.into();
+        validate_text(&service_tier, 64, false, None)?;
+        self.service_tier = Some(service_tier);
+        Ok(self)
+    }
+
+    /// 附加合法服务档位；不适合持久化的上游观测值会被忽略。
+    #[must_use]
+    pub fn with_service_tier_if_valid(mut self, service_tier: impl Into<String>) -> Self {
+        let service_tier = service_tier.into();
+        if validate_text(&service_tier, 64, false, None).is_ok() {
+            self.service_tier = Some(service_tier);
+        }
         self
     }
 
@@ -573,8 +588,13 @@ impl ProviderResponseObservation {
     }
 
     #[must_use]
-    pub const fn request_id(&self) -> Option<&SafeUpstreamValue> {
+    pub const fn request_id(&self) -> Option<&OpaqueUpstreamValue> {
         self.request_id.as_ref()
+    }
+
+    #[must_use]
+    pub fn service_tier(&self) -> Option<&str> {
+        self.service_tier.as_deref()
     }
 
     #[must_use]

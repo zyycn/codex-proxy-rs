@@ -1,57 +1,29 @@
 use axum::{
-    Router,
-    body::{Body, Bytes},
-    extract::DefaultBodyLimit,
+    body::Body,
     http::{Method, Request, StatusCode},
-    routing::post,
 };
-use gateway_api::openai::router::MAX_CLIENT_REQUEST_BODY_BYTES;
 use tower::ServiceExt;
 
 use super::api_router_with_origins;
 use super::models::ModelsExecution;
 
-fn body_limit_app() -> Router {
-    Router::new()
-        .route(
-            "/v1/responses",
-            post(|body: Bytes| async move {
-                if body.len() == MAX_CLIENT_REQUEST_BODY_BYTES {
-                    StatusCode::NO_CONTENT
-                } else {
-                    StatusCode::INTERNAL_SERVER_ERROR
-                }
-            }),
-        )
-        .layer(DefaultBodyLimit::max(MAX_CLIENT_REQUEST_BODY_BYTES))
-}
+const REMOVED_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 
 #[tokio::test]
-async fn responses_body_limit_should_accept_exactly_sixteen_mibibytes() {
-    let response = body_limit_app()
+async fn responses_body_should_accept_payload_above_the_removed_private_limit() {
+    let router = api_router_with_origins(ModelsExecution::new(), Vec::new()).await;
+    let response = router
         .oneshot(
             Request::post("/v1/responses")
-                .body(Body::from(vec![b'a'; MAX_CLIENT_REQUEST_BODY_BYTES]))
-                .expect("build exact-limit request"),
+                .body(Body::from(vec![b'a'; REMOVED_BODY_LIMIT_BYTES + 1]))
+                .expect("build request above the removed limit"),
         )
         .await
-        .expect("route exact-limit request");
+        .expect("route request above the removed limit");
 
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
-}
-
-#[tokio::test]
-async fn responses_body_limit_should_reject_one_byte_over_sixteen_mibibytes() {
-    let response = body_limit_app()
-        .oneshot(
-            Request::post("/v1/responses")
-                .body(Body::from(vec![b'a'; MAX_CLIENT_REQUEST_BODY_BYTES + 1]))
-                .expect("build over-limit request"),
-        )
-        .await
-        .expect("route over-limit request");
-
-    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    // The handler sees the body and rejects the missing credentials. A restored body limit
+    // would return 413 before authentication runs.
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

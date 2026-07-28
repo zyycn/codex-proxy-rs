@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
 use gateway_core::engine::credential::{
-    AccountAvailability, CredentialRevision, OpaqueProviderData, ProviderAccount, ProviderAccountId,
+    AccountAvailability, OpaqueProviderData, ProviderAccount, ProviderAccountId,
 };
 use gateway_core::engine::provider::ProviderCatalogGeneration;
 use gateway_core::provider_ports::{
@@ -96,13 +96,7 @@ impl CodexPlanCatalog {
 pub struct CodexCredentialCatalogSnapshot {
     observed_at: SystemTime,
     models: Vec<CodexCatalogModel>,
-    account_models: BTreeMap<ProviderAccountId, CodexAccountEntitlement>,
-}
-
-#[derive(Clone, PartialEq, Eq)]
-struct CodexAccountEntitlement {
-    revision: CredentialRevision,
-    models: Vec<String>,
+    scope_models: BTreeMap<CodexCatalogScope, Vec<String>>,
 }
 
 impl CodexCredentialCatalogSnapshot {
@@ -116,16 +110,12 @@ impl CodexCredentialCatalogSnapshot {
         &self.models
     }
 
-    #[must_use]
     pub fn account_models(
         &self,
-        account_id: &ProviderAccountId,
-        revision: CredentialRevision,
-    ) -> Option<&[String]> {
-        self.account_models
-            .get(account_id)
-            .filter(|entry| entry.revision == revision)
-            .map(|entry| entry.models.as_slice())
+        account: &ProviderAccount,
+    ) -> Result<Option<&[String]>, CodexCredentialCatalogError> {
+        let scope = CodexCatalogScope::for_account(account)?;
+        Ok(self.scope_models.get(&scope).map(Vec::as_slice))
     }
 }
 
@@ -135,7 +125,7 @@ impl fmt::Debug for CodexCredentialCatalogSnapshot {
             .debug_struct("CodexCredentialCatalogSnapshot")
             .field("observed_at", &self.observed_at)
             .field("model_count", &self.models.len())
-            .field("account_count", &self.account_models.len())
+            .field("scope_count", &self.scope_models.len())
             .finish()
     }
 }
@@ -173,8 +163,6 @@ struct CatalogCacheState {
 }
 
 struct FetchedAccountModels {
-    account_id: ProviderAccountId,
-    revision: CredentialRevision,
     models: Vec<CodexCatalogModel>,
     etag: Option<String>,
 }
@@ -246,30 +234,30 @@ impl CodexCredentialCatalogService {
             .cloned())
     }
 
-    /// 读取单账号当前仍新鲜的模型 entitlement；不触发网络。
+    /// 读取账号当前已验证套餐的模型 entitlement；不触发网络。
     pub fn cached_account_models(
         &self,
-        account_id: &ProviderAccountId,
-        revision: CredentialRevision,
+        account: &ProviderAccount,
     ) -> Result<Option<Vec<String>>, CodexCredentialCatalogError> {
-        Ok(self.cached()?.and_then(|snapshot| {
-            snapshot
-                .account_models(account_id, revision)
-                .map(<[String]>::to_vec)
-        }))
+        let Some(snapshot) = self.cached()? else {
+            return Ok(None);
+        };
+        snapshot
+            .account_models(account)
+            .map(|models| models.map(<[String]>::to_vec))
     }
 
     pub fn observed_model_support(
         &self,
-        account_id: &ProviderAccountId,
-        revision: CredentialRevision,
+        account: &ProviderAccount,
         model: &str,
     ) -> Result<Option<bool>, CodexCredentialCatalogError> {
-        Ok(self.cached()?.and_then(|snapshot| {
-            snapshot
-                .account_models(account_id, revision)
-                .map(|models| models.iter().any(|candidate| candidate == model))
-        }))
+        let Some(snapshot) = self.cached()? else {
+            return Ok(None);
+        };
+        Ok(Some(snapshot.account_models(account)?.is_some_and(
+            |models| models.iter().any(|candidate| candidate == model),
+        )))
     }
 
     /// 优先读取套餐目录 cache；缺失时才用当前账号所属套餐的有限候选集实时填充。
@@ -353,13 +341,13 @@ impl CodexCredentialCatalogService {
         );
         let mut union = BTreeMap::<String, CodexCatalogModel>::new();
         let mut union_order = Vec::new();
-        let mut account_models = BTreeMap::new();
+        let mut scope_models = BTreeMap::new();
         let mut etags = Vec::new();
         for (scope, candidates) in groups {
             let fetched = self.fetch_scope_models(&client, candidates).await?;
             let entitlement = model_ids(&fetched.models);
             self.replace_plan_catalog(&CodexPlanCatalog::new(
-                scope,
+                scope.clone(),
                 Utc::now(),
                 entitlement.clone(),
             ))
@@ -379,13 +367,7 @@ impl CodexCredentialCatalogService {
                     Entry::Occupied(_) => {}
                 }
             }
-            account_models.insert(
-                fetched.account_id,
-                CodexAccountEntitlement {
-                    revision: fetched.revision,
-                    models: entitlement,
-                },
-            );
+            scope_models.insert(scope, entitlement);
             etags.extend(fetched.etag);
         }
         let observed_at = SystemTime::now();
@@ -395,7 +377,7 @@ impl CodexCredentialCatalogService {
                 .into_iter()
                 .filter_map(|id| union.remove(&id))
                 .collect(),
-            account_models,
+            scope_models,
         };
         Ok(FetchedCatalog { snapshot, etags })
     }
@@ -502,8 +484,6 @@ impl CodexCredentialCatalogService {
         }
         let snapshot = result.map_err(|_| CodexCredentialCatalogError::Upstream)?;
         Ok(FetchedAccountModels {
-            account_id: prepared.account.id().clone(),
-            revision: prepared.account.revision(),
             models: snapshot.models().to_vec(),
             etag: snapshot.etag().map(str::to_owned),
         })
@@ -782,7 +762,7 @@ fn same_catalog(
     left: &CodexCredentialCatalogSnapshot,
     right: &CodexCredentialCatalogSnapshot,
 ) -> bool {
-    left.models == right.models && left.account_models == right.account_models
+    left.models == right.models && left.scope_models == right.scope_models
 }
 
 fn validate_response_etag(etag: &str) -> Result<(), CodexCredentialCatalogError> {

@@ -3,6 +3,7 @@
 use std::{fmt, net::IpAddr};
 
 use axum::http::HeaderMap;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload, ProviderSessionState};
 use gateway_protocol::openai::{
     X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER, X_OPENAI_MEMGEN_REQUEST_HEADER,
@@ -14,6 +15,7 @@ use super::error::RequestDecodeError;
 const OPENAI_PROTOCOL: &str = "openai";
 const REVIEW_SUBAGENT: &str = "review";
 const OPENAI_SUBAGENT_KEY: &str = "x-openai-subagent";
+const PASSTHROUGH_HEADERS_CONTEXT_KEY: &str = "opaque_request_headers";
 
 #[derive(Clone, Default)]
 pub struct OpenAiRequestHeaders {
@@ -34,6 +36,7 @@ pub struct OpenAiRequestHeaders {
     responses_lite: Option<String>,
     memgen_request: Option<String>,
     subagent: Option<String>,
+    passthrough_headers: Vec<Value>,
 }
 
 impl OpenAiRequestHeaders {
@@ -57,12 +60,8 @@ impl OpenAiRequestHeaders {
             turn_id: header_string(headers, "x-codex-turn-id"),
             responses_lite: header_string(headers, X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER),
             memgen_request: header_string(headers, X_OPENAI_MEMGEN_REQUEST_HEADER),
-            subagent: header_string(headers, OPENAI_SUBAGENT_KEY).filter(|value| {
-                matches!(
-                    value.as_str(),
-                    "review" | "compact" | "memory_consolidation" | "collab_spawn"
-                )
-            }),
+            subagent: header_string(headers, OPENAI_SUBAGENT_KEY),
+            passthrough_headers: passthrough_headers(headers),
         }
     }
 
@@ -108,6 +107,12 @@ impl OpenAiRequestHeaders {
         insert_protocol_context(&mut context, "turn_id", self.turn_id.as_ref());
         insert_protocol_context(&mut context, "responses_lite", self.responses_lite.as_ref());
         insert_protocol_context(&mut context, "memgen_request", self.memgen_request.as_ref());
+        if !self.passthrough_headers.is_empty() {
+            context.insert(
+                PASSTHROUGH_HEADERS_CONTEXT_KEY.to_owned(),
+                Value::Array(self.passthrough_headers.clone()),
+            );
+        }
         if let Some(use_websocket) = use_websocket {
             context.insert("use_websocket".to_owned(), Value::Bool(use_websocket));
         }
@@ -322,13 +327,14 @@ pub(super) fn decode_request_object(
     review: bool,
     request_headers: &OpenAiRequestHeaders,
 ) -> Result<DecodedResponsesRequest, RequestDecodeError> {
-    // `use_websocket` 只影响本地 transport。无论值是否可识别，都不得进入上游 body。
-    let use_websocket = object
-        .remove("use_websocket")
-        .and_then(|value| value.as_bool());
+    // 仅消费已识别的本地 transport 开关；未知同名值保留给未来上游协议。
+    let use_websocket = object.get("use_websocket").and_then(Value::as_bool);
+    if use_websocket.is_some() {
+        object.remove("use_websocket");
+    }
 
-    let model = required_non_empty_string(&object, "model", "model")?.trim();
-    if model.is_empty() {
+    let model = required_non_empty_string(&object, "model", "model")?;
+    if model.trim().is_empty() {
         return Err(RequestDecodeError::EmptyField {
             field: "model".to_owned(),
         });
@@ -375,24 +381,96 @@ fn inject_subagent_metadata(body: &mut Map<String, Value>, subagent: &str) {
     let metadata = body
         .entry("client_metadata".to_owned())
         .or_insert_with(|| Value::Object(Map::new()));
-    if !metadata.is_object() {
-        *metadata = Value::Object(Map::new());
-    }
-    if let Some(metadata) = metadata.as_object_mut() {
-        metadata.insert(
-            OPENAI_SUBAGENT_KEY.to_owned(),
-            Value::String(subagent.to_owned()),
-        );
-    }
+    let Some(metadata) = metadata.as_object_mut() else {
+        return;
+    };
+    metadata.insert(
+        OPENAI_SUBAGENT_KEY.to_owned(),
+        Value::String(subagent.to_owned()),
+    );
 }
 
 fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get(name)
         .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn passthrough_headers(headers: &HeaderMap) -> Vec<Value> {
+    let connection_headers = headers
+        .get_all("connection")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+
+    headers
+        .iter()
+        .filter(|(name, _)| passthrough_header_name(name.as_str(), &connection_headers))
+        .map(|(name, value)| {
+            Value::Array(vec![
+                Value::String(name.as_str().to_owned()),
+                Value::String(STANDARD.encode(value.as_bytes())),
+            ])
+        })
+        .collect()
+}
+
+fn passthrough_header_name(name: &str, connection_headers: &[String]) -> bool {
+    if connection_headers
+        .iter()
+        .any(|connection_header| connection_header.eq_ignore_ascii_case(name))
+        || name.starts_with("sec-websocket-")
+        || name.starts_with("x-grok-")
+        || name.starts_with("x-xai-")
+    {
+        return false;
+    }
+
+    !matches!(
+        name,
+        // 逐跳头、上游 authority 和重序列化后的实体长度由 transport 重建。
+        "connection"
+            | "keep-alive"
+            | "proxy-connection"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+            | "host"
+            | "content-length"
+            // 下游连接诊断事实只用于本地观测，不能伪装成 OpenAI 请求事实。
+            | "forwarded"
+            | "x-forwarded-for"
+            | "x-forwarded-host"
+            | "x-forwarded-proto"
+            | "x-forwarded-port"
+            | "x-real-ip"
+            | "true-client-ip"
+            | "cf-connecting-ip"
+            | "x-request-id"
+            // 下游鉴权和账号 cookie 绝不能成为上游账号身份。
+            | "authorization"
+            | "x-api-key"
+            | "cookie"
+            | "cookie2"
+            | "chatgpt-account-id"
+            | "chatgpt-organization-id"
+            | "chatgpt-org-id"
+            | "chatgpt-project-id"
+            | "openai-organization"
+            | "openai-project"
+            | "x-openai-organization"
+            | "x-openai-project"
+            // installation ID 始终由当前 lease 重建。
+            | "x-codex-installation-id"
+    )
 }
 
 fn required_non_empty_string<'a>(

@@ -264,6 +264,7 @@ async fn openai_admin_provider_exposes_live_wire_profile_and_validated_billing()
     let billing = admin
         .calculated_billing(&ProviderBillingInput {
             upstream_model_id: "gpt-4o".to_owned(),
+            service_tier: None,
             input_tokens: Some(1_000_000),
             output_tokens: Some(0),
             cached_tokens: Some(0),
@@ -277,6 +278,26 @@ async fn openai_admin_provider_exposes_live_wire_profile_and_validated_billing()
         .expect("known pricing");
     assert_eq!(billing.total_amount.amount.as_str(), "2.5");
     assert_eq!(billing.input_price_per_million.amount.as_str(), "2.5");
+
+    let fast_billing = admin
+        .calculated_billing(&ProviderBillingInput {
+            upstream_model_id: "gpt-4o".to_owned(),
+            service_tier: Some("priority".to_owned()),
+            input_tokens: Some(1_000_000),
+            output_tokens: Some(0),
+            cached_tokens: Some(0),
+            cache_write_tokens: Some(0),
+            total: CurrencyCost {
+                currency: "USD".to_owned(),
+                amount: "5".parse().expect("fast amount"),
+            },
+        })
+        .expect("fast billing")
+        .expect("known fast pricing");
+    assert_eq!(fast_billing.service_tier.as_deref(), Some("priority"));
+    assert_eq!(fast_billing.multiplier_percent, 200);
+    assert_eq!(fast_billing.standard_amount.amount.as_str(), "2.5");
+    assert_eq!(fast_billing.total_amount.amount.as_str(), "5");
 }
 
 #[tokio::test]

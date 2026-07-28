@@ -1800,7 +1800,7 @@ fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView {
         model,
         requested_model: Some(record.requested_model_id),
         upstream_model: record.upstream_model_id,
-        service_tier: None,
+        service_tier: record.service_tier,
         status_code,
         transport,
         attempt_index: None,

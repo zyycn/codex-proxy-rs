@@ -151,6 +151,9 @@ impl OpenAiService for DefaultOpenAiService {
             .commit_credential_import(CredentialImportCommit { prepared }, &context)
             .await
             .map_err(|error| map_store_error(error, "OpenAI credential import"))?;
+        self.provider
+            .account_facts_changed(&result.credential_ids)
+            .await;
         publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
         // 导入完成后立即做一次观察；失败不回滚已经提交的 credential。
         self.observe_initial_quotas(&result.credential_ids, &context.request_id)
@@ -203,6 +206,9 @@ impl OpenAiService for DefaultOpenAiService {
             "OpenAI authorization",
         )
         .await?;
+        self.provider
+            .account_facts_changed(std::slice::from_ref(&result.account_id))
+            .await;
         publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
         if creates_account {
             self.observe_initial_quotas(
@@ -244,6 +250,9 @@ impl OpenAiService for DefaultOpenAiService {
             "OpenAI credential rotation",
         )
         .await?;
+        self.provider
+            .account_facts_changed(std::slice::from_ref(&result.account_id))
+            .await;
         publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
         Ok(result)
     }

@@ -180,6 +180,10 @@ impl ProviderAdmin for FakeProviderAdmin {
         self.record("provider.account_unavailable");
     }
 
+    async fn account_facts_changed(&self, _: &[ProviderAccountId]) {
+        self.record("provider.account_facts_changed");
+    }
+
     fn connection_test_operation(
         &self,
         model: &gateway_core::routing::UpstreamModelId,
@@ -852,6 +856,7 @@ async fn accounts_refresh_should_keep_guard_through_store_commit() {
             "provider.prepare_refresh",
             "store.commit_refresh",
             "guard.finish",
+            "provider.account_facts_changed",
             "store.load_account",
         ]
     );
@@ -1157,8 +1162,7 @@ impl AccountProbe for FailingAccountProbe {
                 "included usage exhausted",
                 Some("usage_exhausted".to_owned()),
                 Some("invalid_request_error".to_owned()),
-            )
-            .expect("safe provider error");
+            );
             Err(GatewayError::new(
                 GatewayErrorKind::RateLimited,
                 "upstream capacity is temporarily unavailable",

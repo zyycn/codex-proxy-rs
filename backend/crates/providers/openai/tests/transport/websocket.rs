@@ -287,6 +287,70 @@ async fn websocket_execute_response_create_request_should_collect_completed_sse(
 }
 
 #[tokio::test]
+async fn websocket_exchange_should_accept_upstream_frame_above_removed_private_limit() {
+    const REMOVED_FRAME_LIMIT_BYTES: usize = 16 * 1024 * 1024;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        // Do not negotiate compression: the wire frame itself must exceed the former limit.
+        let mut websocket =
+            accept_codex_test_websocket_with(stream, |_request, _response| {}).await;
+        let _message = websocket.next().await.unwrap().unwrap();
+        let oversized_event = json!({
+            "type": "response.output_text.delta",
+            "delta": "x".repeat(REMOVED_FRAME_LIMIT_BYTES + 1),
+        })
+        .to_string();
+        assert!(oversized_event.len() > REMOVED_FRAME_LIMIT_BYTES);
+        websocket
+            .send(Message::Text(oversized_event.into()))
+            .await
+            .unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_after_oversized_frame",
+                        "object": "response",
+                        "output": [],
+                        "usage": {
+                            "input_tokens": 1,
+                            "output_tokens": 1,
+                            "total_tokens": 2
+                        }
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+    });
+    let request = codex_request("gpt-5.5", "be brief", Vec::new());
+    let prepared = CodexWebSocketConnection::responses_create_request(
+        &format!("http://{addr}"),
+        "dGhlIHNhbXBsZSBub25jZQ==",
+        vec![(
+            "authorization".to_string(),
+            "Bearer access-token".to_string(),
+        )],
+        &request,
+    )
+    .expect("payload should serialize");
+
+    let response = execute_response_create_request(&prepared)
+        .await
+        .expect("upstream frame above the former private limit should remain forwardable");
+    server.await.unwrap();
+
+    assert!(response.body.len() > REMOVED_FRAME_LIMIT_BYTES);
+    assert!(response.body.contains("resp_after_oversized_frame"));
+}
+
+#[tokio::test]
 async fn websocket_execute_response_create_request_should_return_business_coded_response_failed_as_terminal_sse_fact()
  {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -390,29 +454,29 @@ async fn websocket_execute_response_create_request_should_preserve_opening_error
         let request = read_http_request(&mut stream).await;
         assert!(request.starts_with("GET /codex/responses HTTP/1.1"));
         assert!(request.contains("authorization: Bearer access-token"));
-        let body = r#"{"error":{"message":"rate limited"}}"#;
-        stream
-            .write_all(
-                format!(
-                    "HTTP/1.1 429 Too Many Requests\r\nretry-after: 33\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                    body.len()
-                )
-                .as_bytes(),
-            )
-            .await
-            .unwrap();
+        let mut body = vec![b'x'; 3 * 1024 + 17];
+        body.extend_from_slice(b"\0\xffraw-opening-tail");
+        let head = format!(
+            "HTTP/1.1 429 Too Many Requests\r\nretry-after: 33\r\nx-request-id: req-ws-opening\r\nx-future-error: first\r\nx-future-error: second\r\nset-cookie: account-secret=value\r\ncontent-type: application/problem+json; profile=codex\r\ncontent-length: {}\r\nconnection: close, x-hop-secret\r\nx-hop-secret: hop-secret\r\n\r\n",
+            body.len()
+        );
+        let mut response = head.into_bytes();
+        response.extend_from_slice(&body);
+        stream.write_all(&response).await.unwrap();
+        body
     });
     let prepared = prepared_websocket_request(&format!("http://{addr}"));
 
     let error = execute_response_create_request(&prepared)
         .await
         .expect_err("failed opening should surface upstream status");
-    server.await.unwrap();
+    let expected_body = server.await.unwrap();
 
     let CodexClientError::Upstream {
         status,
         retry_after_seconds,
         body,
+        client_response,
         ..
     } = error
     else {
@@ -420,7 +484,110 @@ async fn websocket_execute_response_create_request_should_preserve_opening_error
     };
     assert_eq!(status, reqwest::StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(retry_after_seconds, Some(33));
-    assert!(body.contains("rate limited"));
+    assert_eq!(body.len(), String::from_utf8_lossy(&expected_body).len());
+    assert!(body.ends_with("\0\u{fffd}raw-opening-tail"));
+    let client_response = client_response.expect("raw opening response");
+    assert_eq!(client_response.status(), 429);
+    assert_eq!(
+        client_response.content_type(),
+        Some(b"application/problem+json; profile=codex".as_slice())
+    );
+    assert_eq!(client_response.body().len(), expected_body.len());
+    assert_eq!(client_response.body().as_ref(), expected_body.as_slice());
+    let future_values = client_response
+        .client_headers()
+        .iter()
+        .filter(|(name, _)| name == "x-future-error")
+        .map(|(_, value)| value.as_ref())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        future_values,
+        vec![b"first".as_slice(), b"second".as_slice()]
+    );
+    assert!(
+        client_response
+            .client_headers()
+            .iter()
+            .any(|(name, value)| { name == "retry-after" && value.as_ref() == b"33" })
+    );
+    assert!(
+        client_response
+            .client_headers()
+            .iter()
+            .any(|(name, value)| { name == "x-request-id" && value.as_ref() == b"req-ws-opening" })
+    );
+    for excluded in [
+        "content-type",
+        "content-length",
+        "set-cookie",
+        "connection",
+        "x-hop-secret",
+    ] {
+        assert!(
+            client_response
+                .client_headers()
+                .iter()
+                .all(|(name, _)| name != excluded),
+            "unexpected forwarded header {excluded}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn websocket_business_events_should_not_be_consumed_by_internal_observers() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let _message = websocket.next().await.unwrap().unwrap();
+        for event in [
+            json!({
+                "type": "future.business.rate_limits",
+                "rate_limits": {
+                    "primary": {
+                        "used_percent": 99,
+                        "window_minutes": 5,
+                        "reset_at": 1893456300
+                    }
+                }
+            }),
+            json!({
+                "type": "future.business.metadata",
+                "metadata": {"turn_state": "business-value"}
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_after_business_events",
+                    "object": "response",
+                    "output": [],
+                    "usage": {
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "total_tokens": 2
+                    }
+                }
+            }),
+        ] {
+            websocket
+                .send(Message::Text(event.to_string().into()))
+                .await
+                .unwrap();
+        }
+        websocket.close(None).await.unwrap();
+    });
+    let prepared = prepared_websocket_request(&format!("http://{addr}"));
+
+    let response = execute_response_create_request(&prepared)
+        .await
+        .expect("business events should remain on the wire");
+    server.await.unwrap();
+
+    assert!(response.body.contains("event: future.business.rate_limits"));
+    assert!(response.body.contains("event: future.business.metadata"));
+    assert_eq!(response.turn_state, None);
+    assert!(response.rate_limit_headers.is_empty());
 }
 
 #[tokio::test]
@@ -1710,6 +1877,7 @@ async fn codex_backend_client_should_use_websocket_when_previous_response_id_is_
                 thread_id: None,
                 client_request_id: None,
                 turn_id: None,
+                account_selection: Default::default(),
             },
         )
         .await

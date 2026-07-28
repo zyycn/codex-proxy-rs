@@ -99,8 +99,14 @@ async fn observability_preserves_and_filters_opaque_response_ids() {
         .await
         .expect("filter opaque response ID");
     assert_eq!(records.total, 1);
-    assert_eq!(records.items[0].client_response_id.as_deref(), Some(response_id.as_str()));
-    assert_eq!(records.items[0].upstream_response_id.as_deref(), Some(response_id.as_str()));
+    assert_eq!(
+        records.items[0].client_response_id.as_deref(),
+        Some(response_id.as_str())
+    );
+    assert_eq!(
+        records.items[0].upstream_response_id.as_deref(),
+        Some(response_id.as_str())
+    );
 
     database.close().await;
 }
@@ -181,6 +187,7 @@ async fn calculated_usage_billing_facts_keep_only_completed_calculated_costs() {
     assert_eq!(facts[0].upstream_model_id, "gpt-5.5");
     assert_eq!(facts[0].input_tokens, Some(800));
     assert_eq!(facts[0].output_tokens, Some(200));
+    assert_eq!(facts[0].service_tier.as_deref(), Some("priority"));
     assert_eq!(facts[0].total.amount.as_str(), "1.25");
 
     let store = PgAdminObservabilityStore::new(database.pool.clone(), None);
@@ -193,6 +200,7 @@ async fn calculated_usage_billing_facts_keep_only_completed_calculated_costs() {
         .await
         .expect("admin calculated usage billing facts");
     assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].service_tier.as_deref(), Some("priority"));
     assert_eq!(facts[0].total.amount.as_str(), "1.25");
 
     database.close().await;
@@ -240,6 +248,10 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
         1,
     );
     assert_eq!(dashboard.recent_requests.len(), 1);
+    assert_eq!(
+        dashboard.recent_requests[0].service_tier.as_deref(),
+        Some("priority")
+    );
     assert_eq!(
         dashboard.recent_requests[0].outcome,
         admin_observability::RequestOutcome::Succeeded,
@@ -313,6 +325,10 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
     assert_eq!(first_page.total, 1);
     assert_eq!(first_page.items.len(), 1);
     assert!(first_page.next_cursor.is_none());
+    assert_eq!(
+        first_page.items[0].service_tier.as_deref(),
+        Some("priority")
+    );
 
     let filtered = store
         .list_usage_records(admin_observability::UsageQuery {
@@ -339,6 +355,7 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
         .await
         .expect("fully filtered usage page");
     assert_eq!(filtered.total, 1);
+    assert_eq!(filtered.items[0].service_tier.as_deref(), Some("priority"));
     assert_eq!(
         filtered.items[0].upstream_request_id.as_deref(),
         Some("upstream_req_success")
@@ -371,6 +388,7 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
         detail.request.outcome,
         admin_observability::RequestOutcome::Succeeded
     );
+    assert_eq!(detail.request.service_tier.as_deref(), Some("priority"));
     assert_eq!(detail.attempts.len(), 1);
     assert_eq!(
         detail.attempts[0].outcome,
@@ -551,6 +569,10 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
     assert_eq!(dashboard.recent_requests.len(), 1);
     assert_eq!(dashboard.recent_requests[0].id, "req_observe_success");
     assert_eq!(
+        dashboard.recent_requests[0].service_tier.as_deref(),
+        Some("priority")
+    );
+    assert_eq!(
         dashboard
             .trend
             .iter()
@@ -624,6 +646,7 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
     assert_eq!(
         (
             successful_image.websocket_pool.as_deref(),
+            successful_image.service_tier.as_deref(),
             successful_image
                 .provider_account_authentication_kind
                 .as_deref(),
@@ -634,6 +657,7 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
         ),
         (
             Some("reuse"),
+            Some("priority"),
             Some("oauth"),
             Some(31),
             Some(9),
@@ -769,6 +793,7 @@ async fn seed_observability_facts(
            client_transport, requested_model_id,
            provider_kind, provider_account_id,
            provider_account_ref, upstream_model_id, upstream_transport, websocket_pool,
+           service_tier,
            attempt_count,
            upstream_send_state, downstream_committed_at, outcome, client_status_code,
            upstream_status_code, client_response_id, upstream_request_id, upstream_response_id,
@@ -781,7 +806,7 @@ async fn seed_observability_facts(
            'req_observe_success', 'key_observe', 1, 'openai', 'responses', '/v1/responses',
            'http_sse', 'public-model', 'openai', 'acct_observe',
            'acct_observe', 'upstream-model',
-           'http_sse', 'reuse', 1, 'sent', $1 - interval '19 minutes', 'succeeded', 200, 200,
+           'http_sse', 'reuse', 'priority', 1, 'sent', $1 - interval '19 minutes', 'succeeded', 200, 200,
            'resp_observe_success', 'upstream_req_success', 'upstream_resp_success',
            100, 20, 40, 3, 5, 31, 9, 120, true, true,
            'provider_reported', 1.25, 'USD', 120, 900,
@@ -843,13 +868,13 @@ async fn seed_calculated_billing_facts(
            client_transport, requested_model_id, provider_kind, provider_account_id,
            provider_account_ref, upstream_model_id, upstream_transport, attempt_count,
            upstream_send_state, downstream_committed_at, outcome, client_status_code,
-           input_tokens, output_tokens, cached_tokens, cache_write_tokens, total_tokens,
+           input_tokens, output_tokens, cached_tokens, cache_write_tokens, total_tokens, service_tier,
            cost_source, cost_amount, cost_currency, started_at, deadline_at, completed_at
          ) values (
            'req_observe_calculated', 'key_observe', 1, 'openai', 'responses', '/v1/responses',
            'http_sse', 'public-model', 'openai', 'acct_observe', 'acct_observe', 'gpt-5.5',
            'http_sse', 1, 'sent', $1 - interval '29 minutes', 'succeeded', 200,
-           800, 200, 0, 0, 1000, 'calculated', 1.25, 'USD',
+           800, 200, 0, 0, 1000, 'priority', 'calculated', 1.25, 'USD',
            $1 - interval '30 minutes', $1 + interval '10 minutes', $1 - interval '29 minutes'
          )",
     )

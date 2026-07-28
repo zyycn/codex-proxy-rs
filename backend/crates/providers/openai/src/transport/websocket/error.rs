@@ -5,6 +5,7 @@ use std::{fmt, time::Duration};
 use gateway_protocol::openai::sse::SseError;
 use thiserror::Error;
 
+use crate::transport::client::CodexClientVisibleUpstreamResponse;
 use crate::transport::diagnostics::CodexUpstreamDiagnostics;
 use crate::transport::diagnostics::CodexUpstreamSendPhase;
 
@@ -96,7 +97,7 @@ pub enum CodexWebSocketExchangeError {
 }
 
 /// WebSocket 上游错误帧载荷。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CodexWebSocketUpstreamError {
     /// 上游返回的 HTTP 风格状态码。
     pub status_code: u16,
@@ -104,6 +105,8 @@ pub struct CodexWebSocketUpstreamError {
     pub retry_after_seconds: Option<u64>,
     /// 原始错误帧。
     pub body: String,
+    /// opening 失败时可返回给当前客户端的原始 HTTP 响应。
+    pub client_response: Option<Box<CodexClientVisibleUpstreamResponse>>,
     /// 上游透传的 `set-cookie` 列表。
     pub set_cookie_headers: Vec<String>,
     /// 上游诊断元数据。
@@ -112,13 +115,27 @@ pub struct CodexWebSocketUpstreamError {
     pub send_phase: CodexUpstreamSendPhase,
 }
 
+impl fmt::Debug for CodexWebSocketUpstreamError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CodexWebSocketUpstreamError")
+            .field("status_code", &self.status_code)
+            .field("retry_after_seconds", &self.retry_after_seconds)
+            .field("body", &"<redacted>")
+            .field(
+                "client_response",
+                &self.client_response.as_ref().map(|_| "<present>"),
+            )
+            .field("set_cookie_headers", &self.set_cookie_headers.len())
+            .field("diagnostics", &self.diagnostics)
+            .field("send_phase", &self.send_phase)
+            .finish()
+    }
+}
+
 impl fmt::Display for CodexWebSocketUpstreamError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "websocket upstream error {}: {}",
-            self.status_code, self.body
-        )
+        write!(f, "websocket upstream returned status {}", self.status_code)
     }
 }
 
@@ -127,6 +144,7 @@ impl CodexWebSocketExchangeError {
         status_code: u16,
         retry_after_seconds: Option<u64>,
         body: String,
+        client_response: Option<Box<CodexClientVisibleUpstreamResponse>>,
         set_cookie_headers: Vec<String>,
         diagnostics: CodexUpstreamDiagnostics,
         send_phase: CodexUpstreamSendPhase,
@@ -135,6 +153,7 @@ impl CodexWebSocketExchangeError {
             status_code,
             retry_after_seconds,
             body,
+            client_response,
             set_cookie_headers,
             diagnostics,
             send_phase,
