@@ -1360,9 +1360,10 @@ fn map_quota_error(error: CodexCredentialQuotaError) -> ProviderAdminError {
         Error::InvalidCredentialData => ProviderAdminErrorKind::Invalid,
         Error::NotFound => ProviderAdminErrorKind::NotFound,
         Error::RevisionConflict => ProviderAdminErrorKind::Conflict,
-        Error::Repository(_) | Error::Store | Error::Upstream => {
-            ProviderAdminErrorKind::Unavailable
-        }
+        Error::CredentialRefreshRequired
+        | Error::Repository(_)
+        | Error::Store
+        | Error::Upstream => ProviderAdminErrorKind::Unavailable,
     })
 }
 

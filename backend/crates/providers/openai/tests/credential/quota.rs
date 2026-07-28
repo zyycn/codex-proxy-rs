@@ -9,8 +9,8 @@ use gateway_core::engine::credential::{
 };
 use provider_openai::OFFICIAL_CODEX_BASE_URL;
 use provider_openai::credential::{
-    CodexCredentialQuotaService, CodexQuotaSyncSummary, CodexQuotaWindowKind,
-    ImportCodexOAuthCredential, parse_codex_quota_usage,
+    CodexCredentialQuotaError, CodexCredentialQuotaService, CodexQuotaSyncSummary,
+    CodexQuotaWindowKind, ImportCodexOAuthCredential, parse_codex_quota_usage,
 };
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use serde_json::json;
@@ -439,6 +439,91 @@ async fn manual_quota_refresh_updates_account_state_from_provider_response() {
 }
 
 #[tokio::test]
+async fn manual_quota_auth_rejection_does_not_invalidate_refreshable_credential() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_manual_quota_auth_rejected";
+    create_account(&store, account_id).await;
+    let account = store.account(account_id).expect("created account");
+    store
+        .apply_state_change(AccountStateChange {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            availability: AccountAvailability::QuotaExhausted,
+            reason: Some("quota_exhausted".to_owned()),
+            cooldown_until: None,
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("mark account exhausted");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    assert!(matches!(
+        service.refresh_account(account.id()).await,
+        Err(CodexCredentialQuotaError::Upstream)
+    ));
+    assert_eq!(
+        store
+            .account(account_id)
+            .expect("preserved account")
+            .availability(),
+        AccountAvailability::QuotaExhausted
+    );
+}
+
+#[tokio::test]
+async fn manual_quota_refresh_waits_for_expired_oauth_token_to_be_refreshed() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_manual_quota_expired_token";
+    let mut expired_profile = profile(&format!("chatgpt-{account_id}"));
+    expired_profile.access_token_expires_at = Some(Utc::now() - chrono::Duration::minutes(1));
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: account_id.to_owned(),
+            name: account_id.to_owned(),
+            secret: secret(&format!("token-{account_id}")),
+            verified_account: expired_profile,
+            next_refresh_at: Some(Utc::now() - chrono::Duration::minutes(5)),
+            enabled: true,
+        })
+        .await;
+    let account = store.account(account_id).expect("created account");
+    let server = MockServer::start().await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    assert!(matches!(
+        service.refresh_account(account.id()).await,
+        Err(CodexCredentialQuotaError::CredentialRefreshRequired)
+    ));
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("received requests")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn passive_rate_limit_headers_replace_stale_secondary_window() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_passive_quota_snapshot").await;
@@ -516,7 +601,7 @@ async fn synchronize_without_accounts_is_a_noop_before_network_io() {
 
     assert_eq!(summary.updated, 0);
     assert_eq!(summary.exhausted, 0);
-    assert_eq!(summary.invalid, 0);
+    assert_eq!(summary.banned, 0);
     assert_eq!(summary.cooldown, 0);
     assert_eq!(summary.transient, 0);
     assert_eq!(summary.stale, 0);
