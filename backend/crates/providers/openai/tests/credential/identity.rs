@@ -314,6 +314,133 @@ async fn import_identity_keeps_signed_workspace_when_usage_returns_a_different_w
 }
 
 #[tokio::test]
+async fn authorization_identity_uses_signed_workspace_when_usage_returns_default_workspace() {
+    let (signed, _) = verifier();
+    let service = CodexAccountIdentityService::new(
+        Arc::new(signed),
+        Arc::new(StaticAccountSource {
+            result: Ok(CodexAuthenticatedAccount {
+                chatgpt_account_id: "account-default".to_owned(),
+                chatgpt_user_id: "user-default".to_owned(),
+                email: None,
+                plan_type: None,
+            }),
+        }),
+    );
+    let nonce = SecretString::from("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    let profile = service
+        .verify_authorization(
+            &secret(
+                &claims(get_current_timestamp() + 3_600),
+                Some("refresh-token"),
+            ),
+            &SecretString::from(token(&id_token_claims(
+                nonce.expose_secret(),
+                "subject-signed",
+            ))),
+            &nonce,
+            &CodexIdentityExpectation::reauthorization(
+                "account-signed".to_owned(),
+                "user-signed".to_owned(),
+                "00000000-0000-4000-8000-000000000001".to_owned(),
+            )
+            .expect("reauthorization expectation"),
+        )
+        .await
+        .expect("signed authorization identity")
+        .into_complete()
+        .expect("complete signed profile");
+
+    assert_eq!(profile.chatgpt_account_id, "account-signed");
+    assert_eq!(profile.chatgpt_user_id, "user-signed");
+}
+
+#[tokio::test]
+async fn authorization_identity_accepts_free_token_without_signed_account_id() {
+    let (signed, _) = verifier();
+    let service = CodexAccountIdentityService::new(
+        Arc::new(signed),
+        Arc::new(StaticAccountSource {
+            result: Ok(CodexAuthenticatedAccount {
+                chatgpt_account_id: "account-signed".to_owned(),
+                chatgpt_user_id: "user-signed".to_owned(),
+                email: Some("usage@example.invalid".to_owned()),
+                plan_type: Some("free".to_owned()),
+            }),
+        }),
+    );
+    let mut free_claims = claims(get_current_timestamp() + 3_600);
+    free_claims["https://api.openai.com/auth"]
+        .as_object_mut()
+        .expect("auth claims")
+        .remove("chatgpt_account_id");
+    free_claims["https://api.openai.com/auth"]["poid"] = json!("new-free-poid");
+    let nonce = SecretString::from("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    let profile = service
+        .verify_authorization(
+            &secret(&free_claims, Some("refresh-token")),
+            &SecretString::from(token(&id_token_claims(
+                nonce.expose_secret(),
+                "subject-signed",
+            ))),
+            &nonce,
+            &CodexIdentityExpectation::reauthorization(
+                "account-signed".to_owned(),
+                "user-signed".to_owned(),
+                "00000000-0000-4000-8000-000000000001".to_owned(),
+            )
+            .expect("reauthorization expectation"),
+        )
+        .await
+        .expect("verified Free authorization identity")
+        .into_complete()
+        .expect("complete Free profile");
+
+    assert_eq!(profile.chatgpt_account_id, "account-signed");
+    assert_eq!(profile.chatgpt_user_id, "user-signed");
+    assert_eq!(profile.poid.as_deref(), Some("new-free-poid"));
+}
+
+#[tokio::test]
+async fn authorization_identity_rejects_signed_workspace_rebinding() {
+    let (signed, _) = verifier();
+    let service = CodexAccountIdentityService::new(
+        Arc::new(signed),
+        Arc::new(StaticAccountSource {
+            result: Ok(CodexAuthenticatedAccount {
+                chatgpt_account_id: "account-default".to_owned(),
+                chatgpt_user_id: "user-default".to_owned(),
+                email: None,
+                plan_type: None,
+            }),
+        }),
+    );
+    let nonce = SecretString::from("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    let error = service
+        .verify_authorization(
+            &secret(
+                &claims(get_current_timestamp() + 3_600),
+                Some("refresh-token"),
+            ),
+            &SecretString::from(token(&id_token_claims(
+                nonce.expose_secret(),
+                "subject-signed",
+            ))),
+            &nonce,
+            &CodexIdentityExpectation::reauthorization(
+                "account-target".to_owned(),
+                "user-target".to_owned(),
+                "00000000-0000-4000-8000-000000000001".to_owned(),
+            )
+            .expect("reauthorization expectation"),
+        )
+        .await
+        .expect_err("signed identity cannot rebind the target account");
+
+    assert_eq!(error, CodexIdentityVerificationError::Rejected);
+}
+
+#[tokio::test]
 async fn account_identity_keeps_usage_unavailable_out_of_ready_profile() {
     let (signed, _) = verifier();
     let service = CodexAccountIdentityService::new(

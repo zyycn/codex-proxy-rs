@@ -120,6 +120,26 @@ fn prepare_rotation_rejects_account_rebinding() {
 }
 
 #[test]
+fn prepare_rotation_rejects_principal_rebinding_without_full_authorization() {
+    let mut rebound = profile("chatgpt-acct_rotate");
+    rebound.oauth_subject = "different-subject".to_owned();
+    rebound.poid = None;
+    let error = CodexCredentialAdmin
+        .prepare_rotation(RotateManagedCodexCredential {
+            current: LoadedCredential {
+                account: codex_account("acct_rotate"),
+                credential: encoded_credential("chatgpt-acct_rotate", "old-access"),
+            },
+            secret: secret("new-access"),
+            verified_account: rebound,
+            next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
+        })
+        .expect_err("non-authorization rotation cannot replace the principal");
+
+    assert_eq!(error, CodexCredentialAdminError::IdentityMismatch);
+}
+
+#[test]
 fn prepared_commands_debug_never_prints_tokens() {
     let prepared = CodexCredentialAdmin
         .prepare_import(import("acct_debug", "debug-secret"))

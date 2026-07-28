@@ -198,6 +198,27 @@ impl CodexIdentityExpectation {
         })
     }
 
+    /// 重新授权只绑定公共稳定账号事实；新 OAuth subject/poid 在 OIDC
+    /// 验证后随凭据一起更新。
+    pub fn reauthorization(
+        chatgpt_account_id: String,
+        chatgpt_user_id: String,
+        installation_id: String,
+    ) -> Result<Self, CodexIdentityVerificationError> {
+        if !valid_identity(&chatgpt_account_id)
+            || !valid_identity(&chatgpt_user_id)
+            || !valid_installation_id(&installation_id)
+        {
+            return Err(CodexIdentityVerificationError::Rejected);
+        }
+        Ok(Self {
+            chatgpt_account_id: Some(chatgpt_account_id),
+            chatgpt_user_id: Some(chatgpt_user_id),
+            installation_id: Some(installation_id),
+            ..Self::default()
+        })
+    }
+
     #[must_use]
     pub fn chatgpt_account_id(&self) -> Option<&str> {
         self.chatgpt_account_id.as_deref()
@@ -647,7 +668,22 @@ impl CodexAccountIdentityVerifier for CodexAccountIdentityService {
             .signed
             .verify_authorization(secret, id_token, expected_nonce)
             .await?;
-        self.complete(secret, signed, expectation).await
+        let fallback = signed_profile(signed.clone(), expectation).ok();
+        match self.accounts.fetch(secret, expectation).await {
+            Ok(account) => match complete_profile(signed, account, expectation) {
+                Ok(profile) => Ok(CodexIdentityVerification::Complete(profile)),
+                Err(_) => fallback
+                    .map(CodexIdentityVerification::Complete)
+                    .ok_or(CodexIdentityVerificationError::Rejected),
+            },
+            Err(CodexIdentityVerificationError::Rejected) => fallback
+                .map(CodexIdentityVerification::Complete)
+                .ok_or(CodexIdentityVerificationError::Rejected),
+            Err(CodexIdentityVerificationError::Unavailable) => Ok(match fallback {
+                Some(profile) => CodexIdentityVerification::Complete(profile),
+                None => CodexIdentityVerification::SignedOnly(signed),
+            }),
+        }
     }
 }
 
@@ -883,6 +919,30 @@ fn complete_profile(
         plan_type: account.plan_type.or(signed.plan_type),
         access_token_expires_at: Some(signed.access_token_expires_at),
     })
+}
+
+fn signed_profile(
+    signed: CodexSignedIdentity,
+    expectation: &CodexIdentityExpectation,
+) -> Result<CodexAccountProfile, CodexIdentityVerificationError> {
+    let profile = signed.into_import_profile()?;
+    if expectation
+        .oauth_subject
+        .as_deref()
+        .is_some_and(|expected| expected != profile.oauth_subject)
+        || matches!(&expectation.poid, PoidExpectation::Exact(expected) if expected != &profile.poid)
+        || expectation
+            .chatgpt_account_id
+            .as_deref()
+            .is_some_and(|expected| expected != profile.chatgpt_account_id)
+        || expectation
+            .chatgpt_user_id
+            .as_deref()
+            .is_some_and(|expected| expected != profile.chatgpt_user_id)
+    {
+        return Err(CodexIdentityVerificationError::Rejected);
+    }
+    Ok(profile)
 }
 
 fn authenticated_account(

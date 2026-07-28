@@ -527,7 +527,7 @@ impl CodexOAuthAdminService {
             .map_err(map_admin_error)?;
             CompletedCodexOAuthCredential::Reauthorize(
                 self.credentials
-                    .prepare_rotation(RotateManagedCodexCredential {
+                    .prepare_reauthorization(RotateManagedCodexCredential {
                         current,
                         secret,
                         verified_account: profile,
@@ -684,14 +684,14 @@ fn oauth_identity_expectation(
 ) -> Result<CodexIdentityExpectation, CodexOAuthAdminError> {
     let runtime = CodexCredentialCodec::decode(&current.credential)
         .map_err(|_| CodexOAuthAdminError::Credential)?;
+    if runtime.authentication.oauth().is_none() {
+        return Err(CodexOAuthAdminError::Credential);
+    }
     let account_id = current
         .account
         .upstream_account_id()
         .ok_or(CodexOAuthAdminError::Credential)?;
-    let principal = runtime.principal.ok_or(CodexOAuthAdminError::Credential)?;
-    CodexIdentityExpectation::current(
-        principal.oauth_subject,
-        principal.poid,
+    CodexIdentityExpectation::reauthorization(
         account_id.to_owned(),
         current.account.upstream_user_id().to_owned(),
         runtime.installation_id,
