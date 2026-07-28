@@ -21,7 +21,7 @@ use gateway_core::CoreStorePorts;
 use gateway_core::health::{HealthProbe, HealthState};
 use gateway_core::provider_ports::ProviderStorePorts;
 use gateway_core::task::{
-    ScheduledTask, WorkerContribution, WorkerCycleContext, WorkerDisabledReason, WorkerId,
+    DaemonRestartPolicy, ScheduledTask, WorkerContribution, WorkerCycleContext, WorkerId,
     WorkerKind, WorkerLeaderLeasePort, WorkerLeaseRequest, WorkerRegistration, WorkerRunnable,
     WorkerSchedule, WorkerTaskError,
 };
@@ -318,28 +318,40 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         }),
     );
 
-    let execution = Arc::new(postgres::PgExecutionStore::new(pool.clone()));
+    let execution_repository = Arc::new(postgres::PgExecutionStore::new(pool.clone()));
+    let (execution, execution_writer) =
+        postgres::BufferedExecutionStore::new(Arc::clone(&execution_repository));
+    let execution = Arc::new(execution);
     let retention = Arc::new(postgres::PgRetentionRepository::new(pool.clone()));
-    let core_ports = CoreStorePorts::new(
-        execution.clone(),
-        (
-            Arc::new(redis::RedisClientAdmissionRepository::new(
-                redis_connection.clone(),
-                REDIS_NAMESPACE,
-            )?),
-            Arc::new(postgres::PgClientAdmissionRecoveryRepository::new(
-                pool.clone(),
-            )),
-        ),
+    let admissions: Arc<dyn gateway_core::engine::admission::ClientAdmissionPort> = Arc::new(
+        redis::RedisClientAdmissionRepository::new(redis_connection.clone(), REDIS_NAMESPACE)?,
+    );
+    let circuits: Arc<dyn gateway_core::engine::execution::ProviderCircuitPort> =
         Arc::new(redis::RedisProviderCircuitRepository::new(
             redis_connection.clone(),
             REDIS_NAMESPACE,
             redis::ProviderCircuitPolicy::default(),
-        )?),
+        )?);
+    let continuation: Arc<dyn gateway_core::engine::continuation::NativeContinuationPort> =
         Arc::new(redis::RedisNativeContinuationRepository::new(
             redis_connection.clone(),
             REDIS_NAMESPACE,
-        )?),
+        )?);
+    let (admissions, admission_release_writer) =
+        redis::BufferedClientAdmissionPort::new(admissions);
+    let (circuits, circuit_feedback_writer) = redis::BufferedProviderCircuitPort::new(circuits);
+    let (continuation, continuation_writer) =
+        redis::BufferedNativeContinuationPort::new(continuation);
+    let core_ports = CoreStorePorts::new(
+        execution,
+        (
+            Arc::new(admissions),
+            Arc::new(postgres::PgClientAdmissionRecoveryRepository::new(
+                pool.clone(),
+            )),
+        ),
+        Arc::new(circuits),
+        Arc::new(continuation),
         (
             Arc::new(postgres::PgRuntimeSnapshotRepository::new(pool.clone())),
             Arc::new(redis::RedisRuntimeChangeRepository::new(
@@ -373,7 +385,14 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
             connection: redis_connection,
         }),
     ];
-    let worker_contributions = store_worker_contributions(execution, retention)?;
+    let worker_contributions = store_worker_contributions(
+        execution_repository,
+        execution_writer,
+        admission_release_writer,
+        circuit_feedback_writer,
+        continuation_writer,
+        retention,
+    )?;
     Ok(StoreBundle {
         admin_ports,
         core_ports,
@@ -386,12 +405,27 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
 
 fn store_worker_contributions(
     execution: Arc<postgres::PgExecutionStore>,
+    execution_writer: postgres::ExecutionObservationWriter<postgres::PgExecutionStore>,
+    admission_release_writer: redis::ClientAdmissionReleaseWriter,
+    circuit_feedback_writer: redis::ProviderCircuitFeedbackWriter,
+    continuation_writer: redis::NativeContinuationWriter,
     retention: Arc<postgres::PgRetentionRepository>,
 ) -> StoreResult<Vec<WorkerContribution>> {
     let stale_id = WorkerId::try_new(WorkerKind::StaleModelRequestRecovery, "postgres")
         .map_err(worker_definition_error)?;
     let retention_id =
         WorkerId::try_new(WorkerKind::Retention, "postgres").map_err(worker_definition_error)?;
+    let ops_flush_id =
+        WorkerId::try_new(WorkerKind::OpsFlush, "postgres").map_err(worker_definition_error)?;
+    let admission_flush_id = WorkerId::try_new(WorkerKind::OpsFlush, "redis_admission")
+        .map_err(worker_definition_error)?;
+    let circuit_flush_id = WorkerId::try_new(WorkerKind::OpsFlush, "redis_circuit")
+        .map_err(worker_definition_error)?;
+    let continuation_flush_id = WorkerId::try_new(WorkerKind::OpsFlush, "redis_continuation")
+        .map_err(worker_definition_error)?;
+    let ops_flush_restart =
+        DaemonRestartPolicy::try_new(Duration::from_secs(1), Duration::from_secs(60))
+            .map_err(worker_definition_error)?;
     Ok(vec![
         WorkerContribution::Registration(scheduled_worker(
             stale_id,
@@ -403,10 +437,46 @@ fn store_worker_contributions(
             Duration::from_secs(60 * 60),
             Box::new(RetentionTask { retention }),
         )?),
-        WorkerContribution::Disabled {
-            kind: WorkerKind::OpsFlush,
-            reason: WorkerDisabledReason::NoBufferedOpsEvents,
-        },
+        WorkerContribution::Registration(
+            WorkerRegistration::try_new(
+                ops_flush_id,
+                WorkerRunnable::Daemon {
+                    restart: ops_flush_restart,
+                    task: Box::new(execution_writer),
+                },
+            )
+            .map_err(worker_definition_error)?,
+        ),
+        WorkerContribution::Registration(
+            WorkerRegistration::try_new(
+                admission_flush_id,
+                WorkerRunnable::Daemon {
+                    restart: ops_flush_restart,
+                    task: Box::new(admission_release_writer),
+                },
+            )
+            .map_err(worker_definition_error)?,
+        ),
+        WorkerContribution::Registration(
+            WorkerRegistration::try_new(
+                circuit_flush_id,
+                WorkerRunnable::Daemon {
+                    restart: ops_flush_restart,
+                    task: Box::new(circuit_feedback_writer),
+                },
+            )
+            .map_err(worker_definition_error)?,
+        ),
+        WorkerContribution::Registration(
+            WorkerRegistration::try_new(
+                continuation_flush_id,
+                WorkerRunnable::Daemon {
+                    restart: ops_flush_restart,
+                    task: Box::new(continuation_writer),
+                },
+            )
+            .map_err(worker_definition_error)?,
+        ),
     ])
 }
 
