@@ -273,8 +273,20 @@ impl CodexCanonicalDecoder {
         self.merge_timing_signals(signals);
         if matches!(event_type, Some("response.failed" | "error")) {
             let failure = ResponsesSseFailure::from_event(event_type.unwrap_or_default(), &value);
+            let mut canonical = Vec::new();
+            if !self.started {
+                // 失败首帧可能是唯一携带 response_id 的上游事实。身份投影只做
+                // 最佳努力：缺少 response/id 时仍必须保留原 typed failure。
+                let _ = self.start(&value, &mut canonical);
+            }
             if let Some(wire) = Self::wire_for_event(event, value, raw_sse_frame) {
-                output.push(ProviderEvent::wire(wire));
+                output.push(if canonical.is_empty() {
+                    ProviderEvent::wire(wire)
+                } else {
+                    ProviderEvent::canonical_with_wire(canonical, wire)
+                });
+            } else {
+                output.extend(canonical.into_iter().map(ProviderEvent::canonical));
             }
             return Err(CodexCanonicalError::Upstream(failure));
         }

@@ -2,6 +2,8 @@ use gateway_core::engine::UpstreamSendState;
 use gateway_core::error::{
     ClientVisibleUpstreamError, GatewayError, ProviderError, ProviderErrorKind, SafeUpstreamValue,
 };
+use gateway_core::event::{ProtocolWireEvent, ProviderEvent};
+use serde_json::json;
 
 #[test]
 fn provider_error_debug_should_not_expose_sensitive_context() {
@@ -35,6 +37,26 @@ fn provider_error_replay_proof_should_be_explicit() {
         .with_replay_safe();
 
     assert!(error.replay_is_safe());
+}
+
+#[test]
+fn provider_error_atomic_client_events_should_be_take_only_and_debug_redacted() {
+    let marker = "atomic-wire-must-not-enter-debug";
+    let event = ProviderEvent::wire(
+        ProtocolWireEvent::json(
+            "openai",
+            Some("response.failed".to_owned()),
+            json!({"type": "response.failed", "message": marker}),
+        )
+        .expect("atomic wire"),
+    );
+    let mut error = ProviderError::new(ProviderErrorKind::RateLimited, UpstreamSendState::Sent)
+        .with_atomic_client_events(vec![event]);
+
+    assert!(error.has_atomic_client_events());
+    assert!(!format!("{error:?}").contains(marker));
+    assert_eq!(error.take_atomic_client_events().len(), 1);
+    assert!(!error.has_atomic_client_events());
 }
 
 #[test]

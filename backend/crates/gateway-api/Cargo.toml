@@ -31,7 +31,9 @@ uuid = { version = "1.23.3", features = ["v7"] }
 
 [dev-dependencies]
 async-trait = "0.1.89"
-tokio = { version = "1.52.3", default-features = false, features = ["macros", "rt"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
+tokio = { version = "1.52.3", default-features = false, features = ["macros", "net", "rt-multi-thread"] }
+tokio-tungstenite = "0.29.0"
 tower = { version = "0.5.3", features = ["util"] }
 
 [lints]

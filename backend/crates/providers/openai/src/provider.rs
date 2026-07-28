@@ -79,6 +79,8 @@ const PROVIDER_NAME: &str = "openai";
 const HTTP_SSE_TRANSPORT: &str = "http_sse";
 const WEBSOCKET_TRANSPORT: &str = "websocket";
 const MAX_COOKIE_HEADER_BYTES: usize = 16 * 1024;
+/// 与 2.x 预取器一致：提交边界前最多保留 64 KiB 原始上游 chunk。
+const MAX_STREAM_PREFETCH_BYTES: usize = 64 * 1024;
 pub const OFFICIAL_CODEX_BASE_PATH: &str = "/backend-api";
 pub const OFFICIAL_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api";
 
@@ -684,6 +686,8 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             })?;
         let request_id = context.request_id().as_str().to_owned();
         let cancellation = context.cancellation().clone();
+        let stream_commit_policy =
+            StreamCommitPolicy::for_continuation(context.continuation_attempt());
         let mut response = create_response_attempt(
             &client,
             &request,
@@ -824,6 +828,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         // （transport/protocol/websocket.rs），push_frames 抽出的 data 即上游原文。
         let mut decoder =
             CodexCanonicalDecoder::new(upstream_model.as_str()).with_raw_sse_passthrough();
+        let mut pre_commit_events = PreCommitClientEvents::new(stream_commit_policy);
         loop {
             let Some(stream_deadline) = remaining(context.deadline()) else {
                 Err(provider_error(ProviderErrorKind::Timeout, UpstreamSendState::Sent))?;
@@ -882,30 +887,41 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             }
             let first_event_changed =
                 observation_state.observe_stream_chunk(&chunk, context.timing_started_at());
-            let (mut events, terminal_failure) = match decoder.push(&chunk) {
+            let chunk_len = chunk.len();
+            let (mut events, canonical_failure) = match decoder.push(&chunk) {
                 CodexCanonicalOutcome::Events(events) => (events, None),
                 CodexCanonicalOutcome::Failed(failure) => {
                     let (events, error, semantic_output_seen) = failure.into_parts();
-                    let failure = map_canonical_error(
+                    (events, Some((error, semantic_output_seen)))
+                }
+            };
+            pre_commit_events.observe_chunk(chunk_len);
+            let terminal_failure = canonical_failure.map(|(error, semantic_output_seen)| {
+                let atomic_upstream_failure = matches!(&error, CodexCanonicalError::Upstream(_));
+                (
+                    map_canonical_error(
                         error,
                         &failure_diagnostics,
                         &failure_set_cookie_headers,
                         &failure_rate_limit_headers,
-                        ReplayBoundary::from_semantic_output(semantic_output_seen),
-                    );
-                    (events, Some(failure))
-                }
-            };
+                        ReplayBoundary::from_semantic_output(
+                            semantic_output_seen || pre_commit_events.is_committed(),
+                        ),
+                    ),
+                    atomic_upstream_failure,
+                )
+            });
+            let timing_signals = decoder.take_timing_signals();
             let timing_changed = first_event_changed
                 || observation_state
-                    .observe_timing_signals(decoder.take_timing_signals(), context.timing_started_at());
+                    .observe_timing_signals(timing_signals, context.timing_started_at());
             let completed = events
                 .iter()
                 .flat_map(ProviderEvent::canonical_facts)
                 .any(|event| matches!(event, GatewayEvent::Completed(_)));
             let terminal_changed = completed
                 && observation_state.mark_completed(terminal_response_is_incomplete(&events));
-            if let Some(failure) = terminal_failure.as_ref() {
+            if let Some((failure, _)) = terminal_failure.as_ref() {
                 apply_failure(&failure_context, &active_account, failure)
                 .await;
             }
@@ -933,33 +949,54 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             if rate_limits_changed || timing_changed || terminal_changed {
                 yield ProviderEvent::observation(observation_state.observation()?);
             }
-            for event in events {
-                yield event;
-            }
-            if let Some(failure) = terminal_failure {
+            if let Some((mut failure, atomic_upstream_failure)) = terminal_failure {
+                let failure_after_commit =
+                    timing_signals.semantic_output || pre_commit_events.is_committed();
+                if failure_after_commit {
+                    for event in pre_commit_events.commit(events) {
+                        yield event;
+                    }
+                } else if atomic_upstream_failure {
+                    failure.error = failure
+                        .error
+                        .with_atomic_client_events(pre_commit_events.take_for_failure(events));
+                }
                 Err(failure.error)?;
                 return;
+            }
+            let events = pre_commit_events.stage(events, timing_signals, completed)?;
+            for event in events {
+                yield event;
             }
             if completed {
                 return;
             }
         }
-        let (mut events, terminal_failure) = match decoder.finish() {
+        let (mut events, canonical_failure) = match decoder.finish() {
             CodexCanonicalOutcome::Events(events) => (events, None),
             CodexCanonicalOutcome::Failed(failure) => {
                 let (events, error, semantic_output_seen) = failure.into_parts();
-                let failure = map_canonical_error(
+                (events, Some((error, semantic_output_seen)))
+            }
+        };
+        let terminal_failure = canonical_failure.map(|(error, semantic_output_seen)| {
+            let atomic_upstream_failure = matches!(&error, CodexCanonicalError::Upstream(_));
+            (
+                map_canonical_error(
                     error,
                     &failure_diagnostics,
                     &failure_set_cookie_headers,
                     &failure_rate_limit_headers,
-                    ReplayBoundary::from_semantic_output(semantic_output_seen),
-                );
-                (events, Some(failure))
-            }
-        };
+                    ReplayBoundary::from_semantic_output(
+                        semantic_output_seen || pre_commit_events.is_committed(),
+                    ),
+                ),
+                atomic_upstream_failure,
+            )
+        });
+        let timing_signals = decoder.take_timing_signals();
         let timing_changed = observation_state
-            .observe_timing_signals(decoder.take_timing_signals(), context.timing_started_at());
+            .observe_timing_signals(timing_signals, context.timing_started_at());
         let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
         let rate_limits_changed = if updates.is_empty() {
             false
@@ -969,7 +1006,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             }
             observation_state.merge_rate_limit_headers(&updates)
         };
-        if let Some(failure) = terminal_failure.as_ref() {
+        if let Some((failure, _)) = terminal_failure.as_ref() {
             apply_failure(&failure_context, &active_account, failure)
             .await;
         }
@@ -1008,12 +1045,24 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         if timing_changed || rate_limits_changed || terminal_changed {
             yield ProviderEvent::observation(observation_state.observation()?);
         }
-        for event in events {
-            yield event;
-        }
-        if let Some(failure) = terminal_failure {
+        if let Some((mut failure, atomic_upstream_failure)) = terminal_failure {
+            let failure_after_commit =
+                timing_signals.semantic_output || pre_commit_events.is_committed();
+            if failure_after_commit {
+                for event in pre_commit_events.commit(events) {
+                    yield event;
+                }
+            } else if atomic_upstream_failure {
+                failure.error = failure
+                    .error
+                    .with_atomic_client_events(pre_commit_events.take_for_failure(events));
+            }
             Err(failure.error)?;
             return;
+        }
+        let events = pre_commit_events.finish(events, timing_signals, completed)?;
+        for event in events {
+            yield event;
         }
     })
 }
@@ -1733,6 +1782,128 @@ impl MappedProviderFailure {
             capture_response_cookies: false,
         }
     }
+}
+
+/// 与 2.x 一致的流提交策略：普通请求优先首事件，续写/重放优先可恢复性。
+#[derive(Clone, Copy)]
+enum StreamCommitPolicy {
+    FirstForwardableEvent,
+    UntilOutputOrTerminal,
+}
+
+impl StreamCommitPolicy {
+    const fn for_continuation(attempt: ContinuationAttempt) -> Self {
+        match attempt {
+            ContinuationAttempt::None => Self::FirstForwardableEvent,
+            ContinuationAttempt::Native
+            | ContinuationAttempt::ReplayOwner
+            | ContinuationAttempt::ReplayAny => Self::UntilOutputOrTerminal,
+        }
+    }
+
+    fn boundary_reached(
+        self,
+        events: &[ProviderEvent],
+        timing_signals: ResponseEventSignals,
+        completed: bool,
+    ) -> bool {
+        match self {
+            Self::FirstForwardableEvent => events.iter().any(ProviderEvent::has_client_event),
+            Self::UntilOutputOrTerminal => timing_signals.semantic_output || completed,
+        }
+    }
+}
+
+/// 提交边界前的上游事件预取。
+///
+/// 原始 chunk 计数而不是重编码后的 event 大小，保持 2.x 的 64 KiB 资源边界；一旦
+/// 提交，后续事件不再具备无痕重放资格。
+struct PreCommitClientEvents {
+    policy: StreamCommitPolicy,
+    pending: Vec<ProviderEvent>,
+    prefetched_bytes: usize,
+    committed: bool,
+}
+
+impl PreCommitClientEvents {
+    const fn new(policy: StreamCommitPolicy) -> Self {
+        Self {
+            policy,
+            pending: Vec::new(),
+            prefetched_bytes: 0,
+            committed: false,
+        }
+    }
+
+    fn observe_chunk(&mut self, bytes: usize) {
+        if !self.committed {
+            self.prefetched_bytes = self.prefetched_bytes.saturating_add(bytes);
+        }
+    }
+
+    fn stage(
+        &mut self,
+        incoming: Vec<ProviderEvent>,
+        timing_signals: ResponseEventSignals,
+        completed: bool,
+    ) -> Result<Vec<ProviderEvent>, ProviderError> {
+        if self.committed {
+            return Ok(incoming);
+        }
+        let boundary_reached = self
+            .policy
+            .boundary_reached(&incoming, timing_signals, completed);
+        self.pending.extend(incoming);
+        if boundary_reached {
+            return Ok(self.commit_pending());
+        }
+        if self.prefetched_bytes > MAX_STREAM_PREFETCH_BYTES {
+            return Err(prefetch_protocol_error());
+        }
+        Ok(Vec::new())
+    }
+
+    fn finish(
+        &mut self,
+        incoming: Vec<ProviderEvent>,
+        timing_signals: ResponseEventSignals,
+        completed: bool,
+    ) -> Result<Vec<ProviderEvent>, ProviderError> {
+        let events = self.stage(incoming, timing_signals, completed)?;
+        if self.committed {
+            Ok(events)
+        } else {
+            Err(prefetch_protocol_error())
+        }
+    }
+
+    fn commit(&mut self, incoming: Vec<ProviderEvent>) -> Vec<ProviderEvent> {
+        if self.committed {
+            return incoming;
+        }
+        self.pending.extend(incoming);
+        self.commit_pending()
+    }
+
+    fn take_for_failure(&mut self, incoming: Vec<ProviderEvent>) -> Vec<ProviderEvent> {
+        self.pending.extend(incoming);
+        self.prefetched_bytes = 0;
+        std::mem::take(&mut self.pending)
+    }
+
+    const fn is_committed(&self) -> bool {
+        self.committed
+    }
+
+    fn commit_pending(&mut self) -> Vec<ProviderEvent> {
+        self.committed = true;
+        self.prefetched_bytes = 0;
+        std::mem::take(&mut self.pending)
+    }
+}
+
+fn prefetch_protocol_error() -> ProviderError {
+    provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
 }
 
 #[derive(Clone, Copy)]

@@ -6,6 +6,7 @@ use std::time::Duration;
 use thiserror::Error;
 
 use crate::engine::UpstreamSendState;
+use crate::event::ProviderEvent;
 
 /// 应用层标识不满足约束。
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -266,9 +267,13 @@ impl fmt::Debug for ClientVisibleUpstreamError {
 
 /// 单次 Provider 调用的稳定错误。
 ///
-/// 该类型不接收原始响应正文，也不会在 `Debug` 或 `Display` 中打印上游
+/// 稳定诊断字段不接收原始响应正文，也不会在 `Debug` 或 `Display` 中打印上游
 /// code/request ID/response ID。Adapter 若捕获到可能含 secret 的上下文，只能调用
 /// [`ProviderError::redact_sensitive_context`] 丢弃正文并留下脱敏标记。
+///
+/// 唯一例外是 [`ProviderError::with_atomic_client_events`]：它只承载尚未交付客户端、
+/// 必须与本错误一起完成重试判断的协议事件。Core 会在任何持久化或日志记录前取走
+/// 这些事件，不能把它们当作诊断上下文使用。
 #[derive(Clone)]
 pub struct ProviderError {
     kind: ProviderErrorKind,
@@ -284,7 +289,11 @@ pub struct ProviderError {
     retry_same_account: bool,
     sensitive_context_redacted: bool,
     client_visible_upstream_error: Option<Box<ClientVisibleUpstreamError>>,
+    atomic_client_events: Option<Box<AtomicClientEvents>>,
 }
+
+#[derive(Clone)]
+struct AtomicClientEvents(Vec<ProviderEvent>);
 
 impl ProviderError {
     /// 创建 Provider 错误。
@@ -304,6 +313,7 @@ impl ProviderError {
             retry_same_account: false,
             sensitive_context_redacted: false,
             client_visible_upstream_error: None,
+            atomic_client_events: None,
         }
     }
 
@@ -376,6 +386,17 @@ impl ProviderError {
     #[must_use]
     pub fn with_client_visible_upstream_error(mut self, error: ClientVisibleUpstreamError) -> Self {
         self.client_visible_upstream_error = Some(Box::new(error));
+        self
+    }
+
+    /// 附加必须先由 Core 判断重试、再决定丢弃或交付的客户端协议事件。
+    ///
+    /// Provider 只能放入当前 attempt 尚未交付的事件；调用方应设置明确的有界缓冲，
+    /// 并保证失败事件本身位于这批事件的末尾。
+    #[must_use]
+    pub fn with_atomic_client_events(mut self, events: Vec<ProviderEvent>) -> Self {
+        self.atomic_client_events =
+            (!events.is_empty()).then(|| Box::new(AtomicClientEvents(events)));
         self
     }
 
@@ -462,6 +483,23 @@ impl ProviderError {
     pub fn client_visible_upstream_error(&self) -> Option<&ClientVisibleUpstreamError> {
         self.client_visible_upstream_error.as_deref()
     }
+
+    /// 取走只供本次重试/提交决策使用的原子客户端事件。
+    ///
+    /// Core 必须在克隆错误、记录中间失败或构造终态前调用本方法，避免原始 wire
+    /// 进入诊断或持久化对象。
+    #[must_use]
+    pub fn take_atomic_client_events(&mut self) -> Vec<ProviderEvent> {
+        self.atomic_client_events
+            .take()
+            .map_or_else(Vec::new, |events| events.0)
+    }
+
+    /// 返回是否携带尚未提交的原子客户端事件；不暴露事件内容。
+    #[must_use]
+    pub fn has_atomic_client_events(&self) -> bool {
+        self.atomic_client_events.is_some()
+    }
 }
 
 impl fmt::Debug for ProviderError {
@@ -507,6 +545,13 @@ impl fmt::Debug for ProviderError {
                     .client_visible_upstream_error
                     .as_ref()
                     .map(|_| "<present>"),
+            )
+            .field(
+                "atomic_client_events",
+                &self
+                    .atomic_client_events
+                    .as_ref()
+                    .map_or(0, |events| events.0.len()),
             )
             .finish()
     }
