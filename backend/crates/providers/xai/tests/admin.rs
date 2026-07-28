@@ -289,6 +289,7 @@ async fn xai_admin_provider_validates_known_billing_breakdown() {
     let billing = admin
         .calculated_billing(&ProviderBillingInput {
             upstream_model_id: "grok-4.5".to_owned(),
+            service_tier: None,
             input_tokens: Some(100),
             output_tokens: Some(10),
             cached_tokens: Some(25),

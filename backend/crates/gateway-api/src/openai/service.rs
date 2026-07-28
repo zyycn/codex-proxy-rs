@@ -81,12 +81,6 @@ impl OpenAiService {
                     "requested model was not found",
                 )
             })?;
-        if !self.execution.contains_public_model(&client, &public_model) {
-            return Err(GatewayError::new(
-                GatewayErrorKind::ModelNotFound,
-                "requested model was not found",
-            ));
-        }
         let previous_response_id = match metadata.continuation() {
             ContinuationIntent::None => None,
             ContinuationIntent::PreviousResponseId(value) => {

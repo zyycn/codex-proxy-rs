@@ -932,6 +932,43 @@ impl AccountAvailabilityPolicy {
     }
 }
 
+/// 候选账号未进入调度池的约束。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountSchedulingBlocker {
+    LocalAvailability,
+    Excluded,
+    ConcurrencyLimit,
+    RequestInterval,
+}
+
+/// 优先账号在本次选择中的处理结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreferredAccountSelection {
+    NotRequested,
+    Hit,
+    Missing,
+    Blocked(AccountSchedulingBlocker),
+}
+
+/// 一次完整账号选择；同时保留优先账号决策，供 Provider 记录调度遥测。
+#[derive(Debug, Clone, Copy)]
+pub struct AccountSelection<'a> {
+    candidate: &'a AccountCandidate,
+    preferred: PreferredAccountSelection,
+}
+
+impl<'a> AccountSelection<'a> {
+    #[must_use]
+    pub const fn candidate(self) -> &'a AccountCandidate {
+        self.candidate
+    }
+
+    #[must_use]
+    pub const fn preferred(self) -> PreferredAccountSelection {
+        self.preferred
+    }
+}
+
 /// 同一 target 内唯一的账号排序器。
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AccountSelector;
@@ -943,43 +980,55 @@ impl AccountSelector {
         &self,
         candidates: &'a [AccountCandidate],
         context: &AccountSelectionContext,
-    ) -> Option<&'a AccountCandidate> {
+    ) -> Option<AccountSelection<'a>> {
+        let preferred = if let Some(preferred) = context.preferred_account.as_ref() {
+            match candidates
+                .iter()
+                .find(|candidate| candidate.account.id() == preferred)
+            {
+                Some(candidate) => match self.scheduling_blocker(candidate, context) {
+                    None => {
+                        return Some(AccountSelection {
+                            candidate,
+                            preferred: PreferredAccountSelection::Hit,
+                        });
+                    }
+                    Some(blocker) => PreferredAccountSelection::Blocked(blocker),
+                },
+                None => PreferredAccountSelection::Missing,
+            }
+        } else {
+            PreferredAccountSelection::NotRequested
+        };
+
         let mut eligible = candidates
             .iter()
-            .filter(|candidate| eligible(candidate, context))
+            .filter(|candidate| self.scheduling_blocker(candidate, context).is_none())
             .collect::<Vec<_>>();
         if eligible.is_empty() {
             return None;
         }
 
-        if let Some(preferred) = context.preferred_account.as_ref()
-            && let Some(candidate) = eligible
-                .iter()
-                .find(|candidate| candidate.account.id() == preferred)
-            && (context.policy.strategy() == RotationStrategy::Sticky
-                || (context.policy.strategy() == RotationStrategy::Smart
-                    && !smart_preference_should_escape(&candidate.signals)))
-        {
-            return Some(candidate);
-        }
-
-        match context.policy.strategy() {
-            RotationStrategy::QuotaResetPriority => eligible.sort_by_key(|candidate| {
-                (
-                    candidate.signals.quota_reset_at.is_none(),
-                    candidate.signals.quota_reset_at,
-                    candidate.signals.in_flight,
-                    candidate.signals.last_started_at,
-                    candidate.account.id().clone(),
-                )
-            }),
+        let candidate = match context.policy.strategy() {
+            RotationStrategy::QuotaResetPriority => {
+                eligible.sort_by_key(|candidate| {
+                    (
+                        candidate.signals.quota_reset_at.is_none(),
+                        candidate.signals.quota_reset_at,
+                        candidate.signals.in_flight,
+                        candidate.signals.last_started_at,
+                        candidate.account.id().clone(),
+                    )
+                });
+                eligible.first().copied()?
+            }
             RotationStrategy::RoundRobin => {
                 eligible.sort_by_key(|candidate| candidate.account.id().clone());
                 let index = context.round_robin_cursor as usize % eligible.len();
-                return Some(eligible[index]);
+                eligible.get(index).copied()?
             }
             RotationStrategy::Smart => {
-                return select_smart_candidate(&eligible, context.round_robin_cursor);
+                select_smart_candidate(&eligible, context.round_robin_cursor)?
             }
             RotationStrategy::Sticky => {
                 eligible.sort_by_key(|candidate| {
@@ -988,9 +1037,44 @@ impl AccountSelector {
                         candidate.account.id().clone(),
                     )
                 });
+                eligible.first().copied()?
             }
+        };
+        Some(AccountSelection {
+            candidate,
+            preferred,
+        })
+    }
+
+    fn scheduling_blocker(
+        &self,
+        candidate: &AccountCandidate,
+        context: &AccountSelectionContext,
+    ) -> Option<AccountSchedulingBlocker> {
+        if !context.availability.bypasses_local_availability()
+            && !candidate.account.is_schedulable(context.now)
+        {
+            return Some(AccountSchedulingBlocker::LocalAvailability);
         }
-        eligible.into_iter().next()
+        if context.excluded_accounts.contains(candidate.account.id()) {
+            return Some(AccountSchedulingBlocker::Excluded);
+        }
+        if candidate.signals.in_flight >= context.policy.max_concurrent_per_account().get() {
+            return Some(AccountSchedulingBlocker::ConcurrencyLimit);
+        }
+        if candidate
+            .signals
+            .last_started_at
+            .is_some_and(|last_started| {
+                !context
+                    .now
+                    .duration_since(last_started)
+                    .is_ok_and(|elapsed| elapsed >= context.policy.request_interval())
+            })
+        {
+            return Some(AccountSchedulingBlocker::RequestInterval);
+        }
+        None
     }
 }
 
@@ -998,8 +1082,6 @@ const SMART_LOAD_WEIGHT: f64 = 1.0;
 const SMART_QUOTA_WEIGHT: f64 = 0.8;
 const SMART_FAILURE_WEIGHT: f64 = 1.0;
 const SMART_LATENCY_WEIGHT: f64 = 0.5;
-const SMART_PREFERENCE_FAILURE_ESCAPE_BASIS_POINTS: u16 = 5_000;
-const SMART_PREFERENCE_LATENCY_ESCAPE_MS: u64 = 15_000;
 
 struct SmartNormalization {
     max_in_flight: u32,
@@ -1118,35 +1200,6 @@ fn higher_is_better(value: u64, minimum: u64, maximum: u64) -> f64 {
         return 1.0;
     }
     (value.saturating_sub(minimum) as f64 / (maximum - minimum) as f64).clamp(0.0, 1.0)
-}
-
-fn smart_preference_should_escape(signals: &AccountRuntimeSignals) -> bool {
-    signals
-        .failure_rate_basis_points
-        .is_some_and(|rate| rate > SMART_PREFERENCE_FAILURE_ESCAPE_BASIS_POINTS)
-        || signals
-            .first_output_latency_ms
-            .is_some_and(|latency| latency > SMART_PREFERENCE_LATENCY_ESCAPE_MS)
-}
-
-fn eligible(candidate: &AccountCandidate, context: &AccountSelectionContext) -> bool {
-    if (!context.availability.bypasses_local_availability()
-        && !candidate.account.is_schedulable(context.now))
-        || context.excluded_accounts.contains(candidate.account.id())
-        || candidate.signals.in_flight >= context.policy.max_concurrent_per_account().get()
-    {
-        return false;
-    }
-
-    candidate
-        .signals
-        .last_started_at
-        .is_none_or(|last_started| {
-            context
-                .now
-                .duration_since(last_started)
-                .is_ok_and(|elapsed| elapsed >= context.policy.request_interval())
-        })
 }
 
 /// Credential 值对象构造错误。

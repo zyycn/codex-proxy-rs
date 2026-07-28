@@ -89,6 +89,18 @@ impl UpstreamModelId {
         Ok(Self(value))
     }
 
+    /// 从未命中显式映射的客户端模型名构造同名上游模型。
+    ///
+    /// 目录和配置仍使用 [`Self::new`] 的内部标识约束；客户端 wire 只要求非空，
+    /// 具体模型字符串是否可用由绑定 Provider 决定。
+    pub fn from_client_wire(value: impl Into<String>) -> Result<Self, IdentifierError> {
+        let value = value.into();
+        if value.is_empty() {
+            return Err(IdentifierError::Empty);
+        }
+        Ok(Self(value))
+    }
+
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0

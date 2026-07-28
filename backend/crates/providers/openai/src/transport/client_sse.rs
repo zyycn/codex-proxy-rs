@@ -20,7 +20,10 @@ use crate::transport::{
     },
     diagnostics::CodexUpstreamSendPhase,
     endpoints::{CODEX_RESPONSES_PATH, endpoint_url},
-    headers::{build_codex_base_headers, insert_optional_header, websocket_header_pairs},
+    headers::{
+        build_codex_base_headers, insert_optional_header, insert_optional_protocol_header,
+        websocket_header_pairs,
+    },
     profile::{CodexWireProfile, CodexWireProfileState},
     protocol::{
         responses::{CodexResponsesRequest, TransportRequirement, transport_requirement},
@@ -95,12 +98,25 @@ impl CodexBackendClient {
         let retry_after_seconds = retry_after_seconds(response.headers(), None);
 
         if !status.is_success() {
-            let body = read_capped_error_body(response).await?;
+            let content_type = response
+                .headers()
+                .get(CONTENT_TYPE)
+                .map(|value| value.as_bytes().to_vec());
+            let client_headers = response_meta::client_headers(response.headers());
+            let raw_body = read_error_response_body(response).await?;
+            let body = String::from_utf8_lossy(&raw_body).into_owned();
+            let retry_after_seconds =
+                retry_after_seconds.or_else(|| retry_after_seconds_from_body(&body));
             return Err(CodexClientError::Upstream {
                 status,
-                retry_after_seconds: retry_after_seconds
-                    .or_else(|| retry_after_seconds_from_body(&body)),
                 body,
+                client_response: Some(Box::new(CodexClientVisibleUpstreamResponse::new(
+                    status,
+                    content_type,
+                    client_headers,
+                    raw_body,
+                ))),
+                retry_after_seconds,
                 diagnostics: Box::new(diagnostics),
                 set_cookie_headers,
                 rate_limit_headers,
@@ -254,8 +270,8 @@ impl CodexBackendClient {
             http_version: Some("HTTP/1.1".to_string()),
         };
         log_websocket_pool_decision(
-            context.request_id,
-            pool_account_id.or(context.account_id),
+            context,
+            pool_account_id,
             pool_log_context.as_ref(),
             prepared.pool_decision(),
         );
@@ -393,6 +409,7 @@ impl CodexBackendClient {
                 retry_after_seconds: retry_after_seconds
                     .or_else(|| retry_after_seconds_from_body(&body)),
                 body,
+                client_response: None,
                 diagnostics: Box::new(diagnostics),
                 set_cookie_headers,
                 rate_limit_headers: Vec::new(),
@@ -412,21 +429,25 @@ impl CodexBackendClient {
         let profile = self.profile.snapshot();
         let mut headers = self.request_headers(&profile, context)?;
         if let Some(subagent) = openai_subagent_from_metadata(request.client_metadata()) {
-            headers.insert(
-                HeaderName::from_static("x-openai-subagent"),
-                HeaderValue::from_str(&subagent)?,
-            );
+            insert_optional_protocol_header(&mut headers, "x-openai-subagent", Some(&subagent));
         }
-        insert_optional_header(
+        insert_optional_protocol_header(
             &mut headers,
             X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER,
             request.responses_lite.as_deref(),
-        )?;
-        insert_optional_header(
+        );
+        insert_optional_protocol_header(
             &mut headers,
             X_OPENAI_MEMGEN_REQUEST_HEADER,
             request.memgen_request.as_deref(),
-        )?;
+        );
+        // 客户端确实携带的普通协议头优先；没有携带时才使用上面的 Codex profile 默认值。
+        for name in request.passthrough_headers.keys() {
+            headers.remove(name);
+            for value in request.passthrough_headers.get_all(name) {
+                headers.append(name.clone(), value.clone());
+            }
+        }
         Ok(headers)
     }
 
@@ -445,7 +466,6 @@ impl CodexBackendClient {
         profile: &CodexWireProfile,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<HeaderMap> {
-        let request_id = context.client_request_id.unwrap_or(context.request_id);
         let mut headers =
             build_codex_base_headers(profile, context.authorization, context.account_id)?;
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -461,31 +481,44 @@ impl CodexBackendClient {
         );
         headers.insert(
             HeaderName::from_static("x-client-request-id"),
-            HeaderValue::from_str(request_id)?,
+            HeaderValue::from_str(context.request_id)?,
+        );
+        insert_optional_protocol_header(
+            &mut headers,
+            "x-client-request-id",
+            context.client_request_id,
         );
         insert_optional_header(
             &mut headers,
             "x-codex-installation-id",
             context.installation_id,
         )?;
-        insert_optional_header(&mut headers, "session-id", context.session_id)?;
-        insert_optional_header(&mut headers, "thread-id", context.thread_id)?;
-        insert_optional_header(&mut headers, "x-codex-turn-id", context.turn_id)?;
-        insert_optional_header(&mut headers, "x-codex-window-id", context.codex_window_id)?;
-        insert_optional_header(&mut headers, "x-codex-turn-state", context.turn_state)?;
-        insert_optional_header(&mut headers, "x-codex-turn-metadata", context.turn_metadata)?;
-        insert_optional_header(&mut headers, "x-codex-beta-features", context.beta_features)?;
-        insert_optional_header(
+        insert_optional_protocol_header(&mut headers, "session-id", context.session_id);
+        insert_optional_protocol_header(&mut headers, "thread-id", context.thread_id);
+        insert_optional_protocol_header(&mut headers, "x-codex-turn-id", context.turn_id);
+        insert_optional_protocol_header(&mut headers, "x-codex-window-id", context.codex_window_id);
+        insert_optional_protocol_header(&mut headers, "x-codex-turn-state", context.turn_state);
+        insert_optional_protocol_header(
+            &mut headers,
+            "x-codex-turn-metadata",
+            context.turn_metadata,
+        );
+        insert_optional_protocol_header(
+            &mut headers,
+            "x-codex-beta-features",
+            context.beta_features,
+        );
+        insert_optional_protocol_header(
             &mut headers,
             "x-responsesapi-include-timing-metrics",
             context.include_timing_metrics,
-        )?;
-        insert_optional_header(&mut headers, "version", context.version)?;
-        insert_optional_header(
+        );
+        insert_optional_protocol_header(&mut headers, "version", context.version);
+        insert_optional_protocol_header(
             &mut headers,
             "x-codex-parent-thread-id",
             context.parent_thread_id,
-        )?;
+        );
 
         Ok(headers)
     }

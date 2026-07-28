@@ -8,7 +8,10 @@ use std::sync::{
 use axum::{
     body::{Body, to_bytes},
     extract::connect_info::ConnectInfo,
-    http::{HeaderMap, Request, StatusCode, header::AUTHORIZATION},
+    http::{
+        HeaderMap, HeaderValue, Request, StatusCode,
+        header::{AUTHORIZATION, CONTENT_TYPE},
+    },
 };
 use bytes::Bytes;
 use futures::future::{BoxFuture, pending};
@@ -18,8 +21,8 @@ use gateway_core::engine::execution::{
 };
 use gateway_core::engine::{CommitRequirement, CoordinatedEvent, EngineError, UpstreamSendState};
 use gateway_core::error::{
-    ClientVisibleUpstreamError, GatewayError, GatewayErrorKind, ProviderError, ProviderErrorKind,
-    SafeUpstreamValue,
+    ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, GatewayError, GatewayErrorKind,
+    ProviderError, ProviderErrorKind,
 };
 use gateway_core::event::{
     ContentItem, ContentKind, GatewayEvent, ProtocolWireEvent, ProviderEvent,
@@ -101,6 +104,8 @@ struct ContextCaptureExecution {
 
 #[derive(Debug, Clone, PartialEq)]
 struct CapturedClientContext {
+    public_model: String,
+    wire_model: Option<String>,
     client_ip: Option<IpAddr>,
     user_agent: Option<String>,
     endpoint: String,
@@ -125,11 +130,14 @@ impl ExecutionService for ContextCaptureExecution {
     }
 
     fn public_models(&self, _: &AuthenticatedClient) -> Vec<PublicModelId> {
-        Vec::new()
+        ["model-a", "model-b"]
+            .into_iter()
+            .map(|model| PublicModelId::new(model).expect("catalog model"))
+            .collect()
     }
 
-    fn contains_public_model(&self, _: &AuthenticatedClient, _: &PublicModelId) -> bool {
-        true
+    fn contains_public_model(&self, _: &AuthenticatedClient, model: &PublicModelId) -> bool {
+        matches!(model.as_str(), "model-a" | "model-b")
     }
 
     fn start(
@@ -137,11 +145,16 @@ impl ExecutionService for ContextCaptureExecution {
         request: StartExecution,
     ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
         Box::pin(async move {
+            let public_model = request.public_model.as_str().to_owned();
             let operation_kind = request.operation.kind();
             let generation = match &request.operation {
                 Operation::Generate(generation) => Some(generation),
                 _ => None,
             };
+            let wire_model = generation
+                .and_then(|generation| generation.protocol_payload().body().get("model"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
             let (client_metadata, protocol_context, prompt_cache_key, input) =
                 generation.map_or((None, None, None, None), |generation| {
                     let payload = generation.protocol_payload();
@@ -159,6 +172,8 @@ impl ExecutionService for ContextCaptureExecution {
                 .as_ref()
                 .map(|value| value.as_str().to_owned());
             *self.observed.lock().expect("context capture lock") = Some(CapturedClientContext {
+                public_model,
+                wire_model,
                 client_ip: request.metadata.client_ip,
                 user_agent: request.metadata.user_agent,
                 endpoint: request.metadata.endpoint,
@@ -510,13 +525,17 @@ async fn request_context_should_resolve_forwarded_precedence_and_peer_fallback()
     assert_eq!(
         captured_client_context(headers, peer).await,
         CapturedClientContext {
+            public_model: "smart-code".to_owned(),
+            wire_model: Some("smart-code".to_owned()),
             client_ip: Some("198.51.100.1".parse().expect("expected IP")),
             user_agent: Some("Codex-CLI/1.0".to_owned()),
             endpoint: "/v1/responses".to_owned(),
             operation_kind: OperationKind::Generate,
             input: Some(json!("hello")),
             client_metadata: None,
-            protocol_context: None,
+            protocol_context: Some(json!({
+                "opaque_request_headers": [["user-agent", "IENvZGV4LUNMSS8xLjAg"]]
+            })),
             prompt_cache_key: None,
             previous_response_id: None,
         }
@@ -538,6 +557,21 @@ async fn request_context_should_resolve_forwarded_precedence_and_peer_fallback()
             .client_ip,
         Some("192.0.2.10".parse().expect("expected peer IP"))
     );
+}
+
+#[tokio::test]
+async fn stale_model_catalog_should_not_block_a_new_model_request() {
+    let model = "  gpt-future-codex  ";
+    let captured = captured_http_request(
+        "openai",
+        json!({"model": model, "input": "hello"}),
+        HeaderMap::new(),
+        None,
+    )
+    .await;
+
+    assert_eq!(captured.public_model, model);
+    assert_eq!(captured.wire_model.as_deref(), Some(model));
 }
 
 #[tokio::test]
@@ -567,14 +601,17 @@ async fn http_request_should_pass_opaque_previous_response_id_to_core() {
 }
 
 #[tokio::test]
-async fn http_request_should_forward_safe_codex_headers_without_projecting_xai_headers() {
+async fn http_request_should_forward_codex_headers_without_projecting_xai_headers() {
     let peer = "192.0.2.10:443".parse().expect("peer address");
     let mut headers = HeaderMap::new();
     headers.insert("x-codex-turn-state", "turn-state".parse().expect("header"));
     headers.insert("conversation-id", "conversation-1".parse().expect("header"));
     headers.insert("session-id", "session-1".parse().expect("header"));
     headers.insert("x-grok-turn-idx", "7".parse().expect("header"));
-    headers.insert("x-openai-subagent", "compact".parse().expect("header"));
+    headers.insert(
+        "x-openai-subagent",
+        "future_codex_mode".parse().expect("header"),
+    );
     headers.insert(
         "x-openai-internal-codex-responses-lite",
         "true".parse().expect("header"),
@@ -600,8 +637,31 @@ async fn http_request_should_forward_safe_codex_headers_without_projecting_xai_h
             .client_metadata
             .as_ref()
             .and_then(|metadata| metadata.get("x-openai-subagent")),
-        Some(&json!("compact"))
+        Some(&json!("future_codex_mode"))
     );
+}
+
+#[tokio::test]
+async fn subagent_header_should_not_replace_non_object_client_metadata() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-openai-subagent",
+        "future_codex_mode".parse().expect("header"),
+    );
+
+    let captured = captured_http_request(
+        "openai",
+        json!({
+            "model": "smart-code",
+            "input": "preserve metadata",
+            "client_metadata": "opaque-client-value"
+        }),
+        headers,
+        None,
+    )
+    .await;
+
+    assert_eq!(captured.client_metadata, Some(json!("opaque-client-value")));
 }
 
 #[tokio::test]
@@ -667,6 +727,43 @@ async fn review_route_should_inject_review_subagent_and_record_its_endpoint() {
 }
 
 #[tokio::test]
+async fn review_route_should_not_replace_non_object_client_metadata() {
+    let observed = Arc::new(Mutex::new(None));
+    let execution = Arc::new(ContextCaptureExecution {
+        observed: Arc::clone(&observed),
+        client: authenticated_client("sk_context_test"),
+    });
+    let request = Request::post("/v1/responses/review")
+        .header(AUTHORIZATION, "Bearer sk_context_test")
+        .body(Body::from(
+            json!({
+                "model": "smart-code",
+                "input": "review this",
+                "client_metadata": ["opaque", "client", "value"]
+            })
+            .to_string(),
+        ))
+        .expect("review request");
+
+    let response = api_router(execution)
+        .await
+        .oneshot(request)
+        .await
+        .expect("review response");
+    let captured = observed
+        .lock()
+        .expect("review capture lock")
+        .clone()
+        .expect("captured review request");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        captured.client_metadata,
+        Some(json!(["opaque", "client", "value"]))
+    );
+}
+
+#[tokio::test]
 async fn streaming_encodes_first_frame_before_commit_and_http_delivery() {
     let trace = Arc::new(Trace::default());
     let session = FakeSession::streaming(
@@ -687,19 +784,22 @@ async fn streaming_encodes_first_frame_before_commit_and_http_delivery() {
 }
 
 #[tokio::test]
-async fn streaming_response_forwards_only_allowlisted_provider_headers() {
+async fn streaming_response_should_append_ordinary_headers_and_skip_unrepresentable_or_sensitive_ones()
+ {
     let trace = Arc::new(Trace::default());
     let headers = vec![
-        ProviderResponseHeader::new(
-            "x-models-etag",
-            SafeUpstreamValue::new("models-v2").expect("etag"),
-        )
-        .expect("safe header"),
+        ProviderResponseHeader::new("x-models-etag", Bytes::from_static(b"models-v2")),
+        ProviderResponseHeader::new("x-future-multi", Bytes::from_static(b"first")),
+        ProviderResponseHeader::new("x-future-multi", Bytes::from_static(b"second")),
+        ProviderResponseHeader::new("x-future-bytes", Bytes::from_static(b"\xffopaque")),
         ProviderResponseHeader::new(
             "authorization",
-            SafeUpstreamValue::new("should-not-cross-boundary").expect("header value"),
-        )
-        .expect("syntactically safe header"),
+            Bytes::from_static(b"should-not-cross-boundary"),
+        ),
+        ProviderResponseHeader::new("connection", Bytes::from_static(b"x-hop-secret")),
+        ProviderResponseHeader::new("x-hop-secret", Bytes::from_static(b"hop-secret")),
+        ProviderResponseHeader::new("content-type", Bytes::from_static(b"application/private")),
+        ProviderResponseHeader::new("bad\0name", Bytes::from_static(b"unrepresentable")),
     ];
     let session = FakeSession::streaming(
         Arc::clone(&trace),
@@ -719,7 +819,29 @@ async fn streaming_response_forwards_only_allowlisted_provider_headers() {
             .and_then(|value| value.to_str().ok()),
         Some("models-v2")
     );
+    assert_eq!(
+        response
+            .headers()
+            .get_all("x-future-multi")
+            .iter()
+            .map(HeaderValue::as_bytes)
+            .collect::<Vec<_>>(),
+        vec![b"first".as_slice(), b"second".as_slice()]
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-future-bytes")
+            .map(HeaderValue::as_bytes),
+        Some(b"\xffopaque".as_slice())
+    );
     assert!(response.headers().get("authorization").is_none());
+    assert!(response.headers().get("connection").is_none());
+    assert!(response.headers().get("x-hop-secret").is_none());
+    assert_eq!(
+        response.headers().get(CONTENT_TYPE),
+        Some(&HeaderValue::from_static("text/event-stream"))
+    );
     std::mem::forget(response);
 }
 
@@ -835,7 +957,107 @@ async fn streaming_rate_limit_before_first_frame_should_persist_the_returned_429
 }
 
 #[tokio::test]
-async fn streaming_postcommit_encode_failure_cancels_without_second_commit() {
+async fn streaming_upstream_http_failure_before_first_frame_should_preserve_raw_response() {
+    let trace = Arc::new(Trace::default());
+    let raw_body = Bytes::from_static(
+        b"{\"error\":{\"message\":\"rate limited\",\"future_field\":{\"kept\":true}},\"top_level\":17}\x00",
+    );
+    let error = ProviderError::new(ProviderErrorKind::RateLimited, UpstreamSendState::Sent)
+        .with_client_visible_upstream_response(
+            ClientVisibleUpstreamResponse::new(
+                429,
+                Some(b"application/problem+json; charset=utf-8".to_vec()),
+                raw_body.clone(),
+            )
+            .with_headers(vec![
+                ProviderResponseHeader::new("retry-after", Bytes::from_static(b"17")),
+                ProviderResponseHeader::new("x-request-id", Bytes::from_static(b"req-failure")),
+                ProviderResponseHeader::new("x-future-error", Bytes::from_static(b"first")),
+                ProviderResponseHeader::new("x-future-error", Bytes::from_static(b"second")),
+                ProviderResponseHeader::new("x-future-bytes", Bytes::from_static(b"\xffopaque")),
+            ]),
+        );
+    let session = FakeSession::streaming(
+        Arc::clone(&trace),
+        vec![NextStep::Error(EngineError::Provider(error))],
+    );
+
+    let response = stream_execution_response(Box::new(session), None).await;
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        response
+            .headers()
+            .get(CONTENT_TYPE)
+            .map(|value| value.as_bytes()),
+        Some(b"application/problem+json; charset=utf-8".as_slice())
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("retry-after")
+            .map(|value| value.as_bytes()),
+        Some(b"17".as_slice())
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-request-id")
+            .map(|value| value.as_bytes()),
+        Some(b"req-failure".as_slice())
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get_all("x-future-error")
+            .iter()
+            .map(|value| value.as_bytes())
+            .collect::<Vec<_>>(),
+        vec![b"first".as_slice(), b"second".as_slice()]
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-future-bytes")
+            .map(|value| value.as_bytes()),
+        Some(b"\xffopaque".as_slice())
+    );
+    assert_eq!(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read raw error body"),
+        raw_body
+    );
+    assert_eq!(trace.client_statuses(), vec![429]);
+}
+
+#[tokio::test]
+async fn buffered_upstream_http_failure_should_preserve_raw_response() {
+    let trace = Arc::new(Trace::default());
+    let raw_body = Bytes::from_static(b"not-json\xffstill-upstream");
+    let error = ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::Sent)
+        .with_client_visible_upstream_response(ClientVisibleUpstreamResponse::new(
+            503,
+            Some(b"application/octet-stream".to_vec()),
+            raw_body.clone(),
+        ));
+    let session = FakeSession::buffered(Arc::clone(&trace), vec![started(), completed()])
+        .with_collect_error(EngineError::Provider(error));
+
+    let response = collect_execution_response(Box::new(session)).await;
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read raw error body"),
+        raw_body
+    );
+    assert_eq!(trace.client_statuses(), vec![503]);
+}
+
+#[tokio::test]
+async fn streaming_canonical_identity_change_does_not_interrupt_wire_delivery() {
     let trace = Arc::new(Trace::default());
     let session = FakeSession::streaming(
         Arc::clone(&trace),
@@ -845,7 +1067,7 @@ async fn streaming_postcommit_encode_failure_cancels_without_second_commit() {
                 mismatched_terminal_event(),
                 CommitRequirement::AlreadyCommitted,
             )),
-            NextStep::FinalizeCancelled,
+            NextStep::FinalizeSuccess,
         ],
     );
 
@@ -854,12 +1076,16 @@ async fn streaming_postcommit_encode_failure_cancels_without_second_commit() {
         .await
         .expect("read SSE body");
 
-    assert!(String::from_utf8_lossy(&body).contains("response.failed"));
+    let body = String::from_utf8_lossy(&body);
+    assert!(body.contains("response.completed"));
+    assert!(body.contains("resp_other"));
+    assert!(!body.contains("response.failed"));
+    assert!(body.ends_with("data: [DONE]\n\n"));
     assert_eq!(trace.client_statuses(), vec![200]);
-    assert!(trace.is_cancelled());
+    assert!(!trace.is_cancelled());
     assert_eq!(
         trace.snapshot(),
-        vec!["next_event", "commit", "next_event", "cancel_finalize"]
+        vec!["next_event", "commit", "next_event", "next_end"]
     );
 }
 
@@ -906,6 +1132,38 @@ async fn streaming_success_should_emit_terminal_event_and_done_marker() {
             "next_end",
         ]
     );
+}
+
+#[tokio::test]
+async fn streaming_finalized_unknown_wire_should_end_cleanly_without_synthetic_failure() {
+    let trace = Arc::new(Trace::default());
+    let raw = Bytes::from_static(
+        b"event: response.future_terminal\ndata: {\"type\":\"response.future_terminal\",\"opaque\":true}\n\n",
+    );
+    let event = ProviderEvent::wire(
+        ProtocolWireEvent::raw_sse("openai", raw.clone()).expect("raw future event"),
+    );
+    let session = FakeSession::streaming(
+        Arc::clone(&trace),
+        vec![
+            NextStep::Event(delivery_provider(
+                event,
+                CommitRequirement::CommitBeforeDelivery,
+            )),
+            NextStep::FinalizeSuccess,
+        ],
+    );
+
+    let response = stream_execution_response(Box::new(session), None).await;
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read transparent SSE body");
+
+    assert!(body.as_ref().starts_with(raw.as_ref()));
+    assert!(body.as_ref().ends_with(b"data: [DONE]\n\n"));
+    assert!(!String::from_utf8_lossy(&body).contains("response.failed"));
+    assert!(!trace.is_cancelled());
+    assert_eq!(trace.snapshot(), vec!["next_event", "commit", "next_end"]);
 }
 
 #[tokio::test]
@@ -976,14 +1234,11 @@ async fn streaming_empty_terminal_should_emit_failure_done_and_cancel_execution(
 async fn streaming_error_should_emit_client_visible_upstream_details() {
     let trace = Arc::new(Trace::default());
     let error = ProviderError::new(ProviderErrorKind::RateLimited, UpstreamSendState::Sent)
-        .with_client_visible_upstream_error(
-            ClientVisibleUpstreamError::new(
-                "Your Codex quota is exhausted",
-                Some("quota_exhausted".to_owned()),
-                Some("rate_limit_error".to_owned()),
-            )
-            .expect("safe structured upstream error"),
-        );
+        .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+            "Your Codex quota is exhausted",
+            Some("quota_exhausted".to_owned()),
+            Some("rate_limit_error".to_owned()),
+        ));
     let session = FakeSession::streaming(
         Arc::clone(&trace),
         vec![
@@ -1246,13 +1501,10 @@ async fn buffered_response_commits_only_after_complete_json_is_encoded() {
 }
 
 #[tokio::test]
-async fn buffered_response_forwards_allowlisted_provider_headers() {
+async fn buffered_response_forwards_long_ordinary_provider_header_values() {
     let trace = Arc::new(Trace::default());
-    let header = ProviderResponseHeader::new(
-        "openai-model",
-        SafeUpstreamValue::new("gpt-5.5-effective").expect("model header"),
-    )
-    .expect("safe header");
+    let model = format!("gpt-{}", "x".repeat(512));
+    let header = ProviderResponseHeader::new("openai-model", Bytes::from(model.clone()));
     let session = FakeSession::buffered(Arc::clone(&trace), vec![started(), completed()])
         .with_response_headers(vec![header]);
 
@@ -1263,7 +1515,7 @@ async fn buffered_response_forwards_allowlisted_provider_headers() {
             .headers()
             .get("openai-model")
             .and_then(|value| value.to_str().ok()),
-        Some("gpt-5.5-effective")
+        Some(model.as_str())
     );
 }
 

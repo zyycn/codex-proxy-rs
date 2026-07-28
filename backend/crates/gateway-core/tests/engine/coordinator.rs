@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures::StreamExt;
 use futures::executor::block_on;
 
@@ -28,8 +29,8 @@ use gateway_core::engine::{
     ProviderAttemptOutcome, RecoveryReport, UpstreamSendState,
 };
 use gateway_core::error::{
-    ContinuationFailure, GatewayErrorKind, ProviderError, ProviderErrorKind, SafeUpstreamValue,
-    StoreError,
+    ClientVisibleUpstreamResponse, ContinuationFailure, GatewayErrorKind, OpaqueUpstreamValue,
+    ProviderError, ProviderErrorKind, StoreError, StoreErrorKind,
 };
 use gateway_core::event::{
     ContentItem, ContentKind, GatewayEvent, ProtocolWireEvent, ProviderEvent,
@@ -65,6 +66,7 @@ struct FinalState {
     upstream_transport: Option<String>,
     http_version: Option<String>,
     websocket_pool: Option<String>,
+    service_tier: Option<String>,
     upstream_request_id: Option<String>,
     upstream_status_code: Option<u16>,
     transport_decision_wait_ms: Option<u64>,
@@ -97,11 +99,37 @@ struct StoreState {
 #[derive(Default)]
 struct FakeStore {
     state: Mutex<StoreState>,
+    failures: BTreeSet<StoreWriteFailure>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum StoreWriteFailure {
+    Create,
+    Commit,
+    Finalize,
+}
+
+impl FakeStore {
+    fn failing(failure: StoreWriteFailure) -> Self {
+        Self {
+            state: Mutex::new(StoreState::default()),
+            failures: BTreeSet::from([failure]),
+        }
+    }
+
+    fn fails(&self, failure: StoreWriteFailure) -> Result<(), StoreError> {
+        if self.failures.contains(&failure) {
+            Err(StoreError::new(StoreErrorKind::Unavailable))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[async_trait]
 impl ExecutionStore for FakeStore {
     async fn create_model_request(&self, _request: NewModelRequest) -> Result<(), StoreError> {
+        self.fails(StoreWriteFailure::Create)?;
         self.state.lock().expect("store lock").created += 1;
         Ok(())
     }
@@ -134,6 +162,7 @@ impl ExecutionStore for FakeStore {
         _committed_at: SystemTime,
         client_status_code: Option<u16>,
     ) -> Result<(), StoreError> {
+        self.fails(StoreWriteFailure::Commit)?;
         let mut state = self.state.lock().expect("store lock");
         state.commits += 1;
         state.committed_statuses.push(client_status_code);
@@ -172,6 +201,7 @@ impl ExecutionStore for FakeStore {
         &self,
         finalization: ModelRequestFinalization,
     ) -> Result<(), StoreError> {
+        self.fails(StoreWriteFailure::Finalize)?;
         self.state
             .lock()
             .expect("store lock")
@@ -194,6 +224,7 @@ impl ExecutionStore for FakeStore {
                 upstream_transport: finalization.upstream_transport,
                 http_version: finalization.http_version,
                 websocket_pool: finalization.websocket_pool,
+                service_tier: finalization.service_tier,
                 upstream_request_id: finalization.upstream_request_id,
                 upstream_status_code: finalization.upstream_status_code,
                 transport_decision_wait_ms: finalization.timings.transport_decision_wait_ms,
@@ -291,15 +322,11 @@ impl Provider for ScriptedProvider {
                     },
                     UpstreamTransport::new("http_sse").expect("transport"),
                 )
-                .with_upstream_request_id(
-                    SafeUpstreamValue::new("upstream-request").expect("safe request id"),
-                );
+                .with_upstream_request_id(OpaqueUpstreamValue::new("upstream-request"));
                 Ok(ProviderStream::new(
                     metadata,
                     Box::pin(futures::stream::iter(
-                        items
-                            .into_iter()
-                            .map(|event| event.map(ProviderEvent::from)),
+                        items.into_iter().map(canonical_provider_event),
                     )),
                     (),
                 ))
@@ -318,12 +345,8 @@ impl Provider for ScriptedProvider {
                 Ok(ProviderStream::new(
                     metadata,
                     Box::pin(
-                        futures::stream::iter(
-                            items
-                                .into_iter()
-                                .map(|event| event.map(ProviderEvent::from)),
-                        )
-                        .chain(futures::stream::pending()),
+                        futures::stream::iter(items.into_iter().map(canonical_provider_event))
+                            .chain(futures::stream::pending()),
                     ),
                     (),
                 ))
@@ -397,6 +420,12 @@ fn complete_stream(total_tokens: Option<u64>) -> Vec<Result<GatewayEvent, Provid
         "gpt-5",
     ))));
     events
+}
+
+fn canonical_provider_event(
+    event: Result<GatewayEvent, ProviderError>,
+) -> Result<ProviderEvent, ProviderError> {
+    event.map(ProviderEvent::canonical)
 }
 
 fn atomic_response_failed(response_id: &str, marker: &str) -> ProviderError {
@@ -547,6 +576,17 @@ fn coordinator(
     Arc<ScriptedProvider>,
 ) {
     let store = Arc::new(FakeStore::default());
+    coordinator_with_store(scripts, store)
+}
+
+fn coordinator_with_store(
+    scripts: Vec<Script>,
+    store: Arc<FakeStore>,
+) -> (
+    AttemptCoordinator<FakeStore>,
+    Arc<FakeStore>,
+    Arc<ScriptedProvider>,
+) {
     let provider = Arc::new(ScriptedProvider::new(scripts));
     let mut registry = ProviderRegistry::builder();
     registry
@@ -651,6 +691,78 @@ fn success_updates_one_model_request_and_persists_usage() {
 }
 
 #[test]
+fn observation_store_failures_never_block_successful_delivery() {
+    for failure in [
+        StoreWriteFailure::Create,
+        StoreWriteFailure::Commit,
+        StoreWriteFailure::Finalize,
+    ] {
+        let operation = operation(RetrySafety::NonIdempotent);
+        let route_plan = plan(&operation);
+        let store = Arc::new(FakeStore::failing(failure));
+        let (coordinator, _, provider) = coordinator_with_store(
+            vec![Script::Stream {
+                account_id: "acct_one",
+                items: complete_stream(None),
+            }],
+            store,
+        );
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .expect("start execution");
+
+        let events = block_on(session.collect_uncommitted())
+            .unwrap_or_else(|error| panic!("{failure:?} blocked collection: {error}"));
+        assert_eq!(events.len(), 2);
+        block_on(session.commit_downstream(Some(200)))
+            .unwrap_or_else(|error| panic!("{failure:?} blocked commit: {error}"));
+        assert!(session.is_finalized());
+        assert_eq!(provider.contexts.lock().expect("contexts lock").len(), 1);
+    }
+}
+
+#[test]
+fn terminal_provider_error_preserves_request_local_upstream_response() {
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let raw_body = Bytes::from_static(b"{\"upstream\":\"unchanged\"}\x00");
+    let provider_error =
+        ProviderError::new(ProviderErrorKind::InvalidRequest, UpstreamSendState::Sent)
+            .with_client_visible_upstream_response(ClientVisibleUpstreamResponse::new(
+                422,
+                Some(b"application/problem+json".to_vec()),
+                raw_body.clone(),
+            ));
+    let (coordinator, _, _) = coordinator(vec![Script::Error(provider_error)]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+
+    let error = block_on(session.collect_uncommitted()).expect_err("provider rejection");
+    let EngineError::Provider(error) = error else {
+        panic!("expected provider error");
+    };
+    let response = error
+        .client_visible_upstream_response()
+        .expect("request-local upstream response");
+
+    assert_eq!(response.status(), 422);
+    assert_eq!(response.body(), &raw_body);
+}
+
+#[test]
 fn success_preserves_opaque_upstream_response_id_and_builds_native_pin() {
     let response_id = format!("resp_{}\0opaque", "x".repeat(4_096));
     let operation = generate_operation();
@@ -695,6 +807,50 @@ fn success_preserves_opaque_upstream_response_id_and_builds_native_pin() {
     assert_eq!(
         state.finalizations[0].upstream_response_id,
         Some(response_id)
+    );
+}
+
+#[test]
+fn canonical_identity_change_and_empty_terminal_id_are_observational() {
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let (coordinator, store, _) = coordinator(vec![Script::Stream {
+        account_id: "acct_one",
+        items: vec![
+            Ok(GatewayEvent::Started(ResponseMeta::new(
+                "response-created",
+                "gpt-5",
+            ))),
+            Ok(GatewayEvent::Completed(ResponseMeta::new("", "gpt-5"))),
+        ],
+    }]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+
+    block_on(session.collect_uncommitted()).expect("identity observation cannot fail delivery");
+    let provider_state = ProviderSessionState::new("openai", Map::new()).expect("provider state");
+    let pin = session
+        .native_continuation_pin(&provider_state)
+        .expect("empty opaque response ID remains recordable");
+    assert_eq!(pin.previous_response_id().as_str(), "");
+    assert_eq!(pin.upstream_response_id().as_str(), "");
+
+    block_on(session.commit_downstream(Some(200))).expect("commit response");
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(
+        state.finalizations[0].client_response_id.as_deref(),
+        Some("")
+    );
+    assert_eq!(
+        state.finalizations[0].upstream_response_id.as_deref(),
+        Some("")
     );
 }
 
@@ -780,7 +936,9 @@ fn response_observation_is_persisted_but_never_delivered() {
     .with_http_version(UpstreamHttpVersion::Http2)
     .with_websocket_pool(WebSocketPoolKind::New)
     .with_status_code(200)
-    .with_request_id(SafeUpstreamValue::new("upstream-observed").expect("request id"))
+    .with_request_id(OpaqueUpstreamValue::new("upstream-observed"))
+    .try_with_service_tier("priority")
+    .expect("service tier")
     .with_timings(ProviderResponseTimings {
         transport_decision_wait_ms: Some(7),
         connect_ms: Some(11),
@@ -792,7 +950,7 @@ fn response_observation_is_persisted_but_never_delivered() {
     items.extend(
         complete_stream(Some(21))
             .into_iter()
-            .map(|event| event.map(ProviderEvent::canonical)),
+            .map(canonical_provider_event),
     );
     let (coordinator, store, _) = coordinator(vec![Script::ObservedStream {
         account_id: "acct_observed",
@@ -817,6 +975,7 @@ fn response_observation_is_persisted_but_never_delivered() {
     assert_eq!(finalization.upstream_transport.as_deref(), Some("http_sse"));
     assert_eq!(finalization.http_version.as_deref(), Some("HTTP/2"));
     assert_eq!(finalization.websocket_pool.as_deref(), Some("new"));
+    assert_eq!(finalization.service_tier.as_deref(), Some("priority"));
     assert_eq!(
         finalization.upstream_request_id.as_deref(),
         Some("upstream-observed")
@@ -826,6 +985,48 @@ fn response_observation_is_persisted_but_never_delivered() {
     assert_eq!(finalization.connect_ms, Some(11));
     assert_eq!(finalization.headers_ms, Some(13));
     assert_eq!(finalization.first_event_ms, Some(17));
+}
+
+#[test]
+fn mismatched_response_observation_should_not_interrupt_client_events() {
+    let operation = operation(RetrySafety::Idempotent);
+    let route_plan = plan(&operation);
+    let first = ProviderEvent::observation(ProviderResponseObservation::new(
+        UpstreamTransport::new("websocket").expect("first transport"),
+    ));
+    let mismatched = ProviderEvent::observation(ProviderResponseObservation::new(
+        UpstreamTransport::new("http_sse").expect("mismatched transport"),
+    ));
+    let mut items = vec![Ok(first), Ok(mismatched)];
+    items.extend(
+        complete_stream(None)
+            .into_iter()
+            .map(canonical_provider_event),
+    );
+    let (coordinator, store, _) = coordinator(vec![Script::ObservedStream {
+        account_id: "acct_observation_mismatch",
+        items,
+    }]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+
+    let events = block_on(session.collect_uncommitted()).expect("client events survive");
+    block_on(session.commit_downstream(Some(200))).expect("commit response");
+
+    assert_eq!(events.len(), 2);
+    assert_eq!(
+        store.state.lock().expect("store lock").finalizations[0]
+            .upstream_transport
+            .as_deref(),
+        Some("websocket")
+    );
 }
 
 #[test]
@@ -852,7 +1053,7 @@ fn response_observation_should_persist_provider_metadata_and_output_timings() {
     items.extend(
         complete_stream(Some(21))
             .into_iter()
-            .map(|event| event.map(ProviderEvent::canonical)),
+            .map(canonical_provider_event),
     );
     let (coordinator, store, _) = coordinator(vec![Script::ObservedStream {
         account_id: "acct_observed",
@@ -992,7 +1193,7 @@ fn discarded_attempt_observation_does_not_leak_into_retry_result() {
     )
     .with_http_version(UpstreamHttpVersion::Http11)
     .with_status_code(503)
-    .with_request_id(SafeUpstreamValue::new("discarded-request").expect("request id"))
+    .with_request_id(OpaqueUpstreamValue::new("discarded-request"))
     .with_timings(ProviderResponseTimings {
         transport_decision_wait_ms: Some(7),
         connect_ms: Some(11),
@@ -1006,12 +1207,12 @@ fn discarded_attempt_observation_does_not_leak_into_retry_result() {
     )
     .with_http_version(UpstreamHttpVersion::Http2)
     .with_status_code(200)
-    .with_request_id(SafeUpstreamValue::new("winning-request").expect("request id"));
+    .with_request_id(OpaqueUpstreamValue::new("winning-request"));
     let mut second_items = vec![Ok(ProviderEvent::observation(second_observation))];
     second_items.extend(
         complete_stream(None)
             .into_iter()
-            .map(|event| event.map(ProviderEvent::canonical)),
+            .map(canonical_provider_event),
     );
     let (coordinator, store, _) = coordinator(vec![
         Script::ObservedStream {
@@ -1821,9 +2022,7 @@ fn rate_limited_account_exhaustion_survives_a_later_empty_selection() {
                 UpstreamSendState::Sent,
             )
             .with_status(429)
-            .with_upstream_code(
-                SafeUpstreamValue::new("rate_limit_exceeded").expect("provider code"),
-            )
+            .with_upstream_code(OpaqueUpstreamValue::new("rate_limit_exceeded"))
             .with_retry_after(Duration::from_secs(30))
             .with_replay_safe())],
         },
@@ -1851,7 +2050,7 @@ fn rate_limited_account_exhaustion_survives_a_later_empty_selection() {
     assert_eq!(error.kind(), ProviderErrorKind::RateLimited);
     assert_eq!(error.upstream_status(), Some(429));
     assert_eq!(
-        error.upstream_code().map(SafeUpstreamValue::as_str),
+        error.upstream_code().map(OpaqueUpstreamValue::as_str),
         Some("rate_limit_exceeded")
     );
     assert_eq!(error.retry_after(), Some(Duration::from_secs(30)));
@@ -2310,6 +2509,100 @@ fn ambiguous_send_state_stops_retry() {
     assert_eq!(finalization.attempt_count, 1);
     assert!(!finalization.committed);
     assert!(finalization.latency_ms.is_some());
+}
+
+#[test]
+fn pre_delivery_transport_failure_rotates_account_for_non_idempotent_generation() {
+    let operation = operation(RetrySafety::NonIdempotent);
+    let route_plan = plan(&operation);
+    let (coordinator, store, provider) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::Transport,
+                UpstreamSendState::Ambiguous,
+            )
+            .with_pre_delivery_retry())],
+        },
+        Script::Stream {
+            account_id: "acct_second",
+            items: complete_stream(None),
+        },
+    ]);
+
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+    block_on(session.collect_uncommitted()).expect("second account succeeds before delivery");
+    block_on(session.commit_downstream(Some(200))).expect("commit winning response");
+
+    let contexts = provider.contexts.lock().expect("contexts lock");
+    assert_eq!(contexts.len(), 2);
+    assert!(
+        contexts[1]
+            .excluded_accounts()
+            .contains(&ProviderAccountId::new("acct_first").expect("account id"))
+    );
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.intermediate_failures, 1);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
+}
+
+#[test]
+fn pre_delivery_retry_marker_is_ignored_after_downstream_commit() {
+    let operation = operation(RetrySafety::NonIdempotent);
+    let route_plan = plan(&operation);
+    let (coordinator, store, provider) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_first",
+            items: vec![
+                Ok(GatewayEvent::Started(ResponseMeta::new(
+                    "response-visible",
+                    "gpt-5",
+                ))),
+                Err(
+                    ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::Ambiguous)
+                        .with_pre_delivery_retry(),
+                ),
+            ],
+        },
+        Script::Stream {
+            account_id: "acct_second",
+            items: complete_stream(None),
+        },
+    ]);
+
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+    let first = block_on(session.next_event())
+        .expect("first event")
+        .expect("visible event");
+    assert_eq!(
+        first.commit_requirement(),
+        CommitRequirement::CommitBeforeDelivery
+    );
+    block_on(session.commit_downstream(Some(200))).expect("commit first event");
+    let error = block_on(session.next_event()).expect_err("committed output cannot be replayed");
+
+    assert!(matches!(error, EngineError::Provider(_)));
+    assert_eq!(provider.contexts.lock().expect("contexts lock").len(), 1);
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.intermediate_failures, 0);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Incomplete);
+    assert!(state.finalizations[0].committed);
 }
 
 #[test]

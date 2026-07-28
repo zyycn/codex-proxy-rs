@@ -25,10 +25,10 @@ pub use self::{
         CodexModelCatalogSnapshot, MAX_CODEX_MODEL_CATALOG_BYTES, parse_codex_model_catalog,
     },
     client::{
-        CodexBackendClient, CodexBackendSseStream, CodexBackendStreamingResponse,
-        CodexBackendTransport, CodexClientError, CodexClientResult, CodexRateLimitHeaderUpdates,
-        CodexRequestContext, CodexTransportDecision, CodexTransportMetrics, CodexTurnStateUpdate,
-        build_reqwest_client,
+        CodexAccountSelectionTelemetry, CodexBackendClient, CodexBackendSseStream,
+        CodexBackendStreamingResponse, CodexBackendTransport, CodexClientError, CodexClientResult,
+        CodexRateLimitHeaderUpdates, CodexRequestContext, CodexTransportDecision,
+        CodexTransportMetrics, CodexTurnStateUpdate, build_reqwest_client,
     },
     diagnostics::{CodexUpstreamDiagnostics, CodexUpstreamSendPhase},
     endpoints::{

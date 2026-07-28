@@ -31,6 +31,27 @@ fn decoder_should_preserve_existing_metadata_fixture_as_openai_wire() {
 }
 
 #[test]
+fn decoder_should_preserve_empty_opaque_response_id_in_canonical_facts() {
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"\",\"model\":\"gpt-test\"}}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"\",\"model\":\"gpt-test\",\"status\":\"completed\",\"output\":[]}}\n\n",
+    );
+
+    let events = CodexCanonicalDecoder::new("fallback")
+        .push(body.as_bytes())
+        .expect("empty opaque response ID remains representable");
+    let facts = canonical_facts(&events);
+
+    assert!(matches!(
+        facts.as_slice(),
+        [GatewayEvent::Started(started), GatewayEvent::Completed(completed)]
+            if started.response_id().is_empty() && completed.response_id().is_empty()
+    ));
+}
+
+#[test]
 fn raw_sse_passthrough_should_keep_original_bytes_alongside_canonical_facts() {
     let heartbeat = ": keep-alive\r\n\r\n";
     let created = concat!(
@@ -129,16 +150,14 @@ fn raw_sse_passthrough_should_forward_unparseable_frames_without_failure() {
 }
 
 #[test]
-fn raw_sse_passthrough_should_forward_frames_with_unsafe_event_metadata() {
-    // 上游事件名超出 wire 安全上限（256 字节）时剥离该元数据继续下发，
-    // 原始帧字节仍原样透传，而不是整帧静默丢弃。
+fn raw_sse_passthrough_should_preserve_long_event_metadata() {
     let event_name = "x".repeat(300);
     let frame = format!("event: {event_name}\ndata: {{\"type\":\"noise\",\"marker\":1}}\n\n");
 
     let events = CodexCanonicalDecoder::new("fallback")
         .with_raw_sse_passthrough()
         .push(frame.as_bytes())
-        .expect("unsafe event metadata must not abort transparent transport");
+        .expect("opaque event metadata must not abort transparent transport");
     let wire = events[0].wire_event().expect("wire event");
 
     assert_eq!(
@@ -146,22 +165,20 @@ fn raw_sse_passthrough_should_forward_frames_with_unsafe_event_metadata() {
         Some(frame.as_bytes())
     );
     assert!(wire.has_json_data());
-    assert_eq!(wire.event_type(), None);
+    assert_eq!(wire.event_type(), Some(event_name.as_str()));
 }
 
 #[test]
-fn decoder_should_strip_unsafe_event_metadata_instead_of_dropping_the_event() {
-    // 无 raw 帧的路径（WebSocket JSON 投影）同样不允许因元数据违规丢事件：
-    // 剥离事件名后 JSON 正文仍完整下发。
+fn decoder_should_preserve_long_event_metadata_without_raw_frame() {
     let event_name = "y".repeat(300);
     let frame = format!("event: {event_name}\ndata: {{\"type\":\"noise\",\"marker\":1}}\n\n");
 
     let events = CodexCanonicalDecoder::new("fallback")
         .push(frame.as_bytes())
-        .expect("unsafe event metadata must not drop the event");
+        .expect("opaque event metadata must not drop the event");
     let wire = events[0].wire_event().expect("wire event");
 
-    assert_eq!(wire.event_type(), None);
+    assert_eq!(wire.event_type(), Some(event_name.as_str()));
     assert!(wire.has_json_data());
     assert_eq!(wire.data()["marker"], serde_json::json!(1));
 }
@@ -182,6 +199,27 @@ fn decoder_should_emit_calculated_cost_for_complete_known_model_usage() {
         event,
         GatewayEvent::CalculatedCost(cost)
             if cost.total().amount().scaled() == 3_437_500
+    )));
+}
+
+#[test]
+fn decoder_should_keep_response_service_tier_when_terminal_event_omits_it() {
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_fast_cost\",\"model\":\"gpt-5.4\",\"service_tier\":\"priority\"}}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fast_cost\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"usage\":{\"input_tokens\":100,\"output_tokens\":10,\"input_tokens_details\":{\"cached_tokens\":25,\"cache_write_tokens\":0},\"total_tokens\":110}}}\n\n",
+    );
+    let mut decoder = CodexCanonicalDecoder::new("fallback");
+    let events = decoder
+        .push(body.as_bytes())
+        .expect("canonical priority response");
+
+    assert_eq!(decoder.response_service_tier(), Some("priority"));
+    assert!(canonical_facts(&events).into_iter().any(|event| matches!(
+        event,
+        GatewayEvent::CalculatedCost(cost)
+            if cost.total().amount().scaled() == 6_875_000
     )));
 }
 

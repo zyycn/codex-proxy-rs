@@ -1,7 +1,7 @@
 use gateway_protocol::openai::sse::parse_sse_events;
 use provider_openai::transport::protocol::responses::{
-    CodexResponsesRequest, PreviousResponseScope, TransportRequirement, response_event_signals,
-    transport_requirement,
+    CodexResponsesRequest, PreviousResponseScope, ResponsesSseFailure, TransportRequirement,
+    response_event_signals, transport_requirement,
 };
 use serde_json::{Value, json};
 
@@ -169,6 +169,22 @@ fn semantic_output_should_ignore_an_empty_delta() {
     let body = b"event: response.output_text.delta\ndata: {\"delta\":\"\"}\n\n";
 
     assert!(!response_body_has_semantic_output(body));
+}
+
+#[test]
+fn structured_failure_should_preserve_empty_opaque_fields() {
+    let failure = ResponsesSseFailure::from_event(
+        "response.failed",
+        &json!({
+            "response": {
+                "error": {"message": "", "code": "", "type": ""}
+            }
+        }),
+    );
+
+    assert_eq!(failure.message, "");
+    assert_eq!(failure.upstream_code.as_deref(), Some(""));
+    assert_eq!(failure.upstream_type.as_deref(), Some(""));
 }
 
 #[test]

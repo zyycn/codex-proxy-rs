@@ -1,7 +1,105 @@
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use gateway_core::operation::{GenerateRequest, ProtocolPayload};
+use provider_openai::encode_generate_request;
 use provider_openai::transport::websocket::CodexWebSocketConnection;
 use serde_json::Value;
+use tokio_tungstenite::tungstenite::http::HeaderMap as WsHeaderMap;
 
 use super::*;
+
+fn request_with_opaque_headers(use_websocket: bool) -> CodexResponsesRequest {
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        json!({"model": "gpt-test", "input": "hello"})
+            .as_object()
+            .expect("request object")
+            .clone(),
+    )
+    .expect("OpenAI payload")
+    .with_context(Map::from_iter([
+        (
+            "opaque_request_headers".to_owned(),
+            json!([
+                ["x-openai-future-mode", STANDARD.encode(b"future-ascii")],
+                ["x-openai-future-mode", STANDARD.encode(b"\x80\xff")],
+                [
+                    "accept",
+                    STANDARD.encode(b"application/vnd.openai.future+json")
+                ],
+                [
+                    "content-type",
+                    STANDARD.encode(b"application/vnd.openai.request+json")
+                ],
+                ["user-agent", STANDARD.encode(b"Codex future-client")],
+                ["originator", STANDARD.encode(b"future-originator")],
+                ["openai-beta", STANDARD.encode(b"future_responses=v2")],
+                ["openai-beta", STANDARD.encode(b"future_tools=v3")],
+                [
+                    "x-openai-internal-codex-residency",
+                    STANDARD.encode(b"future-region")
+                ],
+                ["x-codex-turn-state", STANDARD.encode(b"turn-ascii")],
+                ["x-codex-turn-state", STANDARD.encode(b"turn-\x80")],
+                ["bad header name", STANDARD.encode(b"ignored")],
+                ["x-invalid-base64", "%%%"],
+                ["x-still-valid", STANDARD.encode(b"after-invalid")],
+                ["authorization", STANDARD.encode(b"Bearer client-secret")],
+                ["chatgpt-account-id", STANDARD.encode(b"client-account")],
+                [
+                    "x-codex-installation-id",
+                    STANDARD.encode(b"client-installation")
+                ]
+            ]),
+        ),
+        ("turn_state".to_owned(), json!("typed-turn-state")),
+    ]));
+    let mut request = encode_generate_request(
+        &GenerateRequest::from_protocol_payload(payload),
+        "gpt-routed",
+    )
+    .expect("opaque request headers");
+    request.use_websocket = use_websocket;
+    request.force_http_sse = !use_websocket;
+    request
+}
+
+async fn read_http_request_head(stream: &mut TcpStream) -> Vec<u8> {
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    loop {
+        let read = stream.read(&mut buffer).await.expect("read HTTP request");
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+            request.truncate(end + 4);
+            break;
+        }
+    }
+    request
+}
+
+fn raw_header_values(request: &[u8], target: &str) -> Vec<Vec<u8>> {
+    request
+        .split(|byte| *byte == b'\n')
+        .skip(1)
+        .take_while(|line| *line != b"\r" && !line.is_empty())
+        .filter_map(|line| {
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            let colon = line.iter().position(|byte| *byte == b':')?;
+            line[..colon]
+                .eq_ignore_ascii_case(target.as_bytes())
+                .then(|| {
+                    line[colon + 1..]
+                        .iter()
+                        .copied()
+                        .skip_while(|byte| matches!(byte, b' ' | b'\t'))
+                        .collect()
+                })
+        })
+        .collect()
+}
 
 #[test]
 fn websocket_connection_should_preserve_endpoint_and_header_order() {
@@ -151,7 +249,7 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
     request.memgen_request = Some("true".to_owned());
     request.set_client_metadata(Some(json!({
         "safe": "yes",
-        "x-openai-subagent": "review",
+        "x-openai-subagent": "future_codex_mode",
         "ignored_non_string": 42
     })));
     let backend = CodexBackendClient::new(
@@ -184,6 +282,7 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
                 thread_id: None,
                 client_request_id: None,
                 turn_id: None,
+                account_selection: Default::default(),
             },
         )
         .await
@@ -208,6 +307,8 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
     let headers = received_headers.lock().expect("headers lock");
     for (name, expected) in [
         ("x-client-request-id", "req_ws_security"),
+        ("content-type", "application/json"),
+        ("accept", "text/event-stream"),
         ("x-codex-installation-id", "install-123"),
         ("x-openai-internal-codex-residency", "us"),
         ("x-codex-turn-state", "turn-state"),
@@ -217,7 +318,7 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
         ("version", "26.318.11754"),
         ("x-codex-window-id", "cw_derived"),
         ("x-codex-parent-thread-id", "parent-456"),
-        ("x-openai-subagent", "review"),
+        ("x-openai-subagent", "future_codex_mode"),
         ("x-openai-memgen-request", "true"),
         ("session-id", "cp_derived"),
     ] {
@@ -228,14 +329,192 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
         );
     }
     for forbidden in [
-        "content-type",
-        "accept",
         "session_id",
         "thread-id",
         "x-openai-internal-codex-responses-lite",
     ] {
         assert!(headers.iter().all(|(header, _)| header != forbidden));
     }
+}
+
+#[tokio::test]
+async fn backend_http_should_restore_opaque_multivalue_header_bytes_and_lease_identity() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind opaque HTTP server");
+    let address = listener.local_addr().expect("opaque HTTP server address");
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept opaque HTTP client");
+        let request = read_http_request_head(&mut stream).await;
+        write_completed_sse_response(&mut stream).await;
+        request
+    });
+    let request = request_with_opaque_headers(false);
+    let client = CodexBackendClient::new(
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("HTTP client"),
+        format!("http://{address}"),
+        test_wire_profile(),
+    );
+
+    client
+        .create_response(
+            &request,
+            CodexRequestContext {
+                authorization: "Bearer lease-token",
+                account_id: Some("lease-account"),
+                installation_id: Some("lease-installation"),
+                turn_state: request.turn_state.as_deref(),
+                ..request_context("req_opaque_http", Some("lease-account"))
+            },
+        )
+        .await
+        .expect("opaque HTTP response");
+    let raw = server.await.expect("opaque HTTP server task");
+
+    assert_eq!(
+        raw_header_values(&raw, "x-openai-future-mode"),
+        vec![b"future-ascii".to_vec(), b"\x80\xff".to_vec()]
+    );
+    assert_eq!(
+        raw_header_values(&raw, "openai-beta"),
+        vec![b"future_responses=v2".to_vec(), b"future_tools=v3".to_vec()]
+    );
+    assert_eq!(
+        raw_header_values(&raw, "x-codex-turn-state"),
+        vec![b"turn-ascii".to_vec(), b"turn-\x80".to_vec()]
+    );
+    for (name, value) in [
+        ("accept", b"application/vnd.openai.future+json".as_slice()),
+        (
+            "content-type",
+            b"application/vnd.openai.request+json".as_slice(),
+        ),
+        ("user-agent", b"Codex future-client".as_slice()),
+        ("originator", b"future-originator".as_slice()),
+        (
+            "x-openai-internal-codex-residency",
+            b"future-region".as_slice(),
+        ),
+        ("x-still-valid", b"after-invalid".as_slice()),
+        ("authorization", b"Bearer lease-token".as_slice()),
+        ("chatgpt-account-id", b"lease-account".as_slice()),
+        ("x-codex-installation-id", b"lease-installation".as_slice()),
+    ] {
+        assert_eq!(raw_header_values(&raw, name), vec![value.to_vec()]);
+    }
+    for secret in [
+        b"client-secret".as_slice(),
+        b"client-account",
+        b"client-installation",
+    ] {
+        assert!(!raw.windows(secret.len()).any(|window| window == secret));
+    }
+    for omitted in ["bad header name", "x-invalid-base64"] {
+        assert!(raw_header_values(&raw, omitted).is_empty());
+    }
+}
+
+#[tokio::test]
+async fn backend_websocket_should_drop_only_unrepresentable_opaque_header_values() {
+    let received = Arc::new(Mutex::new(WsHeaderMap::new()));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind opaque WebSocket server");
+    let address = listener
+        .local_addr()
+        .expect("opaque WebSocket server address");
+    let received_for_server = Arc::clone(&received);
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener
+            .accept()
+            .await
+            .expect("accept opaque WebSocket client");
+        let mut websocket = accept_codex_test_websocket_with(stream, move |request, response| {
+            response.headers_mut().insert(
+                "sec-websocket-extensions",
+                "permessage-deflate".parse().expect("extension header"),
+            );
+            *received_for_server.lock().expect("opaque headers lock") = request.headers().clone();
+        })
+        .await;
+        let _ = websocket
+            .next()
+            .await
+            .expect("opaque response.create")
+            .expect("valid opaque response.create");
+        websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_opaque_headers", 1, 1).into(),
+            ))
+            .await
+            .expect("send opaque terminal event");
+    });
+    let request = request_with_opaque_headers(true);
+    let client = CodexBackendClient::new(
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("HTTP client"),
+        format!("http://{address}"),
+        test_wire_profile(),
+    )
+    .with_websocket_pool(Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1))));
+
+    client
+        .create_response(
+            &request,
+            CodexRequestContext {
+                authorization: "Bearer lease-token",
+                account_id: Some("lease-account"),
+                installation_id: Some("lease-installation"),
+                turn_state: request.turn_state.as_deref(),
+                ..request_context("req_opaque_ws", Some("lease-account"))
+            },
+        )
+        .await
+        .expect("opaque WebSocket response");
+    server.await.expect("opaque WebSocket server task");
+    let received = received.lock().expect("opaque headers lock");
+    let values = |name: &str| {
+        received
+            .get_all(name)
+            .iter()
+            .map(|value| value.as_bytes().to_vec())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        values("x-openai-future-mode"),
+        vec![b"future-ascii".to_vec()]
+    );
+    assert_eq!(
+        values("openai-beta"),
+        vec![b"future_responses=v2".to_vec(), b"future_tools=v3".to_vec()]
+    );
+    assert_eq!(
+        values("accept"),
+        vec![b"application/vnd.openai.future+json".to_vec()]
+    );
+    assert_eq!(
+        values("content-type"),
+        vec![b"application/vnd.openai.request+json".to_vec()]
+    );
+    assert_eq!(
+        values("authorization"),
+        vec![b"Bearer lease-token".to_vec()]
+    );
+    assert_eq!(
+        values("chatgpt-account-id"),
+        vec![b"lease-account".to_vec()]
+    );
+    assert_eq!(
+        values("x-codex-installation-id"),
+        vec![b"lease-installation".to_vec()]
+    );
+    assert_eq!(values("x-codex-turn-state"), vec![b"turn-ascii".to_vec()]);
 }
 
 #[tokio::test]
@@ -289,6 +568,7 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
                 thread_id: None,
                 client_request_id: None,
                 turn_id: None,
+                account_selection: Default::default(),
             },
         )
         .await
@@ -352,6 +632,84 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
     ] {
         assert!(header_names.iter().all(|name| name != forbidden));
     }
+}
+
+#[tokio::test]
+async fn backend_http_should_ignore_unrepresentable_protocol_headers_without_blocking_body() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind HTTP header server");
+    let address = listener.local_addr().expect("HTTP header server address");
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept HTTP client");
+        let request = read_http_request(&mut stream).await;
+        write_completed_sse_response(&mut stream).await;
+        request
+    });
+    let mut request = codex_request("gpt-test", "", Vec::new());
+    request.force_http_sse = true;
+    request.turn_state = Some("opaque\nturn-state".to_owned());
+    request.turn_metadata = Some("opaque\nturn-metadata".to_owned());
+    request.responses_lite = Some("opaque\nresponses-lite".to_owned());
+    request.memgen_request = Some("opaque\nmemgen".to_owned());
+    request.set_client_metadata(Some(json!({
+        "x-openai-subagent": "opaque\nsubagent",
+        "future": "preserved"
+    })));
+    let original_metadata = request.client_metadata().cloned();
+    let client = CodexBackendClient::new(
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("HTTP client"),
+        format!("http://{address}"),
+        test_wire_profile(),
+    );
+
+    client
+        .create_response(
+            &request,
+            CodexRequestContext {
+                client_request_id: Some("opaque\nclient-request-id"),
+                session_id: Some("opaque\nsession"),
+                thread_id: Some("opaque\nthread"),
+                turn_id: Some("opaque\nturn"),
+                codex_window_id: Some("opaque\nwindow"),
+                parent_thread_id: Some("opaque\nparent"),
+                beta_features: Some("opaque\nbeta"),
+                include_timing_metrics: Some("opaque\ntiming"),
+                version: Some("opaque\nversion"),
+                turn_state: request.turn_state.as_deref(),
+                turn_metadata: request.turn_metadata.as_deref(),
+                ..request_context("req_protocol_fallback", Some("chatgpt-account"))
+            },
+        )
+        .await
+        .expect("invalid optional projections must not block the request");
+
+    let raw_request = server.await.expect("HTTP header server task");
+    assert_eq!(
+        read_header_value(&raw_request, "x-client-request-id"),
+        Some("req_protocol_fallback")
+    );
+    for omitted in [
+        "session-id",
+        "thread-id",
+        "x-codex-turn-id",
+        "x-codex-window-id",
+        "x-codex-turn-state",
+        "x-codex-turn-metadata",
+        "x-codex-beta-features",
+        "x-responsesapi-include-timing-metrics",
+        "version",
+        "x-codex-parent-thread-id",
+        "x-openai-subagent",
+        "x-openai-internal-codex-responses-lite",
+        "x-openai-memgen-request",
+    ] {
+        assert!(read_header_value(&raw_request, omitted).is_none());
+    }
+    assert_eq!(request.client_metadata(), original_metadata.as_ref());
 }
 
 #[tokio::test]

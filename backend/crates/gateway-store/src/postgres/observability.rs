@@ -369,6 +369,7 @@ pub struct CalculatedUsageBillingFact {
     pub bucket_start: DateTime<Utc>,
     pub provider_kind: String,
     pub upstream_model_id: String,
+    pub service_tier: Option<String>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub cached_tokens: Option<u64>,
@@ -521,6 +522,7 @@ pub struct UsageRecord {
     pub upstream_transport: Option<String>,
     pub http_version: Option<String>,
     pub websocket_pool: Option<String>,
+    pub service_tier: Option<String>,
     pub provider_metadata_json: Option<String>,
     pub attempt_count: u32,
     pub upstream_send_state: String,
@@ -1378,6 +1380,7 @@ fn admin_calculated_usage_billing_fact(
         bucket_start: fact.bucket_start,
         provider_kind: fact.provider_kind,
         upstream_model_id: fact.upstream_model_id,
+        service_tier: fact.service_tier,
         input_tokens: fact.input_tokens,
         output_tokens: fact.output_tokens,
         cached_tokens: fact.cached_tokens,
@@ -1453,6 +1456,7 @@ fn admin_usage_record(record: UsageRecord) -> AdminStoreResult<admin_observabili
         upstream_transport: record.upstream_transport,
         http_version: record.http_version,
         websocket_pool: record.websocket_pool,
+        service_tier: record.service_tier,
         provider_metadata_json: record.provider_metadata_json,
         attempt_count: record.attempt_count,
         upstream_send_state: record.upstream_send_state,
@@ -1812,7 +1816,7 @@ async fn calculated_usage_billing_facts(
     query.push_bind(granularity.sql_interval());
     query.push(
         "::interval, mr.started_at, timestamptz '1970-01-01 00:00:00+00') as bucket_start,
-                mr.provider_kind, mr.upstream_model_id,
+                mr.provider_kind, mr.upstream_model_id, mr.service_tier,
                 mr.input_tokens, mr.output_tokens, mr.cached_tokens, mr.cache_write_tokens,
                 mr.cost_currency, mr.cost_amount::text as amount
          from model_requests mr where mr.started_at >= ",
@@ -2609,7 +2613,7 @@ const USAGE_RECORD_SELECT: &str =
             pa.name as provider_account_name, pa.email as provider_account_email,
             pa.authentication_kind as provider_account_authentication_kind,
             mr.upstream_model_id, mr.upstream_transport, mr.http_version, mr.websocket_pool,
-            mr.provider_observation_json,
+            mr.service_tier, mr.provider_observation_json,
             mr.attempt_count, mr.upstream_send_state, mr.downstream_committed_at,
             mr.outcome, mr.client_status_code, mr.upstream_status_code,
             mr.client_response_id, mr.upstream_request_id, mr.upstream_response_id,
@@ -3107,6 +3111,7 @@ fn usage_record_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<UsageRecord
         upstream_transport: get(row, "upstream_transport")?,
         http_version: get(row, "http_version")?,
         websocket_pool: get(row, "websocket_pool")?,
+        service_tier: get(row, "service_tier")?,
         provider_metadata_json: get::<Option<serde_json::Value>>(row, "provider_observation_json")?
             .map(|value| serde_json::to_string(&value))
             .transpose()
@@ -3202,6 +3207,7 @@ fn calculated_usage_billing_fact_from_row(
         bucket_start: get(row, "bucket_start")?,
         provider_kind: get(row, "provider_kind")?,
         upstream_model_id: get(row, "upstream_model_id")?,
+        service_tier: get(row, "service_tier")?,
         input_tokens: optional_unsigned(row, "input_tokens")?,
         output_tokens: optional_unsigned(row, "output_tokens")?,
         cached_tokens: optional_unsigned(row, "cached_tokens")?,

@@ -6,10 +6,10 @@ use serde_json::{Map, Value};
 
 use gateway_core::engine::credential::{
     AccountAttemptFeedback, AccountAvailability, AccountAvailabilityPolicy, AccountCandidate,
-    AccountFeedbackStats, AccountQuotaSignals, AccountRuntimeSignals, AccountSelectionContext,
-    AccountSelectionPolicy, AccountSelector, CredentialCasUpdate, CredentialRevision,
-    OpaqueProviderData, PlaintextCredential, ProviderAccount, ProviderAccountId,
-    ProviderAccountUpdate, RotationStrategy,
+    AccountFeedbackStats, AccountQuotaSignals, AccountRuntimeSignals, AccountSchedulingBlocker,
+    AccountSelectionContext, AccountSelectionPolicy, AccountSelector, CredentialCasUpdate,
+    CredentialRevision, OpaqueProviderData, PlaintextCredential, PreferredAccountSelection,
+    ProviderAccount, ProviderAccountId, ProviderAccountUpdate, RotationStrategy,
 };
 use gateway_core::routing::ProviderKind;
 
@@ -119,13 +119,13 @@ fn diagnostic_selection_bypasses_all_local_account_availability() {
     assert_eq!(
         AccountSelector
             .select(std::slice::from_ref(&exhausted), &context)
-            .map(|candidate| candidate.account.id()),
+            .map(|selection| selection.candidate().account.id()),
         Some(exhausted.account.id())
     );
     assert_eq!(
         AccountSelector
             .select(std::slice::from_ref(&disabled), &context)
-            .map(|candidate| candidate.account.id()),
+            .map(|selection| selection.candidate().account.id()),
         Some(disabled.account.id())
     );
 }
@@ -169,7 +169,7 @@ fn smart_selector_should_prefer_lower_inflight_count() {
         .select(&candidates, &context(RotationStrategy::Smart))
         .expect("candidate available");
 
-    assert_eq!(selected.account.id().as_str(), "acct_idle");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_idle");
 }
 
 #[test]
@@ -186,15 +186,13 @@ fn smart_selector_should_balance_signals_instead_of_using_lexicographic_load() {
         .select(&candidates, &context(RotationStrategy::Smart))
         .expect("candidate available");
 
-    assert_eq!(selected.account.id().as_str(), "acct_healthy");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_healthy");
 }
 
 #[test]
-fn smart_selector_should_keep_healthy_preferred_account_at_escape_boundary() {
+fn smart_selector_should_report_a_schedulable_preferred_account_hit() {
     let fallback = candidate("acct_fallback", 0, Some(100));
-    let mut preferred = candidate("acct_preferred", 0, Some(1));
-    preferred.signals.failure_rate_basis_points = Some(5_000);
-    preferred.signals.first_output_latency_ms = Some(15_000);
+    let preferred = candidate("acct_preferred", 0, Some(1));
     let preferred_id = preferred.account.id().clone();
     let mut selection = context(RotationStrategy::Smart);
     selection.preferred_account = Some(preferred_id);
@@ -204,16 +202,22 @@ fn smart_selector_should_keep_healthy_preferred_account_at_escape_boundary() {
         .select(&candidates, &selection)
         .expect("candidate available");
 
-    assert_eq!(selected.account.id().as_str(), "acct_preferred");
+    assert_eq!(
+        (
+            selected.candidate().account.id().as_str(),
+            selected.preferred(),
+        ),
+        ("acct_preferred", PreferredAccountSelection::Hit)
+    );
 }
 
 #[test]
-fn smart_selector_should_escape_preferred_account_after_failure_threshold() {
+fn smart_selector_should_keep_preferred_account_despite_failure_signals() {
     let mut fallback = candidate("acct_fallback", 0, Some(100));
     fallback.signals.failure_rate_basis_points = Some(0);
     fallback.signals.first_output_latency_ms = Some(100);
     let mut preferred = candidate("acct_preferred", 0, Some(100));
-    preferred.signals.failure_rate_basis_points = Some(5_001);
+    preferred.signals.failure_rate_basis_points = Some(10_000);
     preferred.signals.first_output_latency_ms = Some(100);
     let preferred_id = preferred.account.id().clone();
     let mut selection = context(RotationStrategy::Smart);
@@ -222,19 +226,19 @@ fn smart_selector_should_escape_preferred_account_after_failure_threshold() {
 
     let selected = AccountSelector
         .select(&candidates, &selection)
-        .expect("fallback candidate available");
+        .expect("preferred candidate available");
 
-    assert_eq!(selected.account.id().as_str(), "acct_fallback");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_preferred");
 }
 
 #[test]
-fn smart_selector_should_escape_preferred_account_after_latency_threshold() {
+fn smart_selector_should_keep_preferred_account_despite_latency_signals() {
     let mut fallback = candidate("acct_fallback", 0, Some(100));
     fallback.signals.failure_rate_basis_points = Some(0);
     fallback.signals.first_output_latency_ms = Some(100);
     let mut preferred = candidate("acct_preferred", 0, Some(100));
     preferred.signals.failure_rate_basis_points = Some(0);
-    preferred.signals.first_output_latency_ms = Some(15_001);
+    preferred.signals.first_output_latency_ms = Some(120_000);
     let preferred_id = preferred.account.id().clone();
     let mut selection = context(RotationStrategy::Smart);
     selection.preferred_account = Some(preferred_id);
@@ -242,9 +246,9 @@ fn smart_selector_should_escape_preferred_account_after_latency_threshold() {
 
     let selected = AccountSelector
         .select(&candidates, &selection)
-        .expect("fallback candidate available");
+        .expect("preferred candidate available");
 
-    assert_eq!(selected.account.id().as_str(), "acct_fallback");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_preferred");
 }
 
 #[test]
@@ -260,7 +264,16 @@ fn smart_selector_should_escape_preferred_account_at_concurrency_limit() {
         .select(&candidates, &selection)
         .expect("fallback candidate available");
 
-    assert_eq!(selected.account.id().as_str(), "acct_fallback");
+    assert_eq!(
+        (
+            selected.candidate().account.id().as_str(),
+            selected.preferred(),
+        ),
+        (
+            "acct_fallback",
+            PreferredAccountSelection::Blocked(AccountSchedulingBlocker::ConcurrencyLimit),
+        )
+    );
 }
 
 #[test]
@@ -346,7 +359,10 @@ fn smart_selector_should_use_provider_quota_rank_after_load_is_equal() {
         .select(&candidates, &context(RotationStrategy::Smart))
         .expect("candidate available");
 
-    assert_eq!(selected.account.id().as_str(), "acct_high_quota");
+    assert_eq!(
+        selected.candidate().account.id().as_str(),
+        "acct_high_quota"
+    );
 }
 
 #[test]
@@ -362,7 +378,7 @@ fn quota_reset_selector_should_prefer_known_earliest_window() {
         .select(&candidates, &context(RotationStrategy::QuotaResetPriority))
         .expect("candidate available");
 
-    assert_eq!(selected.account.id().as_str(), "acct_earlier");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_earlier");
 }
 
 #[test]
@@ -375,7 +391,7 @@ fn smart_selector_should_prefer_known_quota_over_unknown_after_load_is_equal() {
         .select(&candidates, &context(RotationStrategy::Smart))
         .expect("candidate available");
 
-    assert_eq!(selected.account.id().as_str(), "acct_known");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_known");
 }
 
 #[test]
@@ -388,7 +404,7 @@ fn selector_should_reject_account_at_concurrency_limit() {
         .select(&candidates, &context(RotationStrategy::Smart))
         .expect("candidate available");
 
-    assert_eq!(selected.account.id().as_str(), "acct_available");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_available");
 }
 
 #[test]
@@ -410,7 +426,7 @@ fn selector_should_enforce_request_interval_until_boundary() {
         .select(&candidates, &context)
         .expect("candidate available");
 
-    assert_eq!(selected.account.id().as_str(), "acct_ready");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_ready");
 }
 
 #[test]
@@ -427,7 +443,7 @@ fn sticky_selector_should_fall_back_when_requested_account_is_excluded() {
         .select(&candidates, &context)
         .expect("fallback candidate available");
 
-    assert_eq!(selected.account.id().as_str(), "acct_fallback");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_fallback");
 }
 
 #[test]
@@ -447,8 +463,35 @@ fn round_robin_selector_should_be_stable_for_unsorted_candidates() {
         .expect("second candidate available");
 
     assert_eq!(
-        (first.account.id().as_str(), second.account.id().as_str()),
+        (
+            first.candidate().account.id().as_str(),
+            second.candidate().account.id().as_str(),
+        ),
         ("acct_first", "acct_second")
+    );
+}
+
+#[test]
+fn round_robin_selector_should_honor_a_schedulable_preferred_account_before_the_cursor() {
+    let candidates = vec![
+        candidate("acct_first", 0, None),
+        candidate("acct_second", 0, None),
+    ];
+    let mut context = context(RotationStrategy::RoundRobin);
+    context.round_robin_cursor = 0;
+    context.preferred_account =
+        Some(ProviderAccountId::new("acct_second").expect("preferred account"));
+
+    let selected = AccountSelector
+        .select(&candidates, &context)
+        .expect("preferred account available");
+
+    assert_eq!(
+        (
+            selected.candidate().account.id().as_str(),
+            selected.preferred(),
+        ),
+        ("acct_second", PreferredAccountSelection::Hit)
     );
 }
 
@@ -466,7 +509,7 @@ fn selector_should_honor_request_local_exclusion() {
         .select(&candidates, &context)
         .expect("second account available");
 
-    assert_eq!(selected.account.id().as_str(), "acct_second");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_second");
 }
 
 #[test]
@@ -482,7 +525,7 @@ fn sticky_selector_should_prefer_requested_account() {
         .select(&candidates, &context)
         .expect("sticky account available");
 
-    assert_eq!(selected.account.id().as_str(), "acct_second");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_second");
 }
 
 #[test]
@@ -497,7 +540,7 @@ fn sticky_selector_without_request_binding_should_reuse_latest_account() {
         .select(&candidates, &context(RotationStrategy::Sticky))
         .expect("sticky candidate available");
 
-    assert_eq!(selected.account.id().as_str(), "acct_latest");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_latest");
 }
 
 #[test]
@@ -512,7 +555,7 @@ fn round_robin_selector_should_use_frozen_cursor() {
         .select(&candidates, &context)
         .expect("candidate available");
 
-    assert_eq!(selected.account.id().as_str(), "acct_second");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_second");
 }
 
 #[test]

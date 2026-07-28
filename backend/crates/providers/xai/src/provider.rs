@@ -1224,7 +1224,7 @@ fn mark_transient_compaction_failure(error: ProviderError) -> ProviderError {
             | ProviderErrorKind::Protocol
             | ProviderErrorKind::Unavailable
     ) {
-        error.with_replay_safe().with_same_account_retry()
+        error.with_pre_delivery_retry()
     } else {
         error
     }
@@ -1690,15 +1690,11 @@ fn map_request_error(error: GrokRequestEncodeError) -> ProviderError {
     if kind != ProviderErrorKind::InvalidRequest {
         return provider_error;
     }
-    let detail = ClientVisibleUpstreamError::new(
+    provider_error.with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
         error.to_string(),
         Some("invalid_request_normalization".to_owned()),
         Some("invalid_request_error".to_owned()),
-    );
-    match detail {
-        Ok(detail) => provider_error.with_client_visible_upstream_error(detail),
-        Err(_) => provider_error,
-    }
+    ))
 }
 
 /// 将选择阶段失败映射为带结构化 code 与 retry_after 的 Provider 错误。
@@ -1738,14 +1734,11 @@ fn map_selection_error(error: GrokSessionSelectorError) -> ProviderError {
         Some(retry_after) => error.with_retry_after(retry_after),
         None => error,
     };
-    match ClientVisibleUpstreamError::new(
+    error.with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
         message,
         Some(code.to_owned()),
         Some("account_unavailable_error".to_owned()),
-    ) {
-        Ok(detail) => error.with_client_visible_upstream_error(detail),
-        Err(_) => error,
-    }
+    ))
 }
 
 fn cooling_down_message(retry_after: Option<Duration>) -> String {

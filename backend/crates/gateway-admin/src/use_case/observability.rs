@@ -428,6 +428,7 @@ fn recover_standard_costs(
         };
         let input = ProviderBillingInput {
             upstream_model_id: fact.upstream_model_id,
+            service_tier: fact.service_tier,
             input_tokens: fact.input_tokens,
             output_tokens: fact.output_tokens,
             cached_tokens: fact.cached_tokens,
@@ -512,6 +513,7 @@ impl DefaultObservabilityService {
             };
             let input = ProviderBillingInput {
                 upstream_model_id: upstream_model_id.clone(),
+                service_tier: record.service_tier.clone(),
                 input_tokens: record.input_tokens,
                 output_tokens: record.output_tokens,
                 cached_tokens: record.cached_tokens,

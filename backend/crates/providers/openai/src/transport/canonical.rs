@@ -24,6 +24,7 @@ use super::protocol::responses::{
 use super::usage::openai_billing_breakdown;
 
 const CONTENTS_PER_OUTPUT: u32 = 1_024;
+const MAX_SERVICE_TIER_BYTES: usize = 64;
 
 /// 单 attempt 的增量 Responses decoder。
 ///
@@ -41,6 +42,7 @@ pub struct CodexCanonicalDecoder {
     reasoning_output_seen: BTreeSet<u32>,
     usage_emitted: bool,
     semantic_output_seen: bool,
+    response_service_tier: Option<String>,
     timing_signals: ResponseEventSignals,
     raw_sse_passthrough: bool,
 }
@@ -135,6 +137,7 @@ impl CodexCanonicalDecoder {
             reasoning_output_seen: BTreeSet::new(),
             usage_emitted: false,
             semantic_output_seen: false,
+            response_service_tier: None,
             timing_signals: ResponseEventSignals::default(),
             raw_sse_passthrough: false,
         }
@@ -152,15 +155,7 @@ impl CodexCanonicalDecoder {
     pub fn push(&mut self, chunk: &[u8]) -> CodexCanonicalOutcome {
         self.timing_signals = ResponseEventSignals::default();
         if self.raw_sse_passthrough {
-            let frames = match self.decoder.push_frames(chunk) {
-                Ok(frames) => frames,
-                Err(error) => {
-                    return self.failure(
-                        Vec::new(),
-                        CodexCanonicalError::Protocol(protocol_error(error)),
-                    );
-                }
-            };
+            let frames = self.decoder.push_frames(chunk);
             return self.decode_frames(frames);
         }
         let events = match self.decoder.push(chunk) {
@@ -178,15 +173,7 @@ impl CodexCanonicalDecoder {
     pub fn finish(&mut self) -> CodexCanonicalOutcome {
         self.timing_signals = ResponseEventSignals::default();
         if self.raw_sse_passthrough {
-            let frames = match self.decoder.finish_frames() {
-                Ok(frames) => frames,
-                Err(error) => {
-                    return self.failure(
-                        Vec::new(),
-                        CodexCanonicalError::Protocol(protocol_error(error)),
-                    );
-                }
-            };
+            let frames = self.decoder.finish_frames();
             return self.decode_frames(frames);
         }
         let events = match self.decoder.finish() {
@@ -208,6 +195,12 @@ impl CodexCanonicalDecoder {
     #[must_use]
     pub fn take_timing_signals(&mut self) -> ResponseEventSignals {
         std::mem::take(&mut self.timing_signals)
+    }
+
+    /// 返回本 attempt 已从上游响应生命周期帧观察到的实际服务档位。
+    #[must_use]
+    pub fn response_service_tier(&self) -> Option<&str> {
+        self.response_service_tier.as_deref()
     }
 
     fn decode(&mut self, events: Vec<SseEvent>) -> CodexCanonicalOutcome {
@@ -269,6 +262,7 @@ impl CodexCanonicalDecoder {
             .event
             .as_deref()
             .or_else(|| value.get("type").and_then(Value::as_str));
+        self.observe_response_service_tier(&value);
         let signals = response_event_signals(event_type, &value);
         self.merge_timing_signals(signals);
         if matches!(event_type, Some("response.failed" | "error")) {
@@ -313,29 +307,33 @@ impl CodexCanonicalDecoder {
         self.timing_signals.text_output |= signals.text_output;
     }
 
+    fn observe_response_service_tier(&mut self, value: &Value) {
+        let Some(service_tier) = response_object(value)
+            .and_then(|response| response.get("service_tier"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| {
+                !value.is_empty()
+                    && value.len() <= MAX_SERVICE_TIER_BYTES
+                    && !value.chars().any(char::is_control)
+            })
+        else {
+            return;
+        };
+        self.response_service_tier = Some(service_tier.to_ascii_lowercase());
+    }
+
     /// 构造下发的 wire event。
     ///
-    /// 上游事件名或 SSE id 不满足 wire 安全约束时剥离该元数据继续下发，
-    /// 而不是把整帧静默丢弃；raw 帧存在时原始字节仍原样透传，JSON 正文
-    /// 继续供旁路观测使用。
+    /// raw 帧存在时原始字节原样透传；解析出的 event/id 只作旁路元数据，不能
+    /// 反过来决定客户端事件是否可交付。
     fn wire_for_event(
         event: SseEvent,
         value: Value,
         raw_sse_frame: Option<Bytes>,
     ) -> Option<ProtocolWireEvent> {
-        let event_type = event.event.filter(|name| {
-            ProtocolWireEvent::json("openai", Some(name.clone()), Value::Null).is_ok()
-        });
-        let sse_id = event.id.filter(|id| {
-            ProtocolWireEvent::json_with_sse_metadata(
-                "openai",
-                None,
-                Value::Null,
-                Some(id.clone()),
-                None,
-            )
-            .is_ok()
-        });
+        let event_type = event.event;
+        let sse_id = event.id;
         match raw_sse_frame {
             Some(raw_sse_frame) => ProtocolWireEvent::json_with_raw_sse_metadata(
                 "openai",
@@ -424,7 +422,7 @@ impl CodexCanonicalDecoder {
             return Ok(());
         }
         let response = response_object(value).ok_or_else(protocol_error_marker)?;
-        let response_id = required_text(response, "id")?;
+        let response_id = required_string(response, "id")?;
         let model = response
             .get("model")
             .and_then(Value::as_str)
@@ -810,7 +808,7 @@ impl CodexCanonicalDecoder {
             self.completed = true;
             return Ok(());
         };
-        let Ok(response_id) = required_text(response, "id") else {
+        let Ok(response_id) = required_string(response, "id") else {
             self.completed = true;
             return Ok(());
         };
@@ -838,6 +836,10 @@ impl CodexCanonicalDecoder {
             .filter(|model| !model.is_empty())
             .unwrap_or(&self.fallback_model)
             .to_owned();
+        let service_tier = response
+            .get("service_tier")
+            .and_then(Value::as_str)
+            .or(self.response_service_tier.as_deref());
         if let Some(breakdown) = usage
             .filter(|usage| billable_usage_is_complete(response, *usage))
             .and_then(|usage| {
@@ -847,7 +849,7 @@ impl CodexCanonicalDecoder {
                     usage.output_tokens,
                     usage.cached_tokens,
                     usage.cache_write_tokens,
-                    response.get("service_tier").and_then(Value::as_str),
+                    service_tier,
                 )
             })
         {
@@ -913,6 +915,14 @@ fn required_text(value: &Value, field: &str) -> Result<String, ProviderError> {
         .get(field)
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(protocol_error_marker)
+}
+
+fn required_string(value: &Value, field: &str) -> Result<String, ProviderError> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .ok_or_else(protocol_error_marker)
 }

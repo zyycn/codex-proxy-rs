@@ -1,11 +1,15 @@
 //! 核心 Generate operation 到 Codex Responses wire request 的严格编码。
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gateway_core::operation::GenerateRequest;
 use gateway_protocol::openai::WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::transport::protocol::responses::CodexResponsesRequest;
+
+const PASSTHROUGH_HEADERS_CONTEXT_KEY: &str = "opaque_request_headers";
 
 const CROSS_ACCOUNT_IDENTITY_KEYS: &[&str] = &[
     "authorization",
@@ -40,24 +44,14 @@ const ACCOUNT_BOUND_STATE_KEYS: &[&str] = &[
     "turnState",
     "turn_state",
     "x-codex-turn-state",
-    "turnMetadata",
-    "turn_metadata",
-    "x-codex-turn-metadata",
     "previous_response_id",
     "previousResponseId",
     "response_id",
     "responseId",
     "conversation",
-    "conversation_id",
-    "conversationId",
 ];
 
-const UNTRUSTED_CONTINUATION_KEYS: &[&str] = &[
-    "previous_response_id",
-    "previousResponseId",
-    "response_id",
-    "responseId",
-];
+const TURN_METADATA_KEYS: &[&str] = &["turnMetadata", "turn_metadata", "x-codex-turn-metadata"];
 
 const INSTALLATION_ID_KEYS: &[&str] = &[
     "installation_id",
@@ -146,9 +140,7 @@ impl ExtractedRequestContext {
                 .get("client_metadata")
                 .and_then(Value::as_object)
                 .and_then(|metadata| {
-                    non_empty_string(
-                        metadata.get(WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY),
-                    )
+                    string_value(metadata.get(WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY))
                 }),
             // Memory consolidation 只由官方请求头提供；body 中同名字段不参与
             // transport 事实提取。
@@ -158,15 +150,11 @@ impl ExtractedRequestContext {
 }
 
 fn body_string(body: &Map<String, Value>, key: &str) -> Option<String> {
-    non_empty_string(body.get(key))
+    string_value(body.get(key))
 }
 
-fn non_empty_string(value: Option<&Value>) -> Option<String> {
-    value
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
+fn string_value(value: Option<&Value>) -> Option<String> {
+    value.and_then(Value::as_str).map(ToOwned::to_owned)
 }
 
 pub(crate) fn derive_conversation_anchor(
@@ -281,10 +269,6 @@ pub(crate) fn scope_request_to_account(
     installation_id: &str,
     cross_account: bool,
 ) {
-    for key in CROSS_ACCOUNT_IDENTITY_KEYS {
-        request.body_mut().remove(*key);
-    }
-
     let client_metadata_turn_state = metadata_string(request, "x-codex-turn-state");
     let preserve_turn_state =
         !cross_account && (request.turn_state.is_some() || client_metadata_turn_state.is_some());
@@ -304,11 +288,13 @@ pub(crate) fn scope_request_to_account(
         .and_then(|metadata| scope_turn_metadata(&metadata, installation_id, cross_account));
 
     if cross_account {
+        request.passthrough_headers.remove("x-codex-turn-state");
+        request.passthrough_headers.remove("x-codex-turn-metadata");
         sanitize_cross_account_input(request);
-        for key in ACCOUNT_BOUND_STATE_KEYS {
-            request.body_mut().remove(*key);
-        }
-        for key in UNTRUSTED_CONTINUATION_KEYS {
+        for key in CROSS_ACCOUNT_IDENTITY_KEYS
+            .iter()
+            .chain(ACCOUNT_BOUND_STATE_KEYS)
+        {
             request.body_mut().remove(*key);
         }
     }
@@ -316,13 +302,13 @@ pub(crate) fn scope_request_to_account(
     for key in INSTALLATION_ID_KEYS {
         request.replace_existing_identity_field(key, Some(installation_id));
     }
-    for (key, value) in [
-        ("turnState", turn_state.as_deref()),
-        ("x-codex-turn-state", turn_state.as_deref()),
-        ("turnMetadata", turn_metadata.as_deref()),
-        ("x-codex-turn-metadata", turn_metadata.as_deref()),
-    ] {
-        request.replace_existing_identity_field(key, value);
+    for key in TURN_METADATA_KEYS {
+        let scoped = request
+            .body()
+            .get(*key)
+            .and_then(Value::as_str)
+            .and_then(|value| scope_turn_metadata(value, installation_id, cross_account));
+        replace_existing_body_string(request, key, scoped.as_deref());
     }
 
     if let Some(client_metadata) = request.client_metadata().cloned() {
@@ -337,11 +323,11 @@ pub(crate) fn scope_request_to_account(
                             }),
                         )
                     });
-                for key in CROSS_ACCOUNT_IDENTITY_KEYS {
-                    metadata.remove(*key);
-                }
                 if cross_account {
-                    for key in ACCOUNT_BOUND_STATE_KEYS {
+                    for key in CROSS_ACCOUNT_IDENTITY_KEYS
+                        .iter()
+                        .chain(ACCOUNT_BOUND_STATE_KEYS)
+                    {
                         metadata.remove(*key);
                     }
                 }
@@ -369,16 +355,12 @@ pub(crate) fn scope_request_to_account(
                     "x-codex-turn-metadata",
                     client_metadata_turn_metadata.as_deref(),
                 );
-                if !cross_account {
-                    for (key, value) in scoped_turn_metadata {
-                        replace_existing_metadata_field(&mut metadata, key, value.as_deref());
-                    }
+                for (key, value) in scoped_turn_metadata {
+                    replace_existing_metadata_field(&mut metadata, key, value.as_deref());
                 }
                 (!metadata.is_empty()).then_some(Value::Object(metadata))
             }
-            value if !cross_account => Some(value),
-            Value::Null => None,
-            _ => None,
+            value => Some(value),
         };
         request.set_client_metadata(scoped);
     }
@@ -428,11 +410,12 @@ fn scope_turn_metadata(raw: &str, installation_id: &str, cross_account: bool) ->
         return (!cross_account).then(|| raw.to_owned());
     };
     let mut changed = false;
-    for key in CROSS_ACCOUNT_IDENTITY_KEYS {
-        changed |= metadata.remove(*key).is_some();
-    }
     if cross_account {
-        for key in ACCOUNT_BOUND_STATE_KEYS {
+        for key in CROSS_ACCOUNT_IDENTITY_KEYS
+            .iter()
+            .chain(ACCOUNT_BOUND_STATE_KEYS)
+            .chain(TURN_METADATA_KEYS)
+        {
             changed |= metadata.remove(*key).is_some();
         }
     }
@@ -452,24 +435,37 @@ fn scope_turn_metadata(raw: &str, installation_id: &str, cross_account: bool) ->
     serde_json::to_string(&metadata).ok()
 }
 
+fn replace_existing_body_string(
+    request: &mut CodexResponsesRequest,
+    key: &str,
+    value: Option<&str>,
+) {
+    if request.body().get(key).is_some_and(Value::is_string)
+        && let Some(value) = value
+    {
+        request
+            .body_mut()
+            .insert(key.to_owned(), Value::String(value.to_owned()));
+    }
+}
+
 fn replace_existing_metadata_field(
     metadata: &mut Map<String, Value>,
     key: &str,
     value: Option<&str>,
 ) {
-    if metadata.contains_key(key) {
-        replace_metadata_field(metadata, key, value);
+    if metadata.contains_key(key)
+        && let Some(value) = value
+    {
+        metadata.insert(key.to_owned(), Value::String(value.to_owned()));
     }
 }
 
 fn replace_metadata_field(metadata: &mut Map<String, Value>, key: &str, value: Option<&str>) {
-    match value.filter(|value| !value.trim().is_empty()) {
-        Some(value) => {
-            metadata.insert(key.to_owned(), Value::String(value.to_owned()));
-        }
-        None => {
-            metadata.remove(key);
-        }
+    if let Some(value) = value
+        && metadata.get(key).is_none_or(Value::is_string)
+    {
+        metadata.insert(key.to_owned(), Value::String(value.to_owned()));
     }
 }
 
@@ -477,6 +473,7 @@ fn replace_metadata_field(metadata: &mut Map<String, Value>, key: &str, value: O
 // 优先;body 顶层别名只在 header 缺失时兜底(例如 WebSocket 帧无法逐轮携带
 // 请求头的场景)。
 fn apply_protocol_context(request: &mut CodexResponsesRequest, context: &Map<String, Value>) {
+    request.passthrough_headers = decode_passthrough_headers(context);
     request.turn_state =
         context_string(context, "turn_state").or_else(|| request.turn_state.take());
     request.turn_metadata =
@@ -519,10 +516,87 @@ fn apply_protocol_context(request: &mut CodexResponsesRequest, context: &Map<Str
     }
 }
 
+fn decode_passthrough_headers(context: &Map<String, Value>) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    let Some(entries) = context
+        .get(PASSTHROUGH_HEADERS_CONTEXT_KEY)
+        .and_then(Value::as_array)
+    else {
+        return headers;
+    };
+
+    for entry in entries {
+        let Some(entry) = entry.as_array().filter(|entry| entry.len() == 2) else {
+            continue;
+        };
+        let Some(name) = entry.first().and_then(Value::as_str) else {
+            continue;
+        };
+        let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {
+            continue;
+        };
+        if provider_managed_header(name.as_str()) {
+            continue;
+        }
+        let Some(encoded) = entry.get(1).and_then(Value::as_str) else {
+            continue;
+        };
+        let Ok(bytes) = STANDARD.decode(encoded) else {
+            continue;
+        };
+        let Ok(value) = HeaderValue::from_bytes(&bytes) else {
+            continue;
+        };
+        headers.append(name, value);
+    }
+    headers
+}
+
+fn provider_managed_header(name: &str) -> bool {
+    name.starts_with("sec-websocket-")
+        || name.starts_with("x-grok-")
+        || name.starts_with("x-xai-")
+        || matches!(
+            name,
+            "connection"
+                | "keep-alive"
+                | "proxy-connection"
+                | "proxy-authenticate"
+                | "proxy-authorization"
+                | "te"
+                | "trailer"
+                | "transfer-encoding"
+                | "upgrade"
+                | "host"
+                | "content-length"
+                | "forwarded"
+                | "x-forwarded-for"
+                | "x-forwarded-host"
+                | "x-forwarded-proto"
+                | "x-forwarded-port"
+                | "x-real-ip"
+                | "true-client-ip"
+                | "cf-connecting-ip"
+                | "x-request-id"
+                | "authorization"
+                | "x-api-key"
+                | "cookie"
+                | "cookie2"
+                | "chatgpt-account-id"
+                | "chatgpt-organization-id"
+                | "chatgpt-org-id"
+                | "chatgpt-project-id"
+                | "openai-organization"
+                | "openai-project"
+                | "x-openai-organization"
+                | "x-openai-project"
+                | "x-codex-installation-id"
+        )
+}
+
 fn context_string(context: &Map<String, Value>, field: &str) -> Option<String> {
     context
         .get(field)
         .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned)
 }

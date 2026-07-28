@@ -8,6 +8,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode, header::AUTHORIZATION},
 };
+use bytes::Bytes;
 use futures::{SinkExt, StreamExt, future::BoxFuture};
 use gateway_api::openai::responses::ResponseCreateFrameError;
 use gateway_core::engine::execution::{
@@ -177,6 +178,7 @@ struct AtomicFailureTrace {
 
 struct AtomicFailureSession {
     trace: Arc<AtomicFailureTrace>,
+    response_headers: Vec<ProviderResponseHeader>,
 }
 
 impl ExecutionSession for AtomicFailureSession {
@@ -201,7 +203,7 @@ impl ExecutionSession for AtomicFailureSession {
     }
 
     fn response_headers(&self) -> &[ProviderResponseHeader] {
-        &[]
+        &self.response_headers
     }
 
     fn commit_downstream(&mut self, _: Option<u16>) -> BoxFuture<'_, Result<(), EngineError>> {
@@ -231,6 +233,7 @@ impl ExecutionSession for AtomicFailureSession {
 struct AtomicFailureExecution {
     client: AuthenticatedClient,
     trace: Arc<AtomicFailureTrace>,
+    response_headers: Vec<ProviderResponseHeader>,
 }
 
 impl ExecutionService for AtomicFailureExecution {
@@ -263,6 +266,7 @@ impl ExecutionService for AtomicFailureExecution {
                 stream: request.metadata.stream,
                 session: Box::new(AtomicFailureSession {
                     trace: Arc::clone(&self.trace),
+                    response_headers: self.response_headers.clone(),
                 }),
             })
         })
@@ -320,6 +324,7 @@ async fn websocket_atomic_upstream_failure_batch_should_be_forwarded_once() {
     let execution = Arc::new(AtomicFailureExecution {
         client: authenticated_client("sk_ws_atomic"),
         trace: Arc::clone(&trace),
+        response_headers: Vec::new(),
     });
     let app = api_router(execution).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -391,6 +396,172 @@ async fn websocket_atomic_upstream_failure_batch_should_be_forwarded_once() {
     assert!(trace.committed.load(Ordering::Acquire));
     assert_eq!(trace.next_calls.load(Ordering::Acquire), 2);
     assert!(trace.finalized.load(Ordering::Acquire));
+
+    socket.close(None).await.expect("close WebSocket");
+    server.abort();
+}
+
+#[tokio::test]
+async fn websocket_response_metadata_should_preserve_ordinary_headers_without_blocking_events() {
+    let trace = Arc::new(AtomicFailureTrace::default());
+    let execution = Arc::new(AtomicFailureExecution {
+        client: authenticated_client("sk_ws_atomic"),
+        trace,
+        response_headers: vec![
+            ProviderResponseHeader::new("x-future-header", Bytes::from_static(b"future-value")),
+            ProviderResponseHeader::new("x-future-multi", Bytes::from_static(b"first")),
+            ProviderResponseHeader::new("x-future-multi", Bytes::from_static(b"second")),
+            ProviderResponseHeader::new("x-future-bytes", Bytes::from_static(b"\xffopaque")),
+            ProviderResponseHeader::new("bad\0name", Bytes::from_static(b"unrepresentable")),
+            ProviderResponseHeader::new(
+                "authorization",
+                Bytes::from_static(b"should-not-cross-boundary"),
+            ),
+            ProviderResponseHeader::new("connection", Bytes::from_static(b"x-private-hop")),
+            ProviderResponseHeader::new("x-private-hop", Bytes::from_static(b"private-hop")),
+            ProviderResponseHeader::new("content-type", Bytes::from_static(b"application/private")),
+            ProviderResponseHeader::new("x-request-id", Bytes::from_static(b"req_upstream")),
+        ],
+    });
+    let app = api_router(execution).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind WebSocket test server");
+    let address = listener.local_addr().expect("test server address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve WebSocket test router");
+    });
+    let mut request = format!("ws://{address}/v1/responses")
+        .into_client_request()
+        .expect("WebSocket request");
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        "Bearer sk_ws_atomic".parse().expect("authorization"),
+    );
+    let (mut socket, response) = connect_async(request).await.expect("upgrade WebSocket");
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    socket
+        .send(ClientMessage::Text(
+            json!({
+                "type": "response.create",
+                "model": "model-a",
+                "input": "hello"
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send response.create");
+
+    let mut metadata = None;
+    let mut saw_failed = false;
+    while metadata.is_none() || !saw_failed {
+        let message = tokio::time::timeout(Duration::from_secs(2), socket.next())
+            .await
+            .expect("WebSocket response timeout")
+            .expect("WebSocket remains open")
+            .expect("valid WebSocket frame");
+        let ClientMessage::Text(text) = message else {
+            continue;
+        };
+        let value: Value = serde_json::from_str(&text).expect("JSON WebSocket event");
+        match value.get("type").and_then(Value::as_str) {
+            Some("response.metadata") => metadata = Some(value),
+            Some("response.failed") => saw_failed = true,
+            _ => {}
+        }
+    }
+
+    let headers = metadata
+        .as_ref()
+        .and_then(|value| value.get("headers"))
+        .and_then(Value::as_object)
+        .expect("response metadata headers");
+    assert_eq!(headers.get("x-future-header"), Some(&json!("future-value")));
+    // 官方 metadata 是 string map，同名多值只能保持既有的后值覆盖语义。
+    assert_eq!(headers.get("x-future-multi"), Some(&json!("second")));
+    assert_eq!(headers.get("x-request-id"), Some(&json!("req_upstream")));
+    for omitted in [
+        "x-future-bytes",
+        "bad\0name",
+        "authorization",
+        "connection",
+        "x-private-hop",
+        "content-type",
+    ] {
+        assert!(
+            !headers.contains_key(omitted),
+            "unexpected metadata header: {omitted:?}"
+        );
+    }
+    assert!(saw_failed);
+
+    socket.close(None).await.expect("close WebSocket");
+    server.abort();
+}
+
+#[tokio::test]
+async fn websocket_response_create_should_not_have_a_private_16_mib_frame_limit() {
+    let trace = Arc::new(AtomicFailureTrace::default());
+    let execution = Arc::new(AtomicFailureExecution {
+        client: authenticated_client("sk_ws_atomic"),
+        trace,
+        response_headers: Vec::new(),
+    });
+    let app = api_router(execution).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind WebSocket test server");
+    let address = listener.local_addr().expect("test server address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve WebSocket test router");
+    });
+    let mut request = format!("ws://{address}/v1/responses")
+        .into_client_request()
+        .expect("WebSocket request");
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        "Bearer sk_ws_atomic".parse().expect("authorization"),
+    );
+    let (mut socket, response) = connect_async(request).await.expect("upgrade WebSocket");
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    let payload = json!({
+        "type": "response.create",
+        "model": "model-a",
+        "input": "x".repeat(16 * 1024 * 1024 + 1),
+    })
+    .to_string();
+    assert!(payload.len() > 16 * 1024 * 1024);
+
+    socket
+        .send(ClientMessage::Text(payload.into()))
+        .await
+        .expect("send response.create above the former frame limit");
+
+    let mut saw_upstream_event = false;
+    for _ in 0..3 {
+        let message = tokio::time::timeout(Duration::from_secs(10), socket.next())
+            .await
+            .expect("WebSocket response timeout")
+            .expect("WebSocket remains open")
+            .expect("valid WebSocket frame");
+        let ClientMessage::Text(text) = message else {
+            continue;
+        };
+        let value: Value = serde_json::from_str(&text).expect("JSON WebSocket event");
+        if matches!(
+            value.get("type").and_then(Value::as_str),
+            Some("response.created" | "response.failed")
+        ) {
+            saw_upstream_event = true;
+            break;
+        }
+    }
+    assert!(saw_upstream_event);
 
     socket.close(None).await.expect("close WebSocket");
     server.abort();

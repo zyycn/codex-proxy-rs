@@ -20,7 +20,7 @@ gateway-core = { path = "../gateway-core" }
 hex = "0.4.3"
 redis = { version = "1.3.0", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = { version = "1.0.150", features = ["preserve_order"] }
+serde_json = { version = "1.0.150", features = ["arbitrary_precision", "preserve_order"] }
 sha2 = "0.11.0"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "chrono", "json", "macros", "migrate"] }
 thiserror = "2.0.18"

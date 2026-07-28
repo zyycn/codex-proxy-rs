@@ -2,7 +2,8 @@
 
 use axum::{
     Json,
-    http::StatusCode,
+    body::Body,
+    http::{HeaderName, HeaderValue, StatusCode, header::CONTENT_TYPE},
     response::{IntoResponse, Response},
 };
 use gateway_core::{
@@ -119,6 +120,33 @@ pub fn gateway_error_response(error: &GatewayError) -> Response {
         error.client_error_code().unwrap_or(default_code),
     )
     .into_response()
+}
+
+/// 在下游尚未提交时优先交付 Provider 的原始 HTTP 失败响应。
+pub fn engine_error_response(error: &EngineError) -> Response {
+    if let EngineError::Provider(error) = error
+        && let Some(upstream) = error.client_visible_upstream_response()
+        && let Ok(status) = StatusCode::from_u16(upstream.status())
+    {
+        let mut response = Response::new(Body::from(upstream.body().clone()));
+        *response.status_mut() = status;
+        if let Some(content_type) = upstream.content_type()
+            && let Ok(content_type) = HeaderValue::from_bytes(content_type)
+        {
+            response.headers_mut().insert(CONTENT_TYPE, content_type);
+        }
+        for header in upstream.headers() {
+            let Ok(name) = HeaderName::from_bytes(header.name().as_bytes()) else {
+                continue;
+            };
+            let Ok(value) = HeaderValue::from_bytes(header.value()) else {
+                continue;
+            };
+            response.headers_mut().append(name, value);
+        }
+        return response;
+    }
+    gateway_error_response(&gateway_error_from_engine(error))
 }
 
 /// Gateway 错误稳定映射，供 HTTP、SSE 和 WebSocket 共用。

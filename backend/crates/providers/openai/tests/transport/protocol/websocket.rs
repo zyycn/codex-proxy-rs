@@ -173,6 +173,18 @@ fn websocket_metadata_turn_state_should_accept_case_insensitive_header() {
 }
 
 #[test]
+fn websocket_metadata_turn_state_should_ignore_public_event_metadata() {
+    let event = json!({
+        "type": "future.business.event",
+        "metadata": {"turn_state": "business-value"},
+        "turn_state": "another-business-value"
+    });
+
+    assert_eq!(websocket_metadata_turn_state(&event), None);
+    assert!(websocket_event_to_sse_frame(&event.to_string()).is_some());
+}
+
+#[test]
 fn websocket_completed_id_should_read_the_id_without_validating_the_response_shape() {
     let valid = json!({
         "type": "response.completed",
@@ -197,6 +209,16 @@ fn websocket_completed_id_should_read_the_id_without_validating_the_response_sha
         websocket_response_completed_id(&invalid_usage),
         Some("resp_invalid".to_owned())
     );
+}
+
+#[test]
+fn websocket_completed_id_should_preserve_an_empty_opaque_id() {
+    let event = json!({
+        "type": "response.completed",
+        "response": {"id": ""}
+    });
+
+    assert_eq!(websocket_response_completed_id(&event), Some(String::new()));
 }
 
 #[test]

@@ -327,5 +327,6 @@ fn context() -> CodexRequestContext<'static> {
         thread_id: None,
         client_request_id: None,
         turn_id: None,
+        account_selection: Default::default(),
     }
 }

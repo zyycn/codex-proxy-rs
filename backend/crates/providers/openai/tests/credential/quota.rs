@@ -362,6 +362,83 @@ async fn passive_rate_limit_headers_update_quota_and_account_state_with_revision
 }
 
 #[tokio::test]
+async fn manual_quota_refresh_updates_account_state_from_provider_response() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_manual_quota_state";
+    create_account(&store, account_id).await;
+    let account = store.account(account_id).expect("created account");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .and(header(
+            "authorization",
+            format!("Bearer token-{account_id}"),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": false,
+                "limit_reached": true,
+                "primary_window": {"used_percent": 100, "reset_at": 1_900_000_000}
+            }
+        })))
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    let exhausted = service
+        .refresh_account(account.id())
+        .await
+        .expect("refresh exhausted quota");
+
+    assert!(exhausted.fact().exhausted());
+    assert_eq!(
+        store
+            .account(account_id)
+            .expect("exhausted account")
+            .availability(),
+        AccountAvailability::QuotaExhausted
+    );
+
+    server.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .and(header(
+            "authorization",
+            format!("Bearer token-{account_id}"),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {"used_percent": 20, "reset_at": 1_900_000_000}
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let recovered = service
+        .refresh_account(account.id())
+        .await
+        .expect("refresh recovered quota");
+
+    assert!(!recovered.fact().exhausted());
+    assert_eq!(
+        store
+            .account(account_id)
+            .expect("recovered account")
+            .availability(),
+        AccountAvailability::Ready
+    );
+}
+
+#[tokio::test]
 async fn passive_rate_limit_headers_replace_stale_secondary_window() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_passive_quota_snapshot").await;

@@ -38,7 +38,6 @@ use super::websocket::{
 // 常量
 // ---------------------------------------------------------------------------
 
-const MAX_UPSTREAM_ERROR_BODY_BYTES: usize = 1024 * 1024;
 const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 pub(super) const UPSTREAM_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
@@ -85,6 +84,78 @@ pub fn build_reqwest_client() -> Result<Client, CustomCaError> {
 // 错误类型
 // ---------------------------------------------------------------------------
 
+/// 当前 Responses 请求最终失败时可原样返回给客户端的上游 HTTP 响应。
+#[derive(Clone, PartialEq, Eq)]
+pub struct CodexClientVisibleUpstreamResponse {
+    status: u16,
+    content_type: Option<Vec<u8>>,
+    client_headers: Vec<(String, Bytes)>,
+    body: Bytes,
+}
+
+pub(crate) struct CodexClientVisibleUpstreamResponseParts {
+    pub(crate) status: u16,
+    pub(crate) content_type: Option<Vec<u8>>,
+    pub(crate) client_headers: Vec<(String, Bytes)>,
+    pub(crate) body: Bytes,
+}
+
+impl CodexClientVisibleUpstreamResponse {
+    pub(super) fn new(
+        status: StatusCode,
+        content_type: Option<Vec<u8>>,
+        client_headers: Vec<(String, Bytes)>,
+        body: Bytes,
+    ) -> Self {
+        Self {
+            status: status.as_u16(),
+            content_type,
+            client_headers,
+            body,
+        }
+    }
+
+    pub const fn status(&self) -> u16 {
+        self.status
+    }
+
+    pub fn content_type(&self) -> Option<&[u8]> {
+        self.content_type.as_deref()
+    }
+
+    pub fn client_headers(&self) -> &[(String, Bytes)] {
+        &self.client_headers
+    }
+
+    pub const fn body(&self) -> &Bytes {
+        &self.body
+    }
+
+    pub(crate) fn into_parts(self) -> CodexClientVisibleUpstreamResponseParts {
+        CodexClientVisibleUpstreamResponseParts {
+            status: self.status,
+            content_type: self.content_type,
+            client_headers: self.client_headers,
+            body: self.body,
+        }
+    }
+}
+
+impl fmt::Debug for CodexClientVisibleUpstreamResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CodexClientVisibleUpstreamResponse")
+            .field("status", &self.status)
+            .field(
+                "content_type",
+                &self.content_type.as_ref().map(|_| "<present>"),
+            )
+            .field("client_header_count", &self.client_headers.len())
+            .field("body", &"<redacted>")
+            .finish()
+    }
+}
+
 /// Codex 上游 HTTP 客户端错误。
 #[derive(Error)]
 pub enum CodexClientError {
@@ -125,6 +196,8 @@ pub enum CodexClientError {
         status: StatusCode,
         /// 上游错误体。
         body: String,
+        /// 仅供当前 Responses 请求最终失败时原样返回的响应。
+        client_response: Option<Box<CodexClientVisibleUpstreamResponse>>,
         /// 推导出的重试秒数。
         retry_after_seconds: Option<u64>,
         /// 上游诊断元数据。
@@ -208,6 +281,7 @@ impl CodexClientError {
                 body,
                 retry_after_seconds,
                 diagnostics,
+                client_response,
                 set_cookie_headers,
                 rate_limit_headers,
                 send_phase,
@@ -217,6 +291,7 @@ impl CodexClientError {
                 body,
                 *retry_after_seconds,
                 diagnostics,
+                client_response.as_deref(),
                 set_cookie_headers,
                 rate_limit_headers,
                 *send_phase,
@@ -227,6 +302,7 @@ impl CodexClientError {
                     &upstream.body,
                     upstream.retry_after_seconds,
                     &upstream.diagnostics,
+                    upstream.client_response.as_deref(),
                     &upstream.set_cookie_headers,
                     &[],
                     upstream.send_phase,
@@ -247,6 +323,50 @@ pub type CodexBackendSseStream =
 // ---------------------------------------------------------------------------
 // 请求上下文与响应类型
 // ---------------------------------------------------------------------------
+
+/// 账号亲和决策传给 transport 的不可变遥测快照。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CodexAccountSelectionTelemetry<'a> {
+    affinity_hit: bool,
+    escape_reason: Option<&'a str>,
+    account_switch: bool,
+}
+
+impl<'a> CodexAccountSelectionTelemetry<'a> {
+    pub const NONE: Self = Self {
+        affinity_hit: false,
+        escape_reason: None,
+        account_switch: false,
+    };
+
+    #[must_use]
+    pub const fn new(
+        affinity_hit: bool,
+        escape_reason: Option<&'a str>,
+        account_switch: bool,
+    ) -> Self {
+        Self {
+            affinity_hit,
+            escape_reason,
+            account_switch,
+        }
+    }
+
+    #[must_use]
+    pub const fn affinity_hit(self) -> bool {
+        self.affinity_hit
+    }
+
+    #[must_use]
+    pub const fn escape_reason(self) -> Option<&'a str> {
+        self.escape_reason
+    }
+
+    #[must_use]
+    pub const fn account_switch(self) -> bool {
+        self.account_switch
+    }
+}
 
 /// 单次 Codex 上游请求的上下文。
 #[derive(Clone, Copy)]
@@ -283,6 +403,8 @@ pub struct CodexRequestContext<'a> {
     pub client_request_id: Option<&'a str>,
     /// 客户端 turn ID。
     pub turn_id: Option<&'a str>,
+    /// 账号亲和选择结果；仅用于结构化遥测，不参与 transport 决策。
+    pub account_selection: CodexAccountSelectionTelemetry<'a>,
 }
 
 impl<'a> CodexRequestContext<'a> {
@@ -310,6 +432,7 @@ impl<'a> CodexRequestContext<'a> {
             thread_id: None,
             client_request_id: None,
             turn_id: None,
+            account_selection: CodexAccountSelectionTelemetry::NONE,
         }
     }
 }
@@ -328,6 +451,7 @@ impl fmt::Debug for CodexRequestContext<'_> {
                 "installation_id",
                 &self.installation_id.map(|_| "[PSEUDONYM]"),
             )
+            .field("account_selection", &self.account_selection)
             .finish_non_exhaustive()
     }
 }
@@ -453,20 +577,23 @@ pub(super) struct PreparedWebSocketRoute {
 // ---------------------------------------------------------------------------
 
 pub(super) fn log_websocket_pool_decision(
-    request_id: &str,
-    account_id: Option<&str>,
+    context: CodexRequestContext<'_>,
+    pool_account_id: Option<&str>,
     pool_context: Option<&WebSocketPoolLogContext>,
     decision: Option<WebSocketPoolDecision>,
 ) {
     let Some(decision) = decision else {
         return;
     };
-    let rid_short = request_id.chars().take(8).collect::<String>();
+    let rid_short = context.request_id.chars().take(8).collect::<String>();
     tracing::info!(
-        request_id = %request_id,
+        request_id = %context.request_id,
         rid = %rid_short,
-        account_id = account_id.unwrap_or_default(),
+        account_id = pool_account_id.or(context.account_id).unwrap_or_default(),
         ws_pool = decision.kind(),
+        affinity_hit = context.account_selection.affinity_hit(),
+        escape_reason = context.account_selection.escape_reason().unwrap_or_default(),
+        account_switch = context.account_selection.account_switch(),
         conversation_id_hash = pool_context.map_or("", |context| context.conversation_id_hash.as_str()),
         ws_pool_key_hash = pool_context.map_or("", |context| context.pool_key_hash.as_str()),
         "WebSocket pool decision"
@@ -576,14 +703,10 @@ pub(super) async fn read_capped_response_body(
     })
 }
 
-pub(super) async fn read_capped_error_body(
+pub(super) async fn read_error_response_body(
     response: ReqwestResponse,
-) -> Result<String, reqwest::Error> {
-    let body = read_capped_response_body(response, MAX_UPSTREAM_ERROR_BODY_BYTES).await?;
-    if body.limit_exceeded() {
-        return Ok("upstream error response exceeded the body limit".to_owned());
-    }
-    Ok(body.into_string())
+) -> Result<Bytes, reqwest::Error> {
+    response.bytes().await
 }
 
 // ---------------------------------------------------------------------------
@@ -633,19 +756,13 @@ fn now_unix_timestamp_millis() -> u128 {
 }
 
 pub(super) fn openai_subagent_from_metadata(client_metadata: Option<&Value>) -> Option<String> {
-    let value = client_metadata?
-        .as_object()?
-        .get("x-openai-subagent")?
-        .as_str()?
-        .trim();
-    if matches!(
-        value,
-        "review" | "compact" | "memory_consolidation" | "collab_spawn"
-    ) {
-        Some(value.to_string())
-    } else {
-        None
-    }
+    Some(
+        client_metadata?
+            .as_object()?
+            .get("x-openai-subagent")?
+            .as_str()?
+            .to_owned(),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -662,6 +779,7 @@ pub(super) fn websocket_exchange_error_to_client_error(
                 status: StatusCode::from_u16(upstream.status_code)
                     .unwrap_or(StatusCode::BAD_GATEWAY),
                 body: upstream.body,
+                client_response: upstream.client_response,
                 retry_after_seconds: upstream.retry_after_seconds,
                 diagnostics: Box::new(upstream.diagnostics),
                 set_cookie_headers: upstream.set_cookie_headers,

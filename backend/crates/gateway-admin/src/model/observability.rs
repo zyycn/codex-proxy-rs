@@ -330,6 +330,7 @@ pub struct LatencyPercentiles {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderBillingInput {
     pub upstream_model_id: String,
+    pub service_tier: Option<String>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub cached_tokens: Option<u64>,
@@ -345,6 +346,7 @@ pub struct UsageCalculatedBillingFact {
     pub bucket_start: DateTime<Utc>,
     pub provider_kind: String,
     pub upstream_model_id: String,
+    pub service_tier: Option<String>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub cached_tokens: Option<u64>,
@@ -574,6 +576,7 @@ pub struct UsageRecord {
     pub upstream_transport: Option<String>,
     pub http_version: Option<String>,
     pub websocket_pool: Option<String>,
+    pub service_tier: Option<String>,
     /// Provider 已筛选的专有观测 JSON；管理领域保持不透明。
     pub provider_metadata_json: Option<String>,
     pub attempt_count: u32,

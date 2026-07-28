@@ -4,6 +4,7 @@ use gateway_protocol::openai::{
     CodexResponsesRequestSemantics as CodexRequestSemantics,
     codex_responses_request_semantics_with_turn_metadata, events,
 };
+use reqwest::header::HeaderMap;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -19,6 +20,8 @@ use serde_json::{Map, Value};
 pub struct CodexResponsesRequest {
     /// 上游请求体（唯一真相源）。
     body: Map<String, Value>,
+    /// API 边界保存、Provider 逐条恢复的普通客户端请求头。
+    pub(crate) passthrough_headers: HeaderMap,
     /// 是否由客户端显式提供了 prompt cache key。
     pub explicit_prompt_cache_key: bool,
     /// 客户端会话 ID。
@@ -402,7 +405,6 @@ fn failure_message(value: &Value) -> Option<String> {
         .or_else(|| value.pointer("/error/message"))
         .or_else(|| value.get("message"))
         .and_then(Value::as_str)
-        .filter(|message| !message.trim().is_empty())
         .map(ToString::to_string)
 }
 
@@ -412,7 +414,6 @@ fn failure_code(value: &Value) -> Option<String> {
         .or_else(|| value.pointer("/error/code"))
         .or_else(|| value.get("code"))
         .and_then(Value::as_str)
-        .filter(|code| !code.trim().is_empty())
         .map(ToString::to_string)
 }
 
@@ -420,7 +421,6 @@ fn failure_type(value: &Value) -> Option<String> {
     failure_error(value)
         .and_then(|error| error.get("type"))
         .and_then(Value::as_str)
-        .filter(|error_type| !error_type.trim().is_empty())
         .map(ToString::to_string)
 }
 
@@ -446,6 +446,7 @@ impl CodexResponsesRequest {
     pub fn from_body(body: Map<String, Value>) -> Self {
         Self {
             body,
+            passthrough_headers: HeaderMap::new(),
             explicit_prompt_cache_key: false,
             client_conversation_id: None,
             client_session_id: None,
@@ -617,7 +618,7 @@ impl CodexResponsesRequest {
         if !self.body.contains_key(key) {
             return;
         }
-        match value.filter(|value| !value.trim().is_empty()) {
+        match value {
             Some(value) => {
                 self.body
                     .insert(key.to_string(), Value::String(value.to_string()));

@@ -17,8 +17,9 @@ bytes = "1.11.1"
 futures = "0.3.32"
 futures-timer = "3.0.3"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = { version = "1.0.150", features = ["preserve_order"] }
+serde_json = { version = "1.0.150", features = ["arbitrary_precision", "preserve_order"] }
 thiserror = "2.0.18"
+tracing = "0.1.44"
 uuid = { version = "1.23.3", features = ["v7"] }
 
 [lints]

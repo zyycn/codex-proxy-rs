@@ -450,13 +450,17 @@ fn parse_rate_limits_event_should_extract_websocket_metered_limit() {
 
 #[test]
 fn parse_rate_limits_event_should_reject_unrelated_event_type() {
-    assert_eq!(
-        parse_rate_limits_event(&json!({
+    for event in [
+        json!({
             "type": "response.completed",
             "rate_limits": {"primary": {"used_percent": 100}}
-        })),
-        None
-    );
+        }),
+        json!({
+            "rate_limits": {"primary": {"used_percent": 100}}
+        }),
+    ] {
+        assert_eq!(parse_rate_limits_event(&event), None);
+    }
 }
 
 #[test]

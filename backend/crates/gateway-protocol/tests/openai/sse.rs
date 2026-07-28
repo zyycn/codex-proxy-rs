@@ -135,13 +135,8 @@ fn raw_frame_decoder_should_preserve_exact_frame_across_chunk_boundaries() {
     let raw = b": keep-alive\r\nid: evt_1\r\nevent: response.future\r\nretry: 250\r\ndata: { \"type\": \"response.future\", \"opaque\": true }\r\n\r\n";
     let mut decoder = SseEventDecoder::default();
 
-    assert!(
-        decoder
-            .push_frames(&raw[..37])
-            .expect("partial raw frame")
-            .is_empty()
-    );
-    let frames = decoder.push_frames(&raw[37..]).expect("complete raw frame");
+    assert!(decoder.push_frames(&raw[..37]).is_empty());
+    let frames = decoder.push_frames(&raw[37..]);
 
     assert_eq!(frames.len(), 1);
     assert_eq!(frames[0].raw(), raw);
@@ -161,15 +156,11 @@ fn raw_frame_decoder_should_preserve_unparseable_frames_for_transparent_transpor
     let non_utf8 = b"data: \xff\n\n";
     let mut decoder = SseEventDecoder::default();
 
-    let frames = decoder
-        .push_frames(invalid_retry)
-        .expect("raw frame remains deliverable");
+    let frames = decoder.push_frames(invalid_retry);
     assert_eq!(frames[0].raw(), invalid_retry);
     assert!(frames[0].events().is_empty());
 
-    let frames = decoder
-        .push_frames(non_utf8)
-        .expect("non-UTF-8 raw frame remains deliverable");
+    let frames = decoder.push_frames(non_utf8);
     assert_eq!(frames[0].raw(), non_utf8);
     assert!(frames[0].events().is_empty());
 }
@@ -179,15 +170,8 @@ fn raw_frame_decoder_finish_should_preserve_unparseable_trailing_frame() {
     let raw = b"retry: later\ndata: opaque";
     let mut decoder = SseEventDecoder::default();
 
-    assert!(
-        decoder
-            .push_frames(raw)
-            .expect("unfinished raw frame remains buffered")
-            .is_empty()
-    );
-    let frames = decoder
-        .finish_frames()
-        .expect("trailing raw frame remains deliverable");
+    assert!(decoder.push_frames(raw).is_empty());
+    let frames = decoder.finish_frames();
 
     assert_eq!(frames[0].raw(), raw);
     assert!(frames[0].events().is_empty());
@@ -233,6 +217,32 @@ fn incremental_decoder_should_accept_exact_limit_and_reject_one_byte_over() {
 }
 
 #[test]
+fn raw_frame_decoder_should_stream_oversized_unfinished_frame_and_resume_observation() {
+    let oversized = vec![b'x'; MAX_SSE_EVENT_BUFFER_BYTES + 1];
+    let mut decoder = SseEventDecoder::default();
+    let mut raw = decoder
+        .push_frames(&oversized)
+        .into_iter()
+        .flat_map(|frame| frame.into_parts().0)
+        .collect::<Vec<_>>();
+
+    assert!(!raw.is_empty());
+    let tail = decoder.push_frames(b"\n\n");
+    assert!(tail.iter().all(|frame| frame.events().is_empty()));
+    raw.extend(tail.into_iter().flat_map(|frame| frame.into_parts().0));
+    assert_eq!(raw.len(), oversized.len() + 2);
+    assert_eq!(&raw[..oversized.len()], oversized.as_slice());
+    assert_eq!(&raw[oversized.len()..], b"\n\n");
+
+    let observed = decoder.push_frames(b"event: response.future\ndata: {\"ok\":true}\n\n");
+    assert_eq!(observed.len(), 1);
+    assert_eq!(
+        observed[0].events()[0].event.as_deref(),
+        Some("response.future")
+    );
+}
+
+#[test]
 fn encoder_should_round_trip_multiline_data() {
     let frame = encode_sse_event("response.output_text.delta", "first\nsecond");
 
@@ -265,6 +275,20 @@ fn encoder_should_round_trip_sse_id_and_retry() {
             retry: Some(750),
         }]
     );
+}
+
+#[test]
+fn encoder_should_omit_metadata_that_sse_cannot_represent_as_one_field() {
+    let frame = encode_sse_event_with_metadata(
+        "future\nevent",
+        r#"{"type":"future\nevent"}"#,
+        Some("id\0with\nline"),
+        None,
+    );
+
+    assert!(!frame.contains("event:"));
+    assert!(!frame.contains("id:"));
+    assert!(frame.contains(r#"data: {"type":"future\nevent"}"#));
 }
 
 #[test]

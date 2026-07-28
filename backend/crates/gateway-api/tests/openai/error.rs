@@ -141,8 +141,7 @@ fn local_provider_capacity_exhaustion_should_preserve_safe_provider_detail() {
         "no account is eligible for the requested model",
         Some("no_eligible_account".to_owned()),
         Some("account_unavailable_error".to_owned()),
-    )
-    .expect("safe provider detail");
+    );
     let error = EngineError::Provider(
         ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
             .with_client_visible_upstream_error(detail),
@@ -327,14 +326,11 @@ fn openai_error_response_should_preserve_only_safe_contract_fields() {
 async fn gateway_error_response_should_expose_only_structured_client_visible_upstream_fields() {
     let error = GatewayError::from_provider(
         &ProviderError::new(ProviderErrorKind::QuotaExhausted, UpstreamSendState::Sent)
-            .with_client_visible_upstream_error(
-                ClientVisibleUpstreamError::new(
-                    "Your Codex quota is exhausted",
-                    Some("quota_exhausted".to_owned()),
-                    Some("rate_limit_error".to_owned()),
-                )
-                .expect("safe structured upstream error"),
-            ),
+            .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+                "Your Codex quota is exhausted",
+                Some("quota_exhausted".to_owned()),
+                Some("rate_limit_error".to_owned()),
+            )),
     );
 
     let response = gateway_error_response(&error);

@@ -8,7 +8,7 @@ use gateway_core::accounting::{
 };
 use gateway_core::engine::UpstreamSendState;
 use gateway_core::error::{
-    ClientVisibleUpstreamError, ProviderError, ProviderErrorKind, SafeUpstreamValue,
+    ClientVisibleUpstreamError, OpaqueUpstreamValue, ProviderError, ProviderErrorKind,
 };
 use gateway_core::event::{
     ContentItem, ContentKind, FinishReason, GatewayEvent, ProtocolWireEvent, ProviderEvent,
@@ -796,19 +796,17 @@ fn upstream_event_error(value: &Value) -> ProviderError {
     };
     let mut error = ProviderError::new(kind, UpstreamSendState::Sent)
         .redact_sensitive_context("upstream event");
-    if let Some(code) = code.and_then(|code| SafeUpstreamValue::new(code.to_owned()).ok()) {
-        error = error.with_upstream_code(code);
+    if let Some(code) = code {
+        error = error.with_upstream_code(OpaqueUpstreamValue::new(code.to_owned()));
     }
     // 结构化 message/code/type 供原客户端展示与重试分类；message 先脱去
     // 账号指纹（上游限流文案内嵌 team UUID），非结构化正文不透出。
-    if let Some(message) = upstream_error_field(value, "message")
-        && let Ok(client_error) = ClientVisibleUpstreamError::new(
+    if let Some(message) = upstream_error_field(value, "message") {
+        error = error.with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
             scrub_account_fingerprints(message),
             code.map(str::to_owned),
             upstream_error_field(value, "type").map(str::to_owned),
-        )
-    {
-        error = error.with_client_visible_upstream_error(client_error);
+        ));
     }
     error
 }

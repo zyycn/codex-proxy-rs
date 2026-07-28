@@ -18,8 +18,8 @@ use gateway_core::engine::{
     UpstreamSendState,
 };
 use gateway_core::error::{
-    ClientVisibleUpstreamError, ContinuationFailure, ProviderError, ProviderErrorKind,
-    SafeUpstreamValue,
+    ClientVisibleUpstreamError, ContinuationFailure, OpaqueUpstreamValue, ProviderError,
+    ProviderErrorKind,
 };
 use gateway_core::event::{GatewayEvent, UpstreamHttpVersion};
 use gateway_core::operation::{
@@ -1099,12 +1099,13 @@ async fn compaction_stream_should_reject_degenerate_summary_before_commit() {
     let error = next_provider_error(&mut stream).await;
 
     assert_eq!(error.kind(), ProviderErrorKind::Protocol);
-    assert!(error.replay_is_safe());
-    assert!(error.retries_same_account());
+    assert!(!error.replay_is_safe());
+    assert!(error.allows_pre_delivery_retry());
+    assert!(!error.retries_same_account());
 }
 
 #[tokio::test]
-async fn compaction_transport_failure_should_retry_only_the_same_account() {
+async fn compaction_transport_failure_should_allow_pre_delivery_recovery() {
     let transport = StubInferenceTransport::stream_error(GrokInferenceTransportError::new(
         GrokInferenceTransportErrorKind::Transport,
         UpstreamSendState::Sent,
@@ -1121,12 +1122,13 @@ async fn compaction_transport_failure_should_retry_only_the_same_account() {
     let error = next_provider_error(&mut stream).await;
 
     assert_eq!(error.kind(), ProviderErrorKind::Transport);
-    assert!(error.replay_is_safe());
-    assert!(error.retries_same_account());
+    assert!(!error.replay_is_safe());
+    assert!(error.allows_pre_delivery_retry());
+    assert!(!error.retries_same_account());
 }
 
 #[tokio::test]
-async fn compaction_protocol_stream_failure_should_retry_only_the_same_account() {
+async fn compaction_protocol_stream_failure_should_allow_pre_delivery_recovery() {
     let transport =
         StubInferenceTransport::sequence([InferenceMode::SuccessBody(malformed_compaction_sse())]);
     let provider = provider(StubSelector::success(), transport).await;
@@ -1141,8 +1143,9 @@ async fn compaction_protocol_stream_failure_should_retry_only_the_same_account()
     let error = next_provider_error(&mut stream).await;
 
     assert_eq!(error.kind(), ProviderErrorKind::Protocol);
-    assert!(error.replay_is_safe());
-    assert!(error.retries_same_account());
+    assert!(!error.replay_is_safe());
+    assert!(error.allows_pre_delivery_retry());
+    assert!(!error.retries_same_account());
 }
 
 #[tokio::test]
@@ -1421,8 +1424,7 @@ async fn transport_error_should_preserve_client_visible_upstream_detail() {
         "You have run out of credits",
         Some("personal_team_blocked_spending_limit".to_owned()),
         Some("insufficient_quota".to_owned()),
-    )
-    .expect("safe upstream detail");
+    );
     let error = mapped_transport_error(
         GrokInferenceTransportError::new(
             GrokInferenceTransportErrorKind::QuotaExhausted,
@@ -1762,9 +1764,7 @@ async fn connection_state_inherits_session_and_recovers_reasoning_on_pinned_acco
                 UpstreamSendState::Sent,
             )
             .with_status(400)
-            .with_upstream_code(
-                SafeUpstreamValue::new("reasoning_decode_failed").expect("safe code"),
-            ),
+            .with_upstream_code(OpaqueUpstreamValue::new("reasoning_decode_failed")),
         ),
         InferenceMode::Success,
     ]);
@@ -1982,7 +1982,7 @@ async fn missing_native_response_should_be_replay_safe_for_the_same_account() {
             UpstreamSendState::Sent,
         )
         .with_status(404)
-        .with_upstream_code(SafeUpstreamValue::new("not_found").expect("safe code")),
+        .with_upstream_code(OpaqueUpstreamValue::new("not_found")),
     );
     let provider = provider(StubSelector::success(), transport).await;
     let state = ProviderSessionState::new(

@@ -1,6 +1,7 @@
 //! 唯一的账号重试、发送与下游 commit barrier owner。
 
 use std::collections::BTreeSet;
+use std::future::Future;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
@@ -17,7 +18,7 @@ use crate::engine::{
     ModelRequestTimings, NewModelRequest, ProviderAccountStateOwner, ProviderAttemptOutcome,
     RequestAttemptContext, UpstreamSendState,
 };
-use crate::error::{GatewayError, GatewayErrorKind, ProviderError, ProviderErrorKind};
+use crate::error::{GatewayError, GatewayErrorKind, ProviderError, ProviderErrorKind, StoreError};
 use crate::event::{
     GatewayEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseObservation,
 };
@@ -271,10 +272,9 @@ where
             return Err(EngineError::DownstreamCommitRequired);
         }
         if let Some(pending) = self.pending_terminal_failure.take() {
-            let engine_error = provider_engine_error(&pending.error);
             self.finish_provider_error_with_send_state(&pending.error, pending.send_state)
                 .await?;
-            return Err(engine_error);
+            return Err(provider_engine_error(pending.error));
         }
         if self.finalized {
             return Ok(None);
@@ -341,10 +341,9 @@ where
                 PullOutcome::TerminalFailure {
                     error, send_state, ..
                 } => {
-                    let engine_error = provider_engine_error(&error);
                     self.finish_provider_error_with_send_state(&error, send_state)
                         .await?;
-                    return Err(engine_error);
+                    return Err(provider_engine_error(error));
                 }
                 PullOutcome::End => {
                     if events.is_empty() {
@@ -357,11 +356,11 @@ where
         }
     }
 
-    /// 在协议 adapter 真正写出首字节前持久化下游不可撤回边界。
+    /// 在协议 adapter 真正写出首字节前记录下游不可撤回边界。
     ///
     /// # Errors
     ///
-    /// 没有待提交结果、重复提交或 Store 失败时返回错误。
+    /// 没有待提交结果或重复提交时返回错误；观测 Store 失败只记服务端告警。
     pub async fn commit_downstream(
         &mut self,
         client_status_code: Option<u16>,
@@ -370,10 +369,14 @@ where
             return Err(EngineError::InvalidDeliveryState);
         }
         let committed_at = SystemTime::now();
-        self.engine
-            .store()
-            .mark_downstream_committed(&self.request_id, committed_at, client_status_code)
-            .await?;
+        if self.request_persisted {
+            best_effort_store_write(self.engine.store().mark_downstream_committed(
+                &self.request_id,
+                committed_at,
+                client_status_code,
+            ))
+            .await;
+        }
         self.downstream_committed_at = Some(committed_at);
         self.client_status_code = client_status_code;
         self.delivery_pending = false;
@@ -387,7 +390,7 @@ where
     ///
     /// # Errors
     ///
-    /// 状态已经写入或 Store 无法写回时返回错误。
+    /// 状态已经写入时返回错误；观测 Store 失败只记服务端告警。
     pub async fn record_client_status(
         &mut self,
         client_status_code: u16,
@@ -396,10 +399,12 @@ where
             return Err(EngineError::InvalidDeliveryState);
         }
         if self.request_persisted {
-            self.engine
-                .store()
-                .record_client_status(&self.request_id, client_status_code)
-                .await?;
+            best_effort_store_write(
+                self.engine
+                    .store()
+                    .record_client_status(&self.request_id, client_status_code),
+            )
+            .await;
         }
         self.client_status_code = Some(client_status_code);
         Ok(())
@@ -513,40 +518,17 @@ where
                     return Err(EngineError::Deadline);
                 }
                 PollBoundary::Item(Some(Ok(mut event))) => {
-                    if let Some(observation) = event.take_observation()
-                        && let Err(error) = self.observe_response(observation)
-                    {
-                        match self.handle_stream_error(error).await? {
-                            StreamErrorOutcome::AttemptDiscarded => {
-                                return Ok(PullOutcome::AttemptDiscarded);
-                            }
-                            terminal @ StreamErrorOutcome::TerminalFailure { .. } => {
-                                return Ok(terminal.into_pull_outcome());
-                            }
-                        }
-                    }
-                    let mut identity_error = None;
-                    for fact in event.canonical_facts() {
-                        if let Err(error) = self.observe_response_identity(fact) {
-                            identity_error = Some(error);
-                            break;
-                        }
-                    }
-                    if let Some(error) = identity_error {
-                        match self.handle_stream_error(error).await? {
-                            StreamErrorOutcome::AttemptDiscarded => {
-                                return Ok(PullOutcome::AttemptDiscarded);
-                            }
-                            terminal @ StreamErrorOutcome::TerminalFailure { .. } => {
-                                return Ok(terminal.into_pull_outcome());
-                            }
-                        }
+                    if let Some(observation) = event.take_observation() {
+                        self.observe_response(observation);
                     }
                     for fact in event.canonical_facts() {
-                        self.observe_event(fact).await?;
+                        self.observe_response_identity(fact);
+                    }
+                    for fact in event.canonical_facts() {
+                        self.observe_event(fact).await;
                     }
                     if event.wire_event().is_some() && !event.has_canonical_facts() {
-                        self.observe_wire_event().await?;
+                        self.observe_wire_event().await;
                     }
                     if !event.has_client_event() {
                         continue;
@@ -672,21 +654,20 @@ where
                 Ok(stream) => stream,
                 Err(error) => {
                     if error.kind() == ProviderErrorKind::NoEligibleAccount
-                        && let Some(exhaustion) = self.last_account_exhaustion.clone()
+                        && let Some(exhaustion) = self.last_account_exhaustion.take()
                     {
                         let send_state = self.current_send_state();
                         let mut events = std::mem::take(&mut self.last_account_exhaustion_events);
                         if !events.is_empty() {
-                            self.observe_atomic_terminal_events(&mut events)?;
+                            self.observe_atomic_terminal_events(&mut events);
                             return Ok(Some(PullOutcome::TerminalFailure {
                                 events,
                                 error: exhaustion,
                                 send_state,
                             }));
                         }
-                        let engine_error = provider_engine_error(&exhaustion);
                         self.finish_provider_error(&exhaustion).await?;
-                        return Err(engine_error);
+                        return Err(provider_engine_error(exhaustion));
                     }
                     if !(matches!(
                         error.kind(),
@@ -695,9 +676,8 @@ where
                     {
                         self.record_provider_failure(candidate.provider().clone(), error.kind());
                     }
-                    let engine_error = provider_engine_error(&error);
                     self.finish_provider_error(&error).await?;
-                    return Err(engine_error);
+                    return Err(provider_engine_error(error));
                 }
             },
         };
@@ -786,17 +766,23 @@ where
             http_version: None,
         };
         if self.request_persisted {
-            self.engine.store().record_attempt(attempt_record).await?;
+            best_effort_store_write(self.engine.store().record_attempt(attempt_record)).await;
         } else {
             let request = self
                 .pending_request
-                .take()
+                .as_ref()
                 .ok_or(EngineError::InvalidDeliveryState)?;
-            self.engine
-                .store()
-                .create_model_request_with_attempt(request, attempt_record)
-                .await?;
-            self.request_persisted = true;
+            if best_effort_store_write(
+                self.engine
+                    .store()
+                    .create_model_request_with_attempt(request.clone(), attempt_record),
+            )
+            .await
+            .is_some()
+            {
+                self.pending_request = None;
+                self.request_persisted = true;
+            }
         }
         self.attempts = next_attempt.get();
         self.current = Some(CurrentAttempt {
@@ -811,18 +797,9 @@ where
         Ok(None)
     }
 
-    async fn observe_event(&mut self, event: &GatewayEvent) -> Result<(), EngineError> {
+    async fn observe_event(&mut self, event: &GatewayEvent) {
         self.observe_event_facts(event);
-        let current = self.current.as_mut().ok_or(EngineError::NoActiveAttempt)?;
-        if !current.send_observed {
-            self.engine
-                .store()
-                .mark_send_state(&self.request_id, UpstreamSendState::Sent)
-                .await?;
-            current.send_observed = true;
-            self.send_state_watermark = UpstreamSendState::Sent;
-        }
-        Ok(())
+        self.mark_send_observed().await;
     }
 
     fn observe_event_facts(&mut self, event: &GatewayEvent) {
@@ -841,34 +818,38 @@ where
         }
     }
 
-    async fn observe_wire_event(&mut self) -> Result<(), EngineError> {
-        let current = self.current.as_mut().ok_or(EngineError::NoActiveAttempt)?;
+    async fn observe_wire_event(&mut self) {
+        self.mark_send_observed().await;
+    }
+
+    async fn mark_send_observed(&mut self) {
+        let Some(current) = self.current.as_mut() else {
+            return;
+        };
         if !current.send_observed {
-            self.engine
-                .store()
-                .mark_send_state(&self.request_id, UpstreamSendState::Sent)
-                .await?;
+            if self.request_persisted {
+                best_effort_store_write(
+                    self.engine
+                        .store()
+                        .mark_send_state(&self.request_id, UpstreamSendState::Sent),
+                )
+                .await;
+            }
             current.send_observed = true;
             self.send_state_watermark = UpstreamSendState::Sent;
         }
-        Ok(())
     }
 
-    fn observe_response(
-        &mut self,
-        observation: ProviderResponseObservation,
-    ) -> Result<(), ProviderError> {
-        let send_state = self.current_send_state();
-        let current = self
-            .current
-            .as_mut()
-            .ok_or_else(|| ProviderError::new(ProviderErrorKind::Protocol, send_state))?;
+    fn observe_response(&mut self, observation: ProviderResponseObservation) {
+        let Some(current) = self.current.as_mut() else {
+            return;
+        };
         if current
             .response_observation
             .as_ref()
             .is_some_and(|existing| existing.transport() != observation.transport())
         {
-            return Err(ProviderError::new(ProviderErrorKind::Protocol, send_state));
+            return;
         }
         let observed = observation.timings();
         if let Some(value) = observed.transport_decision_wait_ms {
@@ -896,32 +877,16 @@ where
             self.timings.provider_processing_ms = Some(value);
         }
         current.response_observation = Some(observation);
-        Ok(())
     }
 
-    fn observe_response_identity(&mut self, event: &GatewayEvent) -> Result<(), ProviderError> {
+    fn observe_response_identity(&mut self, event: &GatewayEvent) {
         let metadata = match event {
             GatewayEvent::Started(metadata) | GatewayEvent::Completed(metadata) => metadata,
-            _ => return Ok(()),
+            _ => return,
         };
-        let response_id = metadata.response_id();
-        if response_id.is_empty() {
-            return Ok(());
-        }
-        if self
-            .upstream_response_id
-            .as_deref()
-            .is_some_and(|expected| expected != response_id)
-        {
-            return Err(ProviderError::new(
-                ProviderErrorKind::Protocol,
-                UpstreamSendState::Sent,
-            ));
-        }
-        let response_id = response_id.to_owned();
+        let response_id = metadata.response_id().to_owned();
         self.client_response_id = Some(response_id.clone());
         self.upstream_response_id = Some(response_id);
-        Ok(())
     }
 
     /// 失败可重试时要求丢弃本 attempt；预算耗尽时可返回最后一批原始失败事件。
@@ -937,10 +902,6 @@ where
             error.kind(),
             ProviderErrorKind::RateLimited | ProviderErrorKind::QuotaExhausted
         );
-        if account_exhausted {
-            self.last_account_exhaustion = Some(error.clone());
-            self.last_account_exhaustion_events.clear();
-        }
         self.record_provider_failure(current.metadata.provider().clone(), error.kind());
         // attempt_send_state 是本 attempt 自身的发送事实，驱动重试门；
         // 持久化与终态用请求级水位，二者不可混用（水位会把早先 attempt 的
@@ -951,10 +912,14 @@ where
             error.send_state()
         };
         let send_state = self.raise_send_watermark(attempt_send_state);
-        self.engine
-            .store()
-            .mark_send_state(&self.request_id, send_state)
-            .await?;
+        if self.request_persisted {
+            best_effort_store_write(
+                self.engine
+                    .store()
+                    .mark_send_state(&self.request_id, send_state),
+            )
+            .await;
+        }
         let provider_proved_replay_safe = provider_proved_replay_safe(&error);
         let continuation_retry = self.prepare_continuation_retry(
             &current,
@@ -962,6 +927,12 @@ where
             attempt_send_state,
             provider_proved_replay_safe,
         );
+        let pre_delivery_retry = self.account_selection.required_account().is_none()
+            && self.continuation_attempt == ContinuationAttempt::None
+            && self.downstream_committed_at.is_none()
+            && !self.delivery_pending
+            && error.allows_pre_delivery_retry()
+            && self.attempts < self.plan.max_attempts().get();
         let ordinary_retry = self.account_selection.required_account().is_none()
             && self.continuation_attempt == ContinuationAttempt::None
             && self.downstream_committed_at.is_none()
@@ -984,12 +955,13 @@ where
                         .credential_recovery_attempted_accounts
                         .contains(account)
                 });
-        let retryable = continuation_retry || same_account_retry || ordinary_retry;
+        let retryable =
+            continuation_retry || same_account_retry || ordinary_retry || pre_delivery_retry;
 
         if retryable {
-            if account_exhausted {
-                self.last_account_exhaustion_events = atomic_client_events;
-            }
+            // 普通 clone 只保留稳定事实；原始失败响应只能随最后一次客户端可见
+            // 的账号耗尽错误继续，不能进入中间失败记录。
+            let persistence_error = self.request_persisted.then(|| error.clone());
             if same_account_retry {
                 if let Some(account) = current.metadata.provider_account_id() {
                     self.credential_recovery_attempted_accounts
@@ -1003,36 +975,43 @@ where
             {
                 self.excluded_accounts.insert(account.clone());
             }
-            self.engine
-                .store()
-                .record_intermediate_failure(IntermediateFailure {
-                    request_id: self.request_id.clone(),
-                    attempt_index: current.index,
-                    trigger: current.trigger,
-                    provider_kind: current.metadata.provider().clone(),
-                    account_id: current.metadata.provider_account_id().cloned(),
-                    upstream_model_id: current.metadata.upstream_model().clone(),
-                    upstream_status_code: current
-                        .response_observation
-                        .as_ref()
-                        .and_then(ProviderResponseObservation::status_code),
-                    upstream_request_id: current
-                        .response_observation
-                        .as_ref()
-                        .and_then(ProviderResponseObservation::request_id)
-                        .map(|value| value.as_str().to_owned()),
-                    latency: current.started_at.elapsed().unwrap_or_default(),
-                    error,
-                })
-                .await?;
+            if account_exhausted {
+                self.last_account_exhaustion_events = atomic_client_events;
+                self.last_account_exhaustion = Some(error);
+            }
+            if let Some(error) = persistence_error {
+                best_effort_store_write(
+                    self.engine
+                        .store()
+                        .record_intermediate_failure(IntermediateFailure {
+                            request_id: self.request_id.clone(),
+                            attempt_index: current.index,
+                            trigger: current.trigger,
+                            provider_kind: current.metadata.provider().clone(),
+                            account_id: current.metadata.provider_account_id().cloned(),
+                            upstream_model_id: current.metadata.upstream_model().clone(),
+                            upstream_status_code: current
+                                .response_observation
+                                .as_ref()
+                                .and_then(ProviderResponseObservation::status_code),
+                            upstream_request_id: current
+                                .response_observation
+                                .as_ref()
+                                .and_then(ProviderResponseObservation::request_id)
+                                .map(|value| value.as_str().to_owned()),
+                            latency: current.started_at.elapsed().unwrap_or_default(),
+                            error,
+                        }),
+                )
+                .await;
+            }
             self.reset_uncommitted_observations();
             return Ok(StreamErrorOutcome::AttemptDiscarded);
         }
 
-        let engine_error = provider_engine_error(&error);
         self.current = Some(current);
         if !atomic_client_events.is_empty() {
-            self.observe_atomic_terminal_events(&mut atomic_client_events)?;
+            self.observe_atomic_terminal_events(&mut atomic_client_events);
             return Ok(StreamErrorOutcome::TerminalFailure {
                 events: atomic_client_events,
                 error,
@@ -1041,25 +1020,19 @@ where
         }
         self.finish_provider_error_with_send_state(&error, send_state)
             .await?;
-        Err(engine_error)
+        Err(provider_engine_error(error))
     }
 
-    fn observe_atomic_terminal_events(
-        &mut self,
-        events: &mut [ProviderEvent],
-    ) -> Result<(), EngineError> {
+    fn observe_atomic_terminal_events(&mut self, events: &mut [ProviderEvent]) {
         for event in events {
             if let Some(observation) = event.take_observation() {
-                self.observe_response(observation)
-                    .map_err(EngineError::Provider)?;
+                self.observe_response(observation);
             }
             for fact in event.canonical_facts() {
-                self.observe_response_identity(fact)
-                    .map_err(EngineError::Provider)?;
+                self.observe_response_identity(fact);
                 self.observe_event_facts(fact);
             }
         }
-        Ok(())
     }
 
     fn prepare_continuation_retry(
@@ -1149,34 +1122,38 @@ where
             .and_then(ProviderResponseObservation::status_code);
         let (upstream_transport, http_version, websocket_pool) =
             self.current_transport_observation();
+        let service_tier = self.current_service_tier();
         let provider_metadata_json = self.current_provider_metadata_json();
-        self.engine
-            .store()
-            .finalize_model_request(ModelRequestFinalization {
-                request_id: self.request_id.clone(),
-                outcome: ExecutionOutcome::Succeeded,
-                send_state: UpstreamSendState::Sent,
-                attempt_count: self.attempts,
-                downstream_committed_at: self.downstream_committed_at,
-                client_status_code: self.client_status_code,
-                upstream_status_code,
-                client_response_id: self.client_response_id.clone(),
-                upstream_request_id,
-                upstream_response_id: self.upstream_response_id.clone(),
-                upstream_transport,
-                http_version,
-                websocket_pool,
-                provider_metadata_json,
-                error: None,
-                provider_error_code: None,
-                retry_after_ms: None,
-                usage: self.usage.clone(),
-                image_generation_succeeded: self.image_generation_succeeded(),
-                cost: self.cost.clone(),
-                timings: self.timings.clone(),
-                completed_at,
-            })
-            .await?;
+        if self.request_persisted {
+            best_effort_store_write(self.engine.store().finalize_model_request(
+                ModelRequestFinalization {
+                    request_id: self.request_id.clone(),
+                    outcome: ExecutionOutcome::Succeeded,
+                    send_state: UpstreamSendState::Sent,
+                    attempt_count: self.attempts,
+                    downstream_committed_at: self.downstream_committed_at,
+                    client_status_code: self.client_status_code,
+                    upstream_status_code,
+                    client_response_id: self.client_response_id.clone(),
+                    upstream_request_id,
+                    upstream_response_id: self.upstream_response_id.clone(),
+                    upstream_transport,
+                    http_version,
+                    websocket_pool,
+                    service_tier,
+                    provider_metadata_json,
+                    error: None,
+                    provider_error_code: None,
+                    retry_after_ms: None,
+                    usage: self.usage.clone(),
+                    image_generation_succeeded: self.image_generation_succeeded(),
+                    cost: self.cost.clone(),
+                    timings: self.timings.clone(),
+                    completed_at,
+                },
+            ))
+            .await;
+        }
         self.finalized = true;
         Ok(())
     }
@@ -1245,11 +1222,13 @@ where
             UpstreamSendState::Ambiguous
         };
         let send_state = self.raise_send_watermark(send_state);
-        if self.attempts > 0 {
-            self.engine
-                .store()
-                .mark_send_state(&self.request_id, send_state)
-                .await?;
+        if self.attempts > 0 && self.request_persisted {
+            best_effort_store_write(
+                self.engine
+                    .store()
+                    .mark_send_state(&self.request_id, send_state),
+            )
+            .await;
         }
         self.finish_failure(FailureFinalization {
             outcome,
@@ -1299,36 +1278,42 @@ where
             .and_then(ProviderResponseObservation::status_code);
         let (upstream_transport, http_version, websocket_pool) =
             self.current_transport_observation();
+        let service_tier = self.current_service_tier();
         let provider_metadata_json = self.current_provider_metadata_json();
-        self.engine
-            .store()
-            .finalize_model_request(ModelRequestFinalization {
-                request_id: self.request_id.clone(),
-                outcome: finalization.outcome,
-                send_state: finalization.send_state,
-                attempt_count: self.attempts,
-                downstream_committed_at: self.downstream_committed_at,
-                client_status_code: self.client_status_code,
-                upstream_status_code: finalization.upstream_status_code.or(observed_status_code),
-                client_response_id: self.client_response_id.clone(),
-                upstream_request_id,
-                upstream_response_id: finalization
-                    .provider_response_id
-                    .or_else(|| self.upstream_response_id.clone()),
-                upstream_transport,
-                http_version,
-                websocket_pool,
-                provider_metadata_json,
-                error: Some(finalization.error),
-                provider_error_code: finalization.provider_error_code,
-                retry_after_ms: finalization.retry_after_ms,
-                usage: self.usage.clone(),
-                image_generation_succeeded: self.image_generation_succeeded(),
-                cost: self.cost.clone(),
-                timings: self.timings.clone(),
-                completed_at,
-            })
-            .await?;
+        best_effort_store_write(
+            self.engine
+                .store()
+                .finalize_model_request(ModelRequestFinalization {
+                    request_id: self.request_id.clone(),
+                    outcome: finalization.outcome,
+                    send_state: finalization.send_state,
+                    attempt_count: self.attempts,
+                    downstream_committed_at: self.downstream_committed_at,
+                    client_status_code: self.client_status_code,
+                    upstream_status_code: finalization
+                        .upstream_status_code
+                        .or(observed_status_code),
+                    client_response_id: self.client_response_id.clone(),
+                    upstream_request_id,
+                    upstream_response_id: finalization
+                        .provider_response_id
+                        .or_else(|| self.upstream_response_id.clone()),
+                    upstream_transport,
+                    http_version,
+                    websocket_pool,
+                    service_tier,
+                    provider_metadata_json,
+                    error: Some(finalization.error),
+                    provider_error_code: finalization.provider_error_code,
+                    retry_after_ms: finalization.retry_after_ms,
+                    usage: self.usage.clone(),
+                    image_generation_succeeded: self.image_generation_succeeded(),
+                    cost: self.cost.clone(),
+                    timings: self.timings.clone(),
+                    completed_at,
+                }),
+        )
+        .await;
         self.finalized = true;
         Ok(())
     }
@@ -1357,6 +1342,14 @@ where
             .and_then(|current| current.response_observation.as_ref())
             .and_then(ProviderResponseObservation::provider_metadata)
             .map(|metadata| metadata.as_json().to_owned())
+    }
+
+    fn current_service_tier(&self) -> Option<String> {
+        self.current
+            .as_ref()
+            .and_then(|current| current.response_observation.as_ref())
+            .and_then(ProviderResponseObservation::service_tier)
+            .map(str::to_owned)
     }
 
     fn image_generation_succeeded(&self) -> Option<bool> {
@@ -1406,6 +1399,12 @@ where
                 error_kind,
             });
     }
+}
+
+async fn best_effort_store_write<T>(
+    write: impl Future<Output = Result<T, StoreError>>,
+) -> Option<T> {
+    write.await.ok()
 }
 
 enum PullOutcome {
@@ -1517,11 +1516,11 @@ fn initial_continuation_attempt(
     }
 }
 
-fn provider_engine_error(error: &ProviderError) -> EngineError {
+fn provider_engine_error(error: ProviderError) -> EngineError {
     if error.kind() == ProviderErrorKind::Cancelled {
         EngineError::Cancelled
     } else {
-        EngineError::Provider(error.clone())
+        EngineError::Provider(error)
     }
 }
 

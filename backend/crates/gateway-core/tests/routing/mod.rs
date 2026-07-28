@@ -190,21 +190,36 @@ fn global_mapping_should_apply_to_every_provider() {
 #[test]
 fn unmapped_model_should_pass_through_unchanged() {
     let snapshot = snapshot();
-    let plan = snapshot
-        .plan(
-            &PublicModelId::new("future-openai-model").expect("model"),
-            &operation(),
-            &RoutingContext {
-                provider_kind: Some(ProviderKind::new("openai").expect("provider")),
-                ..RoutingContext::default()
-            },
-        )
-        .expect("unknown model remains transparent");
+    for requested in [
+        "future-openai-model".to_owned(),
+        format!("future-{}", "x".repeat(512)),
+        "future\0model".to_owned(),
+        "  future-openai-model  ".to_owned(),
+    ] {
+        let plan = snapshot
+            .plan(
+                &PublicModelId::from_client_wire(requested.clone()).expect("client model"),
+                &operation(),
+                &RoutingContext {
+                    provider_kind: Some(ProviderKind::new("openai").expect("provider")),
+                    ..RoutingContext::default()
+                },
+            )
+            .expect("unknown model remains transparent");
 
-    assert_eq!(
-        plan.candidates()[0].upstream_model().as_str(),
-        "future-openai-model"
-    );
+        assert_eq!(plan.candidates()[0].upstream_model().as_str(), requested);
+    }
+}
+
+#[test]
+fn model_mapping_should_use_exact_client_keys() {
+    let snapshot = snapshot().with_model_mappings(BTreeMap::from([(
+        "  exact-alias  ".to_owned(),
+        "gpt-5.5".to_owned(),
+    )]));
+
+    assert_eq!(snapshot.mapped_model("  exact-alias  "), "gpt-5.5");
+    assert_eq!(snapshot.mapped_model("exact-alias"), "exact-alias");
 }
 
 #[test]

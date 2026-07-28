@@ -9,7 +9,7 @@ use axum::{
         connect_info::ConnectInfo,
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code},
     },
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderName, StatusCode},
     response::{IntoResponse, Response},
 };
 use futures::StreamExt;
@@ -27,7 +27,6 @@ use crate::{
     openai::{
         auth::{authenticate_client, authentication_error_response},
         error::{gateway_error_contract, gateway_error_from_engine, runtime_unavailable_response},
-        router::MAX_CLIENT_REQUEST_BODY_BYTES,
         service::OpenAiService,
     },
 };
@@ -102,8 +101,10 @@ impl ResponsesWebSocketAdapter {
             _connection_guard: connection_guard,
         };
         websocket
-            .max_message_size(MAX_CLIENT_REQUEST_BODY_BYTES)
-            .max_frame_size(MAX_CLIENT_REQUEST_BODY_BYTES)
+            // 覆盖 axum/tungstenite 的私有 64 MiB message 与 16 MiB frame 默认值。
+            // Responses JSON 的协议可接受性由上游决定，代理不另设 wire 长度上限。
+            .max_message_size(usize::MAX)
+            .max_frame_size(usize::MAX)
             .on_upgrade(move |socket| async move {
                 serve_responses_websocket(socket, session).await;
             })
@@ -303,18 +304,7 @@ async fn forward_execution(
         if let Some(update) = event.take_session_update() {
             provider_state = Some(update);
         }
-        match encoder.push_websocket(event) {
-            Ok(messages) => first_messages.extend(messages),
-            Err(error) => {
-                return send_protocol_error(
-                    socket,
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    error.protocol_body(),
-                    &request_id,
-                )
-                .await;
-            }
-        }
+        first_messages.extend(encoder.push_websocket(event));
     }
     if first_messages.is_empty() {
         let error = GatewayError::new(
@@ -336,9 +326,7 @@ async fn forward_execution(
         {
             return outcome;
         }
-        if let Err(error) = commit_connection_replay(replay, &encoder, provider_state.take()) {
-            return send_gateway_error(socket, &error, &request_id).await;
-        }
+        commit_connection_replay(replay, &encoder, provider_state.take());
         if !send_text(
             socket,
             response_metadata_event(&request_id, &response_headers),
@@ -378,18 +366,7 @@ async fn forward_execution(
                     if let Some(update) = event.take_session_update() {
                         provider_state = Some(update);
                     }
-                    match encoder.push_websocket(event) {
-                        Ok(encoded) => messages.extend(encoded),
-                        Err(error) => {
-                            return send_protocol_error(
-                                socket,
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                error.protocol_body(),
-                                &request_id,
-                            )
-                            .await;
-                        }
-                    }
+                    messages.extend(encoder.push_websocket(event));
                 }
                 if encoder.is_completed() {
                     if let Err(outcome) =
@@ -397,11 +374,7 @@ async fn forward_execution(
                     {
                         return outcome;
                     }
-                    if let Err(error) =
-                        commit_connection_replay(replay, &encoder, provider_state.take())
-                    {
-                        return send_gateway_error(socket, &error, &request_id).await;
-                    }
+                    commit_connection_replay(replay, &encoder, provider_state.take());
                     if !send_messages(socket, messages).await {
                         return ForwardOutcome::Disconnect;
                     }
@@ -413,9 +386,17 @@ async fn forward_execution(
                 }
             }
             ActiveInput::Event(Ok(None)) => {
+                if execution
+                    .session_mut()
+                    .is_some_and(|session| session.is_finalized())
+                {
+                    commit_connection_replay(replay, &encoder, provider_state.take());
+                    execution.disarm();
+                    return ForwardOutcome::Continue;
+                }
                 let error = GatewayError::new(
                     GatewayErrorKind::Internal,
-                    "gateway response ended without a terminal event",
+                    "gateway response ended without finalizing the execution",
                 );
                 return send_gateway_error(socket, &error, &request_id).await;
             }
@@ -441,15 +422,10 @@ fn commit_connection_replay(
     replay: &mut ConnectionReplaySnapshot,
     encoder: &OpenAiResponsesEncoder,
     provider_state: Option<ProviderSessionState>,
-) -> Result<(), GatewayError> {
-    let response_id = encoder.response_id().ok_or_else(|| {
-        GatewayError::new(
-            GatewayErrorKind::Internal,
-            "gateway completed a response without an identity",
-        )
-    })?;
-    replay.commit(response_id.to_owned(), provider_state);
-    Ok(())
+) {
+    if let Some(response_id) = encoder.response_id() {
+        replay.commit(response_id.to_owned(), provider_state);
+    }
 }
 
 async fn confirm_completed_execution(
@@ -595,21 +571,24 @@ fn response_metadata_event(
     request_id: &str,
     response_headers: &[ProviderResponseHeader],
 ) -> String {
-    let mut headers = response_headers
-        .iter()
-        .filter_map(|header| {
-            super::safe_response_header_name(header.name()).map(|name| {
-                (
-                    name.to_owned(),
-                    Value::String(header.value().as_str().to_owned()),
-                )
-            })
-        })
-        .collect::<Map<String, Value>>();
-    headers.insert(
-        "x-request-id".to_owned(),
-        Value::String(request_id.to_owned()),
-    );
+    let connection_options = super::response_connection_options(response_headers);
+    let mut headers = Map::new();
+    for header in response_headers {
+        if !super::response_header_is_forwardable(header.name(), &connection_options) {
+            continue;
+        }
+        let Ok(name) = HeaderName::from_bytes(header.name().as_bytes()) else {
+            continue;
+        };
+        let Ok(value) = std::str::from_utf8(header.value()) else {
+            continue;
+        };
+        // 官方 response.metadata 使用 string map，无法表达同名多值；后值保持既有覆盖语义。
+        headers.insert(name.as_str().to_owned(), Value::String(value.to_owned()));
+    }
+    headers
+        .entry("x-request-id".to_owned())
+        .or_insert_with(|| Value::String(request_id.to_owned()));
     json!({
         "type": "response.metadata",
         "headers": headers,

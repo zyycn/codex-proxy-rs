@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use futures::Stream;
 use gateway_core::engine::UpstreamSendState;
-use gateway_core::error::{ClientVisibleUpstreamError, SafeUpstreamValue};
+use gateway_core::error::{ClientVisibleUpstreamError, OpaqueUpstreamValue};
 use gateway_core::event::UpstreamHttpVersion;
 use url::Url;
 use zeroize::Zeroizing;
@@ -196,7 +196,7 @@ pub struct GrokInferenceResponse {
     body: GrokInferenceChunkStream,
     http_version: UpstreamHttpVersion,
     status_code: u16,
-    request_id: Option<SafeUpstreamValue>,
+    request_id: Option<OpaqueUpstreamValue>,
     transport_metrics: GrokInferenceTransportMetrics,
 }
 
@@ -207,7 +207,7 @@ impl GrokInferenceResponse {
         body: GrokInferenceChunkStream,
         http_version: UpstreamHttpVersion,
         status_code: u16,
-        request_id: Option<SafeUpstreamValue>,
+        request_id: Option<OpaqueUpstreamValue>,
     ) -> Self {
         Self {
             body,
@@ -238,7 +238,7 @@ impl GrokInferenceResponse {
     }
 
     #[must_use]
-    pub const fn request_id(&self) -> Option<&SafeUpstreamValue> {
+    pub const fn request_id(&self) -> Option<&OpaqueUpstreamValue> {
         self.request_id.as_ref()
     }
 
@@ -310,8 +310,8 @@ pub struct GrokInferenceTransportError {
     status: Option<u16>,
     retry_after: Option<Duration>,
     http_version: Option<UpstreamHttpVersion>,
-    request_id: Option<SafeUpstreamValue>,
-    upstream_code: Option<Box<SafeUpstreamValue>>,
+    request_id: Option<OpaqueUpstreamValue>,
+    upstream_code: Option<Box<OpaqueUpstreamValue>>,
     client_visible_upstream_error: Option<Box<ClientVisibleUpstreamError>>,
     transport_metrics: GrokInferenceTransportMetrics,
     credential_recovery_required: bool,
@@ -361,7 +361,7 @@ impl GrokInferenceTransportError {
     pub fn with_response_facts(
         mut self,
         http_version: UpstreamHttpVersion,
-        request_id: Option<SafeUpstreamValue>,
+        request_id: Option<OpaqueUpstreamValue>,
     ) -> Self {
         self.http_version = Some(http_version);
         self.request_id = request_id;
@@ -370,7 +370,7 @@ impl GrokInferenceTransportError {
 
     /// 附着从错误 JSON 中提取并清洗后的稳定机器码。
     #[must_use]
-    pub fn with_upstream_code(mut self, code: SafeUpstreamValue) -> Self {
+    pub fn with_upstream_code(mut self, code: OpaqueUpstreamValue) -> Self {
         self.upstream_code = Some(Box::new(code));
         self
     }
@@ -434,12 +434,12 @@ impl GrokInferenceTransportError {
     }
 
     #[must_use]
-    pub const fn request_id(&self) -> Option<&SafeUpstreamValue> {
+    pub const fn request_id(&self) -> Option<&OpaqueUpstreamValue> {
         self.request_id.as_ref()
     }
 
     #[must_use]
-    pub fn upstream_code(&self) -> Option<&SafeUpstreamValue> {
+    pub fn upstream_code(&self) -> Option<&OpaqueUpstreamValue> {
         self.upstream_code.as_deref()
     }
 

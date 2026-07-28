@@ -615,6 +615,7 @@ pub struct ModelRequestFinalization {
     pub upstream_transport: Option<String>,
     pub http_version: Option<String>,
     pub websocket_pool: Option<String>,
+    pub service_tier: Option<String>,
     /// Provider 已筛选的专有观测 JSON；Core 不解释字段。
     pub provider_metadata_json: Option<String>,
     pub error: Option<GatewayError>,

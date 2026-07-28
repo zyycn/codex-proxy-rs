@@ -145,6 +145,7 @@ fn request_context<'a>(
         thread_id: None,
         client_request_id: None,
         turn_id: None,
+        account_selection: Default::default(),
     }
 }
 

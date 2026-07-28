@@ -16,7 +16,7 @@ use crate::engine::credential::{
 };
 use crate::engine::{AttemptContext, UpstreamSendState};
 use crate::error::{
-    IdentifierError, ProviderError, ProviderErrorKind, SafeUpstreamValue, validate_text,
+    IdentifierError, OpaqueUpstreamValue, ProviderError, ProviderErrorKind, validate_text,
 };
 use crate::event::{EventSequenceValidator, ProviderEvent};
 use crate::operation::Operation;
@@ -125,7 +125,7 @@ pub struct ProviderCallMetadata {
     provider: ProviderKind,
     upstream_model: UpstreamModelId,
     resource: ProviderResource,
-    upstream_request_id: Option<SafeUpstreamValue>,
+    upstream_request_id: Option<OpaqueUpstreamValue>,
     transport: UpstreamTransport,
 }
 
@@ -149,7 +149,7 @@ impl ProviderCallMetadata {
 
     /// 设置 adapter 已分类为非 bearer 的 request ID。
     #[must_use]
-    pub fn with_upstream_request_id(mut self, request_id: SafeUpstreamValue) -> Self {
+    pub fn with_upstream_request_id(mut self, request_id: OpaqueUpstreamValue) -> Self {
         self.upstream_request_id = Some(request_id);
         self
     }
@@ -186,7 +186,7 @@ impl ProviderCallMetadata {
 
     /// 返回安全上游 request ID。
     #[must_use]
-    pub const fn upstream_request_id(&self) -> Option<&SafeUpstreamValue> {
+    pub const fn upstream_request_id(&self) -> Option<&OpaqueUpstreamValue> {
         self.upstream_request_id.as_ref()
     }
 

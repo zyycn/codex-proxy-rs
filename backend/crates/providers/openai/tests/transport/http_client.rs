@@ -104,12 +104,25 @@ fn custom_ca_should_report_environment_cache_key_consistently() {
 }
 
 #[tokio::test]
-async fn codex_backend_client_should_bound_and_redact_oversized_error_body() {
+async fn codex_backend_client_should_preserve_oversized_error_response() {
     let server = wiremock::MockServer::start().await;
     let large_error_body = "x".repeat(1024 * 1024 + 17);
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/codex/responses"))
-        .respond_with(wiremock::ResponseTemplate::new(500).set_body_string(large_error_body))
+        .respond_with(
+            wiremock::ResponseTemplate::new(500)
+                .append_header("x-future-error", "first")
+                .append_header("x-future-error", "second")
+                .insert_header("x-request-id", "req-upstream-error")
+                .insert_header("set-cookie", "account-secret=value")
+                .insert_header("authorization", "Bearer response-secret")
+                .insert_header("connection", "x-hop-secret")
+                .insert_header("x-hop-secret", "hop-secret")
+                .set_body_raw(
+                    large_error_body.clone(),
+                    "application/problem+json; charset=utf-8",
+                ),
+        )
         .mount(&server)
         .await;
     let client = CodexBackendClient::new(
@@ -140,15 +153,62 @@ async fn codex_backend_client_should_bound_and_redact_oversized_error_body() {
                 thread_id: None,
                 client_request_id: None,
                 turn_id: None,
+                account_selection: Default::default(),
             },
         )
         .await;
 
-    let Err(CodexClientError::Upstream { status, body, .. }) = result else {
+    let Err(CodexClientError::Upstream {
+        status,
+        body,
+        client_response: Some(client_response),
+        ..
+    }) = result
+    else {
         panic!("expected upstream error");
     };
     assert_eq!(status, reqwest::StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(body, "upstream error response exceeded the body limit");
+    assert_eq!(body, large_error_body);
+    assert_eq!(client_response.status(), 500);
+    assert_eq!(
+        client_response.content_type(),
+        Some(b"application/problem+json; charset=utf-8".as_slice())
+    );
+    let future_values = client_response
+        .client_headers()
+        .iter()
+        .filter(|(name, _)| name == "x-future-error")
+        .map(|(_, value)| value.as_ref())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        future_values,
+        vec![b"first".as_slice(), b"second".as_slice()]
+    );
+    assert!(
+        client_response
+            .client_headers()
+            .iter()
+            .any(|(name, value)| {
+                name == "x-request-id" && value.as_ref() == b"req-upstream-error"
+            })
+    );
+    for excluded in [
+        "content-type",
+        "content-length",
+        "set-cookie",
+        "authorization",
+        "connection",
+        "x-hop-secret",
+    ] {
+        assert!(
+            client_response
+                .client_headers()
+                .iter()
+                .all(|(name, _)| name != excluded),
+            "unexpected forwarded header {excluded}"
+        );
+    }
+    assert_eq!(client_response.body().as_ref(), large_error_body.as_bytes());
 }
 
 #[tokio::test]
@@ -192,6 +252,7 @@ async fn codex_backend_client_should_parse_retry_after_from_rate_limit_error_bod
                 thread_id: None,
                 client_request_id: None,
                 turn_id: None,
+                account_selection: Default::default(),
             },
         )
         .await;
@@ -247,7 +308,7 @@ async fn codex_backend_http_sse_should_fail_after_five_minutes_without_stream_da
 }
 
 #[tokio::test]
-async fn codex_backend_client_should_capture_only_safe_response_metadata() {
+async fn codex_backend_client_should_capture_forwardable_response_metadata() {
     let server = wiremock::MockServer::start().await;
     let body = concat!(
         "event: response.completed\n",
@@ -263,7 +324,18 @@ async fn codex_backend_client_should_capture_only_safe_response_metadata() {
                 .insert_header("x-models-etag", "models-v2")
                 .insert_header("x-reasoning-included", "true")
                 .insert_header("openai-processing-ms", "42")
+                .append_header("x-future-multi", "first")
+                .append_header("x-future-multi", "second")
+                .insert_header(
+                    "x-future-bytes",
+                    reqwest::header::HeaderValue::from_bytes(b"\xffopaque")
+                        .expect("non-UTF-8 header value"),
+                )
                 .insert_header("set-cookie", "secret=value")
+                .insert_header("authorization", "Bearer response-secret")
+                .insert_header("chatgpt-account-id", "account-secret")
+                .insert_header("connection", "x-hop-secret")
+                .insert_header("x-hop-secret", "hop-secret")
                 .insert_header("x-codex-primary-used-percent", "15")
                 .set_body_string(body),
         )
@@ -297,6 +369,7 @@ async fn codex_backend_client_should_capture_only_safe_response_metadata() {
                 thread_id: None,
                 client_request_id: None,
                 turn_id: None,
+                account_selection: Default::default(),
             },
         )
         .await
@@ -321,13 +394,49 @@ async fn codex_backend_client_should_capture_only_safe_response_metadata() {
     assert_eq!(
         names,
         vec![
+            "date",
             "openai-model",
             "openai-processing-ms",
+            "x-codex-primary-used-percent",
+            "x-future-bytes",
+            "x-future-multi",
+            "x-future-multi",
             "x-models-etag",
             "x-reasoning-included",
             "x-request-id"
         ]
     );
+    assert_eq!(
+        response
+            .response_metadata
+            .client_headers
+            .iter()
+            .filter(|(name, _)| name == "x-future-multi")
+            .map(|(_, value)| value.as_ref())
+            .collect::<Vec<_>>(),
+        vec![b"first".as_slice(), b"second".as_slice()]
+    );
+    assert!(
+        response
+            .response_metadata
+            .client_headers
+            .iter()
+            .any(|(name, value)| { name == "x-future-bytes" && value.as_ref() == b"\xffopaque" })
+    );
+    for blocked in [
+        "set-cookie",
+        "authorization",
+        "chatgpt-account-id",
+        "connection",
+        "x-hop-secret",
+        "content-type",
+        "content-length",
+    ] {
+        assert!(
+            !names.contains(&blocked),
+            "leaked response header {blocked}"
+        );
+    }
     assert_eq!(response.set_cookie_headers, vec!["secret=value"]);
     assert_eq!(
         response.rate_limit_headers,

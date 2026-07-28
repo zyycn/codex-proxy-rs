@@ -488,15 +488,11 @@ impl RuntimeSnapshot {
 
     #[must_use]
     pub fn mapped_model(&self, requested: &str) -> String {
-        let original = requested.trim();
+        let original = requested;
         let mut current = original.to_owned();
         let mut seen = BTreeSet::new();
         for _ in 0..20 {
-            let Some(target) = self
-                .model_mappings
-                .get(&current)
-                .map(|target| target.trim())
-            else {
+            let Some(target) = self.model_mappings.get(&current).map(String::as_str) else {
                 return current;
             };
             if !seen.insert(current.clone()) || seen.contains(target) {
@@ -529,8 +525,14 @@ impl RuntimeSnapshot {
             {
                 continue;
             }
-            let upstream_model = UpstreamModelId::new(self.mapped_model(public_model.as_str()))
-                .map_err(|_| RoutingError::InvalidIdentifier)?;
+            let requested_model = public_model.as_str();
+            let mapped_model = self.mapped_model(requested_model);
+            let upstream_model = if self.model_mappings.contains_key(requested_model) {
+                UpstreamModelId::new(mapped_model)
+            } else {
+                UpstreamModelId::from_client_wire(mapped_model)
+            }
+            .map_err(|_| RoutingError::InvalidIdentifier)?;
             let emulated_features = match self
                 .provider_models
                 .get(provider)

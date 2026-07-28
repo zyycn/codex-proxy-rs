@@ -2,6 +2,7 @@ mod http;
 mod websocket;
 
 use axum::http::{HeaderMap, HeaderValue};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use bytes::Bytes;
 use gateway_api::openai::responses::{
     ContinuationIntent, DecodedResponsesRequest, OpenAiRequestHeaders, OpenAiResponsesEncoder,
@@ -118,6 +119,28 @@ fn decoder_should_preserve_the_openai_body_and_only_derive_stable_routing_facts(
 }
 
 #[test]
+fn decoder_should_preserve_opaque_client_model_values() {
+    for model in [
+        format!("future-{}", "x".repeat(512)),
+        "future\0model".to_owned(),
+        "  future-model  ".to_owned(),
+    ] {
+        let decoded = generate_request(json!({
+            "model": model.clone(),
+            "input": "hello"
+        }));
+
+        assert_eq!(decoded.metadata().public_model(), model);
+        assert_eq!(
+            openai_wire_body(&decoded)
+                .get("model")
+                .and_then(Value::as_str),
+            Some(model.as_str())
+        );
+    }
+}
+
+#[test]
 fn decoder_should_preserve_compaction_trigger_for_the_openai_provider() {
     let decoded = generate_request(json!({
         "model": "smart-code",
@@ -150,6 +173,21 @@ fn decoder_should_keep_transport_override_out_of_the_openai_wire_body() {
 }
 
 #[test]
+fn decoder_should_preserve_unrecognized_use_websocket_values() {
+    let decoded = generate_request(json!({
+        "model": "smart-code",
+        "input": "hello",
+        "use_websocket": {"future": "transport-mode"}
+    }));
+
+    assert_eq!(
+        openai_wire_body(&decoded).get("use_websocket"),
+        Some(&json!({"future": "transport-mode"}))
+    );
+    assert!(!openai_protocol_context(&decoded).contains_key("use_websocket"));
+}
+
+#[test]
 fn decoder_should_preserve_connection_metadata_outside_the_openai_wire_body() {
     let mut headers = HeaderMap::new();
     headers.insert("x-codex-turn-state", HeaderValue::from_static("turn-state"));
@@ -170,8 +208,140 @@ fn decoder_should_preserve_connection_metadata_outside_the_openai_wire_body() {
             ("turn_state".to_owned(), json!("turn-state")),
             ("turn_metadata".to_owned(), json!("{\"kind\":\"review\"}")),
             ("conversation_id".to_owned(), json!("conversation")),
+            (
+                "opaque_request_headers".to_owned(),
+                json!([
+                    ["x-codex-turn-state", STANDARD.encode(b"turn-state")],
+                    [
+                        "x-codex-turn-metadata",
+                        STANDARD.encode(br#"{"kind":"review"}"#)
+                    ],
+                    ["conversation-id", STANDARD.encode(b"conversation")]
+                ]),
+            ),
         ])
     );
+}
+
+#[test]
+fn decoder_should_preserve_ordinary_request_headers_as_opaque_multivalues() {
+    let mut headers = HeaderMap::new();
+    headers.append(
+        "x-openai-future-mode",
+        HeaderValue::from_static("future-ascii"),
+    );
+    headers.append(
+        "x-openai-future-mode",
+        HeaderValue::from_bytes(b"\x80\xff").expect("opaque header bytes"),
+    );
+    headers.append("version", HeaderValue::from_static("future-v1"));
+    headers.append(
+        "version",
+        HeaderValue::from_bytes(b"future-\x80").expect("opaque known header bytes"),
+    );
+    headers.insert(
+        "accept",
+        HeaderValue::from_static("application/vnd.openai.responses+json"),
+    );
+    headers.insert(
+        "content-type",
+        HeaderValue::from_static("application/vnd.openai.responses.request+json"),
+    );
+    headers.insert(
+        "user-agent",
+        HeaderValue::from_static("Codex future-client"),
+    );
+    headers.insert("originator", HeaderValue::from_static("future-codex"));
+    headers.append(
+        "openai-beta",
+        HeaderValue::from_static("future_responses=v2"),
+    );
+    headers.append("openai-beta", HeaderValue::from_static("future_tools=v3"));
+    headers.insert(
+        "x-openai-internal-codex-residency",
+        HeaderValue::from_static("future-region"),
+    );
+    headers.insert(
+        "x-codex-turn-state",
+        HeaderValue::from_static("same-account-turn"),
+    );
+
+    headers.insert(
+        "connection",
+        HeaderValue::from_static("keep-alive, x-private-hop"),
+    );
+    headers.insert("x-private-hop", HeaderValue::from_static("drop-me"));
+    headers.insert("host", HeaderValue::from_static("downstream.invalid"));
+    headers.insert("content-length", HeaderValue::from_static("999"));
+    headers.insert("authorization", HeaderValue::from_static("Bearer client"));
+    headers.insert("x-api-key", HeaderValue::from_static("client-key"));
+    headers.insert("cookie", HeaderValue::from_static("client=cookie"));
+    headers.insert(
+        "chatgpt-account-id",
+        HeaderValue::from_static("client-account"),
+    );
+    headers.insert(
+        "chatgpt-project-id",
+        HeaderValue::from_static("client-project"),
+    );
+    headers.insert(
+        "x-codex-installation-id",
+        HeaderValue::from_static("client-installation"),
+    );
+
+    let decoded =
+        decode_request_with_headers(br#"{"model":"smart-code","input":"hello"}"#, &headers)
+            .expect("opaque request headers should not affect body decoding");
+    let entries = openai_protocol_context(&decoded)
+        .get("opaque_request_headers")
+        .and_then(Value::as_array)
+        .expect("opaque request header context");
+    let values = |target: &str| {
+        entries
+            .iter()
+            .filter_map(Value::as_array)
+            .filter(|entry| entry.first().and_then(Value::as_str) == Some(target))
+            .filter_map(|entry| entry.get(1).and_then(Value::as_str))
+            .map(|encoded| STANDARD.decode(encoded).expect("valid base64 header value"))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        values("x-openai-future-mode"),
+        vec![b"future-ascii".to_vec(), b"\x80\xff".to_vec()]
+    );
+    assert_eq!(
+        values("version"),
+        vec![b"future-v1".to_vec(), b"future-\x80".to_vec()]
+    );
+    assert_eq!(
+        values("openai-beta"),
+        vec![b"future_responses=v2".to_vec(), b"future_tools=v3".to_vec()]
+    );
+    for preserved in [
+        "accept",
+        "content-type",
+        "user-agent",
+        "originator",
+        "x-openai-internal-codex-residency",
+        "x-codex-turn-state",
+    ] {
+        assert_eq!(values(preserved).len(), 1, "missing {preserved}");
+    }
+    for excluded in [
+        "connection",
+        "x-private-hop",
+        "host",
+        "content-length",
+        "authorization",
+        "x-api-key",
+        "cookie",
+        "chatgpt-account-id",
+        "chatgpt-project-id",
+        "x-codex-installation-id",
+    ] {
+        assert!(values(excluded).is_empty(), "unexpected {excluded}");
+    }
 }
 
 #[test]
@@ -188,6 +358,18 @@ fn decoder_should_preserve_unknown_nested_values_without_debug_disclosure() {
         Some(&json!(secret))
     );
     assert!(!format!("{decoded:?}").contains(secret));
+}
+
+#[test]
+fn decoder_should_preserve_unknown_arbitrary_precision_numbers() {
+    let number = "12345678901234567890123456789012345678901234567890";
+    let body = format!(r#"{{"model":"smart-code","input":"hello","future_number":{number}}}"#);
+
+    let decoded = decode_request_with_headers(body.as_bytes(), &HeaderMap::new())
+        .expect("opaque numeric field should decode");
+    let encoded = serde_json::to_string(openai_wire_body(&decoded)).expect("encode request body");
+
+    assert!(encoded.contains(&format!(r#""future_number":{number}"#)));
 }
 
 #[test]
@@ -330,7 +512,7 @@ fn transparent_encoder_should_forward_raw_sse_frames_unknown_events_and_terminal
     let mut encoder = OpenAiResponsesEncoder::new();
     let frames = events
         .iter()
-        .flat_map(|event| encoder.push_sse(event).expect("wire event should encode"))
+        .flat_map(|event| encoder.push_sse(event))
         .collect::<Vec<_>>();
     let response = encoder.finish().expect("wire response should finish");
     let body = frames
@@ -384,15 +566,11 @@ fn transparent_encoder_should_use_identical_json_for_sse_and_websocket() {
 
     let sse = events
         .iter()
-        .flat_map(|event| sse_encoder.push_sse(event).expect("SSE wire event"))
+        .flat_map(|event| sse_encoder.push_sse(event))
         .collect::<Vec<_>>();
     let websocket = events
         .iter()
-        .flat_map(|event| {
-            websocket_encoder
-                .push_websocket(event)
-                .expect("WebSocket wire event")
-        })
+        .flat_map(|event| websocket_encoder.push_websocket(event))
         .collect::<Vec<_>>();
     let sse_text = String::from_utf8(
         sse.iter()
@@ -414,8 +592,40 @@ fn transparent_encoder_should_use_identical_json_for_sse_and_websocket() {
 }
 
 #[test]
-fn transparent_encoder_should_require_matching_canonical_and_wire_terminals() {
+fn transparent_encoder_should_follow_wire_when_canonical_identity_changes() {
     let mut encoder = OpenAiResponsesEncoder::new();
+    let started = openai_wire_event(
+        vec![GatewayEvent::Started(ResponseMeta::new(
+            "resp_1", "gpt-test",
+        ))],
+        "response.created",
+        json!({"type": "response.created", "response": {"id": "wire_resp_1"}}),
+    );
+    encoder.push_sse(&started);
+    let changed_identity = openai_wire_event(
+        vec![GatewayEvent::Completed(ResponseMeta::new(
+            "resp_2", "gpt-test",
+        ))],
+        "response.completed",
+        json!({"type": "response.completed", "response": {"id": "wire_resp_2"}}),
+    );
+
+    let completed = encoder.push_sse(&changed_identity);
+
+    assert_eq!(completed.len(), 1);
+    assert!(encoder.is_completed());
+    assert_eq!(encoder.response_id(), Some("wire_resp_2"));
+    assert_eq!(
+        encoder
+            .finish()
+            .expect("wire terminal remains authoritative"),
+        json!({"id": "wire_resp_2"})
+    );
+}
+
+#[test]
+fn transparent_encoder_should_only_require_wire_terminal_for_buffered_conversion() {
+    let mut missing_terminal = OpenAiResponsesEncoder::new();
     let started = openai_wire_event(
         vec![GatewayEvent::Started(ResponseMeta::new(
             "resp_1", "gpt-test",
@@ -423,24 +633,8 @@ fn transparent_encoder_should_require_matching_canonical_and_wire_terminals() {
         "response.created",
         json!({"type": "response.created", "response": {"id": "resp_1"}}),
     );
-    encoder.push_sse(&started).expect("started event");
-    let changed_identity = openai_wire_event(
-        vec![GatewayEvent::Completed(ResponseMeta::new(
-            "resp_2", "gpt-test",
-        ))],
-        "response.completed",
-        json!({"type": "response.completed", "response": {"id": "resp_2"}}),
-    );
 
-    assert_eq!(
-        encoder
-            .push_sse(&changed_identity)
-            .expect_err("identity changes must fail"),
-        ResponseEncodeError::WireIdentityChanged
-    );
-
-    let mut missing_terminal = OpenAiResponsesEncoder::new();
-    missing_terminal.push_sse(&started).expect("started event");
+    missing_terminal.push_sse(&started);
     assert_eq!(
         missing_terminal
             .finish()

@@ -182,7 +182,8 @@ impl GrokAccountSessionSelector {
         };
         let mut capacity_denied = false;
         let mut retry_after = None;
-        while let Some(selected) = AccountSelector.select(&candidates, &context) {
+        while let Some(selection) = AccountSelector.select(&candidates, &context) {
+            let selected = selection.candidate();
             let selected_id = selected.account.id().clone();
             let selected_revision = selected.account.revision();
             let allows_account_state_mutation = !diagnostic || selected.account.enabled();

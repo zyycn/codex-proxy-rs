@@ -18,8 +18,8 @@ use gateway_core::engine::{
     AttemptContext, CancellationToken, ContinuationAttempt, UpstreamSendState,
 };
 use gateway_core::error::{
-    ClientVisibleUpstreamError, ContinuationFailure, ProviderError, ProviderErrorKind,
-    SafeUpstreamValue,
+    ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, ContinuationFailure,
+    OpaqueUpstreamValue, ProviderError, ProviderErrorKind,
 };
 use gateway_core::event::{
     GatewayEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseMetadata,
@@ -70,16 +70,18 @@ use crate::transport::request::{
 use crate::transport::session::CodexSessionIdentity;
 use crate::transport::websocket::{CodexWebSocketExchangeError, PreviousResponseUnavailableReason};
 use crate::transport::{
-    CODEX_RESPONSES_PATH, CodexBackendClient, CodexBackendStreamingResponse, CodexBackendTransport,
-    CodexClientError, CodexRateLimitHeaderUpdates, CodexRequestContext, CodexResponseMetadata,
-    CodexTransportMetrics, CodexUpstreamDiagnostics, CodexWebSocketPool, endpoint_url,
+    CODEX_RESPONSES_PATH, CodexAccountSelectionTelemetry, CodexBackendClient,
+    CodexBackendStreamingResponse, CodexBackendTransport, CodexClientError,
+    CodexRateLimitHeaderUpdates, CodexRequestContext, CodexResponseMetadata, CodexTransportMetrics,
+    CodexUpstreamDiagnostics, CodexWebSocketPool, endpoint_url,
 };
 
 const PROVIDER_NAME: &str = "openai";
 const HTTP_SSE_TRANSPORT: &str = "http_sse";
 const WEBSOCKET_TRANSPORT: &str = "websocket";
 const MAX_COOKIE_HEADER_BYTES: usize = 16 * 1024;
-/// 与 2.x 预取器一致：提交边界前最多保留 64 KiB 原始上游 chunk。
+/// 提交边界前最多保留 64 KiB 原始上游 chunk；达到阈值后结束无感换号窗口，
+/// 但不会把上游数据改写成协议失败。
 const MAX_STREAM_PREFETCH_BYTES: usize = 64 * 1024;
 pub const OFFICIAL_CODEX_BASE_PATH: &str = "/backend-api";
 pub const OFFICIAL_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api";
@@ -169,7 +171,7 @@ impl Provider for CodexProvider {
         };
         let (semantics, reasoning_effort) = encode_generate_request(request, "observability")
             .map(|mut encoded| {
-                if let Ok(Some(previous)) = decode_openai_session_state(request) {
+                if let Some(previous) = decode_openai_session_state(request) {
                     let mut input = previous
                         .transcript
                         .iter()
@@ -236,7 +238,7 @@ impl Provider for CodexProvider {
                 UpstreamSendState::NotSent,
             ));
         };
-        let previous_session = decode_openai_session_state(generate)?;
+        let previous_session = decode_openai_session_state(generate);
         let continuation_requested = generate.native_continuation_requested();
         let mut upstream_request =
             encode_generate_request(generate, candidate.upstream_model().as_str())
@@ -250,11 +252,7 @@ impl Provider for CodexProvider {
         if let Some(identity) = &self.session_identity {
             identity.prepare_local_conversation(&mut upstream_request);
         }
-        if upstream_request
-            .turn_state
-            .as_deref()
-            .is_none_or(str::is_empty)
-        {
+        if upstream_request.turn_state.is_none() {
             upstream_request.turn_state = previous_session
                 .as_ref()
                 .and_then(|state| state.turn_state.clone());
@@ -294,13 +292,7 @@ impl Provider for CodexProvider {
         ) || previous_session.as_ref().is_some_and(|state| {
             state.continuation_scope == OpenAiContinuationScope::ReplayRequired
         });
-        if replay_previous_response {
-            let state = previous_session.as_ref().ok_or_else(|| {
-                provider_error(
-                    ProviderErrorKind::InvalidRequest,
-                    UpstreamSendState::NotSent,
-                )
-            })?;
+        if replay_previous_response && let Some(state) = previous_session.as_ref() {
             let mut input = replay_input_for_account(state, lease.account_id().as_str());
             input.reserve(request_input.len());
             input.extend(request_input.iter().cloned());
@@ -465,17 +457,10 @@ struct OpenAiSessionCapture {
     continuation_scope: Option<OpenAiContinuationScope>,
 }
 
-fn decode_openai_session_state(
-    request: &GenerateRequest,
-) -> Result<Option<OpenAiSessionState>, ProviderError> {
+fn decode_openai_session_state(request: &GenerateRequest) -> Option<OpenAiSessionState> {
     request
         .provider_session_state(PROVIDER_NAME)
-        .map(|state| {
-            serde_json::from_value(Value::Object(state.payload().clone())).map_err(|_| {
-                provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
-            })
-        })
-        .transpose()
+        .and_then(|state| serde_json::from_value(Value::Object(state.payload().clone())).ok())
 }
 
 fn encode_openai_session_state(
@@ -496,14 +481,14 @@ fn encode_openai_session_state(
 fn attach_openai_session_update(
     events: &mut [ProviderEvent],
     capture: &mut Option<OpenAiSessionCapture>,
-) -> Result<(), ProviderError> {
+) {
     let Some((terminal_index, output)) = events.iter().enumerate().find_map(|(index, event)| {
         terminal_response_output(event).map(|output| (index, output.to_vec()))
     }) else {
-        return Ok(());
+        return;
     };
     let Some(capture) = capture.take() else {
-        return Ok(());
+        return;
     };
     let mut transcript = capture
         .previous
@@ -524,17 +509,19 @@ fn attach_openai_session_update(
                 item,
             }),
     );
-    let update = encode_openai_session_state(OpenAiSessionState {
+    let Some(continuation_scope) = capture.continuation_scope else {
+        return;
+    };
+    let Ok(update) = encode_openai_session_state(OpenAiSessionState {
         account_id: capture.account_id,
         conversation_id: capture.conversation_id,
         turn_state: capture.turn_state,
-        continuation_scope: capture
-            .continuation_scope
-            .ok_or_else(|| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent))?,
+        continuation_scope,
         transcript,
-    })?;
+    }) else {
+        return;
+    };
     events[terminal_index].attach_session_update(update);
-    Ok(())
 }
 
 fn terminal_response_output(event: &ProviderEvent) -> Option<&[Value]> {
@@ -686,6 +673,11 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             })?;
         let request_id = context.request_id().as_str().to_owned();
         let cancellation = context.cancellation().clone();
+        let account_selection = CodexAccountSelectionTelemetry::new(
+            lease.affinity_hit(),
+            lease.escape_reason(),
+            lease.account_switch(),
+        );
         let stream_commit_policy =
             StreamCommitPolicy::for_continuation(context.continuation_attempt());
         let mut response = create_response_attempt(
@@ -698,6 +690,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 lease.installation_id(),
                 &authorization,
                 cookie_header.as_ref(),
+                account_selection,
             ),
             active_account.id().as_str(),
             context.deadline(),
@@ -737,6 +730,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                             &recovered.credential.installation_id,
                             &authorization,
                             cookie_header.as_ref(),
+                            account_selection,
                         ),
                         active_account.id().as_str(),
                         context.deadline(),
@@ -789,7 +783,9 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             active_account.id().as_str(),
             context.attempt_index().get(),
         );
-        yield ProviderEvent::observation(observation_state.observation()?);
+        if let Some(observation) = observation_state.observation() {
+            yield ProviderEvent::observation(observation);
+        }
         if allows_account_state_mutation {
             synchronize_passive_quota(&quota, &active_account, &response.rate_limit_headers).await;
         }
@@ -858,8 +854,10 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                         if allows_account_state_mutation {
                             synchronize_passive_quota(&quota, &active_account, &updates).await;
                         }
-                        if observation_state.merge_rate_limit_headers(&updates) {
-                            yield ProviderEvent::observation(observation_state.observation()?);
+                        if observation_state.merge_rate_limit_headers(&updates)
+                            && let Some(observation) = observation_state.observation()
+                        {
+                            yield ProviderEvent::observation(observation);
                         }
                     }
                     apply_failure(&failure_context, &active_account, &failure)
@@ -896,6 +894,8 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 }
             };
             pre_commit_events.observe_chunk(chunk_len);
+            let service_tier_changed = observation_state
+                .observe_service_tier(decoder.response_service_tier());
             let terminal_failure = canonical_failure.map(|(error, semantic_output_seen)| {
                 let atomic_upstream_failure = matches!(&error, CodexCanonicalError::Upstream(_));
                 (
@@ -925,17 +925,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 apply_failure(&failure_context, &active_account, failure)
                 .await;
             }
-            if let Err(error) = attach_openai_session_update(&mut events, &mut session_capture) {
-                if terminal_failure.is_none() {
-                    let failure = MappedProviderFailure::plain(error);
-                    apply_failure(&failure_context, &active_account, &failure)
-                    .await;
-                    Err(failure.error)?;
-                } else {
-                    Err(error)?;
-                }
-                return;
-            }
+            attach_openai_session_update(&mut events, &mut session_capture);
             if allows_account_state_mutation && completed && terminal_failure.is_none() {
                 // 完成事件一旦交给下游，Core 可以立刻停止轮询 Provider stream；
                 // 在此之前持久化亲和关系，保证成功请求不会因流被提前 drop 而丢失绑定。
@@ -946,8 +936,13 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                     .observe_cyber_policy_success(cyber_policy_scope.as_ref())
                     .await;
             }
-            if rate_limits_changed || timing_changed || terminal_changed {
-                yield ProviderEvent::observation(observation_state.observation()?);
+            if (rate_limits_changed
+                || service_tier_changed
+                || timing_changed
+                || terminal_changed)
+                && let Some(observation) = observation_state.observation()
+            {
+                yield ProviderEvent::observation(observation);
             }
             if let Some((mut failure, atomic_upstream_failure)) = terminal_failure {
                 let failure_after_commit =
@@ -964,7 +959,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 Err(failure.error)?;
                 return;
             }
-            let events = pre_commit_events.stage(events, timing_signals, completed)?;
+            let events = pre_commit_events.stage(events, timing_signals, completed);
             for event in events {
                 yield event;
             }
@@ -995,6 +990,8 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             )
         });
         let timing_signals = decoder.take_timing_signals();
+        let service_tier_changed =
+            observation_state.observe_service_tier(decoder.response_service_tier());
         let timing_changed = observation_state
             .observe_timing_signals(timing_signals, context.timing_started_at());
         let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
@@ -1016,17 +1013,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         {
             capture.turn_state = Some(turn_state);
         }
-        if let Err(error) = attach_openai_session_update(&mut events, &mut session_capture) {
-            if terminal_failure.is_none() {
-                let failure = MappedProviderFailure::plain(error);
-                apply_failure(&failure_context, &active_account, &failure)
-                .await;
-                Err(failure.error)?;
-            } else {
-                Err(error)?;
-            }
-            return;
-        }
+        attach_openai_session_update(&mut events, &mut session_capture);
         let completed = events
             .iter()
             .flat_map(ProviderEvent::canonical_facts)
@@ -1042,8 +1029,10 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 .observe_cyber_policy_success(cyber_policy_scope.as_ref())
                 .await;
         }
-        if timing_changed || rate_limits_changed || terminal_changed {
-            yield ProviderEvent::observation(observation_state.observation()?);
+        if (service_tier_changed || timing_changed || rate_limits_changed || terminal_changed)
+            && let Some(observation) = observation_state.observation()
+        {
+            yield ProviderEvent::observation(observation);
         }
         if let Some((mut failure, atomic_upstream_failure)) = terminal_failure {
             let failure_after_commit =
@@ -1060,7 +1049,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             Err(failure.error)?;
             return;
         }
-        let events = pre_commit_events.finish(events, timing_signals, completed)?;
+        let events = pre_commit_events.finish(events, timing_signals, completed);
         for event in events {
             yield event;
         }
@@ -1113,8 +1102,9 @@ impl OpenAiResponseObservationState {
             requested_model: request.model().to_owned(),
             stream: request.stream(),
             compact: semantics.compact,
-            service_tier: request.service_tier().map(str::to_owned),
-            rate_limit_headers: safe_observation_headers(&response.rate_limit_headers),
+            // 请求档位保留在 requestSummary；一等观测只接受响应确认的实际档位。
+            service_tier: None,
+            rate_limit_headers: selected_observation_headers(&response.rate_limit_headers),
             account_id: account_id.to_owned(),
             attempt_index,
             timings: openai_response_timings(
@@ -1125,7 +1115,7 @@ impl OpenAiResponseObservationState {
         }
     }
 
-    fn observation(&self) -> Result<ProviderResponseObservation, ProviderError> {
+    fn observation(&self) -> Option<ProviderResponseObservation> {
         let mut observation = codex_response_observation(
             self.transport,
             &self.diagnostics,
@@ -1137,7 +1127,10 @@ impl OpenAiResponseObservationState {
         if let Some(metadata) = self.provider_metadata() {
             observation = observation.with_provider_metadata(metadata);
         }
-        Ok(observation)
+        if let Some(service_tier) = self.service_tier.as_deref() {
+            observation = observation.with_service_tier_if_valid(service_tier.to_owned());
+        }
+        Some(observation)
     }
 
     fn observe_stream_chunk(&mut self, chunk: &[u8], started_at: Instant) -> bool {
@@ -1165,9 +1158,20 @@ impl OpenAiResponseObservationState {
         changed
     }
 
+    fn observe_service_tier(&mut self, service_tier: Option<&str>) -> bool {
+        let Some(service_tier) = service_tier else {
+            return false;
+        };
+        if self.service_tier.as_deref() == Some(service_tier) {
+            return false;
+        }
+        self.service_tier = Some(service_tier.to_owned());
+        true
+    }
+
     fn merge_rate_limit_headers(&mut self, updates: &[(String, String)]) -> bool {
         let mut changed = false;
-        for (name, value) in safe_observation_headers(updates) {
+        for (name, value) in selected_observation_headers(updates) {
             if let Some(existing) = self
                 .rate_limit_headers
                 .iter_mut()
@@ -1236,7 +1240,9 @@ impl OpenAiResponseObservationState {
         );
         metadata.insert(
             "upstreamTraceHeaders".to_owned(),
-            json!(safe_observation_headers(&self.diagnostics.trace_headers)),
+            json!(selected_observation_headers(
+                &self.diagnostics.trace_headers
+            )),
         );
         metadata.insert("requestSummary".to_owned(), self.request_summary.clone());
         if let Some(service_tier) = &self.service_tier {
@@ -1268,7 +1274,7 @@ impl OpenAiResponseObservationState {
             .trace_headers
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("cf-ray"))
-            && let Some((_, cf_ray)) = safe_observation_header("cf-ray", cf_ray)
+            && let Some((_, cf_ray)) = selected_observation_header("cf-ray", cf_ray)
         {
             metadata.insert("cfRay".to_owned(), Value::String(cf_ray));
         }
@@ -1313,10 +1319,9 @@ fn codex_response_observation(
     metrics: &CodexTransportMetrics,
     websocket_pool_decision: Option<crate::transport::WebSocketPoolDecision>,
     timings: ProviderResponseTimings,
-) -> Result<ProviderResponseObservation, ProviderError> {
+) -> Option<ProviderResponseObservation> {
     let mut observation = ProviderResponseObservation::new(
-        UpstreamTransport::new(actual_transport_name(transport))
-            .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent))?,
+        UpstreamTransport::new(actual_transport_name(transport)).ok()?,
     )
     .with_timings(timings);
     if let Some(version) = metrics
@@ -1336,23 +1341,16 @@ fn codex_response_observation(
     if let Some(status_code) = diagnostics.status_code {
         observation = observation.with_status_code(status_code);
     }
-    if let Some(request_id) = diagnostics
-        .request_id
-        .as_deref()
-        .and_then(|request_id| SafeUpstreamValue::new(request_id.to_owned()).ok())
-    {
-        observation = observation.with_request_id(request_id);
+    if let Some(request_id) = diagnostics.request_id.as_deref() {
+        observation = observation.with_request_id(OpaqueUpstreamValue::new(request_id.to_owned()));
     }
     let client_headers = response_metadata
         .client_headers
         .iter()
-        .filter_map(|(name, value)| {
-            let value = SafeUpstreamValue::new(value.to_owned()).ok()?;
-            ProviderResponseHeader::new(name.to_owned(), value)
-        })
+        .map(|(name, value)| ProviderResponseHeader::new(name.to_owned(), value.clone()))
         .collect();
     observation = observation.with_client_headers(client_headers);
-    Ok(observation)
+    Some(observation)
 }
 
 fn codex_error_observation(error: &CodexClientError) -> Option<ProviderResponseObservation> {
@@ -1375,19 +1373,14 @@ fn codex_error_observation(error: &CodexClientError) -> Option<ProviderResponseO
                 transport_metrics,
                 None,
                 openai_response_timings(transport_metrics, &CodexResponseMetadata::default()),
-            )
-            .ok()?
+            )?
             .with_status_code(status.as_u16());
         }
         CodexClientError::WebSocket(CodexWebSocketExchangeError::Upstream(upstream)) => {
             observation = observation.with_status_code(upstream.status_code);
-            if let Some(request_id) = upstream
-                .diagnostics
-                .request_id
-                .as_deref()
-                .and_then(|value| SafeUpstreamValue::new(value.to_owned()).ok())
-            {
-                observation = observation.with_request_id(request_id);
+            if let Some(request_id) = upstream.diagnostics.request_id.as_deref() {
+                observation =
+                    observation.with_request_id(OpaqueUpstreamValue::new(request_id.to_owned()));
             }
         }
         _ => {}
@@ -1414,7 +1407,8 @@ fn openai_processing_ms(response_metadata: &CodexResponseMetadata) -> Option<u64
         .client_headers
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case("openai-processing-ms"))
-        .and_then(|(_, value)| value.parse::<u64>().ok())
+        .and_then(|(_, value)| std::str::from_utf8(value).ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
 }
 
 fn openai_response_request_summary(
@@ -1460,19 +1454,16 @@ const fn json_value_kind(value: Option<&Value>) -> &'static str {
     }
 }
 
-fn safe_observation_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
+fn selected_observation_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
     headers
         .iter()
-        .filter_map(|(name, value)| safe_observation_header(name, value))
+        .filter_map(|(name, value)| selected_observation_header(name, value))
         .collect()
 }
 
-fn safe_observation_header(name: &str, value: &str) -> Option<(String, String)> {
+fn selected_observation_header(name: &str, value: &str) -> Option<(String, String)> {
     let name = name.trim().to_ascii_lowercase();
-    let value = value.trim();
-    let safe_value = SafeUpstreamValue::new(value.to_owned()).ok()?;
-    ProviderResponseHeader::new(name.clone(), safe_value)?;
-    Some((name, value.to_owned()))
+    (!name.is_empty()).then(|| (name, value.to_owned()))
 }
 
 fn insert_first_timing(target: &mut Option<u64>, started_at: Instant) -> bool {
@@ -1650,6 +1641,7 @@ fn codex_request_context<'a>(
     installation_id: &'a str,
     authorization: &'a SecretString,
     cookie_header: Option<&'a SecretString>,
+    account_selection: CodexAccountSelectionTelemetry<'a>,
 ) -> CodexRequestContext<'a> {
     CodexRequestContext {
         authorization: authorization.expose_secret(),
@@ -1668,6 +1660,7 @@ fn codex_request_context<'a>(
         thread_id: request.client_thread_id.as_deref(),
         client_request_id: request.client_request_id.as_deref(),
         turn_id: request.client_turn_id.as_deref(),
+        account_selection,
     }
 }
 
@@ -1816,8 +1809,9 @@ impl StreamCommitPolicy {
 
 /// 提交边界前的上游事件预取。
 ///
-/// 原始 chunk 计数而不是重编码后的 event 大小，保持 2.x 的 64 KiB 资源边界；一旦
-/// 提交，后续事件不再具备无痕重放资格。
+/// 原始 chunk 计数而不是重编码后的 event 大小。64 KiB 只限定无感换号窗口；达到
+/// 阈值会提交已缓存 wire，绝不能因为网关私有资源规则伪造上游协议失败。一旦提交，
+/// 后续事件不再具备无痕重放资格。
 struct PreCommitClientEvents {
     policy: StreamCommitPolicy,
     pending: Vec<ProviderEvent>,
@@ -1846,21 +1840,18 @@ impl PreCommitClientEvents {
         incoming: Vec<ProviderEvent>,
         timing_signals: ResponseEventSignals,
         completed: bool,
-    ) -> Result<Vec<ProviderEvent>, ProviderError> {
+    ) -> Vec<ProviderEvent> {
         if self.committed {
-            return Ok(incoming);
+            return incoming;
         }
         let boundary_reached = self
             .policy
             .boundary_reached(&incoming, timing_signals, completed);
         self.pending.extend(incoming);
-        if boundary_reached {
-            return Ok(self.commit_pending());
+        if boundary_reached || self.prefetched_bytes > MAX_STREAM_PREFETCH_BYTES {
+            return self.commit_pending();
         }
-        if self.prefetched_bytes > MAX_STREAM_PREFETCH_BYTES {
-            return Err(prefetch_protocol_error());
-        }
-        Ok(Vec::new())
+        Vec::new()
     }
 
     fn finish(
@@ -1868,12 +1859,12 @@ impl PreCommitClientEvents {
         incoming: Vec<ProviderEvent>,
         timing_signals: ResponseEventSignals,
         completed: bool,
-    ) -> Result<Vec<ProviderEvent>, ProviderError> {
-        let events = self.stage(incoming, timing_signals, completed)?;
+    ) -> Vec<ProviderEvent> {
+        let events = self.stage(incoming, timing_signals, completed);
         if self.committed {
-            Ok(events)
+            events
         } else {
-            Err(prefetch_protocol_error())
+            self.commit_pending()
         }
     }
 
@@ -1900,10 +1891,6 @@ impl PreCommitClientEvents {
         self.prefetched_bytes = 0;
         std::mem::take(&mut self.pending)
     }
-}
-
-fn prefetch_protocol_error() -> ProviderError {
-    provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
 }
 
 #[derive(Clone, Copy)]
@@ -1991,7 +1978,29 @@ fn map_handshake_error(error: CodexClientError) -> MappedProviderFailure {
 }
 
 fn map_stream_error(error: CodexClientError) -> MappedProviderFailure {
-    map_client_error(error, UpstreamSendState::Sent, false)
+    let allows_pre_delivery_retry = stream_transport_allows_pre_delivery_retry(&error);
+    let mut failure = map_client_error(error, UpstreamSendState::Sent, false);
+    if allows_pre_delivery_retry {
+        failure.error = failure.error.with_pre_delivery_retry();
+    }
+    failure
+}
+
+fn stream_transport_allows_pre_delivery_retry(error: &CodexClientError) -> bool {
+    match error {
+        CodexClientError::Http(_) | CodexClientError::StreamIdleTimeout { .. } => true,
+        CodexClientError::WebSocket(error) => matches!(
+            error,
+            CodexWebSocketExchangeError::Transport(_)
+                | CodexWebSocketExchangeError::PostSendAmbiguous { .. }
+                | CodexWebSocketExchangeError::SendTimeout { .. }
+                | CodexWebSocketExchangeError::ClosedBeforeTerminal
+                | CodexWebSocketExchangeError::ReceiveIdleTimeout { .. }
+                | CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstEvent { .. }
+                | CodexWebSocketExchangeError::InitialEventTimeout { .. }
+        ),
+        _ => false,
+    }
 }
 
 fn map_canonical_error(
@@ -2088,7 +2097,7 @@ fn map_client_error(
 }
 
 fn map_upstream_failure(
-    failure: CodexUpstreamFailure,
+    mut failure: CodexUpstreamFailure,
     observation: Option<ProviderResponseObservation>,
     replay_boundary: ReplayBoundary,
 ) -> MappedProviderFailure {
@@ -2103,14 +2112,29 @@ fn map_upstream_failure(
         .map(|_| ContinuationFailure::HistoryUnavailable);
     let send_state = upstream_send_state(failure.send_phase);
     let mut error = provider_error(provider_error_kind(category), send_state);
-    if let Some(message) = failure.client_message.as_ref()
-        && let Ok(client_error) = ClientVisibleUpstreamError::new(
+    if let Some(message) = failure.client_message.as_ref() {
+        error = error.with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
             message.clone(),
             failure.client_code.clone(),
             failure.client_error_type.clone(),
-        )
-    {
-        error = error.with_client_visible_upstream_error(client_error);
+        ));
+    }
+    if let Some(response) = failure.client_response.take() {
+        let response = (*response).into_parts();
+        error = error.with_client_visible_upstream_response(
+            ClientVisibleUpstreamResponse::new(
+                response.status,
+                response.content_type,
+                response.body,
+            )
+            .with_headers(
+                response
+                    .client_headers
+                    .into_iter()
+                    .map(|(name, value)| ProviderResponseHeader::new(name, value))
+                    .collect(),
+            ),
+        );
     }
     if let Some(status) = failure.status {
         error = error.with_status(status.as_u16());
@@ -2126,18 +2150,11 @@ fn map_upstream_failure(
     if let Some(retry_after) = failure.retry_after_seconds.map(Duration::from_secs) {
         error = error.with_retry_after(retry_after);
     }
-    if let Some(code) = failure
-        .persistable_code()
-        .and_then(|code| SafeUpstreamValue::new(code.to_owned()).ok())
-    {
-        error = error.with_upstream_code(code);
+    if let Some(code) = failure.persistable_code() {
+        error = error.with_upstream_code(OpaqueUpstreamValue::new(code.to_owned()));
     }
-    if let Some(request_id) = failure
-        .request_id
-        .as_deref()
-        .and_then(|request_id| SafeUpstreamValue::new(request_id.to_owned()).ok())
-    {
-        error = error.with_upstream_request_id(request_id);
+    if let Some(request_id) = failure.request_id.as_deref() {
+        error = error.with_upstream_request_id(OpaqueUpstreamValue::new(request_id.to_owned()));
     }
     MappedProviderFailure {
         error,

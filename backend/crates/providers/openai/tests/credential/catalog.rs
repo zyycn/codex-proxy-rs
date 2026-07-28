@@ -282,6 +282,75 @@ async fn cross_plan_responses_api_conflict_still_fails_the_union() {
 }
 
 #[tokio::test]
+async fn free_and_k12_catalog_entitlements_are_isolated_by_plan_scope() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let first_free = seed_account_with_plan(&store, "acct_free_a", "free").await;
+    let second_free = seed_account_with_plan(&store, "acct_free_b", "free").await;
+    let k12 = seed_account_with_plan(&store, "acct_k12", "k12").await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(SequencedCatalogResponder {
+            calls: Arc::new(AtomicUsize::new(0)),
+            bodies: [
+                br#"{"models":[{"slug":"gpt-5.4","display_name":"GPT-5.4","supported_in_api":true}]}"#,
+                br#"{"models":[{"slug":"gpt-5.4","display_name":"GPT-5.4","supported_in_api":true},{"slug":"gpt-5.6-sol","display_name":"GPT-5.6 Sol","supported_in_api":true}]}"#,
+            ],
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+
+    let snapshot = service.synchronize().await.expect("mixed-plan catalog");
+
+    assert_eq!(snapshot.models().len(), 2);
+    assert_eq!(
+        service
+            .cached_account_models(&first_free)
+            .expect("first free entitlement"),
+        Some(vec!["gpt-5.4".to_owned()])
+    );
+    assert_eq!(
+        service
+            .cached_account_models(&second_free)
+            .expect("second free entitlement"),
+        Some(vec!["gpt-5.4".to_owned()])
+    );
+    assert_eq!(
+        service
+            .observed_model_support(&first_free, "gpt-5.6-sol")
+            .expect("free support fact"),
+        Some(false)
+    );
+    assert_eq!(
+        service
+            .observed_model_support(&k12, "gpt-5.6-sol")
+            .expect("K12 support fact"),
+        Some(true)
+    );
+    let synchronized_generation = service.catalog_generation().get();
+    service.invalidate().expect("invalidate mixed-plan catalog");
+    assert!(
+        service
+            .cached()
+            .expect("cache read after invalidation")
+            .is_none()
+    );
+    assert_eq!(
+        service.catalog_generation().get(),
+        synchronized_generation + 1
+    );
+    assert_eq!(
+        service
+            .observed_model_support(&k12, "gpt-5.6-sol")
+            .expect("support fact after invalidation"),
+        None
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
 async fn response_etag_change_is_deduplicated_and_queued_once() {
     let store = Arc::new(MemoryAccountStore::default());
     let service = service(&store);
