@@ -28,6 +28,16 @@ const MAX_REFRESH_BATCH: u32 = 1_000;
 /// 连续失败计数窗口；每次瞬态失败刷新该 TTL，静默满窗后计数过期归零。
 const REFRESH_BACKOFF_WINDOW: Duration = Duration::from_secs(30 * 60);
 
+fn refresh_due_at(account: &ProviderAccount, now: SystemTime) -> Option<SystemTime> {
+    if let Some(expires_at) = account.access_token_expires_at()
+        && expires_at <= now
+    {
+        // AT 已过期时不能继续等待持久退避；后续额度/请求探测都必须先用 RT 续出可用 AT。
+        return Some(expires_at);
+    }
+    account.next_refresh_at().filter(|next| *next <= now)
+}
+
 pub struct DueCodexCredential {
     pub account: ProviderAccount,
     pub secret: CodexOAuthSecret,
@@ -248,9 +258,9 @@ impl CodexCredentialRefreshService {
                 )
                 && (account.availability() != AccountAvailability::Cooldown
                     || account.cooldown_until().is_some_and(|until| until <= now))
-                && account.next_refresh_at().is_some_and(|next| next <= now)
+                && refresh_due_at(account, now).is_some()
         });
-        accounts.sort_by_key(|account| (account.next_refresh_at(), account.id().clone()));
+        accounts.sort_by_key(|account| (refresh_due_at(account, now), account.id().clone()));
         accounts.truncate(MAX_REFRESH_BATCH as usize);
         let mut due = Vec::with_capacity(accounts.len());
         let mut failures = Vec::new();
