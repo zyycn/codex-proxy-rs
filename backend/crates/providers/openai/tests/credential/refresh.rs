@@ -597,6 +597,75 @@ async fn transient_refresh_defers_without_invalidating_account() {
 }
 
 #[tokio::test]
+async fn expired_access_token_refreshes_even_when_next_refresh_is_deferred() {
+    let store = Arc::new(MemoryAccountStore::default());
+    seed_due_account(&store).await;
+    let original = store.account("acct_refresh").expect("seeded account");
+    let mut expired_profile = profile("chatgpt-acct_refresh");
+    expired_profile.access_token_expires_at =
+        Some(chrono::Utc::now() - chrono::Duration::minutes(5));
+    store
+        .repository()
+        .rotate_oauth_secret(RotateCodexCredential {
+            account_id: "acct_refresh".to_owned(),
+            expected_credential_revision: original.revision().get(),
+            secret: secret("old-access"),
+            verified_account: expired_profile,
+            next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::hours(12)),
+        })
+        .await
+        .expect("seed expired access token with deferred refresh");
+    let deferred = store.account("acct_refresh").expect("deferred account");
+    store
+        .repository()
+        .apply_state(
+            &deferred,
+            AccountAvailability::QuotaExhausted,
+            Some("quota_exhausted".to_owned()),
+            None,
+            SystemTime::now(),
+        )
+        .await
+        .expect("mark account quota exhausted");
+    let refresher = Arc::new(Refresher::new(Ok(success_tokens())));
+    let service = CodexCredentialRefreshService::new(
+        store.repository(),
+        refresher.clone(),
+        Arc::new(VerifiedIdentity),
+        Arc::new(RefreshLeases {
+            available: true,
+            requests: Mutex::new(Vec::new()),
+        }),
+        Arc::new(CountingCredentialState::default()),
+        runtime_policy(),
+    );
+
+    let outcomes = service.refresh_due().await.expect("refresh due");
+
+    assert!(matches!(
+        outcomes.as_slice(),
+        [CodexCredentialRefreshOutcome::Refreshed {
+            account_id,
+            credential_revision: 3,
+        }] if account_id == "acct_refresh"
+    ));
+    assert_eq!(
+        refresher.seen.lock().expect("seen tokens lock").as_slice(),
+        ["rt-old-access"]
+    );
+    let refreshed = store.account("acct_refresh").expect("refreshed account");
+    assert_eq!(
+        refreshed.availability(),
+        AccountAvailability::QuotaExhausted
+    );
+    assert!(
+        refreshed
+            .access_token_expires_at()
+            .is_some_and(|expires_at| expires_at > SystemTime::now())
+    );
+}
+
+#[tokio::test]
 async fn unavailable_refresh_lease_prevents_duplicate_token_exchange() {
     let (store, refresher, service) = setup(Ok(success_tokens()), false).await;
     let outcomes = service.refresh_due().await.expect("refresh due");
