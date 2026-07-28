@@ -625,6 +625,79 @@ impl CodexAccountIdentityVerifier for RebindingVerifier {
     }
 }
 
+struct RotatedPrincipalVerifier;
+
+#[async_trait]
+impl CodexAccountIdentityVerifier for RotatedPrincipalVerifier {
+    async fn verify(
+        &self,
+        _: &CodexOAuthSecret,
+        _: &CodexIdentityExpectation,
+    ) -> Result<CodexIdentityVerification, CodexIdentityVerificationError> {
+        Err(CodexIdentityVerificationError::Rejected)
+    }
+
+    async fn verify_authorization(
+        &self,
+        _: &CodexOAuthSecret,
+        _: &SecretString,
+        _: &SecretString,
+        _: &CodexIdentityExpectation,
+    ) -> Result<CodexIdentityVerification, CodexIdentityVerificationError> {
+        let mut verified = profile("chatgpt-oauth");
+        verified.oauth_subject = "rotated-oauth-subject".to_owned();
+        verified.poid = None;
+        Ok(CodexIdentityVerification::Complete(verified))
+    }
+}
+
+#[tokio::test]
+async fn reauthorization_updates_changed_free_principal_for_same_account() {
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_oauth_principal".to_owned(),
+            name: "reauthorize".to_owned(),
+            secret: secret("old-oauth-access"),
+            verified_account: profile("chatgpt-oauth"),
+            next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await;
+    let service = service_with_store(store, Arc::new(RotatedPrincipalVerifier));
+    let started = service
+        .start_authorization(StartCodexOAuthAuthorization {
+            mutation: reauthorization_mutation("request-rotated-principal", "acct_oauth_principal"),
+        })
+        .await
+        .expect("start reauthorization");
+    let state = Url::parse(&started.authorization_url)
+        .expect("authorization URL")
+        .query_pairs()
+        .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
+        .expect("state");
+    let prepared = service
+        .complete_authorization(CompleteCodexOAuthAuthorization {
+            owner_ref: owner_ref(),
+            flow_id: started.flow_id,
+            callback_url: SecretString::from(format!(
+                "http://localhost:1455/auth/callback?code=authorization-code&state={state}"
+            )),
+        })
+        .await
+        .expect("complete reauthorization");
+    let CompletedCodexOAuthCredential::Reauthorize(prepared) = prepared.credential else {
+        panic!("expected prepared reauthorization");
+    };
+    let runtime =
+        provider_openai::credential::CodexCredentialCodec::decode(prepared.credential.credential())
+            .expect("prepared credential");
+    let principal = runtime.principal.expect("OAuth principal");
+
+    assert_eq!(principal.oauth_subject, "rotated-oauth-subject");
+    assert_eq!(principal.poid, None);
+}
+
 #[tokio::test]
 async fn reauthorization_rejects_identity_rebinding() {
     let store = Arc::new(MemoryAccountStore::default());

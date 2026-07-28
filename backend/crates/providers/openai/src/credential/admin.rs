@@ -491,6 +491,22 @@ impl CodexCredentialAdmin {
         &self,
         input: RotateManagedCodexCredential,
     ) -> Result<PreparedCodexCredentialRotation, CodexCredentialAdminError> {
+        self.prepare_oauth_rotation(input, false)
+    }
+
+    /// 完整 OAuth 授权允许认证主体投影更新，但不允许目标账号或用户发生变化。
+    pub(crate) fn prepare_reauthorization(
+        &self,
+        input: RotateManagedCodexCredential,
+    ) -> Result<PreparedCodexCredentialRotation, CodexCredentialAdminError> {
+        self.prepare_oauth_rotation(input, true)
+    }
+
+    fn prepare_oauth_rotation(
+        &self,
+        input: RotateManagedCodexCredential,
+        replace_principal: bool,
+    ) -> Result<PreparedCodexCredentialRotation, CodexCredentialAdminError> {
         let access_token_expires_at =
             required_time(input.verified_account.access_token_expires_at)?;
         let mut data = CodexCredentialCodec::decode_complete(&input.current.credential)
@@ -503,10 +519,21 @@ impl CodexCredentialAdmin {
             || input.current.account.upstream_account_id()
                 != Some(input.verified_account.chatgpt_account_id.as_str())
             || input.current.account.upstream_user_id() != input.verified_account.chatgpt_user_id
-            || oauth.principal.oauth_subject != input.verified_account.oauth_subject
-            || oauth.principal.poid != input.verified_account.poid
+            || (!replace_principal
+                && (oauth.principal.oauth_subject != input.verified_account.oauth_subject
+                    || oauth.principal.poid != input.verified_account.poid))
         {
             return Err(CodexCredentialAdminError::IdentityMismatch);
+        }
+        if replace_principal {
+            oauth
+                .principal
+                .oauth_subject
+                .clone_from(&input.verified_account.oauth_subject);
+            oauth
+                .principal
+                .poid
+                .clone_from(&input.verified_account.poid);
         }
         oauth.access_token = input.secret.access_token.expose_secret().to_owned();
         oauth.refresh_token = input
