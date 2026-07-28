@@ -29,7 +29,7 @@ use provider_openai::credential::{
 use provider_openai::transport::CodexWebSocketPool;
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use provider_openai::{CodexProvider, OFFICIAL_CODEX_BASE_URL};
-use serde_json::{Map, json};
+use serde_json::{Map, Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -827,13 +827,23 @@ async fn completed_response_persists_session_affinity_before_stream_consumer_sto
             .expect("prepare provider stream");
 
     let mut observed_service_tier = None;
+    let mut upstream_service_tier = None;
     while let Some(event) = stream.next().await {
         let event = event.expect("provider event");
-        if let Some(service_tier) = event
-            .response_observation()
-            .and_then(|observation| observation.service_tier())
-        {
-            observed_service_tier = Some(service_tier.to_owned());
+        if let Some(observation) = event.response_observation() {
+            if let Some(service_tier) = observation.service_tier() {
+                observed_service_tier = Some(service_tier.to_owned());
+            }
+            upstream_service_tier = observation
+                .provider_metadata()
+                .and_then(|metadata| serde_json::from_str::<Value>(metadata.as_json()).ok())
+                .and_then(|metadata| {
+                    metadata
+                        .get("upstreamServiceTier")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .or(upstream_service_tier);
         }
         if event
             .canonical_facts()
@@ -846,7 +856,8 @@ async fn completed_response_persists_session_affinity_before_stream_consumer_sto
     drop(stream);
 
     assert_eq!(affinity.binding_count(), 1);
-    assert_eq!(observed_service_tier.as_deref(), Some("default"));
+    assert_eq!(observed_service_tier.as_deref(), Some("priority"));
+    assert_eq!(upstream_service_tier.as_deref(), Some("default"));
 }
 
 #[tokio::test]
