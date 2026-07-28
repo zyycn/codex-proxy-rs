@@ -57,7 +57,7 @@ fn refresh_policy_requires_a_positive_margin() {
 }
 
 #[test]
-fn refresh_schedule_is_stable_and_never_uses_query_time_margin() {
+fn refresh_schedule_should_use_the_exact_configured_margin() {
     let account = ProviderAccountId::new("acct_stable").expect("valid account");
     let policy = ProviderRefreshPolicy::try_new(
         Duration::from_secs(3_600),
@@ -70,13 +70,7 @@ fn refresh_schedule_is_stable_and_never_uses_query_time_margin() {
     let first = policy
         .next_attempt_at(&account, expires_at, observed_at)
         .expect("schedule refresh");
-    let second = policy
-        .next_attempt_at(&account, expires_at, observed_at)
-        .expect("schedule refresh again");
-
-    assert_eq!(first, second);
-    assert!(first > observed_at);
-    assert!(first < expires_at);
+    assert_eq!(first, expires_at - Duration::from_secs(3_600));
 }
 
 #[test]

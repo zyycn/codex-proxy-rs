@@ -667,32 +667,21 @@ impl ProviderRefreshPolicy {
         self.concurrency
     }
 
-    /// 按账号稳定扰动刷新提前量；相同账号与过期时间跨进程得到同一执行时刻。
+    /// 按配置的精确提前量计算刷新时刻。
     pub fn next_attempt_at(
         self,
-        account_id: &ProviderAccountId,
+        _account_id: &ProviderAccountId,
         access_token_expires_at: SystemTime,
         observed_at: SystemTime,
     ) -> Result<SystemTime, ProviderStoreError> {
         let remaining = access_token_expires_at
             .duration_since(observed_at)
             .map_err(|_| invalid_refresh_policy("schedule expired access token"))?;
-        let base_margin_seconds = self.margin.as_secs();
-        if base_margin_seconds == 0 {
+        if self.margin >= remaining {
             return Ok(observed_at);
         }
-
-        let factor = stable_factor(account_id.as_str(), "normal", 850, 1_150);
-        let jittered_seconds = base_margin_seconds
-            .saturating_mul(u64::from(factor))
-            .saturating_add(500)
-            / 1_000;
-        if jittered_seconds >= remaining.as_secs() {
-            return Ok(observed_at);
-        }
-        let lead = jittered_seconds.max(1);
         access_token_expires_at
-            .checked_sub(Duration::from_secs(lead))
+            .checked_sub(self.margin)
             .ok_or_else(|| invalid_refresh_policy("schedule access token refresh"))
     }
 }
