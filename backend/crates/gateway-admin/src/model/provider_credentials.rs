@@ -5,7 +5,7 @@ use std::fmt;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use gateway_core::{
-    engine::credential::{OpaqueProviderData, ProviderAccountId},
+    engine::credential::{OpaqueProviderData, ProviderAccountId, ProviderAccountIdentity},
     routing::{ProviderKind, UpstreamModelId},
 };
 
@@ -496,6 +496,7 @@ pub struct PreparedCredentialRotationFacts {
     pub account_id: ProviderAccountId,
     pub provider_kind: ProviderKind,
     pub expected_credential_revision: Revision,
+    pub replacement_identity: Option<ProviderAccountIdentity>,
     pub name: String,
     pub email: Option<String>,
     pub plan_type: Option<String>,

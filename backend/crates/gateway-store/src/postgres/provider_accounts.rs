@@ -38,8 +38,8 @@ use gateway_core::engine::credential::{
     CredentialRevision as CoreCredentialRevision, LoadedCredential,
     NewProviderAccount as CoreNewProviderAccount, OpaqueProviderData, PlaintextCredential,
     ProviderAccount as CoreProviderAccount, ProviderAccountId as CoreProviderAccountId,
-    ProviderAccountStore, ProviderAccountUpdate as CoreProviderAccountUpdate, QuotaObservation,
-    QuotaWriteOutcome,
+    ProviderAccountIdentity, ProviderAccountStore,
+    ProviderAccountUpdate as CoreProviderAccountUpdate, QuotaObservation, QuotaWriteOutcome,
 };
 use gateway_core::error::{StoreError as CoreStoreError, StoreErrorKind as CoreStoreErrorKind};
 use gateway_core::routing::ProviderKind;
@@ -296,6 +296,7 @@ impl ImportProviderAccounts {
 pub struct RotateProviderAccount {
     pub scope: ProviderAccountAdminScope,
     pub profile: UpdateProviderAccount,
+    pub replacement_identity: Option<ProviderAccountIdentity>,
     pub credential: ProviderCredentialUpdate,
     pub audit: AdminAuditEvent,
 }
@@ -306,6 +307,7 @@ impl fmt::Debug for RotateProviderAccount {
             .debug_struct("RotateProviderAccount")
             .field("scope", &self.scope)
             .field("profile", &self.profile)
+            .field("replacement_identity", &self.replacement_identity)
             .field("credential", &self.credential)
             .field("audit", &self.audit)
             .finish()
@@ -612,8 +614,14 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         update.validate()?;
         let result = sqlx::query(
             "update provider_accounts
-             set availability = $3, availability_reason = $4, cooldown_until = $5,
-                 availability_observed_at = $6, updated_at = greatest(now(), $6)
+             set availability = case when enabled then $3 else availability end,
+                 availability_reason = case when enabled then $4 else availability_reason end,
+                 cooldown_until = case when enabled then $5 else cooldown_until end,
+                 availability_observed_at = case
+                     when enabled then $6
+                     else availability_observed_at
+                 end,
+                 updated_at = case when enabled then greatest(now(), $6) else updated_at end
              where id = $1 and credential_revision = $2",
         )
         .bind(update.account_id)
@@ -755,6 +763,12 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
         command.scope.validate()?;
         require_nonempty(ENTITY, "account_id", &command.profile.id)?;
         require_nonempty(ENTITY, "name", &command.profile.name)?;
+        if let Some(identity) = &command.replacement_identity {
+            require_nonempty(ENTITY, "upstream_user_id", identity.upstream_user_id())?;
+            if let Some(account_id) = identity.upstream_account_id() {
+                require_nonempty(ENTITY, "upstream_account_id", account_id)?;
+            }
+        }
         if command.profile.id != command.credential.account_id {
             return Err(invalid("rotated profile and credential account IDs differ"));
         }
@@ -770,6 +784,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 &mut transaction,
                 &command.scope,
                 &command.profile,
+                command.replacement_identity.as_ref(),
                 &command.credential,
             )
             .await?;
@@ -1040,6 +1055,7 @@ impl PgAdminAccountStore {
                     email: prepared.email,
                     plan_type: prepared.plan_type,
                 },
+                replacement_identity: prepared.replacement_identity,
                 credential: ProviderCredentialUpdate {
                     account_id: account_id.as_str().to_owned(),
                     expected_revision: store_revision(prepared.expected_credential_revision)?,
@@ -1975,8 +1991,13 @@ async fn rotate_provider_account_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     scope: &ProviderAccountAdminScope,
     profile: &UpdateProviderAccount,
+    replacement_identity: Option<&ProviderAccountIdentity>,
     update: &ProviderCredentialUpdate,
 ) -> StoreResult<Revision> {
+    let replace_identity = replacement_identity.is_some();
+    let upstream_user_id = replacement_identity.map(ProviderAccountIdentity::upstream_user_id);
+    let upstream_account_id =
+        replacement_identity.and_then(ProviderAccountIdentity::upstream_account_id);
     let next = sqlx::query_scalar::<_, i64>(
         "update provider_accounts
          set name = $4,
@@ -1987,19 +2008,25 @@ async fn rotate_provider_account_in_transaction(
              has_refresh_token = $8,
              access_token_expires_at = $9,
              next_refresh_at = $10,
+             upstream_user_id = case when $11::boolean then $12::text else upstream_user_id end,
+             upstream_account_id = case when $11::boolean then $13::text else upstream_account_id end,
              availability = case
+                 when not enabled then availability
                  when availability <> 'quota_exhausted' then 'ready'
                  else availability
              end,
              availability_reason = case
+                 when not enabled then availability_reason
                  when availability <> 'quota_exhausted' then null
                  else availability_reason
              end,
              cooldown_until = case
+                 when not enabled then cooldown_until
                  when availability <> 'quota_exhausted' then null
                  else cooldown_until
              end,
              availability_observed_at = case
+                 when not enabled then availability_observed_at
                  when availability <> 'quota_exhausted' then now()
                  else availability_observed_at
              end,
@@ -2018,9 +2045,25 @@ async fn rotate_provider_account_in_transaction(
     .bind(update.has_refresh_token)
     .bind(update.access_token_expires_at)
     .bind(update.next_refresh_at)
+    .bind(replace_identity)
+    .bind(upstream_user_id)
+    .bind(upstream_account_id)
     .fetch_optional(&mut **transaction)
     .await
-    .map_err(|_| postgres_unavailable("rotate provider account in admin transaction"))?
+    .map_err(|error| {
+        if error
+            .as_database_error()
+            .is_some_and(sqlx::error::DatabaseError::is_unique_violation)
+        {
+            StoreError::Conflict {
+                entity: ENTITY,
+                id: update.account_id.clone(),
+                kind: ConflictKind::InvalidTransition,
+            }
+        } else {
+            postgres_unavailable("rotate provider account in admin transaction")
+        }
+    })?
     .ok_or_else(|| StoreError::Conflict {
         entity: ENTITY,
         id: update.account_id.clone(),

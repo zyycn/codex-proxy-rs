@@ -181,6 +181,14 @@ fn blocked_network_quota_service(store: &Arc<MemoryAccountStore>) -> CodexCreden
 }
 
 async fn create_account(store: &Arc<MemoryAccountStore>, account_id: &str) {
+    create_account_with_enabled(store, account_id, true).await;
+}
+
+async fn create_account_with_enabled(
+    store: &Arc<MemoryAccountStore>,
+    account_id: &str,
+    enabled: bool,
+) {
     store
         .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: account_id.to_owned(),
@@ -188,7 +196,7 @@ async fn create_account(store: &Arc<MemoryAccountStore>, account_id: &str) {
             secret: secret(&format!("token-{account_id}")),
             verified_account: profile(&format!("chatgpt-{account_id}")),
             next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
-            enabled: true,
+            enabled,
         })
         .await;
 }
@@ -367,6 +375,17 @@ async fn manual_quota_refresh_updates_account_state_from_provider_response() {
     let account_id = "acct_manual_quota_state";
     create_account(&store, account_id).await;
     let account = store.account(account_id).expect("created account");
+    store
+        .apply_state_change(AccountStateChange {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            availability: AccountAvailability::Expired,
+            reason: Some("stale_expired_state".to_owned()),
+            cooldown_until: None,
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("seed stale expired state");
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/codex/usage"))
@@ -436,6 +455,61 @@ async fn manual_quota_refresh_updates_account_state_from_provider_response() {
             .availability(),
         AccountAvailability::Ready
     );
+}
+
+#[tokio::test]
+async fn manual_quota_refresh_preserves_disabled_account_state() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_disabled_quota_state";
+    create_account_with_enabled(&store, account_id, false).await;
+    let account = store.account(account_id).expect("created disabled account");
+    store
+        .apply_state_change(AccountStateChange {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            availability: AccountAvailability::Expired,
+            reason: Some("disabled_expired_state".to_owned()),
+            cooldown_until: None,
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("seed disabled account state");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .and(header(
+            "authorization",
+            format!("Bearer token-{account_id}"),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {"used_percent": 20, "reset_at": 1_900_000_000}
+            }
+        })))
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    service
+        .refresh_account(account.id())
+        .await
+        .expect("refresh disabled account quota");
+
+    let current = store
+        .account(account_id)
+        .expect("disabled account after quota refresh");
+    assert!(!current.enabled());
+    assert_eq!(current.availability(), AccountAvailability::Expired);
+    assert!(store.has_quota(account_id));
 }
 
 #[tokio::test]

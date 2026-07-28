@@ -17,9 +17,10 @@ use gateway_admin::{
     ports::store::AccountStore,
 };
 use gateway_core::engine::credential::{
-    AccountAvailability, CredentialCasOutcome, CredentialCasUpdate, CredentialRevision,
-    OpaqueProviderData, PlaintextCredential, ProviderAccountId, ProviderAccountStore,
-    ProviderAccountUpdate, QuotaObservation, QuotaWriteOutcome,
+    AccountAvailability, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
+    CredentialRevision, OpaqueProviderData, PlaintextCredential, ProviderAccountId,
+    ProviderAccountIdentity, ProviderAccountStore, ProviderAccountUpdate, QuotaObservation,
+    QuotaWriteOutcome,
 };
 use gateway_core::routing::ProviderKind;
 use gateway_store::{
@@ -898,6 +899,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
         .rotate_provider_account(RotateProviderAccount {
             scope: wrong_scope,
             profile: profile("acct_admin_a", "wrong scope"),
+            replacement_identity: None,
             credential: credential_update("acct_admin_a", 1, "wrong-scope-secret"),
             audit: audit("audit_wrong_scope", "rotate", "acct_admin_a"),
         })
@@ -926,6 +928,10 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
         .rotate_provider_account(RotateProviderAccount {
             scope: scope.clone(),
             profile: profile("acct_admin_a", "rotated account"),
+            replacement_identity: Some(ProviderAccountIdentity::new(
+                "user-admin-rebound".to_owned(),
+                Some("workspace-admin-rebound".to_owned()),
+            )),
             credential: credential_update("acct_admin_a", 1, "rotated-secret"),
             audit: audit("audit_account_rotate", "rotate", "acct_admin_a"),
         })
@@ -933,15 +939,71 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
         .expect("rotate provider account");
     assert_eq!(rotation.config_revision.get(), 3);
     assert_eq!(rotation.credential_revision.get(), 2);
-    let restored: (String, Option<String>, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
-        "select availability, availability_reason, cooldown_until
+    let restored: (
+        String,
+        Option<String>,
+        Option<chrono::DateTime<Utc>>,
+        String,
+        Option<String>,
+    ) = sqlx::query_as(
+        "select availability, availability_reason, cooldown_until,
+                upstream_user_id, upstream_account_id
          from provider_accounts where id = $1",
     )
     .bind("acct_admin_a")
     .fetch_one(&database.pool)
     .await
     .expect("load restored account state");
-    assert_eq!(restored, ("ready".to_owned(), None, None));
+    assert_eq!(
+        restored,
+        (
+            "ready".to_owned(),
+            None,
+            None,
+            "user-admin-rebound".to_owned(),
+            Some("workspace-admin-rebound".to_owned()),
+        )
+    );
+
+    let identity_conflict = repository
+        .rotate_provider_account(RotateProviderAccount {
+            scope: scope.clone(),
+            profile: profile("acct_admin_a", "must roll back"),
+            replacement_identity: Some(ProviderAccountIdentity::new(
+                "user-admin-b".to_owned(),
+                None,
+            )),
+            credential: credential_update("acct_admin_a", 2, "must-not-persist"),
+            audit: audit(
+                "audit_account_identity_conflict",
+                "reauthorize",
+                "acct_admin_a",
+            ),
+        })
+        .await
+        .expect_err("upstream identity collision must roll back rotation");
+    assert!(matches!(
+        identity_conflict,
+        StoreError::Conflict {
+            kind: ConflictKind::InvalidTransition,
+            ..
+        }
+    ));
+    assert_eq!(current_revision(&database.pool).await, 3);
+    let unchanged: (String, serde_json::Value, i64, String, Option<String>) = sqlx::query_as(
+        "select name, provider_credentials_json, credential_revision,
+                upstream_user_id, upstream_account_id
+         from provider_accounts where id = $1",
+    )
+    .bind("acct_admin_a")
+    .fetch_one(&database.pool)
+    .await
+    .expect("load account after identity collision");
+    assert_eq!(unchanged.0, "rotated account");
+    assert_eq!(unchanged.1["access_token"], "rotated-secret");
+    assert_eq!(unchanged.2, 2);
+    assert_eq!(unchanged.3, "user-admin-rebound");
+    assert_eq!(unchanged.4.as_deref(), Some("workspace-admin-rebound"));
 
     let revision = repository
         .set_provider_account_enabled_admin(SetProviderAccountEnabled {
@@ -1013,6 +1075,7 @@ async fn verified_credential_rotation_preserves_quota_exhaustion() {
         .rotate_provider_account(RotateProviderAccount {
             scope,
             profile: profile("acct_rotation_quota", "reauthorized account"),
+            replacement_identity: None,
             credential: credential_update("acct_rotation_quota", 1, "reauthorized-secret"),
             audit: audit(
                 "audit_rotation_quota_rotate",
@@ -1037,6 +1100,77 @@ async fn verified_credential_rotation_preserves_quota_exhaustion() {
             Some("quota_exhausted".to_owned()),
         ),
     );
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn disabled_account_preserves_user_state_during_refresh_writes() {
+    let Some(database) = TestDatabase::create("provider_account_disabled_refresh").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let scope = ProviderAccountAdminScope {
+        provider_kind: "openai".to_owned(),
+    };
+    let account_id = ProviderAccountId::new("acct_disabled_refresh").expect("account ID");
+    let mut disabled = account(account_id.as_str(), "user-disabled-refresh");
+    disabled.enabled = false;
+    disabled.availability = AccountAvailability::Expired;
+    disabled.availability_reason = Some("credential_expired".to_owned());
+    repository
+        .import_provider_accounts(ImportProviderAccounts {
+            scope: scope.clone(),
+            accounts: vec![disabled],
+            audit: audit(
+                "audit_disabled_refresh_import",
+                "import",
+                account_id.as_str(),
+            ),
+        })
+        .await
+        .expect("import disabled account");
+
+    repository
+        .apply_state_change(AccountStateChange {
+            account_id: account_id.clone(),
+            expected_revision: CredentialRevision::new(1).expect("credential revision"),
+            availability: AccountAvailability::Ready,
+            reason: None,
+            cooldown_until: None,
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("disabled state write is a no-op");
+    repository
+        .rotate_provider_account(RotateProviderAccount {
+            scope,
+            profile: profile(account_id.as_str(), "refreshed disabled account"),
+            replacement_identity: None,
+            credential: credential_update(account_id.as_str(), 1, "disabled-refreshed-secret"),
+            audit: audit(
+                "audit_disabled_refresh_rotate",
+                "refresh",
+                account_id.as_str(),
+            ),
+        })
+        .await
+        .expect("refresh disabled account credential");
+
+    let current: (bool, String, Option<String>, serde_json::Value, i64) = sqlx::query_as(
+        "select enabled, availability, availability_reason,
+                provider_credentials_json, credential_revision
+         from provider_accounts where id = $1",
+    )
+    .bind(account_id.as_str())
+    .fetch_one(&database.pool)
+    .await
+    .expect("load disabled account after refresh writes");
+    assert!(!current.0);
+    assert_eq!(current.1, "expired");
+    assert_eq!(current.2.as_deref(), Some("credential_expired"));
+    assert_eq!(current.3["access_token"], "disabled-refreshed-secret");
+    assert_eq!(current.4, 2);
 
     database.close().await;
 }

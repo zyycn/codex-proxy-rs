@@ -1392,10 +1392,16 @@ fn quota_success_availability(
     exhausted: bool,
     now: SystemTime,
 ) -> Option<AccountAvailability> {
+    let observed = if exhausted {
+        AccountAvailability::QuotaExhausted
+    } else {
+        AccountAvailability::Ready
+    };
     match current {
         AccountAvailability::Invalid
         | AccountAvailability::Expired
-        | AccountAvailability::Banned => None,
+        | AccountAvailability::Banned
+        | AccountAvailability::Unknown => Some(observed),
         AccountAvailability::QuotaExhausted => (!exhausted).then_some(AccountAvailability::Ready),
         AccountAvailability::Ready => exhausted.then_some(AccountAvailability::QuotaExhausted),
         AccountAvailability::Cooldown if exhausted => Some(AccountAvailability::QuotaExhausted),
@@ -1405,11 +1411,6 @@ fn quota_success_availability(
             Some(AccountAvailability::Ready)
         }
         AccountAvailability::Cooldown => None,
-        AccountAvailability::Unknown => Some(if exhausted {
-            AccountAvailability::QuotaExhausted
-        } else {
-            AccountAvailability::Ready
-        }),
     }
 }
 

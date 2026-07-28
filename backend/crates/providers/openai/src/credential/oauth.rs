@@ -29,7 +29,6 @@ use super::admin::{
 use super::identity::{
     CodexAccountIdentityVerifier, CodexIdentityExpectation, CodexIdentityVerificationError,
 };
-use super::security::CodexCredentialCodec;
 use super::token_client::{
     AuthorizationCodeExchangeError, AuthorizationCodeExchanger, AuthorizationCodeGrant,
     OFFICIAL_CODEX_OAUTH_CLIENT_ID, OFFICIAL_CODEX_REDIRECT_URI,
@@ -500,11 +499,7 @@ impl CodexOAuthAdminService {
         } else {
             None
         };
-        let expectation = current
-            .as_ref()
-            .map(oauth_identity_expectation)
-            .transpose()?
-            .unwrap_or_default();
+        let expectation = CodexIdentityExpectation::default();
         let profile = self
             .verifier
             .verify_authorization(&secret, &id_token, &pending.nonce, &expectation)
@@ -677,26 +672,6 @@ impl CodexOAuthAdminService {
             .map_err(map_exchange_error)?;
         Ok((tokens.secret, tokens.id_token))
     }
-}
-
-fn oauth_identity_expectation(
-    current: &gateway_core::engine::credential::LoadedCredential,
-) -> Result<CodexIdentityExpectation, CodexOAuthAdminError> {
-    let runtime = CodexCredentialCodec::decode(&current.credential)
-        .map_err(|_| CodexOAuthAdminError::Credential)?;
-    if runtime.authentication.oauth().is_none() {
-        return Err(CodexOAuthAdminError::Credential);
-    }
-    let account_id = current
-        .account
-        .upstream_account_id()
-        .ok_or(CodexOAuthAdminError::Credential)?;
-    CodexIdentityExpectation::reauthorization(
-        account_id.to_owned(),
-        current.account.upstream_user_id().to_owned(),
-        runtime.installation_id,
-    )
-    .map_err(|_| CodexOAuthAdminError::Credential)
 }
 
 fn authorization_url(
