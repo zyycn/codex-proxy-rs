@@ -370,11 +370,15 @@ where
         }
         let committed_at = SystemTime::now();
         if self.request_persisted {
-            best_effort_store_write(self.engine.store().mark_downstream_committed(
+            best_effort_store_write(
+                "mark_downstream_committed",
                 &self.request_id,
-                committed_at,
-                client_status_code,
-            ))
+                self.engine.store().mark_downstream_committed(
+                    &self.request_id,
+                    committed_at,
+                    client_status_code,
+                ),
+            )
             .await;
         }
         self.downstream_committed_at = Some(committed_at);
@@ -400,6 +404,8 @@ where
         }
         if self.request_persisted {
             best_effort_store_write(
+                "record_client_status",
+                &self.request_id,
                 self.engine
                     .store()
                     .record_client_status(&self.request_id, client_status_code),
@@ -766,13 +772,20 @@ where
             http_version: None,
         };
         if self.request_persisted {
-            best_effort_store_write(self.engine.store().record_attempt(attempt_record)).await;
+            best_effort_store_write(
+                "record_attempt",
+                &self.request_id,
+                self.engine.store().record_attempt(attempt_record),
+            )
+            .await;
         } else {
             let request = self
                 .pending_request
                 .as_ref()
                 .ok_or(EngineError::InvalidDeliveryState)?;
             if best_effort_store_write(
+                "create_model_request_with_attempt",
+                &self.request_id,
                 self.engine
                     .store()
                     .create_model_request_with_attempt(request.clone(), attempt_record),
@@ -829,6 +842,8 @@ where
         if !current.send_observed {
             if self.request_persisted {
                 best_effort_store_write(
+                    "mark_send_state",
+                    &self.request_id,
                     self.engine
                         .store()
                         .mark_send_state(&self.request_id, UpstreamSendState::Sent),
@@ -914,6 +929,8 @@ where
         let send_state = self.raise_send_watermark(attempt_send_state);
         if self.request_persisted {
             best_effort_store_write(
+                "mark_send_state",
+                &self.request_id,
                 self.engine
                     .store()
                     .mark_send_state(&self.request_id, send_state),
@@ -981,6 +998,8 @@ where
             }
             if let Some(error) = persistence_error {
                 best_effort_store_write(
+                    "record_intermediate_failure",
+                    &self.request_id,
                     self.engine
                         .store()
                         .record_intermediate_failure(IntermediateFailure {
@@ -1125,33 +1144,37 @@ where
         let service_tier = self.current_service_tier();
         let provider_metadata_json = self.current_provider_metadata_json();
         if self.request_persisted {
-            best_effort_store_write(self.engine.store().finalize_model_request(
-                ModelRequestFinalization {
-                    request_id: self.request_id.clone(),
-                    outcome: ExecutionOutcome::Succeeded,
-                    send_state: UpstreamSendState::Sent,
-                    attempt_count: self.attempts,
-                    downstream_committed_at: self.downstream_committed_at,
-                    client_status_code: self.client_status_code,
-                    upstream_status_code,
-                    client_response_id: self.client_response_id.clone(),
-                    upstream_request_id,
-                    upstream_response_id: self.upstream_response_id.clone(),
-                    upstream_transport,
-                    http_version,
-                    websocket_pool,
-                    service_tier,
-                    provider_metadata_json,
-                    error: None,
-                    provider_error_code: None,
-                    retry_after_ms: None,
-                    usage: self.usage.clone(),
-                    image_generation_succeeded: self.image_generation_succeeded(),
-                    cost: self.cost.clone(),
-                    timings: self.timings.clone(),
-                    completed_at,
-                },
-            ))
+            best_effort_store_write(
+                "finalize_model_request",
+                &self.request_id,
+                self.engine
+                    .store()
+                    .finalize_model_request(ModelRequestFinalization {
+                        request_id: self.request_id.clone(),
+                        outcome: ExecutionOutcome::Succeeded,
+                        send_state: UpstreamSendState::Sent,
+                        attempt_count: self.attempts,
+                        downstream_committed_at: self.downstream_committed_at,
+                        client_status_code: self.client_status_code,
+                        upstream_status_code,
+                        client_response_id: self.client_response_id.clone(),
+                        upstream_request_id,
+                        upstream_response_id: self.upstream_response_id.clone(),
+                        upstream_transport,
+                        http_version,
+                        websocket_pool,
+                        service_tier,
+                        provider_metadata_json,
+                        error: None,
+                        provider_error_code: None,
+                        retry_after_ms: None,
+                        usage: self.usage.clone(),
+                        image_generation_succeeded: self.image_generation_succeeded(),
+                        cost: self.cost.clone(),
+                        timings: self.timings.clone(),
+                        completed_at,
+                    }),
+            )
             .await;
         }
         self.finalized = true;
@@ -1224,6 +1247,8 @@ where
         let send_state = self.raise_send_watermark(send_state);
         if self.attempts > 0 && self.request_persisted {
             best_effort_store_write(
+                "mark_send_state",
+                &self.request_id,
                 self.engine
                     .store()
                     .mark_send_state(&self.request_id, send_state),
@@ -1281,6 +1306,8 @@ where
         let service_tier = self.current_service_tier();
         let provider_metadata_json = self.current_provider_metadata_json();
         best_effort_store_write(
+            "finalize_model_request",
+            &self.request_id,
             self.engine
                 .store()
                 .finalize_model_request(ModelRequestFinalization {
@@ -1402,9 +1429,22 @@ where
 }
 
 async fn best_effort_store_write<T>(
+    operation: &'static str,
+    request_id: &ModelRequestId,
     write: impl Future<Output = Result<T, StoreError>>,
 ) -> Option<T> {
-    write.await.ok()
+    match write.await {
+        Ok(value) => Some(value),
+        Err(error) => {
+            tracing::warn!(
+                operation,
+                request_id = request_id.as_str(),
+                error_kind = ?error.kind(),
+                "执行观测写入失败，数据面不受影响"
+            );
+            None
+        }
+    }
 }
 
 enum PullOutcome {
