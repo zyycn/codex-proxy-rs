@@ -77,9 +77,9 @@ PostgreSQL/Redis 启动密码。日常校验使用 `config --quiet`。
 进程退出终止。drain 结束后才关停后台 worker，预算为
 `host.worker_shutdown_timeout_seconds`（默认 30 秒），两段预算按最坏情况串联。
 
-Compose 的 `stop_grace_period` 为 30 秒，覆盖空闲与常规负载下的关停；若存量长连接把两段
-预算全部用满（合计 60 秒），Docker 会在宽限期结束时 SIGKILL。要求最坏情况下也完整走完
-drain 与 worker 收尾时，把 `stop_grace_period` 调到大于两个超时之和。
+Compose 的 `stop_grace_period` 为 75 秒，覆盖默认 30 秒 HTTP drain、30 秒 worker 收尾和额外调度
+余量。若调大任一应用超时，也必须把 `stop_grace_period` 调到大于两段超时之和；否则 Docker 会在
+宽限期结束时 SIGKILL。
 
 ## 本地开发
 
@@ -154,6 +154,12 @@ release/publish <version>
 ```
 
 该脚本负责更新 `release/version.yaml`、创建版本提交和带注释 tag，并原子推送分支与 tag。
+它不会登录任何服务器，也不会拉取镜像或调用管理端在线更新。
+
+源码提交、仓库发版和运行实例升级是三种独立状态：本地 commit 不等于 Release，Release/tag 和镜像
+已生成也不等于实例已升级。判断某项修复是否在线前，应先通过管理端版本接口或容器 image digest
+确认运行实例的实际 revision；实例只有在执行上面的 Compose pull/up，或成功完成管理端在线更新后
+才会改变。
 
 构建元数据仍可作为一次性进程环境传入，不需要 `.env` 文件：
 

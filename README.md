@@ -21,15 +21,16 @@
 
 ## 能力
 
-| 领域     | 实现                                                                        |
-| -------- | --------------------------------------------------------------------------- |
-| 协议     | OpenAI Responses JSON、SSE、WebSocket 与模型目录                             |
-| Provider | 固定 OpenAI、xAI 两个 Provider；各自管理 OAuth、账号、额度与模型目录          |
-| 路由     | Client Key 绑定 Provider、全局模型映射、会话亲和与同 Provider 安全 fallback   |
-| 透明边界 | OpenAI SSE 与 WebSocket 均原样转发上游字节；xAI 在 `providers/xai` 内做 Grok 与 Responses 协议转换 |
-| 延续     | OpenAI native/replay continuation；xAI 使用客户端提交的完整历史                |
-| 管理     | Client Key、账号、模型目录、设置、观测、系统更新与 OAuth                       |
-| 计量     | 模型请求 Token、费用、延迟、账号与 Provider 归因                               |
+| 领域     | 实现                                                                                                  |
+| -------- | ----------------------------------------------------------------------------------------------------- |
+| 协议     | OpenAI Responses JSON、SSE、WebSocket 与模型目录                                                       |
+| Provider | 固定 OpenAI、xAI 两个 Provider；各自管理 OAuth、账号、额度与模型目录                                    |
+| 路由     | Client Key 绑定 Provider、全局模型映射、会话亲和与同 Provider 安全 fallback                             |
+| 透明边界 | OpenAI 请求保留未知字段和字段顺序，SSE 与 WebSocket 原样转发业务字节；xAI 在 Provider 内做协议转换          |
+| 延续     | OpenAI native/replay continuation；xAI 使用客户端提交的完整历史                                          |
+| 账号     | 导入、OAuth、credential 刷新、主动额度刷新，以及正常响应中的被动额度/状态观测                              |
+| 管理     | Client Key、账号、模型目录、设置、观测、系统更新与 OAuth                                                 |
+| 计量     | 模型请求 Token、费用、延迟、账号与 Provider 归因，并记录响应确认的实际 `service_tier`                      |
 
 ## 快速开始
 
@@ -93,6 +94,11 @@ curl -i http://127.0.0.1:8080/healthz
 3. 按需配置客户端模型到上游模型的全局映射；未命中映射的模型名原样透传。
 4. 创建 `sk_...` Client Key，绑定 `openai` 或 `xai`，并设置速率与并发限制。
 
+OpenAI 账号导入和首次 OAuth 创建在 credential 提交后会立即尝试一次额度观测；额度接口临时失败不会
+回滚已提交的账号。Free、K12 等套餐共用同一套额度与状态转换逻辑，套餐字段只作为账号事实并隔离
+对应的模型目录 cache。credential 刷新、额度刷新和正常请求中的被动额度观测是三条独立链路，详见
+[账号接口](docs/api.md#5-账号)。
+
 > [!IMPORTANT]
 > xAI 使用 OAuth session，不支持把 xAI API Key 作为上游 credential。
 
@@ -145,7 +151,7 @@ curl http://127.0.0.1:8080/v1/responses \
 ## 运维
 
 ```bash
-# 升级
+# 实例升级
 docker compose -f deploy/compose.yaml pull codex-proxy-rs
 docker compose -f deploy/compose.yaml up -d --no-build
 
@@ -179,7 +185,8 @@ release/publish <version>
 ```
 
 脚本会更新 `release/version.yaml`、创建约定提交与带注释的 `v<version>` tag，并原子推送分支和 tag。
-不要手工修改版本后单独打 tag。
+不要手工修改版本后单独打 tag。该脚本只发布仓库版本和触发 Release 构建，不会登录服务器，也不会
+改变任何运行实例；源码提交、仓库发版和实例升级是三个独立状态。
 
 ## 文档
 

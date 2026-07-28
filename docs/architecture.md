@@ -53,21 +53,24 @@ API decode/auth
   -> freeze RuntimeSnapshot
   -> compile RoutePlan
   -> admission
-  -> persist model_request
+  -> enqueue model_request observation
   -> select Provider/account
-  -> persist attempt facts in model_request
+  -> enqueue attempt/send observations
   -> cross upstream send barrier
   -> canonical stream
-  -> persist downstream delivery barrier
-  -> terminal observation and accounting
+  -> cross in-memory downstream delivery barrier and enqueue observation
+  -> enqueue terminal observation and accounting
 ```
 
 核心不变量：
 
 1. 每个客户端请求只有一条 `model_requests`；attempt 明细保存在其 JSON 事实中，不另建 attempt 表。
-2. 任何可能到达上游的调用都必须先有持久请求事实。
+2. 任何可能到达上游的调用都必须先按序提交 request/attempt 观测到有界队列；PostgreSQL 投影是可恢复
+   观测，不是数据面发送的同步前置条件。
 3. `not_sent`、`sent`、`ambiguous` 是不同的上游发送边界；发送状态是请求级单调水位（`sent` > `ambiguous` > `not_sent`），跨 attempt 只升不降，终态写回不得低于水位；`ambiguous` 不自动重放。
-4. `downstream_committed_at` 表示网关已作出不可撤回的交付承诺，从该时刻禁止 retry/fallback；它在实际首字节写出前持久化，不宣称字节已经到达客户端。
+4. 内存中的 downstream commit 表示网关已作出不可撤回的交付承诺，从该时刻禁止 retry/fallback；
+   它在实际首字节写出前越过并按序入队。`downstream_committed_at` 是该事实的 PostgreSQL 观测投影，
+   不宣称字节已经到达客户端，也不反向决定协议交付。
 5. Provider 每次 `execute` 只能选择一个 credential 并准备一个 cold stream，不得隐藏换号或业务 retry。
 6. 下游 commit 前，Core 可按冻结策略处理同一 Provider 内的账号 fallback；禁止跨 Provider fallback。
 7. 本架构不通过隐式连接复用承载业务身份。HTTP client 可安全复用 transport 连接，但账号、credential revision、cookie/session binding 必须显式绑定到本次调用。
@@ -84,7 +87,9 @@ Fallback 只允许在同一 Provider 内更换可用账号，不跨 Provider。
 
 ## 5. Continuation
 
-系统只保存已被上游确认的安全外部 ID：`model_requests.upstream_response_id`，不新增 conversation、transcript、continuation 或 claim 表。
+系统在 `model_requests.client_response_id` 与 `upstream_response_id` 中记录响应生命周期确认的 ID，
+两者都按 opaque UTF-8 bytes 保存，不做格式、长度或唯一性推断；不新增 conversation、transcript、
+continuation 或 claim 表。
 
 - `store=true`：使用 Provider 持久化的 native handle。
 - `store=false`：opaque replay state 仅存在于活连接内，不落 PostgreSQL。
@@ -107,12 +112,25 @@ Provider 独占以下职责：
 
 客户端可见正文的立场按 Provider 不同：
 
-- OpenAI 是逐字节透明代理：上游 wire 是客户端可见的事实来源，HTTP SSE 帧以原始字节原样下发，WebSocket 上游 JSON 文本原样下发；canonical facts 只从同一帧旁路解析，用于观测、亲和与计费。仅网关内部帧（rate limits、metadata）被就地消费，不向客户端转发。
+- OpenAI 是逐字节透明代理：请求 body 的未知字段和字段顺序保持不变（受控模型映射除外），上游 wire 是客户端可见的事实来源，HTTP SSE 帧以原始字节原样下发，WebSocket 上游 JSON 文本原样下发；response ID 以 opaque bytes 存储，不假设 UUID 或固定长度。canonical facts 只从同一帧旁路解析，用于观测、亲和与计费。仅网关内部帧（rate limits、metadata）被就地消费，不向客户端转发。
 - xAI 是翻译层：把 Grok wire 解码后重新合成 Responses wire 事件，不承诺字节透明；上游错误按结构化 message/code/type 透出，message 中的 UUID 账号指纹替换为占位符。
 
-credential 更新使用 `credential_revision` CAS。认证永久失败、封禁、额度耗尽和带截止时间的 cooldown 是账号运行时事实。cooldown 到期后，Core 的有效调度谓词会自然允许账号重新参与选择；Redis cooldown 只是热缓存。成功调用后才可把账号状态重新观测为 `ready`。自动 refresh 的瞬态失败（限流、5xx、超时、畸形响应）保留现有凭据并按指数退避推迟下一次刷新，不把账号标记为失效；只有上游明确的永久错误（`invalid_grant`、封禁）才写入终态失效。
+credential 更新使用 `credential_revision` CAS。认证永久失败、封禁、额度耗尽和带截止时间的 cooldown 是账号运行时事实。cooldown 到期后，Core 的有效调度谓词会自然允许账号重新参与选择；Redis cooldown 只是热缓存。成功调用或成功额度观测才可把账号状态重新观测为 `ready`。自动 refresh 的瞬态失败（限流、5xx、超时、畸形响应）保留现有凭据并按指数退避推迟下一次刷新，不把账号标记为失效；只有上游明确的永久错误（`invalid_grant`、封禁）才写入终态失效。
 
 `refresh_token_expires_at` 不是公共 SQL 列或 Core 权威状态。xAI 可在 `provider_credentials_json` 内保存它作为 Provider 私有提示；真正失效以 refresh endpoint 返回的永久错误为准。
+
+OpenAI 导入、首次 OAuth 和重新授权都先验证签名 token 与稳定账号身份。重新授权的目标绑定只保存
+目标账号 ID，不接受或冻结客户端提供的 credential revision；complete 阶段重新读取目标账号及其当前
+revision，并以当前 revision 做最终 CAS。上游账号或用户身份发生换绑时拒绝提交；Free token 缺少
+账号 claim 时，用目标账号 header 下的 usage 身份做交叉确认。认证主体投影可以随同一上游账号的
+合法重新授权更新，但目标 upstream account/user 不得改变。
+
+credential 与 quota 是两套状态机。主动 quota refresh 会拒绝过期 access token；quota 探测的
+401/403 不具备判定 refresh token 永久失效的证据。成功主动观测和正常推理响应中的 rate-limit header
+观测都 revision-fenced 写入同一 quota，并转换 readiness、`QuotaExhausted` 或 `Cooldown` 等额度事实；
+只有明确的 deactivated workspace 才能由额度链路写入 `Banned`，且额度观测不能清除 `Invalid`、
+`Expired`、`Banned`。Free、K12 等套餐复用该逻辑；`plan_type` 在此不参与额度分支，只作为 Provider
+事实并用于隔离不同套餐的 catalog cache。
 
 ## 7. 控制面与内部 revision
 
@@ -147,10 +165,16 @@ Admin API 不要求客户端提交配置 revision，也不向客户端暴露配�
 - credential JSON 以 Provider 自己的 schema 明文保存在 `provider_credentials_json`；日志、Debug、API 和 audit
   不输出其中的 secret，Provider 只在需要发往上游时把值包装为运行时 secret。
 - stale recovery 只把超时 `running` 请求收敛为 `incomplete`，不重放业务请求。
-- `ops_events` 逐条同步持久化，`occurrence_count=1`；OpsFlush worker 以 Disabled 声明贡献（没有需要刷写的内存缓冲），不存在隐藏内存聚合权威。
+- 数据面 execution observation 通过有界、带总字节预算的进程内队列交给 PostgreSQL OpsFlush worker；
+  入队不等待数据库，队列满、worker 不可用或写入失败时记录累计统计并丢弃该可恢复观测，不能替换
+  客户端可见协议结果。队列不是第二份业务权威，也不做无幂等键的盲目重试。
 - retention 只删除已满足保留规则的历史事实，不改变运行中请求。
 
-业务 schema 由 `backend/migrations/` 下的编号迁移按序定义：`0001_initial.sql` 建表，后续迁移只做增量变更。已合入的迁移永久冻结——`.frozen-sha256` 是冻结清单，CI 校验清单相对 PR base 只增不改，启动时 sqlx 重校验已应用迁移的 checksum，不一致直接拒绝启动。规则见 `backend/migrations/README.md`。
+业务 schema 由 `backend/migrations/` 下的编号迁移按序定义：`0001_initial.sql` 建表，`0002` 删除
+opaque response ID 唯一索引，`0003` 将 client/upstream response ID 改为无格式假设的 UTF-8 bytes，
+`0004` 增加响应观测得到的 `model_requests.service_tier`。已合入的迁移永久冻结——
+`.frozen-sha256` 是冻结清单，CI 校验清单相对 PR base 只增不改，启动时 sqlx 重校验已应用迁移的
+checksum，不一致直接拒绝启动。规则见 `backend/migrations/README.md`。
 
 ## 9. Redis 终态
 
@@ -165,19 +189,24 @@ codex-proxy-rs:oauth-pending:v1:{provider_kind}:{flow_fingerprint}
 flow_fingerprint = SHA-256(provider_kind || 0x00 || raw_flow_binding)
 ```
 
-Hash 字段恰好为：
+创建时的基础 Hash 字段为：
 
 - `owner_fingerprint`
 - `expires_at_epoch_seconds`
 - `provider_payload`
 
-create/take 使用 Lua 原子执行。owner mismatch 不删除记录；匹配 owner 的 take 返回 payload 并一次性删除。OpenAI TTL 为 10 分钟，xAI TTL 为 30 分钟。
+complete 先通过 Lua 原子 claim，并临时增加 `claim_fingerprint` 与
+`claim_expires_at_epoch_millis`。owner mismatch 不删除记录；有效 claim 阻止并发 complete，失败时只有
+claim owner 可以释放，账号事务提交后才原子删除整个 pending key。OpenAI TTL 为 10 分钟，xAI TTL
+为 30 分钟。
 
 ## 10. 后台任务与恢复
 
 HTTP serve/drain 与 worker 运行时都在 `gateway-host`：Host 负责注册校验、leader lease、失败退避、健康暴露与关闭；`apps/gateway` 的 bootstrap 只装配。WorkerContribution 由 Store、Core 与两个 Provider bundle 显式贡献，host bundle 自身不贡献任何 worker：
 
-- Store：stale execution recovery 与 retention；OpsFlush 以 Disabled 声明贡献。
+- Store：stale execution recovery、retention，以及 PostgreSQL execution observation、Redis client
+  admission release 和 Provider circuit feedback 三个 OpsFlush daemon。native continuation 直接写 Redis，
+  单次 Lua 记录只清理有界数量的过期/超限索引项，避免无界阻塞。
 - Core：RuntimeSnapshot revision 周期对账（无 lease，逐副本运行）与 Redis change 长驻订阅（daemon，逐副本运行）。
 - Provider：credential refresh、quota/catalog 健康，以及模型 etag 与官方版本 release 检查（OpenAI CLI、OpenAI Desktop、xAI CLI）。
 
@@ -185,7 +214,7 @@ HTTP serve/drain 与 worker 运行时都在 `gateway-host`：Host 负责注册�
 
 自更新、回滚与进程重启不是 worker：它们是 Admin API 触发的 Host 系统操作，只替换并重启处理该请求的那个副本。
 
-关闭时序：收到取消信号后，HTTP drain（axum 优雅关闭与游离连接等待）共享同一个从信号时刻起算的绝对截止点，逾期放弃等待存量连接；随后 worker 在独立的 shutdown 超时内 join。
+关闭时序：收到取消信号后，HTTP drain（axum 优雅关闭与游离连接等待）共享同一个从信号时刻起算的绝对截止点，逾期放弃等待存量连接；随后 worker 在独立的 shutdown 超时内 join。有界观测队列会在该阶段按各自预算 drain，逾期的可恢复观测被计数并丢弃。
 
 worker 不得通过导入 Admin use case 绕过边界，也不得维护第二份业务状态。
 
@@ -196,27 +225,15 @@ worker 不得通过导入 Admin use case 绕过边界，也不得维护第二份
 - Core 规则使用确定性测试；Provider 使用 contract/fixture 测试。
 - FK、CAS、revision、recovery 使用真实 PostgreSQL 测试。
 - admission、lease、cooldown、OAuth pending 使用真实 Redis 测试。
-- 真实账号测试只从仓库外部文件读取，不打印、复制或提交凭证。
-
-真实对话测试是显式 ignored 的生产边界测试，必须依次穿过 Provider 导入/必要刷新、实时 catalog、账号 selector、生产 HTTP/SSE transport、canonical 解码、usage 与 completed 终态。xAI 用例允许 OAuth refresh token 轮换，因此必须额外显式授权：
-
-```bash
-CODEX_REAL_ACCOUNT_FIXTURE=/outside/cpr-accounts.json \
-  cargo test -p provider-openai --test main \
-  admin::real_openai_conversation_crosses_production_provider_boundaries \
-  -- --ignored --exact
-
-XAI_REAL_ACCOUNT_FIXTURE=/outside/grok-accounts.json \
-XAI_ALLOW_DESTRUCTIVE_FIXTURE_REFRESH=1 \
-  cargo test -p provider-xai --test main \
-  admin::real_xai_conversation_crosses_production_provider_boundaries \
-  -- --ignored --exact
-```
+- 自动化测试不得发送真实对话或轮换生产 refresh token；仓库不提供破坏性 live fixture。
+- OpenAI identity 仅保留可选的外部 `CODEX_REAL_ACCOUNT_FILE` 官方 JWKS 签名检查，环境变量未设置时
+  直接跳过；它不经过 selector/transport，也不是数据面验收。
 
 终态门禁：
 
 ```bash
 cd backend
-cargo fmt --all -- --check
-cargo test --workspace --all-targets
+cargo fmt --check
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --test main --locked
 ```

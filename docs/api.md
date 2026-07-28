@@ -55,7 +55,7 @@ Admin API 不暴露全局配置版本，mutation 请求也不要求客户端提�
 
 ## 3. Responses 与模型目录
 
-请求正文上限为 16 MiB。
+Responses HTTP body、WebSocket message 和 frame 不设置网关私有长度上限；协议可接受性由上游决定。
 
 | 方法 | 路由 | 说明 |
 | --- | --- | --- |
@@ -70,10 +70,12 @@ Admin API 不暴露全局配置版本，mutation 请求也不要求客户端提�
 `GET /v1/models` 默认返回 OpenAI 兼容列表 `{"object": "list", "data": [...]}`；请求携带非空
 `client_version` query 参数（Codex 客户端）时改为返回 Codex 专用目录合同 `{"models": [...]}`。
 
-OpenAI 路径保留客户端 Responses wire 语义，上游事件字节在 HTTP SSE 与 WebSocket 两条链路上都
-原样转发；xAI 是 Grok wire 与 Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成，
-上游结构化错误的 message/code/type 会透传给客户端，其中内嵌的账号指纹 UUID 已脱敏。模型映射
-是全局精确映射，未命中时模型名原样交给所属 Provider。
+OpenAI 路径保留客户端 Responses wire 语义：请求 body 的未知字段和字段顺序保持不变（受控模型
+映射除外），HTTP SSE 与 WebSocket 的上游业务事件字节原样转发，response ID 按 opaque 值处理而不
+假设 UUID 或固定长度；OpenAI 上游错误 envelope 和允许下发的 opaque header 值也不由 canonical
+观测结果重写。xAI 是 Grok wire 与 Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成。
+上游结构化错误的 message/code/type 会透传给客户端，其中内嵌的账号指纹 UUID 已脱敏。模型映射是
+全局精确映射，未命中时模型名原样交给所属 Provider。
 
 ## 4. 管理员认证
 
@@ -94,17 +96,17 @@ OpenAI 路径保留客户端 Responses wire 语义，上游事件字节在 HTTP 
 | `GET` | `/api/admin/accounts/detail` | `accountId` | 查询账号详情、额度和本地用量 |
 | `GET` | `/api/admin/accounts/export` | `accountIds`、`confirm=export_sensitive_accounts` | 显式导出最多 200 个账号的敏感 Provider 文档 |
 | `POST` | `/api/admin/accounts/import` | `{ provider, data }` | 导入或按上游身份更新账号 |
-| `POST` | `/api/admin/accounts/refresh` | `{ accountId }` | 手工刷新账号 credential |
+| `POST` | `/api/admin/accounts/refresh` | `{ accountId }` | 手工刷新 OAuth credential（AT/RT），不刷新额度 |
 | `POST` | `/api/admin/accounts/rotate` | OpenAI rotation 字段 | 手工替换 OpenAI OAuth token |
 | `POST` | `/api/admin/accounts/enable` | `{ provider, accountId }` | 启用账号 |
 | `POST` | `/api/admin/accounts/disable` | `{ provider, accountId }` | 禁用账号 |
 | `POST` | `/api/admin/accounts/delete` | `{ provider, accountIds }` | 批量删除 1–200 个账号 |
 | `GET` | `/api/admin/accounts/quota` | `accountId` | 读取当前额度，不强制访问上游 |
-| `POST` | `/api/admin/accounts/quota/refresh` | `{ accountId }` | 立即刷新该账号额度 |
+| `POST` | `/api/admin/accounts/quota/refresh` | `{ accountId }` | 访问 Provider 并刷新额度，同时同步额度所属状态 |
 | `GET` | `/api/admin/accounts/models` | `accountId` | 优先读取该 Provider + 套餐的模型 cache，缺失时有限实时拉取 |
 | `POST` | `/api/admin/accounts/models/refresh` | `{ accountId }` | 强制拉取最新模型并覆盖 cache |
 | `GET` | `/api/admin/accounts/connection-test` | `accountId`、`modelId` | 通过 SSE 返回实时连接测试事件，不作为业务 Responses 用量记录 |
-| `POST` | `/api/admin/accounts/oauth/start` | OAuth start 字段 | 创建 OpenAI 或 xAI OAuth flow |
+| `POST` | `/api/admin/accounts/oauth/start` | `{ provider, name, accountId? }` | 创建 OpenAI 或 xAI OAuth flow；`accountId` 表示重新授权 |
 | `POST` | `/api/admin/accounts/oauth/complete` | `{ provider, flowId, callbackUrl }` | 消费 OAuth callback 并写入账号 |
 
 账号列表支持以下稳定值：
@@ -163,7 +165,30 @@ OAuth start 使用：
 }
 ```
 
-重新授权已有账号时只需提供 `accountId`。
+重新授权已有账号时，start 请求仍携带 `provider` 和展示用 `name`，只额外提供目标 `accountId`；
+客户端不得提交 `credentialRevision`、旧 token 身份或其他并发控制字段。complete 请求也不重复提交
+`accountId`，后端通过 `flowId` 中保存的目标绑定完成授权。
+
+### OpenAI 身份、额度与状态
+
+- 导入会校验签名 access token 和稳定账号身份；`/wham/usage` 用于补全账号/套餐事实和额度，
+  不是判断 token 是否有效的唯一依据。
+- 账号文件导入和首次 OAuth 创建在 credential 提交后立即尝试一次额度观测。观测失败只记录告警，
+  不回滚已提交的账号；重新授权只轮换目标账号 credential，不隐式等同于手工额度刷新。
+- 重新授权在 start 时绑定目标账号，complete 时重新读取目标的当前 credential revision，并验证上游
+  account/user 身份没有换绑。Free token 缺少 `chatgpt_account_id` 时，后端使用目标账号 header 调用
+  `/wham/usage` 交叉确认，而不是把该账号推断成 K12。
+- OAuth pending flow 先取得带过期时间的独占 claim，只有账号事务提交成功后才消费。失败会释放 claim，
+  但上游 authorization code 本身通常只能交换一次；已完成过 token exchange 时应重新创建 OAuth flow。
+- `GET /accounts/quota` 只读取最后一次落库快照；`POST /accounts/quota/refresh` 才访问上游。access token
+  已过期时，额度刷新要求先走 credential 刷新或重新授权，不会拿过期 token 探测额度。
+- 成功额度观测会 revision-fenced 写入 quota，并在 `active` 与 `quota_exhausted` 等额度所属状态间同步；
+  不会清除 `expired`、`banned` 等 credential/封禁终态。额度接口的 401/403 也不足以判定 refresh token
+  永久失效，credential 终态只由 OAuth refresh 或身份校验链路写入。
+- 正常 Responses 请求会解析上游响应的 rate-limit headers，合并进同一 quota 快照并同步状态。Free、
+  K12 等套餐共用该状态机；套餐只参与账号展示和按套餐隔离的模型目录 cache，不存在 K12 专属额度路径。
+- 账号页没有定时静默轮询。手工额度刷新完成后页面会重新读取该账号；请求驱动或后台任务产生的状态
+  变化，需要下一次显式查询账号列表后才会显示。
 
 ## 6. Client Key
 
@@ -224,6 +249,11 @@ request/response/upstream ID、outcome 与搜索文本。诊断 `dimension` 可�
 
 汇总与洞察中的请求数与 outcome 分布覆盖筛选范围内全部请求；token、缓存、延迟与成本聚合仅统计
 已完整交付客户端的成功响应。
+
+OpenAI 的 `serviceTier` 只接受上游响应生命周期事件确认的实际 `response.service_tier`；请求里的
+期望档位只保留在 request summary，不能冒充响应事实。计费展示把 `priority`/`fast` 映射为 `Fast`，
+`flex` 映射为 `Flex`，缺失或 `default` 映射为 `Default`；未知非空值原样展示。Fast 优先使用模型的
+priority 价格，缺少专用价格时回退到标准价格的 `2.00x`；Flex 为 `0.50x`，Default 为 `1.00x`。
 
 ## 9. 版本、更新与重启
 
