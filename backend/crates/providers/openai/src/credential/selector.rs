@@ -552,13 +552,9 @@ impl CodexCredentialSelector {
                 CookieRecovery::None,
             ),
             CodexAccountFailure::RateLimited { retry_after } => {
-                let until = now.checked_add(retry_after.unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN));
-                (
-                    AccountAvailability::Cooldown,
-                    Some("rate_limited".to_owned()),
-                    until,
-                    CookieRecovery::None,
-                )
+                return self
+                    .record_rate_limit_failure(account, retry_after, now)
+                    .await;
             }
             CodexAccountFailure::CloudflareChallenge { retry_after } => {
                 let delay = self.cloudflare_challenge_delay(account.id(), now, retry_after);
@@ -593,6 +589,49 @@ impl CodexCredentialSelector {
             .apply_state(account, availability, reason, cooldown_until, now)
             .await?;
         self.apply_cookie_recovery(account, cookie_recovery).await?;
+        Ok(())
+    }
+
+    async fn record_rate_limit_failure(
+        &self,
+        account: &ProviderAccount,
+        retry_after: Option<Duration>,
+        observed_at: SystemTime,
+    ) -> Result<(), CredentialSelectionError> {
+        let current = self.current_account(account.id()).await?;
+        if current.revision() != account.revision() {
+            return Err(CredentialRepositoryError::RevisionConflict.into());
+        }
+        if matches!(
+            current.availability(),
+            AccountAvailability::Invalid
+                | AccountAvailability::Expired
+                | AccountAvailability::Banned
+                | AccountAvailability::QuotaExhausted
+        ) {
+            return Ok(());
+        }
+        let quota_exhausted = self
+            .quota
+            .has_active_exhaustion(&current, observed_at)
+            .await
+            .map_err(|_| CredentialSelectionError::Store)?;
+        let (availability, reason, cooldown_until) = if quota_exhausted {
+            (
+                AccountAvailability::QuotaExhausted,
+                Some("quota_exhausted".to_owned()),
+                None,
+            )
+        } else {
+            (
+                AccountAvailability::Cooldown,
+                Some("rate_limited".to_owned()),
+                observed_at.checked_add(retry_after.unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN)),
+            )
+        };
+        self.repository
+            .apply_state(&current, availability, reason, cooldown_until, observed_at)
+            .await?;
         Ok(())
     }
 

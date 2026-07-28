@@ -417,21 +417,21 @@ fn classify_upstream_failure(
     }
     if [code.as_str(), error_type.as_str()]
         .into_iter()
-        .any(is_rate_limit_signal)
-        || is_rate_limit_message(&message)
-        || is_rate_limit_message(&body)
-        || status == Some(StatusCode::TOO_MANY_REQUESTS)
-    {
-        return CodexFailureCategory::RateLimited;
-    }
-    if [code.as_str(), error_type.as_str()]
-        .into_iter()
         .any(is_quota_signal)
         || is_quota_message(&message)
         || is_quota_message(&body)
         || status == Some(StatusCode::PAYMENT_REQUIRED)
     {
         return CodexFailureCategory::QuotaExhausted;
+    }
+    if [code.as_str(), error_type.as_str()]
+        .into_iter()
+        .any(is_rate_limit_signal)
+        || is_rate_limit_message(&message)
+        || is_rate_limit_message(&body)
+        || status == Some(StatusCode::TOO_MANY_REQUESTS)
+    {
+        return CodexFailureCategory::RateLimited;
     }
     if is_upstream_overload(&code) || is_upstream_overload(&message) {
         return CodexFailureCategory::Unavailable;

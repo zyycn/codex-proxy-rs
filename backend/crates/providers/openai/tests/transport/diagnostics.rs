@@ -143,3 +143,19 @@ fn structured_expiry_code_classifies_without_an_auth_status() {
         CodexFailureCategory::CredentialExpired
     );
 }
+
+#[test]
+fn structured_quota_signal_takes_precedence_over_http_429() {
+    assert_eq!(
+        classify(
+            429,
+            r#"{"error":{"code":"insufficient_quota","message":"rate limit reached"}}"#
+        ),
+        CodexFailureCategory::QuotaExhausted
+    );
+}
+
+#[test]
+fn bare_http_429_remains_a_temporary_rate_limit() {
+    assert_eq!(classify(429, ""), CodexFailureCategory::RateLimited);
+}
