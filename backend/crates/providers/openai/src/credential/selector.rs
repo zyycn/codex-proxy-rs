@@ -6,8 +6,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountCandidate, AccountFeedbackStats, AccountRuntimeSignals,
-    AccountSelectionContext, AccountSelector, ProviderAccount, ProviderAccountId,
+    AccountAvailability, AccountAvailabilityPolicy, AccountCandidate, AccountFeedbackStats,
+    AccountRuntimeSignals, AccountSelectionContext, AccountSelector, ProviderAccount,
+    ProviderAccountId,
 };
 use gateway_core::engine::{AttemptContext, ContinuationAttempt};
 use gateway_core::provider_ports::{
@@ -162,22 +163,26 @@ impl CodexCredentialSelector {
         request: &SelectCodexCredential<'_>,
         cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
+        let diagnostic = request.attempt.is_diagnostic_required_account();
         let accounts = self.repository.list_for_provider().await?;
         let accounts = accounts
             .into_iter()
             .filter(|account| {
                 account.provider() == &self.provider_kind
-                    && !matches!(
-                        self.catalog.observed_model_support(
-                            account.id(),
-                            account.revision(),
-                            request.upstream_model,
-                        ),
-                        Ok(Some(false))
-                    )
+                    && (diagnostic
+                        || !matches!(
+                            self.catalog.observed_model_support(
+                                account.id(),
+                                account.revision(),
+                                request.upstream_model,
+                            ),
+                            Ok(Some(false))
+                        ))
             })
             .collect::<Vec<_>>();
-        self.quota.prepare_scheduling(&accounts).await;
+        if !diagnostic {
+            self.quota.prepare_scheduling(&accounts).await;
+        }
         let account_ids = accounts
             .iter()
             .map(|account| account.id().clone())
@@ -223,23 +228,27 @@ impl CodexCredentialSelector {
                 .collect::<Vec<_>>()
         });
         let scheduling_candidates = quota_exhausted_candidates.as_deref().unwrap_or(&candidates);
-        let affinity_account = match request.session_affinity_key {
-            Some(key) => match self.lookup_session_affinity(key).await {
-                SessionAffinityLookup::Bound(account_id)
-                    if scheduling_candidates.iter().any(|candidate| {
-                        candidate.account.id() == &account_id
-                            && candidate.account.is_schedulable(SystemTime::now())
-                    }) =>
-                {
-                    Some(account_id)
-                }
-                SessionAffinityLookup::Bound(_) => {
-                    self.clear_session_affinity(key).await;
-                    None
-                }
-                SessionAffinityLookup::Missing | SessionAffinityLookup::Unavailable => None,
-            },
-            None => None,
+        let affinity_account = if diagnostic {
+            None
+        } else {
+            match request.session_affinity_key {
+                Some(key) => match self.lookup_session_affinity(key).await {
+                    SessionAffinityLookup::Bound(account_id)
+                        if scheduling_candidates.iter().any(|candidate| {
+                            candidate.account.id() == &account_id
+                                && candidate.account.is_schedulable(SystemTime::now())
+                        }) =>
+                    {
+                        Some(account_id)
+                    }
+                    SessionAffinityLookup::Bound(_) => {
+                        self.clear_session_affinity(key).await;
+                        None
+                    }
+                    SessionAffinityLookup::Missing | SessionAffinityLookup::Unavailable => None,
+                },
+                None => None,
+            }
         };
         let cyber_policy_scope = self
             .prepare_cyber_policy_scope(cyber_policy_session_key)
@@ -290,6 +299,11 @@ impl CodexCredentialSelector {
                 excluded_accounts: excluded.clone(),
                 preferred_account: preferred.clone(),
                 round_robin_cursor,
+                availability: if diagnostic {
+                    AccountAvailabilityPolicy::BypassForDiagnostic
+                } else {
+                    AccountAvailabilityPolicy::Enforce
+                },
             };
             let Some(selected) = AccountSelector.select(scheduling_candidates, &context) else {
                 return match shortest_retry {
@@ -304,6 +318,7 @@ impl CodexCredentialSelector {
                 .find(|candidate| candidate.account.id() == selected.account.id())
                 .map(|candidate| candidate.account.clone())
                 .ok_or(CredentialSelectionError::InvalidCredential)?;
+            let allows_account_state_mutation = !diagnostic || account.enabled();
             let policy = request.attempt.account_selection_policy();
             match self
                 .leases
@@ -327,11 +342,12 @@ impl CodexCredentialSelector {
                     let (account, runtime) = if account.authentication_kind()
                         == CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY
                     {
-                        let prepared = self
-                            .agent_identity
-                            .prepare(&account)
-                            .await
-                            .map_err(|_| CredentialSelectionError::InvalidCredential)?;
+                        let prepared = if allows_account_state_mutation {
+                            self.agent_identity.prepare(&account).await
+                        } else {
+                            self.agent_identity.load_current(account.id()).await
+                        }
+                        .map_err(|_| CredentialSelectionError::InvalidCredential)?;
                         (prepared.account, prepared.credential)
                     } else {
                         let runtime = self.repository.load_runtime_credential(&account).await?;
@@ -359,6 +375,7 @@ impl CodexCredentialSelector {
                         authentication: runtime.authentication,
                         cookies,
                         cyber_policy_scope,
+                        allows_account_state_mutation,
                         _guard: guard,
                     });
                 }
@@ -537,7 +554,7 @@ impl CodexCredentialSelector {
             CodexAccountFailure::RateLimited { retry_after } => {
                 let until = now.checked_add(retry_after.unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN));
                 (
-                    AccountAvailability::QuotaExhausted,
+                    AccountAvailability::Cooldown,
                     Some("rate_limited".to_owned()),
                     until,
                     CookieRecovery::None,
@@ -584,6 +601,7 @@ impl CodexCredentialSelector {
         account: &ProviderAccount,
         session_affinity_key: Option<&ProviderSessionAffinityKey>,
     ) {
+        self.restore_recoverable_account_state(account).await;
         self.risk_recovery
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -623,6 +641,42 @@ impl CodexCredentialSelector {
                     "OpenAI session affinity write timed out"
                 );
             }
+        }
+    }
+
+    async fn restore_recoverable_account_state(&self, account: &ProviderAccount) {
+        let Ok(current) = self.current_account(account.id()).await else {
+            return;
+        };
+        if current.provider() != &self.provider_kind
+            || current.revision() != account.revision()
+            || !current.enabled()
+            || !matches!(
+                current.availability(),
+                AccountAvailability::Unknown
+                    | AccountAvailability::Cooldown
+                    | AccountAvailability::QuotaExhausted
+                    | AccountAvailability::Expired
+            )
+        {
+            return;
+        }
+        if let Err(error) = self
+            .repository
+            .apply_state(
+                &current,
+                AccountAvailability::Ready,
+                None,
+                None,
+                SystemTime::now(),
+            )
+            .await
+        {
+            tracing::warn!(
+                account_id = %account.id(),
+                error = %error,
+                "OpenAI account state recovery after successful upstream response failed"
+            );
         }
     }
 
@@ -801,6 +855,7 @@ pub struct CodexCredentialLease {
     cookies: Vec<RuntimeCodexCookie>,
     installation_id: String,
     cyber_policy_scope: Option<CodexCyberPolicyScope>,
+    allows_account_state_mutation: bool,
     _guard: Box<dyn ProviderLeaseGuard>,
 }
 
@@ -833,6 +888,12 @@ impl CodexCredentialLease {
     #[must_use]
     pub(crate) const fn cyber_policy_scope(&self) -> Option<&CodexCyberPolicyScope> {
         self.cyber_policy_scope.as_ref()
+    }
+
+    /// 禁用账号的管理端诊断必须只返回真实上游结果，不能回写账号侧状态。
+    #[must_use]
+    pub(crate) const fn allows_account_state_mutation(&self) -> bool {
+        self.allows_account_state_mutation
     }
 }
 

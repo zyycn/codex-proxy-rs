@@ -446,16 +446,104 @@ async fn synchronize_without_accounts_is_a_noop_before_network_io() {
 }
 
 #[tokio::test]
-async fn periodic_quota_synchronization_skips_ready_accounts() {
+async fn periodic_quota_synchronization_skips_fresh_ready_accounts() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_periodic_ready").await;
+    let account = store
+        .account("acct_periodic_ready")
+        .expect("created account");
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: Some(OpaqueProviderData::new(
+                json!({
+                    "rate_limit": {
+                        "allowed": true,
+                        "primary_window": {"used_percent": 10, "reset_at": 1_900_000_000}
+                    }
+                })
+                .as_object()
+                .expect("quota object")
+                .clone(),
+            )),
+            observed_at: Some(SystemTime::now()),
+        })
+        .await
+        .expect("persist fresh quota");
 
     let summary = blocked_network_quota_service(&store)
         .synchronize()
         .await
-        .expect("ready account must not query upstream");
+        .expect("fresh ready account must not query upstream");
 
     assert_eq!(summary, CodexQuotaSyncSummary::default());
+}
+
+#[tokio::test]
+async fn periodic_quota_synchronization_limits_stale_ready_account_scans() {
+    let store = Arc::new(MemoryAccountStore::default());
+    for index in 0..9 {
+        let account_id = format!("acct_periodic_stale_ready_{index}");
+        create_account(&store, &account_id).await;
+        let account = store.account(&account_id).expect("created account");
+        store
+            .compare_and_swap_quota(QuotaObservation {
+                account_id: account.id().clone(),
+                expected_revision: account.revision(),
+                quota: Some(OpaqueProviderData::new(
+                    json!({
+                        "rate_limit": {
+                            "allowed": true,
+                            "primary_window": {"used_percent": 10, "reset_at": 1_900_000_000}
+                        }
+                    })
+                    .as_object()
+                    .expect("quota object")
+                    .clone(),
+                )),
+                observed_at: Some(SystemTime::UNIX_EPOCH),
+            })
+            .await
+            .expect("persist stale quota");
+    }
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": false,
+                "primary_window": {"used_percent": 100, "reset_at": 1_900_000_000}
+            }
+        })))
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    let summary = service.synchronize().await.expect("quota synchronization");
+
+    assert_eq!(summary.exhausted, 8);
+    assert_eq!(
+        store
+            .account("acct_periodic_stale_ready_0")
+            .expect("scanned account")
+            .availability(),
+        AccountAvailability::QuotaExhausted
+    );
+    assert_eq!(
+        store
+            .account("acct_periodic_stale_ready_8")
+            .expect("deferred account")
+            .availability(),
+        AccountAvailability::Ready
+    );
 }
 
 #[tokio::test]
@@ -509,6 +597,90 @@ async fn periodic_quota_synchronization_throttles_the_same_exhausted_account() {
     let summary = service.synchronize().await.expect("throttled quota cycle");
 
     assert_eq!(summary, CodexQuotaSyncSummary::default());
+}
+
+#[tokio::test]
+async fn periodic_quota_synchronization_rechecks_an_exhausted_account_once_when_its_reset_is_due() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_periodic_reset_due").await;
+    let account = store
+        .account("acct_periodic_reset_due")
+        .expect("created account");
+    store
+        .apply_state_change(AccountStateChange {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            availability: AccountAvailability::QuotaExhausted,
+            reason: Some("quota_exhausted".to_owned()),
+            cooldown_until: None,
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("mark account exhausted");
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: Some(OpaqueProviderData::new(
+                json!({
+                    "rate_limit": {
+                        "allowed": false,
+                        "primary_window": {"used_percent": 100, "reset_at": 1_900_000_000}
+                    }
+                })
+                .as_object()
+                .expect("quota object")
+                .clone(),
+            )),
+            observed_at: Some(SystemTime::now()),
+        })
+        .await
+        .expect("persist future reset");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    let first = service.synchronize().await.expect("initial refresh");
+    assert_eq!(first.transient, 1);
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: Some(OpaqueProviderData::new(
+                json!({
+                    "rate_limit": {
+                        "allowed": false,
+                        "primary_window": {"used_percent": 100, "reset_at": 1}
+                    }
+                })
+                .as_object()
+                .expect("quota object")
+                .clone(),
+            )),
+            observed_at: Some(SystemTime::now()),
+        })
+        .await
+        .expect("persist due reset");
+
+    let reset_recheck = service.synchronize().await.expect("reset recheck");
+    let repeated = service
+        .synchronize()
+        .await
+        .expect("throttled reset recheck");
+
+    assert_eq!(reset_recheck.transient, 1);
+    assert_eq!(repeated, CodexQuotaSyncSummary::default());
 }
 
 #[tokio::test]

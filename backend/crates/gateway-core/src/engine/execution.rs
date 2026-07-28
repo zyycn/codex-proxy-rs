@@ -477,11 +477,11 @@ impl DefaultExecutionService {
         };
         let mut session = match self
             .probe_coordinator
-            .start(
+            .start_diagnostic(
                 new_request,
                 operation,
                 plan,
-                Some(account_id),
+                account_id,
                 None,
                 CancellationToken::new(),
             )

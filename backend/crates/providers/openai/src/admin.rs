@@ -31,8 +31,9 @@ use gateway_core::engine::credential::{
 use gateway_core::error::StoreErrorKind;
 use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
 use gateway_core::provider_ports::{
-    NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingFlowPort, OAuthPendingPutOutcome,
-    OAuthPendingTakeOutcome, ProviderRuntimePolicyPort, ProviderStoreError, ProviderStoreErrorKind,
+    NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingClaimOutcome, OAuthPendingConsumeOutcome,
+    OAuthPendingFlowPort, OAuthPendingPutOutcome, OAuthPendingReleaseOutcome,
+    ProviderRuntimePolicyPort, ProviderStoreError, ProviderStoreErrorKind,
 };
 use gateway_core::routing::{ProviderKind, UpstreamModelId};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -47,10 +48,11 @@ use crate::credential::{
     CodexAccountQuotaSnapshot, CodexCredentialAdmin, CodexCredentialAdminError,
     CodexCredentialAdminService, CodexCredentialCatalogError, CodexCredentialCatalogService,
     CodexCredentialQuotaError, CodexCredentialQuotaService, CodexOAuthAdmin, CodexOAuthAdminError,
-    CodexOAuthPendingStore, CodexOAuthPendingStoreError, CodexPendingAuthorization,
-    CodexQuotaWindowKind, CodexQuotaWindowRole, CompleteCodexOAuthAuthorization,
-    CompletedCodexOAuthCredential, ExportManagedCodexCredential, RotateManagedCodexCredential,
-    StartCodexOAuthAuthorization, StoredCodexPendingAuthorization, refresh_time,
+    CodexOAuthPendingClaimOutcome, CodexOAuthPendingStore, CodexOAuthPendingStoreError,
+    CodexPendingAuthorization, CodexQuotaWindowKind, CodexQuotaWindowRole,
+    CompleteCodexOAuthAuthorization, CompletedCodexOAuthCredential, ExportManagedCodexCredential,
+    RotateManagedCodexCredential, StartCodexOAuthAuthorization, StoredCodexPendingAuthorization,
+    refresh_time,
 };
 use crate::transport::CodexWebSocketPool;
 use crate::transport::openai_billing_breakdown;
@@ -316,29 +318,37 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 );
             })
             .map_err(map_oauth_error)?;
-        let credential = match completed.credential {
-            CompletedCodexOAuthCredential::Create(credential) => {
-                PreparedAuthorizationCredential::Create(prepared_create(credential, Utc::now())?)
+        let (mutation, completed_credential, authorization_guard) = completed.into_parts();
+        let credential = match (mutation.target(), completed_credential) {
+            (
+                AuthorizationMutationTarget::Create { .. },
+                CompletedCodexOAuthCredential::Create(credential),
+            ) => {
+                prepared_create(credential, Utc::now()).map(PreparedAuthorizationCredential::Create)
             }
-            CompletedCodexOAuthCredential::Reauthorize(credential) => {
-                let provider_kind = match completed.mutation.target() {
-                    AuthorizationMutationTarget::Reauthorize { .. } => {
-                        completed.mutation.provider_kind().clone()
-                    }
-                    AuthorizationMutationTarget::Create { .. } => {
-                        return Err(provider_admin_error(ProviderAdminErrorKind::Internal));
-                    }
-                };
-                PreparedAuthorizationCredential::Reauthorize(prepared_rotation(
-                    credential,
-                    provider_kind,
-                )?)
+            (
+                AuthorizationMutationTarget::Reauthorize { .. },
+                CompletedCodexOAuthCredential::Reauthorize(credential),
+            ) => prepared_rotation(credential, mutation.provider_kind().clone())
+                .map(PreparedAuthorizationCredential::Reauthorize),
+            _ => Err(provider_admin_error(ProviderAdminErrorKind::Internal)),
+        };
+        let credential = match credential {
+            Ok(credential) => credential,
+            Err(error) => {
+                if let Err(settlement_error) = authorization_guard.abort().await {
+                    tracing::warn!(
+                        request_id = %request_id,
+                        settlement_error = %settlement_error,
+                        "OpenAI OAuth claim release failed after credential preparation"
+                    );
+                    return Err(provider_admin_error(ProviderAdminErrorKind::Unavailable));
+                }
+                return Err(error);
             }
         };
-        Ok(PreparedAuthorizationCommit {
-            pending: completed.mutation,
-            credential,
-        })
+        Ok(PreparedAuthorizationCommit::new(mutation, credential)
+            .with_authorization_guard(authorization_guard))
     }
 
     async fn prepare_rotation(
@@ -896,21 +906,86 @@ impl CodexOAuthPendingStore for OpenAiOAuthPendingStore {
         }
     }
 
-    async fn take(
+    async fn claim(
         &self,
         owner_ref: &str,
         flow_id: &str,
-    ) -> Result<Option<CodexPendingAuthorization>, CodexOAuthPendingStoreError> {
+        claim_ref: &str,
+        claim_ttl: std::time::Duration,
+    ) -> Result<CodexOAuthPendingClaimOutcome, CodexOAuthPendingStoreError> {
         let flow = binding(flow_id)?;
         let owner = binding(owner_ref)?;
+        let claim = binding(claim_ref)?;
+        let outcome = self
+            .port
+            .claim_if_owner(&self.provider_kind, &flow, &owner, &claim, claim_ttl)
+            .await
+            .map_err(map_pending_store_error)?;
+        match outcome {
+            OAuthPendingClaimOutcome::Claimed(payload) => match decode_pending(payload) {
+                Ok(pending) => Ok(CodexOAuthPendingClaimOutcome::Claimed(Box::new(pending))),
+                Err(error) => match self
+                    .port
+                    .release_claim(&self.provider_kind, &flow, &owner, &claim)
+                    .await
+                    .map_err(map_pending_store_error)?
+                {
+                    OAuthPendingReleaseOutcome::Released => Err(error),
+                    OAuthPendingReleaseOutcome::NotFound
+                    | OAuthPendingReleaseOutcome::OwnerMismatch
+                    | OAuthPendingReleaseOutcome::ClaimMismatch => {
+                        Err(CodexOAuthPendingStoreError::Unavailable)
+                    }
+                },
+            },
+            OAuthPendingClaimOutcome::NotFound | OAuthPendingClaimOutcome::OwnerMismatch => {
+                Ok(CodexOAuthPendingClaimOutcome::NotFound)
+            }
+            OAuthPendingClaimOutcome::InProgress => Ok(CodexOAuthPendingClaimOutcome::InProgress),
+        }
+    }
+
+    async fn release_claim(
+        &self,
+        owner_ref: &str,
+        flow_id: &str,
+        claim_ref: &str,
+    ) -> Result<bool, CodexOAuthPendingStoreError> {
+        let flow = binding(flow_id)?;
+        let owner = binding(owner_ref)?;
+        let claim = binding(claim_ref)?;
         match self
             .port
-            .take_if_owner(&self.provider_kind, &flow, &owner)
+            .release_claim(&self.provider_kind, &flow, &owner, &claim)
             .await
             .map_err(map_pending_store_error)?
         {
-            OAuthPendingTakeOutcome::Taken(payload) => decode_pending(payload).map(Some),
-            OAuthPendingTakeOutcome::NotFound | OAuthPendingTakeOutcome::OwnerMismatch => Ok(None),
+            OAuthPendingReleaseOutcome::Released => Ok(true),
+            OAuthPendingReleaseOutcome::NotFound
+            | OAuthPendingReleaseOutcome::OwnerMismatch
+            | OAuthPendingReleaseOutcome::ClaimMismatch => Ok(false),
+        }
+    }
+
+    async fn consume_claim(
+        &self,
+        owner_ref: &str,
+        flow_id: &str,
+        claim_ref: &str,
+    ) -> Result<bool, CodexOAuthPendingStoreError> {
+        let flow = binding(flow_id)?;
+        let owner = binding(owner_ref)?;
+        let claim = binding(claim_ref)?;
+        match self
+            .port
+            .consume_claim(&self.provider_kind, &flow, &owner, &claim)
+            .await
+            .map_err(map_pending_store_error)?
+        {
+            OAuthPendingConsumeOutcome::Consumed => Ok(true),
+            OAuthPendingConsumeOutcome::NotFound
+            | OAuthPendingConsumeOutcome::OwnerMismatch
+            | OAuthPendingConsumeOutcome::ClaimMismatch => Ok(false),
         }
     }
 }
@@ -1272,9 +1347,11 @@ fn log_import_failure(stage: &'static str, error: &'static str) {
 fn map_oauth_error(error: CodexOAuthAdminError) -> ProviderAdminError {
     use CodexOAuthAdminError as Error;
     provider_admin_error(match error {
-        Error::InvalidInput | Error::UpstreamRejected | Error::Credential => {
-            ProviderAdminErrorKind::Invalid
-        }
+        Error::InvalidInput
+        | Error::CallbackRejected
+        | Error::TokenRejected
+        | Error::IdentityRejected
+        | Error::Credential => ProviderAdminErrorKind::Invalid,
         Error::NotFound | Error::FlowExpired => ProviderAdminErrorKind::NotFound,
         Error::Conflict | Error::Ambiguous => ProviderAdminErrorKind::Conflict,
         Error::UpstreamUnavailable | Error::StorageUnavailable => {
@@ -1289,7 +1366,9 @@ const fn oauth_error_code(error: &CodexOAuthAdminError) -> &'static str {
         CodexOAuthAdminError::NotFound => "not_found",
         CodexOAuthAdminError::Conflict => "conflict",
         CodexOAuthAdminError::FlowExpired => "flow_expired",
-        CodexOAuthAdminError::UpstreamRejected => "upstream_rejected",
+        CodexOAuthAdminError::CallbackRejected => "callback_rejected",
+        CodexOAuthAdminError::TokenRejected => "token_rejected",
+        CodexOAuthAdminError::IdentityRejected => "identity_rejected",
         CodexOAuthAdminError::UpstreamUnavailable => "upstream_unavailable",
         CodexOAuthAdminError::Ambiguous => "ambiguous",
         CodexOAuthAdminError::StorageUnavailable => "storage_unavailable",

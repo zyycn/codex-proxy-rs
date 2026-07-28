@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use gateway_core::{
     engine::credential::{OpaqueProviderData, ProviderAccountId},
@@ -9,7 +10,7 @@ use gateway_core::{
 };
 
 use super::{
-    MutationActor, MutationContext, PageSize, Revision,
+    AdminError, MutationActor, MutationContext, PageSize, Revision,
     accounts::{AccountAvailability, AccountRecord, AccountStatus, AccountSummary, AccountUsage},
 };
 
@@ -310,6 +311,20 @@ pub trait CredentialCommitGuard: Send + 'static {
     fn finish(self: Box<Self>);
 }
 
+/// OAuth pending claim 在 Store 事务结果确定后执行的显式结算动作。
+///
+/// OAuth provider 必须在 credential 准备阶段持有 claim：Store 提交成功后消费 flow，提交或
+/// 校验失败后释放 flow。异步结算不能依赖 `Drop`，否则请求提前返回会让同一授权流无谓地
+/// 进入短暂的不可重试状态。
+#[async_trait]
+pub trait AuthorizationCommitGuard: Send + 'static {
+    /// Store 已提交 OAuth credential 后消费对应的一次性 flow。
+    async fn commit(self: Box<Self>) -> Result<(), AdminError>;
+
+    /// Store 未提交 OAuth credential 时释放 claim，允许同一 flow 重试。
+    async fn abort(self: Box<Self>) -> Result<(), AdminError>;
+}
+
 /// OAuth complete 后由 Provider 返回的准备结果；Store 仍是唯一提交者。
 pub enum PreparedAuthorizationCredential {
     Create(PreparedCredentialCreate),
@@ -320,6 +335,7 @@ pub enum PreparedAuthorizationCredential {
 pub struct PreparedAuthorizationCommit {
     pub pending: PendingAuthorizationMutation,
     pub credential: PreparedAuthorizationCredential,
+    authorization_guard: Option<Box<dyn AuthorizationCommitGuard>>,
 }
 
 impl fmt::Debug for PreparedAuthorizationCommit {
@@ -346,9 +362,37 @@ pub struct AuthorizationCommit {
     pub credential: AuthorizationCredentialCommit,
 }
 
+/// OAuth 准备结果拆解后的 Store 命令与两个结算 guard。
+///
+/// Store 成功时先结束 credential guard，再消费 OAuth claim；失败时丢弃 credential guard 并
+/// 释放 OAuth claim，使同一授权流可以重试。
+pub(crate) struct AuthorizationCommitSettlement {
+    pub(crate) command: AuthorizationCommit,
+    pub(crate) credential_guard: Option<Box<dyn CredentialCommitGuard>>,
+    pub(crate) authorization_guard: Option<Box<dyn AuthorizationCommitGuard>>,
+}
+
 impl PreparedAuthorizationCommit {
     #[must_use]
-    pub fn into_commit(self) -> (AuthorizationCommit, Option<Box<dyn CredentialCommitGuard>>) {
+    pub fn new(
+        pending: PendingAuthorizationMutation,
+        credential: PreparedAuthorizationCredential,
+    ) -> Self {
+        Self {
+            pending,
+            credential,
+            authorization_guard: None,
+        }
+    }
+
+    /// 让 OAuth claim 覆盖准备完成到 Store 事务结算之间的全部窗口。
+    #[must_use]
+    pub fn with_authorization_guard(mut self, guard: Box<dyn AuthorizationCommitGuard>) -> Self {
+        self.authorization_guard = Some(guard);
+        self
+    }
+
+    pub(crate) fn into_commit(self) -> AuthorizationCommitSettlement {
         let (credential, guard) = match self.credential {
             PreparedAuthorizationCredential::Create(credential) => {
                 (AuthorizationCredentialCommit::Create(credential), None)
@@ -361,13 +405,27 @@ impl PreparedAuthorizationCommit {
                 )
             }
         };
-        (
-            AuthorizationCommit {
+        AuthorizationCommitSettlement {
+            command: AuthorizationCommit {
                 pending: self.pending,
                 credential,
             },
-            guard,
-        )
+            credential_guard: guard,
+            authorization_guard: self.authorization_guard,
+        }
+    }
+
+    pub(crate) async fn abort(self) -> Result<(), AdminError> {
+        let AuthorizationCommitSettlement {
+            credential_guard,
+            authorization_guard,
+            ..
+        } = self.into_commit();
+        drop(credential_guard);
+        if let Some(guard) = authorization_guard {
+            guard.abort().await?;
+        }
+        Ok(())
     }
 }
 

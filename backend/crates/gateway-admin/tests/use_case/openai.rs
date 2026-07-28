@@ -281,6 +281,56 @@ async fn openai_authorization_create_should_remain_successful_when_initial_quota
 }
 
 #[tokio::test]
+async fn openai_authorization_store_failure_should_release_claim_for_retry() {
+    let events = events();
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    provider.retry_authorization_after_abort();
+    let store = FakeAccountStore::new("openai", events.clone());
+    store.fail_next_commit();
+    let services = service(provider.clone(), store).await;
+    let command = || CompleteAuthorization {
+        context: context("oauth-store-retry"),
+        flow_id: "flow-test".to_owned(),
+        callback_url: "http://localhost/callback?code=test&state=test".to_owned(),
+    };
+
+    services
+        .openai()
+        .start_authorization(StartAuthorization {
+            context: context("oauth-store-retry"),
+            name: "new OpenAI credential".to_owned(),
+            reauthorization: None,
+        })
+        .await
+        .expect("start authorization");
+    services
+        .openai()
+        .complete_authorization(command())
+        .await
+        .expect_err("Store commit must fail");
+    services
+        .openai()
+        .complete_authorization(command())
+        .await
+        .expect("released claim must permit retry");
+
+    assert_eq!(
+        recorded(&events),
+        [
+            "provider.start_authorization",
+            "provider.complete_authorization",
+            "store.commit_authorization",
+            "authorization_guard.abort",
+            "provider.complete_authorization",
+            "store.commit_authorization",
+            "authorization_guard.commit",
+            "provider.quota",
+        ]
+    );
+    assert!(provider.pending().is_none());
+}
+
+#[tokio::test]
 async fn openai_import_provider_error_should_not_touch_store_transaction() {
     let events = events();
     let provider = FakeProviderAdmin::new("openai", events.clone());

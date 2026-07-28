@@ -603,7 +603,7 @@ fn credential_expired_failure_marks_unified_account_expired() {
 }
 
 #[test]
-fn rate_limited_failure_marks_account_quota_exhausted_with_a_cooldown() {
+fn rate_limited_failure_marks_account_cooldown_with_a_cooldown_deadline() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_primary", "at-primary");
     let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
@@ -629,7 +629,7 @@ fn rate_limited_failure_marks_account_quota_exhausted_with_a_cooldown() {
     .expect("record rate-limit failure");
 
     let account = store.account("acct_primary").expect("account");
-    assert_eq!(account.availability(), AccountAvailability::QuotaExhausted);
+    assert_eq!(account.availability(), AccountAvailability::Cooldown);
     assert!(
         account
             .cooldown_until()

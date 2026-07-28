@@ -778,21 +778,43 @@ pub enum OAuthPendingPutOutcome {
     AlreadyExists,
 }
 
+/// OAuth 回调处理取得临时 flow 的独占权结果。
+///
+/// 与一次性消费不同，Provider 在上游换取令牌失败时可以释放 claim，让同一 flow
+/// 使用新的回调地址重试；只有完整校验成功后才会消费 flow。
 #[derive(Clone, PartialEq)]
-pub enum OAuthPendingTakeOutcome {
-    Taken(OpaqueProviderData),
+pub enum OAuthPendingClaimOutcome {
+    Claimed(OpaqueProviderData),
     NotFound,
     OwnerMismatch,
+    InProgress,
 }
 
-impl fmt::Debug for OAuthPendingTakeOutcome {
+impl fmt::Debug for OAuthPendingClaimOutcome {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Taken(_) => formatter.write_str("Taken([PROVIDER-OWNED])"),
+            Self::Claimed(_) => formatter.write_str("Claimed([PROVIDER-OWNED])"),
             Self::NotFound => formatter.write_str("NotFound"),
             Self::OwnerMismatch => formatter.write_str("OwnerMismatch"),
+            Self::InProgress => formatter.write_str("InProgress"),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OAuthPendingReleaseOutcome {
+    Released,
+    NotFound,
+    OwnerMismatch,
+    ClaimMismatch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OAuthPendingConsumeOutcome {
+    Consumed,
+    NotFound,
+    OwnerMismatch,
+    ClaimMismatch,
 }
 
 pub trait OAuthPendingFlowPort: Send + Sync {
@@ -801,12 +823,30 @@ pub trait OAuthPendingFlowPort: Send + Sync {
         flow: NewOAuthPendingFlow,
     ) -> BoxFuture<'_, Result<OAuthPendingPutOutcome, ProviderStoreError>>;
 
-    fn take_if_owner<'a>(
+    fn claim_if_owner<'a>(
         &'a self,
         provider_kind: &'a ProviderKind,
         flow: &'a OAuthPendingBinding,
         owner: &'a OAuthPendingBinding,
-    ) -> BoxFuture<'a, Result<OAuthPendingTakeOutcome, ProviderStoreError>>;
+        claim: &'a OAuthPendingBinding,
+        claim_ttl: Duration,
+    ) -> BoxFuture<'a, Result<OAuthPendingClaimOutcome, ProviderStoreError>>;
+
+    fn release_claim<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        flow: &'a OAuthPendingBinding,
+        owner: &'a OAuthPendingBinding,
+        claim: &'a OAuthPendingBinding,
+    ) -> BoxFuture<'a, Result<OAuthPendingReleaseOutcome, ProviderStoreError>>;
+
+    fn consume_claim<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        flow: &'a OAuthPendingBinding,
+        owner: &'a OAuthPendingBinding,
+        claim: &'a OAuthPendingBinding,
+    ) -> BoxFuture<'a, Result<OAuthPendingConsumeOutcome, ProviderStoreError>>;
 }
 
 /// Provider 只能按能力取用端口，无法取得 Redis client 或 repository 集合。

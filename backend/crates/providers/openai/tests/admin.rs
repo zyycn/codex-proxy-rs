@@ -33,7 +33,8 @@ use gateway_core::operation::OperationKind;
 use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
-    NewOAuthPendingFlow, OAuthPendingFlowPort, OAuthPendingPutOutcome, OAuthPendingTakeOutcome,
+    NewOAuthPendingFlow, OAuthPendingClaimOutcome, OAuthPendingConsumeOutcome,
+    OAuthPendingFlowPort, OAuthPendingPutOutcome, OAuthPendingReleaseOutcome,
     ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCooldown, ProviderCooldownPort,
     ProviderCredentialState, ProviderCredentialStatePort, ProviderRefreshPolicy,
     ProviderRuntimePolicyPort, ProviderStoreError, ProviderStorePorts,
@@ -339,7 +340,7 @@ async fn openai_admin_provider_persists_the_full_pending_envelope_and_binds_owne
         .expect("start authorization");
     {
         let values = pending.values.lock().expect("OAuth pending");
-        let (_, payload, _) = values.values().next().expect("stored pending");
+        let (_, payload, _, _) = values.values().next().expect("stored pending");
         let mutation = payload
             .expose_to_provider()
             .get("mutation")
@@ -822,7 +823,7 @@ struct TestOAuthPending {
 }
 
 type PendingKey = (String, String);
-type PendingValue = (String, OpaqueProviderData, SystemTime);
+type PendingValue = (String, OpaqueProviderData, SystemTime, Option<String>);
 
 impl OAuthPendingFlowPort for TestOAuthPending {
     fn put_if_absent(
@@ -844,36 +845,97 @@ impl OAuthPendingFlowPort for TestOAuthPending {
                     flow.owner().expose_to_store().to_owned(),
                     flow.payload().clone(),
                     SystemTime::now() + flow.ttl(),
+                    None,
                 ),
             );
             Ok(OAuthPendingPutOutcome::Stored)
         })
     }
 
-    fn take_if_owner<'a>(
+    fn claim_if_owner<'a>(
         &'a self,
         provider_kind: &'a ProviderKind,
         flow: &'a gateway_core::provider_ports::OAuthPendingBinding,
         owner: &'a gateway_core::provider_ports::OAuthPendingBinding,
-    ) -> BoxFuture<'a, Result<OAuthPendingTakeOutcome, ProviderStoreError>> {
+        claim: &'a gateway_core::provider_ports::OAuthPendingBinding,
+        _claim_ttl: Duration,
+    ) -> BoxFuture<'a, Result<OAuthPendingClaimOutcome, ProviderStoreError>> {
         Box::pin(async move {
             let key = (
                 provider_kind.as_str().to_owned(),
                 flow.expose_to_store().to_owned(),
             );
             let mut values = self.values.lock().expect("OAuth pending");
-            let Some((stored_owner, _, expires_at)) = values.get(&key) else {
-                return Ok(OAuthPendingTakeOutcome::NotFound);
+            let Some((stored_owner, payload, expires_at, stored_claim)) = values.get_mut(&key)
+            else {
+                return Ok(OAuthPendingClaimOutcome::NotFound);
             };
-            if expires_at <= &SystemTime::now() {
+            if *expires_at <= SystemTime::now() {
                 values.remove(&key);
-                return Ok(OAuthPendingTakeOutcome::NotFound);
+                return Ok(OAuthPendingClaimOutcome::NotFound);
             }
             if stored_owner != owner.expose_to_store() {
-                return Ok(OAuthPendingTakeOutcome::OwnerMismatch);
+                return Ok(OAuthPendingClaimOutcome::OwnerMismatch);
             }
-            let (_, payload, _) = values.remove(&key).expect("checked pending");
-            Ok(OAuthPendingTakeOutcome::Taken(payload))
+            if stored_claim.is_some() {
+                return Ok(OAuthPendingClaimOutcome::InProgress);
+            }
+            *stored_claim = Some(claim.expose_to_store().to_owned());
+            Ok(OAuthPendingClaimOutcome::Claimed(payload.clone()))
+        })
+    }
+
+    fn release_claim<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        flow: &'a gateway_core::provider_ports::OAuthPendingBinding,
+        owner: &'a gateway_core::provider_ports::OAuthPendingBinding,
+        claim: &'a gateway_core::provider_ports::OAuthPendingBinding,
+    ) -> BoxFuture<'a, Result<OAuthPendingReleaseOutcome, ProviderStoreError>> {
+        Box::pin(async move {
+            let key = (
+                provider_kind.as_str().to_owned(),
+                flow.expose_to_store().to_owned(),
+            );
+            let mut values = self.values.lock().expect("OAuth pending");
+            let Some((stored_owner, _, _, stored_claim)) = values.get_mut(&key) else {
+                return Ok(OAuthPendingReleaseOutcome::NotFound);
+            };
+            if stored_owner != owner.expose_to_store() {
+                return Ok(OAuthPendingReleaseOutcome::OwnerMismatch);
+            }
+            if stored_claim.as_deref() != Some(claim.expose_to_store()) {
+                return Ok(OAuthPendingReleaseOutcome::ClaimMismatch);
+            }
+            *stored_claim = None;
+            Ok(OAuthPendingReleaseOutcome::Released)
+        })
+    }
+
+    fn consume_claim<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        flow: &'a gateway_core::provider_ports::OAuthPendingBinding,
+        owner: &'a gateway_core::provider_ports::OAuthPendingBinding,
+        claim: &'a gateway_core::provider_ports::OAuthPendingBinding,
+    ) -> BoxFuture<'a, Result<OAuthPendingConsumeOutcome, ProviderStoreError>> {
+        Box::pin(async move {
+            let key = (
+                provider_kind.as_str().to_owned(),
+                flow.expose_to_store().to_owned(),
+            );
+            let mut values = self.values.lock().expect("OAuth pending");
+            let Some((stored_owner, _, _, stored_claim)) = values.get(&key) else {
+                return Ok(OAuthPendingConsumeOutcome::NotFound);
+            };
+            if stored_owner != owner.expose_to_store() {
+                return Ok(OAuthPendingConsumeOutcome::OwnerMismatch);
+            }
+            if stored_claim.as_deref() != Some(claim.expose_to_store()) {
+                return Ok(OAuthPendingConsumeOutcome::ClaimMismatch);
+            }
+            values.remove(&key);
+            Ok(OAuthPendingConsumeOutcome::Consumed)
         })
     }
 }

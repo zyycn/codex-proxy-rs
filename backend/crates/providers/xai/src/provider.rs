@@ -9,8 +9,8 @@ use base64::Engine as _;
 use futures::{StreamExt, future::BoxFuture};
 use gateway_core::engine::continuation::ContinuationBinding;
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountFeedbackStats, ProviderAccount, ProviderAccountId,
-    ProviderAccountStore,
+    AccountAvailability, AccountAvailabilityPolicy, AccountFeedbackStats, ProviderAccount,
+    ProviderAccountId, ProviderAccountStore,
 };
 use gateway_core::engine::provider::{
     EventStream, Provider, ProviderCallMetadata, ProviderCatalogGeneration,
@@ -229,6 +229,7 @@ impl GrokBuildProvider {
             output_items: BTreeMap::new(),
         });
         let selected = Arc::new(selected);
+        let allows_account_state_mutation = selected.allows_account_state_mutation();
         let metadata = provider_call_metadata(candidate, &selected)?;
         let events = cold_http_sse_stream(
             Arc::clone(&self.selector),
@@ -245,8 +246,12 @@ impl GrokBuildProvider {
                 session_capture,
             },
         );
-        Ok(ProviderStream::new(metadata, events, selected)
-            .with_account_feedback(Arc::clone(&self.account_feedback)))
+        let stream = ProviderStream::new(metadata, events, selected);
+        Ok(if allows_account_state_mutation {
+            stream.with_account_feedback(Arc::clone(&self.account_feedback))
+        } else {
+            stream
+        })
     }
 
     async fn execute_compaction(
@@ -288,6 +293,7 @@ impl GrokBuildProvider {
             )
             .await?,
         );
+        let allows_account_state_mutation = selected.allows_account_state_mutation();
         let metadata = provider_call_metadata(candidate, &selected)?;
         let events = cold_compaction_http_sse_stream(
             Arc::clone(&self.selector),
@@ -304,8 +310,12 @@ impl GrokBuildProvider {
                 session: Arc::clone(&selected),
             },
         );
-        Ok(ProviderStream::new(metadata, events, selected)
-            .with_account_feedback(Arc::clone(&self.account_feedback)))
+        let stream = ProviderStream::new(metadata, events, selected);
+        Ok(if allows_account_state_mutation {
+            stream.with_account_feedback(Arc::clone(&self.account_feedback))
+        } else {
+            stream
+        })
     }
 }
 
@@ -324,6 +334,11 @@ async fn select_grok_session(
         context.account_selection_policy(),
         context.deadline(),
     )
+    .with_availability_policy(if context.is_diagnostic_required_account() {
+        AccountAvailabilityPolicy::BypassForDiagnostic
+    } else {
+        AccountAvailabilityPolicy::Enforce
+    })
     .with_affinity(affinity);
     let selection_deadline = remaining(context.deadline())
         .ok_or_else(|| provider_error(ProviderErrorKind::Timeout, UpstreamSendState::NotSent))?;
@@ -1108,6 +1123,7 @@ fn cold_compaction_http_sse_stream(
 
         let summary = summary.finish().map_err(map_compaction_decode_error)?;
         let started = facts.started.ok_or_else(protocol_sent)?;
+        let upstream_completed = facts.completed.is_some();
         let completed = facts.completed.unwrap_or_else(|| started.clone());
         let (created, output_done, terminal) = crate::transport::compaction::compaction_wire_events(
             &started,
@@ -1120,6 +1136,9 @@ fn cold_compaction_http_sse_stream(
         .map_err(|_| protocol_sent())?
         .into_parts();
         ensure_sent_context(&context)?;
+        if upstream_completed && session.allows_account_state_mutation() {
+            selector.record_success(&session).await;
+        }
         yield ProviderEvent::canonical_with_wire(vec![GatewayEvent::Started(started)], created);
         yield ProviderEvent::wire(output_done);
         let mut terminal_facts = facts.accounting;
@@ -1333,6 +1352,9 @@ fn cold_http_sse_stream(
                 .flat_map(ProviderEvent::canonical_facts)
                 .any(|event| matches!(event, GatewayEvent::Completed(_)));
             attach_xai_session_update(&mut events, &mut session_capture)?;
+            if completed && session.allows_account_state_mutation() {
+                selector.record_success(&session).await;
+            }
             for event in events {
                 ensure_sent_context(&context)?;
                 yield event;
@@ -1350,7 +1372,14 @@ fn cold_http_sse_stream(
                 return;
             }
         };
+        let completed = final_events
+            .iter()
+            .flat_map(ProviderEvent::canonical_facts)
+            .any(|event| matches!(event, GatewayEvent::Completed(_)));
         attach_xai_session_update(&mut final_events, &mut session_capture)?;
+        if completed && session.allows_account_state_mutation() {
+            selector.record_success(&session).await;
+        }
         for event in final_events {
             ensure_sent_context(&context)?;
             yield event;
@@ -1449,6 +1478,9 @@ async fn record_failure(
     session: &SelectedGrokSession,
     error: ProviderError,
 ) -> ProviderError {
+    if !session.allows_account_state_mutation() {
+        return error;
+    }
     let failure = match error.kind() {
         ProviderErrorKind::Unauthorized => Some(GrokCredentialFailure::Unauthorized),
         ProviderErrorKind::RateLimited => Some(GrokCredentialFailure::RateLimited {
@@ -1468,6 +1500,9 @@ async fn record_stream_failure(
     session: &SelectedGrokSession,
     error: ProviderError,
 ) -> ProviderError {
+    if !session.allows_account_state_mutation() {
+        return error;
+    }
     if matches!(
         error.kind(),
         ProviderErrorKind::Unauthorized
@@ -1491,6 +1526,9 @@ async fn recover_or_record_failure(
     error: ProviderError,
     recovery_attempted: bool,
 ) -> ProviderError {
+    if !session.allows_account_state_mutation() {
+        return error;
+    }
     if error.requires_credential_recovery() && !recovery_attempted {
         return match recovery
             .recover_unauthorized(session.account_id(), session.credential_revision())

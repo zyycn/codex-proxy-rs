@@ -70,6 +70,17 @@ impl MemoryAccountStore {
     pub(crate) fn quota_reads(&self) -> usize {
         self.quota_reads.load(Ordering::SeqCst)
     }
+
+    pub(crate) fn has_quota(&self, id: &str) -> bool {
+        let Some(id) = ProviderAccountId::new(id).ok() else {
+            return false;
+        };
+        self.accounts
+            .lock()
+            .expect("account store lock")
+            .get(&id)
+            .is_some_and(|stored| stored.quota.is_some())
+    }
 }
 
 #[async_trait]
@@ -439,6 +450,10 @@ pub(crate) struct MemorySessionAffinity {
 impl MemorySessionAffinity {
     pub(crate) fn lookup_keys(&self) -> Vec<String> {
         self.lookups.lock().expect("session affinity lock").clone()
+    }
+
+    pub(crate) fn binding_count(&self) -> usize {
+        self.bindings.lock().expect("session affinity lock").len()
     }
 }
 

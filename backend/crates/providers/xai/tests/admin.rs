@@ -30,11 +30,12 @@ use gateway_core::event::GatewayEvent;
 use gateway_core::operation::{Operation, OperationKind};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
-    NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingFlowPort, OAuthPendingPutOutcome,
-    OAuthPendingTakeOutcome, ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCooldown,
-    ProviderCooldownPort, ProviderCredentialState, ProviderCredentialStatePort,
-    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshPolicy,
-    ProviderRuntimePolicyPort, ProviderStoreError, ProviderStorePorts,
+    NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingClaimOutcome, OAuthPendingConsumeOutcome,
+    OAuthPendingFlowPort, OAuthPendingPutOutcome, OAuthPendingReleaseOutcome,
+    ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCooldown, ProviderCooldownPort,
+    ProviderCredentialState, ProviderCredentialStatePort, ProviderLeaseAcquisition,
+    ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshPolicy, ProviderRuntimePolicyPort,
+    ProviderStoreError, ProviderStorePorts,
 };
 use gateway_core::routing::{
     ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RoutingContext,
@@ -372,7 +373,7 @@ async fn xai_admin_provider_restores_full_pending_envelope_and_binds_owner() {
         .await
         .expect_err("restored pending must validate callback state");
     assert_eq!(invalid_callback.kind(), ProviderAdminErrorKind::Invalid);
-    assert_eq!(pending.len(), 0);
+    assert_eq!(pending.len(), 1);
 
     let mismatched_flow = "pending-envelope-mismatch";
     let owner_ref = admin_session_owner_ref("admin-owner");
@@ -399,7 +400,7 @@ async fn xai_admin_provider_restores_full_pending_envelope_and_binds_owner() {
         .await
         .expect_err("flow binding mismatch");
     assert_eq!(mismatched_envelope.kind(), ProviderAdminErrorKind::Invalid);
-    assert_eq!(pending.len(), 0);
+    assert_eq!(pending.len(), 2);
 }
 
 #[tokio::test]
@@ -819,7 +820,7 @@ struct TestOAuthPending {
 }
 
 type PendingKey = (String, String);
-type PendingValue = (String, OpaqueProviderData, SystemTime);
+type PendingValue = (String, OpaqueProviderData, SystemTime, Option<String>);
 
 impl TestOAuthPending {
     fn insert(&self, flow_id: &str, owner: String, payload: OpaqueProviderData) {
@@ -829,6 +830,7 @@ impl TestOAuthPending {
                 owner,
                 payload,
                 SystemTime::now() + Duration::from_secs(1_800),
+                None,
             ),
         );
     }
@@ -858,36 +860,97 @@ impl OAuthPendingFlowPort for TestOAuthPending {
                     flow.owner().expose_to_store().to_owned(),
                     flow.payload().clone(),
                     SystemTime::now() + flow.ttl(),
+                    None,
                 ),
             );
             Ok(OAuthPendingPutOutcome::Stored)
         })
     }
 
-    fn take_if_owner<'a>(
+    fn claim_if_owner<'a>(
         &'a self,
         provider_kind: &'a ProviderKind,
         flow: &'a OAuthPendingBinding,
         owner: &'a OAuthPendingBinding,
-    ) -> BoxFuture<'a, Result<OAuthPendingTakeOutcome, ProviderStoreError>> {
+        claim: &'a OAuthPendingBinding,
+        _claim_ttl: Duration,
+    ) -> BoxFuture<'a, Result<OAuthPendingClaimOutcome, ProviderStoreError>> {
         Box::pin(async move {
             let key = (
                 provider_kind.as_str().to_owned(),
                 flow.expose_to_store().to_owned(),
             );
             let mut values = self.values.lock().expect("OAuth pending");
-            let Some((stored_owner, _, expires_at)) = values.get(&key) else {
-                return Ok(OAuthPendingTakeOutcome::NotFound);
+            let Some((stored_owner, payload, expires_at, stored_claim)) = values.get_mut(&key)
+            else {
+                return Ok(OAuthPendingClaimOutcome::NotFound);
             };
-            if expires_at <= &SystemTime::now() {
+            if *expires_at <= SystemTime::now() {
                 values.remove(&key);
-                return Ok(OAuthPendingTakeOutcome::NotFound);
+                return Ok(OAuthPendingClaimOutcome::NotFound);
             }
             if stored_owner != owner.expose_to_store() {
-                return Ok(OAuthPendingTakeOutcome::OwnerMismatch);
+                return Ok(OAuthPendingClaimOutcome::OwnerMismatch);
             }
-            let (_, payload, _) = values.remove(&key).expect("checked pending");
-            Ok(OAuthPendingTakeOutcome::Taken(payload))
+            if stored_claim.is_some() {
+                return Ok(OAuthPendingClaimOutcome::InProgress);
+            }
+            *stored_claim = Some(claim.expose_to_store().to_owned());
+            Ok(OAuthPendingClaimOutcome::Claimed(payload.clone()))
+        })
+    }
+
+    fn release_claim<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        flow: &'a OAuthPendingBinding,
+        owner: &'a OAuthPendingBinding,
+        claim: &'a OAuthPendingBinding,
+    ) -> BoxFuture<'a, Result<OAuthPendingReleaseOutcome, ProviderStoreError>> {
+        Box::pin(async move {
+            let key = (
+                provider_kind.as_str().to_owned(),
+                flow.expose_to_store().to_owned(),
+            );
+            let mut values = self.values.lock().expect("OAuth pending");
+            let Some((stored_owner, _, _, stored_claim)) = values.get_mut(&key) else {
+                return Ok(OAuthPendingReleaseOutcome::NotFound);
+            };
+            if stored_owner != owner.expose_to_store() {
+                return Ok(OAuthPendingReleaseOutcome::OwnerMismatch);
+            }
+            if stored_claim.as_deref() != Some(claim.expose_to_store()) {
+                return Ok(OAuthPendingReleaseOutcome::ClaimMismatch);
+            }
+            *stored_claim = None;
+            Ok(OAuthPendingReleaseOutcome::Released)
+        })
+    }
+
+    fn consume_claim<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        flow: &'a OAuthPendingBinding,
+        owner: &'a OAuthPendingBinding,
+        claim: &'a OAuthPendingBinding,
+    ) -> BoxFuture<'a, Result<OAuthPendingConsumeOutcome, ProviderStoreError>> {
+        Box::pin(async move {
+            let key = (
+                provider_kind.as_str().to_owned(),
+                flow.expose_to_store().to_owned(),
+            );
+            let mut values = self.values.lock().expect("OAuth pending");
+            let Some((stored_owner, _, _, stored_claim)) = values.get(&key) else {
+                return Ok(OAuthPendingConsumeOutcome::NotFound);
+            };
+            if stored_owner != owner.expose_to_store() {
+                return Ok(OAuthPendingConsumeOutcome::OwnerMismatch);
+            }
+            if stored_claim.as_deref() != Some(claim.expose_to_store()) {
+                return Ok(OAuthPendingConsumeOutcome::ClaimMismatch);
+            }
+            values.remove(&key);
+            Ok(OAuthPendingConsumeOutcome::Consumed)
         })
     }
 }

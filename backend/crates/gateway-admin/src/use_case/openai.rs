@@ -185,12 +185,13 @@ impl OpenAiService for DefaultOpenAiService {
             .complete_authorization(command)
             .await
             .map_err(|error| map_provider_error(error, "OpenAI authorization"))?;
-        validate_authorization_commit(
+        let prepared = validate_authorization_commit(
             self.provider.provider_kind(),
             &context,
-            &prepared,
+            prepared,
             "OpenAI authorization",
-        )?;
+        )
+        .await?;
         let creates_account = matches!(
             &prepared.credential,
             PreparedAuthorizationCredential::Create(_)

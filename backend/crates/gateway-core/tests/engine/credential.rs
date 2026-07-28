@@ -5,11 +5,11 @@ use std::time::{Duration, SystemTime};
 use serde_json::{Map, Value};
 
 use gateway_core::engine::credential::{
-    AccountAttemptFeedback, AccountAvailability, AccountCandidate, AccountFeedbackStats,
-    AccountQuotaSignals, AccountRuntimeSignals, AccountSelectionContext, AccountSelectionPolicy,
-    AccountSelector, CredentialCasUpdate, CredentialRevision, OpaqueProviderData,
-    PlaintextCredential, ProviderAccount, ProviderAccountId, ProviderAccountUpdate,
-    RotationStrategy,
+    AccountAttemptFeedback, AccountAvailability, AccountAvailabilityPolicy, AccountCandidate,
+    AccountFeedbackStats, AccountQuotaSignals, AccountRuntimeSignals, AccountSelectionContext,
+    AccountSelectionPolicy, AccountSelector, CredentialCasUpdate, CredentialRevision,
+    OpaqueProviderData, PlaintextCredential, ProviderAccount, ProviderAccountId,
+    ProviderAccountUpdate, RotationStrategy,
 };
 use gateway_core::routing::ProviderKind;
 
@@ -51,6 +51,7 @@ fn context(strategy: RotationStrategy) -> AccountSelectionContext {
         excluded_accounts: BTreeSet::new(),
         preferred_account: None,
         round_robin_cursor: 0,
+        availability: AccountAvailabilityPolicy::Enforce,
     }
 }
 
@@ -77,6 +78,55 @@ fn availability_should_round_trip_all_database_values() {
     assert_eq!(
         AccountAvailability::parse(AccountAvailability::QuotaExhausted.as_str()),
         Some(AccountAvailability::QuotaExhausted)
+    );
+}
+
+#[test]
+fn diagnostic_selection_bypasses_all_local_account_availability() {
+    let exhausted = AccountCandidate {
+        account: account("acct_exhausted").with_runtime_state(
+            true,
+            AccountAvailability::QuotaExhausted,
+            None,
+        ),
+        signals: AccountRuntimeSignals {
+            in_flight: 0,
+            last_started_at: None,
+            quota_reset_at: None,
+            quota_remaining_rank: None,
+            failure_rate_basis_points: None,
+            first_output_latency_ms: None,
+        },
+    };
+    let disabled = AccountCandidate {
+        account: account("acct_disabled").with_runtime_state(
+            false,
+            AccountAvailability::QuotaExhausted,
+            None,
+        ),
+        signals: AccountRuntimeSignals {
+            in_flight: 0,
+            last_started_at: None,
+            quota_reset_at: None,
+            quota_remaining_rank: None,
+            failure_rate_basis_points: None,
+            first_output_latency_ms: None,
+        },
+    };
+    let mut context = context(RotationStrategy::Sticky);
+    context.availability = AccountAvailabilityPolicy::BypassForDiagnostic;
+
+    assert_eq!(
+        AccountSelector
+            .select(std::slice::from_ref(&exhausted), &context)
+            .map(|candidate| candidate.account.id()),
+        Some(exhausted.account.id())
+    );
+    assert_eq!(
+        AccountSelector
+            .select(std::slice::from_ref(&disabled), &context)
+            .map(|candidate| candidate.account.id()),
+        Some(disabled.account.id())
     );
 }
 

@@ -347,7 +347,7 @@ impl CodexAgentIdentityTaskService {
         self.load_current(account_id).await
     }
 
-    async fn load_current(
+    pub(crate) async fn load_current(
         &self,
         account_id: &ProviderAccountId,
     ) -> Result<PreparedCodexRuntimeCredential, CodexAgentIdentityError> {

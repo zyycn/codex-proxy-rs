@@ -151,18 +151,27 @@ fn validate_prepared_rotation(
     Ok(())
 }
 
-fn validate_authorization_commit(
+async fn validate_authorization_commit(
     provider_kind: &ProviderKind,
     context: &MutationContext,
-    prepared: &PreparedAuthorizationCommit,
+    prepared: PreparedAuthorizationCommit,
     resource: &'static str,
-) -> Result<(), AdminError> {
+) -> Result<PreparedAuthorizationCommit, AdminError> {
     if prepared.pending.provider_kind() != provider_kind
         || !prepared.pending.owner_binding().matches_context(context)
     {
-        return Err(AdminError::conflict(format!(
+        let validation_error = AdminError::conflict(format!(
             "{resource} pending authorization binding is invalid"
-        )));
+        ));
+        if let Err(error) = prepared.abort().await {
+            tracing::warn!(
+                resource,
+                settlement_error = %error,
+                "OAuth authorization claim release failed after preparation validation"
+            );
+            return Err(error);
+        }
+        return Err(validation_error);
     }
     let matches_target = match (prepared.pending.target(), &prepared.credential) {
         (
@@ -184,11 +193,20 @@ fn validate_authorization_commit(
         _ => false,
     };
     if !matches_target {
-        return Err(AdminError::conflict(format!(
+        let validation_error = AdminError::conflict(format!(
             "{resource} prepared credential does not match its pending target"
-        )));
+        ));
+        if let Err(error) = prepared.abort().await {
+            tracing::warn!(
+                resource,
+                settlement_error = %error,
+                "OAuth authorization claim release failed after preparation validation"
+            );
+            return Err(error);
+        }
+        return Err(validation_error);
     }
-    Ok(())
+    Ok(prepared)
 }
 
 async fn commit_authorization(
@@ -197,16 +215,34 @@ async fn commit_authorization(
     context: &MutationContext,
     resource: &'static str,
 ) -> Result<CredentialMutationResult, AdminError> {
-    let (command, guard) = prepared.into_commit();
+    let crate::model::provider_credentials::AuthorizationCommitSettlement {
+        command,
+        credential_guard,
+        authorization_guard,
+    } = prepared.into_commit();
     match accounts.commit_authorization(command, context).await {
         Ok(result) => {
-            if let Some(guard) = guard {
+            if let Some(guard) = credential_guard {
                 guard.finish();
+            }
+            if let Some(guard) = authorization_guard {
+                guard.commit().await?;
             }
             Ok(result)
         }
         Err(error) => {
-            drop(guard);
+            drop(credential_guard);
+            if let Some(guard) = authorization_guard
+                && let Err(settlement_error) = guard.abort().await
+            {
+                tracing::warn!(
+                    resource,
+                    store_error = %error,
+                    settlement_error = %settlement_error,
+                    "OAuth authorization claim release failed after Store commit failure"
+                );
+                return Err(settlement_error);
+            }
             Err(map_store_error(error, resource))
         }
     }

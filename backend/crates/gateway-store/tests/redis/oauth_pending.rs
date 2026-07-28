@@ -3,8 +3,8 @@ use std::{sync::Arc, time::Duration};
 use gateway_core::{
     engine::credential::OpaqueProviderData,
     provider_ports::{
-        NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingFlowPort, OAuthPendingPutOutcome,
-        OAuthPendingTakeOutcome,
+        NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingClaimOutcome,
+        OAuthPendingConsumeOutcome, OAuthPendingFlowPort, OAuthPendingPutOutcome,
     },
     routing::ProviderKind,
 };
@@ -23,6 +23,7 @@ async fn codex_pending_flow_wrong_owner_does_not_consume_it() {
         OAuthPendingBinding::try_new(format!("flow-{}", Uuid::new_v4())).expect("flow binding");
     let owner = OAuthPendingBinding::try_new("owner-a").expect("owner binding");
     let other_owner = OAuthPendingBinding::try_new("owner-b").expect("other owner binding");
+    let claim = OAuthPendingBinding::try_new("claim-a").expect("claim binding");
     let mut payload = serde_json::Map::new();
     payload.insert(
         "state".to_owned(),
@@ -77,24 +78,37 @@ async fn codex_pending_flow_wrong_owner_does_not_consume_it() {
     assert!(ttl > 0 && ttl <= 60_000);
     assert_eq!(
         repository
-            .take_if_owner(&provider, &flow, &other_owner)
+            .claim_if_owner(
+                &provider,
+                &flow,
+                &other_owner,
+                &claim,
+                Duration::from_secs(30),
+            )
             .await
             .expect("reject wrong owner"),
-        OAuthPendingTakeOutcome::OwnerMismatch
+        OAuthPendingClaimOutcome::OwnerMismatch
     );
     assert!(matches!(
         repository
-            .take_if_owner(&provider, &flow, &owner)
+            .claim_if_owner(&provider, &flow, &owner, &claim, Duration::from_secs(30),)
             .await
-            .expect("consume right owner"),
-        OAuthPendingTakeOutcome::Taken(_)
+            .expect("claim right owner"),
+        OAuthPendingClaimOutcome::Claimed(_)
     ));
     assert_eq!(
         repository
-            .take_if_owner(&provider, &flow, &owner)
+            .consume_claim(&provider, &flow, &owner, &claim)
+            .await
+            .expect("consume right owner claim"),
+        OAuthPendingConsumeOutcome::Consumed
+    );
+    assert_eq!(
+        repository
+            .claim_if_owner(&provider, &flow, &owner, &claim, Duration::from_secs(30),)
             .await
             .expect("flow is one shot"),
-        OAuthPendingTakeOutcome::NotFound
+        OAuthPendingClaimOutcome::NotFound
     );
 }
 
