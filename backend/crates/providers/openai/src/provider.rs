@@ -376,6 +376,7 @@ impl Provider for CodexProvider {
                 response_store,
                 continuation_scope: None,
             });
+        let allows_account_state_mutation = lease.allows_account_state_mutation();
         let events = cold_response_stream(ColdResponse {
             client: self.client.clone(),
             response_origin: self.responses_url.clone(),
@@ -391,8 +392,12 @@ impl Provider for CodexProvider {
             session_affinity_key,
             session_capture,
         });
-        Ok(ProviderStream::new(metadata, events, lease)
-            .with_account_feedback(Arc::clone(&self.account_feedback)))
+        let stream = ProviderStream::new(metadata, events, lease);
+        Ok(if allows_account_state_mutation {
+            stream.with_account_feedback(Arc::clone(&self.account_feedback))
+        } else {
+            stream
+        })
     }
 }
 
@@ -657,6 +662,15 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
     } = response;
     Box::pin(async_stream::try_stream! {
         let cyber_policy_scope = lease.cyber_policy_scope().cloned();
+        let allows_account_state_mutation = lease.allows_account_state_mutation();
+        let failure_context = OpenAiFailureContext {
+            client: &client,
+            selector: &selector,
+            quota: &quota,
+            response_origin: &response_origin,
+            cyber_policy_scope: cyber_policy_scope.as_ref(),
+            allows_account_state_mutation,
+        };
         let mut active_account = lease.account().clone();
         let cookie_header = build_cookie_header(lease.cookies())?;
         let mut authorization = lease
@@ -686,7 +700,9 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             &cancellation,
         )
         .await;
-        if let Err(CodexHandshakeAttemptError::Client(error)) = &response {
+        if allows_account_state_mutation
+            && let Err(CodexHandshakeAttemptError::Client(error)) = &response
+        {
             match agent_identity
                 .recover_after_rejected_task(
                     active_account.id(),
@@ -735,15 +751,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 if let Some(observation) = failure.observation.take() {
                     yield ProviderEvent::observation(observation);
                 }
-                apply_failure(
-                    &client,
-                    &selector,
-                    &quota,
-                    &active_account,
-                    &response_origin,
-                    cyber_policy_scope.as_ref(),
-                    &failure,
-                )
+                apply_failure(&failure_context, &active_account, &failure)
                 .await;
                 Err(failure.error)?;
                 return;
@@ -754,15 +762,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 ProviderErrorKind::Protocol,
                 UpstreamSendState::Sent,
             ));
-            apply_failure(
-                &client,
-                &selector,
-                &quota,
-                &active_account,
-                &response_origin,
-                cyber_policy_scope.as_ref(),
-                &failure,
-            )
+            apply_failure(&failure_context, &active_account, &failure)
             .await;
             Err(failure.error)?;
             return;
@@ -786,7 +786,9 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             context.attempt_index().get(),
         );
         yield ProviderEvent::observation(observation_state.observation()?);
-        synchronize_passive_quota(&quota, &active_account, &response.rate_limit_headers).await;
+        if allows_account_state_mutation {
+            synchronize_passive_quota(&quota, &active_account, &response.rate_limit_headers).await;
+        }
         if let Some(etag) = response.response_metadata.models_etag.as_deref()
             && let Err(error) = catalog.observe_response_etag(etag)
         {
@@ -795,7 +797,8 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 "OpenAI model ETag observation was rejected"
             );
         }
-        if !response.set_cookie_headers.is_empty()
+        if allows_account_state_mutation
+            && !response.set_cookie_headers.is_empty()
             && let Ok(outcome) = selector
                 .capture_response_cookies(
                     &active_account,
@@ -847,20 +850,14 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 Err(failure) => {
                     let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
                     if !updates.is_empty() {
-                        synchronize_passive_quota(&quota, &active_account, &updates).await;
+                        if allows_account_state_mutation {
+                            synchronize_passive_quota(&quota, &active_account, &updates).await;
+                        }
                         if observation_state.merge_rate_limit_headers(&updates) {
                             yield ProviderEvent::observation(observation_state.observation()?);
                         }
                     }
-                    apply_failure(
-                        &client,
-                        &selector,
-                        &quota,
-                        &active_account,
-                        &response_origin,
-                        cyber_policy_scope.as_ref(),
-                        &failure,
-                    )
+                    apply_failure(&failure_context, &active_account, &failure)
                     .await;
                     Err(failure.error)?;
                     return;
@@ -871,7 +868,9 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             let rate_limits_changed = if updates.is_empty() {
                 false
             } else {
-                synchronize_passive_quota(&quota, &active_account, &updates).await;
+                if allows_account_state_mutation {
+                    synchronize_passive_quota(&quota, &active_account, &updates).await;
+                }
                 observation_state.merge_rate_limit_headers(&updates)
             };
             if let (Some(capture), Some(updates)) =
@@ -906,39 +905,33 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 .any(|event| matches!(event, GatewayEvent::Completed(_)));
             let terminal_changed = completed
                 && observation_state.mark_completed(terminal_response_is_incomplete(&events));
-            if rate_limits_changed || timing_changed || terminal_changed {
-                yield ProviderEvent::observation(observation_state.observation()?);
-            }
             if let Some(failure) = terminal_failure.as_ref() {
-                apply_failure(
-                    &client,
-                    &selector,
-                    &quota,
-                    &active_account,
-                    &response_origin,
-                    cyber_policy_scope.as_ref(),
-                    failure,
-                )
+                apply_failure(&failure_context, &active_account, failure)
                 .await;
             }
             if let Err(error) = attach_openai_session_update(&mut events, &mut session_capture) {
                 if terminal_failure.is_none() {
                     let failure = MappedProviderFailure::plain(error);
-                    apply_failure(
-                        &client,
-                        &selector,
-                        &quota,
-                        &active_account,
-                        &response_origin,
-                        cyber_policy_scope.as_ref(),
-                        &failure,
-                    )
+                    apply_failure(&failure_context, &active_account, &failure)
                     .await;
                     Err(failure.error)?;
                 } else {
                     Err(error)?;
                 }
                 return;
+            }
+            if allows_account_state_mutation && completed && terminal_failure.is_none() {
+                // 完成事件一旦交给下游，Core 可以立刻停止轮询 Provider stream；
+                // 在此之前持久化亲和关系，保证成功请求不会因流被提前 drop 而丢失绑定。
+                selector
+                    .record_success(&active_account, session_affinity_key.as_ref())
+                    .await;
+                selector
+                    .observe_cyber_policy_success(cyber_policy_scope.as_ref())
+                    .await;
+            }
+            if rate_limits_changed || timing_changed || terminal_changed {
+                yield ProviderEvent::observation(observation_state.observation()?);
             }
             for event in events {
                 yield event;
@@ -948,12 +941,6 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 return;
             }
             if completed {
-                selector
-                    .record_success(&active_account, session_affinity_key.as_ref())
-                    .await;
-                selector
-                    .observe_cyber_policy_success(cyber_policy_scope.as_ref())
-                    .await;
                 return;
             }
         }
@@ -977,19 +964,13 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         let rate_limits_changed = if updates.is_empty() {
             false
         } else {
-            synchronize_passive_quota(&quota, &active_account, &updates).await;
+            if allows_account_state_mutation {
+                synchronize_passive_quota(&quota, &active_account, &updates).await;
+            }
             observation_state.merge_rate_limit_headers(&updates)
         };
         if let Some(failure) = terminal_failure.as_ref() {
-            apply_failure(
-                &client,
-                &selector,
-                &quota,
-                &active_account,
-                &response_origin,
-                cyber_policy_scope.as_ref(),
-                failure,
-            )
+            apply_failure(&failure_context, &active_account, failure)
             .await;
         }
         if let (Some(capture), Some(updates)) =
@@ -1001,15 +982,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         if let Err(error) = attach_openai_session_update(&mut events, &mut session_capture) {
             if terminal_failure.is_none() {
                 let failure = MappedProviderFailure::plain(error);
-                apply_failure(
-                    &client,
-                    &selector,
-                    &quota,
-                    &active_account,
-                    &response_origin,
-                    cyber_policy_scope.as_ref(),
-                    &failure,
-                )
+                apply_failure(&failure_context, &active_account, &failure)
                 .await;
                 Err(failure.error)?;
             } else {
@@ -1023,6 +996,15 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             .any(|event| matches!(event, GatewayEvent::Completed(_)));
         let terminal_changed = completed
             && observation_state.mark_completed(terminal_response_is_incomplete(&events));
+        if allows_account_state_mutation && completed && terminal_failure.is_none() {
+            // 同上：尾部 finish() 也可能产出 completed，亲和记录必须先于任何下游 yield。
+            selector
+                .record_success(&active_account, session_affinity_key.as_ref())
+                .await;
+            selector
+                .observe_cyber_policy_success(cyber_policy_scope.as_ref())
+                .await;
+        }
         if timing_changed || rate_limits_changed || terminal_changed {
             yield ProviderEvent::observation(observation_state.observation()?);
         }
@@ -1032,14 +1014,6 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         if let Some(failure) = terminal_failure {
             Err(failure.error)?;
             return;
-        }
-        if completed {
-            selector
-                .record_success(&active_account, session_affinity_key.as_ref())
-                .await;
-            selector
-                .observe_cyber_policy_success(cyber_policy_scope.as_ref())
-                .await;
         }
     })
 }
@@ -1781,24 +1755,40 @@ impl ReplayBoundary {
     }
 }
 
+struct OpenAiFailureContext<'a> {
+    client: &'a CodexBackendClient,
+    selector: &'a CodexCredentialSelector,
+    quota: &'a CodexCredentialQuotaService,
+    response_origin: &'a Url,
+    cyber_policy_scope: Option<&'a CodexCyberPolicyScope>,
+    allows_account_state_mutation: bool,
+}
+
 async fn apply_failure(
-    client: &CodexBackendClient,
-    selector: &CodexCredentialSelector,
-    quota: &CodexCredentialQuotaService,
+    context: &OpenAiFailureContext<'_>,
     account: &ProviderAccount,
-    response_origin: &Url,
-    cyber_policy_scope: Option<&CodexCyberPolicyScope>,
     failure: &MappedProviderFailure,
 ) {
-    synchronize_passive_quota(quota, account, &failure.rate_limit_headers).await;
+    if !context.allows_account_state_mutation {
+        return;
+    }
+    synchronize_passive_quota(context.quota, account, &failure.rate_limit_headers).await;
     if failure.cyber_policy_failure {
-        selector
-            .record_cyber_policy_failure(cyber_policy_scope, account)
+        context
+            .selector
+            .record_cyber_policy_failure(context.cyber_policy_scope, account)
             .await;
     }
     if let Some(account_failure) = failure.account_failure {
-        client.evict_websocket_account(account.id().as_str()).await;
-        if let Err(error) = selector.record_failure(account, account_failure).await {
+        context
+            .client
+            .evict_websocket_account(account.id().as_str())
+            .await;
+        if let Err(error) = context
+            .selector
+            .record_failure(account, account_failure)
+            .await
+        {
             tracing::warn!(
                 account_id = %account.id(),
                 error = %error,
@@ -1808,8 +1798,13 @@ async fn apply_failure(
     }
     if failure.capture_response_cookies
         && !failure.set_cookie_headers.is_empty()
-        && let Err(error) = selector
-            .capture_response_cookies(account, response_origin, &failure.set_cookie_headers)
+        && let Err(error) = context
+            .selector
+            .capture_response_cookies(
+                account,
+                context.response_origin,
+                &failure.set_cookie_headers,
+            )
             .await
     {
         tracing::warn!(

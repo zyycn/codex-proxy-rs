@@ -6,8 +6,8 @@ use std::time::{Duration, SystemTime};
 
 use chrono::Utc;
 use gateway_core::engine::credential::{
-    AccountCandidate, AccountFeedbackStats, AccountSelectionContext, AccountSelector,
-    ProviderAccount, ProviderAccountId,
+    AccountAvailability, AccountAvailabilityPolicy, AccountCandidate, AccountFeedbackStats,
+    AccountSelectionContext, AccountSelector, ProviderAccount, ProviderAccountId,
 };
 use gateway_core::provider_ports::{
     ProviderCooldown, ProviderCooldownPort, ProviderLeaseAcquisition, ProviderLeasePort,
@@ -66,39 +66,48 @@ impl GrokAccountSessionSelector {
         &self,
         request: GrokSessionSelection,
     ) -> Result<SelectedGrokSession, GrokSessionSelectorError> {
+        let diagnostic = request.availability() == AccountAvailabilityPolicy::BypassForDiagnostic;
         let accounts = self
             .repository
             .list_accounts_for_provider()
             .await
             .map_err(|_| GrokSessionSelectorError::Unavailable)?;
-        self.quota.prepare_scheduling(&accounts).await;
-        // 目录支持度按套餐 scope 去重后并发批量读取，避免逐账号串行往返。
-        let account_scopes = accounts
-            .iter()
-            .map(|account| GrokCatalogScope::for_account(account).ok())
-            .collect::<Vec<_>>();
-        let unique_scopes = account_scopes
-            .iter()
-            .flatten()
-            .cloned()
-            .collect::<std::collections::BTreeSet<_>>();
-        let support_reads = futures::future::join_all(unique_scopes.iter().map(|scope| {
-            self.catalog_cache
-                .observed_model_support(scope, request.upstream_model().as_str())
-        }))
-        .await;
-        let support_by_scope = unique_scopes
-            .into_iter()
-            .zip(support_reads)
-            .collect::<std::collections::BTreeMap<_, _>>();
-        let mut catalog_eligible = Vec::new();
-        for (account, scope) in accounts.into_iter().zip(account_scopes) {
-            let unsupported = scope
-                .is_some_and(|scope| matches!(support_by_scope.get(&scope), Some(Ok(Some(false)))));
-            if !unsupported {
-                catalog_eligible.push(account);
-            }
+        if !diagnostic {
+            self.quota.prepare_scheduling(&accounts).await;
         }
+        let catalog_eligible = if diagnostic {
+            accounts
+        } else {
+            // 目录支持度按套餐 scope 去重后并发批量读取，避免逐账号串行往返。
+            let account_scopes = accounts
+                .iter()
+                .map(|account| GrokCatalogScope::for_account(account).ok())
+                .collect::<Vec<_>>();
+            let unique_scopes = account_scopes
+                .iter()
+                .flatten()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>();
+            let support_reads = futures::future::join_all(unique_scopes.iter().map(|scope| {
+                self.catalog_cache
+                    .observed_model_support(scope, request.upstream_model().as_str())
+            }))
+            .await;
+            let support_by_scope = unique_scopes
+                .into_iter()
+                .zip(support_reads)
+                .collect::<std::collections::BTreeMap<_, _>>();
+            accounts
+                .into_iter()
+                .zip(account_scopes)
+                .filter_map(|(account, scope)| {
+                    let unsupported = scope.is_some_and(|scope| {
+                        matches!(support_by_scope.get(&scope), Some(Ok(Some(false))))
+                    });
+                    (!unsupported).then_some(account)
+                })
+                .collect()
+        };
         if catalog_eligible.is_empty() {
             return Err(GrokSessionSelectorError::NoEligibleSession);
         }
@@ -112,7 +121,11 @@ impl GrokAccountSessionSelector {
             .load_state(&self.provider_kind, &account_ids)
             .await
             .map_err(|_| GrokSessionSelectorError::Unavailable)?;
-        let runtime_cooldowns = self.runtime_cooldowns(&catalog_eligible).await;
+        let runtime_cooldowns = if diagnostic {
+            std::collections::BTreeMap::new()
+        } else {
+            self.runtime_cooldowns(&catalog_eligible).await
+        };
         let mut candidates = catalog_eligible
             .into_iter()
             .filter(|account| !runtime_cooldowns.contains_key(account.id()))
@@ -147,12 +160,14 @@ impl GrokAccountSessionSelector {
             excluded_accounts: request.excluded_accounts().clone(),
             preferred_account: request.required_account().cloned().or(affinity_account),
             round_robin_cursor: scheduling.round_robin_cursor(),
+            availability: request.availability(),
         };
         let mut capacity_denied = false;
         let mut retry_after = None;
         while let Some(selected) = AccountSelector.select(&candidates, &context) {
             let selected_id = selected.account.id().clone();
             let selected_revision = selected.account.revision();
+            let allows_account_state_mutation = !diagnostic || selected.account.enabled();
             let lease = self
                 .scheduling
                 .try_acquire(ProviderLeaseRequest::Scheduling(
@@ -186,15 +201,16 @@ impl GrokAccountSessionSelector {
                 .load(&selected_id, selected_revision)
                 .await
                 .map_err(|_| GrokSessionSelectorError::InvalidSession)?;
-            if loaded
-                .refresh_token_expires_at
-                .is_some_and(|expires_at| expires_at <= Utc::now())
+            if !diagnostic
+                && loaded
+                    .refresh_token_expires_at
+                    .is_some_and(|expires_at| expires_at <= Utc::now())
             {
                 return Err(GrokSessionSelectorError::InvalidSession);
             }
             let binding = GrokSessionBinding::new(selected_id.as_str())
                 .map_err(|_| GrokSessionSelectorError::InvalidSession)?;
-            return SelectedGrokSession::new(
+            let session = SelectedGrokSession::new(
                 selected_id,
                 selected_revision,
                 loaded.access_token,
@@ -206,7 +222,12 @@ impl GrokAccountSessionSelector {
                 binding,
                 guard,
             )
-            .map_err(|_| GrokSessionSelectorError::InvalidSession);
+            .map_err(|_| GrokSessionSelectorError::InvalidSession)?;
+            return Ok(if allows_account_state_mutation {
+                session
+            } else {
+                session.without_account_state_mutation()
+            });
         }
 
         if capacity_denied {
@@ -297,6 +318,9 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
         failure: GrokCredentialFailure,
     ) -> GrokCredentialFeedbackFuture<'a> {
         Box::pin(async move {
+            if !session.allows_account_state_mutation() {
+                return;
+            }
             let observed_at = Utc::now();
             let persistent = match failure {
                 GrokCredentialFailure::Unauthorized => {
@@ -334,6 +358,51 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
                     observed_at,
                 })
                 .await;
+        })
+    }
+
+    fn record_success<'a>(
+        &'a self,
+        session: &'a SelectedGrokSession,
+    ) -> GrokCredentialFeedbackFuture<'a> {
+        Box::pin(async move {
+            if !session.allows_account_state_mutation() {
+                return;
+            }
+            let Ok(current) = self.repository.load_current(session.account_id()).await else {
+                return;
+            };
+            let account = &current.account;
+            if account.revision() != session.credential_revision()
+                || !account.enabled()
+                || !matches!(
+                    account.availability(),
+                    AccountAvailability::Unknown
+                        | AccountAvailability::Cooldown
+                        | AccountAvailability::QuotaExhausted
+                        | AccountAvailability::Expired
+                )
+            {
+                return;
+            }
+            if let Err(error) = self
+                .repository
+                .update_state(&UpdateGrokCredentialState {
+                    account_id: account.id().clone(),
+                    expected_revision: account.revision(),
+                    availability: GrokCredentialAvailability::Ready,
+                    availability_reason: None,
+                    cooldown_until: None,
+                    observed_at: Utc::now(),
+                })
+                .await
+            {
+                tracing::warn!(
+                    account_id = %account.id(),
+                    error = %error,
+                    "xAI account state recovery after successful upstream response failed"
+                );
+            }
         })
     }
 }

@@ -232,6 +232,7 @@ pub struct AccountAttemptContext {
     required_account: Option<ProviderAccountId>,
     state_owner: Option<ProviderAccountStateOwner>,
     credential_recovery_attempted: bool,
+    diagnostic_required_account: bool,
 }
 
 impl AccountAttemptContext {
@@ -246,6 +247,25 @@ impl AccountAttemptContext {
             required_account,
             state_owner,
             credential_recovery_attempted: false,
+            diagnostic_required_account: false,
+        }
+    }
+
+    /// 为管理端对固定账号的上游诊断创建上下文。
+    ///
+    /// 诊断只绕过本地的被动可用性投影，不能换号，并继续受账号租约保护。
+    #[must_use]
+    pub const fn diagnostic(
+        excluded_accounts: BTreeSet<ProviderAccountId>,
+        required_account: ProviderAccountId,
+        state_owner: Option<ProviderAccountStateOwner>,
+    ) -> Self {
+        Self {
+            excluded_accounts,
+            required_account: Some(required_account),
+            state_owner,
+            credential_recovery_attempted: false,
+            diagnostic_required_account: true,
         }
     }
 
@@ -274,6 +294,12 @@ impl AccountAttemptContext {
     #[must_use]
     pub const fn credential_recovery_attempted(&self) -> bool {
         self.credential_recovery_attempted
+    }
+
+    /// 此尝试是否要由真实上游而非本地投影确认固定账号的可用性。
+    #[must_use]
+    pub const fn is_diagnostic_required_account(&self) -> bool {
+        self.diagnostic_required_account
     }
 }
 
@@ -472,6 +498,12 @@ impl AttemptContext {
     #[must_use]
     pub const fn credential_recovery_attempted(&self) -> bool {
         self.account.credential_recovery_attempted()
+    }
+
+    /// 管理端固定账号诊断会跳过本地可用性投影，保留全部租约约束。
+    #[must_use]
+    pub const fn is_diagnostic_required_account(&self) -> bool {
+        self.account.is_diagnostic_required_account()
     }
 
     #[must_use]

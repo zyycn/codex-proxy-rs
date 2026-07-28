@@ -30,6 +30,9 @@ const MAX_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60 * 60);
 const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);
 const QUOTA_HYDRATION_FAILURE_TTL: Duration = Duration::from_secs(5);
 const QUOTA_PERIODIC_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(30 * 60);
+// ready 账号主要依赖真实请求的被动观察；这里只提供低频、定额的状态兜底。
+const QUOTA_READY_REFRESH_MAX_AGE: Duration = Duration::from_secs(2 * 60 * 60);
+const QUOTA_READY_REFRESH_BATCH_SIZE: usize = 8;
 
 /// OpenAI Provider 主动额度刷新的调度策略。
 ///
@@ -235,6 +238,8 @@ struct CodexQuotaProjectionState {
     next_version: u64,
     entries: BTreeMap<ProviderAccountId, CodexQuotaSchedulingEntry>,
     last_periodic_refresh_at: BTreeMap<ProviderAccountId, Instant>,
+    last_exhausted_reset_recheck: BTreeMap<ProviderAccountId, CodexQuotaResetMarker>,
+    ready_refresh_cursor: Option<ProviderAccountId>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -243,6 +248,24 @@ struct CodexQuotaSchedulingEntry {
     revision: CredentialRevision,
     expires_at: Instant,
     signals: Option<AccountQuotaSignals>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CodexQuotaResetMarker {
+    revision: CredentialRevision,
+    reset_at: SystemTime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexQuotaRefreshKind {
+    Exhausted { reset_at: Option<SystemTime> },
+    Ready,
+}
+
+#[derive(Clone)]
+struct CodexQuotaRefreshCandidate {
+    account: ProviderAccount,
+    kind: CodexQuotaRefreshKind,
 }
 
 #[derive(Clone)]
@@ -395,17 +418,18 @@ impl CodexQuotaSchedulingProjection {
     fn reserve_periodic_refreshes(
         &self,
         accounts: Vec<ProviderAccount>,
+        observations: Option<&BTreeMap<ProviderAccountId, QuotaObservation>>,
         now: SystemTime,
     ) -> Vec<ProviderAccount> {
         let candidates = accounts
             .into_iter()
-            .filter(|account| eligible_quota_sync_account(account, now))
+            .filter_map(|account| quota_refresh_candidate(account, observations, now))
             .collect::<Vec<_>>();
         let candidate_ids = candidates
             .iter()
-            .map(|account| account.id().clone())
+            .map(|candidate| candidate.account.id().clone())
             .collect::<BTreeSet<_>>();
-        let now = Instant::now();
+        let refreshed_at = Instant::now();
         let mut state = self
             .state
             .write()
@@ -413,24 +437,158 @@ impl CodexQuotaSchedulingProjection {
         state
             .last_periodic_refresh_at
             .retain(|account_id, _| candidate_ids.contains(account_id));
-        candidates
-            .into_iter()
-            .filter(|account| {
-                let due = state
-                    .last_periodic_refresh_at
-                    .get(account.id())
-                    .is_none_or(|last| {
-                        now.saturating_duration_since(*last) >= QUOTA_PERIODIC_REFRESH_MIN_INTERVAL
-                    });
-                if due {
-                    state
-                        .last_periodic_refresh_at
-                        .insert(account.id().clone(), now);
+        state
+            .last_exhausted_reset_recheck
+            .retain(|account_id, _| candidate_ids.contains(account_id));
+
+        let mut reserved = Vec::new();
+        let mut ready = Vec::new();
+        for candidate in candidates {
+            match candidate.kind {
+                CodexQuotaRefreshKind::Exhausted { reset_at } => {
+                    if reserve_exhausted_quota_refresh(
+                        &mut state,
+                        &candidate.account,
+                        reset_at,
+                        now,
+                        refreshed_at,
+                    ) {
+                        reserved.push(candidate.account);
+                    }
                 }
-                due
-            })
-            .collect()
+                CodexQuotaRefreshKind::Ready => ready.push(candidate.account),
+            }
+        }
+
+        ready.sort_by(|left, right| left.id().cmp(right.id()));
+        let ready = ready
+            .into_iter()
+            .filter(|account| periodic_quota_refresh_due(&state, account.id(), refreshed_at))
+            .collect::<Vec<_>>();
+        let ready_len = ready.len();
+        if ready_len == 0 {
+            return reserved;
+        }
+        let start = state
+            .ready_refresh_cursor
+            .as_ref()
+            .and_then(|cursor| ready.iter().position(|account| account.id() > cursor))
+            .unwrap_or(0);
+        let ready = ready
+            .into_iter()
+            .cycle()
+            .skip(start)
+            .take(ready_len.min(QUOTA_READY_REFRESH_BATCH_SIZE))
+            .collect::<Vec<_>>();
+        if let Some(last) = ready.last() {
+            state.ready_refresh_cursor = Some(last.id().clone());
+        }
+        for account in &ready {
+            state
+                .last_periodic_refresh_at
+                .insert(account.id().clone(), refreshed_at);
+        }
+        reserved.extend(ready);
+        reserved
     }
+}
+
+fn quota_refresh_candidate(
+    account: ProviderAccount,
+    observations: Option<&BTreeMap<ProviderAccountId, QuotaObservation>>,
+    now: SystemTime,
+) -> Option<CodexQuotaRefreshCandidate> {
+    if !eligible_periodic_quota_refresh(&account, now) {
+        return None;
+    }
+    let observation = observations.and_then(|observations| observations.get(account.id()));
+    let kind = match account.availability() {
+        AccountAvailability::QuotaExhausted => CodexQuotaRefreshKind::Exhausted {
+            reset_at: quota_reset_at_from_observation(&account, observation),
+        },
+        AccountAvailability::Ready
+            if observations.is_some() && quota_observation_is_stale(&account, observation, now) =>
+        {
+            CodexQuotaRefreshKind::Ready
+        }
+        _ => return None,
+    };
+    Some(CodexQuotaRefreshCandidate { account, kind })
+}
+
+fn quota_reset_at_from_observation(
+    account: &ProviderAccount,
+    observation: Option<&QuotaObservation>,
+) -> Option<SystemTime> {
+    observation
+        .filter(|observation| observation.expected_revision == account.revision())
+        .and_then(quota_snapshot_from_observation)
+        .and_then(|snapshot| snapshot.fact().resets_at())
+        .map(SystemTime::from)
+}
+
+fn quota_observation_is_stale(
+    account: &ProviderAccount,
+    observation: Option<&QuotaObservation>,
+    now: SystemTime,
+) -> bool {
+    let Some(observation) = observation.filter(|observation| {
+        observation.expected_revision == account.revision()
+            && quota_snapshot_from_observation(observation).is_some()
+    }) else {
+        return true;
+    };
+    observation
+        .observed_at
+        .and_then(|observed_at| now.duration_since(observed_at).ok())
+        .is_none_or(|age| age >= QUOTA_READY_REFRESH_MAX_AGE)
+}
+
+fn reserve_exhausted_quota_refresh(
+    state: &mut CodexQuotaProjectionState,
+    account: &ProviderAccount,
+    reset_at: Option<SystemTime>,
+    now: SystemTime,
+    refreshed_at: Instant,
+) -> bool {
+    let reset_recheck_due = reset_at.is_some_and(|reset_at| {
+        reset_at <= now
+            && state
+                .last_exhausted_reset_recheck
+                .get(account.id())
+                .is_none_or(|marker| {
+                    marker.revision != account.revision() || marker.reset_at != reset_at
+                })
+    });
+    if !reset_recheck_due && !periodic_quota_refresh_due(state, account.id(), refreshed_at) {
+        return false;
+    }
+    state
+        .last_periodic_refresh_at
+        .insert(account.id().clone(), refreshed_at);
+    if let Some(reset_at) = reset_at.filter(|reset_at| *reset_at <= now) {
+        state.last_exhausted_reset_recheck.insert(
+            account.id().clone(),
+            CodexQuotaResetMarker {
+                revision: account.revision(),
+                reset_at,
+            },
+        );
+    }
+    true
+}
+
+fn periodic_quota_refresh_due(
+    state: &CodexQuotaProjectionState,
+    account_id: &ProviderAccountId,
+    now: Instant,
+) -> bool {
+    state
+        .last_periodic_refresh_at
+        .get(account_id)
+        .is_none_or(|last| {
+            now.saturating_duration_since(*last) >= QUOTA_PERIODIC_REFRESH_MIN_INTERVAL
+        })
 }
 
 fn insert_projection_entry(
@@ -519,7 +677,26 @@ impl CodexCredentialQuotaService {
         let accounts = self.repository.list_for_provider().await?;
         let mut summary = CodexQuotaSyncSummary::default();
         let now = SystemTime::now();
-        let accounts = self.scheduling.reserve_periodic_refreshes(accounts, now);
+        let account_ids = accounts
+            .iter()
+            .map(|account| account.id().clone())
+            .collect::<Vec<_>>();
+        let observations = match self.store.get_quotas(&account_ids).await {
+            Ok(observations) => Some(
+                observations
+                    .into_iter()
+                    .map(|observation| (observation.account_id.clone(), observation))
+                    .collect::<BTreeMap<_, _>>(),
+            ),
+            Err(error) => {
+                // 持久观察不可用时不盲扫 ready；保留已耗尽账号的既有恢复轮询。
+                tracing::warn!(error = %error, "OpenAI quota refresh skipped ready-account scan");
+                None
+            }
+        };
+        let accounts =
+            self.scheduling
+                .reserve_periodic_refreshes(accounts, observations.as_ref(), now);
         if accounts.is_empty() {
             return Ok(summary);
         }
@@ -918,12 +1095,11 @@ async fn fetch_usage_once(
         .map_err(CodexQuotaFetchAttemptError::Upstream)
 }
 
-fn eligible_quota_sync_account(account: &ProviderAccount, now: SystemTime) -> bool {
+fn eligible_periodic_quota_refresh(account: &ProviderAccount, now: SystemTime) -> bool {
     account.enabled()
         && account
             .access_token_expires_at()
             .is_none_or(|expires_at| expires_at > now)
-        && account.availability() == AccountAvailability::QuotaExhausted
 }
 
 fn merge_passive_quota(

@@ -32,6 +32,21 @@ pub struct AttemptCoordinator<S: ?Sized> {
     engine: Arc<GatewayEngine<S>>,
 }
 
+#[derive(Debug, Clone)]
+enum AccountSelection {
+    Scheduled(Option<crate::engine::credential::ProviderAccountId>),
+    Diagnostic(crate::engine::credential::ProviderAccountId),
+}
+
+impl AccountSelection {
+    fn required_account(&self) -> Option<&crate::engine::credential::ProviderAccountId> {
+        match self {
+            Self::Scheduled(account) => account.as_ref(),
+            Self::Diagnostic(account) => Some(account),
+        }
+    }
+}
+
 impl<S: ?Sized> AttemptCoordinator<S>
 where
     S: ExecutionStore,
@@ -54,6 +69,49 @@ where
         operation: Operation,
         plan: RoutingPlan,
         required_account: Option<crate::engine::credential::ProviderAccountId>,
+        continuation: Option<ContinuationBinding>,
+        cancellation: CancellationToken,
+    ) -> Result<ResponseExecutionSession<S>, EngineError> {
+        self.start_with_account_selection(
+            request,
+            operation,
+            plan,
+            AccountSelection::Scheduled(required_account),
+            continuation,
+            cancellation,
+        )
+        .await
+    }
+
+    /// 对固定账号执行诊断请求。
+    ///
+    /// 仅跳过该账号的本地可用性投影；账号租约、并发和请求间隔仍必须满足。
+    pub async fn start_diagnostic(
+        &self,
+        request: NewModelRequest,
+        operation: Operation,
+        plan: RoutingPlan,
+        required_account: crate::engine::credential::ProviderAccountId,
+        continuation: Option<ContinuationBinding>,
+        cancellation: CancellationToken,
+    ) -> Result<ResponseExecutionSession<S>, EngineError> {
+        self.start_with_account_selection(
+            request,
+            operation,
+            plan,
+            AccountSelection::Diagnostic(required_account),
+            continuation,
+            cancellation,
+        )
+        .await
+    }
+
+    async fn start_with_account_selection(
+        &self,
+        request: NewModelRequest,
+        operation: Operation,
+        plan: RoutingPlan,
+        account_selection: AccountSelection,
         continuation: Option<ContinuationBinding>,
         cancellation: CancellationToken,
     ) -> Result<ResponseExecutionSession<S>, EngineError> {
@@ -84,7 +142,7 @@ where
             request_persisted: false,
             operation,
             plan,
-            required_account,
+            account_selection,
             continuation,
             continuation_attempt,
             account_state_owner,
@@ -158,7 +216,7 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     request_persisted: bool,
     operation: Operation,
     plan: RoutingPlan,
-    required_account: Option<crate::engine::credential::ProviderAccountId>,
+    account_selection: AccountSelection,
     continuation: Option<ContinuationBinding>,
     continuation_attempt: ContinuationAttempt,
     account_state_owner: Option<ProviderAccountStateOwner>,
@@ -483,27 +541,36 @@ where
             .ok_or(EngineError::EmptyRoutingPlan)?;
         // recovery 钉选在此被一次性消费，只绑定本次 replay attempt；
         // 外部 required_account 每次 attempt 都重新生效。
-        let pinned_account = self
-            .recovery_account
-            .take()
-            .or_else(|| self.required_account.clone());
+        let pinned_account = match &self.account_selection {
+            AccountSelection::Diagnostic(account) => Some(account.clone()),
+            AccountSelection::Scheduled(_) => self
+                .recovery_account
+                .take()
+                .or_else(|| self.account_selection.required_account().cloned()),
+        };
+        let account_context = match &self.account_selection {
+            AccountSelection::Diagnostic(account) => AccountAttemptContext::diagnostic(
+                self.excluded_accounts.clone(),
+                account.clone(),
+                self.account_state_owner.clone(),
+            ),
+            AccountSelection::Scheduled(_) => AccountAttemptContext::new(
+                self.excluded_accounts.clone(),
+                pinned_account.clone(),
+                self.account_state_owner.clone(),
+            ),
+        }
+        .with_credential_recovery_attempted(pinned_account.as_ref().is_some_and(|account| {
+            self.credential_recovery_attempted_accounts
+                .contains(account)
+        }));
         let context = AttemptContext::new(
             RequestAttemptContext::new(self.request_id.clone(), self.client_api_key_ref.clone())
                 .with_timing_started_at(self.timing_started_at),
             next_attempt,
             self.deadline,
             self.plan.account_selection_policy(),
-            AccountAttemptContext::new(
-                self.excluded_accounts.clone(),
-                pinned_account.clone(),
-                self.account_state_owner.clone(),
-            )
-            .with_credential_recovery_attempted(pinned_account.as_ref().is_some_and(
-                |account| {
-                    self.credential_recovery_attempted_accounts
-                        .contains(account)
-                },
-            )),
+            account_context,
             self.continuation.clone(),
             self.cancellation.clone(),
         )
@@ -818,7 +885,7 @@ where
             attempt_send_state,
             provider_proved_replay_safe,
         );
-        let ordinary_retry = self.required_account.is_none()
+        let ordinary_retry = self.account_selection.required_account().is_none()
             && self.continuation_attempt == ContinuationAttempt::None
             && self.downstream_committed_at.is_none()
             && !self.delivery_pending
@@ -896,7 +963,7 @@ where
         send_state: UpstreamSendState,
         provider_proved_replay_safe: bool,
     ) -> bool {
-        if self.required_account.is_some()
+        if self.account_selection.required_account().is_some()
             || self.continuation_attempt == ContinuationAttempt::None
             || self.downstream_committed_at.is_some()
             || self.delivery_pending

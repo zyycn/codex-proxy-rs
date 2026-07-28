@@ -1202,7 +1202,7 @@ fn native_continuation_replays_owner_before_safely_switching_account() {
 }
 
 #[test]
-fn required_account_reaches_provider_and_matching_metadata_succeeds() {
+fn diagnostic_account_reaches_provider_and_matching_metadata_succeeds() {
     let operation = operation(RetrySafety::Idempotent);
     let route_plan = plan(&operation);
     let (coordinator, _, provider) = coordinator(vec![Script::Stream {
@@ -1210,11 +1210,11 @@ fn required_account_reaches_provider_and_matching_metadata_succeeds() {
         items: complete_stream(None),
     }]);
     let required = ProviderAccountId::new("acct_required").expect("account id");
-    let mut session = block_on(coordinator.start(
+    let mut session = block_on(coordinator.start_diagnostic(
         model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
-        Some(required.clone()),
+        required.clone(),
         None,
         CancellationToken::new(),
     ))
@@ -1225,6 +1225,7 @@ fn required_account_reaches_provider_and_matching_metadata_succeeds() {
     let contexts = provider.contexts.lock().expect("contexts lock");
     assert_eq!(contexts.len(), 1);
     assert_eq!(contexts[0].required_account(), Some(&required));
+    assert!(contexts[0].is_diagnostic_required_account());
 }
 
 #[test]

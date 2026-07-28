@@ -901,6 +901,26 @@ pub struct AccountSelectionContext {
     pub excluded_accounts: BTreeSet<ProviderAccountId>,
     pub preferred_account: Option<ProviderAccountId>,
     pub round_robin_cursor: u64,
+    pub availability: AccountAvailabilityPolicy,
+}
+
+/// 选择账号时是否信任本地可用性投影。
+///
+/// 管理端对指定账号执行诊断时，会直接向上游确认实际状态；该模式跳过
+/// `enabled`、可用性、冷却和 token 到期等本地投影，仍保留租约、并发和
+/// 请求间隔约束，且只能与固定账号约束组合使用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AccountAvailabilityPolicy {
+    #[default]
+    Enforce,
+    BypassForDiagnostic,
+}
+
+impl AccountAvailabilityPolicy {
+    #[must_use]
+    pub const fn bypasses_local_availability(self) -> bool {
+        matches!(self, Self::BypassForDiagnostic)
+    }
 }
 
 /// 同一 target 内唯一的账号排序器。
@@ -1101,7 +1121,8 @@ fn smart_preference_should_escape(signals: &AccountRuntimeSignals) -> bool {
 }
 
 fn eligible(candidate: &AccountCandidate, context: &AccountSelectionContext) -> bool {
-    if !candidate.account.is_schedulable(context.now)
+    if (!context.availability.bypasses_local_availability()
+        && !candidate.account.is_schedulable(context.now))
         || context.excluded_accounts.contains(candidate.account.id())
         || candidate.signals.in_flight >= context.policy.max_concurrent_per_account().get()
     {

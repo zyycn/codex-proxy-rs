@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 
 use gateway_core::engine::credential::{
-    AccountSelectionPolicy, CredentialRevision, ProviderAccountId,
+    AccountAvailabilityPolicy, AccountSelectionPolicy, CredentialRevision, ProviderAccountId,
 };
 use gateway_core::engine::provider::ProviderResource;
 use gateway_core::routing::UpstreamModelId;
@@ -87,6 +87,7 @@ pub struct SelectedGrokSession {
     user_id: SecretValue,
     email: Option<SecretValue>,
     binding: GrokSessionBinding,
+    allows_account_state_mutation: bool,
     _guard: Box<dyn GrokSessionLeaseGuard>,
 }
 
@@ -120,8 +121,16 @@ impl SelectedGrokSession {
             user_id,
             email,
             binding,
+            allows_account_state_mutation: true,
             _guard: Box::new(guard),
         })
+    }
+
+    /// 标记禁用账号的管理端诊断只读取真实上游结果，不回写账号状态。
+    #[must_use]
+    pub(crate) const fn without_account_state_mutation(mut self) -> Self {
+        self.allows_account_state_mutation = false;
+        self
     }
 
     /// 返回选中的账号 ID。
@@ -168,6 +177,11 @@ impl SelectedGrokSession {
     pub const fn binding(&self) -> &GrokSessionBinding {
         &self.binding
     }
+
+    #[must_use]
+    pub(crate) const fn allows_account_state_mutation(&self) -> bool {
+        self.allows_account_state_mutation
+    }
 }
 
 impl fmt::Debug for SelectedGrokSession {
@@ -180,6 +194,10 @@ impl fmt::Debug for SelectedGrokSession {
             .field("user_id", &"[REDACTED]")
             .field("email", &self.email.as_ref().map(|_| "[REDACTED]"))
             .field("binding", &self.binding)
+            .field(
+                "allows_account_state_mutation",
+                &self.allows_account_state_mutation,
+            )
             .field("guard", &"[LEASE]")
             .finish()
     }
@@ -192,6 +210,7 @@ pub struct GrokSessionSelection {
     excluded_accounts: BTreeSet<ProviderAccountId>,
     required_account: Option<ProviderAccountId>,
     account_selection_policy: AccountSelectionPolicy,
+    availability: AccountAvailabilityPolicy,
     affinity: Option<GrokSessionAffinityKey>,
     deadline: SystemTime,
 }
@@ -211,6 +230,7 @@ impl GrokSessionSelection {
             excluded_accounts,
             required_account,
             account_selection_policy,
+            availability: AccountAvailabilityPolicy::Enforce,
             affinity: None,
             deadline,
         }
@@ -220,6 +240,16 @@ impl GrokSessionSelection {
     #[must_use]
     pub fn with_affinity(mut self, affinity: Option<GrokSessionAffinityKey>) -> Self {
         self.affinity = affinity;
+        self
+    }
+
+    /// 为固定账号的管理端诊断指定本地可用性判定策略。
+    #[must_use]
+    pub(crate) const fn with_availability_policy(
+        mut self,
+        availability: AccountAvailabilityPolicy,
+    ) -> Self {
+        self.availability = availability;
         self
     }
 
@@ -245,6 +275,11 @@ impl GrokSessionSelection {
     #[must_use]
     pub const fn account_selection_policy(&self) -> AccountSelectionPolicy {
         self.account_selection_policy
+    }
+
+    #[must_use]
+    pub const fn availability(&self) -> AccountAvailabilityPolicy {
+        self.availability
     }
 
     /// 返回不含原始客户端会话值的账号亲和键。
@@ -296,6 +331,16 @@ pub trait GrokSessionSelector: Send + Sync {
         session: &'a SelectedGrokSession,
         failure: GrokCredentialFailure,
     ) -> GrokCredentialFeedbackFuture<'a>;
+
+    /// 成功完成真实上游请求后收敛账号的可恢复状态。
+    ///
+    /// 默认实现让只关心选择或失败反馈的测试替身无需模拟持久状态写入。
+    fn record_success<'a>(
+        &'a self,
+        _: &'a SelectedGrokSession,
+    ) -> GrokCredentialFeedbackFuture<'a> {
+        Box::pin(async {})
+    }
 }
 
 /// 不含密钥的选择器失败。

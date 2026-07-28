@@ -148,12 +148,13 @@ impl XaiService for DefaultXaiService {
             .complete_authorization(command)
             .await
             .map_err(|error| map_provider_error(error, "xAI authorization"))?;
-        validate_authorization_commit(
+        let prepared = validate_authorization_commit(
             self.provider.provider_kind(),
             &context,
-            &prepared,
+            prepared,
             "xAI authorization",
-        )?;
+        )
+        .await?;
         let result = commit_authorization(
             self.accounts.as_ref(),
             prepared,

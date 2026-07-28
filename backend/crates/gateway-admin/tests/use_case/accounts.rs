@@ -16,7 +16,7 @@ use gateway_core::{
 use gateway_admin::{
     AdminServices,
     model::{
-        MutationContext, Revision,
+        AdminError, MutationContext, Revision,
         accounts::{
             AccountAvailability, AccountConnectionTestEvent, AccountListQuery, AccountPage,
             AccountRecord, AccountSummary, AccountUsage, AccountUsageWindowQuery,
@@ -24,12 +24,12 @@ use gateway_admin::{
         },
         observability::TimeRange,
         provider_credentials::{
-            AuthorizationCommit, AuthorizationCredentialCommit, AuthorizationMutationTarget,
-            AuthorizationStarted, CompleteAuthorization, CredentialCommitGuard, CredentialDetails,
-            CredentialImportCommit, CredentialImportResult, CredentialListQuery,
-            CredentialMutationResult, CredentialPage, CredentialRotationCommit,
-            PendingAuthorizationMutation, PrepareCredentialImport, PrepareCredentialRefresh,
-            PrepareCredentialRotation, PreparedAuthorizationCommit,
+            AuthorizationCommit, AuthorizationCommitGuard, AuthorizationCredentialCommit,
+            AuthorizationMutationTarget, AuthorizationStarted, CompleteAuthorization,
+            CredentialCommitGuard, CredentialDetails, CredentialImportCommit,
+            CredentialImportResult, CredentialListQuery, CredentialMutationResult, CredentialPage,
+            CredentialRotationCommit, PendingAuthorizationMutation, PrepareCredentialImport,
+            PrepareCredentialRefresh, PrepareCredentialRotation, PreparedAuthorizationCommit,
             PreparedAuthorizationCredential, PreparedCredentialCreate, PreparedCredentialImport,
             PreparedCredentialRotation, PreparedCredentialRotationFacts, ProviderDocument,
             ProviderExport, ProviderExportCredentialInput, ProviderModels, ProviderQuota,
@@ -58,7 +58,8 @@ pub(super) struct FakeProviderAdmin {
     events: EventLog,
     failure: Mutex<Option<ProviderAdminErrorKind>>,
     quota_failure: Mutex<Option<ProviderAdminErrorKind>>,
-    pending: Mutex<Option<PendingAuthorizationMutation>>,
+    pending: Arc<Mutex<Option<PendingAuthorizationMutation>>>,
+    retry_authorization_after_abort: Mutex<bool>,
     export_inputs: Mutex<Vec<ProviderExportCredentialInput>>,
     import_account_ids: Mutex<Vec<String>>,
     quota_requests: Mutex<Vec<ProviderQuotaRequest>>,
@@ -72,7 +73,8 @@ impl FakeProviderAdmin {
             events,
             failure: Mutex::new(None),
             quota_failure: Mutex::new(None),
-            pending: Mutex::new(None),
+            pending: Arc::new(Mutex::new(None)),
+            retry_authorization_after_abort: Mutex::new(false),
             export_inputs: Mutex::new(Vec::new()),
             import_account_ids: Mutex::new(vec!["acct_prepared".to_owned()]),
             quota_requests: Mutex::new(Vec::new()),
@@ -111,6 +113,13 @@ impl FakeProviderAdmin {
 
     pub(super) fn pending(&self) -> Option<PendingAuthorizationMutation> {
         self.pending.lock().expect("pending authorization").clone()
+    }
+
+    pub(super) fn retry_authorization_after_abort(&self) {
+        *self
+            .retry_authorization_after_abort
+            .lock()
+            .expect("authorization retry") = true;
     }
 
     fn export_inputs(&self) -> Vec<ProviderExportCredentialInput> {
@@ -246,6 +255,11 @@ impl ProviderAdmin for FakeProviderAdmin {
         if !pending.owner_binding().matches_context(&command.context) {
             return Err(ProviderAdminError::new(ProviderAdminErrorKind::NotFound));
         }
+        let retry_pending = (*self
+            .retry_authorization_after_abort
+            .lock()
+            .expect("authorization retry"))
+        .then(|| pending.clone());
         let credential = match pending.target() {
             AuthorizationMutationTarget::Create { name } => {
                 PreparedAuthorizationCredential::Create(prepared_create(self.kind.clone(), name))
@@ -260,9 +274,16 @@ impl ProviderAdmin for FakeProviderAdmin {
                 PreparedAuthorizationCredential::Reauthorize(self.prepared_rotation(&account))
             }
         };
-        Ok(PreparedAuthorizationCommit {
-            pending,
-            credential,
+        let prepared = PreparedAuthorizationCommit::new(pending, credential);
+        Ok(match retry_pending {
+            Some(pending) => {
+                prepared.with_authorization_guard(Box::new(RetryableAuthorizationGuard::new(
+                    self.events.clone(),
+                    Arc::clone(&self.pending),
+                    pending,
+                )))
+            }
+            None => prepared,
         })
     }
 
@@ -661,6 +682,51 @@ impl Drop for RecordingGuard {
         if !self.finished {
             self.events.lock().expect("guard events").push("guard.drop");
         }
+    }
+}
+
+struct RetryableAuthorizationGuard {
+    events: EventLog,
+    pending: Arc<Mutex<Option<PendingAuthorizationMutation>>>,
+    authorization: PendingAuthorizationMutation,
+}
+
+impl RetryableAuthorizationGuard {
+    fn new(
+        events: EventLog,
+        pending: Arc<Mutex<Option<PendingAuthorizationMutation>>>,
+        authorization: PendingAuthorizationMutation,
+    ) -> Self {
+        Self {
+            events,
+            pending,
+            authorization,
+        }
+    }
+}
+
+#[async_trait]
+impl AuthorizationCommitGuard for RetryableAuthorizationGuard {
+    async fn commit(self: Box<Self>) -> Result<(), AdminError> {
+        self.events
+            .lock()
+            .expect("authorization guard events")
+            .push("authorization_guard.commit");
+        Ok(())
+    }
+
+    async fn abort(self: Box<Self>) -> Result<(), AdminError> {
+        let Self {
+            events,
+            pending,
+            authorization,
+        } = *self;
+        *pending.lock().expect("pending authorization") = Some(authorization);
+        events
+            .lock()
+            .expect("authorization guard events")
+            .push("authorization_guard.abort");
+        Ok(())
     }
 }
 

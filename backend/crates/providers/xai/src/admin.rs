@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -14,8 +14,8 @@ use gateway_admin::model::observability::{
     ProviderBillingInput,
 };
 use gateway_admin::model::provider_credentials::{
-    AuthorizationMutationTarget, AuthorizationOwner, AuthorizationOwnerBinding,
-    AuthorizationStarted, CompleteAuthorization, CredentialCommitGuard,
+    AuthorizationCommitGuard, AuthorizationMutationTarget, AuthorizationOwner,
+    AuthorizationOwnerBinding, AuthorizationStarted, CompleteAuthorization, CredentialCommitGuard,
     PendingAuthorizationMutation, PrepareCredentialImport, PrepareCredentialRefresh,
     PrepareCredentialRotation, PreparedAuthorizationCommit, PreparedAuthorizationCredential,
     PreparedCredentialCreate, PreparedCredentialImport, PreparedCredentialRotation,
@@ -23,7 +23,7 @@ use gateway_admin::model::provider_credentials::{
     ProviderExportCredentialInput, ProviderModel, ProviderModels, ProviderQuota,
     ProviderQuotaRequest, ProviderQuotaWindow,
 };
-use gateway_admin::model::{MutationActor, MutationContext, Revision};
+use gateway_admin::model::{AdminError, MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind};
 use gateway_core::accounting::Money;
 use gateway_core::engine::credential::{
@@ -33,9 +33,9 @@ use gateway_core::engine::credential::{
 use gateway_core::error::StoreErrorKind;
 use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
 use gateway_core::provider_ports::{
-    NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingFlowPort, OAuthPendingPutOutcome,
-    OAuthPendingTakeOutcome, ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError,
-    ProviderStoreErrorKind,
+    NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingClaimOutcome, OAuthPendingConsumeOutcome,
+    OAuthPendingFlowPort, OAuthPendingPutOutcome, OAuthPendingReleaseOutcome,
+    ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError, ProviderStoreErrorKind,
 };
 use gateway_core::routing::{ProviderKind, UpstreamModelId};
 use serde::Deserialize;
@@ -60,7 +60,75 @@ use crate::transport::{GROK_CLI_BASE_URL, XAI_PROVIDER_NAME, grok_billing_breakd
 
 const PENDING_SCHEMA_VERSION: u64 = 2;
 const PENDING_TTL: TimeDelta = TimeDelta::minutes(30);
+const PENDING_CLAIM_TTL: Duration = Duration::from_secs(90);
 const MAX_PENDING_TEXT_BYTES: usize = 512;
+
+struct ClaimedXaiAuthorization {
+    authorization: StoredXaiAuthorization,
+    owner_ref: String,
+    claim_ref: String,
+}
+
+struct XaiAuthorizationCommitGuard {
+    pending: Arc<dyn OAuthPendingFlowPort>,
+    provider_kind: ProviderKind,
+    flow: OAuthPendingBinding,
+    owner: OAuthPendingBinding,
+    claim: OAuthPendingBinding,
+}
+
+impl XaiAuthorizationCommitGuard {
+    fn new(
+        pending: Arc<dyn OAuthPendingFlowPort>,
+        provider_kind: ProviderKind,
+        flow_id: &str,
+        owner_ref: &str,
+        claim_ref: &str,
+    ) -> Result<Self, ProviderAdminError> {
+        Ok(Self {
+            pending,
+            provider_kind,
+            flow: binding(flow_id)?,
+            owner: binding(owner_ref)?,
+            claim: binding(claim_ref)?,
+        })
+    }
+}
+
+#[async_trait]
+impl AuthorizationCommitGuard for XaiAuthorizationCommitGuard {
+    async fn commit(self: Box<Self>) -> Result<(), AdminError> {
+        match self
+            .pending
+            .consume_claim(&self.provider_kind, &self.flow, &self.owner, &self.claim)
+            .await
+            .map_err(map_pending_claim_settlement_error)?
+        {
+            OAuthPendingConsumeOutcome::Consumed => Ok(()),
+            OAuthPendingConsumeOutcome::NotFound
+            | OAuthPendingConsumeOutcome::OwnerMismatch
+            | OAuthPendingConsumeOutcome::ClaimMismatch => Err(AdminError::conflict(
+                "xAI OAuth pending claim is no longer current",
+            )),
+        }
+    }
+
+    async fn abort(self: Box<Self>) -> Result<(), AdminError> {
+        match self
+            .pending
+            .release_claim(&self.provider_kind, &self.flow, &self.owner, &self.claim)
+            .await
+            .map_err(map_pending_claim_settlement_error)?
+        {
+            OAuthPendingReleaseOutcome::Released => Ok(()),
+            OAuthPendingReleaseOutcome::NotFound
+            | OAuthPendingReleaseOutcome::OwnerMismatch
+            | OAuthPendingReleaseOutcome::ClaimMismatch => Err(AdminError::unavailable(
+                "xAI OAuth pending claim could not be released",
+            )),
+        }
+    }
+}
 
 pub(crate) struct XaiAdminProvider {
     provider_kind: ProviderKind,
@@ -172,30 +240,80 @@ impl XaiAdminProvider {
         }
     }
 
-    async fn take_pending(
+    async fn claim_pending(
         &self,
         context: &MutationContext,
         flow_id: &str,
-    ) -> Result<StoredXaiAuthorization, ProviderAdminError> {
+    ) -> Result<ClaimedXaiAuthorization, ProviderAdminError> {
         let flow = binding(flow_id)?;
         let owner_binding = AuthorizationOwnerBinding::from_context(context);
         let owner_ref = owner_ref(owner_binding.owner());
         let owner = binding(&owner_ref)?;
+        let claim_ref = random_flow_id()?;
+        let claim = binding(&claim_ref)?;
         match self
             .pending
-            .take_if_owner(&self.provider_kind, &flow, &owner)
+            .claim_if_owner(
+                &self.provider_kind,
+                &flow,
+                &owner,
+                &claim,
+                PENDING_CLAIM_TTL,
+            )
             .await
             .map_err(map_provider_store_error)?
         {
-            OAuthPendingTakeOutcome::Taken(payload) => {
-                let stored = decode_pending(payload, &self.oauth_config)?;
-                if stored.flow_id != flow_id || stored.owner_ref != owner_ref {
-                    return Err(provider_error(ProviderAdminErrorKind::Invalid));
-                }
-                Ok(stored)
+            OAuthPendingClaimOutcome::Claimed(payload) => {
+                let stored = match decode_pending(payload, &self.oauth_config) {
+                    Ok(stored) if stored.flow_id == flow_id && stored.owner_ref == owner_ref => {
+                        stored
+                    }
+                    Ok(_) => {
+                        self.release_pending_claim(flow_id, &owner_ref, &claim_ref)
+                            .await?;
+                        return Err(provider_error(ProviderAdminErrorKind::Invalid));
+                    }
+                    Err(error) => {
+                        self.release_pending_claim(flow_id, &owner_ref, &claim_ref)
+                            .await?;
+                        return Err(error);
+                    }
+                };
+                Ok(ClaimedXaiAuthorization {
+                    authorization: stored,
+                    owner_ref,
+                    claim_ref,
+                })
             }
-            OAuthPendingTakeOutcome::NotFound | OAuthPendingTakeOutcome::OwnerMismatch => {
+            OAuthPendingClaimOutcome::NotFound | OAuthPendingClaimOutcome::OwnerMismatch => {
                 Err(provider_error(ProviderAdminErrorKind::NotFound))
+            }
+            OAuthPendingClaimOutcome::InProgress => {
+                Err(provider_error(ProviderAdminErrorKind::Conflict))
+            }
+        }
+    }
+
+    async fn release_pending_claim(
+        &self,
+        flow_id: &str,
+        owner_ref: &str,
+        claim_ref: &str,
+    ) -> Result<(), ProviderAdminError> {
+        let flow = binding(flow_id)?;
+        let owner = binding(owner_ref)?;
+        let claim = binding(claim_ref)?;
+        match self
+            .pending
+            .release_claim(&self.provider_kind, &flow, &owner, &claim)
+            .await
+            .map_err(map_provider_store_error)?
+        {
+            OAuthPendingReleaseOutcome::Released => Ok(()),
+            OAuthPendingReleaseOutcome::NotFound
+            | OAuthPendingReleaseOutcome::OwnerMismatch
+            | OAuthPendingReleaseOutcome::ClaimMismatch => {
+                Err(provider_error(ProviderAdminErrorKind::Unavailable))
             }
         }
     }
@@ -433,76 +551,38 @@ impl ProviderAdmin for XaiAdminProvider {
         &self,
         command: CompleteAuthorization,
     ) -> Result<PreparedAuthorizationCommit, ProviderAdminError> {
-        let stored = self
-            .take_pending(&command.context, &command.flow_id)
+        let ClaimedXaiAuthorization {
+            authorization: stored,
+            owner_ref,
+            claim_ref,
+        } = self
+            .claim_pending(&command.context, &command.flow_id)
             .await?;
-        let authorization = PendingAuthorization::from_server_state(
-            &self.oauth_config,
-            &SecretValue::new(stored.server_state),
-        )
-        .map_err(map_oauth_error)?;
-        let callback = callback(&command.callback_url)?;
-        let grant = authorization
-            .accept_callback(callback)
-            .map_err(map_oauth_error)?;
-        let discovery = self.oauth.discover().await.map_err(map_oauth_error)?;
-        let tokens = self
-            .oauth
-            .exchange_authorization_code(&discovery, grant)
-            .await
-            .map_err(map_oauth_error)?;
-        let policy = self
-            .runtime_policy
-            .load_refresh_policy()
-            .await
-            .map_err(map_provider_store_error)?;
-        let credential = match stored.mutation.target() {
-            AuthorizationMutationTarget::Create { name } => {
-                let prepared = GrokCredentialAdmin
-                    .prepare_verified_account(
-                        &VerifiedGrokAccount {
-                            account_id: ProviderAccountId::new(format!(
-                                "acct_{}",
-                                Uuid::now_v7().simple()
-                            ))
-                            .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?,
-                            name: name.clone(),
-                            email: None,
-                            upstream_account_id: None,
-                            plan_type: None,
-                            tokens,
-                            enabled: true,
-                        },
-                        policy,
-                    )
-                    .map_err(map_repository_error)?;
-                PreparedAuthorizationCredential::Create(prepared_create(prepared, Utc::now())?)
-            }
-            AuthorizationMutationTarget::Reauthorize {
-                account_id,
-                expected_credential_revision,
-            } => {
-                let revision = CredentialRevision::new(expected_credential_revision.get())
-                    .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?;
-                let current = self
-                    .accounts
-                    .load_credential(account_id, revision)
-                    .await
-                    .map_err(map_store_error)?;
-                if current.account.provider() != &self.provider_kind {
-                    return Err(provider_error(ProviderAdminErrorKind::NotFound));
-                }
-                let prepared = verified_rotation(current, tokens, policy)?;
-                PreparedAuthorizationCredential::Reauthorize(prepared_rotation(
-                    prepared,
-                    self.provider_kind.clone(),
-                )?)
+        let authorization_guard = match XaiAuthorizationCommitGuard::new(
+            Arc::clone(&self.pending),
+            self.provider_kind.clone(),
+            &command.flow_id,
+            &owner_ref,
+            &claim_ref,
+        ) {
+            Ok(guard) => guard,
+            Err(error) => {
+                self.release_pending_claim(&command.flow_id, &owner_ref, &claim_ref)
+                    .await?;
+                return Err(error);
             }
         };
-        Ok(PreparedAuthorizationCommit {
-            pending: stored.mutation,
-            credential,
-        })
+        let completed = self
+            .complete_claimed_authorization(stored, &command.callback_url)
+            .await;
+        match completed {
+            Ok(completed) => Ok(completed.with_authorization_guard(Box::new(authorization_guard))),
+            Err(error) => {
+                self.release_pending_claim(&command.flow_id, &owner_ref, &claim_ref)
+                    .await?;
+                Err(error)
+            }
+        }
     }
 
     async fn prepare_rotation(
@@ -686,6 +766,82 @@ impl ProviderAdmin for XaiAdminProvider {
             account_ids,
             document: ProviderDocument::new(OpaqueProviderData::new(document)),
         })
+    }
+}
+
+impl XaiAdminProvider {
+    async fn complete_claimed_authorization(
+        &self,
+        stored: StoredXaiAuthorization,
+        callback_url: &str,
+    ) -> Result<PreparedAuthorizationCommit, ProviderAdminError> {
+        let authorization = PendingAuthorization::from_server_state(
+            &self.oauth_config,
+            &SecretValue::new(stored.server_state),
+        )
+        .map_err(map_oauth_error)?;
+        let callback = callback(callback_url)?;
+        let grant = authorization
+            .accept_callback(callback)
+            .map_err(map_oauth_error)?;
+        let discovery = self.oauth.discover().await.map_err(map_oauth_error)?;
+        let tokens = self
+            .oauth
+            .exchange_authorization_code(&discovery, grant)
+            .await
+            .map_err(map_oauth_error)?;
+        let policy = self
+            .runtime_policy
+            .load_refresh_policy()
+            .await
+            .map_err(map_provider_store_error)?;
+        let credential = match stored.mutation.target() {
+            AuthorizationMutationTarget::Create { name } => {
+                let prepared = GrokCredentialAdmin
+                    .prepare_verified_account(
+                        &VerifiedGrokAccount {
+                            account_id: ProviderAccountId::new(format!(
+                                "acct_{}",
+                                Uuid::now_v7().simple()
+                            ))
+                            .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?,
+                            name: name.clone(),
+                            email: None,
+                            upstream_account_id: None,
+                            plan_type: None,
+                            tokens,
+                            enabled: true,
+                        },
+                        policy,
+                    )
+                    .map_err(map_repository_error)?;
+                PreparedAuthorizationCredential::Create(prepared_create(prepared, Utc::now())?)
+            }
+            AuthorizationMutationTarget::Reauthorize {
+                account_id,
+                expected_credential_revision,
+            } => {
+                let revision = CredentialRevision::new(expected_credential_revision.get())
+                    .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?;
+                let current = self
+                    .accounts
+                    .load_credential(account_id, revision)
+                    .await
+                    .map_err(map_store_error)?;
+                if current.account.provider() != &self.provider_kind {
+                    return Err(provider_error(ProviderAdminErrorKind::NotFound));
+                }
+                let prepared = verified_rotation(current, tokens, policy)?;
+                PreparedAuthorizationCredential::Reauthorize(prepared_rotation(
+                    prepared,
+                    self.provider_kind.clone(),
+                )?)
+            }
+        };
+        Ok(PreparedAuthorizationCommit::new(
+            stored.mutation,
+            credential,
+        ))
     }
 }
 
@@ -1340,6 +1496,20 @@ fn map_provider_store_error(error: ProviderStoreError) -> ProviderAdminError {
         ProviderStoreErrorKind::Conflict => ProviderAdminErrorKind::Conflict,
         ProviderStoreErrorKind::Unavailable => ProviderAdminErrorKind::Unavailable,
     })
+}
+
+fn map_pending_claim_settlement_error(error: ProviderStoreError) -> AdminError {
+    match error.kind() {
+        ProviderStoreErrorKind::InvalidData => {
+            AdminError::internal("xAI OAuth pending claim is invalid")
+        }
+        ProviderStoreErrorKind::Conflict => {
+            AdminError::conflict("xAI OAuth pending claim conflicts with current state")
+        }
+        ProviderStoreErrorKind::Unavailable => {
+            AdminError::unavailable("xAI OAuth pending claim store is unavailable")
+        }
+    }
 }
 
 fn map_store_error(error: gateway_core::error::StoreError) -> ProviderAdminError {

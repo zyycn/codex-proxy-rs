@@ -1,13 +1,16 @@
 //! Codex Authorization Code + PKCE/OIDC 管理流。
 
-use std::fmt;
-use std::sync::Arc;
+use std::{fmt, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, TimeDelta, Utc};
-use gateway_admin::model::provider_credentials::{
-    AuthorizationMutationTarget, AuthorizationOwner, PendingAuthorizationMutation,
+use gateway_admin::model::{
+    AdminError,
+    provider_credentials::{
+        AuthorizationCommitGuard, AuthorizationMutationTarget, AuthorizationOwner,
+        PendingAuthorizationMutation,
+    },
 };
 use gateway_core::engine::credential::{
     CredentialRevision, NewProviderAccount, ProviderAccountId, ProviderAccountStore,
@@ -35,6 +38,7 @@ use super::token_client::{
 const AUTHORIZATION_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
 const AUTHORIZATION_SCOPE: &str = "openid profile email offline_access";
 const AUTHORIZATION_TTL: TimeDelta = TimeDelta::minutes(10);
+const AUTHORIZATION_CLAIM_TTL: Duration = Duration::from_secs(90);
 const MAX_CALLBACK_BYTES: usize = 16 * 1024;
 const MAX_TEXT_BYTES: usize = 512;
 
@@ -89,6 +93,7 @@ pub struct CompleteCodexOAuthAuthorization {
 pub struct CompletedCodexOAuthAuthorization<T> {
     pub mutation: PendingAuthorizationMutation,
     pub credential: T,
+    authorization_guard: Box<dyn AuthorizationCommitGuard>,
 }
 
 /// OAuth exchange 后唯一的 credential preparation 结果。
@@ -113,6 +118,18 @@ impl<T> fmt::Debug for CompletedCodexOAuthAuthorization<T> {
             .field("mutation", &self.mutation)
             .field("credential", &"[PREPARED]")
             .finish()
+    }
+}
+
+impl<T> CompletedCodexOAuthAuthorization<T> {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        PendingAuthorizationMutation,
+        T,
+        Box<dyn AuthorizationCommitGuard>,
+    ) {
+        (self.mutation, self.credential, self.authorization_guard)
     }
 }
 
@@ -284,11 +301,33 @@ pub trait CodexOAuthPendingStore: Send + Sync {
         pending: &CodexPendingAuthorization,
     ) -> Result<(), CodexOAuthPendingStoreError>;
 
-    async fn take(
+    async fn claim(
         &self,
         owner_ref: &str,
         flow_id: &str,
-    ) -> Result<Option<CodexPendingAuthorization>, CodexOAuthPendingStoreError>;
+        claim_ref: &str,
+        claim_ttl: Duration,
+    ) -> Result<CodexOAuthPendingClaimOutcome, CodexOAuthPendingStoreError>;
+
+    async fn release_claim(
+        &self,
+        owner_ref: &str,
+        flow_id: &str,
+        claim_ref: &str,
+    ) -> Result<bool, CodexOAuthPendingStoreError>;
+
+    async fn consume_claim(
+        &self,
+        owner_ref: &str,
+        flow_id: &str,
+        claim_ref: &str,
+    ) -> Result<bool, CodexOAuthPendingStoreError>;
+}
+
+pub enum CodexOAuthPendingClaimOutcome {
+    Claimed(Box<CodexPendingAuthorization>),
+    NotFound,
+    InProgress,
 }
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -301,8 +340,12 @@ pub enum CodexOAuthAdminError {
     Conflict,
     #[error("Codex OAuth flow expired")]
     FlowExpired,
-    #[error("Codex OAuth upstream rejected the operation")]
-    UpstreamRejected,
+    #[error("Codex OAuth callback was rejected")]
+    CallbackRejected,
+    #[error("Codex OAuth token exchange was rejected")]
+    TokenRejected,
+    #[error("Codex OAuth identity verification was rejected")]
+    IdentityRejected,
     #[error("Codex OAuth upstream is unavailable")]
     UpstreamUnavailable,
     #[error("Codex OAuth exchange send state is ambiguous")]
@@ -334,6 +377,46 @@ pub struct CodexOAuthAdminService {
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     credentials: CodexCredentialAdmin,
     oauth_client_id: String,
+}
+
+struct CodexOAuthAuthorizationCommitGuard {
+    pending: Arc<dyn CodexOAuthPendingStore>,
+    owner_ref: String,
+    flow_id: String,
+    claim_ref: String,
+}
+
+#[async_trait]
+impl AuthorizationCommitGuard for CodexOAuthAuthorizationCommitGuard {
+    async fn commit(self: Box<Self>) -> Result<(), AdminError> {
+        let consumed = self
+            .pending
+            .consume_claim(&self.owner_ref, &self.flow_id, &self.claim_ref)
+            .await
+            .map_err(map_authorization_settlement_error)?;
+        if consumed {
+            Ok(())
+        } else {
+            Err(AdminError::conflict(
+                "OpenAI OAuth pending claim is no longer current",
+            ))
+        }
+    }
+
+    async fn abort(self: Box<Self>) -> Result<(), AdminError> {
+        let released = self
+            .pending
+            .release_claim(&self.owner_ref, &self.flow_id, &self.claim_ref)
+            .await
+            .map_err(map_authorization_settlement_error)?;
+        if released {
+            Ok(())
+        } else {
+            Err(AdminError::unavailable(
+                "OpenAI OAuth pending claim could not be released",
+            ))
+        }
+    }
 }
 
 impl CodexOAuthAdminService {
@@ -412,7 +495,38 @@ impl CodexOAuthAdmin for CodexOAuthAdminService {
         {
             return Err(CodexOAuthAdminError::InvalidInput);
         }
-        let (pending, mut secret, id_token) = self.exchange_pending(command).await?;
+        let claim_ref = random_secret()?;
+        let pending = self.claim_pending(&command, &claim_ref).await?;
+        let completed = self
+            .complete_claimed_authorization(pending, command.callback_url.expose_secret())
+            .await;
+        match completed {
+            Ok((mutation, credential)) => Ok(CompletedCodexOAuthAuthorization {
+                mutation,
+                credential,
+                authorization_guard: Box::new(CodexOAuthAuthorizationCommitGuard {
+                    pending: Arc::clone(&self.pending),
+                    owner_ref: command.owner_ref,
+                    flow_id: command.flow_id,
+                    claim_ref,
+                }),
+            }),
+            Err(error) => {
+                self.release_claim(&command, &claim_ref).await?;
+                Err(error)
+            }
+        }
+    }
+}
+
+impl CodexOAuthAdminService {
+    async fn complete_claimed_authorization(
+        &self,
+        pending: CodexPendingAuthorization,
+        callback_url: &str,
+    ) -> Result<(PendingAuthorizationMutation, CompletedCodexOAuthCredential), CodexOAuthAdminError>
+    {
+        let (mut secret, id_token) = self.exchange_pending(&pending, callback_url).await?;
         let mutation = pending.mutation.clone();
         let current = if let Some(target) = pending.reauthorization() {
             let current = self
@@ -483,10 +597,7 @@ impl CodexOAuthAdmin for CodexOAuthAdminService {
                     .map_err(map_admin_error)?,
             )
         };
-        Ok(CompletedCodexOAuthAuthorization {
-            mutation,
-            credential,
-        })
+        Ok((mutation, credential))
     }
 }
 
@@ -533,38 +644,70 @@ impl CodexOAuthAdminService {
         })
     }
 
-    async fn exchange_pending(
+    async fn claim_pending(
         &self,
-        command: CompleteCodexOAuthAuthorization,
-    ) -> Result<
-        (
-            CodexPendingAuthorization,
-            super::types::CodexOAuthSecret,
-            SecretString,
-        ),
-        CodexOAuthAdminError,
-    > {
+        command: &CompleteCodexOAuthAuthorization,
+        claim_ref: &str,
+    ) -> Result<CodexPendingAuthorization, CodexOAuthAdminError> {
         if !valid_text(&command.owner_ref)
             || !valid_text(&command.flow_id)
+            || !valid_secret(claim_ref)
             || command.callback_url.expose_secret().len() > MAX_CALLBACK_BYTES
         {
             return Err(CodexOAuthAdminError::InvalidInput);
         }
-        let pending = self
+        let pending = match self
             .pending
-            .take(&command.owner_ref, &command.flow_id)
+            .claim(
+                &command.owner_ref,
+                &command.flow_id,
+                claim_ref,
+                AUTHORIZATION_CLAIM_TTL,
+            )
             .await
             .map_err(map_pending_error)?
-            .ok_or(CodexOAuthAdminError::NotFound)?;
+        {
+            CodexOAuthPendingClaimOutcome::Claimed(pending) => *pending,
+            CodexOAuthPendingClaimOutcome::NotFound => return Err(CodexOAuthAdminError::NotFound),
+            CodexOAuthPendingClaimOutcome::InProgress => {
+                return Err(CodexOAuthAdminError::Conflict);
+            }
+        };
         if pending.expires_at <= Utc::now() {
+            self.release_claim(command, claim_ref).await?;
             return Err(CodexOAuthAdminError::FlowExpired);
         }
-        let (code, callback_state) = callback_parts(command.callback_url.expose_secret())?;
+        Ok(pending)
+    }
+
+    async fn release_claim(
+        &self,
+        command: &CompleteCodexOAuthAuthorization,
+        claim_ref: &str,
+    ) -> Result<(), CodexOAuthAdminError> {
+        if self
+            .pending
+            .release_claim(&command.owner_ref, &command.flow_id, claim_ref)
+            .await
+            .map_err(map_pending_error)?
+        {
+            Ok(())
+        } else {
+            Err(CodexOAuthAdminError::StorageUnavailable)
+        }
+    }
+
+    async fn exchange_pending(
+        &self,
+        pending: &CodexPendingAuthorization,
+        callback_url: &str,
+    ) -> Result<(super::types::CodexOAuthSecret, SecretString), CodexOAuthAdminError> {
+        let (code, callback_state) = callback_parts(callback_url)?;
         if !constant_time_equal(
             pending.state.expose_secret().as_bytes(),
             callback_state.expose_secret().as_bytes(),
         ) {
-            return Err(CodexOAuthAdminError::UpstreamRejected);
+            return Err(CodexOAuthAdminError::CallbackRejected);
         }
         let tokens = self
             .exchanger
@@ -574,7 +717,7 @@ impl CodexOAuthAdminService {
             })
             .await
             .map_err(map_exchange_error)?;
-        Ok((pending, tokens.secret, tokens.id_token))
+        Ok((tokens.secret, tokens.id_token))
     }
 }
 
@@ -622,14 +765,14 @@ fn authorization_url(
 }
 
 fn callback_parts(value: &str) -> Result<(SecretString, SecretString), CodexOAuthAdminError> {
-    let url = Url::parse(value).map_err(|_| CodexOAuthAdminError::UpstreamRejected)?;
+    let url = Url::parse(value).map_err(|_| CodexOAuthAdminError::CallbackRejected)?;
     if url.scheme() != "http"
         || url.host_str() != Some("localhost")
         || url.port() != Some(1455)
         || url.path() != "/auth/callback"
         || url.fragment().is_some()
     {
-        return Err(CodexOAuthAdminError::UpstreamRejected);
+        return Err(CodexOAuthAdminError::CallbackRejected);
     }
     let mut code = None;
     let mut state = None;
@@ -646,7 +789,7 @@ fn callback_parts(value: &str) -> Result<(SecretString, SecretString), CodexOAut
     let state = state.filter(|value| valid_secret(value));
     match (code, state) {
         (Some(code), Some(state)) => Ok((SecretString::from(code), SecretString::from(state))),
-        _ => Err(CodexOAuthAdminError::UpstreamRejected),
+        _ => Err(CodexOAuthAdminError::CallbackRejected),
     }
 }
 
@@ -655,7 +798,7 @@ fn set_unique_callback_parameter(
     value: String,
 ) -> Result<(), CodexOAuthAdminError> {
     if target.replace(value).is_some() {
-        return Err(CodexOAuthAdminError::UpstreamRejected);
+        return Err(CodexOAuthAdminError::CallbackRejected);
     }
     Ok(())
 }
@@ -722,9 +865,23 @@ fn map_pending_error(error: CodexOAuthPendingStoreError) -> CodexOAuthAdminError
     }
 }
 
+fn map_authorization_settlement_error(error: CodexOAuthPendingStoreError) -> AdminError {
+    match error {
+        CodexOAuthPendingStoreError::InvalidValue => {
+            AdminError::internal("OpenAI OAuth pending claim is invalid")
+        }
+        CodexOAuthPendingStoreError::Conflict => {
+            AdminError::conflict("OpenAI OAuth pending claim conflicts with current state")
+        }
+        CodexOAuthPendingStoreError::Unavailable => {
+            AdminError::unavailable("OpenAI OAuth pending claim store is unavailable")
+        }
+    }
+}
+
 fn map_exchange_error(error: AuthorizationCodeExchangeError) -> CodexOAuthAdminError {
     match error {
-        AuthorizationCodeExchangeError::Rejected => CodexOAuthAdminError::UpstreamRejected,
+        AuthorizationCodeExchangeError::Rejected => CodexOAuthAdminError::TokenRejected,
         AuthorizationCodeExchangeError::Unavailable => CodexOAuthAdminError::UpstreamUnavailable,
         AuthorizationCodeExchangeError::Ambiguous => CodexOAuthAdminError::Ambiguous,
     }
@@ -732,7 +889,7 @@ fn map_exchange_error(error: AuthorizationCodeExchangeError) -> CodexOAuthAdminE
 
 fn map_identity_error(error: CodexIdentityVerificationError) -> CodexOAuthAdminError {
     match error {
-        CodexIdentityVerificationError::Rejected => CodexOAuthAdminError::UpstreamRejected,
+        CodexIdentityVerificationError::Rejected => CodexOAuthAdminError::IdentityRejected,
         CodexIdentityVerificationError::Unavailable => CodexOAuthAdminError::UpstreamUnavailable,
     }
 }

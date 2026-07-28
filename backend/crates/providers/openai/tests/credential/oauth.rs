@@ -15,10 +15,10 @@ use provider_openai::credential::token_client::{
 use provider_openai::credential::{
     CodexAccountIdentityVerifier, CodexCredentialAdmin, CodexIdentityExpectation,
     CodexIdentityVerification, CodexIdentityVerificationError, CodexOAuthAdmin,
-    CodexOAuthAdminError, CodexOAuthAdminService, CodexOAuthPendingStore,
-    CodexOAuthPendingStoreError, CodexOAuthSecret, CodexPendingAuthorization,
-    CompleteCodexOAuthAuthorization, CompletedCodexOAuthCredential, ImportCodexOAuthCredential,
-    StartCodexOAuthAuthorization, StoredCodexPendingAuthorization,
+    CodexOAuthAdminError, CodexOAuthAdminService, CodexOAuthPendingClaimOutcome,
+    CodexOAuthPendingStore, CodexOAuthPendingStoreError, CodexOAuthSecret,
+    CodexPendingAuthorization, CompleteCodexOAuthAuthorization, CompletedCodexOAuthCredential,
+    ImportCodexOAuthCredential, StartCodexOAuthAuthorization, StoredCodexPendingAuthorization,
 };
 use secrecy::{ExposeSecret, SecretString};
 use sha2::{Digest as _, Sha256};
@@ -28,7 +28,25 @@ use crate::support::{MemoryAccountStore, profile, runtime_policy, secret};
 
 #[derive(Default)]
 struct PendingStore {
-    value: Mutex<Option<StoredCodexPendingAuthorization>>,
+    value: Mutex<Option<(StoredCodexPendingAuthorization, Option<String>)>>,
+}
+
+fn duplicate_pending(
+    pending: &StoredCodexPendingAuthorization,
+) -> Result<CodexPendingAuthorization, CodexOAuthPendingStoreError> {
+    CodexPendingAuthorization::from_stored(StoredCodexPendingAuthorization {
+        flow_id: pending.flow_id.clone(),
+        owner_ref: pending.owner_ref.clone(),
+        started_request_ref: pending.started_request_ref.clone(),
+        name: pending.name.clone(),
+        expires_at: pending.expires_at,
+        state: pending.state.clone(),
+        nonce: pending.nonce.clone(),
+        code_verifier: pending.code_verifier.clone(),
+        reauthorization_account_id: pending.reauthorization_account_id.clone(),
+        reauthorization_credential_revision: pending.reauthorization_credential_revision,
+        mutation: pending.mutation.clone(),
+    })
 }
 
 #[async_trait]
@@ -41,42 +59,90 @@ impl CodexOAuthPendingStore for PendingStore {
         if value.is_some() {
             return Err(CodexOAuthPendingStoreError::Conflict);
         }
-        *value = Some(StoredCodexPendingAuthorization {
-            flow_id: pending.flow_id().to_owned(),
-            owner_ref: pending.owner_ref().to_owned(),
-            started_request_ref: pending.started_request_ref().to_owned(),
-            name: pending.name().to_owned(),
-            expires_at: pending.expires_at(),
-            state: pending.state().clone(),
-            nonce: pending.nonce().clone(),
-            code_verifier: pending.code_verifier().clone(),
-            reauthorization_account_id: pending
-                .reauthorization()
-                .map(|target| target.account_id().to_string()),
-            reauthorization_credential_revision: pending
-                .reauthorization()
-                .map(|target| target.credential_revision().get()),
-            mutation: pending.mutation().clone(),
-        });
+        *value = Some((
+            StoredCodexPendingAuthorization {
+                flow_id: pending.flow_id().to_owned(),
+                owner_ref: pending.owner_ref().to_owned(),
+                started_request_ref: pending.started_request_ref().to_owned(),
+                name: pending.name().to_owned(),
+                expires_at: pending.expires_at(),
+                state: pending.state().clone(),
+                nonce: pending.nonce().clone(),
+                code_verifier: pending.code_verifier().clone(),
+                reauthorization_account_id: pending
+                    .reauthorization()
+                    .map(|target| target.account_id().to_string()),
+                reauthorization_credential_revision: pending
+                    .reauthorization()
+                    .map(|target| target.credential_revision().get()),
+                mutation: pending.mutation().clone(),
+            },
+            None,
+        ));
         Ok(())
     }
 
-    async fn take(
+    async fn claim(
         &self,
         owner_ref: &str,
         flow_id: &str,
-    ) -> Result<Option<CodexPendingAuthorization>, CodexOAuthPendingStoreError> {
+        claim_ref: &str,
+        _claim_ttl: std::time::Duration,
+    ) -> Result<CodexOAuthPendingClaimOutcome, CodexOAuthPendingStoreError> {
         let mut value = self.value.lock().expect("pending lock");
-        if value
-            .as_ref()
-            .is_some_and(|pending| pending.owner_ref == owner_ref && pending.flow_id == flow_id)
-        {
-            return value
-                .take()
-                .map(CodexPendingAuthorization::from_stored)
-                .transpose();
+        let Some((pending, claim)) = value.as_mut() else {
+            return Ok(CodexOAuthPendingClaimOutcome::NotFound);
+        };
+        if pending.owner_ref != owner_ref || pending.flow_id != flow_id {
+            return Ok(CodexOAuthPendingClaimOutcome::NotFound);
         }
-        Ok(None)
+        if claim.is_some() {
+            return Ok(CodexOAuthPendingClaimOutcome::InProgress);
+        }
+        *claim = Some(claim_ref.to_owned());
+        duplicate_pending(pending)
+            .map(Box::new)
+            .map(CodexOAuthPendingClaimOutcome::Claimed)
+    }
+
+    async fn release_claim(
+        &self,
+        owner_ref: &str,
+        flow_id: &str,
+        claim_ref: &str,
+    ) -> Result<bool, CodexOAuthPendingStoreError> {
+        let mut value = self.value.lock().expect("pending lock");
+        let Some((pending, claim)) = value.as_mut() else {
+            return Ok(false);
+        };
+        if pending.owner_ref != owner_ref
+            || pending.flow_id != flow_id
+            || claim.as_deref() != Some(claim_ref)
+        {
+            return Ok(false);
+        }
+        *claim = None;
+        Ok(true)
+    }
+
+    async fn consume_claim(
+        &self,
+        owner_ref: &str,
+        flow_id: &str,
+        claim_ref: &str,
+    ) -> Result<bool, CodexOAuthPendingStoreError> {
+        let mut value = self.value.lock().expect("pending lock");
+        let Some((pending, claim)) = value.as_ref() else {
+            return Ok(false);
+        };
+        if pending.owner_ref != owner_ref
+            || pending.flow_id != flow_id
+            || claim.as_deref() != Some(claim_ref)
+        {
+            return Ok(false);
+        }
+        *value = None;
+        Ok(true)
     }
 }
 
@@ -313,7 +379,7 @@ async fn completion_rejects_repeated_code_callback_parameter() {
         .await
         .expect_err("repeated code");
 
-    assert_eq!(error, CodexOAuthAdminError::UpstreamRejected);
+    assert_eq!(error, CodexOAuthAdminError::CallbackRejected);
 }
 
 #[tokio::test]
@@ -337,7 +403,7 @@ async fn completion_rejects_repeated_state_callback_parameter() {
         .await
         .expect_err("repeated state");
 
-    assert_eq!(error, CodexOAuthAdminError::UpstreamRejected);
+    assert_eq!(error, CodexOAuthAdminError::CallbackRejected);
 }
 
 struct UnavailableVerifier;
@@ -389,7 +455,7 @@ async fn completion_classifies_unavailable_identity_verification_as_upstream_una
 }
 
 #[tokio::test]
-async fn callback_state_mismatch_fails_closed_and_consumes_flow() {
+async fn callback_state_mismatch_releases_flow_for_retry() {
     let service = service();
     let started = started(&service).await;
     let flow_id = started.flow_id;
@@ -405,14 +471,48 @@ async fn callback_state_mismatch_fails_closed_and_consumes_flow() {
             .complete_authorization(command())
             .await
             .expect_err("bad state"),
-        CodexOAuthAdminError::UpstreamRejected
+        CodexOAuthAdminError::CallbackRejected
     );
     assert_eq!(
         service
             .complete_authorization(command())
             .await
-            .expect_err("one shot"),
-        CodexOAuthAdminError::NotFound
+            .expect_err("retryable callback rejection"),
+        CodexOAuthAdminError::CallbackRejected
+    );
+}
+
+#[tokio::test]
+async fn token_exchange_rejection_releases_flow_for_retry() {
+    let service = service();
+    let started = started(&service).await;
+    let flow_id = started.flow_id;
+    let state = Url::parse(&started.authorization_url)
+        .expect("authorization URL")
+        .query_pairs()
+        .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
+        .expect("state");
+    let command = || CompleteCodexOAuthAuthorization {
+        owner_ref: owner_ref(),
+        flow_id: flow_id.clone(),
+        callback_url: SecretString::from(format!(
+            "http://localhost:1455/auth/callback?code=rejected-authorization-code&state={state}"
+        )),
+    };
+
+    assert_eq!(
+        service
+            .complete_authorization(command())
+            .await
+            .expect_err("token exchange rejection"),
+        CodexOAuthAdminError::TokenRejected
+    );
+    assert_eq!(
+        service
+            .complete_authorization(command())
+            .await
+            .expect_err("retryable token exchange rejection"),
+        CodexOAuthAdminError::TokenRejected
     );
 }
 
