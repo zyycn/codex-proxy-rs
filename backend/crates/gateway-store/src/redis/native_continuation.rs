@@ -24,6 +24,7 @@ use super::{namespace, resource_fingerprint};
 const CONTINUATION_TTL: Duration = Duration::from_secs(4 * 60 * 60);
 const MAX_CONTINUATIONS: usize = 65_536;
 const MAX_RECORD_BYTES: usize = 64 * 1024;
+const MAX_INDEX_CLEANUP_PER_RECORD: usize = 64;
 
 const RECORD_SCRIPT: &str = r#"
 local entry_key = KEYS[1]
@@ -35,12 +36,13 @@ local ttl_seconds = tonumber(ARGV[4])
 local cutoff = tonumber(ARGV[5])
 local max_entries = tonumber(ARGV[6])
 local entry_prefix = ARGV[7]
+local cleanup_limit = tonumber(ARGV[8])
 
 redis.call('SET', entry_key, payload, 'EX', ttl_seconds)
 redis.call('ZADD', index_key, score, entry_id)
 redis.call('EXPIRE', index_key, ttl_seconds)
 
-local stale = redis.call('ZRANGEBYSCORE', index_key, '-inf', cutoff)
+local stale = redis.call('ZRANGEBYSCORE', index_key, '-inf', cutoff, 'LIMIT', 0, cleanup_limit)
 for _, stale_id in ipairs(stale) do
   redis.call('UNLINK', entry_prefix .. '{' .. stale_id .. '}')
   redis.call('ZREM', index_key, stale_id)
@@ -48,6 +50,9 @@ end
 
 local count = redis.call('ZCARD', index_key)
 local excess = count - max_entries
+if excess > cleanup_limit then
+  excess = cleanup_limit
+end
 if excess > 0 then
   local oldest = redis.call('ZRANGE', index_key, 0, excess - 1)
   for _, old_id in ipairs(oldest) do
@@ -158,6 +163,7 @@ impl NativeContinuationPort for RedisNativeContinuationRepository {
                 .arg(cutoff)
                 .arg(MAX_CONTINUATIONS)
                 .arg(self.entry_prefix())
+                .arg(MAX_INDEX_CLEANUP_PER_RECORD)
                 .invoke_async::<i64>(&mut connection)
                 .await
                 .map_err(|_| NativeContinuationStoreError)?;

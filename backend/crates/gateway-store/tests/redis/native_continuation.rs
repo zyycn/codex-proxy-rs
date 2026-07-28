@@ -115,6 +115,51 @@ async fn native_continuation_rejects_provider_state_for_a_different_provider() {
     assert!(namespace_keys(&mut connection, &namespace).await.is_empty());
 }
 
+#[tokio::test]
+async fn native_continuation_record_should_bound_index_cleanup_work() {
+    const STALE_ENTRY_COUNT: usize = 100;
+    const CLEANUP_BATCH: usize = 64;
+
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    repository
+        .record(pin("resp-cleanup-anchor"))
+        .await
+        .expect("record cleanup anchor");
+    let index_key = namespace_keys(&mut connection, &namespace)
+        .await
+        .into_iter()
+        .find(|key| key.ends_with(":global:index"))
+        .expect("continuation index key");
+    let mut seed = redis::cmd("ZADD");
+    seed.arg(&index_key);
+    for index in 0..STALE_ENTRY_COUNT {
+        seed.arg(0).arg(format!("stale-{index}"));
+    }
+    assert_eq!(
+        seed.query_async::<i64>(&mut connection)
+            .await
+            .expect("seed stale continuation index entries"),
+        i64::try_from(STALE_ENTRY_COUNT).expect("stale entry count fits i64")
+    );
+
+    repository
+        .record(pin("resp-cleanup-trigger"))
+        .await
+        .expect("record continuation with bounded cleanup");
+
+    assert_eq!(
+        redis::cmd("ZCARD")
+            .arg(index_key)
+            .query_async::<usize>(&mut connection)
+            .await
+            .expect("count continuation index entries"),
+        STALE_ENTRY_COUNT + 2 - CLEANUP_BATCH
+    );
+    delete_namespace_keys(&mut connection, &namespace).await;
+}
+
 async fn repository() -> Option<(RedisNativeContinuationRepository, ConnectionManager, String)> {
     let redis_url = crate::support::test_env("CPR_TEST_REDIS_URL")?;
     let client = redis::Client::open(redis_url).expect("valid CPR_TEST_REDIS_URL");
@@ -126,6 +171,15 @@ async fn repository() -> Option<(RedisNativeContinuationRepository, ConnectionMa
     let repository = RedisNativeContinuationRepository::new(connection.clone(), &namespace)
         .expect("valid test namespace");
     Some((repository, connection, namespace))
+}
+
+fn pin(response_id: &str) -> NativeContinuationPin {
+    NativeContinuationPin::new(
+        PreviousResponseId::new(response_id),
+        PreviousResponseId::new(response_id),
+        ProviderKind::new("openai").expect("provider"),
+        ProviderAccountId::new("acct_primary").expect("account"),
+    )
 }
 
 async fn namespace_keys(connection: &mut ConnectionManager, namespace: &str) -> Vec<String> {

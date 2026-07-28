@@ -7,19 +7,13 @@ use gateway_core::engine::admission::{
     ClientAdmissionDecision, ClientAdmissionError, ClientAdmissionPort, ClientAdmissionRecovery,
     ClientAdmissionRequest, ClientAdmissionRestoreResult,
 };
-use gateway_core::engine::continuation::{
-    NativeContinuationPin, NativeContinuationPort, NativeContinuationStoreError, PreviousResponseId,
-};
-use gateway_core::engine::credential::ProviderAccountId;
 use gateway_core::engine::execution::{
     ProviderCircuitDecision, ProviderCircuitError, ProviderCircuitPort,
 };
 use gateway_core::engine::{CancellationToken, ModelRequestId};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::ProviderKind;
-use gateway_store::redis::{
-    BufferedClientAdmissionPort, BufferedNativeContinuationPort, BufferedProviderCircuitPort,
-};
+use gateway_store::redis::{BufferedClientAdmissionPort, BufferedProviderCircuitPort};
 
 #[derive(Default)]
 struct RecordingCoordination {
@@ -98,37 +92,14 @@ impl ProviderCircuitPort for RecordingCoordination {
     }
 }
 
-impl NativeContinuationPort for RecordingCoordination {
-    fn resolve<'a>(
-        &'a self,
-        _: &'a PreviousResponseId,
-    ) -> BoxFuture<'a, Result<Option<NativeContinuationPin>, NativeContinuationStoreError>> {
-        Box::pin(async { Ok(None) })
-    }
-
-    fn record<'a>(
-        &'a self,
-        _: NativeContinuationPin,
-    ) -> BoxFuture<'a, Result<(), NativeContinuationStoreError>> {
-        Box::pin(async move {
-            self.record("continuation");
-            Ok(())
-        })
-    }
-}
-
 #[tokio::test]
-async fn full_redis_coordination_queues_should_drop_writes_without_waiting() {
+async fn full_recoverable_coordination_queues_should_drop_writes_without_waiting() {
     let inner = Arc::new(RecordingCoordination::default());
     let (admissions, _admission_writer) = BufferedClientAdmissionPort::with_capacity(
         inner.clone(),
         NonZeroUsize::new(1).expect("capacity"),
     );
     let (circuits, _circuit_writer) = BufferedProviderCircuitPort::with_capacity(
-        inner.clone(),
-        NonZeroUsize::new(1).expect("capacity"),
-    );
-    let (continuation, _continuation_writer) = BufferedNativeContinuationPort::with_capacity(
         inner.clone(),
         NonZeroUsize::new(1).expect("capacity"),
     );
@@ -153,14 +124,6 @@ async fn full_redis_coordination_queues_should_drop_writes_without_waiting() {
             .observe_failure(&provider)
             .await
             .expect("full circuit queue remains fail-open");
-        continuation
-            .record(continuation_pin())
-            .await
-            .expect("first continuation enqueue");
-        continuation
-            .record(continuation_pin())
-            .await
-            .expect("full continuation queue remains fail-open");
     })
     .await
     .expect("coordination enqueue must never wait for Redis");
@@ -179,10 +142,6 @@ async fn redis_coordination_writers_should_flush_each_side_effect() {
         inner.clone(),
         NonZeroUsize::new(8).expect("capacity"),
     );
-    let (continuation, continuation_writer) = BufferedNativeContinuationPort::with_capacity(
-        inner.clone(),
-        NonZeroUsize::new(8).expect("capacity"),
-    );
     let client = ClientApiKeyId::new("key_writer_test").expect("client key");
     let request = ModelRequestId::new("req_writer_test").expect("request ID");
     let provider = ProviderKind::new("openai").expect("provider");
@@ -194,20 +153,14 @@ async fn redis_coordination_writers_should_flush_each_side_effect() {
         .observe_success(&provider)
         .await
         .expect("enqueue circuit feedback");
-    continuation
-        .record(continuation_pin())
-        .await
-        .expect("enqueue continuation");
-
     let cancellation = CancellationToken::new();
     let tasks = [
         spawn_writer(Arc::new(admission_writer), cancellation.clone()),
         spawn_writer(Arc::new(circuit_writer), cancellation.clone()),
-        spawn_writer(Arc::new(continuation_writer), cancellation.clone()),
     ];
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
-            if inner.operations().len() == 3 {
+            if inner.operations().len() == 2 {
                 break;
             }
             tokio::task::yield_now().await;
@@ -224,7 +177,7 @@ async fn redis_coordination_writers_should_flush_each_side_effect() {
 
     let mut operations = inner.operations();
     operations.sort_unstable();
-    assert_eq!(operations, ["admission", "circuit_success", "continuation"]);
+    assert_eq!(operations, ["admission", "circuit_success"]);
 }
 
 fn spawn_writer<T>(
@@ -235,13 +188,4 @@ where
     T: gateway_core::task::DaemonTask + 'static,
 {
     tokio::spawn(async move { writer.run(cancellation).await })
-}
-
-fn continuation_pin() -> NativeContinuationPin {
-    NativeContinuationPin::new(
-        PreviousResponseId::new("resp_buffer_test"),
-        PreviousResponseId::new("resp_buffer_test"),
-        ProviderKind::new("openai").expect("provider"),
-        ProviderAccountId::new("acct_buffer_test").expect("account"),
-    )
 }

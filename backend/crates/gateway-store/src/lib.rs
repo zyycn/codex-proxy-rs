@@ -332,6 +332,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
             REDIS_NAMESPACE,
             redis::ProviderCircuitPolicy::default(),
         )?);
+    // Continuation affinity 是下一轮请求的路由事实，Core 必须直接等待 Redis 确认。
     let continuation: Arc<dyn gateway_core::engine::continuation::NativeContinuationPort> =
         Arc::new(redis::RedisNativeContinuationRepository::new(
             redis_connection.clone(),
@@ -340,8 +341,6 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
     let (admissions, admission_release_writer) =
         redis::BufferedClientAdmissionPort::new(admissions);
     let (circuits, circuit_feedback_writer) = redis::BufferedProviderCircuitPort::new(circuits);
-    let (continuation, continuation_writer) =
-        redis::BufferedNativeContinuationPort::new(continuation);
     let core_ports = CoreStorePorts::new(
         execution,
         (
@@ -351,7 +350,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
             )),
         ),
         Arc::new(circuits),
-        Arc::new(continuation),
+        continuation,
         (
             Arc::new(postgres::PgRuntimeSnapshotRepository::new(pool.clone())),
             Arc::new(redis::RedisRuntimeChangeRepository::new(
@@ -390,7 +389,6 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         execution_writer,
         admission_release_writer,
         circuit_feedback_writer,
-        continuation_writer,
         retention,
     )?;
     Ok(StoreBundle {
@@ -408,7 +406,6 @@ fn store_worker_contributions(
     execution_writer: postgres::ExecutionObservationWriter<postgres::PgExecutionStore>,
     admission_release_writer: redis::ClientAdmissionReleaseWriter,
     circuit_feedback_writer: redis::ProviderCircuitFeedbackWriter,
-    continuation_writer: redis::NativeContinuationWriter,
     retention: Arc<postgres::PgRetentionRepository>,
 ) -> StoreResult<Vec<WorkerContribution>> {
     let stale_id = WorkerId::try_new(WorkerKind::StaleModelRequestRecovery, "postgres")
@@ -420,8 +417,6 @@ fn store_worker_contributions(
     let admission_flush_id = WorkerId::try_new(WorkerKind::OpsFlush, "redis_admission")
         .map_err(worker_definition_error)?;
     let circuit_flush_id = WorkerId::try_new(WorkerKind::OpsFlush, "redis_circuit")
-        .map_err(worker_definition_error)?;
-    let continuation_flush_id = WorkerId::try_new(WorkerKind::OpsFlush, "redis_continuation")
         .map_err(worker_definition_error)?;
     let ops_flush_restart =
         DaemonRestartPolicy::try_new(Duration::from_secs(1), Duration::from_secs(60))
@@ -463,16 +458,6 @@ fn store_worker_contributions(
                 WorkerRunnable::Daemon {
                     restart: ops_flush_restart,
                     task: Box::new(circuit_feedback_writer),
-                },
-            )
-            .map_err(worker_definition_error)?,
-        ),
-        WorkerContribution::Registration(
-            WorkerRegistration::try_new(
-                continuation_flush_id,
-                WorkerRunnable::Daemon {
-                    restart: ops_flush_restart,
-                    task: Box::new(continuation_writer),
                 },
             )
             .map_err(worker_definition_error)?,
