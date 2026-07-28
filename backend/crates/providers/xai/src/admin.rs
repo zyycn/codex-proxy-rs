@@ -58,7 +58,7 @@ use crate::credential::{
 use crate::transport::profile::{GrokCliReleaseSnapshot, GrokCliReleaseStatus};
 use crate::transport::{GROK_CLI_BASE_URL, XAI_PROVIDER_NAME, grok_billing_breakdown};
 
-const PENDING_SCHEMA_VERSION: u64 = 2;
+const PENDING_SCHEMA_VERSION: u64 = 3;
 const PENDING_TTL: TimeDelta = TimeDelta::minutes(30);
 const PENDING_CLAIM_TTL: Duration = Duration::from_secs(90);
 const MAX_PENDING_TEXT_BYTES: usize = 512;
@@ -520,16 +520,10 @@ impl ProviderAdmin for XaiAdminProvider {
         if pending.provider_kind() != &self.provider_kind {
             return Err(provider_error(ProviderAdminErrorKind::Invalid));
         }
-        if let AuthorizationMutationTarget::Reauthorize {
-            account_id,
-            expected_credential_revision,
-        } = pending.target()
-        {
-            let revision = CredentialRevision::new(expected_credential_revision.get())
-                .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
+        if let AuthorizationMutationTarget::Reauthorize { account_id } = pending.target() {
             let current = self
                 .accounts
-                .load_credential(account_id, revision)
+                .load_current_credential(account_id)
                 .await
                 .map_err(map_store_error)?;
             if current.account.provider() != &self.provider_kind {
@@ -590,16 +584,11 @@ impl ProviderAdmin for XaiAdminProvider {
         command: PrepareCredentialRotation,
     ) -> Result<PreparedCredentialRotation, ProviderAdminError> {
         validate_account_record(&command.account, &self.provider_kind)?;
-        if command.account.credential_revision != command.expected_credential_revision {
-            return Err(provider_error(ProviderAdminErrorKind::Conflict));
-        }
         let account_id = ProviderAccountId::new(command.account.id.clone())
-            .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
-        let revision = CredentialRevision::new(command.expected_credential_revision.get())
             .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
         let current = self
             .accounts
-            .load_credential(&account_id, revision)
+            .load_current_credential(&account_id)
             .await
             .map_err(map_store_error)?;
         if !account_matches_record(&current.account, &command.account) {
@@ -653,15 +642,17 @@ impl ProviderAdmin for XaiAdminProvider {
         validate_account_record(&command.account, &self.provider_kind)?;
         let account_id = ProviderAccountId::new(command.account.id.clone())
             .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
-        let current = self.account(&account_id).await?;
-        if !account_matches_record(&current, &command.account) {
+        let current = self
+            .accounts
+            .load_current_credential(&account_id)
+            .await
+            .map_err(map_store_error)?;
+        if !account_matches_record(&current.account, &command.account) {
             return Err(provider_error(ProviderAdminErrorKind::Conflict));
         }
-        let revision = CredentialRevision::new(command.account.credential_revision.get())
-            .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
         let prepared = self
             .refresh
-            .prepare_manual_refresh(&account_id, revision)
+            .prepare_manual_refresh(current)
             .await
             .map_err(map_refresh_error)?;
         prepared_rotation(prepared, command.account.provider_kind)
@@ -817,15 +808,10 @@ impl XaiAdminProvider {
                     .map_err(map_repository_error)?;
                 PreparedAuthorizationCredential::Create(prepared_create(prepared, Utc::now())?)
             }
-            AuthorizationMutationTarget::Reauthorize {
-                account_id,
-                expected_credential_revision,
-            } => {
-                let revision = CredentialRevision::new(expected_credential_revision.get())
-                    .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?;
+            AuthorizationMutationTarget::Reauthorize { account_id } => {
                 let current = self
                     .accounts
-                    .load_credential(account_id, revision)
+                    .load_current_credential(account_id)
                     .await
                     .map_err(map_store_error)?;
                 if current.account.provider() != &self.provider_kind {
@@ -1045,19 +1031,9 @@ fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, Provi
 fn account_matches_record(account: &ProviderAccount, record: &AccountRecord) -> bool {
     account.id().as_str() == record.id
         && account.provider() == &record.provider_kind
-        && account.revision().get() == record.credential_revision.get()
-        && account.name() == record.name
-        && account.email() == record.email.as_deref()
         && account.upstream_user_id() == record.upstream_user_id
         && account.upstream_account_id() == record.upstream_account_id.as_deref()
-        && account.plan_type() == record.plan_type.as_deref()
-        && account.enabled() == record.enabled
-        && account.availability() == record.availability
-        && account.cooldown_until().map(DateTime::<Utc>::from) == record.cooldown_until
-        && account.access_token_expires_at().map(DateTime::<Utc>::from)
-            == record.access_token_expires_at
-        && account.next_refresh_at().map(DateTime::<Utc>::from) == record.next_refresh_at
-        && account.has_refresh_token() == record.has_refresh_token
+        && account.authentication_kind() == record.authentication_kind
 }
 
 fn project_quota(
@@ -1209,13 +1185,8 @@ struct PendingMutationDocument {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum PendingTargetDocument {
-    Create {
-        name: String,
-    },
-    Reauthorize {
-        account_id: String,
-        expected_credential_revision: u64,
-    },
+    Create { name: String },
+    Reauthorize { account_id: String },
 }
 
 #[derive(Deserialize)]
@@ -1280,18 +1251,11 @@ fn encode_target(target: &AuthorizationMutationTarget) -> Map<String, Value> {
             document.insert("kind".to_owned(), Value::String("create".to_owned()));
             document.insert("name".to_owned(), Value::String(name.clone()));
         }
-        AuthorizationMutationTarget::Reauthorize {
-            account_id,
-            expected_credential_revision,
-        } => {
+        AuthorizationMutationTarget::Reauthorize { account_id } => {
             document.insert("kind".to_owned(), Value::String("reauthorize".to_owned()));
             document.insert(
                 "account_id".to_owned(),
                 Value::String(account_id.to_string()),
-            );
-            document.insert(
-                "expected_credential_revision".to_owned(),
-                Value::Number(Number::from(expected_credential_revision.get())),
             );
         }
     }
@@ -1358,15 +1322,12 @@ fn decode_mutation(
         .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
     let target = match document.target {
         PendingTargetDocument::Create { name } => AuthorizationMutationTarget::Create { name },
-        PendingTargetDocument::Reauthorize {
-            account_id,
-            expected_credential_revision,
-        } => AuthorizationMutationTarget::Reauthorize {
-            account_id: ProviderAccountId::new(account_id)
-                .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?,
-            expected_credential_revision: Revision::new(expected_credential_revision)
-                .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?,
-        },
+        PendingTargetDocument::Reauthorize { account_id } => {
+            AuthorizationMutationTarget::Reauthorize {
+                account_id: ProviderAccountId::new(account_id)
+                    .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?,
+            }
+        }
     };
     let actor = match document.owner {
         PendingOwnerDocument::AdminSession { admin_user_id } => {

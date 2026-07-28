@@ -13,7 +13,6 @@ use gateway_core::engine::credential::{
     AccountAvailability, CredentialCasUpdate, CredentialRevision, LoadedCredential,
     NewProviderAccount, ProviderAccount, ProviderAccountId, ProviderAccountUpdate,
 };
-use gateway_core::error::StoreErrorKind;
 use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeaseGuard, ProviderLeasePort, ProviderLeaseRequest,
     ProviderRefreshCapacityRequest, ProviderRefreshLeaseRequest, ProviderRefreshPolicy,
@@ -28,7 +27,6 @@ use thiserror::Error;
 use super::identity::{
     CodexAccountIdentityVerifier, CodexIdentityExpectation, CodexIdentityVerificationError,
 };
-use super::repository::CodexCredentialRepository;
 use super::security::CodexCredentialCodec;
 use super::token_client::{RefreshFailure, TokenRefresher};
 use super::types::{
@@ -350,10 +348,6 @@ pub enum CodexCredentialAdminError {
     InvalidCredential,
     #[error("Codex account was not found")]
     NotFound,
-    #[error("Codex credential revision is stale")]
-    RevisionConflict,
-    #[error("Codex account store is unavailable")]
-    StoreUnavailable,
     #[error("Codex account has no refresh token")]
     MissingRefreshToken,
     #[error("Codex refresh lease is unavailable")]
@@ -551,9 +545,8 @@ impl CodexCredentialAdmin {
     }
 }
 
-/// 有状态的 Codex 手工刷新边界；只读取 Store 并准备 CAS，不自行持久化。
+/// 有状态的 Codex 手工刷新边界；消费调用方刚读取的当前 credential 并准备 CAS。
 pub struct CodexCredentialAdminService {
-    repository: CodexCredentialRepository,
     refresher: Arc<dyn TokenRefresher>,
     verifier: Arc<dyn CodexAccountIdentityVerifier>,
     leases: Arc<dyn ProviderLeasePort>,
@@ -564,7 +557,6 @@ impl fmt::Debug for CodexCredentialAdminService {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CodexCredentialAdminService")
-            .field("repository", &"CodexCredentialRepository")
             .field("refresher", &"TokenRefresher")
             .field("verifier", &"CodexAccountIdentityVerifier")
             .field("leases", &"ProviderLeasePort")
@@ -575,14 +567,12 @@ impl fmt::Debug for CodexCredentialAdminService {
 
 impl CodexCredentialAdminService {
     pub fn new(
-        repository: CodexCredentialRepository,
         refresher: Arc<dyn TokenRefresher>,
         verifier: Arc<dyn CodexAccountIdentityVerifier>,
         leases: Arc<dyn ProviderLeasePort>,
         runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     ) -> Self {
         Self {
-            repository,
             refresher,
             verifier,
             leases,
@@ -593,19 +583,11 @@ impl CodexCredentialAdminService {
     /// 官方 RT exchange + AT 身份验证；结果由 App 在同一 revision/audit 事务中提交。
     pub async fn manual_refresh(
         &self,
-        account_id: ProviderAccountId,
-        expected_revision: CredentialRevision,
+        current: LoadedCredential,
     ) -> Result<PreparedCodexCredentialRotation, CodexCredentialAdminError> {
-        let current = self
-            .repository
-            .store()
-            .load_credential(&account_id, expected_revision)
-            .await
-            .map_err(map_admin_store_error)?;
-        if current.account.provider().as_str() != PROVIDER_NAME
-            || current.account.id() != &account_id
-            || current.account.revision() != expected_revision
-        {
+        let account_id = current.account.id().clone();
+        let expected_revision = current.account.revision();
+        if current.account.provider().as_str() != PROVIDER_NAME {
             return Err(CodexCredentialAdminError::NotFound);
         }
         let runtime = CodexCredentialCodec::decode(&current.credential)
@@ -988,17 +970,6 @@ fn china_rfc3339(value: DateTime<Utc>) -> String {
     value
         .with_timezone(&FixedOffset::east_opt(8 * 60 * 60).expect("valid China offset"))
         .to_rfc3339()
-}
-
-fn map_admin_store_error(error: gateway_core::error::StoreError) -> CodexCredentialAdminError {
-    match error.kind() {
-        StoreErrorKind::Conflict => CodexCredentialAdminError::RevisionConflict,
-        StoreErrorKind::Unavailable => CodexCredentialAdminError::StoreUnavailable,
-        StoreErrorKind::InvalidState | StoreErrorKind::InvalidData => {
-            CodexCredentialAdminError::NotFound
-        }
-        _ => CodexCredentialAdminError::StoreUnavailable,
-    }
 }
 
 const fn map_refresh_failure(error: RefreshFailure) -> CodexCredentialAdminError {

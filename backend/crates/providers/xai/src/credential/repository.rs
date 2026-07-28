@@ -463,21 +463,6 @@ impl GrokCredentialRepository {
         loaded_from_core(loaded)
     }
 
-    pub(crate) async fn load_managed(
-        &self,
-        account_id: &ProviderAccountId,
-        revision: CredentialRevision,
-    ) -> Result<LoadedCredential, GrokCredentialRepositoryError> {
-        let loaded = self
-            .store
-            .load_credential(account_id, revision)
-            .await
-            .map_err(map_rotation_load_error)?;
-        ensure_xai(&loaded.account)?;
-        decode_secret(&loaded.credential)?;
-        Ok(loaded)
-    }
-
     /// 读取 xAI Provider 的全部账号；credential 逐行按 revision fence 加载。
     pub(crate) async fn list_loaded_for_provider(
         &self,
@@ -528,8 +513,12 @@ impl GrokCredentialRepository {
         &self,
         account_id: &ProviderAccountId,
     ) -> Result<LoadedGrokCredential, GrokCredentialRepositoryError> {
-        let account = self.ensure_xai_account(account_id).await?;
-        self.load(account_id, account.revision()).await
+        let loaded = self
+            .store
+            .load_current_credential(account_id)
+            .await
+            .map_err(map_store_error)?;
+        loaded_from_core(loaded)
     }
 
     pub(crate) async fn replace_quota(

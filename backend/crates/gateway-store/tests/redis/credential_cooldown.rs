@@ -73,6 +73,13 @@ impl ProviderAccountStore for CooldownTestAccountStore {
         unreachable!("cooldown tests do not load credentials")
     }
 
+    async fn load_current_credential(
+        &self,
+        _account: &ProviderAccountId,
+    ) -> Result<LoadedCredential, CoreStoreError> {
+        unreachable!("cooldown tests do not load credentials")
+    }
+
     async fn compare_and_swap_credential(
         &self,
         _update: CredentialCasUpdate,

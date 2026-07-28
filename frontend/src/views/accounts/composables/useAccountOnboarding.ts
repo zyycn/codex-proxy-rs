@@ -72,7 +72,6 @@ export function useAccountOnboarding(options: {
           ...(account
             ? {
                 accountId: account.id,
-                expectedCredentialRevision: account.credentialRevision,
               }
             : {}),
         })

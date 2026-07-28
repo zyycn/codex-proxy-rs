@@ -2192,14 +2192,22 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         account: &CoreProviderAccountId,
         expected_revision: CoreCredentialRevision,
     ) -> Result<LoadedCredential, CoreStoreError> {
+        let loaded = self.load_current_credential(account).await?;
+        if loaded.account.revision().get() != expected_revision.get() {
+            return Err(CoreStoreError::new(CoreStoreErrorKind::Conflict));
+        }
+        Ok(loaded)
+    }
+
+    async fn load_current_credential(
+        &self,
+        account: &CoreProviderAccountId,
+    ) -> Result<LoadedCredential, CoreStoreError> {
         let record = self
             .load_provider_account(account.as_str())
             .await
             .map_err(core_store_error)?
             .ok_or_else(|| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
-        if record.summary.credential_revision.get() != expected_revision.get() {
-            return Err(CoreStoreError::new(CoreStoreErrorKind::Conflict));
-        }
         Ok(LoadedCredential {
             account: core_account_from_summary(record.summary)?,
             credential: PlaintextCredential::new(record.provider_credentials_json.fields().clone()),

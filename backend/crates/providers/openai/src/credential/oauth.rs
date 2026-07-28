@@ -13,7 +13,7 @@ use gateway_admin::model::{
     },
 };
 use gateway_core::engine::credential::{
-    CredentialRevision, NewProviderAccount, ProviderAccountId, ProviderAccountStore,
+    NewProviderAccount, ProviderAccountId, ProviderAccountStore,
 };
 use gateway_core::provider_ports::ProviderRuntimePolicyPort;
 use secrecy::{ExposeSecret, SecretString};
@@ -45,24 +45,6 @@ const MAX_TEXT_BYTES: usize = 512;
 #[derive(Clone, Debug)]
 pub struct StartCodexOAuthAuthorization {
     pub mutation: PendingAuthorizationMutation,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CodexOAuthReauthorizationTarget {
-    account_id: ProviderAccountId,
-    credential_revision: CredentialRevision,
-}
-
-impl CodexOAuthReauthorizationTarget {
-    #[must_use]
-    pub const fn account_id(&self) -> &ProviderAccountId {
-        &self.account_id
-    }
-
-    #[must_use]
-    pub const fn credential_revision(&self) -> CredentialRevision {
-        self.credential_revision
-    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -153,7 +135,7 @@ pub struct CodexPendingAuthorization {
     state: SecretString,
     nonce: SecretString,
     code_verifier: SecretString,
-    reauthorization: Option<CodexOAuthReauthorizationTarget>,
+    reauthorization: Option<ProviderAccountId>,
     mutation: PendingAuthorizationMutation,
 }
 
@@ -167,7 +149,6 @@ pub struct StoredCodexPendingAuthorization {
     pub nonce: SecretString,
     pub code_verifier: SecretString,
     pub reauthorization_account_id: Option<String>,
-    pub reauthorization_credential_revision: Option<u64>,
     pub mutation: PendingAuthorizationMutation,
 }
 
@@ -175,19 +156,11 @@ impl CodexPendingAuthorization {
     pub fn from_stored(
         input: StoredCodexPendingAuthorization,
     ) -> Result<Self, CodexOAuthPendingStoreError> {
-        let reauthorization = match (
-            input.reauthorization_account_id,
-            input.reauthorization_credential_revision,
-        ) {
-            (None, None) => None,
-            (Some(account_id), Some(revision)) => Some(CodexOAuthReauthorizationTarget {
-                account_id: ProviderAccountId::new(account_id)
-                    .map_err(|_| CodexOAuthPendingStoreError::InvalidValue)?,
-                credential_revision: CredentialRevision::new(revision)
-                    .map_err(|_| CodexOAuthPendingStoreError::InvalidValue)?,
-            }),
-            _ => return Err(CodexOAuthPendingStoreError::InvalidValue),
-        };
+        let reauthorization = input
+            .reauthorization_account_id
+            .map(ProviderAccountId::new)
+            .transpose()
+            .map_err(|_| CodexOAuthPendingStoreError::InvalidValue)?;
         let pending = Self {
             flow_id: input.flow_id,
             owner_ref: input.owner_ref,
@@ -256,7 +229,7 @@ impl CodexPendingAuthorization {
     }
 
     #[must_use]
-    pub const fn reauthorization(&self) -> Option<&CodexOAuthReauthorizationTarget> {
+    pub const fn reauthorization(&self) -> Option<&ProviderAccountId> {
         self.reauthorization.as_ref()
     }
 
@@ -455,15 +428,10 @@ impl CodexOAuthAdmin for CodexOAuthAdminService {
     ) -> Result<CodexOAuthAuthorizationStarted, CodexOAuthAdminError> {
         let (name, reauthorization) = match command.mutation.target() {
             AuthorizationMutationTarget::Create { name } => (name.clone(), None),
-            AuthorizationMutationTarget::Reauthorize {
-                account_id,
-                expected_credential_revision,
-            } => {
-                let expected_revision = CredentialRevision::new(expected_credential_revision.get())
-                    .map_err(|_| CodexOAuthAdminError::InvalidInput)?;
+            AuthorizationMutationTarget::Reauthorize { account_id } => {
                 let current = self
                     .store
-                    .load_credential(account_id, expected_revision)
+                    .load_current_credential(account_id)
                     .await
                     .map_err(map_store_error)?;
                 if current.account.provider().as_str() != "openai"
@@ -471,13 +439,7 @@ impl CodexOAuthAdmin for CodexOAuthAdminService {
                 {
                     return Err(CodexOAuthAdminError::NotFound);
                 }
-                (
-                    current.account.name().to_owned(),
-                    Some(CodexOAuthReauthorizationTarget {
-                        account_id: account_id.clone(),
-                        credential_revision: expected_revision,
-                    }),
-                )
+                (current.account.name().to_owned(), Some(account_id.clone()))
             }
         };
         self.start_pending(command.mutation, name, reauthorization)
@@ -531,7 +493,7 @@ impl CodexOAuthAdminService {
         let current = if let Some(target) = pending.reauthorization() {
             let current = self
                 .store
-                .load_credential(target.account_id(), target.credential_revision())
+                .load_current_credential(target)
                 .await
                 .map_err(map_store_error)?;
             Some(current)
@@ -606,7 +568,7 @@ impl CodexOAuthAdminService {
         &self,
         mutation: PendingAuthorizationMutation,
         name: String,
-        reauthorization: Option<CodexOAuthReauthorizationTarget>,
+        reauthorization: Option<ProviderAccountId>,
     ) -> Result<CodexOAuthAuthorizationStarted, CodexOAuthAdminError> {
         if !valid_text(&name) {
             return Err(CodexOAuthAdminError::InvalidInput);
@@ -625,11 +587,7 @@ impl CodexOAuthAdminService {
             state: SecretString::from(random_secret()?),
             nonce: SecretString::from(random_secret()?),
             code_verifier: SecretString::from(random_secret()?),
-            reauthorization_account_id: reauthorization
-                .as_ref()
-                .map(|target| target.account_id().to_string()),
-            reauthorization_credential_revision: reauthorization
-                .map(|target| target.credential_revision().get()),
+            reauthorization_account_id: reauthorization.as_ref().map(ToString::to_string),
             mutation,
         })
         .map_err(map_pending_error)?;
@@ -843,15 +801,8 @@ fn pending_mutation_matches(pending: &CodexPendingAuthorization) -> bool {
     }
     match (pending.mutation.target(), pending.reauthorization.as_ref()) {
         (AuthorizationMutationTarget::Create { name }, None) => name == &pending.name,
-        (
-            AuthorizationMutationTarget::Reauthorize {
-                account_id,
-                expected_credential_revision,
-            },
-            Some(target),
-        ) => {
-            account_id == target.account_id()
-                && expected_credential_revision.get() == target.credential_revision().get()
+        (AuthorizationMutationTarget::Reauthorize { account_id }, Some(target)) => {
+            account_id == target
         }
         _ => false,
     }

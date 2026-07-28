@@ -171,13 +171,6 @@ pub struct CredentialImportCommit {
     pub prepared: PreparedCredentialImport,
 }
 
-/// 可选的重新授权目标。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReauthorizationTarget {
-    pub account_id: ProviderAccountId,
-    pub credential_revision: Revision,
-}
-
 /// OAuth pending owner 的中立身份；不编码具体 Provider 的 Redis key 或 JSON。
 #[derive(Clone, PartialEq, Eq)]
 pub enum AuthorizationOwner {
@@ -238,15 +231,13 @@ impl fmt::Debug for AuthorizationOwnerBinding {
 }
 
 /// OAuth 完成时应创建新账号还是 CAS 更新既有 credential。
+///
+/// 重新授权只绑定稳定的账号身份：credential revision 由服务端在临近写入时读取，
+/// 长流程期间的后台刷新不得让恢复操作失效。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthorizationMutationTarget {
-    Create {
-        name: String,
-    },
-    Reauthorize {
-        account_id: ProviderAccountId,
-        expected_credential_revision: Revision,
-    },
+    Create { name: String },
+    Reauthorize { account_id: ProviderAccountId },
 }
 
 /// 必须完整进入 Provider opaque pending payload、并在 complete 后原样恢复的事务信封。
@@ -292,7 +283,7 @@ impl PendingAuthorizationMutation {
 pub struct StartAuthorization {
     pub context: MutationContext,
     pub name: String,
-    pub reauthorization: Option<ReauthorizationTarget>,
+    pub reauthorization: Option<ProviderAccountId>,
 }
 
 /// OAuth 流程启动结果。
@@ -480,14 +471,12 @@ pub struct CredentialDeletionResult {
 /// Provider-owned token 轮换命令。
 pub struct RotateCredential {
     pub mutation: CredentialMutation,
-    pub expected_credential_revision: Revision,
     pub provider_material: ProviderDocument,
 }
 
 /// Provider 校验手工轮换材料时所需的非事务输入。
 pub struct PrepareCredentialRotation {
     pub account: AccountRecord,
-    pub expected_credential_revision: Revision,
     pub provider_material: ProviderDocument,
 }
 
@@ -496,10 +485,6 @@ impl fmt::Debug for PrepareCredentialRotation {
         formatter
             .debug_struct("PrepareCredentialRotation")
             .field("account", &self.account)
-            .field(
-                "expected_credential_revision",
-                &self.expected_credential_revision,
-            )
             .field("provider_material", &self.provider_material)
             .finish()
     }
@@ -572,10 +557,6 @@ impl fmt::Debug for RotateCredential {
         formatter
             .debug_struct("RotateCredential")
             .field("mutation", &self.mutation)
-            .field(
-                "expected_credential_revision",
-                &self.expected_credential_revision,
-            )
             .field("provider_material", &self.provider_material)
             .finish()
     }

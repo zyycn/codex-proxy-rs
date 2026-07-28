@@ -105,8 +105,6 @@ export interface Account {
   tokenRefreshing: boolean
   availability: string
   enabled: boolean
-  credentialRevision: number
-  stateRevision: number | null
   accessTokenExpiresAt: string | null
   accessTokenExpiresAtDisplay: string | null
   refreshTokenExpiresAt: string | null
@@ -160,7 +158,6 @@ export interface AccountImportResponse {
 
 export interface AccountMutationResponse {
   accountId: string
-  credentialRevision?: number
 }
 
 export interface AccountDeletionResponse {

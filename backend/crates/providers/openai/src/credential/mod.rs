@@ -48,9 +48,8 @@ pub use identity::{
 pub use oauth::{
     CodexOAuthAdmin, CodexOAuthAdminError, CodexOAuthAdminService, CodexOAuthAuthorizationStarted,
     CodexOAuthPendingClaimOutcome, CodexOAuthPendingStore, CodexOAuthPendingStoreError,
-    CodexOAuthReauthorizationTarget, CodexPendingAuthorization, CompleteCodexOAuthAuthorization,
-    CompletedCodexOAuthAuthorization, CompletedCodexOAuthCredential, StartCodexOAuthAuthorization,
-    StoredCodexPendingAuthorization,
+    CodexPendingAuthorization, CompleteCodexOAuthAuthorization, CompletedCodexOAuthAuthorization,
+    CompletedCodexOAuthCredential, StartCodexOAuthAuthorization, StoredCodexPendingAuthorization,
 };
 pub use quota::{
     CodexAccountQuotaSnapshot, CodexCredentialQuotaError, CodexCredentialQuotaService,

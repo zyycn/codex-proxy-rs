@@ -16,7 +16,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::{Stream, StreamExt as _};
 use gateway_admin::model::{
-    AdminError as AdminServiceError, AdminErrorKind, PageSize, Revision,
+    AdminError as AdminServiceError, AdminErrorKind, PageSize,
     accounts::{
         AccountConnectionTestEvent as DomainConnectionTestEvent, AccountCost, AccountListQuery,
         AccountModelUsage, AccountSort, AccountSortField, AccountStatus as DomainAccountStatus,
@@ -26,8 +26,8 @@ use gateway_admin::model::{
         AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountRefreshResult,
         AuthorizationStarted, CompleteAuthorization, CredentialDeletion, CredentialDeletionResult,
         CredentialImportResult, CredentialMutation, CredentialMutationResult, ImportCredentials,
-        ProviderDocument, ProviderModels, ProviderQuota, ProviderQuotaWindow,
-        ReauthorizationTarget, RotateCredential, StartAuthorization,
+        ProviderDocument, ProviderModels, ProviderQuota, ProviderQuotaWindow, RotateCredential,
+        StartAuthorization,
     },
 };
 use gateway_core::{
@@ -196,8 +196,6 @@ pub struct AccountView {
     pub token_refreshing: bool,
     pub availability: String,
     pub enabled: bool,
-    pub credential_revision: u64,
-    pub state_revision: Option<u64>,
     pub access_token_expires_at: Option<String>,
     pub access_token_expires_at_display: Option<String>,
     pub refresh_token_expires_at: Option<String>,
@@ -604,24 +602,16 @@ pub struct StartAccountAuthorizationRequest {
     pub provider: String,
     pub name: String,
     pub account_id: Option<String>,
-    pub expected_credential_revision: Option<u64>,
 }
 
 impl StartAccountAuthorizationRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
         AccountProvider::parse(&self.provider)?;
         require_text(&self.name, MAX_NAME_BYTES, "name")?;
-        match (
-            self.account_id.as_deref(),
-            self.expected_credential_revision,
-        ) {
-            (None, None) => Ok(()),
-            (Some(account_id), Some(credential_revision)) => {
-                require_account_id(account_id, "accountId")?;
-                require_positive(credential_revision, "expectedCredentialRevision")
-            }
-            _ => Err(WireValidationError::new("reauthorization")),
+        if let Some(account_id) = self.account_id.as_deref() {
+            require_account_id(account_id, "accountId")?;
         }
+        Ok(())
     }
 
     fn into_command(
@@ -630,15 +620,11 @@ impl StartAccountAuthorizationRequest {
     ) -> Result<(AccountProvider, StartAuthorization), WireValidationError> {
         self.validate()?;
         let provider = AccountProvider::parse(&self.provider)?;
-        let reauthorization = match (self.account_id, self.expected_credential_revision) {
-            (None, None) => None,
-            (Some(account_id), Some(credential_revision)) => Some(ReauthorizationTarget {
-                account_id: ProviderAccountId::new(account_id)
-                    .map_err(|_| WireValidationError::new("accountId"))?,
-                credential_revision: revision(credential_revision, "expectedCredentialRevision")?,
-            }),
-            _ => return Err(WireValidationError::new("reauthorization")),
-        };
+        let reauthorization = self
+            .account_id
+            .map(ProviderAccountId::new)
+            .transpose()
+            .map_err(|_| WireValidationError::new("accountId"))?;
         Ok((
             provider,
             StartAuthorization {
@@ -771,7 +757,6 @@ impl AccountDeletionRequest {
 pub struct RotateAccountRequest {
     pub provider: String,
     pub account_id: String,
-    pub expected_credential_revision: u64,
     pub access_token: String,
     pub refresh_token: Option<String>,
 }
@@ -782,10 +767,6 @@ impl RotateAccountRequest {
             return Err(WireValidationError::new("provider"));
         }
         require_account_id(&self.account_id, "accountId")?;
-        require_positive(
-            self.expected_credential_revision,
-            "expectedCredentialRevision",
-        )?;
         validate_oauth_material(&self.access_token, self.refresh_token.as_deref())
     }
 
@@ -806,10 +787,6 @@ impl RotateAccountRequest {
                 account_id: ProviderAccountId::new(self.account_id)
                     .map_err(|_| WireValidationError::new("accountId"))?,
             },
-            expected_credential_revision: revision(
-                self.expected_credential_revision,
-                "expectedCredentialRevision",
-            )?,
             provider_material: ProviderDocument::new(OpaqueProviderData::new(material)),
         })
     }
@@ -858,15 +835,12 @@ impl From<AuthorizationStarted> for AccountAuthorizationData {
 #[serde(rename_all = "camelCase")]
 pub struct AccountMutationData {
     pub account_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub credential_revision: Option<u64>,
 }
 
 impl From<CredentialMutationResult> for AccountMutationData {
     fn from(result: CredentialMutationResult) -> Self {
         Self {
             account_id: result.account_id.to_string(),
-            credential_revision: result.credential_revision.map(Revision::get),
         }
     }
 }
@@ -1409,8 +1383,6 @@ fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
         token_refreshing: false,
         availability: account.availability.as_str().to_owned(),
         enabled: account.enabled,
-        credential_revision: account.credential_revision.get(),
-        state_revision: None,
         access_token_expires_at: expires_at,
         access_token_expires_at_display: account
             .access_token_expires_at
@@ -1661,10 +1633,6 @@ fn empty_account_usage() -> AccountUsageView {
     }
 }
 
-fn revision(value: u64, field: &'static str) -> Result<Revision, WireValidationError> {
-    Revision::new(value).map_err(|_| WireValidationError::new(field))
-}
-
 fn provider_document(
     value: Value,
     field: &'static str,
@@ -1693,13 +1661,6 @@ fn require_text(
     field: &'static str,
 ) -> Result<(), WireValidationError> {
     if value.trim().is_empty() || value.len() > max_bytes || value.chars().any(char::is_control) {
-        return Err(WireValidationError::new(field));
-    }
-    Ok(())
-}
-
-fn require_positive(value: u64, field: &'static str) -> Result<(), WireValidationError> {
-    if value == 0 || i64::try_from(value).is_err() {
         return Err(WireValidationError::new(field));
     }
     Ok(())

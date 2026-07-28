@@ -509,7 +509,6 @@ async fn xai_admin_provider_rejects_unprepared_mutations_before_store_commit() {
     let rotation_error = admin
         .prepare_rotation(PrepareCredentialRotation {
             account: record.clone(),
-            expected_credential_revision: record.credential_revision,
             provider_material: ProviderDocument::new(OpaqueProviderData::new(Map::new())),
         })
         .await
@@ -543,7 +542,7 @@ fn pending_payload(flow_id: &str, owner_ref: &str) -> OpaqueProviderData {
         .expose()
         .to_owned();
     let value = json!({
-        "schema_version": 1,
+        "schema_version": 3,
         "flow_id": flow_id,
         "owner_ref": owner_ref,
         "expires_at": (Utc::now() + chrono::Duration::minutes(30)).to_rfc3339(),

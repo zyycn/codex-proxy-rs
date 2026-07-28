@@ -61,7 +61,7 @@ use crate::transport::profile::{
 };
 
 const PROVIDER_NAME: &str = "openai";
-const PENDING_DOCUMENT_SCHEMA_VERSION: u64 = 2;
+const PENDING_DOCUMENT_SCHEMA_VERSION: u64 = 3;
 const MAX_ACCESS_TOKEN_BYTES: usize = 16 * 1024;
 const MAX_REFRESH_TOKEN_BYTES: usize = 64 * 1024;
 
@@ -146,7 +146,7 @@ impl OpenAiAdminProvider {
         }
         let current = self
             .accounts
-            .load_credential(existing.id(), existing.revision())
+            .load_current_credential(existing.id())
             .await
             .map_err(map_store_error)?;
         incoming.credential = CodexCredentialCodec::preserve_installation_id(
@@ -356,16 +356,11 @@ impl ProviderAdmin for OpenAiAdminProvider {
         command: PrepareCredentialRotation,
     ) -> Result<PreparedCredentialRotation, ProviderAdminError> {
         validate_account_record(&command.account, &self.provider_kind)?;
-        if command.account.credential_revision != command.expected_credential_revision {
-            return Err(provider_admin_error(ProviderAdminErrorKind::Conflict));
-        }
         let account_id = ProviderAccountId::new(command.account.id.clone())
-            .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
-        let expected_revision = CredentialRevision::new(command.expected_credential_revision.get())
             .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
         let current = self
             .accounts
-            .load_credential(&account_id, expected_revision)
+            .load_current_credential(&account_id)
             .await
             .map_err(map_store_error)?;
         if !account_matches_record(&current.account, &command.account) {
@@ -425,11 +420,17 @@ impl ProviderAdmin for OpenAiAdminProvider {
         validate_account_record(&command.account, &self.provider_kind)?;
         let account_id = ProviderAccountId::new(command.account.id.clone())
             .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
-        let revision = CredentialRevision::new(command.account.credential_revision.get())
-            .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
+        let current = self
+            .accounts
+            .load_current_credential(&account_id)
+            .await
+            .map_err(map_store_error)?;
+        if !account_matches_record(&current.account, &command.account) {
+            return Err(provider_admin_error(ProviderAdminErrorKind::Conflict));
+        }
         let prepared = self
             .credentials
-            .manual_refresh(account_id, revision)
+            .manual_refresh(current)
             .await
             .map_err(map_credential_admin_error)?;
         prepared_rotation(prepared, command.account.provider_kind)
@@ -717,20 +718,9 @@ fn dashboard_desktop_release(
 fn account_matches_record(account: &ProviderAccount, record: &AccountRecord) -> bool {
     account.id().as_str() == record.id
         && account.provider() == &record.provider_kind
-        && account.revision().get() == record.credential_revision.get()
-        && account.name() == record.name
-        && account.email() == record.email.as_deref()
         && account.upstream_user_id() == record.upstream_user_id
         && account.upstream_account_id() == record.upstream_account_id.as_deref()
-        && account.plan_type() == record.plan_type.as_deref()
         && account.authentication_kind() == record.authentication_kind
-        && account.enabled() == record.enabled
-        && account.availability() == record.availability
-        && account.cooldown_until().map(DateTime::<Utc>::from) == record.cooldown_until
-        && account.access_token_expires_at().map(DateTime::<Utc>::from)
-            == record.access_token_expires_at
-        && account.next_refresh_at().map(DateTime::<Utc>::from) == record.next_refresh_at
-        && account.has_refresh_token() == record.has_refresh_token
 }
 
 fn empty_quota() -> ProviderQuota {
@@ -1002,7 +992,6 @@ struct PendingDocument {
     nonce: String,
     code_verifier: String,
     reauthorization_account_id: Option<String>,
-    reauthorization_credential_revision: Option<u64>,
     mutation: PendingMutationDocument,
 }
 
@@ -1019,13 +1008,8 @@ struct PendingMutationDocument {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum PendingTargetDocument {
-    Create {
-        name: String,
-    },
-    Reauthorize {
-        account_id: String,
-        expected_credential_revision: u64,
-    },
+    Create { name: String },
+    Reauthorize { account_id: String },
 }
 
 #[derive(Deserialize)]
@@ -1069,15 +1053,9 @@ fn encode_pending(pending: &CodexPendingAuthorization) -> Map<String, Value> {
     );
     document.insert(
         "reauthorization_account_id".to_owned(),
-        pending.reauthorization().map_or(Value::Null, |target| {
-            Value::String(target.account_id().to_string())
-        }),
-    );
-    document.insert(
-        "reauthorization_credential_revision".to_owned(),
-        pending.reauthorization().map_or(Value::Null, |target| {
-            Value::Number(Number::from(target.credential_revision().get()))
-        }),
+        pending
+            .reauthorization()
+            .map_or(Value::Null, |target| Value::String(target.to_string())),
     );
     document.insert(
         "mutation".to_owned(),
@@ -1118,18 +1096,11 @@ fn encode_target(target: &AuthorizationMutationTarget) -> Map<String, Value> {
             document.insert("kind".to_owned(), Value::String("create".to_owned()));
             document.insert("name".to_owned(), Value::String(name.clone()));
         }
-        AuthorizationMutationTarget::Reauthorize {
-            account_id,
-            expected_credential_revision,
-        } => {
+        AuthorizationMutationTarget::Reauthorize { account_id } => {
             document.insert("kind".to_owned(), Value::String("reauthorize".to_owned()));
             document.insert(
                 "account_id".to_owned(),
                 Value::String(account_id.to_string()),
-            );
-            document.insert(
-                "expected_credential_revision".to_owned(),
-                Value::Number(Number::from(expected_credential_revision.get())),
             );
         }
     }
@@ -1171,7 +1142,6 @@ fn decode_pending(
         nonce: SecretString::from(document.nonce),
         code_verifier: SecretString::from(document.code_verifier),
         reauthorization_account_id: document.reauthorization_account_id,
-        reauthorization_credential_revision: document.reauthorization_credential_revision,
         mutation: decode_mutation(document.mutation)?,
     })
 }
@@ -1186,15 +1156,12 @@ fn decode_mutation(
         .map_err(|_| CodexOAuthPendingStoreError::InvalidValue)?;
     let target = match document.target {
         PendingTargetDocument::Create { name } => AuthorizationMutationTarget::Create { name },
-        PendingTargetDocument::Reauthorize {
-            account_id,
-            expected_credential_revision,
-        } => AuthorizationMutationTarget::Reauthorize {
-            account_id: ProviderAccountId::new(account_id)
-                .map_err(|_| CodexOAuthPendingStoreError::InvalidValue)?,
-            expected_credential_revision: Revision::new(expected_credential_revision)
-                .map_err(|_| CodexOAuthPendingStoreError::InvalidValue)?,
-        },
+        PendingTargetDocument::Reauthorize { account_id } => {
+            AuthorizationMutationTarget::Reauthorize {
+                account_id: ProviderAccountId::new(account_id)
+                    .map_err(|_| CodexOAuthPendingStoreError::InvalidValue)?,
+            }
+        }
     };
     let actor = match document.owner {
         PendingOwnerDocument::AdminSession { admin_user_id } => {
@@ -1297,10 +1264,10 @@ fn map_credential_admin_error(error: CodexCredentialAdminError) -> ProviderAdmin
         | Error::AccountBanned
         | Error::IdentityRejected => ProviderAdminErrorKind::Invalid,
         Error::NotFound => ProviderAdminErrorKind::NotFound,
-        Error::RevisionConflict | Error::RefreshLeaseUnavailable | Error::RefreshAmbiguous => {
+        Error::RefreshLeaseUnavailable | Error::RefreshAmbiguous => {
             ProviderAdminErrorKind::Conflict
         }
-        Error::StoreUnavailable | Error::RefreshUnavailable | Error::IdentityUnavailable => {
+        Error::RefreshUnavailable | Error::IdentityUnavailable => {
             ProviderAdminErrorKind::Unavailable
         }
     })
@@ -1312,8 +1279,6 @@ const fn credential_admin_error_code(error: CodexCredentialAdminError) -> &'stat
         CodexCredentialAdminError::IdentityMismatch => "identity_mismatch",
         CodexCredentialAdminError::InvalidCredential => "invalid_credential",
         CodexCredentialAdminError::NotFound => "not_found",
-        CodexCredentialAdminError::RevisionConflict => "revision_conflict",
-        CodexCredentialAdminError::StoreUnavailable => "store_unavailable",
         CodexCredentialAdminError::MissingRefreshToken => "missing_refresh_token",
         CodexCredentialAdminError::RefreshLeaseUnavailable => "refresh_lease_unavailable",
         CodexCredentialAdminError::RefreshRejected => "refresh_rejected",

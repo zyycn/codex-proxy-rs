@@ -346,7 +346,23 @@ async fn openai_admin_provider_persists_the_full_pending_envelope_and_binds_owne
             .get("mutation")
             .and_then(Value::as_object)
             .expect("pending mutation");
+        assert!(
+            payload
+                .expose_to_provider()
+                .get("reauthorization_credential_revision")
+                .is_none()
+        );
+        assert_eq!(
+            mutation.get("schema_version").and_then(Value::as_u64),
+            Some(3)
+        );
         assert!(mutation.get("expected_config_revision").is_none());
+        assert!(
+            mutation
+                .get("target")
+                .and_then(Value::as_object)
+                .is_some_and(|target| target.get("expected_credential_revision").is_none())
+        );
         assert_eq!(
             mutation.get("started_request_id").and_then(Value::as_str),
             Some("request-start")
@@ -368,6 +384,81 @@ async fn openai_admin_provider_persists_the_full_pending_envelope_and_binds_owne
         .expect_err("wrong owner");
     assert_eq!(error.kind(), ProviderAdminErrorKind::NotFound);
     assert_eq!(pending.values.lock().expect("OAuth pending").len(), 1);
+}
+
+#[tokio::test]
+async fn openai_reauthorization_pending_payload_contains_only_stable_account_identity() {
+    let accounts = Arc::new(MemoryAccountStore::default());
+    accounts
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_pending_reauth".to_owned(),
+            name: "pending reauthorization".to_owned(),
+            secret: secret("pending-reauth-access"),
+            verified_account: profile("chatgpt-pending-reauth"),
+            next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await;
+    let pending = Arc::new(TestOAuthPending::default());
+    let config = valid_config();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(accounts, Arc::clone(&pending)),
+    )
+    .await
+    .expect("OpenAI bundle");
+    let context = MutationContext {
+        actor: MutationActor::AdminApiKey,
+        request_id: "request-pending-reauth".to_owned(),
+    };
+
+    bundle
+        .admin_provider()
+        .start_authorization(PendingAuthorizationMutation::new(
+            ProviderKind::new("openai").expect("provider"),
+            AuthorizationMutationTarget::Reauthorize {
+                account_id: ProviderAccountId::new("acct_pending_reauth").expect("account id"),
+            },
+            AuthorizationOwnerBinding::from_context(&context),
+        ))
+        .await
+        .expect("start reauthorization");
+
+    let values = pending.values.lock().expect("OAuth pending");
+    let (_, payload, _, _) = values.values().next().expect("stored pending");
+    let document = payload.expose_to_provider();
+    let mutation = document
+        .get("mutation")
+        .and_then(Value::as_object)
+        .expect("pending mutation");
+    let target = mutation
+        .get("target")
+        .and_then(Value::as_object)
+        .expect("pending target");
+    assert_eq!(
+        mutation.get("schema_version").and_then(Value::as_u64),
+        Some(3)
+    );
+    assert_eq!(
+        document
+            .get("reauthorization_account_id")
+            .and_then(Value::as_str),
+        Some("acct_pending_reauth")
+    );
+    assert!(
+        document
+            .get("reauthorization_credential_revision")
+            .is_none()
+    );
+    assert_eq!(
+        target.get("kind").and_then(Value::as_str),
+        Some("reauthorize")
+    );
+    assert_eq!(
+        target.get("account_id").and_then(Value::as_str),
+        Some("acct_pending_reauth")
+    );
+    assert!(target.get("expected_credential_revision").is_none());
 }
 
 #[tokio::test]
@@ -568,10 +659,20 @@ async fn openai_admin_provider_rejects_unprepared_mutations_before_store_commit(
         .await
         .expect_err("invalid import");
     assert_eq!(import_error.kind(), ProviderAdminErrorKind::Invalid);
+    let mut stale_record = record.clone();
+    stale_record.name = "stale name".to_owned();
+    stale_record.email = None;
+    stale_record.plan_type = None;
+    stale_record.credential_revision = Revision::new(99).expect("stale revision");
+    stale_record.has_refresh_token = false;
+    stale_record.access_token_expires_at = None;
+    stale_record.next_refresh_at = None;
+    stale_record.enabled = false;
+    stale_record.availability = AdminAccountAvailability::Banned;
+    stale_record.cooldown_until = Some(Utc::now() + chrono::Duration::minutes(5));
     let rotation_error = admin
         .prepare_rotation(PrepareCredentialRotation {
-            account: record.clone(),
-            expected_credential_revision: record.credential_revision,
+            account: stale_record,
             provider_material: ProviderDocument::new(OpaqueProviderData::new(Map::new())),
         })
         .await
