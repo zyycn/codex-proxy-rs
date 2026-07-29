@@ -3,7 +3,8 @@ use std::{sync::Arc, time::Instant};
 use futures::{StreamExt, TryStreamExt};
 use gateway_protocol::openai::{
     X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER, X_OPENAI_MEMGEN_REQUEST_HEADER,
-    events::retry_after_seconds_from_body,
+    events::{self, retry_after_seconds_from_body},
+    sse::{SseEventDecoder, SseFrame},
 };
 use reqwest::{
     Client, Response as ReqwestResponse,
@@ -130,13 +131,14 @@ impl CodexBackendClient {
             });
         }
 
+        let rate_limit_header_updates = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         Ok(CodexBackendStreamingResponse {
-            body: http_sse_stream(response),
+            body: http_sse_stream(response, Arc::clone(&rate_limit_header_updates)),
             transport: CodexBackendTransport::HttpSse,
             turn_state,
             set_cookie_headers,
             rate_limit_headers,
-            rate_limit_header_updates: None,
+            rate_limit_header_updates: Some(rate_limit_header_updates),
             turn_state_update: None,
             websocket_pool_decision: None,
             diagnostics,
@@ -594,20 +596,74 @@ fn websocket_connection_profile(headers: &HeaderMap) -> String {
         .join("\0")
 }
 
-fn http_sse_stream(response: ReqwestResponse) -> CodexBackendSseStream {
+fn http_sse_stream(
+    response: ReqwestResponse,
+    rate_limit_updates: CodexRateLimitHeaderUpdates,
+) -> CodexBackendSseStream {
     let stream: CodexBackendSseStream =
         Box::pin(response.bytes_stream().map_err(CodexClientError::Http));
-    Box::pin(futures::stream::unfold(Some(stream), |stream| async move {
-        let mut stream = stream?;
-        match tokio::time::timeout(UPSTREAM_STREAM_IDLE_TIMEOUT, stream.next()).await {
-            Ok(Some(chunk)) => Some((chunk, Some(stream))),
-            Ok(None) => None,
-            Err(_) => Some((
-                Err(CodexClientError::StreamIdleTimeout {
-                    timeout: UPSTREAM_STREAM_IDLE_TIMEOUT,
-                }),
-                None,
-            )),
+    let stream: CodexBackendSseStream =
+        Box::pin(futures::stream::unfold(Some(stream), |stream| async move {
+            let mut stream = stream?;
+            match tokio::time::timeout(UPSTREAM_STREAM_IDLE_TIMEOUT, stream.next()).await {
+                Ok(Some(chunk)) => Some((chunk, Some(stream))),
+                Ok(None) => None,
+                Err(_) => Some((
+                    Err(CodexClientError::StreamIdleTimeout {
+                        timeout: UPSTREAM_STREAM_IDLE_TIMEOUT,
+                    }),
+                    None,
+                )),
+            }
+        }));
+    observe_http_sse_rate_limits(stream, rate_limit_updates)
+}
+
+fn observe_http_sse_rate_limits(
+    stream: CodexBackendSseStream,
+    updates: CodexRateLimitHeaderUpdates,
+) -> CodexBackendSseStream {
+    Box::pin(futures::stream::unfold(
+        (stream, SseEventDecoder::default(), updates),
+        |(mut stream, mut decoder, updates)| async move {
+            match stream.next().await {
+                Some(chunk) => {
+                    if let Ok(bytes) = &chunk {
+                        append_http_sse_rate_limit_updates(decoder.push_frames(bytes), &updates)
+                            .await;
+                    }
+                    Some((chunk, (stream, decoder, updates)))
+                }
+                None => {
+                    append_http_sse_rate_limit_updates(decoder.finish_frames(), &updates).await;
+                    None
+                }
+            }
+        },
+    ))
+}
+
+async fn append_http_sse_rate_limit_updates(
+    frames: Vec<SseFrame>,
+    updates: &CodexRateLimitHeaderUpdates,
+) {
+    let mut headers = Vec::new();
+    for frame in frames {
+        for event in frame.events() {
+            if event
+                .event
+                .as_deref()
+                .is_some_and(|event| event != "codex.rate_limits")
+            {
+                continue;
+            }
+            let Some(rate_limits) = events::parse_rate_limits_event_raw(&event.data) else {
+                continue;
+            };
+            headers.extend(events::rate_limits_to_header_pairs(&rate_limits));
         }
-    }))
+    }
+    if !headers.is_empty() {
+        updates.lock().await.extend(headers);
+    }
 }

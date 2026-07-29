@@ -256,8 +256,6 @@ impl CodexCredentialRefreshService {
                         | AccountAvailability::Banned
                         | AccountAvailability::Invalid
                 )
-                && (account.availability() != AccountAvailability::Cooldown
-                    || account.cooldown_until().is_some_and(|until| until <= now))
                 && refresh_due_at(account, now).is_some()
         });
         accounts.sort_by_key(|account| (refresh_due_at(account, now), account.id().clone()));

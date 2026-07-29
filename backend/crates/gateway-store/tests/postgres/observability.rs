@@ -122,16 +122,27 @@ async fn dashboard_account_metrics_should_partition_available_and_unavailable_ac
            id, provider_kind, name, upstream_user_id, authentication_kind,
            provider_credentials_json, credential_revision, has_refresh_token,
            access_token_expires_at, enabled, availability,
+           availability_reason, cooldown_until,
            availability_observed_at, created_at, updated_at
          ) values
            ('acct_available', 'openai', 'available', 'user-available', 'oauth',
-            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'ready', $1, $1, $1),
+            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'ready',
+            null, null, $1, $1, $1),
            ('acct_expired', 'openai', 'expired', 'user-expired', 'oauth',
-            '{}'::jsonb, 1, false, $1 - interval '1 day', true, 'ready', $1, $1, $1),
+            '{}'::jsonb, 1, false, $1 - interval '1 day', true, 'ready',
+            null, null, $1, $1, $1),
+           ('acct_rate_cooldown', 'openai', 'rate-cooldown', 'user-rate-cooldown', 'oauth',
+            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'cooldown',
+            'rate_limited', $1 + interval '2 hours', $1, $1, $1),
+           ('acct_usage_limit', 'openai', 'usage-limit', 'user-usage-limit', 'oauth',
+            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'cooldown',
+            'usage_limit_exhausted', $1 + interval '2 hours', $1, $1, $1),
            ('acct_banned', 'xai', 'banned', 'user-banned', 'oauth',
-            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'banned', $1, $1, $1),
+            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'banned',
+            null, null, $1, $1, $1),
            ('acct_disabled', 'xai', 'disabled', 'user-disabled', 'oauth',
-            '{}'::jsonb, 1, false, $1 + interval '1 day', false, 'ready', $1, $1, $1)",
+            '{}'::jsonb, 1, false, $1 + interval '1 day', false, 'ready',
+            null, null, $1, $1, $1)",
     )
     .bind(now)
     .execute(&database.pool)
@@ -154,10 +165,11 @@ async fn dashboard_account_metrics_should_partition_available_and_unavailable_ac
             metrics.active,
             metrics.unavailable,
             metrics.expired,
+            metrics.quota_exhausted,
             metrics.disabled,
             metrics.banned,
         ),
-        (4, 3, 1, 3, 1, 1, 1),
+        (6, 5, 2, 3, 1, 1, 1, 1),
     );
     database.close().await;
 }

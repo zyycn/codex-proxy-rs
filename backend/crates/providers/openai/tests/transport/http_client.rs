@@ -269,6 +269,54 @@ async fn codex_backend_client_should_parse_retry_after_from_rate_limit_error_bod
     assert_eq!(retry_after_seconds, Some(12));
 }
 
+#[tokio::test]
+async fn codex_backend_http_sse_should_capture_structured_rate_limit_event_updates() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/codex/responses"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(concat!(
+                    "event: codex.rate_limits\n",
+                    "data: {\"type\":\"codex.rate_limits\",\"rate_limits\":{\"allowed\":true,\"limit_reached\":false,\"primary\":{\"used_percent\":100,\"window_minutes\":300,\"reset_at\":1893456300}}}\n\n",
+                    "event: response.completed\n",
+                    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_http_rate_limits\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
+                )),
+        )
+        .mount(&server)
+        .await;
+    let client = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        server.uri(),
+        test_wire_profile(),
+    );
+    let mut request = codex_request("gpt-5.5", "", Vec::new());
+    request.force_http_sse = true;
+
+    let response = client
+        .create_response(
+            &request,
+            request_context("req_http_rate_limit_event", Some("acct")),
+        )
+        .await
+        .expect("HTTP SSE response");
+    let structured = response
+        .rate_limit_headers
+        .iter()
+        .filter(|(name, _)| matches!(name.as_str(), "x-codex-allowed" | "x-codex-limit-reached"))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        structured,
+        vec![
+            ("x-codex-allowed".to_owned(), "true".to_owned()),
+            ("x-codex-limit-reached".to_owned(), "false".to_owned()),
+        ]
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn codex_backend_http_sse_should_fail_after_five_minutes_without_stream_data() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

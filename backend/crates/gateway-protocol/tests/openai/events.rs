@@ -440,6 +440,8 @@ fn parse_rate_limits_event_should_extract_websocket_metered_limit() {
         "metered_limit_name": "codex-other",
         "limit_name": "Other requests",
         "rate_limits": {
+            "allowed": false,
+            "limit_reached": true,
             "primary": {
                 "used_percent": 33,
                 "window_minutes": 60,
@@ -450,7 +452,8 @@ fn parse_rate_limits_event_should_extract_websocket_metered_limit() {
             "has_credits": true,
             "unlimited": false,
             "balance": "9.25"
-        }
+        },
+        "rate_limit_reached_type": "usage_limit_reached"
     });
 
     let parsed = parse_rate_limits_event(&event).expect("rate-limit event");
@@ -460,16 +463,22 @@ fn parse_rate_limits_event_should_extract_websocket_metered_limit() {
         (
             parsed.active_limit.as_deref(),
             details.limit_name.as_deref(),
+            details.allowed,
+            details.limit_reached,
             details.primary.expect("primary window").window_minutes,
             parsed.plan_type.as_deref(),
             parsed.credits.expect("credits").balance,
+            parsed.rate_limit_reached_type.as_deref(),
         ),
         (
             Some("codex_other"),
             Some("Other requests"),
+            Some(false),
+            Some(true),
             Some(60),
             Some("team"),
             Some("9.25".to_owned()),
+            Some("usage_limit_reached"),
         )
     );
 }
@@ -498,9 +507,15 @@ fn rate_limit_header_round_trip_should_preserve_wire_facts() {
             "300".to_owned(),
         ),
         ("x-codex-active-limit".to_owned(), "codex".to_owned()),
+        ("x-codex-allowed".to_owned(), "false".to_owned()),
+        ("x-codex-limit-reached".to_owned(), "true".to_owned()),
         ("x-codex-credits-has-credits".to_owned(), "true".to_owned()),
         ("x-codex-credits-unlimited".to_owned(), "false".to_owned()),
         ("x-codex-plan-type".to_owned(), "plus".to_owned()),
+        (
+            "x-codex-rate-limit-reached-type".to_owned(),
+            "usage_limit_reached".to_owned(),
+        ),
     ];
     let parsed = parse_rate_limit_headers(&source).expect("initial parse");
     let encoded = rate_limits_to_header_pairs(&parsed);

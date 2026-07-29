@@ -392,6 +392,12 @@ pub fn rate_limits_to_header_pairs(rate_limits: &ParsedRateLimits) -> Vec<(Strin
             &format!("{prefix}-secondary"),
             details.secondary,
         );
+        if let Some(allowed) = details.allowed {
+            headers.push((format!("{prefix}-allowed"), allowed.to_string()));
+        }
+        if let Some(limit_reached) = details.limit_reached {
+            headers.push((format!("{prefix}-limit-reached"), limit_reached.to_string()));
+        }
         if let Some(limit_name) = &details.limit_name {
             headers.push((format!("{prefix}-limit-name"), limit_name.clone()));
         }

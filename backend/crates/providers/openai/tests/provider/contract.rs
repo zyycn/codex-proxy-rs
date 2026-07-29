@@ -36,7 +36,7 @@ use tokio::{
     sync::oneshot,
     time::timeout,
 };
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::support::{
@@ -861,7 +861,7 @@ async fn completed_response_persists_session_affinity_before_stream_consumer_sto
 }
 
 #[tokio::test]
-async fn response_failed_before_semantic_output_is_atomic_and_persists_cooldown() {
+async fn response_failed_before_semantic_output_is_atomic_and_persists_quota_lock() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_atomic_failure";
     create_account(&store, account_id).await;
@@ -906,7 +906,7 @@ async fn response_failed_before_semantic_output_is_atomic_and_persists_cooldown(
         vec!["response.created", "response.failed"]
     );
     let account = store.account(account_id).expect("rate-limited account");
-    assert_eq!(account.availability(), AccountAvailability::Cooldown);
+    assert_eq!(account.availability(), AccountAvailability::QuotaExhausted);
     assert!(
         account
             .cooldown_until()
@@ -915,6 +915,68 @@ async fn response_failed_before_semantic_output_is_atomic_and_persists_cooldown(
     let _ = release.send(());
     server.abort();
     let _ = server.await;
+}
+
+#[tokio::test]
+async fn usage_limit_failure_marks_quota_exhausted_without_usage_probe() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_usage_limit_request_path";
+    create_account(&store, account_id).await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .and(header("authorization", format!("Bearer at-{account_id}")))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(concat!(
+                    "event: response.created\n",
+                    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_usage_limit_confirm\",\"model\":\"gpt-5.4\",\"status\":\"in_progress\"}}\n\n",
+                    "event: response.failed\n",
+                    "data: {\"type\":\"response.failed\",\"status_code\":429,\"retry_after_seconds\":86400,\"response\":{\"id\":\"resp_usage_limit_confirm\",\"status\":\"failed\",\"error\":{\"code\":\"usage_limit_reached\",\"message\":\"usage limit reached\"}}}\n\n"
+                )),
+        )
+        .mount(&server)
+        .await;
+
+    let mut stream = provider_with_base_url(&store, server.uri())
+        .execute(
+            planned_request("openai", http_generate_operation()),
+            context("req_usage_limit_confirm", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare provider stream");
+    let failure = loop {
+        match stream.next().await {
+            Some(Ok(_)) => {}
+            Some(Err(error)) => break error,
+            None => panic!("usage-limit failure must surface a typed failure"),
+        }
+    };
+
+    assert_eq!(failure.kind(), ProviderErrorKind::QuotaExhausted);
+    let account = store.account(account_id).expect("usage-limit account");
+    assert_eq!(account.availability(), AccountAvailability::QuotaExhausted);
+    assert!(
+        account
+            .cooldown_until()
+            .is_some_and(|until| until > SystemTime::now())
+    );
+    assert!(!store.has_quota(account_id));
+    let requests = server.received_requests().await.expect("received requests");
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.url.path() == "/api/codex/usage")
+            .count(),
+        0
+    );
 }
 
 #[tokio::test]
@@ -1336,6 +1398,76 @@ async fn successful_response_preserves_quota_exhaustion_from_rate_limit_headers(
         AccountAvailability::QuotaExhausted
     );
     assert!(store.has_quota(account_id));
+}
+
+#[tokio::test]
+async fn successful_http_sse_rate_limit_event_persists_structured_exhaustion() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_http_sse_exhausted";
+    create_account(&store, account_id).await;
+    let reset_at = 1_900_000_000_u64;
+    let rate_limit_event = json!({
+        "type": "codex.rate_limits",
+        "rate_limits": {
+            "allowed": false,
+            "limit_reached": true,
+            "primary": {
+                "used_percent": 42,
+                "window_minutes": 300,
+                "reset_at": reset_at,
+            },
+        },
+    });
+    let completed_event = json!({
+        "type": "response.completed",
+        "response": {
+            "id": "resp_http_sse_exhausted",
+            "model": "gpt-5.4",
+            "status": "completed",
+            "output": [],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        },
+    });
+    let body = format!(
+        "event: codex.rate_limits\ndata: {rate_limit_event}\n\nevent: response.completed\ndata: {completed_event}\n\n"
+    );
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body),
+        )
+        .mount(&server)
+        .await;
+
+    let mut stream = provider_with_base_url(&store, server.uri())
+        .execute(
+            planned_request("openai", http_generate_operation()),
+            context("req_http_sse_exhausted", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare provider stream");
+    while let Some(event) = stream.next().await {
+        event.expect("successful upstream response");
+    }
+
+    let account = store
+        .account(account_id)
+        .expect("account after HTTP SSE response");
+    assert_eq!(
+        (
+            account.availability(),
+            account.cooldown_until(),
+            store.has_quota(account_id),
+        ),
+        (
+            AccountAvailability::QuotaExhausted,
+            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(reset_at)),
+            true,
+        )
+    );
 }
 
 #[test]

@@ -769,31 +769,31 @@ impl CodexCredentialSelector {
         if current.revision() != account.revision() {
             return Err(CredentialRepositoryError::RevisionConflict.into());
         }
-        // 一次真实 429 证明上游已经接受当前凭据，可纠正旧的认证/封禁终态。
-        // 结构化额度耗尽仍拥有更高优先级，不能被通用限流降级。
-        if current.availability() == AccountAvailability::QuotaExhausted {
-            return Ok(());
-        }
-        let quota_exhausted = self
-            .quota
-            .has_active_exhaustion(&current, observed_at)
-            .await
-            .map_err(|_| CredentialSelectionError::Store)?;
-        let (availability, reason, cooldown_until) = if quota_exhausted {
-            (
-                AccountAvailability::QuotaExhausted,
-                Some("quota_exhausted".to_owned()),
-                None,
-            )
-        } else {
-            (
-                AccountAvailability::Cooldown,
-                Some(reason.to_owned()),
-                observed_at.checked_add(retry_after.unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN)),
-            )
+        let cooldown_until =
+            observed_at.checked_add(retry_after.unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN));
+        let cooldown_until = match (current.availability(), current.cooldown_until()) {
+            (AccountAvailability::QuotaExhausted, Some(existing)) => {
+                cooldown_until.map_or(Some(existing), |until| Some(existing.max(until)))
+            }
+            _ => cooldown_until,
         };
+        let reason = if current.availability() == AccountAvailability::QuotaExhausted
+            && current.cooldown_until().is_none()
+        {
+            Some("quota_exhausted".to_owned())
+        } else {
+            Some(reason.to_owned())
+        };
+        // 一次真实 429 证明上游已经接受当前凭据，可纠正旧的认证/封禁终态。
+        // resettable 用量限制沿用 v2 的 quota lock 语义，并保留/延长复核时间。
         self.repository
-            .apply_state(&current, availability, reason, cooldown_until, observed_at)
+            .apply_state(
+                &current,
+                AccountAvailability::QuotaExhausted,
+                reason,
+                cooldown_until,
+                observed_at,
+            )
             .await?;
         Ok(())
     }
