@@ -1555,7 +1555,7 @@ async fn free_model_quota_sse_failure_is_classified_for_resettable_account_coold
         "event: response.created\n",
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_model_quota\",\"model\":\"grok-4.5\"}}\n\n",
         "event: response.failed\n",
-        "data: {\"type\":\"response.failed\",\"error\":{\"code\":\"subscription:free-usage-exhausted\",\"message\":\"You have used all the included free usage for model grok-4.5-0722 for now. Usage resets over a rolling 24-hour window \u{2014} tokens (actual/limit): 500505/500000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok\"}}\n\n",
+        "data: {\"type\":\"response.failed\",\"error\":{\"status\":null,\"contentType\":null,\"body\":null,\"code\":\"subscription_free_usage_exhausted\",\"type\":null,\"message\":\"You've used all the included free usage for model grok-4.5-0722 for now. Usage resets over a rolling 24-hour window \u{2014} tokens (actual/limit): 500505/500000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok\"}}\n\n",
     )
     .as_bytes()
     .to_vec();
@@ -1572,6 +1572,10 @@ async fn free_model_quota_sse_failure_is_classified_for_resettable_account_coold
     let error = next_provider_error(&mut stream).await;
 
     assert_eq!(error.kind(), ProviderErrorKind::QuotaExhausted);
+    assert_eq!(
+        error.upstream_code().map(|code| code.as_str()),
+        Some("subscription_free_usage_exhausted")
+    );
     assert_eq!(
         selector.feedback.lock().expect("feedback").as_slice(),
         &[GrokCredentialFailure::ModelQuotaExhausted {

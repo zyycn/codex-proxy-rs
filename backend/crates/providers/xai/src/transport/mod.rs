@@ -56,12 +56,32 @@ pub use transport::{
 };
 
 const UUID_TEXT_LEN: usize = 36;
+const FREE_USAGE_SIGNALS: &[&str] = &[
+    "subscription:free-usage-exhausted",
+    "subscription_free_usage_exhausted",
+    "free-usage-exhausted",
+    "free_usage_exhausted",
+    "used all the included free usage",
+    "used all your free usage",
+];
+const ACCOUNT_QUOTA_SIGNALS: &[&str] = &[
+    "personal-team-blocked:spending-limit",
+    "personal_team_blocked_spending_limit",
+    "quota_exceeded",
+    "insufficient_quota",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GrokQuotaFailureKind {
     Account,
     FreeAccount,
-    Model,
+    FreeModelUsage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GrokQuotaSignal {
+    Account,
+    FreeUsage,
 }
 
 pub(crate) fn classify_grok_quota_failure(
@@ -69,39 +89,47 @@ pub(crate) fn classify_grok_quota_failure(
     error_type: Option<&str>,
     message: Option<&str>,
 ) -> Option<GrokQuotaFailureKind> {
-    let text = [
-        code.unwrap_or_default(),
-        error_type.unwrap_or_default(),
-        message.unwrap_or_default(),
-    ]
-    .join(" ")
-    .to_ascii_lowercase();
-    let free_usage = contains_any(
-        &text,
-        &[
-            "subscription:free-usage-exhausted",
-            "subscription_free_usage_exhausted",
-            "free-usage-exhausted",
-            "free_usage_exhausted",
-            "used all the included free usage",
-            "used all your free usage",
-        ],
-    );
-    if free_usage && text.contains("for model") {
-        return Some(GrokQuotaFailureKind::Model);
+    let code = code.map(str::to_ascii_lowercase);
+    let error_type = error_type.map(str::to_ascii_lowercase);
+    let message = message.map(str::to_ascii_lowercase);
+    // `code` and `type` are stable upstream fields. Do not let a conflicting
+    // human-readable message override them; use the message only as a
+    // fallback or to refine a confirmed free-usage signal's rolling window.
+    let structured_signal = code
+        .as_deref()
+        .and_then(classify_quota_signal)
+        .or_else(|| error_type.as_deref().and_then(classify_quota_signal));
+    match structured_signal {
+        Some(GrokQuotaSignal::Account) => Some(GrokQuotaFailureKind::Account),
+        Some(GrokQuotaSignal::FreeUsage) => Some(free_usage_failure_kind(message.as_deref())),
+        None => classify_message_quota_failure(message.as_deref()),
     }
-    if contains_any(
-        &text,
-        &[
-            "personal-team-blocked:spending-limit",
-            "personal_team_blocked_spending_limit",
-            "quota_exceeded",
-            "insufficient_quota",
-        ],
-    ) {
-        return Some(GrokQuotaFailureKind::Account);
+}
+
+fn classify_quota_signal(value: &str) -> Option<GrokQuotaSignal> {
+    if contains_any(value, ACCOUNT_QUOTA_SIGNALS) {
+        Some(GrokQuotaSignal::Account)
+    } else if contains_any(value, FREE_USAGE_SIGNALS) {
+        Some(GrokQuotaSignal::FreeUsage)
+    } else {
+        None
     }
-    free_usage.then_some(GrokQuotaFailureKind::FreeAccount)
+}
+
+fn classify_message_quota_failure(message: Option<&str>) -> Option<GrokQuotaFailureKind> {
+    match message.and_then(classify_quota_signal) {
+        Some(GrokQuotaSignal::Account) => Some(GrokQuotaFailureKind::Account),
+        Some(GrokQuotaSignal::FreeUsage) => Some(free_usage_failure_kind(message)),
+        None => None,
+    }
+}
+
+fn free_usage_failure_kind(message: Option<&str>) -> GrokQuotaFailureKind {
+    if message.is_some_and(|value| value.contains("for model")) {
+        GrokQuotaFailureKind::FreeModelUsage
+    } else {
+        GrokQuotaFailureKind::FreeAccount
+    }
 }
 
 fn contains_any(value: &str, needles: &[&str]) -> bool {

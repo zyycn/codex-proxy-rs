@@ -471,8 +471,12 @@ async fn inference_transport_should_classify_model_quota_for_403_and_429() {
             .and(path("/v1/responses"))
             .respond_with(ResponseTemplate::new(status).set_body_json(json!({
                 "error": {
-                    "code": "subscription:free-usage-exhausted",
-                    "message": "You have used all the included free usage for model grok-4.5"
+                    "status": null,
+                    "contentType": null,
+                    "body": null,
+                    "code": "subscription_free_usage_exhausted",
+                    "type": null,
+                    "message": "You've used all the included free usage for model grok-4.5-0722 for now. Usage resets over a rolling 24-hour window - tokens (actual/limit): 500505/500000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok"
                 }
             })))
             .expect(1)
@@ -487,6 +491,38 @@ async fn inference_transport_should_classify_model_quota_for_403_and_429() {
         assert_eq!(
             error.kind(),
             GrokInferenceTransportErrorKind::ModelQuotaExhausted
+        );
+    }
+}
+
+#[tokio::test]
+async fn inference_transport_should_prefer_structured_quota_fields_over_conflicting_message() {
+    for (code, error_type) in [
+        ("quota_exceeded", Some("subscription_free_usage_exhausted")),
+        ("rate_limit_exceeded", Some("quota_exceeded")),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+                "error": {
+                    "code": code,
+                    "type": error_type,
+                    "message": "You've used all the included free usage for model grok-4.5-0722 for now."
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let origin = Url::parse(&server.uri()).expect("wiremock origin");
+        let error = inference_transport(&origin)
+            .execute(inference_request(&origin))
+            .await
+            .expect_err("quota response must fail");
+
+        assert_eq!(
+            error.kind(),
+            GrokInferenceTransportErrorKind::QuotaExhausted
         );
     }
 }
