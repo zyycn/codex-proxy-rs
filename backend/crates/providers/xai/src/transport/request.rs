@@ -56,6 +56,7 @@ const SESSION_FIELDS: &[&str] = &[
     "conversation_id",
     "conversationId",
 ];
+const PROTOCOL_CONTEXT_SESSION_FIELDS: &[&str] = &["conversation_id", "session_id", "thread_id"];
 const FOREIGN_CLIENT_METADATA_FIELDS: &[&str] = &["x-openai-subagent"];
 const MAX_SESSION_SEED_BYTES: usize = 1_024;
 const GROK_CACHE_ROUTE_TOOLS: &[&str] = &["web_search", "x_search"];
@@ -414,6 +415,17 @@ fn explicit_session_seed(request: &GenerateRequest, body: &Map<String, Value>) -
             body.get("metadata")
                 .and_then(Value::as_object)
                 .and_then(first_session_value)
+        })
+        .or_else(|| {
+            PROTOCOL_CONTEXT_SESSION_FIELDS.iter().find_map(|field| {
+                request
+                    .protocol_payload()
+                    .context()
+                    .get(*field)
+                    .and_then(Value::as_str)
+                    .and_then(valid_session_seed)
+                    .map(ToOwned::to_owned)
+            })
         })
 }
 
