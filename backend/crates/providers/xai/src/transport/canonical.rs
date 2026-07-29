@@ -19,7 +19,7 @@ use gateway_protocol::openai::sse::{SseEvent, SseEventDecoder};
 use serde_json::Value;
 
 use super::request::{GrokResponseTransform, GrokResponsesRequest};
-use super::scrub_account_fingerprints;
+use super::{classify_grok_quota_failure, scrub_account_fingerprints};
 
 const CONTENTS_PER_OUTPUT: u32 = 1_024;
 const LONG_CONTEXT_THRESHOLD: u64 = 200_000;
@@ -785,14 +785,19 @@ fn incomplete_finish_reason(response: &Value) -> FinishReason {
 
 fn upstream_event_error(value: &Value) -> ProviderError {
     let code = upstream_error_field(value, "code");
-    let kind = match code {
-        Some("invalid_request" | "invalid_prompt") => ProviderErrorKind::InvalidRequest,
-        Some("unsupported" | "unsupported_feature") => ProviderErrorKind::Unsupported,
-        Some("unauthorized" | "invalid_token") => ProviderErrorKind::Unauthorized,
-        Some("permission_denied") => ProviderErrorKind::PermissionDenied,
-        Some("rate_limit_exceeded") => ProviderErrorKind::RateLimited,
-        Some("quota_exceeded" | "insufficient_quota") => ProviderErrorKind::QuotaExhausted,
-        _ => ProviderErrorKind::Unavailable,
+    let error_type = upstream_error_field(value, "type");
+    let message = upstream_error_field(value, "message");
+    let kind = if classify_grok_quota_failure(code, error_type, message).is_some() {
+        ProviderErrorKind::QuotaExhausted
+    } else {
+        match code {
+            Some("invalid_request" | "invalid_prompt") => ProviderErrorKind::InvalidRequest,
+            Some("unsupported" | "unsupported_feature") => ProviderErrorKind::Unsupported,
+            Some("unauthorized" | "invalid_token") => ProviderErrorKind::Unauthorized,
+            Some("permission_denied") => ProviderErrorKind::PermissionDenied,
+            Some("rate_limit_exceeded") => ProviderErrorKind::RateLimited,
+            _ => ProviderErrorKind::Unavailable,
+        }
     };
     let mut error = ProviderError::new(kind, UpstreamSendState::Sent)
         .redact_sensitive_context("upstream event");
@@ -801,11 +806,11 @@ fn upstream_event_error(value: &Value) -> ProviderError {
     }
     // 结构化 message/code/type 供原客户端展示与重试分类；message 先脱去
     // 账号指纹（上游限流文案内嵌 team UUID），非结构化正文不透出。
-    if let Some(message) = upstream_error_field(value, "message") {
+    if let Some(message) = message {
         error = error.with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
             scrub_account_fingerprints(message),
             code.map(str::to_owned),
-            upstream_error_field(value, "type").map(str::to_owned),
+            error_type.map(str::to_owned),
         ));
     }
     error

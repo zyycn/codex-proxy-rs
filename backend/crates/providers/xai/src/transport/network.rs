@@ -33,7 +33,7 @@ use gateway_core::engine::UpstreamSendState;
 use gateway_core::error::{ClientVisibleUpstreamError, OpaqueUpstreamValue};
 use gateway_core::event::UpstreamHttpVersion;
 
-use super::scrub_account_fingerprints;
+use super::{GrokQuotaFailureKind, classify_grok_quota_failure, scrub_account_fingerprints};
 
 pub(crate) const OFFICIAL_OAUTH_HOST: &str = "auth.x.ai";
 const OFFICIAL_INFERENCE_HOST: &str = "cli-chat-proxy.grok.com";
@@ -1138,31 +1138,26 @@ fn reasoning_decode_failed(metadata: &InferenceErrorMetadata) -> bool {
 }
 
 fn paid_quota_exhausted(metadata: &InferenceErrorMetadata) -> bool {
-    contains_any(
-        &inference_metadata_text(metadata),
-        &[
-            "personal-team-blocked:spending-limit",
-            "personal_team_blocked_spending_limit",
-        ],
-    )
+    matches!(quota_failure(metadata), Some(GrokQuotaFailureKind::Account))
 }
 
 fn free_quota_exhausted(metadata: &InferenceErrorMetadata) -> bool {
-    contains_any(
-        &inference_metadata_text(metadata),
-        &[
-            "subscription:free-usage-exhausted",
-            "subscription_free_usage_exhausted",
-            "free-usage-exhausted",
-            "free_usage_exhausted",
-            "used all the included free usage",
-            "used all your free usage",
-        ],
+    matches!(
+        quota_failure(metadata),
+        Some(GrokQuotaFailureKind::FreeAccount)
     )
 }
 
 fn model_quota_exhausted(metadata: &InferenceErrorMetadata) -> bool {
-    inference_metadata_text(metadata).contains("used all the included free usage for model")
+    matches!(quota_failure(metadata), Some(GrokQuotaFailureKind::Model))
+}
+
+fn quota_failure(metadata: &InferenceErrorMetadata) -> Option<GrokQuotaFailureKind> {
+    classify_grok_quota_failure(
+        metadata.code.as_deref(),
+        metadata.error_type.as_deref(),
+        metadata.message.as_deref(),
+    )
 }
 
 fn model_access_denied(metadata: &InferenceErrorMetadata) -> bool {

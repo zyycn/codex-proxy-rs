@@ -291,12 +291,17 @@ async fn usage_route_should_forward_a_bounded_unknown_outcome_filter() {
 
 #[tokio::test]
 async fn usage_route_should_expose_image_and_websocket_facts() {
+    use std::str::FromStr as _;
+
     use axum::{
         body::{Body, to_bytes},
         http::{Request, StatusCode, header},
     };
     use chrono::Utc;
-    use gateway_admin::model::observability::{RequestOutcome, UsageRecord};
+    use gateway_admin::model::observability::{
+        CalculatedBillingBreakdown, CurrencyCost, DecimalAmount, RequestOutcome, UsageBilling,
+        UsageRecord,
+    };
     use gateway_api::admin::observability;
     use tower::ServiceExt as _;
 
@@ -304,6 +309,10 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
 
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
+    let usd = |amount: &str| CurrencyCost {
+        currency: "USD".to_owned(),
+        amount: DecimalAmount::from_str(amount).expect("USD amount"),
+    };
     fixture
         .usage_records
         .lock()
@@ -359,7 +368,22 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
             cost_source: "unavailable".to_owned(),
             cost_amount: None,
             cost_currency: None,
-            billing: None,
+            billing: Some(UsageBilling::Calculated(Box::new(
+                CalculatedBillingBreakdown {
+                    input_amount: usd("0.03"),
+                    output_amount: usd("0.07"),
+                    cache_read_amount: usd("0.00"),
+                    cache_write_amount: usd("0.00"),
+                    standard_amount: usd("0.10"),
+                    total_amount: usd("0.10"),
+                    input_price_per_million: usd("10.0000"),
+                    output_price_per_million: usd("60.0000"),
+                    cache_read_price_per_million: usd("1.0000"),
+                    cache_write_price_per_million: usd("12.5000"),
+                    service_tier: Some("priority".to_owned()),
+                    multiplier_percent: 100,
+                },
+            ))),
             transport_decision_wait_ms: Some(7),
             connect_ms: Some(11),
             headers_ms: Some(13),
@@ -399,6 +423,19 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
         .await
         .expect("usage response body");
     let value: serde_json::Value = serde_json::from_slice(&body).expect("usage response JSON");
+
+    assert_eq!(
+        value["data"]["items"][0]["billing"]["inputPriceDisplay"],
+        "$10 / 1M Token"
+    );
+    assert_eq!(
+        value["data"]["items"][0]["billing"]["outputPriceDisplay"],
+        "$60 / 1M Token"
+    );
+    assert_eq!(
+        value["data"]["items"][0]["billing"]["cacheWritePriceDisplay"],
+        "$12.5 / 1M Token"
+    );
 
     assert_eq!(
         serde_json::json!({

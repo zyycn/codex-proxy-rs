@@ -282,7 +282,7 @@ pub enum GrokInferenceTransportErrorKind {
     QuotaExhausted,
     /// 账号订阅级免费额度耗尽。
     FreeQuotaExhausted,
-    /// 当前账号只耗尽了指定模型的免费额度。
+    /// 上游声明指定模型的免费用量耗尽；selector 会收敛为账号级可恢复额度状态。
     ModelQuotaExhausted,
     /// 当前账号只缺少指定模型的访问权限。
     ModelAccessDenied,

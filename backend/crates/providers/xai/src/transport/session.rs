@@ -319,7 +319,7 @@ pub enum GrokCredentialFailure {
         /// 已解析并脱敏的延迟；缺失时由 selector 使用短暂默认值。
         retry_after: Option<Duration>,
     },
-    /// 选中账号只耗尽了指定模型的额度。
+    /// 上游声明指定模型的免费用量耗尽；selector 会收敛为账号级可恢复额度状态。
     ModelQuotaExhausted {
         upstream_model: UpstreamModelId,
         retry_after: Option<Duration>,

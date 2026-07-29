@@ -479,15 +479,16 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
                     "upstream_payment_quota_exhausted",
                     None,
                 ),
-                GrokCredentialFailure::ModelQuotaExhausted {
-                    upstream_model,
-                    retry_after,
-                } => {
+                GrokCredentialFailure::ModelQuotaExhausted { retry_after, .. } => {
                     let retry_after =
                         bounded_cooldown(retry_after, MODEL_QUOTA_COOLDOWN, MAX_MODEL_COOLDOWN);
-                    self.record_model_runtime_cooldown(session, upstream_model, retry_after)
-                        .await;
-                    return;
+                    // xAI 免费模型额度按账号滚动窗口恢复；持久化使页面和各调度节点收敛。
+                    self.record_runtime_cooldown(session, retry_after).await;
+                    (
+                        GrokCredentialAvailability::Cooldown,
+                        "usage_limit_exhausted",
+                        persistent_cooldown_until(observed_at, retry_after),
+                    )
                 }
                 GrokCredentialFailure::ModelAccessDenied {
                     upstream_model,

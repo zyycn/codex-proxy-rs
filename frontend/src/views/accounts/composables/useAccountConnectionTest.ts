@@ -280,17 +280,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     if (event.type === 'error') {
       applyAccountStatus(event.accountStatus)
       connectionTestError.value = connectionTestErrorText(event)
-      const detail = event.upstreamStatus || event.upstreamContentType || event.upstreamBody
-        || event.providerErrorCode || event.providerErrorType
-        ? {
-            status: event.upstreamStatus,
-            contentType: event.upstreamContentType,
-            body: event.upstreamBody,
-            code: event.providerErrorCode,
-            type: event.providerErrorType,
-          }
-        : undefined
-      appendConnectionTestLog(connectionTestError.value, 'danger', detail)
+      appendConnectionTestLog('上游返回错误', 'danger', connectionTestError.value)
       finishConnectionTest('error')
       clearConnectionTestRun()
     }

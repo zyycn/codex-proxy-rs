@@ -193,19 +193,6 @@ function connectionLogClass(tone: string) {
             </div>
           </BaseScrollbar>
         </div>
-
-        <div v-if="error" class="mt-3 rounded-lg bg-(--cp-danger-bg) px-3 py-2.5">
-          <p class="m-0 text-[11px] font-heavy text-(--cp-danger-text)">
-            错误信息
-          </p>
-          <BaseScrollbar max-height="118px" view-class="pt-1.5 pr-2">
-            <p
-              class="m-0 wrap-break-word text-[12px] leading-[1.55] font-emphasis text-(--cp-danger-text)"
-            >
-              {{ error }}
-            </p>
-          </BaseScrollbar>
-        </div>
       </section>
     </div>
 

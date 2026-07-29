@@ -217,6 +217,11 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     assert_eq!(usage_page.summary.total, 5);
     assert_eq!(usage_page.summary.active, 2);
     assert_eq!(usage_page.summary.quota_exhausted, 1);
+    assert_eq!(usage_page.summary.unavailable, 3);
+    assert_eq!(
+        usage_page.summary.total,
+        usage_page.summary.active + usage_page.summary.unavailable
+    );
     assert_eq!(
         usage_page
             .items
@@ -1098,6 +1103,103 @@ async fn verified_credential_rotation_preserves_quota_exhaustion() {
         (
             "quota_exhausted".to_owned(),
             Some("quota_exhausted".to_owned()),
+        ),
+    );
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn xai_free_quota_exhaustion_state_is_persisted() {
+    let Some(database) = TestDatabase::create("provider_account_xai_free_quota").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let account_id = ProviderAccountId::new("acct_xai_free_quota").expect("account ID");
+    let mut imported = account(account_id.as_str(), "user-xai-free-quota");
+    imported.provider_kind = "xai".to_owned();
+    repository
+        .insert_provider_account(imported)
+        .await
+        .expect("insert xAI account");
+
+    repository
+        .apply_state_change(AccountStateChange {
+            account_id: account_id.clone(),
+            expected_revision: CredentialRevision::new(1).expect("credential revision"),
+            availability: AccountAvailability::QuotaExhausted,
+            reason: Some("upstream_free_quota_exhausted".to_owned()),
+            cooldown_until: None,
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("persist xAI free quota exhaustion");
+
+    let current: (String, String, Option<String>) = sqlx::query_as(
+        "select provider_kind, availability, availability_reason
+         from provider_accounts where id = $1",
+    )
+    .bind(account_id.as_str())
+    .fetch_one(&database.pool)
+    .await
+    .expect("load persisted xAI quota state");
+    assert_eq!(
+        current,
+        (
+            "xai".to_owned(),
+            "quota_exhausted".to_owned(),
+            Some("upstream_free_quota_exhausted".to_owned()),
+        ),
+    );
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn xai_resettable_usage_limit_state_is_persisted() {
+    let Some(database) = TestDatabase::create("provider_account_xai_usage_limit").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let account_id = ProviderAccountId::new("acct_xai_usage_limit").expect("account ID");
+    let mut imported = account(account_id.as_str(), "user-xai-usage-limit");
+    imported.provider_kind = "xai".to_owned();
+    repository
+        .insert_provider_account(imported)
+        .await
+        .expect("insert xAI account");
+
+    let observed_at = SystemTime::now();
+    let cooldown_until = observed_at
+        .checked_add(Duration::from_secs(24 * 60 * 60))
+        .expect("cooldown deadline");
+    repository
+        .apply_state_change(AccountStateChange {
+            account_id: account_id.clone(),
+            expected_revision: CredentialRevision::new(1).expect("credential revision"),
+            availability: AccountAvailability::Cooldown,
+            reason: Some("usage_limit_exhausted".to_owned()),
+            cooldown_until: Some(cooldown_until),
+            observed_at,
+        })
+        .await
+        .expect("persist xAI resettable usage limit");
+
+    let current: (String, String, Option<String>, bool) = sqlx::query_as(
+        "select provider_kind, availability, availability_reason, cooldown_until is not null
+         from provider_accounts where id = $1",
+    )
+    .bind(account_id.as_str())
+    .fetch_one(&database.pool)
+    .await
+    .expect("load persisted xAI usage limit state");
+    assert_eq!(
+        current,
+        (
+            "xai".to_owned(),
+            "cooldown".to_owned(),
+            Some("usage_limit_exhausted".to_owned()),
+            true,
         ),
     );
 
