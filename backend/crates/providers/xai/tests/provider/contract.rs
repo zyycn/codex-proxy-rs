@@ -149,6 +149,26 @@ fn stateful_sse_with_assistant(encrypted_content: &str, assistant: &str) -> Vec<
     .into_bytes()
 }
 
+fn stateful_sse_with_custom_tool_call(encrypted_content: &str, input: &str) -> Vec<u8> {
+    let arguments = serde_json::to_string(&json!({"input": input})).expect("tool arguments");
+    let arguments_json = serde_json::to_string(&arguments).expect("arguments JSON string");
+    format!(
+        concat!(
+            "event: response.created\n",
+            "data: {{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_state\",\"model\":\"grok-4.5\"}}}}\n\n",
+            "event: response.output_item.done\n",
+            "data: {{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{{\"id\":\"reason_account_bound\",\"type\":\"reasoning\",\"status\":\"completed\",\"summary\":[],\"content\":null,\"encrypted_content\":\"{}\"}}}}\n\n",
+            "event: response.output_item.done\n",
+            "data: {{\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{{\"id\":\"item_exec\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"call_exec\",\"name\":\"exec\",\"arguments\":{arguments_json}}}}}\n\n",
+            "event: response.completed\n",
+            "data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_state\",\"model\":\"grok-4.5\",\"status\":\"completed\"}}}}\n\n"
+        ),
+        encrypted_content,
+        arguments_json = arguments_json,
+    )
+    .into_bytes()
+}
+
 fn custom_apply_patch_sse(patch: &str) -> Vec<u8> {
     let arguments = serde_json::to_string(&json!({"patch": patch})).expect("patch arguments");
     let arguments_json = serde_json::to_string(&arguments).expect("arguments JSON string");
@@ -655,6 +675,23 @@ fn reasoning_replay_operation(session: &str, input: serde_json::Value) -> Operat
         ]),
     )
     .expect("OpenAI payload");
+    Operation::Generate(GenerateRequest::from_protocol_payload(payload))
+}
+
+fn contextual_reasoning_replay_operation(session: &str, input: serde_json::Value) -> Operation {
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        Map::from_iter([
+            ("model".to_owned(), json!("client-model")),
+            ("input".to_owned(), input),
+            ("tools".to_owned(), json!([{"type":"custom","name":"exec"}])),
+        ]),
+    )
+    .expect("OpenAI payload")
+    .with_context(Map::from_iter([(
+        "conversation_id".to_owned(),
+        json!(session),
+    )]));
     Operation::Generate(GenerateRequest::from_protocol_payload(payload))
 }
 
@@ -1919,6 +1956,55 @@ async fn reasoning_replay_is_reused_only_for_the_same_explicit_session() {
     assert_eq!(
         replayed.pointer("/input/0/encrypted_content"),
         Some(&json!(encrypted_content))
+    );
+}
+
+#[tokio::test]
+async fn reasoning_replay_should_pair_context_scoped_custom_call_with_its_output() {
+    let encrypted_content = replay_ciphertext(4);
+    let transport = StubInferenceTransport::sequence([
+        InferenceMode::SuccessBody(stateful_sse_with_custom_tool_call(
+            &encrypted_content,
+            "inspect skills",
+        )),
+        InferenceMode::Success,
+    ]);
+    let provider = provider(StubSelector::success(), transport.clone()).await;
+
+    execute_successfully(
+        &provider,
+        contextual_reasoning_replay_operation(
+            "conversation-from-header",
+            json!([{"type":"message","role":"user","content":"find skills"}]),
+        ),
+    )
+    .await;
+    execute_successfully(
+        &provider,
+        contextual_reasoning_replay_operation(
+            "conversation-from-header",
+            json!([{
+                "type":"custom_tool_call_output",
+                "call_id":"call_exec",
+                "output":[{"type":"input_text","text":"skills found"}]
+            }]),
+        ),
+    )
+    .await;
+
+    let requests = transport.requests.lock().expect("requests");
+    let replayed: serde_json::Value =
+        serde_json::from_slice(requests[1].body()).expect("replayed body");
+    let item_types = replayed["input"]
+        .as_array()
+        .expect("replayed input")
+        .iter()
+        .filter_map(|item| item["type"].as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        item_types,
+        ["reasoning", "function_call", "function_call_output"]
     );
 }
 

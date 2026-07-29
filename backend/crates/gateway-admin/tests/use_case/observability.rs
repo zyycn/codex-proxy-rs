@@ -327,9 +327,19 @@ async fn usage_records_should_tolerate_records_that_fail_billing_enrichment() {
     let store = Arc::new(FixtureObservabilityStore::new(observation_range(now)));
     let invalid_kind = "x".repeat(65);
     store.replace_usage_records(vec![
-        calculated_total_record("request_invalid_kind", Some(&invalid_kind), now),
-        calculated_total_record("request_unregistered_kind", Some("anthropic"), now),
-        calculated_total_record("request_enriched", Some("openai"), now),
+        total_record(
+            "request_invalid_kind",
+            Some(&invalid_kind),
+            "calculated",
+            now,
+        ),
+        total_record(
+            "request_unregistered_kind",
+            Some("anthropic"),
+            "calculated",
+            now,
+        ),
+        total_record("request_enriched", Some("openai"), "calculated", now),
     ]);
     let services = observability_services_with_calculated_billing(store).await;
 
@@ -352,6 +362,30 @@ async fn usage_records_should_tolerate_records_that_fail_billing_enrichment() {
         matches!(page.items[2].billing, Some(UsageBilling::Calculated(_))),
         "healthy record is still enriched"
     );
+}
+
+#[tokio::test]
+async fn usage_records_should_enrich_provider_reported_totals_when_pricing_matches() {
+    let now = Utc::now();
+    let store = Arc::new(FixtureObservabilityStore::new(observation_range(now)));
+    store.replace_usage_records(vec![total_record(
+        "request_provider_reported",
+        Some("openai"),
+        "provider_reported",
+        now,
+    )]);
+    let services = observability_services_with_calculated_billing(store).await;
+
+    let page = services
+        .observability()
+        .usage_records(usage_query(now))
+        .await
+        .expect("usage records");
+
+    assert!(matches!(
+        page.items[0].billing,
+        Some(UsageBilling::Calculated(_))
+    ));
 }
 
 struct FixtureObservabilityStore {
@@ -567,9 +601,10 @@ fn usage_query(now: DateTime<Utc>) -> UsageQuery {
     }
 }
 
-fn calculated_total_record(
+fn total_record(
     id: &str,
     provider_kind: Option<&str>,
+    source: &str,
     now: DateTime<Utc>,
 ) -> UsageRecord {
     UsageRecord {
@@ -613,11 +648,11 @@ fn calculated_total_record(
         image_input_tokens: None,
         image_output_tokens: None,
         total_tokens: Some(1_000),
-        cost_source: "calculated".to_owned(),
+        cost_source: source.to_owned(),
         cost_amount: None,
         cost_currency: None,
         billing: Some(UsageBilling::Total {
-            source: "calculated".to_owned(),
+            source: source.to_owned(),
             total: CurrencyCost {
                 currency: "USD".to_owned(),
                 amount: gateway_admin::model::observability::DecimalAmount::from_str("1.25")

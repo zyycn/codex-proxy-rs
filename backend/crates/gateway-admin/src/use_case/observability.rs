@@ -492,14 +492,14 @@ impl DefaultObservabilityService {
         }
     }
 
-    /// 逐条尽力把 calculated 总额升级为完整分解；单条脏数据（非法 Provider kind
-    /// 或费用规则失败）只保留该条已存的总额，不影响整页返回。
+    /// 逐条尽力把可校验的总额升级为完整分解；单条脏数据（非法 Provider kind、
+    /// 不支持的来源或费用规则失败）只保留该条已存的总额，不影响整页返回。
     fn enrich_billing(&self, records: &mut [crate::model::observability::UsageRecord]) {
         for record in records {
             let Some(UsageBilling::Total { source, total }) = record.billing.as_ref() else {
                 continue;
             };
-            if source != "calculated" {
+            if !matches!(source.as_str(), "calculated" | "provider_reported") {
                 continue;
             }
             let (Some(provider), Some(upstream_model_id)) = (
