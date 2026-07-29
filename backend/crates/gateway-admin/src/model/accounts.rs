@@ -169,6 +169,8 @@ pub struct AccountPage {
 }
 
 /// 统一账号目录的全局状态计数，不受当前筛选和分页影响。
+///
+/// 配额耗尽是可恢复状态，始终单列；`unavailable` 只包含过期、禁用和封禁账号。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccountSummary {
     pub total: u64,

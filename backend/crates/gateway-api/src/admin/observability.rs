@@ -2234,6 +2234,9 @@ fn dashboard_view(result: domain::DashboardResult, kind: TrendKind) -> Dashboard
         account_usage,
         recent_requests,
     } = observation;
+    // 概览卡只有可用和不可用两桶：额度耗尽可恢复，保留在可用；不可用只含终态账号。
+    let available_accounts =
+        dashboard_available_account_count(provider_accounts.total, provider_accounts.unavailable);
     let mut account_usage_views = Vec::with_capacity(account_usage.len());
     let mut credential_usage_views = Vec::with_capacity(account_usage.len());
     for credential in account_usage {
@@ -2282,8 +2285,8 @@ fn dashboard_view(result: domain::DashboardResult, kind: TrendKind) -> Dashboard
             credentials: DashboardCredentialsCardView {
                 total: format_compact_number(provider_accounts.total),
                 total_value: provider_accounts.total,
-                available: format_compact_number(provider_accounts.active),
-                available_value: provider_accounts.active,
+                available: format_compact_number(available_accounts),
+                available_value: available_accounts,
                 unavailable: format_compact_number(provider_accounts.unavailable),
                 unavailable_value: provider_accounts.unavailable,
             },
@@ -2337,6 +2340,10 @@ fn dashboard_view(result: domain::DashboardResult, kind: TrendKind) -> Dashboard
         attempts: attempt_metrics_view(&attempts),
         costs: cost_views(&attempts.costs),
     }
+}
+
+fn dashboard_available_account_count(total: u64, unavailable: u64) -> u64 {
+    total.saturating_sub(unavailable)
 }
 
 fn usage_summary_view(summary: domain::UsageSummary) -> UsageSummaryView {

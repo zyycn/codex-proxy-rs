@@ -1610,36 +1610,26 @@ fn admin_account_summary(
     accounts: &[ProviderAccountSummary],
     now: DateTime<Utc>,
 ) -> AccountSummary {
-    let total = u64::try_from(accounts.len()).unwrap_or(u64::MAX);
-    let active = u64::try_from(
-        accounts
-            .iter()
-            .filter(|account| admin_account_status(account, now) == AdminAccountStatus::Active)
-            .count(),
-    )
-    .unwrap_or(u64::MAX);
-    let quota_exhausted = u64::try_from(
-        accounts
-            .iter()
-            .filter(|account| {
-                admin_account_status(account, now) == AdminAccountStatus::QuotaExhausted
-            })
-            .count(),
-    )
-    .unwrap_or(u64::MAX);
-    let unavailable = u64::try_from(
-        accounts
-            .iter()
-            .filter(|account| admin_account_status(account, now) != AdminAccountStatus::Active)
-            .count(),
-    )
-    .unwrap_or(u64::MAX);
-    AccountSummary {
-        total,
-        active,
-        quota_exhausted,
-        unavailable,
+    let mut summary = AccountSummary {
+        total: u64::try_from(accounts.len()).unwrap_or(u64::MAX),
+        active: 0,
+        quota_exhausted: 0,
+        unavailable: 0,
+    };
+    for account in accounts {
+        match admin_account_status(account, now) {
+            AdminAccountStatus::Active => summary.active = summary.active.saturating_add(1),
+            AdminAccountStatus::QuotaExhausted => {
+                summary.quota_exhausted = summary.quota_exhausted.saturating_add(1);
+            }
+            AdminAccountStatus::Expired
+            | AdminAccountStatus::Disabled
+            | AdminAccountStatus::Banned => {
+                summary.unavailable = summary.unavailable.saturating_add(1);
+            }
+        }
     }
+    summary
 }
 
 fn sort_admin_account_items(items: &mut [AdminAccountListItem], sort: Option<AdminAccountSort>) {
