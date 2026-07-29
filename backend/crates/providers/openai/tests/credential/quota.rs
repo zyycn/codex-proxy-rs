@@ -56,6 +56,36 @@ fn parser_treats_any_confirmed_provider_limit_as_exhausted() {
 }
 
 #[test]
+fn parser_keeps_full_percent_as_display_without_provider_exhaustion_signal() {
+    let fact = parse_codex_quota_usage(&json!({
+        "rate_limit": {
+            "allowed": true,
+            "limit_reached": false,
+            "primary_window": {"used_percent": 100, "reset_at": 1_900_000_000}
+        }
+    }))
+    .expect("valid full-percent quota");
+
+    assert_eq!(fact.remaining_percent(), Some(0));
+    assert!(!fact.exhausted());
+}
+
+#[test]
+fn parser_treats_confirmed_limit_reached_as_exhausted_even_below_full_percent() {
+    let fact = parse_codex_quota_usage(&json!({
+        "rate_limit": {
+            "allowed": false,
+            "limit_reached": true,
+            "primary_window": {"used_percent": 98, "reset_at": 1_900_000_000}
+        }
+    }))
+    .expect("valid provider-confirmed quota");
+
+    assert_eq!(fact.remaining_percent(), Some(2));
+    assert!(fact.exhausted());
+}
+
+#[test]
 fn parser_does_not_infer_exhaustion_from_unknown_credit_fields() {
     let fact = parse_codex_quota_usage(&json!({
         "credits": {
@@ -366,6 +396,49 @@ async fn passive_rate_limit_headers_update_quota_and_account_state_with_revision
             .reset_at()
             .map(|value| value.timestamp()),
         Some(reset_at)
+    );
+}
+
+#[tokio::test]
+async fn passive_full_percent_with_explicit_allowance_keeps_account_ready() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_passive_full_allowed").await;
+    let account = store.account("acct_passive_full_allowed").expect("account");
+    let service = quota_service(&store);
+    let headers = vec![
+        ("x-codex-active-limit".to_owned(), "codex".to_owned()),
+        ("x-codex-primary-used-percent".to_owned(), "100".to_owned()),
+        (
+            "x-codex-primary-reset-at".to_owned(),
+            "1900000000".to_owned(),
+        ),
+        ("x-codex-allowed".to_owned(), "true".to_owned()),
+        ("x-codex-limit-reached".to_owned(), "false".to_owned()),
+    ];
+
+    assert!(
+        service
+            .synchronize_passive_headers(&account, &headers)
+            .await
+            .expect("passive quota")
+    );
+    let current = store
+        .account("acct_passive_full_allowed")
+        .expect("current account");
+    let snapshot = service
+        .read_account(account.id())
+        .await
+        .expect("read quota")
+        .expect("quota snapshot");
+
+    assert_eq!(
+        (
+            current.availability(),
+            current.cooldown_until(),
+            snapshot.fact().remaining_percent(),
+            snapshot.fact().exhausted(),
+        ),
+        (AccountAvailability::Ready, None, Some(0), false)
     );
 }
 
@@ -771,12 +844,18 @@ async fn periodic_quota_synchronization_repairs_cooldown_with_active_exhausted_q
 
     service.synchronize().await.expect("quota synchronization");
 
+    let reconciled = store
+        .account("acct_periodic_stuck_cooldown")
+        .expect("reconciled account");
     assert_eq!(
-        store
-            .account("acct_periodic_stuck_cooldown")
-            .expect("reconciled account")
-            .availability(),
-        AccountAvailability::QuotaExhausted
+        (reconciled.availability(), reconciled.cooldown_until()),
+        (
+            AccountAvailability::QuotaExhausted,
+            Some(
+                SystemTime::UNIX_EPOCH
+                    + Duration::from_secs(u64::try_from(reset_at).expect("positive reset")),
+            ),
+        )
     );
 }
 
@@ -815,12 +894,14 @@ async fn periodic_quota_synchronization_does_not_downgrade_exhaustion_on_rate_li
 
     service.synchronize().await.expect("quota synchronization");
 
-    assert_eq!(
-        store
-            .account("acct_periodic_exhausted")
-            .expect("persisted account")
-            .availability(),
-        AccountAvailability::QuotaExhausted
+    let account = store
+        .account("acct_periodic_exhausted")
+        .expect("persisted account");
+    assert_eq!(account.availability(), AccountAvailability::QuotaExhausted);
+    assert!(
+        account
+            .cooldown_until()
+            .is_some_and(|until| until > SystemTime::now())
     );
 }
 
@@ -952,6 +1033,60 @@ async fn periodic_quota_synchronization_attempts_quota_exhausted_accounts() {
 }
 
 #[tokio::test]
+async fn periodic_quota_synchronization_waits_for_quota_cooldown_deadline_with_grace() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_periodic_exhausted_cooldown").await;
+    let account = store
+        .account("acct_periodic_exhausted_cooldown")
+        .expect("created account");
+    store
+        .apply_state_change(AccountStateChange {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            availability: AccountAvailability::QuotaExhausted,
+            reason: Some("usage_limit_exhausted".to_owned()),
+            cooldown_until: SystemTime::now().checked_sub(Duration::from_secs(29)),
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("mark account exhausted with recent cooldown");
+    let service = blocked_network_quota_service(&store);
+
+    let waiting = service
+        .synchronize()
+        .await
+        .expect("quota synchronization before grace");
+
+    assert_eq!(waiting, CodexQuotaSyncSummary::default());
+    let current = store
+        .account("acct_periodic_exhausted_cooldown")
+        .expect("current account");
+    store
+        .apply_state_change(AccountStateChange {
+            account_id: current.id().clone(),
+            expected_revision: current.revision(),
+            availability: AccountAvailability::QuotaExhausted,
+            reason: Some("usage_limit_exhausted".to_owned()),
+            cooldown_until: SystemTime::now().checked_sub(Duration::from_secs(31)),
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("mark account exhausted past grace");
+
+    let due = service
+        .synchronize()
+        .await
+        .expect("quota synchronization after grace");
+    let repeated = service
+        .synchronize()
+        .await
+        .expect("quota synchronization repeated");
+
+    assert_eq!(due.transient, 1);
+    assert_eq!(repeated, CodexQuotaSyncSummary::default());
+}
+
+#[tokio::test]
 async fn periodic_quota_synchronization_throttles_the_same_exhausted_account() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_periodic_throttled").await;
@@ -1029,8 +1164,8 @@ async fn periodic_quota_synchronization_rechecks_an_exhausted_account_once_when_
         server.uri(),
     );
 
-    let first = service.synchronize().await.expect("initial refresh");
-    assert_eq!(first.transient, 1);
+    let waiting = service.synchronize().await.expect("initial cooldown wait");
+    assert_eq!(waiting, CodexQuotaSyncSummary::default());
     store
         .compare_and_swap_quota(QuotaObservation {
             account_id: account.id().clone(),
@@ -1059,6 +1194,77 @@ async fn periodic_quota_synchronization_rechecks_an_exhausted_account_once_when_
 
     assert_eq!(reset_recheck.transient, 1);
     assert_eq!(repeated, CodexQuotaSyncSummary::default());
+}
+
+#[tokio::test]
+async fn periodic_quota_synchronization_reschedules_a_confirmed_new_reset() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_periodic_new_reset";
+    create_account(&store, account_id).await;
+    let account = store.account(account_id).expect("created account");
+    let initial_reset = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+    let confirmed_reset = SystemTime::UNIX_EPOCH + Duration::from_secs(2);
+    store
+        .apply_state_change(AccountStateChange {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            availability: AccountAvailability::QuotaExhausted,
+            reason: Some("usage_limit_exhausted".to_owned()),
+            cooldown_until: Some(initial_reset),
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("mark account exhausted with due reset");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": false,
+                "limit_reached": true,
+                "primary_window": {"used_percent": 100, "reset_at": 2}
+            }
+        })))
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    let first = service.synchronize().await.expect("first reset recheck");
+    let persisted_reset = store
+        .account(account_id)
+        .expect("account after first recheck")
+        .cooldown_until();
+    let second = service.synchronize().await.expect("new reset recheck");
+    let repeated = service.synchronize().await.expect("same reset throttled");
+    let request_count = server
+        .received_requests()
+        .await
+        .expect("received requests")
+        .len();
+
+    assert_eq!(
+        (
+            first.exhausted,
+            persisted_reset,
+            second.exhausted,
+            repeated,
+            request_count,
+        ),
+        (
+            1,
+            Some(confirmed_reset),
+            1,
+            CodexQuotaSyncSummary::default(),
+            2,
+        )
+    );
 }
 
 #[tokio::test]

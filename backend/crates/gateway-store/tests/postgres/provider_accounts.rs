@@ -1334,7 +1334,15 @@ fn cooldown_observation_requires_expiry() {
 }
 
 #[test]
-fn imported_account_rejects_mismatched_cooldown_runtime_facts() {
+fn quota_exhausted_account_accepts_cooldown_runtime_facts() {
+    let mut imported = account("acct_quota_cooldown", "user-quota-cooldown");
+    imported.availability = AccountAvailability::QuotaExhausted;
+    imported.cooldown_until = Some(Utc::now() + TimeDelta::minutes(5));
+    assert!(imported.validate().is_ok());
+}
+
+#[test]
+fn imported_account_rejects_cooldown_until_for_ready_runtime_facts() {
     let mut imported = account("acct_invalid_cooldown", "user-invalid-cooldown");
     imported.cooldown_until = Some(Utc::now() + TimeDelta::minutes(5));
     assert!(imported.validate().is_err());

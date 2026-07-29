@@ -125,6 +125,26 @@ fn parse_availability(value: &str) -> StoreResult<AccountAvailability> {
     AccountAvailability::parse(value).ok_or_else(|| invalid("unknown availability value"))
 }
 
+fn validate_availability_cooldown(
+    availability: AccountAvailability,
+    has_cooldown_until: bool,
+) -> StoreResult<()> {
+    if availability == AccountAvailability::Cooldown && !has_cooldown_until {
+        return Err(invalid("cooldown availability requires cooldown_until"));
+    }
+    if has_cooldown_until
+        && !matches!(
+            availability,
+            AccountAvailability::Cooldown | AccountAvailability::QuotaExhausted
+        )
+    {
+        return Err(invalid(
+            "cooldown_until is only allowed for cooldown or quota_exhausted availability",
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccountSummary {
     pub id: String,
@@ -224,11 +244,7 @@ impl NewProviderAccount {
         if !self.has_refresh_token && self.next_refresh_at.is_some() {
             return Err(invalid("next_refresh_at requires a refresh token"));
         }
-        if (self.availability == AccountAvailability::Cooldown) != self.cooldown_until.is_some() {
-            return Err(invalid(
-                "cooldown_until must be present exactly for cooldown availability",
-            ));
-        }
+        validate_availability_cooldown(self.availability, self.cooldown_until.is_some())?;
         validate_object_size(
             "provider_credentials_json",
             &self.provider_credentials_json,
@@ -380,11 +396,7 @@ pub struct ProviderAccountStateUpdate {
 impl ProviderAccountStateUpdate {
     pub fn validate(&self) -> StoreResult<()> {
         require_nonempty(ENTITY, "account_id", &self.account_id)?;
-        if (self.availability == AccountAvailability::Cooldown) != self.cooldown_until.is_some() {
-            return Err(invalid(
-                "cooldown availability and cooldown_until must agree",
-            ));
-        }
+        validate_availability_cooldown(self.availability, self.cooldown_until.is_some())?;
         Ok(())
     }
 }
@@ -392,11 +404,7 @@ impl ProviderAccountStateUpdate {
 impl ProviderAccountObservation {
     pub fn validate(&self) -> StoreResult<()> {
         require_nonempty(ENTITY, "account_id", &self.account_id)?;
-        if (self.availability == AccountAvailability::Cooldown) != self.cooldown_until.is_some() {
-            return Err(invalid(
-                "cooldown availability and cooldown_until must agree",
-            ));
-        }
+        validate_availability_cooldown(self.availability, self.cooldown_until.is_some())?;
         if self.provider_quota_json.is_some() != self.quota_observed_at.is_some() {
             return Err(invalid("quota JSON and quota_observed_at must agree"));
         }

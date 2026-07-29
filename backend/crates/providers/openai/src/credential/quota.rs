@@ -30,6 +30,7 @@ const MAX_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60 * 60);
 const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);
 const QUOTA_HYDRATION_FAILURE_TTL: Duration = Duration::from_secs(5);
 const QUOTA_PERIODIC_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(30 * 60);
+const QUOTA_RESET_RECHECK_GRACE: Duration = Duration::from_secs(30);
 // ready 账号主要依赖真实请求的被动观察；这里只提供低频、定额的状态兜底。
 const QUOTA_READY_REFRESH_MAX_AGE: Duration = Duration::from_secs(2 * 60 * 60);
 const QUOTA_READY_REFRESH_BATCH_SIZE: usize = 8;
@@ -307,7 +308,7 @@ enum CodexQuotaFetchError {
 enum CodexQuotaStateTransition {
     Banned { reason: &'static str },
     Exhausted,
-    Cooldown { until: Option<SystemTime> },
+    ResettableLimit { until: Option<SystemTime> },
 }
 
 impl CodexQuotaStateTransition {
@@ -315,7 +316,7 @@ impl CodexQuotaStateTransition {
         match self {
             Self::Banned { .. } => AccountAvailability::Banned,
             Self::Exhausted => AccountAvailability::QuotaExhausted,
-            Self::Cooldown { .. } => AccountAvailability::Cooldown,
+            Self::ResettableLimit { .. } => AccountAvailability::QuotaExhausted,
         }
     }
 
@@ -323,13 +324,13 @@ impl CodexQuotaStateTransition {
         match self {
             Self::Banned { reason } => reason,
             Self::Exhausted => "quota_exhausted",
-            Self::Cooldown { .. } => "quota_rate_limited",
+            Self::ResettableLimit { .. } => "quota_rate_limited",
         }
     }
 
     const fn cooldown_until(self) -> Option<SystemTime> {
         match self {
-            Self::Cooldown { until } => until,
+            Self::ResettableLimit { until } => until,
             Self::Banned { .. } | Self::Exhausted => None,
         }
     }
@@ -547,7 +548,9 @@ fn quota_refresh_candidate(
     let snapshot = quota_snapshot_for_account(&account, observation);
     let kind = match account.availability() {
         AccountAvailability::QuotaExhausted => CodexQuotaRefreshKind::Exhausted {
-            reset_at: quota_reset_at_from_snapshot(snapshot.as_ref()),
+            reset_at: account
+                .cooldown_until()
+                .or_else(|| quota_reset_at_from_snapshot(snapshot.as_ref())),
         },
         AccountAvailability::Cooldown
             if snapshot
@@ -618,22 +621,24 @@ fn reserve_exhausted_quota_refresh(
     now: SystemTime,
     refreshed_at: Instant,
 ) -> bool {
-    let reset_recheck_due = reset_at.is_some_and(|reset_at| {
-        reset_at <= now
-            && state
-                .last_exhausted_reset_recheck
-                .get(account.id())
-                .is_none_or(|marker| {
-                    marker.revision != account.revision() || marker.reset_at != reset_at
-                })
-    });
-    if !reset_recheck_due && !periodic_quota_refresh_due(state, account.id(), refreshed_at) {
-        return false;
-    }
-    state
-        .last_periodic_refresh_at
-        .insert(account.id().clone(), refreshed_at);
-    if let Some(reset_at) = reset_at.filter(|reset_at| *reset_at <= now) {
+    if let Some(reset_at) = reset_at {
+        if !quota_reset_recheck_ready(reset_at, now) {
+            return false;
+        }
+        let same_reset_already_checked = state
+            .last_exhausted_reset_recheck
+            .get(account.id())
+            .is_some_and(|marker| {
+                marker.revision == account.revision() && marker.reset_at == reset_at
+            });
+        if same_reset_already_checked
+            && !periodic_quota_refresh_due(state, account.id(), refreshed_at)
+        {
+            return false;
+        }
+        state
+            .last_periodic_refresh_at
+            .insert(account.id().clone(), refreshed_at);
         state.last_exhausted_reset_recheck.insert(
             account.id().clone(),
             CodexQuotaResetMarker {
@@ -641,8 +646,21 @@ fn reserve_exhausted_quota_refresh(
                 reset_at,
             },
         );
+        return true;
     }
+    if !periodic_quota_refresh_due(state, account.id(), refreshed_at) {
+        return false;
+    }
+    state
+        .last_periodic_refresh_at
+        .insert(account.id().clone(), refreshed_at);
     true
+}
+
+fn quota_reset_recheck_ready(reset_at: SystemTime, now: SystemTime) -> bool {
+    reset_at
+        .checked_add(QUOTA_RESET_RECHECK_GRACE)
+        .is_some_and(|ready_at| ready_at <= now)
 }
 
 fn periodic_quota_refresh_due(
@@ -802,16 +820,12 @@ impl CodexCredentialQuotaService {
                         summary.transient += 1;
                         continue;
                     };
-                    let preserve_exhaustion = account.availability()
-                        == AccountAvailability::QuotaExhausted
-                        && transition.availability() == AccountAvailability::Cooldown;
                     match transition {
                         CodexQuotaStateTransition::Banned { .. } => summary.banned += 1,
-                        CodexQuotaStateTransition::Exhausted => summary.exhausted += 1,
-                        CodexQuotaStateTransition::Cooldown { .. } => summary.cooldown += 1,
-                    }
-                    if preserve_exhaustion {
-                        continue;
+                        CodexQuotaStateTransition::Exhausted
+                        | CodexQuotaStateTransition::ResettableLimit { .. } => {
+                            summary.exhausted += 1;
+                        }
                     }
                     let _ = self
                         .repository
@@ -856,19 +870,23 @@ impl CodexCredentialQuotaService {
             {
                 continue;
             }
-            if !matches!(
-                self.has_active_exhaustion(&current, observed_at).await,
-                Ok(true)
-            ) {
-                continue;
-            }
+            let snapshot = match self.read_snapshot_for(&current).await {
+                Ok(Some(snapshot))
+                    if quota_fact_is_active_exhaustion(snapshot.fact(), observed_at) =>
+                {
+                    snapshot
+                }
+                _ => continue,
+            };
+            let cooldown_until =
+                quota_reset_at_from_snapshot(Some(&snapshot)).or_else(|| current.cooldown_until());
             if let Err(error) = self
                 .repository
                 .apply_state(
                     &current,
                     AccountAvailability::QuotaExhausted,
                     Some("quota_exhausted".to_owned()),
-                    None,
+                    cooldown_until,
                     observed_at,
                 )
                 .await
@@ -881,8 +899,11 @@ impl CodexCredentialQuotaService {
                 continue;
             }
             let enabled = current.enabled();
-            *account =
-                current.with_runtime_state(enabled, AccountAvailability::QuotaExhausted, None);
+            *account = current.with_runtime_state(
+                enabled,
+                AccountAvailability::QuotaExhausted,
+                cooldown_until,
+            );
         }
     }
 
@@ -927,10 +948,10 @@ impl CodexCredentialQuotaService {
         } else {
             summary.updated += 1;
         }
-        if let Some(availability) = quota_success_availability(
+        if let Some((availability, cooldown_until)) = quota_success_state(
             current.availability(),
             current.cooldown_until(),
-            fact.exhausted(),
+            fact,
             SystemTime::now(),
         ) {
             let _ = self
@@ -939,7 +960,7 @@ impl CodexCredentialQuotaService {
                     &current,
                     availability,
                     fact.exhausted().then_some("quota_exhausted".to_owned()),
-                    None,
+                    cooldown_until,
                     observed_at,
                 )
                 .await;
@@ -993,10 +1014,10 @@ impl CodexCredentialQuotaService {
         }
         self.scheduling
             .observe(current.id().clone(), current.revision(), observed_at, fact);
-        if let Some(availability) = quota_success_availability(
+        if let Some((availability, cooldown_until)) = quota_success_state(
             current.availability(),
             current.cooldown_until(),
-            fact.exhausted(),
+            fact,
             observed_at,
         ) {
             self.repository
@@ -1004,7 +1025,7 @@ impl CodexCredentialQuotaService {
                     &current,
                     availability,
                     fact.exhausted().then_some("quota_exhausted".to_owned()),
-                    None,
+                    cooldown_until,
                     observed_at,
                 )
                 .await?;
@@ -1024,19 +1045,6 @@ impl CodexCredentialQuotaService {
             .filter(|account| account.provider().as_str() == "openai")
             .ok_or(CodexCredentialQuotaError::NotFound)?;
         self.read_snapshot_for(&account).await
-    }
-
-    pub(super) async fn has_active_exhaustion(
-        &self,
-        account: &ProviderAccount,
-        now: SystemTime,
-    ) -> Result<bool, CodexCredentialQuotaError> {
-        match self.read_snapshot_for(account).await {
-            Ok(snapshot) => Ok(snapshot
-                .is_some_and(|snapshot| quota_fact_is_active_exhaustion(snapshot.fact(), now))),
-            Err(CodexCredentialQuotaError::RevisionConflict) => Ok(false),
-            Err(error) => Err(error),
-        }
     }
 
     async fn read_snapshot_for(
@@ -1164,10 +1172,10 @@ impl CodexCredentialQuotaService {
             snapshot.observed_at(),
             snapshot.fact(),
         );
-        if let Some(availability) = quota_success_availability(
+        if let Some((availability, cooldown_until)) = quota_success_state(
             current.availability(),
             current.cooldown_until(),
-            snapshot.fact().exhausted(),
+            snapshot.fact(),
             SystemTime::now(),
         ) {
             self.repository
@@ -1178,7 +1186,7 @@ impl CodexCredentialQuotaService {
                         .fact()
                         .exhausted()
                         .then_some("quota_exhausted".to_owned()),
-                    None,
+                    cooldown_until,
                     observed_at,
                 )
                 .await?;
@@ -1386,32 +1394,34 @@ fn passive_rate_limit_window(window: RateLimitWindow) -> Map<String, Value> {
     snapshot
 }
 
-fn quota_success_availability(
+fn quota_success_state(
     current: AccountAvailability,
     cooldown_until: Option<SystemTime>,
-    exhausted: bool,
+    fact: CodexQuotaFact,
     now: SystemTime,
-) -> Option<AccountAvailability> {
-    let observed = if exhausted {
-        AccountAvailability::QuotaExhausted
-    } else {
-        AccountAvailability::Ready
-    };
-    match current {
+) -> Option<(AccountAvailability, Option<SystemTime>)> {
+    if fact.exhausted() {
+        let observed_cooldown = fact.resets_at().map(SystemTime::from).or(cooldown_until);
+        return (current != AccountAvailability::QuotaExhausted
+            || cooldown_until != observed_cooldown)
+            .then_some((AccountAvailability::QuotaExhausted, observed_cooldown));
+    }
+
+    let availability = match current {
         AccountAvailability::Invalid
         | AccountAvailability::Expired
         | AccountAvailability::Banned
-        | AccountAvailability::Unknown => Some(observed),
-        AccountAvailability::QuotaExhausted => (!exhausted).then_some(AccountAvailability::Ready),
-        AccountAvailability::Ready => exhausted.then_some(AccountAvailability::QuotaExhausted),
-        AccountAvailability::Cooldown if exhausted => Some(AccountAvailability::QuotaExhausted),
+        | AccountAvailability::Unknown
+        | AccountAvailability::QuotaExhausted => Some(AccountAvailability::Ready),
+        AccountAvailability::Ready => None,
         AccountAvailability::Cooldown
             if cooldown_until.is_some_and(|cooldown_until| cooldown_until <= now) =>
         {
             Some(AccountAvailability::Ready)
         }
         AccountAvailability::Cooldown => None,
-    }
+    };
+    availability.map(|availability| (availability, None))
 }
 
 fn quota_state_transition(
@@ -1439,7 +1449,7 @@ fn quota_state_transition(
                 retry_after_seconds.unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN.as_secs()),
             )
             .min(MAX_RATE_LIMIT_COOLDOWN);
-            Some(CodexQuotaStateTransition::Cooldown {
+            Some(CodexQuotaStateTransition::ResettableLimit {
                 until: observed_at.checked_add(duration),
             })
         }
@@ -1877,7 +1887,6 @@ impl QuotaAggregate {
                 self.remaining_percent
                     .map_or(remaining, |current| current.min(remaining)),
             );
-            self.exhausted |= used >= 100.0;
         }
         if let Some(reset) = object.get("reset_at") {
             let seconds = reset

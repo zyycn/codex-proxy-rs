@@ -3,12 +3,10 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use chrono::Utc;
 use futures::executor::block_on;
 use gateway_core::engine::credential::{
     AccountAttemptFeedback, AccountAvailability, AccountFeedbackStats, AccountSelectionPolicy,
-    AccountStateChange, OpaqueProviderData, ProviderAccountId, ProviderAccountStore as _,
-    QuotaObservation, RotationStrategy,
+    AccountStateChange, ProviderAccountId, ProviderAccountStore as _, RotationStrategy,
 };
 use gateway_core::engine::{
     AccountAttemptContext, AttemptContext, CancellationToken, ModelRequestId, RequestAttemptContext,
@@ -24,7 +22,6 @@ use provider_openai::credential::{
 };
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use secrecy::ExposeSecret;
-use serde_json::json;
 use url::Url;
 
 use crate::support::{
@@ -121,7 +118,7 @@ fn selector_with_runtime(
         os_version: "6.8".to_owned(),
         arch: "x86_64".to_owned(),
         terminal: "selector-contract".to_owned(),
-        verified_at: Utc::now(),
+        verified_at: chrono::Utc::now(),
     });
     let http = reqwest::Client::builder().build().expect("HTTP client");
     let agent_identity = agent_identity_service(store);
@@ -731,7 +728,7 @@ fn credential_expired_failure_marks_unified_account_expired() {
 }
 
 #[test]
-fn rate_limited_failure_marks_account_cooldown_with_a_cooldown_deadline() {
+fn rate_limited_failure_marks_quota_exhausted_with_a_reset_deadline() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_primary", "at-primary");
     let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
@@ -757,7 +754,7 @@ fn rate_limited_failure_marks_account_cooldown_with_a_cooldown_deadline() {
     .expect("record rate-limit failure");
 
     let account = store.account("acct_primary").expect("account");
-    assert_eq!(account.availability(), AccountAvailability::Cooldown);
+    assert_eq!(account.availability(), AccountAvailability::QuotaExhausted);
     assert!(
         account
             .cooldown_until()
@@ -765,28 +762,31 @@ fn rate_limited_failure_marks_account_cooldown_with_a_cooldown_deadline() {
     );
 }
 
-#[test]
-fn usage_limit_exhaustion_is_a_resettable_account_cooldown() {
+#[tokio::test]
+async fn usage_limit_exhaustion_marks_quota_exhausted_without_usage_probe() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_primary", "at-primary");
     let account = store.account("acct_primary").expect("account");
     let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
 
-    block_on(selector.record_failure(
-        &account,
-        CodexAccountFailure::UsageLimitExhausted {
-            retry_after: Some(Duration::from_secs(30)),
-        },
-    ))
-    .expect("record usage-limit exhaustion");
+    selector
+        .record_failure(
+            &account,
+            CodexAccountFailure::UsageLimitExhausted {
+                retry_after: Some(Duration::from_secs(30)),
+            },
+        )
+        .await
+        .expect("record usage-limit exhaustion");
 
     let account = store.account("acct_primary").expect("persisted account");
-    assert_eq!(account.availability(), AccountAvailability::Cooldown);
+    assert_eq!(account.availability(), AccountAvailability::QuotaExhausted);
     assert!(
         account
             .cooldown_until()
             .is_some_and(|until| until > SystemTime::now())
     );
+    assert_eq!(store.quota_reads(), 0);
 }
 
 #[test]
@@ -794,26 +794,15 @@ fn rate_limited_failure_does_not_downgrade_persisted_quota_exhaustion() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_primary", "at-primary");
     let account = store.account("acct_primary").expect("account");
-    let reset_at = Utc::now().timestamp() + 24 * 60 * 60;
-    block_on(
-        store.compare_and_swap_quota(QuotaObservation {
-            account_id: account.id().clone(),
-            expected_revision: account.revision(),
-            quota: Some(OpaqueProviderData::new(
-                json!({
-                    "rate_limit": {
-                        "allowed": false,
-                        "primary_window": {"used_percent": 100, "reset_at": reset_at}
-                    }
-                })
-                .as_object()
-                .expect("quota object")
-                .clone(),
-            )),
-            observed_at: Some(SystemTime::now()),
-        }),
-    )
-    .expect("persist exhausted quota");
+    block_on(store.apply_state_change(AccountStateChange {
+        account_id: account.id().clone(),
+        expected_revision: account.revision(),
+        availability: AccountAvailability::QuotaExhausted,
+        reason: Some("quota_exhausted".to_owned()),
+        cooldown_until: None,
+        observed_at: SystemTime::now(),
+    }))
+    .expect("mark exhausted");
     let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
 
     block_on(selector.record_failure(
@@ -831,33 +820,54 @@ fn rate_limited_failure_does_not_downgrade_persisted_quota_exhaustion() {
             .availability(),
         AccountAvailability::QuotaExhausted
     );
+    assert!(
+        store
+            .account("acct_primary")
+            .expect("persisted account")
+            .cooldown_until()
+            .is_some_and(|until| until > SystemTime::now())
+    );
 }
 
 #[test]
-fn rate_limited_failure_ignores_exhaustion_after_its_reset_time() {
+fn rate_limited_failure_keeps_longer_existing_quota_deadline() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_primary", "at-primary");
     let account = store.account("acct_primary").expect("account");
-    let reset_at = Utc::now().timestamp() - 1;
-    block_on(
-        store.compare_and_swap_quota(QuotaObservation {
-            account_id: account.id().clone(),
-            expected_revision: account.revision(),
-            quota: Some(OpaqueProviderData::new(
-                json!({
-                    "rate_limit": {
-                        "allowed": false,
-                        "primary_window": {"used_percent": 100, "reset_at": reset_at}
-                    }
-                })
-                .as_object()
-                .expect("quota object")
-                .clone(),
-            )),
-            observed_at: Some(SystemTime::now()),
-        }),
-    )
-    .expect("persist expired quota exhaustion");
+    let existing_deadline = SystemTime::now() + Duration::from_secs(300);
+    block_on(store.apply_state_change(AccountStateChange {
+        account_id: account.id().clone(),
+        expected_revision: account.revision(),
+        availability: AccountAvailability::QuotaExhausted,
+        reason: Some("usage_limit_exhausted".to_owned()),
+        cooldown_until: Some(existing_deadline),
+        observed_at: SystemTime::now(),
+    }))
+    .expect("mark exhausted");
+    let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
+
+    block_on(selector.record_failure(
+        &account,
+        CodexAccountFailure::RateLimited {
+            retry_after: Some(Duration::from_secs(30)),
+        },
+    ))
+    .expect("record shorter rate-limit failure");
+
+    assert_eq!(
+        store
+            .account("acct_primary")
+            .expect("persisted account")
+            .cooldown_until(),
+        Some(existing_deadline)
+    );
+}
+
+#[test]
+fn rate_limited_failure_does_not_consult_stale_quota_snapshot() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_primary", "at-primary");
+    let account = store.account("acct_primary").expect("account");
     let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
 
     block_on(selector.record_failure(
@@ -873,8 +883,9 @@ fn rate_limited_failure_ignores_exhaustion_after_its_reset_time() {
             .account("acct_primary")
             .expect("persisted account")
             .availability(),
-        AccountAvailability::Cooldown
+        AccountAvailability::QuotaExhausted
     );
+    assert_eq!(store.quota_reads(), 0);
 }
 
 #[test]
@@ -907,7 +918,7 @@ fn authenticated_rate_limit_recovers_stale_authentication_state() {
             .account("acct_primary")
             .expect("persisted account")
             .availability(),
-        AccountAvailability::Cooldown
+        AccountAvailability::QuotaExhausted
     );
 }
 
@@ -985,7 +996,7 @@ fn rate_limited_failures_for_distinct_accounts_do_not_conflict() {
                 .expect("persisted second account")
                 .availability(),
         ],
-        [AccountAvailability::Cooldown; 2]
+        [AccountAvailability::QuotaExhausted; 2]
     );
 }
 

@@ -1992,27 +1992,35 @@ async fn provider_account_metrics(
     observed_at: DateTime<Utc>,
 ) -> StoreResult<ProviderAccountMetrics> {
     let row = sqlx::query(
-        "select count(*)::bigint as total,
+        "with normalized as (
+           select enabled,
+                  case
+                    when not enabled then 'disabled'
+                    when availability = 'banned' then 'banned'
+                    when availability = 'quota_exhausted'
+                      or (
+                        availability = 'cooldown'
+                        and availability_reason = 'usage_limit_exhausted'
+                        and (cooldown_until is null or cooldown_until > $1)
+                      )
+                      then 'quota_exhausted'
+                    when availability in ('expired', 'invalid')
+                      or (access_token_expires_at is not null and access_token_expires_at <= $1)
+                      then 'expired'
+                    else 'active'
+                  end as status
+             from provider_accounts
+         )
+         select count(*)::bigint as total,
                 count(*) filter (where enabled)::bigint as enabled,
-                count(*) filter (
-                  where not (
-                    enabled and availability = 'ready'
-                      and (access_token_expires_at is null or access_token_expires_at > $1)
-                  )
-                )::bigint as unavailable,
-                count(*) filter (
-                  where enabled and availability = 'ready'
-                    and (access_token_expires_at is null or access_token_expires_at > $1)
-                )::bigint as active,
-                count(*) filter (
-                  where availability = 'expired'
-                    or (access_token_expires_at is not null and access_token_expires_at <= $1)
-                )::bigint as expired,
-                count(*) filter (where availability = 'quota_exhausted')::bigint
-                  as quota_exhausted,
-                count(*) filter (where not enabled)::bigint as disabled,
-                count(*) filter (where availability = 'banned')::bigint as banned
-         from provider_accounts",
+                count(*) filter (where status in ('expired', 'disabled', 'banned'))::bigint
+                  as unavailable,
+                count(*) filter (where status = 'active')::bigint as active,
+                count(*) filter (where status = 'expired')::bigint as expired,
+                count(*) filter (where status = 'quota_exhausted')::bigint as quota_exhausted,
+                count(*) filter (where status = 'disabled')::bigint as disabled,
+                count(*) filter (where status = 'banned')::bigint as banned
+           from normalized",
     )
     .bind(observed_at)
     .fetch_one(pool)
@@ -2035,11 +2043,29 @@ async fn active_provider_account_ids(
     observed_at: DateTime<Utc>,
 ) -> StoreResult<Vec<String>> {
     sqlx::query(
-        "select id
-         from provider_accounts
-         where enabled and availability = 'ready'
-           and (access_token_expires_at is null or access_token_expires_at > $1)
-         order by id",
+        "with normalized as (
+           select id,
+                  case
+                    when not enabled then 'disabled'
+                    when availability = 'banned' then 'banned'
+                    when availability = 'quota_exhausted'
+                      or (
+                        availability = 'cooldown'
+                        and availability_reason = 'usage_limit_exhausted'
+                        and (cooldown_until is null or cooldown_until > $1)
+                      )
+                      then 'quota_exhausted'
+                    when availability in ('expired', 'invalid')
+                      or (access_token_expires_at is not null and access_token_expires_at <= $1)
+                      then 'expired'
+                    else 'active'
+                  end as status
+             from provider_accounts
+         )
+         select id
+           from normalized
+          where status = 'active'
+          order by id",
     )
     .bind(observed_at)
     .fetch_all(pool)
