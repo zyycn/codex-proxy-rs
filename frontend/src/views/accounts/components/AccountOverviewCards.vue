@@ -33,7 +33,7 @@ const overviewItems = computed(() => [
     icon: Gauge,
   },
   {
-    label: '不可用账号',
+    label: '异常账号',
     value: formatCount(props.summary.unavailable),
     caption: '过期 / 禁用 / 封禁',
     tone: 'danger',

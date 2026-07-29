@@ -261,7 +261,7 @@ mod response {
 }
 
 #[tokio::test]
-async fn dashboard_summary_should_count_quota_exhausted_accounts_as_available_in_headline_card() {
+async fn dashboard_summary_should_include_quota_exhaustion_in_unavailable_headline_count() {
     use axum::{
         body::{Body, to_bytes},
         http::{Request, StatusCode, header},
@@ -288,7 +288,7 @@ async fn dashboard_summary_should_count_quota_exhausted_accounts_as_available_in
         provider_accounts: AccountPoolMetrics {
             total: 807,
             enabled: 804,
-            unavailable: 7,
+            unavailable: 792,
             active: 15,
             expired: 2,
             quota_exhausted: 785,
@@ -328,8 +328,8 @@ async fn dashboard_summary_should_count_quota_exhausted_accounts_as_available_in
         ),
         (
             &serde_json::json!(807),
-            &serde_json::json!(800),
-            &serde_json::json!(7)
+            &serde_json::json!(15),
+            &serde_json::json!(792)
         ),
     );
 }

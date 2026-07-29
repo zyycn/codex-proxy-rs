@@ -169,12 +169,14 @@ async fn dashboard_account_metrics_should_partition_account_statuses() {
             metrics.disabled,
             metrics.banned,
         ),
-        (6, 5, 2, 3, 1, 1, 1, 1),
+        (6, 5, 2, 4, 1, 1, 1, 1),
     );
+    // 首页按调度可用性聚合：配额耗尽也属于不可用。
     assert_eq!(
-        metrics.total,
-        metrics.active + metrics.quota_exhausted + metrics.unavailable
+        metrics.unavailable,
+        metrics.quota_exhausted + metrics.expired + metrics.disabled + metrics.banned
     );
+    assert_eq!(metrics.total, metrics.active + metrics.unavailable);
     database.close().await;
 }
 

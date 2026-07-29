@@ -874,17 +874,24 @@ async fn quota_projection_preserves_unknown_period_for_dynamic_duration_fallback
 }
 
 #[tokio::test]
-async fn weekly_period_without_reported_allowance_is_not_authoritative_quota() {
-    let (_, repository) = repository_with_accounts(&[("free-quota", "subject-free-quota")]).await;
+async fn non_authoritative_quota_refresh_does_not_clear_existing_quota_exhaustion() {
+    let (store, repository) =
+        repository_with_accounts(&[("free-quota", "subject-free-quota")]).await;
+    let id = account_id("free-quota");
+    set_account_state(&store, &id, AccountAvailability::QuotaExhausted, None).await;
     let transport = QueueBillingTransport::success(
         br#"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-07-15T00:00:00Z","end":"2026-07-22T00:00:00Z"},"onDemandCap":{"val":0},"onDemandUsed":{"val":0},"prepaidBalance":{"val":0}}}"#,
     );
     let snapshot = crate::support::grok_quota_service(repository, transport)
-        .refresh_account(&account_id("free-quota"))
+        .refresh_account(&id)
         .await
         .expect("refresh Free quota");
 
     assert!(!snapshot.billing().has_authoritative_quota());
+    assert_eq!(
+        store.account(&id).expect("account").availability(),
+        AccountAvailability::QuotaExhausted
+    );
 }
 
 #[tokio::test]
