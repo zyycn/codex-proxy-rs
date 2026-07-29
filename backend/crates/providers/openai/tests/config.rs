@@ -117,7 +117,7 @@ fn openai_config_defaults_to_the_provider_owned_operating_values() {
             64,
             8,
             20_000,
-            5,
+            15,
             true,
             true,
             "app_EMoamEEZ73f0CkXaXp7hrann",
