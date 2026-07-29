@@ -261,6 +261,80 @@ mod response {
 }
 
 #[tokio::test]
+async fn dashboard_summary_should_count_quota_exhausted_accounts_as_available_in_headline_card() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode, header},
+    };
+    use chrono::{Duration, Utc};
+    use gateway_admin::model::observability::{
+        AccountPoolMetrics, AttemptMetrics, DashboardObservation, RequestMetrics, TimeRange,
+    };
+    use gateway_api::admin::observability;
+    use tower::ServiceExt as _;
+
+    use super::{AdminTestFixture, AdminTestState};
+
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let now = Utc::now();
+    *fixture
+        .dashboard_observation
+        .lock()
+        .expect("dashboard observation") = Some(DashboardObservation {
+        range: TimeRange::new(now - Duration::hours(1), now).expect("dashboard range"),
+        requests: RequestMetrics::default(),
+        attempts: AttemptMetrics::default(),
+        provider_accounts: AccountPoolMetrics {
+            total: 807,
+            enabled: 804,
+            unavailable: 7,
+            active: 15,
+            expired: 2,
+            quota_exhausted: 785,
+            refreshing: None,
+            disabled: 3,
+            banned: 2,
+        },
+        trend: Vec::new(),
+        account_usage: Vec::new(),
+        recent_requests: Vec::new(),
+    });
+
+    let response = observability::router::<AdminTestState>()
+        .with_state(fixture.state())
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/dashboard/summary")
+                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header("x-request-id", "req_dashboard_account_summary")
+                .body(Body::empty())
+                .expect("dashboard request"),
+        )
+        .await
+        .expect("dashboard response");
+    let status = response.status();
+    let body = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("dashboard response body");
+    let value: serde_json::Value = serde_json::from_slice(&body).expect("dashboard response JSON");
+    assert_eq!(status, StatusCode::OK, "{value}");
+
+    assert_eq!(
+        (
+            &value["data"]["cards"]["credentials"]["totalValue"],
+            &value["data"]["cards"]["credentials"]["availableValue"],
+            &value["data"]["cards"]["credentials"]["unavailableValue"],
+        ),
+        (
+            &serde_json::json!(807),
+            &serde_json::json!(800),
+            &serde_json::json!(7)
+        ),
+    );
+}
+
+#[tokio::test]
 async fn usage_route_should_forward_a_bounded_unknown_outcome_filter() {
     use axum::{
         body::Body,

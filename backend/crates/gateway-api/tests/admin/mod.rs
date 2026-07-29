@@ -79,6 +79,7 @@ pub(super) struct AdminTestFixture {
     pub auth: Arc<MemoryAuthStore>,
     pub settings: Arc<MemorySettingsStore>,
     pub usage_records: Arc<Mutex<Vec<UsageRecord>>>,
+    pub dashboard_observation: Arc<Mutex<Option<DashboardObservation>>>,
 }
 
 impl AdminTestFixture {
@@ -92,8 +93,10 @@ impl AdminTestFixture {
         let settings = Arc::new(MemorySettingsStore::new(api_key));
         let client_keys = Arc::new(MemoryClientKeyStore);
         let usage_records = Arc::new(Mutex::new(Vec::new()));
+        let dashboard_observation = Arc::new(Mutex::new(None));
         let unused = Arc::new(UnusedStore {
             usage_records: Arc::clone(&usage_records),
+            dashboard_observation: Arc::clone(&dashboard_observation),
         });
         let stores = AdminStorePorts::new(
             unused.clone(),
@@ -125,6 +128,7 @@ impl AdminTestFixture {
             auth,
             settings,
             usage_records,
+            dashboard_observation,
         }
     }
 
@@ -392,6 +396,7 @@ impl ClientKeyStore for MemoryClientKeyStore {
 
 struct UnusedStore {
     usage_records: Arc<Mutex<Vec<UsageRecord>>>,
+    dashboard_observation: Arc<Mutex<Option<DashboardObservation>>>,
 }
 
 #[async_trait]
@@ -503,7 +508,11 @@ impl AccountStore for UnusedStore {
 #[async_trait]
 impl ObservabilityStore for UnusedStore {
     async fn dashboard_summary(&self, _: TimeRange) -> AdminStoreResult<DashboardObservation> {
-        Err(unavailable("dashboard"))
+        self.dashboard_observation
+            .lock()
+            .expect("dashboard observation")
+            .clone()
+            .ok_or_else(|| unavailable("dashboard"))
     }
 
     async fn dashboard_trend(&self, _: TimeRange) -> AdminStoreResult<Vec<RequestMetricPoint>> {

@@ -112,7 +112,7 @@ async fn observability_preserves_and_filters_opaque_response_ids() {
 }
 
 #[tokio::test]
-async fn dashboard_account_metrics_should_partition_available_and_unavailable_accounts() {
+async fn dashboard_account_metrics_should_partition_account_statuses() {
     let Some(database) = TestDatabase::create("dashboard_account_metrics").await else {
         return;
     };
@@ -169,9 +169,12 @@ async fn dashboard_account_metrics_should_partition_available_and_unavailable_ac
             metrics.disabled,
             metrics.banned,
         ),
-        (6, 5, 2, 4, 1, 1, 1, 1),
+        (6, 5, 2, 3, 1, 1, 1, 1),
     );
-    assert_eq!(metrics.total, metrics.active + metrics.unavailable);
+    assert_eq!(
+        metrics.total,
+        metrics.active + metrics.quota_exhausted + metrics.unavailable
+    );
     database.close().await;
 }
 

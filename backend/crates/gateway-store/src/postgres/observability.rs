@@ -2013,7 +2013,7 @@ async fn provider_account_metrics(
          )
          select count(*)::bigint as total,
                 count(*) filter (where enabled)::bigint as enabled,
-                count(*) filter (where status <> 'active')::bigint
+                count(*) filter (where status in ('expired', 'disabled', 'banned'))::bigint
                   as unavailable,
                 count(*) filter (where status = 'active')::bigint as active,
                 count(*) filter (where status = 'expired')::bigint as expired,

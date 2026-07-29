@@ -130,10 +130,13 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     let mut invalid = account("acct_invalid", "user-invalid");
     invalid.email = Some("invalid@example.invalid".to_owned());
     invalid.availability = AccountAvailability::Invalid;
+    let mut disabled = account("acct_disabled", "user-disabled");
+    disabled.email = Some("disabled@example.invalid".to_owned());
+    disabled.enabled = false;
     let mut quota_exhausted = account("acct_quota_exhausted", "user-quota-exhausted");
     quota_exhausted.email = Some("quota-exhausted@example.invalid".to_owned());
     quota_exhausted.availability = AccountAvailability::QuotaExhausted;
-    for account in [alpha, beta, charlie, invalid, quota_exhausted] {
+    for account in [alpha, beta, charlie, invalid, disabled, quota_exhausted] {
         repository
             .insert_provider_account(account)
             .await
@@ -213,14 +216,16 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
         .await
         .expect("sort accounts by retained usage");
     assert_eq!(usage_page.config_revision.get(), 1);
-    assert_eq!(usage_page.total, 5);
-    assert_eq!(usage_page.summary.total, 5);
+    assert_eq!(usage_page.total, 6);
+    assert_eq!(usage_page.summary.total, 6);
     assert_eq!(usage_page.summary.active, 2);
     assert_eq!(usage_page.summary.quota_exhausted, 1);
     assert_eq!(usage_page.summary.unavailable, 3);
     assert_eq!(
         usage_page.summary.total,
-        usage_page.summary.active + usage_page.summary.unavailable
+        usage_page.summary.active
+            + usage_page.summary.quota_exhausted
+            + usage_page.summary.unavailable
     );
     assert_eq!(
         usage_page

@@ -460,6 +460,8 @@ pub struct RequestMetricPoint {
 }
 
 /// 账号池容量统计。
+///
+/// 配额耗尽单列为可恢复状态；`unavailable` 只包含过期、禁用和封禁账号。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AccountPoolMetrics {
     pub total: u64,
