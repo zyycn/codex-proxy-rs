@@ -461,7 +461,9 @@ pub struct RequestMetricPoint {
 
 /// 账号池容量统计。
 ///
-/// 配额耗尽单列为可恢复状态；`unavailable` 只包含过期、禁用和封禁账号。
+/// 首页概览的 `unavailable` 表示不可参与调度，包含配额耗尽及过期、禁用和封禁账号。
+///
+/// `quota_exhausted` 仍单列，以便状态详情展示和诊断。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AccountPoolMetrics {
     pub total: u64,

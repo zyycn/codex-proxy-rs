@@ -469,7 +469,7 @@ impl GrokCredentialQuotaService {
         if quota_refresh_may_update_state(&loaded.account, &current.account)
             && let Some(availability) = quota_refresh_availability(
                 current.account.availability(),
-                quota_is_exhausted(snapshot.billing()),
+                authoritative_quota_exhaustion(snapshot.billing()),
             )
         {
             self.repository
@@ -1329,6 +1329,13 @@ fn quota_is_exhausted(billing: &GrokBillingPresentation) -> bool {
         )
 }
 
+/// `None` means the billing document cannot prove either quota state.
+fn authoritative_quota_exhaustion(billing: &GrokBillingPresentation) -> Option<bool> {
+    billing
+        .has_authoritative_quota()
+        .then(|| quota_is_exhausted(billing))
+}
+
 fn quota_refresh_may_update_state(before: &ProviderAccount, current: &ProviderAccount) -> bool {
     current.enabled()
         && current
@@ -1341,22 +1348,26 @@ fn quota_refresh_may_update_state(before: &ProviderAccount, current: &ProviderAc
 
 fn quota_refresh_availability(
     current: AccountAvailability,
-    exhausted: bool,
+    exhausted: Option<bool>,
 ) -> Option<GrokCredentialAvailability> {
     match current {
         AccountAvailability::Invalid
         | AccountAvailability::Expired
         | AccountAvailability::Banned => None,
         AccountAvailability::QuotaExhausted => {
-            (!exhausted).then_some(GrokCredentialAvailability::Ready)
+            matches!(exhausted, Some(false)).then_some(GrokCredentialAvailability::Ready)
         }
-        AccountAvailability::Cooldown | AccountAvailability::Unknown => Some(if exhausted {
-            GrokCredentialAvailability::QuotaExhausted
-        } else {
-            GrokCredentialAvailability::Ready
-        }),
+        AccountAvailability::Cooldown | AccountAvailability::Unknown => {
+            exhausted.map(|exhausted| {
+                if exhausted {
+                    GrokCredentialAvailability::QuotaExhausted
+                } else {
+                    GrokCredentialAvailability::Ready
+                }
+            })
+        }
         AccountAvailability::Ready => {
-            exhausted.then_some(GrokCredentialAvailability::QuotaExhausted)
+            matches!(exhausted, Some(true)).then_some(GrokCredentialAvailability::QuotaExhausted)
         }
     }
 }
