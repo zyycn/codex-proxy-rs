@@ -1600,10 +1600,12 @@ fn stream_credential_failure(
                 Some(GrokQuotaFailureKind::FreeAccount) => {
                     GrokCredentialFailure::FreeQuotaExhausted
                 }
-                Some(GrokQuotaFailureKind::Model) => GrokCredentialFailure::ModelQuotaExhausted {
-                    upstream_model: upstream_model.clone(),
-                    retry_after: error.retry_after(),
-                },
+                Some(GrokQuotaFailureKind::FreeModelUsage) => {
+                    GrokCredentialFailure::ModelQuotaExhausted {
+                        upstream_model: upstream_model.clone(),
+                        retry_after: error.retry_after(),
+                    }
+                }
                 Some(GrokQuotaFailureKind::Account) | None => GrokCredentialFailure::QuotaExhausted,
             })
         }

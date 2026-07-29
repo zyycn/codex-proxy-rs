@@ -1082,15 +1082,10 @@ fn first_string(object: &serde_json::Map<String, Value>, fields: &[&str]) -> Opt
 }
 
 fn classify_payment_required(metadata: &InferenceErrorMetadata) -> GrokInferenceTransportErrorKind {
-    if model_quota_exhausted(metadata) {
-        GrokInferenceTransportErrorKind::ModelQuotaExhausted
-    } else if paid_quota_exhausted(metadata) {
-        GrokInferenceTransportErrorKind::QuotaExhausted
-    } else if free_quota_exhausted(metadata) {
-        GrokInferenceTransportErrorKind::FreeQuotaExhausted
-    } else {
-        GrokInferenceTransportErrorKind::PaymentRequired
-    }
+    quota_failure(metadata).map_or(
+        GrokInferenceTransportErrorKind::PaymentRequired,
+        quota_transport_error_kind,
+    )
 }
 
 fn classify_forbidden(
@@ -1103,12 +1098,8 @@ fn classify_forbidden(
         GrokInferenceTransportErrorKind::SafetyRejected
     } else if credential_rejected(&text) {
         GrokInferenceTransportErrorKind::Unauthorized
-    } else if model_quota_exhausted(metadata) {
-        GrokInferenceTransportErrorKind::ModelQuotaExhausted
-    } else if paid_quota_exhausted(metadata) {
-        GrokInferenceTransportErrorKind::QuotaExhausted
-    } else if free_quota_exhausted(metadata) {
-        GrokInferenceTransportErrorKind::FreeQuotaExhausted
+    } else if let Some(failure) = quota_failure(metadata) {
+        quota_transport_error_kind(failure)
     } else if model_access_denied(metadata) {
         GrokInferenceTransportErrorKind::ModelAccessDenied
     } else {
@@ -1119,15 +1110,10 @@ fn classify_forbidden(
 fn classify_too_many_requests(
     metadata: &InferenceErrorMetadata,
 ) -> GrokInferenceTransportErrorKind {
-    if model_quota_exhausted(metadata) {
-        GrokInferenceTransportErrorKind::ModelQuotaExhausted
-    } else if paid_quota_exhausted(metadata) {
-        GrokInferenceTransportErrorKind::QuotaExhausted
-    } else if free_quota_exhausted(metadata) {
-        GrokInferenceTransportErrorKind::FreeQuotaExhausted
-    } else {
-        GrokInferenceTransportErrorKind::RateLimited
-    }
+    quota_failure(metadata).map_or(
+        GrokInferenceTransportErrorKind::RateLimited,
+        quota_transport_error_kind,
+    )
 }
 
 fn reasoning_decode_failed(metadata: &InferenceErrorMetadata) -> bool {
@@ -1137,27 +1123,22 @@ fn reasoning_decode_failed(metadata: &InferenceErrorMetadata) -> bool {
     })
 }
 
-fn paid_quota_exhausted(metadata: &InferenceErrorMetadata) -> bool {
-    matches!(quota_failure(metadata), Some(GrokQuotaFailureKind::Account))
-}
-
-fn free_quota_exhausted(metadata: &InferenceErrorMetadata) -> bool {
-    matches!(
-        quota_failure(metadata),
-        Some(GrokQuotaFailureKind::FreeAccount)
-    )
-}
-
-fn model_quota_exhausted(metadata: &InferenceErrorMetadata) -> bool {
-    matches!(quota_failure(metadata), Some(GrokQuotaFailureKind::Model))
-}
-
 fn quota_failure(metadata: &InferenceErrorMetadata) -> Option<GrokQuotaFailureKind> {
     classify_grok_quota_failure(
         metadata.code.as_deref(),
         metadata.error_type.as_deref(),
         metadata.message.as_deref(),
     )
+}
+
+fn quota_transport_error_kind(failure: GrokQuotaFailureKind) -> GrokInferenceTransportErrorKind {
+    match failure {
+        GrokQuotaFailureKind::Account => GrokInferenceTransportErrorKind::QuotaExhausted,
+        GrokQuotaFailureKind::FreeAccount => GrokInferenceTransportErrorKind::FreeQuotaExhausted,
+        GrokQuotaFailureKind::FreeModelUsage => {
+            GrokInferenceTransportErrorKind::ModelQuotaExhausted
+        }
+    }
 }
 
 fn model_access_denied(metadata: &InferenceErrorMetadata) -> bool {
