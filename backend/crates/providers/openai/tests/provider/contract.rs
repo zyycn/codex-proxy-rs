@@ -7,7 +7,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::Utc;
 use futures::StreamExt;
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountFeedbackStats, ProviderAccountId, ProviderAccountStore as _,
+    AccountAvailability, AccountFeedbackStats, OpaqueProviderData, ProviderAccountId,
+    ProviderAccountStore as _, QuotaObservation,
 };
 use gateway_core::engine::provider::{Provider as _, ProviderRequest};
 use gateway_core::engine::{
@@ -1006,16 +1007,49 @@ async fn response_failed_before_semantic_output_is_atomic_and_persists_quota_loc
 }
 
 #[tokio::test]
-async fn usage_limit_failure_marks_quota_exhausted_without_usage_probe() {
+async fn usage_limit_failure_returns_promptly_and_refreshes_the_authoritative_quota_snapshot() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_usage_limit_request_path";
     create_account(&store, account_id).await;
+    let account = store.account(account_id).expect("created account");
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: Some(OpaqueProviderData::new(
+                json!({
+                    "rate_limit": {
+                        "allowed": true,
+                        "limit_reached": false,
+                        "primary_window": {"used_percent": 99, "reset_at": 1_900_000_000}
+                    }
+                })
+                .as_object()
+                .expect("stale quota object")
+                .clone(),
+            )),
+            observed_at: Some(SystemTime::now()),
+        })
+        .await
+        .expect("seed stale passive quota");
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/codex/usage"))
         .and(header("authorization", format!("Bearer at-{account_id}")))
-        .respond_with(ResponseTemplate::new(500))
-        .expect(0)
+        // 限额错误本身只能确认状态；这里必须覆盖上一帧被动观察到的 99%。
+        .respond_with(
+            ResponseTemplate::new(200)
+                // 验证后台 usage 同步不能把原始的额度错误响应拖到查询完成之后。
+                .set_delay(Duration::from_millis(750))
+                .set_body_json(json!({
+                    "rate_limit": {
+                        "allowed": false,
+                        "limit_reached": true,
+                        "primary_window": {"used_percent": 100, "reset_at": 1_900_000_000}
+                    }
+                })),
+        )
+        .expect(1)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
@@ -1040,13 +1074,17 @@ async fn usage_limit_failure_marks_quota_exhausted_without_usage_probe() {
         )
         .await
         .expect("prepare provider stream");
-    let failure = loop {
-        match stream.next().await {
-            Some(Ok(_)) => {}
-            Some(Err(error)) => break error,
-            None => panic!("usage-limit failure must surface a typed failure"),
+    let failure = timeout(Duration::from_millis(300), async {
+        loop {
+            match stream.next().await {
+                Some(Ok(_)) => {}
+                Some(Err(error)) => break error,
+                None => panic!("usage-limit failure must surface a typed failure"),
+            }
         }
-    };
+    })
+    .await
+    .expect("usage refresh must not block the original quota failure");
 
     assert_eq!(failure.kind(), ProviderErrorKind::QuotaExhausted);
     let account = store.account(account_id).expect("usage-limit account");
@@ -1056,14 +1094,53 @@ async fn usage_limit_failure_marks_quota_exhausted_without_usage_probe() {
             .cooldown_until()
             .is_some_and(|until| until > SystemTime::now())
     );
-    assert!(!store.has_quota(account_id));
+    tokio::time::sleep(Duration::from_millis(200)).await;
     let requests = server.received_requests().await.expect("received requests");
     assert_eq!(
         requests
             .iter()
             .filter(|request| request.url.path() == "/api/codex/usage")
             .count(),
-        0
+        0,
+        "usage refresh must wait for the upstream quota settlement delay"
+    );
+
+    let quota = timeout(Duration::from_secs(5), async {
+        loop {
+            let quota = store
+                .get_quotas(&[account.id().clone()])
+                .await
+                .expect("read refreshed quota")
+                .into_iter()
+                .next()
+                .and_then(|observation| observation.quota)
+                .expect("authoritative quota snapshot");
+            let quota = Value::Object(quota.into_inner());
+            if quota
+                .pointer("/rate_limit/primary_window/used_percent")
+                .and_then(Value::as_u64)
+                == Some(100)
+            {
+                break quota;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("background usage refresh must replace the stale quota snapshot");
+    assert_eq!(
+        quota
+            .pointer("/rate_limit/primary_window/used_percent")
+            .and_then(Value::as_u64),
+        Some(100)
+    );
+    let requests = server.received_requests().await.expect("received requests");
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.url.path() == "/api/codex/usage")
+            .count(),
+        1
     );
 }
 

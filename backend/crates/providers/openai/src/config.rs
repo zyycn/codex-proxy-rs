@@ -217,7 +217,7 @@ pub struct CodexQuotaSettings {
 impl Default for CodexQuotaSettings {
     fn default() -> Self {
         Self {
-            refresh_interval_minutes: 5,
+            refresh_interval_minutes: 15,
             skip_exhausted: true,
         }
     }

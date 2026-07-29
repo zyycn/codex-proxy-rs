@@ -84,6 +84,9 @@ const MAX_COOKIE_HEADER_BYTES: usize = 16 * 1024;
 /// 提交边界前最多保留 64 KiB 原始上游 chunk；达到阈值后结束无感换号窗口，
 /// 但不会把上游数据改写成协议失败。
 const MAX_STREAM_PREFETCH_BYTES: usize = 64 * 1024;
+// 额度拒绝后先给上游额度结算留出时间，再以受限时长同步 usage 快照。
+const QUOTA_FAILURE_REFRESH_DELAY: Duration = Duration::from_secs(2);
+const QUOTA_FAILURE_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 pub const OFFICIAL_CODEX_BASE_PATH: &str = "/backend-api";
 pub const OFFICIAL_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api";
 
@@ -1937,7 +1940,7 @@ impl ReplayBoundary {
 struct OpenAiFailureContext<'a> {
     client: &'a CodexBackendClient,
     selector: &'a CodexCredentialSelector,
-    quota: &'a CodexCredentialQuotaService,
+    quota: &'a Arc<CodexCredentialQuotaService>,
     response_origin: &'a Url,
     cyber_policy_scope: Option<&'a CodexCyberPolicyScope>,
     allows_account_state_mutation: bool,
@@ -1952,6 +1955,10 @@ async fn apply_failure(
         return;
     }
     synchronize_passive_quota(context.quota, account, &failure.rate_limit_headers).await;
+    let needs_authoritative_quota_refresh = matches!(
+        failure.account_failure,
+        Some(CodexAccountFailure::QuotaExhausted | CodexAccountFailure::UsageLimitExhausted { .. })
+    );
     if failure.cyber_policy_failure {
         context
             .selector
@@ -1975,6 +1982,9 @@ async fn apply_failure(
             );
         }
     }
+    if needs_authoritative_quota_refresh {
+        schedule_authoritative_quota_refresh_after_failure(context.quota, account);
+    }
     if failure.capture_response_cookies
         && !failure.set_cookie_headers.is_empty()
         && let Err(error) = context
@@ -1992,6 +2002,42 @@ async fn apply_failure(
             "Failed to persist OpenAI response cookies"
         );
     }
+}
+
+fn schedule_authoritative_quota_refresh_after_failure(
+    quota: &Arc<CodexCredentialQuotaService>,
+    account: &ProviderAccount,
+) {
+    // 限额错误可以确认账号状态，但 Responses 事件中的 used_percent 可能仍停在上一结算点。
+    // usage 快照在后台补齐，不能阻塞原始失败响应。先等待 2 秒让上游结算，
+    // 再查询；5 秒仅限制实际查询自身。
+    let quota = Arc::clone(quota);
+    let account_id = account.id().clone();
+    drop(tokio::spawn(async move {
+        tokio::time::sleep(QUOTA_FAILURE_REFRESH_DELAY).await;
+        match tokio::time::timeout(
+            QUOTA_FAILURE_REFRESH_TIMEOUT,
+            quota.refresh_account(&account_id),
+        )
+        .await
+        {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(
+                    account_id = %account_id,
+                    error = %error,
+                    "OpenAI authoritative quota synchronization after quota rejection failed"
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    account_id = %account_id,
+                    timeout_ms = QUOTA_FAILURE_REFRESH_TIMEOUT.as_millis(),
+                    "OpenAI authoritative quota synchronization after quota rejection timed out"
+                );
+            }
+        }
+    }));
 }
 
 fn map_handshake_error(error: CodexClientError) -> MappedProviderFailure {
