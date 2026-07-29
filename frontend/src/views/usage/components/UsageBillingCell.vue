@@ -56,17 +56,17 @@ function itemValueClass(tone?: string, accent?: boolean) {
 
     <UsageDetailPopover v-if="billing" title="计费明细" width="248px" trigger-label="查看费用明细">
       <div class="grid gap-1.5 text-(--cp-text-secondary)">
-        <div v-for="item in amountItems" :key="item.label" class="flex justify-between gap-4">
-          <span>{{ item.label }}</span>
-          <span class="font-mono font-heavy" :class="itemValueClass(undefined, item.accent)">
+        <div v-for="item in amountItems" :key="item.label" class="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4">
+          <span class="whitespace-nowrap">{{ item.label }}</span>
+          <span class="justify-self-end whitespace-nowrap font-mono font-heavy" :class="itemValueClass(undefined, item.accent)">
             {{ item.value }}
           </span>
         </div>
       </div>
       <div class="mt-1 grid gap-1.5 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) p-2 text-(--cp-text-secondary)">
-        <div v-for="item in billingItems" :key="item.label" class="flex justify-between gap-4">
-          <span>{{ item.label }}</span>
-          <span class="font-mono font-heavy" :class="itemValueClass(item.tone)">
+        <div v-for="item in billingItems" :key="item.label" class="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4">
+          <span class="whitespace-nowrap">{{ item.label }}</span>
+          <span class="justify-self-end whitespace-nowrap font-mono font-heavy" :class="itemValueClass(item.tone)">
             {{ item.value }}
           </span>
         </div>

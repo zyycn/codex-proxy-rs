@@ -1519,6 +1519,69 @@ async fn model_quota_transport_failure_preserves_model_scoped_feedback() {
 }
 
 #[tokio::test]
+async fn free_quota_sse_failure_marks_the_account_exhausted() {
+    let selector = StubSelector::success();
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_free_quota\",\"model\":\"grok-4.5\"}}\n\n",
+        "event: response.failed\n",
+        "data: {\"type\":\"response.failed\",\"error\":{\"code\":\"subscription:free-usage-exhausted\",\"message\":\"You have used all your free usage\"}}\n\n",
+    )
+    .as_bytes()
+    .to_vec();
+    let transport = StubInferenceTransport::sequence([InferenceMode::SuccessBody(body)]);
+    let provider = provider(selector.clone(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::QuotaExhausted);
+    assert_eq!(
+        selector.feedback.lock().expect("feedback").as_slice(),
+        &[GrokCredentialFailure::FreeQuotaExhausted]
+    );
+}
+
+#[tokio::test]
+async fn free_model_quota_sse_failure_is_classified_for_resettable_account_cooldown() {
+    let selector = StubSelector::success();
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_model_quota\",\"model\":\"grok-4.5\"}}\n\n",
+        "event: response.failed\n",
+        "data: {\"type\":\"response.failed\",\"error\":{\"code\":\"subscription:free-usage-exhausted\",\"message\":\"You have used all the included free usage for model grok-4.5-0722 for now. Usage resets over a rolling 24-hour window \u{2014} tokens (actual/limit): 500505/500000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok\"}}\n\n",
+    )
+    .as_bytes()
+    .to_vec();
+    let transport = StubInferenceTransport::sequence([InferenceMode::SuccessBody(body)]);
+    let provider = provider(selector.clone(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::QuotaExhausted);
+    assert_eq!(
+        selector.feedback.lock().expect("feedback").as_slice(),
+        &[GrokCredentialFailure::ModelQuotaExhausted {
+            upstream_model: UpstreamModelId::new("grok-4.5").expect("model"),
+            retry_after: None,
+        }]
+    );
+}
+
+#[tokio::test]
 async fn model_access_denial_is_retryable_without_credential_recovery() {
     let selector = StubSelector::success();
     let transport = StubInferenceTransport::error(

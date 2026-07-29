@@ -148,15 +148,20 @@ export function useAccountOnboarding(options: {
   }
 
   async function importAccountDocument() {
-    const data = parseImportJson(createForm.value.importText)
-    if (Array.isArray(data) || typeof data !== 'object' || data === null)
-      throw new Error('导入文件必须是 JSON object')
-    const result = await importAccounts({
-      provider: createForm.value.provider,
-      data,
-    })
-    const provider = createForm.value.provider === 'xai' ? 'xAI' : 'OpenAI'
-    return `${provider} 账号已导入 ${result.importedCount} 个`
+    const provider = requireImportProvider(createForm.value.provider)
+    const documents = providerImportDocuments(
+      parseImportJson(createForm.value.importText),
+      provider,
+    )
+    let importedCount = 0
+    for (const entry of documents) {
+      const result = await importAccounts({
+        provider,
+        data: entry.document,
+      })
+      importedCount += result.importedCount
+    }
+    return `${providerDisplayName(provider) ?? provider} 账号已导入 ${importedCount} 个`
   }
 
   async function importMixedAccountDocument() {
@@ -257,6 +262,27 @@ function parseImportJson(value: string) {
   catch {
     throw new Error('JSON 格式不正确')
   }
+}
+
+function requireImportProvider(value: string): ImportProvider {
+  if (value === 'openai' || value === 'xai')
+    return value
+  throw new Error('请选择要导入的账号平台')
+}
+
+function providerImportDocuments(value: unknown, provider: ImportProvider): MixedImportDocument[] {
+  if (isRecord(value) && Array.isArray(value.documents)) {
+    const documents = parseMixedImportDocuments(value)
+      .filter(entry => entry.provider === provider)
+    if (documents.length === 0) {
+      const label = providerDisplayName(provider) ?? provider
+      throw new Error(`批量导入文件不包含 ${label} 账号文档`)
+    }
+    return documents
+  }
+  if (!isRecord(value))
+    throw new Error('导入文件必须是 JSON object')
+  return [{ provider, document: value }]
 }
 
 function parseMixedImportDocuments(value: unknown): MixedImportDocument[] {

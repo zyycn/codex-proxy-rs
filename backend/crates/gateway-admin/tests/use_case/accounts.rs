@@ -374,6 +374,7 @@ impl ProviderAdmin for FakeProviderAdmin {
 pub(super) struct FakeAccountStore {
     events: EventLog,
     account: AccountRecord,
+    account_after_probe: Mutex<Option<AccountRecord>>,
     fail_commit: Mutex<bool>,
     audit_requests: Mutex<Vec<String>>,
     quota_window_usage: Mutex<Vec<AccountUsageWindowResult>>,
@@ -388,6 +389,7 @@ impl FakeAccountStore {
         Arc::new(Self {
             events,
             account,
+            account_after_probe: Mutex::new(None),
             fail_commit: Mutex::new(false),
             audit_requests: Mutex::new(Vec::new()),
             quota_window_usage: Mutex::new(Vec::new()),
@@ -404,6 +406,13 @@ impl FakeAccountStore {
 
     pub(super) fn set_quota_window_usage(&self, usage: Vec<AccountUsageWindowResult>) {
         *self.quota_window_usage.lock().expect("quota window usage") = usage;
+    }
+
+    fn set_account_after_probe(&self, account: AccountRecord) {
+        *self
+            .account_after_probe
+            .lock()
+            .expect("account after probe") = Some(account);
     }
 
     fn record(&self, event: &'static str) {
@@ -445,7 +454,13 @@ impl AccountStore for FakeAccountStore {
 
     async fn load_account(&self, account_id: &str) -> AdminStoreResult<Option<AccountRecord>> {
         self.record("store.load_account");
-        Ok((account_id == self.account.id).then(|| self.account.clone()))
+        let account = self
+            .account_after_probe
+            .lock()
+            .expect("account after probe")
+            .clone()
+            .unwrap_or_else(|| self.account.clone());
+        Ok((account_id == account.id.as_str()).then_some(account))
     }
 
     async fn load_account_usage(
@@ -799,6 +814,36 @@ async fn connection_test_should_probe_unavailable_account() {
         }) if message == "included usage exhausted"
             && code == "usage_exhausted"
             && error_type == "invalid_request_error"
+    ));
+}
+
+#[tokio::test]
+async fn connection_test_reloads_resettable_usage_limit_status_after_probe() {
+    let events = events();
+    let provider = FakeProviderAdmin::new("xai", events.clone());
+    let store = FakeAccountStore::new("xai", events);
+    let probe = Arc::new(FreeModelQuotaProbe {
+        store: Arc::clone(&store),
+    });
+    let services = accounts_service_with_probe(provider, store, probe).await;
+
+    let events = services
+        .accounts()
+        .test_connection(
+            ProviderAccountId::new("acct_test").expect("account ID"),
+            gateway_core::routing::UpstreamModelId::new("grok-4.5").expect("model"),
+        )
+        .await
+        .expect("connection test stream")
+        .collect::<Vec<_>>()
+        .await;
+
+    assert!(matches!(
+        events.last(),
+        Some(AccountConnectionTestEvent::Failed {
+            account_status: gateway_admin::model::accounts::AccountStatus::QuotaExhausted,
+            ..
+        })
     ));
 }
 
@@ -1229,6 +1274,30 @@ impl AccountProbe for FailingAccountProbe {
                 "upstream capacity is temporarily unavailable",
             )
             .with_client_visible_upstream_error(detail)
+            .into())
+        })
+    }
+}
+
+struct FreeModelQuotaProbe {
+    store: Arc<FakeAccountStore>,
+}
+
+impl AccountProbe for FreeModelQuotaProbe {
+    fn probe(
+        &self,
+        _: AccountProbeRequest,
+    ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
+        Box::pin(async move {
+            let mut account = account_record("xai");
+            account.availability = AccountAvailability::Cooldown;
+            account.availability_reason = Some("usage_limit_exhausted".to_owned());
+            account.cooldown_until = Some(Utc::now() + TimeDelta::hours(24));
+            self.store.set_account_after_probe(account);
+            Err(GatewayError::new(
+                GatewayErrorKind::RateLimited,
+                "xAI free model quota is exhausted",
+            )
             .into())
         })
     }

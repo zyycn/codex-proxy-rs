@@ -134,7 +134,7 @@ async fn dashboard_account_metrics_should_partition_available_and_unavailable_ac
            ('acct_rate_cooldown', 'openai', 'rate-cooldown', 'user-rate-cooldown', 'oauth',
             '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'cooldown',
             'rate_limited', $1 + interval '2 hours', $1, $1, $1),
-           ('acct_usage_limit', 'openai', 'usage-limit', 'user-usage-limit', 'oauth',
+           ('acct_usage_limit', 'xai', 'usage-limit', 'user-usage-limit', 'oauth',
             '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'cooldown',
             'usage_limit_exhausted', $1 + interval '2 hours', $1, $1, $1),
            ('acct_banned', 'xai', 'banned', 'user-banned', 'oauth',
@@ -169,8 +169,9 @@ async fn dashboard_account_metrics_should_partition_available_and_unavailable_ac
             metrics.disabled,
             metrics.banned,
         ),
-        (6, 5, 2, 3, 1, 1, 1, 1),
+        (6, 5, 2, 4, 1, 1, 1, 1),
     );
+    assert_eq!(metrics.total, metrics.active + metrics.unavailable);
     database.close().await;
 }
 

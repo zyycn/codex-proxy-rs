@@ -1653,12 +1653,7 @@ fn format_token_price(cost: &domain::CurrencyCost) -> String {
     if cost.currency != "USD" {
         return format!("{} {} / 1M Token", cost.currency, cost.amount.as_str());
     }
-    let value = cost
-        .amount
-        .as_str()
-        .parse::<f64>()
-        .map_or(0.0, |value| value);
-    format!("${value:.4} / 1M Token")
+    format!("${} / 1M Token", cost.amount.as_str())
 }
 
 fn format_service_tier(service_tier: Option<&str>) -> String {

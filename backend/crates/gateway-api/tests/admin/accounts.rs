@@ -340,7 +340,7 @@ mod actions {
                 upstream_status: Some(429),
                 upstream_content_type: Some("application/json".to_owned()),
                 upstream_body: Some(r#"{"error":{"type":"usage_limit_reached"}}"#.to_owned()),
-                account_status: AccountStatus::Active,
+                account_status: AccountStatus::QuotaExhausted,
             },
         ]
         .map(|event| AccountConnectionTestEvent::from(event).data);
@@ -374,7 +374,7 @@ mod actions {
                     "upstreamStatus": 429,
                     "upstreamContentType": "application/json",
                     "upstreamBody": r#"{"error":{"type":"usage_limit_reached"}}"#,
-                    "accountStatus": "active"
+                    "accountStatus": "quota_exhausted"
                 }),
             ]
         );

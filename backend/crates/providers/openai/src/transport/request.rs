@@ -161,13 +161,14 @@ pub(crate) fn derive_conversation_anchor(
     request: &CodexResponsesRequest,
 ) -> Option<(&'static str, String)> {
     request
-        .prompt_cache_key()
-        .map(|value| ("prompt-cache", value.to_owned()))
+        .client_session_id
+        .as_deref()
+        .map(|value| ("session", value.to_owned()))
         .or_else(|| {
             request
-                .client_session_id
+                .client_conversation_id
                 .as_deref()
-                .map(|value| ("session", value.to_owned()))
+                .map(|value| ("conversation", value.to_owned()))
         })
         .or_else(|| {
             request
@@ -177,9 +178,8 @@ pub(crate) fn derive_conversation_anchor(
         })
         .or_else(|| {
             request
-                .client_conversation_id
-                .as_deref()
-                .map(|value| ("conversation", value.to_owned()))
+                .prompt_cache_key()
+                .map(|value| ("prompt-cache", value.to_owned()))
         })
         .or_else(|| derive_stable_conversation_key(request).map(|value| ("request", value)))
 }

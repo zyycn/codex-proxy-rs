@@ -490,7 +490,7 @@ async fn payment_required_feedback_persists_account_quota_exhaustion() {
 }
 
 #[tokio::test]
-async fn model_quota_feedback_blocks_only_the_failed_account_and_model() {
+async fn free_model_quota_feedback_persists_resettable_account_exhaustion() {
     let fixture = SelectorFixture::new(&["model-quota", "available"]).await;
     let failed_model = UpstreamModelId::new("grok-4.5").expect("failed model");
     let session = fixture
@@ -505,38 +505,47 @@ async fn model_quota_feedback_blocks_only_the_failed_account_and_model() {
             &session,
             GrokCredentialFailure::ModelQuotaExhausted {
                 upstream_model: failed_model.clone(),
-                retry_after: Some(Duration::from_secs(5)),
+                retry_after: None,
             },
         )
         .await;
 
-    assert_eq!(
-        fixture
-            .store
-            .account(&selected)
-            .expect("selected account")
-            .availability(),
-        AccountAvailability::Ready
+    let account = fixture.store.account(&selected).expect("selected account");
+    assert_eq!(account.availability(), AccountAvailability::Cooldown);
+    let minimum_until = SystemTime::now() + Duration::from_secs(23 * 60 * 60);
+    assert!(
+        account
+            .cooldown_until()
+            .is_some_and(|until| until > minimum_until)
     );
     let scope = ProviderCooldownScope::upstream_model(failed_model);
     assert!(
         fixture
             .cooldowns
             .scoped_cooldown(&selected, &scope)
-            .is_some()
+            .is_none()
     );
-    let unrelated_model = fixture
+    assert!(
+        fixture
+            .cooldowns
+            .cooldown(&selected)
+            .is_some_and(|cooldown| cooldown.until() > minimum_until)
+    );
+    assert!(matches!(
+        fixture
+            .selector
+            .select(fixture.request_for_model("grok-4.6", Some(selected.clone())))
+            .await,
+        Err(GrokSessionSelectorError::AccountCoolingDown {
+            retry_after: Some(_)
+        })
+    ));
+    let next = fixture
         .selector
-        .select(fixture.request_for_model("grok-4.6", Some(selected.clone())))
+        .select(fixture.request_for_model("grok-4.6", None))
         .await
-        .expect("same account remains valid for another model");
-    assert_eq!(unrelated_model.account_id(), &selected);
-    let failed_model_retry = fixture
-        .selector
-        .select(fixture.request_for_model("grok-4.5", None))
-        .await
-        .expect("another account serves the failed model");
-    assert_ne!(failed_model_retry.account_id(), &selected);
+        .expect("another account remains schedulable");
+    assert_ne!(next.account_id(), &selected);
 }
 
 #[tokio::test]

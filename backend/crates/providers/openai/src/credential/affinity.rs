@@ -16,9 +16,16 @@ pub(crate) fn derive_codex_session_affinity_key(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return ProviderSessionAffinityKey::try_new(conversation_id.to_owned()).ok();
+        if let Ok(key) = ProviderSessionAffinityKey::try_new(conversation_id.to_owned()) {
+            return Some(key);
+        }
+        return opaque_affinity_key("local-conversation", conversation_id);
     }
     let (domain, value) = derive_conversation_anchor(request)?;
+    opaque_affinity_key(domain, &value)
+}
+
+fn opaque_affinity_key(domain: &str, value: &str) -> Option<ProviderSessionAffinityKey> {
     let mut hasher = Sha256::new();
     hasher.update(b"codex-session-affinity-v1\0");
     hasher.update(domain.as_bytes());

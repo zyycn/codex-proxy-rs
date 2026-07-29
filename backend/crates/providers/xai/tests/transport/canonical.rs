@@ -803,6 +803,28 @@ fn decoder_should_classify_failed_event_without_retaining_body() {
 }
 
 #[test]
+fn decoder_should_classify_free_quota_failed_event() {
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_quota\"}}\n\n",
+        "event: response.failed\n",
+        "data: {\"type\":\"response.failed\",\"error\":{\"code\":\"subscription:free-usage-exhausted\",\"type\":\"billing_error\",\"message\":\"You have used all your free usage\"}}\n\n",
+    );
+    let error = GrokCanonicalDecoder::new("fallback")
+        .push(body.as_bytes())
+        .expect_err("free quota failure must surface");
+
+    assert_eq!(
+        error.kind(),
+        gateway_core::error::ProviderErrorKind::QuotaExhausted
+    );
+    assert_eq!(
+        error.upstream_code().map(|code| code.as_str()),
+        Some("subscription:free-usage-exhausted")
+    );
+}
+
+#[test]
 fn decoder_should_scrub_account_fingerprints_from_failure_messages() {
     let body = concat!(
         "event: error\n",

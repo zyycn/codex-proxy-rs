@@ -1630,14 +1630,7 @@ fn admin_account_summary(
     let unavailable = u64::try_from(
         accounts
             .iter()
-            .filter(|account| {
-                matches!(
-                    admin_account_status(account, now),
-                    AdminAccountStatus::Expired
-                        | AdminAccountStatus::Disabled
-                        | AdminAccountStatus::Banned
-                )
-            })
+            .filter(|account| admin_account_status(account, now) != AdminAccountStatus::Active)
             .count(),
     )
     .unwrap_or(u64::MAX);

@@ -785,6 +785,94 @@ async fn prompt_cache_key_should_become_an_opaque_session_affinity_lookup_key() 
 }
 
 #[tokio::test]
+async fn explicit_session_id_should_override_turn_specific_prompt_cache_keys_for_affinity() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_session_affinity").await;
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let provider = provider_with_affinity(&store, Arc::clone(&affinity));
+
+    for (request_id, prompt_cache_key) in [
+        ("req_session_affinity_first", "turn-cache-first"),
+        ("req_session_affinity_second", "turn-cache-second"),
+    ] {
+        let generation = GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object(
+                "openai",
+                Map::from_iter([
+                    ("model".to_owned(), json!("gpt-5.4")),
+                    ("input".to_owned(), json!("hello")),
+                    ("prompt_cache_key".to_owned(), json!(prompt_cache_key)),
+                ]),
+            )
+            .expect("OpenAI payload")
+            .with_context(Map::from_iter([(
+                "session_id".to_owned(),
+                json!("stable-client-session"),
+            )])),
+        );
+
+        let stream = provider
+            .execute(
+                planned_request("openai", Operation::Generate(generation)),
+                context(request_id, CancellationToken::new()),
+            )
+            .await
+            .expect("prepare provider stream");
+        drop(stream);
+    }
+
+    let keys = affinity.lookup_keys();
+    assert_eq!(keys.len(), 2);
+    assert_eq!(keys[0], keys[1]);
+}
+
+#[tokio::test]
+async fn invalid_local_conversation_id_should_fall_back_to_an_opaque_affinity_key() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_local_affinity").await;
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let generation = GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([
+                ("model".to_owned(), json!("gpt-5.4")),
+                ("input".to_owned(), json!("hello")),
+            ]),
+        )
+        .expect("OpenAI payload"),
+    )
+    .with_provider_session_state(
+        ProviderSessionState::new(
+            "openai",
+            Map::from_iter([
+                ("account_id".to_owned(), json!("acct_local_affinity")),
+                (
+                    "conversation_id".to_owned(),
+                    json!("lc_UppercaseBase64ConversationId"),
+                ),
+                ("continuation_scope".to_owned(), json!("replay_required")),
+                ("transcript".to_owned(), json!([])),
+            ]),
+        )
+        .expect("provider session state"),
+    );
+
+    let stream = provider_with_affinity(&store, Arc::clone(&affinity))
+        .execute(
+            planned_request("openai", Operation::Generate(generation)),
+            context("req_local_affinity", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare provider stream");
+    drop(stream);
+
+    let keys = affinity.lookup_keys();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].len(), 64);
+    assert!(keys[0].bytes().all(|byte| byte.is_ascii_hexdigit()));
+}
+
+#[tokio::test]
 async fn completed_response_persists_session_affinity_before_stream_consumer_stops_polling() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_completed_affinity").await;

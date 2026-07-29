@@ -60,8 +60,9 @@ use crate::transport::{
     GrokCompactionSummaryDecoder, GrokCredentialFailure, GrokInferenceChunkStream,
     GrokInferenceRequest, GrokInferenceResponse, GrokInferenceTransport,
     GrokInferenceTransportError, GrokInferenceTransportErrorKind, GrokInferenceTransportMetrics,
-    GrokProviderConfigError, GrokRequestEncodeError, GrokResponsesRequest, GrokSessionAffinityKey,
-    GrokSessionSelection, GrokSessionSelector, GrokSessionSelectorError, SelectedGrokSession,
+    GrokProviderConfigError, GrokQuotaFailureKind, GrokRequestEncodeError, GrokResponsesRequest,
+    GrokSessionAffinityKey, GrokSessionSelection, GrokSessionSelector, GrokSessionSelectorError,
+    SelectedGrokSession, classify_grok_quota_failure,
 };
 use crate::{GrokCatalogCapabilityEvidence, GrokCatalogModel};
 
@@ -1118,9 +1119,21 @@ fn cold_compaction_http_sse_stream(
         .await
         .map_err(mark_transient_compaction_failure)?
         {
-            let events = canonical.push(&chunk).map_err(|error| {
-                mark_transient_compaction_failure(map_continuation_failure(&context, error))
-            })?;
+            let events = match canonical.push(&chunk) {
+                Ok(events) => events,
+                Err(error) => {
+                    let error = map_continuation_failure(&context, error);
+                    let error = record_stream_failure(
+                        selector.as_ref(),
+                        &session,
+                        error,
+                        &upstream_model,
+                    )
+                    .await;
+                    Err(mark_transient_compaction_failure(error))?;
+                    return;
+                }
+            };
             for event in events {
                 summary.observe(&event).map_err(map_compaction_decode_error)?;
                 facts.observe(&event);
@@ -1131,9 +1144,22 @@ fn cold_compaction_http_sse_stream(
         }
 
         if facts.completed.is_none() {
-            for event in canonical.finish_without_terminal().map_err(|error| {
-                mark_transient_compaction_failure(map_continuation_failure(&context, error))
-            })? {
+            let events = match canonical.finish_without_terminal() {
+                Ok(events) => events,
+                Err(error) => {
+                    let error = map_continuation_failure(&context, error);
+                    let error = record_stream_failure(
+                        selector.as_ref(),
+                        &session,
+                        error,
+                        &upstream_model,
+                    )
+                    .await;
+                    Err(mark_transient_compaction_failure(error))?;
+                    return;
+                }
+            };
+            for event in events {
                 summary.observe(&event).map_err(map_compaction_decode_error)?;
                 facts.observe(&event);
                 if facts.completed.is_some() {
@@ -1371,7 +1397,13 @@ fn cold_http_sse_stream(
                 Ok(events) => events,
                 Err(error) => {
                     let error = map_continuation_failure(&context, error);
-                    let error = record_stream_failure(selector.as_ref(), &session, error).await;
+                    let error = record_stream_failure(
+                        selector.as_ref(),
+                        &session,
+                        error,
+                        &upstream_model,
+                    )
+                    .await;
                     Err(error)?;
                     return;
                 }
@@ -1399,7 +1431,13 @@ fn cold_http_sse_stream(
             Ok(events) => events,
             Err(error) => {
                 let error = map_continuation_failure(&context, error);
-                let error = record_stream_failure(selector.as_ref(), &session, error).await;
+                let error = record_stream_failure(
+                    selector.as_ref(),
+                    &session,
+                    error,
+                    &upstream_model,
+                )
+                .await;
                 Err(error)?;
                 return;
             }
@@ -1508,28 +1546,6 @@ fn xai_transport_metadata(
     ProviderResponseMetadata::new(serde_json::to_string(&Value::Object(metadata)).ok()?)
 }
 
-async fn record_failure(
-    selector: &dyn GrokSessionSelector,
-    session: &SelectedGrokSession,
-    error: ProviderError,
-) -> ProviderError {
-    if !session.allows_account_state_mutation() {
-        return error;
-    }
-    let failure = match error.kind() {
-        ProviderErrorKind::Unauthorized => Some(GrokCredentialFailure::Unauthorized),
-        ProviderErrorKind::RateLimited => Some(GrokCredentialFailure::RateLimited {
-            retry_after: error.retry_after(),
-        }),
-        ProviderErrorKind::QuotaExhausted => Some(GrokCredentialFailure::QuotaExhausted),
-        _ => None,
-    };
-    if let Some(failure) = failure {
-        selector.record_failure(session, failure).await;
-    }
-    error
-}
-
 async fn record_credential_failure(
     selector: &dyn GrokSessionSelector,
     session: &SelectedGrokSession,
@@ -1546,17 +1562,13 @@ async fn record_stream_failure(
     selector: &dyn GrokSessionSelector,
     session: &SelectedGrokSession,
     error: ProviderError,
+    upstream_model: &UpstreamModelId,
 ) -> ProviderError {
     if !session.allows_account_state_mutation() {
         return error;
     }
-    if matches!(
-        error.kind(),
-        ProviderErrorKind::Unauthorized
-            | ProviderErrorKind::RateLimited
-            | ProviderErrorKind::QuotaExhausted
-    ) {
-        return record_failure(selector, session, error).await;
+    if let Some(failure) = stream_credential_failure(&error, upstream_model) {
+        return record_credential_failure(selector, session, error, failure).await;
     }
     if error.kind() != ProviderErrorKind::Cancelled {
         selector
@@ -1564,6 +1576,39 @@ async fn record_stream_failure(
             .await;
     }
     error
+}
+
+fn stream_credential_failure(
+    error: &ProviderError,
+    upstream_model: &UpstreamModelId,
+) -> Option<GrokCredentialFailure> {
+    match error.kind() {
+        ProviderErrorKind::Unauthorized => Some(GrokCredentialFailure::Unauthorized),
+        ProviderErrorKind::RateLimited => Some(GrokCredentialFailure::RateLimited {
+            retry_after: error.retry_after(),
+        }),
+        ProviderErrorKind::QuotaExhausted => {
+            let visible = error.client_visible_upstream_error();
+            let quota_kind = classify_grok_quota_failure(
+                visible
+                    .and_then(ClientVisibleUpstreamError::code)
+                    .or_else(|| error.upstream_code().map(|code| code.as_str())),
+                visible.and_then(ClientVisibleUpstreamError::error_type),
+                visible.map(ClientVisibleUpstreamError::message),
+            );
+            Some(match quota_kind {
+                Some(GrokQuotaFailureKind::FreeAccount) => {
+                    GrokCredentialFailure::FreeQuotaExhausted
+                }
+                Some(GrokQuotaFailureKind::Model) => GrokCredentialFailure::ModelQuotaExhausted {
+                    upstream_model: upstream_model.clone(),
+                    retry_after: error.retry_after(),
+                },
+                Some(GrokQuotaFailureKind::Account) | None => GrokCredentialFailure::QuotaExhausted,
+            })
+        }
+        _ => None,
+    }
 }
 
 async fn recover_or_record_failure(
@@ -1644,7 +1689,7 @@ async fn map_and_record_stream_transport_failure(
     match credential_failure {
         Some(failure) => record_credential_failure(selector, session, error, failure).await,
         None if request_scoped => error,
-        None => record_stream_failure(selector, session, error).await,
+        None => record_stream_failure(selector, session, error, upstream_model).await,
     }
 }
 
