@@ -68,6 +68,7 @@ const GROK_INTERNAL_HISTORY_KEYS: &[&str] =
 pub struct GrokResponsesRequest {
     body: Map<String, Value>,
     session_id: Option<String>,
+    reasoning_replay_session_id: Option<String>,
     affinity: Option<GrokSessionAffinityKey>,
     response_transform: GrokResponseTransform,
 }
@@ -83,6 +84,23 @@ impl GrokResponsesRequest {
     #[must_use]
     pub fn session_id(&self) -> Option<&str> {
         self.session_id.as_deref()
+    }
+
+    /// 返回只有显式会话身份才启用的 reasoning replay scope。
+    pub(crate) fn reasoning_replay_session_id(&self) -> Option<&str> {
+        self.reasoning_replay_session_id.as_deref()
+    }
+
+    pub(crate) fn has_previous_response_id(&self) -> bool {
+        self.body
+            .get("previous_response_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+    }
+
+    pub(crate) fn replay_input_items(&self) -> Option<Vec<Value>> {
+        self.body.get("input").and_then(Value::as_array).cloned()
     }
 
     /// 返回与会话一致、额外绑定模型的账号亲和键。
@@ -149,6 +167,9 @@ impl GrokResponsesRequest {
             return;
         };
         self.session_id = Some(session_id.to_owned());
+        if self.reasoning_replay_session_id.is_some() {
+            self.reasoning_replay_session_id = Some(session_id.to_owned());
+        }
         self.affinity = None;
         self.body.insert(
             "prompt_cache_key".to_owned(),
@@ -159,6 +180,7 @@ impl GrokResponsesRequest {
     pub(crate) fn clear_session(&mut self) {
         self.body.remove("prompt_cache_key");
         self.session_id = None;
+        self.reasoning_replay_session_id = None;
         self.affinity = None;
     }
 
@@ -207,13 +229,16 @@ impl GrokResponsesRequest {
         );
         sanitize_account_identity(&mut body);
         sanitize_foreign_client_metadata(&mut body);
-        let response_transform = normalize_responses_request(&mut body)?;
+        let mut response_transform = normalize_responses_request(&mut body)?;
+        response_transform.observe_client_cache_tools();
         if enable_cache_route {
-            enable_grok_prompt_cache_route(&mut body);
+            enable_grok_prompt_cache_route(&mut body, upstream_model, &mut response_transform);
         }
         let (session_id, affinity) = identity.map_or((None, None), |(session_id, affinity)| {
             (Some(session_id), Some(affinity))
         });
+        let reasoning_replay_session_id =
+            session_seed.is_some().then(|| session_id.clone()).flatten();
         match session_id.as_ref() {
             Some(session_id) => {
                 body.insert(
@@ -230,6 +255,7 @@ impl GrokResponsesRequest {
         Ok(Self {
             body,
             session_id,
+            reasoning_replay_session_id,
             affinity,
             response_transform,
         })
@@ -321,23 +347,61 @@ fn sanitize_foreign_client_metadata(body: &mut Map<String, Value>) {
     }
 }
 
-fn enable_grok_prompt_cache_route(body: &mut Map<String, Value>) {
+fn enable_grok_prompt_cache_route(
+    body: &mut Map<String, Value>,
+    upstream_model: &str,
+    response: &mut GrokResponseTransform,
+) {
     let tools = body
         .entry("tools".to_owned())
         .or_insert_with(|| Value::Array(Vec::new()));
     let Value::Array(tools) = tools else {
         return;
     };
-    // 缓存路由不得改变模型可调用的工具集：客户端带工具时无法既保留其
-    // tool_choice 语义又阻止注入的原生搜索被调用，因此直接不注入。
-    if !tools.is_empty() {
+    response.observe_upstream_cache_tools(tools);
+    if is_cache_media_model(upstream_model) || has_tool_type(tools, "image_generation") {
         return;
     }
-    for tool in GROK_CACHE_ROUTE_TOOLS {
-        tools.push(json_object([("type", Value::String((*tool).to_owned()))]));
+    if tools.is_empty() {
+        for tool in GROK_CACHE_ROUTE_TOOLS {
+            tools.push(json_object([("type", Value::String((*tool).to_owned()))]));
+            response.mark_injected_cache_tool(tool);
+        }
+        // 无客户端工具时以 none 选中缓存路由，同时不授予搜索能力。
+        body.insert("tool_choice".to_owned(), Value::String("none".to_owned()));
+    } else if !has_tool_type(tools, "x_search") {
+        tools.push(json_object([(
+            "type",
+            Value::String("x_search".to_owned()),
+        )]));
+        response.mark_injected_cache_tool("x_search");
     }
-    // 禁用工具调用，使原生搜索声明只承担缓存路由作用。
-    body.insert("tool_choice".to_owned(), Value::String("none".to_owned()));
+    append_x_search_to_allowed_tools(body);
+}
+
+fn is_cache_media_model(model: &str) -> bool {
+    let model = model.trim().to_ascii_lowercase();
+    ["image", "imagine", "video"]
+        .into_iter()
+        .any(|marker| model.contains(marker))
+}
+
+fn append_x_search_to_allowed_tools(body: &mut Map<String, Value>) {
+    let Some(choice) = body.get_mut("tool_choice").and_then(Value::as_object_mut) else {
+        return;
+    };
+    if choice.get("type").and_then(Value::as_str) != Some("allowed_tools") {
+        return;
+    }
+    let Some(allowed) = choice.get_mut("tools").and_then(Value::as_array_mut) else {
+        return;
+    };
+    if !has_tool_type(allowed, "x_search") {
+        allowed.push(json_object([(
+            "type",
+            Value::String("x_search".to_owned()),
+        )]));
+    }
 }
 
 fn explicit_session_seed(request: &GenerateRequest, body: &Map<String, Value>) -> Option<String> {
@@ -674,6 +738,11 @@ pub(crate) struct GrokResponseTransform {
     aliases: BTreeMap<String, ToolIdentity>,
     visible_tools: Vec<Value>,
     legacy_local_shell: bool,
+    filter_x_search: bool,
+    injected_tool_types: BTreeSet<String>,
+    client_declared_tools: BTreeSet<String>,
+    dropped_output_indexes: BTreeSet<u64>,
+    dropped_item_ids: BTreeSet<String>,
     stream_calls: BTreeMap<String, StreamCallState>,
     stream_keys: BTreeMap<String, String>,
 }
@@ -698,7 +767,42 @@ impl GrokTransformedWireEvent {
 impl GrokResponseTransform {
     #[must_use]
     pub(crate) fn is_empty(&self) -> bool {
-        self.aliases.is_empty() && self.visible_tools.is_empty() && !self.legacy_local_shell
+        self.aliases.is_empty()
+            && self.visible_tools.is_empty()
+            && !self.legacy_local_shell
+            && !self.filter_x_search
+            && self.injected_tool_types.is_empty()
+    }
+
+    fn observe_client_cache_tools(&mut self) {
+        for tool in &self.visible_tools {
+            let kind = tool.get("type").and_then(Value::as_str).unwrap_or_default();
+            if kind == "x_search" {
+                self.filter_x_search = true;
+            }
+            if matches!(kind, "function" | "custom")
+                && let Some(name) = tool
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+            {
+                self.client_declared_tools.insert(name.to_owned());
+            }
+        }
+    }
+
+    fn observe_upstream_cache_tools(&mut self, tools: &[Value]) {
+        if has_tool_type(tools, "x_search") {
+            self.filter_x_search = true;
+        }
+    }
+
+    fn mark_injected_cache_tool(&mut self, kind: &str) {
+        self.injected_tool_types.insert(kind.to_owned());
+        if kind == "x_search" {
+            self.filter_x_search = true;
+        }
     }
 
     pub(crate) fn rewrite_stream_event(
@@ -706,6 +810,20 @@ impl GrokResponseTransform {
         event_type: &str,
         mut value: Value,
     ) -> Result<Vec<GrokTransformedWireEvent>, GrokRequestEncodeError> {
+        if self.cache_filter_enabled() {
+            if value
+                .get("item")
+                .is_some_and(|item| self.is_internal_cache_call(item))
+            {
+                self.record_dropped_cache_item(&value);
+                return Ok(Vec::new());
+            }
+            self.filter_cache_envelope(&mut value)?;
+            if self.references_dropped_cache_item(&value) {
+                return Ok(Vec::new());
+            }
+            self.compact_cache_output_index(&mut value);
+        }
         if event_type == "response.output_item.added"
             && let Some(item) = value.get("item").and_then(Value::as_object)
             && let Some(primary) = self.remember_stream_call(item)
@@ -1031,9 +1149,145 @@ impl GrokResponseTransform {
         ])
     }
 
+    fn cache_filter_enabled(&self) -> bool {
+        self.filter_x_search || !self.injected_tool_types.is_empty()
+    }
+
+    fn is_internal_cache_call(&self, item: &Value) -> bool {
+        let Some(item) = item.as_object() else {
+            return false;
+        };
+        let kind = string_field(item, "type").trim();
+        if kind == "web_search_call" {
+            return self.injected_tool_types.contains("web_search");
+        }
+        if !matches!(kind, "custom_tool_call" | "function_call") {
+            return false;
+        }
+        if string_field(item, "call_id").trim().starts_with("xs_call") {
+            return true;
+        }
+        let name = string_field(item, "name").trim();
+        matches!(
+            name,
+            "x_user_search" | "x_semantic_search" | "x_keyword_search" | "x_thread_fetch"
+        ) && string_field(item, "namespace").trim().is_empty()
+            && !self.client_declared_tools.contains(name)
+    }
+
+    fn record_dropped_cache_item(&mut self, payload: &Value) {
+        if let Some(index) = payload.get("output_index").and_then(Value::as_u64) {
+            self.dropped_output_indexes.insert(index);
+        }
+        let Some(item) = payload.get("item").and_then(Value::as_object) else {
+            return;
+        };
+        for field in ["id", "call_id"] {
+            if let Some(value) = item
+                .get(field)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                self.dropped_item_ids.insert(value.to_owned());
+            }
+        }
+    }
+
+    fn references_dropped_cache_item(&self, payload: &Value) -> bool {
+        if payload
+            .get("output_index")
+            .and_then(Value::as_u64)
+            .is_some_and(|index| self.dropped_output_indexes.contains(&index))
+        {
+            return true;
+        }
+        ["item_id", "call_id"].into_iter().any(|field| {
+            payload
+                .get(field)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .is_some_and(|value| self.dropped_item_ids.contains(value))
+        })
+    }
+
+    fn compact_cache_output_index(&self, payload: &mut Value) {
+        let Some(index) = payload.get("output_index").and_then(Value::as_u64) else {
+            return;
+        };
+        let removed_before = self
+            .dropped_output_indexes
+            .iter()
+            .filter(|dropped| **dropped < index)
+            .count() as u64;
+        if removed_before > 0
+            && let Some(payload) = payload.as_object_mut()
+        {
+            payload.insert(
+                "output_index".to_owned(),
+                Value::from(index.saturating_sub(removed_before)),
+            );
+        }
+    }
+
+    fn filter_cache_envelope(&self, payload: &mut Value) -> Result<(), GrokRequestEncodeError> {
+        let Some(payload) = payload.as_object_mut() else {
+            return Ok(());
+        };
+        self.filter_cache_output(payload)?;
+        self.filter_injected_cache_tools(payload)?;
+        if let Some(response) = payload.get_mut("response").and_then(Value::as_object_mut) {
+            self.filter_cache_output(response)?;
+            self.filter_injected_cache_tools(response)?;
+        }
+        Ok(())
+    }
+
+    fn filter_cache_output(
+        &self,
+        envelope: &mut Map<String, Value>,
+    ) -> Result<(), GrokRequestEncodeError> {
+        let Some(output) = envelope.get_mut("output") else {
+            return Ok(());
+        };
+        let output = output
+            .as_array_mut()
+            .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
+        output.retain(|item| !self.is_internal_cache_call(item));
+        Ok(())
+    }
+
+    fn filter_injected_cache_tools(
+        &self,
+        envelope: &mut Map<String, Value>,
+    ) -> Result<(), GrokRequestEncodeError> {
+        if self.injected_tool_types.is_empty() {
+            return Ok(());
+        }
+        let Some(tools) = envelope.get_mut("tools") else {
+            return Ok(());
+        };
+        let tools = tools
+            .as_array_mut()
+            .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
+        tools.retain(|tool| {
+            tool.get("type")
+                .and_then(Value::as_str)
+                .is_none_or(|kind| !self.injected_tool_types.contains(kind.trim()))
+        });
+        if tools.is_empty() {
+            envelope.remove("tools");
+        }
+        Ok(())
+    }
+
     fn restore_visible_tools(&self, response: &mut Map<String, Value>) {
         if response.contains_key("tools") {
-            response.insert("tools".to_owned(), Value::Array(self.visible_tools.clone()));
+            if self.visible_tools.is_empty() {
+                response.remove("tools");
+            } else {
+                response.insert("tools".to_owned(), Value::Array(self.visible_tools.clone()));
+            }
         }
     }
 }
@@ -1125,6 +1379,8 @@ impl fmt::Debug for GrokResponseTransform {
             .field("alias_count", &self.aliases.len())
             .field("visible_tool_count", &self.visible_tools.len())
             .field("legacy_local_shell", &self.legacy_local_shell)
+            .field("filter_x_search", &self.filter_x_search)
+            .field("injected_tool_types", &self.injected_tool_types)
             .finish()
     }
 }
@@ -1982,6 +2238,9 @@ impl ToolNormalizer {
                     ]),
                 );
             }
+            "allowed_tools" => {
+                self.normalize_allowed_tools_choice(payload, object, normalized_tools)?;
+            }
             "function" => self.normalize_function_tool_choice(payload, object)?,
             _ => {
                 if let Some(hosted_kind) = normalize_hosted_tool_choice_kind(&kind) {
@@ -1999,6 +2258,94 @@ impl ToolNormalizer {
                 } else {
                     return Err(GrokRequestEncodeError::InvalidRequestNormalization);
                 }
+            }
+        }
+        Ok(())
+    }
+
+    fn normalize_allowed_tools_choice(
+        &self,
+        payload: &mut Map<String, Value>,
+        mut object: Map<String, Value>,
+        normalized_tools: &[Value],
+    ) -> Result<(), GrokRequestEncodeError> {
+        if !matches!(
+            object.get("mode").and_then(Value::as_str),
+            Some("auto" | "required")
+        ) {
+            return Err(GrokRequestEncodeError::InvalidRequestNormalization);
+        }
+        let allowed = object
+            .get_mut("tools")
+            .and_then(Value::as_array_mut)
+            .filter(|tools| !tools.is_empty())
+            .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
+        for allowed_tool in allowed {
+            self.normalize_allowed_tool_reference(allowed_tool, normalized_tools)?;
+        }
+        payload.insert("tool_choice".to_owned(), Value::Object(object));
+        Ok(())
+    }
+
+    fn normalize_allowed_tool_reference(
+        &self,
+        allowed_tool: &mut Value,
+        normalized_tools: &[Value],
+    ) -> Result<(), GrokRequestEncodeError> {
+        let object = allowed_tool
+            .as_object_mut()
+            .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
+        let kind = string_field(object, "type").trim().to_owned();
+        match kind.as_str() {
+            "function" => {
+                let choice = match object.get_mut("function") {
+                    Some(Value::Object(function)) => function,
+                    Some(_) => return Err(GrokRequestEncodeError::InvalidRequestNormalization),
+                    None => object,
+                };
+                rewrite_namespace_choice(choice, &self.identity_aliases)?;
+                let name = string_field(choice, "name").trim();
+                if name.is_empty() || !has_named_tool(normalized_tools, "function", name) {
+                    return Err(GrokRequestEncodeError::InvalidRequestNormalization);
+                }
+            }
+            "custom" => {
+                let identity = ToolIdentity::new(
+                    ToolKind::Custom,
+                    string_field(object, "namespace").trim(),
+                    string_field(object, "name").trim(),
+                );
+                let alias = self
+                    .identity_aliases
+                    .get(&identity)
+                    .cloned()
+                    .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
+                object.insert("type".to_owned(), Value::String("function".to_owned()));
+                object.insert("name".to_owned(), Value::String(alias));
+                object.remove("namespace");
+            }
+            "apply_patch" | "tool_search" => {
+                let identity = if kind == "apply_patch" {
+                    ToolIdentity::new(ToolKind::ApplyPatch, "", "apply_patch")
+                } else {
+                    ToolIdentity::new(ToolKind::ToolSearch, "", "tool_search")
+                };
+                let alias = self
+                    .identity_aliases
+                    .get(&identity)
+                    .cloned()
+                    .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
+                object.clear();
+                object.insert("type".to_owned(), Value::String("function".to_owned()));
+                object.insert("name".to_owned(), Value::String(alias));
+            }
+            _ => {
+                let hosted_kind = normalize_hosted_tool_choice_kind(&kind)
+                    .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
+                if !has_tool_type(normalized_tools, hosted_kind) {
+                    return Err(GrokRequestEncodeError::InvalidRequestNormalization);
+                }
+                object.insert("type".to_owned(), Value::String(hosted_kind.to_owned()));
             }
         }
         Ok(())
@@ -2078,6 +2425,13 @@ fn has_tool_type(tools: &[Value], kind: &str) -> bool {
     tools
         .iter()
         .any(|tool| tool.pointer("/type").and_then(Value::as_str) == Some(kind))
+}
+
+fn has_named_tool(tools: &[Value], kind: &str, name: &str) -> bool {
+    tools.iter().any(|tool| {
+        tool.pointer("/type").and_then(Value::as_str) == Some(kind)
+            && tool.pointer("/name").and_then(Value::as_str) == Some(name)
+    })
 }
 
 fn tools_of_type(tools: &[Value], kind: &str) -> Vec<Value> {

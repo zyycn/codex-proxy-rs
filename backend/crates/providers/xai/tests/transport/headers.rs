@@ -91,7 +91,7 @@ fn headers_should_bind_identity_to_the_selected_oauth_account() {
 }
 
 #[test]
-fn headers_should_keep_openai_cache_requests_out_of_shell_session_mode() {
+fn headers_should_send_both_stable_session_headers_without_inventing_a_turn_index() {
     let headers = build_grok_headers(
         &crate::support::xai_wire_profile(),
         &selected_session(),
@@ -109,7 +109,7 @@ fn headers_should_keep_openai_cache_requests_out_of_shell_session_mode() {
     };
 
     assert_eq!(value("x-grok-conv-id"), Some("session-fixture"));
-    assert_eq!(value("x-grok-session-id"), None);
+    assert_eq!(value("x-grok-session-id"), Some("session-fixture"));
     assert_eq!(value("x-grok-turn-idx"), None);
 }
 

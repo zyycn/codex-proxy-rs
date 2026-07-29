@@ -42,6 +42,7 @@ If the prior conversation contains a note about files at /tmp/compaction/segment
 pub struct GrokCompactionRequest {
     body: Map<String, Value>,
     affinity: Option<GrokSessionAffinityKey>,
+    reasoning_replay_session_id: Option<String>,
 }
 
 impl GrokCompactionRequest {
@@ -60,6 +61,8 @@ impl GrokCompactionRequest {
             upstream_model,
             client_api_key_ref,
         )?;
+        let reasoning_replay_session_id =
+            normalized.reasoning_replay_session_id().map(str::to_owned);
         let mut body = normalized.body().clone();
         let mut input = normalized.input_items();
         input.push(summary_prompt_item());
@@ -95,6 +98,7 @@ impl GrokCompactionRequest {
         Ok(Self {
             body,
             affinity: normalized.affinity().cloned(),
+            reasoning_replay_session_id,
         })
     }
 
@@ -108,6 +112,12 @@ impl GrokCompactionRequest {
     #[must_use]
     pub const fn affinity(&self) -> Option<&GrokSessionAffinityKey> {
         self.affinity.as_ref()
+    }
+
+    /// 返回用于在成功 compact 后清除 reasoning replay 的显式会话身份。
+    #[must_use]
+    pub(crate) fn reasoning_replay_session_id(&self) -> Option<&str> {
+        self.reasoning_replay_session_id.as_deref()
     }
 
     /// 序列化上游请求正文。

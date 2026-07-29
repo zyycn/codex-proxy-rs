@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use gateway_core::engine::credential::{
     AccountAvailability, AccountAvailabilityPolicy, AccountCandidate, AccountFeedbackStats,
     AccountSelectionContext, AccountSelector, ProviderAccount, ProviderAccountId,
@@ -17,7 +17,7 @@ use gateway_core::provider_ports::{
 use gateway_core::routing::{ProviderKind, UpstreamModelId};
 
 use super::catalog::{GrokCatalogScope, GrokCredentialCatalogCache, GrokCredentialQuotaService};
-use super::repository::GrokCredentialRepository;
+use super::repository::{GrokCredentialRepository, GrokCredentialRepositoryError};
 use super::types::{GrokCredentialAvailability, UpdateGrokCredentialState};
 use crate::{
     GrokCredentialFailure, GrokCredentialFeedbackFuture, GrokSessionBinding, GrokSessionSelection,
@@ -29,7 +29,6 @@ const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 const MAX_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(24 * 60 * 60);
 const STREAM_INTERRUPTION_COOLDOWN: Duration = Duration::from_secs(30);
 const UNAUTHORIZED_COOLDOWN: Duration = Duration::from_secs(60);
-const PAYMENT_REQUIRED_COOLDOWN: Duration = Duration::from_secs(60);
 const MODEL_ACCESS_DENIED_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 const MODEL_QUOTA_COOLDOWN: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_MODEL_COOLDOWN: Duration = Duration::from_secs(24 * 60 * 60);
@@ -369,6 +368,66 @@ impl GrokAccountSessionSelector {
             ))
             .await;
     }
+
+    async fn persist_account_failure(
+        &self,
+        session: &SelectedGrokSession,
+        availability: GrokCredentialAvailability,
+        reason: &'static str,
+        cooldown_until: Option<DateTime<Utc>>,
+        observed_at: chrono::DateTime<Utc>,
+    ) {
+        let update = |expected_revision| UpdateGrokCredentialState {
+            account_id: session.account_id().clone(),
+            expected_revision,
+            availability,
+            availability_reason: Some(reason.to_owned()),
+            cooldown_until,
+            observed_at,
+        };
+        match self
+            .repository
+            .update_state(&update(session.credential_revision()))
+            .await
+        {
+            Ok(()) => return,
+            Err(
+                GrokCredentialRepositoryError::Conflict
+                | GrokCredentialRepositoryError::StaleCredentialRevision,
+            ) => {}
+            Err(error) => {
+                tracing::warn!(
+                    account_id = %session.account_id(),
+                    error = %error,
+                    "xAI account failure state write failed"
+                );
+                return;
+            }
+        }
+        let current = match self.repository.load_current(session.account_id()).await {
+            Ok(current) if current.account.enabled() => current,
+            Ok(_) => return,
+            Err(error) => {
+                tracing::warn!(
+                    account_id = %session.account_id(),
+                    error = %error,
+                    "xAI account failure state reload failed"
+                );
+                return;
+            }
+        };
+        if let Err(error) = self
+            .repository
+            .update_state(&update(current.account.revision()))
+            .await
+        {
+            tracing::warn!(
+                account_id = %session.account_id(),
+                error = %error,
+                "xAI account failure state retry failed"
+            );
+        }
+    }
 }
 
 impl fmt::Debug for GrokAccountSessionSelector {
@@ -415,15 +474,11 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
                     "upstream_free_quota_exhausted",
                     None,
                 ),
-                GrokCredentialFailure::PaymentRequired { retry_after } => {
-                    let retry_after = bounded_cooldown(
-                        retry_after,
-                        PAYMENT_REQUIRED_COOLDOWN,
-                        MAX_RATE_LIMIT_COOLDOWN,
-                    );
-                    self.record_runtime_cooldown(session, retry_after).await;
-                    return;
-                }
+                GrokCredentialFailure::PaymentRequired { .. } => (
+                    GrokCredentialAvailability::QuotaExhausted,
+                    "upstream_payment_quota_exhausted",
+                    None,
+                ),
                 GrokCredentialFailure::ModelQuotaExhausted {
                     upstream_model,
                     retry_after,
@@ -452,26 +507,31 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
                         .unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN)
                         .min(MAX_RATE_LIMIT_COOLDOWN);
                     self.record_runtime_cooldown(session, retry_after).await;
-                    return;
+                    (
+                        GrokCredentialAvailability::Cooldown,
+                        "upstream_rate_limited",
+                        persistent_cooldown_until(observed_at, retry_after),
+                    )
                 }
                 GrokCredentialFailure::StreamInterrupted => {
                     self.record_runtime_cooldown(session, STREAM_INTERRUPTION_COOLDOWN)
                         .await;
-                    return;
+                    (
+                        GrokCredentialAvailability::Cooldown,
+                        "upstream_stream_interrupted",
+                        persistent_cooldown_until(observed_at, STREAM_INTERRUPTION_COOLDOWN),
+                    )
                 }
             };
             let (availability, reason, cooldown_until) = persistent;
-            let _ = self
-                .repository
-                .update_state(&UpdateGrokCredentialState {
-                    account_id: session.account_id().clone(),
-                    expected_revision: session.credential_revision(),
-                    availability,
-                    availability_reason: Some(reason.to_owned()),
-                    cooldown_until,
-                    observed_at,
-                })
-                .await;
+            self.persist_account_failure(
+                session,
+                availability,
+                reason,
+                cooldown_until,
+                observed_at,
+            )
+            .await;
         })
     }
 
@@ -493,7 +553,6 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
                     account.availability(),
                     AccountAvailability::Unknown
                         | AccountAvailability::Cooldown
-                        | AccountAvailability::QuotaExhausted
                         | AccountAvailability::Expired
                 )
             {
@@ -538,6 +597,15 @@ fn bounded_cooldown(
         .filter(|duration| !duration.is_zero())
         .unwrap_or(default)
         .min(maximum)
+}
+
+fn persistent_cooldown_until(
+    observed_at: DateTime<Utc>,
+    duration: Duration,
+) -> Option<DateTime<Utc>> {
+    chrono::Duration::from_std(duration)
+        .ok()
+        .map(|duration| observed_at + duration)
 }
 
 fn insert_runtime_cooldown(
