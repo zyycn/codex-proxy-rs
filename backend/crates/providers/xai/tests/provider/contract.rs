@@ -106,6 +106,15 @@ const SUCCESS_SSE: &[u8] = concat!(
 )
 .as_bytes();
 
+fn replay_ciphertext(seed: u8) -> String {
+    use base64::Engine as _;
+
+    let bytes = (0_u16..128)
+        .map(|value| (value as u8).wrapping_add(seed))
+        .collect::<Vec<_>>();
+    base64::engine::general_purpose::STANDARD_NO_PAD.encode(bytes)
+}
+
 fn stateful_sse(encrypted_content: &str) -> Vec<u8> {
     format!(
         concat!(
@@ -117,6 +126,25 @@ fn stateful_sse(encrypted_content: &str) -> Vec<u8> {
             "data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_state\",\"model\":\"grok-4.5\",\"status\":\"completed\"}}}}\n\n"
         ),
         encrypted_content
+    )
+    .into_bytes()
+}
+
+fn stateful_sse_with_assistant(encrypted_content: &str, assistant: &str) -> Vec<u8> {
+    let assistant = serde_json::to_string(assistant).expect("assistant text");
+    format!(
+        concat!(
+            "event: response.created\n",
+            "data: {{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_state\",\"model\":\"grok-4.5\"}}}}\n\n",
+            "event: response.output_item.done\n",
+            "data: {{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{{\"id\":\"reason_account_bound\",\"type\":\"reasoning\",\"status\":\"completed\",\"summary\":[],\"content\":null,\"encrypted_content\":\"{}\"}}}}\n\n",
+            "event: response.output_item.done\n",
+            "data: {{\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{{\"id\":\"message_account_bound\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{{\"type\":\"output_text\",\"text\":{assistant}}}]}}}}\n\n",
+            "event: response.completed\n",
+            "data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_state\",\"model\":\"grok-4.5\",\"status\":\"completed\"}}}}\n\n"
+        ),
+        encrypted_content,
+        assistant = assistant,
     )
     .into_bytes()
 }
@@ -275,6 +303,54 @@ impl GrokSessionSelector for StubSelector {
         Box::pin(async move {
             self.feedback.lock().expect("feedback").push(failure);
         })
+    }
+}
+
+struct SequencedAccountSelector {
+    accounts: Mutex<VecDeque<gateway_core::engine::credential::ProviderAccountId>>,
+}
+
+impl SequencedAccountSelector {
+    fn new(
+        accounts: impl IntoIterator<Item = gateway_core::engine::credential::ProviderAccountId>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            accounts: Mutex::new(accounts.into_iter().collect()),
+        })
+    }
+}
+
+impl GrokSessionSelector for SequencedAccountSelector {
+    fn select(&self, request: GrokSessionSelection) -> GrokSessionSelectorFuture<'_> {
+        let selected = self.accounts.lock().expect("account sequence").pop_front();
+        Box::pin(async move {
+            let id = selected.ok_or(GrokSessionSelectorError::NoEligibleSession)?;
+            if request.excluded_accounts().contains(&id)
+                || request
+                    .required_account()
+                    .is_some_and(|required| required != &id)
+            {
+                return Err(GrokSessionSelectorError::NoEligibleSession);
+            }
+            SelectedGrokSession::new(
+                id,
+                CredentialRevision::new(1).expect("revision"),
+                SecretValue::new("oauth-access"),
+                SecretValue::new("verified-user"),
+                Some(SecretValue::new("user@example.com")),
+                GrokSessionBinding::new("acct_provider").expect("binding"),
+                (),
+            )
+            .map_err(|_| GrokSessionSelectorError::InvalidSession)
+        })
+    }
+
+    fn record_failure<'a>(
+        &'a self,
+        _: &'a SelectedGrokSession,
+        _: GrokCredentialFailure,
+    ) -> GrokCredentialFeedbackFuture<'a> {
+        Box::pin(async {})
     }
 }
 
@@ -481,7 +557,7 @@ async fn provider_with_recovery(
 }
 
 async fn provider_with_catalog_transport(
-    selector: Arc<StubSelector>,
+    selector: Arc<dyn GrokSessionSelector>,
     transport: Arc<StubInferenceTransport>,
     recovery: Arc<StubRecovery>,
     catalog_transport: Arc<dyn GrokModelCatalogTransport>,
@@ -569,6 +645,19 @@ fn operation() -> Operation {
     Operation::Generate(GenerateRequest::from_protocol_payload(payload))
 }
 
+fn reasoning_replay_operation(session: &str, input: serde_json::Value) -> Operation {
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        Map::from_iter([
+            ("model".to_owned(), json!("client-model")),
+            ("prompt_cache_key".to_owned(), json!(session)),
+            ("input".to_owned(), input),
+        ]),
+    )
+    .expect("OpenAI payload");
+    Operation::Generate(GenerateRequest::from_protocol_payload(payload))
+}
+
 fn operation_with_reasoning_effort(effort: &str) -> Operation {
     let payload = ProtocolPayload::json_object(
         "openai",
@@ -607,6 +696,26 @@ fn compaction_operation() -> Operation {
         "openai",
         Map::from_iter([
             ("model".to_owned(), json!("client-model")),
+            (
+                "input".to_owned(),
+                json!([
+                    {"type": "message", "role": "user", "content": "history"},
+                    {"type": "compaction_trigger"}
+                ]),
+            ),
+            ("stream".to_owned(), json!(true)),
+        ]),
+    )
+    .expect("OpenAI payload");
+    Operation::Generate(GenerateRequest::from_protocol_payload(payload))
+}
+
+fn compaction_operation_with_prompt_cache(session: &str) -> Operation {
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        Map::from_iter([
+            ("model".to_owned(), json!("client-model")),
+            ("prompt_cache_key".to_owned(), json!(session)),
             (
                 "input".to_owned(),
                 json!([
@@ -735,6 +844,18 @@ fn context_with_continuation_attempt(
     attempt: ContinuationAttempt,
 ) -> AttemptContext {
     context(CancellationToken::new(), Some(continuation)).with_continuation_attempt(attempt)
+}
+
+async fn execute_successfully(provider: &GrokBuildProvider, operation: Operation) {
+    let mut stream = provider
+        .execute(
+            provider_request_with_operation("xai", operation),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("provider stream");
+    let events = stream.by_ref().collect::<Vec<_>>().await;
+    assert!(events.iter().all(Result::is_ok));
 }
 
 #[tokio::test]
@@ -1300,7 +1421,7 @@ async fn explicit_quota_http_429_marks_provider_error_replay_safe() {
 }
 
 #[tokio::test]
-async fn unknown_http_402_is_retryable_without_account_quota_feedback() {
+async fn unknown_http_402_is_retryable_with_payment_quota_feedback() {
     let selector = StubSelector::success();
     let transport = StubInferenceTransport::error(
         GrokInferenceTransportError::new(
@@ -1748,6 +1869,190 @@ async fn external_previous_response_is_rejected_before_selection() {
     };
     assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
     assert_eq!(selector.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn reasoning_replay_is_reused_only_for_the_same_explicit_session() {
+    let encrypted_content = replay_ciphertext(0);
+    let transport = StubInferenceTransport::sequence([
+        InferenceMode::SuccessBody(stateful_sse(&encrypted_content)),
+        InferenceMode::Success,
+        InferenceMode::Success,
+    ]);
+    let provider = provider(StubSelector::success(), transport.clone()).await;
+
+    execute_successfully(
+        &provider,
+        reasoning_replay_operation(
+            "session-a",
+            json!([{"type":"message","role":"user","content":"first"}]),
+        ),
+    )
+    .await;
+    execute_successfully(
+        &provider,
+        reasoning_replay_operation(
+            "session-b",
+            json!([{"type":"message","role":"user","content":"other"}]),
+        ),
+    )
+    .await;
+    execute_successfully(
+        &provider,
+        reasoning_replay_operation(
+            "session-a",
+            json!([{"type":"message","role":"user","content":"next"}]),
+        ),
+    )
+    .await;
+
+    let requests = transport.requests.lock().expect("requests");
+    let other: serde_json::Value =
+        serde_json::from_slice(requests[1].body()).expect("other session body");
+    let replayed: serde_json::Value =
+        serde_json::from_slice(requests[2].body()).expect("replayed body");
+    assert!(
+        other["input"]
+            .as_array()
+            .is_some_and(|input| input.iter().all(|item| item["type"] != "reasoning"))
+    );
+    assert_eq!(
+        replayed.pointer("/input/0/encrypted_content"),
+        Some(&json!(encrypted_content))
+    );
+}
+
+#[tokio::test]
+async fn reasoning_replay_is_scoped_to_the_selected_account() {
+    let encrypted_content = replay_ciphertext(1);
+    let transport = StubInferenceTransport::sequence([
+        InferenceMode::SuccessBody(stateful_sse(&encrypted_content)),
+        InferenceMode::Success,
+        InferenceMode::Success,
+    ]);
+    let selector = SequencedAccountSelector::new([
+        account_id("replay-a"),
+        account_id("replay-b"),
+        account_id("replay-a"),
+    ]);
+    let provider = provider_with_catalog_transport(
+        selector,
+        transport.clone(),
+        StubRecovery::new(GrokCredentialRecoveryOutcome::Unavailable),
+        Arc::new(StaticCatalogTransport),
+    )
+    .await;
+
+    for prompt in ["first", "different account", "owner again"] {
+        execute_successfully(
+            &provider,
+            reasoning_replay_operation(
+                "shared-session",
+                json!([{"type":"message","role":"user","content":prompt}]),
+            ),
+        )
+        .await;
+    }
+
+    let requests = transport.requests.lock().expect("requests");
+    let different_account: serde_json::Value =
+        serde_json::from_slice(requests[1].body()).expect("different account request body");
+    let owner_again: serde_json::Value =
+        serde_json::from_slice(requests[2].body()).expect("owner request body");
+    assert!(
+        different_account["input"]
+            .as_array()
+            .is_some_and(|input| input.iter().all(|item| item["type"] != "reasoning"))
+    );
+    assert_eq!(
+        owner_again.pointer("/input/0/encrypted_content"),
+        Some(&json!(encrypted_content))
+    );
+}
+
+#[tokio::test]
+async fn reasoning_replay_rejects_mismatched_assistant_history() {
+    let encrypted_content = replay_ciphertext(2);
+    let transport = StubInferenceTransport::sequence([
+        InferenceMode::SuccessBody(stateful_sse_with_assistant(
+            &encrypted_content,
+            "cached answer",
+        )),
+        InferenceMode::Success,
+    ]);
+    let provider = provider(StubSelector::success(), transport.clone()).await;
+
+    execute_successfully(
+        &provider,
+        reasoning_replay_operation(
+            "assistant-session",
+            json!([{"type":"message","role":"user","content":"first"}]),
+        ),
+    )
+    .await;
+    execute_successfully(
+        &provider,
+        reasoning_replay_operation(
+            "assistant-session",
+            json!([
+                {"type":"message","role":"user","content":"first"},
+                {"type":"message","role":"assistant","content":[{"type":"output_text","text":"different answer"}]},
+                {"type":"message","role":"user","content":"next"}
+            ]),
+        ),
+    )
+    .await;
+
+    let requests = transport.requests.lock().expect("requests");
+    let body: serde_json::Value = serde_json::from_slice(requests[1].body()).expect("second body");
+    assert!(
+        body["input"]
+            .as_array()
+            .is_some_and(|input| input.iter().all(|item| item["type"] != "reasoning"))
+    );
+}
+
+#[tokio::test]
+async fn successful_compaction_clears_reasoning_replay_for_the_session() {
+    let encrypted_content = replay_ciphertext(3);
+    let summary = valid_compaction_summary("reasoning replay cleared");
+    let transport = StubInferenceTransport::sequence([
+        InferenceMode::SuccessBody(stateful_sse(&encrypted_content)),
+        InferenceMode::SuccessBody(compaction_sse(&summary, None)),
+        InferenceMode::Success,
+    ]);
+    let provider = provider(StubSelector::success(), transport.clone()).await;
+
+    execute_successfully(
+        &provider,
+        reasoning_replay_operation(
+            "compact-session",
+            json!([{"type":"message","role":"user","content":"first"}]),
+        ),
+    )
+    .await;
+    execute_successfully(
+        &provider,
+        compaction_operation_with_prompt_cache("compact-session"),
+    )
+    .await;
+    execute_successfully(
+        &provider,
+        reasoning_replay_operation(
+            "compact-session",
+            json!([{"type":"message","role":"user","content":"after compact"}]),
+        ),
+    )
+    .await;
+
+    let requests = transport.requests.lock().expect("requests");
+    let body: serde_json::Value =
+        serde_json::from_slice(requests[2].body()).expect("post-compaction body");
+    assert!(
+        body["input"]
+            .as_array()
+            .is_some_and(|input| input.iter().all(|item| item["type"] != "reasoning"))
+    );
 }
 
 #[tokio::test]

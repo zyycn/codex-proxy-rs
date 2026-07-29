@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
-use base64::Engine as _;
 use futures::{StreamExt, future::BoxFuture};
 use gateway_core::engine::continuation::ContinuationBinding;
 use gateway_core::engine::credential::{
@@ -48,9 +47,13 @@ use crate::credential::{
     GrokCredentialRecovery, GrokCredentialRecoveryOutcome, GrokCredentialRefreshOutcome,
     GrokCredentialRefreshService, GrokQuotaError,
 };
+use crate::reasoning_replay::{
+    GrokReasoningReplay, GrokReasoningReplayCapture, GrokReasoningReplayKey,
+    valid_reasoning_ciphertext,
+};
 use crate::transport::canonical::GrokCanonicalDecoder;
 use crate::transport::config::XAI_PROVIDER_NAME;
-use crate::transport::headers::{GrokClientIdentity, GrokHeader, build_grok_headers};
+use crate::transport::headers::{GrokClientIdentity, build_grok_headers};
 use crate::transport::profile::{GROK_CLI_RELEASE_POLL_INTERVAL, GrokCliReleaseService};
 use crate::transport::{
     GROK_RESPONSES_URL, GrokCompactionDecodeError, GrokCompactionRequest,
@@ -66,8 +69,6 @@ const HTTP_SSE_TRANSPORT: &str = "http_sse";
 const DEFAULT_GROK_MODEL: &str = "grok-4.5";
 const XAI_SESSION_STATE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const XAI_SESSION_OUTPUT_LIMIT: usize = 4_096;
-const MIN_REASONING_CIPHERTEXT_BYTES: usize = 50;
-const MIN_REASONING_CIPHERTEXT_ENTROPY: f64 = 0.85;
 const REASONING_DECODE_FAILED_CODE: &str = "reasoning_decode_failed";
 const RESPONSE_NOT_FOUND_CODE: &str = "not_found";
 
@@ -82,6 +83,7 @@ pub struct GrokBuildProvider {
     credential_recovery: Arc<dyn GrokCredentialRecovery>,
     account_feedback: Arc<AccountFeedbackStats>,
     client_identity: GrokClientIdentity,
+    reasoning_replay: GrokReasoningReplay,
     wire_profile: XaiWireProfileState,
     responses_url: Url,
 }
@@ -105,6 +107,7 @@ impl GrokBuildProvider {
             credential_recovery,
             account_feedback,
             client_identity: GrokClientIdentity::new(),
+            reasoning_replay: GrokReasoningReplay::new(),
             wire_profile,
             responses_url,
         })
@@ -217,6 +220,38 @@ impl GrokBuildProvider {
             selected.account_id(),
             request_input.as_slice(),
         )?;
+        let inherited_replay_session_id = context
+            .continuation()
+            .is_none()
+            .then(|| {
+                previous_session
+                    .as_ref()
+                    .and_then(|state| state.session_id.as_deref())
+            })
+            .flatten();
+        let reasoning_replay_key = upstream_request
+            .reasoning_replay_session_id()
+            .or(inherited_replay_session_id)
+            .and_then(|session_id| {
+                self.reasoning_replay.key(
+                    candidate.upstream_model().as_str(),
+                    session_id,
+                    selected.account_id().as_str(),
+                )
+            });
+        if !upstream_request.has_previous_response_id()
+            && let (Some(key), Some(input)) = (
+                reasoning_replay_key.as_ref(),
+                upstream_request.replay_input_items(),
+            )
+            && let Some(input) = self.reasoning_replay.apply(key, &input)
+        {
+            upstream_request
+                .set_replay_input(input)
+                .map_err(map_request_error)?;
+        }
+        let reasoning_replay_capture =
+            reasoning_replay_key.map(|key| self.reasoning_replay.capture(key));
         let session_capture = (!matches!(
             context.continuation(),
             Some(ContinuationBinding::Pinned(_) | ContinuationBinding::External(_))
@@ -244,6 +279,7 @@ impl GrokBuildProvider {
                 context,
                 session: Arc::clone(&selected),
                 session_capture,
+                reasoning_replay_capture,
             },
         );
         let stream = ProviderStream::new(metadata, events, selected);
@@ -274,7 +310,7 @@ impl GrokBuildProvider {
             .map(|previous| ProviderAccountId::new(previous.account_id.clone()))
             .transpose()
             .map_err(|_| protocol_not_sent())?;
-        let upstream_session_id = previous_session
+        let inherited_session_id = previous_session
             .as_ref()
             .and_then(|previous| previous.session_id.clone());
         let upstream_request = GrokCompactionRequest::encode(
@@ -283,6 +319,12 @@ impl GrokBuildProvider {
             context.client_api_key_ref(),
         )
         .map_err(map_request_error)?;
+        let explicit_replay_session_id = upstream_request
+            .reasoning_replay_session_id()
+            .map(str::to_owned);
+        let upstream_session_id = inherited_session_id
+            .clone()
+            .or_else(|| explicit_replay_session_id.clone());
         let selected = Arc::new(
             select_grok_session(
                 self.selector.as_ref(),
@@ -293,6 +335,16 @@ impl GrokBuildProvider {
             )
             .await?,
         );
+        let reasoning_replay_key = explicit_replay_session_id
+            .as_deref()
+            .or(inherited_session_id.as_deref())
+            .and_then(|session_id| {
+                self.reasoning_replay.key(
+                    candidate.upstream_model().as_str(),
+                    session_id,
+                    selected.account_id().as_str(),
+                )
+            });
         let allows_account_state_mutation = selected.allows_account_state_mutation();
         let metadata = provider_call_metadata(candidate, &selected)?;
         let events = cold_compaction_http_sse_stream(
@@ -308,6 +360,8 @@ impl GrokBuildProvider {
                 upstream_session_id,
                 context,
                 session: Arc::clone(&selected),
+                reasoning_replay: self.reasoning_replay.clone(),
+                reasoning_replay_key,
             },
         );
         let stream = ProviderStream::new(metadata, events, selected);
@@ -715,46 +769,6 @@ fn portable_output_item(mut item: Value, strip_opaque: bool) -> Option<Value> {
     Some(item)
 }
 
-fn valid_reasoning_ciphertext(value: &str) -> bool {
-    if value.is_empty()
-        || value != value.trim()
-        || value.len() > XAI_SESSION_STATE_MAX_BYTES
-        || value.starts_with("gAAAA")
-        || value.contains('=')
-    {
-        return false;
-    }
-    let Ok(decoded) = base64::engine::general_purpose::STANDARD_NO_PAD.decode(value) else {
-        return false;
-    };
-    decoded.len() >= MIN_REASONING_CIPHERTEXT_BYTES
-        && byte_entropy_ratio(&decoded) >= MIN_REASONING_CIPHERTEXT_ENTROPY
-}
-
-fn byte_entropy_ratio(value: &[u8]) -> f64 {
-    if value.is_empty() {
-        return 0.0;
-    }
-    let mut counts = [0_u32; 256];
-    for byte in value {
-        counts[usize::from(*byte)] += 1;
-    }
-    let size = value.len() as f64;
-    let entropy = counts
-        .into_iter()
-        .filter(|count| *count > 0)
-        .map(|count| {
-            let probability = f64::from(count) / size;
-            -probability * probability.log2()
-        })
-        .sum::<f64>();
-    let symbols = value.len().min(256);
-    if symbols <= 1 {
-        return 0.0;
-    }
-    entropy / (symbols as f64).log2()
-}
-
 fn has_readable_reasoning(item: &Map<String, Value>) -> bool {
     ["summary", "content"].into_iter().any(|field| {
         item.get(field)
@@ -898,6 +912,7 @@ struct GrokStreamAttempt {
     context: AttemptContext,
     session: Arc<SelectedGrokSession>,
     session_capture: Option<GrokSessionCapture>,
+    reasoning_replay_capture: Option<GrokReasoningReplayCapture>,
 }
 
 struct GrokCompactionStreamAttempt {
@@ -910,6 +925,8 @@ struct GrokCompactionStreamAttempt {
     upstream_session_id: Option<String>,
     context: AttemptContext,
     session: Arc<SelectedGrokSession>,
+    reasoning_replay: GrokReasoningReplay,
+    reasoning_replay_key: Option<GrokReasoningReplayKey>,
 }
 
 struct AcceptedGrokInference {
@@ -1044,9 +1061,11 @@ fn cold_compaction_http_sse_stream(
         upstream_session_id,
         context,
         session,
+        reasoning_replay,
+        reasoning_replay_key,
     } = attempt;
     Box::pin(async_stream::try_stream! {
-        let mut headers = build_grok_headers(
+        let headers = build_grok_headers(
             &wire_profile,
             &session,
             &client_identity,
@@ -1055,12 +1074,6 @@ fn cold_compaction_http_sse_stream(
             None,
             &upstream_model,
         );
-        if let Some(upstream_session_id) = upstream_session_id.as_deref() {
-            headers.push(GrokHeader::sensitive(
-                "x-grok-session-id",
-                crate::credential::SecretValue::new(upstream_session_id.to_owned()),
-            ));
-        }
         let body = request.to_json_bytes().map_err(map_request_error)?;
         let inference_request = GrokInferenceRequest::new(
             responses_url,
@@ -1146,6 +1159,9 @@ fn cold_compaction_http_sse_stream(
         ensure_sent_context(&context)?;
         if upstream_completed && session.allows_account_state_mutation() {
             selector.record_success(&session).await;
+        }
+        if let Some(key) = reasoning_replay_key.as_ref() {
+            reasoning_replay.clear(key);
         }
         yield ProviderEvent::canonical_with_wire(vec![GatewayEvent::Started(started)], created);
         yield ProviderEvent::wire(output_done);
@@ -1245,6 +1261,7 @@ fn cold_http_sse_stream(
         context,
         session,
         mut session_capture,
+        mut reasoning_replay_capture,
     } = attempt;
     Box::pin(async_stream::try_stream! {
         if context.cancellation().is_cancelled() {
@@ -1364,6 +1381,9 @@ fn cold_http_sse_stream(
                 .flat_map(ProviderEvent::canonical_facts)
                 .any(|event| matches!(event, GatewayEvent::Completed(_)));
             attach_xai_session_update(&mut events, &mut session_capture)?;
+            if let Some(capture) = reasoning_replay_capture.as_mut() {
+                capture.observe(&events);
+            }
             if completed && session.allows_account_state_mutation() {
                 selector.record_success(&session).await;
             }
@@ -1389,6 +1409,9 @@ fn cold_http_sse_stream(
             .flat_map(ProviderEvent::canonical_facts)
             .any(|event| matches!(event, GatewayEvent::Completed(_)));
         attach_xai_session_update(&mut final_events, &mut session_capture)?;
+        if let Some(capture) = reasoning_replay_capture.as_mut() {
+            capture.observe(&final_events);
+        }
         if completed && session.allows_account_state_mutation() {
             selector.record_success(&session).await;
         }
@@ -1871,7 +1894,9 @@ const WORKER_LEASE_TTL: Duration = Duration::from_secs(15 * 60);
 const WORKER_LEASE_RENEWAL: Duration = Duration::from_secs(5 * 60);
 const OAUTH_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const QUOTA_CATALOG_INTERVAL: Duration = Duration::from_secs(5 * 60);
-const QUOTA_PERIODIC_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(30 * 60);
+// grok2api 对 Free/未知额度耗尽采用 24 小时恢复探测；当前公共账号状态没有
+// 独立的 paid period-end 字段，因此 Build 账号统一使用同一保守下限。
+const QUOTA_PERIODIC_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const CLI_RELEASE_WORKER_OWNER: &str = "xai-cli-release";
 
 pub(crate) fn worker_contributions(

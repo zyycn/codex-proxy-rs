@@ -256,7 +256,7 @@ fn explicit_session_should_enable_the_noop_native_cache_route() {
 }
 
 #[test]
-fn explicit_session_should_not_add_invokable_cache_tools_to_client_tool_requests() {
+fn explicit_session_should_add_only_internal_x_search_to_client_tool_requests() {
     let request = raw_request(json!({
         "model": "client",
         "prompt_cache_key": "conversation-42",
@@ -273,15 +273,15 @@ fn explicit_session_should_not_add_invokable_cache_tools_to_client_tool_requests
         GrokResponsesRequest::encode(&request, "grok-4.5", &client_key()).expect("request");
     let body = Value::Object(encoded.body().clone());
 
-    // 缓存路由不得扩大模型可调用的工具集：带客户端工具时不注入原生搜索。
     assert_eq!(
-        body.pointer("/tools"),
-        Some(&json!([{
+        body.pointer("/tools/0"),
+        Some(&json!({
             "type": "function",
             "name": "read_file",
             "parameters": {"type": "object"}
-        }]))
+        }))
     );
+    assert_eq!(body.pointer("/tools/1"), Some(&json!({"type": "x_search"})));
     assert_eq!(body.pointer("/tool_choice"), Some(&json!("auto")));
 }
 
@@ -384,7 +384,7 @@ fn function_parameters_should_report_the_invalid_nullable_root_field() {
 }
 
 #[test]
-fn explicit_session_should_not_inject_cache_tools_after_codex_additional_tools_normalization() {
+fn explicit_session_should_add_x_search_after_codex_additional_tools_normalization() {
     let request = raw_request(json!({
         "model": "client",
         "prompt_cache_key": "conversation-42",
@@ -417,9 +417,36 @@ fn explicit_session_should_not_inject_cache_tools_after_codex_additional_tools_n
         Some(&json!(["patch"]))
     );
     assert_eq!(body.pointer("/tools/1/name"), Some(&json!("read_file")));
-    // 归一化装载的会话工具视同客户端工具：不再追加可被调用的原生搜索。
-    assert_eq!(body.pointer("/tools/2"), None);
+    assert_eq!(body.pointer("/tools/2"), Some(&json!({"type": "x_search"})));
     assert_eq!(body.pointer("/tool_choice"), Some(&json!("auto")));
+}
+
+#[test]
+fn explicit_session_should_add_x_search_to_allowed_tools_choice() {
+    let request = raw_request(json!({
+        "model": "client",
+        "prompt_cache_key": "conversation-42",
+        "input": "first",
+        "tools": [{
+            "type": "function",
+            "name": "read_file",
+            "parameters": {"type": "object"}
+        }],
+        "tool_choice": {
+            "type": "allowed_tools",
+            "mode": "auto",
+            "tools": [{"type": "function", "name": "read_file"}]
+        }
+    }));
+
+    let encoded =
+        GrokResponsesRequest::encode(&request, "grok-4.5", &client_key()).expect("request");
+    let body = Value::Object(encoded.body().clone());
+
+    assert_eq!(
+        body.pointer("/tool_choice/tools/1"),
+        Some(&json!({"type": "x_search"}))
+    );
 }
 
 #[test]

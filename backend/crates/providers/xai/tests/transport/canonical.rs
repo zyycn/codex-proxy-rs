@@ -643,6 +643,76 @@ fn decoder_should_preserve_image_and_hosted_tool_items_without_inventing_facts()
 }
 
 #[test]
+fn decoder_should_hide_injected_search_calls_and_compact_later_output_indexes() {
+    let request = tool_request(serde_json::json!({
+        "model": "client",
+        "prompt_cache_key": "cache-session",
+        "input": "hello"
+    }));
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_cache\",\"tools\":[{\"type\":\"web_search\"},{\"type\":\"x_search\"}]}}\n\n",
+        "event: response.output_item.added\n",
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"item_xs\",\"call_id\":\"xs_call_1\",\"name\":\"x_semantic_search\",\"arguments\":\"{}\"}}\n\n",
+        "event: response.function_call_arguments.delta\n",
+        "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"item_id\":\"item_xs\",\"call_id\":\"xs_call_1\",\"delta\":\"{}\"}\n\n",
+        "event: response.output_item.done\n",
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"item_xs\",\"call_id\":\"xs_call_1\",\"name\":\"x_semantic_search\",\"arguments\":\"{}\"}}\n\n",
+        "event: response.output_item.added\n",
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"type\":\"image_generation_call\",\"id\":\"image_visible\"}}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_cache\",\"status\":\"completed\",\"tools\":[{\"type\":\"web_search\"},{\"type\":\"x_search\"}],\"output\":[{\"type\":\"function_call\",\"call_id\":\"xs_call_1\",\"name\":\"x_semantic_search\",\"arguments\":\"{}\"},{\"type\":\"image_generation_call\",\"id\":\"image_visible\"}]}}\n\n",
+    );
+
+    let events = GrokCanonicalDecoder::for_request("grok-4.5", &request)
+        .push(body.as_bytes())
+        .expect("filtered cache route response");
+    let wire = wire_events(&events);
+
+    assert_eq!(wire.len(), 3);
+    assert_eq!(
+        wire[1].data().get("output_index"),
+        Some(&serde_json::json!(0))
+    );
+    assert_eq!(
+        wire[2].data().pointer("/response/output/0/id"),
+        Some(&serde_json::json!("image_visible"))
+    );
+    assert_eq!(wire[2].data().pointer("/response/output/1"), None);
+    assert_eq!(wire[2].data().pointer("/response/tools"), None);
+}
+
+#[test]
+fn decoder_should_preserve_an_internal_search_name_declared_by_the_client() {
+    let request = tool_request(serde_json::json!({
+        "model": "client",
+        "prompt_cache_key": "cache-session",
+        "input": "hello",
+        "tools": [{
+            "type": "function",
+            "name": "x_user_search",
+            "parameters": {"type": "object"}
+        }]
+    }));
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_declared\"}}\n\n",
+        "event: response.output_item.added\n",
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"item_client\",\"call_id\":\"call_client\",\"name\":\"x_user_search\",\"arguments\":\"{}\"}}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_declared\",\"status\":\"completed\"}}\n\n",
+    );
+
+    let events = GrokCanonicalDecoder::for_request("grok-4.5", &request)
+        .push(body.as_bytes())
+        .expect("client-declared search function");
+
+    assert!(wire_events(&events).iter().any(|event| {
+        event.data().pointer("/item/name") == Some(&serde_json::json!("x_user_search"))
+    }));
+}
+
+#[test]
 fn decoder_should_tolerate_mismatched_event_identity_and_preserve_the_wire_event() {
     let body = concat!(
         "event: response.created\n",

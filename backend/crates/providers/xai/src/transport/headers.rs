@@ -142,11 +142,11 @@ pub fn build_grok_headers(
             "x-grok-conv-id",
             SecretValue::new(upstream_session_id.to_owned()),
         ));
+        headers.push(GrokHeader::sensitive(
+            "x-grok-session-id",
+            SecretValue::new(upstream_session_id.to_owned()),
+        ));
         if let Some(turn_index) = turn_index {
-            headers.push(GrokHeader::sensitive(
-                "x-grok-session-id",
-                SecretValue::new(upstream_session_id.to_owned()),
-            ));
             headers.push(GrokHeader::public("x-grok-turn-idx", turn_index));
         }
     }

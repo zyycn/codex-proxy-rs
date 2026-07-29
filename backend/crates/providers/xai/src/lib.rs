@@ -4,6 +4,7 @@ mod admin;
 pub mod config;
 pub mod credential;
 mod provider;
+mod reasoning_replay;
 pub mod transport;
 
 use std::path::Path;
