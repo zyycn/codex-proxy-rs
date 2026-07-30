@@ -443,7 +443,7 @@ async fn passive_full_percent_with_explicit_allowance_keeps_account_ready() {
 }
 
 #[tokio::test]
-async fn manual_quota_refresh_updates_account_state_from_provider_response() {
+async fn manual_quota_refresh_keeps_confirmed_exhaustion_until_the_recorded_reset() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_manual_quota_state";
     create_account(&store, account_id).await;
@@ -541,24 +541,25 @@ async fn manual_quota_refresh_updates_account_state_from_provider_response() {
             "rate_limit": {
                 "allowed": true,
                 "limit_reached": false,
-                "primary_window": {"used_percent": 20, "reset_at": 1_900_000_000}
+                "primary_window": {"used_percent": 99, "reset_at": 1_900_000_000}
             }
         })))
         .mount(&server)
         .await;
 
-    let recovered = service
+    let unchanged_reset = service
         .refresh_account(account.id())
         .await
-        .expect("refresh recovered quota");
+        .expect("refresh lower usage quota");
 
-    assert!(!recovered.fact().exhausted());
+    assert!(!unchanged_reset.fact().exhausted());
     assert_eq!(
         store
             .account(account_id)
-            .expect("recovered account")
+            .expect("account after lower usage")
             .availability(),
-        AccountAvailability::Ready
+        AccountAvailability::QuotaExhausted,
+        "a lower used_percent before the recorded reset is not quota recovery"
     );
 }
 
@@ -1051,7 +1052,7 @@ async fn periodic_quota_synchronization_rechecks_exhausted_accounts_without_wait
 }
 
 #[tokio::test]
-async fn periodic_quota_synchronization_requires_a_real_snapshot_improvement_to_recover() {
+async fn periodic_quota_synchronization_does_not_recover_from_percent_drop_before_reset() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_periodic_recovery_evidence";
     create_account(&store, account_id).await;
@@ -1066,7 +1067,7 @@ async fn periodic_quota_synchronization_requires_a_real_snapshot_improvement_to_
                     "rate_limit": {
                         "allowed": true,
                         "limit_reached": false,
-                        "primary_window": {"used_percent": 86, "reset_at": reset_at}
+                        "primary_window": {"used_percent": 100, "reset_at": reset_at}
                     }
                 })
                 .as_object()
@@ -1095,7 +1096,7 @@ async fn periodic_quota_synchronization_requires_a_real_snapshot_improvement_to_
             "rate_limit": {
                 "allowed": true,
                 "limit_reached": false,
-                "primary_window": {"used_percent": 86, "reset_at": reset_at}
+                "primary_window": {"used_percent": 100, "reset_at": reset_at}
             }
         })))
         .expect(1)
@@ -1131,7 +1132,7 @@ async fn periodic_quota_synchronization_requires_a_real_snapshot_improvement_to_
             "rate_limit": {
                 "allowed": true,
                 "limit_reached": false,
-                "primary_window": {"used_percent": 20, "reset_at": reset_at}
+                "primary_window": {"used_percent": 99, "reset_at": reset_at}
             }
         })))
         .expect(1)
@@ -1147,19 +1148,71 @@ async fn periodic_quota_synchronization_requires_a_real_snapshot_improvement_to_
         server.uri(),
     );
 
-    let improved = next_cycle
+    let lower_percent = next_cycle
         .synchronize()
         .await
-        .expect("improved quota recheck");
+        .expect("lower percent quota recheck");
 
-    assert_eq!(improved.updated, 1);
+    assert_eq!(lower_percent.updated, 1);
     assert_eq!(
         store
             .account(account_id)
-            .expect("account after improved snapshot")
+            .expect("account after lower percent snapshot")
             .availability(),
-        AccountAvailability::Ready
+        AccountAvailability::QuotaExhausted,
+        "a provider percentage change is not sufficient to release a confirmed exhaustion"
     );
+}
+
+#[tokio::test]
+async fn periodic_quota_synchronization_recovers_after_recorded_reset() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_periodic_reset_elapsed";
+    create_account(&store, account_id).await;
+    let account = store.account(account_id).expect("created account");
+    store
+        .apply_state_change(AccountStateChange {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            availability: AccountAvailability::QuotaExhausted,
+            reason: Some("usage_limit_exhausted".to_owned()),
+            cooldown_until: SystemTime::now().checked_sub(Duration::from_secs(60)),
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("mark account exhausted with an elapsed reset");
+    let server = MockServer::start().await;
+    let next_reset = Utc::now().timestamp() + 24 * 60 * 60;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {"used_percent": 1, "reset_at": next_reset}
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    // 定时复核可提前执行，但只有已记录的 reset 到期后才释放额度耗尽状态。
+    let summary = service.synchronize().await.expect("quota synchronization");
+
+    assert_eq!(summary.updated, 1);
+    let current = store
+        .account(account_id)
+        .expect("account after elapsed reset");
+    assert_eq!(current.availability(), AccountAvailability::Ready);
+    assert_eq!(current.cooldown_until(), None);
 }
 
 #[tokio::test]
