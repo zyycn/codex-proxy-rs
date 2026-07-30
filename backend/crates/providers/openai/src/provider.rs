@@ -2009,15 +2009,15 @@ fn schedule_authoritative_quota_refresh_after_failure(
     account: &ProviderAccount,
 ) {
     // 限额错误可以确认账号状态，但 Responses 事件中的 used_percent 可能仍停在上一结算点。
-    // usage 快照在后台补齐，不能阻塞原始失败响应。先等待 2 秒让上游结算，
-    // 再查询；5 秒仅限制实际查询自身。
+    // usage 快照在后台补齐展示基线，不得撤销同一轮真实失败，也不能阻塞原始响应。
+    // 先等待 2 秒让上游结算，再查询；5 秒仅限制实际查询自身。
     let quota = Arc::clone(quota);
     let account_id = account.id().clone();
     drop(tokio::spawn(async move {
         tokio::time::sleep(QUOTA_FAILURE_REFRESH_DELAY).await;
         match tokio::time::timeout(
             QUOTA_FAILURE_REFRESH_TIMEOUT,
-            quota.refresh_account(&account_id),
+            quota.refresh_account_after_failure(&account_id),
         )
         .await
         {

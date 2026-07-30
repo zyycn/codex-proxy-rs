@@ -36,6 +36,7 @@ struct StoredAccount {
     account: ProviderAccount,
     credential: gateway_core::engine::credential::PlaintextCredential,
     quota: Option<QuotaObservation>,
+    state_observed_at: Option<SystemTime>,
 }
 
 #[derive(Default)]
@@ -129,6 +130,7 @@ impl ProviderAccountStore for MemoryAccountStore {
                 account: input.account,
                 credential: input.credential,
                 quota: None,
+                state_observed_at: None,
             },
         );
         Ok(())
@@ -260,6 +262,15 @@ impl ProviderAccountStore for MemoryAccountStore {
         if stored.account.revision() != observation.expected_revision {
             return Ok(QuotaWriteOutcome::Conflict);
         }
+        if stored
+            .quota
+            .as_ref()
+            .and_then(|quota| quota.observed_at)
+            .zip(observation.observed_at)
+            .is_some_and(|(current, incoming)| current > incoming)
+        {
+            return Ok(QuotaWriteOutcome::Conflict);
+        }
         stored.quota = Some(observation);
         Ok(QuotaWriteOutcome::Updated)
     }
@@ -270,6 +281,12 @@ impl ProviderAccountStore for MemoryAccountStore {
             .get_mut(&change.account_id)
             .ok_or_else(|| store_error(StoreErrorKind::InvalidData))?;
         if stored.account.revision() != change.expected_revision {
+            return Err(store_error(StoreErrorKind::Conflict));
+        }
+        if stored
+            .state_observed_at
+            .is_some_and(|current| current > change.observed_at)
+        {
             return Err(store_error(StoreErrorKind::Conflict));
         }
         stored.account = rebuild_account(
@@ -285,6 +302,7 @@ impl ProviderAccountStore for MemoryAccountStore {
                 profile: None,
             },
         );
+        stored.state_observed_at = Some(change.observed_at);
         Ok(())
     }
 

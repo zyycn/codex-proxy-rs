@@ -509,6 +509,38 @@ async fn manual_quota_refresh_updates_account_state_from_provider_response() {
             "rate_limit": {
                 "allowed": true,
                 "limit_reached": false,
+                "primary_window": {"used_percent": 100, "reset_at": 1_900_000_000}
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let stale = service
+        .refresh_account(account.id())
+        .await
+        .expect("refresh contradictory full quota");
+
+    assert!(!stale.fact().exhausted());
+    assert_eq!(
+        store
+            .account(account_id)
+            .expect("account after contradictory quota")
+            .availability(),
+        AccountAvailability::QuotaExhausted,
+        "an unchanged usage window cannot override a confirmed quota failure"
+    );
+
+    server.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .and(header(
+            "authorization",
+            format!("Bearer token-{account_id}"),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
                 "primary_window": {"used_percent": 20, "reset_at": 1_900_000_000}
             }
         })))
@@ -1016,6 +1048,118 @@ async fn periodic_quota_synchronization_rechecks_exhausted_accounts_without_wait
 
     assert_eq!(due.transient, 1);
     assert_eq!(repeated, CodexQuotaSyncSummary::default());
+}
+
+#[tokio::test]
+async fn periodic_quota_synchronization_requires_a_real_snapshot_improvement_to_recover() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_periodic_recovery_evidence";
+    create_account(&store, account_id).await;
+    let account = store.account(account_id).expect("created account");
+    let reset_at = 1_900_000_000;
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: Some(OpaqueProviderData::new(
+                json!({
+                    "rate_limit": {
+                        "allowed": true,
+                        "limit_reached": false,
+                        "primary_window": {"used_percent": 86, "reset_at": reset_at}
+                    }
+                })
+                .as_object()
+                .expect("quota object")
+                .clone(),
+            )),
+            observed_at: Some(SystemTime::now()),
+        })
+        .await
+        .expect("seed post-failure quota snapshot");
+    store
+        .apply_state_change(AccountStateChange {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            availability: AccountAvailability::QuotaExhausted,
+            reason: Some("usage_limit_exhausted".to_owned()),
+            cooldown_until: SystemTime::now().checked_add(Duration::from_secs(24 * 60 * 60)),
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("mark account exhausted");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {"used_percent": 86, "reset_at": reset_at}
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    let unchanged = service
+        .synchronize()
+        .await
+        .expect("unchanged quota recheck");
+
+    assert_eq!(unchanged.updated, 1);
+    assert_eq!(
+        store
+            .account(account_id)
+            .expect("account after unchanged snapshot")
+            .availability(),
+        AccountAvailability::QuotaExhausted
+    );
+
+    server.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {"used_percent": 20, "reset_at": reset_at}
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    // 新 worker 实例模拟下一次 30 分钟复核，避免测试等待真实节流周期。
+    let next_cycle = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    let improved = next_cycle
+        .synchronize()
+        .await
+        .expect("improved quota recheck");
+
+    assert_eq!(improved.updated, 1);
+    assert_eq!(
+        store
+            .account(account_id)
+            .expect("account after improved snapshot")
+            .availability(),
+        AccountAvailability::Ready
+    );
 }
 
 #[tokio::test]
