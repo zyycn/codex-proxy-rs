@@ -170,11 +170,11 @@ Admin API 不要求客户端提交配置 revision，也不向客户端暴露配�
   客户端可见协议结果。队列不是第二份业务权威，也不做无幂等键的盲目重试。
 - retention 只删除已满足保留规则的历史事实，不改变运行中请求。
 
-业务 schema 由 `backend/migrations/` 下的编号迁移按序定义：`0001_initial.sql` 建表，`0002` 删除
-opaque response ID 唯一索引，`0003` 将 client/upstream response ID 改为无格式假设的 UTF-8 bytes，
-`0004` 增加响应观测得到的 `model_requests.service_tier`。已合入的迁移永久冻结——
-`.frozen-sha256` 是冻结清单，CI 校验清单相对 PR base 只增不改，启动时 sqlx 重校验已应用迁移的
-checksum，不一致直接拒绝启动。规则见 `backend/migrations/README.md`。
+业务 schema 由 `backend/migrations/0001_initial.sql` 直接定义当前大版本的完整新库基线，其中
+response ID 使用无格式假设的 UTF-8 bytes，`model_requests.service_tier` 保存响应观测到的服务档位，
+且额度耗尽账号可以携带冷却截止时间。同一大版本内已合入的迁移永久冻结——
+`.frozen-sha256` 是冻结清单，CI 校验清单相对 PR base 只增不改，启动时 sqlx 重校验已应用
+迁移的 checksum，不一致直接拒绝启动。规则见 `backend/migrations/README.md`。
 
 ## 9. Redis 终态
 

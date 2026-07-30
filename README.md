@@ -168,10 +168,8 @@ docker compose -f deploy/compose.yaml up -d
 > 运行状态。
 
 > [!WARNING]
-> 跨大版本不是原地升级：数据库 schema 与配置只在同一大版本内兼容，内置一键自更新
-> 会拒绝跨大版本目标（3.0 之前的旧版没有这道门禁，不要用旧版界面的一键更新跨大版本）。
-> 升级到新的大版本需要全新部署（全新 `.runtime/` 数据目录），并重新导入或重新授权
-> Provider 账号与客户端 Key。
+> 不支持跨大版本在线升级。升级到新的大版本时，请使用全新的 `.runtime/` 数据目录重新部署，
+> 并重新导入或重新授权 Provider 账号与客户端 Key。
 
 Compose 默认只绑定 `127.0.0.1`。公网接入应使用 HTTPS 反向代理，转发 WebSocket
 upgrade 与真实客户端 IP；不要暴露 PostgreSQL 或 Redis。
