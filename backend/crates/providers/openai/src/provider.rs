@@ -84,6 +84,9 @@ const MAX_COOKIE_HEADER_BYTES: usize = 16 * 1024;
 /// 提交边界前最多保留 64 KiB 原始上游 chunk；达到阈值后结束无感换号窗口，
 /// 但不会把上游数据改写成协议失败。
 const MAX_STREAM_PREFETCH_BYTES: usize = 64 * 1024;
+/// 短暂保留 response.created 等结构事件，让随后到达的明确拒绝可以无感换号；
+/// 到期即放行，避免模型长时间思考时让客户端一直收不到首事件。
+const STREAM_REPLAY_GRACE: Duration = Duration::from_millis(1_200);
 // 额度拒绝后先给上游额度结算留出时间，再以受限时长同步 usage 快照。
 const QUOTA_FAILURE_REFRESH_DELAY: Duration = Duration::from_secs(2);
 const QUOTA_FAILURE_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -682,8 +685,6 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             lease.escape_reason(),
             lease.account_switch(),
         );
-        let stream_commit_policy =
-            StreamCommitPolicy::for_continuation(context.continuation_attempt());
         let mut response = create_response_attempt(
             &client,
             &request,
@@ -829,12 +830,13 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         let mut decoder = CodexCanonicalDecoder::new(upstream_model.as_str())
             .with_requested_service_tier(request.service_tier())
             .with_raw_sse_passthrough();
-        let mut pre_commit_events = PreCommitClientEvents::new(stream_commit_policy);
+        let mut pre_commit_events = PreCommitClientEvents::new();
         loop {
             let Some(stream_deadline) = remaining(context.deadline()) else {
                 Err(provider_error(ProviderErrorKind::Timeout, UpstreamSendState::Sent))?;
                 return;
             };
+            let replay_grace_deadline = pre_commit_events.replay_grace_deadline();
             let next = tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => Err(MappedProviderFailure::plain(provider_error(
@@ -845,14 +847,21 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                     ProviderErrorKind::Timeout,
                     UpstreamSendState::Sent,
                 ))),
+                _ = wait_for_replay_grace(replay_grace_deadline) => Ok(PreCommitPoll::GraceElapsed),
                 chunk = body.next() => match chunk {
-                    Some(Ok(chunk)) => Ok(Some(chunk)),
+                    Some(Ok(chunk)) => Ok(PreCommitPoll::Upstream(Some(chunk))),
                     Some(Err(error)) => Err(map_stream_error(error)),
-                    None => Ok(None),
+                    None => Ok(PreCommitPoll::Upstream(None)),
                 },
             };
             let next = match next {
-                Ok(next) => next,
+                Ok(PreCommitPoll::Upstream(next)) => next,
+                Ok(PreCommitPoll::GraceElapsed) => {
+                    for event in pre_commit_events.commit_pending() {
+                        yield event;
+                    }
+                    continue;
+                }
                 Err(failure) => {
                     let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
                     if !updates.is_empty() {
@@ -1801,54 +1810,37 @@ impl MappedProviderFailure {
     }
 }
 
-/// 与 2.x 一致的流提交策略：普通请求优先首事件，续写/重放优先可恢复性。
-#[derive(Clone, Copy)]
-enum StreamCommitPolicy {
-    FirstForwardableEvent,
-    UntilOutputOrTerminal,
+enum PreCommitPoll<T> {
+    Upstream(T),
+    GraceElapsed,
 }
 
-impl StreamCommitPolicy {
-    const fn for_continuation(attempt: ContinuationAttempt) -> Self {
-        match attempt {
-            ContinuationAttempt::None => Self::FirstForwardableEvent,
-            ContinuationAttempt::Native
-            | ContinuationAttempt::ReplayOwner
-            | ContinuationAttempt::ReplayAny => Self::UntilOutputOrTerminal,
-        }
-    }
-
-    fn boundary_reached(
-        self,
-        events: &[ProviderEvent],
-        timing_signals: ResponseEventSignals,
-        completed: bool,
-    ) -> bool {
-        match self {
-            Self::FirstForwardableEvent => events.iter().any(ProviderEvent::has_client_event),
-            Self::UntilOutputOrTerminal => timing_signals.semantic_output || completed,
-        }
+async fn wait_for_replay_grace(deadline: Option<Instant>) {
+    if let Some(deadline) = deadline {
+        tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
+    } else {
+        std::future::pending::<()>().await;
     }
 }
 
 /// 提交边界前的上游事件预取。
 ///
-/// 原始 chunk 计数而不是重编码后的 event 大小。64 KiB 只限定无感换号窗口；达到
-/// 阈值会提交已缓存 wire，绝不能因为网关私有资源规则伪造上游协议失败。一旦提交，
-/// 后续事件不再具备无痕重放资格。
+/// 原始 chunk 计数而不是重编码后的 event 大小。时间与 64 KiB 共同限定无感换号
+/// 窗口；任一边界到达都会提交已缓存 wire，不能因网关私有资源规则伪造上游协议
+/// 失败。一旦提交，后续事件不再具备无痕重放资格。
 struct PreCommitClientEvents {
-    policy: StreamCommitPolicy,
     pending: Vec<ProviderEvent>,
     prefetched_bytes: usize,
+    replay_grace_deadline: Option<Instant>,
     committed: bool,
 }
 
 impl PreCommitClientEvents {
-    const fn new(policy: StreamCommitPolicy) -> Self {
+    const fn new() -> Self {
         Self {
-            policy,
             pending: Vec::new(),
             prefetched_bytes: 0,
+            replay_grace_deadline: None,
             committed: false,
         }
     }
@@ -1868,12 +1860,16 @@ impl PreCommitClientEvents {
         if self.committed {
             return incoming;
         }
-        let boundary_reached = self
-            .policy
-            .boundary_reached(&incoming, timing_signals, completed);
+        let starts_replay_grace = incoming.iter().any(ProviderEvent::has_client_event);
         self.pending.extend(incoming);
-        if boundary_reached || self.prefetched_bytes > MAX_STREAM_PREFETCH_BYTES {
+        if timing_signals.semantic_output
+            || completed
+            || self.prefetched_bytes > MAX_STREAM_PREFETCH_BYTES
+        {
             return self.commit_pending();
+        }
+        if starts_replay_grace && self.replay_grace_deadline.is_none() {
+            self.replay_grace_deadline = Instant::now().checked_add(STREAM_REPLAY_GRACE);
         }
         Vec::new()
     }
@@ -1903,7 +1899,12 @@ impl PreCommitClientEvents {
     fn take_for_failure(&mut self, incoming: Vec<ProviderEvent>) -> Vec<ProviderEvent> {
         self.pending.extend(incoming);
         self.prefetched_bytes = 0;
+        self.replay_grace_deadline = None;
         std::mem::take(&mut self.pending)
+    }
+
+    const fn replay_grace_deadline(&self) -> Option<Instant> {
+        self.replay_grace_deadline
     }
 
     const fn is_committed(&self) -> bool {
@@ -1913,6 +1914,7 @@ impl PreCommitClientEvents {
     fn commit_pending(&mut self) -> Vec<ProviderEvent> {
         self.committed = true;
         self.prefetched_bytes = 0;
+        self.replay_grace_deadline = None;
         std::mem::take(&mut self.pending)
     }
 }
