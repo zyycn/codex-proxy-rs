@@ -1154,10 +1154,10 @@ async fn usage_limit_failure_returns_promptly_and_refreshes_the_authoritative_qu
 }
 
 #[tokio::test]
-async fn ordinary_request_should_forward_created_before_later_failed_chunk() {
+async fn ordinary_request_should_hold_created_until_later_failure_can_rotate() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_first_event_latency").await;
-    let (base_url, release, _first_chunk_sent, server) = paused_chunked_sse_server(
+    let (base_url, release, first_chunk_sent, server) = paused_chunked_sse_server(
         concat!(
             "event: response.created\n",
             "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_first_event\",\"model\":\"gpt-5.4\",\"status\":\"in_progress\"}}\n\n"
@@ -1178,41 +1178,111 @@ async fn ordinary_request_should_forward_created_before_later_failed_chunk() {
         .await
         .expect("prepare provider stream");
 
-    let first_event = loop {
-        let next = timeout(Duration::from_secs(1), stream.next())
-            .await
-            .expect("first chunk must not wait for the withheld failure")
-            .expect("provider stream must stay open")
-            .expect("provider event");
-        if next.has_client_event() {
-            break next;
+    let mut first_chunk_sent = Box::pin(first_chunk_sent);
+    loop {
+        tokio::select! {
+            sent = &mut first_chunk_sent => {
+                sent.expect("first upstream chunk");
+                break;
+            }
+            next = stream.next() => {
+                let event = next
+                    .expect("provider stream must stay open")
+                    .expect("provider event");
+                assert!(!event.has_client_event(), "response.created must remain replayable");
+            }
         }
-    };
-    assert_eq!(
-        first_event.wire_event().and_then(|wire| wire.event_type()),
-        Some("response.created")
+    }
+
+    let exposed = timeout(Duration::from_millis(100), async {
+        loop {
+            let next = stream
+                .next()
+                .await
+                .expect("provider stream must stay open")
+                .expect("provider event");
+            if next.has_client_event() {
+                return next;
+            }
+        }
+    })
+    .await;
+    assert!(
+        exposed.is_err(),
+        "a structural event must not commit the downstream before a later 429"
     );
 
     release.send(()).expect("release second upstream chunk");
-    let mut later_wire_types = Vec::new();
-    let failure = loop {
+    let mut failure = loop {
         let next = timeout(Duration::from_secs(1), stream.next())
             .await
             .expect("later failure must arrive after release")
             .expect("provider stream must return typed failure");
         match next {
-            Ok(event) => {
-                if let Some(event_type) = event.wire_event().and_then(|wire| wire.event_type()) {
-                    later_wire_types.push(event_type.to_owned());
-                }
-            }
+            Ok(event) => assert!(
+                !event.has_client_event(),
+                "failure attempt leaked downstream"
+            ),
             Err(error) => break error,
         }
     };
 
-    assert_eq!(later_wire_types, vec!["response.failed"]);
-    assert!(!failure.replay_is_safe());
-    assert!(!failure.has_atomic_client_events());
+    assert!(failure.replay_is_safe());
+    assert_eq!(
+        failure
+            .take_atomic_client_events()
+            .iter()
+            .filter_map(|event| event.wire_event()?.event_type())
+            .collect::<Vec<_>>(),
+        vec!["response.created", "response.failed"]
+    );
+    server.await.expect("chunked SSE server");
+}
+
+#[tokio::test]
+async fn ordinary_request_should_bound_structural_event_replay_grace() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_bounded_replay_grace").await;
+    let (base_url, release, _first_chunk_sent, server) = paused_chunked_sse_server(
+        concat!(
+            "event: response.created\n",
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_bounded_grace\",\"model\":\"gpt-5.4\",\"status\":\"in_progress\"}}\n\n"
+        )
+        .to_owned(),
+        String::new(),
+    )
+    .await;
+    let mut stream = provider_with_base_url(&store, base_url)
+        .execute(
+            planned_request("openai", http_generate_operation()),
+            context("req_bounded_replay_grace", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare provider stream");
+
+    let first_event = timeout(Duration::from_secs(2), async {
+        loop {
+            let event = stream
+                .next()
+                .await
+                .expect("provider stream must stay open")
+                .expect("provider event");
+            if event.has_client_event() {
+                return event;
+            }
+        }
+    })
+    .await
+    .expect("response.created must be released after the bounded grace period");
+
+    assert_eq!(
+        first_event.wire_event().and_then(|wire| wire.event_type()),
+        Some("response.created")
+    );
+    release.send(()).expect("finish upstream response");
+    while let Some(event) = stream.next().await {
+        event.expect("clean upstream EOF");
+    }
     server.await.expect("chunked SSE server");
 }
 
