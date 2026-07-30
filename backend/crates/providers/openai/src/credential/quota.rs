@@ -197,14 +197,7 @@ pub struct CodexQuotaSyncSummary {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum QuotaRecoveryEvidence {
     SuccessfulResponse,
-    RefreshedSnapshot { confirms_recovery: bool },
-    PostFailureSnapshot,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum QuotaRefreshMode {
-    Reconcile,
-    AfterConfirmedFailure,
+    RefreshedSnapshot,
 }
 
 impl CodexQuotaSyncSummary {
@@ -649,20 +642,9 @@ impl CodexCredentialQuotaService {
             let observed_at = SystemTime::now();
             match self.fetch_usage_with_recovery(&client, &account).await {
                 Ok(FetchedCodexQuota { account, value }) => {
-                    let previous_snapshot = observations
-                        .as_ref()
-                        .and_then(|observations| observations.get(account.id()))
-                        .filter(|observation| observation.expected_revision == account.revision())
-                        .and_then(quota_snapshot_from_observation);
                     // 单账号解析或落库失败只影响该账号；其余账号继续同步。
                     if let Err(error) = self
-                        .apply_fetched_quota(
-                            &account,
-                            &value,
-                            observed_at,
-                            previous_snapshot.as_ref(),
-                            &mut summary,
-                        )
+                        .apply_fetched_quota(&account, &value, observed_at, &mut summary)
                         .await
                     {
                         summary.transient += 1;
@@ -777,7 +759,6 @@ impl CodexCredentialQuotaService {
         account: &ProviderAccount,
         value: &Value,
         observed_at: SystemTime,
-        previous_snapshot: Option<&CodexAccountQuotaSnapshot>,
         summary: &mut CodexQuotaSyncSummary,
     ) -> Result<(), CodexCredentialQuotaError> {
         let snapshot = parse_account_quota_snapshot(
@@ -824,9 +805,7 @@ impl CodexCredentialQuotaService {
             current.cooldown_until(),
             fact,
             SystemTime::now(),
-            QuotaRecoveryEvidence::RefreshedSnapshot {
-                confirms_recovery: quota_snapshot_confirms_recovery(previous_snapshot, &snapshot),
-            },
+            QuotaRecoveryEvidence::RefreshedSnapshot,
         ) {
             let _ = self
                 .repository
@@ -970,23 +949,20 @@ impl CodexCredentialQuotaService {
         &self,
         account_id: &ProviderAccountId,
     ) -> Result<CodexAccountQuotaSnapshot, CodexCredentialQuotaError> {
-        self.refresh_account_with_mode(account_id, QuotaRefreshMode::Reconcile)
-            .await
+        self.refresh_account_snapshot(account_id).await
     }
 
-    /// 真实限额失败后的异步刷新只补齐展示快照，不允许同一轮陈旧 usage 撤销失败状态。
+    /// 真实限额失败后的异步刷新只补齐展示快照，不允许 usage 快照撤销已确认的失败状态。
     pub(crate) async fn refresh_account_after_failure(
         &self,
         account_id: &ProviderAccountId,
     ) -> Result<CodexAccountQuotaSnapshot, CodexCredentialQuotaError> {
-        self.refresh_account_with_mode(account_id, QuotaRefreshMode::AfterConfirmedFailure)
-            .await
+        self.refresh_account_snapshot(account_id).await
     }
 
-    async fn refresh_account_with_mode(
+    async fn refresh_account_snapshot(
         &self,
         account_id: &ProviderAccountId,
-        mode: QuotaRefreshMode,
     ) -> Result<CodexAccountQuotaSnapshot, CodexCredentialQuotaError> {
         let account = self
             .store
@@ -994,7 +970,6 @@ impl CodexCredentialQuotaService {
             .await?
             .filter(|account| account.provider().as_str() == "openai")
             .ok_or(CodexCredentialQuotaError::NotFound)?;
-        let previous_snapshot = self.read_snapshot_for(&account).await?;
         let observed_at = SystemTime::now();
         if !access_token_is_current(&account, observed_at) {
             return Err(CodexCredentialQuotaError::CredentialRefreshRequired);
@@ -1071,17 +1046,7 @@ impl CodexCredentialQuotaService {
             current.cooldown_until(),
             snapshot.fact(),
             SystemTime::now(),
-            match mode {
-                QuotaRefreshMode::AfterConfirmedFailure => {
-                    QuotaRecoveryEvidence::PostFailureSnapshot
-                }
-                QuotaRefreshMode::Reconcile => QuotaRecoveryEvidence::RefreshedSnapshot {
-                    confirms_recovery: quota_snapshot_confirms_recovery(
-                        previous_snapshot.as_ref(),
-                        &snapshot,
-                    ),
-                },
-            },
+            QuotaRecoveryEvidence::RefreshedSnapshot,
         ) {
             self.repository
                 .apply_state(
@@ -1348,47 +1313,10 @@ fn quota_recovery_confirmed(
     }
     match evidence {
         QuotaRecoveryEvidence::SuccessfulResponse => true,
-        QuotaRecoveryEvidence::RefreshedSnapshot { confirms_recovery } => confirms_recovery,
-        QuotaRecoveryEvidence::PostFailureSnapshot => false,
+        // used_percent 是可滞后、会取整的观测值；确认 429 后的 100% 也是
+        // 管理端投影。它们的回落不能覆盖仍未到期的上游 reset 时间。
+        QuotaRecoveryEvidence::RefreshedSnapshot => false,
     }
-}
-
-fn quota_snapshot_confirms_recovery(
-    previous: Option<&CodexAccountQuotaSnapshot>,
-    current: &CodexAccountQuotaSnapshot,
-) -> bool {
-    if current.fact().exhausted() {
-        return false;
-    }
-    let Some(previous) = previous else {
-        return false;
-    };
-    if previous
-        .fact()
-        .remaining_percent()
-        .zip(current.fact().remaining_percent())
-        .is_some_and(|(previous, current)| current > previous)
-    {
-        return true;
-    }
-
-    // 单窗口账号可以用同一窗口的用量回落或 reset 前移证明上游提前翻新；多窗口
-    // 无法从账号级 429 确认具体受限窗口，保守等待整体剩余额度改善或真实请求成功。
-    let ([previous], [current]) = (previous.windows(), current.windows()) else {
-        return false;
-    };
-    if previous.key() != current.key() {
-        return false;
-    }
-    let usage_recovered = previous
-        .used_percent()
-        .zip(current.used_percent())
-        .is_some_and(|(previous, current)| current < previous);
-    let window_advanced = previous
-        .reset_at()
-        .zip(current.reset_at())
-        .is_some_and(|(previous, current)| current > previous);
-    usage_recovered || window_advanced
 }
 
 fn quota_state_transition(
