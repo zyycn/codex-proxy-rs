@@ -626,7 +626,7 @@ jobs:
           make_latest: ${{ needs.release-info.outputs.prerelease == 'true' && 'false' || 'true' }}
           body: |
             > [!WARNING]
-            > **Upgrading across major versions?** Database schema and configuration are only compatible within a major version, and the one-click self-update refuses cross-major targets (releases before 3.0 lack this gate — do not use their built-in update to reach a newer major). Deploy the new major fresh (new `.runtime/` data directory) and re-import or re-authorize provider accounts and client keys. See the [upgrade notes](https://github.com/${{ github.repository }}/blob/main/deploy/README.md#镜像升级与源码构建).
+            > **Upgrading across major versions?** Online upgrades across major versions are not supported. Deploy the new major fresh with a new `.runtime/` data directory, then re-import or re-authorize provider accounts and client keys. See the [upgrade notes](https://github.com/${{ github.repository }}/blob/main/deploy/README.md#镜像升级与源码构建).
 
             ## 📥 Installation
 

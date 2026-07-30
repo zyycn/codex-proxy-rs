@@ -166,7 +166,14 @@ create table provider_accounts (
     )
   ),
   constraint provider_accounts_cooldown_ck check (
-    (availability = 'cooldown') = (cooldown_until is not null)
+    (
+      availability != 'cooldown'
+      or cooldown_until is not null
+    )
+    and (
+      cooldown_until is null
+      or availability in ('cooldown', 'quota_exhausted')
+    )
   ),
   constraint provider_accounts_time_ck check (
     created_at <= updated_at
@@ -208,6 +215,7 @@ create table model_requests (
   requested_model_id text not null,
   provider_kind text,
   upstream_model_id text,
+  service_tier text,
   provider_account_id text,
   provider_account_ref text,
   upstream_transport text,
@@ -220,9 +228,11 @@ create table model_requests (
   outcome text not null default 'running',
   client_status_code integer,
   upstream_status_code integer,
-  client_response_id text,
+  -- Provider response IDs are opaque JSON strings. Bytes preserve embedded NUL
+  -- and avoid imposing PostgreSQL text-index limits on protocol handles.
+  client_response_id bytea,
   upstream_request_id text,
-  upstream_response_id text,
+  upstream_response_id bytea,
   error_kind text,
   provider_error_code text,
   error_message text,
@@ -321,6 +331,13 @@ create table model_requests (
     provider_observation_json is null
     or jsonb_typeof(provider_observation_json) = 'object'
   ),
+  constraint model_requests_service_tier_ck check (
+    service_tier is null
+    or (
+      octet_length(service_tier) between 1 and 64
+      and service_tier !~ '[[:cntrl:]]'
+    )
+  ),
   constraint model_requests_cost_ck check (
     cost_source in ('provider_reported', 'calculated', 'unavailable')
     and (
@@ -414,10 +431,6 @@ create index model_requests_running_deadline_idx
 create index model_requests_retention_idx
   on model_requests (completed_at)
   where outcome <> 'running';
-create unique index model_requests_client_response_uq
-  on model_requests (client_response_id)
-  where client_response_id is not null;
-
 create table ops_events (
   id text primary key,
   model_request_id text,

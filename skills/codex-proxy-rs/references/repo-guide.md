@@ -40,9 +40,9 @@
 
 ## 存储
 
-- PostgreSQL 业务表只有 `0001_initial.sql` 定义的七张；后续编号迁移只做增量。当前 `0002` 删除
-  opaque response ID 索引，`0003` 把 response ID 改为 bytes，`0004` 增加响应观测的 service tier。
-- 已应用迁移按字节冻结：`backend/migrations/.frozen-sha256` 是冻结清单，CI 相对 PR base 做 append-only 校验；schema 变更一律新增编号迁移，规则见 `backend/migrations/README.md`。
+- PostgreSQL 业务表只有 `0001_initial.sql` 定义的七张；该文件直接表达当前大版本的完整新库基线，
+  包括 bytes response ID、响应观测 service tier 与额度耗尽冷却约束。
+- 同一大版本内已应用迁移按字节冻结：`backend/migrations/.frozen-sha256` 是冻结清单，CI 相对 PR base 做 append-only 校验；schema 变更一律新增编号迁移，规则见 `backend/migrations/README.md`。
 - `config_revision` 只用于会改变调度快照或安全配置的管理 mutation。
 - quota、cooldown、catalog generation、自动 refresh 不推进全局 revision。
 - refresh 只推进账号 `credential_revision`；Redis cooldown 是可丢失热缓存。
