@@ -1036,15 +1036,16 @@ async fn usage_limit_failure_returns_promptly_and_refreshes_the_authoritative_qu
     Mock::given(method("GET"))
         .and(path("/api/codex/usage"))
         .and(header("authorization", format!("Bearer at-{account_id}")))
-        // 限额错误本身只能确认状态；这里必须覆盖上一帧被动观察到的 99%。
+        // 生产环境会短暂返回互相矛盾的快照：数字已到 100%，但布尔位仍声称可用。
+        // 后台同步应覆盖展示数据，不能据此撤销真实请求已经确认的额度耗尽。
         .respond_with(
             ResponseTemplate::new(200)
                 // 验证后台 usage 同步不能把原始的额度错误响应拖到查询完成之后。
                 .set_delay(Duration::from_millis(750))
                 .set_body_json(json!({
                     "rate_limit": {
-                        "allowed": false,
-                        "limit_reached": true,
+                        "allowed": true,
+                        "limit_reached": false,
                         "primary_window": {"used_percent": 100, "reset_at": 1_900_000_000}
                     }
                 })),
@@ -1141,6 +1142,14 @@ async fn usage_limit_failure_returns_promptly_and_refreshes_the_authoritative_qu
             .filter(|request| request.url.path() == "/api/codex/usage")
             .count(),
         1
+    );
+    assert_eq!(
+        store
+            .account(account_id)
+            .expect("account after stale full usage refresh")
+            .availability(),
+        AccountAvailability::QuotaExhausted,
+        "a contradictory full usage snapshot must not unlock a confirmed exhausted account"
     );
 }
 

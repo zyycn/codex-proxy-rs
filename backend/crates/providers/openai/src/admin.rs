@@ -25,8 +25,9 @@ use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind};
 use gateway_core::accounting::Money;
 use gateway_core::engine::credential::{
-    CredentialRevision, LoadedCredential, NewProviderAccount, OpaqueProviderData,
-    PlaintextCredential, ProviderAccount, ProviderAccountId, ProviderAccountStore,
+    AccountAvailability, CredentialRevision, LoadedCredential, NewProviderAccount,
+    OpaqueProviderData, PlaintextCredential, ProviderAccount, ProviderAccountId,
+    ProviderAccountStore,
 };
 use gateway_core::error::StoreErrorKind;
 use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
@@ -458,21 +459,23 @@ impl ProviderAdmin for OpenAiAdminProvider {
             refresh,
             rolling_usage: _,
         } = request;
-        self.account(&account_id).await?;
+        let mut account = self.account(&account_id).await?;
         let snapshot = if refresh {
-            Some(
+            let snapshot = Some(
                 self.quota
                     .refresh_account(&account_id)
                     .await
                     .map_err(map_quota_error)?,
-            )
+            );
+            account = self.account(&account_id).await?;
+            snapshot
         } else {
             self.quota
                 .read_account(&account_id)
                 .await
                 .map_err(map_quota_error)?
         };
-        Ok(snapshot.map_or_else(empty_quota, project_quota))
+        Ok(project_quota(snapshot, &account))
     }
 
     async fn models(
@@ -746,7 +749,18 @@ fn empty_quota() -> ProviderQuota {
     }
 }
 
-fn project_quota(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota {
+fn project_quota(
+    snapshot: Option<CodexAccountQuotaSnapshot>,
+    account: &ProviderAccount,
+) -> ProviderQuota {
+    let mut quota = snapshot.map_or_else(empty_quota, project_quota_snapshot);
+    if account.availability() == AccountAvailability::QuotaExhausted {
+        force_confirmed_exhaustion_projection(&mut quota, account.cooldown_until());
+    }
+    quota
+}
+
+fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota {
     let mut provider_data = Map::new();
     provider_data.insert(
         "remaining_percent".to_owned(),
@@ -797,6 +811,68 @@ fn project_quota(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota {
             provider_data,
         ))),
     }
+}
+
+fn force_confirmed_exhaustion_projection(
+    quota: &mut ProviderQuota,
+    cooldown_until: Option<SystemTime>,
+) {
+    // 真实 429 对“当前已耗尽”的证明强于可能延迟结算的 usage 文档。这里只覆盖
+    // Admin 展示投影，原始 Provider JSON 仍作为后续判断窗口是否真正恢复的基线。
+    quota.provider_data = Some(ProviderDocument::new(OpaqueProviderData::new(
+        Map::from_iter([
+            (
+                "remaining_percent".to_owned(),
+                Value::Number(Number::from(0)),
+            ),
+            ("exhausted".to_owned(), Value::Bool(true)),
+        ]),
+    )));
+    let reset_at = cooldown_until.map(DateTime::<Utc>::from);
+    if quota.windows.is_empty() {
+        quota.windows.push(ProviderQuotaWindow {
+            key: "confirmed-quota-exhaustion".to_owned(),
+            group: "other".to_owned(),
+            label: "额度".to_owned(),
+            source: None,
+            window_seconds: None,
+            used_percent: Some(100.0),
+            reset_at,
+            local_usage: None,
+            provider_data: None,
+        });
+        return;
+    }
+
+    let matched_reset = reset_at.and_then(|reset_at| {
+        quota
+            .windows
+            .iter()
+            .enumerate()
+            .filter_map(|(index, window)| {
+                let distance = window.reset_at.map(|window_reset| {
+                    (window_reset.timestamp() - reset_at.timestamp()).unsigned_abs()
+                })?;
+                Some((index, distance))
+            })
+            .min_by_key(|(_, distance)| *distance)
+            .map(|(index, _)| index)
+    });
+    let index = matched_reset
+        .or_else(|| {
+            quota
+                .windows
+                .iter()
+                .enumerate()
+                .max_by(|(_, left), (_, right)| {
+                    left.used_percent
+                        .unwrap_or(-1.0)
+                        .total_cmp(&right.used_percent.unwrap_or(-1.0))
+                })
+                .map(|(index, _)| index)
+        })
+        .unwrap_or(0);
+    quota.windows[index].used_percent = Some(100.0);
 }
 
 const fn quota_group(kind: CodexQuotaWindowKind) -> &'static str {

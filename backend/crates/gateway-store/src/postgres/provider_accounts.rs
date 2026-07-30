@@ -630,7 +630,8 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                      else availability_observed_at
                  end,
                  updated_at = case when enabled then greatest(now(), $6) else updated_at end
-             where id = $1 and credential_revision = $2",
+             where id = $1 and credential_revision = $2
+               and (availability_observed_at is null or availability_observed_at <= $6)",
         )
         .bind(update.account_id)
         .bind(to_i64(update.expected_revision.get())?)
@@ -675,7 +676,8 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
             "update provider_accounts
              set provider_quota_json = $3, quota_observed_at = $4,
                  updated_at = greatest(now(), coalesce($4, now()))
-             where id = $1 and credential_revision = $2",
+             where id = $1 and credential_revision = $2
+               and ($4 is null or quota_observed_at is null or quota_observed_at <= $4)",
         )
         .bind(account_id)
         .bind(to_i64(expected_revision.get())?)

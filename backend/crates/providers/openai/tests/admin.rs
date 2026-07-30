@@ -20,8 +20,8 @@ use gateway_admin::model::provider_credentials::{
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::ProviderAdminErrorKind;
 use gateway_core::engine::credential::{
-    CredentialRevision, OpaqueProviderData, ProviderAccount, ProviderAccountId,
-    ProviderAccountStore, QuotaObservation,
+    AccountAvailability as CoreAccountAvailability, AccountStateChange, CredentialRevision,
+    OpaqueProviderData, ProviderAccount, ProviderAccountId, ProviderAccountStore, QuotaObservation,
 };
 use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
 use gateway_core::provider_ports::{
@@ -501,6 +501,108 @@ async fn openai_admin_provider_projects_codex_additional_limit_as_the_primary_qu
     assert_eq!(monthly[0].label, "月限额");
     assert_eq!(monthly[0].source.as_deref(), Some("core"));
     assert_eq!(monthly[0].used_percent, Some(2.0));
+}
+
+#[tokio::test]
+async fn openai_admin_projects_confirmed_quota_exhaustion_as_full_without_mutating_raw_usage() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_admin_confirmed_exhaustion";
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: account_id.to_owned(),
+            name: "admin confirmed exhaustion".to_owned(),
+            secret: secret("admin-confirmed-exhaustion-access"),
+            verified_account: profile("chatgpt-admin-confirmed-exhaustion"),
+            next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await;
+    let account = store.account(account_id).expect("stored account");
+    let reset_at = 1_900_000_000_u64;
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: Some(OpaqueProviderData::new(
+                json!({
+                    "rate_limit": {
+                        "allowed": true,
+                        "limit_reached": false,
+                        "primary_window": {"used_percent": 86, "reset_at": reset_at}
+                    }
+                })
+                .as_object()
+                .expect("quota object")
+                .clone(),
+            )),
+            observed_at: Some(SystemTime::now()),
+        })
+        .await
+        .expect("persist raw quota");
+    store
+        .apply_state_change(AccountStateChange {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            availability: CoreAccountAvailability::QuotaExhausted,
+            reason: Some("usage_limit_exhausted".to_owned()),
+            cooldown_until: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(reset_at)),
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("mark account exhausted");
+    let config = valid_config();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(Arc::clone(&store), Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .expect("OpenAI bundle");
+
+    let exhausted = bundle
+        .admin_provider()
+        .quota(ProviderQuotaRequest {
+            account_id: account.id().clone(),
+            refresh: false,
+            rolling_usage: None,
+        })
+        .await
+        .expect("project exhausted quota");
+
+    assert_eq!(exhausted.windows.len(), 1);
+    assert_eq!(exhausted.windows[0].used_percent, Some(100.0));
+    let raw = store
+        .get_quotas(std::slice::from_ref(account.id()))
+        .await
+        .expect("read raw quota")
+        .pop()
+        .expect("raw quota");
+    assert_eq!(
+        raw.quota.expect("raw document").expose_to_provider()["rate_limit"]["primary_window"]["used_percent"],
+        86
+    );
+
+    store
+        .apply_state_change(AccountStateChange {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            availability: CoreAccountAvailability::Ready,
+            reason: None,
+            cooldown_until: None,
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("recover account");
+    let recovered = bundle
+        .admin_provider()
+        .quota(ProviderQuotaRequest {
+            account_id: account.id().clone(),
+            refresh: false,
+            rolling_usage: None,
+        })
+        .await
+        .expect("project recovered quota");
+
+    assert_eq!(recovered.windows[0].used_percent, Some(86.0));
 }
 
 #[tokio::test]

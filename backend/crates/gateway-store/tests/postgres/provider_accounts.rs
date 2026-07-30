@@ -112,6 +112,97 @@ async fn core_quota_batch_reads_only_observed_accounts_in_one_contract_call() {
 }
 
 #[tokio::test]
+async fn delayed_provider_observations_cannot_overwrite_newer_state_or_quota() {
+    let Some(database) = TestDatabase::create("provider_account_observation_fence").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let account_id = ProviderAccountId::new("acct_observation_fence").expect("account id");
+    repository
+        .insert_provider_account(account(account_id.as_str(), "user-observation-fence"))
+        .await
+        .expect("insert observation fence fixture");
+    let revision = CredentialRevision::new(1).expect("revision");
+    let newer = SystemTime::now()
+        .checked_add(Duration::from_secs(60))
+        .expect("newer observation time");
+    let older = newer
+        .checked_sub(Duration::from_secs(30))
+        .expect("older observation time");
+
+    let quota = |marker: &str, observed_at| QuotaObservation {
+        account_id: account_id.clone(),
+        expected_revision: revision,
+        quota: Some(OpaqueProviderData::new(
+            json!({"marker": marker})
+                .as_object()
+                .expect("quota object")
+                .clone(),
+        )),
+        observed_at: Some(observed_at),
+    };
+    assert_eq!(
+        repository
+            .compare_and_swap_quota(quota("newer", newer))
+            .await
+            .expect("persist newer quota"),
+        QuotaWriteOutcome::Updated
+    );
+    assert_eq!(
+        repository
+            .compare_and_swap_quota(quota("older", older))
+            .await
+            .expect("reject older quota"),
+        QuotaWriteOutcome::Conflict
+    );
+
+    repository
+        .apply_state_change(AccountStateChange {
+            account_id: account_id.clone(),
+            expected_revision: revision,
+            availability: AccountAvailability::QuotaExhausted,
+            reason: Some("quota_exhausted".to_owned()),
+            cooldown_until: Some(newer),
+            observed_at: newer,
+        })
+        .await
+        .expect("persist newer account state");
+    assert!(
+        repository
+            .apply_state_change(AccountStateChange {
+                account_id: account_id.clone(),
+                expected_revision: revision,
+                availability: AccountAvailability::Ready,
+                reason: None,
+                cooldown_until: None,
+                observed_at: older,
+            })
+            .await
+            .is_err(),
+        "a delayed state observation must conflict"
+    );
+
+    let current = repository
+        .get_account(&account_id)
+        .await
+        .expect("load fenced account")
+        .expect("fenced account");
+    assert_eq!(current.availability(), AccountAvailability::QuotaExhausted);
+    let observed = repository
+        .get_quotas(std::slice::from_ref(&account_id))
+        .await
+        .expect("load fenced quota")
+        .pop()
+        .expect("fenced quota");
+    assert_eq!(
+        observed.quota.expect("quota document").expose_to_provider()["marker"],
+        "newer"
+    );
+
+    database.close().await;
+}
+
+#[tokio::test]
 async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_usage() {
     let Some(database) = TestDatabase::create("provider_account_terminal_list").await else {
         return;
