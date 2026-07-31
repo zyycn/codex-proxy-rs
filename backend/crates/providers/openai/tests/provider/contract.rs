@@ -702,6 +702,109 @@ async fn cross_account_scope_sanitizes_only_known_turn_metadata_fields() {
 }
 
 #[tokio::test]
+async fn continuation_replay_should_use_the_client_full_input_without_legacy_transcript() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_client_history").await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(CAPTURE_COMPLETED_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client_input = json!([
+        {"role": "user", "content": "complete client history"},
+        {"role": "assistant", "content": "previous answer"},
+        {"role": "user", "content": "current turn"}
+    ]);
+    let generation = GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([
+                ("model".to_owned(), json!("gpt-5.4")),
+                ("input".to_owned(), client_input.clone()),
+            ]),
+        )
+        .expect("OpenAI payload")
+        .with_context(Map::from_iter([("use_websocket".to_owned(), json!(false))])),
+    )
+    .with_provider_session_state(
+        ProviderSessionState::new(
+            "openai",
+            Map::from_iter([
+                ("account_id".to_owned(), json!("acct_client_history")),
+                ("conversation_id".to_owned(), json!("conversation")),
+                ("continuation_scope".to_owned(), json!("replay_required")),
+                (
+                    "transcript".to_owned(),
+                    json!([{"client_input": {"role": "user", "content": "stale proxy copy"}}]),
+                ),
+            ]),
+        )
+        .expect("provider session state"),
+    );
+    let mut stream = provider_with_base_url(&store, server.uri())
+        .execute(
+            planned_request("openai", Operation::Generate(generation)),
+            context("req_client_history", CancellationToken::new())
+                .with_continuation_attempt(ContinuationAttempt::ReplayAny),
+        )
+        .await
+        .expect("prepare replay stream");
+    while let Some(event) = stream.next().await {
+        event.expect("replay response");
+    }
+    let requests = server
+        .received_requests()
+        .await
+        .expect("captured replay request");
+    let body: Value = serde_json::from_slice(&requests[0].body).expect("captured JSON body");
+
+    assert_eq!(body.get("input"), Some(&client_input));
+}
+
+#[tokio::test]
+async fn completed_response_session_state_should_not_copy_the_conversation_transcript() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_bounded_session_state").await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(CAPTURE_COMPLETED_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut stream = provider_with_base_url(&store, server.uri())
+        .execute(
+            planned_request("openai", http_generate_operation()),
+            context("req_bounded_session_state", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare provider stream");
+    let mut session_payload = None;
+    while let Some(event) = stream.next().await {
+        let event = event.expect("provider response");
+        if let Some(update) = event.session_update() {
+            session_payload = Some(update.payload().clone());
+        }
+    }
+
+    assert!(
+        !session_payload
+            .expect("completed response session update")
+            .contains_key("transcript")
+    );
+}
+
+#[tokio::test]
 async fn account_change_drops_only_account_bound_opaque_headers() {
     let protocol_context = Map::from_iter([(
         "opaque_request_headers".to_owned(),
