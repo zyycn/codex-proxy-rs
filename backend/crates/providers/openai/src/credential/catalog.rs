@@ -136,8 +136,8 @@ pub enum CodexCredentialCatalogError {
     NoEligibleCredential,
     #[error("Codex model catalog account data is invalid")]
     InvalidCredentialData,
-    #[error("Codex model catalog upstream query failed")]
-    Upstream,
+    #[error("Codex model catalog upstream query failed: {detail}")]
+    Upstream { detail: String },
     #[error("Codex model catalog contains conflicting account facts")]
     ConflictingModelFacts,
     #[error("Codex model catalog cache is unavailable")]
@@ -482,7 +482,9 @@ impl CodexCredentialCatalogService {
                 ))
                 .await;
         }
-        let snapshot = result.map_err(|_| CodexCredentialCatalogError::Upstream)?;
+        let snapshot = result.map_err(|error| CodexCredentialCatalogError::Upstream {
+            detail: error.to_string(),
+        })?;
         Ok(FetchedAccountModels {
             models: snapshot.models().to_vec(),
             etag: snapshot.etag().map(str::to_owned),

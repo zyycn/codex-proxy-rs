@@ -190,9 +190,26 @@ impl fmt::Debug for ContinuationBinding {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("native continuation store is unavailable")]
-pub struct NativeContinuationStoreError;
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("native continuation store is unavailable: {detail}")]
+pub struct NativeContinuationStoreError {
+    detail: String,
+}
+
+impl NativeContinuationStoreError {
+    /// 构造带可排查细节的亲和存储错误；`detail` 不应包含 response handle。
+    #[must_use]
+    pub fn new(detail: impl Into<String>) -> Self {
+        Self {
+            detail: detail.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+}
 
 /// 可丢失的 previous-response 亲和存储端口。
 ///

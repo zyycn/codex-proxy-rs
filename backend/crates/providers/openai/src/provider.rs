@@ -2416,19 +2416,45 @@ impl ScheduledTask for OpenAiOAuthRefreshTask {
                 .refresh_due()
                 .await
                 .map_err(|_| WorkerTaskError::safe("OpenAI OAuth refresh failed"))?;
-            let operational_failures = outcomes
-                .iter()
-                .filter(|outcome| {
-                    matches!(
-                        outcome,
-                        CodexCredentialRefreshOutcome::Transient { .. }
-                            | CodexCredentialRefreshOutcome::Failed { .. }
-                    )
-                })
-                .count();
-            if operational_failures > 0 {
+            let mut refreshed = 0_u64;
+            let mut invalidated = 0_u64;
+            let mut banned = 0_u64;
+            let mut transient = 0_u64;
+            let mut lease_unavailable = 0_u64;
+            let mut stale = 0_u64;
+            let mut failed = 0_u64;
+            let mut transient_accounts = Vec::new();
+            let mut failed_accounts = Vec::new();
+            for outcome in &outcomes {
+                match outcome {
+                    CodexCredentialRefreshOutcome::Refreshed { .. } => refreshed += 1,
+                    CodexCredentialRefreshOutcome::Invalidated { .. } => invalidated += 1,
+                    CodexCredentialRefreshOutcome::Banned { .. } => banned += 1,
+                    CodexCredentialRefreshOutcome::Transient { account_id } => {
+                        transient += 1;
+                        transient_accounts.push(account_id);
+                    }
+                    CodexCredentialRefreshOutcome::LeaseUnavailable { .. } => {
+                        lease_unavailable += 1;
+                    }
+                    CodexCredentialRefreshOutcome::Stale { .. } => stale += 1,
+                    CodexCredentialRefreshOutcome::Failed { account_id } => {
+                        failed += 1;
+                        failed_accounts.push(account_id);
+                    }
+                }
+            }
+            if transient > 0 || failed > 0 {
                 tracing::warn!(
-                    operational_failures,
+                    refreshed,
+                    invalidated,
+                    banned,
+                    transient,
+                    lease_unavailable,
+                    stale,
+                    failed,
+                    transient_accounts = ?transient_accounts,
+                    failed_accounts = ?failed_accounts,
                     "OpenAI OAuth refresh cycle contained operational failures"
                 );
             }
@@ -2499,12 +2525,23 @@ impl ScheduledTask for OpenAiQuotaTask {
             let mut failures = false;
             match self.quota.synchronize().await {
                 Ok(summary) if summary.has_operational_failures() => {
-                    tracing::warn!("OpenAI quota cycle contained operational failures");
+                    tracing::warn!(
+                        updated = summary.updated,
+                        exhausted = summary.exhausted,
+                        banned = summary.banned,
+                        cooldown = summary.cooldown,
+                        transient = summary.transient,
+                        stale = summary.stale,
+                        "OpenAI quota cycle contained operational failures"
+                    );
                 }
                 Ok(_) => {}
-                Err(_) => {
+                Err(error) => {
                     failures = true;
-                    tracing::warn!("OpenAI quota synchronization failed");
+                    tracing::warn!(
+                        error = %error,
+                        "OpenAI quota synchronization failed"
+                    );
                 }
             }
             if context.cancellation().is_cancelled() {

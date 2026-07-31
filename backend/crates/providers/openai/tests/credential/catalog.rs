@@ -215,7 +215,10 @@ async fn plan_catalog_refresh_stops_after_three_failed_accounts() {
         .await
         .expect_err("three failed accounts stop the refresh");
 
-    assert!(matches!(error, CodexCredentialCatalogError::Upstream));
+    assert!(matches!(
+        error,
+        CodexCredentialCatalogError::Upstream { .. }
+    ));
     server.verify().await;
 }
 

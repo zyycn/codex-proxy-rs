@@ -92,7 +92,7 @@ impl RedisNativeContinuationRepository {
 
     fn entry_fingerprint(&self, response_id: &str) -> Result<String, NativeContinuationStoreError> {
         resource_fingerprint("native continuation", response_id)
-            .map_err(|_| NativeContinuationStoreError)
+            .map_err(|error| NativeContinuationStoreError::new(error.to_string()))
     }
 
     fn entry_key(&self, fingerprint: &str) -> String {
@@ -123,7 +123,9 @@ impl NativeContinuationPort for RedisNativeContinuationRepository {
                 .arg(self.entry_key(&fingerprint))
                 .query_async::<Option<String>>(&mut connection)
                 .await
-                .map_err(|_| NativeContinuationStoreError)?;
+                .map_err(|error| {
+                    NativeContinuationStoreError::new(format!("redis GET failed: {error}"))
+                })?;
             payload
                 .map(|payload| decode_pin(previous_response_id, &payload))
                 .transpose()
@@ -141,15 +143,21 @@ impl NativeContinuationPort for RedisNativeContinuationRepository {
             let fingerprint = self.entry_fingerprint(pin.previous_response_id().as_str())?;
             let payload = encode_pin(&pin)?;
             if payload.len() > MAX_RECORD_BYTES {
-                return Err(NativeContinuationStoreError);
+                return Err(NativeContinuationStoreError::new(format!(
+                    "pin payload is too large ({} bytes, limit {MAX_RECORD_BYTES})",
+                    payload.len()
+                )));
             }
             let now_millis = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .map_err(|_| NativeContinuationStoreError)?
+                .map_err(|_| NativeContinuationStoreError::new("system clock predates Unix epoch"))?
                 .as_millis();
-            let now_millis = u64::try_from(now_millis).map_err(|_| NativeContinuationStoreError)?;
-            let ttl_millis = u64::try_from(CONTINUATION_TTL.as_millis())
-                .map_err(|_| NativeContinuationStoreError)?;
+            let now_millis = u64::try_from(now_millis).map_err(|_| {
+                NativeContinuationStoreError::new("system time is outside supported range")
+            })?;
+            let ttl_millis = u64::try_from(CONTINUATION_TTL.as_millis()).map_err(|_| {
+                NativeContinuationStoreError::new("continuation TTL is outside supported range")
+            })?;
             let cutoff = now_millis.saturating_sub(ttl_millis);
             let ttl_seconds = CONTINUATION_TTL.as_secs();
             let mut connection = self.connection.clone();
@@ -166,7 +174,11 @@ impl NativeContinuationPort for RedisNativeContinuationRepository {
                 .arg(MAX_INDEX_CLEANUP_PER_RECORD)
                 .invoke_async::<i64>(&mut connection)
                 .await
-                .map_err(|_| NativeContinuationStoreError)?;
+                .map_err(|error| {
+                    NativeContinuationStoreError::new(format!(
+                        "redis affinity script failed: {error}"
+                    ))
+                })?;
             Ok(())
         })
     }
@@ -177,7 +189,9 @@ fn encode_pin(pin: &NativeContinuationPin) -> Result<String, NativeContinuationS
         .session_state()
         .is_some_and(|state| state.provider() != pin.provider().as_str())
     {
-        return Err(NativeContinuationStoreError);
+        return Err(NativeContinuationStoreError::new(
+            "session state provider does not match pin provider",
+        ));
     }
     serde_json::to_string(&ContinuationWire {
         upstream_response_id: pin.upstream_response_id().as_str().to_owned(),
@@ -186,17 +200,23 @@ fn encode_pin(pin: &NativeContinuationPin) -> Result<String, NativeContinuationS
         scope: scope_name(pin.scope()).to_owned(),
         session_state: pin.session_state().cloned(),
     })
-    .map_err(|_| NativeContinuationStoreError)
+    .map_err(|error| {
+        NativeContinuationStoreError::new(format!("pin serialization failed: {error}"))
+    })
 }
 
 fn decode_pin(
     previous_response_id: &PreviousResponseId,
     payload: &str,
 ) -> Result<NativeContinuationPin, NativeContinuationStoreError> {
-    let wire: ContinuationWire =
-        serde_json::from_str(payload).map_err(|_| NativeContinuationStoreError)?;
-    let provider = ProviderKind::new(wire.provider).map_err(|_| NativeContinuationStoreError)?;
-    let account = ProviderAccountId::new(wire.account).map_err(|_| NativeContinuationStoreError)?;
+    let wire: ContinuationWire = serde_json::from_str(payload)
+        .map_err(|error| NativeContinuationStoreError::new(format!("{error}")))?;
+    let provider = ProviderKind::new(wire.provider).map_err(|_| {
+        NativeContinuationStoreError::new("pin payload contains an invalid provider")
+    })?;
+    let account = ProviderAccountId::new(wire.account).map_err(|_| {
+        NativeContinuationStoreError::new("pin payload contains an invalid account id")
+    })?;
     let upstream_response_id = PreviousResponseId::new(wire.upstream_response_id);
     let scope = parse_scope(&wire.scope)?;
     let mut pin = NativeContinuationPin::new(
@@ -208,7 +228,9 @@ fn decode_pin(
     .with_scope(scope);
     if let Some(state) = wire.session_state {
         if state.provider() != provider.as_str() {
-            return Err(NativeContinuationStoreError);
+            return Err(NativeContinuationStoreError::new(
+                "pin payload session state provider does not match pin provider",
+            ));
         }
         pin = pin.with_session_state(state);
     }
@@ -226,6 +248,8 @@ fn parse_scope(scope: &str) -> Result<NativeContinuationScope, NativeContinuatio
     match scope {
         "persisted" => Ok(NativeContinuationScope::Persisted),
         "connection_local" => Ok(NativeContinuationScope::ConnectionLocal),
-        _ => Err(NativeContinuationStoreError),
+        _ => Err(NativeContinuationStoreError::new(
+            "pin payload contains an unsupported continuation scope",
+        )),
     }
 }

@@ -274,7 +274,17 @@ impl DefaultExecutionService {
                 let timeout = Delay::new(COORDINATION_TIMEOUT).fuse();
                 pin_mut!(resolve, timeout);
                 let pin = select_biased! {
-                    result = resolve => result.ok().flatten(),
+                    result = resolve => match result {
+                        Ok(pin) => pin,
+                        Err(error) => {
+                            tracing::debug!(
+                                request_id = request_id.as_str(),
+                                %error,
+                                "Continuation affinity 查询失败，退化为外部续接"
+                            );
+                            None
+                        }
+                    },
                     _ = timeout => None,
                 };
                 match pin {
@@ -950,17 +960,28 @@ async fn record_native_continuation(
     continuation: &dyn NativeContinuationPort,
     pin: NativeContinuationPin,
 ) {
+    let provider = pin.provider().as_str().to_owned();
+    let account = pin.account().as_str().to_owned();
     let record = continuation.record(pin).fuse();
     let timeout = Delay::new(COORDINATION_TIMEOUT).fuse();
     pin_mut!(record, timeout);
     select_biased! {
         result = record => {
             if let Err(error) = result {
-                tracing::warn!(%error, "Continuation affinity 写入失败，后续请求将退化为外部续接");
+                tracing::warn!(
+                    provider = %provider,
+                    account = %account,
+                    %error,
+                    "Continuation affinity 写入失败，后续请求将退化为外部续接"
+                );
             }
         },
         _ = timeout => {
-            tracing::warn!("Continuation affinity 后台写入超时，已丢弃本次亲和记录");
+            tracing::warn!(
+                provider = %provider,
+                account = %account,
+                "Continuation affinity 后台写入超时，已丢弃本次亲和记录"
+            );
         },
     }
 }
