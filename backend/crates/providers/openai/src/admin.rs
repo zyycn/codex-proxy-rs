@@ -1439,8 +1439,8 @@ fn map_quota_error(error: CodexCredentialQuotaError) -> ProviderAdminError {
         Error::RevisionConflict => ProviderAdminErrorKind::Conflict,
         Error::CredentialRefreshRequired
         | Error::Repository(_)
-        | Error::Store
-        | Error::Upstream => ProviderAdminErrorKind::Unavailable,
+        | Error::Store { .. }
+        | Error::Upstream { .. } => ProviderAdminErrorKind::Unavailable,
     })
 }
 
@@ -1452,6 +1452,6 @@ fn map_catalog_error(error: CodexCredentialCatalogError) -> ProviderAdminError {
         }
         Error::NoEligibleCredential => ProviderAdminErrorKind::NotFound,
         Error::ConcurrentUpdate => ProviderAdminErrorKind::Conflict,
-        Error::Upstream | Error::Cache => ProviderAdminErrorKind::Unavailable,
+        Error::Upstream { .. } | Error::Cache => ProviderAdminErrorKind::Unavailable,
     })
 }

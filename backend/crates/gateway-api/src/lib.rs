@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
-use axum::http::{HeaderName, HeaderValue, Method, StatusCode};
+use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
 use axum::routing::get;
 use gateway_admin::AdminServices;
 use gateway_core::engine::execution::ExecutionService;
@@ -166,10 +166,32 @@ pub fn initialize(
             Duration::from_secs(seconds),
         ));
     }
+    // Trace 必须在 SetRequestId 内侧，span 才能捕获本服务生成的 request_id；
+    // 默认 DEBUG span 会被 info 日志过滤器丢弃，这里显式用 info_span。
+    let trace_layer = TraceLayer::new_for_http().make_span_with({
+        let request_id_header = request_id_header.clone();
+        move |request: &Request<_>| {
+            let request_id = request
+                .headers()
+                .get(&request_id_header)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default();
+            tracing::info_span!(
+                "request",
+                request_id = %request_id,
+                method = %request.method().as_str(),
+                uri = %request
+                    .uri()
+                    .path_and_query()
+                    .map(axum::http::uri::PathAndQuery::as_str)
+                    .unwrap_or_default(),
+            )
+        }
+    });
     let router = router
         .layer(PropagateRequestIdLayer::new(request_id_header.clone()))
+        .layer(trace_layer)
         .layer(SetRequestIdLayer::new(request_id_header, MakeRequestUuid))
-        .layer(TraceLayer::new_for_http())
         .with_state(state);
     Ok(ApiBundle { router })
 }

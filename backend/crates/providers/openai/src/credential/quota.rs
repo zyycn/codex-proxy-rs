@@ -215,19 +215,21 @@ pub enum CodexCredentialQuotaError {
     CredentialRefreshRequired,
     #[error(transparent)]
     Repository(#[from] CredentialRepositoryError),
-    #[error("provider account store is unavailable")]
-    Store,
+    #[error("provider account store is unavailable: {detail}")]
+    Store { detail: String },
     #[error("Codex quota account was not found")]
     NotFound,
     #[error("Codex quota credential revision is stale")]
     RevisionConflict,
-    #[error("Codex quota upstream query failed")]
-    Upstream,
+    #[error("Codex quota upstream query failed: {detail}")]
+    Upstream { detail: String },
 }
 
 impl From<gateway_core::error::StoreError> for CodexCredentialQuotaError {
-    fn from(_: gateway_core::error::StoreError) -> Self {
-        Self::Store
+    fn from(error: gateway_core::error::StoreError) -> Self {
+        Self::Store {
+            detail: error.to_string(),
+        }
     }
 }
 
@@ -660,10 +662,19 @@ impl CodexCredentialQuotaService {
                 }
                 Err(CodexQuotaFetchError::Recovery) => {
                     summary.transient += 1;
+                    tracing::warn!(
+                        account_id = %account.id(),
+                        "OpenAI quota credential recovery failed; refresh cycle will retry later"
+                    );
                 }
                 Err(CodexQuotaFetchError::Upstream { account, error }) => {
                     let Some(transition) = quota_state_transition(&error, observed_at) else {
                         summary.transient += 1;
+                        tracing::warn!(
+                            account_id = %account.id(),
+                            error = %error,
+                            "OpenAI quota upstream rejection was not classified"
+                        );
                         continue;
                     };
                     match transition {
@@ -986,7 +997,9 @@ impl CodexCredentialQuotaService {
                     return Err(CodexCredentialQuotaError::InvalidCredentialData);
                 }
                 Err(CodexQuotaFetchError::Recovery) => {
-                    return Err(CodexCredentialQuotaError::Upstream);
+                    return Err(CodexCredentialQuotaError::Upstream {
+                        detail: "credential recovery failed".to_owned(),
+                    });
                 }
                 Err(CodexQuotaFetchError::Upstream { account, error }) => {
                     if let Some(transition) = quota_state_transition(&error, observed_at) {
@@ -1001,7 +1014,9 @@ impl CodexCredentialQuotaService {
                             )
                             .await;
                     }
-                    return Err(CodexCredentialQuotaError::Upstream);
+                    return Err(CodexCredentialQuotaError::Upstream {
+                        detail: error.to_string(),
+                    });
                 }
             };
         let snapshot = parse_account_quota_snapshot(

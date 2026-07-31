@@ -652,7 +652,7 @@ async fn manual_quota_auth_rejection_does_not_invalidate_refreshable_credential(
 
     assert!(matches!(
         service.refresh_account(account.id()).await,
-        Err(CodexCredentialQuotaError::Upstream)
+        Err(CodexCredentialQuotaError::Upstream { .. })
     ));
     assert_eq!(
         store
