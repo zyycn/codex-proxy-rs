@@ -7,8 +7,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use gateway_core::{
-    engine::{EngineError, UpstreamSendState},
-    error::{GatewayError, GatewayErrorKind, ProviderErrorKind},
+    engine::EngineError,
+    error::{GatewayError, GatewayErrorKind},
 };
 use serde_json::{Value, json};
 
@@ -72,19 +72,6 @@ pub fn model_not_found_response() -> (StatusCode, Json<Value>) {
 #[must_use]
 pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {
     match error {
-        EngineError::Provider(error)
-            if error.kind() == ProviderErrorKind::Unavailable
-                && error.send_state() == UpstreamSendState::NotSent =>
-        {
-            let gateway = GatewayError::new(
-                GatewayErrorKind::NoAvailableProvider,
-                "no upstream provider is currently available for this request",
-            );
-            match error.client_visible_upstream_error() {
-                Some(upstream) => gateway.with_client_visible_upstream_error(upstream.clone()),
-                None => gateway,
-            }
-        }
         EngineError::Provider(error) => GatewayError::from_provider(error),
         EngineError::Cancelled => {
             GatewayError::new(GatewayErrorKind::Cancelled, "request was cancelled")
@@ -184,6 +171,16 @@ pub const fn gateway_error_contract(
             StatusCode::SERVICE_UNAVAILABLE,
             "server_error",
             "no_available_provider",
+        ),
+        GatewayErrorKind::AccountCapacityUnavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "server_error",
+            "account_capacity_unavailable",
+        ),
+        GatewayErrorKind::ProviderInfrastructureUnavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "server_error",
+            "provider_infrastructure_unavailable",
         ),
         GatewayErrorKind::RateLimited => (
             StatusCode::TOO_MANY_REQUESTS,

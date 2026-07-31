@@ -219,6 +219,17 @@ fn transport_should_prefer_websocket_when_requested_without_history() {
 }
 
 #[test]
+fn new_chain_should_allow_pre_delivery_http_fallback() {
+    let mut request = codex_request("gpt-test", "be brief", Vec::new());
+    request.use_websocket = true;
+
+    assert!(
+        transport_requirement(&request).allows_pre_delivery_http_fallback(),
+        "new chains may follow the TS same-account fallback behavior"
+    );
+}
+
+#[test]
 fn transport_should_mark_unknown_previous_response_as_external() {
     let mut request = codex_request("gpt-test", "be brief", Vec::new());
     request.set_previous_response_id(Some("resp_previous".to_owned()));
@@ -228,6 +239,17 @@ fn transport_should_mark_unknown_previous_response_as_external() {
         TransportRequirement::ExternalUnknown
     );
     assert!(transport_requirement(&request).allows_pre_send_http_fallback());
+}
+
+#[test]
+fn previous_response_should_forbid_pre_delivery_http_fallback() {
+    let mut request = codex_request("gpt-test", "be brief", Vec::new());
+    request.set_previous_response_id(Some("resp_previous".to_owned()));
+
+    assert!(
+        !transport_requirement(&request).allows_pre_delivery_http_fallback(),
+        "a sent continuation must not be replayed on another transport"
+    );
 }
 
 #[test]

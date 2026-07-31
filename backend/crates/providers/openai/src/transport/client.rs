@@ -477,6 +477,7 @@ pub enum CodexTransportDecision {
     Http2BreakerOpen,
     Http2PoolUnavailable,
     Http2PreSendFailure,
+    Http2PreDeliveryFailure,
 }
 
 impl CodexTransportDecision {
@@ -491,6 +492,7 @@ impl CodexTransportDecision {
             Self::Http2BreakerOpen => "http2_breaker_open",
             Self::Http2PoolUnavailable => "http2_pool_unavailable",
             Self::Http2PreSendFailure => "http2_ws_pre_send_failure",
+            Self::Http2PreDeliveryFailure => "http2_ws_pre_delivery_failure",
         }
     }
 }

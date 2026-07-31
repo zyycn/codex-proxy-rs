@@ -139,6 +139,11 @@ impl TransportRequirement {
         )
     }
 
+    /// WebSocket 已发送 payload、但尚未交付业务事件时，是否允许同账号 HTTP 重放。
+    pub fn allows_pre_delivery_http_fallback(self) -> bool {
+        matches!(self, Self::NewChain)
+    }
+
     /// 用于审计与遥测的稳定名称。
     pub fn as_str(self) -> &'static str {
         match self {

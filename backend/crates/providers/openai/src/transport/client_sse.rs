@@ -32,10 +32,11 @@ use crate::transport::{
     },
     response_meta,
     websocket::{
-        CodexWebSocketConnection, CodexWebSocketPool, CodexWebSocketPoolKey,
-        DEFAULT_INITIAL_EVENT_TIMEOUT, WEBSOCKET_FAST_PATH_BUDGET, WebSocketOriginBreaker,
-        WebSocketPoolDecision, execute_prepared_response_create_request_stream,
-        post_send_ambiguous, prepare_response_create_request_with_pool, websocket_audit_dir,
+        CodexWebSocketConnection, CodexWebSocketExchangeError, CodexWebSocketPool,
+        CodexWebSocketPoolKey, CodexWebSocketStreamingExchange, DEFAULT_INITIAL_EVENT_TIMEOUT,
+        WEBSOCKET_FAST_PATH_BUDGET, WebSocketOriginBreaker, WebSocketPoolDecision,
+        execute_prepared_response_create_request_stream, post_send_ambiguous,
+        prepare_response_create_request_with_pool, websocket_audit_dir,
         write_websocket_audit_artifact_from_env,
     },
 };
@@ -308,7 +309,7 @@ impl CodexBackendClient {
             route,
             metrics,
         } = prepared;
-        let result = match route {
+        match route {
             PreparedResponseRoute::Http => self
                 .create_response_stream_http_sse(request, context)
                 .await
@@ -317,48 +318,122 @@ impl CodexBackendClient {
                     response
                 }),
             PreparedResponseRoute::WebSocket(route) => {
-                let PreparedWebSocketRoute { request, prepared } = *route;
-                execute_prepared_response_create_request_stream(&request, prepared)
-                    .await
-                    .map_err(websocket_exchange_error_to_client_error)
-                    .map(|exchange| {
-                        tracing::info!(
-                            request_id = %context.request_id,
-                            websocket_connection_id = %exchange.websocket_connection_id,
-                            ws_pool = exchange.pool_decision.map_or("unpooled", WebSocketPoolDecision::kind),
-                            "WebSocket response stream established"
-                        );
-                        CodexBackendStreamingResponse {
-                            body: Box::pin(
-                                exchange
-                                    .body
-                                    .map_err(post_send_ambiguous)
-                                    .map_err(websocket_exchange_error_to_client_error),
-                            ),
-                            transport: CodexBackendTransport::WebSocket,
-                            turn_state: exchange.turn_state,
-                            set_cookie_headers: exchange.set_cookie_headers,
-                            rate_limit_headers: exchange.rate_limit_headers,
-                            rate_limit_header_updates: Some(exchange.rate_limit_header_updates),
-                            turn_state_update: Some(exchange.turn_state_update),
-                            websocket_pool_decision: exchange.pool_decision,
-                            diagnostics: exchange.diagnostics,
-                            response_metadata: exchange.response_metadata,
-                            transport_metrics: metrics,
-                            connection_local_continuation: exchange.connection_local_continuation,
-                        }
-                    })
+                let PreparedWebSocketRoute {
+                    request: websocket_request,
+                    prepared,
+                } = *route;
+                let delivery_wait_started_at = Instant::now();
+                let mut exchange = match execute_prepared_response_create_request_stream(
+                    &websocket_request,
+                    prepared,
+                )
+                .await
+                {
+                    Ok(exchange) => exchange,
+                    Err(error)
+                        if requirement.allows_pre_delivery_http_fallback()
+                            && error.allows_pre_delivery_http_fallback() =>
+                    {
+                        return self
+                            .fallback_to_http_before_websocket_delivery(
+                                request,
+                                context,
+                                requirement,
+                                metrics,
+                                delivery_wait_started_at,
+                                error,
+                            )
+                            .await;
+                    }
+                    Err(error) => return Err(websocket_exchange_error_to_client_error(error)),
+                };
+                if requirement.allows_pre_delivery_http_fallback()
+                    && let Err(error) = await_websocket_delivery_boundary(&mut exchange).await
+                {
+                    if error.allows_pre_delivery_http_fallback() {
+                        return self
+                            .fallback_to_http_before_websocket_delivery(
+                                request,
+                                context,
+                                requirement,
+                                metrics,
+                                delivery_wait_started_at,
+                                error,
+                            )
+                            .await;
+                    }
+                    return Err(websocket_exchange_error_to_client_error(
+                        post_send_ambiguous(error),
+                    ));
+                }
+                tracing::info!(
+                    request_id = %context.request_id,
+                    websocket_connection_id = %exchange.websocket_connection_id,
+                    ws_pool = exchange.pool_decision.map_or("unpooled", WebSocketPoolDecision::kind),
+                    "WebSocket response stream established"
+                );
+                Ok(CodexBackendStreamingResponse {
+                    body: Box::pin(
+                        exchange
+                            .body
+                            .map_err(post_send_ambiguous)
+                            .map_err(websocket_exchange_error_to_client_error),
+                    ),
+                    transport: CodexBackendTransport::WebSocket,
+                    turn_state: exchange.turn_state,
+                    set_cookie_headers: exchange.set_cookie_headers,
+                    rate_limit_headers: exchange.rate_limit_headers,
+                    rate_limit_header_updates: Some(exchange.rate_limit_header_updates),
+                    turn_state_update: Some(exchange.turn_state_update),
+                    websocket_pool_decision: exchange.pool_decision,
+                    diagnostics: exchange.diagnostics,
+                    response_metadata: exchange.response_metadata,
+                    transport_metrics: metrics,
+                    connection_local_continuation: exchange.connection_local_continuation,
+                })
             }
-        };
-        result.inspect_err(|error| {
+        }
+        .inspect_err(|error| {
             tracing::warn!(
                 request_id = %context.request_id,
                 transport_requirement = requirement.as_str(),
                 failure_phase = "post_send_or_explicit_response",
                 error = %error,
-                "Responses stream transport failed after preparation; automatic fallback is disabled"
+                "Responses stream transport failed after preparation"
             );
         })
+    }
+
+    async fn fallback_to_http_before_websocket_delivery(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+        requirement: TransportRequirement,
+        mut metrics: CodexTransportMetrics,
+        delivery_wait_started_at: Instant,
+        error: CodexWebSocketExchangeError,
+    ) -> CodexClientResult<CodexBackendStreamingResponse> {
+        let decision_wait_ms = metrics
+            .transport_decision_wait_ms
+            .unwrap_or_default()
+            .saturating_add(elapsed_duration_millis(delivery_wait_started_at.elapsed()));
+        metrics.decision = Some(CodexTransportDecision::Http2PreDeliveryFailure);
+        metrics.transport_decision_wait_ms = Some(decision_wait_ms);
+        tracing::warn!(
+            request_id = %context.request_id,
+            account_id = context.account_id.unwrap_or_default(),
+            transport_requirement = requirement.as_str(),
+            transport_decision = CodexTransportDecision::Http2PreDeliveryFailure.as_str(),
+            transport_decision_wait_ms = decision_wait_ms,
+            error = %error,
+            "WebSocket failed before first deliverable event; using same-account HTTP"
+        );
+        self.create_response_stream_http_sse(request, context)
+            .await
+            .map(|mut response| {
+                merge_preparation_metrics(&mut response.transport_metrics, metrics);
+                response
+            })
     }
 
     fn websocket_pool_key(
@@ -561,6 +636,36 @@ impl CodexBackendClient {
         headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
         Ok(headers)
     }
+}
+
+async fn await_websocket_delivery_boundary(
+    exchange: &mut CodexWebSocketStreamingExchange,
+) -> Result<(), CodexWebSocketExchangeError> {
+    let mut prelude = Vec::new();
+    loop {
+        match exchange.body.next().await {
+            Some(Ok(frame)) if is_websocket_lifecycle_prelude(&frame) => prelude.push(frame),
+            Some(Ok(frame)) => {
+                prelude.push(frame);
+                let remaining =
+                    std::mem::replace(&mut exchange.body, Box::pin(futures::stream::empty()));
+                exchange.body =
+                    Box::pin(futures::stream::iter(prelude.into_iter().map(Ok)).chain(remaining));
+                return Ok(());
+            }
+            Some(Err(error)) => return Err(error),
+            None => {
+                return Err(CodexWebSocketExchangeError::closed_before_terminal(
+                    None, None,
+                ));
+            }
+        }
+    }
+}
+
+fn is_websocket_lifecycle_prelude(frame: &[u8]) -> bool {
+    frame.starts_with(b"event: response.created\n")
+        || frame.starts_with(b"event: response.in_progress\n")
 }
 
 async fn read_model_catalog_body(response: ReqwestResponse) -> CodexClientResult<Vec<u8>> {

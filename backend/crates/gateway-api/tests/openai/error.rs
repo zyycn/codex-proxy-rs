@@ -59,6 +59,30 @@ fn no_available_provider_error_should_map_to_service_unavailable() {
 }
 
 #[test]
+fn account_capacity_error_should_map_to_service_unavailable() {
+    assert_eq!(
+        gateway_error_contract(GatewayErrorKind::AccountCapacityUnavailable),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "server_error",
+            "account_capacity_unavailable",
+        )
+    );
+}
+
+#[test]
+fn provider_infrastructure_error_should_map_to_service_unavailable() {
+    assert_eq!(
+        gateway_error_contract(GatewayErrorKind::ProviderInfrastructureUnavailable),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "server_error",
+            "provider_infrastructure_unavailable",
+        )
+    );
+}
+
+#[test]
 fn rate_limited_error_should_map_to_openai_retryable_status() {
     assert_eq!(
         gateway_error_contract(GatewayErrorKind::RateLimited),
@@ -122,29 +146,32 @@ fn engine_provider_error_should_preserve_retry_classification() {
 #[test]
 fn local_provider_capacity_exhaustion_should_map_to_service_unavailable() {
     let error = EngineError::Provider(ProviderError::new(
-        ProviderErrorKind::Unavailable,
+        ProviderErrorKind::AccountCapacityUnavailable,
         UpstreamSendState::NotSent,
     ));
 
     assert_eq!(
         gateway_error_from_engine(&error),
         GatewayError::new(
-            GatewayErrorKind::NoAvailableProvider,
-            "no upstream provider is currently available for this request"
+            GatewayErrorKind::AccountCapacityUnavailable,
+            "all eligible upstream accounts are temporarily busy"
         )
     );
 }
 
 #[test]
-fn local_provider_capacity_exhaustion_should_preserve_safe_provider_detail() {
+fn no_eligible_provider_account_should_preserve_safe_provider_detail() {
     let detail = ClientVisibleUpstreamError::new(
         "no account is eligible for the requested model",
         Some("no_eligible_account".to_owned()),
         Some("account_unavailable_error".to_owned()),
     );
     let error = EngineError::Provider(
-        ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
-            .with_client_visible_upstream_error(detail),
+        ProviderError::new(
+            ProviderErrorKind::NoEligibleAccount,
+            UpstreamSendState::NotSent,
+        )
+        .with_client_visible_upstream_error(detail),
     );
     let gateway = gateway_error_from_engine(&error);
 
@@ -165,6 +192,22 @@ fn local_provider_capacity_exhaustion_should_preserve_safe_provider_detail() {
 }
 
 #[test]
+fn provider_infrastructure_failure_should_have_a_distinct_client_contract() {
+    let error = EngineError::Provider(ProviderError::new(
+        ProviderErrorKind::ProviderInfrastructureUnavailable,
+        UpstreamSendState::NotSent,
+    ));
+
+    assert_eq!(
+        gateway_error_from_engine(&error),
+        GatewayError::new(
+            GatewayErrorKind::ProviderInfrastructureUnavailable,
+            "provider account infrastructure is temporarily unavailable"
+        )
+    );
+}
+
+#[test]
 fn no_eligible_provider_account_should_map_to_service_unavailable() {
     let error = EngineError::Provider(ProviderError::new(
         ProviderErrorKind::NoEligibleAccount,
@@ -181,16 +224,18 @@ fn no_eligible_provider_account_should_map_to_service_unavailable() {
 }
 
 #[test]
-fn sent_provider_unavailability_should_remain_bad_gateway() {
-    let error = EngineError::Provider(ProviderError::new(
-        ProviderErrorKind::Unavailable,
-        UpstreamSendState::Sent,
-    ));
+fn provider_unavailability_should_remain_bad_gateway_regardless_of_send_state() {
+    for send_state in [UpstreamSendState::NotSent, UpstreamSendState::Sent] {
+        let error = EngineError::Provider(ProviderError::new(
+            ProviderErrorKind::Unavailable,
+            send_state,
+        ));
 
-    assert_eq!(
-        gateway_error_from_engine(&error).kind(),
-        GatewayErrorKind::UpstreamUnavailable
-    );
+        assert_eq!(
+            gateway_error_from_engine(&error).kind(),
+            GatewayErrorKind::UpstreamUnavailable
+        );
+    }
 }
 
 #[test]
