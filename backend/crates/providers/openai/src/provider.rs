@@ -64,8 +64,7 @@ use crate::transport::protocol::responses::{
     CodexResponsesRequest, PreviousResponseScope, ResponseEventSignals,
 };
 use crate::transport::request::{
-    CodexRequestEncodeError, encode_generate_request, sanitize_cross_account_item,
-    scope_request_to_account,
+    CodexRequestEncodeError, encode_generate_request, scope_request_to_account,
 };
 use crate::transport::session::CodexSessionIdentity;
 use crate::transport::usage::normalize_service_tier;
@@ -177,17 +176,7 @@ impl Provider for CodexProvider {
             return ProviderRequestObservation::default();
         };
         let (semantics, reasoning_effort) = encode_generate_request(request, "observability")
-            .map(|mut encoded| {
-                if let Some(previous) = decode_openai_session_state(request) {
-                    let mut input = previous
-                        .transcript
-                        .iter()
-                        .map(OpenAiReplayItem::value)
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    input.extend(encoded.input().iter().cloned());
-                    encoded.set_input(input);
-                }
+            .map(|encoded| {
                 let semantics = encoded.semantics();
                 let reasoning_effort = semantics.reasoning_effort.clone();
                 (semantics, reasoning_effort)
@@ -267,7 +256,6 @@ impl Provider for CodexProvider {
         let session_affinity_key = derive_codex_session_affinity_key(&upstream_request);
         let cyber_policy_session_key =
             derive_codex_cyber_policy_session_key(&upstream_request, context.client_api_key_ref());
-        let request_input = upstream_request.input().to_vec();
         let transport = selected_transport(&upstream_request);
         apply_transport(&mut upstream_request, transport);
 
@@ -299,11 +287,8 @@ impl Provider for CodexProvider {
         ) || previous_session.as_ref().is_some_and(|state| {
             state.continuation_scope == OpenAiContinuationScope::ReplayRequired
         });
-        if replay_previous_response && let Some(state) = previous_session.as_ref() {
-            let mut input = replay_input_for_account(state, lease.account_id().as_str());
-            input.reserve(request_input.len());
-            input.extend(request_input.iter().cloned());
-            upstream_request.set_input(input);
+        if replay_previous_response && previous_session.is_some() {
+            // Codex 客户端 input 是完整历史；恢复时只解除上游续链绑定，避免重复叠加代理副本。
             upstream_request.set_previous_response_id(None);
             upstream_request.previous_response_scope = None;
             upstream_request.turn_state = None;
@@ -369,8 +354,6 @@ impl Provider for CodexProvider {
         let response_store = upstream_request.store();
         let session_capture =
             (!continuation_requested || previous_session.is_some()).then(|| OpenAiSessionCapture {
-                previous: previous_session,
-                request_input,
                 account_id: lease.account_id().as_str().to_owned(),
                 conversation_id: upstream_request.local_conversation_id.clone(),
                 turn_state: upstream_request.turn_state.clone(),
@@ -425,7 +408,6 @@ struct OpenAiSessionState {
     #[serde(default)]
     turn_state: Option<String>,
     continuation_scope: OpenAiContinuationScope,
-    transcript: Vec<OpenAiReplayItem>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -436,27 +418,7 @@ enum OpenAiContinuationScope {
     ReplayRequired,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum OpenAiReplayItem {
-    ClientInput(Value),
-    SanitizedOutput(Value),
-    AccountOutput { account_id: String, item: Value },
-}
-
-impl OpenAiReplayItem {
-    fn value(&self) -> &Value {
-        match self {
-            Self::ClientInput(value)
-            | Self::SanitizedOutput(value)
-            | Self::AccountOutput { item: value, .. } => value,
-        }
-    }
-}
-
 struct OpenAiSessionCapture {
-    previous: Option<OpenAiSessionState>,
-    request_input: Vec<Value>,
     account_id: String,
     conversation_id: Option<String>,
     turn_state: Option<String>,
@@ -489,33 +451,15 @@ fn attach_openai_session_update(
     events: &mut [ProviderEvent],
     capture: &mut Option<OpenAiSessionCapture>,
 ) {
-    let Some((terminal_index, output)) = events.iter().enumerate().find_map(|(index, event)| {
-        terminal_response_output(event).map(|output| (index, output.to_vec()))
-    }) else {
+    let Some(terminal_index) = events
+        .iter()
+        .position(|event| terminal_response_output(event).is_some())
+    else {
         return;
     };
     let Some(capture) = capture.take() else {
         return;
     };
-    let mut transcript = capture
-        .previous
-        .map(|state| state.transcript)
-        .unwrap_or_default();
-    project_transcript_to_account(&mut transcript, &capture.account_id);
-    transcript.extend(
-        capture
-            .request_input
-            .into_iter()
-            .map(OpenAiReplayItem::ClientInput),
-    );
-    transcript.extend(
-        output
-            .into_iter()
-            .map(|item| OpenAiReplayItem::AccountOutput {
-                account_id: capture.account_id.clone(),
-                item,
-            }),
-    );
     let Some(continuation_scope) = capture.continuation_scope else {
         return;
     };
@@ -524,7 +468,6 @@ fn attach_openai_session_update(
         conversation_id: capture.conversation_id,
         turn_state: capture.turn_state,
         continuation_scope,
-        transcript,
     }) else {
         return;
     };
@@ -550,47 +493,6 @@ fn terminal_response_output(event: &ProviderEvent) -> Option<&[Value]> {
             .map(Vec::as_slice)
     })
     .flatten()
-}
-
-fn project_transcript_to_account(transcript: &mut Vec<OpenAiReplayItem>, account_id: &str) {
-    *transcript = transcript
-        .drain(..)
-        .filter_map(|item| match item {
-            OpenAiReplayItem::AccountOutput {
-                account_id: owner,
-                item,
-            } if owner != account_id => {
-                sanitize_cross_account_item(item).map(OpenAiReplayItem::SanitizedOutput)
-            }
-            item => Some(item),
-        })
-        .collect();
-}
-
-fn replay_input_for_account(state: &OpenAiSessionState, account_id: &str) -> Vec<Value> {
-    state
-        .transcript
-        .iter()
-        .filter_map(|item| match item {
-            OpenAiReplayItem::ClientInput(value) | OpenAiReplayItem::SanitizedOutput(value) => {
-                Some(value.clone())
-            }
-            OpenAiReplayItem::AccountOutput {
-                account_id: owner,
-                item,
-            } if owner == account_id => Some(without_output_id(item.clone())),
-            OpenAiReplayItem::AccountOutput { item, .. } => {
-                sanitize_cross_account_item(item.clone())
-            }
-        })
-        .collect()
-}
-
-fn without_output_id(mut item: Value) -> Value {
-    if let Value::Object(object) = &mut item {
-        object.remove("id");
-    }
-    item
 }
 
 enum CodexHandshakeAttemptError {
