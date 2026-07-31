@@ -96,25 +96,29 @@ const PRICING_RULES: &[PricingRule] = &[
         model: "gpt-5.6-sol",
         pricing: ModelPricing::new(50_000, 300_000, 5_000)
             .with_cache_write(125)
-            .with_priority(100_000, 600_000, 10_000),
+            .with_priority(100_000, 600_000, 10_000)
+            .with_long_context(100_000, 450_000, 10_000, 0, 0, 0),
     },
     PricingRule {
         model: "gpt-5.6-terra",
-        pricing: ModelPricing::new(25_000, 150_000, 2_500)
+        pricing: ModelPricing::new(20_000, 120_000, 2_000)
             .with_cache_write(125)
-            .with_priority(50_000, 300_000, 5_000),
+            .with_priority(40_000, 240_000, 4_000)
+            .with_long_context(40_000, 180_000, 4_000, 0, 0, 0),
     },
     PricingRule {
         model: "gpt-5.6-luna",
-        pricing: ModelPricing::new(10_000, 60_000, 1_000)
+        pricing: ModelPricing::new(2_000, 12_000, 200)
             .with_cache_write(125)
-            .with_priority(20_000, 120_000, 2_000),
+            .with_priority(4_000, 24_000, 400)
+            .with_long_context(4_000, 18_000, 400, 0, 0, 0),
     },
     PricingRule {
         model: "gpt-5.6",
         pricing: ModelPricing::new(50_000, 300_000, 5_000)
             .with_cache_write(125)
-            .with_priority(100_000, 600_000, 10_000),
+            .with_priority(100_000, 600_000, 10_000)
+            .with_long_context(100_000, 450_000, 10_000, 0, 0, 0),
     },
     PricingRule {
         model: "gpt-5.5-pro",
@@ -162,11 +166,11 @@ const PRICING_RULES: &[PricingRule] = &[
     },
     PricingRule {
         model: "gpt-4o-mini",
-        pricing: ModelPricing::new(1_500, 6_000, 0),
+        pricing: ModelPricing::new(1_500, 6_000, 750),
     },
     PricingRule {
         model: "gpt-4o",
-        pricing: ModelPricing::new(25_000, 100_000, 0),
+        pricing: ModelPricing::new(25_000, 100_000, 12_500),
     },
     PricingRule {
         model: "gpt-4-turbo",

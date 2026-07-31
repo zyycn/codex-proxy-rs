@@ -31,6 +31,33 @@ fn billing_breakdown_should_preserve_input_output_and_cache_components() {
 }
 
 #[test]
+fn billing_breakdown_should_use_latest_gpt_5_6_and_cached_input_prices() {
+    let terra = openai_billing_breakdown("gpt-5.6-terra", 1, 1, 0, 0, None)
+        .expect("gpt-5.6-terra standard pricing");
+    assert_eq!(terra.total_amount().amount().scaled(), 140_000);
+
+    let terra_fast = openai_billing_breakdown("gpt-5.6-terra", 1, 1, 0, 0, Some("fast"))
+        .expect("gpt-5.6-terra fast pricing");
+    assert_eq!(terra_fast.total_amount().amount().scaled(), 280_000);
+
+    let terra_long = openai_billing_breakdown("gpt-5.6-terra", 272_001, 0, 0, 0, None)
+        .expect("gpt-5.6-terra long-context pricing");
+    assert_eq!(terra_long.total_amount().amount().scaled(), 10_880_040_000);
+
+    let luna = openai_billing_breakdown("gpt-5.6-luna", 1, 1, 0, 0, None)
+        .expect("gpt-5.6-luna standard pricing");
+    assert_eq!(luna.total_amount().amount().scaled(), 14_000);
+
+    let gpt_4o =
+        openai_billing_breakdown("gpt-4o", 1, 1, 1, 0, None).expect("gpt-4o cached-input pricing");
+    assert_eq!(gpt_4o.total_amount().amount().scaled(), 112_500);
+
+    let gpt_4o_mini = openai_billing_breakdown("gpt-4o-mini", 1, 1, 1, 0, None)
+        .expect("gpt-4o-mini cached-input pricing");
+    assert_eq!(gpt_4o_mini.total_amount().amount().scaled(), 6_750);
+}
+
+#[test]
 fn billing_breakdown_should_apply_fast_and_flex_tiers_without_guessing_unknown_models() {
     let fast = openai_billing_breakdown("gpt-5.4", 1, 1, 0, 0, Some("fast")).expect("fast pricing");
     let flex = openai_billing_breakdown("gpt-5.4", 1, 1, 0, 0, Some("flex")).expect("flex pricing");
