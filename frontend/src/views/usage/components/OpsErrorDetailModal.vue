@@ -13,6 +13,7 @@ const props = defineProps<{
 const open = defineModel<boolean>({ default: false })
 
 const fields = computed(() => [
+  { label: '账号', value: props.record?.metadata.accountLabel },
   { label: '时间', value: props.record?.createdAtDisplay },
   { label: '事件', value: props.record?.kind },
   { label: '失败分类', value: props.record?.failureClass },

@@ -1,0 +1,937 @@
+use chrono::{DateTime, TimeDelta, Utc};
+use gateway_store::postgres::{
+    DiagnosticDimension, ModelRequestAttemptStart, ModelRequestRepository, NewModelRequest,
+    ObservabilityPageNumber, ObservabilityPageSize, ObservabilityRange, ObservabilityRepository,
+    OpsErrorFilter, OpsErrorQuery, OpsEvent, OpsEventLevel, OpsEventRepository, PgExecutionStore,
+    PgObservabilityRepository, PgOpsEventRepository, UsageRecordFilter, UsageRecordQuery,
+};
+use sqlx::PgPool;
+use uuid::Uuid;
+
+use super::TestDatabase;
+
+type ProviderAccountSnapshotRow = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+#[tokio::test]
+async fn request_snapshots_should_survive_account_deletion() {
+    let Some(database) = TestDatabase::create("snapshot_request_delete").await else {
+        return;
+    };
+    let started_at = Utc::now();
+    seed_account(
+        &database.pool,
+        "acct_snap_a",
+        "Snapshot Alpha",
+        Some("alpha@example.invalid"),
+        "oauth",
+        started_at,
+    )
+    .await;
+    let store = PgExecutionStore::new(database.pool.clone());
+    store
+        .insert_model_request_with_first_attempt(
+            new_request("req_snap_a", started_at),
+            attempt("req_snap_a", 1, "acct_snap_a"),
+        )
+        .await
+        .expect("insert request with first attempt");
+    finalize_request(&database.pool, "req_snap_a", started_at).await;
+
+    sqlx::query("delete from provider_accounts where id = 'acct_snap_a'")
+        .execute(&database.pool)
+        .await
+        .expect("delete provider account");
+
+    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let page = repository
+        .list_usage_records(usage_query(started_at, UsageRecordFilter::default()))
+        .await
+        .expect("list usage records after deletion");
+    let record = page
+        .items
+        .iter()
+        .find(|record| record.id == "req_snap_a")
+        .expect("request snapshot record");
+    assert_eq!(
+        (
+            record.provider_account_ref.as_deref(),
+            record.provider_account_name.as_deref(),
+            record.provider_account_email.as_deref(),
+            record.provider_account_authentication_kind.as_deref(),
+        ),
+        (
+            Some("acct_snap_a"),
+            Some("Snapshot Alpha"),
+            Some("alpha@example.invalid"),
+            Some("oauth"),
+        )
+    );
+
+    let detail = repository
+        .usage_record_detail("req_snap_a")
+        .await
+        .expect("usage record detail after deletion");
+    assert_eq!(
+        (
+            detail.request.provider_account_name.as_deref(),
+            detail.request.provider_account_email.as_deref(),
+            detail
+                .request
+                .provider_account_authentication_kind
+                .as_deref(),
+        ),
+        (
+            Some("Snapshot Alpha"),
+            Some("alpha@example.invalid"),
+            Some("oauth"),
+        )
+    );
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn attempts_should_keep_their_own_account_snapshots() {
+    let Some(database) = TestDatabase::create("snapshot_attempt").await else {
+        return;
+    };
+    let started_at = Utc::now();
+    seed_account(
+        &database.pool,
+        "acct_snap_a",
+        "Snapshot Alpha",
+        Some("alpha@example.invalid"),
+        "oauth",
+        started_at,
+    )
+    .await;
+    seed_account(
+        &database.pool,
+        "acct_snap_b",
+        "Snapshot Beta",
+        Some("beta@example.invalid"),
+        "api_key",
+        started_at,
+    )
+    .await;
+    let store = PgExecutionStore::new(database.pool.clone());
+    store
+        .insert_model_request_with_first_attempt(
+            new_request("req_snap_ab", started_at),
+            attempt("req_snap_ab", 1, "acct_snap_a"),
+        )
+        .await
+        .expect("insert first attempt");
+    PgOpsEventRepository::new(database.pool.clone())
+        .append_ops_event(OpsEvent {
+            id: "ops_snap_a".to_owned(),
+            model_request_id: Some("req_snap_ab".to_owned()),
+            attempt_index: Some(1),
+            level: OpsEventLevel::Warning,
+            component: "routing".to_owned(),
+            operation: "fallback".to_owned(),
+            provider_kind: Some("openai".to_owned()),
+            provider_account_id: Some("acct_snap_a".to_owned()),
+            provider_account_ref: Some("acct_snap_a".to_owned()),
+            upstream_model_id: Some("upstream-a".to_owned()),
+            failure_kind: "rate_limited".to_owned(),
+            status_code: Some(429),
+            provider_error_code: Some("rate_limit".to_owned()),
+            retry_after_ms: Some(1_000),
+            upstream_request_id: None,
+            latency_ms: Some(120),
+            message: "first account was limited".to_owned(),
+            occurrence_count: 1,
+            created_at: started_at + chrono::Duration::seconds(1),
+        })
+        .await
+        .expect("append intermediate failure");
+    store
+        .begin_model_request_attempt(attempt("req_snap_ab", 2, "acct_snap_b"))
+        .await
+        .expect("begin second attempt");
+    finalize_request(&database.pool, "req_snap_ab", started_at).await;
+
+    sqlx::query("delete from provider_accounts where id in ('acct_snap_a', 'acct_snap_b')")
+        .execute(&database.pool)
+        .await
+        .expect("delete provider accounts");
+
+    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let detail = repository
+        .usage_record_detail("req_snap_ab")
+        .await
+        .expect("usage detail with mixed attempts");
+    let intermediate = detail
+        .attempts
+        .iter()
+        .find(|attempt| attempt.source == "ops_event")
+        .expect("intermediate attempt");
+    assert_eq!(
+        (
+            intermediate.provider_account_name.as_deref(),
+            intermediate.provider_account_email.as_deref(),
+            intermediate.provider_account_authentication_kind.as_deref(),
+        ),
+        (
+            Some("Snapshot Alpha"),
+            Some("alpha@example.invalid"),
+            Some("oauth"),
+        )
+    );
+    let final_attempt = detail
+        .attempts
+        .iter()
+        .find(|attempt| attempt.source == "model_request")
+        .expect("final attempt");
+    assert_eq!(
+        (
+            final_attempt.provider_account_name.as_deref(),
+            final_attempt.provider_account_email.as_deref(),
+            final_attempt
+                .provider_account_authentication_kind
+                .as_deref(),
+        ),
+        (
+            Some("Snapshot Beta"),
+            Some("beta@example.invalid"),
+            Some("api_key"),
+        )
+    );
+    assert_eq!(
+        detail.request.provider_account_email.as_deref(),
+        Some("beta@example.invalid")
+    );
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn ops_errors_should_keep_request_and_event_snapshots_after_account_deletion() {
+    let Some(database) = TestDatabase::create("snapshot_ops_errors").await else {
+        return;
+    };
+    let started_at = Utc::now();
+    seed_account(
+        &database.pool,
+        "acct_snap_a",
+        "Snapshot Alpha",
+        Some("alpha@example.invalid"),
+        "oauth",
+        started_at,
+    )
+    .await;
+    seed_account(
+        &database.pool,
+        "acct_snap_c",
+        "Snapshot Charlie",
+        Some("charlie@example.invalid"),
+        "api_key",
+        started_at,
+    )
+    .await;
+    let store = PgExecutionStore::new(database.pool.clone());
+    store
+        .insert_model_request_with_first_attempt(
+            new_request("req_snap_error", started_at),
+            attempt("req_snap_error", 1, "acct_snap_a"),
+        )
+        .await
+        .expect("insert failed request");
+    sqlx::query(
+        "update model_requests
+         set outcome = 'failed', error_kind = 'upstream_error',
+             error_message = 'snapshot failure', client_status_code = 502,
+             upstream_status_code = 502, completed_at = $1
+         where id = 'req_snap_error'",
+    )
+    .bind(started_at + chrono::Duration::seconds(2))
+    .execute(&database.pool)
+    .await
+    .expect("mark request failed");
+    PgOpsEventRepository::new(database.pool.clone())
+        .append_ops_event(OpsEvent {
+            id: "ops_snap_probe".to_owned(),
+            model_request_id: None,
+            attempt_index: None,
+            level: OpsEventLevel::Warning,
+            component: "account_probe".to_owned(),
+            operation: "connection_test".to_owned(),
+            provider_kind: Some("xai".to_owned()),
+            provider_account_id: Some("acct_snap_c".to_owned()),
+            provider_account_ref: Some("acct_snap_c".to_owned()),
+            upstream_model_id: Some("grok-test".to_owned()),
+            failure_kind: "auth_failed".to_owned(),
+            status_code: Some(401),
+            provider_error_code: Some("invalid_api_key".to_owned()),
+            retry_after_ms: None,
+            upstream_request_id: None,
+            latency_ms: Some(80),
+            message: "probe failed".to_owned(),
+            occurrence_count: 1,
+            created_at: started_at + chrono::Duration::seconds(3),
+        })
+        .await
+        .expect("append probe failure");
+
+    sqlx::query("delete from provider_accounts where id in ('acct_snap_a', 'acct_snap_c')")
+        .execute(&database.pool)
+        .await
+        .expect("delete provider accounts");
+
+    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let errors = repository
+        .list_ops_errors(OpsErrorQuery {
+            range: range_around(started_at),
+            filter: OpsErrorFilter::default(),
+            cursor: None,
+            page: ObservabilityPageNumber::new(1).expect("page"),
+            page_size: ObservabilityPageSize::new(10).expect("page size"),
+        })
+        .await
+        .expect("list ops errors after deletion");
+    let request_error = errors
+        .items
+        .iter()
+        .find(|error| error.source == "model_request")
+        .expect("request error");
+    assert_eq!(
+        (
+            request_error.provider_account_name.as_deref(),
+            request_error.provider_account_email.as_deref(),
+            request_error
+                .provider_account_authentication_kind
+                .as_deref(),
+        ),
+        (
+            Some("Snapshot Alpha"),
+            Some("alpha@example.invalid"),
+            Some("oauth"),
+        )
+    );
+    let probe_error = errors
+        .items
+        .iter()
+        .find(|error| error.source == "ops_event")
+        .expect("probe error");
+    assert_eq!(
+        (
+            probe_error.provider_account_name.as_deref(),
+            probe_error.provider_account_email.as_deref(),
+            probe_error.provider_account_authentication_kind.as_deref(),
+        ),
+        (
+            Some("Snapshot Charlie"),
+            Some("charlie@example.invalid"),
+            Some("api_key"),
+        )
+    );
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn diagnostics_should_group_same_email_accounts_by_stable_ref() {
+    let Some(database) = TestDatabase::create("snapshot_diagnostics_same_email").await else {
+        return;
+    };
+    let started_at = Utc::now();
+    seed_account(
+        &database.pool,
+        "acct_snap_a",
+        "Alpha",
+        Some("same@example.invalid"),
+        "oauth",
+        started_at,
+    )
+    .await;
+    seed_account(
+        &database.pool,
+        "acct_snap_b",
+        "Beta",
+        Some("same@example.invalid"),
+        "api_key",
+        started_at,
+    )
+    .await;
+    let store = PgExecutionStore::new(database.pool.clone());
+    store
+        .insert_model_request_with_first_attempt(
+            new_request("req_snap_a", started_at),
+            attempt("req_snap_a", 1, "acct_snap_a"),
+        )
+        .await
+        .expect("insert account a request");
+    finalize_request(&database.pool, "req_snap_a", started_at).await;
+    store
+        .insert_model_request_with_first_attempt(
+            new_request("req_snap_b", started_at + chrono::Duration::seconds(1)),
+            attempt("req_snap_b", 1, "acct_snap_b"),
+        )
+        .await
+        .expect("insert account b request");
+    finalize_request(&database.pool, "req_snap_b", started_at).await;
+
+    sqlx::query("delete from provider_accounts where id in ('acct_snap_a', 'acct_snap_b')")
+        .execute(&database.pool)
+        .await
+        .expect("delete provider accounts");
+
+    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let diagnostics = repository
+        .usage_diagnostics(
+            range_around(started_at),
+            UsageRecordFilter::default(),
+            DiagnosticDimension::Account,
+        )
+        .await
+        .expect("account diagnostics");
+    assert_eq!(diagnostics.len(), 2);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|item| item.key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["acct_snap_a", "acct_snap_b"]
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .all(|item| item.name == "same@example.invalid")
+    );
+    assert!(diagnostics.iter().all(|item| item.request_count == 1));
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn diagnostics_should_fallback_to_name_then_ref_for_missing_snapshots() {
+    let Some(database) = TestDatabase::create("snapshot_diagnostics_fallback").await else {
+        return;
+    };
+    let started_at = Utc::now();
+    seed_account(
+        &database.pool,
+        "acct_snap_c",
+        "Snapshot Charlie",
+        None,
+        "api_key",
+        started_at,
+    )
+    .await;
+    let store = PgExecutionStore::new(database.pool.clone());
+    store
+        .insert_model_request_with_first_attempt(
+            new_request("req_snap_c", started_at),
+            attempt("req_snap_c", 1, "acct_snap_c"),
+        )
+        .await
+        .expect("insert account c request");
+    finalize_request(&database.pool, "req_snap_c", started_at).await;
+    store
+        .insert_model_request_with_first_attempt(
+            new_request("req_snap_legacy", started_at + chrono::Duration::seconds(1)),
+            ModelRequestAttemptStart {
+                model_request_id: "req_snap_legacy".to_owned(),
+                attempt_count: 1,
+                provider_kind: "openai".to_owned(),
+                provider_account_id: None,
+                provider_account_ref: Some("acct_legacy_deleted".to_owned()),
+                upstream_model_id: "legacy-model".to_owned(),
+                upstream_transport: "http_sse".to_owned(),
+                http_version: None,
+            },
+        )
+        .await
+        .expect("insert legacy request without live account");
+    finalize_request(&database.pool, "req_snap_legacy", started_at).await;
+
+    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let diagnostics = repository
+        .usage_diagnostics(
+            range_around(started_at),
+            UsageRecordFilter::default(),
+            DiagnosticDimension::Account,
+        )
+        .await
+        .expect("account diagnostics");
+    let by_key = diagnostics
+        .iter()
+        .map(|item| (item.key.as_str(), item.name.as_str()))
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(by_key.get("acct_snap_c"), Some(&"Snapshot Charlie"));
+    assert_eq!(
+        by_key.get("acct_legacy_deleted"),
+        Some(&"acct_legacy_deleted")
+    );
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn failure_diagnostics_should_only_include_errored_requests() {
+    let Some(database) = TestDatabase::create("snapshot_failure_dimension").await else {
+        return;
+    };
+    let started_at = Utc::now();
+    seed_account(
+        &database.pool,
+        "acct_snap_a",
+        "Snapshot Alpha",
+        Some("alpha@example.invalid"),
+        "oauth",
+        started_at,
+    )
+    .await;
+    let store = PgExecutionStore::new(database.pool.clone());
+    store
+        .insert_model_request_with_first_attempt(
+            new_request("req_snap_ok", started_at),
+            attempt("req_snap_ok", 1, "acct_snap_a"),
+        )
+        .await
+        .expect("insert healthy request");
+    finalize_request(&database.pool, "req_snap_ok", started_at).await;
+    store
+        .insert_model_request_with_first_attempt(
+            new_request("req_snap_err", started_at + chrono::Duration::seconds(1)),
+            attempt("req_snap_err", 1, "acct_snap_a"),
+        )
+        .await
+        .expect("insert errored request");
+    sqlx::query(
+        "update model_requests
+         set outcome = 'failed', error_kind = 'rate_limited',
+             error_message = 'upstream limited', client_status_code = 429,
+             upstream_status_code = 429, completed_at = $2
+         where id = $1",
+    )
+    .bind("req_snap_err")
+    .bind(started_at + chrono::Duration::seconds(6))
+    .execute(&database.pool)
+    .await
+    .expect("mark request failed");
+
+    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let diagnostics = repository
+        .usage_diagnostics(
+            range_around(started_at),
+            UsageRecordFilter::default(),
+            DiagnosticDimension::Failure,
+        )
+        .await
+        .expect("failure diagnostics");
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].key, "rate_limited");
+    assert_eq!(diagnostics[0].request_count, 1);
+    assert_eq!(diagnostics[0].failure_count, 1);
+    assert_eq!(diagnostics[0].success_count, 0);
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
+    let Some(database) = TestDatabase::create("snapshot_api_key_dimension").await else {
+        return;
+    };
+    let started_at = Utc::now();
+    seed_api_key(&database.pool, "key_diag", "My Key", started_at).await;
+    let store = PgExecutionStore::new(database.pool.clone());
+    for id in ["req_key_a", "req_key_b"] {
+        let mut request = new_request(id, started_at);
+        request.client_api_key_id = Some("key_diag".to_owned());
+        request.client_api_key_ref = "key_diag".to_owned();
+        let attempt = ModelRequestAttemptStart {
+            model_request_id: id.to_owned(),
+            attempt_count: 1,
+            provider_kind: "openai".to_owned(),
+            provider_account_id: None,
+            provider_account_ref: Some("acct_key".to_owned()),
+            upstream_model_id: "upstream-model".to_owned(),
+            upstream_transport: "http_sse".to_owned(),
+            http_version: None,
+        };
+        store
+            .insert_model_request_with_first_attempt(request, attempt)
+            .await
+            .expect("insert api key request");
+        finalize_request(&database.pool, id, started_at).await;
+    }
+
+    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let diagnostics = repository
+        .usage_diagnostics(
+            range_around(started_at),
+            UsageRecordFilter::default(),
+            DiagnosticDimension::ApiKey,
+        )
+        .await
+        .expect("api key diagnostics");
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].key, "key_diag");
+    assert_eq!(diagnostics[0].name, "My Key");
+    assert_eq!(diagnostics[0].request_count, 2);
+
+    sqlx::query("delete from client_api_keys where id = 'key_diag'")
+        .execute(&database.pool)
+        .await
+        .expect("delete api key");
+    let diagnostics = repository
+        .usage_diagnostics(
+            range_around(started_at),
+            UsageRecordFilter::default(),
+            DiagnosticDimension::ApiKey,
+        )
+        .await
+        .expect("api key diagnostics after deletion");
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].key, "key_diag");
+    assert_eq!(diagnostics[0].name, "key_diag");
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn renaming_account_should_not_rewrite_historical_snapshots() {
+    let Some(database) = TestDatabase::create("snapshot_rename").await else {
+        return;
+    };
+    let started_at = Utc::now();
+    seed_account(
+        &database.pool,
+        "acct_snap_a",
+        "Original Name",
+        Some("original@example.invalid"),
+        "oauth",
+        started_at,
+    )
+    .await;
+    let store = PgExecutionStore::new(database.pool.clone());
+    store
+        .insert_model_request_with_first_attempt(
+            new_request("req_snap_a", started_at),
+            attempt("req_snap_a", 1, "acct_snap_a"),
+        )
+        .await
+        .expect("insert request with original snapshot");
+    finalize_request(&database.pool, "req_snap_a", started_at).await;
+    sqlx::query(
+        "update provider_accounts
+         set name = 'Renamed', email = 'renamed@example.invalid'
+         where id = 'acct_snap_a'",
+    )
+    .execute(&database.pool)
+    .await
+    .expect("rename provider account");
+
+    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let page = repository
+        .list_usage_records(usage_query(started_at, UsageRecordFilter::default()))
+        .await
+        .expect("list usage records after rename");
+    let record = page
+        .items
+        .iter()
+        .find(|record| record.id == "req_snap_a")
+        .expect("historical request");
+    assert_eq!(
+        (
+            record.provider_account_name.as_deref(),
+            record.provider_account_email.as_deref(),
+        ),
+        (Some("Original Name"), Some("original@example.invalid"))
+    );
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn migration_should_backfill_snapshots_for_existing_accounts_and_survive_deletion() {
+    let Some(database_url) = crate::support::test_env("CPR_TEST_DATABASE_URL") else {
+        return;
+    };
+    let schema = format!("cpr_store_snapshot_backfill_{}", Uuid::new_v4().simple());
+    let admin = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .expect("connect test PostgreSQL");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("create schema \"{schema}\"")))
+        .execute(&admin)
+        .await
+        .expect("create backfill schema");
+    let search_path = schema.clone();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .after_connect(move |connection, _metadata| {
+            let search_path = search_path.clone();
+            Box::pin(async move {
+                sqlx::query("select set_config('search_path', $1, false)")
+                    .bind(search_path)
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&database_url)
+        .await
+        .expect("connect backfill pool");
+    let started_at = Utc::now();
+    {
+        let mut migration = pool.begin().await.expect("begin terminal migration");
+        sqlx::raw_sql(include_str!("../../../../migrations/0001_initial.sql"))
+            .execute(&mut *migration)
+            .await
+            .expect("apply initial migration");
+        migration.commit().await.expect("commit initial migration");
+    }
+    seed_account(
+        &pool,
+        "acct_backfill",
+        "Backfill",
+        Some("backfill@example.invalid"),
+        "oauth",
+        started_at,
+    )
+    .await;
+    sqlx::query(
+        "insert into model_requests (
+           id, client_api_key_ref, config_revision, protocol, operation, endpoint,
+           client_transport, requested_model_id,
+           provider_kind, provider_account_id, provider_account_ref,
+           upstream_model_id, upstream_transport, attempt_count, upstream_send_state,
+           started_at, deadline_at
+         ) values (
+           'req_backfill', 'key_backfill', 1, 'openai', 'responses', '/v1/responses',
+           'http_sse', 'coding', 'openai', 'acct_backfill', 'acct_backfill',
+           'upstream-backfill', 'http_sse', 1, 'sent', $1, $1 + interval '30 seconds'
+         )",
+    )
+    .bind(started_at)
+    .execute(&pool)
+    .await
+    .expect("insert pre-migration request");
+    sqlx::query(
+        "insert into ops_events (
+           id, level, component, operation,
+           provider_kind, provider_account_id, provider_account_ref,
+           failure_kind, message, occurrence_count, created_at
+         ) values (
+           'ops_backfill', 'warning', 'account_probe', 'connection_test',
+           'openai', 'acct_backfill', 'acct_backfill',
+           'auth_failed', 'backfill probe', 1, $1
+         )",
+    )
+    .bind(started_at)
+    .execute(&pool)
+    .await
+    .expect("insert pre-migration ops event");
+    {
+        let mut migration = pool.begin().await.expect("begin snapshot migration");
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/0002_snapshot_provider_account_identity.sql"
+        ))
+        .execute(&mut *migration)
+        .await
+        .expect("apply snapshot migration");
+        migration.commit().await.expect("commit snapshot migration");
+    }
+    let (
+        request_name,
+        request_email,
+        request_authentication_kind,
+        event_name,
+        event_email,
+        event_authentication_kind,
+    ): ProviderAccountSnapshotRow = sqlx::query_as(
+        "select
+           (select provider_account_name_snapshot from model_requests where id = 'req_backfill'),
+           (select provider_account_email_snapshot from model_requests where id = 'req_backfill'),
+           (select provider_account_authentication_kind_snapshot from model_requests where id = 'req_backfill'),
+           (select provider_account_name_snapshot from ops_events where id = 'ops_backfill'),
+           (select provider_account_email_snapshot from ops_events where id = 'ops_backfill'),
+           (select provider_account_authentication_kind_snapshot from ops_events where id = 'ops_backfill')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("load backfilled snapshots");
+    assert_eq!(
+        (
+            request_name.as_deref(),
+            request_email.as_deref(),
+            request_authentication_kind.as_deref(),
+        ),
+        (
+            Some("Backfill"),
+            Some("backfill@example.invalid"),
+            Some("oauth"),
+        )
+    );
+    assert_eq!(
+        (
+            event_name.as_deref(),
+            event_email.as_deref(),
+            event_authentication_kind.as_deref(),
+        ),
+        (
+            Some("Backfill"),
+            Some("backfill@example.invalid"),
+            Some("oauth"),
+        )
+    );
+    sqlx::query("delete from provider_accounts where id = 'acct_backfill'")
+        .execute(&pool)
+        .await
+        .expect("delete backfilled account");
+    let request_snapshot: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+        "select provider_account_name_snapshot, provider_account_email_snapshot,
+                provider_account_authentication_kind_snapshot
+         from model_requests where id = 'req_backfill'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("load request snapshot after deletion");
+    assert_eq!(
+        (
+            request_snapshot.0.as_deref(),
+            request_snapshot.1.as_deref(),
+            request_snapshot.2.as_deref(),
+        ),
+        (
+            Some("Backfill"),
+            Some("backfill@example.invalid"),
+            Some("oauth"),
+        )
+    );
+
+    drop(pool);
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "drop schema \"{schema}\" cascade"
+    )))
+    .execute(&admin)
+    .await
+    .expect("drop backfill schema");
+    admin.close().await;
+}
+
+fn new_request(id: &str, started_at: DateTime<Utc>) -> NewModelRequest {
+    NewModelRequest {
+        id: id.to_owned(),
+        client_api_key_id: None,
+        client_api_key_ref: "key_snapshot".to_owned(),
+        config_revision: 1,
+        protocol: "openai".to_owned(),
+        operation: "responses".to_owned(),
+        endpoint: "/v1/responses".to_owned(),
+        client_transport: "http_sse".to_owned(),
+        requested_model_id: "coding".to_owned(),
+        client_ip: None,
+        user_agent: None,
+        reasoning_effort: None,
+        reasoning_preset: None,
+        request_kind: None,
+        subagent_kind: None,
+        compact: false,
+        image_generation_requested: false,
+        started_at,
+        deadline_at: started_at + chrono::Duration::seconds(30),
+    }
+}
+
+fn attempt(id: &str, count: u32, account_id: &str) -> ModelRequestAttemptStart {
+    ModelRequestAttemptStart {
+        model_request_id: id.to_owned(),
+        attempt_count: count,
+        provider_kind: "openai".to_owned(),
+        provider_account_id: Some(account_id.to_owned()),
+        provider_account_ref: Some(account_id.to_owned()),
+        upstream_model_id: "upstream-model".to_owned(),
+        upstream_transport: "http_sse".to_owned(),
+        http_version: None,
+    }
+}
+
+fn usage_query(started_at: DateTime<Utc>, filter: UsageRecordFilter) -> UsageRecordQuery {
+    UsageRecordQuery {
+        range: range_around(started_at),
+        filter,
+        cursor: None,
+        page: ObservabilityPageNumber::new(1).expect("page"),
+        page_size: ObservabilityPageSize::new(10).expect("page size"),
+    }
+}
+
+fn range_around(started_at: DateTime<Utc>) -> ObservabilityRange {
+    ObservabilityRange::new(
+        started_at - TimeDelta::hours(1),
+        started_at + TimeDelta::hours(1),
+    )
+    .expect("observability range")
+}
+
+async fn seed_account(
+    pool: &PgPool,
+    id: &str,
+    name: &str,
+    email: Option<&str>,
+    authentication_kind: &str,
+    now: DateTime<Utc>,
+) {
+    sqlx::query(
+        "insert into provider_accounts (
+           id, provider_kind, name, email, upstream_user_id,
+           upstream_account_id, plan_type, authentication_kind,
+           provider_credentials_json, credential_revision,
+           has_refresh_token, access_token_expires_at, enabled, availability,
+           availability_observed_at, created_at, updated_at
+         ) values (
+           $1, 'openai', $2, $3, 'user-' || $1, null, null, $4,
+           '{}'::jsonb, 1, false, $5 + interval '1 day', true, 'ready',
+           $5, $5, $5
+         )",
+    )
+    .bind(id)
+    .bind(name)
+    .bind(email)
+    .bind(authentication_kind)
+    .bind(now)
+    .execute(pool)
+    .await
+    .expect("seed provider account");
+}
+
+async fn finalize_request(pool: &PgPool, id: &str, started_at: DateTime<Utc>) {
+    sqlx::query(
+        "update model_requests
+         set outcome = 'succeeded', client_status_code = 200,
+             upstream_status_code = 200, downstream_committed_at = $2, completed_at = $2
+         where id = $1",
+    )
+    .bind(id)
+    .bind(started_at + chrono::Duration::seconds(5))
+    .execute(pool)
+    .await
+    .expect("finalize request");
+}
+
+async fn seed_api_key(pool: &PgPool, id: &str, name: &str, now: DateTime<Utc>) {
+    sqlx::query(
+        "insert into client_api_keys (id, name, provider_kind, key, enabled, created_at, updated_at)
+         values ($1, $2, 'openai', 'sk_' || $3, true, $4, $4)",
+    )
+    .bind(id)
+    .bind(name)
+    .bind("A".repeat(43))
+    .bind(now)
+    .execute(pool)
+    .await
+    .expect("seed api key");
+}

@@ -649,6 +649,9 @@ pub struct UsageAttempt {
     pub operation: String,
     pub provider_kind: Option<String>,
     pub provider_account_ref: Option<String>,
+    pub provider_account_name: Option<String>,
+    pub provider_account_email: Option<String>,
+    pub provider_account_authentication_kind: Option<String>,
     pub upstream_model_id: Option<String>,
     pub upstream_transport: Option<String>,
     pub upstream_send_state: Option<String>,
@@ -709,6 +712,7 @@ pub struct UsageSummary {
 /// 单个诊断维度值的聚合结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiagnosticObservation {
+    pub key: String,
     pub name: String,
     pub request_count: u64,
     pub success_count: u64,
@@ -732,6 +736,9 @@ pub struct OpsError {
     pub operation: String,
     pub provider_kind: Option<String>,
     pub provider_account_ref: Option<String>,
+    pub provider_account_name: Option<String>,
+    pub provider_account_email: Option<String>,
+    pub provider_account_authentication_kind: Option<String>,
     pub upstream_model_id: Option<String>,
     pub upstream_transport: Option<String>,
     pub failure_kind: String,
@@ -1025,6 +1032,7 @@ pub struct UsageInsights {
 /// 已完成分母计算的诊断项。
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiagnosticsItem {
+    pub key: String,
     pub name: String,
     pub request_count: u64,
     pub success_count: u64,

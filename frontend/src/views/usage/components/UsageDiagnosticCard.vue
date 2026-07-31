@@ -141,7 +141,7 @@ function diagnosticNameDisplay(name: string) {
         :columns="diagnosticColumns"
         :rows="displayItems"
         compact
-        row-key="name"
+        row-key="key"
         empty-text="暂无诊断数据"
         max-height="230px"
         min-width="640px"

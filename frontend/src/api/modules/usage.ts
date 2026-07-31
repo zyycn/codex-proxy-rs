@@ -100,6 +100,7 @@ export interface UsageRecord {
   authenticationKind: string | null
   accountId: string | null
   accountEmail: string | null
+  accountName: string | null
   route: string
   model: string
   requestedModel: string | null
@@ -164,7 +165,10 @@ export interface UsageAttempt {
   firstTokenMs: number | null
   latencyMs: number | null
   credentialName: string | null
+  accountId: string | null
+  accountName: string | null
   accountEmail: string | null
+  authenticationKind: string | null
   startedAt: string
   completedAt: string | null
 }
@@ -192,6 +196,7 @@ export interface OpsError {
   clientApiKeyId: string | null
   kind: string
   provider: string | null
+  authenticationKind: string | null
   accountId: string | null
   route: string
   model: string | null
@@ -307,6 +312,7 @@ export interface UsageInsightsOverviewResponse {
 }
 
 export interface UsageDiagnosticItem {
+  key: string
   name: string
   requestCount: number
   successCount: number

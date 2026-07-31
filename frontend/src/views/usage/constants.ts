@@ -130,7 +130,7 @@ export const opsErrorColumns = [
   },
   {
     key: 'accountId',
-    label: '账号 ID',
+    label: '账号',
     width: '230px',
     cellClass: 'font-mono text-[12px] font-emphasis',
   },

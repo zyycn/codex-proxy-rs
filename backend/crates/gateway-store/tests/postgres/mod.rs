@@ -17,6 +17,7 @@ mod provider_accounts;
 mod retention;
 mod runtime_settings;
 mod snapshot;
+mod snapshots;
 
 pub(super) struct TestDatabase {
     admin: PgPool,
@@ -58,6 +59,12 @@ impl TestDatabase {
             .execute(&mut *migration)
             .await
             .expect("apply terminal migration");
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/0002_snapshot_provider_account_identity.sql"
+        ))
+        .execute(&mut *migration)
+        .await
+        .expect("apply snapshot migration");
         migration.commit().await.expect("commit terminal migration");
         Some(Self {
             admin,
@@ -153,19 +160,22 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
     .expect("drop migration test database");
     admin.close().await;
 
-    assert_eq!((first_table_count, migration_count), (8, 1));
+    assert_eq!((first_table_count, migration_count), (8, 2));
     assert_eq!(response_id_types, ["bytea", "bytea"]);
     assert!(!raw_response_id_index_exists);
 }
 
 #[test]
 fn migrations_should_leave_transaction_ownership_to_sqlx() {
-    let transaction_statements = [include_str!("../../../../migrations/0001_initial.sql")]
-        .into_iter()
-        .flat_map(str::lines)
-        .map(str::trim)
-        .filter(|line| matches!(*line, "begin;" | "commit;"))
-        .count();
+    let transaction_statements = [
+        include_str!("../../../../migrations/0001_initial.sql"),
+        include_str!("../../../../migrations/0002_snapshot_provider_account_identity.sql"),
+    ]
+    .into_iter()
+    .flat_map(str::lines)
+    .map(str::trim)
+    .filter(|line| matches!(*line, "begin;" | "commit;"))
+    .count();
 
     assert_eq!(transaction_statements, 0);
 }
