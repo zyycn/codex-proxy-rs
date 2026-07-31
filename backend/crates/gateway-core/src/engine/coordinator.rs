@@ -165,8 +165,8 @@ where
             timings: ModelRequestTimings::default(),
             client_response_id: None,
             upstream_response_id: None,
-            last_account_exhaustion: None,
-            last_account_exhaustion_events: Vec::new(),
+            last_retryable_failure: None,
+            last_retryable_failure_events: Vec::new(),
             provider_attempt_outcomes: Vec::new(),
             pending_terminal_failure: None,
         };
@@ -245,9 +245,10 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     timings: ModelRequestTimings,
     client_response_id: Option<String>,
     upstream_response_id: Option<String>,
-    last_account_exhaustion: Option<ProviderError>,
-    /// 最近一次账号耗尽在重试时被丢弃的原始失败批次；只用于后续空选路终态。
-    last_account_exhaustion_events: Vec<ProviderEvent>,
+    /// 最近一次为无感恢复而被丢弃的原始上游错误；只在后续空选路时成为终态。
+    last_retryable_failure: Option<ProviderError>,
+    /// 与 `last_retryable_failure` 同属一个 attempt 的原始失败批次。
+    last_retryable_failure_events: Vec<ProviderEvent>,
     provider_attempt_outcomes: Vec<ProviderAttemptOutcome>,
     /// 原子失败批次已交给协议层、但尚待下游提交后收敛的原 Provider 错误。
     pending_terminal_failure: Option<PendingTerminalFailure>,
@@ -659,25 +660,30 @@ where
             ProviderBoundary::Result(result) => match *result {
                 Ok(stream) => stream,
                 Err(error) => {
-                    if error.kind() == ProviderErrorKind::NoEligibleAccount
-                        && let Some(exhaustion) = self.last_account_exhaustion.take()
+                    if matches!(
+                        error.kind(),
+                        ProviderErrorKind::AccountCapacityUnavailable
+                            | ProviderErrorKind::NoEligibleAccount
+                    ) && let Some(last_failure) = self.last_retryable_failure.take()
                     {
                         let send_state = self.current_send_state();
-                        let mut events = std::mem::take(&mut self.last_account_exhaustion_events);
+                        let mut events = std::mem::take(&mut self.last_retryable_failure_events);
                         if !events.is_empty() {
                             self.observe_atomic_terminal_events(&mut events);
                             return Ok(Some(PullOutcome::TerminalFailure {
                                 events,
-                                error: exhaustion,
+                                error: last_failure,
                                 send_state,
                             }));
                         }
-                        self.finish_provider_error(&exhaustion).await?;
-                        return Err(provider_engine_error(exhaustion));
+                        self.finish_provider_error(&last_failure).await?;
+                        return Err(provider_engine_error(last_failure));
                     }
                     if !(matches!(
                         error.kind(),
-                        ProviderErrorKind::Unavailable | ProviderErrorKind::NoEligibleAccount
+                        ProviderErrorKind::AccountCapacityUnavailable
+                            | ProviderErrorKind::NoEligibleAccount
+                            | ProviderErrorKind::ProviderInfrastructureUnavailable
                     ) && error.send_state() == UpstreamSendState::NotSent)
                     {
                         self.record_provider_failure(candidate.provider().clone(), error.kind());
@@ -909,14 +915,10 @@ where
         &mut self,
         mut error: ProviderError,
     ) -> Result<StreamErrorOutcome, EngineError> {
-        // 原始 wire 只能活在本次决策栈内；后续 clone、attempt 记录与终态对象均只
-        // 接触已剥离的稳定错误字段。
+        // 原始 wire 只活在 request-local 决策状态；clone、attempt 记录与持久化终态
+        // 均只接触已剥离的稳定错误字段。
         let mut atomic_client_events = error.take_atomic_client_events();
         let current = self.current.take().ok_or(EngineError::NoActiveAttempt)?;
-        let account_exhausted = matches!(
-            error.kind(),
-            ProviderErrorKind::RateLimited | ProviderErrorKind::QuotaExhausted
-        );
         self.record_provider_failure(current.metadata.provider().clone(), error.kind());
         // attempt_send_state 是本 attempt 自身的发送事实，驱动重试门；
         // 持久化与终态用请求级水位，二者不可混用（水位会把早先 attempt 的
@@ -976,8 +978,8 @@ where
             continuation_retry || same_account_retry || ordinary_retry || pre_delivery_retry;
 
         if retryable {
-            // 普通 clone 只保留稳定事实；原始失败响应只能随最后一次客户端可见
-            // 的账号耗尽错误继续，不能进入中间失败记录。
+            // 普通 clone 只保留稳定事实；原始 wire/HTTP response 由 request-local
+            // 所有权保留到下一次 attempt 成功，或最终空选路时返回客户端。
             let persistence_error = self.request_persisted.then(|| error.clone());
             if same_account_retry {
                 if let Some(account) = current.metadata.provider_account_id() {
@@ -992,10 +994,8 @@ where
             {
                 self.excluded_accounts.insert(account.clone());
             }
-            if account_exhausted {
-                self.last_account_exhaustion_events = atomic_client_events;
-                self.last_account_exhaustion = Some(error);
-            }
+            self.last_retryable_failure_events = atomic_client_events;
+            self.last_retryable_failure = Some(error);
             if let Some(error) = persistence_error {
                 best_effort_store_write(
                     "record_intermediate_failure",

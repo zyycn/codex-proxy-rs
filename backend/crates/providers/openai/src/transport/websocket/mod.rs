@@ -19,7 +19,7 @@ pub use self::{
         WebSocketOriginBreaker, WebSocketOriginBreakerConfig, WebSocketOriginBreakerDecision,
         WebSocketOriginBreakerPermit,
     },
-    error::{CodexWebSocketExchangeError, CodexWebSocketUpstreamError},
+    error::{CodexWebSocketCloseError, CodexWebSocketExchangeError, CodexWebSocketUpstreamError},
     exchange::{
         CodexWebSocketRateLimitHeaderUpdates, CodexWebSocketSseStream,
         CodexWebSocketStreamingExchange, CodexWebSocketTurnStateUpdate,

@@ -1767,7 +1767,10 @@ fn map_request_error(error: CodexRequestEncodeError) -> ProviderError {
 fn map_selection_error(error: CredentialSelectionError) -> ProviderError {
     match error {
         CredentialSelectionError::CapacityUnavailable { retry_after } => {
-            let error = provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent);
+            let error = provider_error(
+                ProviderErrorKind::AccountCapacityUnavailable,
+                UpstreamSendState::NotSent,
+            );
             match retry_after {
                 Some(retry) => error.with_retry_after(retry),
                 None => error,
@@ -1780,9 +1783,10 @@ fn map_selection_error(error: CredentialSelectionError) -> ProviderError {
         CredentialSelectionError::InvalidCredential
         | CredentialSelectionError::Store
         | CredentialSelectionError::Coordinator
-        | CredentialSelectionError::CookiePolicy => {
-            provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
-        }
+        | CredentialSelectionError::CookiePolicy => provider_error(
+            ProviderErrorKind::ProviderInfrastructureUnavailable,
+            UpstreamSendState::NotSent,
+        ),
     }
 }
 
@@ -2063,7 +2067,7 @@ fn stream_transport_allows_pre_delivery_retry(error: &CodexClientError) -> bool 
             CodexWebSocketExchangeError::Transport(_)
                 | CodexWebSocketExchangeError::PostSendAmbiguous { .. }
                 | CodexWebSocketExchangeError::SendTimeout { .. }
-                | CodexWebSocketExchangeError::ClosedBeforeTerminal
+                | CodexWebSocketExchangeError::ClosedBeforeTerminal(_)
                 | CodexWebSocketExchangeError::ReceiveIdleTimeout { .. }
                 | CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstEvent { .. }
                 | CodexWebSocketExchangeError::InitialEventTimeout { .. }
@@ -2151,10 +2155,19 @@ fn map_client_error(
                 send_state,
             ))
         }
-        CodexClientError::WebSocket(error) => MappedProviderFailure::plain(provider_error(
-            websocket_error_kind(&error),
-            websocket_send_state(&error),
-        )),
+        CodexClientError::WebSocket(error) => {
+            let client_visible_error = websocket_client_visible_error(&error);
+            let mut failure = MappedProviderFailure::plain(provider_error(
+                websocket_error_kind(&error),
+                websocket_send_state(&error),
+            ));
+            if let Some(client_visible_error) = client_visible_error {
+                failure.error = failure
+                    .error
+                    .with_client_visible_upstream_error(client_visible_error);
+            }
+            failure
+        }
     };
     if let Some(continuation_failure) = continuation_failure {
         failure.error = failure
@@ -2163,6 +2176,21 @@ fn map_client_error(
     }
     failure.observation = observation;
     failure
+}
+
+fn websocket_client_visible_error(
+    error: &CodexWebSocketExchangeError,
+) -> Option<ClientVisibleUpstreamError> {
+    let close = error.close_before_terminal()?;
+    let message = close
+        .reason()
+        .filter(|reason| !reason.is_empty())
+        .map_or_else(|| close.to_string(), str::to_owned);
+    Some(ClientVisibleUpstreamError::new(
+        message,
+        close.code().map(|code| code.to_string()),
+        Some("websocket_close_error".to_owned()),
+    ))
 }
 
 fn map_upstream_failure(
@@ -2333,7 +2361,7 @@ const fn websocket_send_state(error: &CodexWebSocketExchangeError) -> UpstreamSe
         CodexWebSocketExchangeError::Transport(_)
         | CodexWebSocketExchangeError::PostSendAmbiguous { .. }
         | CodexWebSocketExchangeError::SendTimeout { .. }
-        | CodexWebSocketExchangeError::ClosedBeforeTerminal
+        | CodexWebSocketExchangeError::ClosedBeforeTerminal(_)
         | CodexWebSocketExchangeError::ReceiveIdleTimeout { .. }
         | CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstEvent { .. }
         | CodexWebSocketExchangeError::InitialEventTimeout { .. } => UpstreamSendState::Ambiguous,
@@ -2360,7 +2388,7 @@ const fn websocket_error_kind(error: &CodexWebSocketExchangeError) -> ProviderEr
         CodexWebSocketExchangeError::Transport(_)
         | CodexWebSocketExchangeError::Connect(_)
         | CodexWebSocketExchangeError::PostSendAmbiguous { .. }
-        | CodexWebSocketExchangeError::ClosedBeforeTerminal
+        | CodexWebSocketExchangeError::ClosedBeforeTerminal(_)
         | CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstEvent { .. } => {
             ProviderErrorKind::Transport
         }
@@ -2617,5 +2645,74 @@ impl DaemonTask for OpenAiCatalogEtagTask {
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capacity_selection_error_preserves_classification_and_retry_after() {
+        let retry_after = Duration::from_secs(7);
+        let error = map_selection_error(CredentialSelectionError::CapacityUnavailable {
+            retry_after: Some(retry_after),
+        });
+
+        assert_eq!(
+            (error.kind(), error.send_state(), error.retry_after()),
+            (
+                ProviderErrorKind::AccountCapacityUnavailable,
+                UpstreamSendState::NotSent,
+                Some(retry_after),
+            )
+        );
+    }
+
+    #[test]
+    fn selection_infrastructure_errors_have_a_distinct_classification() {
+        for selection_error in [
+            CredentialSelectionError::InvalidCredential,
+            CredentialSelectionError::Store,
+            CredentialSelectionError::Coordinator,
+            CredentialSelectionError::CookiePolicy,
+        ] {
+            let error = map_selection_error(selection_error);
+
+            assert_eq!(
+                (error.kind(), error.send_state()),
+                (
+                    ProviderErrorKind::ProviderInfrastructureUnavailable,
+                    UpstreamSendState::NotSent,
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn websocket_close_details_are_only_exposed_through_the_client_error() {
+        let close = CodexWebSocketExchangeError::closed_before_terminal(
+            Some(1009),
+            Some("message too big".to_owned()),
+        );
+        assert!(!format!("{close:?}").contains("message too big"));
+        assert!(!close.to_string().contains("message too big"));
+
+        let failure = map_stream_error(CodexClientError::WebSocket(
+            CodexWebSocketExchangeError::PostSendAmbiguous {
+                message: close.to_string(),
+                source: Some(Box::new(close)),
+            },
+        ));
+        assert_eq!(failure.error.kind(), ProviderErrorKind::Transport);
+        assert_eq!(failure.error.send_state(), UpstreamSendState::Ambiguous);
+        assert!(failure.error.allows_pre_delivery_retry());
+        let detail = failure
+            .error
+            .client_visible_upstream_error()
+            .expect("WebSocket close detail");
+        assert_eq!(detail.message(), "message too big");
+        assert_eq!(detail.code(), Some("1009"));
+        assert_eq!(detail.error_type(), Some("websocket_close_error"));
     }
 }

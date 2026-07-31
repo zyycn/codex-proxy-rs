@@ -40,19 +40,20 @@ pub(super) fn reused_stream_receive_error(
     error: CodexWebSocketExchangeError,
 ) -> CodexWebSocketExchangeError {
     match error {
-        CodexWebSocketExchangeError::ClosedBeforeTerminal
+        CodexWebSocketExchangeError::ClosedBeforeTerminal(_)
         | CodexWebSocketExchangeError::ReceiveIdleTimeout { .. }
         | CodexWebSocketExchangeError::Transport(_) => {
-            reused_connection_died_before_first_event(&error)
+            reused_connection_died_before_first_event(error)
         }
         error => error,
     }
 }
 
 pub(super) fn reused_connection_died_before_first_event(
-    error: &CodexWebSocketExchangeError,
+    error: CodexWebSocketExchangeError,
 ) -> CodexWebSocketExchangeError {
     CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstEvent {
         message: error.to_string(),
+        source: Some(Box::new(error)),
     }
 }

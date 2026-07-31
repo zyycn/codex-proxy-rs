@@ -5,6 +5,7 @@ use provider_openai::transport::{
         WebSocketOriginBreaker, WebSocketOriginBreakerConfig, WebSocketOriginBreakerDecision,
     },
 };
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
 
 use super::*;
 
@@ -913,14 +914,133 @@ async fn concurrent_same_key_should_singleflight_websocket_opening() {
 }
 
 #[tokio::test]
-async fn payload_send_failure_should_not_open_http_fallback() {
+async fn websocket_failure_before_first_delivery_should_use_same_account_http() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_codex_test_websocket_with(stream, |request, response| {
+            assert_eq!(
+                request
+                    .headers()
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok()),
+                Some("Bearer access-token")
+            );
+            assert_eq!(
+                request
+                    .headers()
+                    .get("chatgpt-account-id")
+                    .and_then(|value| value.to_str().ok()),
+                Some("chatgpt-account")
+            );
+            response.headers_mut().insert(
+                "sec-websocket-extensions",
+                "permessage-deflate".parse().unwrap(),
+            );
+        })
+        .await;
+        let _payload = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.created",
+                    "response": {
+                        "id": "resp_abandoned_websocket",
+                        "model": "gpt-test"
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.in_progress",
+                    "response": {
+                        "id": "resp_abandoned_websocket",
+                        "model": "gpt-test"
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        websocket
+            .close(Some(CloseFrame {
+                code: CloseCode::Size,
+                reason: "message too big".into(),
+            }))
+            .await
+            .unwrap();
+
+        let (mut http, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut http).await;
+        assert!(request.starts_with("POST /codex/responses HTTP/1.1"));
+        assert_eq!(
+            read_header_value(&request, "authorization"),
+            Some("Bearer access-token")
+        );
+        assert_eq!(
+            read_header_value(&request, "chatgpt-account-id"),
+            Some("chatgpt-account")
+        );
+        write_completed_sse_response(&mut http).await;
+    });
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        test_wire_profile(),
+    )
+    .with_websocket_pool(Arc::new(CodexWebSocketPool::default()));
+
+    let response = backend
+        .create_response(
+            &new_chain_request("conversation-pre-delivery-fallback"),
+            request_context("req_pre_delivery_fallback", Some("chatgpt-account")),
+        )
+        .await
+        .expect("pre-delivery WebSocket failure should use same-account HTTP");
+    server.await.unwrap();
+
+    assert_eq!(response.transport, CodexBackendTransport::HttpSse);
+    assert_eq!(
+        response.transport_metrics.decision,
+        Some(CodexTransportDecision::Http2PreDeliveryFailure)
+    );
+    assert!(response.body.contains("resp_http_fallback"));
+    assert!(!response.body.contains("resp_abandoned_websocket"));
+}
+
+#[tokio::test]
+async fn websocket_failure_after_first_delivery_should_not_open_http_fallback() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut websocket = accept_codex_test_websocket(stream).await;
         let _payload = websocket.next().await.unwrap().unwrap();
-        websocket.close(None).await.unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.output_text.delta",
+                    "delta": "delivered"
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        websocket
+            .close(Some(CloseFrame {
+                code: CloseCode::Size,
+                reason: "message too big after output".into(),
+            }))
+            .await
+            .unwrap();
         assert!(
             timeout(Duration::from_millis(100), listener.accept())
                 .await
@@ -936,17 +1056,25 @@ async fn payload_send_failure_should_not_open_http_fallback() {
 
     let error = backend
         .create_response(
-            &new_chain_request("conversation-post-send"),
-            request_context("req_post_send", Some("chatgpt-account")),
+            &new_chain_request("conversation-post-delivery"),
+            request_context("req_post_delivery", Some("chatgpt-account")),
         )
         .await
-        .expect_err("post-send close must not be replayed");
+        .expect_err("post-delivery close must not be replayed");
     server.await.unwrap();
 
-    std::assert_matches!(
-        error,
-        CodexClientError::WebSocket(CodexWebSocketExchangeError::PostSendAmbiguous { .. })
-    );
+    let CodexClientError::WebSocket(CodexWebSocketExchangeError::PostSendAmbiguous {
+        source: Some(source),
+        ..
+    }) = error
+    else {
+        panic!("expected typed post-delivery WebSocket failure");
+    };
+    let CodexWebSocketExchangeError::ClosedBeforeTerminal(close) = *source else {
+        panic!("expected upstream close frame source");
+    };
+    assert_eq!(close.code(), Some(1009));
+    assert_eq!(close.reason(), Some("message too big after output"));
 }
 
 #[tokio::test]

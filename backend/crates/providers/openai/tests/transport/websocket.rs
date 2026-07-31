@@ -649,7 +649,15 @@ async fn websocket_execute_response_create_request_should_reject_binary_event() 
             .unwrap();
         websocket.close(None).await.unwrap();
     });
-    let prepared = prepared_websocket_request(&format!("http://{addr}"));
+    let mut request = codex_request("gpt-test", "be brief", Vec::new());
+    request.set_previous_response_id(Some("resp_binary_previous".to_owned()));
+    let prepared = CodexWebSocketConnection::responses_create_request(
+        &format!("http://{addr}"),
+        "dGhlIHNhbXBsZSBub25jZQ==",
+        vec![("authorization".to_owned(), "Bearer access-token".to_owned())],
+        &request,
+    )
+    .expect("prepare continuation WebSocket request");
 
     let error = execute_response_create_request(&prepared)
         .await

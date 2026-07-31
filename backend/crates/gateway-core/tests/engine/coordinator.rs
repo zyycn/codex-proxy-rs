@@ -29,8 +29,9 @@ use gateway_core::engine::{
     ProviderAttemptOutcome, RecoveryReport, UpstreamSendState,
 };
 use gateway_core::error::{
-    ClientVisibleUpstreamResponse, ContinuationFailure, GatewayErrorKind, OpaqueUpstreamValue,
-    ProviderError, ProviderErrorKind, StoreError, StoreErrorKind,
+    ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, ContinuationFailure,
+    GatewayErrorKind, OpaqueUpstreamValue, ProviderError, ProviderErrorKind, StoreError,
+    StoreErrorKind,
 };
 use gateway_core::event::{
     ContentItem, ContentKind, GatewayEvent, ProtocolWireEvent, ProviderEvent,
@@ -2552,6 +2553,128 @@ fn pre_delivery_transport_failure_rotates_account_for_non_idempotent_generation(
     let state = store.state.lock().expect("store lock");
     assert_eq!(state.intermediate_failures, 1);
     assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
+}
+
+#[test]
+fn final_capacity_exhaustion_returns_the_last_retryable_upstream_failure() {
+    let operation = operation(RetrySafety::NonIdempotent);
+    let route_plan = plan(&operation);
+    let raw_body = Bytes::from_static(b"{\"error\":\"last upstream body\"}\x00");
+    let upstream_error =
+        ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::Ambiguous)
+            .with_pre_delivery_retry()
+            .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+                "message too big",
+                Some("1009".to_owned()),
+                Some("websocket_close_error".to_owned()),
+            ))
+            .with_client_visible_upstream_response(ClientVisibleUpstreamResponse::new(
+                502,
+                Some(b"application/json".to_vec()),
+                raw_body.clone(),
+            ));
+    let (coordinator, store, provider) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(upstream_error)],
+        },
+        Script::Error(ProviderError::new(
+            ProviderErrorKind::AccountCapacityUnavailable,
+            UpstreamSendState::NotSent,
+        )),
+    ]);
+
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+    let error = block_on(session.collect_uncommitted())
+        .expect_err("empty selection must return the retained upstream failure");
+    let EngineError::Provider(error) = error else {
+        panic!("expected retained provider error");
+    };
+
+    assert_eq!(error.kind(), ProviderErrorKind::Transport);
+    let detail = error
+        .client_visible_upstream_error()
+        .expect("structured upstream detail");
+    assert_eq!(detail.message(), "message too big");
+    assert_eq!(detail.code(), Some("1009"));
+    assert_eq!(detail.error_type(), Some("websocket_close_error"));
+    let response = error
+        .client_visible_upstream_response()
+        .expect("original upstream response");
+    assert_eq!(response.status(), 502);
+    assert_eq!(response.body(), &raw_body);
+
+    assert_eq!(provider.contexts.lock().expect("contexts lock").len(), 2);
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.intermediate_failures, 1);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Failed);
+    assert_eq!(
+        state.finalizations[0].send_state,
+        UpstreamSendState::Ambiguous
+    );
+}
+
+#[test]
+fn provider_infrastructure_failure_does_not_restore_the_last_upstream_failure() {
+    let operation = operation(RetrySafety::NonIdempotent);
+    let route_plan = plan(&operation);
+    let upstream_error =
+        ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::Ambiguous)
+            .with_pre_delivery_retry()
+            .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+                "upstream marker",
+                Some("upstream_marker".to_owned()),
+                Some("upstream_error".to_owned()),
+            ))
+            .with_client_visible_upstream_response(ClientVisibleUpstreamResponse::new(
+                502,
+                Some(b"application/json".to_vec()),
+                Bytes::from_static(b"{\"error\":\"upstream marker\"}"),
+            ));
+    let (coordinator, store, provider) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(upstream_error)],
+        },
+        Script::Error(ProviderError::new(
+            ProviderErrorKind::ProviderInfrastructureUnavailable,
+            UpstreamSendState::NotSent,
+        )),
+    ]);
+
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+    let error = block_on(session.collect_uncommitted())
+        .expect_err("provider infrastructure failure must remain terminal");
+    let EngineError::Provider(error) = error else {
+        panic!("expected provider error");
+    };
+
+    assert_eq!(
+        error.kind(),
+        ProviderErrorKind::ProviderInfrastructureUnavailable
+    );
+    assert!(error.client_visible_upstream_error().is_none());
+    assert!(error.client_visible_upstream_response().is_none());
+    assert_eq!(provider.contexts.lock().expect("contexts lock").len(), 2);
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.intermediate_failures, 1);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Failed);
 }
 
 #[test]

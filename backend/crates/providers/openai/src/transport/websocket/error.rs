@@ -71,8 +71,8 @@ pub enum CodexWebSocketExchangeError {
         reason: PreviousResponseUnavailableReason,
     },
     /// 上游在 terminal 事件前关闭。
-    #[error("websocket closed before terminal event")]
-    ClosedBeforeTerminal,
+    #[error("{0}")]
+    ClosedBeforeTerminal(CodexWebSocketCloseError),
     /// 上游在指定时间内没有发送任何事件。
     #[error("websocket receive idle timeout after {timeout:?}")]
     ReceiveIdleTimeout {
@@ -87,6 +87,9 @@ pub enum CodexWebSocketExchangeError {
     ReusedConnectionDiedBeforeFirstEvent {
         /// 底层失效原因。
         message: String,
+        /// 原始 typed transport failure。
+        #[source]
+        source: Option<Box<CodexWebSocketExchangeError>>,
     },
     /// 建连并发送后，上游在配置时间内没有产生任何事件。
     #[error("websocket first upstream event not received within {timeout:?}")]
@@ -94,6 +97,55 @@ pub enum CodexWebSocketExchangeError {
         /// 首个上游事件超时时长。
         timeout: Duration,
     },
+}
+
+/// 上游在 terminal 事件前发送的 WebSocket close 信息。
+///
+/// close reason 只供原请求的客户端错误响应使用；`Debug` 与 `Display` 均不会输出它。
+#[derive(Clone, PartialEq, Eq)]
+pub struct CodexWebSocketCloseError {
+    code: Option<u16>,
+    reason: Option<String>,
+}
+
+impl CodexWebSocketCloseError {
+    pub(crate) fn new(code: Option<u16>, reason: Option<String>) -> Self {
+        Self { code, reason }
+    }
+
+    /// 返回上游 close code；没有 close frame 时为 `None`。
+    #[must_use]
+    pub const fn code(&self) -> Option<u16> {
+        self.code
+    }
+
+    /// 返回上游 close reason；仅可用于当前请求的客户端协议响应。
+    #[must_use]
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+}
+
+impl fmt::Debug for CodexWebSocketCloseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CodexWebSocketCloseError")
+            .field("code", &self.code)
+            .field("reason", &self.reason.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
+impl fmt::Display for CodexWebSocketCloseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.code {
+            Some(code) => write!(
+                formatter,
+                "websocket closed before terminal event (code {code})"
+            ),
+            None => formatter.write_str("websocket closed before terminal event"),
+        }
+    }
 }
 
 /// WebSocket 上游错误帧载荷。
@@ -140,6 +192,25 @@ impl fmt::Display for CodexWebSocketUpstreamError {
 }
 
 impl CodexWebSocketExchangeError {
+    pub(crate) fn closed_before_terminal(code: Option<u16>, reason: Option<String>) -> Self {
+        Self::ClosedBeforeTerminal(CodexWebSocketCloseError::new(code, reason))
+    }
+
+    pub(crate) fn close_before_terminal(&self) -> Option<&CodexWebSocketCloseError> {
+        match self {
+            Self::ClosedBeforeTerminal(close) => Some(close),
+            Self::PostSendAmbiguous {
+                source: Some(source),
+                ..
+            }
+            | Self::ReusedConnectionDiedBeforeFirstEvent {
+                source: Some(source),
+                ..
+            } => source.close_before_terminal(),
+            _ => None,
+        }
+    }
+
     pub(super) fn upstream(
         status_code: u16,
         retry_after_seconds: Option<u64>,
@@ -172,5 +243,17 @@ impl CodexWebSocketExchangeError {
                 | Self::SharedConnectFailed
                 | Self::ContinuationUnavailable { .. }
         )
+    }
+
+    /// 首个业务事件交付前，普通 WebSocket 失败可切到同账号 HTTP。
+    pub(in crate::transport) fn allows_pre_delivery_http_fallback(&self) -> bool {
+        match self {
+            Self::Upstream(_) => false,
+            Self::PostSendAmbiguous {
+                source: Some(source),
+                ..
+            } => source.allows_pre_delivery_http_fallback(),
+            _ => true,
+        }
     }
 }

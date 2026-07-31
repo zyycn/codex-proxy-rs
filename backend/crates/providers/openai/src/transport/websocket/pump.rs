@@ -29,6 +29,8 @@ use tokio::{
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
 use uuid::Uuid;
 
+use super::CodexWebSocketCloseError;
+
 /// 底层 tungstenite WebSocket 流。
 pub(crate) type RawWsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -69,13 +71,25 @@ const PUMP_MESSAGE_BUFFER: usize = 64;
 pub(crate) enum PumpExitReason {
     CommandChannelClosed,
     LocalClose,
-    OutboundTransportError { message: String },
-    UpstreamCloseFrame { frame: Option<String> },
+    OutboundTransportError {
+        message: String,
+    },
+    UpstreamCloseFrame {
+        close: Option<CodexWebSocketCloseError>,
+    },
     UpstreamEof,
-    InboundTransportError { message: String },
-    PongTimeout { timeout: Duration },
-    LivenessTimeout { timeout: Duration },
-    KeepaliveTransportError { message: String },
+    InboundTransportError {
+        message: String,
+    },
+    PongTimeout {
+        timeout: Duration,
+    },
+    LivenessTimeout {
+        timeout: Duration,
+    },
+    KeepaliveTransportError {
+        message: String,
+    },
     MessageReceiverClosed,
 }
 
@@ -100,7 +114,7 @@ impl PumpExitReason {
             Self::OutboundTransportError { message }
             | Self::InboundTransportError { message }
             | Self::KeepaliveTransportError { message } => Some(message.clone()),
-            Self::UpstreamCloseFrame { frame } => frame.clone(),
+            Self::UpstreamCloseFrame { close } => close.as_ref().map(ToString::to_string),
             Self::PongTimeout { timeout } | Self::LivenessTimeout { timeout } => {
                 Some(format!("{timeout:?}"))
             }
@@ -108,6 +122,13 @@ impl PumpExitReason {
             | Self::LocalClose
             | Self::UpstreamEof
             | Self::MessageReceiverClosed => None,
+        }
+    }
+
+    pub(crate) fn upstream_close(&self) -> Option<&CodexWebSocketCloseError> {
+        match self {
+            Self::UpstreamCloseFrame { close: Some(close) } => Some(close),
+            _ => None,
         }
     }
 
@@ -336,7 +357,12 @@ async fn pump_loop(
                             message => {
                                 let terminal_reason = match &message {
                                     Message::Close(frame) => Some(PumpExitReason::UpstreamCloseFrame {
-                                        frame: frame.as_ref().map(|frame| format!("{frame:?}")),
+                                        close: frame.as_ref().map(|frame| {
+                                            CodexWebSocketCloseError::new(
+                                                Some(u16::from(frame.code)),
+                                                Some(frame.reason.to_string()),
+                                            )
+                                        }),
                                     }),
                                     _ => None,
                                 };
