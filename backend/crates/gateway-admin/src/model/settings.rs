@@ -11,14 +11,8 @@ use super::Revision;
 /// 客户端模型到上游模型的全局精确映射。
 pub type ModelMappings = BTreeMap<PublicModelId, UpstreamModelId>;
 
-/// 账号调度策略。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RotationStrategy {
-    Smart,
-    QuotaResetPriority,
-    RoundRobin,
-    Sticky,
-}
+/// 账号调度策略；由 Core 拥有稳定值与 wire 映射。
+pub use gateway_core::engine::credential::RotationStrategy;
 
 /// 完整运行设置事实。
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::net::IpAddr;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -39,7 +40,7 @@ use crate::routing::{
 };
 
 const MODEL_REQUEST_DEADLINE: Duration = Duration::from_secs(10 * 60);
-const REDIS_COORDINATION_TIMEOUT: Duration = Duration::from_millis(100);
+const COORDINATION_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientTransport {
@@ -173,6 +174,22 @@ pub enum ProviderCircuitDecision {
 #[error("provider circuit store is unavailable")]
 pub struct ProviderCircuitError;
 
+/// Provider circuit 的可重建协调策略；由 Core 拥有并交给 Store adapter 执行。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderCircuitPolicy {
+    pub failure_threshold: NonZeroU32,
+    pub open_duration: Duration,
+}
+
+impl Default for ProviderCircuitPolicy {
+    fn default() -> Self {
+        Self {
+            failure_threshold: NonZeroU32::new(3).unwrap_or(NonZeroU32::MIN),
+            open_duration: Duration::from_secs(30),
+        }
+    }
+}
+
 pub trait ProviderCircuitPort: Send + Sync {
     fn decision<'a>(
         &'a self,
@@ -254,7 +271,7 @@ impl DefaultExecutionService {
         let continuation = match request.metadata.previous_response_id.as_ref() {
             Some(previous) => {
                 let resolve = self.continuation.resolve(previous).fuse();
-                let timeout = Delay::new(REDIS_COORDINATION_TIMEOUT).fuse();
+                let timeout = Delay::new(COORDINATION_TIMEOUT).fuse();
                 pin_mut!(resolve, timeout);
                 let pin = select_biased! {
                     result = resolve => result.ok().flatten(),
@@ -393,7 +410,7 @@ impl DefaultExecutionService {
         provider_kind: &ProviderKind,
     ) -> Result<RoutingContext, GatewayError> {
         let decision = self.circuits.decision(provider_kind).fuse();
-        let timeout = Delay::new(REDIS_COORDINATION_TIMEOUT).fuse();
+        let timeout = Delay::new(COORDINATION_TIMEOUT).fuse();
         pin_mut!(decision, timeout);
         let decision = select_biased! {
             result = decision => Some(result),
@@ -934,7 +951,7 @@ async fn record_native_continuation(
     pin: NativeContinuationPin,
 ) {
     let record = continuation.record(pin).fuse();
-    let timeout = Delay::new(REDIS_COORDINATION_TIMEOUT).fuse();
+    let timeout = Delay::new(COORDINATION_TIMEOUT).fuse();
     pin_mut!(record, timeout);
     select_biased! {
         result = record => {

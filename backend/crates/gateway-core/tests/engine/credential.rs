@@ -57,6 +57,19 @@ fn context(strategy: RotationStrategy) -> AccountSelectionContext {
 }
 
 #[test]
+fn rotation_strategy_parse_should_round_trip_stable_wire_values() {
+    for strategy in [
+        RotationStrategy::Smart,
+        RotationStrategy::QuotaResetPriority,
+        RotationStrategy::RoundRobin,
+        RotationStrategy::Sticky,
+    ] {
+        assert_eq!(RotationStrategy::parse(strategy.as_str()), Some(strategy));
+    }
+    assert_eq!(RotationStrategy::parse("unknown"), None);
+}
+
+#[test]
 fn plaintext_credential_debug_should_redact_values() {
     let mut object = Map::new();
     object.insert("access_token".to_owned(), Value::from("secret-at"));

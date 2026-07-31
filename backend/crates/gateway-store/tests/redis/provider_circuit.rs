@@ -1,9 +1,11 @@
 use std::{num::NonZeroU32, time::Duration};
 
-use gateway_core::{engine::execution::provider_failure_affects_circuit, error::ProviderErrorKind};
+use gateway_core::{
+    engine::execution::{ProviderCircuitPolicy, provider_failure_affects_circuit},
+    error::ProviderErrorKind,
+};
 use gateway_store::redis::{
-    ProviderCircuitDecision, ProviderCircuitPolicy, ProviderCircuitRepository,
-    RedisProviderCircuitRepository,
+    ProviderCircuitDecision, ProviderCircuitRepository, RedisProviderCircuitRepository,
 };
 use redis::aio::ConnectionManager;
 use uuid::Uuid;

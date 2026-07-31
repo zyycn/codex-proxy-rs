@@ -244,13 +244,8 @@ async fn compile_runtime_snapshot(
     }
 
     let model_mappings = facts.settings.model_mappings;
-    let rotation_strategy = match facts.settings.rotation_strategy.as_str() {
-        "smart" => RotationStrategy::Smart,
-        "quota_reset_priority" => RotationStrategy::QuotaResetPriority,
-        "round_robin" => RotationStrategy::RoundRobin,
-        "sticky" => RotationStrategy::Sticky,
-        _ => return Err(RuntimeSnapshotCompileError::InvalidData),
-    };
+    let rotation_strategy = RotationStrategy::parse(facts.settings.rotation_strategy.as_str())
+        .ok_or(RuntimeSnapshotCompileError::InvalidData)?;
     let selection_policy = AccountSelectionPolicy::new(
         rotation_strategy,
         NonZeroU32::new(facts.settings.max_concurrent_per_account)

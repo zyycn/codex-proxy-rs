@@ -698,6 +698,17 @@ impl RotationStrategy {
             Self::Sticky => "sticky",
         }
     }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "smart" => Some(Self::Smart),
+            "quota_reset_priority" => Some(Self::QuotaResetPriority),
+            "round_robin" => Some(Self::RoundRobin),
+            "sticky" => Some(Self::Sticky),
+            _ => None,
+        }
+    }
 }
 
 /// 从 `runtime_settings` 冻结到一次请求计划的账号调度策略。
