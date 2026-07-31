@@ -247,6 +247,7 @@ impl ObservabilityService for DefaultObservabilityService {
             items: items
                 .into_iter()
                 .map(|item| DiagnosticsItem {
+                    key: item.key,
                     name: item.name,
                     request_count: item.request_count,
                     success_count: item.request_count.saturating_sub(item.failure_count),

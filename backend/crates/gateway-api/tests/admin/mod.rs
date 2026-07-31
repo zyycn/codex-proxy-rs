@@ -23,9 +23,9 @@ use gateway_admin::{
             NewClientKey, SetClientKeyEnabled, UpdateClientKey,
         },
         observability::{
-            DashboardObservation, DiagnosticDimension, DiagnosticObservation, OpsErrorPage,
-            OpsErrorQuery, RequestMetricPoint, TimeRange, UsageDetail, UsageFilter, UsageOverview,
-            UsagePage, UsageQuery, UsageRecord,
+            DashboardObservation, DiagnosticDimension, DiagnosticObservation, OpsError,
+            OpsErrorPage, OpsErrorQuery, RequestMetricPoint, TimeRange, UsageDetail, UsageFilter,
+            UsageOverview, UsagePage, UsageQuery, UsageRecord,
         },
         provider_credentials::{
             AuthorizationCommit, AuthorizationStarted, CompleteAuthorization, CredentialDetails,
@@ -79,6 +79,9 @@ pub(super) struct AdminTestFixture {
     pub auth: Arc<MemoryAuthStore>,
     pub settings: Arc<MemorySettingsStore>,
     pub usage_records: Arc<Mutex<Vec<UsageRecord>>>,
+    pub usage_detail: Arc<Mutex<Option<UsageDetail>>>,
+    pub diagnostics: Arc<Mutex<Vec<DiagnosticObservation>>>,
+    pub ops_errors: Arc<Mutex<Vec<OpsError>>>,
     pub dashboard_observation: Arc<Mutex<Option<DashboardObservation>>>,
 }
 
@@ -93,9 +96,15 @@ impl AdminTestFixture {
         let settings = Arc::new(MemorySettingsStore::new(api_key));
         let client_keys = Arc::new(MemoryClientKeyStore);
         let usage_records = Arc::new(Mutex::new(Vec::new()));
+        let usage_detail = Arc::new(Mutex::new(None));
+        let diagnostics = Arc::new(Mutex::new(Vec::new()));
+        let ops_errors = Arc::new(Mutex::new(Vec::new()));
         let dashboard_observation = Arc::new(Mutex::new(None));
         let unused = Arc::new(UnusedStore {
             usage_records: Arc::clone(&usage_records),
+            usage_detail: Arc::clone(&usage_detail),
+            diagnostics: Arc::clone(&diagnostics),
+            ops_errors: Arc::clone(&ops_errors),
             dashboard_observation: Arc::clone(&dashboard_observation),
         });
         let stores = AdminStorePorts::new(
@@ -128,6 +137,9 @@ impl AdminTestFixture {
             auth,
             settings,
             usage_records,
+            usage_detail,
+            diagnostics,
+            ops_errors,
             dashboard_observation,
         }
     }
@@ -396,6 +408,9 @@ impl ClientKeyStore for MemoryClientKeyStore {
 
 struct UnusedStore {
     usage_records: Arc<Mutex<Vec<UsageRecord>>>,
+    usage_detail: Arc<Mutex<Option<UsageDetail>>>,
+    diagnostics: Arc<Mutex<Vec<DiagnosticObservation>>>,
+    ops_errors: Arc<Mutex<Vec<OpsError>>>,
     dashboard_observation: Arc<Mutex<Option<DashboardObservation>>>,
 }
 
@@ -546,7 +561,11 @@ impl ObservabilityStore for UnusedStore {
     }
 
     async fn usage_record_detail(&self, _: &str) -> AdminStoreResult<UsageDetail> {
-        Err(unavailable("usage detail"))
+        self.usage_detail
+            .lock()
+            .expect("usage detail")
+            .clone()
+            .ok_or_else(|| unavailable("usage detail"))
     }
 
     async fn usage_summary(&self, _: TimeRange, _: UsageFilter) -> AdminStoreResult<UsageOverview> {
@@ -559,11 +578,16 @@ impl ObservabilityStore for UnusedStore {
         _: UsageFilter,
         _: DiagnosticDimension,
     ) -> AdminStoreResult<Vec<DiagnosticObservation>> {
-        Err(unavailable("usage diagnostics"))
+        Ok(self.diagnostics.lock().expect("diagnostics").clone())
     }
 
     async fn list_ops_errors(&self, _: OpsErrorQuery) -> AdminStoreResult<OpsErrorPage> {
-        Err(unavailable("ops errors"))
+        let items = self.ops_errors.lock().expect("ops errors").clone();
+        Ok(OpsErrorPage {
+            total: items.len() as u64,
+            items,
+            next_cursor: None,
+        })
     }
 }
 

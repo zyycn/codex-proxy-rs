@@ -34,7 +34,7 @@ export function usageRecordTypeClass(record: UsageDisplayRecord) {
 }
 
 export function usageAccountText(record: UsageDisplayRecord) {
-  return record.accountEmail || '—'
+  return record.accountEmail || record.accountName || record.accountId || '—'
 }
 
 export function usageAuthenticationKind(record: UsageDisplayRecord) {

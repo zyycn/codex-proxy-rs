@@ -335,6 +335,332 @@ async fn dashboard_summary_should_include_quota_exhaustion_in_unavailable_headli
 }
 
 #[tokio::test]
+async fn usage_detail_should_keep_attempt_snapshot_contract() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode, header},
+    };
+    use chrono::Utc;
+    use gateway_admin::model::observability::{UsageAttempt, UsageDetail};
+    use gateway_api::admin::observability;
+    use tower::ServiceExt as _;
+
+    use super::{AdminTestFixture, AdminTestState};
+
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let now = Utc::now();
+    fixture
+        .usage_detail
+        .lock()
+        .expect("usage detail")
+        .replace(UsageDetail {
+            request: usage_record_with_account(
+                "req_detail",
+                "acct_snap_a",
+                "Snapshot Alpha",
+                "alpha@example.invalid",
+                "oauth",
+                now,
+            ),
+            attempts: vec![UsageAttempt {
+                source: "ops_event".to_owned(),
+                id: "ops_detail".to_owned(),
+                attempt_index: 1,
+                component: "routing".to_owned(),
+                operation: "fallback".to_owned(),
+                provider_kind: Some("openai".to_owned()),
+                provider_account_ref: Some("acct_snap_b".to_owned()),
+                provider_account_name: Some("Snapshot Beta".to_owned()),
+                provider_account_email: Some("beta@example.invalid".to_owned()),
+                provider_account_authentication_kind: Some("api_key".to_owned()),
+                upstream_model_id: Some("upstream-b".to_owned()),
+                upstream_transport: Some("http_sse".to_owned()),
+                upstream_send_state: Some("sent".to_owned()),
+                outcome: gateway_admin::model::observability::RequestOutcome::Failed,
+                downstream_committed: false,
+                status_code: Some(429),
+                provider_error_code: Some("rate_limit".to_owned()),
+                failure_kind: Some("rate_limited".to_owned()),
+                retry_after_ms: Some(1_000),
+                upstream_request_id: None,
+                latency_ms: Some(120),
+                message: Some("limited".to_owned()),
+                input_tokens: None,
+                output_tokens: None,
+                cached_tokens: None,
+                cache_write_tokens: None,
+                reasoning_tokens: None,
+                total_tokens: None,
+                cost_source: Some("unavailable".to_owned()),
+                cost_amount: None,
+                cost_currency: None,
+                occurred_at: now,
+            }],
+        });
+    let response = observability::router::<AdminTestState>()
+        .with_state(fixture.state())
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/usage/records/detail?id=req_detail")
+                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header("x-request-id", "req_usage_detail_snapshot")
+                .body(Body::empty())
+                .expect("usage detail request"),
+        )
+        .await
+        .expect("usage detail response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("usage detail body");
+    let value: serde_json::Value = serde_json::from_slice(&body).expect("usage detail JSON");
+    assert_eq!(
+        serde_json::json!({
+            "accountId": value["data"]["accountId"],
+            "accountName": value["data"]["accountName"],
+            "accountEmail": value["data"]["accountEmail"],
+            "authenticationKind": value["data"]["authenticationKind"],
+            "attemptCredentialName": value["data"]["attempts"][0]["credentialName"],
+            "attemptAccountId": value["data"]["attempts"][0]["accountId"],
+            "attemptAccountName": value["data"]["attempts"][0]["accountName"],
+            "attemptAccountEmail": value["data"]["attempts"][0]["accountEmail"],
+            "attemptAuthenticationKind": value["data"]["attempts"][0]["authenticationKind"],
+        }),
+        serde_json::json!({
+            "accountId": "acct_snap_a",
+            "accountName": "Snapshot Alpha",
+            "accountEmail": "alpha@example.invalid",
+            "authenticationKind": "oauth",
+            "attemptCredentialName": "Snapshot Beta",
+            "attemptAccountId": "acct_snap_b",
+            "attemptAccountName": "Snapshot Beta",
+            "attemptAccountEmail": "beta@example.invalid",
+            "attemptAuthenticationKind": "api_key",
+        })
+    );
+}
+
+#[tokio::test]
+async fn ops_errors_should_keep_account_label_and_authentication_contract() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode, header},
+    };
+    use chrono::Utc;
+    use gateway_admin::model::observability::OpsError;
+    use gateway_api::admin::observability;
+    use tower::ServiceExt as _;
+
+    use super::{AdminTestFixture, AdminTestState};
+
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    fixture
+        .ops_errors
+        .lock()
+        .expect("ops errors")
+        .push(OpsError {
+            source: "model_request".to_owned(),
+            event_id: "err_snapshot".to_owned(),
+            request_id: Some("req_err".to_owned()),
+            attempt_index: Some(1),
+            client_api_key_ref: Some("key_err".to_owned()),
+            component: "model_request".to_owned(),
+            operation: "responses".to_owned(),
+            provider_kind: Some("openai".to_owned()),
+            provider_account_ref: Some("acct_err".to_owned()),
+            provider_account_name: None,
+            provider_account_email: Some("err@example.invalid".to_owned()),
+            provider_account_authentication_kind: Some("api_key".to_owned()),
+            upstream_model_id: Some("upstream-err".to_owned()),
+            upstream_transport: Some("http_sse".to_owned()),
+            failure_kind: "upstream_error".to_owned(),
+            client_status_code: Some(502),
+            upstream_status_code: Some(502),
+            provider_error_code: Some("upstream".to_owned()),
+            client_response_id: None,
+            upstream_request_id: None,
+            latency_ms: Some(90),
+            message: "snapshot error".to_owned(),
+            occurrence_count: 1,
+            occurred_at: Utc::now(),
+            stable_sort_id: "model_request:req_err".to_owned(),
+        });
+    let response = observability::router::<AdminTestState>()
+        .with_state(fixture.state())
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/operations/errors")
+                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header("x-request-id", "req_ops_errors_snapshot")
+                .body(Body::empty())
+                .expect("ops errors request"),
+        )
+        .await
+        .expect("ops errors response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("ops errors body");
+    let value: serde_json::Value = serde_json::from_slice(&body).expect("ops errors JSON");
+    assert_eq!(
+        serde_json::json!({
+            "provider": value["data"]["items"][0]["provider"],
+            "authenticationKind": value["data"]["items"][0]["authenticationKind"],
+            "accountId": value["data"]["items"][0]["accountId"],
+            "accountLabel": value["data"]["items"][0]["metadata"]["accountLabel"],
+        }),
+        serde_json::json!({
+            "provider": "openai",
+            "authenticationKind": "api_key",
+            "accountId": "acct_err",
+            "accountLabel": "err@example.invalid",
+        })
+    );
+}
+
+#[tokio::test]
+async fn diagnostics_should_keep_stable_key_and_display_name_contract() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode, header},
+    };
+    use gateway_admin::model::observability::{CostCoverage, DiagnosticObservation};
+    use gateway_api::admin::observability;
+    use tower::ServiceExt as _;
+
+    use super::{AdminTestFixture, AdminTestState};
+
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    fixture
+        .diagnostics
+        .lock()
+        .expect("diagnostics")
+        .push(DiagnosticObservation {
+            key: "acct_diag".to_owned(),
+            name: "diag@example.invalid".to_owned(),
+            request_count: 2,
+            success_count: 2,
+            failure_count: 0,
+            attempt_count: 2,
+            total_tokens: 200,
+            average_latency_ms: Some(100),
+            cost_coverage: CostCoverage::default(),
+            costs: Vec::new(),
+        });
+    let response = observability::router::<AdminTestState>()
+        .with_state(fixture.state())
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/usage/insights/diagnostics?dimension=account")
+                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header("x-request-id", "req_diagnostics_snapshot")
+                .body(Body::empty())
+                .expect("diagnostics request"),
+        )
+        .await
+        .expect("diagnostics response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("diagnostics body");
+    let value: serde_json::Value = serde_json::from_slice(&body).expect("diagnostics JSON");
+    assert_eq!(
+        (
+            &value["data"]["items"][0]["key"],
+            &value["data"]["items"][0]["name"],
+            &value["data"]["dimension"],
+        ),
+        (
+            &serde_json::json!("acct_diag"),
+            &serde_json::json!("diag@example.invalid"),
+            &serde_json::json!("account"),
+        )
+    );
+}
+
+fn usage_record_with_account(
+    id: &str,
+    account_id: &str,
+    name: &str,
+    email: &str,
+    authentication_kind: &str,
+    started_at: chrono::DateTime<chrono::Utc>,
+) -> gateway_admin::model::observability::UsageRecord {
+    use gateway_admin::model::observability::{RequestOutcome, UsageRecord};
+
+    UsageRecord {
+        id: id.to_owned(),
+        client_api_key_ref: "key_detail".to_owned(),
+        config_revision: 1,
+        protocol: "openai".to_owned(),
+        operation: "responses".to_owned(),
+        endpoint: "/v1/responses".to_owned(),
+        client_transport: "http_sse".to_owned(),
+        requested_model_id: "coding".to_owned(),
+        provider_kind: Some("openai".to_owned()),
+        provider_account_ref: Some(account_id.to_owned()),
+        provider_account_name: Some(name.to_owned()),
+        provider_account_email: Some(email.to_owned()),
+        provider_account_authentication_kind: Some(authentication_kind.to_owned()),
+        upstream_model_id: Some("upstream-model".to_owned()),
+        upstream_transport: Some("http_sse".to_owned()),
+        http_version: Some("h2".to_owned()),
+        websocket_pool: None,
+        service_tier: None,
+        provider_metadata_json: None,
+        attempt_count: 1,
+        upstream_send_state: "sent".to_owned(),
+        downstream_committed_at: Some(started_at),
+        outcome: RequestOutcome::Succeeded,
+        client_status_code: Some(200),
+        upstream_status_code: Some(200),
+        client_response_id: None,
+        upstream_request_id: None,
+        upstream_response_id: None,
+        error_kind: None,
+        provider_error_code: None,
+        error_message: None,
+        retry_after_ms: None,
+        input_tokens: Some(1),
+        output_tokens: Some(1),
+        cached_tokens: Some(0),
+        cache_write_tokens: Some(0),
+        reasoning_tokens: Some(0),
+        image_input_tokens: Some(0),
+        image_output_tokens: Some(0),
+        total_tokens: Some(2),
+        cost_source: "unavailable".to_owned(),
+        cost_amount: None,
+        cost_currency: None,
+        billing: None,
+        transport_decision_wait_ms: None,
+        connect_ms: None,
+        headers_ms: None,
+        first_event_ms: None,
+        first_reasoning_ms: None,
+        first_text_ms: None,
+        first_token_ms: None,
+        provider_processing_ms: None,
+        latency_ms: None,
+        client_ip: None,
+        user_agent: None,
+        reasoning_effort: None,
+        reasoning_preset: None,
+        request_kind: None,
+        subagent_kind: None,
+        compact: false,
+        image_generation_requested: false,
+        image_generation_succeeded: None,
+        started_at,
+        deadline_at: started_at + chrono::Duration::seconds(30),
+        completed_at: Some(started_at),
+    }
+}
+
+#[tokio::test]
 async fn usage_route_should_forward_a_bounded_unknown_outcome_filter() {
     use axum::{
         body::Body,
@@ -401,9 +727,9 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
             client_transport: "http_sse".to_owned(),
             requested_model_id: "grok-4.5".to_owned(),
             provider_kind: Some("xai".to_owned()),
-            provider_account_ref: None,
-            provider_account_name: None,
-            provider_account_email: None,
+            provider_account_ref: Some("acct_snapshot".to_owned()),
+            provider_account_name: Some("Snapshot Alpha".to_owned()),
+            provider_account_email: Some("alpha@example.invalid".to_owned()),
             provider_account_authentication_kind: Some("oauth".to_owned()),
             upstream_model_id: Some("grok-4.5".to_owned()),
             upstream_transport: Some("http_sse".to_owned()),
@@ -515,6 +841,9 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
         serde_json::json!({
             "route": value["data"]["items"][0]["route"],
             "serviceTier": value["data"]["items"][0]["serviceTier"],
+            "accountId": value["data"]["items"][0]["accountId"],
+            "accountName": value["data"]["items"][0]["accountName"],
+            "accountEmail": value["data"]["items"][0]["accountEmail"],
             "authenticationKind": value["data"]["items"][0]["authenticationKind"],
             "imageInputTokens": value["data"]["items"][0]["tokenDetails"]["imageInputTokens"],
             "imageOutputTokens": value["data"]["items"][0]["tokenDetails"]["imageOutputTokens"],
@@ -542,6 +871,9 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
         serde_json::json!({
             "route": "/v1/responses",
             "serviceTier": "priority",
+            "accountId": "acct_snapshot",
+            "accountName": "Snapshot Alpha",
+            "accountEmail": "alpha@example.invalid",
             "authenticationKind": "oauth",
             "imageInputTokens": 31,
             "imageOutputTokens": 9,

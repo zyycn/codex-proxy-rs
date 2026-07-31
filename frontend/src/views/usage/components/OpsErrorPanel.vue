@@ -98,6 +98,14 @@ function showDetail(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][nu
           {{ row.failureClass || '—' }}
         </span>
       </template>
+      <template #accountId="{ row }">
+        <span
+          class="block max-w-full truncate font-mono text-[12px] font-bold text-(--cp-text-primary)"
+          :title="row.accountId || ''"
+        >
+          {{ row.metadata.accountLabel || '—' }}
+        </span>
+      </template>
       <template #actions="{ row }">
         <BaseButton
           icon-only

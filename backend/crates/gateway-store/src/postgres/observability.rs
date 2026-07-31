@@ -587,6 +587,9 @@ pub struct UsageAttemptObservation {
     pub operation: String,
     pub provider_kind: Option<String>,
     pub provider_account_ref: Option<String>,
+    pub provider_account_name: Option<String>,
+    pub provider_account_email: Option<String>,
+    pub provider_account_authentication_kind: Option<String>,
     pub upstream_model_id: Option<String>,
     pub upstream_transport: Option<String>,
     pub upstream_send_state: Option<String>,
@@ -636,6 +639,7 @@ pub struct UsageOverview {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiagnosticObservation {
+    pub key: String,
     pub name: String,
     pub request_count: u64,
     pub success_count: u64,
@@ -658,6 +662,9 @@ pub struct OpsErrorRecord {
     pub operation: String,
     pub provider_kind: Option<String>,
     pub provider_account_ref: Option<String>,
+    pub provider_account_name: Option<String>,
+    pub provider_account_email: Option<String>,
+    pub provider_account_authentication_kind: Option<String>,
     pub upstream_model_id: Option<String>,
     pub upstream_transport: Option<String>,
     pub failure_kind: String,
@@ -1540,6 +1547,9 @@ fn admin_usage_attempt(
         operation: attempt.operation,
         provider_kind: attempt.provider_kind,
         provider_account_ref: attempt.provider_account_ref,
+        provider_account_name: attempt.provider_account_name,
+        provider_account_email: attempt.provider_account_email,
+        provider_account_authentication_kind: attempt.provider_account_authentication_kind,
         upstream_model_id: attempt.upstream_model_id,
         upstream_transport: attempt.upstream_transport,
         upstream_send_state: attempt.upstream_send_state,
@@ -1596,6 +1606,7 @@ fn admin_diagnostic_observation(
     observation: DiagnosticObservation,
 ) -> AdminStoreResult<admin_observability::DiagnosticObservation> {
     Ok(admin_observability::DiagnosticObservation {
+        key: observation.key,
         name: observation.name,
         request_count: observation.request_count,
         success_count: observation.success_count,
@@ -1627,6 +1638,9 @@ fn admin_ops_error(error: OpsErrorRecord) -> admin_observability::OpsError {
         operation: error.operation,
         provider_kind: error.provider_kind,
         provider_account_ref: error.provider_account_ref,
+        provider_account_name: error.provider_account_name,
+        provider_account_email: error.provider_account_email,
+        provider_account_authentication_kind: error.provider_account_authentication_kind,
         upstream_model_id: error.upstream_model_id,
         upstream_transport: error.upstream_transport,
         failure_kind: error.failure_kind,
@@ -2635,8 +2649,10 @@ const USAGE_RECORD_SELECT: &str =
     "select mr.id, mr.client_api_key_ref, mr.config_revision, mr.protocol, mr.operation,
             mr.endpoint, mr.client_transport, mr.requested_model_id,
             mr.provider_kind, mr.provider_account_ref,
-            pa.name as provider_account_name, pa.email as provider_account_email,
-            pa.authentication_kind as provider_account_authentication_kind,
+            mr.provider_account_name_snapshot as provider_account_name,
+            mr.provider_account_email_snapshot as provider_account_email,
+            mr.provider_account_authentication_kind_snapshot
+              as provider_account_authentication_kind,
             mr.upstream_model_id, mr.upstream_transport, mr.http_version, mr.websocket_pool,
             mr.service_tier, mr.provider_observation_json,
             mr.attempt_count, mr.upstream_send_state, mr.downstream_committed_at,
@@ -2652,8 +2668,7 @@ const USAGE_RECORD_SELECT: &str =
             mr.user_agent, mr.reasoning_effort, mr.reasoning_preset, mr.request_kind,
             mr.subagent_kind, mr.compact, mr.image_generation_requested,
             mr.image_generation_succeeded, mr.started_at, mr.deadline_at, mr.completed_at
-     from model_requests mr
-     left join provider_accounts pa on pa.id = mr.provider_account_id";
+     from model_requests mr";
 
 async fn list_usage_records(
     pool: &PgPool,
@@ -2753,7 +2768,12 @@ async fn usage_record_detail(pool: &PgPool, request_id: &str) -> StoreResult<Usa
     let request = usage_record_from_row(&row)?;
     let rows = sqlx::query(
         "select id, attempt_index, component, operation,
-                provider_kind, provider_account_ref, upstream_model_id,
+                provider_kind, provider_account_ref,
+                provider_account_name_snapshot as provider_account_name,
+                provider_account_email_snapshot as provider_account_email,
+                provider_account_authentication_kind_snapshot
+                  as provider_account_authentication_kind,
+                upstream_model_id,
                 failure_kind, status_code, provider_error_code, retry_after_ms,
                 upstream_request_id, latency_ms, message, created_at
          from ops_events where model_request_id = $1
@@ -2784,6 +2804,9 @@ fn intermediate_attempt_from_row(
         operation: get(row, "operation")?,
         provider_kind: get(row, "provider_kind")?,
         provider_account_ref: get(row, "provider_account_ref")?,
+        provider_account_name: get(row, "provider_account_name")?,
+        provider_account_email: get(row, "provider_account_email")?,
+        provider_account_authentication_kind: get(row, "provider_account_authentication_kind")?,
         upstream_model_id: get(row, "upstream_model_id")?,
         upstream_transport: None,
         upstream_send_state: None,
@@ -2818,6 +2841,9 @@ fn final_attempt_from_request(request: &UsageRecord) -> UsageAttemptObservation 
         operation: request.operation.clone(),
         provider_kind: request.provider_kind.clone(),
         provider_account_ref: request.provider_account_ref.clone(),
+        provider_account_name: request.provider_account_name.clone(),
+        provider_account_email: request.provider_account_email.clone(),
+        provider_account_authentication_kind: request.provider_account_authentication_kind.clone(),
         upstream_model_id: request.upstream_model_id.clone(),
         upstream_transport: request.upstream_transport.clone(),
         upstream_send_state: Some(request.upstream_send_state.clone()),
@@ -2872,7 +2898,7 @@ async fn usage_diagnostics(
     statement.push_bind(range.start);
     statement.push(" and mr.started_at < ");
     statement.push_bind(range.end);
-    push_completed_usage_fact_filter(&mut statement, "mr");
+    push_diagnostic_fact_filter(&mut statement, dimension);
     push_usage_filter(&mut statement, filter, "mr");
     statement.push(" group by dimension_name order by request_count desc, dimension_name limit ");
     statement.push_bind(DIAGNOSTIC_LIMIT);
@@ -2885,6 +2911,7 @@ async fn usage_diagnostics(
         .iter()
         .map(|row| {
             Ok(DiagnosticObservation {
+                key: get(row, "dimension_name")?,
                 name: get(row, "dimension_name")?,
                 request_count: unsigned(row, "request_count")?,
                 success_count: unsigned(row, "success_count")?,
@@ -2897,18 +2924,99 @@ async fn usage_diagnostics(
             })
         })
         .collect::<StoreResult<Vec<_>>>()?;
+    let mut display_names = match dimension {
+        DiagnosticDimension::Account => {
+            diagnostic_account_display_names(
+                pool,
+                &observations
+                    .iter()
+                    .map(|item| item.key.clone())
+                    .collect::<Vec<_>>(),
+            )
+            .await?
+        }
+        DiagnosticDimension::ApiKey => {
+            diagnostic_api_key_display_names(
+                pool,
+                &observations
+                    .iter()
+                    .map(|item| item.key.clone())
+                    .collect::<Vec<_>>(),
+            )
+            .await?
+        }
+        _ => HashMap::new(),
+    };
+    for observation in &mut observations {
+        if let Some(name) = display_names.remove(&observation.key) {
+            observation.name = name;
+        }
+    }
     let positions = observations
         .iter()
         .enumerate()
-        .map(|(index, item)| (item.name.clone(), index))
+        .map(|(index, item)| (item.key.clone(), index))
         .collect::<HashMap<_, _>>();
-    let costs = diagnostic_costs(pool, range, filter, dimension_sql).await?;
-    for (name, values) in costs {
-        if let Some(position) = positions.get(&name).copied() {
+    let costs = diagnostic_costs(pool, range, filter, dimension_sql, dimension).await?;
+    for (key, values) in costs {
+        if let Some(position) = positions.get(&key).copied() {
             observations[position].costs = values;
         }
     }
     Ok(observations)
+}
+
+async fn diagnostic_account_display_names(
+    pool: &PgPool,
+    account_ids: &[String],
+) -> StoreResult<HashMap<String, String>> {
+    if account_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = sqlx::query(
+        "select provider_account_ref,
+                coalesce(
+                  (array_agg(provider_account_email_snapshot order by started_at desc)
+                     filter (where provider_account_email_snapshot is not null))[1],
+                  (array_agg(provider_account_name_snapshot order by started_at desc)
+                     filter (where provider_account_name_snapshot is not null))[1],
+                  provider_account_ref
+                ) as display_name
+         from model_requests
+         where provider_account_ref = any($1::text[])
+         group by provider_account_ref",
+    )
+    .bind(account_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| postgres_unavailable("load diagnostic account display names"))?;
+    let mut display_names = HashMap::with_capacity(rows.len());
+    for row in rows {
+        display_names.insert(
+            get(&row, "provider_account_ref")?,
+            get(&row, "display_name")?,
+        );
+    }
+    Ok(display_names)
+}
+
+async fn diagnostic_api_key_display_names(
+    pool: &PgPool,
+    key_ids: &[String],
+) -> StoreResult<HashMap<String, String>> {
+    if key_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = sqlx::query("select id, name from client_api_keys where id = any($1::text[])")
+        .bind(key_ids)
+        .fetch_all(pool)
+        .await
+        .map_err(|_| postgres_unavailable("load diagnostic api key display names"))?;
+    let mut display_names = HashMap::with_capacity(rows.len());
+    for row in rows {
+        display_names.insert(get(&row, "id")?, get(&row, "name")?);
+    }
+    Ok(display_names)
 }
 
 async fn diagnostic_costs(
@@ -2916,6 +3024,7 @@ async fn diagnostic_costs(
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
     dimension_sql: &'static str,
+    dimension: DiagnosticDimension,
 ) -> StoreResult<HashMap<String, Vec<CurrencyCostTotal>>> {
     let mut statement = QueryBuilder::<Postgres>::new("select ");
     statement.push(dimension_sql);
@@ -2927,7 +3036,7 @@ async fn diagnostic_costs(
     statement.push(" and mr.started_at < ");
     statement.push_bind(range.end);
     statement.push(" and mr.cost_amount is not null and mr.cost_currency is not null");
-    push_completed_usage_fact_filter(&mut statement, "mr");
+    push_diagnostic_fact_filter(&mut statement, dimension);
     push_usage_filter(&mut statement, filter, "mr");
     statement.push(
         " group by dimension_name, mr.cost_currency order by dimension_name, mr.cost_currency",
@@ -2965,13 +3074,29 @@ fn diagnostic_dimension_sql(dimension: DiagnosticDimension) -> &'static str {
     }
 }
 
+fn push_diagnostic_fact_filter(
+    statement: &mut QueryBuilder<Postgres>,
+    dimension: DiagnosticDimension,
+) {
+    if dimension == DiagnosticDimension::Failure {
+        statement.push(" and mr.error_kind is not null");
+    } else {
+        push_completed_usage_fact_filter(statement, "mr");
+    }
+}
+
 const OPS_ERRORS_CTE: &str = "with errors as (
        select 'model_request'::text as source,
               mr.id as event_id, mr.id as request_id,
               nullif(mr.attempt_count, 0) as attempt_index,
               mr.client_api_key_ref, 'model_request'::text as component, mr.operation,
               mr.provider_kind,
-              mr.provider_account_ref, mr.upstream_model_id, mr.upstream_transport,
+              mr.provider_account_ref,
+              mr.provider_account_name_snapshot as provider_account_name,
+              mr.provider_account_email_snapshot as provider_account_email,
+              mr.provider_account_authentication_kind_snapshot
+                as provider_account_authentication_kind,
+              mr.upstream_model_id, mr.upstream_transport,
               coalesce(mr.error_kind, 'failed') as failure_kind,
               mr.client_status_code, mr.upstream_status_code,
               mr.provider_error_code, mr.client_response_id, mr.upstream_request_id,
@@ -2984,6 +3109,10 @@ const OPS_ERRORS_CTE: &str = "with errors as (
        select 'ops_event'::text, oe.id, oe.model_request_id, oe.attempt_index,
               mr.client_api_key_ref, oe.component, oe.operation,
               oe.provider_kind, oe.provider_account_ref,
+              oe.provider_account_name_snapshot as provider_account_name,
+              oe.provider_account_email_snapshot as provider_account_email,
+              oe.provider_account_authentication_kind_snapshot
+                as provider_account_authentication_kind,
               oe.upstream_model_id, null::text, oe.failure_kind,
               null::integer as client_status_code, oe.status_code as upstream_status_code,
               oe.provider_error_code, mr.client_response_id, oe.upstream_request_id,
@@ -2999,6 +3128,8 @@ async fn list_ops_errors(pool: &PgPool, query: OpsErrorQuery) -> StoreResult<Ops
     statement.push(
         " select source, event_id, request_id, attempt_index, client_api_key_ref,
                  component, operation, provider_kind, provider_account_ref,
+                 provider_account_name, provider_account_email,
+                 provider_account_authentication_kind,
                  upstream_model_id, upstream_transport,
                  failure_kind, client_status_code, upstream_status_code,
                  provider_error_code, client_response_id,
@@ -3202,6 +3333,9 @@ fn ops_error_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<OpsErrorRecord
         operation: get(row, "operation")?,
         provider_kind: get(row, "provider_kind")?,
         provider_account_ref: get(row, "provider_account_ref")?,
+        provider_account_name: get(row, "provider_account_name")?,
+        provider_account_email: get(row, "provider_account_email")?,
+        provider_account_authentication_kind: get(row, "provider_account_authentication_kind")?,
         upstream_model_id: get(row, "upstream_model_id")?,
         upstream_transport: get(row, "upstream_transport")?,
         failure_kind: get(row, "failure_kind")?,

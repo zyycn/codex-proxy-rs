@@ -441,7 +441,8 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
         )
         .await
         .expect("admin diagnostics");
-    assert_eq!(diagnostics[0].name, "acct_observe");
+    assert_eq!(diagnostics[0].key, "acct_observe");
+    assert_eq!(diagnostics[0].name, "account@example.invalid");
     assert_eq!(diagnostics[0].cost_coverage.provider_reported_count, 1);
     assert_eq!(diagnostics[0].costs[0].amount.as_str(), "1.25");
 
@@ -731,7 +732,8 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
         )
         .await
         .expect("usage diagnostics");
-    assert_eq!(diagnostics[0].name, "acct_observe");
+    assert_eq!(diagnostics[0].key, "acct_observe");
+    assert_eq!(diagnostics[0].name, "account@example.invalid");
     assert_eq!(diagnostics[0].request_count, 1);
     assert_eq!(diagnostics[0].costs[0].amount.as_str(), "1.25");
 
@@ -790,6 +792,8 @@ async fn seed_observability_facts(
            client_transport, requested_model_id,
            provider_kind, provider_account_id,
            provider_account_ref, upstream_model_id, upstream_transport,
+           provider_account_name_snapshot, provider_account_email_snapshot,
+           provider_account_authentication_kind_snapshot,
            attempt_count, upstream_send_state, outcome, client_status_code,
            input_tokens, output_tokens, total_tokens, cost_source, latency_ms,
            started_at, deadline_at, completed_at
@@ -797,6 +801,7 @@ async fn seed_observability_facts(
            'req_observe_uncommitted', 'key_observe', 1, 'openai', 'responses', '/v1/responses',
            'http_sse', 'public-model', 'openai', 'acct_observe',
            'acct_observe', 'upstream-model', 'http_sse',
+           'primary', 'account@example.invalid', 'oauth',
            1, 'sent', 'succeeded', 200,
            900, 900, 1800, 'unavailable', 650,
            $1 - interval '15 minutes', $1 + interval '10 minutes', $1 - interval '14 minutes'
@@ -812,6 +817,8 @@ async fn seed_observability_facts(
            provider_kind, provider_account_id,
            provider_account_ref, upstream_model_id, upstream_transport, websocket_pool,
            service_tier,
+           provider_account_name_snapshot, provider_account_email_snapshot,
+           provider_account_authentication_kind_snapshot,
            attempt_count,
            upstream_send_state, downstream_committed_at, outcome, client_status_code,
            upstream_status_code, client_response_id, upstream_request_id, upstream_response_id,
@@ -824,7 +831,9 @@ async fn seed_observability_facts(
            'req_observe_success', 'key_observe', 1, 'openai', 'responses', '/v1/responses',
            'http_sse', 'public-model', 'openai', 'acct_observe',
            'acct_observe', 'upstream-model',
-           'http_sse', 'reuse', 'priority', 1, 'sent', $1 - interval '19 minutes', 'succeeded', 200, 200,
+           'http_sse', 'reuse', 'priority',
+           'primary', 'account@example.invalid', 'oauth',
+           1, 'sent', $1 - interval '19 minutes', 'succeeded', 200, 200,
            'resp_observe_success', 'upstream_req_success', 'upstream_resp_success',
            100, 20, 40, 3, 5, 31, 9, 120, true, true,
            'provider_reported', 1.25, 'USD', 120, 900,
@@ -840,6 +849,8 @@ async fn seed_observability_facts(
            client_transport, requested_model_id,
            provider_kind, provider_account_id,
            provider_account_ref, upstream_model_id, upstream_transport, attempt_count,
+           provider_account_name_snapshot, provider_account_email_snapshot,
+           provider_account_authentication_kind_snapshot,
            upstream_send_state, outcome, client_status_code, upstream_status_code,
            error_kind, provider_error_code, error_message, retry_after_ms,
            input_tokens, cached_tokens, image_generation_requested,
@@ -849,7 +860,9 @@ async fn seed_observability_facts(
            'req_observe_failed', 'key_observe', 1, 'openai', 'responses', '/v1/responses',
            'http_sse', 'public-model', 'openai', 'acct_observe',
            'acct_observe', 'upstream-model',
-           'http_sse', 2, 'sent', 'failed', 502, 429, 'rate_limited', 'rate_limit',
+           'http_sse', 2,
+           'primary', 'account@example.invalid', 'oauth',
+           'sent', 'failed', 502, 429, 'rate_limited', 'rate_limit',
            'upstream limited', 1000, 0, 0, true, false, 'unavailable', 700,
            $1 - interval '10 minutes', $1 + interval '20 minutes', $1 - interval '9 minutes'
          )",
@@ -862,11 +875,15 @@ async fn seed_observability_facts(
            id, model_request_id, attempt_index, level, component, operation,
            provider_kind, provider_account_id,
            provider_account_ref, upstream_model_id, failure_kind, status_code,
+           provider_account_name_snapshot, provider_account_email_snapshot,
+           provider_account_authentication_kind_snapshot,
            provider_error_code, retry_after_ms, latency_ms, message, occurrence_count, created_at
          ) values (
            'ops_observe_retry', 'req_observe_failed', 1, 'warning', 'routing', 'responses',
            'openai', 'acct_observe', 'acct_observe',
-           'upstream-model', 'rate_limited', 429, 'rate_limit', 1000, 300,
+           'upstream-model', 'rate_limited', 429,
+           'primary', 'account@example.invalid', 'oauth',
+           'rate_limit', 1000, 300,
            'first account was limited', 1, $1 - interval '9 minutes 30 seconds'
          )",
     )
@@ -885,13 +902,17 @@ async fn seed_calculated_billing_facts(
            id, client_api_key_ref, config_revision, protocol, operation, endpoint,
            client_transport, requested_model_id, provider_kind, provider_account_id,
            provider_account_ref, upstream_model_id, upstream_transport, attempt_count,
+           provider_account_name_snapshot, provider_account_email_snapshot,
+           provider_account_authentication_kind_snapshot,
            upstream_send_state, downstream_committed_at, outcome, client_status_code,
            input_tokens, output_tokens, cached_tokens, cache_write_tokens, total_tokens, service_tier,
            cost_source, cost_amount, cost_currency, started_at, deadline_at, completed_at
          ) values (
            'req_observe_calculated', 'key_observe', 1, 'openai', 'responses', '/v1/responses',
            'http_sse', 'public-model', 'openai', 'acct_observe', 'acct_observe', 'gpt-5.5',
-           'http_sse', 1, 'sent', $1 - interval '29 minutes', 'succeeded', 200,
+           'http_sse', 1,
+           'primary', 'account@example.invalid', 'oauth',
+           'sent', $1 - interval '29 minutes', 'succeeded', 200,
            800, 200, 0, 0, 1000, 'priority', 'calculated', 1.25, 'USD',
            $1 - interval '30 minutes', $1 + interval '10 minutes', $1 - interval '29 minutes'
          )",
@@ -904,13 +925,17 @@ async fn seed_calculated_billing_facts(
            id, client_api_key_ref, config_revision, protocol, operation, endpoint,
            client_transport, requested_model_id, provider_kind, provider_account_id,
            provider_account_ref, upstream_model_id, upstream_transport, attempt_count,
+           provider_account_name_snapshot, provider_account_email_snapshot,
+           provider_account_authentication_kind_snapshot,
            upstream_send_state, outcome, client_status_code, input_tokens, output_tokens,
            total_tokens, cost_source, cost_amount, cost_currency, started_at, deadline_at,
            completed_at
          ) values (
            'req_observe_calculated_uncommitted', 'key_observe', 1, 'openai', 'responses',
            '/v1/responses', 'http_sse', 'public-model', 'openai', 'acct_observe',
-           'acct_observe', 'gpt-5.5', 'http_sse', 1, 'sent', 'succeeded', 200, 800, 200,
+           'acct_observe', 'gpt-5.5', 'http_sse', 1,
+           'primary', 'account@example.invalid', 'oauth',
+           'sent', 'succeeded', 200, 800, 200,
            1000, 'calculated', 1.25, 'USD',
            $1 - interval '40 minutes', $1 + interval '10 minutes', $1 - interval '39 minutes'
          )",

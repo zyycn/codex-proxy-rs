@@ -414,12 +414,18 @@ impl ModelRequestRepository for PgExecutionStore {
                reasoning_preset, request_kind, subagent_kind, compact,
                image_generation_requested, started_at, deadline_at,
                provider_kind, provider_account_id, provider_account_ref,
+               provider_account_name_snapshot, provider_account_email_snapshot,
+               provider_account_authentication_kind_snapshot,
                upstream_model_id, upstream_transport, http_version,
                attempt_count, upstream_send_state
              ) values (
                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::inet, $11, $12,
                $13, $14, $15, $16, $17, $18, $19,
-               $20, $21, $22, $23, $24, $25, 1, 'not_sent'
+               $20, $21, $22,
+               (select name from provider_accounts where id = $21),
+               (select email from provider_accounts where id = $21),
+               (select authentication_kind from provider_accounts where id = $21),
+               $23, $24, $25, 1, 'not_sent'
              )",
         )
         .bind(request.id)
@@ -466,6 +472,15 @@ impl ModelRequestRepository for PgExecutionStore {
              set provider_kind = $2,
                  provider_account_id = $3,
                  provider_account_ref = $4,
+                 provider_account_name_snapshot = (
+                   select name from provider_accounts where id = $3
+                 ),
+                 provider_account_email_snapshot = (
+                   select email from provider_accounts where id = $3
+                 ),
+                 provider_account_authentication_kind_snapshot = (
+                   select authentication_kind from provider_accounts where id = $3
+                 ),
                  upstream_model_id = $5,
                  upstream_transport = $6,
                  http_version = $7,

@@ -110,11 +110,16 @@ impl OpsEventRepository for PgOpsEventRepository {
             "insert into ops_events (
                id, model_request_id, attempt_index, level, component, operation,
                provider_kind, provider_account_id, provider_account_ref, upstream_model_id,
+               provider_account_name_snapshot, provider_account_email_snapshot,
+               provider_account_authentication_kind_snapshot,
                failure_kind, status_code, provider_error_code, retry_after_ms,
                upstream_request_id, latency_ms, message, occurrence_count, created_at
              ) values (
-               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-               $14, $15, $16, $17, $18, $19
+               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+               (select name from provider_accounts where id = $8),
+               (select email from provider_accounts where id = $8),
+               (select authentication_kind from provider_accounts where id = $8),
+               $11, $12, $13, $14, $15, $16, $17, $18, $19
              )",
         )
         .bind(event.id)

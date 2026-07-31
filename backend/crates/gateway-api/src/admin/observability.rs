@@ -583,6 +583,7 @@ pub struct UsageRecordView {
     pub authentication_kind: Option<String>,
     pub account_id: Option<String>,
     pub account_email: Option<String>,
+    pub account_name: Option<String>,
     pub route: String,
     pub model: String,
     pub requested_model: Option<String>,
@@ -723,7 +724,10 @@ pub struct UsageAttemptView {
     pub first_token_ms: Option<u64>,
     pub latency_ms: Option<u64>,
     pub credential_name: Option<String>,
+    pub account_id: Option<String>,
+    pub account_name: Option<String>,
     pub account_email: Option<String>,
+    pub authentication_kind: Option<String>,
     pub started_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
 }
@@ -1203,6 +1207,7 @@ pub struct UsageInsightsOverviewView {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticItemView {
+    pub key: String,
     pub name: String,
     pub request_count: u64,
     pub success_count: u64,
@@ -1232,6 +1237,7 @@ pub struct OpsErrorView {
     pub client_api_key_id: Option<String>,
     pub kind: String,
     pub provider: Option<String>,
+    pub authentication_kind: Option<String>,
     pub account_id: Option<String>,
     pub route: String,
     pub model: Option<String>,
@@ -1791,6 +1797,7 @@ fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView {
         authentication_kind: record.provider_account_authentication_kind,
         account_id: record.provider_account_ref,
         account_email: record.provider_account_email,
+        account_name: record.provider_account_name,
         route: record.endpoint,
         model,
         requested_model: Some(record.requested_model_id),
@@ -1869,6 +1876,11 @@ fn provider_metadata_fields(value: Option<&str>) -> BTreeMap<String, Value> {
 
 fn usage_attempt_view(attempt: domain::UsageAttempt) -> UsageAttemptView {
     let occurred_at = attempt.occurred_at;
+    let credential_name = attempt
+        .provider_account_name
+        .as_ref()
+        .or(attempt.provider_account_ref.as_ref())
+        .cloned();
     UsageAttemptView {
         id: attempt.id,
         attempt_index: attempt.attempt_index,
@@ -1902,8 +1914,11 @@ fn usage_attempt_view(attempt: domain::UsageAttempt) -> UsageAttemptView {
         total_tokens: attempt.total_tokens,
         first_token_ms: None,
         latency_ms: attempt.latency_ms,
-        credential_name: attempt.provider_account_ref,
-        account_email: None,
+        credential_name,
+        account_id: attempt.provider_account_ref,
+        account_name: attempt.provider_account_name,
+        account_email: attempt.provider_account_email,
+        authentication_kind: attempt.provider_account_authentication_kind,
         started_at: occurred_at,
         completed_at: Some(occurred_at),
     }
@@ -1948,12 +1963,19 @@ fn usage_page_view(
 }
 
 fn ops_error_view(error: domain::OpsError) -> OpsErrorView {
+    let account_label = error
+        .provider_account_email
+        .as_ref()
+        .or(error.provider_account_name.as_ref())
+        .or(error.provider_account_ref.as_ref())
+        .cloned();
     OpsErrorView {
         id: error.event_id,
         request_id: error.request_id,
         client_api_key_id: error.client_api_key_ref,
         kind: error.operation.clone(),
         provider: error.provider_kind,
+        authentication_kind: error.provider_account_authentication_kind,
         account_id: error.provider_account_ref,
         route: error.operation,
         model: error.upstream_model_id,
@@ -1970,7 +1992,7 @@ fn ops_error_view(error: domain::OpsError) -> OpsErrorView {
             source: error.source,
             component: error.component,
             attempt_id: None,
-            account_label: None,
+            account_label,
         },
         created_at: error.occurred_at,
         created_at_display: china_datetime(&error.occurred_at),
@@ -2520,6 +2542,7 @@ fn diagnostics_view(
             .items
             .into_iter()
             .map(|item| DiagnosticItemView {
+                key: item.key,
                 name: if item.name == "__none__" {
                     "未知".to_owned()
                 } else {

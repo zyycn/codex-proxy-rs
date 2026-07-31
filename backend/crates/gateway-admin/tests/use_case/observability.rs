@@ -695,6 +695,7 @@ fn health_metric_point(bucket_start: DateTime<Utc>, metrics: RequestMetrics) -> 
 
 fn diagnostic(name: &str, request_count: u64) -> DiagnosticObservation {
     DiagnosticObservation {
+        key: name.to_owned(),
         name: name.to_owned(),
         request_count,
         success_count: request_count,
