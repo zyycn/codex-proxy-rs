@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -43,6 +43,7 @@ struct StoredAccount {
 pub(crate) struct MemoryAccountStore {
     accounts: Mutex<BTreeMap<ProviderAccountId, StoredAccount>>,
     quota_reads: AtomicUsize,
+    fail_provider_listing: AtomicBool,
 }
 
 impl MemoryAccountStore {
@@ -115,6 +116,10 @@ impl MemoryAccountStore {
             .get(&id)
             .is_some_and(|stored| stored.quota.is_some())
     }
+
+    pub(crate) fn fail_provider_listing(&self) {
+        self.fail_provider_listing.store(true, Ordering::SeqCst);
+    }
 }
 
 #[async_trait]
@@ -162,6 +167,9 @@ impl ProviderAccountStore for MemoryAccountStore {
         &self,
         provider: &ProviderKind,
     ) -> Result<Vec<ProviderAccount>, StoreError> {
+        if self.fail_provider_listing.load(Ordering::SeqCst) {
+            return Err(store_error(StoreErrorKind::Unavailable));
+        }
         Ok(self
             .accounts
             .lock()
