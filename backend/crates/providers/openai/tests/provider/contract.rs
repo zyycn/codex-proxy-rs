@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::Utc;
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use gateway_core::engine::credential::{
     AccountAvailability, AccountFeedbackStats, OpaqueProviderData, ProviderAccountId,
     ProviderAccountStore as _, QuotaObservation,
@@ -37,6 +37,8 @@ use tokio::{
     sync::oneshot,
     time::timeout,
 };
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -44,6 +46,7 @@ use crate::support::{
     MemoryAccountStore, MemorySessionAffinity, MemorySessionExclusions, TestLeaseCoordinator,
     account_policy, agent_identity_service_with_pool, catalog_cache, profile, secret,
 };
+use crate::transport::accept_codex_test_websocket;
 
 const OFFICIAL_FIXTURE: &[u8] =
     include_bytes!("../transport/fixtures/official_models_snapshot.json");
@@ -81,10 +84,36 @@ fn provider_with_base_url(store: &Arc<MemoryAccountStore>, base_url: String) -> 
     provider_with_affinity_and_base_url(store, Arc::new(MemorySessionAffinity::default()), base_url)
 }
 
+fn provider_with_leases(
+    store: &Arc<MemoryAccountStore>,
+    leases: Arc<TestLeaseCoordinator>,
+) -> CodexProvider {
+    provider_with_affinity_and_base_url_and_leases(
+        store,
+        Arc::new(MemorySessionAffinity::default()),
+        OFFICIAL_CODEX_BASE_URL.to_owned(),
+        leases,
+    )
+}
+
 fn provider_with_affinity_and_base_url(
     store: &Arc<MemoryAccountStore>,
     session_affinity: Arc<MemorySessionAffinity>,
     base_url: String,
+) -> CodexProvider {
+    provider_with_affinity_and_base_url_and_leases(
+        store,
+        session_affinity,
+        base_url,
+        Arc::new(TestLeaseCoordinator::default()),
+    )
+}
+
+fn provider_with_affinity_and_base_url_and_leases(
+    store: &Arc<MemoryAccountStore>,
+    session_affinity: Arc<MemorySessionAffinity>,
+    base_url: String,
+    leases: Arc<TestLeaseCoordinator>,
 ) -> CodexProvider {
     let profile = wire_profile();
     let http = reqwest::Client::builder()
@@ -112,7 +141,7 @@ fn provider_with_affinity_and_base_url(
     let selector = Arc::new(CodexCredentialSelector::new(
         ProviderKind::new("openai").expect("provider"),
         store.repository(),
-        Arc::new(TestLeaseCoordinator::default()),
+        leases,
         session_affinity,
         Arc::new(MemorySessionExclusions::default()),
         Arc::clone(&catalog),
@@ -515,6 +544,130 @@ async fn generate_without_an_eligible_openai_account_fails_before_network_io() {
 
     assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
     assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+}
+
+#[tokio::test]
+async fn capacity_selection_error_preserves_classification_and_retry_after() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_capacity_busy").await;
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    *leases.busy.lock().expect("lease busy lock") = true;
+
+    let error = match provider_with_leases(&store, leases)
+        .execute(
+            planned_request("openai", generate_operation()),
+            context("req_capacity_busy", CancellationToken::new()),
+        )
+        .await
+    {
+        Ok(_) => panic!("busy account selection must fail"),
+        Err(error) => error,
+    };
+
+    assert_eq!(
+        (error.kind(), error.send_state(), error.retry_after()),
+        (
+            ProviderErrorKind::AccountCapacityUnavailable,
+            UpstreamSendState::NotSent,
+            Some(Duration::from_millis(25)),
+        )
+    );
+}
+
+#[tokio::test]
+async fn selection_infrastructure_errors_have_a_distinct_classification() {
+    let store = Arc::new(MemoryAccountStore::default());
+    store.fail_provider_listing();
+
+    let error = match provider(&store)
+        .execute(
+            planned_request("openai", generate_operation()),
+            context("req_selection_store_failure", CancellationToken::new()),
+        )
+        .await
+    {
+        Ok(_) => panic!("account store failure must fail selection"),
+        Err(error) => error,
+    };
+
+    assert_eq!(
+        (error.kind(), error.send_state()),
+        (
+            ProviderErrorKind::ProviderInfrastructureUnavailable,
+            UpstreamSendState::NotSent,
+        )
+    );
+}
+
+#[tokio::test]
+async fn websocket_close_details_are_only_exposed_through_the_client_error() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_websocket_close").await;
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind WebSocket listener");
+    let base_url = format!(
+        "http://{}",
+        listener.local_addr().expect("listener address")
+    );
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener
+            .accept()
+            .await
+            .expect("accept WebSocket connection");
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let _request = websocket
+            .next()
+            .await
+            .expect("WebSocket request")
+            .expect("valid WebSocket request");
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.output_text.delta",
+                    "delta": "partial output"
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("send semantic WebSocket event");
+        websocket
+            .close(Some(CloseFrame {
+                code: CloseCode::Size,
+                reason: "message too big".into(),
+            }))
+            .await
+            .expect("close WebSocket");
+    });
+
+    let mut stream = provider_with_base_url(&store, base_url)
+        .execute(
+            planned_request("openai", generate_operation()),
+            context("req_websocket_close", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare WebSocket provider stream");
+    let error = loop {
+        match stream.next().await {
+            Some(Ok(_)) => {}
+            Some(Err(error)) => break error,
+            None => panic!("WebSocket close must surface a provider error"),
+        }
+    };
+    server.await.expect("WebSocket server");
+
+    assert!(!format!("{error:?}").contains("message too big"));
+    assert!(!error.to_string().contains("message too big"));
+    assert_eq!(error.kind(), ProviderErrorKind::Transport);
+    assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
+    assert!(error.allows_pre_delivery_retry());
+    let detail = error
+        .client_visible_upstream_error()
+        .expect("WebSocket close detail");
+    assert_eq!(detail.message(), "message too big");
+    assert_eq!(detail.code(), Some("1009"));
+    assert_eq!(detail.error_type(), Some("websocket_close_error"));
 }
 
 #[tokio::test]
