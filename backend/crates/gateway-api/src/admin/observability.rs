@@ -2180,19 +2180,6 @@ fn relative_time(value: Option<DateTime<Utc>>, now: DateTime<Utc>) -> String {
     format!("{} 天前", elapsed.num_days())
 }
 
-fn rotation_strategy_name(
-    strategy: gateway_admin::model::settings::RotationStrategy,
-) -> &'static str {
-    match strategy {
-        gateway_admin::model::settings::RotationStrategy::Smart => "smart",
-        gateway_admin::model::settings::RotationStrategy::QuotaResetPriority => {
-            "quota_reset_priority"
-        }
-        gateway_admin::model::settings::RotationStrategy::RoundRobin => "round_robin",
-        gateway_admin::model::settings::RotationStrategy::Sticky => "sticky",
-    }
-}
-
 fn dashboard_view(result: domain::DashboardResult, kind: TrendKind) -> DashboardDataView {
     let domain::DashboardResult {
         observation,
@@ -2296,7 +2283,7 @@ fn dashboard_view(result: domain::DashboardResult, kind: TrendKind) -> Dashboard
             used_slots: capacity.used_slots,
             available_slots: capacity.available_slots,
         },
-        rotation_strategy: rotation_strategy_name(rotation_strategy).to_owned(),
+        rotation_strategy: rotation_strategy.as_str().to_owned(),
     }
 }
 

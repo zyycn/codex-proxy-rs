@@ -330,7 +330,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         Arc::new(redis::RedisProviderCircuitRepository::new(
             redis_connection.clone(),
             REDIS_NAMESPACE,
-            redis::ProviderCircuitPolicy::default(),
+            gateway_core::engine::execution::ProviderCircuitPolicy::default(),
         )?);
     // Continuation affinity 是下一轮请求的路由事实，Core 必须直接等待 Redis 确认。
     let continuation: Arc<dyn gateway_core::engine::continuation::NativeContinuationPort> =
@@ -613,7 +613,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 refresh_concurrency: command.refresh_concurrency,
                 max_concurrent_per_account: command.max_concurrent_per_account,
                 request_interval_ms: command.request_interval_ms,
-                rotation_strategy: admin_rotation_name(command.rotation_strategy).to_owned(),
+                rotation_strategy: command.rotation_strategy.as_str().to_owned(),
                 model_mappings: store_model_mappings(command.model_mappings),
                 usage_retention_days: command.usage_retention_days,
                 ops_event_retention_days: command.ops_event_retention_days,
@@ -712,19 +712,14 @@ impl AdminSettingsStoreAdapter {
 fn admin_runtime_settings(
     settings: postgres::RuntimeSettings,
 ) -> AdminStoreResult<AdminRuntimeSettings> {
-    let rotation_strategy = match settings.rotation_strategy.as_str() {
-        "smart" => AdminRotationStrategy::Smart,
-        "quota_reset_priority" => AdminRotationStrategy::QuotaResetPriority,
-        "round_robin" => AdminRotationStrategy::RoundRobin,
-        "sticky" => AdminRotationStrategy::Sticky,
-        _ => {
-            return Err(AdminStoreError::new(
+    let rotation_strategy = AdminRotationStrategy::parse(settings.rotation_strategy.as_str())
+        .ok_or_else(|| {
+            AdminStoreError::new(
                 AdminStoreErrorKind::Invalid,
                 "runtime settings",
                 "rotation strategy is invalid",
-            ));
-        }
-    };
+            )
+        })?;
     let model_mappings = settings
         .model_mappings
         .into_iter()
@@ -766,15 +761,6 @@ fn store_model_mappings(mappings: ModelMappings) -> std::collections::BTreeMap<S
         .into_iter()
         .map(|(public, upstream)| (public.as_str().to_owned(), upstream.as_str().to_owned()))
         .collect()
-}
-
-const fn admin_rotation_name(strategy: AdminRotationStrategy) -> &'static str {
-    match strategy {
-        AdminRotationStrategy::Smart => "smart",
-        AdminRotationStrategy::QuotaResetPriority => "quota_reset_priority",
-        AdminRotationStrategy::RoundRobin => "round_robin",
-        AdminRotationStrategy::Sticky => "sticky",
-    }
 }
 
 pub(crate) fn store_revision(revision: AdminRevision) -> AdminStoreResult<Revision> {

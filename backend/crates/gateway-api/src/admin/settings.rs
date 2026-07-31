@@ -72,10 +72,7 @@ impl UpdateRuntimeSettingsRequest {
         if i64::try_from(self.request_interval_ms).is_err() {
             return Err(WireValidationError::new("requestIntervalMs"));
         }
-        if !matches!(
-            self.rotation_strategy.as_str(),
-            "smart" | "quota_reset_priority" | "round_robin" | "sticky"
-        ) {
+        if RotationStrategy::parse(&self.rotation_strategy).is_none() {
             return Err(WireValidationError::new("rotationStrategy"));
         }
         Ok(())
@@ -91,7 +88,7 @@ impl UpdateRuntimeSettingsRequest {
             max_concurrent_per_account: u32::try_from(self.max_concurrent_per_account)
                 .map_err(|_| WireValidationError::new("settingsMaxConcurrencyOverflow"))?,
             request_interval_ms: self.request_interval_ms,
-            rotation_strategy: parse_rotation_strategy(&self.rotation_strategy)
+            rotation_strategy: RotationStrategy::parse(&self.rotation_strategy)
                 .ok_or_else(|| WireValidationError::new("rotationStrategy"))?,
             usage_retention_days: u32::try_from(self.usage_retention_days)
                 .map_err(|_| WireValidationError::new("settingsUsageRetentionOverflow"))?,
@@ -111,7 +108,7 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
             refresh_concurrency: u64::from(settings.refresh_concurrency),
             max_concurrent_per_account: u64::from(settings.max_concurrent_per_account),
             request_interval_ms: settings.request_interval_ms,
-            rotation_strategy: rotation_strategy_name(settings.rotation_strategy).to_owned(),
+            rotation_strategy: settings.rotation_strategy.as_str().to_owned(),
             usage_retention_days: u64::from(settings.usage_retention_days),
             ops_event_retention_days: u64::from(settings.ops_event_retention_days),
             audit_retention_days: u64::from(settings.audit_retention_days),
@@ -317,25 +314,6 @@ fn wire_model_mappings(mappings: DomainModelMappings) -> ModelMappings {
         .into_iter()
         .map(|(requested, upstream)| (requested.to_string(), upstream.to_string()))
         .collect()
-}
-
-fn parse_rotation_strategy(value: &str) -> Option<RotationStrategy> {
-    match value {
-        "smart" => Some(RotationStrategy::Smart),
-        "quota_reset_priority" => Some(RotationStrategy::QuotaResetPriority),
-        "round_robin" => Some(RotationStrategy::RoundRobin),
-        "sticky" => Some(RotationStrategy::Sticky),
-        _ => None,
-    }
-}
-
-const fn rotation_strategy_name(strategy: RotationStrategy) -> &'static str {
-    match strategy {
-        RotationStrategy::Smart => "smart",
-        RotationStrategy::QuotaResetPriority => "quota_reset_priority",
-        RotationStrategy::RoundRobin => "round_robin",
-        RotationStrategy::Sticky => "sticky",
-    }
 }
 
 fn valid_model_name(value: &str, max_len: usize) -> bool {

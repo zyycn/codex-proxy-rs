@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
 
+use gateway_core::engine::credential::RotationStrategy;
 use gateway_core::provider_ports::{
     ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError, ProviderStoreErrorKind,
 };
@@ -93,10 +94,7 @@ impl RuntimeSettingsUpdate {
             || self.ops_event_retention_days == 0
             || self.audit_retention_days == 0
             || !valid_model_mappings(&self.model_mappings)
-            || !matches!(
-                self.rotation_strategy.as_str(),
-                "smart" | "quota_reset_priority" | "round_robin" | "sticky"
-            )
+            || RotationStrategy::parse(&self.rotation_strategy).is_none()
         {
             return Err(StoreError::InvalidData {
                 entity: "runtime settings",

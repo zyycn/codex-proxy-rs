@@ -1,12 +1,10 @@
 //! Provider 的可重建 Redis circuit。
 
-use std::num::NonZeroU32;
-use std::time::Duration;
-
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use gateway_core::engine::execution::{
-    ProviderCircuitDecision as CoreCircuitDecision, ProviderCircuitError, ProviderCircuitPort,
+    ProviderCircuitDecision as CoreCircuitDecision, ProviderCircuitError, ProviderCircuitPolicy,
+    ProviderCircuitPort,
 };
 use gateway_core::routing::ProviderKind;
 use redis::{Script, aio::ConnectionManager};
@@ -36,21 +34,6 @@ local open_until = tonumber(redis.call('HGET', KEYS[1], 'open_until_ms') or '0')
 if open_until > now_ms then return {0, tostring(open_until)} end
 return {1, '0'}
 "#;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProviderCircuitPolicy {
-    pub failure_threshold: NonZeroU32,
-    pub open_duration: Duration,
-}
-
-impl Default for ProviderCircuitPolicy {
-    fn default() -> Self {
-        Self {
-            failure_threshold: NonZeroU32::new(3).unwrap_or(NonZeroU32::MIN),
-            open_duration: Duration::from_secs(30),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderCircuitDecision {
