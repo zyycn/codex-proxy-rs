@@ -255,6 +255,7 @@ impl ObservabilityService for DefaultObservabilityService {
                     error_rate: rate_or_zero(item.failure_count, item.request_count),
                     request_share: rate_or_zero(item.request_count, total_requests),
                     average_latency_ms: item.average_latency_ms,
+                    latency_p95_ms: item.latency_p95_ms,
                     estimated_cost: usd_cost(&item.costs),
                     attempt_count: item.attempt_count,
                     total_tokens: item.total_tokens,

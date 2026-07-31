@@ -97,6 +97,12 @@ export const usageRecordColumns = [
 
 export const opsErrorColumns = [
   {
+    key: 'accountId',
+    label: '账号',
+    width: '230px',
+    cellClass: 'font-mono text-[12px] font-emphasis',
+  },
+  {
     key: 'createdAtDisplay',
     label: '时间',
     width: '190px',
@@ -104,6 +110,7 @@ export const opsErrorColumns = [
       'whitespace-nowrap font-mono text-[12px] font-emphasis tabular-nums text-(--cp-text-secondary)',
   },
   { key: 'upstreamStatusCode', label: '上游状态', width: '96px', align: 'center' as const },
+  { key: 'clientStatusCode', label: '客户端状态', width: '96px', align: 'center' as const },
   {
     key: 'failureClass',
     label: '失败分类',
@@ -126,12 +133,6 @@ export const opsErrorColumns = [
     key: 'model',
     label: '模型',
     width: '180px',
-    cellClass: 'font-mono text-[12px] font-emphasis',
-  },
-  {
-    key: 'accountId',
-    label: '账号',
-    width: '230px',
     cellClass: 'font-mono text-[12px] font-emphasis',
   },
   {

@@ -771,8 +771,6 @@ pub struct TrendPointView {
     pub errors_value: u64,
     pub latency: String,
     pub latency_value: Option<u64>,
-    pub first_token_latency: String,
-    pub first_token_latency_value: Option<u64>,
     pub max_latency: String,
     pub max_latency_value: Option<u64>,
     pub min_latency: String,
@@ -842,21 +840,6 @@ pub struct DashboardCacheCardView {
     pub total_hit_rate: String,
     pub total_cached_tokens: String,
     pub average_first_token_latency_ms: String,
-}
-
-/// Dashboard 凭据用量摘要。
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DashboardCredentialUsageView {
-    pub id: String,
-    pub display_name: String,
-    pub plan_type: Option<String>,
-    pub tokens: String,
-    pub tokens_value: Option<u64>,
-    pub last_used: String,
-    pub provider: String,
-    pub availability: String,
-    pub request_count: u64,
 }
 
 /// 旧 Dashboard 账号概览卡片所需的 Provider 安全投影。
@@ -1016,18 +999,6 @@ pub struct DashboardDesktopReleaseView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_build: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub published_at: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub minimum_system_version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hardware_requirements: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub download_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub download_size: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub signature_present: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
@@ -1061,14 +1032,10 @@ pub struct DashboardDataView {
     pub health_timeline: HealthTimelineView,
     pub wire_profiles: Vec<DashboardWireProfileView>,
     pub account_usage: Vec<DashboardAccountUsageView>,
-    pub credential_usage: Vec<DashboardCredentialUsageView>,
     pub usage_records: Vec<UsageRecordView>,
     pub pool_summary: DashboardPoolSummaryView,
     pub capacity_info: DashboardCapacityInfoView,
     pub rotation_strategy: String,
-    pub logical_requests: RequestMetricsView,
-    pub attempts: AttemptMetricsView,
-    pub costs: Vec<CostView>,
 }
 
 /// 用量汇总响应数据。
@@ -1215,6 +1182,7 @@ pub struct DiagnosticItemView {
     pub error_rate: f64,
     pub request_share: f64,
     pub average_latency_ms: Option<u64>,
+    pub latency_p95_ms: Option<u64>,
     pub estimated_cost: Option<String>,
     pub attempt_count: u64,
     pub total_tokens: u64,
@@ -1973,11 +1941,11 @@ fn ops_error_view(error: domain::OpsError) -> OpsErrorView {
         id: error.event_id,
         request_id: error.request_id,
         client_api_key_id: error.client_api_key_ref,
-        kind: error.operation.clone(),
+        kind: error.component.clone(),
         provider: error.provider_kind,
         authentication_kind: error.provider_account_authentication_kind,
         account_id: error.provider_account_ref,
-        route: error.operation,
+        route: error.endpoint.unwrap_or_else(|| "—".to_owned()),
         model: error.upstream_model_id,
         client_status_code: error.client_status_code.map(i64::from),
         upstream_status_code: error.upstream_status_code.map(i64::from),
@@ -2037,8 +2005,6 @@ fn trend_point_view(point: domain::TrendPoint) -> TrendPointView {
         errors_value: point.service_failure_count,
         latency: display_duration(point.average_latency_ms),
         latency_value: point.average_latency_ms,
-        first_token_latency: display_duration(point.average_first_token_latency_ms),
-        first_token_latency_value: point.average_first_token_latency_ms,
         max_latency: display_duration(point.metrics.max_latency_ms),
         max_latency_value: point.metrics.max_latency_ms,
         min_latency: display_duration(point.metrics.min_latency_ms),
@@ -2189,12 +2155,6 @@ fn wire_profile_view(profile: domain::DashboardWireProfile) -> DashboardWireProf
             checked_at: release.checked_at,
             latest_version: release.latest_version,
             latest_build: release.latest_build,
-            published_at: release.published_at,
-            minimum_system_version: release.minimum_system_version,
-            hardware_requirements: release.hardware_requirements,
-            download_url: release.download_url,
-            download_size: release.download_size,
-            signature_present: release.signature_present,
             error: release.error,
         }),
     }
@@ -2250,14 +2210,12 @@ fn dashboard_view(result: domain::DashboardResult, kind: TrendKind) -> Dashboard
     let domain::DashboardObservation {
         range,
         requests,
-        attempts,
         provider_accounts,
-        trend: _,
         account_usage,
         recent_requests,
+        ..
     } = observation;
     let mut account_usage_views = Vec::with_capacity(account_usage.len());
-    let mut credential_usage_views = Vec::with_capacity(account_usage.len());
     for credential in account_usage {
         account_usage_views.push(DashboardAccountUsageView {
             id: credential.account_id.clone(),
@@ -2282,21 +2240,6 @@ fn dashboard_view(result: domain::DashboardResult, kind: TrendKind) -> Dashboard
                 .collect(),
             quota_used_percent: credential.quota_used_percent,
             last_used: relative_time(credential.last_used_at, range.end),
-        });
-        credential_usage_views.push(DashboardCredentialUsageView {
-            id: credential.account_id,
-            display_name: credential.email.unwrap_or(credential.name),
-            plan_type: credential.plan_type,
-            tokens: credential
-                .total_tokens
-                .map_or_else(|| "-".to_owned(), format_compact_number),
-            tokens_value: credential.total_tokens,
-            last_used: credential
-                .last_used_at
-                .map_or_else(|| "-".to_owned(), |value| china_datetime(&value)),
-            provider: credential.provider_kind,
-            availability: credential.availability,
-            request_count: credential.request_count,
         });
     }
     DashboardDataView {
@@ -2337,7 +2280,6 @@ fn dashboard_view(result: domain::DashboardResult, kind: TrendKind) -> Dashboard
         health_timeline: health_timeline_view(health_timeline),
         wire_profiles: wire_profiles.into_iter().map(wire_profile_view).collect(),
         account_usage: account_usage_views,
-        credential_usage: credential_usage_views,
         usage_records: recent_requests.into_iter().map(usage_record_view).collect(),
         pool_summary: DashboardPoolSummaryView {
             total: provider_accounts.total,
@@ -2355,9 +2297,6 @@ fn dashboard_view(result: domain::DashboardResult, kind: TrendKind) -> Dashboard
             available_slots: capacity.available_slots,
         },
         rotation_strategy: rotation_strategy_name(rotation_strategy).to_owned(),
-        logical_requests: request_metrics_view(&requests),
-        attempts: attempt_metrics_view(&attempts),
-        costs: cost_views(&attempts.costs),
     }
 }
 
@@ -2554,6 +2493,7 @@ fn diagnostics_view(
                 error_rate: item.error_rate,
                 request_share: item.request_share,
                 average_latency_ms: item.average_latency_ms,
+                latency_p95_ms: item.latency_p95_ms,
                 estimated_cost: item.estimated_cost.as_ref().map(ToString::to_string),
                 attempt_count: item.attempt_count,
                 total_tokens: item.total_tokens,

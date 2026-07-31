@@ -720,6 +720,7 @@ pub struct DiagnosticObservation {
     pub attempt_count: u64,
     pub total_tokens: u64,
     pub average_latency_ms: Option<u64>,
+    pub latency_p95_ms: Option<u64>,
     pub cost_coverage: CostCoverage,
     pub costs: Vec<CurrencyCost>,
 }
@@ -734,6 +735,7 @@ pub struct OpsError {
     pub client_api_key_ref: Option<String>,
     pub component: String,
     pub operation: String,
+    pub endpoint: Option<String>,
     pub provider_kind: Option<String>,
     pub provider_account_ref: Option<String>,
     pub provider_account_name: Option<String>,
@@ -1040,6 +1042,7 @@ pub struct DiagnosticsItem {
     pub error_rate: f64,
     pub request_share: f64,
     pub average_latency_ms: Option<u64>,
+    pub latency_p95_ms: Option<u64>,
     pub estimated_cost: Option<DecimalAmount>,
     pub attempt_count: u64,
     pub total_tokens: u64,

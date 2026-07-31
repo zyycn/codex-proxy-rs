@@ -5,9 +5,11 @@ import type { getUsageRecordDetail } from '@/api'
 import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
+import BaseTable from '@/components/base/BaseTable/index.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { useThemeColor } from '@/composables/useThemeColor'
 import { displayValue, fieldLabelClass, fieldValueBaseClass, fieldValueClass } from '../utils/detail'
+import { formatDuration } from '../utils/format'
 import {
   usageAccountText,
   usageBilling,
@@ -47,6 +49,11 @@ const panelClass = 'rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5'
 const panelTitleClass = 'm-0 text-[12px] leading-none font-heavy text-(--cp-text-secondary)'
 
 const accountDisplay = computed(() => props.record ? usageAccountText(props.record) : '—')
+const finalAttemptIndex = computed(() => {
+  const attempts = props.record?.attempts ?? []
+  const last = attempts[attempts.length - 1]
+  return last?.attemptIndex ?? props.record?.attemptCount
+})
 const overviewItems = computed(() => [
   { label: '时间', value: props.record?.createdAtDisplay, mono: true },
   { label: '类型', value: props.record ? usageRecordType(props.record) : '—' },
@@ -84,10 +91,15 @@ const detailGroups = computed(() => [
     title: '客户端与上游',
     items: [
       { label: '客户端 IP', value: props.record ? usageClientIp(props.record) : '—', mono: true },
-      { label: 'User-Agent', value: props.record ? usageUserAgent(props.record) : '', mono: true },
+      {
+        label: 'User-Agent',
+        value: props.record ? usageUserAgent(props.record) : '',
+        mono: true,
+        wrap: true,
+      },
       { label: '传输方式', value: props.record?.transport, mono: true },
       { label: '事件类型', value: props.record?.kind, mono: true },
-      { label: '尝试序号', value: props.record?.attemptIndex },
+      { label: '尝试序号', value: finalAttemptIndex.value },
       { label: '服务层级', value: props.record?.serviceTier, mono: true },
       { label: '客户端 Key ID', value: props.record?.clientApiKeyId, mono: true },
     ],
@@ -95,6 +107,61 @@ const detailGroups = computed(() => [
 ])
 const modelRouteGroup = computed(() => detailGroups.value[0])
 const clientUpstreamGroup = computed(() => detailGroups.value[1])
+
+const attemptColumns = [
+  {
+    key: 'attemptIndex',
+    label: '序号',
+    width: '56px',
+    align: 'center' as const,
+  },
+  { key: 'outcome', label: '结果', width: '76px' },
+  { key: 'provider', label: '平台', width: '72px' },
+  { key: 'model', label: '模型', width: '140px' },
+  { key: 'transport', label: '传输', width: '84px' },
+  { key: 'statusCode', label: '状态', width: '84px' },
+  { key: 'accountLabel', label: '账号', width: '200px' },
+  {
+    key: 'latencyMs',
+    label: '耗时',
+    width: '84px',
+    align: 'right' as const,
+  },
+]
+
+const attemptRows = computed(() =>
+  (props.record?.attempts ?? []).map(attempt => ({
+    id: attempt.id,
+    attemptIndex: attempt.attemptIndex,
+    outcome: attempt.outcome,
+    provider: attempt.provider,
+    model: attempt.model,
+    transport: attempt.transport,
+    statusCode: attempt.statusCode,
+    accountLabel: attempt.accountEmail || attempt.accountName || attempt.accountId || '—',
+    accountId: attempt.accountId,
+    latencyMs: attempt.latencyMs,
+  })),
+)
+
+function attemptOutcomeText(outcome: string) {
+  const labels: Record<string, string> = {
+    succeeded: '成功',
+    failed: '失败',
+    cancelled: '取消',
+    incomplete: '未完成',
+    running: '进行中',
+  }
+  return labels[outcome] ?? outcome
+}
+
+function attemptOutcomeClass(outcome: string) {
+  if (outcome === 'succeeded')
+    return 'text-(--cp-success-text)'
+  if (outcome === 'failed')
+    return 'text-(--cp-danger-text)'
+  return 'text-(--cp-text-secondary)'
+}
 
 const billingItems = computed(() => {
   const value = billing.value
@@ -332,6 +399,44 @@ const tokenDonutOption = computed<EChartsOption>(() => {
             <UsageDetailFieldGrid :items="billingItems" />
           </section>
         </div>
+      </section>
+
+      <section v-if="attemptRows.length" :class="panelClass">
+        <h3 :class="panelTitleClass">
+          尝试链路
+        </h3>
+        <BaseTable
+          class="mt-3 min-w-0"
+          :columns="attemptColumns"
+          :rows="attemptRows"
+          compact
+          row-key="id"
+          min-width="640px"
+        >
+          <template #outcome="{ row }">
+            <span :class="attemptOutcomeClass(row.outcome)">
+              {{ attemptOutcomeText(row.outcome) }}
+            </span>
+          </template>
+          <template #statusCode="{ row }">
+            <UsageStatusCodeBadge
+              :status-code="typeof row.statusCode === 'number' ? row.statusCode : null"
+            />
+          </template>
+          <template #accountLabel="{ row }">
+            <span
+              class="block max-w-full truncate font-mono text-[12px] font-bold text-(--cp-text-primary)"
+              :title="row.accountId || ''"
+            >
+              {{ row.accountLabel }}
+            </span>
+          </template>
+          <template #latencyMs="{ row }">
+            <span class="font-mono font-bold tabular-nums text-(--cp-text-primary)">
+              {{ formatDuration(row.latencyMs) }}
+            </span>
+          </template>
+        </BaseTable>
       </section>
 
       <section

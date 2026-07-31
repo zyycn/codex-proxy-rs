@@ -24,8 +24,6 @@ export interface DashboardTrendPoint {
   errorsValue: number
   latency: string
   latencyValue: number | null
-  firstTokenLatency: string
-  firstTokenLatencyValue: number | null
   maxLatency: string
   maxLatencyValue: number | null
   minLatency: string
@@ -121,12 +119,6 @@ export interface DashboardWireProfile {
     checkedAt?: string
     latestVersion?: string
     latestBuild?: string
-    publishedAt?: string
-    minimumSystemVersion?: string
-    hardwareRequirements?: string
-    downloadUrl?: string
-    downloadSize?: number
-    signaturePresent?: boolean
     error?: string
   }
 }
@@ -149,18 +141,6 @@ export interface DashboardAccountUsage {
   lastUsed: string
 }
 
-export interface DashboardCredentialUsage {
-  id: string
-  displayName: string
-  planType: string | null
-  tokens: string
-  tokensValue: number | null
-  lastUsed: string
-  provider: string
-  availability: string
-  requestCount: number
-}
-
 export interface DashboardPoolSummary {
   total: number
   active: number
@@ -178,33 +158,16 @@ export interface DashboardCapacityInfo {
   availableSlots: number | null
 }
 
-export interface DashboardRequestMetrics {
-  requestCount: number
-  successCount: number
-  failureCount: number
-  cancelledCount: number
-  incompleteCount: number
-  callerErrorCount: number
-  inputTokens: number
-  outputTokens: number
-  cachedTokens: number
-  cacheWriteTokens: number
-  reasoningTokens: number
-  totalTokens: number
-}
-
 export interface DashboardSummaryResponse {
   cards: DashboardCards
   trend: DashboardTrendResponse
   healthTimeline: DashboardHealthTimeline
   wireProfiles: DashboardWireProfile[]
   accountUsage: DashboardAccountUsage[]
-  credentialUsage: DashboardCredentialUsage[]
   usageRecords: UsageRecord[]
   poolSummary: DashboardPoolSummary
   capacityInfo: DashboardCapacityInfo
   rotationStrategy: string
-  logicalRequests: DashboardRequestMetrics
 }
 
 export function getDashboardSummary(data: object) {

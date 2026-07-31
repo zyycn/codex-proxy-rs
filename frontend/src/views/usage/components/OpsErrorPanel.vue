@@ -93,6 +93,11 @@ function showDetail(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][nu
           :status-code="typeof row.upstreamStatusCode === 'number' ? row.upstreamStatusCode : null"
         />
       </template>
+      <template #clientStatusCode="{ row }">
+        <UsageStatusCodeBadge
+          :status-code="typeof row.clientStatusCode === 'number' ? row.clientStatusCode : null"
+        />
+      </template>
       <template #failureClass="{ row }">
         <span class="font-mono text-[12px] font-bold text-(--cp-danger-text)">
           {{ row.failureClass || '—' }}
