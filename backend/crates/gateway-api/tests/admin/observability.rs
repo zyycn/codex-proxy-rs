@@ -167,8 +167,6 @@ mod response {
                 errors_value: 0,
                 latency: "1 ms".to_owned(),
                 latency_value: Some(1),
-                first_token_latency: "1 ms".to_owned(),
-                first_token_latency_value: Some(1),
                 max_latency: "1 ms".to_owned(),
                 max_latency_value: Some(1),
                 min_latency: "1 ms".to_owned(),
@@ -468,6 +466,7 @@ async fn ops_errors_should_keep_account_label_and_authentication_contract() {
             client_api_key_ref: Some("key_err".to_owned()),
             component: "model_request".to_owned(),
             operation: "responses".to_owned(),
+            endpoint: Some("/v1/responses".to_owned()),
             provider_kind: Some("openai".to_owned()),
             provider_account_ref: Some("acct_err".to_owned()),
             provider_account_name: None,
@@ -508,14 +507,20 @@ async fn ops_errors_should_keep_account_label_and_authentication_contract() {
         serde_json::json!({
             "provider": value["data"]["items"][0]["provider"],
             "authenticationKind": value["data"]["items"][0]["authenticationKind"],
+            "kind": value["data"]["items"][0]["kind"],
             "accountId": value["data"]["items"][0]["accountId"],
             "accountLabel": value["data"]["items"][0]["metadata"]["accountLabel"],
+            "clientStatusCode": value["data"]["items"][0]["clientStatusCode"],
+            "route": value["data"]["items"][0]["route"],
         }),
         serde_json::json!({
             "provider": "openai",
             "authenticationKind": "api_key",
+            "kind": "model_request",
             "accountId": "acct_err",
             "accountLabel": "err@example.invalid",
+            "clientStatusCode": 502,
+            "route": "/v1/responses",
         })
     );
 }
@@ -547,6 +552,7 @@ async fn diagnostics_should_keep_stable_key_and_display_name_contract() {
             attempt_count: 2,
             total_tokens: 200,
             average_latency_ms: Some(100),
+            latency_p95_ms: Some(3800),
             cost_coverage: CostCoverage::default(),
             costs: Vec::new(),
         });
@@ -571,11 +577,13 @@ async fn diagnostics_should_keep_stable_key_and_display_name_contract() {
         (
             &value["data"]["items"][0]["key"],
             &value["data"]["items"][0]["name"],
+            &value["data"]["items"][0]["latencyP95Ms"],
             &value["data"]["dimension"],
         ),
         (
             &serde_json::json!("acct_diag"),
             &serde_json::json!("diag@example.invalid"),
+            &serde_json::json!(3800),
             &serde_json::json!("account"),
         )
     );

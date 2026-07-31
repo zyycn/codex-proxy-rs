@@ -320,6 +320,7 @@ export interface UsageDiagnosticItem {
   errorRate: number
   requestShare: number
   averageLatencyMs: number | null
+  latencyP95Ms: number | null
   estimatedCost: string | null
   attemptCount: number
   totalTokens: number

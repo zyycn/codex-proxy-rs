@@ -17,7 +17,7 @@ const fields = computed(() => [
   { label: '时间', value: props.record?.createdAtDisplay },
   { label: '事件', value: props.record?.kind },
   { label: '失败分类', value: props.record?.failureClass },
-  { label: 'Provider', value: props.record?.provider },
+  { label: '平台/类型', value: providerKindLabel(props.record) },
   { label: '端点', value: props.record?.route },
   { label: '模型', value: props.record?.model },
   { label: '账号 ID', value: props.record?.accountId },
@@ -44,6 +44,14 @@ function display(value: unknown) {
 function latencyDisplay(value: unknown) {
   return typeof value === 'number' ? `${value} ms` : '—'
 }
+
+function providerKindLabel(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][number] | null) {
+  if (!record?.provider)
+    return '—'
+  return record.authenticationKind
+    ? `${record.provider} · ${record.authenticationKind}`
+    : record.provider
+}
 </script>
 
 <template>
@@ -58,7 +66,7 @@ function latencyDisplay(value: unknown) {
     <template v-if="record">
       <section class="rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5">
         <div class="flex flex-wrap items-center gap-3">
-          <UsageStatusCodeBadge :status-code="record.upstreamStatusCode" />
+          <UsageStatusCodeBadge :status-code="record.clientStatusCode" />
           <span class="text-[12px] font-bold text-(--cp-text-secondary)">
             客户端 {{ display(record.clientStatusCode) }}
           </span>

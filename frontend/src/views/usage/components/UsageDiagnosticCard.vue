@@ -82,10 +82,8 @@ const sortedItems = computed(() =>
   ),
 )
 
-// P95 列消费的 latencyP95Ms 目前不在诊断聚合响应中，缺失时渲染占位符。
 type DiagnosticDisplayItem = Diagnostics['items'][number] & {
   nameDisplay: ReturnType<typeof diagnosticNameDisplay>
-  latencyP95Ms?: number
 }
 
 const displayItems = computed<DiagnosticDisplayItem[]>(() =>

@@ -647,6 +647,7 @@ pub struct DiagnosticObservation {
     pub attempt_count: u64,
     pub total_tokens: u64,
     pub average_latency_ms: Option<u64>,
+    pub latency_p95_ms: Option<u64>,
     pub cost_coverage: CostCoverage,
     pub costs: Vec<CurrencyCostTotal>,
 }
@@ -660,6 +661,7 @@ pub struct OpsErrorRecord {
     pub client_api_key_ref: Option<String>,
     pub component: String,
     pub operation: String,
+    pub endpoint: Option<String>,
     pub provider_kind: Option<String>,
     pub provider_account_ref: Option<String>,
     pub provider_account_name: Option<String>,
@@ -1614,6 +1616,7 @@ fn admin_diagnostic_observation(
         attempt_count: observation.attempt_count,
         total_tokens: observation.total_tokens,
         average_latency_ms: observation.average_latency_ms,
+        latency_p95_ms: observation.latency_p95_ms,
         cost_coverage: admin_cost_coverage(observation.cost_coverage),
         costs: admin_currency_costs(observation.costs)?,
     })
@@ -1636,6 +1639,7 @@ fn admin_ops_error(error: OpsErrorRecord) -> admin_observability::OpsError {
         client_api_key_ref: error.client_api_key_ref,
         component: error.component,
         operation: error.operation,
+        endpoint: error.endpoint,
         provider_kind: error.provider_kind,
         provider_account_ref: error.provider_account_ref,
         provider_account_name: error.provider_account_name,
@@ -2887,6 +2891,8 @@ async fn usage_diagnostics(
                 coalesce(sum(mr.attempt_count), 0)::bigint as attempt_count,
                 coalesce(sum(mr.total_tokens), 0)::bigint as total_tokens,
                 round(avg(mr.latency_ms))::bigint as average_latency_ms,
+                round(percentile_cont(0.95) within group (order by mr.latency_ms))::bigint
+                  as latency_p95_ms,
                 count(*) filter (where mr.cost_source = 'provider_reported')::bigint
                   as provider_reported_count,
                 count(*) filter (where mr.cost_source = 'calculated')::bigint
@@ -2919,6 +2925,7 @@ async fn usage_diagnostics(
                 attempt_count: unsigned(row, "attempt_count")?,
                 total_tokens: unsigned(row, "total_tokens")?,
                 average_latency_ms: optional_unsigned(row, "average_latency_ms")?,
+                latency_p95_ms: optional_unsigned(row, "latency_p95_ms")?,
                 cost_coverage: coverage_from_row(row)?,
                 costs: Vec::new(),
             })
@@ -3090,6 +3097,7 @@ const OPS_ERRORS_CTE: &str = "with errors as (
               mr.id as event_id, mr.id as request_id,
               nullif(mr.attempt_count, 0) as attempt_index,
               mr.client_api_key_ref, 'model_request'::text as component, mr.operation,
+              mr.endpoint,
               mr.provider_kind,
               mr.provider_account_ref,
               mr.provider_account_name_snapshot as provider_account_name,
@@ -3108,6 +3116,7 @@ const OPS_ERRORS_CTE: &str = "with errors as (
        union all
        select 'ops_event'::text, oe.id, oe.model_request_id, oe.attempt_index,
               mr.client_api_key_ref, oe.component, oe.operation,
+              null::text as endpoint,
               oe.provider_kind, oe.provider_account_ref,
               oe.provider_account_name_snapshot as provider_account_name,
               oe.provider_account_email_snapshot as provider_account_email,
@@ -3127,7 +3136,7 @@ async fn list_ops_errors(pool: &PgPool, query: OpsErrorQuery) -> StoreResult<Ops
     let mut statement = QueryBuilder::<Postgres>::new(OPS_ERRORS_CTE);
     statement.push(
         " select source, event_id, request_id, attempt_index, client_api_key_ref,
-                 component, operation, provider_kind, provider_account_ref,
+                 component, operation, endpoint, provider_kind, provider_account_ref,
                  provider_account_name, provider_account_email,
                  provider_account_authentication_kind,
                  upstream_model_id, upstream_transport,
@@ -3331,6 +3340,7 @@ fn ops_error_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<OpsErrorRecord
         client_api_key_ref: get(row, "client_api_key_ref")?,
         component: get(row, "component")?,
         operation: get(row, "operation")?,
+        endpoint: get(row, "endpoint")?,
         provider_kind: get(row, "provider_kind")?,
         provider_account_ref: get(row, "provider_account_ref")?,
         provider_account_name: get(row, "provider_account_name")?,

@@ -316,6 +316,7 @@ async fn ops_errors_should_keep_request_and_event_snapshots_after_account_deleti
             Some("oauth"),
         )
     );
+    assert_eq!(request_error.endpoint.as_deref(), Some("/v1/responses"));
     let probe_error = errors
         .items
         .iter()
@@ -333,6 +334,7 @@ async fn ops_errors_should_keep_request_and_event_snapshots_after_account_deleti
             Some("api_key"),
         )
     );
+    assert_eq!(probe_error.endpoint, None);
 
     database.close().await;
 }
@@ -565,6 +567,14 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
             .expect("insert api key request");
         finalize_request(&database.pool, id, started_at).await;
     }
+    sqlx::query("update model_requests set latency_ms = 1000 where id = 'req_key_a'")
+        .execute(&database.pool)
+        .await
+        .expect("set request a latency");
+    sqlx::query("update model_requests set latency_ms = 2000 where id = 'req_key_b'")
+        .execute(&database.pool)
+        .await
+        .expect("set request b latency");
 
     let repository = PgObservabilityRepository::new(database.pool.clone());
     let diagnostics = repository
@@ -579,6 +589,7 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
     assert_eq!(diagnostics[0].key, "key_diag");
     assert_eq!(diagnostics[0].name, "My Key");
     assert_eq!(diagnostics[0].request_count, 2);
+    assert_eq!(diagnostics[0].latency_p95_ms, Some(1950));
 
     sqlx::query("delete from client_api_keys where id = 'key_diag'")
         .execute(&database.pool)
