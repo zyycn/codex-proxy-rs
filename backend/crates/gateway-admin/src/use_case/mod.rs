@@ -2,6 +2,7 @@
 
 pub mod accounts;
 pub mod auth;
+pub mod backup;
 pub mod client_keys;
 pub mod observability;
 pub mod openai;

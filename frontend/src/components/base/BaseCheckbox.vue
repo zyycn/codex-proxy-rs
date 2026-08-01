@@ -7,11 +7,13 @@ const props = withDefaults(
     indeterminate?: boolean
     disabled?: boolean
     label?: string
+    showLabel?: boolean
   }>(),
   {
     indeterminate: false,
     disabled: false,
     label: undefined,
+    showLabel: false,
   },
 )
 
@@ -57,6 +59,12 @@ function toggle() {
         class="absolute transition-opacity duration-150 size-3"
         :class="[!indeterminate && model ? 'opacity-100' : 'opacity-0']"
       />
+    </span>
+    <span
+      v-if="showLabel && label"
+      class="text-[13px] leading-none font-emphasis"
+    >
+      {{ label }}
     </span>
   </button>
 </template>

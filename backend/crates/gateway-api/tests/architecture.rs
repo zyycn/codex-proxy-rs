@@ -35,6 +35,7 @@ fn source_tree_should_match_frozen_machine_manifest() {
     let mut expected = vec![
         "src/admin/accounts.rs",
         "src/admin/auth.rs",
+        "src/admin/backups.rs",
         "src/admin/client_keys.rs",
         "src/admin/mod.rs",
         "src/admin/observability.rs",

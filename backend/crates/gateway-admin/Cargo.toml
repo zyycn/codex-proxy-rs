@@ -26,9 +26,14 @@ subtle = "2.6.1"
 thiserror = "2.0.18"
 tracing = "0.1.44"
 uuid = { version = "1.23.3", features = ["v7"] }
+cron = "0.17"
+chrono-tz = "0.10"
+tokio = { version = "1.52", features = ["rt", "time", "macros"] }
 
 [dev-dependencies]
 serde_json = { version = "1.0.150", features = ["arbitrary_precision", "preserve_order"] }
+sha2 = "0.11"
+tempfile = "3"
 tokio = { version = "1.52.3", default-features = false, features = ["macros", "rt"] }
 
 [lints]

@@ -9,6 +9,7 @@ use axum::{
 
 pub mod accounts;
 pub mod auth;
+pub mod backups;
 pub mod client_keys;
 pub mod observability;
 pub mod settings;
@@ -29,6 +30,7 @@ where
     Router::new()
         .merge(accounts::router::<S>())
         .merge(auth::router::<S>())
+        .merge(backups::router::<S>())
         .merge(client_keys::router::<S>())
         .merge(observability::router::<S>())
         .merge(settings::router::<S>())

@@ -4,6 +4,7 @@ use std::num::{NonZeroU16, NonZeroU64};
 
 pub mod accounts;
 pub mod auth;
+pub mod backup;
 pub mod client_keys;
 pub mod observability;
 pub mod provider_credentials;
@@ -51,6 +52,11 @@ impl AdminError {
     }
 
     #[must_use]
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self::new(AdminErrorKind::Invalid, message)
+    }
+
+    #[must_use]
     pub fn not_found(message: impl Into<String>) -> Self {
         Self::new(AdminErrorKind::NotFound, message)
     }
@@ -58,6 +64,11 @@ impl AdminError {
     #[must_use]
     pub fn conflict(message: impl Into<String>) -> Self {
         Self::new(AdminErrorKind::Conflict, message)
+    }
+
+    #[must_use]
+    pub fn bad_gateway(message: impl Into<String>) -> Self {
+        Self::new(AdminErrorKind::BadGateway, message)
     }
 
     #[must_use]

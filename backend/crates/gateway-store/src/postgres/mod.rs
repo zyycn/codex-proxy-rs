@@ -9,6 +9,7 @@ use crate::{
 
 mod admin_security_audit;
 mod admission_recovery;
+mod backup;
 mod client_keys;
 mod execution;
 mod execution_buffer;
@@ -21,6 +22,7 @@ mod snapshot;
 
 pub use admin_security_audit::*;
 pub use admission_recovery::*;
+pub use backup::*;
 pub use client_keys::*;
 pub use execution::*;
 pub use execution_buffer::*;

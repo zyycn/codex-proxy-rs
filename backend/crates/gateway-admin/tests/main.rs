@@ -17,6 +17,8 @@ use gateway_admin::{
     ports::store::{AccountStore, AuthStore, ClientKeyStore, ObservabilityStore, SettingsStore},
 };
 
+mod backup;
+mod backup_runtime;
 mod use_case;
 
 #[test]

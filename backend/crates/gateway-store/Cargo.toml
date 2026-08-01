@@ -13,24 +13,31 @@ path = "tests/main.rs"
 
 [dependencies]
 async-trait = "0.1.89"
+aws-credential-types = "1.2"
+aws-sdk-s3 = { version = "1.140", features = ["rt-tokio", "rustls"] }
+aws-smithy-runtime-api = "1.14"
+aws-smithy-types = "1.6"
 chrono = "0.4.45"
+fs2 = "0.4"
 futures = "0.3.32"
 gateway-admin = { path = "../gateway-admin" }
 gateway-core = { path = "../gateway-core" }
 hex = "0.4.3"
 redis = { version = "1.3.0", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
+secrecy = "0.10"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.150", features = ["arbitrary_precision", "preserve_order"] }
 sha2 = "0.11.0"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "chrono", "json", "macros", "migrate"] }
 thiserror = "2.0.18"
-tokio = { version = "1.52.3", default-features = false, features = ["rt", "time"] }
+tokio = { version = "1.52", default-features = false, features = ["fs", "io-std", "io-util", "macros", "process", "rt", "sync", "time"] }
 tracing = "0.1.44"
 url = "2.5.8"
 uuid = { version = "1.23.3", features = ["v4", "v7"] }
 
 [dev-dependencies]
-tokio = { version = "1.52.3", default-features = false, features = ["macros", "rt-multi-thread"] }
+tempfile = "3.23"
+tokio = { version = "1.52.3", default-features = false, features = ["macros", "rt-multi-thread", "fs", "io-util", "process", "time"] }
 
 [lints]
 workspace = true

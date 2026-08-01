@@ -2,23 +2,28 @@
 //!
 //! 本 crate 不包含 HTTP wire、数据库实现或具体 Provider 实现。
 
-use std::{fmt, path::Path, sync::Arc};
+use std::{fmt, path::Path, sync::Arc, time::Duration};
 
 use gateway_core::{
     engine::probe::AccountProbe,
     routing::{ProviderKind, snapshot::SnapshotControl},
+    task::{
+        DaemonRestartPolicy, WorkerContribution, WorkerId, WorkerKind, WorkerRegistration,
+        WorkerRunnable,
+    },
 };
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Deserialize;
 
+pub mod backup;
 pub mod model;
 pub mod ports;
 mod use_case;
 
 pub use use_case::{
-    accounts::AccountsService, auth::AuthService, client_keys::ClientKeyService,
-    observability::ObservabilityService, openai::OpenAiService, settings::SettingsService,
-    system::SystemService, xai::XaiService,
+    accounts::AccountsService, auth::AuthService, backup::BackupService,
+    client_keys::ClientKeyService, observability::ObservabilityService, openai::OpenAiService,
+    settings::SettingsService, system::SystemService, xai::XaiService,
 };
 
 use model::{AdminError, AdminErrorKind};
@@ -28,7 +33,7 @@ use ports::{
     system::SystemOperations,
 };
 use use_case::{
-    accounts::DefaultAccountsService, auth::DefaultAuthService,
+    accounts::DefaultAccountsService, auth::DefaultAuthService, backup::DefaultBackupService,
     client_keys::DefaultClientKeyService, observability::DefaultObservabilityService,
     openai::DefaultOpenAiService, settings::DefaultSettingsService, system::DefaultSystemService,
     xai::DefaultXaiService,
@@ -47,6 +52,8 @@ const WEAK_INITIAL_PASSWORDS: &[&str] = &[
     "replace-me",
     "codex-proxy-rs",
 ];
+
+const BACKUP_WORKER_OWNER: &str = "backup";
 
 /// 只用于首次幂等创建默认管理员的启动密码。
 #[derive(Clone, Deserialize)]
@@ -146,6 +153,7 @@ pub struct AdminServices {
     system: Arc<dyn SystemService>,
     openai: Arc<dyn OpenAiService>,
     xai: Arc<dyn XaiService>,
+    backups: Arc<dyn BackupService>,
 }
 
 impl AdminServices {
@@ -188,17 +196,28 @@ impl AdminServices {
     pub fn xai(&self) -> &dyn XaiService {
         self.xai.as_ref()
     }
+
+    #[must_use]
+    pub fn backups(&self) -> &dyn BackupService {
+        self.backups.as_ref()
+    }
 }
 
 /// Admin 初始化完成后的封闭能力包。
 pub struct AdminBundle {
     services: AdminServices,
+    worker_contributions: Vec<WorkerContribution>,
 }
 
 impl AdminBundle {
     #[must_use]
     pub fn services(&self) -> AdminServices {
         self.services.clone()
+    }
+
+    /// 取出 Backup Worker 贡献；只能调用一次，与其它 Bundle 的贡献一并交给 Host。
+    pub fn take_worker_contributions(&mut self) -> Vec<WorkerContribution> {
+        std::mem::take(&mut self.worker_contributions)
     }
 }
 
@@ -241,6 +260,18 @@ pub async fn initialize(
         snapshot.clone(),
         probe.clone(),
     ));
+    let backup_ports = store.backup();
+    let backups = Arc::new(DefaultBackupService::new(
+        backup_ports.repository(),
+        backup_ports.object_store(),
+        store.auth(),
+        snapshot.clone(),
+    ));
+    let backup_task = backup::task::BackupTask::new(
+        backup_ports.repository(),
+        backup_ports.dump(),
+        backup_ports.object_store(),
+    );
     let services = AdminServices {
         auth,
         accounts,
@@ -268,8 +299,32 @@ pub async fn initialize(
             store.accounts(),
             snapshot.clone(),
         )),
+        backups,
     };
-    Ok(AdminBundle { services })
+    let worker_contributions = backup_worker_contribution(backup_task)?;
+    Ok(AdminBundle {
+        services,
+        worker_contributions,
+    })
+}
+
+/// Backup Worker 注册：单个可取消 Daemon，owner 固定为 `backup`。
+fn backup_worker_contribution(
+    task: backup::task::BackupTask,
+) -> Result<Vec<WorkerContribution>, AdminError> {
+    let id = WorkerId::try_new(WorkerKind::Backup, BACKUP_WORKER_OWNER)
+        .map_err(|_| AdminError::internal("Backup worker id is invalid"))?;
+    let restart = DaemonRestartPolicy::try_new(Duration::from_secs(1), Duration::from_secs(60))
+        .map_err(|_| AdminError::internal("Backup worker restart policy is invalid"))?;
+    let registration = WorkerRegistration::try_new(
+        id,
+        WorkerRunnable::Daemon {
+            restart,
+            task: Box::new(task),
+        },
+    )
+    .map_err(|_| AdminError::internal("Backup worker registration is invalid"))?;
+    Ok(vec![WorkerContribution::Registration(registration)])
 }
 
 fn provider_kind(value: &'static str) -> Result<ProviderKind, AdminError> {
