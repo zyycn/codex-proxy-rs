@@ -21,6 +21,8 @@ mod runtime_settings;
 mod snapshot;
 mod snapshots;
 
+static TEST_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
+
 pub(super) struct TestDatabase {
     admin: PgPool,
     pub(super) pool: PgPool,
@@ -56,28 +58,10 @@ impl TestDatabase {
             .connect(&database_url)
             .await
             .expect("connect isolated test schema");
-        let mut migration = pool.begin().await.expect("begin terminal migration");
-        sqlx::raw_sql(include_str!("../../../../migrations/0001_initial.sql"))
-            .execute(&mut *migration)
+        TEST_MIGRATOR
+            .run(&pool)
             .await
-            .expect("apply terminal migration");
-        sqlx::raw_sql(include_str!(
-            "../../../../migrations/0002_snapshot_provider_account_identity.sql"
-        ))
-        .execute(&mut *migration)
-        .await
-        .expect("apply snapshot migration");
-        sqlx::raw_sql(include_str!("../../../../migrations/0003_s3_backup.sql"))
-            .execute(&mut *migration)
-            .await
-            .expect("apply backup migration");
-        sqlx::raw_sql(include_str!(
-            "../../../../migrations/0004_drop_provider_accounts_id_kind_uq.sql"
-        ))
-        .execute(&mut *migration)
-        .await
-        .expect("apply index drop migration");
-        migration.commit().await.expect("commit terminal migration");
+            .expect("apply test migrations");
         Some(Self {
             admin,
             pool,
@@ -172,24 +156,19 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
     .expect("drop migration test database");
     admin.close().await;
 
-    assert_eq!((first_table_count, migration_count), (10, 4));
+    assert_eq!((first_table_count, migration_count), (10, 1));
     assert_eq!(response_id_types, ["bytea", "bytea"]);
     assert!(!raw_response_id_index_exists);
 }
 
 #[test]
 fn migrations_should_leave_transaction_ownership_to_sqlx() {
-    let transaction_statements = [
-        include_str!("../../../../migrations/0001_initial.sql"),
-        include_str!("../../../../migrations/0002_snapshot_provider_account_identity.sql"),
-        include_str!("../../../../migrations/0003_s3_backup.sql"),
-        include_str!("../../../../migrations/0004_drop_provider_accounts_id_kind_uq.sql"),
-    ]
-    .into_iter()
-    .flat_map(str::lines)
-    .map(str::trim)
-    .filter(|line| matches!(*line, "begin;" | "commit;"))
-    .count();
+    let transaction_statements = TEST_MIGRATOR
+        .iter()
+        .flat_map(|migration| migration.sql.as_str().lines())
+        .map(str::trim)
+        .filter(|line| matches!(*line, "begin;" | "commit;"))
+        .count();
 
     assert_eq!(transaction_statements, 0);
 }

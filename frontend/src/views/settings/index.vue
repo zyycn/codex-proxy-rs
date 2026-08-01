@@ -91,7 +91,7 @@ watch(
     <div class="mt-4">
       <BaseSegmented
         :model-value="section"
-        class="bg-(--cp-default-bg-active)!"
+        class="bg-(--cp-input-soft-bg)!"
         :options="[
           { label: '运行设置', value: 'runtime' },
           { label: '备份', value: 'backup' },
