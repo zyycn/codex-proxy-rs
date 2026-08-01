@@ -39,6 +39,30 @@ impl Decimal {
             .filter(|value| *value <= MAX_SCALED_DECIMAL)
             .map(Self)
     }
+
+    /// 除以非零整数，保留最多十位小数。
+    #[must_use]
+    pub fn checked_div_u64(self, divisor: u64) -> Option<Self> {
+        let divisor = u128::from(divisor);
+        (divisor != 0)
+            .then(|| self.0.checked_div(divisor))
+            .flatten()
+            .and_then(|value| Self::from_scaled(value).ok())
+    }
+
+    /// 去尾零的 canonical 字符串，用于 wire 序列化。
+    #[must_use]
+    pub fn canonical(self) -> String {
+        let integer = self.0 / DECIMAL_SCALE;
+        let fraction = self.0 % DECIMAL_SCALE;
+        if fraction == 0 {
+            integer.to_string()
+        } else {
+            let fraction = format!("{fraction:010}");
+            let trimmed = fraction.trim_end_matches('0');
+            format!("{integer}.{trimmed}")
+        }
+    }
 }
 
 impl FromStr for Decimal {
