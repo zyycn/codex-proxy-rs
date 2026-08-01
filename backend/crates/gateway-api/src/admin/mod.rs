@@ -12,6 +12,7 @@ pub mod auth;
 pub mod backups;
 pub mod client_keys;
 pub mod observability;
+pub mod presenter;
 pub mod settings;
 pub mod system;
 pub mod wire;

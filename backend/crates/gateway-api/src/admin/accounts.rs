@@ -16,7 +16,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::{Stream, StreamExt as _};
 use gateway_admin::model::{
-    AdminError as AdminServiceError, AdminErrorKind, PageSize,
+    AdminError as AdminServiceError, PageSize,
     accounts::{
         AccountConnectionTestEvent as DomainConnectionTestEvent, AccountCost, AccountListQuery,
         AccountModelUsage, AccountSort, AccountSortField, AccountStatus as DomainAccountStatus,
@@ -37,6 +37,7 @@ use gateway_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use super::presenter::{format_compact_number, format_number};
 use super::{
     AdminAuth, AdminEnvelope, AdminError, AdminResponse, AdminSessionState, PageMeta,
     WireValidationError,
@@ -1468,7 +1469,7 @@ fn quota_local_usage(usage: &AccountUsage) -> Value {
         "imageRequestCount": usage.image_request_count,
         "imageRequestFailedCount": usage.image_request_failed_count,
         "totalTokens": total_tokens,
-        "totalTokensDisplay": format_tokens(total_tokens),
+        "totalTokensDisplay": format_compact_number(total_tokens),
         "requestBuckets": usage.request_buckets.iter().map(|bucket| serde_json::json!({
             "bucketStart": bucket.bucket_start,
             "requestCount": bucket.request_count,
@@ -1601,7 +1602,7 @@ fn account_currency_cost_view(cost: &AccountCost) -> CurrencyCostView {
 }
 
 fn display_optional_tokens(value: Option<u64>) -> String {
-    value.map_or_else(|| "—".to_owned(), format_tokens)
+    value.map_or_else(|| "—".to_owned(), format_compact_number)
 }
 
 fn empty_account_usage() -> AccountUsageView {
@@ -1719,37 +1720,6 @@ fn account_status_name(status: DomainAccountStatus) -> &'static str {
     }
 }
 
-fn format_number(value: u64) -> String {
-    let text = value.to_string();
-    let mut output = String::with_capacity(text.len() + text.len() / 3);
-    for (index, character) in text.chars().rev().enumerate() {
-        if index > 0 && index % 3 == 0 {
-            output.push(',');
-        }
-        output.push(character);
-    }
-    output.chars().rev().collect()
-}
-
-fn format_tokens(value: u64) -> String {
-    if value < 1_000 {
-        return format_number(value);
-    }
-    for (suffix, threshold) in [
-        ("P", 1_000_000_000_000_000_u64),
-        ("T", 1_000_000_000_000_u64),
-        ("B", 1_000_000_000_u64),
-        ("M", 1_000_000_u64),
-        ("K", 1_000_u64),
-    ] {
-        if value >= threshold {
-            let scaled = value as f64 / threshold as f64;
-            return format!("{scaled:.1}{suffix}").replace(".0", "");
-        }
-    }
-    format_number(value)
-}
-
 fn relative_time(value: DateTime<Utc>, now: DateTime<Utc>) -> String {
     let elapsed = now.signed_duration_since(value);
     if elapsed.num_seconds() < 0 {
@@ -1787,16 +1757,5 @@ fn map_wire_error(error: WireValidationError) -> AdminError {
 }
 
 fn map_service_error(error: AdminServiceError) -> AdminError {
-    match error.kind() {
-        AdminErrorKind::Invalid => AdminError::bad_request(error.to_string()),
-        AdminErrorKind::Unauthorized => AdminError::admin_session_required(),
-        AdminErrorKind::NotFound => AdminError::not_found(error.to_string()),
-        AdminErrorKind::Conflict => AdminError::conflict(error.to_string()),
-        AdminErrorKind::RateLimited => AdminError::too_many_login_attempts(),
-        AdminErrorKind::BadGateway => AdminError::bad_gateway(error.to_string()),
-        AdminErrorKind::Unavailable => {
-            AdminError::service_unavailable("Account directory unavailable")
-        }
-        AdminErrorKind::Internal => AdminError::internal(error.to_string()),
-    }
+    super::wire::map_admin_service_error(error, "Account directory unavailable")
 }

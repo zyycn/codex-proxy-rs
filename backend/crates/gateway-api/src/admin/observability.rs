@@ -10,14 +10,15 @@ use axum::{
     routing::get,
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::{DateTime, Duration, Timelike as _, Utc};
+use chrono::{DateTime, Duration, Utc};
 use gateway_admin::model::{PageSize as DomainPageSize, observability as domain};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::presenter::{format_compact_number, format_number};
 use super::{
-    AdminAuth, AdminEnvelope, AdminError, AdminResponse, AdminSessionState, WireValidationError,
-    wire::map_admin_service_error,
+    AdminAuth, AdminEnvelope, AdminError, AdminResponse, AdminSessionState, PageMeta,
+    WireValidationError, wire::map_admin_service_error,
 };
 
 /// 观测列表默认页大小。
@@ -329,7 +330,8 @@ fn dashboard_range(
     end: Option<&str>,
 ) -> Result<domain::TimeRange, WireValidationError> {
     let end = parse_datetime(end)?.unwrap_or_else(Utc::now);
-    let start = parse_datetime(start)?.unwrap_or_else(|| china_day_start(end) - Duration::days(1));
+    let start =
+        parse_datetime(start)?.unwrap_or_else(|| domain::china_day_start(end) - Duration::days(1));
     domain::TimeRange::new(start, end).map_err(|_| WireValidationError::new("timeRange"))
 }
 
@@ -338,7 +340,7 @@ fn dashboard_today_range(
     end: Option<&str>,
 ) -> Result<domain::TimeRange, WireValidationError> {
     let end = parse_datetime(end)?.unwrap_or_else(Utc::now);
-    let start = parse_datetime(start)?.unwrap_or_else(|| china_day_start(end));
+    let start = parse_datetime(start)?.unwrap_or_else(|| domain::china_day_start(end));
     domain::TimeRange::new(start, end).map_err(|_| WireValidationError::new("timeRange"))
 }
 
@@ -479,29 +481,6 @@ fn non_empty(value: Option<String>) -> Option<String> {
 pub struct CursorWire {
     pub observed_at: DateTime<Utc>,
     pub stable_id: String,
-}
-
-/// 观测列表分页元数据。
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PageMeta {
-    pub page: u32,
-    pub page_size: u16,
-    pub total: u64,
-    pub total_pages: u32,
-}
-
-impl PageMeta {
-    /// 由应用层已校验的分页事实构造响应元数据。
-    #[must_use]
-    pub const fn new(page: u32, page_size: u16, total: u64, total_pages: u32) -> Self {
-        Self {
-            page,
-            page_size,
-            total,
-            total_pages,
-        }
-    }
 }
 
 /// 观测列表响应数据。
@@ -1443,37 +1422,6 @@ where
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
-fn format_number(value: u64) -> String {
-    let text = value.to_string();
-    let mut output = String::with_capacity(text.len() + text.len() / 3);
-    for (index, character) in text.chars().rev().enumerate() {
-        if index > 0 && index % 3 == 0 {
-            output.push(',');
-        }
-        output.push(character);
-    }
-    output.chars().rev().collect()
-}
-
-fn format_compact_number(value: u64) -> String {
-    if value < 1_000 {
-        return format_number(value);
-    }
-    for (suffix, threshold) in [
-        ("P", 1_000_000_000_000_000_u64),
-        ("T", 1_000_000_000_000_u64),
-        ("B", 1_000_000_000_u64),
-        ("M", 1_000_000_u64),
-        ("K", 1_000_u64),
-    ] {
-        if value >= threshold {
-            let scaled = value as f64 / threshold as f64;
-            return format!("{scaled:.1}{suffix}").replace(".0", "");
-        }
-    }
-    format_number(value)
-}
-
 fn display_duration(value: Option<u64>) -> String {
     let Some(value) = value.and_then(|value| i64::try_from(value).ok()) else {
         return "—".to_owned();
@@ -1495,12 +1443,6 @@ fn display_rate(value: f64) -> String {
     } else {
         "—".to_owned()
     }
-}
-
-fn china_day_start(value: DateTime<Utc>) -> DateTime<Utc> {
-    const CHINA_OFFSET_SECONDS: i64 = 8 * 60 * 60;
-    let elapsed = (value.timestamp() + CHINA_OFFSET_SECONDS).rem_euclid(24 * 60 * 60);
-    value - Duration::seconds(elapsed) - Duration::nanoseconds(i64::from(value.nanosecond()))
 }
 
 fn china_datetime(value: &DateTime<Utc>) -> String {
@@ -1908,7 +1850,7 @@ fn page_meta(page: u32, page_size: u16, total: u64) -> PageMeta {
     let total_pages = total.saturating_add(page_size_u64 - 1) / page_size_u64;
     PageMeta::new(
         page,
-        page_size,
+        u32::from(page_size),
         total,
         u32::try_from(total_pages).unwrap_or(u32::MAX),
     )
