@@ -19,6 +19,14 @@ const restartReadyTimeoutMs = 60_000
 const restartProbeTimeoutMs = 2_000
 const restartReadyPollIntervalMs = 500
 
+interface SystemUpdateEvent {
+  id: string
+  level: string
+  message: string
+  at: string
+  terminal?: boolean
+}
+
 export const useSystemUpdateStore = defineStore('system-update', () => {
   const version = shallowRef<Awaited<ReturnType<typeof getSystemVersion>> | null>(null)
   const updateInfo = shallowRef<Awaited<ReturnType<typeof getSystemUpdateDetail>> | null>(null)
@@ -30,7 +38,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
   const updateSuccess = shallowRef(false)
   const needRestart = shallowRef(false)
   const loadedOnce = shallowRef(false)
-  const updateLogs = ref<any[]>([])
+  const updateLogs = ref<SystemUpdateEvent[]>([])
   const updateStreaming = shallowRef(false)
   const updateStreamError = shallowRef('')
   const restartTargetVersion = shallowRef('')
@@ -72,7 +80,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     restartTargetVersion.value = ''
   }
 
-  function appendUpdateLog(log: any) {
+  function appendUpdateLog(log: SystemUpdateEvent) {
     const logs = updateLogs.value.filter(item => item.id !== log.id)
     updateLogs.value = [...logs, log].slice(-maxUpdateLogs)
   }
@@ -97,7 +105,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     if (!message?.raw)
       return
     try {
-      const event = JSON.parse(message.raw)
+      const event = JSON.parse(message.raw) as SystemUpdateEvent
       appendUpdateLog(event)
       if (event.terminal)
         disconnectUpdateEvents()
