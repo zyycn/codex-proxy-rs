@@ -50,7 +50,15 @@ export function getSystemVersion(timeout = 0) {
   })
 }
 
-export function getSystemUpdateDetail(data: object) {
+interface SystemUpdateDetailQuery {
+  refresh?: boolean
+}
+
+interface SystemUpdateTarget {
+  targetVersion?: string
+}
+
+export function getSystemUpdateDetail(data: SystemUpdateDetailQuery) {
   return request<SystemUpdateDetail>({
     url: '/api/admin/system/update/detail',
     method: 'GET',
@@ -58,7 +66,7 @@ export function getSystemUpdateDetail(data: object) {
   })
 }
 
-export function performSystemUpdate(data: object) {
+export function performSystemUpdate(data: SystemUpdateTarget) {
   return request<SystemUpdateAccepted>({
     url: '/api/admin/system/update',
     method: 'POST',

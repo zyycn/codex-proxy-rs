@@ -35,7 +35,28 @@ export interface ApiKeyMutationResponse {
   id: string
 }
 
-export function getApiKeys(data: object) {
+// 请求参数类型：仅定义 API 边界的形状，调用方不依赖显式声明。
+interface ApiKeyListParams {
+  cursor?: string
+  limit: number
+  search?: string
+  sortBy?: string
+  sortDirection?: string
+}
+
+interface ApiKeyCreateParam {
+  name: string
+  label?: string
+  providerKind: string
+  maxConcurrency: number
+  requestsPerMinute: number
+}
+
+interface ApiKeyIdParam {
+  id: string
+}
+
+export function getApiKeys(data: ApiKeyListParams) {
   return request<ApiKeyListResponse>({
     url: '/api/admin/client-keys',
     method: 'GET',
@@ -43,7 +64,7 @@ export function getApiKeys(data: object) {
   })
 }
 
-export function createApiKey(data: object) {
+export function createApiKey(data: ApiKeyCreateParam) {
   return request<ApiKeyCreateResponse>({
     url: '/api/admin/client-keys/create',
     method: 'POST',
@@ -51,7 +72,7 @@ export function createApiKey(data: object) {
   })
 }
 
-export function revealApiKey(data: object) {
+export function revealApiKey(data: ApiKeyIdParam) {
   return request<ApiKeyRevealResponse>({
     url: '/api/admin/client-keys/reveal',
     method: 'GET',
@@ -59,7 +80,7 @@ export function revealApiKey(data: object) {
   })
 }
 
-export function deleteApiKey(data: object) {
+export function deleteApiKey(data: ApiKeyIdParam) {
   return request<ApiKeyMutationResponse>({
     url: '/api/admin/client-keys/delete',
     method: 'POST',
@@ -67,7 +88,7 @@ export function deleteApiKey(data: object) {
   })
 }
 
-export function disableApiKey(data: object) {
+export function disableApiKey(data: ApiKeyIdParam) {
   return request<ApiKeyMutationResponse>({
     url: '/api/admin/client-keys/disable',
     method: 'POST',
@@ -75,7 +96,7 @@ export function disableApiKey(data: object) {
   })
 }
 
-export function enableApiKey(data: object) {
+export function enableApiKey(data: ApiKeyIdParam) {
   return request<ApiKeyMutationResponse>({
     url: '/api/admin/client-keys/enable',
     method: 'POST',

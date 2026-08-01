@@ -331,7 +331,28 @@ export interface UsageDiagnosticsResponse {
   items: UsageDiagnosticItem[]
 }
 
-export function getUsageRecords(data: object) {
+// 请求参数类型：仅定义 API 边界的形状，调用方不依赖显式声明。
+interface UsageRangeQuery {
+  startTime: string
+  endTime: string
+  provider?: string
+  model?: string
+  statusCode?: number
+  search?: string
+}
+
+type UsagePagedQuery = UsageRangeQuery & {
+  page: number
+  pageSize: number
+}
+
+interface UsageDetailQuery {
+  id: string
+}
+
+type UsageDiagnosticsQuery = UsageRangeQuery & { dimension: string }
+
+export function getUsageRecords(data: UsagePagedQuery) {
   return request<UsageRecordsResponse>({
     url: '/api/admin/usage/records',
     method: 'GET',
@@ -339,7 +360,7 @@ export function getUsageRecords(data: object) {
   })
 }
 
-export function getOpsErrors(data: object) {
+export function getOpsErrors(data: UsagePagedQuery) {
   return request<OpsErrorsResponse>({
     url: '/api/admin/operations/errors',
     method: 'GET',
@@ -347,7 +368,7 @@ export function getOpsErrors(data: object) {
   })
 }
 
-export function getUsageRecordDetail(data: object) {
+export function getUsageRecordDetail(data: UsageDetailQuery) {
   return request<UsageRecordDetail>({
     url: '/api/admin/usage/records/detail',
     method: 'GET',
@@ -355,7 +376,7 @@ export function getUsageRecordDetail(data: object) {
   })
 }
 
-export function getUsageRecordSummary(data: object) {
+export function getUsageRecordSummary(data: UsageRangeQuery) {
   return request<UsageSummaryResponse>({
     url: '/api/admin/usage/records/summary',
     method: 'GET',
@@ -363,7 +384,7 @@ export function getUsageRecordSummary(data: object) {
   })
 }
 
-export function getUsageRecordInsightsOverview(data: object) {
+export function getUsageRecordInsightsOverview(data: UsageRangeQuery) {
   return request<UsageInsightsOverviewResponse>({
     url: '/api/admin/usage/insights/overview',
     method: 'GET',
@@ -371,7 +392,7 @@ export function getUsageRecordInsightsOverview(data: object) {
   })
 }
 
-export function getUsageRecordInsightsDiagnostics(data: object) {
+export function getUsageRecordInsightsDiagnostics(data: UsageDiagnosticsQuery) {
   return request<UsageDiagnosticsResponse>({
     url: '/api/admin/usage/insights/diagnostics',
     method: 'GET',

@@ -171,7 +171,45 @@ export interface AccountOAuthStartResponse {
   expiresAt: string
 }
 
-export function getAccounts(data: object) {
+// 请求参数类型：仅定义 API 边界的形状，调用方不依赖显式声明。
+interface AccountListParams {
+  page: number
+  pageSize: number
+  search?: string
+  provider?: string
+  status?: string
+  sortBy?: string
+  sortDirection?: string
+}
+
+interface AccountIdParam {
+  accountId: string
+}
+
+interface AccountProviderIdParam {
+  provider: string
+  accountId: string
+}
+
+interface AccountDeleteParams {
+  provider: string
+  accountIds: string[]
+}
+
+interface AccountImportParam {
+  provider: string
+  data: unknown
+}
+
+interface AccountOAuthStartParam {
+  provider: string
+  name: string
+  accountId?: string
+}
+
+interface AccountOAuthCompleteParam { flowId: string, callbackUrl: string }
+
+export function getAccounts(data: AccountListParams) {
   return request<AccountListResponse>({
     url: '/api/admin/accounts',
     method: 'GET',
@@ -179,7 +217,7 @@ export function getAccounts(data: object) {
   })
 }
 
-export function exportAccounts(data: object) {
+export function exportAccounts(data: AccountListParams) {
   return request<unknown>({
     url: '/api/admin/accounts/export',
     method: 'GET',
@@ -187,7 +225,7 @@ export function exportAccounts(data: object) {
   })
 }
 
-export function refreshAccount(data: object) {
+export function refreshAccount(data: AccountIdParam) {
   return request<AccountRefreshResponse>({
     url: '/api/admin/accounts/refresh',
     method: 'POST',
@@ -195,7 +233,7 @@ export function refreshAccount(data: object) {
   })
 }
 
-export function getAccountQuota(data: object) {
+export function getAccountQuota(data: AccountIdParam) {
   return request<AccountQuotaResponse>({
     url: '/api/admin/accounts/quota',
     method: 'GET',
@@ -203,7 +241,7 @@ export function getAccountQuota(data: object) {
   })
 }
 
-export function refreshAccountQuota(data: object) {
+export function refreshAccountQuota(data: AccountIdParam) {
   return request<AccountQuotaResponse>({
     url: '/api/admin/accounts/quota/refresh',
     method: 'POST',
@@ -211,7 +249,7 @@ export function refreshAccountQuota(data: object) {
   })
 }
 
-export function getAccountModels(data: object) {
+export function getAccountModels(data: AccountIdParam) {
   return request<AccountModelsResponse>({
     url: '/api/admin/accounts/models',
     method: 'GET',
@@ -219,7 +257,7 @@ export function getAccountModels(data: object) {
   })
 }
 
-export function refreshAccountModels(data: object) {
+export function refreshAccountModels(data: AccountIdParam) {
   return request<AccountModelsResponse>({
     url: '/api/admin/accounts/models/refresh',
     method: 'POST',
@@ -227,7 +265,7 @@ export function refreshAccountModels(data: object) {
   })
 }
 
-export function importAccounts(data: object) {
+export function importAccounts(data: AccountImportParam) {
   return request<AccountImportResponse>({
     url: '/api/admin/accounts/import',
     method: 'POST',
@@ -235,7 +273,7 @@ export function importAccounts(data: object) {
   })
 }
 
-export function enableAccount(data: object) {
+export function enableAccount(data: AccountProviderIdParam) {
   return request<AccountMutationResponse>({
     url: '/api/admin/accounts/enable',
     method: 'POST',
@@ -243,7 +281,7 @@ export function enableAccount(data: object) {
   })
 }
 
-export function disableAccount(data: object) {
+export function disableAccount(data: AccountProviderIdParam) {
   return request<AccountMutationResponse>({
     url: '/api/admin/accounts/disable',
     method: 'POST',
@@ -251,7 +289,7 @@ export function disableAccount(data: object) {
   })
 }
 
-export function deleteAccounts(data: object) {
+export function deleteAccounts(data: AccountDeleteParams) {
   return request<AccountDeletionResponse>({
     url: '/api/admin/accounts/delete',
     method: 'POST',
@@ -259,7 +297,7 @@ export function deleteAccounts(data: object) {
   })
 }
 
-export function startAccountOAuth(data: object) {
+export function startAccountOAuth(data: AccountOAuthStartParam) {
   return request<AccountOAuthStartResponse>({
     url: '/api/admin/accounts/oauth/start',
     method: 'POST',
@@ -267,7 +305,7 @@ export function startAccountOAuth(data: object) {
   })
 }
 
-export function completeAccountOAuth(data: object) {
+export function completeAccountOAuth(data: AccountOAuthCompleteParam) {
   return request<AccountMutationResponse>({
     url: '/api/admin/accounts/oauth/complete',
     method: 'POST',
