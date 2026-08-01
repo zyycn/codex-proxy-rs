@@ -175,6 +175,8 @@ export interface UsageAttempt {
 
 export type UsageRecordDetail = UsageRecord & {
   attempts: UsageAttempt[]
+  /** 尝试列表是否完整；best-effort 下恒为 false。 */
+  attemptsComplete: boolean
 }
 
 export interface UsageRecordsResponse {

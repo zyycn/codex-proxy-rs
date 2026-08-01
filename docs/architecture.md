@@ -66,14 +66,15 @@ API decode/auth
 
 1. 每个客户端请求只有一条 `model_requests`；attempt 明细保存在其 JSON 事实中，不另建 attempt 表。
 2. 任何可能到达上游的调用都必须先按序提交 request/attempt 观测到有界队列；PostgreSQL 投影是可恢复
-   观测，不是数据面发送的同步前置条件。
-3. `not_sent`、`sent`、`ambiguous` 是不同的上游发送边界；发送状态是请求级单调水位（`sent` > `ambiguous` > `not_sent`），跨 attempt 只升不降，终态写回不得低于水位；`ambiguous` 不自动重放。
+   观测，不是数据面发送的同步前置条件。3. `not_sent`、`sent`、`ambiguous` 是不同的上游发送边界；发送状态是请求级单调水位（`sent` > `ambiguous` > `not_sent`），跨 attempt 只升不降，终态写回不得低于水位；`ambiguous` 不自动重放。
 4. 内存中的 downstream commit 表示网关已作出不可撤回的交付承诺，从该时刻禁止 retry/fallback；
    它在实际首字节写出前越过并按序入队。`downstream_committed_at` 是该事实的 PostgreSQL 观测投影，
    不宣称字节已经到达客户端，也不反向决定协议交付。
 5. Provider 每次 `execute` 只能选择一个 credential 并准备一个 cold stream，不得隐藏换号或业务 retry。
 6. 下游 commit 前，Core 可按冻结策略处理同一 Provider 内的账号 fallback；禁止跨 Provider fallback。
 7. 本架构不通过隐式连接复用承载业务身份。HTTP client 可安全复用 transport 连接，但账号、credential revision、cookie/session binding 必须显式绑定到本次调用。
+
+管理端 Usage 详情中的 attempt 列表是 best-effort 观测（见 adr-002）：中间失败来自 `ops_events`，最终尝试由 `model_requests` 合成，二者都不承诺完整（队列丢弃、写入失败、非失败观测不落库会造成缺口）。API 通过 `attemptsComplete: false` 显式标注这一语义，不再声称「全部尝试」。
 
 ## 4. 路由、fallback 与错误处理
 

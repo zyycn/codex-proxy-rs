@@ -402,9 +402,17 @@ const tokenDonutOption = computed<EChartsOption>(() => {
       </section>
 
       <section v-if="attemptRows.length" :class="panelClass">
-        <h3 :class="panelTitleClass">
-          尝试链路
-        </h3>
+        <div class="flex items-center gap-2">
+          <h3 :class="panelTitleClass">
+            尝试链路
+          </h3>
+          <span
+            class="rounded-full bg-(--cp-bg-muted) px-2 py-0.5 text-[11px] leading-none font-emphasis text-(--cp-text-secondary)"
+            title="中间尝试可能有缺口，仅展示可观测到的记录"
+          >
+            尽力观测
+          </span>
+        </div>
         <BaseTable
           class="mt-3 min-w-0"
           :columns="attemptColumns"
