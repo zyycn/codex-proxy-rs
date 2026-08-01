@@ -66,11 +66,12 @@ mod query {
 mod response {
     use chrono::{TimeZone, Utc};
     use gateway_admin::model::observability::DesktopReleaseStatus;
+    use gateway_api::admin::PageMeta;
     use gateway_api::admin::observability::{
         BillingView, CostCoverageView, CursorWire, DashboardAccountRequestBucketView,
         DashboardAccountUsageView, DashboardDesktopReleaseStatusView, DashboardWireAttributeView,
-        DashboardWireProfileView, DashboardWireTargetView, PageData, PageMeta, TokenDetailsView,
-        TrendData, TrendKind, TrendPointView, TrendSummaryView,
+        DashboardWireProfileView, DashboardWireTargetView, PageData, TokenDetailsView, TrendData,
+        TrendKind, TrendPointView, TrendSummaryView,
     };
     use serde_json::json;
 
