@@ -1,5 +1,6 @@
 mod accounts;
 mod auth;
+mod backup;
 mod client_keys;
 mod observability;
 mod openai;
@@ -46,6 +47,7 @@ use gateway_admin::{
         system::{SystemOperationAccepted, SystemUpdateDetail, SystemUpdateStatus, SystemVersion},
     },
     ports::{
+        backup::BackupStorePorts,
         provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind},
         store::{
             AccountStore, AdminStoreError, AdminStoreErrorKind, AdminStorePorts, AdminStoreResult,
@@ -75,6 +77,7 @@ pub(super) struct AdminHarness {
     client_keys: Arc<dyn ClientKeyStore>,
     observability: Arc<dyn ObservabilityStore>,
     settings: Arc<dyn SettingsStore>,
+    backup: BackupStorePorts,
     providers: Vec<Arc<dyn ProviderAdmin>>,
     probe: Arc<dyn AccountProbe>,
     system: Arc<dyn SystemOperations>,
@@ -91,6 +94,7 @@ impl AdminHarness {
             client_keys: unavailable.clone(),
             observability: unavailable.clone(),
             settings: unavailable,
+            backup: BackupStorePorts::disabled(),
             providers: vec![
                 Arc::new(UnavailableProvider::new("openai")),
                 Arc::new(UnavailableProvider::new("xai")),
@@ -135,6 +139,11 @@ impl AdminHarness {
         self
     }
 
+    pub(super) fn backup(mut self, backup: BackupStorePorts) -> Self {
+        self.backup = backup;
+        self
+    }
+
     pub(super) fn provider(mut self, provider: Arc<dyn ProviderAdmin>) -> Self {
         self.providers
             .retain(|registered| registered.provider_kind() != provider.provider_kind());
@@ -165,6 +174,7 @@ impl AdminHarness {
                 self.client_keys,
                 self.observability,
                 self.settings,
+                self.backup,
             ),
             self.providers,
             Arc::new(NoopSnapshot),

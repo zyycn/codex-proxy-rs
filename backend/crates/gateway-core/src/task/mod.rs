@@ -21,10 +21,11 @@ pub enum WorkerKind {
     StaleModelRequestRecovery,
     Retention,
     OpsFlush,
+    Backup,
 }
 
 impl WorkerKind {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::OAuthRefresh,
         Self::QuotaCatalogHealth,
         Self::RuntimeSnapshotReconciliation,
@@ -32,6 +33,7 @@ impl WorkerKind {
         Self::StaleModelRequestRecovery,
         Self::Retention,
         Self::OpsFlush,
+        Self::Backup,
     ];
 
     #[must_use]
@@ -44,6 +46,7 @@ impl WorkerKind {
             Self::StaleModelRequestRecovery => "stale_model_request_recovery",
             Self::Retention => "retention",
             Self::OpsFlush => "ops_flush",
+            Self::Backup => "backup",
         }
     }
 }

@@ -7,6 +7,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
+use super::backup::BackupStorePorts;
 use crate::model::{
     MutationContext, Revision,
     accounts::{
@@ -300,6 +301,7 @@ pub struct AdminStorePorts {
     client_keys: Arc<dyn ClientKeyStore>,
     observability: Arc<dyn ObservabilityStore>,
     settings: Arc<dyn SettingsStore>,
+    backup: BackupStorePorts,
 }
 
 impl AdminStorePorts {
@@ -310,6 +312,7 @@ impl AdminStorePorts {
         client_keys: Arc<dyn ClientKeyStore>,
         observability: Arc<dyn ObservabilityStore>,
         settings: Arc<dyn SettingsStore>,
+        backup: BackupStorePorts,
     ) -> Self {
         Self {
             accounts,
@@ -317,6 +320,7 @@ impl AdminStorePorts {
             client_keys,
             observability,
             settings,
+            backup,
         }
     }
 
@@ -343,5 +347,10 @@ impl AdminStorePorts {
     #[must_use]
     pub fn settings(&self) -> Arc<dyn SettingsStore> {
         self.settings.clone()
+    }
+
+    #[must_use]
+    pub fn backup(&self) -> BackupStorePorts {
+        self.backup.clone()
     }
 }

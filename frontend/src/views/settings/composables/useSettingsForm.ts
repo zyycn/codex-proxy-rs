@@ -1,5 +1,5 @@
 import type { rotationOptions } from '../constants'
-import { computed, onMounted, reactive, ref, shallowRef } from 'vue'
+import { computed, reactive, ref, shallowRef } from 'vue'
 
 import { getSettings, updateSettings } from '@/api'
 import { toast } from '@/components/base/BaseToast'
@@ -138,10 +138,6 @@ export function useSettingsForm() {
     }
   }
 
-  onMounted(() => {
-    void loadSettings()
-  })
-
   return {
     loading,
     saving,
@@ -156,5 +152,6 @@ export function useSettingsForm() {
     maxConcurrentPerAccountValue,
     requestIntervalMsValue,
     saveSettings,
+    loadSettings,
   }
 }

@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import { GitBranch, Plus, Trash2 } from '@lucide/vue'
-import { computed } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 
-const props = withDefaults(defineProps<{
+withDefaults(defineProps<{
   mappings: Array<{ requestedModel: string, upstreamModel: string }>
   loading?: boolean
   error?: string
@@ -20,8 +19,6 @@ const emit = defineEmits<{
   updateMapping: [index: number, key: 'requestedModel' | 'upstreamModel', value: string]
   removeMapping: [index: number]
 }>()
-
-const rows = computed(() => props.mappings)
 </script>
 
 <template>
@@ -55,7 +52,7 @@ const rows = computed(() => props.mappings)
         正在加载模型映射...
       </div>
       <div
-        v-else-if="rows.length === 0"
+        v-else-if="mappings.length === 0"
         class="rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-4 py-4 text-[13px] font-emphasis text-(--cp-text-muted)"
       >
         暂无模型映射
@@ -68,7 +65,7 @@ const rows = computed(() => props.mappings)
           <span />
         </div>
         <div
-          v-for="(row, index) in rows"
+          v-for="(row, index) in mappings"
           :key="index"
           class="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-3 rounded-(--cp-card-radius) bg-(--cp-bg-subtle) p-3"
         >

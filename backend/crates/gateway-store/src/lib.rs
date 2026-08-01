@@ -13,6 +13,7 @@ use gateway_admin::model::settings::{
     RotationStrategy as AdminRotationStrategy, RuntimeSettings as AdminRuntimeSettings,
 };
 use gateway_admin::model::{MutationActor, MutationContext, Revision as AdminRevision};
+use gateway_admin::ports::backup::BackupStorePorts;
 use gateway_admin::ports::store::{
     AdminStoreError, AdminStoreErrorKind, AdminStorePorts, AdminStoreResult, AuthStore,
     SettingsStore,
@@ -33,6 +34,7 @@ const REDIS_URL_ENV: &str = "CPR_REDIS_URL";
 const DATABASE_PASSWORD_ENV: &str = "CPR_DATABASE_PASSWORD";
 const REDIS_PASSWORD_ENV: &str = "CPR_REDIS_PASSWORD";
 
+pub mod backup;
 pub mod postgres;
 pub mod redis;
 
@@ -316,6 +318,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         Arc::new(AdminSettingsStoreAdapter {
             control_plane: postgres::PgControlPlaneRepository::new(pool.clone()),
         }),
+        backup_ports(pool.clone(), &config)?,
     );
 
     let execution_repository = Arc::new(postgres::PgExecutionStore::new(pool.clone()));
@@ -399,6 +402,22 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         health_probes,
         worker_contributions,
     })
+}
+
+/// 构造备份控制面的仓储、导出器与对象存储适配器。
+fn backup_ports(pool: sqlx::PgPool, config: &StoreConfig) -> StoreResult<BackupStorePorts> {
+    let staging = Arc::new(backup::staging::StagingArea::open(
+        std::path::PathBuf::from(".runtime/data/backup-staging"),
+        backup::staging::DEFAULT_MAX_ARCHIVE_BYTES,
+    )?);
+    let repository = Arc::new(postgres::PgBackupRepository::new(pool));
+    let dump = Arc::new(backup::pg_dump::PgDumpAdapter::new(
+        staging,
+        config.database.url.clone(),
+        config.database.password.clone(),
+    ));
+    let object_store = Arc::new(backup::s3::S3ObjectStoreAdapter::new());
+    Ok(BackupStorePorts::new(repository, dump, object_store))
 }
 
 fn store_worker_contributions(

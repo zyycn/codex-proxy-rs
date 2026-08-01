@@ -31,7 +31,7 @@ export const routes: RouteRecordRaw[] = [
         component: () => import('@/views/usage/index.vue'),
       },
       {
-        path: 'settings',
+        path: 'settings/:section?',
         name: 'settings',
         component: () => import('@/views/settings/index.vue'),
       },

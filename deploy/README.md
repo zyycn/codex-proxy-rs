@@ -191,3 +191,35 @@ Release 必须提供当前 OS/架构的 `codex-proxy-rs_<version>_<os>_<arch>.ta
 .runtime/data/update.lock
 .runtime/data/update-tmp/
 ```
+
+## 备份与恢复
+
+### 运行时事实
+
+- 运行时镜像的 `pg_dump`/`pg_restore` 在构建期从与 compose 服务端同一固定
+  `postgres:18-bookworm` 镜像（`Dockerfile` 的 `POSTGRES_IMAGE`）COPY 到
+  `/usr/lib/postgresql/18/bin` 并加入容器 PATH，版本与服务端严格一致；运行时只从
+  Debian 官方源补 `libpq5` 依赖，不引入第三方 APT 源，也不依赖运行时动态安装。
+- 备份暂存目录为 `/app/.runtime/data/backup-staging`，由 `.runtime/data` 卷持久化，权限
+  `0700`（仅 `cpr` 用户可读写）。部署卷至少预留一个最大数据库归档的空间。
+- S3/R2 存储、Cron 计划、保留策略与备份记录都保存在 PostgreSQL（`backup_settings` /
+  `backup_records`），备份记录行在删除成功后硬删除，操作历史进入 `admin_audit_events`。
+
+### 人工恢复数据库
+
+备份归档由 `pg_dump --format=custom --no-owner --no-privileges` 生成，可通过标准 PostgreSQL
+工具离线恢复：
+
+```bash
+pg_restore --no-owner --no-privileges --dbname=<target> <archive>.dump
+```
+
+恢复期间与恢复后的边界（见 `docs/s3-backup-design-audit.md` §8）：
+
+1. 恢复期间以维护模式启动，不运行备份 Worker（避免把快照中的中间状态当作当前任务继续处理）。
+2. 恢复完成后清理备份控制记录的非终态（`queued/dumping/uploading/deleting`），并重新计算
+   `next_run_at`，避免按旧游标立即触发计划。
+3. 重新执行当前 S3 配置的连接探针，再允许计划任务运行。
+4. 不自动删除恢复前已经存在的远端对象。
+
+首版不提供在线恢复 API；恢复属于人工运维操作。

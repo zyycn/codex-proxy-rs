@@ -72,7 +72,7 @@ pub async fn run() -> Result<(), BootstrapError> {
     let providers = ProviderRegistry::new([openai.core_provider(), xai.core_provider()])?;
     let mut core = gateway_core::initialize(store.core_ports(), providers).await?;
     host.report_startup_ready("Core");
-    let admin = gateway_admin::initialize(
+    let mut admin = gateway_admin::initialize(
         admin,
         store.admin_ports(),
         vec![openai.admin_provider(), xai.admin_provider()],
@@ -99,6 +99,7 @@ pub async fn run() -> Result<(), BootstrapError> {
     plan.extend(core.take_worker_contributions());
     plan.extend(openai.take_worker_contributions());
     plan.extend(xai.take_worker_contributions());
+    plan.extend(admin.take_worker_contributions());
     host.start_workers(plan, store.worker_leader_lease())?;
     host.report_startup_ready("Workers");
     host.serve(api.router()).await?;

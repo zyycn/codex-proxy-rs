@@ -1,4 +1,4 @@
-import { onMounted, reactive, shallowRef } from 'vue'
+import { reactive, shallowRef } from 'vue'
 
 import {
   deleteAdminApiKey,
@@ -69,10 +69,6 @@ export function useAdminApiKey() {
     await copyText(generatedKey.value, { successText: '已复制', errorFromException: true })
   }
 
-  onMounted(() => {
-    void loadStatus()
-  })
-
   return {
     loading,
     regenerating,
@@ -83,5 +79,6 @@ export function useAdminApiKey() {
     regenerate,
     remove,
     copyGeneratedKey,
+    loadStatus,
   }
 }
