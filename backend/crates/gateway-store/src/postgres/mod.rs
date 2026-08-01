@@ -81,7 +81,7 @@ pub trait ControlPlaneRepository: Send + Sync {
         replacement: ControlPlaneReplacement,
     ) -> StoreResult<ControlPlaneSnapshot>;
 
-    /// 字段级更新 admin_api_key，不影响其它运行设置。
+    /// 更新 admin_api_key 字段并推进 config revision。
     async fn replace_admin_api_key(
         &self,
         admin_api_key: Option<String>,
