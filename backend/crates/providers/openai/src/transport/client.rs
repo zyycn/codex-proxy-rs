@@ -183,6 +183,12 @@ pub enum CodexClientError {
     /// WebSocket 请求编码失败。
     #[error("failed to encode websocket request: {0}")]
     WebSocketEncode(#[source] serde_json::Error),
+    /// 上游请求体 JSON 序列化失败。
+    #[error("failed to encode upstream request body: {0}")]
+    RequestBodyEncode(#[source] serde_json::Error),
+    /// 上游请求体 zstd 压缩失败。
+    #[error("failed to compress upstream request body: {0}")]
+    RequestCompression(#[source] std::io::Error),
     /// WebSocket 请求失败。
     #[error("websocket request failed: {0}")]
     WebSocket(#[from] CodexWebSocketExchangeError),
@@ -235,6 +241,12 @@ impl fmt::Debug for CodexClientError {
             Self::WebSocketEncode(_) => {
                 formatter.write_str("CodexClientError::WebSocketEncode([REDACTED])")
             }
+            Self::RequestBodyEncode(_) => {
+                formatter.write_str("CodexClientError::RequestBodyEncode([REDACTED])")
+            }
+            Self::RequestCompression(_) => {
+                formatter.write_str("CodexClientError::RequestCompression([REDACTED])")
+            }
             Self::WebSocket(_) => formatter.write_str("CodexClientError::WebSocket([REDACTED])"),
             Self::Upstream {
                 status,
@@ -267,7 +279,9 @@ impl CodexClientError {
             Self::CustomCa(_)
             | Self::InvalidHeaderName(_)
             | Self::InvalidHeaderValue(_)
-            | Self::WebSocketEncode(_) => None,
+            | Self::WebSocketEncode(_)
+            | Self::RequestBodyEncode(_)
+            | Self::RequestCompression(_) => None,
         }
     }
 

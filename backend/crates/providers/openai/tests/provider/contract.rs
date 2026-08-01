@@ -338,6 +338,21 @@ fn captured_header_values(request: &wiremock::Request, name: &str) -> Vec<Vec<u8
         .collect()
 }
 
+fn captured_request_body(request: &wiremock::Request) -> serde_json::Value {
+    let body = if request
+        .headers
+        .get("content-encoding")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("zstd"))
+    {
+        zstd::stream::decode_all(std::io::Cursor::<&[u8]>::new(request.body.as_ref()))
+            .expect("zstd body should decode")
+    } else {
+        request.body.to_vec()
+    };
+    serde_json::from_slice(&body).expect("captured JSON body")
+}
+
 async fn paused_chunked_sse_server(
     first_chunk: String,
     second_chunk: String,
@@ -747,8 +762,7 @@ async fn same_account_scope_preserves_future_protocol_shapes() {
         Map::new(),
     )
     .await;
-    let body: serde_json::Value =
-        serde_json::from_slice(&request.body).expect("captured JSON body");
+    let body: serde_json::Value = captured_request_body(&request);
 
     assert_eq!(
         body.get("authorization"),
@@ -794,8 +808,7 @@ async fn cross_account_scope_removes_only_account_bound_body_fields() {
         Map::new(),
     )
     .await;
-    let body: serde_json::Value =
-        serde_json::from_slice(&request.body).expect("captured JSON body");
+    let body: serde_json::Value = captured_request_body(&request);
 
     assert!(body.get("authorization").is_none());
     assert!(body.get("conversation").is_none());
@@ -833,8 +846,7 @@ async fn cross_account_scope_sanitizes_only_known_turn_metadata_fields() {
         Map::new(),
     )
     .await;
-    let body: serde_json::Value =
-        serde_json::from_slice(&request.body).expect("captured JSON body");
+    let body: serde_json::Value = captured_request_body(&request);
     let turn_metadata = body
         .get("turnMetadata")
         .and_then(serde_json::Value::as_str)
@@ -915,7 +927,7 @@ async fn continuation_replay_should_use_the_client_full_input_without_legacy_tra
         .received_requests()
         .await
         .expect("captured replay request");
-    let body: Value = serde_json::from_slice(&requests[0].body).expect("captured JSON body");
+    let body: Value = captured_request_body(&requests[0]);
 
     assert_eq!(body.get("input"), Some(&client_input));
 }
