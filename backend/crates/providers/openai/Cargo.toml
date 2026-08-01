@@ -22,11 +22,18 @@ gateway-core = { path = "../../gateway-core" }
 gateway-protocol = { path = "../../gateway-protocol" }
 getrandom = "0.4.3"
 hex = "0.4.3"
+# 与官方 Codex Desktop app-server 的 TLS 栈逐版本对齐（2026-08 核实：
+# ChatGPT.app Resources/codex 二进制内为 hyper-rustls 0.27.7 + rustls 0.23.36 +
+# reqwest 0.12.28 + ring）。rustls 0.23.37 起 ClientHello 扩展顺序变化，JA3
+# 会偏离官方指纹；升级前必须重新抓握手对比扩展顺序。
+hyper-rustls = "=0.27.7"
 jsonwebtoken = { version = "=11.0.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 reqwest = { version = "=0.12.28", default-features = false, features = ["json", "stream", "cookies", "rustls-tls-native-roots", "gzip", "brotli", "zstd", "deflate", "http2"] }
 roxmltree = "0.21.1"
 semver = "1.0.27"
-rustls = { version = "=0.23.42", default-features = false, features = ["ring", "std", "tls12"] }
+# 保持 ring provider：reqwest rustls-tls-native-roots 即 __rustls-ring，与官方一致；
+# 不要给 TLS 客户端路径启用 aws_lc_rs，否则密钥共享/扩展集可能变化。
+rustls = { version = "=0.23.36", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8.4"
 rustls-pki-types = "1.14.1"
 secrecy = "0.10.3"
