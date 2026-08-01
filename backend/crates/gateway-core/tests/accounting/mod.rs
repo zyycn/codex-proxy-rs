@@ -13,6 +13,25 @@ fn decimal_should_render_with_database_scale() {
 }
 
 #[test]
+fn decimal_canonical_should_strip_trailing_zeroes() {
+    assert_eq!(Decimal::from_str("12.34").unwrap().canonical(), "12.34");
+    assert_eq!(Decimal::from_str("12").unwrap().canonical(), "12");
+    assert_eq!(Decimal::from_str("0").unwrap().canonical(), "0");
+    assert_eq!(
+        Decimal::from_str("1.0000000000").unwrap().canonical(),
+        "1"
+    );
+}
+
+#[test]
+fn decimal_div_u64_should_keep_up_to_ten_fraction_digits() {
+    let decimal = Decimal::from_str("10").unwrap();
+    let third = decimal.checked_div_u64(3).unwrap();
+    assert_eq!(third.canonical(), "3.3333333333");
+    assert_eq!(decimal.checked_div_u64(0), None);
+}
+
+#[test]
 fn provider_usd_ticks_should_map_exactly_to_decimal_scale() {
     let estimate = ProviderReportedCost::from_usd_ticks(12_345_678_901)
         .expect("valid provider ticks")

@@ -204,42 +204,22 @@ impl DecimalAmount {
     /// 精确相加两个 `numeric(20,10)` 金额。
     #[must_use]
     pub fn checked_add(&self, other: &Self) -> Option<Self> {
-        let sum = scaled_amount(&self.0)?.checked_add(scaled_amount(&other.0)?)?;
-        Self::from_scaled(sum)
+        Self::from_decimal(self.to_decimal()?.checked_add(other.to_decimal()?)?)
     }
 
     /// 将金额按非零请求数均分，保留最多十位小数。
     #[must_use]
     pub fn checked_div_u64(&self, divisor: u64) -> Option<Self> {
-        let divisor = u128::from(divisor);
-        (divisor != 0)
-            .then(|| scaled_amount(&self.0)?.checked_div(divisor))
-            .flatten()
-            .and_then(Self::from_scaled)
+        Self::from_decimal(self.to_decimal()?.checked_div_u64(divisor)?)
     }
 
-    fn from_scaled(value: u128) -> Option<Self> {
-        if value >= 10_u128.pow(20) {
-            return None;
-        }
-        let whole = value / 10_u128.pow(10);
-        let fraction = value % 10_u128.pow(10);
-        let value = if fraction == 0 {
-            whole.to_string()
-        } else {
-            format!("{whole}.{fraction:010}")
-                .trim_end_matches('0')
-                .to_owned()
-        };
-        Some(Self(value))
+    fn to_decimal(&self) -> Option<gateway_core::accounting::Decimal> {
+        self.0.parse().ok()
     }
-}
 
-fn scaled_amount(value: &str) -> Option<u128> {
-    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
-    let whole = whole.parse::<u128>().ok()?;
-    let fraction = format!("{fraction:0<10}").parse::<u128>().ok()?;
-    whole.checked_mul(10_u128.pow(10))?.checked_add(fraction)
+    fn from_decimal(value: gateway_core::accounting::Decimal) -> Option<Self> {
+        Some(Self(value.canonical()))
+    }
 }
 
 impl FromStr for DecimalAmount {
