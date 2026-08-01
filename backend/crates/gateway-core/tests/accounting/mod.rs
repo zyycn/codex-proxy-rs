@@ -17,10 +17,7 @@ fn decimal_canonical_should_strip_trailing_zeroes() {
     assert_eq!(Decimal::from_str("12.34").unwrap().canonical(), "12.34");
     assert_eq!(Decimal::from_str("12").unwrap().canonical(), "12");
     assert_eq!(Decimal::from_str("0").unwrap().canonical(), "0");
-    assert_eq!(
-        Decimal::from_str("1.0000000000").unwrap().canonical(),
-        "1"
-    );
+    assert_eq!(Decimal::from_str("1.0000000000").unwrap().canonical(), "1");
 }
 
 #[test]
