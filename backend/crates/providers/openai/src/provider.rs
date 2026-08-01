@@ -1127,6 +1127,8 @@ impl OpenAiResponseObservationState {
 
     fn provider_metadata(&self) -> Option<ProviderResponseMetadata> {
         let mut metadata = Map::new();
+        // 观测对象版本信封：读取端按 schemaVersion 解码，缺失视为 v0（见 DB-03）。
+        metadata.insert("schemaVersion".to_owned(), json!(1));
         let effective_model = self
             .response_metadata
             .effective_model
