@@ -533,9 +533,8 @@ async fn request_context_should_resolve_forwarded_precedence_and_peer_fallback()
             operation_kind: OperationKind::Generate,
             input: Some(json!("hello")),
             client_metadata: None,
-            protocol_context: Some(json!({
-                "opaque_request_headers": [["user-agent", "IENvZGV4LUNMSS8xLjAg"]]
-            })),
+            // 客户端 User-Agent 仅用于本地展示，不再透传给上游指纹上下文。
+            protocol_context: None,
             prompt_cache_key: None,
             previous_response_id: None,
         }

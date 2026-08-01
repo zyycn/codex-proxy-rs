@@ -321,8 +321,6 @@ fn decoder_should_preserve_ordinary_request_headers_as_opaque_multivalues() {
     for preserved in [
         "accept",
         "content-type",
-        "user-agent",
-        "originator",
         "x-openai-internal-codex-residency",
         "x-codex-turn-state",
     ] {
@@ -339,6 +337,9 @@ fn decoder_should_preserve_ordinary_request_headers_as_opaque_multivalues() {
         "chatgpt-account-id",
         "chatgpt-project-id",
         "x-codex-installation-id",
+        // 上游指纹由运行时画像统一生成，客户端不得覆盖。
+        "user-agent",
+        "originator",
     ] {
         assert!(values(excluded).is_empty(), "unexpected {excluded}");
     }

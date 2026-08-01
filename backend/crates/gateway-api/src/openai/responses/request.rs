@@ -470,6 +470,10 @@ fn passthrough_header_name(name: &str, connection_headers: &[String]) -> bool {
             | "x-openai-project"
             // installation ID 始终由当前 lease 重建。
             | "x-codex-installation-id"
+            // 上游指纹必须由运行时画像统一生成，客户端 originator/User-Agent
+            // 不能透传覆盖，避免不同下游客户端暴露不一致的设备指纹。
+            | "originator"
+            | "user-agent"
     )
 }
 
