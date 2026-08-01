@@ -2031,6 +2031,8 @@ fn map_client_error(
         CodexClientError::InvalidHeaderName(_)
         | CodexClientError::InvalidHeaderValue(_)
         | CodexClientError::WebSocketEncode(_)
+        | CodexClientError::RequestBodyEncode(_)
+        | CodexClientError::RequestCompression(_)
         | CodexClientError::ModelCatalog(_)
         | CodexClientError::CustomCa(_) => MappedProviderFailure::plain(provider_error(
             ProviderErrorKind::Protocol,

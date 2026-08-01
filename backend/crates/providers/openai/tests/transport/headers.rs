@@ -738,6 +738,58 @@ async fn backend_http_should_ignore_unrepresentable_protocol_headers_without_blo
 }
 
 #[tokio::test]
+async fn backend_http_should_zstd_compress_codex_responses_request_body() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind zstd HTTP server");
+    let address = listener.local_addr().expect("zstd HTTP server address");
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept zstd HTTP client");
+        let request = read_http_request_with_body(&mut stream).await;
+        write_completed_sse_response(&mut stream).await;
+        request
+    });
+    let mut request = codex_request("gpt-test", "compress me", Vec::new());
+    request.force_http_sse = true;
+    let client = CodexBackendClient::new(
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("HTTP client"),
+        format!("http://{address}"),
+        test_wire_profile(),
+    );
+
+    client
+        .create_response(
+            &request,
+            request_context("req_zstd_compress", Some("acct-zstd")),
+        )
+        .await
+        .expect("zstd compressed response");
+
+    let raw = server.await.expect("zstd HTTP server task");
+    let separator = raw
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("HTTP head/body separator");
+    let (head, body) = raw.split_at(separator);
+    let body = &body[4..];
+    let head = std::str::from_utf8(head).expect("HTTP head is UTF-8");
+    assert_eq!(read_header_value(head, "content-encoding"), Some("zstd"));
+    assert_eq!(
+        read_header_value(head, "content-type"),
+        Some("application/json")
+    );
+    let decompressed =
+        zstd::stream::decode_all(std::io::Cursor::new(body)).expect("zstd body should decode");
+    let json: serde_json::Value =
+        serde_json::from_slice(&decompressed).expect("decompressed body should be valid JSON");
+    assert_eq!(json["model"], "gpt-test");
+    assert_eq!(json["instructions"], "compress me");
+}
+
+#[tokio::test]
 async fn websocket_should_keep_an_exact_chain_while_new_connections_adopt_the_latest_codex_core_wire_profile()
  {
     let listener = TcpListener::bind("127.0.0.1:0")

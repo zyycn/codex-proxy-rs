@@ -9,7 +9,8 @@ use gateway_protocol::openai::{
 use reqwest::{
     Client, Response as ReqwestResponse,
     header::{
-        ACCEPT, AUTHORIZATION, CONTENT_TYPE, COOKIE, HeaderMap, HeaderName, HeaderValue, USER_AGENT,
+        ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE, COOKIE, HeaderMap, HeaderName,
+        HeaderValue, USER_AGENT,
     },
 };
 use tokio_tungstenite::tungstenite::handshake::client::generate_key;
@@ -82,11 +83,17 @@ impl CodexBackendClient {
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
         let headers = self.request_headers_for_http_response(upstream_request, context)?;
         let headers_started_at = Instant::now();
+        // 与官方 Codex app-server 一致：/v1/responses 请求体默认 zstd 压缩。
+        let body =
+            serde_json::to_vec(&upstream_request).map_err(CodexClientError::RequestBodyEncode)?;
+        let body = zstd::stream::encode_all(std::io::Cursor::new(body), 3)
+            .map_err(CodexClientError::RequestCompression)?;
         let response = self
             .client
             .post(endpoint_url(&self.base_url, CODEX_RESPONSES_PATH))
             .headers(headers)
-            .json(&upstream_request)
+            .header(CONTENT_ENCODING, HeaderValue::from_static("zstd"))
+            .body(body)
             .send()
             .await?;
         let upstream_headers_ms = elapsed_duration_millis(headers_started_at.elapsed());

@@ -410,10 +410,50 @@ async fn read_http_request(stream: &mut TcpStream) -> String {
         }
         request.extend_from_slice(&buffer[..read]);
         if request.windows(4).any(|window| window == b"\r\n\r\n") {
+            let head_end = request
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .expect("HTTP head terminator");
+            request.truncate(head_end + 4);
             break;
         }
     }
     String::from_utf8(request).expect("HTTP request is UTF-8")
+}
+
+async fn read_http_request_with_body(stream: &mut TcpStream) -> Vec<u8> {
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let read = stream.read(&mut buffer).await.expect("read HTTP request");
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        if let Some(head_end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&request[..head_end]);
+            let content_length = head
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.trim()
+                        .eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            let total = head_end + 4 + content_length;
+            while request.len() < total {
+                let read = stream.read(&mut buffer).await.expect("read HTTP body");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+            }
+            break;
+        }
+    }
+    request
 }
 
 async fn write_completed_sse_response(stream: &mut TcpStream) {
