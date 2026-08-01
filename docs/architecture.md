@@ -26,8 +26,8 @@ backend/
 ├── apps/gateway/               composition root（Bundle 装配）
 ├── crates/gateway-core/        operation、routing、engine、policy、accounting
 ├── crates/gateway-protocol/    可共享 wire contract 与 canonical event
-├── crates/gateway-admin/       管理领域、用例与抽象端口
-├── crates/gateway-store/       PostgreSQL、Redis adapter
+├── crates/gateway-admin/       管理领域、用例、抽象端口与备份 Worker 策略
+├── crates/gateway-store/       PostgreSQL、Redis、S3/R2 与 pg_dump adapter
 ├── crates/gateway-api/         OpenAI Responses 与 Admin HTTP adapter
 ├── crates/gateway-host/        配置与日志、HTTP serve/drain、worker 运行时、自更新
 ├── crates/providers/openai/    OpenAI credential、catalog、transport
@@ -41,7 +41,7 @@ backend/
 - `gateway-protocol` 不依赖其他 workspace crate。
 - Provider crate 之间禁止互相依赖。
 - `gateway-api` 只面向 Admin/Core/Protocol 抽象，不导入具体 Provider。
-- `gateway-store` 实现 Admin/Core 端口，但不拥有业务策略。
+- `gateway-store` 实现 Admin/Core 端口与备份基础设施（S3/R2、`pg_dump`、受控暂存），但不拥有业务策略。
 - 只有 `apps/gateway` 组合具体实现。
 
 依赖 DAG 主要由上述约定与评审维护，机器校验只覆盖两处：`gateway-api` 的 architecture 测试冻结自身源码树与测试树，并禁止 manifest 出现 store/Provider/基础设施依赖（禁止清单不含 `gateway-host`）；`apps/gateway` 的 architecture 测试冻结应用源码树、禁止生产测试挂载并约束 bootstrap 只做装配。其余 crate 没有 architecture 测试。
@@ -146,7 +146,7 @@ Admin API 不要求客户端提交配置 revision，也不向客户端暴露配�
 
 ## 8. PostgreSQL 终态
 
-`backend/migrations/0001_initial.sql` 创建且只创建七张业务表：
+`backend/migrations/0001_initial.sql` 创建且只创建七张业务表；`0003_s3_backup.sql` 增加备份配置与备份记录两张表：
 
 | 表 | 权威事实 |
 | --- | --- |
@@ -157,6 +157,16 @@ Admin API 不要求客户端提交配置 revision，也不向客户端暴露配�
 | `provider_accounts` | 账号资料、Provider-owned 明文 credential JSON、revision、quota、cooldown |
 | `model_requests` | 请求、attempt、计费、交付与恢复事实 |
 | `ops_events` | 脱敏运行事件 |
+| `backup_settings` | S3/R2 存储、Cron 计划与保留策略单例配置 |
+| `backup_records` | 备份任务状态与归档事实（`queued/dumping/uploading/completed/failed/deleting`） |
+
+备份设计边界见 `docs/s3-backup-design-audit.md`：单副本部署下备份由单个可取消
+`DaemonTask` 承担调度、执行、删除收敛与保留清理，不需要 leader lease、fencing token 或
+heartbeat；计划时间点冲突只记录日志/指标并推进游标，不产生 skipped 记录；删除成功后
+记录硬删除，操作历史进入 `admin_audit_events`。管理员身份事实不重复写入
+`backup_records`。存储身份在存在记录时锁定：endpoint/region/bucket/path-style 不允许
+变化，只允许轮换凭据与修改 prefix。每份备份可设置创建时确定的手动过期时间
+`expires_at`（手动与计划备份均可，`expiresInDays` 天数生成），到期由 Worker 自动清理。
 
 设计规则：
 
@@ -202,12 +212,16 @@ claim owner 可以释放，账号事务提交后才原子删除整个 pending ke
 
 ## 10. 后台任务与恢复
 
-HTTP serve/drain 与 worker 运行时都在 `gateway-host`：Host 负责注册校验、leader lease、失败退避、健康暴露与关闭；`apps/gateway` 的 bootstrap 只装配。WorkerContribution 由 Store、Core 与两个 Provider bundle 显式贡献，host bundle 自身不贡献任何 worker：
+HTTP serve/drain 与 worker 运行时都在 `gateway-host`：Host 负责注册校验、leader lease、失败退避、健康暴露与关闭；`apps/gateway` 的 bootstrap 只装配。WorkerContribution 由 Store、Core、Admin 与两个 Provider bundle 显式贡献，host bundle 自身不贡献任何 worker：
 
 - Store：stale execution recovery、retention，以及 PostgreSQL execution observation、Redis client
   admission release 和 Provider circuit feedback 三个 OpsFlush daemon。native continuation 直接写 Redis，
   单次 Lua 记录只清理有界数量的过期/超限索引项，避免无界阻塞。
 - Core：RuntimeSnapshot revision 周期对账（无 lease，逐副本运行）与 Redis change 长驻订阅（daemon，逐副本运行）。
+- Admin：备份 daemon（`WorkerKind::Backup`）。单副本边界下它是一个可取消 `DaemonTask`，内部循环推进
+  Cron 游标、恢复中间状态、完成删除收敛、领取并执行一个 queued 任务、执行一小批保留清理；长时间
+  `pg_dump` 与 multipart 上传由 daemon 自身持有，Host 只负责 panic 后重启、健康与关闭。它不使用
+  Redis leader lease（单副本无竞争），只依赖 PostgreSQL 部分唯一约束防御并发 API/调度创建。
 - Provider：credential refresh、quota/catalog 健康，以及模型 etag 与官方版本 release 检查（OpenAI CLI、OpenAI Desktop、xAI CLI）。
 
 带 lease 的周期任务在每个周期开始向 Redis 申请一次 leader lease，周期内续租，周期结束即释放。这只是单周期互斥，不是跨周期 leader 选举：各副本独立计时，N 副本部署下同一任务的实际执行频率最坏可达单副本的 N 倍。
