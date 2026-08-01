@@ -29,7 +29,10 @@ use crate::transport::{
     profile::{CodexWireProfile, CodexWireProfileState},
     protocol::{
         responses::{CodexResponsesRequest, TransportRequirement, transport_requirement},
-        websocket::{websocket_audit_artifact_from_attempt, websocket_payload_audit_snapshot},
+        websocket::{
+            websocket_audit_artifact_from_attempt, websocket_connection_limit_message,
+            websocket_payload_audit_snapshot,
+        },
     },
     response_meta,
     websocket::{
@@ -181,6 +184,19 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
         pool_account_id: Option<&str>,
     ) -> CodexClientResult<PreparedResponseTransport> {
+        self.prepare_response_transport(request, context, pool_account_id, false)
+            .await
+    }
+
+    /// 与 [`Self::prepare_response_transport_with_pool_account`] 相同；
+    /// `force_fresh` 时绕过连接池，为连接寿命限制重试强制新建连接。
+    async fn prepare_response_transport(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+        pool_account_id: Option<&str>,
+        force_fresh: bool,
+    ) -> CodexClientResult<PreparedResponseTransport> {
         let requirement = transport_requirement(request);
         if requirement == TransportRequirement::HttpRequired {
             return Ok(PreparedResponseTransport {
@@ -218,7 +234,11 @@ impl CodexBackendClient {
         let pool_key =
             self.websocket_pool_key(request, context, pool_account_id, &connection_profile);
         let pool_log_context = pool_key.as_ref().map(WebSocketPoolLogContext::from_key);
-        let pool = self.websocket_pool.as_deref().zip(pool_key);
+        let pool = if force_fresh {
+            None
+        } else {
+            self.websocket_pool.as_deref().zip(pool_key)
+        };
         let fast_path_budget = match requirement {
             TransportRequirement::PersistedContinuation
             | TransportRequirement::ExternalUnknown
@@ -354,24 +374,124 @@ impl CodexBackendClient {
                     }
                     Err(error) => return Err(websocket_exchange_error_to_client_error(error)),
                 };
-                if requirement.allows_pre_delivery_http_fallback()
-                    && let Err(error) = await_websocket_delivery_boundary(&mut exchange).await
-                {
-                    if error.allows_pre_delivery_http_fallback() {
-                        return self
-                            .fallback_to_http_before_websocket_delivery(
-                                request,
-                                context,
-                                requirement,
-                                metrics,
-                                delivery_wait_started_at,
-                                error,
-                            )
-                            .await;
+                // 仅普通新链请求允许交付前降级/重试；延续类请求保持旧语义：
+                // 不进入交付边界，错误由 exchange 流原样上抛给下游。
+                if requirement.allows_pre_delivery_http_fallback() {
+                    let mut fresh_retry_used = false;
+                    loop {
+                        match await_websocket_delivery_boundary(&mut exchange).await {
+                            Ok(DeliveryBoundary::Ready) => break,
+                            Ok(DeliveryBoundary::ConnectionLimitReached { message }) => {
+                                if fresh_retry_used {
+                                    // 新连接仍被限流：与官方重试预算耗尽一致，降级同账号 HTTP/SSE。
+                                    return self
+                                        .http_fallback_before_delivery(
+                                            request,
+                                            context,
+                                            requirement,
+                                            metrics,
+                                            delivery_wait_started_at,
+                                            &message,
+                                        )
+                                        .await
+                                        ;
+                                }
+                                fresh_retry_used = true;
+                                tracing::warn!(
+                                    request_id = %context.request_id,
+                                    %message,
+                                    "WebSocket connection limit reached; retrying on a fresh connection"
+                                );
+                                drop(exchange);
+                                match self
+                                    .prepare_response_transport(request, context, None, true)
+                                    .await
+                                {
+                                    Ok(PreparedResponseTransport {
+                                        route: PreparedResponseRoute::WebSocket(route),
+                                        ..
+                                    }) => {
+                                        match execute_prepared_response_create_request_stream(
+                                            &route.request,
+                                            route.prepared,
+                                        )
+                                        .await
+                                        {
+                                            Ok(next_exchange) => {
+                                                exchange = next_exchange;
+                                                continue;
+                                            }
+                                            Err(error)
+                                                if error.allows_pre_delivery_http_fallback() =>
+                                            {
+                                                return self
+                                                    .fallback_to_http_before_websocket_delivery(
+                                                        request,
+                                                        context,
+                                                        requirement,
+                                                        metrics,
+                                                        delivery_wait_started_at,
+                                                        error,
+                                                    )
+                                                    .await;
+                                            }
+                                            Err(error) => {
+                                                return Err(
+                                                    websocket_exchange_error_to_client_error(
+                                                        post_send_ambiguous(error),
+                                                    ),
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Ok(PreparedResponseTransport {
+                                        route: PreparedResponseRoute::Http,
+                                        ..
+                                    }) => {
+                                        return self
+                                            .create_response_stream_http_sse(request, context)
+                                            .await
+                                            .map(|mut response| {
+                                                merge_preparation_metrics(
+                                                    &mut response.transport_metrics,
+                                                    metrics,
+                                                );
+                                                response
+                                            });
+                                    }
+                                    Err(error) => {
+                                        return self
+                                            .http_fallback_before_delivery(
+                                                request,
+                                                context,
+                                                requirement,
+                                                metrics,
+                                                delivery_wait_started_at,
+                                                &error.to_string(),
+                                            )
+                                            .await;
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                if error.allows_pre_delivery_http_fallback() {
+                                    return self
+                                        .fallback_to_http_before_websocket_delivery(
+                                            request,
+                                            context,
+                                            requirement,
+                                            metrics,
+                                            delivery_wait_started_at,
+                                            error,
+                                        )
+                                        .await;
+                                }
+                                return Err(websocket_exchange_error_to_client_error(
+                                    post_send_ambiguous(error),
+                                ));
+                            }
+                        }
                     }
-                    return Err(websocket_exchange_error_to_client_error(
-                        post_send_ambiguous(error),
-                    ));
                 }
                 tracing::info!(
                     request_id = %context.request_id,
@@ -416,9 +536,30 @@ impl CodexBackendClient {
         request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
         requirement: TransportRequirement,
-        mut metrics: CodexTransportMetrics,
+        metrics: CodexTransportMetrics,
         delivery_wait_started_at: Instant,
         error: CodexWebSocketExchangeError,
+    ) -> CodexClientResult<CodexBackendStreamingResponse> {
+        self.http_fallback_before_delivery(
+            request,
+            context,
+            requirement,
+            metrics,
+            delivery_wait_started_at,
+            &error.to_string(),
+        )
+        .await
+    }
+
+    /// 交付前降级同账号 HTTP/SSE 的公共路径：统一标记 decision 与等待耗时。
+    async fn http_fallback_before_delivery(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+        requirement: TransportRequirement,
+        mut metrics: CodexTransportMetrics,
+        delivery_wait_started_at: Instant,
+        detail: &str,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
         let decision_wait_ms = metrics
             .transport_decision_wait_ms
@@ -432,7 +573,7 @@ impl CodexBackendClient {
             transport_requirement = requirement.as_str(),
             transport_decision = CodexTransportDecision::Http2PreDeliveryFailure.as_str(),
             transport_decision_wait_ms = decision_wait_ms,
-            error = %error,
+            error = %detail,
             "WebSocket failed before first deliverable event; using same-account HTTP"
         );
         self.create_response_stream_http_sse(request, context)
@@ -653,20 +794,36 @@ impl CodexBackendClient {
     }
 }
 
+/// 首个可投递帧前的交付边界结果。
+enum DeliveryBoundary {
+    /// 已越过边界，可开始向下游投递。
+    Ready,
+    /// 首个可投递帧是上游连接寿命限制错误；该帧已放回流，
+    /// 调用方可选择丢弃并换新连接重试，或原样投递。
+    ConnectionLimitReached {
+        /// 上游错误说明。
+        message: String,
+    },
+}
+
 async fn await_websocket_delivery_boundary(
     exchange: &mut CodexWebSocketStreamingExchange,
-) -> Result<(), CodexWebSocketExchangeError> {
+) -> Result<DeliveryBoundary, CodexWebSocketExchangeError> {
     let mut prelude = Vec::new();
     loop {
         match exchange.body.next().await {
             Some(Ok(frame)) if is_websocket_lifecycle_prelude(&frame) => prelude.push(frame),
             Some(Ok(frame)) => {
+                let limit_message = websocket_connection_limit_message(&frame);
                 prelude.push(frame);
                 let remaining =
                     std::mem::replace(&mut exchange.body, Box::pin(futures::stream::empty()));
                 exchange.body =
                     Box::pin(futures::stream::iter(prelude.into_iter().map(Ok)).chain(remaining));
-                return Ok(());
+                return Ok(match limit_message {
+                    Some(message) => DeliveryBoundary::ConnectionLimitReached { message },
+                    None => DeliveryBoundary::Ready,
+                });
             }
             Some(Err(error)) => return Err(error),
             None => {

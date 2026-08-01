@@ -108,6 +108,31 @@ pub fn websocket_metadata_turn_state(value: &Value) -> Option<String> {
         })
 }
 
+/// 上游 WebSocket 连接寿命限制错误码。
+pub(crate) const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE: &str =
+    "websocket_connection_limit_reached";
+
+/// 若首个可投递 SSE 帧是上游连接寿命限制错误帧，返回其 message。
+pub(crate) fn websocket_connection_limit_message(frame: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(frame).ok()?;
+    let event = gateway_protocol::openai::sse::parse_sse_events(text)
+        .ok()?
+        .into_iter()
+        .next()?;
+    if event.event.as_deref() != Some("error") {
+        return None;
+    }
+    let value = serde_json::from_str::<Value>(&event.data).ok()?;
+    let code = value.pointer("/error/code").and_then(Value::as_str)?;
+    (code == WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE).then(|| {
+        value
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .unwrap_or("websocket connection limit reached")
+            .to_owned()
+    })
+}
+
 fn json_value_as_string(value: &Value) -> Option<String> {
     match value {
         Value::String(value) => Some(value.clone()),
