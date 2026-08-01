@@ -1,9 +1,6 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
@@ -15,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  group: release-${{ inputs.tag }}
   cancel-in-progress: false
 
 env:
@@ -43,14 +40,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          ref: ${{ inputs.tag }}
           fetch-depth: 0
 
       - name: Read release metadata
         id: version
         shell: bash
         env:
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
           ruby <<'RUBY' >> "$GITHUB_OUTPUT"
           require "json"
@@ -188,9 +185,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             backend/target
-          key: cargo-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock') }}
+          key: cargo-v2-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml') }}
           restore-keys: |
-            cargo-${{ runner.os }}-${{ matrix.target }}-
+            cargo-v2-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Build binary
         shell: bash
@@ -253,9 +250,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             backend/target
-          key: cargo-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock') }}
+          key: cargo-v2-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml') }}
           restore-keys: |
-            cargo-${{ runner.os }}-${{ matrix.target }}-
+            cargo-v2-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Build binary
         shell: bash
@@ -471,8 +468,8 @@ jobs:
           push: true
           build-args: |
             CPR_PREBUILT_DIR=dist/docker
-          cache-from: type=gha,scope=runtime-prebuilt-${{ matrix.os }}-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=runtime-prebuilt-${{ matrix.os }}-${{ matrix.arch }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.os }}-${{ matrix.arch }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.os }}-${{ matrix.arch }},mode=min
           provenance: mode=max
           sbom: true
           labels: |
