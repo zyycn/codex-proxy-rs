@@ -61,7 +61,7 @@ function togglePasswordVisible(): void {
           <img
             src="/favicon.svg"
             alt=""
-            class="block size-8 select-none"
+            class="block size-[38px] select-none"
             draggable="false"
           >
         </BaseMotionIcon>
@@ -232,7 +232,6 @@ function togglePasswordVisible(): void {
   align-items: center;
   justify-content: center;
   border-radius: 8px;
-  background: var(--login-logo-bg);
   color: var(--login-logo-text);
   font-family: var(--font-mono);
   font-size: 12px;
