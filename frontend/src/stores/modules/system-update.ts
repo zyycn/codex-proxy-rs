@@ -24,16 +24,32 @@ interface SystemUpdateEvent {
   level: string
   message: string
   at: string
+  step?: string
   terminal?: boolean
 }
+
+// 单一更新阶段状态机：互斥的操作态无法被类型同时表达。
+type SystemUpdatePhase
+  = | { kind: 'idle' }
+    | { kind: 'loading' }
+    | { kind: 'checking' }
+    | { kind: 'ready' }
+    | { kind: 'updating' }
+    | { kind: 'restart_required' }
+    | { kind: 'restarting' }
+    | { kind: 'failed' }
+
+const UPDATE_BUSY_PHASES = new Set<SystemUpdatePhase['kind']>([
+  'loading',
+  'checking',
+  'updating',
+  'restarting',
+])
 
 export const useSystemUpdateStore = defineStore('system-update', () => {
   const version = shallowRef<Awaited<ReturnType<typeof getSystemVersion>> | null>(null)
   const updateInfo = shallowRef<Awaited<ReturnType<typeof getSystemUpdateDetail>> | null>(null)
-  const loading = shallowRef(false)
-  const checking = shallowRef(false)
-  const updating = shallowRef(false)
-  const restarting = shallowRef(false)
+  const phase = shallowRef<SystemUpdatePhase>({ kind: 'idle' })
   const updateError = shallowRef('')
   const updateSuccess = shallowRef(false)
   const needRestart = shallowRef(false)
@@ -61,6 +77,12 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
   let loadVersionPromise: ReturnType<typeof getSystemVersion> | undefined
   let loadSystemPromise: Promise<void> | undefined
 
+  const phaseKind = computed(() => phase.value.kind)
+  const loading = computed(() => phaseKind.value === 'loading')
+  const checking = computed(() => phaseKind.value === 'checking')
+  const updating = computed(() => phaseKind.value === 'updating')
+  const restarting = computed(() => phaseKind.value === 'restarting')
+
   const hasUpdate = computed(() => Boolean(updateInfo.value?.hasUpdate ?? version.value?.hasUpdate))
   const isReleaseBuild = computed(() => updateInfo.value?.buildType === 'release')
   const canUpdate = computed(
@@ -68,10 +90,12 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
       hasUpdate.value
       && isReleaseBuild.value
       && Boolean(updateInfo.value?.updateSupported)
-      && !updating.value
-      && !checking.value
-      && !restarting.value,
+      && !UPDATE_BUSY_PHASES.has(phaseKind.value),
   )
+
+  function setPhase(next: SystemUpdatePhase) {
+    phase.value = next
+  }
 
   function resetUpdateResult() {
     updateError.value = ''
@@ -149,7 +173,9 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     if (loadSystemPromise)
       return loadSystemPromise
 
-    loading.value = true
+    if (!UPDATE_BUSY_PHASES.has(phaseKind.value)) {
+      setPhase({ kind: 'loading' })
+    }
     loadSystemPromise = (async () => {
       updateInfo.value = await getSystemUpdateDetail({ refresh })
       if (!version.value)
@@ -161,7 +187,8 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
       await loadSystemPromise
     }
     finally {
-      loading.value = false
+      if (phaseKind.value === 'loading')
+        setPhase({ kind: 'ready' })
       loadSystemPromise = undefined
     }
   }
@@ -185,7 +212,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     if (checking.value)
       return updateInfo.value
 
-    checking.value = true
+    setPhase({ kind: 'checking' })
     resetUpdateResult()
     try {
       updateInfo.value = await getSystemUpdateDetail({ refresh })
@@ -195,7 +222,8 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
       return updateInfo.value
     }
     finally {
-      checking.value = false
+      if (phaseKind.value === 'checking')
+        setPhase({ kind: 'ready' })
     }
   }
 
@@ -207,7 +235,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
 
     clearUpdateLogs()
     await connectUpdateEvents(true)
-    updating.value = true
+    setPhase({ kind: 'updating' })
     updateError.value = ''
     updateSuccess.value = false
     try {
@@ -220,6 +248,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
         latestVersion: result.targetVersion,
         hasUpdate: false,
       }
+      setPhase(result.needRestart ? { kind: 'restart_required' } : { kind: 'ready' })
       return result
     }
     catch (error: unknown) {
@@ -230,10 +259,8 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
         message: updateError.value,
         at: new Date().toISOString(),
       })
+      setPhase({ kind: 'failed' })
       throw error
-    }
-    finally {
-      updating.value = false
     }
   }
 
@@ -260,7 +287,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     }
 
     updateError.value = `服务未在预期时间内启动 v${expectedVersion}`
-    restarting.value = false
+    setPhase({ kind: 'failed' })
   }
 
   async function restartNow() {
@@ -270,10 +297,11 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     if (!restartTargetVersion.value) {
       const error = new Error('缺少待生效的目标版本')
       updateError.value = error.message
+      setPhase({ kind: 'failed' })
       throw error
     }
 
-    restarting.value = true
+    setPhase({ kind: 'restarting' })
     updateError.value = ''
     disconnectUpdateEvents()
 
@@ -282,7 +310,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     }
     catch (error: unknown) {
       if (error instanceof ApiError && error.status > 0) {
-        restarting.value = false
+        setPhase({ kind: 'failed' })
         updateError.value = errorMessage(error, '重启失败')
         throw error
       }
@@ -294,6 +322,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
   return {
     version,
     updateInfo,
+    phase,
     loading,
     checking,
     updating,

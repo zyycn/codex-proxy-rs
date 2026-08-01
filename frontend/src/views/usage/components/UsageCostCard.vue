@@ -41,7 +41,7 @@ const props = withDefaults(
 
 const activeView = shallowRef('cost')
 const { palette } = useUsageChartPalette()
-const points = computed<any[]>(() => props.cost.points)
+const points = computed(() => props.cost.points)
 const hasStandardCost = computed(() =>
   points.value.some(point => point.standardCost != null),
 )
@@ -62,7 +62,7 @@ const hasData = computed(() => {
     return points.value.some(point => point.totalTokens > 0 || point.cachedTokens > 0)
   }
   return points.value.some(
-    point => point.inputTokens > 0 || point.cachedTokenRate > 0 || point.cacheHitRequestRate > 0,
+    point => point.inputTokens > 0 || point.cachedTokenRate > 0 || (point.cacheHitRequestRate ?? 0) > 0,
   )
 })
 
