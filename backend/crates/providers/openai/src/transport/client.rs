@@ -47,6 +47,7 @@ type ReqwestClientCache = Mutex<HashMap<ReqwestClientCacheKey, Client>>;
 
 /// 构建带缓存、自动协商 HTTP/2 的 reqwest Client。
 pub fn build_reqwest_client() -> Result<Client, CustomCaError> {
+    super::tls::ensure_rustls_provider();
     let cache_key = custom_ca_env_cache_key();
     static CLIENTS: OnceLock<ReqwestClientCache> = OnceLock::new();
     let cache = CLIENTS.get_or_init(|| Mutex::new(HashMap::new()));
@@ -68,11 +69,7 @@ pub fn build_reqwest_client() -> Result<Client, CustomCaError> {
         .tcp_keepalive(Duration::from_secs(30))
         .http2_keep_alive_interval(Duration::from_secs(30))
         .http2_keep_alive_timeout(Duration::from_secs(5))
-        .http2_keep_alive_while_idle(true)
-        .gzip(true)
-        .brotli(true)
-        .zstd(true)
-        .deflate(true);
+        .http2_keep_alive_while_idle(true);
     let client = build_reqwest_client_with_custom_ca(builder)?;
     let mut clients = cache
         .lock()

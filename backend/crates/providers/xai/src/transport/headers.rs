@@ -127,7 +127,6 @@ pub fn build_grok_headers(
         GrokHeader::public("user-agent", profile.user_agent()),
         GrokHeader::public("content-type", "application/json"),
         GrokHeader::public("accept", "text/event-stream"),
-        GrokHeader::public("accept-encoding", "identity"),
         GrokHeader::sensitive("x-grok-req-id", SecretValue::new(upstream_request_id)),
         GrokHeader::sensitive(
             "idempotency-key",
