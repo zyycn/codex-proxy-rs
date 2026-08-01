@@ -82,6 +82,91 @@ fn gateway_admin_stays_free_of_infrastructure_dependencies() {
     );
 }
 
+/// workspace 包名到冻结成员路径的映射。
+const PACKAGE_TO_MEMBER: &[(&str, &str)] = &[
+    ("codex-proxy-rs", "apps/gateway"),
+    ("gateway-admin", "crates/gateway-admin"),
+    ("gateway-api", "crates/gateway-api"),
+    ("gateway-core", "crates/gateway-core"),
+    ("gateway-host", "crates/gateway-host"),
+    ("gateway-protocol", "crates/gateway-protocol"),
+    ("gateway-store", "crates/gateway-store"),
+    ("provider-openai", "crates/providers/openai"),
+    ("provider-xai", "crates/providers/xai"),
+];
+
+/// 冻结的 workspace 内部运行时依赖边；新增/删除任何边都必须同步本表。
+const ALLOWED_INTERNAL_EDGES: &[(&str, &str)] = &[
+    ("codex-proxy-rs", "gateway-admin"),
+    ("codex-proxy-rs", "gateway-api"),
+    ("codex-proxy-rs", "gateway-core"),
+    ("codex-proxy-rs", "gateway-host"),
+    ("codex-proxy-rs", "gateway-store"),
+    ("codex-proxy-rs", "provider-openai"),
+    ("codex-proxy-rs", "provider-xai"),
+    ("gateway-admin", "gateway-core"),
+    ("gateway-api", "gateway-admin"),
+    ("gateway-api", "gateway-core"),
+    ("gateway-api", "gateway-protocol"),
+    ("gateway-host", "gateway-admin"),
+    ("gateway-host", "gateway-core"),
+    ("gateway-store", "gateway-admin"),
+    ("gateway-store", "gateway-core"),
+    ("provider-openai", "gateway-admin"),
+    ("provider-openai", "gateway-core"),
+    ("provider-openai", "gateway-protocol"),
+    ("provider-xai", "gateway-admin"),
+    ("provider-xai", "gateway-core"),
+    ("provider-xai", "gateway-protocol"),
+];
+
+#[test]
+fn workspace_internal_dependency_edges_match_frozen_dag() {
+    let metadata = cargo_metadata_json();
+    let packages = metadata["packages"]
+        .as_array()
+        .expect("cargo metadata packages");
+    let internal_names: std::collections::BTreeSet<&str> =
+        PACKAGE_TO_MEMBER.iter().map(|(name, _)| *name).collect();
+
+    let mut actual: Vec<(String, String)> = Vec::new();
+    for package in packages {
+        let name = package["name"].as_str().expect("package name");
+        if !internal_names.contains(name) {
+            continue;
+        }
+        for dependency in package["dependencies"].as_array().into_iter().flatten() {
+            let dep_name = dependency["name"].as_str().expect("dependency name");
+            if !internal_names.contains(dep_name) {
+                continue;
+            }
+            let is_runtime_edge = dependency["dep_kinds"]
+                .as_array()
+                .map(|kinds| {
+                    kinds
+                        .iter()
+                        .any(|kind| kind["kind"].as_str() == Some("normal"))
+                })
+                .unwrap_or(true);
+            if is_runtime_edge {
+                actual.push((name.to_owned(), dep_name.to_owned()));
+            }
+        }
+    }
+
+    let mut expected: Vec<(String, String)> = ALLOWED_INTERNAL_EDGES
+        .iter()
+        .map(|(from, to)| ((*from).to_owned(), (*to).to_owned()))
+        .collect();
+    actual.sort();
+    expected.sort();
+
+    assert_eq!(
+        actual, expected,
+        "workspace internal dependency edges diverged from the frozen DAG"
+    );
+}
+
 #[test]
 fn production_sources_do_not_host_tests() {
     for member in WORKSPACE_MEMBERS {
@@ -105,6 +190,20 @@ fn backend_root() -> PathBuf {
         .join("../..")
         .canonicalize()
         .expect("backend workspace root")
+}
+
+fn cargo_metadata_json() -> serde_json::Value {
+    let output = std::process::Command::new("cargo")
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .current_dir(backend_root())
+        .output()
+        .expect("run cargo metadata");
+    assert!(
+        output.status.success(),
+        "cargo metadata failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("parse cargo metadata")
 }
 
 /// 提取成员 `[dependencies]` 段内声明的依赖名;段落以下一个 `[` 表头结束。

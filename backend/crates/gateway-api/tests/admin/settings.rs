@@ -63,6 +63,123 @@ fn settings_request_should_reject_unknown_rotation_strategy() {
 }
 
 #[test]
+fn settings_response_should_cover_the_full_runtime_settings_contract() {
+    use std::collections::BTreeMap;
+
+    use chrono::{TimeZone, Utc};
+    use gateway_admin::model::Revision;
+    use gateway_admin::model::settings::RuntimeSettings;
+    use gateway_api::admin::settings::RuntimeSettingsView;
+    use gateway_core::engine::credential::RotationStrategy;
+    use gateway_core::routing::{PublicModelId, UpstreamModelId};
+
+    let settings = RuntimeSettings {
+        config_revision: Revision::new(7).expect("revision"),
+        model_mappings: BTreeMap::from_iter([
+            (
+                PublicModelId::new("gpt-5.4").expect("public model"),
+                UpstreamModelId::new("gpt-5.5").expect("upstream model"),
+            ),
+            (
+                PublicModelId::new("grok-latest").expect("public model"),
+                UpstreamModelId::new("grok-4.5").expect("upstream model"),
+            ),
+        ]),
+        refresh_margin_seconds: 1800,
+        refresh_concurrency: 4,
+        max_concurrent_per_account: 5,
+        request_interval_ms: 25,
+        rotation_strategy: RotationStrategy::RoundRobin,
+        usage_retention_days: 32,
+        ops_event_retention_days: 31,
+        audit_retention_days: 91,
+        updated_at: Utc
+            .with_ymd_and_hms(2026, 8, 2, 10, 30, 0)
+            .single()
+            .expect("timestamp"),
+    };
+
+    let value = serde_json::to_value(RuntimeSettingsView::from(settings)).expect("serialize view");
+    assert_eq!(
+        value,
+        json!({
+            "modelMappings": {
+                "gpt-5.4": "gpt-5.5",
+                "grok-latest": "grok-4.5"
+            },
+            "refreshMarginSeconds": 1800,
+            "refreshConcurrency": 4,
+            "maxConcurrentPerAccount": 5,
+            "requestIntervalMs": 25,
+            "rotationStrategy": "round_robin",
+            "usageRetentionDays": 32,
+            "opsEventRetentionDays": 31,
+            "auditRetentionDays": 91,
+            "updatedAt": "2026-08-02T10:30:00Z"
+        })
+    );
+}
+
+#[test]
+fn settings_request_and_response_fields_should_stay_in_lockstep() {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use gateway_admin::model::Revision;
+    use gateway_admin::model::settings::RuntimeSettings;
+    use gateway_api::admin::settings::RuntimeSettingsView;
+    use gateway_core::engine::credential::RotationStrategy;
+    use gateway_core::routing::{PublicModelId, UpstreamModelId};
+
+    let request: UpdateRuntimeSettingsRequest =
+        serde_json::from_value(update_body()).expect("decode settings");
+    request.validate().expect("fixture settings must validate");
+
+    let request_fields: BTreeSet<String> = update_body()
+        .as_object()
+        .expect("request body object")
+        .keys()
+        .cloned()
+        .collect();
+    let settings = RuntimeSettings {
+        config_revision: Revision::new(7).expect("revision"),
+        model_mappings: request
+            .model_mappings
+            .iter()
+            .map(|(public, upstream)| {
+                Ok((
+                    PublicModelId::new(public.clone())?,
+                    UpstreamModelId::new(upstream.clone())?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, gateway_core::error::IdentifierError>>()
+            .expect("valid model mappings"),
+        refresh_margin_seconds: request.refresh_margin_seconds,
+        refresh_concurrency: u32::try_from(request.refresh_concurrency).expect("u32"),
+        max_concurrent_per_account: u32::try_from(request.max_concurrent_per_account).expect("u32"),
+        request_interval_ms: request.request_interval_ms,
+        rotation_strategy: RotationStrategy::parse(&request.rotation_strategy)
+            .expect("fixture rotation strategy"),
+        usage_retention_days: u32::try_from(request.usage_retention_days).expect("u32"),
+        ops_event_retention_days: u32::try_from(request.ops_event_retention_days).expect("u32"),
+        audit_retention_days: u32::try_from(request.audit_retention_days).expect("u32"),
+        updated_at: chrono::Utc::now(),
+    };
+
+    let response_fields: BTreeSet<String> =
+        serde_json::to_value(RuntimeSettingsView::from(settings))
+            .expect("serialize view")
+            .as_object()
+            .expect("view object")
+            .keys()
+            .cloned()
+            .collect();
+    let mut expected_fields = request_fields;
+    expected_fields.insert("updatedAt".to_owned());
+
+    assert_eq!(response_fields, expected_fields);
+}
+
+#[test]
 fn settings_request_should_reject_unknown_revision_field() {
     let mut body = update_body();
     body["expectedConfigRevision"] = json!(7);
