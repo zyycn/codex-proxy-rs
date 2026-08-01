@@ -12,7 +12,12 @@ export interface LogoutResponse {
   message: string
 }
 
-export function login(data: object) {
+interface LoginParam {
+  username: string
+  password: string
+}
+
+export function login(data: LoginParam) {
   return request<LoginResponse>({
     url: '/api/admin/auth/login',
     method: 'POST',

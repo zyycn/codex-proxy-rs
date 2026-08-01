@@ -34,7 +34,9 @@ export function getSettings() {
   })
 }
 
-export function updateSettings(data: object) {
+type UpdateSettingsParam = Omit<RuntimeSettings, 'updatedAt'>
+
+export function updateSettings(data: UpdateSettingsParam) {
   return request<RuntimeSettings>({
     url: '/api/admin/settings/update',
     method: 'POST',

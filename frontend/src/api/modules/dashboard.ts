@@ -170,7 +170,11 @@ export interface DashboardSummaryResponse {
   rotationStrategy: string
 }
 
-export function getDashboardSummary(data: object) {
+interface DashboardQuery {
+  kind: string
+}
+
+export function getDashboardSummary(data: DashboardQuery) {
   return request<DashboardSummaryResponse>({
     url: '/api/admin/dashboard/summary',
     method: 'GET',
@@ -178,7 +182,7 @@ export function getDashboardSummary(data: object) {
   })
 }
 
-export function getDashboardTrend(data: object) {
+export function getDashboardTrend(data: DashboardQuery) {
   return request<DashboardTrendResponse>({
     url: '/api/admin/dashboard/trend',
     method: 'GET',
