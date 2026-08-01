@@ -1,4 +1,8 @@
-use std::{env, fs, io, path::PathBuf, sync::Arc};
+use std::{
+    env, fs, io,
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+};
 
 use rustls::{ClientConfig, RootCertStore};
 use rustls_pki_types::{
@@ -10,6 +14,16 @@ use thiserror::Error;
 const CA_CERT_HINT: &str = "If you set CODEX_CA_CERTIFICATE or SSL_CERT_FILE, ensure it points to a PEM file containing one or more CERTIFICATE blocks, or unset it to use system roots.";
 
 type PemSection = (SectionKind, Vec<u8>);
+
+/// rustls 0.23 在同时编译 `ring` 与 `aws-lc-rs` 时无法自动选择进程级
+/// CryptoProvider；本工程固定使用 ring（与官方 Codex Desktop JA3 一致），
+/// 因此在首次 TLS 使用前显式安装一次。重复安装会被 rustls 忽略。
+pub fn ensure_rustls_provider() {
+    static INSTALL: OnceLock<()> = OnceLock::new();
+    INSTALL.get_or_init(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
 
 /// 自定义 CA 证书环境变量名。
 pub const CODEX_CA_CERT_ENV: &str = "CODEX_CA_CERTIFICATE";
@@ -111,6 +125,7 @@ fn build_reqwest_client_with_env(
     env_source: &dyn EnvSource,
     mut builder: reqwest::ClientBuilder,
 ) -> CustomCaResult<reqwest::Client> {
+    ensure_rustls_provider();
     let Some(bundle) = env_source.configured_ca_bundle() else {
         return builder
             .build()
@@ -142,6 +157,7 @@ fn build_reqwest_client_with_env(
 fn maybe_build_rustls_client_config_with_env(
     env_source: &dyn EnvSource,
 ) -> CustomCaResult<Option<Arc<ClientConfig>>> {
+    ensure_rustls_provider();
     let Some(bundle) = env_source.configured_ca_bundle() else {
         return Ok(None);
     };
