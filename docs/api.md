@@ -230,7 +230,81 @@ auditRetentionDays
 
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
 
-## 8. Dashboard、用量与错误
+## 8. 备份
+
+全部备份端点位于 `/api/admin/settings/backups/*`，内部由独立 BackupService 承担，不并入设置用例。响应继续使用 `AdminEnvelope`，wire 字段 camelCase，`Cache-Control: no-store`。
+
+| 方法 | 路由 | 请求 | 说明 |
+| --- | --- | --- | --- |
+| `GET` | `/api/admin/settings/backups` | 无 | 读取存储配置（含明文 Secret）、验证状态与调度配置 |
+| `POST` | `/api/admin/settings/backups/storage/update` | S3 配置 | 更新存储配置；`secretAccessKey` 为空字符串会校验失败 |
+| `POST` | `/api/admin/settings/backups/storage/test` | 无 | 测试已保存的存储配置（Put/Head/Get/Delete 探针） |
+| `POST` | `/api/admin/settings/backups/schedule/update` | 调度配置 | 更新 Cron、时区与保留策略 |
+| `GET` | `/api/admin/settings/backups/records` | 查询参数 | 分页查询备份记录 |
+| `POST` | `/api/admin/settings/backups/create` | `{ expiresInDays? }` | 创建手动备份，返回 `202 Accepted`；`expiresInDays` 为过期天数（0 或缺省表示不过期） |
+| `POST` | `/api/admin/settings/backups/download-url` | `{ backupId }` | 创建 5 分钟有效预签名下载地址（仅 completed） |
+| `POST` | `/api/admin/settings/backups/delete` | `{ backupId }` | 请求删除（进入 `deleting`，由 Worker 收敛硬删除） |
+
+读取设置响应（Secret 以明文返回，由前端掩码显示）：
+
+```text
+storageRevision, endpoint, region, bucket, accessKeyId, secretAccessKey, prefix,
+forcePathStyle, verified, scheduleEnabled, cronExpression, scheduleTimezone,
+retentionDays, retentionCount, nextRunAt, lastVerifiedAt, updatedAt
+```
+
+更新存储请求字段：
+
+```text
+endpoint, region, bucket, accessKeyId, secretAccessKey, prefix, forcePathStyle
+```
+
+`secretAccessKey` 为空字符串会校验失败；由于 GET 会回传已保存的明文 Secret，保存时始终整体提交当前值。已有备份记录时，endpoint/region/bucket/forcePathStyle 不允许变化（存储身份锁定，`409`）；只允许轮换凭据与修改 prefix。
+
+更新调度请求字段：
+
+```text
+scheduleEnabled, cronExpression, scheduleTimezone, retentionDays, retentionCount
+```
+
+`cronExpression` 为 5 段格式；`retentionDays`/`retentionCount` 为 0 表示禁用对应清理。启用计划前必须已保存完整存储配置且通过连接测试。
+
+记录列表查询参数：
+
+```text
+page, pageSize, status, trigger
+```
+
+`status` 可取 `queued/dumping/uploading/completed/failed/deleting`；`trigger` 可取 `manual/scheduled`。记录响应字段：
+
+```text
+id, triggerKind, status, scheduledAt, objectKey, sizeBytes, sha256, attemptCount,
+errorCode, errorMessage, startedAt, completedAt, expiresAt, createdAt, updatedAt
+```
+
+`expiresAt` 为创建时确定的手动过期时间；到期后由 Worker 自动清理（手动与计划备份均可设置）。
+
+连接测试响应：
+
+```text
+{ ok, stage, code, message }
+```
+
+`stage` 为 `putObject/headObject/getObject/deleteObject`。探测成功后以 `storageRevision` CAS 写入 `lastVerifiedAt`；测试期间配置变化则丢弃结果。
+
+备份错误映射（`AdminErrorCode` 既有体系）：
+
+| HTTP | 场景 |
+| --- | --- |
+| `400` | 配置、Cron、时区或状态参数无效 |
+| `404` | 备份记录不存在 |
+| `409` | 已有活跃任务、状态冲突或存储身份锁定 |
+| `502` | S3 兼容服务返回无效或失败响应 |
+| `503` | PostgreSQL、`pg_dump` 或对象存储暂不可用 |
+
+审计动作：`backup.s3_config_updated`、`backup.s3_connection_tested`、`backup.schedule_updated`、`backup.created`、`backup.download_url_created`、`backup.delete_requested`。审计详情与记录表均不保存 Secret、数据库连接串或预签名 URL query。
+
+## 9. Dashboard、用量与错误
 
 | 方法 | 路由 | 说明 |
 | --- | --- | --- |
@@ -255,7 +329,7 @@ OpenAI 的 `serviceTier` 只接受上游响应生命周期事件确认的实际 
 `flex` 映射为 `Flex`，缺失或 `default` 映射为 `Default`；未知非空值原样展示。Fast 优先使用模型的
 priority 价格，缺少专用价格时回退到标准价格的 `2.00x`；Flex 为 `0.50x`，Default 为 `1.00x`。
 
-## 9. 版本、更新与重启
+## 10. 版本、更新与重启
 
 | 方法 | 路由 | 主要 query/body | 说明 |
 | --- | --- | --- | --- |
