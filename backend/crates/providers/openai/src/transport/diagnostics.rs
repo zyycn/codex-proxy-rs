@@ -65,6 +65,7 @@ const PERSISTABLE_UPSTREAM_CODES: &[&str] = &[
     "unsupported_feature",
     "usage_limit_reached",
     "verification_required",
+    "websocket_connection_limit_reached",
     "workspace_deactivated",
     "workspace_member_credits_depleted",
     "workspace_member_usage_limit_reached",
