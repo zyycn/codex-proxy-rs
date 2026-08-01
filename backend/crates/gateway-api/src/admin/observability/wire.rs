@@ -97,6 +97,17 @@ pub struct UsageRecordView {
     pub service_tier: Option<String>,
     pub status_code: Option<i64>,
     pub transport: Option<String>,
+    pub protocol: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_status_code: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_status_code: Option<i64>,
+    pub websocket_pool: Option<WebSocketPoolMetadataView>,
+    pub image_generation_requested: bool,
+    pub image_generation_succeeded: Option<bool>,
+    pub latency_details: UsageLatencyDetailsView,
     pub attempt_index: Option<i64>,
     pub attempt_count: u64,
     pub response_id: Option<String>,
@@ -111,7 +122,8 @@ pub struct UsageRecordView {
     pub image_input_tokens: Option<u64>,
     pub image_output_tokens: Option<u64>,
     pub message: String,
-    pub metadata: UsageRecordMetadataView,
+    /// Provider 安全观测；Core 字段由顶层字段提供，不再复制进 metadata。
+    pub metadata: BTreeMap<String, Value>,
     pub created_at: DateTime<Utc>,
     pub created_at_display: String,
     pub client_ip: Option<String>,
@@ -129,50 +141,6 @@ pub struct UsageRecordView {
     pub first_token_latency_ms_display: String,
     pub latency_ms_display: String,
     pub logical_outcome: String,
-}
-
-/// 逻辑请求安全元数据；不承载原始请求体或上游错误正文。
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UsageRecordMetadataView {
-    pub protocol: String,
-    pub logical_outcome: String,
-    pub attempt_count: u64,
-    pub requested_model: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub upstream_model: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub client_ip: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_agent: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning_effort: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning_preset: Option<String>,
-    pub compact: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_kind: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub subagent_kind: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub transport: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub http_version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub client_status_code: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub upstream_status_code: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub response_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub upstream_request_id: Option<String>,
-    pub websocket_pool: Option<WebSocketPoolMetadataView>,
-    pub image_generation_requested: bool,
-    pub image_generation_succeeded: Option<bool>,
-    pub latency_details: UsageLatencyDetailsView,
-    /// Provider 安全观测直接展开，避免 API 层理解任何 Provider 专属字段。
-    #[serde(flatten)]
-    pub provider_metadata: BTreeMap<String, Value>,
 }
 
 /// WebSocket 池决策的稳定形状；与 Provider 选择逻辑无关。

@@ -241,43 +241,7 @@ pub(crate) fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView 
         .upstream_transport
         .clone()
         .or_else(|| Some(record.client_transport.clone()));
-    let metadata = UsageRecordMetadataView {
-        protocol: record.protocol.clone(),
-        logical_outcome: outcome.clone(),
-        attempt_count: u64::from(record.attempt_count),
-        requested_model: record.requested_model_id.clone(),
-        upstream_model: record.upstream_model_id.clone(),
-        client_ip: record.client_ip.clone(),
-        user_agent: record.user_agent.clone(),
-        reasoning_effort: record.reasoning_effort.clone(),
-        reasoning_preset: record.reasoning_preset.clone(),
-        compact: record.compact,
-        request_kind: record.request_kind.clone(),
-        subagent_kind: record.subagent_kind.clone(),
-        transport: transport.clone(),
-        http_version: record.http_version.clone(),
-        client_status_code: record.client_status_code.map(i64::from),
-        upstream_status_code: record.upstream_status_code.map(i64::from),
-        response_id: record.client_response_id.clone(),
-        upstream_request_id: record.upstream_request_id.clone(),
-        websocket_pool: record
-            .websocket_pool
-            .clone()
-            .map(|kind| WebSocketPoolMetadataView { kind }),
-        image_generation_requested: record.image_generation_requested,
-        image_generation_succeeded: record.image_generation_succeeded,
-        latency_details: UsageLatencyDetailsView {
-            transport_decision_wait_ms: record.transport_decision_wait_ms,
-            ws_connect_ms: record.connect_ms,
-            upstream_headers_ms: record.headers_ms,
-            first_event_ms: record.first_event_ms,
-            first_reasoning_ms: record.first_reasoning_ms,
-            first_text_ms: record.first_text_ms,
-            first_token_ms: record.first_token_ms,
-            openai_processing_ms: record.provider_processing_ms,
-        },
-        provider_metadata: provider_metadata_fields(record.provider_metadata_json.as_deref()),
-    };
+    let metadata = provider_metadata_fields(record.provider_metadata_json.as_deref());
     UsageRecordView {
         id: record.id.clone(),
         request_id: record.id,
@@ -295,6 +259,26 @@ pub(crate) fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView 
         service_tier: record.service_tier,
         status_code,
         transport,
+        protocol: record.protocol.clone(),
+        http_version: record.http_version.clone(),
+        client_status_code: record.client_status_code.map(i64::from),
+        upstream_status_code: record.upstream_status_code.map(i64::from),
+        websocket_pool: record
+            .websocket_pool
+            .clone()
+            .map(|kind| WebSocketPoolMetadataView { kind }),
+        image_generation_requested: record.image_generation_requested,
+        image_generation_succeeded: record.image_generation_succeeded,
+        latency_details: UsageLatencyDetailsView {
+            transport_decision_wait_ms: record.transport_decision_wait_ms,
+            ws_connect_ms: record.connect_ms,
+            upstream_headers_ms: record.headers_ms,
+            first_event_ms: record.first_event_ms,
+            first_reasoning_ms: record.first_reasoning_ms,
+            first_text_ms: record.first_text_ms,
+            first_token_ms: record.first_token_ms,
+            openai_processing_ms: record.provider_processing_ms,
+        },
         attempt_index: None,
         attempt_count: u64::from(record.attempt_count),
         response_id: record.client_response_id,
