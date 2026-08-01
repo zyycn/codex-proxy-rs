@@ -1,5 +1,6 @@
 import type { Ref } from 'vue'
 import type { UsageTimeRangeParams } from './useUsageTimeRange'
+import type { UsageViewModel } from '@/api'
 import { watchDebounced } from '@vueuse/core'
 import { clamp } from 'es-toolkit'
 
@@ -9,6 +10,7 @@ import {
   getUsageRecordInsightsOverview,
   getUsageRecords,
   getUsageRecordSummary,
+  normalizeUsageRecord,
 } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 
@@ -29,7 +31,7 @@ interface UsageLoadOptions {
 export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   const loading = shallowRef(true)
   const analyticsLoading = shallowRef(true)
-  const records = shallowRef<Awaited<ReturnType<typeof getUsageRecords>>['items']>([])
+  const records = shallowRef<UsageViewModel[]>([])
   const summary = shallowRef(emptySummary())
   const insights = shallowRef(emptyInsights())
   const page = shallowRef(1)
@@ -101,7 +103,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
       if (requestId !== loadRequestId)
         return
 
-      records.value = result.items
+      records.value = result.items.map(normalizeUsageRecord)
       summary.value = nextAnalytics.summary
       insights.value = {
         ...nextAnalytics.insights,

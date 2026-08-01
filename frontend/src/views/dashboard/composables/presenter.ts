@@ -3,6 +3,7 @@ import type { getDashboardSummary, getDashboardTrend } from '@/api'
 import { Activity, FileText, Timer, Users } from '@lucide/vue'
 
 import { clamp } from 'es-toolkit'
+import { normalizeUsageRecord } from '@/api'
 
 type DashboardSummary = Awaited<ReturnType<typeof getDashboardSummary>>
 type DashboardTrend = Awaited<ReturnType<typeof getDashboardTrend>>
@@ -94,7 +95,7 @@ export function dashboardSnapshotView(summary: DashboardSummary | null) {
     healthTimeline: summary?.healthTimeline ?? emptyHealthTimeline,
     accountUsage: (summary?.accountUsage ?? []).map(accountUsageItem),
     wireProfiles: summary?.wireProfiles ?? [],
-    usageRecords: summary?.usageRecords ?? [],
+    usageRecords: (summary?.usageRecords ?? []).map(normalizeUsageRecord),
     poolSummary: summary?.poolSummary ?? null,
     capacityInfo: summary?.capacityInfo ?? emptyCapacityInfo,
     rotationStrategy: summary?.rotationStrategy ?? null,

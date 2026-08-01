@@ -1,21 +1,17 @@
-import type { getUsageRecords } from '@/api'
+import type { UsageViewModel } from '@/api'
 import { shallowRef } from 'vue'
-import { getUsageRecordDetail } from '@/api'
+import { getUsageRecordDetail, normalizeUsageRecord } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { errorMessage } from '@/utils/async'
 
 export function useUsageRecordDetail() {
   const showDetailModal = shallowRef(false)
-  const selectedUsageRecord = shallowRef<Awaited<ReturnType<typeof getUsageRecordDetail>> | null>(
-    null,
-  )
+  const selectedUsageRecord = shallowRef<UsageViewModel | null>(null)
 
-  async function handleViewDetail(
-    record: Awaited<ReturnType<typeof getUsageRecords>>['items'][number],
-  ) {
+  async function handleViewDetail(record: UsageViewModel) {
     try {
       const detail = await getUsageRecordDetail({ id: record.id })
-      selectedUsageRecord.value = detail
+      selectedUsageRecord.value = normalizeUsageRecord(detail)
       showDetailModal.value = true
     }
     catch (error: unknown) {

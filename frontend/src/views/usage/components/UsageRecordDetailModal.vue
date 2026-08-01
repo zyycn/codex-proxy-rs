@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts'
-import type { getUsageRecordDetail } from '@/api'
+import type { UsageViewModel } from '@/api'
 
 import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -29,7 +29,7 @@ import UsageDetailFieldGrid from './UsageDetailFieldGrid.vue'
 import UsageStatusCodeBadge from './UsageStatusCodeBadge.vue'
 
 const props = defineProps<{
-  record: Awaited<ReturnType<typeof getUsageRecordDetail>> | null
+  record: UsageViewModel | null
 }>()
 
 const open = defineModel<boolean>({ default: false })
@@ -460,11 +460,11 @@ const tokenDonutOption = computed<EChartsOption>(() => {
         </div>
       </section>
 
-      <section v-if="record.metadata" class="min-h-0" :class="[panelClass]">
+      <section v-if="record.providerMetadata" class="min-h-0" :class="[panelClass]">
         <UsageDetailCodePanel
           title="元数据"
           max-height="min(32dvh, 340px)"
-          :content="JSON.stringify(record.metadata, null, 2)"
+          :content="JSON.stringify(record.providerMetadata, null, 2)"
         />
       </section>
     </template>
