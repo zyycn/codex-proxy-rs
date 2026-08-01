@@ -50,15 +50,13 @@ impl CodexWireProfile {
     /// 按 Codex Core 的官方格式生成最终 User-Agent。
     pub fn user_agent(&self) -> String {
         format!(
-            "{}/{} ({} {}; {}) {} ({}; {})",
+            "{}/{} ({} {}; {}) {}",
             self.originator,
             self.codex_version,
             self.os_type,
             self.os_version,
             self.arch,
             self.terminal,
-            self.originator,
-            self.desktop_version,
         )
     }
 }

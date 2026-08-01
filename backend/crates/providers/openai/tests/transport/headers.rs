@@ -350,6 +350,7 @@ async fn backend_http_should_restore_opaque_multivalue_header_bytes_and_lease_id
         request
     });
     let request = request_with_opaque_headers(false);
+    let expected_user_agent = test_wire_profile().snapshot().user_agent();
     let client = CodexBackendClient::new(
         reqwest::Client::builder()
             .no_proxy()
@@ -392,8 +393,6 @@ async fn backend_http_should_restore_opaque_multivalue_header_bytes_and_lease_id
             "content-type",
             b"application/vnd.openai.request+json".as_slice(),
         ),
-        ("user-agent", b"Codex future-client".as_slice()),
-        ("originator", b"future-originator".as_slice()),
         (
             "x-openai-internal-codex-residency",
             b"future-region".as_slice(),
@@ -405,6 +404,15 @@ async fn backend_http_should_restore_opaque_multivalue_header_bytes_and_lease_id
     ] {
         assert_eq!(raw_header_values(&raw, name), vec![value.to_vec()]);
     }
+    // 指纹头由运行时画像生成，不透传客户端值。
+    assert_eq!(
+        raw_header_values(&raw, "user-agent"),
+        vec![expected_user_agent.as_bytes().to_vec()]
+    );
+    assert_eq!(
+        raw_header_values(&raw, "originator"),
+        vec![b"codex_cli_rs".to_vec()]
+    );
     for secret in [
         b"client-secret".as_slice(),
         b"client-account",
@@ -502,6 +510,11 @@ async fn backend_websocket_should_drop_only_unrepresentable_opaque_header_values
         values("content-type"),
         vec![b"application/vnd.openai.request+json".to_vec()]
     );
+    assert_eq!(
+        values("user-agent"),
+        vec![test_wire_profile().snapshot().user_agent().into_bytes()]
+    );
+    assert_eq!(values("originator"), vec![b"codex_cli_rs".to_vec()]);
     assert_eq!(
         values("authorization"),
         vec![b"Bearer lease-token".to_vec()]
@@ -713,8 +726,8 @@ async fn backend_http_should_ignore_unrepresentable_protocol_headers_without_blo
 }
 
 #[tokio::test]
-async fn websocket_should_keep_an_exact_chain_while_new_connections_adopt_the_latest_wire_profile()
-{
+async fn websocket_should_keep_an_exact_chain_while_new_connections_adopt_the_latest_codex_core_wire_profile()
+ {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind profile server");
@@ -806,7 +819,7 @@ async fn websocket_should_keep_an_exact_chain_while_new_connections_adopt_the_la
         )
         .await
         .expect("first response");
-    profile.update_desktop_release("26.900.1", "7001");
+    profile.update_cli_release("1.2.4");
 
     let mut continuation = request.clone();
     continuation.set_previous_response_id(Some("resp_profile_first".to_owned()));
@@ -828,6 +841,6 @@ async fn websocket_should_keep_an_exact_chain_while_new_connections_adopt_the_la
 
     let (first_user_agent, second_user_agent) = server.await.expect("profile server task");
     assert!(first_user_agent.contains("1.2.3"));
-    assert!(second_user_agent.contains("26.900.1"));
+    assert!(second_user_agent.contains("1.2.4"));
     assert_ne!(first_user_agent, second_user_agent);
 }

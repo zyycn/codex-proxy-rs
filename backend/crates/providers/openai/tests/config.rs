@@ -13,7 +13,7 @@ fn openai_config_builds_the_audited_wire_profile() {
 
     assert_eq!(
         profile.user_agent(),
-        "Codex Desktop/0.102.0 (macOS 15.5.0; arm64) xterm-256color (Codex Desktop; 1.2026.190)"
+        "Codex Desktop/0.102.0 (macOS 15.5.0; arm64) xterm-256color"
     );
     assert_eq!(profile.desktop_build, "19012345678");
 }
