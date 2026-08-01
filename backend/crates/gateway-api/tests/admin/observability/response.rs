@@ -1,261 +1,196 @@
-mod query {
-    use gateway_api::admin::observability::{
-        DashboardQuery, DiagnosticDimension, DiagnosticsQuery, OpsQuery, TrendKind, UsageQuery,
-        parse_attempt_index, parse_datetime, parse_status,
+//! 响应 DTO 与固定 wire 形状的合同测试。
+
+use chrono::{TimeZone, Utc};
+use gateway_admin::model::observability::DesktopReleaseStatus;
+use gateway_api::admin::PageMeta;
+use gateway_api::admin::observability::{
+    BillingView, CostCoverageView, CursorWire, DashboardAccountRequestBucketView,
+    DashboardAccountUsageView, DashboardDesktopReleaseStatusView, DashboardWireAttributeView,
+    DashboardWireProfileView, DashboardWireTargetView, PageData, TokenDetailsView, TrendData,
+    TrendKind, TrendPointView, TrendSummaryView,
+};
+use serde_json::json;
+
+#[test]
+fn usage_page_should_keep_terminal_camel_case_shape() {
+    let data = PageData {
+        items: vec![json!({"id": "request_1"})],
+        page: PageMeta::new(1, 50, 1, 1),
+        next_cursor: Some("cursor".to_owned()),
     };
-    use serde_json::json;
-
-    #[test]
-    fn dashboard_query_should_parse_terminal_trend_kinds() {
-        let query: DashboardQuery = serde_json::from_value(json!({"kind": "errors"})).unwrap();
-        assert_eq!(query.trend_kind().unwrap(), TrendKind::Errors);
-    }
-
-    #[test]
-    fn dashboard_query_should_reject_unknown_trend_kind() {
-        let query: DashboardQuery = serde_json::from_value(json!({"kind": "secret"})).unwrap();
-        assert_eq!(query.trend_kind().unwrap_err().field(), "kind");
-    }
-
-    #[test]
-    fn usage_query_should_bound_page_size_and_cursor() {
-        let query: UsageQuery = serde_json::from_value(json!({
-            "page": 2,
-            "pageSize": 100,
-            "cursor": "opaque"
-        }))
-        .unwrap();
-        assert_eq!(query.validate_page().unwrap(), (2, 100));
-        assert!(query.validate_cursor().is_ok());
-    }
-
-    #[test]
-    fn usage_query_should_reject_zero_page() {
-        let query: UsageQuery = serde_json::from_value(json!({"page": 0})).unwrap();
-        assert_eq!(query.validate_page().unwrap_err().field(), "page");
-    }
-
-    #[test]
-    fn ops_query_should_reject_page_size_above_terminal_limit() {
-        let query: OpsQuery = serde_json::from_value(json!({"pageSize": 101})).unwrap();
-        assert_eq!(query.validate_page().unwrap_err().field(), "pageSize");
-    }
-
-    #[test]
-    fn diagnostics_query_should_keep_wire_dimension_name() {
-        let query: DiagnosticsQuery =
-            serde_json::from_value(json!({"dimension": "failure_class"})).unwrap();
-        assert_eq!(query.dimension().unwrap(), DiagnosticDimension::Failure);
-        assert_eq!(DiagnosticDimension::Failure.display_name(), "failureClass");
-    }
-
-    #[test]
-    fn scalar_query_parsers_should_reject_out_of_range_values_without_echoing_input() {
-        assert_eq!(parse_status(Some(99)).unwrap_err().field(), "statusCode");
-        assert_eq!(
-            parse_attempt_index(Some(0)).unwrap_err().field(),
-            "attemptIndex"
-        );
-        assert_eq!(
-            parse_datetime(Some("not-a-time")).unwrap_err().field(),
-            "timeRange"
-        );
-    }
+    let value = serde_json::to_value(data).unwrap();
+    assert_eq!(value["page"]["pageSize"], 50);
+    assert_eq!(value["nextCursor"], "cursor");
 }
 
-mod response {
-    use chrono::{TimeZone, Utc};
-    use gateway_admin::model::observability::DesktopReleaseStatus;
-    use gateway_api::admin::PageMeta;
-    use gateway_api::admin::observability::{
-        BillingView, CostCoverageView, CursorWire, DashboardAccountRequestBucketView,
-        DashboardAccountUsageView, DashboardDesktopReleaseStatusView, DashboardWireAttributeView,
-        DashboardWireProfileView, DashboardWireTargetView, PageData, TokenDetailsView, TrendData,
-        TrendKind, TrendPointView, TrendSummaryView,
-    };
-    use serde_json::json;
+#[test]
+fn dashboard_wire_profiles_should_keep_provider_specific_attributes() {
+    let value = serde_json::to_value(DashboardWireProfileView {
+        provider: "xai".to_owned(),
+        product: "Grok Build".to_owned(),
+        version: "0.2.106".to_owned(),
+        build: None,
+        target: DashboardWireTargetView {
+            os_type: "linux".to_owned(),
+            os_version: "—".to_owned(),
+            arch: "x86_64".to_owned(),
+            terminal: "headless".to_owned(),
+        },
+        user_agent: "grok-shell/0.2.106 (linux; x86_64)".to_owned(),
+        attributes: vec![DashboardWireAttributeView {
+            label: "客户端标识".to_owned(),
+            value: "grok-shell".to_owned(),
+        }],
+        verified_at: None,
+        release: None,
+    })
+    .expect("dashboard profile");
 
-    #[test]
-    fn usage_page_should_keep_terminal_camel_case_shape() {
-        let data = PageData {
-            items: vec![json!({"id": "request_1"})],
-            page: PageMeta::new(1, 50, 1, 1),
-            next_cursor: Some("cursor".to_owned()),
-        };
-        let value = serde_json::to_value(data).unwrap();
-        assert_eq!(value["page"]["pageSize"], 50);
-        assert_eq!(value["nextCursor"], "cursor");
-    }
+    assert_eq!(value["provider"], "xai");
+    assert_eq!(value["version"], "0.2.106");
+    assert_eq!(value["attributes"][0]["label"], "客户端标识");
+    assert!(value.get("release").is_none());
+    assert!(value.get("verifiedAt").is_none());
+}
 
-    #[test]
-    fn dashboard_wire_profiles_should_keep_provider_specific_attributes() {
-        let value = serde_json::to_value(DashboardWireProfileView {
-            provider: "xai".to_owned(),
-            product: "Grok Build".to_owned(),
-            version: "0.2.106".to_owned(),
-            build: None,
-            target: DashboardWireTargetView {
-                os_type: "linux".to_owned(),
-                os_version: "—".to_owned(),
-                arch: "x86_64".to_owned(),
-                terminal: "headless".to_owned(),
-            },
-            user_agent: "grok-shell/0.2.106 (linux; x86_64)".to_owned(),
-            attributes: vec![DashboardWireAttributeView {
-                label: "客户端标识".to_owned(),
-                value: "grok-shell".to_owned(),
-            }],
-            verified_at: None,
-            release: None,
-        })
-        .expect("dashboard profile");
-
-        assert_eq!(value["provider"], "xai");
-        assert_eq!(value["version"], "0.2.106");
-        assert_eq!(value["attributes"][0]["label"], "客户端标识");
-        assert!(value.get("release").is_none());
-        assert!(value.get("verifiedAt").is_none());
-    }
-
-    #[test]
-    fn dashboard_account_usage_should_keep_daily_request_timeline() {
-        let bucket_start = Utc.timestamp_opt(0, 0).single().unwrap();
-        let value = serde_json::to_value(DashboardAccountUsageView {
-            id: "account_1".to_owned(),
-            provider: "xai".to_owned(),
-            authentication_kind: "oauth".to_owned(),
-            email: "account@example.com".to_owned(),
-            plan_type: Some("free".to_owned()),
-            tokens: "—".to_owned(),
+#[test]
+fn dashboard_account_usage_should_keep_daily_request_timeline() {
+    let bucket_start = Utc.timestamp_opt(0, 0).single().unwrap();
+    let value = serde_json::to_value(DashboardAccountUsageView {
+        id: "account_1".to_owned(),
+        provider: "xai".to_owned(),
+        authentication_kind: "oauth".to_owned(),
+        email: "account@example.com".to_owned(),
+        plan_type: Some("free".to_owned()),
+        tokens: "—".to_owned(),
+        request_count: 3,
+        request_buckets: vec![DashboardAccountRequestBucketView {
+            bucket_start,
             request_count: 3,
-            request_buckets: vec![DashboardAccountRequestBucketView {
-                bucket_start,
-                request_count: 3,
-            }],
-            quota_used_percent: None,
-            last_used: "刚刚".to_owned(),
-        })
-        .expect("dashboard account usage");
+        }],
+        quota_used_percent: None,
+        last_used: "刚刚".to_owned(),
+    })
+    .expect("dashboard account usage");
 
-        assert_eq!(value["requestCount"], 3);
-        assert_eq!(
-            value["requestBuckets"][0]["bucketStart"],
-            "1970-01-01T00:00:00Z"
-        );
-        assert_eq!(value["requestBuckets"][0]["requestCount"], 3);
-    }
+    assert_eq!(value["requestCount"], 3);
+    assert_eq!(
+        value["requestBuckets"][0]["bucketStart"],
+        "1970-01-01T00:00:00Z"
+    );
+    assert_eq!(value["requestBuckets"][0]["requestCount"], 3);
+}
 
-    #[test]
-    fn trend_wire_should_serialize_kind_and_values_without_store_types() {
-        let now = Utc.timestamp_opt(0, 0).single().unwrap();
-        let data = TrendData {
-            kind: TrendKind::Usage,
-            points: vec![TrendPointView {
-                time: "08:00".to_owned(),
-                bucket: now,
-                label: "01-01 08:00".to_owned(),
-                requests: "1".to_owned(),
-                requests_value: 1,
-                input_tokens: "2".to_owned(),
-                input_tokens_value: 2,
-                output_tokens: "3".to_owned(),
-                output_tokens_value: 3,
-                cached_tokens: "0".to_owned(),
-                cached_tokens_value: 0,
-                cache_hit_rate_value: 0.0,
-                tokens_value: 5,
-                errors: "0".to_owned(),
-                errors_value: 0,
-                latency: "1 ms".to_owned(),
-                latency_value: Some(1),
-                max_latency: "1 ms".to_owned(),
-                max_latency_value: Some(1),
-                min_latency: "1 ms".to_owned(),
-                min_latency_value: Some(1),
-                success_rate: "100.0%".to_owned(),
-                success_rate_value: Some(100.0),
-            }],
-            summary: vec![TrendSummaryView {
-                label: "输入".to_owned(),
-                value: "2".to_owned(),
-                ratio: None,
-            }],
-        };
-        let value = serde_json::to_value(data).unwrap();
-        assert_eq!(value["kind"], "usage");
-        assert_eq!(value["points"][0]["requestsValue"], 1);
-    }
+#[test]
+fn trend_wire_should_serialize_kind_and_values_without_store_types() {
+    let now = Utc.timestamp_opt(0, 0).single().unwrap();
+    let data = TrendData {
+        kind: TrendKind::Usage,
+        points: vec![TrendPointView {
+            time: "08:00".to_owned(),
+            bucket: now,
+            label: "01-01 08:00".to_owned(),
+            requests: "1".to_owned(),
+            requests_value: 1,
+            input_tokens: "2".to_owned(),
+            input_tokens_value: 2,
+            output_tokens: "3".to_owned(),
+            output_tokens_value: 3,
+            cached_tokens: "0".to_owned(),
+            cached_tokens_value: 0,
+            cache_hit_rate_value: 0.0,
+            tokens_value: 5,
+            errors: "0".to_owned(),
+            errors_value: 0,
+            latency: "1 ms".to_owned(),
+            latency_value: Some(1),
+            max_latency: "1 ms".to_owned(),
+            max_latency_value: Some(1),
+            min_latency: "1 ms".to_owned(),
+            min_latency_value: Some(1),
+            success_rate: "100.0%".to_owned(),
+            success_rate_value: Some(100.0),
+        }],
+        summary: vec![TrendSummaryView {
+            label: "输入".to_owned(),
+            value: "2".to_owned(),
+            ratio: None,
+        }],
+    };
+    let value = serde_json::to_value(data).unwrap();
+    assert_eq!(value["kind"], "usage");
+    assert_eq!(value["points"][0]["requestsValue"], 1);
+}
 
-    #[test]
-    fn sensitive_response_views_do_not_require_debug_or_add_secret_fields() {
-        let coverage = CostCoverageView {
-            known: 1,
-            partial: 0,
-            unknown: 0,
-            not_billable: 0,
-        };
-        let token_details = TokenDetailsView {
-            input_tokens: Some(1),
-            output_tokens: Some(2),
-            cached_tokens: None,
-            cache_write_tokens: None,
-            reasoning_tokens: None,
-            image_input_tokens: None,
-            image_output_tokens: None,
-            total_tokens: Some(3),
-            input_tokens_display: "1".to_owned(),
-            output_tokens_display: "2".to_owned(),
-            cached_tokens_display: "-".to_owned(),
-            cache_write_tokens_display: "-".to_owned(),
-            reasoning_tokens_display: "-".to_owned(),
-            image_input_tokens_display: "-".to_owned(),
-            image_output_tokens_display: "-".to_owned(),
-            total_tokens_display: "3".to_owned(),
-        };
-        let cursor = CursorWire {
-            observed_at: Utc.timestamp_opt(0, 0).single().unwrap(),
-            stable_id: "request_1".to_owned(),
-        };
-        let value = serde_json::to_value((&coverage, &token_details, &cursor)).unwrap();
-        assert!(value.to_string().contains("known"));
-        assert!(!value.to_string().contains("secret"));
-    }
+#[test]
+fn sensitive_response_views_do_not_require_debug_or_add_secret_fields() {
+    let coverage = CostCoverageView {
+        known: 1,
+        partial: 0,
+        unknown: 0,
+        not_billable: 0,
+    };
+    let token_details = TokenDetailsView {
+        input_tokens: Some(1),
+        output_tokens: Some(2),
+        cached_tokens: None,
+        cache_write_tokens: None,
+        reasoning_tokens: None,
+        image_input_tokens: None,
+        image_output_tokens: None,
+        total_tokens: Some(3),
+        input_tokens_display: "1".to_owned(),
+        output_tokens_display: "2".to_owned(),
+        cached_tokens_display: "-".to_owned(),
+        cache_write_tokens_display: "-".to_owned(),
+        reasoning_tokens_display: "-".to_owned(),
+        image_input_tokens_display: "-".to_owned(),
+        image_output_tokens_display: "-".to_owned(),
+        total_tokens_display: "3".to_owned(),
+    };
+    let cursor = CursorWire {
+        observed_at: Utc.timestamp_opt(0, 0).single().unwrap(),
+        stable_id: "request_1".to_owned(),
+    };
+    let value = serde_json::to_value((&coverage, &token_details, &cursor)).unwrap();
+    assert!(value.to_string().contains("known"));
+    assert!(!value.to_string().contains("secret"));
+}
 
-    #[test]
-    fn billing_view_should_preserve_the_original_detail_contract() {
-        let value = serde_json::to_value(BillingView {
-            input_amount_display: "$0.03".to_owned(),
-            output_amount_display: "$0.00".to_owned(),
-            cache_read_amount_display: "$0.14".to_owned(),
-            cache_write_amount_display: "$0.00".to_owned(),
-            standard_amount_display: "$0.17".to_owned(),
-            total_amount_display: "$0.17".to_owned(),
-            input_price_display: "$10.0000 / 1M Token".to_owned(),
-            output_price_display: "$60.0000 / 1M Token".to_owned(),
-            cache_read_price_display: "$1.0000 / 1M Token".to_owned(),
-            cache_write_price_display: "$12.5000 / 1M Token".to_owned(),
-            service_tier_display: "Fast".to_owned(),
-            multiplier_display: "1.00x".to_owned(),
-        })
-        .expect("billing view");
+#[test]
+fn billing_view_should_preserve_the_original_detail_contract() {
+    let value = serde_json::to_value(BillingView {
+        input_amount_display: "$0.03".to_owned(),
+        output_amount_display: "$0.00".to_owned(),
+        cache_read_amount_display: "$0.14".to_owned(),
+        cache_write_amount_display: "$0.00".to_owned(),
+        standard_amount_display: "$0.17".to_owned(),
+        total_amount_display: "$0.17".to_owned(),
+        input_price_display: "$10.0000 / 1M Token".to_owned(),
+        output_price_display: "$60.0000 / 1M Token".to_owned(),
+        cache_read_price_display: "$1.0000 / 1M Token".to_owned(),
+        cache_write_price_display: "$12.5000 / 1M Token".to_owned(),
+        service_tier_display: "Fast".to_owned(),
+        multiplier_display: "1.00x".to_owned(),
+    })
+    .expect("billing view");
 
-        assert_eq!(value["inputAmountDisplay"], "$0.03");
-        assert_eq!(value["cacheReadPriceDisplay"], "$1.0000 / 1M Token");
-        assert_eq!(value["serviceTierDisplay"], "Fast");
-        assert_eq!(value["multiplierDisplay"], "1.00x");
-    }
+    assert_eq!(value["inputAmountDisplay"], "$0.03");
+    assert_eq!(value["cacheReadPriceDisplay"], "$1.0000 / 1M Token");
+    assert_eq!(value["serviceTierDisplay"], "Fast");
+    assert_eq!(value["multiplierDisplay"], "1.00x");
+}
 
-    #[test]
-    fn desktop_release_status_should_preserve_the_existing_dashboard_wire_values() {
-        for (domain, expected) in [
-            (DesktopReleaseStatus::Unchecked, "unchecked"),
-            (DesktopReleaseStatus::Current, "aligned"),
-            (DesktopReleaseStatus::UpdateAvailable, "review_required"),
-            (DesktopReleaseStatus::Failed, "check_failed"),
-        ] {
-            let status = DashboardDesktopReleaseStatusView::from(domain);
-            assert_eq!(serde_json::to_value(status).unwrap(), expected);
-        }
+#[test]
+fn desktop_release_status_should_preserve_the_existing_dashboard_wire_values() {
+    for (domain, expected) in [
+        (DesktopReleaseStatus::Unchecked, "unchecked"),
+        (DesktopReleaseStatus::Current, "aligned"),
+        (DesktopReleaseStatus::UpdateAvailable, "review_required"),
+        (DesktopReleaseStatus::Failed, "check_failed"),
+    ] {
+        let status = DashboardDesktopReleaseStatusView::from(domain);
+        assert_eq!(serde_json::to_value(status).unwrap(), expected);
     }
 }
 
@@ -272,7 +207,7 @@ async fn dashboard_summary_should_include_quota_exhaustion_in_unavailable_headli
     use gateway_api::admin::observability;
     use tower::ServiceExt as _;
 
-    use super::{AdminTestFixture, AdminTestState};
+    use crate::admin::{AdminTestFixture, AdminTestState};
 
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
@@ -344,7 +279,7 @@ async fn usage_detail_should_keep_attempt_snapshot_contract() {
     use gateway_api::admin::observability;
     use tower::ServiceExt as _;
 
-    use super::{AdminTestFixture, AdminTestState};
+    use crate::admin::{AdminTestFixture, AdminTestState};
 
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
@@ -451,7 +386,7 @@ async fn ops_errors_should_keep_account_label_and_authentication_contract() {
     use gateway_api::admin::observability;
     use tower::ServiceExt as _;
 
-    use super::{AdminTestFixture, AdminTestState};
+    use crate::admin::{AdminTestFixture, AdminTestState};
 
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
@@ -536,7 +471,7 @@ async fn diagnostics_should_keep_stable_key_and_display_name_contract() {
     use gateway_api::admin::observability;
     use tower::ServiceExt as _;
 
-    use super::{AdminTestFixture, AdminTestState};
+    use crate::admin::{AdminTestFixture, AdminTestState};
 
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
@@ -678,7 +613,7 @@ async fn usage_route_should_forward_a_bounded_unknown_outcome_filter() {
     use gateway_api::admin::observability;
     use tower::ServiceExt as _;
 
-    use super::{AdminTestFixture, AdminTestState};
+    use crate::admin::{AdminTestFixture, AdminTestState};
 
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
@@ -714,7 +649,7 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
     use gateway_api::admin::observability;
     use tower::ServiceExt as _;
 
-    use super::{AdminTestFixture, AdminTestState};
+    use crate::admin::{AdminTestFixture, AdminTestState};
 
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
