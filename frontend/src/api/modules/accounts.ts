@@ -207,7 +207,16 @@ interface AccountOAuthStartParam {
   accountId?: string
 }
 
-interface AccountOAuthCompleteParam { flowId: string, callbackUrl: string }
+interface AccountOAuthCompleteParam {
+  provider: string
+  flowId: string
+  callbackUrl: string
+}
+
+interface AccountExportParam {
+  accountIds: string
+  confirm: string
+}
 
 export function getAccounts(data: AccountListParams) {
   return request<AccountListResponse>({
@@ -217,7 +226,7 @@ export function getAccounts(data: AccountListParams) {
   })
 }
 
-export function exportAccounts(data: AccountListParams) {
+export function exportAccounts(data: AccountExportParam) {
   return request<unknown>({
     url: '/api/admin/accounts/export',
     method: 'GET',

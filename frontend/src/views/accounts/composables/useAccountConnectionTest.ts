@@ -1,6 +1,7 @@
+import type { Account, AccountModelsResponse } from '@/api'
 import { CheckCircle2, Clock3, Wifi, XCircle } from '@lucide/vue'
-import { useEventSource } from '@vueuse/core'
 
+import { useEventSource } from '@vueuse/core'
 import { clamp } from 'es-toolkit'
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { getAccountModels, refreshAccountModels } from '@/api'
@@ -35,11 +36,23 @@ interface ConnectionTestRequestPayload {
   input?: Array<{ content?: Array<{ type?: string, text?: string }> }>
 }
 
+interface ConnectionTestEvent {
+  type: string
+  text?: string
+  model?: string
+  payload?: ConnectionTestRequestPayload
+  success?: boolean
+  accountStatus?: string
+  upstreamBody?: string
+  upstreamStatus?: number
+  error?: string
+}
+
 interface AccountConnectionTestOptions {
   onAccountStatus: (accountId: string, status: string) => void
 }
 
-function connectionTestErrorText(event: any) {
+function connectionTestErrorText(event: ConnectionTestEvent) {
   if (typeof event.upstreamBody === 'string' && event.upstreamBody.length > 0)
     return event.upstreamBody
   if (Number.isInteger(event.upstreamStatus))
@@ -49,7 +62,7 @@ function connectionTestErrorText(event: any) {
 
 export function useAccountConnectionTest(options: AccountConnectionTestOptions) {
   const showConnectionTestModal = shallowRef(false)
-  const testingAccount = shallowRef<any>(null)
+  const testingAccount = shallowRef<Account | null>(null)
   const connectionTestStatus = shallowRef<ConnectionTestStatus>('idle')
   const connectionTestModel = shallowRef('')
   const connectionTestContent = shallowRef('')
@@ -119,7 +132,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     }
   })
 
-  function openConnectionTest(account: any) {
+  function openConnectionTest(account: Account) {
     abortConnectionTest()
     testingAccount.value = account
     connectionTestSelectedModel.value = ''
@@ -241,7 +254,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     clearConnectionTestRun()
   }
 
-  function handleConnectionTestEvent(event: any) {
+  function handleConnectionTestEvent(event: ConnectionTestEvent) {
     if (event.type === 'test_start') {
       connectionTestModel.value = event.model || connectionTestModel.value
       appendConnectionTestLog(`开始测试 ${connectionTestModel.value || '未选择模型'}`, 'info')
@@ -312,7 +325,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     }
   }
 
-  function applyConnectionTestModels(result: any, preserveSelection = false) {
+  function applyConnectionTestModels(result: AccountModelsResponse, preserveSelection = false) {
     const previousSelection = preserveSelection ? connectionTestSelectedModel.value : ''
     connectionTestModelOptions.value = []
     for (const model of result.models ?? []) {
