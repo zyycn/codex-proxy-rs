@@ -808,6 +808,7 @@ dependencies = [
  "provider-openai",
  "provider-xai",
  "serde",
+ "serde_json",
  "syn 3.0.3",
  "tempfile",
  "thiserror",
