@@ -718,6 +718,8 @@ pub struct UsageRecordDetailView {
     #[serde(flatten)]
     pub request: UsageRecordView,
     pub attempts: Vec<UsageAttemptView>,
+    /// 尝试列表是否完整；best-effort 下恒为 false。
+    pub attempts_complete: bool,
 }
 
 /// Dashboard 趋势数据。
@@ -1842,6 +1844,7 @@ fn usage_detail_view(detail: domain::UsageDetail) -> UsageRecordDetailView {
             .into_iter()
             .map(usage_attempt_view)
             .collect(),
+        attempts_complete: false,
     }
 }
 
