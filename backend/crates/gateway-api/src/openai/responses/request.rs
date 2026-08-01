@@ -474,6 +474,11 @@ fn passthrough_header_name(name: &str, connection_headers: &[String]) -> bool {
             // 不能透传覆盖，避免不同下游客户端暴露不一致的设备指纹。
             | "originator"
             | "user-agent"
+            // 设备 attestation/integrity 头只能由官方客户端或网关自身生成，
+            // 客户端注入的 x-oai-attestation / X-OAI-IS 不得透传上游。
+            | "x-oai-attestation"
+            | "x-oai-is"
+            | "x-oai-is-update"
     )
 }
 

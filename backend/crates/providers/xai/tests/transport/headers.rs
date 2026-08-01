@@ -71,7 +71,7 @@ fn headers_should_bind_identity_to_the_selected_oauth_account() {
     assert_eq!(value("x-grok-client-version"), Some("0.2.106"));
     assert_eq!(value("x-grok-client-identifier"), Some("grok-shell"));
     assert_eq!(value("x-grok-client-mode"), Some("headless"));
-    assert_eq!(value("accept-encoding"), Some("identity"));
+    assert_eq!(value("accept-encoding"), None);
     assert_eq!(value("x-grok-turn-idx"), Some("7"));
     assert_eq!(
         value("user-agent"),

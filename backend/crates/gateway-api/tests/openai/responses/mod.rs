@@ -288,6 +288,15 @@ fn decoder_should_preserve_ordinary_request_headers_as_opaque_multivalues() {
         "x-codex-installation-id",
         HeaderValue::from_static("client-installation"),
     );
+    headers.insert(
+        "x-oai-attestation",
+        HeaderValue::from_static("client-attestation"),
+    );
+    headers.insert("x-oai-is", HeaderValue::from_static("client-is"));
+    headers.insert(
+        "x-oai-is-update",
+        HeaderValue::from_static("client-is-update"),
+    );
 
     let decoded =
         decode_request_with_headers(br#"{"model":"smart-code","input":"hello"}"#, &headers)
@@ -340,6 +349,9 @@ fn decoder_should_preserve_ordinary_request_headers_as_opaque_multivalues() {
         // 上游指纹由运行时画像统一生成，客户端不得覆盖。
         "user-agent",
         "originator",
+        "x-oai-attestation",
+        "x-oai-is",
+        "x-oai-is-update",
     ] {
         assert!(values(excluded).is_empty(), "unexpected {excluded}");
     }

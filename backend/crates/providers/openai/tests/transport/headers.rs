@@ -48,7 +48,10 @@ fn request_with_opaque_headers(use_websocket: bool) -> CodexResponsesRequest {
                 [
                     "x-codex-installation-id",
                     STANDARD.encode(b"client-installation")
-                ]
+                ],
+                ["x-oai-attestation", STANDARD.encode(b"client-attestation")],
+                ["x-oai-is", STANDARD.encode(b"client-is")],
+                ["x-oai-is-update", STANDARD.encode(b"client-is-update")]
             ]),
         ),
         ("turn_state".to_owned(), json!("typed-turn-state")),
@@ -413,6 +416,12 @@ async fn backend_http_should_restore_opaque_multivalue_header_bytes_and_lease_id
         raw_header_values(&raw, "originator"),
         vec![b"codex_cli_rs".to_vec()]
     );
+    for dropped in ["x-oai-attestation", "x-oai-is", "x-oai-is-update"] {
+        assert!(
+            raw_header_values(&raw, dropped).is_empty(),
+            "unexpected {dropped}"
+        );
+    }
     for secret in [
         b"client-secret".as_slice(),
         b"client-account",
@@ -515,6 +524,9 @@ async fn backend_websocket_should_drop_only_unrepresentable_opaque_header_values
         vec![test_wire_profile().snapshot().user_agent().into_bytes()]
     );
     assert_eq!(values("originator"), vec![b"codex_cli_rs".to_vec()]);
+    for dropped in ["x-oai-attestation", "x-oai-is", "x-oai-is-update"] {
+        assert!(values(dropped).is_empty(), "unexpected {dropped}");
+    }
     assert_eq!(
         values("authorization"),
         vec![b"Bearer lease-token".to_vec()]

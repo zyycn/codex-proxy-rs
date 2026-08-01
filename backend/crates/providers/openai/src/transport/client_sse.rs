@@ -522,7 +522,10 @@ impl CodexBackendClient {
         for name in request.passthrough_headers.keys() {
             // 上游指纹必须由运行时画像统一生成：originator/User-Agent 即使绕过
             // API 透传黑名单也不能覆盖画像，避免下游客户端暴露不一致指纹。
-            if matches!(name.as_str(), "originator" | "user-agent") {
+            if matches!(
+                name.as_str(),
+                "originator" | "user-agent" | "x-oai-attestation" | "x-oai-is" | "x-oai-is-update"
+            ) {
                 continue;
             }
             headers.remove(name);

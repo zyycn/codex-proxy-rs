@@ -19,7 +19,8 @@ gateway-core = { path = "../../gateway-core" }
 gateway-protocol = { path = "../../gateway-protocol" }
 getrandom = "0.4.3"
 jsonwebtoken = { version = "=11.0.0", default-features = false, features = ["aws_lc_rs"] }
-reqwest = { version = "=0.12.28", default-features = false, features = ["stream", "rustls-tls-native-roots", "gzip", "brotli", "zstd", "deflate", "http2"] }
+# 与官方 Grok CLI 一致：reqwest 不启用压缩特性，上游请求不带 accept-encoding。
+reqwest = { version = "=0.12.28", default-features = false, features = ["stream", "rustls-tls-native-roots", "http2"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.150", features = ["arbitrary_precision", "preserve_order"] }
 semver = "1.0.27"
