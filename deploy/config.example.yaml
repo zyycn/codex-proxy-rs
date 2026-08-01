@@ -59,10 +59,10 @@ openai:
   wire_profile:
     # Provider 每 24 小时读取官方 npm metadata 与 Desktop appcast，仅在进程内更新版本字段。
     originator: 'Codex Desktop'
-    codex_version: '0.145.0'
-    desktop_version: '26.721.31836'
-    desktop_build: '5828'
-    os_type: 'Mac OS'
+    codex_version: '0.146.0'
+    desktop_version: '26.727.51351'
+    desktop_build: '6119'
+    os_type: 'macOS'
     os_version: '15.7.1'
     arch: 'arm64'
     terminal: 'unknown'
@@ -73,7 +73,7 @@ xai:
   wire_profile:
     # Provider 每 24 小时读取官方 npm metadata，仅在进程内更新 client_version。
     client_identifier: 'grok-shell'
-    client_version: '0.2.106'
+    client_version: '0.2.118'
     client_mode: 'headless'
     target_os: 'linux'
     target_arch: 'x86_64'
