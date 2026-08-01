@@ -320,7 +320,7 @@ pub(crate) async fn bump_config_revision_in_transaction(
     Revision::new(u64::try_from(next).map_err(|_| invalid_numeric())?)
 }
 
-/// 只更新 admin_api_key，不触碰其它运行设置字段。
+/// 更新 admin_api_key 字段，config revision 由调用方 bump。
 pub(crate) async fn update_admin_api_key_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     admin_api_key: Option<String>,
