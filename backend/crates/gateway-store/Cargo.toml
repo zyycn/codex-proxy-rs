@@ -14,7 +14,7 @@ path = "tests/main.rs"
 [dependencies]
 async-trait = "0.1.89"
 aws-credential-types = "1.2"
-aws-sdk-s3 = { version = "1.140", features = ["rt-tokio", "rustls"] }
+aws-sdk-s3 = { version = "1.140", default-features = false, features = ["rt-tokio", "default-https-client"] }
 aws-smithy-runtime-api = "1.14"
 aws-smithy-types = "1.6"
 chrono = "0.4.45"
