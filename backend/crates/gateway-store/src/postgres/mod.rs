@@ -1,4 +1,4 @@
-//! 八张终态业务表的 PostgreSQL adapters。
+//! 九张终态业务表的 PostgreSQL adapters。
 
 use async_trait::async_trait;
 use sqlx::{PgPool, postgres::PgPoolOptions};

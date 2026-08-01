@@ -147,7 +147,7 @@ Admin API 不要求客户端提交配置 revision，也不向客户端暴露配�
 
 ## 8. PostgreSQL 终态
 
-`backend/migrations/0001_initial.sql` 创建且只创建七张业务表；`0003_s3_backup.sql` 增加备份配置与备份记录两张表：
+`backend/migrations/0001_initial.sql` 直接定义当前大版本完整的新库基线，共创建九张业务表：
 
 | 表 | 权威事实 |
 | --- | --- |
