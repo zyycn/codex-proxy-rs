@@ -182,9 +182,10 @@ upgrade 与真实客户端 IP；不要暴露 PostgreSQL 或 Redis。
 release/publish <version>
 ```
 
-脚本会更新 `release/version.yaml`、创建约定提交与带注释的 `v<version>` tag，并原子推送分支和 tag。
-不要手工修改版本后单独打 tag。该脚本只发布仓库版本和触发 Release 构建，不会登录服务器，也不会
-改变任何运行实例；源码提交、仓库发版和实例升级是三个独立状态。
+脚本依赖已登录的 GitHub CLI（`gh auth login`）。它会更新 `release/version.yaml`、创建约定提交与带
+注释的 `v<version>` tag，原子推送分支和 tag，再从发布分支触发 Release 构建，使构建缓存可以跨版本
+复用。不要手工修改版本后单独打 tag。该脚本不会登录服务器，也不会改变任何运行实例；源码提交、
+仓库发版和实例升级是三个独立状态。
 
 ## 文档
 
