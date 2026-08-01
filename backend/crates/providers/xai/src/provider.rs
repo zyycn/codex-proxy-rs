@@ -1543,6 +1543,8 @@ fn xai_transport_metadata(
     if metadata.is_empty() {
         return None;
     }
+    // 观测对象版本信封：读取端按 schemaVersion 解码，缺失视为 v0（见 DB-03）。
+    metadata.insert("schemaVersion".to_owned(), Value::from(1));
     ProviderResponseMetadata::new(serde_json::to_string(&Value::Object(metadata)).ok()?)
 }
 
