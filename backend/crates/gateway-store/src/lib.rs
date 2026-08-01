@@ -686,43 +686,26 @@ impl AdminSettingsStoreAdapter {
         admin_api_key: Option<String>,
         context: &MutationContext,
     ) -> AdminStoreResult<AdminApiKeyMutation> {
-        let current = postgres::ControlPlaneRepository::load_control_plane(&self.control_plane)
-            .await
-            .map_err(|error| admin_store_error("admin API key", error))?;
         let exists = admin_api_key.is_some();
-        let update = postgres::RuntimeSettingsUpdate {
-            admin_api_key,
-            refresh_margin_seconds: current.settings.refresh_margin_seconds,
-            refresh_concurrency: current.settings.refresh_concurrency,
-            max_concurrent_per_account: current.settings.max_concurrent_per_account,
-            request_interval_ms: current.settings.request_interval_ms,
-            rotation_strategy: current.settings.rotation_strategy,
-            model_mappings: current.settings.model_mappings,
-            usage_retention_days: current.settings.usage_retention_days,
-            ops_event_retention_days: current.settings.ops_event_retention_days,
-            audit_retention_days: current.settings.audit_retention_days,
-        };
-        let snapshot = postgres::ControlPlaneRepository::replace_control_plane(
+        let revision = postgres::ControlPlaneRepository::replace_admin_api_key(
             &self.control_plane,
-            postgres::ControlPlaneReplacement {
-                settings: update,
-                audit: mutation_audit(
-                    context,
-                    if exists {
-                        "admin_api_key.replace"
-                    } else {
-                        "admin_api_key.delete"
-                    },
-                    "runtime_settings",
-                    "1",
-                    vec!["admin_api_key".to_owned()],
-                ),
-            },
+            admin_api_key,
+            mutation_audit(
+                context,
+                if exists {
+                    "admin_api_key.replace"
+                } else {
+                    "admin_api_key.delete"
+                },
+                "runtime_settings",
+                "1",
+                vec!["admin_api_key".to_owned()],
+            ),
         )
         .await
         .map_err(|error| admin_store_error("admin API key", error))?;
         Ok(AdminApiKeyMutation {
-            config_revision: admin_revision(snapshot.settings.config_revision)?,
+            config_revision: admin_revision(revision)?,
             exists,
         })
     }

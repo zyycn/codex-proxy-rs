@@ -81,6 +81,13 @@ pub trait ControlPlaneRepository: Send + Sync {
         replacement: ControlPlaneReplacement,
     ) -> StoreResult<ControlPlaneSnapshot>;
 
+    /// 字段级更新 admin_api_key，不影响其它运行设置。
+    async fn replace_admin_api_key(
+        &self,
+        admin_api_key: Option<String>,
+        audit: AdminAuditEvent,
+    ) -> StoreResult<Revision>;
+
     async fn create_client_api_key(
         &self,
         key: NewClientApiKey,
@@ -176,6 +183,15 @@ impl ControlPlaneRepository for PgControlPlaneRepository {
         }
     }
 
+    async fn replace_admin_api_key(
+        &self,
+        admin_api_key: Option<String>,
+        audit: AdminAuditEvent,
+    ) -> StoreResult<Revision> {
+        self.apply_targeted_mutation(ControlPlaneMutation::SetAdminApiKey(admin_api_key), audit)
+            .await
+    }
+
     async fn create_client_api_key(
         &self,
         key: NewClientApiKey,
@@ -228,6 +244,7 @@ enum ControlPlaneMutation {
     UpdateClientApiKey(UpdateClientApiKeyDetails),
     SetClientApiKeyEnabled { id: String, enabled: bool },
     DeleteClientApiKey(String),
+    SetAdminApiKey(Option<String>),
 }
 
 impl PgControlPlaneRepository {
@@ -256,6 +273,9 @@ impl PgControlPlaneRepository {
                 }
                 ControlPlaneMutation::DeleteClientApiKey(id) => {
                     delete_client_api_key_in_transaction(&mut transaction, &id).await?;
+                }
+                ControlPlaneMutation::SetAdminApiKey(key) => {
+                    update_admin_api_key_in_transaction(&mut transaction, key).await?;
                 }
             }
             append_admin_audit_event_in_transaction(&mut transaction, audit, revision).await?;
