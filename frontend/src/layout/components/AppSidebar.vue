@@ -339,12 +339,12 @@ onBeforeUnmount(() => {
       <BaseMotionIcon
         aria-hidden="true"
         variant="brand"
-        class="inline-flex size-11 items-center justify-center relative -top-0.5 rounded-(--cp-icon-button-radius) bg-(--cp-brand-mark-bg)"
+        class="inline-flex size-11 items-center justify-center relative -top-0.5 rounded-(--cp-icon-button-radius)"
       >
         <img
           src="/favicon.svg"
           alt=""
-          class="block size-9 select-none"
+          class="block size-11 select-none"
           draggable="false"
         >
       </BaseMotionIcon>
