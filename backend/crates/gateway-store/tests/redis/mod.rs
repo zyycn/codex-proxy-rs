@@ -1,4 +1,5 @@
 mod client_admission;
+mod coordination_buffer;
 mod credential_cooldown;
 mod credential_leases;
 mod credential_state;

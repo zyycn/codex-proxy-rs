@@ -5,7 +5,7 @@ use std::sync::Arc;
 use gateway_admin::model::backup::BackupStatus;
 use gateway_admin::ports::backup::BackupStorePorts;
 
-use crate::backup_runtime::{
+use crate::backup::support::{
     FakeAuthStore, FakeBackupRepository, FakeDumpPort, FakeObjectStore, configured_settings,
     system_context,
 };
