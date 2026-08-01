@@ -64,31 +64,9 @@ export interface UsageLatencyDetails {
   openaiProcessingMs?: number
 }
 
-// 已知字段之外还会平铺 Provider 安全观测字段，因此保留索引签名。
+// Provider 私有观测字段；Core 字段由顶层 UsageRecord 提供，不再复制进 metadata。
 export interface UsageRecordMetadata {
   [key: string]: unknown
-  protocol: string
-  logicalOutcome: string
-  attemptCount: number
-  requestedModel: string
-  upstreamModel?: string
-  clientIp?: string
-  userAgent?: string
-  reasoningEffort?: string
-  reasoningPreset?: string
-  compact: boolean
-  requestKind?: string
-  subagentKind?: string
-  transport?: string
-  httpVersion?: string
-  clientStatusCode?: number
-  upstreamStatusCode?: number
-  responseId?: string
-  upstreamRequestId?: string
-  websocketPool: { kind: string } | null
-  imageGenerationRequested: boolean
-  imageGenerationSucceeded: boolean | null
-  latencyDetails: UsageLatencyDetails
 }
 
 export interface UsageRecord {
@@ -108,6 +86,14 @@ export interface UsageRecord {
   serviceTier: string | null
   statusCode: number | null
   transport: string | null
+  protocol: string
+  httpVersion: string | null
+  clientStatusCode: number | null
+  upstreamStatusCode: number | null
+  websocketPool: { kind: string } | null
+  imageGenerationRequested: boolean
+  imageGenerationSucceeded: boolean | null
+  latencyDetails: UsageLatencyDetails | null
   attemptIndex: number | null
   attemptCount: number
   responseId: string | null
@@ -348,6 +334,11 @@ type UsagePagedQuery = UsageRangeQuery & {
   pageSize: number
 }
 
+type OpsErrorPagedQuery = UsagePagedQuery & {
+  failureClass?: string
+  route?: string
+}
+
 interface UsageDetailQuery {
   id: string
 }
@@ -362,7 +353,7 @@ export function getUsageRecords(data: UsagePagedQuery) {
   })
 }
 
-export function getOpsErrors(data: UsagePagedQuery) {
+export function getOpsErrors(data: OpsErrorPagedQuery) {
   return request<OpsErrorsResponse>({
     url: '/api/admin/operations/errors',
     method: 'GET',
@@ -400,4 +391,180 @@ export function getUsageRecordInsightsDiagnostics(data: UsageDiagnosticsQuery) {
     method: 'GET',
     params: data,
   })
+}
+
+// Usage 记录的规范化 view model：组件只消费这个形状，兼容性回退只发生在本文件。
+export interface UsageViewModel {
+  id: string
+  requestId: string
+  clientApiKeyId: string | null
+  kind: string
+  provider: string | null
+  authenticationKind: string | null
+  accountId: string | null
+  accountEmail: string | null
+  accountName: string | null
+  route: string
+  model: string
+  requestedModel: string | null
+  upstreamModel: string | null
+  serviceTier: string | null
+  statusCode: number | null
+  transport: string | null
+  stream: boolean | null
+  apiKind: string | null
+  attemptIndex: number | null
+  attemptCount: number
+  responseId: string | null
+  upstreamRequestId: string | null
+  protocol: string
+  httpVersion: string | null
+  clientStatusCode: number | null
+  upstreamStatusCode: number | null
+  websocketPool: { kind: string } | null
+  imageGenerationRequested: boolean
+  imageGenerationSucceeded: boolean | null
+  latencyMs: number | null
+  firstTokenLatencyMs: number | null
+  latencyDetails: UsageLatencyDetails | null
+  inputTokens: number | null
+  outputTokens: number | null
+  cachedTokens: number | null
+  cacheWriteTokens: number | null
+  reasoningTokens: number | null
+  imageInputTokens: number | null
+  imageOutputTokens: number | null
+  message: string
+  createdAt: string
+  createdAtDisplay: string
+  clientIp: string | null
+  userAgent: string | null
+  reasoningEffort: string | null
+  reasoningPreset: string | null
+  compact: boolean
+  requestKind: string | null
+  subagentKind: string | null
+  tokenDetails: UsageTokenDetails
+  billing: UsageBilling | null
+  costs: UsageCost[]
+  costCoverage: UsageCostCoverage
+  firstTokenLatencyMsDisplay: string
+  latencyMsDisplay: string
+  logicalOutcome: string
+  providerMetadata: Record<string, unknown>
+  requestBody?: unknown
+  responseBody?: unknown
+  attempts?: UsageAttempt[]
+  attemptsComplete?: boolean
+}
+
+const CORE_METADATA_KEYS = new Set([
+  'protocol',
+  'logicalOutcome',
+  'attemptCount',
+  'requestedModel',
+  'upstreamModel',
+  'clientIp',
+  'userAgent',
+  'reasoningEffort',
+  'reasoningPreset',
+  'compact',
+  'requestKind',
+  'subagentKind',
+  'transport',
+  'httpVersion',
+  'clientStatusCode',
+  'upstreamStatusCode',
+  'responseId',
+  'upstreamRequestId',
+  'websocketPool',
+  'imageGenerationRequested',
+  'imageGenerationSucceeded',
+  'latencyDetails',
+])
+
+function metadataRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+/** 一次性兼容 normalize：顶层 Core 字段优先，旧响应中的 metadata 回退只发生在这里。 */
+export function normalizeUsageRecord(record: UsageRecord | UsageRecordDetail): UsageViewModel {
+  const metadata = metadataRecord(record.metadata)
+  const legacy = <T>(top: T | null | undefined, key: string): T | null | undefined =>
+    top ?? (metadata[key] as T | undefined)
+
+  const latencyDetails = legacy(record.latencyDetails, 'latencyDetails') ?? null
+  const providerMetadata: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(metadata)) {
+    if (!CORE_METADATA_KEYS.has(key))
+      providerMetadata[key] = value
+  }
+
+  return {
+    id: record.id,
+    requestId: record.requestId,
+    clientApiKeyId: record.clientApiKeyId,
+    kind: record.kind,
+    provider: record.provider,
+    authenticationKind: record.authenticationKind,
+    accountId: record.accountId,
+    accountEmail: record.accountEmail,
+    accountName: record.accountName,
+    route: record.route,
+    model: record.model,
+    requestedModel: legacy(record.requestedModel, 'requestedModel') ?? null,
+    upstreamModel: legacy(record.upstreamModel, 'upstreamModel') ?? null,
+    serviceTier: record.serviceTier,
+    statusCode: record.statusCode,
+    transport: legacy(record.transport, 'transport') ?? null,
+    stream: typeof metadata.stream === 'boolean' ? metadata.stream : null,
+    apiKind: typeof metadata.apiKind === 'string' ? metadata.apiKind : null,
+    attemptIndex: record.attemptIndex,
+    attemptCount: legacy(record.attemptCount, 'attemptCount') ?? 0,
+    responseId: legacy(record.responseId, 'responseId') ?? null,
+    upstreamRequestId: legacy(record.upstreamRequestId, 'upstreamRequestId') ?? null,
+    protocol: legacy(record.protocol, 'protocol') ?? '',
+    httpVersion: legacy(record.httpVersion, 'httpVersion') ?? null,
+    clientStatusCode: legacy(record.clientStatusCode, 'clientStatusCode') ?? null,
+    upstreamStatusCode: legacy(record.upstreamStatusCode, 'upstreamStatusCode') ?? null,
+    websocketPool: legacy(record.websocketPool, 'websocketPool') ?? null,
+    imageGenerationRequested:
+      legacy(record.imageGenerationRequested, 'imageGenerationRequested') ?? false,
+    imageGenerationSucceeded:
+      legacy(record.imageGenerationSucceeded, 'imageGenerationSucceeded') ?? null,
+    latencyMs: record.latencyMs,
+    firstTokenLatencyMs: record.firstTokenLatencyMs,
+    latencyDetails,
+    inputTokens: record.inputTokens,
+    outputTokens: record.outputTokens,
+    cachedTokens: record.cachedTokens,
+    cacheWriteTokens: record.cacheWriteTokens,
+    reasoningTokens: record.reasoningTokens,
+    imageInputTokens: record.imageInputTokens,
+    imageOutputTokens: record.imageOutputTokens,
+    message: record.message,
+    createdAt: record.createdAt,
+    createdAtDisplay: record.createdAtDisplay,
+    clientIp: legacy(record.clientIp, 'clientIp') ?? null,
+    userAgent: legacy(record.userAgent, 'userAgent') ?? null,
+    reasoningEffort: legacy(record.reasoningEffort, 'reasoningEffort') ?? null,
+    reasoningPreset: legacy(record.reasoningPreset, 'reasoningPreset') ?? null,
+    compact: legacy(record.compact, 'compact') ?? false,
+    requestKind: legacy(record.requestKind, 'requestKind') ?? null,
+    subagentKind: legacy(record.subagentKind, 'subagentKind') ?? null,
+    tokenDetails: record.tokenDetails,
+    billing: record.billing,
+    costs: record.costs,
+    costCoverage: record.costCoverage,
+    firstTokenLatencyMsDisplay: record.firstTokenLatencyMsDisplay,
+    latencyMsDisplay: record.latencyMsDisplay,
+    logicalOutcome: legacy(record.logicalOutcome, 'logicalOutcome') ?? '',
+    providerMetadata,
+    requestBody: metadata.requestBody,
+    responseBody: metadata.responseBody,
+    attempts: 'attempts' in record ? record.attempts : undefined,
+    attemptsComplete: 'attemptsComplete' in record ? record.attemptsComplete : undefined,
+  }
 }

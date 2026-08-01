@@ -1,25 +1,25 @@
-import type { getDashboardSummary, getUsageRecords } from '@/api'
+// Usage 记录的单一规范化 view model 消费层。
+//
+// 组件只消费 `UsageDisplayRecord`（即 `UsageViewModel`）；兼容性回退只存在于
+// `normalizeUsageRecord`（api/modules/usage.ts），组件不再逐字段 fallback。
+
+import type { UsageViewModel } from '@/api'
+
 import { formatDuration } from './format'
 
-type UsageRecord = Awaited<ReturnType<typeof getUsageRecords>>['items'][number]
-type DashboardUsageRecord = Awaited<ReturnType<typeof getDashboardSummary>>['usageRecords'][number]
-export type UsageDisplayRecord = UsageRecord | DashboardUsageRecord
+export type UsageDisplayRecord = UsageViewModel
 
 export function usageRecordType(record: UsageDisplayRecord) {
-  const metadata = recordMetadata(record)
-  if (record?.transport === 'websocket') {
+  if (record.transport === 'websocket')
     return 'WS'
-  }
 
-  if (metadata?.stream === true || record.transport === 'http_sse') {
+  if (record.stream === true || record.transport === 'http_sse')
     return 'SSE'
-  }
 
-  if (metadata?.stream === false) {
+  if (record.stream === false)
     return 'HTTP'
-  }
 
-  return metadata?.apiKind === 'chat' ? 'Chat' : 'HTTP'
+  return record.apiKind === 'chat' ? 'Chat' : 'HTTP'
 }
 
 export function usageRecordTypeClass(record: UsageDisplayRecord) {
@@ -42,22 +42,18 @@ export function usageAuthenticationKind(record: UsageDisplayRecord) {
 }
 
 export function usageClientIp(record: UsageDisplayRecord) {
-  return record.clientIp || stringProperty(recordMetadata(record), 'clientIp') || '—'
+  return record.clientIp || '—'
 }
 
 export function usageUserAgent(record: UsageDisplayRecord) {
-  return record.userAgent || stringProperty(recordMetadata(record), 'userAgent') || '—'
+  return record.userAgent || '—'
 }
 
 export function usageReasoningEffort(record: UsageDisplayRecord) {
-  const metadata = recordMetadata(record)
-  const reasoningEffort
-    = record.reasoningEffort || stringProperty(metadata, 'reasoningEffort') || '—'
-  if (usageIsSubagent(record)) {
+  const reasoningEffort = record.reasoningEffort || '—'
+  if (usageIsSubagent(record))
     return reasoningEffort
-  }
-
-  return record.reasoningPreset || stringProperty(metadata, 'reasoningPreset') || reasoningEffort
+  return record.reasoningPreset || reasoningEffort
 }
 
 export function usageIsSubagent(record: UsageDisplayRecord) {
@@ -65,13 +61,12 @@ export function usageIsSubagent(record: UsageDisplayRecord) {
 }
 
 export function usageIsCompact(record: UsageDisplayRecord) {
-  return record.compact === true || recordMetadata(record)?.compact === true
+  return record.compact === true
 }
 
 export function usageModelDisplay(record: UsageDisplayRecord) {
-  const metadata = recordMetadata(record)
-  const requestedModel = record.requestedModel || stringProperty(metadata, 'requestedModel') || ''
-  const upstreamModel = record.upstreamModel || stringProperty(metadata, 'upstreamModel') || ''
+  const requestedModel = record.requestedModel || ''
+  const upstreamModel = record.upstreamModel || ''
   const storedModel = record.model || ''
   const primary = requestedModel || storedModel || upstreamModel || '—'
   const secondary
@@ -89,14 +84,14 @@ export function usageTokenDetails(record: UsageDisplayRecord) {
 }
 
 export function usageLatencyDetails(record: UsageDisplayRecord) {
-  const latencyDetails = recordLatencyDetails(record)
+  const latencyDetails = record.latencyDetails
   const firstTokenMs = durationValue(
-    record.firstTokenLatencyMs ?? property(latencyDetails, 'firstTokenMs'),
+    record.firstTokenLatencyMs ?? latencyDetails?.firstTokenMs,
   )
-  const firstEventMs = durationValue(property(latencyDetails, 'firstEventMs'))
+  const firstEventMs = durationValue(latencyDetails?.firstEventMs)
   const totalMs = durationValue(record.latencyMs)
-  const firstReasoningMs = durationValue(property(latencyDetails, 'firstReasoningMs'))
-  const firstTextMs = durationValue(property(latencyDetails, 'firstTextMs'))
+  const firstReasoningMs = durationValue(latencyDetails?.firstReasoningMs)
+  const firstTextMs = durationValue(latencyDetails?.firstTextMs)
   const breakdownItems = []
 
   if (firstTokenMs !== null && totalMs !== null && firstTokenMs <= totalMs) {
@@ -123,12 +118,12 @@ export function usageLatencyDetails(record: UsageDisplayRecord) {
   const transportItems = [
     {
       label: '传输决策等待',
-      value: durationValue(property(latencyDetails, 'transportDecisionWaitMs')),
+      value: durationValue(latencyDetails?.transportDecisionWaitMs),
     },
-    { label: 'WebSocket 连接', value: durationValue(property(latencyDetails, 'wsConnectMs')) },
-    { label: '上游响应头', value: durationValue(property(latencyDetails, 'upstreamHeadersMs')) },
+    { label: 'WebSocket 连接', value: durationValue(latencyDetails?.wsConnectMs) },
+    { label: '上游响应头', value: durationValue(latencyDetails?.upstreamHeadersMs) },
     { label: '首个上游事件', value: firstEventMs },
-    { label: '上游处理', value: durationValue(property(latencyDetails, 'openaiProcessingMs')) },
+    { label: '上游处理', value: durationValue(latencyDetails?.openaiProcessingMs) },
   ]
     .filter(item => item.value !== null)
     .map(item => ({ ...item, value: formatDuration(item.value) }))
@@ -152,23 +147,20 @@ export function usageBillingText(record: UsageDisplayRecord) {
 }
 
 export function visibleRequestText(record: UsageDisplayRecord) {
-  const body = property(recordMetadata(record), 'requestBody')
-  if (!body) {
+  const body = record.requestBody
+  if (!body)
     return ''
-  }
 
   return extractInputText(body) || JSON.stringify(body, null, 2)
 }
 
 export function visibleResponseText(record: UsageDisplayRecord) {
-  const body = property(recordMetadata(record), 'responseBody')
-  if (!body) {
+  const body = record.responseBody
+  if (!body)
     return ''
-  }
 
-  if (typeof body === 'string') {
+  if (typeof body === 'string')
     return body
-  }
 
   return stringProperty(asRecord(body), 'output_text') || extractOutputText(body) || JSON.stringify(body, null, 2)
 }
@@ -179,24 +171,20 @@ function durationValue(value: unknown) {
 
 function extractInputText(body: unknown) {
   const input = property(asRecord(body), 'input')
-  if (typeof input === 'string') {
+  if (typeof input === 'string')
     return input
-  }
 
-  if (!Array.isArray(input)) {
+  if (!Array.isArray(input))
     return ''
-  }
 
   return input
     .flatMap((item) => {
       const content = property(asRecord(item), 'content')
-      if (typeof content === 'string') {
+      if (typeof content === 'string')
         return [content]
-      }
 
-      if (!Array.isArray(content)) {
+      if (!Array.isArray(content))
         return []
-      }
 
       return content.flatMap((part) => {
         const value = asRecord(part)
@@ -210,9 +198,8 @@ function extractInputText(body: unknown) {
 
 function extractOutputText(body: unknown) {
   const output = property(asRecord(body), 'output')
-  if (!Array.isArray(output)) {
+  if (!Array.isArray(output))
     return ''
-  }
 
   return output
     .flatMap((item) => {
@@ -226,17 +213,6 @@ function extractOutputText(body: unknown) {
     })
     .filter(Boolean)
     .join('\n')
-}
-
-function recordMetadata(record: UsageDisplayRecord) {
-  return asRecord('metadata' in record ? record.metadata : undefined)
-}
-
-function recordLatencyDetails(record: UsageDisplayRecord) {
-  const metadata = recordMetadata(record)
-  return asRecord('latencyDetails' in record ? record.latencyDetails : undefined)
-    ?? asRecord(property(metadata, 'latencyDetails'))
-    ?? metadata
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
