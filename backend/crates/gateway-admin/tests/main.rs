@@ -18,7 +18,7 @@ use gateway_admin::{
 };
 
 mod backup;
-mod backup_runtime;
+mod model;
 mod use_case;
 
 #[test]

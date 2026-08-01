@@ -12,6 +12,7 @@ mod admission_recovery;
 mod backup;
 mod client_keys;
 mod execution;
+mod execution_buffer;
 mod observability;
 mod ops_events;
 mod provider_accounts;
