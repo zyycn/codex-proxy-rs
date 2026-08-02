@@ -34,7 +34,7 @@ use gateway_core::error::StoreErrorKind;
 use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
 use gateway_core::provider_ports::{
     NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingClaimOutcome, OAuthPendingConsumeOutcome,
-    OAuthPendingFlowPort, OAuthPendingPutOutcome, OAuthPendingReleaseOutcome,
+    OAuthPendingFlowPort, OAuthPendingPutOutcome, OAuthPendingReleaseOutcome, ProviderCooldownPort,
     ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError, ProviderStoreErrorKind,
 };
 use gateway_core::routing::{ProviderKind, UpstreamModelId};
@@ -143,6 +143,7 @@ pub(crate) struct XaiAdminProvider {
     quota: Arc<GrokCredentialQuotaService>,
     catalog: Arc<GrokCredentialCatalogService>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
+    cooldowns: Arc<dyn ProviderCooldownPort>,
 }
 
 pub(crate) struct XaiAdminServices {
@@ -154,6 +155,7 @@ pub(crate) struct XaiAdminServices {
     pub(crate) quota: Arc<GrokCredentialQuotaService>,
     pub(crate) catalog: Arc<GrokCredentialCatalogService>,
     pub(crate) runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
+    pub(crate) cooldowns: Arc<dyn ProviderCooldownPort>,
 }
 
 impl XaiAdminProvider {
@@ -178,6 +180,7 @@ impl XaiAdminProvider {
             quota: services.quota,
             catalog: services.catalog,
             runtime_policy: services.runtime_policy,
+            cooldowns: services.cooldowns,
         }
     }
 
@@ -325,7 +328,10 @@ impl ProviderAdmin for XaiAdminProvider {
         &self.provider_kind
     }
 
-    async fn account_unavailable(&self, _account_id: &ProviderAccountId) {}
+    async fn account_unavailable(&self, account_id: &ProviderAccountId) {
+        // 删除/禁用账号：清除该账号全部 account/model scoped cooldown key。
+        let _ = self.cooldowns.clear_all(account_id).await;
+    }
 
     fn connection_test_operation(
         &self,
@@ -1041,6 +1047,7 @@ fn project_quota(
             observed_at: None,
             refresh_token_expires_at,
             windows: Vec::new(),
+            limit_reached: false,
             provider_data: None,
         };
     };
@@ -1105,6 +1112,9 @@ fn project_quota(
         observed_at: Some(snapshot.observed_at()),
         refresh_token_expires_at,
         windows: vec![window],
+        limit_reached: billing
+            .used_percent()
+            .is_some_and(|used| used.is_finite() && used >= 100.0),
         provider_data: None,
     }
 }

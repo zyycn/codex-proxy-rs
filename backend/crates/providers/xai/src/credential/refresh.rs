@@ -651,18 +651,11 @@ impl GrokCredentialRefreshService {
     }
 
     async fn runtime_cooldown_active(&self, credential: &DueGrokCredential) -> bool {
+        // runtime cooldown 是账号/model 级生命周期，与 credential revision 无关：
+        // 轮换不清除、不因 revision 变化判失效（与 selector 的读取语义一致）。
         let Ok(Some(cooldown)) = self.cooldowns.read(credential.account_id()).await else {
             return false;
         };
-        if cooldown.credential_revision() != credential.credential_revision() {
-            if cooldown.credential_revision() < credential.credential_revision() {
-                let _ = self
-                    .cooldowns
-                    .clear(credential.account_id(), credential.credential_revision())
-                    .await;
-            }
-            return false;
-        }
         cooldown.until() > SystemTime::now()
     }
 

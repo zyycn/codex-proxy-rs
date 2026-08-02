@@ -786,6 +786,7 @@ pub(crate) fn dashboard_view(
             active: provider_accounts.active,
             rate_limited: provider_accounts.rate_limited,
             expired: provider_accounts.expired,
+            invalid: provider_accounts.invalid,
             quota_exhausted: provider_accounts.quota_exhausted,
             refreshing: provider_accounts.refreshing,
             disabled: provider_accounts.disabled,

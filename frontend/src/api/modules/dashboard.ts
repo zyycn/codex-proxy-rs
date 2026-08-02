@@ -146,6 +146,7 @@ export interface DashboardPoolSummary {
   active: number
   rateLimited: number
   expired: number
+  invalid: number
   quotaExhausted: number
   refreshing: number | null
   disabled: number

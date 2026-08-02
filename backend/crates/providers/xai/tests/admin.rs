@@ -672,6 +672,13 @@ impl ProviderCooldownPort for TestCooldown {
     ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
         Box::pin(async { Ok(false) })
     }
+
+    fn clear_all<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
 }
 
 struct TestRuntimePolicy;

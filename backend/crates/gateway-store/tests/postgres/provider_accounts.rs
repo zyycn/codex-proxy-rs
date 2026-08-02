@@ -760,10 +760,9 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
         i64,
         Option<serde_json::Value>,
         String,
-        Option<String>,
     ) = sqlx::query_as(
         "select name, provider_credentials_json, credential_revision, provider_quota_json,
-                availability, availability_reason
+                availability
          from provider_accounts where id = 'acct_admin_upsert'",
     )
     .fetch_one(&database.pool)
@@ -777,7 +776,6 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
         "credential replacement must clear stale quota"
     );
     assert_eq!(row.4, "banned");
-    assert_eq!(row.5.as_deref(), Some("upstream_account_deactivated"));
 
     repository
         .import_provider_accounts(ImportProviderAccounts {
@@ -945,24 +943,21 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
         .await
         .expect("import provider accounts");
     assert_eq!(imported.config_revision.get(), 2);
-    let ready: (bool, String, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
-        "select enabled, availability, cooldown_until from provider_accounts where id = $1",
-    )
-    .bind("acct_admin_a")
-    .fetch_one(&database.pool)
-    .await
-    .expect("load ready imported account");
-    assert_eq!(ready, (true, "ready".to_owned(), None));
-    let cooldown: (bool, String, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
-        "select enabled, availability, cooldown_until from provider_accounts where id = $1",
-    )
-    .bind("acct_admin_b")
-    .fetch_one(&database.pool)
-    .await
-    .expect("load cooldown imported account");
+    let ready: (bool, String) =
+        sqlx::query_as("select enabled, availability from provider_accounts where id = $1")
+            .bind("acct_admin_a")
+            .fetch_one(&database.pool)
+            .await
+            .expect("load ready imported account");
+    assert_eq!(ready, (true, "ready".to_owned()));
+    let cooldown: (bool, String) =
+        sqlx::query_as("select enabled, availability from provider_accounts where id = $1")
+            .bind("acct_admin_b")
+            .fetch_one(&database.pool)
+            .await
+            .expect("load cooldown imported account");
     assert!(cooldown.0);
-    assert_eq!(cooldown.1, "cooldown");
-    assert!(cooldown.2.is_some());
+    assert_eq!(cooldown.1, "ready");
 
     repository
         .import_provider_accounts(ImportProviderAccounts {
@@ -1009,7 +1004,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 
     sqlx::query(
         "update provider_accounts
-         set availability = 'expired', availability_reason = 'credential_expired'
+         set availability = 'expired'
          where id = $1",
     )
     .bind("acct_admin_a")
@@ -1032,15 +1027,8 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
         .expect("rotate provider account");
     assert_eq!(rotation.config_revision.get(), 3);
     assert_eq!(rotation.credential_revision.get(), 2);
-    let restored: (
-        String,
-        Option<String>,
-        Option<chrono::DateTime<Utc>>,
-        String,
-        Option<String>,
-    ) = sqlx::query_as(
-        "select availability, availability_reason, cooldown_until,
-                upstream_user_id, upstream_account_id
+    let restored: (String, String, Option<String>) = sqlx::query_as(
+        "select availability, upstream_user_id, upstream_account_id
          from provider_accounts where id = $1",
     )
     .bind("acct_admin_a")
@@ -1051,8 +1039,6 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
         restored,
         (
             "ready".to_owned(),
-            None,
-            None,
             "user-admin-rebound".to_owned(),
             Some("workspace-admin-rebound".to_owned()),
         )
@@ -1178,20 +1164,13 @@ async fn verified_credential_rotation_preserves_quota_exhaustion() {
         .await
         .expect("rotate exhausted account credential");
 
-    let availability: (String, Option<String>) = sqlx::query_as(
-        "select availability, availability_reason from provider_accounts where id = $1",
-    )
-    .bind("acct_rotation_quota")
-    .fetch_one(&database.pool)
-    .await
-    .expect("load exhausted account after credential rotation");
-    assert_eq!(
-        availability,
-        (
-            "quota_exhausted".to_owned(),
-            Some("quota_exhausted".to_owned()),
-        ),
-    );
+    let availability: String =
+        sqlx::query_scalar("select availability from provider_accounts where id = $1")
+            .bind("acct_rotation_quota")
+            .fetch_one(&database.pool)
+            .await
+            .expect("load exhausted account after credential rotation");
+    assert_eq!(availability, "quota_exhausted".to_owned());
 
     database.close().await;
 }
@@ -1321,9 +1300,8 @@ async fn disabled_account_preserves_user_state_during_refresh_writes() {
         .await
         .expect("refresh disabled account credential");
 
-    let current: (bool, String, Option<String>, serde_json::Value, i64) = sqlx::query_as(
-        "select enabled, availability, availability_reason,
-                provider_credentials_json, credential_revision
+    let current: (bool, String, serde_json::Value, i64) = sqlx::query_as(
+        "select enabled, availability, provider_credentials_json, credential_revision
          from provider_accounts where id = $1",
     )
     .bind(account_id.as_str())
@@ -1332,9 +1310,8 @@ async fn disabled_account_preserves_user_state_during_refresh_writes() {
     .expect("load disabled account after refresh writes");
     assert!(!current.0);
     assert_eq!(current.1, "expired");
-    assert_eq!(current.2.as_deref(), Some("credential_expired"));
-    assert_eq!(current.3["access_token"], "disabled-refreshed-secret");
-    assert_eq!(current.4, 2);
+    assert_eq!(current.2["access_token"], "disabled-refreshed-secret");
+    assert_eq!(current.3, 2);
 
     database.close().await;
 }

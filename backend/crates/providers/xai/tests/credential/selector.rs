@@ -10,8 +10,8 @@ use gateway_core::engine::credential::{
     QuotaWriteOutcome, RotationStrategy,
 };
 use gateway_core::provider_ports::{
-    ProviderCooldownScope, ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
-    ProviderSchedulingState, ProviderStoreError,
+    ProviderCooldownPort, ProviderCooldownScope, ProviderLeaseAcquisition, ProviderLeasePort,
+    ProviderLeaseRequest, ProviderSchedulingState, ProviderStoreError,
 };
 use gateway_core::routing::UpstreamModelId;
 use provider_xai::{
@@ -444,7 +444,7 @@ async fn successful_request_clears_the_persisted_cooldown_state() {
 }
 
 #[tokio::test]
-async fn payment_required_feedback_persists_account_quota_exhaustion() {
+async fn payment_required_feedback_writes_short_account_cooldown_without_persisting_exhaustion() {
     let fixture = SelectorFixture::new(&["payment-required", "available"]).await;
     let session = fixture
         .selector
@@ -462,15 +462,22 @@ async fn payment_required_feedback_persists_account_quota_exhaustion() {
         )
         .await;
 
+    // bare 402 无结构化 quota code：只写短期账号 runtime cooldown，
+    // 不持久化 QuotaExhausted（避免长期错误状态）。
     assert_eq!(
         fixture
             .store
             .account(&selected)
             .expect("selected account")
             .availability(),
-        AccountAvailability::QuotaExhausted
+        AccountAvailability::Ready
     );
-    assert!(fixture.cooldowns.cooldown(&selected).is_none());
+    assert!(
+        fixture
+            .cooldowns
+            .cooldown(&selected)
+            .is_some_and(|cooldown| cooldown.until() > SystemTime::now())
+    );
     let next = fixture
         .selector
         .select(fixture.request(BTreeSet::new()))
@@ -480,7 +487,7 @@ async fn payment_required_feedback_persists_account_quota_exhaustion() {
 }
 
 #[tokio::test]
-async fn free_model_quota_feedback_persists_resettable_account_exhaustion() {
+async fn model_quota_feedback_writes_model_scoped_cooldown_without_blocking_other_models() {
     let fixture = SelectorFixture::new(&["model-quota", "available"]).await;
     let failed_model = UpstreamModelId::new("grok-4.5").expect("failed model");
     let session = fixture
@@ -504,33 +511,31 @@ async fn free_model_quota_feedback_persists_resettable_account_exhaustion() {
     assert_eq!(account.availability(), AccountAvailability::Ready);
     let minimum_until = SystemTime::now() + Duration::from_secs(23 * 60 * 60);
     let scope = ProviderCooldownScope::upstream_model(failed_model);
+    // model-scoped cooldown：目标模型被排除，账号级无 cooldown。
     assert!(
         fixture
             .cooldowns
             .scoped_cooldown(&selected, &scope)
-            .is_none()
-    );
-    assert!(
-        fixture
-            .cooldowns
-            .cooldown(&selected)
             .is_some_and(|cooldown| cooldown.until() > minimum_until)
     );
+    assert!(fixture.cooldowns.cooldown(&selected).is_none());
+    // 失败模型不可选（ModelCoolingDown 由 model-scoped cooldown 派生）。
     assert!(matches!(
         fixture
             .selector
-            .select(fixture.request_for_model("grok-4.6", Some(selected.clone())))
+            .select(fixture.request_for_model("grok-4.5", Some(selected.clone())))
             .await,
-        Err(GrokSessionSelectorError::AccountCoolingDown {
+        Err(GrokSessionSelectorError::ModelCoolingDown {
             retry_after: Some(_)
         })
     ));
-    let next = fixture
+    // 另一模型不受 model cooldown 影响：同一账号在 grok-4.6 下仍可选。
+    let other_model = fixture
         .selector
-        .select(fixture.request_for_model("grok-4.6", None))
+        .select(fixture.request_for_model("grok-4.6", Some(selected.clone())))
         .await
-        .expect("another account remains schedulable");
-    assert_ne!(next.account_id(), &selected);
+        .expect("model-scoped cooldown must not block other models");
+    assert_eq!(other_model.account_id(), &selected);
 }
 
 #[tokio::test]
@@ -970,4 +975,112 @@ async fn quota_reset_strategy_uses_provider_reported_earliest_reset() {
         .expect("reset-ranked account");
 
     assert_eq!(session.account_id(), &account_id("zzz-earlier-reset"));
+}
+
+#[tokio::test]
+async fn deleting_account_clears_all_account_and_model_scoped_cooldowns() {
+    // 删除账号后其 account/model scoped cooldown key 全部清除。
+    let fixture = SelectorFixture::new(&["clear-cooldowns", "available"]).await;
+    let session = fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+        .expect("session");
+    let selected = session.account_id().clone();
+    let model = UpstreamModelId::new("grok-4.5").expect("model");
+    // 写 account cooldown + model scoped cooldown。
+    fixture
+        .selector
+        .record_failure(
+            &session,
+            GrokCredentialFailure::RateLimited {
+                retry_after: Some(Duration::from_secs(60)),
+            },
+        )
+        .await;
+    fixture
+        .selector
+        .record_failure(
+            &session,
+            GrokCredentialFailure::ModelQuotaExhausted {
+                upstream_model: model.clone(),
+                retry_after: Some(Duration::from_secs(3600)),
+            },
+        )
+        .await;
+    assert!(fixture.cooldowns.cooldown(&selected).is_some());
+    assert!(
+        fixture
+            .cooldowns
+            .scoped_cooldown(
+                &selected,
+                &ProviderCooldownScope::upstream_model(model.clone())
+            )
+            .is_some()
+    );
+
+    // 删除账号（clear_all 清全部）。
+    fixture
+        .cooldowns
+        .clear_all(&selected)
+        .await
+        .expect("clear all cooldowns");
+    assert!(fixture.cooldowns.cooldown(&selected).is_none());
+    assert!(
+        fixture
+            .cooldowns
+            .scoped_cooldown(
+                &selected,
+                &ProviderCooldownScope::upstream_model(model.clone())
+            )
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn bare_402_cooldown_expires_and_account_recovers_without_persisted_exhaustion() {
+    // bare 402 只写短期 account cooldown，不持久化
+    // QuotaExhausted；退避到期后账号自动恢复可选。
+    let fixture = SelectorFixture::new(&["payment-recover", "available"]).await;
+    let session = fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+        .expect("session");
+    let selected = session.account_id().clone();
+    fixture
+        .selector
+        .record_failure(
+            &session,
+            GrokCredentialFailure::PaymentRequired {
+                retry_after: Some(Duration::from_secs(1)),
+            },
+        )
+        .await;
+
+    // 退避活跃期间该账号被排除，另一账号可选。
+    assert_eq!(
+        fixture
+            .store
+            .account(&selected)
+            .expect("account")
+            .availability(),
+        AccountAvailability::Ready,
+        "bare 402 must not persist QuotaExhausted"
+    );
+    let next = fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+        .expect("another account available during cooldown");
+    assert_ne!(next.account_id(), &selected);
+
+    // 等短 cooldown 到期。
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    let recovered = fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+        .expect("account recovers after cooldown expiry");
+    assert_eq!(recovered.account_id(), &selected);
 }

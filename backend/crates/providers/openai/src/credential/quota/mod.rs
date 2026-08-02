@@ -1,10 +1,21 @@
-//! Codex quota 原始观察、Provider-owned 解析与账号状态投影。
+//! Codex quota 服务编排：请求级额度投影、被动/主动同步与 429 合成。
+//!
+//! - [`snapshot`]：快照/窗口解析、聚合、O(1) 滚动与调度信号。
+//! - [`recovery`]：402 恢复证据与 availability 转换。
+
+pub(crate) mod recovery;
+pub(crate) mod snapshot;
+
+pub use snapshot::{
+    CodexAccountQuotaSnapshot, CodexQuotaFact, CodexQuotaWindow, CodexQuotaWindowKind,
+    CodexQuotaWindowRole, parse_codex_quota_usage,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use gateway_core::engine::credential::{
     AccountAvailability, AccountQuotaSignals, CredentialRevision, OpaqueProviderData,
     ProviderAccount, ProviderAccountId, ProviderAccountStore, QuotaObservation, QuotaWriteOutcome,
@@ -12,7 +23,7 @@ use gateway_core::engine::credential::{
 use gateway_protocol::openai::events::{
     ParsedRateLimits, RateLimitDetails, RateLimitWindow, parse_rate_limit_headers,
 };
-use reqwest::{Client, StatusCode};
+use reqwest::Client;
 use secrecy::ExposeSecret;
 use serde_json::{Map, Number, Value};
 use thiserror::Error;
@@ -24,9 +35,14 @@ use crate::transport::{CodexBackendClient, CodexClientError, CodexRequestContext
 
 use super::agent_identity::{CodexAgentIdentityTaskService, PreparedCodexRuntimeCredential};
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
+use recovery::{QuotaRecoveryEvidence, quota_state_transition, quota_success_state};
+use snapshot::{
+    parse_account_quota_snapshot, quota_projection_ttl, quota_snapshot_from_observation,
+    scheduling_signals_from_snapshot,
+};
 
 const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
-const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);
+pub(crate) const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);
 const QUOTA_HYDRATION_FAILURE_TTL: Duration = Duration::from_secs(5);
 const QUOTA_PERIODIC_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(30 * 60);
 // 5xx 上游拒绝的短退避重试预算；指数退避 1s/2s，吞掉瞬时抖动。
@@ -55,174 +71,6 @@ impl CodexQuotaRefreshPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CodexQuotaFact {
-    remaining_percent: Option<u8>,
-    resets_at: Option<DateTime<Utc>>,
-    exhausted: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CodexQuotaWindowKind {
-    ShortTerm,
-    Weekly,
-    Monthly,
-    Other,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CodexQuotaWindowRole {
-    Primary,
-    Secondary,
-    Monthly,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct CodexQuotaWindow {
-    key: String,
-    source: String,
-    /// 上游提供的限流名称（`metered_feature`/`limit_name`/`limitId`）；显示优先用它。
-    limit_name: Option<String>,
-    kind: CodexQuotaWindowKind,
-    role: CodexQuotaWindowRole,
-    window_seconds: Option<u64>,
-    used_percent: Option<f64>,
-    reset_at: Option<DateTime<Utc>>,
-    limit_reached: bool,
-}
-
-impl CodexQuotaWindow {
-    #[must_use]
-    pub fn key(&self) -> &str {
-        &self.key
-    }
-
-    #[must_use]
-    pub fn source(&self) -> &str {
-        &self.source
-    }
-
-    #[must_use]
-    pub fn limit_name(&self) -> Option<&str> {
-        self.limit_name.as_deref()
-    }
-
-    #[must_use]
-    pub const fn kind(&self) -> CodexQuotaWindowKind {
-        self.kind
-    }
-
-    #[must_use]
-    pub const fn role(&self) -> CodexQuotaWindowRole {
-        self.role
-    }
-
-    #[must_use]
-    pub const fn window_seconds(&self) -> Option<u64> {
-        self.window_seconds
-    }
-
-    #[must_use]
-    pub const fn used_percent(&self) -> Option<f64> {
-        self.used_percent
-    }
-
-    #[must_use]
-    pub const fn reset_at(&self) -> Option<DateTime<Utc>> {
-        self.reset_at
-    }
-
-    /// 该窗口是否已触顶（`limit_reached` 或 `used_percent >= 100`）。
-    #[must_use]
-    pub const fn limit_reached(&self) -> bool {
-        self.limit_reached
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct CodexAccountQuotaSnapshot {
-    account_id: ProviderAccountId,
-    credential_revision: CredentialRevision,
-    observed_at: SystemTime,
-    fact: CodexQuotaFact,
-    windows: Vec<CodexQuotaWindow>,
-}
-
-impl CodexAccountQuotaSnapshot {
-    #[must_use]
-    pub const fn account_id(&self) -> &ProviderAccountId {
-        &self.account_id
-    }
-
-    #[must_use]
-    pub const fn credential_revision(&self) -> CredentialRevision {
-        self.credential_revision
-    }
-
-    #[must_use]
-    pub const fn observed_at(&self) -> SystemTime {
-        self.observed_at
-    }
-
-    #[must_use]
-    pub const fn fact(&self) -> CodexQuotaFact {
-        self.fact
-    }
-
-    #[must_use]
-    pub fn windows(&self) -> &[CodexQuotaWindow] {
-        &self.windows
-    }
-
-    /// 投影滚动已过期窗口：`reset_at` 已过的窗口 `used_percent=0`、
-    /// `limit_reached=false`、`reset_at` 滚到下一个周期（reset 到期自动归零）。
-    /// 只作用于展示/调度投影，不写回持久化 raw JSON。
-    #[must_use]
-    pub fn roll_expired_windows(mut self, now: SystemTime) -> Self {
-        for window in &mut self.windows {
-            let Some(reset_at) = window.reset_at else {
-                continue;
-            };
-            let reset = SystemTime::from(reset_at);
-            if reset > now {
-                continue;
-            }
-            window.used_percent = Some(0.0);
-            window.limit_reached = false;
-            if let Some(window_seconds) = window.window_seconds.filter(|seconds| *seconds > 0) {
-                let mut next = reset;
-                while next <= now {
-                    let Some(after) = next.checked_add(Duration::from_secs(window_seconds)) else {
-                        break;
-                    };
-                    next = after;
-                }
-                window.reset_at = Some(DateTime::<Utc>::from(next));
-            } else {
-                window.reset_at = None;
-            }
-        }
-        self
-    }
-}
-
-impl CodexQuotaFact {
-    #[must_use]
-    pub const fn remaining_percent(&self) -> Option<u8> {
-        self.remaining_percent
-    }
-
-    #[must_use]
-    pub const fn resets_at(&self) -> Option<DateTime<Utc>> {
-        self.resets_at
-    }
-
-    #[must_use]
-    pub const fn exhausted(&self) -> bool {
-        self.exhausted
-    }
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CodexQuotaSyncSummary {
     pub updated: u64,
@@ -230,12 +78,6 @@ pub struct CodexQuotaSyncSummary {
     pub banned: u64,
     pub transient: u64,
     pub stale: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum QuotaRecoveryEvidence {
-    SuccessfulResponse,
-    RefreshedSnapshot,
 }
 
 impl CodexQuotaSyncSummary {
@@ -351,7 +193,7 @@ impl CodexQuotaSchedulingProjection {
     }
 
     fn observe(&self, snapshot: &CodexAccountQuotaSnapshot) -> bool {
-        let Some(remaining_ttl) = quota_projection_ttl(snapshot.observed_at()) else {
+        let Some(remaining_ttl) = quota_projection_ttl(snapshot) else {
             return false;
         };
         self.replace(
@@ -390,7 +232,7 @@ impl CodexQuotaSchedulingProjection {
         target: &CodexQuotaHydrationTarget,
         snapshot: &CodexAccountQuotaSnapshot,
     ) -> bool {
-        let Some(remaining_ttl) = quota_projection_ttl(snapshot.observed_at()) else {
+        let Some(remaining_ttl) = quota_projection_ttl(snapshot) else {
             return false;
         };
         let mut state = self
@@ -549,6 +391,21 @@ impl CodexCredentialQuotaService {
         }
     }
 
+    /// 写入新快照前读取旧确认 reset（402 恢复用「旧 reset 已到期」判定）。
+    async fn previous_confirmed_reset(&self, account: &ProviderAccount) -> Option<SystemTime> {
+        let observations = self
+            .store
+            .get_quotas(std::slice::from_ref(account.id()))
+            .await
+            .ok()?;
+        let observation = observations.into_iter().find(|observation| {
+            observation.account_id == *account.id()
+                && observation.expected_revision == account.revision()
+        })?;
+        let snapshot = quota_snapshot_from_observation(&observation)?;
+        snapshot.fact().resets_at().map(SystemTime::from)
+    }
+
     /// 批量预热请求级额度投影；持久层或 Provider JSON 异常只退化为未知额度。
     pub async fn prepare_scheduling(&self, accounts: &[ProviderAccount]) {
         if self.scheduling.hydration_targets(accounts).is_empty() {
@@ -685,6 +542,7 @@ impl CodexCredentialQuotaService {
             value,
         )?;
         let fact = snapshot.fact();
+        let previous_reset_at = self.previous_confirmed_reset(account).await;
         let object = value
             .as_object()
             .cloned()
@@ -719,6 +577,7 @@ impl CodexCredentialQuotaService {
         if let Some(availability) = quota_success_state(
             current.availability(),
             fact,
+            previous_reset_at,
             SystemTime::now(),
             QuotaRecoveryEvidence::RefreshedSnapshot,
         ) {
@@ -786,6 +645,7 @@ impl CodexCredentialQuotaService {
         if let Some(availability) = quota_success_state(
             current.availability(),
             fact,
+            None,
             observed_at,
             QuotaRecoveryEvidence::SuccessfulResponse,
         ) {
@@ -998,6 +858,7 @@ impl CodexCredentialQuotaService {
             observed_at,
             &value,
         )?;
+        let previous_reset_at = self.previous_confirmed_reset(&account).await;
         let object = value
             .as_object()
             .cloned()
@@ -1027,6 +888,7 @@ impl CodexCredentialQuotaService {
         if let Some(availability) = quota_success_state(
             current.availability(),
             snapshot.fact(),
+            previous_reset_at,
             SystemTime::now(),
             QuotaRecoveryEvidence::RefreshedSnapshot,
         ) {
@@ -1268,481 +1130,4 @@ fn passive_rate_limit_window(window: RateLimitWindow) -> Map<String, Value> {
         snapshot.insert("reset_at".to_owned(), Value::from(reset_at));
     }
     snapshot
-}
-
-/// 402 恢复判定：新观测未耗尽时返回 `Ready`；仍耗尽或未到恢复时机返回 `None`。
-///
-/// 只处理 `QuotaExhausted` 的恢复——429/触顶不再进入该状态，由 quota 数据
-/// 驱动调度排除（限流不改变账号可用性）。`Invalid/Expired/Banned` 等终态由 selector 的
-/// 成功响应恢复路径处理。
-fn quota_success_state(
-    current: AccountAvailability,
-    fact: CodexQuotaFact,
-    now: SystemTime,
-    recovery_evidence: QuotaRecoveryEvidence,
-) -> Option<AccountAvailability> {
-    if current != AccountAvailability::QuotaExhausted || fact.exhausted() {
-        return None;
-    }
-    quota_recovery_confirmed(
-        recovery_evidence,
-        fact.resets_at().map(SystemTime::from),
-        now,
-    )
-    .then_some(AccountAvailability::Ready)
-}
-
-fn quota_recovery_confirmed(
-    evidence: QuotaRecoveryEvidence,
-    reset_at: Option<SystemTime>,
-    now: SystemTime,
-) -> bool {
-    if reset_at.is_some_and(|reset_at| reset_at <= now) {
-        return true;
-    }
-    match evidence {
-        // 一次真实成功响应是恢复的最强证据。
-        QuotaRecoveryEvidence::SuccessfulResponse => true,
-        // used_percent 是可滞后、会取整的观测值；其回落不能覆盖仍未到期的上游 reset 时间。
-        QuotaRecoveryEvidence::RefreshedSnapshot => false,
-    }
-}
-
-fn quota_state_transition(error: &CodexClientError) -> Option<AccountAvailability> {
-    let CodexClientError::Upstream { status, body, .. } = error else {
-        return None;
-    };
-    if *status == StatusCode::PAYMENT_REQUIRED && is_deactivated_workspace(body) {
-        return Some(AccountAvailability::Banned);
-    }
-    match *status {
-        // 402：真额度耗尽 → QuotaExhausted（worker 按 reset_at 自动恢复）。
-        StatusCode::PAYMENT_REQUIRED => Some(AccountAvailability::QuotaExhausted),
-        // 429/503：临时限流，不写 availability（限流不改变账号可用性），由 quota 数据驱动。
-        StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE => None,
-        // quota/usage 接口只能产生额度域状态；鉴权拒绝不具备判定 RT
-        // 永久失效的证据，终态只能由 OAuth refresh/身份校验状态机写入。
-        _ => None,
-    }
-}
-
-fn is_deactivated_workspace(body: &str) -> bool {
-    serde_json::from_str::<Value>(body)
-        .ok()
-        .is_some_and(|value| {
-            value.pointer("/detail/code").and_then(Value::as_str) == Some("deactivated_workspace")
-        })
-}
-
-/// 解析用于 Admin 展示/调度信号的 Codex 已知 quota；原始 JSON 原样落 Provider quota 字段。
-pub fn parse_codex_quota_usage(usage: &Value) -> Result<CodexQuotaFact, CodexCredentialQuotaError> {
-    let object = usage
-        .as_object()
-        .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
-    let mut aggregate = QuotaAggregate::default();
-    for limit in canonical_rate_limits(object)? {
-        aggregate.observe_rate_limit(limit.rate_limit)?;
-    }
-    // spend_control 只提供 exhaustion 信号（`reached`），不生成窗口、
-    // 不参与剩余量聚合（`individual_limit` 等字段无窗口语义）。
-    if let Some(spend_control) = object.get("spend_control") {
-        aggregate.observe_exhaustion_object(spend_control, "reached")?;
-    }
-    if let Some(credits) = object.get("credits") {
-        aggregate.observe_exhaustion_object(credits, "overage_limit_reached")?;
-    }
-    if !aggregate.recognized {
-        return Err(CodexCredentialQuotaError::InvalidCredentialData);
-    }
-    Ok(CodexQuotaFact {
-        remaining_percent: aggregate.remaining_percent,
-        resets_at: aggregate.resets_at,
-        exhausted: aggregate.exhausted,
-    })
-}
-
-fn quota_snapshot_from_observation(
-    observation: &QuotaObservation,
-) -> Option<CodexAccountQuotaSnapshot> {
-    let observed_at = observation.observed_at?;
-    let quota = observation.quota.as_ref()?;
-    parse_account_quota_snapshot(
-        observation.account_id.clone(),
-        observation.expected_revision,
-        observed_at,
-        &Value::Object(quota.expose_to_provider().clone()),
-    )
-    .ok()
-}
-
-fn quota_projection_ttl(observed_at: SystemTime) -> Option<Duration> {
-    let age = SystemTime::now()
-        .duration_since(observed_at)
-        .unwrap_or(Duration::ZERO);
-    QUOTA_SCHEDULING_TTL
-        .checked_sub(age)
-        .filter(|remaining| !remaining.is_zero())
-}
-
-/// 从快照的滚动窗口派生中立调度事实（`limit_reached` = 任一窗口触顶）。
-fn scheduling_signals_from_snapshot(
-    snapshot: &CodexAccountQuotaSnapshot,
-) -> Option<AccountQuotaSignals> {
-    let rolled = snapshot.clone().roll_expired_windows(SystemTime::now());
-    quota_scheduling_signals(&rolled)
-}
-
-fn quota_scheduling_signals(snapshot: &CodexAccountQuotaSnapshot) -> Option<AccountQuotaSignals> {
-    let now = SystemTime::now();
-    let mut limit_reached = false;
-    let mut remaining_rank: Option<u64> = None;
-    let mut reset_at: Option<SystemTime> = None;
-    for window in &snapshot.windows {
-        limit_reached |= window.limit_reached();
-        if let Some(used) = window
-            .used_percent()
-            .filter(|used| used.is_finite() && (0.0..=100.0).contains(used))
-        {
-            let rank = ((100.0 - used) * 100.0).round() as u64;
-            remaining_rank = Some(remaining_rank.map_or(rank, |current| current.min(rank)));
-        }
-        if let Some(reset) = window
-            .reset_at()
-            .map(SystemTime::from)
-            .filter(|reset| *reset > now)
-        {
-            reset_at = Some(reset_at.map_or(reset, |current| current.min(reset)));
-        }
-    }
-    (remaining_rank.is_some() || reset_at.is_some())
-        .then(|| AccountQuotaSignals::new(reset_at, remaining_rank, limit_reached))
-}
-
-fn parse_account_quota_snapshot(
-    account_id: ProviderAccountId,
-    credential_revision: CredentialRevision,
-    observed_at: SystemTime,
-    usage: &Value,
-) -> Result<CodexAccountQuotaSnapshot, CodexCredentialQuotaError> {
-    let fact = parse_codex_quota_usage(usage)?;
-    let object = usage
-        .as_object()
-        .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
-    let mut windows = Vec::new();
-    for limit in canonical_rate_limits(object)? {
-        parse_rate_limit_windows(
-            &limit.source,
-            limit.limit_name.as_deref(),
-            limit.rate_limit,
-            &mut windows,
-        )?;
-    }
-    windows.sort_by(|left, right| left.key.cmp(&right.key));
-    Ok(CodexAccountQuotaSnapshot {
-        account_id,
-        credential_revision,
-        observed_at,
-        fact,
-        windows,
-    })
-}
-
-/// 一个规范化后的限流桶：source 是调度/展示分组键，limit_name 是上游显示名。
-struct CanonicalRateLimit<'a> {
-    source: String,
-    limit_name: Option<String>,
-    rate_limit: &'a Value,
-}
-
-fn canonical_rate_limits(
-    object: &Map<String, Value>,
-) -> Result<Vec<CanonicalRateLimit<'_>>, CodexCredentialQuotaError> {
-    let mut limits = Vec::new();
-    if let Some(rate_limit) = object.get("rate_limit") {
-        limits.push(CanonicalRateLimit {
-            source: "core".to_owned(),
-            limit_name: None,
-            rate_limit,
-        });
-    }
-    if let Some(rate_limit) = object
-        .get("code_review_rate_limit")
-        .filter(|value| !value.is_null())
-    {
-        limits.push(CanonicalRateLimit {
-            source: "code_review".to_owned(),
-            limit_name: Some("code_review".to_owned()),
-            rate_limit,
-        });
-    }
-    let Some(additional) = object
-        .get("additional_rate_limits")
-        .filter(|value| !value.is_null())
-    else {
-        return Ok(limits);
-    };
-    for (index, value) in additional
-        .as_array()
-        .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?
-        .iter()
-        .enumerate()
-    {
-        let item = value
-            .as_object()
-            .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
-        let (source, limit_name) = canonical_rate_limit_source(item, index);
-        if let Some(rate_limit) = item.get("rate_limit") {
-            // additional 里的 codex 桶覆盖顶层 rate_limit（同源替换）。
-            if let Some(existing) = limits.iter_mut().find(|existing| existing.source == source) {
-                existing.rate_limit = rate_limit;
-                existing.limit_name = limit_name;
-            } else {
-                limits.push(CanonicalRateLimit {
-                    source,
-                    limit_name,
-                    rate_limit,
-                });
-            }
-        }
-    }
-    Ok(limits)
-}
-
-fn canonical_rate_limit_source(
-    item: &Map<String, Value>,
-    index: usize,
-) -> (String, Option<String>) {
-    let source = item
-        .get("metered_feature")
-        .or_else(|| item.get("limit_name"))
-        .and_then(Value::as_str)
-        .filter(|value| {
-            !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
-        })
-        .map(str::to_owned)
-        .unwrap_or_else(|| format!("additional-{index}"));
-    let limit_name = item
-        .get("limit_name")
-        .or_else(|| item.get("metered_feature"))
-        .and_then(Value::as_str)
-        .filter(|value| {
-            !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
-        })
-        .map(str::to_owned);
-    if source.trim().to_ascii_lowercase().replace(['-', ' '], "_") == "codex" {
-        ("core".to_owned(), limit_name)
-    } else {
-        (source, limit_name)
-    }
-}
-
-fn parse_rate_limit_windows(
-    source: &str,
-    limit_name: Option<&str>,
-    value: &Value,
-    output: &mut Vec<CodexQuotaWindow>,
-) -> Result<(), CodexCredentialQuotaError> {
-    let object = value
-        .as_object()
-        .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
-    for (name, role) in [
-        ("primary_window", CodexQuotaWindowRole::Primary),
-        ("secondary_window", CodexQuotaWindowRole::Secondary),
-    ] {
-        let Some(window) = object.get(name) else {
-            continue;
-        };
-        if window.is_null() {
-            continue;
-        }
-        let window = window
-            .as_object()
-            .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
-        let window_seconds = optional_positive_u64(window, "limit_window_seconds")?
-            .or(optional_positive_u64(window, "window_seconds")?)
-            .or(optional_positive_u64(window, "window_minutes")?
-                .and_then(|minutes| minutes.checked_mul(60)));
-        let used_percent = window
-            .get("used_percent")
-            .map(|value| {
-                value
-                    .as_f64()
-                    .filter(|value| value.is_finite() && *value >= 0.0)
-                    .map(|value| value.clamp(0.0, 100.0))
-                    .ok_or(CodexCredentialQuotaError::InvalidCredentialData)
-            })
-            .transpose()?;
-        let reset_at = window
-            .get("reset_at")
-            .map(|value| {
-                value
-                    .as_i64()
-                    .filter(|value| *value > 0)
-                    .and_then(|value| DateTime::<Utc>::from_timestamp(value, 0))
-                    .ok_or(CodexCredentialQuotaError::InvalidCredentialData)
-            })
-            .transpose()?;
-        let limit_reached = window
-            .get("limit_reached")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-            || used_percent.is_some_and(|used| used >= 100.0);
-        let kind = quota_window_kind(window_seconds);
-        output.push(CodexQuotaWindow {
-            key: format!("{}-{}", quota_key(source), quota_role_name(role, kind)),
-            source: source.to_owned(),
-            limit_name: limit_name.map(str::to_owned),
-            kind,
-            role,
-            window_seconds,
-            used_percent,
-            reset_at,
-            limit_reached,
-        });
-    }
-    Ok(())
-}
-
-fn optional_positive_u64(
-    object: &Map<String, Value>,
-    key: &str,
-) -> Result<Option<u64>, CodexCredentialQuotaError> {
-    object
-        .get(key)
-        .map(|value| {
-            value
-                .as_u64()
-                .filter(|value| *value > 0)
-                .ok_or(CodexCredentialQuotaError::InvalidCredentialData)
-        })
-        .transpose()
-}
-
-const fn quota_window_kind(seconds: Option<u64>) -> CodexQuotaWindowKind {
-    match seconds {
-        Some(value) if value >= 17_100 && value <= 18_900 => CodexQuotaWindowKind::ShortTerm,
-        Some(value) if value >= 574_560 && value <= 635_040 => CodexQuotaWindowKind::Weekly,
-        Some(value) if value >= 2_462_400 && value <= 2_721_600 => CodexQuotaWindowKind::Monthly,
-        _ => CodexQuotaWindowKind::Other,
-    }
-}
-
-fn quota_key(value: &str) -> String {
-    let mut key = value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    while key.contains("--") {
-        key = key.replace("--", "-");
-    }
-    let key = key.trim_matches('-');
-    if key.is_empty() {
-        "quota".to_owned()
-    } else {
-        key.to_owned()
-    }
-}
-
-const fn quota_role_name(role: CodexQuotaWindowRole, kind: CodexQuotaWindowKind) -> &'static str {
-    match kind {
-        CodexQuotaWindowKind::ShortTerm => "five-hour",
-        CodexQuotaWindowKind::Weekly => "weekly",
-        CodexQuotaWindowKind::Monthly => "monthly",
-        CodexQuotaWindowKind::Other => match role {
-            CodexQuotaWindowRole::Primary => "primary",
-            CodexQuotaWindowRole::Secondary => "secondary",
-            CodexQuotaWindowRole::Monthly => "monthly",
-        },
-    }
-}
-
-#[derive(Default)]
-struct QuotaAggregate {
-    recognized: bool,
-    exhausted: bool,
-    remaining_percent: Option<u8>,
-    resets_at: Option<DateTime<Utc>>,
-}
-
-impl QuotaAggregate {
-    fn observe_rate_limit(&mut self, value: &Value) -> Result<(), CodexCredentialQuotaError> {
-        let object = value
-            .as_object()
-            .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
-        self.recognized = true;
-        self.exhausted |= optional_bool(object, "limit_reached")?.unwrap_or(false);
-        self.exhausted |= optional_bool(object, "allowed")?.is_some_and(|allowed| !allowed);
-        for key in ["primary_window", "secondary_window"] {
-            if let Some(window) = object.get(key) {
-                self.observe_window(window)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn observe_window(&mut self, value: &Value) -> Result<(), CodexCredentialQuotaError> {
-        if value.is_null() {
-            return Ok(());
-        }
-        let object = value
-            .as_object()
-            .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
-        if let Some(used) = object.get("used_percent") {
-            let used = used
-                .as_f64()
-                .filter(|value| value.is_finite() && *value >= 0.0)
-                .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
-            let remaining = (100.0 - used).clamp(0.0, 100.0).round() as u8;
-            self.remaining_percent = Some(
-                self.remaining_percent
-                    .map_or(remaining, |current| current.min(remaining)),
-            );
-        }
-        if let Some(reset) = object.get("reset_at") {
-            let seconds = reset
-                .as_i64()
-                .filter(|seconds| *seconds > 0)
-                .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
-            let reset = DateTime::<Utc>::from_timestamp(seconds, 0)
-                .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
-            self.resets_at = Some(self.resets_at.map_or(reset, |current| current.min(reset)));
-        }
-        Ok(())
-    }
-
-    fn observe_exhaustion_object(
-        &mut self,
-        value: &Value,
-        key: &str,
-    ) -> Result<(), CodexCredentialQuotaError> {
-        if value.is_null() {
-            return Ok(());
-        }
-        let object = value
-            .as_object()
-            .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
-        self.recognized = true;
-        self.exhausted |= optional_bool(object, key)?.unwrap_or(false);
-        Ok(())
-    }
-}
-
-fn optional_bool(
-    object: &Map<String, Value>,
-    key: &str,
-) -> Result<Option<bool>, CodexCredentialQuotaError> {
-    object
-        .get(key)
-        .map(|value| {
-            value
-                .as_bool()
-                .ok_or(CodexCredentialQuotaError::InvalidCredentialData)
-        })
-        .transpose()
 }

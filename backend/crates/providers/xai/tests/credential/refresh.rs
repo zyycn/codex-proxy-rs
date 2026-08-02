@@ -10,8 +10,8 @@ use gateway_core::engine::credential::{
     ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
 };
 use gateway_core::provider_ports::{
-    ProviderCredentialState, ProviderCredentialStatePort, ProviderLeaseAcquisition,
-    ProviderLeasePort, ProviderLeaseRequest, ProviderStoreError,
+    ProviderCooldown, ProviderCooldownPort, ProviderCredentialState, ProviderCredentialStatePort,
+    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderStoreError,
 };
 use provider_xai::{
     GrokCredentialCatalogCache, GrokCredentialRecovery, GrokCredentialRecoveryOutcome,
@@ -141,6 +141,48 @@ async fn fixture(
     GrokCredentialRefreshService,
 ) {
     fixture_many([input], responses, lease_available).await
+}
+
+/// 带外部注入 cooldown 端口的 fixture（AUD-05 组合测试用）。
+#[allow(clippy::type_complexity)]
+async fn fixture_with_cooldowns(
+    input: provider_xai::CreateGrokCredential,
+    responses: impl IntoIterator<Item = Result<GrokRefreshTokens, GrokRefreshFailure>>,
+    lease_available: bool,
+    cooldowns: Arc<MemoryCooldownPort>,
+) -> (
+    Arc<MemoryProviderAccountStore>,
+    GrokCredentialRepository,
+    Arc<QueueRefresher>,
+    GrokCredentialRefreshService,
+    Arc<MemoryCooldownPort>,
+) {
+    let store = MemoryProviderAccountStore::shared();
+    let account_store: Arc<dyn ProviderAccountStore> = store.clone();
+    let repository = GrokCredentialRepository::new(account_store);
+    seed_input(&store, &input).await.expect("create account");
+    let refresher = QueueRefresher::new(responses);
+    let refresher_port: Arc<dyn GrokCredentialRefresher> = refresher.clone();
+    let cache: Arc<dyn GrokCredentialCatalogCache> = MemoryGrokCatalogCache::shared();
+    let catalog = Arc::new(crate::support::grok_catalog_service(
+        repository.clone(),
+        Arc::new(StaticCatalogTransport),
+        cache,
+    ));
+    let leases = Arc::new(TestRefreshLeases {
+        available: lease_available,
+        calls: AtomicUsize::new(0),
+    });
+    let service = GrokCredentialRefreshService::new(
+        repository.clone(),
+        refresher_port,
+        catalog,
+        leases,
+        cooldowns.clone(),
+        Arc::new(CountingCredentialState::default()),
+        runtime_policy(),
+    );
+    (store, repository, refresher, service, cooldowns)
 }
 
 /// 真实累加连续失败计数的测试 double，用于断言退避的指数增长与成功清零。
@@ -731,4 +773,55 @@ async fn malformed_account_refresh_does_not_stop_later_accounts() {
             .get(),
         2
     );
+}
+
+#[tokio::test]
+async fn runtime_cooldown_survives_credential_rotation_and_blocks_refresh() {
+    // cooldown 写于 revision N，轮换到 N+1 后 refresh worker 不得清除
+    // 或失效它；cooldown 活跃期间账号被跳过刷新。
+    let input = create_input(
+        "cooldown-survives-rotation",
+        "subject-cooldown-survives-rotation",
+    );
+    let id = input.account_id.clone();
+    let cooldowns = Arc::new(MemoryCooldownPort::default());
+    let (store, _, _, service, cooldowns) = fixture_with_cooldowns(
+        input,
+        [Ok(success_tokens(Some("rotated-refresh")))],
+        true,
+        cooldowns,
+    )
+    .await;
+    // 先写 account cooldown（revision 1，未来到期）。
+    let until = SystemTime::now() + Duration::from_secs(3600);
+    cooldowns
+        .put_if_later(ProviderCooldown::new(
+            id.clone(),
+            CredentialRevision::new(1).expect("revision"),
+            until,
+        ))
+        .await
+        .expect("write cooldown");
+
+    // 轮换到 revision 2。
+    let outcome = service
+        .recover_unauthorized(&id, CredentialRevision::new(1).expect("revision"))
+        .await;
+    assert_eq!(outcome, GrokCredentialRecoveryOutcome::Recovered);
+    assert_eq!(store.account(&id).expect("account").revision().get(), 2);
+
+    // cooldown 仍有效（轮换不清除）。
+    assert!(
+        cooldowns
+            .cooldown(&id)
+            .is_some_and(|cooldown| cooldown.until() > SystemTime::now()),
+        "rotation must not clear account runtime cooldown"
+    );
+    // cooldown 活跃期间 refresh worker 跳过该账号（不清除、不刷新）。
+    let outcomes = service.refresh_due().await.expect("refresh due");
+    assert!(
+        outcomes.is_empty(),
+        "cooldown-active account must be skipped by refresh worker"
+    );
+    assert_eq!(store.account(&id).expect("account").revision().get(), 2);
 }

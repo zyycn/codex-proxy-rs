@@ -609,3 +609,48 @@ fn credential_cas_should_reject_refresh_schedule_without_refresh_token() {
         .is_err()
     );
 }
+
+#[test]
+fn enforced_availability_excludes_terminal_states_despite_quota_signals() {
+    // availability 终态（Banned/Expired/Invalid）始终排除，
+    // 不受 quota 信号或 skip_exhausted 放宽影响。
+    let mut banned = candidate("acct_banned", 0, Some(100));
+    banned.account = banned
+        .account
+        .with_runtime_state(true, AccountAvailability::Banned);
+    let mut expired = candidate("acct_expired", 0, Some(100));
+    expired.account = expired
+        .account
+        .with_runtime_state(true, AccountAvailability::Expired);
+    let mut invalid = candidate("acct_invalid", 0, Some(100));
+    invalid.account = invalid
+        .account
+        .with_runtime_state(true, AccountAvailability::Invalid);
+    let healthy = candidate("acct_healthy", 0, Some(100));
+    let candidates = vec![banned, expired, invalid, healthy];
+
+    let selected = AccountSelector
+        .select(&candidates, &context(RotationStrategy::Smart))
+        .expect("healthy candidate available");
+
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_healthy");
+}
+
+#[test]
+fn enforced_availability_allows_quota_exhausted_with_skip_exhausted_projection() {
+    // QuotaExhausted 是可恢复额度耗尽，skip_exhausted=false 的
+    // 放宽投影（provider 层）允许其参与调度；core 的 Enforce 策略本身
+    // 只排除终态。这里验证 Enforce 下 QuotaExhausted 仍被排除（严格模式）。
+    let mut exhausted = candidate("acct_exhausted", 0, Some(100));
+    exhausted.account = exhausted
+        .account
+        .with_runtime_state(true, AccountAvailability::QuotaExhausted);
+    let healthy = candidate("acct_healthy", 0, Some(100));
+    let candidates = vec![exhausted, healthy];
+
+    let selected = AccountSelector
+        .select(&candidates, &context(RotationStrategy::Smart))
+        .expect("healthy candidate available");
+
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_healthy");
+}

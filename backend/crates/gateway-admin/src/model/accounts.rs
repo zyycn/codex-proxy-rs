@@ -16,8 +16,10 @@ pub use gateway_core::engine::credential::AccountAvailability;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountStatus {
     Active,
-    Expired,
+    RateLimited,
     QuotaExhausted,
+    Expired,
+    Invalid,
     Disabled,
     Banned,
 }

@@ -265,6 +265,7 @@ pub(crate) const fn admin_account_pool_metrics(
         active: metrics.active,
         rate_limited: metrics.rate_limited,
         expired: metrics.expired,
+        invalid: metrics.invalid,
         quota_exhausted: metrics.quota_exhausted,
         refreshing: None,
         disabled: metrics.disabled,

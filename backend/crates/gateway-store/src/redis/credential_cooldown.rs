@@ -76,6 +76,8 @@ pub trait CredentialCooldownRepository: Send + Sync {
         provider_account_id: &str,
         through_revision: Revision,
     ) -> StoreResult<bool>;
+    /// 删除账号时清除该账号全部 account/model scope cooldown key。
+    async fn delete_account_cooldowns(&self, provider_account_id: &str) -> StoreResult<bool>;
 }
 
 #[derive(Clone)]
@@ -218,6 +220,50 @@ impl CredentialCooldownRepository for RedisCredentialCooldownRepository {
         self.invalidate_at_key(self.key(provider_account_id)?, through_revision)
             .await
     }
+
+    async fn delete_account_cooldowns(&self, provider_account_id: &str) -> StoreResult<bool> {
+        require_nonempty(
+            "credential cooldown",
+            "provider_account_id",
+            provider_account_id,
+        )?;
+        // 账号删除：清除该账号的 account key 与全部 model-scoped key。
+        // 用 SCAN 精确匹配命名空间内该账号前缀，避免 KEYS 阻塞。
+        let mut connection = self.connection.clone();
+        let account_key = self.key(provider_account_id)?;
+        let mut keys = vec![account_key.clone()];
+        let pattern = format!(
+            "{}:account:{}:cooldown:*",
+            self.namespace,
+            resource_fingerprint("credential cooldown", provider_account_id)?
+        );
+        let mut cursor = 0_i64;
+        loop {
+            let (next, found): (i64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(&pattern)
+                .arg("COUNT")
+                .arg(100)
+                .query_async(&mut connection)
+                .await
+                .map_err(|_| redis_unavailable("scan account cooldown keys"))?;
+            keys.extend(found);
+            cursor = next;
+            if cursor == 0 {
+                break;
+            }
+        }
+        if keys.is_empty() {
+            return Ok(false);
+        }
+        let removed: i64 = redis::cmd("DEL")
+            .arg(keys)
+            .query_async(&mut connection)
+            .await
+            .map_err(|_| redis_unavailable("delete account cooldown keys"))?;
+        Ok(removed > 0)
+    }
 }
 
 impl ProviderCooldownPort for RedisCredentialCooldownRepository {
@@ -339,6 +385,17 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
             )
             .await
             .map_err(|_| provider_unavailable("clear scoped credential cooldown"))
+        })
+    }
+
+    fn clear_all<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            self.delete_account_cooldowns(account_id.as_str())
+                .await
+                .map_err(|_| provider_unavailable("clear all credential cooldowns"))
         })
     }
 }
