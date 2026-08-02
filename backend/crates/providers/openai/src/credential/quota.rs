@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use gateway_core::engine::credential::{
@@ -14,7 +14,7 @@ use gateway_protocol::openai::events::{
 };
 use reqwest::{Client, StatusCode};
 use secrecy::ExposeSecret;
-use serde_json::{Map, Value};
+use serde_json::{Map, Number, Value};
 use thiserror::Error;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -26,11 +26,10 @@ use super::agent_identity::{CodexAgentIdentityTaskService, PreparedCodexRuntimeC
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
 
 const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
-const MAX_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60 * 60);
 const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);
 const QUOTA_HYDRATION_FAILURE_TTL: Duration = Duration::from_secs(5);
 const QUOTA_PERIODIC_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(30 * 60);
-// 5xx 上游拒绝的短退避重试预算；指数退避 1s/2s，吞掉瞬时抖动（对齐 TS withRetry）。
+// 5xx 上游拒绝的短退避重试预算；指数退避 1s/2s，吞掉瞬时抖动。
 const QUOTA_FETCH_5XX_MAX_RETRIES: u32 = 2;
 const QUOTA_FETCH_5XX_BASE_DELAY: Duration = Duration::from_secs(1);
 
@@ -82,11 +81,14 @@ pub enum CodexQuotaWindowRole {
 pub struct CodexQuotaWindow {
     key: String,
     source: String,
+    /// 上游提供的限流名称（`metered_feature`/`limit_name`/`limitId`）；显示优先用它。
+    limit_name: Option<String>,
     kind: CodexQuotaWindowKind,
     role: CodexQuotaWindowRole,
     window_seconds: Option<u64>,
     used_percent: Option<f64>,
     reset_at: Option<DateTime<Utc>>,
+    limit_reached: bool,
 }
 
 impl CodexQuotaWindow {
@@ -98,6 +100,11 @@ impl CodexQuotaWindow {
     #[must_use]
     pub fn source(&self) -> &str {
         &self.source
+    }
+
+    #[must_use]
+    pub fn limit_name(&self) -> Option<&str> {
+        self.limit_name.as_deref()
     }
 
     #[must_use]
@@ -123,6 +130,12 @@ impl CodexQuotaWindow {
     #[must_use]
     pub const fn reset_at(&self) -> Option<DateTime<Utc>> {
         self.reset_at
+    }
+
+    /// 该窗口是否已触顶（`limit_reached` 或 `used_percent >= 100`）。
+    #[must_use]
+    pub const fn limit_reached(&self) -> bool {
+        self.limit_reached
     }
 }
 
@@ -160,6 +173,37 @@ impl CodexAccountQuotaSnapshot {
     pub fn windows(&self) -> &[CodexQuotaWindow] {
         &self.windows
     }
+
+    /// 投影滚动已过期窗口：`reset_at` 已过的窗口 `used_percent=0`、
+    /// `limit_reached=false`、`reset_at` 滚到下一个周期（reset 到期自动归零）。
+    /// 只作用于展示/调度投影，不写回持久化 raw JSON。
+    #[must_use]
+    pub fn roll_expired_windows(mut self, now: SystemTime) -> Self {
+        for window in &mut self.windows {
+            let Some(reset_at) = window.reset_at else {
+                continue;
+            };
+            let reset = SystemTime::from(reset_at);
+            if reset > now {
+                continue;
+            }
+            window.used_percent = Some(0.0);
+            window.limit_reached = false;
+            if let Some(window_seconds) = window.window_seconds.filter(|seconds| *seconds > 0) {
+                let mut next = reset;
+                while next <= now {
+                    let Some(after) = next.checked_add(Duration::from_secs(window_seconds)) else {
+                        break;
+                    };
+                    next = after;
+                }
+                window.reset_at = Some(DateTime::<Utc>::from(next));
+            } else {
+                window.reset_at = None;
+            }
+        }
+        self
+    }
 }
 
 impl CodexQuotaFact {
@@ -179,20 +223,11 @@ impl CodexQuotaFact {
     }
 }
 
-fn quota_fact_is_active_exhaustion(fact: CodexQuotaFact, now: SystemTime) -> bool {
-    fact.exhausted()
-        && fact
-            .resets_at()
-            .map(SystemTime::from)
-            .is_none_or(|reset_at| reset_at > now)
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CodexQuotaSyncSummary {
     pub updated: u64,
     pub exhausted: u64,
     pub banned: u64,
-    pub cooldown: u64,
     pub transient: u64,
     pub stale: u64,
 }
@@ -292,38 +327,6 @@ enum CodexQuotaFetchError {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CodexQuotaStateTransition {
-    Banned { reason: &'static str },
-    Exhausted,
-    ResettableLimit { until: Option<SystemTime> },
-}
-
-impl CodexQuotaStateTransition {
-    const fn availability(self) -> AccountAvailability {
-        match self {
-            Self::Banned { .. } => AccountAvailability::Banned,
-            Self::Exhausted => AccountAvailability::QuotaExhausted,
-            Self::ResettableLimit { .. } => AccountAvailability::QuotaExhausted,
-        }
-    }
-
-    const fn reason(self) -> &'static str {
-        match self {
-            Self::Banned { reason } => reason,
-            Self::Exhausted => "quota_exhausted",
-            Self::ResettableLimit { .. } => "quota_rate_limited",
-        }
-    }
-
-    const fn cooldown_until(self) -> Option<SystemTime> {
-        match self {
-            Self::ResettableLimit { until } => until,
-            Self::Banned { .. } | Self::Exhausted => None,
-        }
-    }
-}
-
 impl CodexQuotaSchedulingProjection {
     fn hydration_targets(&self, accounts: &[ProviderAccount]) -> Vec<CodexQuotaHydrationTarget> {
         let state = self
@@ -347,21 +350,15 @@ impl CodexQuotaSchedulingProjection {
             .collect()
     }
 
-    fn observe(
-        &self,
-        account_id: ProviderAccountId,
-        revision: CredentialRevision,
-        observed_at: SystemTime,
-        fact: CodexQuotaFact,
-    ) -> bool {
-        let Some(remaining_ttl) = quota_projection_ttl(observed_at) else {
+    fn observe(&self, snapshot: &CodexAccountQuotaSnapshot) -> bool {
+        let Some(remaining_ttl) = quota_projection_ttl(snapshot.observed_at()) else {
             return false;
         };
         self.replace(
-            account_id,
-            revision,
+            snapshot.account_id().clone(),
+            snapshot.credential_revision(),
             remaining_ttl,
-            quota_scheduling_signals(fact),
+            scheduling_signals_from_snapshot(snapshot),
         );
         true
     }
@@ -413,7 +410,7 @@ impl CodexQuotaSchedulingProjection {
             snapshot.account_id().clone(),
             snapshot.credential_revision(),
             remaining_ttl,
-            quota_scheduling_signals(snapshot.fact()),
+            scheduling_signals_from_snapshot(snapshot),
         );
         true
     }
@@ -453,7 +450,12 @@ impl CodexQuotaSchedulingProjection {
     ) -> Vec<ProviderAccount> {
         let candidates = accounts
             .into_iter()
-            .filter_map(|account| quota_refresh_candidate(account, now))
+            .filter_map(|account| {
+                let limit_reached = self
+                    .signals(&account)
+                    .is_some_and(|signals| signals.limit_reached());
+                quota_refresh_candidate(account, now, limit_reached)
+            })
             .collect::<Vec<_>>();
         let candidate_ids = candidates
             .iter()
@@ -484,36 +486,16 @@ impl CodexQuotaSchedulingProjection {
     }
 }
 
-fn quota_refresh_candidate(account: ProviderAccount, now: SystemTime) -> Option<ProviderAccount> {
-    (eligible_periodic_quota_refresh(&account, now)
-        && account.availability() == AccountAvailability::QuotaExhausted)
-        .then_some(account)
-}
-
-fn quota_snapshot_for_account(
-    account: &ProviderAccount,
-    observation: Option<&QuotaObservation>,
-) -> Option<CodexAccountQuotaSnapshot> {
-    observation
-        .filter(|observation| observation.expected_revision == account.revision())
-        .and_then(quota_snapshot_from_observation)
-}
-
-fn quota_reset_at_from_snapshot(
-    snapshot: Option<&CodexAccountQuotaSnapshot>,
-) -> Option<SystemTime> {
-    snapshot
-        .and_then(|snapshot| snapshot.fact().resets_at())
-        .map(SystemTime::from)
-}
-
-fn quota_observation_confirms_active_exhaustion(
-    account: &ProviderAccount,
-    observation: Option<&QuotaObservation>,
+fn quota_refresh_candidate(
+    account: ProviderAccount,
     now: SystemTime,
-) -> bool {
-    quota_snapshot_for_account(account, observation)
-        .is_some_and(|snapshot| quota_fact_is_active_exhaustion(snapshot.fact(), now))
+    limit_reached: bool,
+) -> Option<ProviderAccount> {
+    // 定时器只兜底「已耗尽（402）」或「任一窗口触顶（limit_reached 死锁）」账号，
+    // 正常账号由真实请求的响应头被动同步。
+    (eligible_periodic_quota_refresh(&account, now)
+        && (account.availability() == AccountAvailability::QuotaExhausted || limit_reached))
+        .then_some(account)
 }
 
 fn periodic_quota_refresh_due(
@@ -612,28 +594,9 @@ impl CodexCredentialQuotaService {
     }
 
     pub async fn synchronize(&self) -> Result<CodexQuotaSyncSummary, CodexCredentialQuotaError> {
-        let mut accounts = self.repository.list_for_provider().await?;
+        let accounts = self.repository.list_for_provider().await?;
         let mut summary = CodexQuotaSyncSummary::default();
         let now = SystemTime::now();
-        let account_ids = accounts
-            .iter()
-            .map(|account| account.id().clone())
-            .collect::<Vec<_>>();
-        let observations = match self.store.get_quotas(&account_ids).await {
-            Ok(observations) => Some(
-                observations
-                    .into_iter()
-                    .map(|observation| (observation.account_id.clone(), observation))
-                    .collect::<BTreeMap<_, _>>(),
-            ),
-            Err(error) => {
-                // 持久观察不可用时跳过旧状态修正；仍复核当前已标记耗尽的账号。
-                tracing::warn!(error = %error, "OpenAI quota refresh skipped persisted exhaustion reconciliation");
-                None
-            }
-        };
-        self.reconcile_persisted_exhaustion(&mut accounts, observations.as_ref(), now)
-            .await;
         let accounts = self.scheduling.reserve_periodic_refreshes(accounts, now);
         if accounts.is_empty() {
             return Ok(summary);
@@ -671,100 +634,40 @@ impl CodexCredentialQuotaService {
                     );
                 }
                 Err(CodexQuotaFetchError::Upstream { account, error }) => {
-                    let Some(transition) = quota_state_transition(&error, observed_at) else {
-                        summary.transient += 1;
-                        tracing::warn!(
-                            account_id = %account.id(),
-                            error = %error,
-                            "OpenAI quota upstream rejection was not classified"
-                        );
-                        continue;
-                    };
-                    match transition {
-                        CodexQuotaStateTransition::Banned { .. } => summary.banned += 1,
-                        CodexQuotaStateTransition::Exhausted
-                        | CodexQuotaStateTransition::ResettableLimit { .. } => {
+                    match quota_state_transition(&error) {
+                        // 402：真额度耗尽，写入 QuotaExhausted（worker 按 reset_at 自动恢复）。
+                        Some(AccountAvailability::QuotaExhausted) => {
                             summary.exhausted += 1;
+                            let _ = self
+                                .repository
+                                .apply_state(
+                                    &account,
+                                    AccountAvailability::QuotaExhausted,
+                                    observed_at,
+                                )
+                                .await;
+                        }
+                        Some(AccountAvailability::Banned) => {
+                            summary.banned += 1;
+                            let _ = self
+                                .repository
+                                .apply_state(&account, AccountAvailability::Banned, observed_at)
+                                .await;
+                        }
+                        // 429/503 等临时拒绝：不写 availability（限流不改变账号可用性），仅记失败待重试。
+                        None | Some(_) => {
+                            summary.transient += 1;
+                            tracing::warn!(
+                                account_id = %account.id(),
+                                error = %error,
+                                "OpenAI quota upstream rejection; refresh cycle will retry later"
+                            );
                         }
                     }
-                    let _ = self
-                        .repository
-                        .apply_state(
-                            &account,
-                            transition.availability(),
-                            Some(transition.reason().to_owned()),
-                            transition.cooldown_until(),
-                            observed_at,
-                        )
-                        .await;
                 }
             }
         }
         Ok(summary)
-    }
-
-    async fn reconcile_persisted_exhaustion(
-        &self,
-        accounts: &mut [ProviderAccount],
-        observations: Option<&BTreeMap<ProviderAccountId, QuotaObservation>>,
-        observed_at: SystemTime,
-    ) {
-        let Some(observations) = observations else {
-            return;
-        };
-        for account in accounts {
-            if account.availability() != AccountAvailability::Cooldown
-                || !quota_observation_confirms_active_exhaustion(
-                    account,
-                    observations.get(account.id()),
-                    observed_at,
-                )
-            {
-                continue;
-            }
-            let Ok(Some(current)) = self.store.get_account(account.id()).await else {
-                continue;
-            };
-            if current.revision() != account.revision()
-                || current.availability() != AccountAvailability::Cooldown
-            {
-                continue;
-            }
-            let snapshot = match self.read_snapshot_for(&current).await {
-                Ok(Some(snapshot))
-                    if quota_fact_is_active_exhaustion(snapshot.fact(), observed_at) =>
-                {
-                    snapshot
-                }
-                _ => continue,
-            };
-            let cooldown_until =
-                quota_reset_at_from_snapshot(Some(&snapshot)).or_else(|| current.cooldown_until());
-            if let Err(error) = self
-                .repository
-                .apply_state(
-                    &current,
-                    AccountAvailability::QuotaExhausted,
-                    Some("quota_exhausted".to_owned()),
-                    cooldown_until,
-                    observed_at,
-                )
-                .await
-            {
-                tracing::warn!(
-                    account_id = %account.id(),
-                    error = %error,
-                    "OpenAI persisted quota exhaustion reconciliation failed"
-                );
-                continue;
-            }
-            let enabled = current.enabled();
-            *account = current.with_runtime_state(
-                enabled,
-                AccountAvailability::QuotaExhausted,
-                cooldown_until,
-            );
-        }
     }
 
     /// 解析并 revision-fenced 落库单账号的 Provider quota JSON。
@@ -807,29 +710,21 @@ impl CodexCredentialQuotaService {
             summary.stale += 1;
             return Ok(());
         }
-        self.scheduling
-            .observe(current.id().clone(), current.revision(), observed_at, fact);
+        self.scheduling.observe(&snapshot);
         if fact.exhausted() {
             summary.exhausted += 1;
         } else {
             summary.updated += 1;
         }
-        if let Some((availability, cooldown_until)) = quota_success_state(
+        if let Some(availability) = quota_success_state(
             current.availability(),
-            current.cooldown_until(),
             fact,
             SystemTime::now(),
             QuotaRecoveryEvidence::RefreshedSnapshot,
         ) {
             let _ = self
                 .repository
-                .apply_state(
-                    &current,
-                    availability,
-                    fact.exhausted().then_some("quota_exhausted".to_owned()),
-                    cooldown_until,
-                    observed_at,
-                )
+                .apply_state(&current, availability, observed_at)
                 .await;
         }
         Ok(())
@@ -857,8 +752,14 @@ impl CodexCredentialQuotaService {
             .map(OpaqueProviderData::into_inner)
             .unwrap_or_default();
         let quota = merge_passive_quota(existing, &rate_limits);
-        let fact = parse_codex_quota_usage(&Value::Object(quota.clone()))?;
         let observed_at = SystemTime::now();
+        let fact = parse_codex_quota_usage(&Value::Object(quota.clone()))?;
+        let snapshot = parse_account_quota_snapshot(
+            account.id().clone(),
+            account.revision(),
+            observed_at,
+            &Value::Object(quota.clone()),
+        );
         let outcome = self
             .store
             .compare_and_swap_quota(QuotaObservation {
@@ -879,26 +780,105 @@ impl CodexCredentialQuotaService {
         if current.revision() != account.revision() {
             return Ok(false);
         }
-        self.scheduling
-            .observe(current.id().clone(), current.revision(), observed_at, fact);
-        if let Some((availability, cooldown_until)) = quota_success_state(
+        if let Ok(snapshot) = snapshot {
+            self.scheduling.observe(&snapshot);
+        }
+        if let Some(availability) = quota_success_state(
             current.availability(),
-            current.cooldown_until(),
             fact,
             observed_at,
             QuotaRecoveryEvidence::SuccessfulResponse,
         ) {
             self.repository
-                .apply_state(
-                    &current,
-                    availability,
-                    fact.exhausted().then_some("quota_exhausted".to_owned()),
-                    cooldown_until,
-                    observed_at,
-                )
+                .apply_state(&current, availability, observed_at)
                 .await?;
         }
         Ok(true)
+    }
+
+    /// 真实 429 的单一事实入口：合成/更新 quota 主窗口（`limit_reached=true`、
+    /// `used_percent=100`、`reset_at=retry-after`）。availability 不改变，
+    /// 窗口 reset 到期后由投影自动滚动恢复（429 只记录限流窗口）。
+    /// 已有更晚的 `reset_at` 不会被缩短（never-shrink）。
+    pub async fn apply_rate_limit_429(
+        &self,
+        account: &ProviderAccount,
+        retry_after: Option<Duration>,
+        observed_at: SystemTime,
+    ) -> Result<(), CodexCredentialQuotaError> {
+        let mut object = self
+            .store
+            .get_quotas(std::slice::from_ref(account.id()))
+            .await?
+            .into_iter()
+            .find(|observation| {
+                observation.account_id == *account.id()
+                    && observation.expected_revision == account.revision()
+            })
+            .and_then(|observation| observation.quota)
+            .map(OpaqueProviderData::into_inner)
+            .unwrap_or_default();
+        let new_reset_at = observed_at
+            .checked_add(retry_after.unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN))
+            .and_then(|reset| reset.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs() as i64);
+        let existing_reset_at = object
+            .get("rate_limit")
+            .and_then(Value::as_object)
+            .and_then(|rate_limit| rate_limit.get("primary_window"))
+            .and_then(Value::as_object)
+            .and_then(|window| window.get("reset_at"))
+            .and_then(Value::as_i64);
+        let reset_at = match (existing_reset_at, new_reset_at) {
+            (Some(existing), Some(next)) if existing > next => Some(existing),
+            (_, next) => next,
+        };
+        let mut rate_limit = object
+            .get("rate_limit")
+            .cloned()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        rate_limit.insert("allowed".to_owned(), Value::Bool(false));
+        rate_limit.insert("limit_reached".to_owned(), Value::Bool(true));
+        let mut primary = rate_limit
+            .get("primary_window")
+            .cloned()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        let used_percent = primary
+            .get("used_percent")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0)
+            .max(100.0);
+        primary.insert(
+            "used_percent".to_owned(),
+            Number::from_f64(used_percent)
+                .map(Value::Number)
+                .unwrap_or_else(|| Value::Number(Number::from(100))),
+        );
+        if let Some(reset_at) = reset_at {
+            primary.insert("reset_at".to_owned(), Value::from(reset_at));
+        }
+        rate_limit.insert("primary_window".to_owned(), Value::Object(primary));
+        object.insert("rate_limit".to_owned(), Value::Object(rate_limit));
+        if self
+            .store
+            .compare_and_swap_quota(QuotaObservation {
+                account_id: account.id().clone(),
+                expected_revision: account.revision(),
+                quota: Some(OpaqueProviderData::new(object)),
+                observed_at: Some(observed_at),
+            })
+            .await?
+            == QuotaWriteOutcome::Conflict
+        {
+            return Ok(());
+        }
+        // 429 合成的限流窗口要立即反映到调度信号（reset 到期由投影滚动解除）。
+        if let Ok(Some(snapshot)) = self.read_snapshot_for(account).await {
+            self.scheduling.observe(&snapshot);
+        }
+        Ok(())
     }
 
     /// 读取单账号最后一次落库的 Provider quota，并由 Codex 域解析展示窗口。
@@ -949,12 +929,7 @@ impl CodexCredentialQuotaService {
             observed_at,
             &Value::Object(data.expose_to_provider().clone()),
         )?;
-        self.scheduling.observe(
-            snapshot.account_id().clone(),
-            snapshot.credential_revision(),
-            snapshot.observed_at(),
-            snapshot.fact(),
-        );
+        self.scheduling.observe(&snapshot);
         Ok(Some(snapshot))
     }
 
@@ -1005,16 +980,11 @@ impl CodexCredentialQuotaService {
                     });
                 }
                 Err(CodexQuotaFetchError::Upstream { account, error }) => {
-                    if let Some(transition) = quota_state_transition(&error, observed_at) {
+                    // 402/deactivated → 写终态；429/503 等临时拒绝不写 availability（限流不改变账号可用性）。
+                    if let Some(availability) = quota_state_transition(&error) {
                         let _ = self
                             .repository
-                            .apply_state(
-                                &account,
-                                transition.availability(),
-                                Some(transition.reason().to_owned()),
-                                transition.cooldown_until(),
-                                observed_at,
-                            )
+                            .apply_state(&account, availability, observed_at)
                             .await;
                     }
                     return Err(CodexCredentialQuotaError::Upstream {
@@ -1053,30 +1023,15 @@ impl CodexCredentialQuotaService {
         if current.revision() != account.revision() {
             return Err(CodexCredentialQuotaError::RevisionConflict);
         }
-        self.scheduling.observe(
-            snapshot.account_id().clone(),
-            snapshot.credential_revision(),
-            snapshot.observed_at(),
-            snapshot.fact(),
-        );
-        if let Some((availability, cooldown_until)) = quota_success_state(
+        self.scheduling.observe(&snapshot);
+        if let Some(availability) = quota_success_state(
             current.availability(),
-            current.cooldown_until(),
             snapshot.fact(),
             SystemTime::now(),
             QuotaRecoveryEvidence::RefreshedSnapshot,
         ) {
             self.repository
-                .apply_state(
-                    &current,
-                    availability,
-                    snapshot
-                        .fact()
-                        .exhausted()
-                        .then_some("quota_exhausted".to_owned()),
-                    cooldown_until,
-                    observed_at,
-                )
+                .apply_state(&current, availability, observed_at)
                 .await?;
         }
         Ok(snapshot)
@@ -1315,91 +1270,56 @@ fn passive_rate_limit_window(window: RateLimitWindow) -> Map<String, Value> {
     snapshot
 }
 
+/// 402 恢复判定：新观测未耗尽时返回 `Ready`；仍耗尽或未到恢复时机返回 `None`。
+///
+/// 只处理 `QuotaExhausted` 的恢复——429/触顶不再进入该状态，由 quota 数据
+/// 驱动调度排除（限流不改变账号可用性）。`Invalid/Expired/Banned` 等终态由 selector 的
+/// 成功响应恢复路径处理。
 fn quota_success_state(
     current: AccountAvailability,
-    cooldown_until: Option<SystemTime>,
     fact: CodexQuotaFact,
     now: SystemTime,
     recovery_evidence: QuotaRecoveryEvidence,
-) -> Option<(AccountAvailability, Option<SystemTime>)> {
-    if fact.exhausted() {
-        let observed_cooldown = match (fact.resets_at().map(SystemTime::from), cooldown_until) {
-            (Some(observed), Some(confirmed)) => Some(observed.max(confirmed)),
-            (observed, confirmed) => observed.or(confirmed),
-        };
-        return (current != AccountAvailability::QuotaExhausted
-            || cooldown_until != observed_cooldown)
-            .then_some((AccountAvailability::QuotaExhausted, observed_cooldown));
+) -> Option<AccountAvailability> {
+    if current != AccountAvailability::QuotaExhausted || fact.exhausted() {
+        return None;
     }
-
-    let availability = match current {
-        AccountAvailability::Invalid
-        | AccountAvailability::Expired
-        | AccountAvailability::Banned
-        | AccountAvailability::Unknown => Some(AccountAvailability::Ready),
-        AccountAvailability::QuotaExhausted
-            if !quota_recovery_confirmed(recovery_evidence, cooldown_until, now) =>
-        {
-            None
-        }
-        AccountAvailability::QuotaExhausted => Some(AccountAvailability::Ready),
-        AccountAvailability::Ready => None,
-        AccountAvailability::Cooldown
-            if cooldown_until.is_some_and(|cooldown_until| cooldown_until <= now) =>
-        {
-            Some(AccountAvailability::Ready)
-        }
-        AccountAvailability::Cooldown => None,
-    };
-    availability.map(|availability| (availability, None))
+    quota_recovery_confirmed(
+        recovery_evidence,
+        fact.resets_at().map(SystemTime::from),
+        now,
+    )
+    .then_some(AccountAvailability::Ready)
 }
 
 fn quota_recovery_confirmed(
     evidence: QuotaRecoveryEvidence,
-    cooldown_until: Option<SystemTime>,
+    reset_at: Option<SystemTime>,
     now: SystemTime,
 ) -> bool {
-    if cooldown_until.is_some_and(|cooldown_until| cooldown_until <= now) {
+    if reset_at.is_some_and(|reset_at| reset_at <= now) {
         return true;
     }
     match evidence {
+        // 一次真实成功响应是恢复的最强证据。
         QuotaRecoveryEvidence::SuccessfulResponse => true,
-        // used_percent 是可滞后、会取整的观测值；确认 429 后的 100% 也是
-        // 管理端投影。它们的回落不能覆盖仍未到期的上游 reset 时间。
+        // used_percent 是可滞后、会取整的观测值；其回落不能覆盖仍未到期的上游 reset 时间。
         QuotaRecoveryEvidence::RefreshedSnapshot => false,
     }
 }
 
-fn quota_state_transition(
-    error: &CodexClientError,
-    observed_at: SystemTime,
-) -> Option<CodexQuotaStateTransition> {
-    let CodexClientError::Upstream {
-        status,
-        retry_after_seconds,
-        body,
-        ..
-    } = error
-    else {
+fn quota_state_transition(error: &CodexClientError) -> Option<AccountAvailability> {
+    let CodexClientError::Upstream { status, body, .. } = error else {
         return None;
     };
     if *status == StatusCode::PAYMENT_REQUIRED && is_deactivated_workspace(body) {
-        return Some(CodexQuotaStateTransition::Banned {
-            reason: "quota_deactivated_workspace",
-        });
+        return Some(AccountAvailability::Banned);
     }
     match *status {
-        StatusCode::PAYMENT_REQUIRED => Some(CodexQuotaStateTransition::Exhausted),
-        // 429 与 503 都是"稍后重试"语义：优先尊重 Retry-After，缺失时用默认冷却。
-        StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE => {
-            let duration = Duration::from_secs(
-                retry_after_seconds.unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN.as_secs()),
-            )
-            .min(MAX_RATE_LIMIT_COOLDOWN);
-            Some(CodexQuotaStateTransition::ResettableLimit {
-                until: observed_at.checked_add(duration),
-            })
-        }
+        // 402：真额度耗尽 → QuotaExhausted（worker 按 reset_at 自动恢复）。
+        StatusCode::PAYMENT_REQUIRED => Some(AccountAvailability::QuotaExhausted),
+        // 429/503：临时限流，不写 availability（限流不改变账号可用性），由 quota 数据驱动。
+        StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE => None,
         // quota/usage 接口只能产生额度域状态；鉴权拒绝不具备判定 RT
         // 永久失效的证据，终态只能由 OAuth refresh/身份校验状态机写入。
         _ => None,
@@ -1420,22 +1340,13 @@ pub fn parse_codex_quota_usage(usage: &Value) -> Result<CodexQuotaFact, CodexCre
         .as_object()
         .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
     let mut aggregate = QuotaAggregate::default();
-    for rate_limit in canonical_rate_limits(object)?.into_values() {
-        aggregate.observe_rate_limit(rate_limit)?;
+    for limit in canonical_rate_limits(object)? {
+        aggregate.observe_rate_limit(limit.rate_limit)?;
     }
+    // spend_control 只提供 exhaustion 信号（`reached`），不生成窗口、
+    // 不参与剩余量聚合（`individual_limit` 等字段无窗口语义）。
     if let Some(spend_control) = object.get("spend_control") {
         aggregate.observe_exhaustion_object(spend_control, "reached")?;
-        if let Some(individual) = spend_control
-            .as_object()
-            .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?
-            .get("individual_limit")
-        {
-            aggregate.observe_window(individual)?;
-        }
-    }
-    if let Some(monthly_limit) = object.get("monthly_limit") {
-        aggregate.observe_exhaustion_object(monthly_limit, "limit_reached")?;
-        aggregate.observe_window(monthly_limit)?;
     }
     if let Some(credits) = object.get("credits") {
         aggregate.observe_exhaustion_object(credits, "overage_limit_reached")?;
@@ -1473,15 +1384,38 @@ fn quota_projection_ttl(observed_at: SystemTime) -> Option<Duration> {
         .filter(|remaining| !remaining.is_zero())
 }
 
-fn quota_scheduling_signals(fact: CodexQuotaFact) -> Option<AccountQuotaSignals> {
-    let remaining_rank = fact.remaining_percent().map(|value| u64::from(value) * 100);
+/// 从快照的滚动窗口派生中立调度事实（`limit_reached` = 任一窗口触顶）。
+fn scheduling_signals_from_snapshot(
+    snapshot: &CodexAccountQuotaSnapshot,
+) -> Option<AccountQuotaSignals> {
+    let rolled = snapshot.clone().roll_expired_windows(SystemTime::now());
+    quota_scheduling_signals(&rolled)
+}
+
+fn quota_scheduling_signals(snapshot: &CodexAccountQuotaSnapshot) -> Option<AccountQuotaSignals> {
     let now = SystemTime::now();
-    let reset_at = fact
-        .resets_at()
-        .map(SystemTime::from)
-        .filter(|reset_at| *reset_at > now);
+    let mut limit_reached = false;
+    let mut remaining_rank: Option<u64> = None;
+    let mut reset_at: Option<SystemTime> = None;
+    for window in &snapshot.windows {
+        limit_reached |= window.limit_reached();
+        if let Some(used) = window
+            .used_percent()
+            .filter(|used| used.is_finite() && (0.0..=100.0).contains(used))
+        {
+            let rank = ((100.0 - used) * 100.0).round() as u64;
+            remaining_rank = Some(remaining_rank.map_or(rank, |current| current.min(rank)));
+        }
+        if let Some(reset) = window
+            .reset_at()
+            .map(SystemTime::from)
+            .filter(|reset| *reset > now)
+        {
+            reset_at = Some(reset_at.map_or(reset, |current| current.min(reset)));
+        }
+    }
     (remaining_rank.is_some() || reset_at.is_some())
-        .then(|| AccountQuotaSignals::new(reset_at, remaining_rank))
+        .then(|| AccountQuotaSignals::new(reset_at, remaining_rank, limit_reached))
 }
 
 fn parse_account_quota_snapshot(
@@ -1495,14 +1429,13 @@ fn parse_account_quota_snapshot(
         .as_object()
         .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
     let mut windows = Vec::new();
-    for (source, rate_limit) in canonical_rate_limits(object)? {
-        parse_rate_limit_windows(&source, rate_limit, &mut windows)?;
-    }
-    if let Some(spend_control) = object.get("spend_control").filter(|value| !value.is_null()) {
-        parse_spend_control_window(spend_control, &mut windows)?;
-    }
-    if let Some(monthly_limit) = object.get("monthly_limit").filter(|value| !value.is_null()) {
-        parse_monthly_limit_window(monthly_limit, &mut windows)?;
+    for limit in canonical_rate_limits(object)? {
+        parse_rate_limit_windows(
+            &limit.source,
+            limit.limit_name.as_deref(),
+            limit.rate_limit,
+            &mut windows,
+        )?;
     }
     windows.sort_by(|left, right| left.key.cmp(&right.key));
     Ok(CodexAccountQuotaSnapshot {
@@ -1514,12 +1447,33 @@ fn parse_account_quota_snapshot(
     })
 }
 
+/// 一个规范化后的限流桶：source 是调度/展示分组键，limit_name 是上游显示名。
+struct CanonicalRateLimit<'a> {
+    source: String,
+    limit_name: Option<String>,
+    rate_limit: &'a Value,
+}
+
 fn canonical_rate_limits(
     object: &Map<String, Value>,
-) -> Result<BTreeMap<String, &Value>, CodexCredentialQuotaError> {
-    let mut limits = BTreeMap::new();
+) -> Result<Vec<CanonicalRateLimit<'_>>, CodexCredentialQuotaError> {
+    let mut limits = Vec::new();
     if let Some(rate_limit) = object.get("rate_limit") {
-        limits.insert("core".to_owned(), rate_limit);
+        limits.push(CanonicalRateLimit {
+            source: "core".to_owned(),
+            limit_name: None,
+            rate_limit,
+        });
+    }
+    if let Some(rate_limit) = object
+        .get("code_review_rate_limit")
+        .filter(|value| !value.is_null())
+    {
+        limits.push(CanonicalRateLimit {
+            source: "code_review".to_owned(),
+            limit_name: Some("code_review".to_owned()),
+            rate_limit,
+        });
     }
     let Some(additional) = object
         .get("additional_rate_limits")
@@ -1536,15 +1490,28 @@ fn canonical_rate_limits(
         let item = value
             .as_object()
             .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
-        let source = canonical_rate_limit_source(item, index);
+        let (source, limit_name) = canonical_rate_limit_source(item, index);
         if let Some(rate_limit) = item.get("rate_limit") {
-            limits.insert(source, rate_limit);
+            // additional 里的 codex 桶覆盖顶层 rate_limit（同源替换）。
+            if let Some(existing) = limits.iter_mut().find(|existing| existing.source == source) {
+                existing.rate_limit = rate_limit;
+                existing.limit_name = limit_name;
+            } else {
+                limits.push(CanonicalRateLimit {
+                    source,
+                    limit_name,
+                    rate_limit,
+                });
+            }
         }
     }
     Ok(limits)
 }
 
-fn canonical_rate_limit_source(item: &Map<String, Value>, index: usize) -> String {
+fn canonical_rate_limit_source(
+    item: &Map<String, Value>,
+    index: usize,
+) -> (String, Option<String>) {
     let source = item
         .get("metered_feature")
         .or_else(|| item.get("limit_name"))
@@ -1554,15 +1521,24 @@ fn canonical_rate_limit_source(item: &Map<String, Value>, index: usize) -> Strin
         })
         .map(str::to_owned)
         .unwrap_or_else(|| format!("additional-{index}"));
+    let limit_name = item
+        .get("limit_name")
+        .or_else(|| item.get("metered_feature"))
+        .and_then(Value::as_str)
+        .filter(|value| {
+            !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
+        })
+        .map(str::to_owned);
     if source.trim().to_ascii_lowercase().replace(['-', ' '], "_") == "codex" {
-        "core".to_owned()
+        ("core".to_owned(), limit_name)
     } else {
-        source
+        (source, limit_name)
     }
 }
 
 fn parse_rate_limit_windows(
     source: &str,
+    limit_name: Option<&str>,
     value: &Value,
     output: &mut Vec<CodexQuotaWindow>,
 ) -> Result<(), CodexCredentialQuotaError> {
@@ -1606,132 +1582,25 @@ fn parse_rate_limit_windows(
                     .ok_or(CodexCredentialQuotaError::InvalidCredentialData)
             })
             .transpose()?;
+        let limit_reached = window
+            .get("limit_reached")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            || used_percent.is_some_and(|used| used >= 100.0);
         let kind = quota_window_kind(window_seconds);
         output.push(CodexQuotaWindow {
             key: format!("{}-{}", quota_key(source), quota_role_name(role, kind)),
             source: source.to_owned(),
+            limit_name: limit_name.map(str::to_owned),
             kind,
             role,
             window_seconds,
             used_percent,
             reset_at,
+            limit_reached,
         });
     }
     Ok(())
-}
-
-fn parse_spend_control_window(
-    value: &Value,
-    output: &mut Vec<CodexQuotaWindow>,
-) -> Result<(), CodexCredentialQuotaError> {
-    let object = value
-        .as_object()
-        .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
-    let Some(individual) = object.get("individual_limit") else {
-        return Ok(());
-    };
-    if individual.is_null() {
-        return Ok(());
-    }
-    let individual = individual
-        .as_object()
-        .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
-    let reached = object
-        .get("reached")
-        .map(|value| {
-            value
-                .as_bool()
-                .ok_or(CodexCredentialQuotaError::InvalidCredentialData)
-        })
-        .transpose()?
-        .unwrap_or(false);
-    let used_percent = quota_percent(individual, "used_percent")?;
-    let remaining_percent = quota_percent(individual, "remaining_percent")?;
-    let used_percent =
-        used_percent.or_else(|| remaining_percent.map(|value| (100.0 - value).clamp(0.0, 100.0)));
-    let reset_at = quota_reset_at(individual)?;
-    let window_seconds = quota_window_seconds(individual)?.or(Some(2_592_000));
-    output.push(CodexQuotaWindow {
-        key: "spend-control-monthly".to_owned(),
-        source: "spend_control".to_owned(),
-        kind: CodexQuotaWindowKind::Monthly,
-        role: CodexQuotaWindowRole::Monthly,
-        window_seconds,
-        used_percent: used_percent.map(|value| if reached { 100.0_f64.max(value) } else { value }),
-        reset_at,
-    });
-    Ok(())
-}
-
-fn parse_monthly_limit_window(
-    value: &Value,
-    output: &mut Vec<CodexQuotaWindow>,
-) -> Result<(), CodexCredentialQuotaError> {
-    let object = value
-        .as_object()
-        .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
-    let used_percent = quota_percent(object, "used_percent")?;
-    let remaining_percent = quota_percent(object, "remaining_percent")?;
-    let used_percent =
-        used_percent.or_else(|| remaining_percent.map(|value| (100.0 - value).clamp(0.0, 100.0)));
-    output.push(CodexQuotaWindow {
-        key: "monthly-limit".to_owned(),
-        source: "monthly_limit".to_owned(),
-        kind: CodexQuotaWindowKind::Monthly,
-        role: CodexQuotaWindowRole::Monthly,
-        window_seconds: quota_window_seconds(object)?.or(Some(2_592_000)),
-        used_percent,
-        reset_at: quota_reset_at(object)?,
-    });
-    Ok(())
-}
-
-fn quota_percent(
-    object: &Map<String, Value>,
-    key: &str,
-) -> Result<Option<f64>, CodexCredentialQuotaError> {
-    object
-        .get(key)
-        .map(|value| {
-            value
-                .as_f64()
-                .filter(|value| value.is_finite() && (0.0..=100.0).contains(value))
-                .ok_or(CodexCredentialQuotaError::InvalidCredentialData)
-        })
-        .transpose()
-}
-
-fn quota_reset_at(
-    object: &Map<String, Value>,
-) -> Result<Option<DateTime<Utc>>, CodexCredentialQuotaError> {
-    object
-        .get("reset_at")
-        .map(|value| {
-            value
-                .as_i64()
-                .filter(|value| *value > 0)
-                .and_then(|value| DateTime::<Utc>::from_timestamp(value, 0))
-                .ok_or(CodexCredentialQuotaError::InvalidCredentialData)
-        })
-        .transpose()
-}
-
-fn quota_window_seconds(
-    object: &Map<String, Value>,
-) -> Result<Option<u64>, CodexCredentialQuotaError> {
-    if let Some(seconds) = optional_positive_u64(object, "window_seconds")? {
-        return Ok(Some(seconds));
-    }
-    if let Some(seconds) = optional_positive_u64(object, "limit_window_seconds")? {
-        return Ok(Some(seconds));
-    }
-    optional_positive_u64(object, "window_minutes")?
-        .map(|minutes| {
-            minutes
-                .checked_mul(60)
-                .ok_or(CodexCredentialQuotaError::InvalidCredentialData)
-        })
-        .transpose()
 }
 
 fn optional_positive_u64(

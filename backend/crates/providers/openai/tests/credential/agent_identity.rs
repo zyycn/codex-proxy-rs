@@ -66,7 +66,7 @@ fn agent_account(
         Some("agent-account".to_owned()),
         Some("pro".to_owned()),
     )
-    .with_runtime_state(true, AccountAvailability::Ready, None)
+    .with_runtime_state(true, AccountAvailability::Ready)
     .with_refresh_schedule(false, None);
     NewProviderAccount {
         account,

@@ -93,7 +93,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
             "select id, provider_kind, name, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
                     access_token_expires_at, next_refresh_at, enabled, availability,
-                    availability_reason, cooldown_until, availability_observed_at,
+                    availability_observed_at,
                     quota_observed_at, created_at, updated_at
              from provider_accounts
              where ($1::text is null or provider_kind = $1) and ($2 or enabled)
@@ -114,11 +114,11 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                id, provider_kind, name, email, upstream_user_id,
                upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
                has_refresh_token, access_token_expires_at, next_refresh_at, enabled,
-               availability, availability_reason, cooldown_until, provider_quota_json,
+               availability, provider_quota_json,
                availability_observed_at, quota_observed_at, created_at, updated_at
              ) values (
                $1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12, $13,
-               $14, null, $15, null, $16, null, now(), greatest(now(), $16)
+               $14, null, $15, null, now(), greatest(now(), $15)
              )",
         )
         .bind(account.id)
@@ -135,7 +135,6 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         .bind(account.next_refresh_at)
         .bind(account.enabled)
         .bind(account.availability.as_str())
-        .bind(account.cooldown_until)
         .bind(account.availability_observed_at)
         .execute(&self.pool)
         .await
@@ -210,21 +209,17 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         let result = sqlx::query(
             "update provider_accounts
              set availability = case when enabled then $3 else availability end,
-                 availability_reason = case when enabled then $4 else availability_reason end,
-                 cooldown_until = case when enabled then $5 else cooldown_until end,
                  availability_observed_at = case
-                     when enabled then $6
+                     when enabled then $4
                      else availability_observed_at
                  end,
-                 updated_at = case when enabled then greatest(now(), $6) else updated_at end
+                 updated_at = case when enabled then greatest(now(), $4) else updated_at end
              where id = $1 and credential_revision = $2
-               and (availability_observed_at is null or availability_observed_at <= $6)",
+               and (availability_observed_at is null or availability_observed_at <= $4)",
         )
         .bind(update.account_id)
         .bind(to_i64(update.expected_revision.get())?)
         .bind(update.availability.as_str())
-        .bind(update.availability_reason)
-        .bind(update.cooldown_until)
         .bind(update.availability_observed_at)
         .execute(&self.pool)
         .await
@@ -466,11 +461,11 @@ pub(crate) async fn upsert_provider_account_in_transaction(
            id, provider_kind, name, email, upstream_user_id,
            upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
            has_refresh_token, access_token_expires_at, next_refresh_at, enabled,
-           availability, availability_reason, cooldown_until, provider_quota_json,
+           availability, provider_quota_json,
            availability_observed_at, quota_observed_at, created_at, updated_at
          ) values (
            $1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12, $13,
-           $14, $15, $16, null, $17, null, now(), greatest(now(), $17)
+           $14, null, $15, null, now(), greatest(now(), $15)
          )
          on conflict (
            provider_kind,
@@ -488,8 +483,6 @@ pub(crate) async fn upsert_provider_account_in_transaction(
            next_refresh_at = excluded.next_refresh_at,
            enabled = excluded.enabled,
            availability = excluded.availability,
-           availability_reason = excluded.availability_reason,
-           cooldown_until = excluded.cooldown_until,
            provider_quota_json = null,
            availability_observed_at = excluded.availability_observed_at,
            quota_observed_at = null,
@@ -510,8 +503,6 @@ pub(crate) async fn upsert_provider_account_in_transaction(
     .bind(account.next_refresh_at)
     .bind(account.enabled)
     .bind(account.availability.as_str())
-    .bind(&account.availability_reason)
-    .bind(account.cooldown_until)
     .bind(account.availability_observed_at)
     .fetch_optional(&mut **transaction)
     .await
@@ -564,16 +555,6 @@ pub(crate) async fn rotate_provider_account_in_transaction(
                  when not enabled then availability
                  when availability <> 'quota_exhausted' then 'ready'
                  else availability
-             end,
-             availability_reason = case
-                 when not enabled then availability_reason
-                 when availability <> 'quota_exhausted' then null
-                 else availability_reason
-             end,
-             cooldown_until = case
-                 when not enabled then cooldown_until
-                 when availability <> 'quota_exhausted' then null
-                 else cooldown_until
              end,
              availability_observed_at = case
                  when not enabled then availability_observed_at

@@ -32,8 +32,6 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             next_refresh_at: account.account.next_refresh_at().map(DateTime::<Utc>::from),
             enabled: account.account.enabled(),
             availability: account.account.availability(),
-            availability_reason: None,
-            cooldown_until: account.account.cooldown_until().map(DateTime::<Utc>::from),
             availability_observed_at: Utc::now(),
         })
         .await
@@ -242,8 +240,6 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                 expected_revision: Revision::new(change.expected_revision.get())
                     .map_err(core_store_error)?,
                 availability: change.availability,
-                availability_reason: change.reason,
-                cooldown_until: change.cooldown_until.map(DateTime::<Utc>::from),
                 availability_observed_at: DateTime::<Utc>::from(change.observed_at),
             })
             .await

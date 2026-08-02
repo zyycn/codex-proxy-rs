@@ -110,7 +110,6 @@ impl SelectorFixture {
                     expected_revision: CredentialRevision::new(1).expect("revision"),
                     availability: GrokCredentialAvailability::Ready,
                     availability_reason: None,
-                    cooldown_until: None,
                     observed_at: Utc::now(),
                 })
                 .await
@@ -132,6 +131,7 @@ impl SelectorFixture {
                     last_started_at: None,
                     quota_reset_at: None,
                     quota_remaining_rank: None,
+                    quota_limit_reached: false,
                     failure_rate_basis_points: None,
                     first_output_latency_ms: None,
                 },
@@ -369,21 +369,17 @@ async fn account_scoped_cooldown_survives_credential_rotation() {
         CredentialCasOutcome::Updated(revision) if revision.get() == 2
     ));
 
+    // 账号级限流冷却跨凭据轮换保留：轮换后仍被冷却排除。
     assert!(matches!(
         fixture
             .selector
             .select(fixture.request(BTreeSet::new()))
             .await,
-        Err(GrokSessionSelectorError::NoEligibleSession)
+        Err(GrokSessionSelectorError::AccountCoolingDown { .. })
     ));
     let account = fixture.store.account(&id).expect("rotated account");
     assert_eq!(account.revision().get(), 2);
-    assert_eq!(account.availability(), AccountAvailability::Cooldown);
-    assert!(
-        account
-            .cooldown_until()
-            .is_some_and(|until| until > SystemTime::now())
-    );
+    assert_eq!(account.availability(), AccountAvailability::Ready);
 }
 
 #[tokio::test]
@@ -405,12 +401,7 @@ async fn rate_limit_feedback_persists_the_grok2api_cooldown_state() {
         )
         .await;
     let account = fixture.store.account(&selected).expect("account");
-    assert_eq!(account.availability(), AccountAvailability::Cooldown);
-    assert!(
-        account
-            .cooldown_until()
-            .is_some_and(|until| until > SystemTime::now())
-    );
+    assert_eq!(account.availability(), AccountAvailability::Ready);
     assert!(
         fixture
             .cooldowns
@@ -450,7 +441,6 @@ async fn successful_request_clears_the_persisted_cooldown_state() {
         .account(session.account_id())
         .expect("account");
     assert_eq!(account.availability(), AccountAvailability::Ready);
-    assert!(account.cooldown_until().is_none());
 }
 
 #[tokio::test]
@@ -511,13 +501,8 @@ async fn free_model_quota_feedback_persists_resettable_account_exhaustion() {
         .await;
 
     let account = fixture.store.account(&selected).expect("selected account");
-    assert_eq!(account.availability(), AccountAvailability::Cooldown);
+    assert_eq!(account.availability(), AccountAvailability::Ready);
     let minimum_until = SystemTime::now() + Duration::from_secs(23 * 60 * 60);
-    assert!(
-        account
-            .cooldown_until()
-            .is_some_and(|until| until > minimum_until)
-    );
     let scope = ProviderCooldownScope::upstream_model(failed_model);
     assert!(
         fixture
@@ -604,12 +589,7 @@ async fn interrupted_stream_feedback_persists_the_grok2api_cooldown_state() {
         .store
         .account(session.account_id())
         .expect("account");
-    assert_eq!(account.availability(), AccountAvailability::Cooldown);
-    assert!(
-        account
-            .cooldown_until()
-            .is_some_and(|until| until > SystemTime::now())
-    );
+    assert_eq!(account.availability(), AccountAvailability::Ready);
     assert!(
         fixture
             .cooldowns

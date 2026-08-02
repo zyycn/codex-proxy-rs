@@ -188,11 +188,13 @@ impl fmt::Debug for OpaqueProviderData {
 }
 
 /// 数据库中固定的账号运行状态。
+///
+/// 只承载终态或需要外部干预的状态；临时限流（429）不进入此状态，由
+/// Provider quota 数据驱动（`AccountQuotaSignals::limit_reached`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AccountAvailability {
     Unknown,
     Ready,
-    Cooldown,
     QuotaExhausted,
     Expired,
     Banned,
@@ -206,7 +208,6 @@ impl AccountAvailability {
         match self {
             Self::Unknown => "unknown",
             Self::Ready => "ready",
-            Self::Cooldown => "cooldown",
             Self::QuotaExhausted => "quota_exhausted",
             Self::Expired => "expired",
             Self::Banned => "banned",
@@ -220,7 +221,6 @@ impl AccountAvailability {
         match value {
             "unknown" => Some(Self::Unknown),
             "ready" => Some(Self::Ready),
-            "cooldown" => Some(Self::Cooldown),
             "quota_exhausted" => Some(Self::QuotaExhausted),
             "expired" => Some(Self::Expired),
             "banned" => Some(Self::Banned),
@@ -244,7 +244,6 @@ pub struct ProviderAccount {
     revision: CredentialRevision,
     enabled: bool,
     availability: AccountAvailability,
-    cooldown_until: Option<SystemTime>,
     access_token_expires_at: Option<SystemTime>,
     next_refresh_at: Option<SystemTime>,
     has_refresh_token: bool,
@@ -274,7 +273,6 @@ impl ProviderAccount {
             revision,
             enabled: true,
             availability: AccountAvailability::Unknown,
-            cooldown_until: None,
             access_token_expires_at,
             next_refresh_at: None,
             has_refresh_token: false,
@@ -299,11 +297,9 @@ impl ProviderAccount {
         mut self,
         enabled: bool,
         availability: AccountAvailability,
-        cooldown_until: Option<SystemTime>,
     ) -> Self {
         self.enabled = enabled;
         self.availability = availability;
-        self.cooldown_until = cooldown_until;
         self
     }
 
@@ -374,11 +370,6 @@ impl ProviderAccount {
     }
 
     #[must_use]
-    pub const fn cooldown_until(&self) -> Option<SystemTime> {
-        self.cooldown_until
-    }
-
-    #[must_use]
     pub const fn access_token_expires_at(&self) -> Option<SystemTime> {
         self.access_token_expires_at
     }
@@ -398,7 +389,6 @@ impl ProviderAccount {
     pub fn is_schedulable(&self, now: SystemTime) -> bool {
         let available = match self.availability {
             AccountAvailability::Ready => true,
-            AccountAvailability::Cooldown => self.cooldown_until.is_some_and(|until| until <= now),
             AccountAvailability::Unknown
             | AccountAvailability::QuotaExhausted
             | AccountAvailability::Expired
@@ -614,8 +604,6 @@ pub struct AccountStateChange {
     pub account_id: ProviderAccountId,
     pub expected_revision: CredentialRevision,
     pub availability: AccountAvailability,
-    pub reason: Option<String>,
-    pub cooldown_until: Option<SystemTime>,
     pub observed_at: SystemTime,
 }
 
@@ -756,6 +744,7 @@ pub struct AccountRuntimeSignals {
     pub last_started_at: Option<SystemTime>,
     pub quota_reset_at: Option<SystemTime>,
     pub quota_remaining_rank: Option<u64>,
+    pub quota_limit_reached: bool,
     pub failure_rate_basis_points: Option<u16>,
     pub first_output_latency_ms: Option<u64>,
 }
@@ -903,6 +892,7 @@ impl AccountRuntimeSignals {
         if let Some(quota) = quota {
             self.quota_reset_at = quota.reset_at;
             self.quota_remaining_rank = quota.remaining_rank;
+            self.quota_limit_reached = quota.limit_reached;
         }
         self
     }
@@ -924,14 +914,20 @@ impl AccountRuntimeSignals {
 pub struct AccountQuotaSignals {
     reset_at: Option<SystemTime>,
     remaining_rank: Option<u64>,
+    limit_reached: bool,
 }
 
 impl AccountQuotaSignals {
     #[must_use]
-    pub const fn new(reset_at: Option<SystemTime>, remaining_rank: Option<u64>) -> Self {
+    pub const fn new(
+        reset_at: Option<SystemTime>,
+        remaining_rank: Option<u64>,
+        limit_reached: bool,
+    ) -> Self {
         Self {
             reset_at,
             remaining_rank,
+            limit_reached,
         }
     }
 
@@ -943,6 +939,12 @@ impl AccountQuotaSignals {
     #[must_use]
     pub const fn remaining_rank(self) -> Option<u64> {
         self.remaining_rank
+    }
+
+    /// 任一计量窗口已触顶（`limit_reached`/`used_percent >= 100`）；调度据此排除候选。
+    #[must_use]
+    pub const fn limit_reached(self) -> bool {
+        self.limit_reached
     }
 }
 

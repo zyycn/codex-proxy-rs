@@ -23,7 +23,7 @@ import { useAccountConnectionTest } from './composables/useAccountConnectionTest
 import { useAccountMutations } from './composables/useAccountMutations'
 import { useAccountsQuery } from './composables/useAccountsQuery'
 import { useAccountsTable } from './composables/useAccountsTable'
-import { accountColumns } from './constants'
+import { accountColumns, derivedAccountStatus } from './constants'
 
 const selectedIds = ref<Set<string>>(new Set())
 const {
@@ -204,7 +204,7 @@ const {
           </template>
 
           <template #status="{ row }">
-            <AccountStatusBadge :status="row.tokenRefreshing ? 'refreshing' : row.status" />
+            <AccountStatusBadge :status="derivedAccountStatus(row)" />
           </template>
 
           <template #planType="{ row }">
@@ -219,7 +219,7 @@ const {
             <AccountTableActions
               :account="row"
               :deleting="deletingAccount"
-              :refreshing="refreshingAccountIds.has(row.id) || row.tokenRefreshing"
+              :refreshing="refreshingAccountIds.has(row.id)"
               :schedule-label="scheduleActionLabel(row)"
               :testing="testingConnectionIds.has(row.id)"
               :updating-status="updatingStatusAccountIds.has(row.id)"

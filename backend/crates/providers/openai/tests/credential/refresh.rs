@@ -621,8 +621,6 @@ async fn expired_access_token_refreshes_even_when_next_refresh_is_deferred() {
         .apply_state(
             &deferred,
             AccountAvailability::QuotaExhausted,
-            Some("quota_exhausted".to_owned()),
-            None,
             SystemTime::now(),
         )
         .await
@@ -685,18 +683,11 @@ async fn expired_access_token_refreshes_during_active_cooldown() {
         .await
         .expect("seed expired access token with deferred refresh");
     let deferred = store.account("acct_refresh").expect("deferred account");
-    let cooldown_until = SystemTime::now() + Duration::from_secs(12 * 60 * 60);
     store
         .repository()
-        .apply_state(
-            &deferred,
-            AccountAvailability::Cooldown,
-            Some("rate_limited".to_owned()),
-            Some(cooldown_until),
-            SystemTime::now(),
-        )
+        .apply_state(&deferred, AccountAvailability::Ready, SystemTime::now())
         .await
-        .expect("mark account cooling down");
+        .expect("mark account ready");
     let refresher = Arc::new(Refresher::new(Ok(success_tokens())));
     let service = CodexCredentialRefreshService::new(
         store.repository(),
@@ -724,8 +715,7 @@ async fn expired_access_token_refreshes_during_active_cooldown() {
         ["rt-old-access"]
     );
     let refreshed = store.account("acct_refresh").expect("refreshed account");
-    assert_eq!(refreshed.availability(), AccountAvailability::Cooldown);
-    assert_eq!(refreshed.cooldown_until(), Some(cooldown_until));
+    assert_eq!(refreshed.availability(), AccountAvailability::Ready);
     assert!(
         refreshed
             .access_token_expires_at()

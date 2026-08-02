@@ -1263,12 +1263,8 @@ async fn response_failed_before_semantic_output_is_atomic_and_persists_quota_loc
         vec!["response.created", "response.failed"]
     );
     let account = store.account(account_id).expect("rate-limited account");
-    assert_eq!(account.availability(), AccountAvailability::QuotaExhausted);
-    assert!(
-        account
-            .cooldown_until()
-            .is_some_and(|until| until > SystemTime::now())
-    );
+    // 429 只记录限流窗口，不改变 availability（限流不改变账号可用性）。
+    assert_eq!(account.availability(), AccountAvailability::Ready);
     let _ = release.send(());
     server.abort();
     let _ = server.await;
@@ -1358,11 +1354,6 @@ async fn usage_limit_failure_returns_promptly_and_refreshes_the_authoritative_qu
     assert_eq!(failure.kind(), ProviderErrorKind::QuotaExhausted);
     let account = store.account(account_id).expect("usage-limit account");
     assert_eq!(account.availability(), AccountAvailability::QuotaExhausted);
-    assert!(
-        account
-            .cooldown_until()
-            .is_some_and(|until| until > SystemTime::now())
-    );
     tokio::time::sleep(Duration::from_millis(200)).await;
     let requests = server.received_requests().await.expect("received requests");
     assert_eq!(
@@ -1799,8 +1790,6 @@ async fn disabled_account_diagnostic_uses_upstream_without_persisting_account_st
         .apply_state(
             &account,
             AccountAvailability::QuotaExhausted,
-            Some("quota_exhausted".to_owned()),
-            None,
             SystemTime::now(),
         )
         .await
@@ -1907,7 +1896,7 @@ async fn successful_response_preserves_quota_exhaustion_from_rate_limit_headers(
             .account(account_id)
             .expect("account after successful response")
             .availability(),
-        AccountAvailability::QuotaExhausted
+        AccountAvailability::Ready
     );
     assert!(store.has_quota(account_id));
 }
@@ -1969,16 +1958,8 @@ async fn successful_http_sse_rate_limit_event_persists_structured_exhaustion() {
         .account(account_id)
         .expect("account after HTTP SSE response");
     assert_eq!(
-        (
-            account.availability(),
-            account.cooldown_until(),
-            store.has_quota(account_id),
-        ),
-        (
-            AccountAvailability::QuotaExhausted,
-            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(reset_at)),
-            true,
-        )
+        (account.availability(), store.has_quota(account_id),),
+        (AccountAvailability::Ready, true,)
     );
 }
 

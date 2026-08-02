@@ -233,8 +233,6 @@ impl CodexCredentialRepository {
         &self,
         account: &ProviderAccount,
         availability: AccountAvailability,
-        reason: Option<String>,
-        cooldown_until: Option<SystemTime>,
         observed_at: SystemTime,
     ) -> Result<(), CredentialRepositoryError> {
         if !account.enabled() {
@@ -245,8 +243,6 @@ impl CodexCredentialRepository {
                 account_id: account.id().clone(),
                 expected_revision: account.revision(),
                 availability,
-                reason,
-                cooldown_until,
                 observed_at,
             })
             .await?;

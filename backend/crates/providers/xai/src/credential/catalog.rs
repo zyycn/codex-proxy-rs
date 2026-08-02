@@ -482,7 +482,6 @@ impl GrokCredentialQuotaService {
                         GrokCredentialAvailability::QuotaExhausted
                     )
                     .then_some("quota_exhausted".to_owned()),
-                    cooldown_until: None,
                     observed_at,
                 })
                 .await
@@ -1151,7 +1150,6 @@ fn eligible_catalog_candidate(candidate: &LoadedGrokCredential) -> bool {
         && match account.availability() {
             AccountAvailability::Unknown
             | AccountAvailability::Ready
-            | AccountAvailability::Cooldown
             | AccountAvailability::QuotaExhausted => true,
             AccountAvailability::Expired
             | AccountAvailability::Banned
@@ -1294,8 +1292,15 @@ fn quota_scheduling_signals(billing: &GrokBillingPresentation) -> Option<Account
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
         .map(|value| SystemTime::from(value.to_utc()))
         .filter(|reset_at| *reset_at > now);
-    (remaining_rank.is_some() || reset_at.is_some())
-        .then(|| AccountQuotaSignals::new(reset_at, remaining_rank))
+    (remaining_rank.is_some() || reset_at.is_some()).then(|| {
+        AccountQuotaSignals::new(
+            reset_at,
+            remaining_rank,
+            billing
+                .used_percent()
+                .is_some_and(|used| used.is_finite() && used >= 100.0),
+        )
+    })
 }
 
 fn quota_is_exhausted(billing: &GrokBillingPresentation) -> bool {
@@ -1343,7 +1348,6 @@ fn quota_refresh_may_update_state(before: &ProviderAccount, current: &ProviderAc
             .is_some_and(|expires_at| expires_at > SystemTime::now())
         && current.revision() == before.revision()
         && current.availability() == before.availability()
-        && current.cooldown_until() == before.cooldown_until()
 }
 
 fn quota_refresh_availability(
@@ -1357,15 +1361,13 @@ fn quota_refresh_availability(
         AccountAvailability::QuotaExhausted => {
             matches!(exhausted, Some(false)).then_some(GrokCredentialAvailability::Ready)
         }
-        AccountAvailability::Cooldown | AccountAvailability::Unknown => {
-            exhausted.map(|exhausted| {
-                if exhausted {
-                    GrokCredentialAvailability::QuotaExhausted
-                } else {
-                    GrokCredentialAvailability::Ready
-                }
-            })
-        }
+        AccountAvailability::Unknown => exhausted.map(|exhausted| {
+            if exhausted {
+                GrokCredentialAvailability::QuotaExhausted
+            } else {
+                GrokCredentialAvailability::Ready
+            }
+        }),
         AccountAvailability::Ready => {
             matches!(exhausted, Some(true)).then_some(GrokCredentialAvailability::QuotaExhausted)
         }

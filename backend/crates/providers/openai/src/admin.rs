@@ -579,8 +579,6 @@ fn prepared_create(
         next_refresh_at: account.next_refresh_at().map(DateTime::<Utc>::from),
         enabled: account.enabled(),
         availability,
-        availability_reason: None,
-        cooldown_until: account.cooldown_until().map(DateTime::<Utc>::from),
         availability_observed_at: observed_at,
     })
 }
@@ -682,11 +680,7 @@ fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, Provi
         account.upstream_account_id.clone(),
         account.plan_type.clone(),
     )
-    .with_runtime_state(
-        account.enabled,
-        account.availability,
-        account.cooldown_until.map(SystemTime::from),
-    )
+    .with_runtime_state(account.enabled, account.availability)
     .with_refresh_schedule(
         account.has_refresh_token,
         account.next_refresh_at.map(SystemTime::from),
@@ -753,9 +747,12 @@ fn project_quota(
     snapshot: Option<CodexAccountQuotaSnapshot>,
     account: &ProviderAccount,
 ) -> ProviderQuota {
-    let mut quota = snapshot.map_or_else(empty_quota, project_quota_snapshot);
+    // 展示前先滚动已过期窗口，避免 reset 后的旧窗口值悬挂。
+    let mut quota = snapshot
+        .map(|snapshot| project_quota_snapshot(snapshot.roll_expired_windows(SystemTime::now())))
+        .unwrap_or_else(empty_quota);
     if account.availability() == AccountAvailability::QuotaExhausted {
-        force_confirmed_exhaustion_projection(&mut quota, account.cooldown_until());
+        force_confirmed_exhaustion_projection(&mut quota);
     }
     quota
 }
@@ -790,6 +787,7 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
                 key: window.key().to_owned(),
                 group: quota_group(window.kind()).to_owned(),
                 label: codex_quota_window_label(
+                    window.limit_name(),
                     window.kind(),
                     window.source(),
                     window.window_seconds(),
@@ -798,6 +796,7 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
                 window_seconds: window.window_seconds(),
                 used_percent: window.used_percent(),
                 reset_at: window.reset_at(),
+                limit_reached: window.limit_reached(),
                 local_usage: None,
                 provider_data: Some(ProviderDocument::new(OpaqueProviderData::new(data))),
             }
@@ -813,12 +812,9 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
     }
 }
 
-fn force_confirmed_exhaustion_projection(
-    quota: &mut ProviderQuota,
-    cooldown_until: Option<SystemTime>,
-) {
-    // 真实 429 对“当前已耗尽”的证明强于可能延迟结算的 usage 文档。这里只覆盖
-    // Admin 展示投影，原始 Provider JSON 仍作为后续判断窗口是否真正恢复的基线。
+fn force_confirmed_exhaustion_projection(quota: &mut ProviderQuota) {
+    // 402 已确认耗尽：只覆盖 Admin 展示投影，原始 Provider JSON 仍作为
+    // 后续判断窗口是否真正恢复的基线。
     quota.provider_data = Some(ProviderDocument::new(OpaqueProviderData::new(
         Map::from_iter([
             (
@@ -828,7 +824,6 @@ fn force_confirmed_exhaustion_projection(
             ("exhausted".to_owned(), Value::Bool(true)),
         ]),
     )));
-    let reset_at = cooldown_until.map(DateTime::<Utc>::from);
     if quota.windows.is_empty() {
         quota.windows.push(ProviderQuotaWindow {
             key: "confirmed-quota-exhaustion".to_owned(),
@@ -837,42 +832,28 @@ fn force_confirmed_exhaustion_projection(
             source: None,
             window_seconds: None,
             used_percent: Some(100.0),
-            reset_at,
+            reset_at: None,
+            limit_reached: true,
             local_usage: None,
             provider_data: None,
         });
         return;
     }
 
-    let matched_reset = reset_at.and_then(|reset_at| {
-        quota
-            .windows
-            .iter()
-            .enumerate()
-            .filter_map(|(index, window)| {
-                let distance = window.reset_at.map(|window_reset| {
-                    (window_reset.timestamp() - reset_at.timestamp()).unsigned_abs()
-                })?;
-                Some((index, distance))
-            })
-            .min_by_key(|(_, distance)| *distance)
-            .map(|(index, _)| index)
-    });
-    let index = matched_reset
-        .or_else(|| {
-            quota
-                .windows
-                .iter()
-                .enumerate()
-                .max_by(|(_, left), (_, right)| {
-                    left.used_percent
-                        .unwrap_or(-1.0)
-                        .total_cmp(&right.used_percent.unwrap_or(-1.0))
-                })
-                .map(|(index, _)| index)
+    // 选已用比例最高的窗口强制 100%，保留其自身 reset_at。
+    let index = quota
+        .windows
+        .iter()
+        .enumerate()
+        .max_by(|(_, left), (_, right)| {
+            left.used_percent
+                .unwrap_or(-1.0)
+                .total_cmp(&right.used_percent.unwrap_or(-1.0))
         })
+        .map(|(index, _)| index)
         .unwrap_or(0);
     quota.windows[index].used_percent = Some(100.0);
+    quota.windows[index].limit_reached = true;
 }
 
 const fn quota_group(kind: CodexQuotaWindowKind) -> &'static str {
@@ -891,11 +872,17 @@ const fn quota_role(role: CodexQuotaWindowRole) -> &'static str {
     }
 }
 
+/// 窗口展示名，优先使用上游 `limit_name`（原文，`_` 转空格）；
+/// 无 limit_name 时按窗口时长猜（±5% 容差，汉化输出），猜不中兜底「额度」。
 fn codex_quota_window_label(
+    limit_name: Option<&str>,
     kind: CodexQuotaWindowKind,
     source: &str,
     window_seconds: Option<u64>,
 ) -> String {
+    if let Some(limit_name) = limit_name {
+        return limit_name.replace('_', " ");
+    }
     let base = match kind {
         CodexQuotaWindowKind::Monthly => "月限额".to_owned(),
         CodexQuotaWindowKind::Weekly => "周限额".to_owned(),
@@ -908,11 +895,8 @@ fn codex_quota_window_label(
         }
         CodexQuotaWindowKind::Other => custom_quota_window_label(window_seconds),
     };
-    if matches!(source, "core" | "codex" | "spend_control" | "monthly_limit") {
+    if matches!(source, "core" | "codex" | "code_review" | "spend_control") {
         return base;
-    }
-    if is_codex_review_limit(source) {
-        return format!("代码审查 · {base}");
     }
     format!("{source} · {base}")
 }
@@ -928,15 +912,6 @@ fn custom_quota_window_label(window_seconds: Option<u64>) -> String {
     } else {
         format!("{}分钟限额", seconds.div_ceil(60))
     }
-}
-
-fn is_codex_review_limit(value: &str) -> bool {
-    let normalized = value.trim().to_ascii_lowercase().replace(['-', ' '], "_");
-    matches!(
-        normalized.as_str(),
-        "review" | "code_review" | "codex_review" | "codex_code_review"
-    ) || normalized.contains("code_review")
-        || normalized.contains("codex_review")
 }
 
 /// 将 Provider-owned PKCE/OIDC 状态保存到 Store 提供的 Redis 原子端口。

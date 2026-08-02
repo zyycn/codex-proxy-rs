@@ -366,6 +366,7 @@ pub struct ProviderAccountMetrics {
     pub enabled: u64,
     pub unavailable: u64,
     pub active: u64,
+    pub rate_limited: u64,
     pub expired: u64,
     pub quota_exhausted: u64,
     pub disabled: u64,

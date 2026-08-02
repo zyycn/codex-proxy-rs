@@ -144,6 +144,7 @@ export interface DashboardAccountUsage {
 export interface DashboardPoolSummary {
   total: number
   active: number
+  rateLimited: number
   expired: number
   quotaExhausted: number
   refreshing: number | null

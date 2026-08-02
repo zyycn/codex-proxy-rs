@@ -913,8 +913,6 @@ fn prepared_create(
         next_refresh_at: account.next_refresh_at().map(Into::into),
         enabled: account.enabled(),
         availability: account.availability(),
-        availability_reason: None,
-        cooldown_until: account.cooldown_until().map(Into::into),
         availability_observed_at: observed_at,
     })
 }
@@ -1018,11 +1016,7 @@ fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, Provi
         account.upstream_account_id.clone(),
         account.plan_type.clone(),
     )
-    .with_runtime_state(
-        account.enabled,
-        account.availability,
-        account.cooldown_until.map(Into::into),
-    )
+    .with_runtime_state(account.enabled, account.availability)
     .with_refresh_schedule(
         account.has_refresh_token,
         account.next_refresh_at.map(Into::into),
@@ -1087,6 +1081,9 @@ fn project_quota(
             window_seconds,
             used_percent: billing.used_percent(),
             reset_at: billing.period_end().and_then(parse_utc),
+            limit_reached: billing
+                .used_percent()
+                .is_some_and(|used| used.is_finite() && used >= 100.0),
             local_usage: None,
             provider_data: Some(ProviderDocument::new(OpaqueProviderData::new(data))),
         }
@@ -1099,6 +1096,7 @@ fn project_quota(
             window_seconds: Some(crate::GROK_FREE_ROLLING_WINDOW_SECONDS),
             used_percent: None,
             reset_at: None,
+            limit_reached: false,
             local_usage: rolling_usage,
             provider_data: None,
         }

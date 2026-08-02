@@ -510,8 +510,6 @@ async fn selector_should_escape_a_quota_exhausted_affinity_account() {
             account_id: first.id().clone(),
             expected_revision: first.revision(),
             availability: AccountAvailability::QuotaExhausted,
-            reason: Some("quota_exhausted".to_owned()),
-            cooldown_until: None,
             observed_at: SystemTime::now(),
         })
         .await
@@ -547,57 +545,6 @@ async fn selector_should_escape_a_quota_exhausted_affinity_account() {
             selected.account_switch(),
         ),
         ("acct_second", false, Some("quota_exhausted"), true)
-    );
-}
-
-#[tokio::test]
-async fn selector_should_escape_an_affinity_account_during_cooldown() {
-    let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_first", "at-first");
-    create_account(&store, "acct_second", "at-second");
-    let first = store.account("acct_first").expect("first account");
-    store
-        .apply_state_change(AccountStateChange {
-            account_id: first.id().clone(),
-            expected_revision: first.revision(),
-            availability: AccountAvailability::Cooldown,
-            reason: Some("rate_limited".to_owned()),
-            cooldown_until: Some(SystemTime::now() + Duration::from_secs(60)),
-            observed_at: SystemTime::now(),
-        })
-        .await
-        .expect("mark first account cooling down");
-    let affinity = Arc::new(MemorySessionAffinity::default());
-    let provider = ProviderKind::new("openai").expect("provider");
-    let key = ProviderSessionAffinityKey::try_new("cooldown-session").expect("affinity key");
-    affinity
-        .bind(&provider, &key, first.id(), Duration::from_secs(60))
-        .await
-        .expect("seed affinity");
-    let selector =
-        selector_with_affinity(&store, Arc::new(TestLeaseCoordinator::default()), affinity);
-    let request_url =
-        Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("request URL");
-    let request_attempt = attempt(BTreeSet::new());
-
-    let selected = selector
-        .select(&SelectCodexCredential {
-            upstream_model: "gpt-5.4",
-            request_url: &request_url,
-            attempt: &request_attempt,
-            session_affinity_key: Some(&key),
-        })
-        .await
-        .expect("select fallback account");
-
-    assert_eq!(
-        (
-            selected.account_id().as_str(),
-            selected.affinity_hit(),
-            selected.escape_reason(),
-            selected.account_switch(),
-        ),
-        ("acct_second", false, Some("cooldown"), true)
     );
 }
 
@@ -728,7 +675,7 @@ fn credential_expired_failure_marks_unified_account_expired() {
 }
 
 #[test]
-fn rate_limited_failure_marks_quota_exhausted_with_a_reset_deadline() {
+fn rate_limited_failure_records_quota_window_without_changing_availability() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_primary", "at-primary");
     let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
@@ -753,12 +700,33 @@ fn rate_limited_failure_marks_quota_exhausted_with_a_reset_deadline() {
     ))
     .expect("record rate-limit failure");
 
+    // 429 不改变 availability（限流不改变账号可用性），只把限流窗口合成进 quota JSON。
     let account = store.account("acct_primary").expect("account");
-    assert_eq!(account.availability(), AccountAvailability::QuotaExhausted);
+    assert_eq!(account.availability(), AccountAvailability::Ready);
+    let quota = store.quota_json("acct_primary").expect("quota");
+    assert_eq!(
+        quota
+            .pointer("/rate_limit/limit_reached")
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        quota
+            .pointer("/rate_limit/primary_window/used_percent")
+            .and_then(serde_json::Value::as_f64),
+        Some(100.0)
+    );
     assert!(
-        account
-            .cooldown_until()
-            .is_some_and(|until| until > SystemTime::now())
+        quota
+            .pointer("/rate_limit/primary_window/reset_at")
+            .and_then(serde_json::Value::as_i64)
+            .is_some_and(|reset_at| {
+                reset_at
+                    > SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .expect("clock")
+                        .as_secs() as i64
+            })
     );
 }
 
@@ -781,11 +749,6 @@ async fn usage_limit_exhaustion_marks_quota_exhausted_without_usage_probe() {
 
     let account = store.account("acct_primary").expect("persisted account");
     assert_eq!(account.availability(), AccountAvailability::QuotaExhausted);
-    assert!(
-        account
-            .cooldown_until()
-            .is_some_and(|until| until > SystemTime::now())
-    );
     assert_eq!(store.quota_reads(), 0);
 }
 
@@ -798,8 +761,6 @@ fn rate_limited_failure_does_not_downgrade_persisted_quota_exhaustion() {
         account_id: account.id().clone(),
         expected_revision: account.revision(),
         availability: AccountAvailability::QuotaExhausted,
-        reason: Some("quota_exhausted".to_owned()),
-        cooldown_until: None,
         observed_at: SystemTime::now(),
     }))
     .expect("mark exhausted");
@@ -813,53 +774,13 @@ fn rate_limited_failure_does_not_downgrade_persisted_quota_exhaustion() {
     ))
     .expect("record rate-limit failure");
 
+    // 429 不写 availability，402 的 QuotaExhausted 保持不变。
     assert_eq!(
         store
             .account("acct_primary")
             .expect("persisted account")
             .availability(),
         AccountAvailability::QuotaExhausted
-    );
-    assert!(
-        store
-            .account("acct_primary")
-            .expect("persisted account")
-            .cooldown_until()
-            .is_some_and(|until| until > SystemTime::now())
-    );
-}
-
-#[test]
-fn rate_limited_failure_keeps_longer_existing_quota_deadline() {
-    let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_primary", "at-primary");
-    let account = store.account("acct_primary").expect("account");
-    let existing_deadline = SystemTime::now() + Duration::from_secs(300);
-    block_on(store.apply_state_change(AccountStateChange {
-        account_id: account.id().clone(),
-        expected_revision: account.revision(),
-        availability: AccountAvailability::QuotaExhausted,
-        reason: Some("usage_limit_exhausted".to_owned()),
-        cooldown_until: Some(existing_deadline),
-        observed_at: SystemTime::now(),
-    }))
-    .expect("mark exhausted");
-    let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
-
-    block_on(selector.record_failure(
-        &account,
-        CodexAccountFailure::RateLimited {
-            retry_after: Some(Duration::from_secs(30)),
-        },
-    ))
-    .expect("record shorter rate-limit failure");
-
-    assert_eq!(
-        store
-            .account("acct_primary")
-            .expect("persisted account")
-            .cooldown_until(),
-        Some(existing_deadline)
     );
 }
 
@@ -883,13 +804,14 @@ fn rate_limited_failure_does_not_consult_stale_quota_snapshot() {
             .account("acct_primary")
             .expect("persisted account")
             .availability(),
-        AccountAvailability::QuotaExhausted
+        AccountAvailability::Ready
     );
-    assert_eq!(store.quota_reads(), 0);
+    // 429 合成限流窗口需要读写 quota JSON。
+    assert!(store.quota_reads() >= 1);
 }
 
 #[test]
-fn authenticated_rate_limit_recovers_stale_authentication_state() {
+fn rate_limited_failure_does_not_overwrite_stale_authentication_state() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_primary", "at-primary");
     let account = store.account("acct_primary").expect("account");
@@ -897,8 +819,6 @@ fn authenticated_rate_limit_recovers_stale_authentication_state() {
         account_id: account.id().clone(),
         expected_revision: account.revision(),
         availability: AccountAvailability::Invalid,
-        reason: Some("identity_verification_required".to_owned()),
-        cooldown_until: None,
         observed_at: SystemTime::now(),
     }))
     .expect("mark account invalid");
@@ -913,12 +833,13 @@ fn authenticated_rate_limit_recovers_stale_authentication_state() {
     ))
     .expect("record rate-limit failure");
 
+    // 429 不写 availability（限流不改变账号可用性），认证终态保持不变。
     assert_eq!(
         store
             .account("acct_primary")
             .expect("persisted account")
             .availability(),
-        AccountAvailability::QuotaExhausted
+        AccountAvailability::Invalid
     );
 }
 
@@ -936,8 +857,6 @@ fn successful_upstream_response_recovers_non_quota_terminal_states() {
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             availability: stale,
-            reason: Some("stale_observation".to_owned()),
-            cooldown_until: None,
             observed_at: SystemTime::now(),
         }))
         .expect("seed stale state");
@@ -996,7 +915,7 @@ fn rate_limited_failures_for_distinct_accounts_do_not_conflict() {
                 .expect("persisted second account")
                 .availability(),
         ],
-        [AccountAvailability::QuotaExhausted; 2]
+        [AccountAvailability::Ready; 2]
     );
 }
 
@@ -1082,7 +1001,7 @@ fn identity_verification_failure_isolates_only_selected_account() {
 }
 
 #[test]
-fn cloudflare_challenge_backoff_escalates_and_success_resets_it() {
+fn cloudflare_challenge_does_not_change_availability() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_primary", "at-primary");
     let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
@@ -1099,48 +1018,21 @@ fn cloudflare_challenge_backoff_escalates_and_success_resets_it() {
         )
         .expect("select account");
 
+    // Cloudflare 挑战只走内存退避表，不写 availability（限流不改变账号可用性）。
     block_on(selector.record_failure(
         lease.account(),
         CodexAccountFailure::CloudflareChallenge { retry_after: None },
     ))
-    .expect("record first challenge");
-    let first = store
-        .account("acct_primary")
-        .expect("account")
-        .cooldown_until()
-        .expect("first cooldown")
-        .duration_since(SystemTime::now())
-        .expect("future cooldown");
-    assert!(first >= Duration::from_secs(9) && first <= Duration::from_secs(10));
+    .expect("record challenge");
 
-    block_on(selector.record_failure(
-        lease.account(),
-        CodexAccountFailure::CloudflareChallenge { retry_after: None },
-    ))
-    .expect("record second challenge");
-    let second = store
-        .account("acct_primary")
-        .expect("account")
-        .cooldown_until()
-        .expect("second cooldown")
-        .duration_since(SystemTime::now())
-        .expect("future cooldown");
-    assert!(second >= Duration::from_secs(29) && second <= Duration::from_secs(30));
-
+    assert_eq!(
+        store
+            .account("acct_primary")
+            .expect("account")
+            .availability(),
+        AccountAvailability::Ready
+    );
     block_on(selector.record_success(lease.account(), None));
-    block_on(selector.record_failure(
-        lease.account(),
-        CodexAccountFailure::CloudflareChallenge { retry_after: None },
-    ))
-    .expect("record reset challenge");
-    let reset = store
-        .account("acct_primary")
-        .expect("account")
-        .cooldown_until()
-        .expect("reset cooldown")
-        .duration_since(SystemTime::now())
-        .expect("future cooldown");
-    assert!(reset >= Duration::from_secs(9) && reset <= Duration::from_secs(10));
 }
 
 #[test]
@@ -1226,14 +1118,12 @@ fn cloudflare_challenge_expires_provider_owned_cookies_at_cooldown_boundary() {
     .expect("record challenge");
 
     let account = store.account("acct_primary").expect("account");
-    let cooldown_until = account.cooldown_until().expect("cooldown");
     let data = block_on(store.repository().load_complete_data(&account)).expect("credential data");
     assert_eq!(data.cookies().len(), 1);
-    assert!(
-        data.cookies()[0]
-            .expires_at
-            .is_some_and(|expires_at| SystemTime::from(expires_at) <= cooldown_until)
-    );
+    assert!(data.cookies()[0].expires_at.is_some_and(|expires_at| {
+        let expires_at = SystemTime::from(expires_at);
+        expires_at > SystemTime::now() && expires_at <= SystemTime::now() + Duration::from_secs(120)
+    }));
 }
 
 #[test]

@@ -409,7 +409,7 @@ impl CodexCredentialAdmin {
             Some(input.verified_account.chatgpt_account_id),
             input.verified_account.plan_type,
         )
-        .with_runtime_state(input.enabled, AccountAvailability::Ready, None)
+        .with_runtime_state(input.enabled, AccountAvailability::Ready)
         .with_refresh_schedule(
             input.secret.refresh_token.is_some(),
             optional_time(input.next_refresh_at),
@@ -806,10 +806,7 @@ impl CodexCredentialAdminService {
                     )) {
                         return Err(CodexCredentialAdminError::InvalidInput);
                     }
-                    account.account =
-                        account
-                            .account
-                            .with_runtime_state(enabled, availability, None);
+                    account.account = account.account.with_runtime_state(enabled, availability);
                     account
                 }
             };
@@ -933,7 +930,7 @@ impl CodexCredentialAdminService {
             Some(upstream_account_id),
             candidate.plan_type.clone(),
         )
-        .with_runtime_state(enabled, AccountAvailability::Ready, None)
+        .with_runtime_state(enabled, AccountAvailability::Ready)
         .with_refresh_schedule(false, None);
         Ok(NewProviderAccount {
             account,
@@ -1000,9 +997,7 @@ fn cpr_status(account: &ProviderAccount) -> &'static str {
         AccountAvailability::QuotaExhausted => "quota_exhausted",
         AccountAvailability::Expired | AccountAvailability::Invalid => "expired",
         AccountAvailability::Banned => "banned",
-        AccountAvailability::Unknown
-        | AccountAvailability::Ready
-        | AccountAvailability::Cooldown => "active",
+        AccountAvailability::Unknown | AccountAvailability::Ready => "active",
     }
 }
 

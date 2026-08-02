@@ -7,6 +7,7 @@ export interface AccountQuotaWindow {
   labelDisplay: string
   usedPercent: number | null
   usedPercentDisplay: string
+  limitReached: boolean
   localUsage?: unknown
   resetAtDisplay: string
 }
@@ -102,7 +103,6 @@ export interface Account {
   hasRefreshToken: boolean
   status: string
   displayStatus: string
-  tokenRefreshing: boolean
   availability: string
   enabled: boolean
   accessTokenExpiresAt: string | null

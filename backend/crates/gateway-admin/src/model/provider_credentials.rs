@@ -153,8 +153,6 @@ pub struct PreparedCredentialCreate {
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
     pub availability: AccountAvailability,
-    pub availability_reason: Option<String>,
-    pub cooldown_until: Option<DateTime<Utc>>,
     pub availability_observed_at: DateTime<Utc>,
 }
 
@@ -573,6 +571,7 @@ pub struct ProviderQuotaWindow {
     pub window_seconds: Option<u64>,
     pub used_percent: Option<f64>,
     pub reset_at: Option<DateTime<Utc>>,
+    pub limit_reached: bool,
     pub local_usage: Option<AccountUsage>,
     pub provider_data: Option<ProviderDocument>,
 }

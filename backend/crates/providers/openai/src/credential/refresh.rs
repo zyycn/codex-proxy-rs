@@ -192,7 +192,6 @@ impl CodexCredentialRefreshService {
                 self.persist_terminal(
                     &due.account,
                     AccountAvailability::Expired,
-                    "invalid_grant",
                     CodexCredentialRefreshOutcome::Invalidated { account_id },
                 )
                 .await
@@ -201,7 +200,6 @@ impl CodexCredentialRefreshService {
                 self.persist_terminal(
                     &due.account,
                     AccountAvailability::Banned,
-                    "account_banned",
                     CodexCredentialRefreshOutcome::Banned { account_id },
                 )
                 .await
@@ -330,7 +328,6 @@ impl CodexCredentialRefreshService {
                     .persist_terminal(
                         &due.account,
                         AccountAvailability::Invalid,
-                        "refreshed_identity_rejected",
                         CodexCredentialRefreshOutcome::Invalidated {
                             account_id: due.account.id().to_string(),
                         },
@@ -433,7 +430,6 @@ impl CodexCredentialRefreshService {
         &self,
         account: &ProviderAccount,
         availability: AccountAvailability,
-        reason: &'static str,
         outcome: CodexCredentialRefreshOutcome,
     ) -> Result<CodexCredentialRefreshOutcome, CodexCredentialRefreshError> {
         match self.repository.load_runtime_credential(account).await {
@@ -447,13 +443,7 @@ impl CodexCredentialRefreshService {
         }
         match self
             .repository
-            .apply_state(
-                account,
-                availability,
-                Some(reason.to_owned()),
-                None,
-                SystemTime::now(),
-            )
+            .apply_state(account, availability, SystemTime::now())
             .await
         {
             Ok(()) => Ok(outcome),

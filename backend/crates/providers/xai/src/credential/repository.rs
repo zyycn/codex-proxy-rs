@@ -168,11 +168,7 @@ impl GrokCredentialAdmin {
             input.account.upstream_account_id.clone(),
             input.account.plan_type.clone(),
         )
-        .with_runtime_state(
-            input.enabled,
-            input.initial_availability.into(),
-            input.initial_cooldown_until.map(to_system_time),
-        )
+        .with_runtime_state(input.enabled, input.initial_availability.into())
         .with_refresh_schedule(true, Some(to_system_time(input.next_refresh_at)));
         Ok(NewProviderAccount {
             account,
@@ -222,7 +218,6 @@ impl GrokCredentialAdmin {
             enabled: input.enabled,
             initial_availability: GrokCredentialAvailability::Ready,
             initial_availability_reason: None,
-            initial_cooldown_until: None,
         })
     }
 
@@ -434,15 +429,12 @@ impl GrokCredentialRepository {
         input: &UpdateGrokCredentialState,
     ) -> Result<(), GrokCredentialRepositoryError> {
         validate_reason(input.availability_reason.as_deref())?;
-        validate_cooldown(input.availability, input.cooldown_until)?;
         self.ensure_xai_account(&input.account_id).await?;
         self.store
             .apply_state_change(AccountStateChange {
                 account_id: input.account_id.clone(),
                 expected_revision: input.expected_revision,
                 availability: input.availability.into(),
-                reason: input.availability_reason.clone(),
-                cooldown_until: input.cooldown_until.map(to_system_time),
                 observed_at: to_system_time(input.observed_at),
             })
             .await
@@ -708,8 +700,7 @@ fn validate_create(input: &CreateGrokCredential) -> Result<(), GrokCredentialRep
     validate_profile(&input.account)?;
     validate_refresh_schedule(input.next_refresh_at, input.account.access_token_expires_at)?;
     validate_secret(&input.secret)?;
-    validate_reason(input.initial_availability_reason.as_deref())?;
-    validate_cooldown(input.initial_availability, input.initial_cooldown_until)
+    validate_reason(input.initial_availability_reason.as_deref())
 }
 
 fn validate_profile(profile: &GrokAccountProfile) -> Result<(), GrokCredentialRepositoryError> {
@@ -811,18 +802,6 @@ fn validate_reason(reason: Option<&str>) -> Result<(), GrokCredentialRepositoryE
     {
         return Err(GrokCredentialRepositoryError::InvalidInput(
             "availability_reason",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_cooldown(
-    availability: GrokCredentialAvailability,
-    cooldown_until: Option<DateTime<Utc>>,
-) -> Result<(), GrokCredentialRepositoryError> {
-    if matches!(availability, GrokCredentialAvailability::Cooldown) != cooldown_until.is_some() {
-        return Err(GrokCredentialRepositoryError::InvalidInput(
-            "cooldown_until",
         ));
     }
     Ok(())

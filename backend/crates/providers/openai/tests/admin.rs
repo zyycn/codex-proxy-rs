@@ -498,7 +498,8 @@ async fn openai_admin_provider_projects_codex_additional_limit_as_the_primary_qu
         .collect::<Vec<_>>();
 
     assert_eq!(monthly.len(), 1);
-    assert_eq!(monthly[0].label, "月限额");
+    // limit_name 优先显示，不再猜成「月限额」。
+    assert_eq!(monthly[0].label, "custom codex label");
     assert_eq!(monthly[0].source.as_deref(), Some("core"));
     assert_eq!(monthly[0].used_percent, Some(2.0));
 }
@@ -544,8 +545,6 @@ async fn openai_admin_projects_confirmed_quota_exhaustion_as_full_without_mutati
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             availability: CoreAccountAvailability::QuotaExhausted,
-            reason: Some("usage_limit_exhausted".to_owned()),
-            cooldown_until: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(reset_at)),
             observed_at: SystemTime::now(),
         })
         .await
@@ -586,8 +585,6 @@ async fn openai_admin_projects_confirmed_quota_exhaustion_as_full_without_mutati
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             availability: CoreAccountAvailability::Ready,
-            reason: None,
-            cooldown_until: None,
             observed_at: SystemTime::now(),
         })
         .await
@@ -645,7 +642,6 @@ async fn openai_admin_provider_rejects_unprepared_mutations_before_store_commit(
     stale_record.next_refresh_at = None;
     stale_record.enabled = false;
     stale_record.availability = AdminAccountAvailability::Banned;
-    stale_record.cooldown_until = Some(Utc::now() + chrono::Duration::minutes(5));
     let rotation_error = admin
         .prepare_rotation(PrepareCredentialRotation {
             account: stale_record,
@@ -712,8 +708,6 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
         next_refresh_at: account.next_refresh_at().map(DateTime::<Utc>::from),
         enabled: account.enabled(),
         availability: AdminAccountAvailability::Ready,
-        availability_reason: None,
-        cooldown_until: account.cooldown_until().map(DateTime::<Utc>::from),
         availability_observed_at: now,
         quota_observed_at: None,
         created_at: now,

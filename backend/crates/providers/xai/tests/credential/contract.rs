@@ -219,44 +219,18 @@ async fn state_update_uses_credential_revision_fence() {
     let (store, repository) = repository();
     let input = create_input("state", "subject-state");
     seed_input(&store, &input).await.expect("create");
-    let cooldown_until = Utc::now() + chrono::Duration::minutes(1);
     repository
         .update_state(&UpdateGrokCredentialState {
             account_id: input.account_id.clone(),
             expected_revision: CredentialRevision::new(1).expect("revision"),
-            availability: GrokCredentialAvailability::Cooldown,
-            availability_reason: Some("rate_limited".to_owned()),
-            cooldown_until: Some(cooldown_until),
+            availability: GrokCredentialAvailability::Ready,
+            availability_reason: Some("upstream_rate_limited".to_owned()),
             observed_at: Utc::now(),
         })
         .await
         .expect("state update");
     let account = store.account(&input.account_id).expect("account");
-    assert_eq!(account.availability(), AccountAvailability::Cooldown);
-    assert!(account.cooldown_until().is_some());
-}
-
-#[tokio::test]
-async fn cooldown_requires_matching_deadline() {
-    let (store, repository) = repository();
-    let input = create_input("bad-cooldown", "subject-cooldown");
-    seed_input(&store, &input).await.expect("create");
-    let result = repository
-        .update_state(&UpdateGrokCredentialState {
-            account_id: input.account_id,
-            expected_revision: CredentialRevision::new(1).expect("revision"),
-            availability: GrokCredentialAvailability::Cooldown,
-            availability_reason: None,
-            cooldown_until: None,
-            observed_at: Utc::now(),
-        })
-        .await;
-    assert_eq!(
-        result,
-        Err(GrokCredentialRepositoryError::InvalidInput(
-            "cooldown_until"
-        ))
-    );
+    assert_eq!(account.availability(), AccountAvailability::Ready);
 }
 
 #[tokio::test]

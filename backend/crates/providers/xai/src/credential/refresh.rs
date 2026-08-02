@@ -705,7 +705,6 @@ impl GrokCredentialRefreshService {
                 expected_revision: credential.credential_revision,
                 availability,
                 availability_reason: Some(reason.to_owned()),
-                cooldown_until: None,
                 observed_at: Utc::now(),
             })
             .await
@@ -852,8 +851,6 @@ fn account_due(
                 | AccountAvailability::Banned
                 | AccountAvailability::Invalid
         )
-        && (availability != AccountAvailability::Cooldown
-            || account.cooldown_until().is_some_and(|until| until <= now))
         && account.next_refresh_at().is_some_and(|next| next <= now)
 }
 
