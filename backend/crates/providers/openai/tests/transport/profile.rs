@@ -66,7 +66,7 @@ fn wire_profile_should_generate_codex_core_user_agent() {
         codex_version: "0.144.2".to_owned(),
         desktop_version: "26.707.72221".to_owned(),
         desktop_build: "72221".to_owned(),
-        os_type: "Mac OS".to_owned(),
+        os_type: "macOS".to_owned(),
         os_version: "15.7.1".to_owned(),
         arch: "arm64".to_owned(),
         terminal: "unknown".to_owned(),
@@ -78,7 +78,7 @@ fn wire_profile_should_generate_codex_core_user_agent() {
 
     assert_eq!(
         profile.user_agent(),
-        "Codex Desktop/0.144.2 (Mac OS 15.7.1; arm64) unknown"
+        "Codex Desktop/0.144.2 (macOS 15.7.1; arm64) unknown"
     );
 }
 
@@ -219,7 +219,7 @@ fn wire_profile() -> CodexWireProfile {
         codex_version: "0.144.2".to_owned(),
         desktop_version: "26.707.72221".to_owned(),
         desktop_build: "72221".to_owned(),
-        os_type: "Mac OS".to_owned(),
+        os_type: "macOS".to_owned(),
         os_version: "15.7.1".to_owned(),
         arch: "arm64".to_owned(),
         terminal: "unknown".to_owned(),

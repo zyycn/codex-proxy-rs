@@ -946,6 +946,53 @@ async fn periodic_quota_synchronization_does_not_downgrade_exhaustion_on_rate_li
 }
 
 #[tokio::test]
+async fn periodic_quota_synchronization_respects_retry_after_on_service_unavailable() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_periodic_503_retry_after").await;
+    let account = store
+        .account("acct_periodic_503_retry_after")
+        .expect("created account");
+    store
+        .apply_state_change(AccountStateChange {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            availability: AccountAvailability::QuotaExhausted,
+            reason: Some("quota_exhausted".to_owned()),
+            cooldown_until: None,
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("mark account exhausted");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        // 5xx 短退避重试后仍失败，Retry-After 用于写冷却，不再落入"未分类"。
+        .respond_with(ResponseTemplate::new(503).insert_header("Retry-After", "120"))
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    service.synchronize().await.expect("quota synchronization");
+
+    let account = store
+        .account("acct_periodic_503_retry_after")
+        .expect("persisted account");
+    assert_eq!(account.availability(), AccountAvailability::QuotaExhausted);
+    assert!(
+        account
+            .cooldown_until()
+            .is_some_and(|until| until > SystemTime::now())
+    );
+}
+
+#[tokio::test]
 async fn periodic_quota_synchronization_skips_ordinary_cooldown_without_exhausted_quota() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_periodic_temporary_cooldown").await;
@@ -1028,7 +1075,8 @@ async fn periodic_quota_synchronization_rechecks_exhausted_accounts_without_wait
     Mock::given(method("GET"))
         .and(path("/api/codex/usage"))
         .respond_with(ResponseTemplate::new(500))
-        .expect(1)
+        // 5xx 短退避重试 1s/2s 后仍失败，最终计入 transient。
+        .expect(3)
         .mount(&server)
         .await;
     let service = quota_service_with_base_url(

@@ -295,7 +295,7 @@ impl Default for CodexWireProfileConfig {
             codex_version: "0.145.0".to_owned(),
             desktop_version: "26.721.31836".to_owned(),
             desktop_build: "5828".to_owned(),
-            os_type: "Mac OS".to_owned(),
+            os_type: "macOS".to_owned(),
             os_version: "15.7.1".to_owned(),
             arch: "arm64".to_owned(),
             terminal: "unknown".to_owned(),

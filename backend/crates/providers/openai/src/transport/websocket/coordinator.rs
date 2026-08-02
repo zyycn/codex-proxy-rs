@@ -24,7 +24,7 @@ use super::{
         WebSocketPoolConnectLease, WebSocketPoolConnectOutcome, WebSocketPoolDecision,
         WebSocketPoolLease,
     },
-    pump::{PumpKeepalive, PumpedWebSocket},
+    pump::{PumpKeepalive, PumpLogContext, PumpedWebSocket},
 };
 
 pub(crate) const WEBSOCKET_FAST_PATH_BUDGET: Duration = Duration::from_millis(800);
@@ -203,10 +203,12 @@ async fn prepare_unpooled_websocket(
     decision_started_at: Instant,
 ) -> Result<PreparedWebSocket, CodexWebSocketExchangeError> {
     let permit = acquire_breaker_permit(breaker, origin_key)?;
+    let context = pump_log_context_from_connection(request.connection());
     let connected = connect_with_budget(
         request.connection(),
         PumpKeepalive::disabled(),
         fast_path_budget,
+        context,
     )
     .await;
     let (connection, connect_elapsed) = finish_breaker_attempt(permit, connected)?;
@@ -302,6 +304,10 @@ fn start_pooled_websocket_connect(
     let cancellation = connect_lease.cancellation_token();
     let fast_path_reporter = permit.fast_path_reporter();
     let keepalive = pool.keepalive();
+    let context = PumpLogContext::new(
+        Some(task_key.account_id().to_owned()),
+        Some(task_key.conversation_id_hash()),
+    );
     let (sender, receiver) = oneshot::channel();
     pool.spawn_connect_task(async move {
         let connected = tokio::select! {
@@ -319,7 +325,7 @@ fn start_pooled_websocket_connect(
                 );
                 return;
             }
-            result = connect_with_budget(&connection, keepalive, None) => result,
+            result = connect_with_budget(&connection, keepalive, None, context) => result,
         };
         match finish_breaker_attempt(permit, connected) {
             Ok((connection, connect_elapsed)) => {
@@ -392,17 +398,28 @@ fn duration_millis_u64(duration: Duration) -> u64 {
         .max(1)
 }
 
+/// 非池化建连的 pump 日志上下文：从业务头提取账号归属（会话 hash 只有池 key 才有）。
+fn pump_log_context_from_connection(connection: &CodexWebSocketConnection) -> PumpLogContext {
+    let account_id = connection
+        .headers()
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("chatgpt-account-id"))
+        .map(|(_, value)| value.clone());
+    PumpLogContext::new(account_id, None)
+}
+
 async fn connect_with_budget(
     connection: &CodexWebSocketConnection,
     keepalive: PumpKeepalive,
     fast_path_budget: Option<Duration>,
+    context: PumpLogContext,
 ) -> Result<(PooledWebSocketConnection, Duration), CodexWebSocketExchangeError> {
     let started_at = Instant::now();
     let connected = match fast_path_budget {
-        Some(budget) => timeout(budget, connect_pumped_websocket(connection, keepalive))
+        Some(budget) => timeout(budget, connect_pumped_websocket(connection, keepalive, context))
             .await
             .map_err(|_| CodexWebSocketExchangeError::FastPathTimeout { timeout: budget })?,
-        None => connect_pumped_websocket(connection, keepalive).await,
+        None => connect_pumped_websocket(connection, keepalive, context).await,
     }?;
     let (websocket, response) = connected;
     Ok((
