@@ -416,9 +416,12 @@ async fn connect_with_budget(
 ) -> Result<(PooledWebSocketConnection, Duration), CodexWebSocketExchangeError> {
     let started_at = Instant::now();
     let connected = match fast_path_budget {
-        Some(budget) => timeout(budget, connect_pumped_websocket(connection, keepalive, context))
-            .await
-            .map_err(|_| CodexWebSocketExchangeError::FastPathTimeout { timeout: budget })?,
+        Some(budget) => timeout(
+            budget,
+            connect_pumped_websocket(connection, keepalive, context),
+        )
+        .await
+        .map_err(|_| CodexWebSocketExchangeError::FastPathTimeout { timeout: budget })?,
         None => connect_pumped_websocket(connection, keepalive, context).await,
     }?;
     let (websocket, response) = connected;

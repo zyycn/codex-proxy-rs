@@ -204,7 +204,11 @@ impl std::fmt::Debug for PumpedWebSocket {
 
 impl PumpedWebSocket {
     /// 用底层流启动一个 pump 任务并返回句柄。
-    pub(crate) fn new(inner: RawWsStream, keepalive: PumpKeepalive, context: PumpLogContext) -> Self {
+    pub(crate) fn new(
+        inner: RawWsStream,
+        keepalive: PumpKeepalive,
+        context: PumpLogContext,
+    ) -> Self {
         let (tx_command, rx_command) = mpsc::channel::<PumpCommand>(PUMP_COMMAND_BUFFER);
         let (tx_message, rx_message) = mpsc::channel(PUMP_MESSAGE_BUFFER);
         let connection_id = Uuid::new_v4();
