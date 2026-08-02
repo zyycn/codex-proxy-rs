@@ -128,7 +128,7 @@ export const statusLabels: Record<string, string> = {
   disabled: '已禁用',
   banned: '已封禁',
   quota_exhausted: '配额耗尽',
-  refreshing: '刷新中',
+  rate_limited: '限流中',
 }
 
 export const statusTones: Record<string, 'success' | 'danger' | 'warning' | 'info' | 'normal'> = {
@@ -137,17 +137,32 @@ export const statusTones: Record<string, 'success' | 'danger' | 'warning' | 'inf
   disabled: 'normal',
   banned: 'danger',
   quota_exhausted: 'warning',
-  refreshing: 'info',
+  rate_limited: 'warning',
 }
 
 export const accountStatusFilterOptions = [
   { label: '全部状态', value: '' },
   { label: statusLabels.active, value: 'active' },
-  { label: statusLabels.expired, value: 'expired' },
   { label: statusLabels.quota_exhausted, value: 'quota_exhausted' },
+  { label: statusLabels.expired, value: 'expired' },
   { label: statusLabels.disabled, value: 'disabled' },
   { label: statusLabels.banned, value: 'banned' },
 ]
+
+/**
+ * 照 v2：`rate_limited` 不是后端状态，而是由「任一 quota 窗口 limit_reached」派生。
+ * 账号 `active` 但任一窗口触顶 → 显示「限流中」。
+ */
+export function derivedAccountStatus(row: AccountRow): string {
+  if (row.status === 'active' && isQuotaWindowReached(row)) {
+    return 'rate_limited'
+  }
+  return row.status
+}
+
+function isQuotaWindowReached(row: AccountRow): boolean {
+  return row.quota.windows.some(window => window.limitReached)
+}
 
 export function visibleSummaryQuotaWindows(windows: AccountQuotaWindow[]) {
   const known = [...windows]

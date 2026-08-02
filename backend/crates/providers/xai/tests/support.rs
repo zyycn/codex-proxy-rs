@@ -328,7 +328,6 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
                 revision: next,
                 access_token_expires_at,
                 availability: stored.account.availability(),
-                cooldown_until: stored.account.cooldown_until(),
                 enabled: stored.account.enabled(),
                 has_refresh_token,
                 next_refresh_at,
@@ -381,7 +380,6 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
                 revision: stored.account.revision(),
                 access_token_expires_at: stored.account.access_token_expires_at(),
                 availability: change.availability,
-                cooldown_until: change.cooldown_until,
                 enabled: stored.account.enabled(),
                 has_refresh_token: stored.account.has_refresh_token(),
                 next_refresh_at: stored.account.next_refresh_at(),
@@ -402,7 +400,6 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
                 revision: stored.account.revision(),
                 access_token_expires_at: stored.account.access_token_expires_at(),
                 availability: stored.account.availability(),
-                cooldown_until: stored.account.cooldown_until(),
                 enabled: stored.account.enabled(),
                 has_refresh_token: stored.account.has_refresh_token(),
                 next_refresh_at: stored.account.next_refresh_at(),
@@ -427,7 +424,6 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
                 revision: stored.account.revision(),
                 access_token_expires_at: stored.account.access_token_expires_at(),
                 availability: stored.account.availability(),
-                cooldown_until: stored.account.cooldown_until(),
                 enabled,
                 has_refresh_token: stored.account.has_refresh_token(),
                 next_refresh_at: stored.account.next_refresh_at(),
@@ -449,7 +445,6 @@ struct AccountReplacement {
     revision: CredentialRevision,
     access_token_expires_at: Option<SystemTime>,
     availability: AccountAvailability,
-    cooldown_until: Option<SystemTime>,
     enabled: bool,
     has_refresh_token: bool,
     next_refresh_at: Option<SystemTime>,
@@ -473,11 +468,7 @@ fn rebuild_account(previous: &ProviderAccount, replacement: AccountReplacement) 
         previous.upstream_account_id().map(str::to_owned),
         replacement.plan_type,
     )
-    .with_runtime_state(
-        replacement.enabled,
-        replacement.availability,
-        replacement.cooldown_until,
-    )
+    .with_runtime_state(replacement.enabled, replacement.availability)
     .with_refresh_schedule(replacement.has_refresh_token, replacement.next_refresh_at)
 }
 
@@ -549,7 +540,6 @@ pub fn create_input(suffix: &str, subject: &str) -> CreateGrokCredential {
         enabled: true,
         initial_availability: GrokCredentialAvailability::Unknown,
         initial_availability_reason: None,
-        initial_cooldown_until: None,
     }
 }
 

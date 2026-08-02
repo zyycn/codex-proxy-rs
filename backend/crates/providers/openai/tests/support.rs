@@ -117,6 +117,17 @@ impl MemoryAccountStore {
             .is_some_and(|stored| stored.quota.is_some())
     }
 
+    pub(crate) fn quota_json(&self, id: &str) -> Option<serde_json::Value> {
+        let id = ProviderAccountId::new(id).ok()?;
+        self.accounts
+            .lock()
+            .expect("account store lock")
+            .get(&id)
+            .and_then(|stored| stored.quota.as_ref())
+            .and_then(|observation| observation.quota.as_ref())
+            .map(|data| serde_json::Value::Object(data.expose_to_provider().clone()))
+    }
+
     pub(crate) fn fail_provider_listing(&self) {
         self.fail_provider_listing.store(true, Ordering::SeqCst);
     }
@@ -235,7 +246,6 @@ impl ProviderAccountStore for MemoryAccountStore {
                 revision: next,
                 enabled: stored.account.enabled(),
                 availability: stored.account.availability(),
-                cooldown_until: stored.account.cooldown_until(),
                 access_token_expires_at,
                 has_refresh_token,
                 next_refresh_at,
@@ -303,7 +313,6 @@ impl ProviderAccountStore for MemoryAccountStore {
                 revision: stored.account.revision(),
                 enabled: stored.account.enabled(),
                 availability: change.availability,
-                cooldown_until: change.cooldown_until,
                 access_token_expires_at: stored.account.access_token_expires_at(),
                 has_refresh_token: stored.account.has_refresh_token(),
                 next_refresh_at: stored.account.next_refresh_at(),
@@ -325,7 +334,6 @@ impl ProviderAccountStore for MemoryAccountStore {
                 revision: stored.account.revision(),
                 enabled: stored.account.enabled(),
                 availability: stored.account.availability(),
-                cooldown_until: stored.account.cooldown_until(),
                 access_token_expires_at: stored.account.access_token_expires_at(),
                 has_refresh_token: stored.account.has_refresh_token(),
                 next_refresh_at: stored.account.next_refresh_at(),
@@ -350,7 +358,6 @@ impl ProviderAccountStore for MemoryAccountStore {
                 revision: stored.account.revision(),
                 enabled,
                 availability: stored.account.availability(),
-                cooldown_until: stored.account.cooldown_until(),
                 access_token_expires_at: stored.account.access_token_expires_at(),
                 has_refresh_token: stored.account.has_refresh_token(),
                 next_refresh_at: stored.account.next_refresh_at(),
@@ -378,7 +385,6 @@ struct AccountRebuild {
     revision: CredentialRevision,
     enabled: bool,
     availability: AccountAvailability,
-    cooldown_until: Option<SystemTime>,
     access_token_expires_at: Option<SystemTime>,
     has_refresh_token: bool,
     next_refresh_at: Option<SystemTime>,
@@ -407,11 +413,7 @@ fn rebuild_account(current: &ProviderAccount, rebuild: AccountRebuild) -> Provid
         current.upstream_account_id().map(str::to_owned),
         plan_type,
     )
-    .with_runtime_state(
-        rebuild.enabled,
-        rebuild.availability,
-        rebuild.cooldown_until,
-    )
+    .with_runtime_state(rebuild.enabled, rebuild.availability)
     .with_refresh_schedule(rebuild.has_refresh_token, rebuild.next_refresh_at)
 }
 
@@ -464,6 +466,7 @@ impl ProviderLeasePort for TestLeaseCoordinator {
                             last_started_at: None,
                             quota_reset_at: None,
                             quota_remaining_rank: None,
+                            quota_limit_reached: false,
                             failure_rate_basis_points: None,
                             first_output_latency_ms: None,
                         },
@@ -765,6 +768,6 @@ pub(crate) fn codex_account(id: &str) -> ProviderAccount {
         Some(format!("chatgpt-{id}")),
         Some("pro".to_owned()),
     )
-    .with_runtime_state(true, AccountAvailability::Ready, None)
+    .with_runtime_state(true, AccountAvailability::Ready)
     .with_refresh_schedule(true, Some(SystemTime::now() + Duration::from_secs(2_700)))
 }

@@ -32,8 +32,6 @@ use super::types::{
     RuntimeCodexCookie,
 };
 
-const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
-const CLOUDFLARE_PATH_BLOCK_COOLDOWN: Duration = Duration::from_secs(30);
 const CLOUDFLARE_RECOVERY_STALE_AFTER: Duration = Duration::from_secs(60 * 60);
 const CLOUDFLARE_CHALLENGE_BACKOFF: [Duration; 4] = [
     Duration::from_secs(10),
@@ -84,7 +82,6 @@ struct RiskRecoveryState {
 
 #[derive(Debug, Clone, Copy)]
 enum CookieRecovery {
-    None,
     ExpireAt(SystemTime),
     Clear,
 }
@@ -321,6 +318,7 @@ impl CodexCredentialSelector {
                         last_started_at: None,
                         quota_reset_at: None,
                         quota_remaining_rank: None,
+                        quota_limit_reached: false,
                         failure_rate_basis_points: None,
                         first_output_latency_ms: None,
                     })
@@ -329,9 +327,16 @@ impl CodexCredentialSelector {
                 AccountCandidate { account, signals }
             })
             .collect::<Vec<_>>();
-        // 旧版开关只影响“候选资格”。保留原始账号供 revision-fenced 凭据加载，
-        // 用影子候选承载放宽后的资格，避免伪造已持久化账号的运行状态。
-        let quota_exhausted_candidates = (!self.skip_exhausted).then(|| {
+        // skip_exhausted 语义：true 时排除任一窗口触顶（limit_reached）的账号，
+        // 仅由上游 429 兜底；false 时保留全部候选（含 QuotaExhausted 的放宽投影）。
+        // 保留原始账号供 revision-fenced 凭据加载，用影子候选承载资格放宽。
+        let scheduling_candidates = if self.skip_exhausted {
+            candidates
+                .iter()
+                .filter(|candidate| !candidate.signals.quota_limit_reached)
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
             candidates
                 .iter()
                 .cloned()
@@ -340,8 +345,8 @@ impl CodexCredentialSelector {
                     candidate
                 })
                 .collect::<Vec<_>>()
-        });
-        let scheduling_candidates = quota_exhausted_candidates.as_deref().unwrap_or(&candidates);
+        };
+        let scheduling_candidates = scheduling_candidates.as_slice();
         let mut affinity = if diagnostic {
             AffinitySelection::default()
         } else {
@@ -682,118 +687,64 @@ impl CodexCredentialSelector {
         failure: CodexAccountFailure,
     ) -> Result<(), CredentialSelectionError> {
         let now = SystemTime::now();
-        let (availability, reason, cooldown_until, cookie_recovery) = match failure {
-            CodexAccountFailure::CredentialExpired => (
-                AccountAvailability::Expired,
-                Some("credential_expired".to_owned()),
-                None,
-                CookieRecovery::None,
-            ),
-            CodexAccountFailure::IdentityVerificationRequired => (
-                AccountAvailability::Invalid,
-                Some("identity_verification_required".to_owned()),
-                None,
-                CookieRecovery::None,
-            ),
-            CodexAccountFailure::Banned => (
-                AccountAvailability::Banned,
-                Some("account_banned".to_owned()),
-                None,
-                CookieRecovery::None,
-            ),
-            CodexAccountFailure::QuotaExhausted => (
-                AccountAvailability::QuotaExhausted,
-                Some("quota_exhausted".to_owned()),
-                None,
-                CookieRecovery::None,
-            ),
-            CodexAccountFailure::UsageLimitExhausted { retry_after } => {
-                return self
-                    .record_resettable_limit_failure(
-                        account,
-                        retry_after,
-                        "usage_limit_exhausted",
-                        now,
-                    )
-                    .await;
+        match failure {
+            CodexAccountFailure::CredentialExpired => {
+                self.apply_state(account, AccountAvailability::Expired, now)
+                    .await
             }
+            CodexAccountFailure::IdentityVerificationRequired => {
+                self.apply_state(account, AccountAvailability::Invalid, now)
+                    .await
+            }
+            CodexAccountFailure::Banned => {
+                self.apply_state(account, AccountAvailability::Banned, now)
+                    .await
+            }
+            // 402：真额度耗尽，由 quota worker 按窗口 reset 自动恢复。
+            CodexAccountFailure::QuotaExhausted
+            | CodexAccountFailure::UsageLimitExhausted { .. } => {
+                self.apply_state(account, AccountAvailability::QuotaExhausted, now)
+                    .await
+            }
+            // 429：临时限流只写 quota，availability 不改变。
             CodexAccountFailure::RateLimited { retry_after } => {
-                return self
-                    .record_resettable_limit_failure(account, retry_after, "rate_limited", now)
-                    .await;
+                self.quota
+                    .apply_rate_limit_429(account, retry_after, now)
+                    .await
+                    .map_err(|_| CredentialSelectionError::Store)?;
+                Ok(())
             }
+            // Cloudflare 挑战：内存退避表（记录风险计数），不写 availability。
             CodexAccountFailure::CloudflareChallenge { retry_after } => {
                 let delay = self.cloudflare_challenge_delay(account.id(), now, retry_after);
-                let cooldown_until = now.checked_add(delay);
-                (
-                    AccountAvailability::Cooldown,
-                    Some("cloudflare_challenge".to_owned()),
-                    cooldown_until,
-                    cooldown_until.map_or(CookieRecovery::Clear, CookieRecovery::ExpireAt),
-                )
+                let recovery = now
+                    .checked_add(delay)
+                    .map_or(CookieRecovery::Clear, CookieRecovery::ExpireAt);
+                self.apply_cookie_recovery(account, recovery).await?;
+                Ok(())
             }
+            // Cloudflare 路径被封：连续超阈值才置 Invalid；否则内存退避。
             CodexAccountFailure::CloudflarePathBlocked => {
                 let blocked = self.record_cloudflare_path_block(account.id(), now);
                 if blocked >= CLOUDFLARE_PATH_BLOCK_THRESHOLD {
-                    (
-                        AccountAvailability::Invalid,
-                        Some("cloudflare_path_blocked".to_owned()),
-                        None,
-                        CookieRecovery::Clear,
-                    )
-                } else {
-                    (
-                        AccountAvailability::Cooldown,
-                        Some("cloudflare_path_blocked".to_owned()),
-                        now.checked_add(CLOUDFLARE_PATH_BLOCK_COOLDOWN),
-                        CookieRecovery::Clear,
-                    )
+                    self.apply_state(account, AccountAvailability::Invalid, now)
+                        .await?;
                 }
+                self.apply_cookie_recovery(account, CookieRecovery::Clear)
+                    .await?;
+                Ok(())
             }
-        };
-        self.repository
-            .apply_state(account, availability, reason, cooldown_until, now)
-            .await?;
-        self.apply_cookie_recovery(account, cookie_recovery).await?;
-        Ok(())
+        }
     }
 
-    async fn record_resettable_limit_failure(
+    async fn apply_state(
         &self,
         account: &ProviderAccount,
-        retry_after: Option<Duration>,
-        reason: &'static str,
+        availability: AccountAvailability,
         observed_at: SystemTime,
     ) -> Result<(), CredentialSelectionError> {
-        let current = self.current_account(account.id()).await?;
-        if current.revision() != account.revision() {
-            return Err(CredentialRepositoryError::RevisionConflict.into());
-        }
-        let cooldown_until =
-            observed_at.checked_add(retry_after.unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN));
-        let cooldown_until = match (current.availability(), current.cooldown_until()) {
-            (AccountAvailability::QuotaExhausted, Some(existing)) => {
-                cooldown_until.map_or(Some(existing), |until| Some(existing.max(until)))
-            }
-            _ => cooldown_until,
-        };
-        let reason = if current.availability() == AccountAvailability::QuotaExhausted
-            && current.cooldown_until().is_none()
-        {
-            Some("quota_exhausted".to_owned())
-        } else {
-            Some(reason.to_owned())
-        };
-        // 一次真实 429 证明上游已经接受当前凭据，可纠正旧的认证/封禁终态。
-        // resettable 用量限制沿用 v2 的 quota lock 语义，并保留/延长复核时间。
         self.repository
-            .apply_state(
-                &current,
-                AccountAvailability::QuotaExhausted,
-                reason,
-                cooldown_until,
-                observed_at,
-            )
+            .apply_state(account, availability, observed_at)
             .await?;
         Ok(())
     }
@@ -857,7 +808,6 @@ impl CodexCredentialSelector {
             || !matches!(
                 current.availability(),
                 AccountAvailability::Unknown
-                    | AccountAvailability::Cooldown
                     | AccountAvailability::Expired
                     | AccountAvailability::Invalid
                     | AccountAvailability::Banned
@@ -867,13 +817,7 @@ impl CodexCredentialSelector {
         }
         if let Err(error) = self
             .repository
-            .apply_state(
-                &current,
-                AccountAvailability::Ready,
-                None,
-                None,
-                SystemTime::now(),
-            )
+            .apply_state(&current, AccountAvailability::Ready, SystemTime::now())
             .await
         {
             tracing::warn!(
@@ -985,15 +929,11 @@ impl CodexCredentialSelector {
         account: &ProviderAccount,
         recovery: CookieRecovery,
     ) -> Result<(), CredentialSelectionError> {
-        if matches!(recovery, CookieRecovery::None) {
-            return Ok(());
-        }
         let mut data = self.repository.load_complete_data(account).await?;
         if data.cookies().is_empty() {
             return Ok(());
         }
         match recovery {
-            CookieRecovery::None => return Ok(()),
             CookieRecovery::ExpireAt(expires_at) => {
                 let expires_at = chrono::DateTime::<chrono::Utc>::from(expires_at);
                 for cookie in data.cookies_mut() {
@@ -1013,11 +953,9 @@ impl CodexCredentialSelector {
 
 fn quota_exhausted_scheduling_projection(account: &ProviderAccount) -> ProviderAccount {
     if account.availability() == AccountAvailability::QuotaExhausted {
-        return account.clone().with_runtime_state(
-            account.enabled(),
-            AccountAvailability::Ready,
-            account.cooldown_until(),
-        );
+        return account
+            .clone()
+            .with_runtime_state(account.enabled(), AccountAvailability::Ready);
     }
     account.clone()
 }
@@ -1032,7 +970,6 @@ fn affinity_unavailable_reason(account: &ProviderAccount, now: SystemTime) -> Af
     }
     match account.availability() {
         AccountAvailability::QuotaExhausted => AffinityEscapeReason::QuotaExhausted,
-        AccountAvailability::Cooldown => AffinityEscapeReason::Cooldown,
         AccountAvailability::Unknown
         | AccountAvailability::Ready
         | AccountAvailability::Expired

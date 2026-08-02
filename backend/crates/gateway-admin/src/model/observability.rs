@@ -443,13 +443,15 @@ pub struct RequestMetricPoint {
 ///
 /// 首页概览的 `unavailable` 表示不可参与调度，包含配额耗尽及过期、禁用和封禁账号。
 ///
-/// `quota_exhausted` 仍单列，以便状态详情展示和诊断。
+/// `quota_exhausted`（402 确认耗尽）与 `rate_limited`（429 限流中）单列，
+/// 以便状态详情展示和诊断。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AccountPoolMetrics {
     pub total: u64,
     pub enabled: u64,
     pub unavailable: u64,
     pub active: u64,
+    pub rate_limited: u64,
     pub expired: u64,
     pub quota_exhausted: u64,
     pub refreshing: Option<u64>,

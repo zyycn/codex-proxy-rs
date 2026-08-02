@@ -783,7 +783,6 @@ fn eligible_catalog_account(account: &ProviderAccount, now: SystemTime) -> bool 
         && match account.availability() {
             AccountAvailability::Unknown
             | AccountAvailability::Ready
-            | AccountAvailability::Cooldown
             | AccountAvailability::QuotaExhausted => true,
             AccountAvailability::Expired
             | AccountAvailability::Banned

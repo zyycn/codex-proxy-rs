@@ -70,26 +70,6 @@ pub(crate) fn parse_availability(value: &str) -> StoreResult<AccountAvailability
     AccountAvailability::parse(value).ok_or_else(|| invalid("unknown availability value"))
 }
 
-pub(crate) fn validate_availability_cooldown(
-    availability: AccountAvailability,
-    has_cooldown_until: bool,
-) -> StoreResult<()> {
-    if availability == AccountAvailability::Cooldown && !has_cooldown_until {
-        return Err(invalid("cooldown availability requires cooldown_until"));
-    }
-    if has_cooldown_until
-        && !matches!(
-            availability,
-            AccountAvailability::Cooldown | AccountAvailability::QuotaExhausted
-        )
-    {
-        return Err(invalid(
-            "cooldown_until is only allowed for cooldown or quota_exhausted availability",
-        ));
-    }
-    Ok(())
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccountSummary {
     pub id: String,
@@ -106,8 +86,6 @@ pub struct ProviderAccountSummary {
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
     pub availability: AccountAvailability,
-    pub availability_reason: Option<String>,
-    pub cooldown_until: Option<DateTime<Utc>>,
     pub availability_observed_at: DateTime<Utc>,
     pub quota_observed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
@@ -151,8 +129,6 @@ pub struct NewProviderAccount {
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
     pub availability: AccountAvailability,
-    pub availability_reason: Option<String>,
-    pub cooldown_until: Option<DateTime<Utc>>,
     pub availability_observed_at: DateTime<Utc>,
 }
 
@@ -173,7 +149,6 @@ impl fmt::Debug for NewProviderAccount {
             .field("name", &self.name)
             .field("enabled", &self.enabled)
             .field("availability", &self.availability)
-            .field("cooldown_until", &self.cooldown_until)
             .field("provider_credentials_json", &"[REDACTED]")
             .finish_non_exhaustive()
     }
@@ -189,7 +164,6 @@ impl NewProviderAccount {
         if !self.has_refresh_token && self.next_refresh_at.is_some() {
             return Err(invalid("next_refresh_at requires a refresh token"));
         }
-        validate_availability_cooldown(self.availability, self.cooldown_until.is_some())?;
         validate_object_size(
             "provider_credentials_json",
             &self.provider_credentials_json,
@@ -321,8 +295,6 @@ impl fmt::Debug for ProviderCredentialUpdate {
 pub struct ProviderAccountObservation {
     pub account_id: String,
     pub availability: AccountAvailability,
-    pub availability_reason: Option<String>,
-    pub cooldown_until: Option<DateTime<Utc>>,
     pub provider_quota_json: Option<JsonObject>,
     pub availability_observed_at: DateTime<Utc>,
     pub quota_observed_at: Option<DateTime<Utc>>,
@@ -333,15 +305,12 @@ pub struct ProviderAccountStateUpdate {
     pub account_id: String,
     pub expected_revision: Revision,
     pub availability: AccountAvailability,
-    pub availability_reason: Option<String>,
-    pub cooldown_until: Option<DateTime<Utc>>,
     pub availability_observed_at: DateTime<Utc>,
 }
 
 impl ProviderAccountStateUpdate {
     pub fn validate(&self) -> StoreResult<()> {
         require_nonempty(ENTITY, "account_id", &self.account_id)?;
-        validate_availability_cooldown(self.availability, self.cooldown_until.is_some())?;
         Ok(())
     }
 }
@@ -349,7 +318,6 @@ impl ProviderAccountStateUpdate {
 impl ProviderAccountObservation {
     pub fn validate(&self) -> StoreResult<()> {
         require_nonempty(ENTITY, "account_id", &self.account_id)?;
-        validate_availability_cooldown(self.availability, self.cooldown_until.is_some())?;
         if self.provider_quota_json.is_some() != self.quota_observed_at.is_some() {
             return Err(invalid("quota JSON and quota_observed_at must agree"));
         }
@@ -363,14 +331,14 @@ impl ProviderAccountObservation {
 pub(crate) const ACCOUNT_SELECT: &str = "select id, provider_kind, name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, availability,
-            availability_reason, cooldown_until, provider_quota_json,
+            provider_quota_json,
             availability_observed_at, quota_observed_at, created_at, updated_at
      from provider_accounts where id = $1";
 
 pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select id, provider_kind, name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, availability,
-            availability_reason, cooldown_until, provider_quota_json,
+            provider_quota_json,
             availability_observed_at, quota_observed_at, created_at, updated_at
      from provider_accounts
      where id = any($1::text[]) and provider_kind = $2
@@ -420,11 +388,7 @@ pub(crate) fn core_account_from_summary(
         summary.upstream_account_id,
         summary.plan_type,
     )
-    .with_runtime_state(
-        summary.enabled,
-        summary.availability,
-        summary.cooldown_until.map(Into::into),
-    )
+    .with_runtime_state(summary.enabled, summary.availability)
     .with_refresh_schedule(
         summary.has_refresh_token,
         summary.next_refresh_at.map(Into::into),
@@ -474,8 +438,6 @@ pub(crate) fn account_summary_from_row(
         next_refresh_at: get(&row, "next_refresh_at")?,
         enabled: get(&row, "enabled")?,
         availability: parse_availability(&availability)?,
-        availability_reason: get(&row, "availability_reason")?,
-        cooldown_until: get(&row, "cooldown_until")?,
         availability_observed_at: get(&row, "availability_observed_at")?,
         quota_observed_at: get(&row, "quota_observed_at")?,
         created_at: get(&row, "created_at")?,

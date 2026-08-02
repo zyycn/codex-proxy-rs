@@ -28,9 +28,9 @@ use gateway_store::{
     postgres::{
         AdminAuditActorKind, AdminAuditEvent, DeleteProviderAccounts, ImportProviderAccounts,
         NewProviderAccount, PgAdminAccountStore, PgProviderAccountRepository,
-        ProviderAccountAdminRepository, ProviderAccountAdminScope, ProviderAccountObservation,
-        ProviderAccountRepository, ProviderCredentialUpdate, RotateProviderAccount,
-        SetProviderAccountEnabled, UpdateProviderAccount,
+        ProviderAccountAdminRepository, ProviderAccountAdminScope, ProviderAccountRepository,
+        ProviderCredentialUpdate, RotateProviderAccount, SetProviderAccountEnabled,
+        UpdateProviderAccount,
     },
 };
 use serde_json::json;
@@ -161,8 +161,6 @@ async fn delayed_provider_observations_cannot_overwrite_newer_state_or_quota() {
             account_id: account_id.clone(),
             expected_revision: revision,
             availability: AccountAvailability::QuotaExhausted,
-            reason: Some("quota_exhausted".to_owned()),
-            cooldown_until: Some(newer),
             observed_at: newer,
         })
         .await
@@ -173,8 +171,6 @@ async fn delayed_provider_observations_cannot_overwrite_newer_state_or_quota() {
                 account_id: account_id.clone(),
                 expected_revision: revision,
                 availability: AccountAvailability::Ready,
-                reason: None,
-                cooldown_until: None,
                 observed_at: older,
             })
             .await
@@ -747,7 +743,6 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
     updated.name = "updated import".to_owned();
     updated.provider_credentials_json = credential_json("updated-import-secret");
     updated.availability = AccountAvailability::Banned;
-    updated.availability_reason = Some("upstream_account_deactivated".to_owned());
     let imported = repository
         .import_provider_accounts(ImportProviderAccounts {
             scope: scope.clone(),
@@ -819,8 +814,6 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
             next_refresh_at: None,
             enabled: true,
             availability: AccountAvailability::Ready,
-            availability_reason: None,
-            cooldown_until: None,
             availability_observed_at: Utc::now(),
         })
         .await
@@ -942,8 +935,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
     };
 
     let mut cooldown_account = account("acct_admin_b", "user-admin-b");
-    cooldown_account.availability = AccountAvailability::Cooldown;
-    cooldown_account.cooldown_until = Some(Utc::now() + TimeDelta::minutes(10));
+    cooldown_account.availability = AccountAvailability::Ready;
     let imported = repository
         .import_provider_accounts(ImportProviderAccounts {
             scope: scope.clone(),
@@ -1158,7 +1150,6 @@ async fn verified_credential_rotation_preserves_quota_exhaustion() {
     };
     let mut exhausted = account("acct_rotation_quota", "user-rotation-quota");
     exhausted.availability = AccountAvailability::QuotaExhausted;
-    exhausted.availability_reason = Some("quota_exhausted".to_owned());
     repository
         .import_provider_accounts(ImportProviderAccounts {
             scope: scope.clone(),
@@ -1224,29 +1215,20 @@ async fn xai_free_quota_exhaustion_state_is_persisted() {
             account_id: account_id.clone(),
             expected_revision: CredentialRevision::new(1).expect("credential revision"),
             availability: AccountAvailability::QuotaExhausted,
-            reason: Some("upstream_free_quota_exhausted".to_owned()),
-            cooldown_until: None,
             observed_at: SystemTime::now(),
         })
         .await
         .expect("persist xAI free quota exhaustion");
 
-    let current: (String, String, Option<String>) = sqlx::query_as(
-        "select provider_kind, availability, availability_reason
+    let current: (String, String) = sqlx::query_as(
+        "select provider_kind, availability
          from provider_accounts where id = $1",
     )
     .bind(account_id.as_str())
     .fetch_one(&database.pool)
     .await
     .expect("load persisted xAI quota state");
-    assert_eq!(
-        current,
-        (
-            "xai".to_owned(),
-            "quota_exhausted".to_owned(),
-            Some("upstream_free_quota_exhausted".to_owned()),
-        ),
-    );
+    assert_eq!(current, ("xai".to_owned(), "quota_exhausted".to_owned()),);
 
     database.close().await;
 }
@@ -1266,38 +1248,25 @@ async fn xai_resettable_usage_limit_state_is_persisted() {
         .expect("insert xAI account");
 
     let observed_at = SystemTime::now();
-    let cooldown_until = observed_at
-        .checked_add(Duration::from_secs(24 * 60 * 60))
-        .expect("cooldown deadline");
     repository
         .apply_state_change(AccountStateChange {
             account_id: account_id.clone(),
             expected_revision: CredentialRevision::new(1).expect("credential revision"),
-            availability: AccountAvailability::Cooldown,
-            reason: Some("usage_limit_exhausted".to_owned()),
-            cooldown_until: Some(cooldown_until),
+            availability: AccountAvailability::Ready,
             observed_at,
         })
         .await
         .expect("persist xAI resettable usage limit");
 
-    let current: (String, String, Option<String>, bool) = sqlx::query_as(
-        "select provider_kind, availability, availability_reason, cooldown_until is not null
+    let current: (String, String) = sqlx::query_as(
+        "select provider_kind, availability
          from provider_accounts where id = $1",
     )
     .bind(account_id.as_str())
     .fetch_one(&database.pool)
     .await
     .expect("load persisted xAI usage limit state");
-    assert_eq!(
-        current,
-        (
-            "xai".to_owned(),
-            "cooldown".to_owned(),
-            Some("usage_limit_exhausted".to_owned()),
-            true,
-        ),
-    );
+    assert_eq!(current, ("xai".to_owned(), "ready".to_owned()));
 
     database.close().await;
 }
@@ -1315,7 +1284,6 @@ async fn disabled_account_preserves_user_state_during_refresh_writes() {
     let mut disabled = account(account_id.as_str(), "user-disabled-refresh");
     disabled.enabled = false;
     disabled.availability = AccountAvailability::Expired;
-    disabled.availability_reason = Some("credential_expired".to_owned());
     repository
         .import_provider_accounts(ImportProviderAccounts {
             scope: scope.clone(),
@@ -1334,8 +1302,6 @@ async fn disabled_account_preserves_user_state_during_refresh_writes() {
             account_id: account_id.clone(),
             expected_revision: CredentialRevision::new(1).expect("credential revision"),
             availability: AccountAvailability::Ready,
-            reason: None,
-            cooldown_until: None,
             observed_at: SystemTime::now(),
         })
         .await
@@ -1389,8 +1355,6 @@ fn account(id: &str, upstream_user_id: &str) -> NewProviderAccount {
         next_refresh_at: None,
         enabled: true,
         availability: AccountAvailability::Ready,
-        availability_reason: None,
-        cooldown_until: None,
         availability_observed_at: Utc::now(),
     }
 }
@@ -1518,30 +1482,14 @@ fn provider_credentials_are_redacted_from_debug() {
 }
 
 #[test]
-fn cooldown_observation_requires_expiry() {
-    let observation = ProviderAccountObservation {
-        account_id: "account-1".to_owned(),
-        availability: AccountAvailability::Cooldown,
-        availability_reason: None,
-        cooldown_until: None,
-        provider_quota_json: None,
-        availability_observed_at: Utc::now(),
-        quota_observed_at: None,
-    };
-    assert!(observation.validate().is_err());
-}
-
-#[test]
 fn quota_exhausted_account_accepts_cooldown_runtime_facts() {
     let mut imported = account("acct_quota_cooldown", "user-quota-cooldown");
     imported.availability = AccountAvailability::QuotaExhausted;
-    imported.cooldown_until = Some(Utc::now() + TimeDelta::minutes(5));
     assert!(imported.validate().is_ok());
 }
 
 #[test]
-fn imported_account_rejects_cooldown_until_for_ready_runtime_facts() {
-    let mut imported = account("acct_invalid_cooldown", "user-invalid-cooldown");
-    imported.cooldown_until = Some(Utc::now() + TimeDelta::minutes(5));
-    assert!(imported.validate().is_err());
+fn imported_ready_account_passes_validation() {
+    let imported = account("acct_ready_import", "user-ready-import");
+    assert!(imported.validate().is_ok());
 }

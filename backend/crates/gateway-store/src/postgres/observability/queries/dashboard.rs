@@ -348,17 +348,11 @@ pub(crate) async fn provider_account_metrics(
 ) -> StoreResult<ProviderAccountMetrics> {
     let row = sqlx::query(
         "with normalized as (
-           select enabled,
+           select enabled, availability, provider_quota_json,
                   case
                     when not enabled then 'disabled'
                     when availability = 'banned' then 'banned'
-                    when availability = 'quota_exhausted'
-                      or (
-                        availability = 'cooldown'
-                        and availability_reason = 'usage_limit_exhausted'
-                        and (cooldown_until is null or cooldown_until > $1)
-                      )
-                      then 'quota_exhausted'
+                    when availability = 'quota_exhausted' then 'quota_exhausted'
                     when availability in ('expired', 'invalid')
                       or (access_token_expires_at is not null and access_token_expires_at <= $1)
                       then 'expired'
@@ -370,6 +364,17 @@ pub(crate) async fn provider_account_metrics(
                 count(*) filter (where enabled)::bigint as enabled,
                 count(*) filter (where status <> 'active')::bigint as unavailable,
                 count(*) filter (where status = 'active')::bigint as active,
+                count(*) filter (
+                  where status = 'active'
+                    and (
+                      provider_quota_json is not null
+                      and (
+                        provider_quota_json->'rate_limit'->>'limit_reached' = 'true'
+                        or (provider_quota_json->'rate_limit'->'primary_window'->>'used_percent')::numeric >= 100
+                        or (provider_quota_json->'rate_limit'->'secondary_window'->>'used_percent')::numeric >= 100
+                      )
+                    )
+                )::bigint as rate_limited,
                 count(*) filter (where status = 'expired')::bigint as expired,
                 count(*) filter (where status = 'quota_exhausted')::bigint as quota_exhausted,
                 count(*) filter (where status = 'disabled')::bigint as disabled,
@@ -385,6 +390,7 @@ pub(crate) async fn provider_account_metrics(
         enabled: unsigned(&row, "enabled")?,
         unavailable: unsigned(&row, "unavailable")?,
         active: unsigned(&row, "active")?,
+        rate_limited: unsigned(&row, "rate_limited")?,
         expired: unsigned(&row, "expired")?,
         quota_exhausted: unsigned(&row, "quota_exhausted")?,
         disabled: unsigned(&row, "disabled")?,
@@ -402,13 +408,7 @@ pub(crate) async fn active_provider_account_ids(
                   case
                     when not enabled then 'disabled'
                     when availability = 'banned' then 'banned'
-                    when availability = 'quota_exhausted'
-                      or (
-                        availability = 'cooldown'
-                        and availability_reason = 'usage_limit_exhausted'
-                        and (cooldown_until is null or cooldown_until > $1)
-                      )
-                      then 'quota_exhausted'
+                    when availability = 'quota_exhausted' then 'quota_exhausted'
                     when availability in ('expired', 'invalid')
                       or (access_token_expires_at is not null and access_token_expires_at <= $1)
                       then 'expired'

@@ -221,7 +221,7 @@ export function useAccountMutations(options: {
           ? {
               ...account,
               status,
-              displayStatus: account.tokenRefreshing ? 'refreshing' : status,
+              displayStatus: status,
             }
           : account,
       )

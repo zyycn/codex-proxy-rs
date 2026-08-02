@@ -201,15 +201,12 @@ async fn set_account_state(
     store: &MemoryProviderAccountStore,
     id: &ProviderAccountId,
     availability: AccountAvailability,
-    cooldown_until: Option<SystemTime>,
 ) {
     store
         .apply_state_change(AccountStateChange {
             account_id: id.clone(),
             expected_revision: CredentialRevision::new(1).expect("revision"),
             availability,
-            reason: Some("test isolation".to_owned()),
-            cooldown_until,
             observed_at: SystemTime::now(),
         })
         .await
@@ -491,8 +488,6 @@ async fn quota_exhausted_account_remains_eligible_for_catalog_discovery() {
             account_id: id,
             expected_revision: CredentialRevision::new(1).expect("revision"),
             availability: AccountAvailability::QuotaExhausted,
-            reason: Some("quota exhausted".to_owned()),
-            cooldown_until: None,
             observed_at: SystemTime::now(),
         })
         .await
@@ -686,18 +681,14 @@ async fn quota_refresh_persists_dynamic_provider_document_and_projects_known_fie
 }
 
 #[tokio::test]
-async fn recovered_quota_refresh_releases_existing_quota_and_cooldown_isolation() {
-    for (suffix, availability, cooldown_until) in [
-        ("recover-quota", AccountAvailability::QuotaExhausted, None),
-        (
-            "recover-cooldown",
-            AccountAvailability::Cooldown,
-            SystemTime::now().checked_add(Duration::from_secs(300)),
-        ),
+async fn recovered_quota_refresh_releases_existing_quota_isolation() {
+    for (suffix, availability) in [
+        ("recover-quota", AccountAvailability::QuotaExhausted),
+        ("recover-ready", AccountAvailability::Ready),
     ] {
         let (store, repository) = repository_with_accounts(&[(suffix, suffix)]).await;
         let id = account_id(suffix);
-        set_account_state(&store, &id, availability, cooldown_until).await;
+        set_account_state(&store, &id, availability).await;
         crate::support::grok_quota_service(
             repository,
             QueueBillingTransport::success(br#"{"config":{"creditUsagePercent":25}}"#),
@@ -708,7 +699,6 @@ async fn recovered_quota_refresh_releases_existing_quota_and_cooldown_isolation(
 
         let account = store.account(&id).expect("account");
         assert_eq!(account.availability(), AccountAvailability::Ready);
-        assert_eq!(account.cooldown_until(), None);
     }
 }
 
@@ -717,7 +707,7 @@ async fn authoritative_exhaustion_preserves_quota_exhausted_state() {
     let (store, repository) =
         repository_with_accounts(&[("still-exhausted", "still-exhausted")]).await;
     let id = account_id("still-exhausted");
-    set_account_state(&store, &id, AccountAvailability::QuotaExhausted, None).await;
+    set_account_state(&store, &id, AccountAvailability::QuotaExhausted).await;
 
     crate::support::grok_quota_service(
         repository,
@@ -742,7 +732,7 @@ async fn recovered_quota_does_not_clear_terminal_account_states() {
     ] {
         let (store, repository) = repository_with_accounts(&[(suffix, suffix)]).await;
         let id = account_id(suffix);
-        set_account_state(&store, &id, availability, None).await;
+        set_account_state(&store, &id, availability).await;
         crate::support::grok_quota_service(
             repository,
             QueueBillingTransport::success(br#"{"config":{"creditUsagePercent":10}}"#),
@@ -759,20 +749,15 @@ async fn recovered_quota_does_not_clear_terminal_account_states() {
 }
 
 #[tokio::test]
-async fn quota_refresh_does_not_overwrite_a_newer_cooldown() {
+async fn quota_refresh_preserves_ready_availability_across_concurrent_state_write() {
     let (store, repository) = repository_with_accounts(&[("new-cooldown", "new-cooldown")]).await;
     let id = account_id("new-cooldown");
-    let new_cooldown = SystemTime::now()
-        .checked_add(Duration::from_secs(600))
-        .expect("cooldown time");
     let transport = Arc::new(MutatingBillingTransport {
         store: Arc::clone(&store),
         mutation: Mutex::new(Some(BillingMutation::State(AccountStateChange {
             account_id: id.clone(),
             expected_revision: CredentialRevision::new(1).expect("revision"),
-            availability: AccountAvailability::Cooldown,
-            reason: Some("new rate limit".to_owned()),
-            cooldown_until: Some(new_cooldown),
+            availability: AccountAvailability::Ready,
             observed_at: SystemTime::now(),
         }))),
         body: br#"{"config":{"creditUsagePercent":10}}"#.to_vec(),
@@ -781,11 +766,10 @@ async fn quota_refresh_does_not_overwrite_a_newer_cooldown() {
     crate::support::grok_quota_service(repository, transport)
         .refresh_account(&id)
         .await
-        .expect("refresh around concurrent cooldown");
+        .expect("refresh around concurrent state write");
 
     let account = store.account(&id).expect("account");
-    assert_eq!(account.availability(), AccountAvailability::Cooldown);
-    assert_eq!(account.cooldown_until(), Some(new_cooldown));
+    assert_eq!(account.availability(), AccountAvailability::Ready);
 }
 
 #[tokio::test]
@@ -878,7 +862,7 @@ async fn non_authoritative_quota_refresh_does_not_clear_existing_quota_exhaustio
     let (store, repository) =
         repository_with_accounts(&[("free-quota", "subject-free-quota")]).await;
     let id = account_id("free-quota");
-    set_account_state(&store, &id, AccountAvailability::QuotaExhausted, None).await;
+    set_account_state(&store, &id, AccountAvailability::QuotaExhausted).await;
     let transport = QueueBillingTransport::success(
         br#"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-07-15T00:00:00Z","end":"2026-07-22T00:00:00Z"},"onDemandCap":{"val":0},"onDemandUsed":{"val":0},"prepaidBalance":{"val":0}}}"#,
     );

@@ -194,7 +194,7 @@ fn agent_export_item(id: &str) -> (ExportManagedCodexCredential, String) {
         Some("agent-account-export".to_owned()),
         Some("pro".to_owned()),
     )
-    .with_runtime_state(true, AccountAvailability::Ready, None)
+    .with_runtime_state(true, AccountAvailability::Ready)
     .with_refresh_schedule(false, None);
     (
         ExportManagedCodexCredential {

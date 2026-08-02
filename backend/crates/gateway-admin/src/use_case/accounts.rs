@@ -260,18 +260,37 @@ impl AccountsService for DefaultAccountsService {
         let mut quotas = futures::future::join_all(page.items.iter().map(|account| async {
             let account_id = ProviderAccountId::new(account.id.clone())
                 .map_err(|_| AdminError::invalid("Invalid provider account ID"))?;
-            let provider = self
-                .providers
-                .require(&account.provider_kind)
-                .map_err(|error| map_provider_error(error, "provider quota"))?;
-            provider
+            // 单个账号的 quota 投影失败（Provider 未注册或 quota 读取失败）不拖垮整页：
+            // 该账号降级为空额度投影，其余账号与页面状态照常返回。
+            let provider = match self.providers.require(&account.provider_kind) {
+                Ok(provider) => provider,
+                Err(error) => {
+                    tracing::warn!(
+                        account_id = %account.id,
+                        error = %error,
+                        "account directory provider is not registered; showing empty quota"
+                    );
+                    return Ok(empty_quota());
+                }
+            };
+            match provider
                 .quota(ProviderQuotaRequest {
                     account_id,
                     refresh: false,
                     rolling_usage: rolling_usage.get(&account.id).cloned(),
                 })
                 .await
-                .map_err(|error| map_provider_error(error, "provider quota"))
+            {
+                Ok(quota) => Ok(quota),
+                Err(error) => {
+                    tracing::warn!(
+                        account_id = %account.id,
+                        error = %error,
+                        "account directory quota projection failed; showing empty quota"
+                    );
+                    Ok(empty_quota())
+                }
+            }
         }))
         .await
         .into_iter()
@@ -486,16 +505,22 @@ impl AccountsService for DefaultAccountsService {
     }
 }
 
+/// 账号目录中单个账号 quota 读取失败时使用的空额度投影。
+fn empty_quota() -> ProviderQuota {
+    ProviderQuota {
+        observed_at: None,
+        refresh_token_expires_at: None,
+        windows: Vec::new(),
+        provider_data: None,
+    }
+}
+
 fn account_status(account: &AccountRecord, now: chrono::DateTime<Utc>) -> AccountStatus {
     if !account.enabled {
         AccountStatus::Disabled
     } else if account.availability == crate::model::accounts::AccountAvailability::Banned {
         AccountStatus::Banned
-    } else if account.availability == crate::model::accounts::AccountAvailability::QuotaExhausted
-        || (account.availability == crate::model::accounts::AccountAvailability::Cooldown
-            && account.availability_reason.as_deref() == Some("usage_limit_exhausted")
-            && account.cooldown_until.is_none_or(|until| until > now))
-    {
+    } else if account.availability == crate::model::accounts::AccountAvailability::QuotaExhausted {
         AccountStatus::QuotaExhausted
     } else if matches!(
         account.availability,

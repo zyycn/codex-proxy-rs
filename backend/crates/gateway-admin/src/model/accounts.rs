@@ -75,8 +75,6 @@ pub struct AccountRecord {
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
     pub availability: AccountAvailability,
-    pub availability_reason: Option<String>,
-    pub cooldown_until: Option<DateTime<Utc>>,
     pub availability_observed_at: DateTime<Utc>,
     pub quota_observed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,

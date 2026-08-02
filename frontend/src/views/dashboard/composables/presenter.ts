@@ -367,6 +367,7 @@ function dashboardUsageWindow(item: DashboardSummary['accountUsage'][number]) {
       labelDisplay: '额度',
       usedPercent,
       usedPercentDisplay: usedPercent === null ? '—' : `${usedPercent}%`,
+      limitReached: (usedPercent ?? 0) >= 100,
       windowSeconds: null,
       resetAtDisplay: '—',
     }
@@ -388,6 +389,7 @@ function dashboardUsageWindow(item: DashboardSummary['accountUsage'][number]) {
     labelDisplay: '日请求',
     usedPercent: null,
     usedPercentDisplay: '—',
+    limitReached: false,
     windowSeconds: 86_400,
     resetAtDisplay: '—',
     localUsage: {

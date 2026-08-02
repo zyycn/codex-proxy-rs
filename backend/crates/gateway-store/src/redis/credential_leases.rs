@@ -512,6 +512,7 @@ impl RedisProviderLeaseCoordinator {
                         last_started_at: signal.last_started_at.map(Into::into),
                         quota_reset_at: None,
                         quota_remaining_rank: None,
+                        quota_limit_reached: false,
                         failure_rate_basis_points: None,
                         first_output_latency_ms: None,
                     },

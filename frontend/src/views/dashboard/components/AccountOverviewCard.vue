@@ -112,8 +112,15 @@ const statusRows = computed(() => {
       icon: RefreshCw,
     },
     {
-      label: '额度受限',
-      description: '已触发额度阈值',
+      label: '限流中',
+      description: '任一额度窗口已触顶',
+      value: String(p?.rateLimited ?? 0),
+      tone: 'warning',
+      icon: TriangleAlert,
+    },
+    {
+      label: '配额耗尽',
+      description: '已确认 402 耗尽',
       value: String(quota),
       tone: 'warning',
       icon: TriangleAlert,
@@ -141,11 +148,13 @@ const statusBars = computed(() => {
     return []
   const active = (p.active / p.total) * 100
   const refreshing = ((p.refreshing ?? 0) / p.total) * 100
+  const rateLimited = ((p.rateLimited ?? 0) / p.total) * 100
   const quota = (p.quotaExhausted / p.total) * 100
   const unavailable = ((p.expired + p.disabled + p.banned) / p.total) * 100
   return [
     { pct: active, cls: 'bg-(--cp-success)' },
     { pct: refreshing, cls: 'bg-(--cp-normal)' },
+    { pct: rateLimited, cls: 'bg-(--cp-warning)' },
     { pct: quota, cls: 'bg-(--cp-warning)' },
     { pct: unavailable, cls: 'bg-(--cp-danger)' },
   ].filter(b => b.pct > 0)

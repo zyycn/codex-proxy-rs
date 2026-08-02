@@ -146,6 +146,7 @@ fn quota_window(
         window_seconds,
         used_percent,
         reset_at: None,
+        limit_reached: false,
         local_usage: None,
         provider_data: None,
     }

@@ -63,11 +63,7 @@ pub(crate) fn admin_account_status(
         AdminAccountStatus::Disabled
     } else if account.availability == AccountAvailability::Banned {
         AdminAccountStatus::Banned
-    } else if account.availability == AccountAvailability::QuotaExhausted
-        || (account.availability == AccountAvailability::Cooldown
-            && account.availability_reason.as_deref() == Some("usage_limit_exhausted")
-            && account.cooldown_until.is_none_or(|until| until > now))
-    {
+    } else if account.availability == AccountAvailability::QuotaExhausted {
         AdminAccountStatus::QuotaExhausted
     } else if account.availability == AccountAvailability::Expired
         || account.availability == AccountAvailability::Invalid
@@ -184,8 +180,6 @@ pub(crate) fn admin_account_record(
         next_refresh_at: summary.next_refresh_at,
         enabled: summary.enabled,
         availability: summary.availability,
-        availability_reason: summary.availability_reason,
-        cooldown_until: summary.cooldown_until,
         availability_observed_at: summary.availability_observed_at,
         quota_observed_at: summary.quota_observed_at,
         created_at: summary.created_at,
@@ -211,8 +205,6 @@ pub(crate) fn prepared_account(
         next_refresh_at: credential.next_refresh_at,
         enabled: credential.enabled,
         availability: credential.availability,
-        availability_reason: credential.availability_reason,
-        cooldown_until: credential.cooldown_until,
         availability_observed_at: credential.availability_observed_at,
     })
 }

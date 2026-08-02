@@ -194,7 +194,6 @@ pub struct AccountView {
     pub has_refresh_token: bool,
     pub status: String,
     pub display_status: String,
-    pub token_refreshing: bool,
     pub availability: String,
     pub enabled: bool,
     pub access_token_expires_at: Option<String>,
@@ -227,6 +226,7 @@ pub struct AccountQuotaWindowView {
     pub label_display: String,
     pub used_percent: Option<f64>,
     pub used_percent_display: String,
+    pub limit_reached: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local_usage: Option<serde_json::Value>,
     pub reset_at_display: String,
@@ -1387,7 +1387,6 @@ fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
         has_refresh_token: account.has_refresh_token,
         status: status.clone(),
         display_status: status,
-        token_refreshing: false,
         availability: account.availability.as_str().to_owned(),
         enabled: account.enabled,
         access_token_expires_at: expires_at,
@@ -1435,6 +1434,7 @@ fn quota_window_view(window: ProviderQuotaWindow) -> AccountQuotaWindowView {
         window_seconds,
         used_percent,
         reset_at,
+        limit_reached,
         local_usage,
         provider_data: _,
     } = window;
@@ -1446,6 +1446,7 @@ fn quota_window_view(window: ProviderQuotaWindow) -> AccountQuotaWindowView {
         used_percent,
         used_percent_display: used_percent
             .map_or_else(|| "—".to_owned(), |value| format!("{value:.1}%")),
+        limit_reached,
         local_usage: local_usage.as_ref().map(quota_local_usage),
         reset_at_display: reset_at.map_or_else(|| "—".to_owned(), |value| china_datetime(&value)),
     }

@@ -64,11 +64,13 @@ impl fmt::Debug for GrokAccountProfile {
 }
 
 /// 与 `provider_accounts.availability` 一一对应的 xAI 状态。
+///
+/// 限流（429/滚动窗口）不进入持久化状态：由 `ProviderCooldownPort`（Redis 跨重启
+/// 保留）驱动调度排除，账号状态保持 `Ready`。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GrokCredentialAvailability {
     Unknown,
     Ready,
-    Cooldown,
     QuotaExhausted,
     Expired,
     Banned,
@@ -81,7 +83,6 @@ impl From<GrokCredentialAvailability> for AccountAvailability {
         match value {
             GrokCredentialAvailability::Unknown => Self::Unknown,
             GrokCredentialAvailability::Ready => Self::Ready,
-            GrokCredentialAvailability::Cooldown => Self::Cooldown,
             GrokCredentialAvailability::QuotaExhausted => Self::QuotaExhausted,
             GrokCredentialAvailability::Expired => Self::Expired,
             GrokCredentialAvailability::Banned => Self::Banned,
@@ -100,7 +101,6 @@ pub struct CreateGrokCredential {
     pub enabled: bool,
     pub initial_availability: GrokCredentialAvailability,
     pub initial_availability_reason: Option<String>,
-    pub initial_cooldown_until: Option<DateTime<Utc>>,
 }
 
 impl fmt::Debug for CreateGrokCredential {
@@ -243,7 +243,6 @@ pub struct UpdateGrokCredentialState {
     pub expected_revision: CredentialRevision,
     pub availability: GrokCredentialAvailability,
     pub availability_reason: Option<String>,
-    pub cooldown_until: Option<DateTime<Utc>>,
     pub observed_at: DateTime<Utc>,
 }
 

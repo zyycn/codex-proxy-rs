@@ -230,7 +230,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     testingAccount.value = {
       ...account,
       status,
-      displayStatus: account.tokenRefreshing ? account.displayStatus : status,
+      displayStatus: status,
     }
     options.onAccountStatus(account.id, status)
   }

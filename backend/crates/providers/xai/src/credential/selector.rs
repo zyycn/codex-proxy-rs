@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use gateway_core::engine::credential::{
     AccountAvailability, AccountAvailabilityPolicy, AccountCandidate, AccountFeedbackStats,
     AccountSelectionContext, AccountSelector, ProviderAccount, ProviderAccountId,
@@ -300,36 +300,26 @@ impl GrokAccountSessionSelector {
         for ((account, account_read), model_read) in
             accounts.iter().zip(account_reads).zip(model_reads)
         {
-            if let Ok(Some(cooldown)) = account_read {
-                if cooldown.credential_revision() != account.revision() {
-                    if cooldown.credential_revision() < account.revision() {
-                        let _ = self.cooldowns.clear(account.id(), account.revision()).await;
-                    }
-                } else if cooldown.until() > now {
-                    insert_runtime_cooldown(
-                        &mut cooled,
-                        account.id(),
-                        cooldown.until(),
-                        RuntimeCooldownScope::Account,
-                    );
-                }
+            if let Ok(Some(cooldown)) = account_read
+                && cooldown.until() > now
+            {
+                // 账号级限流冷却跨凭据轮换保留：上游限流不因本地凭据更换解除。
+                insert_runtime_cooldown(
+                    &mut cooled,
+                    account.id(),
+                    cooldown.until(),
+                    RuntimeCooldownScope::Account,
+                );
             }
-            if let Ok(Some(cooldown)) = model_read {
-                if cooldown.credential_revision() != account.revision() {
-                    if cooldown.credential_revision() < account.revision() {
-                        let _ = self
-                            .cooldowns
-                            .clear_scoped(account.id(), &model_scope, account.revision())
-                            .await;
-                    }
-                } else if cooldown.until() > now {
-                    insert_runtime_cooldown(
-                        &mut cooled,
-                        account.id(),
-                        cooldown.until(),
-                        RuntimeCooldownScope::Model,
-                    );
-                }
+            if let Ok(Some(cooldown)) = model_read
+                && cooldown.until() > now
+            {
+                insert_runtime_cooldown(
+                    &mut cooled,
+                    account.id(),
+                    cooldown.until(),
+                    RuntimeCooldownScope::Model,
+                );
             }
         }
         cooled
@@ -374,7 +364,6 @@ impl GrokAccountSessionSelector {
         session: &SelectedGrokSession,
         availability: GrokCredentialAvailability,
         reason: &'static str,
-        cooldown_until: Option<DateTime<Utc>>,
         observed_at: chrono::DateTime<Utc>,
     ) {
         let update = |expected_revision| UpdateGrokCredentialState {
@@ -382,7 +371,6 @@ impl GrokAccountSessionSelector {
             expected_revision,
             availability,
             availability_reason: Some(reason.to_owned()),
-            cooldown_until,
             observed_at,
         };
         match self
@@ -467,28 +455,22 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
                 GrokCredentialFailure::QuotaExhausted => (
                     GrokCredentialAvailability::QuotaExhausted,
                     "upstream_quota_exhausted",
-                    None,
                 ),
                 GrokCredentialFailure::FreeQuotaExhausted => (
                     GrokCredentialAvailability::QuotaExhausted,
                     "upstream_free_quota_exhausted",
-                    None,
                 ),
                 GrokCredentialFailure::PaymentRequired { .. } => (
                     GrokCredentialAvailability::QuotaExhausted,
                     "upstream_payment_quota_exhausted",
-                    None,
                 ),
+                // xAI 免费模型额度按账号滚动窗口恢复：限流只写运行时冷却
+                // （Redis 跨重启保留），不进入持久化账号状态。
                 GrokCredentialFailure::ModelQuotaExhausted { retry_after, .. } => {
                     let retry_after =
                         bounded_cooldown(retry_after, MODEL_QUOTA_COOLDOWN, MAX_MODEL_COOLDOWN);
-                    // xAI 免费模型额度按账号滚动窗口恢复；持久化使页面和各调度节点收敛。
                     self.record_runtime_cooldown(session, retry_after).await;
-                    (
-                        GrokCredentialAvailability::Cooldown,
-                        "usage_limit_exhausted",
-                        persistent_cooldown_until(observed_at, retry_after),
-                    )
+                    return;
                 }
                 GrokCredentialFailure::ModelAccessDenied {
                     upstream_model,
@@ -508,31 +490,17 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
                         .unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN)
                         .min(MAX_RATE_LIMIT_COOLDOWN);
                     self.record_runtime_cooldown(session, retry_after).await;
-                    (
-                        GrokCredentialAvailability::Cooldown,
-                        "upstream_rate_limited",
-                        persistent_cooldown_until(observed_at, retry_after),
-                    )
+                    return;
                 }
                 GrokCredentialFailure::StreamInterrupted => {
                     self.record_runtime_cooldown(session, STREAM_INTERRUPTION_COOLDOWN)
                         .await;
-                    (
-                        GrokCredentialAvailability::Cooldown,
-                        "upstream_stream_interrupted",
-                        persistent_cooldown_until(observed_at, STREAM_INTERRUPTION_COOLDOWN),
-                    )
+                    return;
                 }
             };
-            let (availability, reason, cooldown_until) = persistent;
-            self.persist_account_failure(
-                session,
-                availability,
-                reason,
-                cooldown_until,
-                observed_at,
-            )
-            .await;
+            let (availability, reason) = persistent;
+            self.persist_account_failure(session, availability, reason, observed_at)
+                .await;
         })
     }
 
@@ -552,9 +520,7 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
                 || !account.enabled()
                 || !matches!(
                     account.availability(),
-                    AccountAvailability::Unknown
-                        | AccountAvailability::Cooldown
-                        | AccountAvailability::Expired
+                    AccountAvailability::Unknown | AccountAvailability::Expired
                 )
             {
                 return;
@@ -566,7 +532,6 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
                     expected_revision: account.revision(),
                     availability: GrokCredentialAvailability::Ready,
                     availability_reason: None,
-                    cooldown_until: None,
                     observed_at: Utc::now(),
                 })
                 .await
@@ -598,15 +563,6 @@ fn bounded_cooldown(
         .filter(|duration| !duration.is_zero())
         .unwrap_or(default)
         .min(maximum)
-}
-
-fn persistent_cooldown_until(
-    observed_at: DateTime<Utc>,
-    duration: Duration,
-) -> Option<DateTime<Utc>> {
-    chrono::Duration::from_std(duration)
-        .ok()
-        .map(|duration| observed_at + duration)
 }
 
 fn insert_runtime_cooldown(

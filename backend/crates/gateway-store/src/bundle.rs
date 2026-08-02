@@ -1,8 +1,10 @@
 //! 完成连接、迁移与 hydration 的 Store 能力集合与启动屏障。
 
+use gateway_core::engine::credential::ProviderAccountStore;
+
 use super::*;
 
-/// 已完成连接、迁移与 cooldown hydration 的 Store 能力集合。
+/// 已完成连接、迁移与 hydration 的 Store 能力集合。
 pub struct StoreBundle {
     admin_ports: AdminStorePorts,
     core_ports: CoreStorePorts,
@@ -61,12 +63,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         redis_connection.clone(),
         REDIS_NAMESPACE,
     )?);
-    let account_store = Arc::new(redis::CooldownCachingProviderAccountStore::new(
-        provider_accounts,
-        cooldowns.clone(),
-    ));
-    let hydrated = account_store.hydrate(std::time::SystemTime::now()).await;
-    tracing::info!(hydrated, "账号 cooldown Redis 热缓存重建完成");
+    let account_store: Arc<dyn ProviderAccountStore> = provider_accounts;
 
     let credential_leases =
         redis::RedisCredentialLeaseRepository::new(redis_connection.clone(), REDIS_NAMESPACE)?;

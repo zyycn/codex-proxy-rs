@@ -24,7 +24,7 @@ fn account(id: &str) -> ProviderAccount {
         CredentialRevision::new(1).expect("valid revision"),
         Some(SystemTime::now() + Duration::from_secs(3600)),
     )
-    .with_runtime_state(true, AccountAvailability::Ready, None)
+    .with_runtime_state(true, AccountAvailability::Ready)
 }
 
 fn candidate(id: &str, in_flight: u32, remaining: Option<u64>) -> AccountCandidate {
@@ -35,6 +35,7 @@ fn candidate(id: &str, in_flight: u32, remaining: Option<u64>) -> AccountCandida
             last_started_at: None,
             quota_reset_at: None,
             quota_remaining_rank: remaining,
+            quota_limit_reached: false,
             failure_rate_basis_points: None,
             first_output_latency_ms: None,
         },
@@ -110,31 +111,27 @@ fn availability_should_round_trip_all_database_values() {
 #[test]
 fn diagnostic_selection_bypasses_all_local_account_availability() {
     let exhausted = AccountCandidate {
-        account: account("acct_exhausted").with_runtime_state(
-            true,
-            AccountAvailability::QuotaExhausted,
-            None,
-        ),
+        account: account("acct_exhausted")
+            .with_runtime_state(true, AccountAvailability::QuotaExhausted),
         signals: AccountRuntimeSignals {
             in_flight: 0,
             last_started_at: None,
             quota_reset_at: None,
             quota_remaining_rank: None,
+            quota_limit_reached: false,
             failure_rate_basis_points: None,
             first_output_latency_ms: None,
         },
     };
     let disabled = AccountCandidate {
-        account: account("acct_disabled").with_runtime_state(
-            false,
-            AccountAvailability::QuotaExhausted,
-            None,
-        ),
+        account: account("acct_disabled")
+            .with_runtime_state(false, AccountAvailability::QuotaExhausted),
         signals: AccountRuntimeSignals {
             in_flight: 0,
             last_started_at: None,
             quota_reset_at: None,
             quota_remaining_rank: None,
+            quota_limit_reached: false,
             failure_rate_basis_points: None,
             first_output_latency_ms: None,
         },
@@ -158,31 +155,9 @@ fn diagnostic_selection_bypasses_all_local_account_availability() {
 
 #[test]
 fn disabled_account_should_not_be_schedulable() {
-    let account =
-        account("acct_disabled").with_runtime_state(false, AccountAvailability::Ready, None);
+    let account = account("acct_disabled").with_runtime_state(false, AccountAvailability::Ready);
 
     assert!(!account.is_schedulable(SystemTime::now()));
-}
-
-#[test]
-fn cooldown_account_should_become_schedulable_at_its_deadline() {
-    let now = SystemTime::now();
-    let account =
-        account("acct_cooldown").with_runtime_state(true, AccountAvailability::Cooldown, Some(now));
-
-    assert!(account.is_schedulable(now));
-}
-
-#[test]
-fn cooldown_account_should_remain_isolated_before_its_deadline() {
-    let now = SystemTime::now();
-    let account = account("acct_cooldown").with_runtime_state(
-        true,
-        AccountAvailability::Cooldown,
-        Some(now + Duration::from_secs(1)),
-    );
-
-    assert!(!account.is_schedulable(now));
 }
 
 #[test]
@@ -311,10 +286,15 @@ fn provider_quota_overlay_should_preserve_store_concurrency_facts() {
         last_started_at: Some(last_started_at),
         quota_reset_at: None,
         quota_remaining_rank: None,
+        quota_limit_reached: false,
         failure_rate_basis_points: None,
         first_output_latency_ms: None,
     }
-    .with_provider_quota(Some(AccountQuotaSignals::new(Some(reset_at), Some(75))));
+    .with_provider_quota(Some(AccountQuotaSignals::new(
+        Some(reset_at),
+        Some(75),
+        false,
+    )));
 
     assert_eq!(
         (

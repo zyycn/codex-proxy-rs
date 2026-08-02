@@ -224,6 +224,7 @@ async fn dashboard_summary_should_include_quota_exhaustion_in_unavailable_headli
             enabled: 804,
             unavailable: 792,
             active: 15,
+            rate_limited: 0,
             expired: 2,
             quota_exhausted: 785,
             refreshing: None,

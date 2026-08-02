@@ -373,7 +373,7 @@ impl ProviderAdmin for FakeProviderAdmin {
 
 pub(super) struct FakeAccountStore {
     events: EventLog,
-    account: AccountRecord,
+    accounts: Mutex<Vec<AccountRecord>>,
     account_after_probe: Mutex<Option<AccountRecord>>,
     fail_commit: Mutex<bool>,
     audit_requests: Mutex<Vec<String>>,
@@ -388,7 +388,7 @@ impl FakeAccountStore {
     fn with_account(account: AccountRecord, events: EventLog) -> Arc<Self> {
         Arc::new(Self {
             events,
-            account,
+            accounts: Mutex::new(vec![account]),
             account_after_probe: Mutex::new(None),
             fail_commit: Mutex::new(false),
             audit_requests: Mutex::new(Vec::new()),
@@ -406,6 +406,10 @@ impl FakeAccountStore {
 
     pub(super) fn set_quota_window_usage(&self, usage: Vec<AccountUsageWindowResult>) {
         *self.quota_window_usage.lock().expect("quota window usage") = usage;
+    }
+
+    pub(super) fn set_accounts(&self, accounts: Vec<AccountRecord>) {
+        *self.accounts.lock().expect("accounts") = accounts;
     }
 
     fn set_account_after_probe(&self, account: AccountRecord) {
@@ -439,12 +443,14 @@ impl FakeAccountStore {
 #[async_trait]
 impl AccountStore for FakeAccountStore {
     async fn list_accounts(&self, _: AccountListQuery) -> AdminStoreResult<AccountPage> {
+        self.record("store.list_accounts");
+        let accounts = self.accounts.lock().expect("accounts").clone();
         Ok(AccountPage {
             config_revision: revision(1),
-            items: vec![self.account.clone()],
-            total: 1,
+            items: accounts.clone(),
+            total: accounts.len() as u64,
             summary: AccountSummary {
-                total: 1,
+                total: accounts.len() as u64,
                 active: 1,
                 quota_exhausted: 0,
                 unavailable: 0,
@@ -454,13 +460,22 @@ impl AccountStore for FakeAccountStore {
 
     async fn load_account(&self, account_id: &str) -> AdminStoreResult<Option<AccountRecord>> {
         self.record("store.load_account");
+        // probe 后的账号状态覆盖只对同一 id 生效；其余按账号列表查询。
         let account = self
             .account_after_probe
             .lock()
             .expect("account after probe")
             .clone()
-            .unwrap_or_else(|| self.account.clone());
-        Ok((account_id == account.id.as_str()).then_some(account))
+            .filter(|account| account.id == account_id)
+            .or_else(|| {
+                self.accounts
+                    .lock()
+                    .expect("accounts")
+                    .iter()
+                    .find(|account| account.id == account_id)
+                    .cloned()
+            });
+        Ok(account)
     }
 
     async fn load_account_usage(
@@ -488,11 +503,12 @@ impl AccountStore for FakeAccountStore {
         _: CredentialListQuery,
     ) -> AdminStoreResult<CredentialPage> {
         self.record("store.list_credentials");
+        let accounts = self.accounts.lock().expect("accounts").clone();
         Ok(CredentialPage {
             config_revision: revision(1),
-            items: (provider_kind == &self.account.provider_kind)
-                .then(|| self.account.clone())
+            items: accounts
                 .into_iter()
+                .filter(|account| &account.provider_kind == provider_kind)
                 .collect(),
             next_cursor: None,
         })
@@ -504,14 +520,19 @@ impl AccountStore for FakeAccountStore {
         account_id: &ProviderAccountId,
     ) -> AdminStoreResult<Option<CredentialDetails>> {
         self.record("store.credential_details");
-        Ok(
-            (provider_kind == &self.account.provider_kind
-                && account_id.as_str() == self.account.id)
-                .then(|| CredentialDetails {
-                    config_revision: revision(1),
-                    credential: self.account.clone(),
-                }),
-        )
+        let account = self
+            .accounts
+            .lock()
+            .expect("accounts")
+            .iter()
+            .find(|account| {
+                &account.provider_kind == provider_kind && account.id == account_id.as_str()
+            })
+            .cloned();
+        Ok(account.map(|credential| CredentialDetails {
+            config_revision: revision(1),
+            credential,
+        }))
     }
 
     async fn load_credentials_for_export(
@@ -520,21 +541,26 @@ impl AccountStore for FakeAccountStore {
         account_ids: &[ProviderAccountId],
     ) -> AdminStoreResult<Vec<ProviderExportCredentialInput>> {
         self.record("store.load_credentials_for_export");
-        if provider_kind != &self.account.provider_kind
-            || account_ids
-                .iter()
-                .any(|account_id| account_id.as_str() != self.account.id)
-        {
+        let accounts = self.accounts.lock().expect("accounts").clone();
+        if accounts.iter().any(|account| {
+            &account.provider_kind != provider_kind
+                || !account_ids
+                    .iter()
+                    .any(|account_id| account_id.as_str() == account.id)
+        }) {
             return Err(AdminStoreError::new(
                 AdminStoreErrorKind::NotFound,
                 "test account",
                 "credential not found",
             ));
         }
-        Ok(vec![ProviderExportCredentialInput {
-            account: self.account.clone(),
-            provider_material: document(),
-        }])
+        Ok(accounts
+            .into_iter()
+            .map(|account| ProviderExportCredentialInput {
+                account,
+                provider_material: document(),
+            })
+            .collect())
     }
 
     async fn commit_credential_import(
@@ -818,7 +844,7 @@ async fn connection_test_should_probe_unavailable_account() {
 }
 
 #[tokio::test]
-async fn connection_test_reloads_resettable_usage_limit_status_after_probe() {
+async fn connection_test_rate_limited_probe_preserves_active_account_status() {
     let events = events();
     let provider = FakeProviderAdmin::new("xai", events.clone());
     let store = FakeAccountStore::new("xai", events);
@@ -841,7 +867,7 @@ async fn connection_test_reloads_resettable_usage_limit_status_after_probe() {
     assert!(matches!(
         events.last(),
         Some(AccountConnectionTestEvent::Failed {
-            account_status: gateway_admin::model::accounts::AccountStatus::QuotaExhausted,
+            account_status: gateway_admin::model::accounts::AccountStatus::Active,
             ..
         })
     ));
@@ -880,7 +906,7 @@ async fn connection_test_should_preserve_disabled_account_status() {
 async fn accounts_export_should_pass_store_loaded_timestamps_and_material_to_provider() {
     let provider = FakeProviderAdmin::new("openai", events());
     let store = FakeAccountStore::new("openai", events());
-    let expected = store.account.clone();
+    let expected = store.accounts.lock().expect("accounts")[0].clone();
     accounts_service(provider.clone(), store)
         .await
         .accounts()
@@ -968,12 +994,75 @@ async fn accounts_list_should_return_complete_directory_semantics() {
 }
 
 #[tokio::test]
-async fn accounts_list_should_prefer_usage_limit_exhaustion_over_stale_token_expiry() {
+async fn accounts_list_should_degrade_quota_failure_to_empty_window_without_dropping_page() {
+    let events = events();
+    let openai = FakeProviderAdmin::new("openai", events.clone());
+    openai.set_quota(ProviderQuota {
+        observed_at: Some(Utc::now()),
+        refresh_token_expires_at: None,
+        windows: vec![ProviderQuotaWindow {
+            key: "primary".to_owned(),
+            group: "shortTerm".to_owned(),
+            label: "5小时限额".to_owned(),
+            source: None,
+            window_seconds: Some(5 * 60 * 60),
+            used_percent: Some(97.0),
+            reset_at: Some(Utc::now() + TimeDelta::hours(1)),
+            limit_reached: false,
+            local_usage: None,
+            provider_data: None,
+        }],
+        provider_data: None,
+    });
+    let failing = FakeProviderAdmin::new("xai", events.clone());
+    failing.fail_next_quota(ProviderAdminErrorKind::Invalid);
+    let store = FakeAccountStore::new("openai", events.clone());
+    let mut xai_account = account_record("xai");
+    xai_account.id = "acct_bad_xai".to_owned();
+    store.set_accounts(vec![account_record("openai"), xai_account]);
+    let services = super::AdminHarness::new()
+        .accounts(store.clone())
+        .settings(Arc::new(StaticSettingsStore))
+        .provider(openai)
+        .provider(failing)
+        .probe(Arc::new(SuccessfulAccountProbe))
+        .build()
+        .await;
+
+    let page = services
+        .accounts()
+        .list(AccountListQuery {
+            page: 1,
+            page_size: gateway_admin::model::PageSize::new(20).expect("page size"),
+            provider_kind: None,
+            search: None,
+            status: None,
+            sort: None,
+        })
+        .await
+        .expect("one failing quota must not fail the directory page");
+
+    assert_eq!(page.items.len(), 2);
+    let by_id = page
+        .items
+        .iter()
+        .map(|item| (item.account.id.as_str(), item))
+        .collect::<std::collections::HashMap<_, _>>();
+    let healthy = by_id.get("acct_test").expect("healthy account item");
+    assert_eq!(healthy.quota.windows.len(), 1);
+    assert_eq!(healthy.quota.windows[0].key, "primary");
+    let degraded = by_id.get("acct_bad_xai").expect("degraded account item");
+    assert!(degraded.quota.windows.is_empty());
+    assert!(degraded.quota.observed_at.is_none());
+    assert!(degraded.quota.provider_data.is_none());
+    assert_eq!(page.summary.total, 2);
+}
+
+#[tokio::test]
+async fn accounts_list_should_prefer_quota_exhaustion_over_stale_token_expiry() {
     let provider = FakeProviderAdmin::new("openai", events());
     let mut account = account_record("openai");
-    account.availability = AccountAvailability::Cooldown;
-    account.availability_reason = Some("usage_limit_exhausted".to_owned());
-    account.cooldown_until = Some(Utc::now() + TimeDelta::minutes(5));
+    account.availability = AccountAvailability::QuotaExhausted;
     account.access_token_expires_at = Some(Utc::now() - TimeDelta::minutes(5));
     let store = FakeAccountStore::with_account(account, events());
 
@@ -1012,6 +1101,7 @@ async fn accounts_list_should_attach_local_usage_to_quota_windows() {
             window_seconds: Some(5 * 60 * 60),
             used_percent: Some(97.0),
             reset_at: Some(reset_at),
+            limit_reached: false,
             local_usage: None,
             provider_data: None,
         }],
@@ -1166,8 +1256,6 @@ pub(super) fn account_record(kind: &str) -> AccountRecord {
         next_refresh_at: Some(now + TimeDelta::minutes(30)),
         enabled: true,
         availability: AccountAvailability::Ready,
-        availability_reason: None,
-        cooldown_until: None,
         availability_observed_at: now,
         quota_observed_at: None,
         created_at: now,
@@ -1204,8 +1292,6 @@ fn prepared_create_with_id(
         next_refresh_at: Some(now + TimeDelta::minutes(30)),
         enabled: true,
         availability: AccountAvailability::Ready,
-        availability_reason: None,
-        cooldown_until: None,
         availability_observed_at: now,
     }
 }
@@ -1290,9 +1376,7 @@ impl AccountProbe for FreeModelQuotaProbe {
     ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
         Box::pin(async move {
             let mut account = account_record("xai");
-            account.availability = AccountAvailability::Cooldown;
-            account.availability_reason = Some("usage_limit_exhausted".to_owned());
-            account.cooldown_until = Some(Utc::now() + TimeDelta::hours(24));
+            account.availability = AccountAvailability::Ready;
             self.store.set_account_after_probe(account);
             Err(GatewayError::new(
                 GatewayErrorKind::RateLimited,
