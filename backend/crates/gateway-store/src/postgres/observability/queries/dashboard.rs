@@ -348,7 +348,7 @@ pub(crate) async fn provider_account_metrics(
 ) -> StoreResult<ProviderAccountMetrics> {
     let row = sqlx::query(
         "with normalized as (
-           select enabled, availability, provider_quota_json,
+           select enabled, availability, quota_limit_reached,
                   case
                     when not enabled then 'disabled'
                     when availability = 'banned' then 'banned'
@@ -357,13 +357,7 @@ pub(crate) async fn provider_account_metrics(
                     when availability = 'expired'
                       or (access_token_expires_at is not null and access_token_expires_at <= $1)
                       then 'expired'
-                    when provider_quota_json is not null
-                      and provider_quota_json->'rate_limit'->>'limit_reached' = 'true'
-                      and (
-                        provider_quota_json->'rate_limit'->'primary_window'->>'reset_at' is null
-                        or (provider_quota_json->'rate_limit'->'primary_window'->>'reset_at')::bigint > extract(epoch from $1)::bigint
-                      )
-                      then 'rate_limited'
+                    when quota_limit_reached then 'rate_limited'
                     when availability = 'unknown' then 'invalid'
                     else 'active'
                   end as status

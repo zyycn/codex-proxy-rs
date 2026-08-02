@@ -88,6 +88,8 @@ pub struct ProviderAccountSummary {
     pub availability: AccountAvailability,
     pub availability_observed_at: DateTime<Utc>,
     pub quota_observed_at: Option<DateTime<Utc>>,
+    /// 快照级限流事实（Provider 物化）。
+    pub quota_limit_reached: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -298,6 +300,8 @@ pub struct ProviderAccountObservation {
     pub provider_quota_json: Option<JsonObject>,
     pub availability_observed_at: DateTime<Utc>,
     pub quota_observed_at: Option<DateTime<Utc>>,
+    /// 快照级限流事实（Provider 物化）。
+    pub quota_limit_reached: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -331,14 +335,14 @@ impl ProviderAccountObservation {
 pub(crate) const ACCOUNT_SELECT: &str = "select id, provider_kind, name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, availability,
-            provider_quota_json,
+            provider_quota_json, quota_limit_reached,
             availability_observed_at, quota_observed_at, created_at, updated_at
      from provider_accounts where id = $1";
 
 pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select id, provider_kind, name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, availability,
-            provider_quota_json,
+            provider_quota_json, quota_limit_reached,
             availability_observed_at, quota_observed_at, created_at, updated_at
      from provider_accounts
      where id = any($1::text[]) and provider_kind = $2
@@ -440,6 +444,7 @@ pub(crate) fn account_summary_from_row(
         availability: parse_availability(&availability)?,
         availability_observed_at: get(&row, "availability_observed_at")?,
         quota_observed_at: get(&row, "quota_observed_at")?,
+        quota_limit_reached: get(&row, "quota_limit_reached")?,
         created_at: get(&row, "created_at")?,
         updated_at: get(&row, "updated_at")?,
     })

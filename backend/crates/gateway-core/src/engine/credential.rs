@@ -578,6 +578,8 @@ pub struct QuotaObservation {
     pub expected_revision: CredentialRevision,
     pub quota: Option<OpaqueProviderData>,
     pub observed_at: Option<SystemTime>,
+    /// 快照级限流事实（Provider 解析后物化）；None 表示不更新物化列。
+    pub limit_reached: Option<bool>,
 }
 
 impl fmt::Debug for QuotaObservation {

@@ -358,6 +358,7 @@ async fn passive_rate_limit_headers_replace_stale_secondary_window() {
                 baseline.as_object().expect("quota object").clone(),
             )),
             observed_at: Some(SystemTime::now()),
+            limit_reached: None,
         })
         .await
         .expect("persist baseline quota");
@@ -436,6 +437,7 @@ async fn periodic_quota_synchronization_does_not_scan_stale_ready_accounts() {
             )),
             // 正常账号即使缓存已旧，也只等待真实请求被动同步，不能被定时任务主动拉取。
             observed_at: Some(SystemTime::UNIX_EPOCH),
+            limit_reached: None,
         })
         .await
         .expect("persist stale quota");
@@ -481,6 +483,7 @@ async fn periodic_quota_synchronization_preserves_availability_when_usage_peaks(
                 .clone(),
             )),
             observed_at: Some(SystemTime::now()),
+            limit_reached: None,
         })
         .await
         .expect("persist exhausted quota");
@@ -718,6 +721,7 @@ async fn periodic_quota_synchronization_does_not_recover_from_percent_drop_befor
                 .clone(),
             )),
             observed_at: Some(SystemTime::now()),
+            limit_reached: None,
         })
         .await
         .expect("seed post-failure quota snapshot");

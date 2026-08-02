@@ -471,6 +471,7 @@ async fn openai_admin_provider_projects_codex_additional_limit_as_the_primary_qu
                 raw.as_object().expect("quota object").clone(),
             )),
             observed_at: Some(SystemTime::now()),
+            limit_reached: None,
         })
         .await
         .expect("persist quota");
@@ -537,6 +538,7 @@ async fn openai_admin_projects_confirmed_quota_exhaustion_as_full_without_mutati
                 .clone(),
             )),
             observed_at: Some(SystemTime::now()),
+            limit_reached: None,
         })
         .await
         .expect("persist raw quota");
