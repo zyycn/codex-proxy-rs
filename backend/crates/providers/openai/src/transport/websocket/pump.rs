@@ -36,6 +36,22 @@ pub(crate) type RawWsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 const PUMP_COMMAND_BUFFER: usize = 32;
 
+/// pump 日志的账号级关联上下文；空闲连接被上游重置等场景用于回溯归属。
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PumpLogContext {
+    pub(crate) account_id: Option<String>,
+    pub(crate) conversation_id_hash: Option<String>,
+}
+
+impl PumpLogContext {
+    pub(crate) fn new(account_id: Option<String>, conversation_id_hash: Option<String>) -> Self {
+        Self {
+            account_id,
+            conversation_id_hash,
+        }
+    }
+}
+
 /// pump 保活策略。
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PumpKeepalive {
@@ -188,7 +204,7 @@ impl std::fmt::Debug for PumpedWebSocket {
 
 impl PumpedWebSocket {
     /// 用底层流启动一个 pump 任务并返回句柄。
-    pub(crate) fn new(inner: RawWsStream, keepalive: PumpKeepalive) -> Self {
+    pub(crate) fn new(inner: RawWsStream, keepalive: PumpKeepalive, context: PumpLogContext) -> Self {
         let (tx_command, rx_command) = mpsc::channel::<PumpCommand>(PUMP_COMMAND_BUFFER);
         let (tx_message, rx_message) = mpsc::channel(PUMP_MESSAGE_BUFFER);
         let connection_id = Uuid::new_v4();
@@ -203,6 +219,7 @@ impl PumpedWebSocket {
                 rx_command,
                 tx_message,
                 keepalive,
+                context,
                 closed_for_task,
                 exit_reason_for_task,
             )
@@ -273,12 +290,17 @@ impl Drop for PumpedWebSocket {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "pump owns one flat set of channel/state handles and log context"
+)]
 async fn pump_loop(
     connection_id: Uuid,
     mut inner: RawWsStream,
     mut rx_command: mpsc::Receiver<PumpCommand>,
     tx_message: mpsc::Sender<Result<Message, tungstenite::Error>>,
     keepalive: PumpKeepalive,
+    context: PumpLogContext,
     closed: Arc<AtomicBool>,
     exit_reason: Arc<Mutex<Option<PumpExitReason>>>,
 ) {
@@ -429,7 +451,7 @@ async fn pump_loop(
     *exit_reason
         .lock()
         .expect("WebSocket pump exit reason lock poisoned") = Some(reason.clone());
-    log_pump_exit(connection_id, &reason, backpressure_events);
+    log_pump_exit(connection_id, &context, &reason, backpressure_events);
 
     if reason.should_send_close() {
         let _ = inner.send(Message::Close(None)).await;
@@ -510,11 +532,20 @@ async fn send_keepalive_ping(
     }))
 }
 
-fn log_pump_exit(connection_id: Uuid, reason: &PumpExitReason, backpressure_events: u64) {
+fn log_pump_exit(
+    connection_id: Uuid,
+    context: &PumpLogContext,
+    reason: &PumpExitReason,
+    backpressure_events: u64,
+) {
     let detail = reason.detail().unwrap_or_default();
+    let account_id = context.account_id.as_deref().unwrap_or("unknown");
+    let conversation_id_hash = context.conversation_id_hash.as_deref().unwrap_or("unknown");
     if reason.is_unexpected() {
         tracing::warn!(
             websocket_connection_id = %connection_id,
+            account_id = %account_id,
+            conversation_id_hash = %conversation_id_hash,
             pump_exit_reason = reason.as_str(),
             pump_exit_detail = detail,
             backpressure_events,
@@ -523,6 +554,8 @@ fn log_pump_exit(connection_id: Uuid, reason: &PumpExitReason, backpressure_even
     } else if matches!(reason, PumpExitReason::UpstreamCloseFrame { .. }) {
         tracing::info!(
             websocket_connection_id = %connection_id,
+            account_id = %account_id,
+            conversation_id_hash = %conversation_id_hash,
             pump_exit_reason = reason.as_str(),
             pump_exit_detail = detail,
             backpressure_events,
@@ -531,6 +564,8 @@ fn log_pump_exit(connection_id: Uuid, reason: &PumpExitReason, backpressure_even
     } else {
         tracing::debug!(
             websocket_connection_id = %connection_id,
+            account_id = %account_id,
+            conversation_id_hash = %conversation_id_hash,
             pump_exit_reason = reason.as_str(),
             pump_exit_detail = detail,
             backpressure_events,

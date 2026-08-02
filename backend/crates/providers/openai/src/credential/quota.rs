@@ -30,6 +30,9 @@ const MAX_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60 * 60);
 const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);
 const QUOTA_HYDRATION_FAILURE_TTL: Duration = Duration::from_secs(5);
 const QUOTA_PERIODIC_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(30 * 60);
+// 5xx 上游拒绝的短退避重试预算；指数退避 1s/2s，吞掉瞬时抖动（对齐 TS withRetry）。
+const QUOTA_FETCH_5XX_MAX_RETRIES: u32 = 2;
+const QUOTA_FETCH_5XX_BASE_DELAY: Duration = Duration::from_secs(1);
 
 /// OpenAI Provider 主动额度刷新的调度策略。
 ///
@@ -1089,7 +1092,7 @@ impl CodexCredentialQuotaService {
             .prepare(account)
             .await
             .map_err(|_| CodexQuotaFetchError::InvalidCredential)?;
-        let mut result = fetch_usage_once(client, &prepared).await;
+        let mut result = fetch_usage_with_5xx_retry(client, &prepared).await;
         if let Err(CodexQuotaFetchAttemptError::Upstream(error)) = &result
             && let Some(recovered) = self
                 .agent_identity
@@ -1102,7 +1105,7 @@ impl CodexCredentialQuotaService {
                 .map_err(|_| CodexQuotaFetchError::Recovery)?
         {
             prepared = recovered;
-            result = fetch_usage_once(client, &prepared).await;
+            result = fetch_usage_with_5xx_retry(client, &prepared).await;
         }
         match result {
             Ok(value) => Ok(FetchedCodexQuota {
@@ -1141,6 +1144,39 @@ async fn fetch_usage_once(
         ))
         .await
         .map_err(CodexQuotaFetchAttemptError::Upstream)
+}
+
+/// 对 5xx 上游拒绝做有限次指数退避重试（1s/2s），吞掉瞬时抖动。
+///
+/// 4xx（含 402/429）不重试：它们已经走额度状态转换，重试只会放大上游负载。
+async fn fetch_usage_with_5xx_retry(
+    client: &CodexBackendClient,
+    prepared: &PreparedCodexRuntimeCredential,
+) -> Result<Value, CodexQuotaFetchAttemptError> {
+    let mut attempt = 0_u32;
+    loop {
+        let result = fetch_usage_once(client, prepared).await;
+        let retryable = match &result {
+            Ok(_) => false,
+            Err(CodexQuotaFetchAttemptError::Upstream(CodexClientError::Upstream {
+                status,
+                ..
+            })) => status.is_server_error(),
+            Err(_) => false,
+        };
+        if !retryable || attempt >= QUOTA_FETCH_5XX_MAX_RETRIES {
+            return result;
+        }
+        attempt += 1;
+        let delay = QUOTA_FETCH_5XX_BASE_DELAY.saturating_mul(attempt);
+        tracing::warn!(
+            account_id = %prepared.account.id(),
+            retry_attempt = attempt,
+            retry_delay_ms = delay.as_millis(),
+            "OpenAI quota usage 5xx upstream rejection; retrying with backoff"
+        );
+        tokio::time::sleep(delay).await;
+    }
 }
 
 fn eligible_periodic_quota_refresh(account: &ProviderAccount, now: SystemTime) -> bool {
@@ -1354,7 +1390,8 @@ fn quota_state_transition(
     }
     match *status {
         StatusCode::PAYMENT_REQUIRED => Some(CodexQuotaStateTransition::Exhausted),
-        StatusCode::TOO_MANY_REQUESTS => {
+        // 429 与 503 都是"稍后重试"语义：优先尊重 Retry-After，缺失时用默认冷却。
+        StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE => {
             let duration = Duration::from_secs(
                 retry_after_seconds.unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN.as_secs()),
             )
