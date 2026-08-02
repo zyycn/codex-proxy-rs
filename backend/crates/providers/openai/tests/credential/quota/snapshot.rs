@@ -196,6 +196,7 @@ async fn persisted_provider_quota_projects_dynamic_windows_without_network_io() 
                 raw.as_object().expect("quota object").clone(),
             )),
             observed_at: Some(SystemTime::now()),
+            limit_reached: None,
         })
         .await
         .expect("persist quota");
@@ -243,6 +244,7 @@ async fn roll_expired_windows_is_o1_for_extremely_old_reset() {
                 raw.as_object().expect("quota object").clone(),
             )),
             observed_at: Some(SystemTime::now()),
+            limit_reached: None,
         })
         .await
         .expect("persist quota");
@@ -284,6 +286,7 @@ async fn scheduling_signal_survives_limit_reached_without_percent_or_reset() {
                 raw.as_object().expect("quota object").clone(),
             )),
             observed_at: Some(SystemTime::now()),
+            limit_reached: None,
         })
         .await
         .expect("persist quota");
@@ -335,6 +338,7 @@ async fn persisted_codex_additional_limit_replaces_the_top_level_rate_limit() {
                 raw.as_object().expect("quota object").clone(),
             )),
             observed_at: Some(SystemTime::now()),
+            limit_reached: None,
         })
         .await
         .expect("persist quota");
@@ -404,6 +408,7 @@ async fn code_review_limit_projects_as_independent_window_with_limit_name() {
                 raw.as_object().expect("quota object").clone(),
             )),
             observed_at: Some(SystemTime::now()),
+            limit_reached: None,
         })
         .await
         .expect("persist quota");

@@ -74,6 +74,7 @@ async fn core_quota_batch_reads_only_observed_accounts_in_one_contract_call() {
                         .clone(),
                 )),
                 observed_at: Some(SystemTime::now()),
+                limit_reached: None,
             })
             .await
             .expect("persist quota");
@@ -140,6 +141,7 @@ async fn delayed_provider_observations_cannot_overwrite_newer_state_or_quota() {
                 .clone(),
         )),
         observed_at: Some(observed_at),
+        limit_reached: None,
     };
     assert_eq!(
         repository

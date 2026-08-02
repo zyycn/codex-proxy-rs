@@ -163,7 +163,8 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             .map(|account| account.as_str().to_owned())
             .collect::<Vec<_>>();
         let rows = sqlx::query(
-            "select id, credential_revision, provider_quota_json, quota_observed_at \
+            "select id, credential_revision, provider_quota_json, quota_observed_at, \
+                    quota_limit_reached \
              from provider_accounts \
              where id = any($1) and provider_quota_json is not null",
         )
@@ -191,12 +192,16 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                 let observed_at = row
                     .try_get::<DateTime<Utc>, _>("quota_observed_at")
                     .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
+                let limit_reached = row
+                    .try_get::<bool, _>("quota_limit_reached")
+                    .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
                 Ok(QuotaObservation {
                     account_id: CoreProviderAccountId::new(account_id)
                         .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?,
                     expected_revision: revision,
                     quota: Some(quota),
                     observed_at: Some(observed_at.into()),
+                    limit_reached: Some(limit_reached),
                 })
             })
             .collect()
@@ -223,6 +228,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                 Revision::new(observation.expected_revision.get()).map_err(core_store_error)?,
                 quota,
                 observation.observed_at.map(DateTime::<Utc>::from),
+                observation.limit_reached,
             )
             .await
             .map_err(core_store_error)?;

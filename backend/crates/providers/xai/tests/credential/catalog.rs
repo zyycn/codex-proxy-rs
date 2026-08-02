@@ -919,6 +919,7 @@ async fn quota_read_rejects_corrupt_provider_document() {
             expected_revision: CredentialRevision::new(1).expect("revision"),
             quota: Some(OpaqueProviderData::new(document)),
             observed_at: Some(SystemTime::now()),
+            limit_reached: None,
         })
         .await
         .expect("seed corrupt quota");

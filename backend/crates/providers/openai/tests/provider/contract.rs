@@ -1293,6 +1293,7 @@ async fn usage_limit_failure_returns_promptly_and_refreshes_the_authoritative_qu
                 .clone(),
             )),
             observed_at: Some(SystemTime::now()),
+            limit_reached: None,
         })
         .await
         .expect("seed stale passive quota");

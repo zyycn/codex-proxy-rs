@@ -155,6 +155,7 @@ async fn expired_old_reset_with_fresh_allowed_snapshot_recovers_ready() {
                 .clone(),
             )),
             observed_at: Some(SystemTime::now()),
+            limit_reached: None,
         })
         .await
         .expect("seed old exhausted snapshot");

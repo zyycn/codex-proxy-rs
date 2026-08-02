@@ -451,6 +451,9 @@ impl GrokCredentialQuotaService {
                 loaded.account.revision(),
                 document,
                 observed_at.into(),
+                presentation
+                    .used_percent()
+                    .is_some_and(|used| used.is_finite() && used >= 100.0),
             )
             .await
             .map_err(map_quota_repository_error)?;

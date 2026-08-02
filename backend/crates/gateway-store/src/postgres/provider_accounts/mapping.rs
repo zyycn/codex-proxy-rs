@@ -72,6 +72,10 @@ pub(crate) fn admin_account_status(
             .is_some_and(|expires_at| expires_at <= now)
     {
         AdminAccountStatus::Expired
+    } else if account.quota_limit_reached {
+        AdminAccountStatus::RateLimited
+    } else if account.availability == AccountAvailability::Unknown {
+        AdminAccountStatus::Invalid
     } else {
         AdminAccountStatus::Active
     }

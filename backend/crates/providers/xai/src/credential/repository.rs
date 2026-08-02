@@ -519,6 +519,7 @@ impl GrokCredentialRepository {
         expected_revision: CredentialRevision,
         document: serde_json::Map<String, Value>,
         observed_at: SystemTime,
+        limit_reached: bool,
     ) -> Result<(), GrokCredentialRepositoryError> {
         let outcome = self
             .store
@@ -527,6 +528,7 @@ impl GrokCredentialRepository {
                 expected_revision,
                 quota: Some(OpaqueProviderData::new(document)),
                 observed_at: Some(observed_at),
+                limit_reached: Some(limit_reached),
             })
             .await
             .map_err(map_store_error)?;

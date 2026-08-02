@@ -245,6 +245,7 @@ impl SelectorFixture {
                     document.as_object().expect("quota object").clone(),
                 )),
                 observed_at: Some(SystemTime::now()),
+                limit_reached: None,
             })
             .await
             .expect("persist quota");

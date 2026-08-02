@@ -554,6 +554,7 @@ impl CodexCredentialQuotaService {
                 expected_revision: account.revision(),
                 quota: Some(OpaqueProviderData::new(object)),
                 observed_at: Some(observed_at),
+                limit_reached: Some(fact.exhausted()),
             })
             .await?;
         if outcome == QuotaWriteOutcome::Conflict {
@@ -626,6 +627,7 @@ impl CodexCredentialQuotaService {
                 expected_revision: account.revision(),
                 quota: Some(OpaqueProviderData::new(quota)),
                 observed_at: Some(observed_at),
+                limit_reached: Some(true),
             })
             .await?;
         if outcome == QuotaWriteOutcome::Conflict {
@@ -728,6 +730,7 @@ impl CodexCredentialQuotaService {
                 expected_revision: account.revision(),
                 quota: Some(OpaqueProviderData::new(object)),
                 observed_at: Some(observed_at),
+                limit_reached: Some(true),
             })
             .await?
             == QuotaWriteOutcome::Conflict
@@ -870,6 +873,7 @@ impl CodexCredentialQuotaService {
                 expected_revision: account.revision(),
                 quota: Some(OpaqueProviderData::new(object)),
                 observed_at: Some(observed_at),
+                limit_reached: Some(snapshot.fact().exhausted()),
             })
             .await?
             == QuotaWriteOutcome::Conflict

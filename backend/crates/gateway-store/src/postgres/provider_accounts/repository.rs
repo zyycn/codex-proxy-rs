@@ -27,6 +27,7 @@ pub trait ProviderAccountRepository: Send + Sync {
         expected_revision: Revision,
         quota: Option<JsonObject>,
         observed_at: Option<DateTime<Utc>>,
+        limit_reached: Option<bool>,
     ) -> StoreResult<bool>;
     async fn delete_provider_account(&self, id: &str) -> StoreResult<bool>;
 }
@@ -94,7 +95,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                     upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
                     access_token_expires_at, next_refresh_at, enabled, availability,
                     availability_observed_at,
-                    quota_observed_at, created_at, updated_at
+                    quota_observed_at, quota_limit_reached, created_at, updated_at
              from provider_accounts
              where ($1::text is null or provider_kind = $1) and ($2 or enabled)
              order by provider_kind, name, id",
@@ -246,6 +247,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         expected_revision: Revision,
         quota: Option<JsonObject>,
         observed_at: Option<DateTime<Utc>>,
+        limit_reached: Option<bool>,
     ) -> StoreResult<bool> {
         require_nonempty(ENTITY, "account_id", account_id)?;
         if quota.is_some() != observed_at.is_some() {
@@ -257,6 +259,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         let result = sqlx::query(
             "update provider_accounts
              set provider_quota_json = $3, quota_observed_at = $4,
+                 quota_limit_reached = coalesce($5, quota_limit_reached),
                  updated_at = greatest(now(), coalesce($4, now()))
              where id = $1 and credential_revision = $2
                and ($4 is null or quota_observed_at is null or quota_observed_at <= $4)",
@@ -265,6 +268,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         .bind(to_i64(expected_revision.get())?)
         .bind(quota.map(|value| value.as_value()))
         .bind(observed_at)
+        .bind(limit_reached)
         .execute(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("compare and swap provider quota"))?;
