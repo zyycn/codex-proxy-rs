@@ -21,7 +21,6 @@ pub(crate) enum QuotaRecoveryEvidence {
     RefreshedSnapshot,
 }
 
-///
 /// 只处理 `QuotaExhausted` 的恢复——429/触顶不再进入该状态，由 quota 数据
 /// 驱动调度排除（限流不改变账号可用性）。`Invalid/Expired/Banned` 等终态由 selector 的
 /// 成功响应恢复路径处理。
@@ -43,23 +42,16 @@ pub(crate) fn quota_success_state(
     if fact.explicit_allowed() {
         return Some(AccountAvailability::Ready);
     }
-    quota_recovery_confirmed(recovery_evidence, previous_reset_at, now)
-        .then_some(AccountAvailability::Ready)
-}
-
-fn quota_recovery_confirmed(
-    evidence: QuotaRecoveryEvidence,
-    previous_reset_at: Option<SystemTime>,
-    now: SystemTime,
-) -> bool {
-    match evidence {
-        // 一次真实成功响应是恢复的最强证据。
-        QuotaRecoveryEvidence::SuccessfulResponse => true,
-        // 周期刷新：旧确认 reset 已到期才恢复；used_percent 是可滞后、会取整的
-        // 观测值，其回落不能覆盖仍未到期的旧 reset。
-        QuotaRecoveryEvidence::RefreshedSnapshot => {
-            previous_reset_at.is_some_and(|reset_at| reset_at <= now)
+    // 一次真实成功响应是最强证据；周期刷新需要旧确认 reset 已到期
+    // （used_percent 是可滞后、会取整的观测值，其回落不能覆盖仍未到期的旧 reset）。
+    match recovery_evidence {
+        QuotaRecoveryEvidence::SuccessfulResponse => Some(AccountAvailability::Ready),
+        QuotaRecoveryEvidence::RefreshedSnapshot
+            if previous_reset_at.is_some_and(|reset_at| reset_at <= now) =>
+        {
+            Some(AccountAvailability::Ready)
         }
+        QuotaRecoveryEvidence::RefreshedSnapshot => None,
     }
 }
 
