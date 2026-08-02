@@ -93,7 +93,9 @@ pub(crate) fn admin_account_summary(
             AdminAccountStatus::QuotaExhausted => {
                 summary.quota_exhausted = summary.quota_exhausted.saturating_add(1);
             }
-            AdminAccountStatus::Expired
+            AdminAccountStatus::RateLimited
+            | AdminAccountStatus::Expired
+            | AdminAccountStatus::Invalid
             | AdminAccountStatus::Disabled
             | AdminAccountStatus::Banned => {
                 summary.unavailable = summary.unavailable.saturating_add(1);
@@ -149,7 +151,9 @@ pub(crate) fn sort_admin_account_items(
 pub(crate) const fn admin_account_status_name(status: AdminAccountStatus) -> &'static str {
     match status {
         AdminAccountStatus::Active => "active",
+        AdminAccountStatus::RateLimited => "rate_limited",
         AdminAccountStatus::Expired => "expired",
+        AdminAccountStatus::Invalid => "invalid",
         AdminAccountStatus::QuotaExhausted => "quota_exhausted",
         AdminAccountStatus::Disabled => "disabled",
         AdminAccountStatus::Banned => "banned",

@@ -635,6 +635,13 @@ pub trait ProviderCooldownPort: Send + Sync {
         scope: &'a ProviderCooldownScope,
         through_revision: CredentialRevision,
     ) -> BoxFuture<'a, Result<bool, ProviderStoreError>>;
+
+    /// 删除账号时清除该账号全部 account/model scope cooldown key。
+    /// 生命周期与 credential revision 无关；不要求调用方持有 revision。
+    fn clear_all<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

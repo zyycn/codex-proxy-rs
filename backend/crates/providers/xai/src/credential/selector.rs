@@ -460,16 +460,27 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
                     GrokCredentialAvailability::QuotaExhausted,
                     "upstream_free_quota_exhausted",
                 ),
-                GrokCredentialFailure::PaymentRequired { .. } => (
-                    GrokCredentialAvailability::QuotaExhausted,
-                    "upstream_payment_quota_exhausted",
-                ),
-                // xAI 免费模型额度按账号滚动窗口恢复：限流只写运行时冷却
-                // （Redis 跨重启保留），不进入持久化账号状态。
-                GrokCredentialFailure::ModelQuotaExhausted { retry_after, .. } => {
+                // bare 402 没有结构化 quota code，不能证明账号额度耗尽：
+                // 只写短期账号级 runtime cooldown（TransientBackoff），
+                // 不持久化 QuotaExhausted（结构化 QuotaExhausted/FreeQuotaExhausted 走上面）。
+                GrokCredentialFailure::PaymentRequired { retry_after } => {
+                    let retry_after = retry_after
+                        .unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN)
+                        .min(MAX_RATE_LIMIT_COOLDOWN);
+                    self.record_runtime_cooldown(session, retry_after).await;
+                    return;
+                }
+                // xAI 免费模型额度按该模型滚动窗口恢复：限流写 model-scoped
+                // runtime cooldown（Redis 跨重启保留），不进入持久化账号状态，
+                // 不阻止该账号服务其他模型。
+                GrokCredentialFailure::ModelQuotaExhausted {
+                    upstream_model,
+                    retry_after,
+                } => {
                     let retry_after =
                         bounded_cooldown(retry_after, MODEL_QUOTA_COOLDOWN, MAX_MODEL_COOLDOWN);
-                    self.record_runtime_cooldown(session, retry_after).await;
+                    self.record_model_runtime_cooldown(session, upstream_model, retry_after)
+                        .await;
                     return;
                 }
                 GrokCredentialFailure::ModelAccessDenied {

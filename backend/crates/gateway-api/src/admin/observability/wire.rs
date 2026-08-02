@@ -350,6 +350,7 @@ pub struct DashboardPoolSummaryView {
     pub active: u64,
     pub rate_limited: u64,
     pub expired: u64,
+    pub invalid: u64,
     pub quota_exhausted: u64,
     pub refreshing: Option<u64>,
     pub disabled: u64,

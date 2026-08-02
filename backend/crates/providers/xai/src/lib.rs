@@ -171,7 +171,7 @@ pub async fn initialize(
         refresher,
         Arc::clone(&catalog),
         Arc::clone(&leases),
-        cooldowns,
+        cooldowns.clone(),
         ports.credential_state(),
         Arc::clone(&runtime_policy),
     ));
@@ -200,6 +200,7 @@ pub async fn initialize(
             quota: Arc::clone(&quota),
             catalog: Arc::clone(&catalog),
             runtime_policy,
+            cooldowns: Arc::clone(&cooldowns),
         },
         cli_release_status,
     ));

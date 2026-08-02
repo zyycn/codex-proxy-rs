@@ -739,6 +739,7 @@ fn empty_quota() -> ProviderQuota {
         observed_at: None,
         refresh_token_expires_at: None,
         windows: Vec::new(),
+        limit_reached: false,
         provider_data: None,
     }
 }
@@ -770,7 +771,7 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
         "exhausted".to_owned(),
         Value::Bool(snapshot.fact().exhausted()),
     );
-    let windows = snapshot
+    let windows: Vec<ProviderQuotaWindow> = snapshot
         .windows()
         .iter()
         .map(|window| {
@@ -802,19 +803,28 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
             }
         })
         .collect();
+    // 快照级 limit_reached 只看滚动后的窗口触顶：顶层标记是观测事实，不能
+    // 在窗口全部过期后继续维持限流。
+    let limit_reached = quota_windows_limit_reached(&windows);
     ProviderQuota {
         observed_at: Some(DateTime::<Utc>::from(snapshot.observed_at())),
         refresh_token_expires_at: None,
         windows,
+        limit_reached,
         provider_data: Some(ProviderDocument::new(OpaqueProviderData::new(
             provider_data,
         ))),
     }
 }
 
+fn quota_windows_limit_reached(windows: &[ProviderQuotaWindow]) -> bool {
+    windows.iter().any(|window| window.limit_reached)
+}
+
 fn force_confirmed_exhaustion_projection(quota: &mut ProviderQuota) {
     // 402 已确认耗尽：只覆盖 Admin 展示投影，原始 Provider JSON 仍作为
     // 后续判断窗口是否真正恢复的基线。
+    quota.limit_reached = true;
     quota.provider_data = Some(ProviderDocument::new(OpaqueProviderData::new(
         Map::from_iter([
             (

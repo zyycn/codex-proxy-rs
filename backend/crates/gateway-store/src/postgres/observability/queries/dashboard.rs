@@ -353,29 +353,29 @@ pub(crate) async fn provider_account_metrics(
                     when not enabled then 'disabled'
                     when availability = 'banned' then 'banned'
                     when availability = 'quota_exhausted' then 'quota_exhausted'
-                    when availability in ('expired', 'invalid')
+                    when availability = 'invalid' then 'invalid'
+                    when availability = 'expired'
                       or (access_token_expires_at is not null and access_token_expires_at <= $1)
                       then 'expired'
+                    when provider_quota_json is not null
+                      and provider_quota_json->'rate_limit'->>'limit_reached' = 'true'
+                      and (
+                        provider_quota_json->'rate_limit'->'primary_window'->>'reset_at' is null
+                        or (provider_quota_json->'rate_limit'->'primary_window'->>'reset_at')::bigint > extract(epoch from $1)::bigint
+                      )
+                      then 'rate_limited'
+                    when availability = 'unknown' then 'invalid'
                     else 'active'
                   end as status
              from provider_accounts
          )
          select count(*)::bigint as total,
                 count(*) filter (where enabled)::bigint as enabled,
-                count(*) filter (where status <> 'active')::bigint as unavailable,
+                count(*) filter (where status in ('rate_limited','quota_exhausted','expired','invalid','disabled','banned'))::bigint as unavailable,
                 count(*) filter (where status = 'active')::bigint as active,
-                count(*) filter (
-                  where status = 'active'
-                    and (
-                      provider_quota_json is not null
-                      and (
-                        provider_quota_json->'rate_limit'->>'limit_reached' = 'true'
-                        or (provider_quota_json->'rate_limit'->'primary_window'->>'used_percent')::numeric >= 100
-                        or (provider_quota_json->'rate_limit'->'secondary_window'->>'used_percent')::numeric >= 100
-                      )
-                    )
-                )::bigint as rate_limited,
+                count(*) filter (where status = 'rate_limited')::bigint as rate_limited,
                 count(*) filter (where status = 'expired')::bigint as expired,
+                count(*) filter (where status = 'invalid')::bigint as invalid,
                 count(*) filter (where status = 'quota_exhausted')::bigint as quota_exhausted,
                 count(*) filter (where status = 'disabled')::bigint as disabled,
                 count(*) filter (where status = 'banned')::bigint as banned
@@ -392,6 +392,7 @@ pub(crate) async fn provider_account_metrics(
         active: unsigned(&row, "active")?,
         rate_limited: unsigned(&row, "rate_limited")?,
         expired: unsigned(&row, "expired")?,
+        invalid: unsigned(&row, "invalid")?,
         quota_exhausted: unsigned(&row, "quota_exhausted")?,
         disabled: unsigned(&row, "disabled")?,
         banned: unsigned(&row, "banned")?,

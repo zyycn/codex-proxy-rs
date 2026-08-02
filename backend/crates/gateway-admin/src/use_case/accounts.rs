@@ -217,7 +217,7 @@ impl DefaultAccountsService {
         )
         .await?;
         Ok(AccountDirectoryItem {
-            status: account_status(&account, now),
+            status: account_status(&account, quota.limit_reached, now),
             usage: usage.into_iter().next(),
             account,
             quota,
@@ -302,7 +302,7 @@ impl AccountsService for DefaultAccountsService {
             .into_iter()
             .zip(quotas)
             .map(|(account, quota)| AccountDirectoryItem {
-                status: account_status(&account, now),
+                status: account_status(&account, quota.limit_reached, now),
                 usage: usage.get(&account.id).cloned(),
                 account,
                 quota,
@@ -426,7 +426,7 @@ impl AccountsService for DefaultAccountsService {
         upstream_model: UpstreamModelId,
     ) -> Result<AccountConnectionTestEventStream, AdminError> {
         let (account, provider) = self.provider_for_account(&account_id).await?;
-        let initial_status = account_status(&account, Utc::now());
+        let initial_status = account_status(&account, false, Utc::now());
         let model = upstream_model.as_str().to_owned();
         let operation = provider
             .connection_test_operation(&upstream_model, CONNECTION_TEST_INPUT)
@@ -460,7 +460,7 @@ impl AccountsService for DefaultAccountsService {
                 .ok()
                 .flatten()
                 .map_or(initial_status, |account| {
-                    account_status(&account, Utc::now())
+                    account_status(&account, false, Utc::now())
                 });
             match result {
                 Ok(result) => result
@@ -511,11 +511,18 @@ fn empty_quota() -> ProviderQuota {
         observed_at: None,
         refresh_token_expires_at: None,
         windows: Vec::new(),
+        limit_reached: false,
         provider_data: None,
     }
 }
 
-fn account_status(account: &AccountRecord, now: chrono::DateTime<Utc>) -> AccountStatus {
+/// 互斥页面状态：availability 终态优先，quota 快照级 `limit_reached` 派生
+/// `rate_limited`，`Unknown` 保守映射 `invalid`（不可调度，不显示为 active）。
+fn account_status(
+    account: &AccountRecord,
+    quota_limit_reached: bool,
+    now: chrono::DateTime<Utc>,
+) -> AccountStatus {
     if !account.enabled {
         AccountStatus::Disabled
     } else if account.availability == crate::model::accounts::AccountAvailability::Banned {
@@ -524,13 +531,21 @@ fn account_status(account: &AccountRecord, now: chrono::DateTime<Utc>) -> Accoun
         AccountStatus::QuotaExhausted
     } else if matches!(
         account.availability,
+        crate::model::accounts::AccountAvailability::Invalid
+    ) {
+        AccountStatus::Invalid
+    } else if matches!(
+        account.availability,
         crate::model::accounts::AccountAvailability::Expired
-            | crate::model::accounts::AccountAvailability::Invalid
     ) || account
         .access_token_expires_at
         .is_some_and(|expires_at| expires_at <= now)
     {
         AccountStatus::Expired
+    } else if quota_limit_reached {
+        AccountStatus::RateLimited
+    } else if account.availability == crate::model::accounts::AccountAvailability::Unknown {
+        AccountStatus::Invalid
     } else {
         AccountStatus::Active
     }

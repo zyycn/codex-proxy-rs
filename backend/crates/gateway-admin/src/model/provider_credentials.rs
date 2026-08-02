@@ -590,6 +590,8 @@ pub struct ProviderQuota {
     pub observed_at: Option<DateTime<Utc>>,
     pub refresh_token_expires_at: Option<DateTime<Utc>>,
     pub windows: Vec<ProviderQuotaWindow>,
+    /// 快照级限流事实（顶层或任一窗口触顶）；Admin 状态派生用，前端不再遍历窗口猜测。
+    pub limit_reached: bool,
     pub provider_data: Option<ProviderDocument>,
 }
 

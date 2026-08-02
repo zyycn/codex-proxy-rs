@@ -14,6 +14,7 @@ export interface AccountQuotaWindow {
 
 export interface AccountQuota {
   refreshedAtDisplay: string
+  limitReached: boolean
   windows: AccountQuotaWindow[]
 }
 

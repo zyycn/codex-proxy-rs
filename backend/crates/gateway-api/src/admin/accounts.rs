@@ -213,6 +213,7 @@ pub struct AccountView {
 #[serde(rename_all = "camelCase")]
 pub struct AccountQuotaView {
     pub refreshed_at_display: String,
+    pub limit_reached: bool,
     pub windows: Vec<AccountQuotaWindowView>,
 }
 
@@ -1419,6 +1420,7 @@ fn account_quota_view(
     (
         AccountQuotaView {
             refreshed_at_display,
+            limit_reached: quota.limit_reached,
             windows,
         },
         refresh_token_expires_at,
@@ -1714,8 +1716,10 @@ fn provider_document_value(document: ProviderDocument) -> Value {
 fn account_status_name(status: DomainAccountStatus) -> &'static str {
     match status {
         DomainAccountStatus::Active => "active",
-        DomainAccountStatus::Expired => "expired",
+        DomainAccountStatus::RateLimited => "rate_limited",
         DomainAccountStatus::QuotaExhausted => "quota_exhausted",
+        DomainAccountStatus::Expired => "expired",
+        DomainAccountStatus::Invalid => "invalid",
         DomainAccountStatus::Disabled => "disabled",
         DomainAccountStatus::Banned => "banned",
     }

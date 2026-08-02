@@ -724,6 +724,20 @@ impl ProviderCooldownPort for MemoryCooldownPort {
             Ok(should_remove)
         })
     }
+
+    fn clear_all<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            let mut cooldowns = lock(&self.cooldowns);
+            let mut scoped = lock(&self.scoped_cooldowns);
+            let account_removed = cooldowns.remove(account_id).is_some();
+            let scoped_removed = scoped.keys().any(|(id, _)| id == account_id);
+            scoped.retain(|(id, _), _| id != account_id);
+            Ok(account_removed || scoped_removed)
+        })
+    }
 }
 
 impl ProviderRuntimePolicyPort for StaticRuntimePolicy {

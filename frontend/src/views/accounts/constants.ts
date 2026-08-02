@@ -150,18 +150,11 @@ export const accountStatusFilterOptions = [
 ]
 
 /**
- * 照 v2：`rate_limited` 不是后端状态，而是由「任一 quota 窗口 limit_reached」派生。
- * 账号 `active` 但任一窗口触顶 → 显示「限流中」。
+ * 后端已派生互斥状态（含 `rate_limited`，由快照级 quota.limitReached 产生）；
+ * 前端只渲染，不再独立派生。
  */
 export function derivedAccountStatus(row: AccountRow): string {
-  if (row.status === 'active' && isQuotaWindowReached(row)) {
-    return 'rate_limited'
-  }
   return row.status
-}
-
-function isQuotaWindowReached(row: AccountRow): boolean {
-  return row.quota.windows.some(window => window.limitReached)
 }
 
 export function visibleSummaryQuotaWindows(windows: AccountQuotaWindow[]) {

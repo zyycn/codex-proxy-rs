@@ -1,16 +1,23 @@
+//! quota 测试入口与共享 fixture。
+//!
+//! - [`snapshot`]：快照聚合、窗口滚动与调度信号回归。
+//! - [`recovery`]：402 恢复证据回归。
+
+mod recovery;
+mod snapshot;
+
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use chrono::{TimeZone as _, Utc};
-use futures::future::join_all;
 use gateway_core::engine::credential::{
     AccountAvailability, AccountStateChange, OpaqueProviderData, ProviderAccountStore as _,
-    QuotaObservation, QuotaWriteOutcome,
+    QuotaObservation,
 };
 use provider_openai::OFFICIAL_CODEX_BASE_URL;
 use provider_openai::credential::{
     CodexCredentialQuotaError, CodexCredentialQuotaService, CodexQuotaSyncSummary,
-    CodexQuotaWindowKind, ImportCodexOAuthCredential, parse_codex_quota_usage,
+    CodexQuotaWindowKind, ImportCodexOAuthCredential,
 };
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use serde_json::json;
@@ -18,138 +25,6 @@ use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::support::{MemoryAccountStore, profile, secret};
-
-#[test]
-fn parser_extracts_dynamic_windows_without_a_fixed_database_shape() {
-    let fact = parse_codex_quota_usage(&json!({
-        "rate_limit": {
-            "allowed": true,
-            "primary_window": {"used_percent": 25.2, "reset_at": 1_800_000_100},
-            "secondary_window": {"used_percent": 80.4, "reset_at": 1_800_000_200}
-        },
-        "additional_rate_limits": [{
-            "limit_name": "future_dynamic_window",
-            "rate_limit": {"primary_window": {"used_percent": 10}}
-        }]
-    }))
-    .expect("valid dynamic quota");
-
-    assert_eq!(fact.remaining_percent(), Some(20));
-    assert_eq!(
-        fact.resets_at().map(|value| value.timestamp()),
-        Some(1_800_000_100)
-    );
-    assert!(!fact.exhausted());
-}
-
-#[test]
-fn parser_treats_any_confirmed_provider_limit_as_exhausted() {
-    let fact = parse_codex_quota_usage(&json!({
-        "rate_limit": {"primary_window": {"used_percent": 10}},
-        "additional_rate_limits": [{
-            "rate_limit": {"allowed": false, "primary_window": {"used_percent": 100}}
-        }]
-    }))
-    .expect("valid quota");
-
-    assert!(fact.exhausted());
-}
-
-#[test]
-fn parser_keeps_full_percent_as_display_without_provider_exhaustion_signal() {
-    let fact = parse_codex_quota_usage(&json!({
-        "rate_limit": {
-            "allowed": true,
-            "limit_reached": false,
-            "primary_window": {"used_percent": 100, "reset_at": 1_900_000_000}
-        }
-    }))
-    .expect("valid full-percent quota");
-
-    assert_eq!(fact.remaining_percent(), Some(0));
-    assert!(!fact.exhausted());
-}
-
-#[test]
-fn parser_treats_confirmed_limit_reached_as_exhausted_even_below_full_percent() {
-    let fact = parse_codex_quota_usage(&json!({
-        "rate_limit": {
-            "allowed": false,
-            "limit_reached": true,
-            "primary_window": {"used_percent": 98, "reset_at": 1_900_000_000}
-        }
-    }))
-    .expect("valid provider-confirmed quota");
-
-    assert_eq!(fact.remaining_percent(), Some(2));
-    assert!(fact.exhausted());
-}
-
-#[test]
-fn parser_does_not_infer_exhaustion_from_unknown_credit_fields() {
-    let fact = parse_codex_quota_usage(&json!({
-        "credits": {
-            "has_credits": false,
-            "balance": 0,
-            "overage_limit_reached": false,
-            "future_provider_field": {"anything": true}
-        }
-    }))
-    .expect("recognized credits object");
-
-    assert!(!fact.exhausted());
-}
-
-#[test]
-fn parser_accepts_official_null_additional_rate_limits() {
-    let fact = parse_codex_quota_usage(&json!({
-        "rate_limit": {
-            "allowed": true,
-            "limit_reached": false,
-            "primary_window": {
-                "limit_window_seconds": 18_000,
-                "used_percent": 12.5,
-                "reset_at": 1_800_000_100
-            },
-            "secondary_window": {
-                "limit_window_seconds": 604_800,
-                "used_percent": 30.0,
-                "reset_at": 1_800_000_200
-            }
-        },
-        "additional_rate_limits": null,
-        "credits": {
-            "has_credits": false,
-            "balance": null,
-            "overage_limit_reached": false,
-            "unlimited": false
-        },
-        "spend_control": {
-            "individual_limit": null,
-            "reached": false
-        }
-    }))
-    .expect("official null additional quota");
-
-    assert_eq!(fact.remaining_percent(), Some(70));
-    assert!(!fact.exhausted());
-}
-
-#[test]
-fn parser_rejects_wrong_known_field_type_without_echoing_body() {
-    let marker = "quota-secret-marker";
-    let error = parse_codex_quota_usage(&json!({
-        "rate_limit": {"allowed": marker}
-    }))
-    .expect_err("known field type must be strict");
-
-    assert!(!format!("{error:?} {error}").contains(marker));
-}
-
-#[test]
-fn parser_rejects_unrecognized_top_level_object() {
-    assert!(parse_codex_quota_usage(&json!({"future_only": {"used": 1}})).is_err());
-}
 
 fn wire_profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
@@ -229,202 +104,6 @@ async fn create_account_with_enabled(
             enabled,
         })
         .await;
-}
-
-#[tokio::test]
-async fn concurrent_cold_scheduling_hydration_reads_quota_once() {
-    let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_hydration").await;
-    let account = store.account("acct_hydration").expect("created account");
-    let service = quota_service(&store);
-
-    join_all((0..32).map(|_| service.prepare_scheduling(std::slice::from_ref(&account)))).await;
-
-    assert_eq!(store.quota_reads(), 1);
-}
-
-#[tokio::test]
-async fn persisted_provider_quota_projects_dynamic_windows_without_network_io() {
-    let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_quota").await;
-    let account = store.account("acct_quota").expect("created account");
-    let raw = json!({
-        "rate_limit": {
-            "allowed": true,
-            "primary_window": {
-                "used_percent": 37,
-                "reset_at": 1_900_000_000,
-                "limit_window_seconds": 18_000
-            },
-            "secondary_window": {
-                "used_percent": 42,
-                "reset_at": 1_900_604_800,
-                "limit_window_seconds": 604_800
-            }
-        },
-        "additional_rate_limits": null,
-        "spend_control": {
-            "reached": false,
-            "individual_limit": {
-                "used_percent": 12,
-                "reset_at": 1_902_592_000
-            }
-        },
-        "provider_specific_root": {"opaque": [1, 2, 3]}
-    });
-    let outcome = store
-        .compare_and_swap_quota(QuotaObservation {
-            account_id: account.id().clone(),
-            expected_revision: account.revision(),
-            quota: Some(OpaqueProviderData::new(
-                raw.as_object().expect("quota object").clone(),
-            )),
-            observed_at: Some(SystemTime::now()),
-        })
-        .await
-        .expect("persist quota");
-    assert_eq!(outcome, QuotaWriteOutcome::Updated);
-
-    let snapshot = quota_service(&store)
-        .read_account(account.id())
-        .await
-        .expect("read quota")
-        .expect("quota snapshot");
-
-    assert_eq!(snapshot.windows().len(), 2);
-    assert_eq!(
-        snapshot.windows()[0].kind(),
-        CodexQuotaWindowKind::ShortTerm
-    );
-    assert_eq!(snapshot.windows()[0].window_seconds(), Some(18_000));
-    assert_eq!(snapshot.windows()[1].kind(), CodexQuotaWindowKind::Weekly);
-}
-
-#[tokio::test]
-async fn persisted_codex_additional_limit_replaces_the_top_level_rate_limit() {
-    let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_canonical_codex_limit").await;
-    let account = store
-        .account("acct_canonical_codex_limit")
-        .expect("created account");
-    let raw = json!({
-        "rate_limit": {
-            "primary_window": {
-                "used_percent": 91,
-                "reset_at": 1_900_000_000,
-                "limit_window_seconds": 2_592_000
-            }
-        },
-        "additional_rate_limits": [{
-            "metered_feature": "codex",
-            "rate_limit": {
-                "primary_window": {
-                    "used_percent": 2,
-                    "reset_at": 1_900_000_000,
-                    "limit_window_seconds": 2_592_000
-                }
-            }
-        }]
-    });
-    let outcome = store
-        .compare_and_swap_quota(QuotaObservation {
-            account_id: account.id().clone(),
-            expected_revision: account.revision(),
-            quota: Some(OpaqueProviderData::new(
-                raw.as_object().expect("quota object").clone(),
-            )),
-            observed_at: Some(SystemTime::now()),
-        })
-        .await
-        .expect("persist quota");
-    assert_eq!(outcome, QuotaWriteOutcome::Updated);
-
-    let snapshot = quota_service(&store)
-        .read_account(account.id())
-        .await
-        .expect("read quota")
-        .expect("quota snapshot");
-    let monthly = snapshot
-        .windows()
-        .iter()
-        .filter(|window| window.kind() == CodexQuotaWindowKind::Monthly)
-        .collect::<Vec<_>>();
-
-    assert_eq!(snapshot.fact().remaining_percent(), Some(98));
-    assert_eq!(monthly.len(), 1);
-    assert_eq!(monthly[0].source(), "core");
-    assert_eq!(monthly[0].used_percent(), Some(2.0));
-}
-
-#[tokio::test]
-async fn code_review_limit_projects_as_independent_window_with_limit_name() {
-    let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_code_review").await;
-    let account = store.account("acct_code_review").expect("account");
-    let raw = json!({
-        "rate_limit": {
-            "primary_window": {
-                "used_percent": 37,
-                "reset_at": 1_900_000_000,
-                "limit_window_seconds": 18_000
-            }
-        },
-        "code_review_rate_limit": {
-            "primary_window": {
-                "used_percent": 80,
-                "reset_at": 1_900_604_800,
-                "limit_window_seconds": 604_800
-            }
-        },
-        "additional_rate_limits": [{
-            "limit_name": "code review",
-            "metered_feature": "code_review",
-            "rate_limit": {
-                "primary_window": {
-                    "used_percent": 55,
-                    "reset_at": 1_900_604_800,
-                    "limit_window_seconds": 604_800
-                }
-            }
-        }],
-        "spend_control": {
-            "reached": false,
-            "individual_limit": {
-                "used_percent": 12,
-                "reset_at": 1_902_592_000
-            }
-        }
-    });
-    store
-        .compare_and_swap_quota(QuotaObservation {
-            account_id: account.id().clone(),
-            expected_revision: account.revision(),
-            quota: Some(OpaqueProviderData::new(
-                raw.as_object().expect("quota object").clone(),
-            )),
-            observed_at: Some(SystemTime::now()),
-        })
-        .await
-        .expect("persist quota");
-
-    let snapshot = quota_service(&store)
-        .read_account(account.id())
-        .await
-        .expect("read quota")
-        .expect("quota snapshot");
-
-    // spend_control 不再生成窗口（只作 exhaustion 信号），
-    // 顶层 code_review_rate_limit 与 additional 的 code_review 桶同源替换后保留一个。
-    let review = snapshot
-        .windows()
-        .iter()
-        .filter(|window| window.source() == "code_review")
-        .collect::<Vec<_>>();
-    assert_eq!(review.len(), 1);
-    assert_eq!(review[0].limit_name(), Some("code review"));
-    assert_eq!(review[0].used_percent(), Some(55.0));
-    assert_eq!(snapshot.windows().len(), 2);
-    assert!(!snapshot.fact().exhausted());
 }
 
 #[tokio::test]
@@ -508,127 +187,9 @@ async fn passive_full_percent_with_explicit_allowance_keeps_account_ready() {
             snapshot.fact().remaining_percent(),
             snapshot.fact().exhausted(),
         ),
-        (AccountAvailability::Ready, Some(0), false)
-    );
-}
-
-#[tokio::test]
-async fn manual_quota_refresh_keeps_confirmed_exhaustion_until_the_recorded_reset() {
-    let store = Arc::new(MemoryAccountStore::default());
-    let account_id = "acct_manual_quota_state";
-    create_account(&store, account_id).await;
-    let account = store.account(account_id).expect("created account");
-    store
-        .apply_state_change(AccountStateChange {
-            account_id: account.id().clone(),
-            expected_revision: account.revision(),
-            availability: AccountAvailability::Expired,
-            observed_at: SystemTime::now(),
-        })
-        .await
-        .expect("seed stale expired state");
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/api/codex/usage"))
-        .and(header(
-            "authorization",
-            format!("Bearer token-{account_id}"),
-        ))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "rate_limit": {
-                "allowed": false,
-                "limit_reached": true,
-                "primary_window": {"used_percent": 100, "reset_at": 1_900_000_000}
-            }
-        })))
-        .mount(&server)
-        .await;
-    let service = quota_service_with_base_url(
-        &store,
-        reqwest::Client::builder()
-            .no_proxy()
-            .build()
-            .expect("client"),
-        server.uri(),
-    );
-
-    let exhausted = service
-        .refresh_account(account.id())
-        .await
-        .expect("refresh exhausted quota");
-
-    assert!(exhausted.fact().exhausted());
-    assert_eq!(
-        store
-            .account(account_id)
-            .expect("exhausted account")
-            .availability(),
-        AccountAvailability::Expired,
-        "manual refresh never changes non-QuotaExhausted availability"
-    );
-
-    server.reset().await;
-    Mock::given(method("GET"))
-        .and(path("/api/codex/usage"))
-        .and(header(
-            "authorization",
-            format!("Bearer token-{account_id}"),
-        ))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "rate_limit": {
-                "allowed": true,
-                "limit_reached": false,
-                "primary_window": {"used_percent": 100, "reset_at": 1_900_000_000}
-            }
-        })))
-        .mount(&server)
-        .await;
-
-    let stale = service
-        .refresh_account(account.id())
-        .await
-        .expect("refresh contradictory full quota");
-
-    assert!(!stale.fact().exhausted());
-    assert_eq!(
-        store
-            .account(account_id)
-            .expect("account after contradictory quota")
-            .availability(),
-        AccountAvailability::Expired,
-        "an unchanged usage window cannot override an expired credential state"
-    );
-
-    server.reset().await;
-    Mock::given(method("GET"))
-        .and(path("/api/codex/usage"))
-        .and(header(
-            "authorization",
-            format!("Bearer token-{account_id}"),
-        ))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "rate_limit": {
-                "allowed": true,
-                "limit_reached": false,
-                "primary_window": {"used_percent": 99, "reset_at": 1_900_000_000}
-            }
-        })))
-        .mount(&server)
-        .await;
-
-    let unchanged_reset = service
-        .refresh_account(account.id())
-        .await
-        .expect("refresh lower usage quota");
-
-    assert!(!unchanged_reset.fact().exhausted());
-    assert_eq!(
-        store
-            .account(account_id)
-            .expect("account after lower usage")
-            .availability(),
-        AccountAvailability::Expired,
-        "a lower used_percent before the recorded reset is not quota recovery for an expired credential"
+        // used=100 是快照级 exhaustion，但 availability 保持 Ready
+        // （限流不改变账号可用性）。
+        (AccountAvailability::Ready, Some(0), true)
     );
 }
 
@@ -1196,7 +757,8 @@ async fn periodic_quota_synchronization_does_not_recover_from_percent_drop_befor
         .await
         .expect("unchanged quota recheck");
 
-    assert_eq!(unchanged.updated, 1);
+    // used=100 是快照级 exhaustion，计 exhausted 而非 updated。
+    assert_eq!(unchanged.exhausted, 1);
     assert_eq!(
         store
             .account(account_id)
@@ -1210,8 +772,7 @@ async fn periodic_quota_synchronization_does_not_recover_from_percent_drop_befor
         .and(path("/api/codex/usage"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "rate_limit": {
-                "allowed": true,
-                "limit_reached": false,
+                // 无 allowed/limit_reached 标记的模糊快照。
                 "primary_window": {"used_percent": 99, "reset_at": reset_at}
             }
         })))

@@ -92,9 +92,10 @@ const statusRows = computed(() => {
   const refreshing = p?.refreshing ?? 0
   const quota = p?.quotaExhausted ?? 0
   const expired = p?.expired ?? 0
+  const invalid = p?.invalid ?? 0
   const disabled = p?.disabled ?? 0
   const banned = p?.banned ?? 0
-  const unavailable = expired + disabled + banned
+  const unavailable = expired + invalid + disabled + banned
 
   return [
     {
@@ -127,7 +128,7 @@ const statusRows = computed(() => {
     },
     {
       label: '不可用',
-      description: `过期 ${expired} · 禁用 ${disabled} · 封禁 ${banned}`,
+      description: `过期 ${expired} · 失效 ${invalid} · 禁用 ${disabled} · 封禁 ${banned}`,
       value: String(unavailable),
       tone: 'danger',
       icon: ShieldAlert,
@@ -150,7 +151,7 @@ const statusBars = computed(() => {
   const refreshing = ((p.refreshing ?? 0) / p.total) * 100
   const rateLimited = ((p.rateLimited ?? 0) / p.total) * 100
   const quota = (p.quotaExhausted / p.total) * 100
-  const unavailable = ((p.expired + p.disabled + p.banned) / p.total) * 100
+  const unavailable = ((p.expired + (p.invalid ?? 0) + p.disabled + p.banned) / p.total) * 100
   return [
     { pct: active, cls: 'bg-(--cp-success)' },
     { pct: refreshing, cls: 'bg-(--cp-normal)' },
