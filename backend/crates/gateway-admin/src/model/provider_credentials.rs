@@ -595,6 +595,9 @@ pub struct ProviderQuota {
     pub windows: Vec<ProviderQuotaWindow>,
     /// 快照级限流事实（顶层或任一窗口触顶）；Admin 状态派生用，前端不再遍历窗口猜测。
     pub limit_reached: bool,
+    /// 429 临时限流（Redis 冷却）到期时间；`Some` 时账号处于临时限流，到期自动恢复。
+    /// 与 `limit_reached`（配额耗尽）是独立维度，不污染额度窗口。
+    pub rate_limited_until: Option<DateTime<Utc>>,
     pub provider_data: Option<ProviderDocument>,
 }
 

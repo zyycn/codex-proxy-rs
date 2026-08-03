@@ -1,5 +1,10 @@
 //! Pg 观测 adapter：实现 `ObservabilityRepository` 与 `AdminObservabilityStore`。
 
+use std::sync::Arc;
+use std::time::SystemTime;
+
+use gateway_core::provider_ports::ProviderCooldownPort;
+
 use super::*;
 
 use crate::redis::{CredentialLeaseRepository as _, RedisCredentialLeaseRepository};
@@ -7,12 +12,73 @@ use crate::redis::{CredentialLeaseRepository as _, RedisCredentialLeaseRepositor
 #[derive(Clone)]
 pub struct PgObservabilityRepository {
     pool: PgPool,
+    cooldowns: Option<Arc<dyn ProviderCooldownPort>>,
 }
 
 impl PgObservabilityRepository {
     #[must_use]
-    pub const fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub const fn new(pool: PgPool, cooldowns: Option<Arc<dyn ProviderCooldownPort>>) -> Self {
+        Self { pool, cooldowns }
+    }
+
+    /// 账号池指标：SQL 聚合后，用 Redis 429 冷却对每个非终态账号重新归类——
+    /// 冷却中 → `rate_limited`（限流中）；否则按 `quota_limit_reached` 归
+    /// `quota_exhausted`（配额耗尽）或 `active`。冷却不可用时不修正（限流中计入配额耗尽）。
+    async fn provider_account_metrics_with_cooldowns(
+        &self,
+        observed_at: DateTime<Utc>,
+    ) -> StoreResult<ProviderAccountMetrics> {
+        let base = provider_account_metrics(&self.pool, observed_at).await?;
+        let Some(cooldowns) = &self.cooldowns else {
+            return Ok(base);
+        };
+        let candidates = schedulable_metric_candidates(&self.pool).await?;
+        if candidates.is_empty() {
+            return Ok(base);
+        }
+        let mut active = 0_u64;
+        let mut rate_limited = 0_u64;
+        let mut quota_exhausted = 0_u64;
+        for (account_id, revision, quota_reached) in candidates {
+            let Ok(account_id) =
+                gateway_core::engine::credential::ProviderAccountId::new(account_id)
+            else {
+                continue;
+            };
+            let cooling = cooldowns
+                .read(&account_id)
+                .await
+                .ok()
+                .flatten()
+                .filter(|cooldown| cooldown.credential_revision().get() as i64 == revision)
+                .filter(|cooldown| cooldown.until() > SystemTime::now())
+                .is_some();
+            if cooling {
+                rate_limited += 1;
+            } else if quota_reached {
+                quota_exhausted += 1;
+            } else {
+                active += 1;
+            }
+        }
+        // 终态计数（expired/invalid/disabled/banned）保持 SQL 原值。
+        Ok(ProviderAccountMetrics {
+            total: base.total,
+            enabled: base.enabled,
+            unavailable: rate_limited
+                + quota_exhausted
+                + base.expired
+                + base.invalid
+                + base.disabled
+                + base.banned,
+            active,
+            rate_limited,
+            expired: base.expired,
+            invalid: base.invalid,
+            quota_exhausted,
+            disabled: base.disabled,
+            banned: base.banned,
+        })
     }
 }
 
@@ -28,9 +94,13 @@ pub struct PgAdminObservabilityStore {
 
 impl PgAdminObservabilityStore {
     #[must_use]
-    pub fn new(pool: PgPool, runtime_signals: Option<RedisCredentialLeaseRepository>) -> Self {
+    pub fn new(
+        pool: PgPool,
+        runtime_signals: Option<RedisCredentialLeaseRepository>,
+        cooldowns: Option<Arc<dyn ProviderCooldownPort>>,
+    ) -> Self {
         Self {
-            repository: PgObservabilityRepository::new(pool),
+            repository: PgObservabilityRepository::new(pool, cooldowns),
             runtime_signals,
         }
     }
@@ -62,11 +132,13 @@ impl ObservabilityRepository for PgObservabilityRepository {
         };
         // 分两批并发：页面延迟从六路之和降为两批各自最慢者之和，同时单次
         // 渲染最多占用 3 个池连接，不与数据面写路径争抢整个连接池。
-        let (requests, attempts, provider_accounts) = futures::try_join!(
+        let (requests, attempts) = futures::try_join!(
             request_metrics(&self.pool, range, &filter),
             attempt_metrics(&self.pool, range, &filter),
-            provider_account_metrics(&self.pool, range.end),
         )?;
+        let provider_accounts = self
+            .provider_account_metrics_with_cooldowns(range.end)
+            .await?;
         let (trend, account_usage, recent_requests) = futures::try_join!(
             request_metric_series(&self.pool, range, &filter),
             provider_account_usage(&self.pool, account_usage_query),

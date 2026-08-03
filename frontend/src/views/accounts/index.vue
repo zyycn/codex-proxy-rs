@@ -206,6 +206,7 @@ const {
               :status="derivedAccountStatus(row)"
               :error-reason="row.errorReason"
               :error-message="row.errorMessage"
+              :rate-limited-until="row.quota.rateLimitedUntil"
             />
           </template>
 

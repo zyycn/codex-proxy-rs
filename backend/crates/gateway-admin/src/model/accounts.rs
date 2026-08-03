@@ -1,6 +1,6 @@
 //! 多 Provider 账号目录与连接测试的公共事实。
 
-use std::pin::Pin;
+use std::{pin::Pin, time::SystemTime};
 
 use chrono::{DateTime, Utc};
 use futures::Stream;
@@ -58,12 +58,14 @@ impl AccountStatus {
 }
 
 /// 状态派生所需的最小事实；由 store / use_case 各自构造，派生规则唯一。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountStatusSignals {
     pub enabled: bool,
     pub availability: AccountAvailability,
     pub access_token_expired: bool,
     pub quota_limit_reached: bool,
+    /// 429 临时限流（Redis 冷却）到期时间；`Some` 表示账号当前处于临时限流。
+    pub rate_limited_until: Option<SystemTime>,
 }
 
 impl AccountStatusSignals {
@@ -84,8 +86,10 @@ impl AccountStatusSignals {
             )
         {
             AccountStatus::Error
-        } else if self.quota_limit_reached {
+        } else if self.rate_limited_until.is_some() {
             AccountStatus::RateLimited
+        } else if self.quota_limit_reached {
+            AccountStatus::QuotaExhausted
         } else {
             AccountStatus::Normal
         }
@@ -135,7 +139,7 @@ impl AccountErrorReason {
 ///
 /// 与 [`AccountStatusSignals::derive`] 保持同一判定：`Error` 当且仅当此处返回 `Some`。
 #[must_use]
-pub fn derive_error_reason(signals: AccountStatusSignals) -> Option<AccountErrorReason> {
+pub fn derive_error_reason(signals: &AccountStatusSignals) -> Option<AccountErrorReason> {
     if !signals.enabled {
         return None;
     }

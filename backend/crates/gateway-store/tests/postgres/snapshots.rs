@@ -39,7 +39,7 @@ async fn request_snapshots_should_survive_account_deletion() {
         .await
         .expect("delete provider account");
 
-    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
     let page = repository
         .list_usage_records(usage_query(started_at, UsageRecordFilter::default()))
         .await
@@ -154,7 +154,7 @@ async fn attempts_should_keep_their_own_account_snapshots() {
         .await
         .expect("delete provider accounts");
 
-    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
     let detail = repository
         .usage_record_detail("req_snap_ab")
         .await
@@ -276,7 +276,7 @@ async fn ops_errors_should_keep_request_and_event_snapshots_after_account_deleti
         .await
         .expect("delete provider accounts");
 
-    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
     let errors = repository
         .list_ops_errors(OpsErrorQuery {
             range: range_around(started_at),
@@ -376,7 +376,7 @@ async fn diagnostics_should_group_same_email_accounts_by_stable_ref() {
         .await
         .expect("delete provider accounts");
 
-    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
     let diagnostics = repository
         .usage_diagnostics(
             range_around(started_at),
@@ -445,7 +445,7 @@ async fn diagnostics_should_fallback_to_name_then_ref_for_missing_snapshots() {
         .expect("insert legacy request without live account");
     finalize_request(&database.pool, "req_snap_legacy", started_at).await;
 
-    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
     let diagnostics = repository
         .usage_diagnostics(
             range_around(started_at),
@@ -511,7 +511,7 @@ async fn failure_diagnostics_should_only_include_errored_requests() {
     .await
     .expect("mark request failed");
 
-    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
     let diagnostics = repository
         .usage_diagnostics(
             range_around(started_at),
@@ -566,7 +566,7 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
         .await
         .expect("set request b latency");
 
-    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
     let diagnostics = repository
         .usage_diagnostics(
             range_around(started_at),
@@ -633,7 +633,7 @@ async fn renaming_account_should_not_rewrite_historical_snapshots() {
     .await
     .expect("rename provider account");
 
-    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
     let page = repository
         .list_usage_records(usage_query(started_at, UsageRecordFilter::default()))
         .await

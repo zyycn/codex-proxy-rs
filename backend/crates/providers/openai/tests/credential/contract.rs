@@ -12,7 +12,9 @@ use gateway_core::engine::{
     AccountAttemptContext, AttemptContext, CancellationToken, ModelRequestId, RequestAttemptContext,
 };
 use gateway_core::policy::ClientApiKeyId;
-use gateway_core::provider_ports::{ProviderSessionAffinityKey, ProviderSessionAffinityPort};
+use gateway_core::provider_ports::{
+    ProviderCooldownPort, ProviderSessionAffinityKey, ProviderSessionAffinityPort,
+};
 use gateway_core::routing::ProviderKind;
 use provider_openai::OFFICIAL_CODEX_BASE_URL;
 use provider_openai::credential::{
@@ -25,8 +27,8 @@ use secrecy::ExposeSecret;
 use url::Url;
 
 use crate::support::{
-    MemoryAccountStore, MemorySessionAffinity, MemorySessionExclusions, TestLeaseCoordinator,
-    account_policy, agent_identity_service, catalog_cache, profile, secret,
+    MemoryAccountStore, MemoryCooldownPort, MemorySessionAffinity, MemorySessionExclusions,
+    TestLeaseCoordinator, account_policy, agent_identity_service, catalog_cache, profile, secret,
 };
 
 fn create_account(store: &Arc<MemoryAccountStore>, id: &str, token: &str) {
@@ -99,6 +101,7 @@ fn selector_with_affinity(
         session_affinity,
         Arc::new(AccountFeedbackStats::default()),
         true,
+        Arc::new(MemoryCooldownPort::new()),
     )
 }
 
@@ -108,6 +111,7 @@ fn selector_with_runtime(
     session_affinity: Arc<MemorySessionAffinity>,
     account_feedback: Arc<AccountFeedbackStats>,
     skip_exhausted: bool,
+    cooldowns: Arc<dyn ProviderCooldownPort>,
 ) -> CodexCredentialSelector {
     let profile = CodexWireProfileState::new(CodexWireProfile {
         originator: "codex_cli_rs".to_owned(),
@@ -136,6 +140,7 @@ fn selector_with_runtime(
         http,
         OFFICIAL_CODEX_BASE_URL.to_owned(),
         Arc::clone(&agent_identity),
+        cooldowns,
     ));
     CodexCredentialSelector::new(
         ProviderKind::new("openai").expect("provider"),
@@ -464,6 +469,7 @@ async fn selector_should_keep_a_schedulable_affinity_account_despite_soft_health
         affinity,
         Arc::clone(&account_feedback),
         true,
+        Arc::new(MemoryCooldownPort::new()),
     );
     for _ in 0..4 {
         account_feedback.report(
@@ -683,7 +689,15 @@ fn credential_expired_failure_marks_unified_account_expired() {
 fn rate_limited_failure_records_quota_window_without_changing_availability() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_primary", "at-primary");
-    let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
+    let cooldowns = Arc::new(MemoryCooldownPort::new());
+    let selector = selector_with_runtime(
+        &store,
+        Arc::new(TestLeaseCoordinator::default()),
+        Arc::new(MemorySessionAffinity::default()),
+        Arc::new(AccountFeedbackStats::default()),
+        true,
+        Arc::clone(&cooldowns) as Arc<dyn ProviderCooldownPort>,
+    );
     let attempt = attempt(BTreeSet::new());
     let lease =
         block_on(
@@ -706,33 +720,18 @@ fn rate_limited_failure_records_quota_window_without_changing_availability() {
     ))
     .expect("record rate-limit failure");
 
-    // 429 不改变 availability（限流不改变账号可用性），只把限流窗口合成进 quota JSON。
+    // 429 不改变 availability（限流不改变账号可用性），也不污染 quota JSON——
+    // 临时限流写入 Redis 冷却（到期自动解除），额度重置时间保持不变。
     let account = store.account("acct_primary").expect("account");
     assert_eq!(account.availability(), AccountAvailability::Ready);
-    let quota = store.quota_json("acct_primary").expect("quota");
-    assert_eq!(
-        quota
-            .pointer("/rate_limit/limit_reached")
-            .and_then(serde_json::Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        quota
-            .pointer("/rate_limit/primary_window/used_percent")
-            .and_then(serde_json::Value::as_f64),
-        Some(100.0)
-    );
     assert!(
-        quota
-            .pointer("/rate_limit/primary_window/reset_at")
-            .and_then(serde_json::Value::as_i64)
-            .is_some_and(|reset_at| {
-                reset_at
-                    > SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .expect("clock")
-                        .as_secs() as i64
-            })
+        store.quota_json("acct_primary").is_none(),
+        "429 must not synthesize quota window"
+    );
+    let cooldown = block_on(cooldowns.read(account.id())).expect("read cooldown");
+    assert!(
+        cooldown.is_some_and(|cooling| cooling.until() > SystemTime::now()),
+        "429 must record a Redis cooldown expiring in the future"
     );
 }
 
@@ -798,7 +797,15 @@ fn rate_limited_failure_does_not_consult_stale_quota_snapshot() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_primary", "at-primary");
     let account = store.account("acct_primary").expect("account");
-    let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
+    let cooldowns = Arc::new(MemoryCooldownPort::new());
+    let selector = selector_with_runtime(
+        &store,
+        Arc::new(TestLeaseCoordinator::default()),
+        Arc::new(MemorySessionAffinity::default()),
+        Arc::new(AccountFeedbackStats::default()),
+        true,
+        Arc::clone(&cooldowns) as Arc<dyn ProviderCooldownPort>,
+    );
 
     block_on(selector.record_failure(
         &account,
@@ -816,8 +823,13 @@ fn rate_limited_failure_does_not_consult_stale_quota_snapshot() {
             .availability(),
         AccountAvailability::Ready
     );
-    // 429 合成限流窗口需要读写 quota JSON。
-    assert!(store.quota_reads() >= 1);
+    // 429 临时限流写入 Redis 冷却，不读写 quota JSON。
+    assert_eq!(store.quota_reads(), 0);
+    let cooldown = block_on(cooldowns.read(account.id())).expect("read cooldown");
+    assert!(
+        cooldown.is_some_and(|cooling| cooling.until() > SystemTime::now()),
+        "429 must record a Redis cooldown"
+    );
 }
 
 #[test]
@@ -949,6 +961,7 @@ fn selector_keeps_a_quota_exhausted_account_eligible_when_configured_not_to_skip
         Arc::new(MemorySessionAffinity::default()),
         Arc::new(AccountFeedbackStats::default()),
         false,
+        Arc::new(MemoryCooldownPort::new()),
     );
     let request_url =
         Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("request URL");

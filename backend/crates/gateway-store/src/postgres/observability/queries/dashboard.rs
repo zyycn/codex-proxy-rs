@@ -425,6 +425,33 @@ pub(crate) async fn active_provider_account_ids(
     .collect()
 }
 
+/// 查询非终态候选账号：id + credential revision + 是否 quota 触顶。
+/// 仅含 ready/unknown 等可被 Redis 冷却影响的账号，终态（禁用/封禁/过期/无效）由
+/// [`provider_account_metrics`] 直接计数。
+pub(crate) async fn schedulable_metric_candidates(
+    pool: &PgPool,
+) -> StoreResult<Vec<(String, i64, bool)>> {
+    sqlx::query(
+        "select id, credential_revision, quota_limit_reached
+           from provider_accounts
+          where enabled
+            and availability in ('ready', 'unknown')
+          order by id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|_| postgres_unavailable("load schedulable metric candidates"))?
+    .into_iter()
+    .map(|row| {
+        Ok((
+            get(&row, "id")?,
+            get(&row, "credential_revision")?,
+            get(&row, "quota_limit_reached")?,
+        ))
+    })
+    .collect::<StoreResult<Vec<_>>>()
+}
+
 pub(crate) async fn provider_observations(
     pool: &PgPool,
     range: ObservabilityRange,

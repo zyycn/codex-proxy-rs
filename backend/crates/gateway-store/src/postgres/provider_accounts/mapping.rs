@@ -60,6 +60,7 @@ pub(crate) fn account_matches_admin_query(
 pub(crate) fn admin_account_status(
     account: &ProviderAccountSummary,
     now: DateTime<Utc>,
+    rate_limited_until: Option<SystemTime>,
 ) -> AdminAccountStatus {
     // 派生规则唯一归属 gateway-admin 域层，此处只做类型适配。
     AccountStatusSignals {
@@ -69,6 +70,7 @@ pub(crate) fn admin_account_status(
             .access_token_expires_at
             .is_some_and(|expires_at| expires_at <= now),
         quota_limit_reached: account.quota_limit_reached,
+        rate_limited_until,
     }
     .derive()
 }
@@ -76,6 +78,7 @@ pub(crate) fn admin_account_status(
 pub(crate) fn admin_account_summary(
     accounts: &[ProviderAccountSummary],
     now: DateTime<Utc>,
+    rate_limited_until: &BTreeMap<String, SystemTime>,
 ) -> AccountSummary {
     let mut summary = AccountSummary {
         total: u64::try_from(accounts.len()).unwrap_or(u64::MAX),
@@ -86,7 +89,8 @@ pub(crate) fn admin_account_summary(
         error: 0,
     };
     for account in accounts {
-        match admin_account_status(account, now) {
+        let until = rate_limited_until.get(&account.id).copied();
+        match admin_account_status(account, now, until) {
             AdminAccountStatus::Normal => summary.normal = summary.normal.saturating_add(1),
             AdminAccountStatus::QuotaExhausted => {
                 summary.quota_exhausted = summary.quota_exhausted.saturating_add(1);

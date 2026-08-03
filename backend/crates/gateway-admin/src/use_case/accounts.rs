@@ -1,6 +1,6 @@
 //! 统一账号目录与跨 Provider 动态分派。
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc, time::SystemTime};
 
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
@@ -217,10 +217,11 @@ impl DefaultAccountsService {
             std::slice::from_mut(&mut quota),
         )
         .await?;
-        let signals = account_signals(&account, quota.limit_reached, now);
+        let signals = account_signals(&account, &quota, now);
+        let error_reason = derive_error_reason(&signals);
         Ok(AccountDirectoryItem {
             status: signals.derive(),
-            error_reason: derive_error_reason(signals),
+            error_reason,
             usage: usage.into_iter().next(),
             account,
             quota,
@@ -305,10 +306,11 @@ impl AccountsService for DefaultAccountsService {
             .into_iter()
             .zip(quotas)
             .map(|(account, quota)| {
-                let signals = account_signals(&account, quota.limit_reached, now);
+                let signals = account_signals(&account, &quota, now);
+                let error_reason = derive_error_reason(&signals);
                 AccountDirectoryItem {
                     status: signals.derive(),
-                    error_reason: derive_error_reason(signals),
+                    error_reason,
                     usage: usage.get(&account.id).cloned(),
                     account,
                     quota,
@@ -519,6 +521,7 @@ fn empty_quota() -> ProviderQuota {
         refresh_token_expires_at: None,
         windows: Vec::new(),
         limit_reached: false,
+        rate_limited_until: None,
         provider_data: None,
     }
 }
@@ -526,7 +529,7 @@ fn empty_quota() -> ProviderQuota {
 /// 构造状态派生所需的信号快照。
 fn account_signals(
     account: &AccountRecord,
-    quota_limit_reached: bool,
+    quota: &ProviderQuota,
     now: chrono::DateTime<Utc>,
 ) -> AccountStatusSignals {
     AccountStatusSignals {
@@ -535,7 +538,8 @@ fn account_signals(
         access_token_expired: account
             .access_token_expires_at
             .is_some_and(|expires_at| expires_at <= now),
-        quota_limit_reached,
+        quota_limit_reached: quota.limit_reached,
+        rate_limited_until: quota.rate_limited_until.map(SystemTime::from),
     }
 }
 
@@ -545,7 +549,11 @@ fn account_status(
     quota_limit_reached: bool,
     now: chrono::DateTime<Utc>,
 ) -> AccountStatus {
-    account_signals(account, quota_limit_reached, now).derive()
+    let quota = ProviderQuota {
+        limit_reached: quota_limit_reached,
+        ..empty_quota()
+    };
+    account_signals(account, &quota, now).derive()
 }
 
 fn retained_usage_range(now: chrono::DateTime<Utc>, retention_days: u32) -> TimeRange {

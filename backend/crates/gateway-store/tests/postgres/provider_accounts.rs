@@ -361,7 +361,7 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     .await
     .expect("seed charlie usage");
 
-    let store = PgAdminAccountStore::new(database.pool.clone());
+    let store = PgAdminAccountStore::new(database.pool.clone(), None);
     let usage_page = store
         .list_accounts(AccountListQuery {
             page: 1,
@@ -481,7 +481,7 @@ async fn terminal_credential_list_preserves_grouped_filters_and_unpaged_collecti
             .expect("insert xAI credential fixture");
     }
 
-    let store = PgAdminAccountStore::new(database.pool.clone());
+    let store = PgAdminAccountStore::new(database.pool.clone(), None);
     let provider = ProviderKind::new("xai").expect("xAI Provider kind");
     let complete = store
         .list_credentials(
@@ -562,7 +562,7 @@ async fn terminal_admin_usage_chunks_large_selections_and_preserves_exact_costs(
     let mut account_ids = vec!["acct_usage_exact".to_owned()];
     account_ids.extend((0..200).map(|index| format!("missing_account_{index}")));
 
-    let usage = PgAdminAccountStore::new(database.pool.clone())
+    let usage = PgAdminAccountStore::new(database.pool.clone(), None)
         .load_account_usage(
             TimeRange {
                 start: now - TimeDelta::hours(1),
@@ -654,7 +654,7 @@ async fn terminal_admin_quota_window_usage_prefers_provider_total_and_falls_back
     .await
     .expect("separate provider total from fallback components");
 
-    let mut usage = PgAdminAccountStore::new(database.pool.clone())
+    let mut usage = PgAdminAccountStore::new(database.pool.clone(), None)
         .load_account_usage_by_windows(&[
             AccountUsageWindowQuery {
                 account_id: "acct_quota_window".to_owned(),
@@ -694,7 +694,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
         .insert_provider_account(account("acct_terminal_mutation", "user-terminal-mutation"))
         .await
         .expect("insert mutation account");
-    let store = PgAdminAccountStore::new(database.pool.clone());
+    let store = PgAdminAccountStore::new(database.pool.clone(), None);
     let context = MutationContext {
         actor: MutationActor::System,
         request_id: "request_terminal_mutation".to_owned(),
@@ -767,7 +767,7 @@ async fn terminal_admin_delete_removes_enabled_accounts_in_one_transaction() {
             .expect("insert enabled account");
     }
 
-    let revision = PgAdminAccountStore::new(database.pool.clone())
+    let revision = PgAdminAccountStore::new(database.pool.clone(), None)
         .delete_accounts(
             DeleteAccounts {
                 account_ids: vec![

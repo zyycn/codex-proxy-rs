@@ -71,6 +71,7 @@ fn quota_service_with_base_url(
         http,
         base_url,
         crate::support::agent_identity_service(store),
+        Arc::new(crate::support::MemoryCooldownPort::new()),
     )
 }
 

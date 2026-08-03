@@ -1,5 +1,11 @@
 //! `gateway-admin` 账号端口的 PostgreSQL adapter。
 
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::SystemTime;
+
+use gateway_core::provider_ports::ProviderCooldownPort;
+
 use super::*;
 
 /// Admin 账号用例所需的公共账号、留存观测与 revision 事务能力。
@@ -11,17 +17,47 @@ pub struct PgAdminAccountStore {
     accounts: PgProviderAccountRepository,
     observability: PgObservabilityRepository,
     control_plane: PgControlPlaneRepository,
+    cooldowns: Option<Arc<dyn ProviderCooldownPort>>,
 }
 
 impl PgAdminAccountStore {
     #[must_use]
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool, cooldowns: Option<Arc<dyn ProviderCooldownPort>>) -> Self {
         Self {
             pool: pool.clone(),
             accounts: PgProviderAccountRepository::new(pool.clone()),
-            observability: PgObservabilityRepository::new(pool.clone()),
+            observability: PgObservabilityRepository::new(pool.clone(), cooldowns.clone()),
             control_plane: PgControlPlaneRepository::new(pool),
+            cooldowns,
         }
+    }
+
+    /// 批量读取 Redis 429 冷却，返回 `account_id → rate_limited_until` 映射。
+    /// 冷却不可用（Redis 挂/无 cooldown 端口）时返回空映射，账号归入配额耗尽（近似）。
+    async fn load_rate_limited_until(
+        &self,
+        accounts: &[ProviderAccountSummary],
+    ) -> AdminStoreResult<BTreeMap<String, SystemTime>> {
+        let Some(cooldowns) = &self.cooldowns else {
+            return Ok(BTreeMap::new());
+        };
+        let mut map = BTreeMap::new();
+        for account in accounts {
+            let Ok(account_id) = CoreProviderAccountId::new(account.id.clone()) else {
+                continue;
+            };
+            let Some(cooldown) = cooldowns.read(&account_id).await.ok().flatten() else {
+                continue;
+            };
+            if cooldown.credential_revision().get() != account.credential_revision.get() {
+                continue;
+            }
+            let until = cooldown.until();
+            if until > SystemTime::now() {
+                map.insert(account.id.clone(), until);
+            }
+        }
+        Ok(map)
     }
 
     async fn usage_observations(
@@ -242,11 +278,17 @@ impl AccountStore for PgAdminAccountStore {
         )
         .map_err(|error| admin_store_error(ENTITY, error))?;
         let now = Utc::now();
-        let summary = admin_account_summary(&accounts, now);
+        // 批量读取 Redis 429 冷却，供列表状态派生与筛选使用。
+        let rate_limited_until = self
+            .load_rate_limited_until(&accounts)
+            .await
+            .unwrap_or_default();
+        let summary = admin_account_summary(&accounts, now, &rate_limited_until);
         let mut items = accounts
             .into_iter()
             .filter_map(|account| {
-                let status = admin_account_status(&account, now);
+                let until = rate_limited_until.get(&account.id).copied();
+                let status = admin_account_status(&account, now, until);
                 account_matches_admin_query(&account, status, &query).then_some(
                     AdminAccountListItem {
                         account,

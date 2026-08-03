@@ -210,6 +210,8 @@ pub struct AccountView {
 pub struct AccountQuotaView {
     pub refreshed_at_display: String,
     pub limit_reached: bool,
+    /// 429 临时限流（Redis 冷却）到期时间展示；非限流中为 `null`。
+    pub rate_limited_until: Option<String>,
     pub windows: Vec<AccountQuotaWindowView>,
 }
 
@@ -1418,10 +1420,12 @@ fn account_quota_view(
         .observed_at
         .map_or_else(|| "—".to_owned(), |value| relative_time(value, now));
     let windows = quota.windows.into_iter().map(quota_window_view).collect();
+    let rate_limited_until = quota.rate_limited_until.map(|until| china_datetime(&until));
     (
         AccountQuotaView {
             refreshed_at_display,
             limit_reached: quota.limit_reached,
+            rate_limited_until,
             windows,
         },
         refresh_token_expires_at,

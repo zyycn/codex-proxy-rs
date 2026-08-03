@@ -1,6 +1,7 @@
 //! 完成连接、迁移与 hydration 的 Store 能力集合与启动屏障。
 
 use gateway_core::engine::credential::ProviderAccountStore;
+use gateway_core::provider_ports::ProviderCooldownPort;
 
 use super::*;
 
@@ -85,7 +86,10 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
     )?);
 
     let admin_ports = AdminStorePorts::new(
-        Arc::new(postgres::PgAdminAccountStore::new(pool.clone())),
+        Arc::new(postgres::PgAdminAccountStore::new(
+            pool.clone(),
+            Some(Arc::clone(&cooldowns) as Arc<dyn ProviderCooldownPort>),
+        )),
         Arc::new(AdminAuthStoreAdapter {
             security: postgres::PgAdminSecurityAuditRepository::new(pool.clone()),
             settings: postgres::PgRuntimeSettingsRepository::new(pool.clone()),
@@ -98,6 +102,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         Arc::new(postgres::PgAdminObservabilityStore::new(
             pool.clone(),
             Some(credential_leases.clone()),
+            Some(Arc::clone(&cooldowns) as Arc<dyn ProviderCooldownPort>),
         )),
         Arc::new(AdminSettingsStoreAdapter {
             control_plane: postgres::PgControlPlaneRepository::new(pool.clone()),

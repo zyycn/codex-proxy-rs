@@ -29,6 +29,8 @@ const props = withDefaults(
     offset?: number
     width?: number | string
     disabled?: boolean
+    /** hover 触发时打开弹窗的延迟（毫秒）；click 触发不生效。 */
+    hoverDelay?: number
     panelClass?: string
     triggerClass?: string
     anchorElement?: HTMLElement | null
@@ -39,6 +41,7 @@ const props = withDefaults(
     trigger: 'click',
     offset: 6,
     disabled: false,
+    hoverDelay: 400,
     panelClass: '',
     triggerClass: '',
     anchorElement: null,
@@ -55,6 +58,7 @@ const popoverRef = ref<HTMLElement | null>(null)
 const popoverStyle = ref<CSSProperties>({})
 const popoverArrowStyle = ref<CSSProperties>({})
 const hoverCloseTimer = shallowRef<number>()
+const hoverOpenTimer = shallowRef<number>()
 const viewportTarget = computed(() => (open.value && typeof window !== 'undefined' ? window : null))
 
 const popoverClasses = computed(() => [
@@ -260,6 +264,7 @@ async function openPopover() {
   if (props.disabled || open.value)
     return
 
+  clearHoverOpenTimer()
   clearHoverCloseTimer()
   open.value = true
   await nextTick()
@@ -293,13 +298,28 @@ function clearHoverCloseTimer() {
   hoverCloseTimer.value = undefined
 }
 
+function clearHoverOpenTimer() {
+  if (hoverOpenTimer.value === undefined) {
+    return
+  }
+
+  window.clearTimeout(hoverOpenTimer.value)
+  hoverOpenTimer.value = undefined
+}
+
 function handleHoverEnter() {
   if (props.trigger !== 'hover') {
     return
   }
 
   clearHoverCloseTimer()
-  void openPopover()
+  // 延迟打开：鼠标稳定悬停一小段时间再展示，避免扫过表格时弹窗频繁闪烁。
+  if (hoverOpenTimer.value === undefined) {
+    hoverOpenTimer.value = window.setTimeout(() => {
+      hoverOpenTimer.value = undefined
+      void openPopover()
+    }, props.hoverDelay)
+  }
 }
 
 function handleHoverLeave() {
@@ -307,6 +327,7 @@ function handleHoverLeave() {
     return
   }
 
+  clearHoverOpenTimer()
   clearHoverCloseTimer()
   hoverCloseTimer.value = window.setTimeout(closePopover, 90)
 }
@@ -341,7 +362,10 @@ useEventListener(viewportTarget, 'keydown', (event) => {
 })
 useEventListener(viewportTarget, 'resize', updatePopoverPositionThrottled)
 useEventListener(viewportTarget, 'scroll', updatePopoverPositionThrottled, { capture: true })
-onBeforeUnmount(clearHoverCloseTimer)
+onBeforeUnmount(() => {
+  clearHoverOpenTimer()
+  clearHoverCloseTimer()
+})
 </script>
 
 <template>

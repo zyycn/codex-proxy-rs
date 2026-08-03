@@ -294,6 +294,24 @@ impl CodexCredentialSelector {
         if !diagnostic {
             self.quota.prepare_scheduling(&accounts).await;
         }
+        // 429 临时限流（Redis 冷却）中的账号即使额度正常也不参与调度，
+        // 到期后冷却过期自动恢复。诊断请求（连接测试）绕过冷却，需要真实探测。
+        let accounts = if diagnostic {
+            accounts
+        } else {
+            let mut retained = Vec::with_capacity(accounts.len());
+            for account in accounts {
+                let cooling = self
+                    .quota
+                    .rate_limited_until(account.id(), account.revision())
+                    .await
+                    .unwrap_or(None);
+                if cooling.is_none() {
+                    retained.push(account);
+                }
+            }
+            retained
+        };
         let account_ids = accounts
             .iter()
             .map(|account| account.id().clone())

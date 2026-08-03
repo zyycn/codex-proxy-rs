@@ -111,6 +111,7 @@ pub async fn initialize(
         http.clone(),
         config.base_url().to_owned(),
         Arc::clone(&agent_identity),
+        ports.cooldowns(),
     ));
     let quota_skip_exhausted = config.quota_skip_exhausted();
     let selector = Arc::new(CodexCredentialSelector::new(

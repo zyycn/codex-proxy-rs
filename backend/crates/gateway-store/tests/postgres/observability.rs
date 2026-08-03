@@ -83,7 +83,7 @@ async fn observability_preserves_and_filters_opaque_response_ids() {
     .expect("persist opaque response IDs");
     let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
         .expect("observability range");
-    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
 
     let records = repository
         .list_usage_records(UsageRecordQuery {
@@ -147,7 +147,7 @@ async fn dashboard_account_metrics_should_partition_account_statuses() {
     .execute(&database.pool)
     .await
     .expect("seed account metric states");
-    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
     let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
         .expect("dashboard range");
 
@@ -193,7 +193,7 @@ async fn calculated_usage_billing_facts_keep_only_completed_calculated_costs() {
         .expect("seed calculated billing facts");
     let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
         .expect("observability range");
-    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
 
     let facts = repository
         .usage_calculated_billing_facts(range, UsageRecordFilter::default())
@@ -207,7 +207,7 @@ async fn calculated_usage_billing_facts_keep_only_completed_calculated_costs() {
     assert_eq!(facts[0].service_tier.as_deref(), Some("priority"));
     assert_eq!(facts[0].total.amount.as_str(), "1.25");
 
-    let store = PgAdminObservabilityStore::new(database.pool.clone(), None);
+    let store = PgAdminObservabilityStore::new(database.pool.clone(), None, None);
     let facts = store
         .usage_calculated_billing_facts(
             admin_observability::TimeRange::new(range.start, range.end)
@@ -235,7 +235,7 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
     let range =
         admin_observability::TimeRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
             .expect("admin observability range");
-    let store = PgAdminObservabilityStore::new(database.pool.clone(), None);
+    let store = PgAdminObservabilityStore::new(database.pool.clone(), None, None);
 
     let dashboard = store
         .dashboard_summary(range)
@@ -524,7 +524,7 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
         .expect("seed observability facts");
     let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
         .expect("observability range");
-    let repository = PgObservabilityRepository::new(database.pool.clone());
+    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
 
     let dashboard = repository
         .dashboard_summary(range)

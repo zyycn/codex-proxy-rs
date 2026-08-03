@@ -13,19 +13,20 @@ pub use snapshot::{
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime};
 
 use chrono::Utc;
 use gateway_core::engine::credential::{
     AccountAvailability, AccountQuotaSignals, CredentialRevision, OpaqueProviderData,
     ProviderAccount, ProviderAccountId, ProviderAccountStore, QuotaObservation, QuotaWriteOutcome,
 };
+use gateway_core::provider_ports::{ProviderCooldown, ProviderCooldownPort};
 use gateway_protocol::openai::events::{
     ParsedRateLimits, RateLimitDetails, RateLimitWindow, parse_rate_limit_headers,
 };
 use reqwest::Client;
 use secrecy::ExposeSecret;
-use serde_json::{Map, Number, Value};
+use serde_json::{Map, Value};
 use thiserror::Error;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -120,6 +121,7 @@ pub struct CodexCredentialQuotaService {
     http: Client,
     base_url: String,
     agent_identity: Arc<CodexAgentIdentityTaskService>,
+    cooldowns: Arc<dyn ProviderCooldownPort>,
     scheduling: CodexQuotaSchedulingProjection,
 }
 
@@ -379,6 +381,7 @@ impl CodexCredentialQuotaService {
         http: Client,
         base_url: String,
         agent_identity: Arc<CodexAgentIdentityTaskService>,
+        cooldowns: Arc<dyn ProviderCooldownPort>,
     ) -> Self {
         Self {
             store: Arc::clone(repository.store()),
@@ -387,6 +390,7 @@ impl CodexCredentialQuotaService {
             http,
             base_url,
             agent_identity,
+            cooldowns,
             scheduling: CodexQuotaSchedulingProjection::default(),
         }
     }
@@ -658,90 +662,54 @@ impl CodexCredentialQuotaService {
         Ok(true)
     }
 
-    /// 真实 429 的单一事实入口：合成/更新 quota 主窗口（`limit_reached=true`、
-    /// `used_percent=100`、`reset_at=retry-after`）。availability 不改变，
-    /// 窗口 reset 到期后由投影自动滚动恢复（429 只记录限流窗口）。
-    /// 已有更晚的 `reset_at` 不会被缩短（never-shrink）。
+    /// 真实 429 的单一事实入口：写入 Redis 临时限流冷却（`until = now + retry_after`）。
+    /// availability 与 quota 主窗口（额度重置时间）都不改变——临时限流是独立维度，
+    /// 到期由 Redis key 过期自动解除，不污染配额耗尽状态。
+    /// 已有更晚的冷却不会被缩短（put_if_later）。
     pub async fn apply_rate_limit_429(
         &self,
         account: &ProviderAccount,
         retry_after: Option<Duration>,
         observed_at: SystemTime,
     ) -> Result<(), CodexCredentialQuotaError> {
-        let mut object = self
-            .store
-            .get_quotas(std::slice::from_ref(account.id()))
-            .await?
-            .into_iter()
-            .find(|observation| {
-                observation.account_id == *account.id()
-                    && observation.expected_revision == account.revision()
-            })
-            .and_then(|observation| observation.quota)
-            .map(OpaqueProviderData::into_inner)
-            .unwrap_or_default();
-        let new_reset_at = observed_at
+        let until = observed_at
             .checked_add(retry_after.unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN))
-            .and_then(|reset| reset.duration_since(UNIX_EPOCH).ok())
-            .map(|duration| duration.as_secs() as i64);
-        let existing_reset_at = object
-            .get("rate_limit")
-            .and_then(Value::as_object)
-            .and_then(|rate_limit| rate_limit.get("primary_window"))
-            .and_then(Value::as_object)
-            .and_then(|window| window.get("reset_at"))
-            .and_then(Value::as_i64);
-        let reset_at = match (existing_reset_at, new_reset_at) {
-            (Some(existing), Some(next)) if existing > next => Some(existing),
-            (_, next) => next,
-        };
-        let mut rate_limit = object
-            .get("rate_limit")
-            .cloned()
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        rate_limit.insert("allowed".to_owned(), Value::Bool(false));
-        rate_limit.insert("limit_reached".to_owned(), Value::Bool(true));
-        let mut primary = rate_limit
-            .get("primary_window")
-            .cloned()
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        let used_percent = primary
-            .get("used_percent")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0)
-            .max(100.0);
-        primary.insert(
-            "used_percent".to_owned(),
-            Number::from_f64(used_percent)
-                .map(Value::Number)
-                .unwrap_or_else(|| Value::Number(Number::from(100))),
-        );
-        if let Some(reset_at) = reset_at {
-            primary.insert("reset_at".to_owned(), Value::from(reset_at));
-        }
-        rate_limit.insert("primary_window".to_owned(), Value::Object(primary));
-        object.insert("rate_limit".to_owned(), Value::Object(rate_limit));
-        if self
-            .store
-            .compare_and_swap_quota(QuotaObservation {
-                account_id: account.id().clone(),
-                expected_revision: account.revision(),
-                quota: Some(OpaqueProviderData::new(object)),
-                observed_at: Some(observed_at),
-                limit_reached: Some(true),
-            })
-            .await?
-            == QuotaWriteOutcome::Conflict
-        {
-            return Ok(());
-        }
-        // 429 合成的限流窗口要立即反映到调度信号（reset 到期由投影滚动解除）。
-        if let Ok(Some(snapshot)) = self.read_snapshot_for(account).await {
-            self.scheduling.observe(&snapshot);
-        }
+            .unwrap_or(observed_at);
+        self.cooldowns
+            .put_if_later(ProviderCooldown::new(
+                account.id().clone(),
+                account.revision(),
+                until,
+            ))
+            .await
+            .map_err(|error| CodexCredentialQuotaError::Store {
+                detail: error.to_string(),
+            })?;
         Ok(())
+    }
+
+    /// 读取账号当前是否处于临时限流（429）冷却，及到期时间。
+    pub async fn rate_limited_until(
+        &self,
+        account_id: &ProviderAccountId,
+        credential_revision: CredentialRevision,
+    ) -> Result<Option<SystemTime>, CodexCredentialQuotaError> {
+        let Some(cooldown) = self.cooldowns.read(account_id).await.map_err(|error| {
+            CodexCredentialQuotaError::Store {
+                detail: error.to_string(),
+            }
+        })?
+        else {
+            return Ok(None);
+        };
+        if cooldown.credential_revision() != credential_revision {
+            return Ok(None);
+        }
+        let until = cooldown.until();
+        if until <= SystemTime::now() {
+            return Ok(None);
+        }
+        Ok(Some(until))
     }
 
     /// 读取单账号最后一次落库的 Provider quota，并由 Codex 域解析展示窗口。

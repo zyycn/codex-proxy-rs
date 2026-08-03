@@ -16,9 +16,10 @@ use gateway_core::engine::credential::{
 };
 use gateway_core::error::{StoreError, StoreErrorKind};
 use gateway_core::provider_ports::{
-    ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderLeaseAcquisition, ProviderLeasePort,
-    ProviderLeaseRequest, ProviderRefreshPolicy, ProviderRuntimePolicyPort,
-    ProviderSchedulingLeaseRequest, ProviderSchedulingState, ProviderSessionAffinityKey,
+    ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCooldown, ProviderCooldownPort,
+    ProviderCooldownScope, ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
+    ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderSchedulingLeaseRequest,
+    ProviderSchedulingState, ProviderScopedCooldown, ProviderSessionAffinityKey,
     ProviderSessionAffinityPort, ProviderSessionExclusionPort, ProviderSessionExclusions,
     ProviderStoreError,
 };
@@ -770,4 +771,91 @@ pub(crate) fn codex_account(id: &str) -> ProviderAccount {
     )
     .with_runtime_state(true, AccountAvailability::Ready)
     .with_refresh_schedule(true, Some(SystemTime::now() + Duration::from_secs(2_700)))
+}
+
+/// 内存 `ProviderCooldownPort`：只实现 `read`/`put_if_later`（openai selector
+/// 429 冷却路径用），其余 scope 变体测试不涉及，返回占位。
+#[derive(Clone, Default)]
+pub(crate) struct MemoryCooldownPort {
+    pub(crate) cooldowns: Arc<Mutex<BTreeMap<ProviderAccountId, ProviderCooldown>>>,
+}
+
+impl MemoryCooldownPort {
+    #[must_use]
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl ProviderCooldownPort for MemoryCooldownPort {
+    fn put_if_later(
+        &self,
+        cooldown: ProviderCooldown,
+    ) -> BoxFuture<'_, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            let mut cooldowns = self.cooldowns.lock().expect("cooldown lock");
+            let should_write = cooldowns.get(cooldown.account_id()).is_none_or(|current| {
+                current.credential_revision() < cooldown.credential_revision()
+                    || (current.credential_revision() == cooldown.credential_revision()
+                        && current.until() < cooldown.until())
+            });
+            if should_write {
+                cooldowns.insert(cooldown.account_id().clone(), cooldown);
+            }
+            Ok(should_write)
+        })
+    }
+
+    fn read<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<Option<ProviderCooldown>, ProviderStoreError>> {
+        Box::pin(async move {
+            Ok(self
+                .cooldowns
+                .lock()
+                .expect("cooldown lock")
+                .get(account_id)
+                .cloned())
+        })
+    }
+
+    fn clear<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _through_revision: CredentialRevision,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn put_scoped_if_later(
+        &self,
+        _cooldown: ProviderScopedCooldown,
+    ) -> BoxFuture<'_, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn read_scoped<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _scope: &'a ProviderCooldownScope,
+    ) -> BoxFuture<'a, Result<Option<ProviderScopedCooldown>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn clear_scoped<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _scope: &'a ProviderCooldownScope,
+        _through_revision: CredentialRevision,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn clear_all<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
 }

@@ -1048,6 +1048,7 @@ fn project_quota(
             refresh_token_expires_at,
             windows: Vec::new(),
             limit_reached: false,
+            rate_limited_until: None,
             provider_data: None,
         };
     };
@@ -1115,6 +1116,7 @@ fn project_quota(
         limit_reached: billing
             .used_percent()
             .is_some_and(|used| used.is_finite() && used >= 100.0),
+        rate_limited_until: None,
         provider_data: None,
     }
 }

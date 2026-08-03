@@ -1015,6 +1015,7 @@ async fn accounts_list_should_degrade_quota_failure_to_empty_window_without_drop
             provider_data: None,
         }],
         limit_reached: false,
+        rate_limited_until: None,
         provider_data: None,
     });
     let failing = FakeProviderAdmin::new("xai", events.clone());
@@ -1119,7 +1120,8 @@ async fn accounts_list_should_map_unknown_availability_to_error_not_normal() {
 
 #[tokio::test]
 async fn accounts_list_should_map_rate_limited_from_quota_limit_reached() {
-    // ready + 快照级 quota.limitReached → rate_limited。
+    // ready + 快照级 quota.limitReached → quota_exhausted（配额耗尽）；
+    // rate_limited 只来自 ProviderQuota.rate_limited_until（429 Redis 冷却）。
     let provider = FakeProviderAdmin::new("openai", events());
     provider.set_quota(ProviderQuota {
         observed_at: Some(Utc::now()),
@@ -1137,6 +1139,7 @@ async fn accounts_list_should_map_rate_limited_from_quota_limit_reached() {
             provider_data: None,
         }],
         limit_reached: true,
+        rate_limited_until: Some(Utc::now() + TimeDelta::minutes(5)),
         provider_data: None,
     });
     let store = FakeAccountStore::new("openai", events());
@@ -1162,6 +1165,51 @@ async fn accounts_list_should_map_rate_limited_from_quota_limit_reached() {
 }
 
 #[tokio::test]
+async fn accounts_list_should_map_quota_exhausted_when_only_limit_reached() {
+    // ready + 快照级 quota.limitReached、无 429 冷却 → quota_exhausted。
+    let provider = FakeProviderAdmin::new("openai", events());
+    provider.set_quota(ProviderQuota {
+        observed_at: Some(Utc::now()),
+        refresh_token_expires_at: None,
+        windows: vec![ProviderQuotaWindow {
+            key: "primary".to_owned(),
+            group: "shortTerm".to_owned(),
+            label: "5小时限额".to_owned(),
+            source: None,
+            window_seconds: Some(5 * 60 * 60),
+            used_percent: Some(100.0),
+            reset_at: Some(Utc::now() + TimeDelta::hours(1)),
+            limit_reached: true,
+            local_usage: None,
+            provider_data: None,
+        }],
+        limit_reached: true,
+        rate_limited_until: None,
+        provider_data: None,
+    });
+    let store = FakeAccountStore::new("openai", events());
+
+    let page = accounts_service(provider, store)
+        .await
+        .accounts()
+        .list(AccountListQuery {
+            page: 1,
+            page_size: gateway_admin::model::PageSize::new(20).expect("page size"),
+            provider_kind: None,
+            search: None,
+            status: None,
+            sort: None,
+        })
+        .await
+        .expect("quota exhausted account directory");
+
+    assert_eq!(
+        page.items.first().expect("account item").status,
+        gateway_admin::model::accounts::AccountStatus::QuotaExhausted,
+    );
+}
+
+#[tokio::test]
 async fn accounts_list_should_attach_local_usage_to_quota_windows() {
     let provider = FakeProviderAdmin::new("openai", events());
     let reset_at = Utc::now() + TimeDelta::hours(1);
@@ -1181,6 +1229,7 @@ async fn accounts_list_should_attach_local_usage_to_quota_windows() {
             provider_data: None,
         }],
         limit_reached: false,
+        rate_limited_until: None,
         provider_data: None,
     });
     let store = FakeAccountStore::new("openai", events());
@@ -1289,6 +1338,7 @@ fn empty_quota() -> ProviderQuota {
         refresh_token_expires_at: None,
         windows: Vec::new(),
         limit_reached: false,
+        rate_limited_until: None,
         provider_data: None,
     }
 }

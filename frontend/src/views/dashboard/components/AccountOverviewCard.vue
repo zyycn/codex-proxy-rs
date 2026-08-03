@@ -116,7 +116,7 @@ const statusRows = computed(() => {
     },
     {
       label: '额度受限',
-      description: `限流中 ${rateLimited} · 配额耗尽 ${quotaExhausted}`,
+      description: '配额耗尽与限流中',
       value: String(quotaLimited),
       tone: 'warning',
       icon: TriangleAlert,

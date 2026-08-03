@@ -43,8 +43,9 @@ use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::support::{
-    MemoryAccountStore, MemorySessionAffinity, MemorySessionExclusions, TestLeaseCoordinator,
-    account_policy, agent_identity_service_with_pool, catalog_cache, profile, secret,
+    MemoryAccountStore, MemoryCooldownPort, MemorySessionAffinity, MemorySessionExclusions,
+    TestLeaseCoordinator, account_policy, agent_identity_service_with_pool, catalog_cache, profile,
+    secret,
 };
 use crate::transport::accept_codex_test_websocket;
 
@@ -136,6 +137,7 @@ fn provider_with_affinity_and_base_url_and_leases(
         http.clone(),
         base_url.clone(),
         Arc::clone(&agent_identity),
+        Arc::new(MemoryCooldownPort::new()),
     ));
     let account_feedback = Arc::new(AccountFeedbackStats::default());
     let selector = Arc::new(CodexCredentialSelector::new(

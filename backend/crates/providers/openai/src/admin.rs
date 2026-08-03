@@ -475,7 +475,14 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 .await
                 .map_err(map_quota_error)?
         };
-        Ok(project_quota(snapshot, &account))
+        let mut quota = project_quota(snapshot, &account);
+        quota.rate_limited_until = self
+            .quota
+            .rate_limited_until(account.id(), account.revision())
+            .await
+            .map_err(map_quota_error)?
+            .map(DateTime::<Utc>::from);
+        Ok(quota)
     }
 
     async fn models(
@@ -740,6 +747,7 @@ fn empty_quota() -> ProviderQuota {
         refresh_token_expires_at: None,
         windows: Vec::new(),
         limit_reached: false,
+        rate_limited_until: None,
         provider_data: None,
     }
 }
@@ -811,6 +819,7 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
         refresh_token_expires_at: None,
         windows,
         limit_reached,
+        rate_limited_until: None,
         provider_data: Some(ProviderDocument::new(OpaqueProviderData::new(
             provider_data,
         ))),
