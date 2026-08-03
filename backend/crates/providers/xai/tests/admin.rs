@@ -473,6 +473,7 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
         enabled: account.enabled(),
         availability: account.availability(),
         availability_observed_at: now,
+        last_error_message: None,
         quota_observed_at: None,
         created_at: now,
         updated_at: now,

@@ -507,6 +507,7 @@ async fn selector_should_escape_a_quota_exhausted_affinity_account() {
     let first = store.account("acct_first").expect("first account");
     store
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: first.id().clone(),
             expected_revision: first.revision(),
             availability: AccountAvailability::QuotaExhausted,
@@ -663,8 +664,12 @@ fn credential_expired_failure_marks_unified_account_expired() {
             }),
         )
         .expect("select account");
-    block_on(selector.record_failure(lease.account(), CodexAccountFailure::CredentialExpired))
-        .expect("record credential expiry");
+    block_on(selector.record_failure(
+        lease.account(),
+        CodexAccountFailure::CredentialExpired,
+        None,
+    ))
+    .expect("record credential expiry");
     assert_eq!(
         store
             .account("acct_primary")
@@ -697,6 +702,7 @@ fn rate_limited_failure_records_quota_window_without_changing_availability() {
         CodexAccountFailure::RateLimited {
             retry_after: Some(Duration::from_secs(30)),
         },
+        None,
     ))
     .expect("record rate-limit failure");
 
@@ -743,6 +749,7 @@ async fn usage_limit_exhaustion_marks_quota_exhausted_without_usage_probe() {
             CodexAccountFailure::UsageLimitExhausted {
                 retry_after: Some(Duration::from_secs(30)),
             },
+            None,
         )
         .await
         .expect("record usage-limit exhaustion");
@@ -758,6 +765,7 @@ fn rate_limited_failure_does_not_downgrade_persisted_quota_exhaustion() {
     create_account(&store, "acct_primary", "at-primary");
     let account = store.account("acct_primary").expect("account");
     block_on(store.apply_state_change(AccountStateChange {
+        message: None,
         account_id: account.id().clone(),
         expected_revision: account.revision(),
         availability: AccountAvailability::QuotaExhausted,
@@ -771,6 +779,7 @@ fn rate_limited_failure_does_not_downgrade_persisted_quota_exhaustion() {
         CodexAccountFailure::RateLimited {
             retry_after: Some(Duration::from_secs(30)),
         },
+        None,
     ))
     .expect("record rate-limit failure");
 
@@ -796,6 +805,7 @@ fn rate_limited_failure_does_not_consult_stale_quota_snapshot() {
         CodexAccountFailure::RateLimited {
             retry_after: Some(Duration::from_secs(30)),
         },
+        None,
     ))
     .expect("record rate-limit failure");
 
@@ -816,6 +826,7 @@ fn rate_limited_failure_does_not_overwrite_stale_authentication_state() {
     create_account(&store, "acct_primary", "at-primary");
     let account = store.account("acct_primary").expect("account");
     block_on(store.apply_state_change(AccountStateChange {
+        message: None,
         account_id: account.id().clone(),
         expected_revision: account.revision(),
         availability: AccountAvailability::Invalid,
@@ -830,6 +841,7 @@ fn rate_limited_failure_does_not_overwrite_stale_authentication_state() {
         CodexAccountFailure::RateLimited {
             retry_after: Some(Duration::from_secs(30)),
         },
+        None,
     ))
     .expect("record rate-limit failure");
 
@@ -854,6 +866,7 @@ fn successful_upstream_response_recovers_non_quota_terminal_states() {
         create_account(&store, "acct_primary", "at-primary");
         let account = store.account("acct_primary").expect("account");
         block_on(store.apply_state_change(AccountStateChange {
+            message: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             availability: stale,
@@ -892,12 +905,14 @@ fn rate_limited_failures_for_distinct_accounts_do_not_conflict() {
                 CodexAccountFailure::RateLimited {
                     retry_after: Some(Duration::from_secs(30)),
                 },
+                None,
             ),
             selector.record_failure(
                 &second,
                 CodexAccountFailure::RateLimited {
                     retry_after: Some(Duration::from_secs(30)),
                 },
+                None,
             ),
         );
         first_result.expect("record first account failure");
@@ -925,7 +940,7 @@ fn selector_keeps_a_quota_exhausted_account_eligible_when_configured_not_to_skip
     create_account(&store, "acct_primary", "at-primary");
     let strict_selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
     let account = store.account("acct_primary").expect("account");
-    block_on(strict_selector.record_failure(&account, CodexAccountFailure::QuotaExhausted))
+    block_on(strict_selector.record_failure(&account, CodexAccountFailure::QuotaExhausted, None))
         .expect("mark account exhausted");
 
     let selector = selector_with_runtime(
@@ -979,6 +994,7 @@ fn identity_verification_failure_isolates_only_selected_account() {
     block_on(selector.record_failure(
         lease.account(),
         CodexAccountFailure::IdentityVerificationRequired,
+        None,
     ))
     .expect("record identity verification failure");
 
@@ -1022,6 +1038,7 @@ fn cloudflare_challenge_does_not_change_availability() {
     block_on(selector.record_failure(
         lease.account(),
         CodexAccountFailure::CloudflareChallenge { retry_after: None },
+        None,
     ))
     .expect("record challenge");
 
@@ -1058,9 +1075,11 @@ fn repeated_cloudflare_path_block_marks_only_the_affected_account_invalid() {
         .expect("select account");
 
     for _ in 0..3 {
-        block_on(
-            selector.record_failure(lease.account(), CodexAccountFailure::CloudflarePathBlocked),
-        )
+        block_on(selector.record_failure(
+            lease.account(),
+            CodexAccountFailure::CloudflarePathBlocked,
+            None,
+        ))
         .expect("record path block");
     }
 
@@ -1114,6 +1133,7 @@ fn cloudflare_challenge_expires_provider_owned_cookies_at_cooldown_boundary() {
     block_on(selector.record_failure(
         second.account(),
         CodexAccountFailure::CloudflareChallenge { retry_after: None },
+        None,
     ))
     .expect("record challenge");
 
@@ -1157,8 +1177,12 @@ fn cloudflare_path_block_deletes_provider_owned_cookies() {
         session_affinity_key: None,
     }))
     .expect("select revised account");
-    block_on(selector.record_failure(second.account(), CodexAccountFailure::CloudflarePathBlocked))
-        .expect("record path block");
+    block_on(selector.record_failure(
+        second.account(),
+        CodexAccountFailure::CloudflarePathBlocked,
+        None,
+    ))
+    .expect("record path block");
 
     let account = store.account("acct_primary").expect("account");
     let data = block_on(store.repository().load_complete_data(&account)).expect("credential data");
@@ -1194,7 +1218,7 @@ fn response_cookie_rotation_returns_a_current_account_for_later_fenced_writes() 
 
     assert_eq!(outcome.credential_revision, Some(current.revision().get()));
     assert_ne!(current.revision(), lease.account().revision());
-    block_on(selector.record_failure(&current, CodexAccountFailure::QuotaExhausted))
+    block_on(selector.record_failure(&current, CodexAccountFailure::QuotaExhausted, None))
         .expect("record failure with current revision");
     assert_eq!(
         store

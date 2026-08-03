@@ -235,6 +235,18 @@ impl CodexCredentialRepository {
         availability: AccountAvailability,
         observed_at: SystemTime,
     ) -> Result<(), CredentialRepositoryError> {
+        self.apply_state_with_message(account, availability, observed_at, None)
+            .await
+    }
+
+    /// 带上游错误描述的状态写入；`message` 为 `Some` 时持久化最近错误，恢复 `Ready` 时清空。
+    pub async fn apply_state_with_message(
+        &self,
+        account: &ProviderAccount,
+        availability: AccountAvailability,
+        observed_at: SystemTime,
+        message: Option<String>,
+    ) -> Result<(), CredentialRepositoryError> {
         if !account.enabled() {
             return Ok(());
         }
@@ -244,6 +256,7 @@ impl CodexCredentialRepository {
                 expected_revision: account.revision(),
                 availability,
                 observed_at,
+                message,
             })
             .await?;
         Ok(())

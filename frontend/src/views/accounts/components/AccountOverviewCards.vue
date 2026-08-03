@@ -20,7 +20,7 @@ const overviewItems = computed(() => [
   },
   {
     label: '正常账号',
-    value: formatCount(props.summary.active),
+    value: formatCount(props.summary.normal),
     caption: '可参与调度',
     tone: 'success',
     icon: ShieldCheck,
@@ -33,9 +33,9 @@ const overviewItems = computed(() => [
     icon: Gauge,
   },
   {
-    label: '异常账号',
-    value: formatCount(props.summary.unavailable),
-    caption: '过期 / 失效 / 禁用 / 封禁',
+    label: '待处理',
+    value: formatCount((props.summary.disabled ?? 0) + (props.summary.error ?? 0)),
+    caption: '已停用 / 错误',
     tone: 'danger',
     icon: AlertTriangle,
   },

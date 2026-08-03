@@ -436,6 +436,7 @@ impl GrokCredentialRepository {
                 expected_revision: input.expected_revision,
                 availability: input.availability.into(),
                 observed_at: to_system_time(input.observed_at),
+                message: input.availability_reason.clone(),
             })
             .await
             .map_err(map_store_error)

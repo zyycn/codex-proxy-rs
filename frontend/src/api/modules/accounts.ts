@@ -104,6 +104,8 @@ export interface Account {
   hasRefreshToken: boolean
   status: string
   displayStatus: string
+  errorReason: string | null
+  errorMessage: string | null
   availability: string
   enabled: boolean
   accessTokenExpiresAt: string | null
@@ -127,10 +129,11 @@ export interface AccountPageMeta {
 
 export interface AccountSummary {
   total: number
-  active: number
+  normal: number
   quotaExhausted: number
   rateLimited: number
-  unavailable: number
+  disabled: number
+  error: number
 }
 
 export interface AccountListResponse {

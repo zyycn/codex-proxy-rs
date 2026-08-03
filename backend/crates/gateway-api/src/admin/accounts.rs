@@ -91,7 +91,8 @@ impl ListQuery {
         let status = match self.status.as_deref().map(str::trim) {
             None | Some("") => None,
             Some(value) => Some(
-                parse_account_status(value).ok_or_else(|| WireValidationError::new("status"))?,
+                DomainAccountStatus::parse(&value.to_ascii_lowercase())
+                    .ok_or_else(|| WireValidationError::new("status"))?,
             ),
         };
         let sort = match (self.sort_by.as_deref(), self.sort_direction.as_deref()) {
@@ -125,19 +126,6 @@ fn parse_provider(value: &str) -> Result<Option<ProviderKind>, WireValidationErr
     ProviderKind::new(value.to_owned())
         .map(Some)
         .map_err(|_| WireValidationError::new("provider"))
-}
-
-fn parse_account_status(value: &str) -> Option<DomainAccountStatus> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "active" => Some(DomainAccountStatus::Active),
-        "rate_limited" => Some(DomainAccountStatus::RateLimited),
-        "expired" => Some(DomainAccountStatus::Expired),
-        "invalid" => Some(DomainAccountStatus::Invalid),
-        "quota_exhausted" => Some(DomainAccountStatus::QuotaExhausted),
-        "disabled" => Some(DomainAccountStatus::Disabled),
-        "banned" => Some(DomainAccountStatus::Banned),
-        _ => None,
-    }
 }
 
 fn parse_sort_field(value: &str) -> Option<AccountSortField> {
@@ -174,10 +162,11 @@ pub struct AccountPageData {
 #[serde(rename_all = "camelCase")]
 pub struct AccountSummaryView {
     pub total: u64,
-    pub active: u64,
+    pub normal: u64,
     pub quota_exhausted: u64,
     pub rate_limited: u64,
-    pub unavailable: u64,
+    pub disabled: u64,
+    pub error: u64,
 }
 
 /// 一条安全账号视图。
@@ -197,6 +186,10 @@ pub struct AccountView {
     pub has_refresh_token: bool,
     pub status: String,
     pub display_status: String,
+    /// `status == "error"` 时的具体原因；其余状态为 `null`。
+    pub error_reason: Option<String>,
+    /// 最近一次失败的上游错误描述；仅错误状态存在。
+    pub error_message: Option<String>,
     pub availability: String,
     pub enabled: bool,
     pub access_token_expires_at: Option<String>,
@@ -530,7 +523,7 @@ impl From<DomainConnectionTestEvent> for AccountConnectionTestEvent {
             DomainConnectionTestEvent::Completed { account_status } => serde_json::json!({
                 "type": "test_complete",
                 "success": true,
-                "accountStatus": account_status_name(account_status)
+                "accountStatus": account_status.as_str()
             }),
             DomainConnectionTestEvent::Failed {
                 message,
@@ -548,7 +541,7 @@ impl From<DomainConnectionTestEvent> for AccountConnectionTestEvent {
                 "upstreamStatus": upstream_status,
                 "upstreamContentType": upstream_content_type,
                 "upstreamBody": upstream_body,
-                "accountStatus": account_status_name(account_status)
+                "accountStatus": account_status.as_str()
             }),
         };
         Self { data }
@@ -1336,10 +1329,11 @@ fn account_page_data(
         page: PageMeta::new(page, u32::from(page_size), result.total, total_pages),
         summary: AccountSummaryView {
             total: result.summary.total,
-            active: result.summary.active,
+            normal: result.summary.normal,
             quota_exhausted: result.summary.quota_exhausted,
             rate_limited: result.summary.rate_limited,
-            unavailable: result.summary.unavailable,
+            disabled: result.summary.disabled,
+            error: result.summary.error,
         },
     }
 }
@@ -1370,10 +1364,11 @@ fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
     let AccountDirectoryItem {
         account,
         status,
+        error_reason,
         usage,
         quota,
     } = item;
-    let status = account_status_name(status).to_owned();
+    let status = status.as_str().to_owned();
     let expires_at = account.access_token_expires_at.as_ref().map(china_rfc3339);
     let added_at = china_rfc3339(&account.created_at);
     let updated_at = china_rfc3339(&account.updated_at);
@@ -1392,6 +1387,8 @@ fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
         has_refresh_token: account.has_refresh_token,
         status: status.clone(),
         display_status: status,
+        error_reason: error_reason.map(|reason| reason.as_str().to_owned()),
+        error_message: account.last_error_message,
         availability: account.availability.as_str().to_owned(),
         enabled: account.enabled,
         access_token_expires_at: expires_at,
@@ -1715,18 +1712,6 @@ fn valid_visible_ascii(value: &str) -> bool {
 
 fn provider_document_value(document: ProviderDocument) -> Value {
     Value::Object(document.into_provider_data().into_inner())
-}
-
-fn account_status_name(status: DomainAccountStatus) -> &'static str {
-    match status {
-        DomainAccountStatus::Active => "active",
-        DomainAccountStatus::RateLimited => "rate_limited",
-        DomainAccountStatus::QuotaExhausted => "quota_exhausted",
-        DomainAccountStatus::Expired => "expired",
-        DomainAccountStatus::Invalid => "invalid",
-        DomainAccountStatus::Disabled => "disabled",
-        DomainAccountStatus::Banned => "banned",
-    }
 }
 
 fn relative_time(value: DateTime<Utc>, now: DateTime<Utc>) -> String {

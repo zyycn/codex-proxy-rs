@@ -26,7 +26,7 @@ const emit = defineEmits<{
 const canRefreshToken = computed(
   () =>
     props.account.hasRefreshToken
-    && (props.account.status === 'active' || props.account.status === 'quota_exhausted'),
+    && (props.account.status === 'normal' || props.account.status === 'quota_exhausted'),
 )
 const canReauthorize = computed(() => props.account.provider === 'openai')
 </script>

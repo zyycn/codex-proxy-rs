@@ -160,6 +160,7 @@ async fn delayed_provider_observations_cannot_overwrite_newer_state_or_quota() {
 
     repository
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: account_id.clone(),
             expected_revision: revision,
             availability: AccountAvailability::QuotaExhausted,
@@ -170,6 +171,7 @@ async fn delayed_provider_observations_cannot_overwrite_newer_state_or_quota() {
     assert!(
         repository
             .apply_state_change(AccountStateChange {
+                message: None,
                 account_id: account_id.clone(),
                 expected_revision: revision,
                 availability: AccountAvailability::Ready,
@@ -196,6 +198,61 @@ async fn delayed_provider_observations_cannot_overwrite_newer_state_or_quota() {
         observed.quota.expect("quota document").expose_to_provider()["marker"],
         "newer"
     );
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn account_state_message_is_persisted_and_cleared_on_recovery() {
+    let Some(database) = TestDatabase::create("provider_account_state_message").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let account_id = ProviderAccountId::new("acct_state_message").expect("account ID");
+    repository
+        .insert_provider_account(account(account_id.as_str(), "user-state-message"))
+        .await
+        .expect("insert state message fixture");
+    let revision = CredentialRevision::new(1).expect("revision");
+
+    repository
+        .apply_state_change(AccountStateChange {
+            message: Some("upstream returned 402 payment required".to_owned()),
+            account_id: account_id.clone(),
+            expected_revision: revision,
+            availability: AccountAvailability::QuotaExhausted,
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("persist error message");
+    let stored: Option<String> =
+        sqlx::query_scalar("select last_error_message from provider_accounts where id = $1")
+            .bind(account_id.as_str())
+            .fetch_one(&database.pool)
+            .await
+            .expect("read error message");
+    assert_eq!(
+        stored.as_deref(),
+        Some("upstream returned 402 payment required")
+    );
+
+    repository
+        .apply_state_change(AccountStateChange {
+            message: None,
+            account_id: account_id.clone(),
+            expected_revision: revision,
+            availability: AccountAvailability::Ready,
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("recover account");
+    let cleared: Option<String> =
+        sqlx::query_scalar("select last_error_message from provider_accounts where id = $1")
+            .bind(account_id.as_str())
+            .fetch_one(&database.pool)
+            .await
+            .expect("read cleared error message");
+    assert_eq!(cleared, None);
 
     database.close().await;
 }
@@ -322,16 +379,18 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     assert_eq!(usage_page.config_revision.get(), 1);
     assert_eq!(usage_page.total, 6);
     assert_eq!(usage_page.summary.total, 6);
-    assert_eq!(usage_page.summary.active, 1);
+    assert_eq!(usage_page.summary.normal, 1);
     assert_eq!(usage_page.summary.quota_exhausted, 1);
     assert_eq!(usage_page.summary.rate_limited, 1);
-    assert_eq!(usage_page.summary.unavailable, 3);
+    assert_eq!(usage_page.summary.disabled, 1);
+    assert_eq!(usage_page.summary.error, 2);
     assert_eq!(
         usage_page.summary.total,
-        usage_page.summary.active
+        usage_page.summary.normal
             + usage_page.summary.quota_exhausted
             + usage_page.summary.rate_limited
-            + usage_page.summary.unavailable
+            + usage_page.summary.disabled
+            + usage_page.summary.error
     );
     assert_eq!(
         usage_page
@@ -371,7 +430,7 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
             page_size: PageSize::new(10).expect("page size"),
             provider_kind: Some(ProviderKind::new("openai").expect("Provider kind")),
             search: Some("ALPHA@EXAMPLE".to_owned()),
-            status: Some(AccountStatus::Active),
+            status: Some(AccountStatus::Normal),
             sort: None,
         })
         .await
@@ -381,18 +440,20 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     assert_eq!(filtered.items[0].id, "acct_alpha");
     assert_eq!(filtered.items[0].provider_kind.as_str(), "openai");
 
-    let banned = store
+    let error_accounts = store
         .list_accounts(AccountListQuery {
             page: 1,
             page_size: PageSize::new(10).expect("page size"),
             provider_kind: None,
             search: None,
-            status: Some(AccountStatus::Banned),
+            status: Some(AccountStatus::Error),
             sort: None,
         })
         .await
-        .expect("filter banned accounts");
-    assert_eq!(banned.items[0].id, "acct_beta");
+        .expect("filter error accounts");
+    assert_eq!(error_accounts.items.len(), 2);
+    assert_eq!(error_accounts.items[0].id, "acct_beta");
+    assert_eq!(error_accounts.items[1].id, "acct_invalid");
     database.close().await;
 }
 
@@ -1210,6 +1271,7 @@ async fn xai_free_quota_exhaustion_state_is_persisted() {
 
     repository
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: account_id.clone(),
             expected_revision: CredentialRevision::new(1).expect("credential revision"),
             availability: AccountAvailability::QuotaExhausted,
@@ -1248,6 +1310,7 @@ async fn xai_resettable_usage_limit_state_is_persisted() {
     let observed_at = SystemTime::now();
     repository
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: account_id.clone(),
             expected_revision: CredentialRevision::new(1).expect("credential revision"),
             availability: AccountAvailability::Ready,
@@ -1297,6 +1360,7 @@ async fn disabled_account_preserves_user_state_during_refresh_writes() {
 
     repository
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: account_id.clone(),
             expected_revision: CredentialRevision::new(1).expect("credential revision"),
             availability: AccountAvailability::Ready,

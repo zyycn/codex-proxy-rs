@@ -235,6 +235,7 @@ async fn manual_quota_refresh_preserves_disabled_account_state() {
     let account = store.account(account_id).expect("created disabled account");
     store
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             availability: AccountAvailability::Expired,
@@ -288,6 +289,7 @@ async fn manual_quota_auth_rejection_does_not_invalidate_refreshable_credential(
     let account = store.account(account_id).expect("created account");
     store
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             availability: AccountAvailability::QuotaExhausted,
@@ -494,6 +496,7 @@ async fn periodic_quota_synchronization_preserves_availability_when_usage_peaks(
     let reset_at = Utc::now().timestamp() + 24 * 60 * 60;
     store
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             availability: AccountAvailability::Ready,
@@ -560,6 +563,7 @@ async fn periodic_quota_synchronization_does_not_downgrade_exhaustion_on_rate_li
         .expect("created account");
     store
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             availability: AccountAvailability::QuotaExhausted,
@@ -599,6 +603,7 @@ async fn periodic_quota_synchronization_respects_retry_after_on_service_unavaila
         .expect("created account");
     store
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             availability: AccountAvailability::QuotaExhausted,
@@ -639,6 +644,7 @@ async fn periodic_quota_synchronization_skips_ready_accounts_without_quota_reach
         .expect("created account");
     store
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             availability: AccountAvailability::Ready,
@@ -671,6 +677,7 @@ async fn periodic_quota_synchronization_attempts_quota_exhausted_accounts() {
         .expect("created account");
     store
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             availability: AccountAvailability::QuotaExhausted,
@@ -696,6 +703,7 @@ async fn periodic_quota_synchronization_rechecks_exhausted_accounts_without_wait
         .expect("created account");
     store
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             availability: AccountAvailability::QuotaExhausted,
@@ -761,6 +769,7 @@ async fn periodic_quota_synchronization_does_not_recover_from_percent_drop_befor
         .expect("seed post-failure quota snapshot");
     store
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             availability: AccountAvailability::QuotaExhausted,
@@ -851,6 +860,7 @@ async fn periodic_quota_synchronization_recovers_after_recorded_reset() {
     let account = store.account(account_id).expect("created account");
     store
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             availability: AccountAvailability::QuotaExhausted,
@@ -900,6 +910,7 @@ async fn periodic_quota_synchronization_throttles_the_same_exhausted_account() {
         .expect("created account");
     store
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             availability: AccountAvailability::QuotaExhausted,
@@ -923,6 +934,7 @@ async fn periodic_quota_synchronization_does_not_bypass_throttle_for_a_new_reset
     let account = store.account(account_id).expect("created account");
     store
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             availability: AccountAvailability::QuotaExhausted,
@@ -977,6 +989,7 @@ async fn invalid_quota_json_for_one_account_does_not_abort_the_batch() {
         let account = store.account(account_id).expect("created account");
         store
             .apply_state_change(AccountStateChange {
+                message: None,
                 account_id: account.id().clone(),
                 expected_revision: account.revision(),
                 availability: AccountAvailability::QuotaExhausted,

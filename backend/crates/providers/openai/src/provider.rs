@@ -1697,6 +1697,8 @@ fn map_selection_error(error: CredentialSelectionError) -> ProviderError {
 struct MappedProviderFailure {
     error: ProviderError,
     account_failure: Option<CodexAccountFailure>,
+    /// 原始上游错误描述，随 availability 状态一并持久化。
+    error_message: Option<String>,
     cyber_policy_failure: bool,
     set_cookie_headers: Vec<String>,
     rate_limit_headers: Vec<(String, String)>,
@@ -1709,6 +1711,7 @@ impl MappedProviderFailure {
         Self {
             error,
             account_failure: None,
+            error_message: None,
             cyber_policy_failure: false,
             set_cookie_headers: Vec::new(),
             rate_limit_headers: Vec::new(),
@@ -1882,7 +1885,7 @@ async fn apply_failure(
             .await;
         if let Err(error) = context
             .selector
-            .record_failure(account, account_failure)
+            .record_failure(account, account_failure, failure.error_message.clone())
             .await
         {
             tracing::warn!(
@@ -2162,6 +2165,7 @@ fn map_upstream_failure(
     MappedProviderFailure {
         error,
         account_failure: account_failure(category, failure.retry_after_seconds),
+        error_message: failure.client_message,
         cyber_policy_failure,
         set_cookie_headers: failure.set_cookie_headers,
         rate_limit_headers: failure.rate_limit_headers,

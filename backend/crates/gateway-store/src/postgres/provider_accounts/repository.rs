@@ -95,7 +95,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                     upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
                     access_token_expires_at, next_refresh_at, enabled, availability,
                     availability_observed_at,
-                    quota_observed_at, quota_limit_reached, created_at, updated_at
+                    quota_observed_at, quota_limit_reached, last_error_message, created_at, updated_at
              from provider_accounts
              where ($1::text is null or provider_kind = $1) and ($2 or enabled)
              order by provider_kind, name, id",
@@ -214,6 +214,11 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                      when enabled then $4
                      else availability_observed_at
                  end,
+                 last_error_message = case
+                     when enabled then
+                         case when $3 = 'ready' then null else coalesce($5, last_error_message) end
+                     else last_error_message
+                 end,
                  updated_at = case when enabled then greatest(now(), $4) else updated_at end
              where id = $1 and credential_revision = $2
                and (availability_observed_at is null or availability_observed_at <= $4)",
@@ -222,6 +227,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         .bind(to_i64(update.expected_revision.get())?)
         .bind(update.availability.as_str())
         .bind(update.availability_observed_at)
+        .bind(update.message.as_deref())
         .execute(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("apply provider account state"))?;

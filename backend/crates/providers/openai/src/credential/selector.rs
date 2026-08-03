@@ -685,26 +685,32 @@ impl CodexCredentialSelector {
         &self,
         account: &ProviderAccount,
         failure: CodexAccountFailure,
+        message: Option<String>,
     ) -> Result<(), CredentialSelectionError> {
         let now = SystemTime::now();
         match failure {
             CodexAccountFailure::CredentialExpired => {
-                self.apply_state(account, AccountAvailability::Expired, now)
+                self.apply_state_with_message(account, AccountAvailability::Expired, now, message)
                     .await
             }
             CodexAccountFailure::IdentityVerificationRequired => {
-                self.apply_state(account, AccountAvailability::Invalid, now)
+                self.apply_state_with_message(account, AccountAvailability::Invalid, now, message)
                     .await
             }
             CodexAccountFailure::Banned => {
-                self.apply_state(account, AccountAvailability::Banned, now)
+                self.apply_state_with_message(account, AccountAvailability::Banned, now, message)
                     .await
             }
             // 402：真额度耗尽，由 quota worker 按窗口 reset 自动恢复。
             CodexAccountFailure::QuotaExhausted
             | CodexAccountFailure::UsageLimitExhausted { .. } => {
-                self.apply_state(account, AccountAvailability::QuotaExhausted, now)
-                    .await
+                self.apply_state_with_message(
+                    account,
+                    AccountAvailability::QuotaExhausted,
+                    now,
+                    message,
+                )
+                .await
             }
             // 429：临时限流只写 quota，availability 不改变。
             CodexAccountFailure::RateLimited { retry_after } => {
@@ -727,8 +733,13 @@ impl CodexCredentialSelector {
             CodexAccountFailure::CloudflarePathBlocked => {
                 let blocked = self.record_cloudflare_path_block(account.id(), now);
                 if blocked >= CLOUDFLARE_PATH_BLOCK_THRESHOLD {
-                    self.apply_state(account, AccountAvailability::Invalid, now)
-                        .await?;
+                    self.apply_state_with_message(
+                        account,
+                        AccountAvailability::Invalid,
+                        now,
+                        message,
+                    )
+                    .await?;
                 }
                 self.apply_cookie_recovery(account, CookieRecovery::Clear)
                     .await?;
@@ -737,14 +748,15 @@ impl CodexCredentialSelector {
         }
     }
 
-    async fn apply_state(
+    async fn apply_state_with_message(
         &self,
         account: &ProviderAccount,
         availability: AccountAvailability,
         observed_at: SystemTime,
+        message: Option<String>,
     ) -> Result<(), CredentialSelectionError> {
         self.repository
-            .apply_state(account, availability, observed_at)
+            .apply_state_with_message(account, availability, observed_at, message)
             .await?;
         Ok(())
     }

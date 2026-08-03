@@ -202,7 +202,11 @@ const {
           </template>
 
           <template #status="{ row }">
-            <AccountStatusBadge :status="derivedAccountStatus(row)" />
+            <AccountStatusBadge
+              :status="derivedAccountStatus(row)"
+              :error-reason="row.errorReason"
+              :error-message="row.errorMessage"
+            />
           </template>
 
           <template #planType="{ row }">

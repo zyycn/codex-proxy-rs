@@ -12,6 +12,7 @@ async fn manual_quota_refresh_keeps_confirmed_exhaustion_until_the_recorded_rese
     let account = store.account(account_id).expect("created account");
     store
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             availability: AccountAvailability::Expired,
@@ -161,6 +162,7 @@ async fn expired_old_reset_with_fresh_allowed_snapshot_recovers_ready() {
         .expect("seed old exhausted snapshot");
     store
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             availability: AccountAvailability::QuotaExhausted,

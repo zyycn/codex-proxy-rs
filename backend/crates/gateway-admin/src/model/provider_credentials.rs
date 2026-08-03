@@ -11,7 +11,10 @@ use gateway_core::{
 
 use super::{
     AdminError, MutationActor, MutationContext, PageSize, Revision,
-    accounts::{AccountAvailability, AccountRecord, AccountStatus, AccountSummary, AccountUsage},
+    accounts::{
+        AccountAvailability, AccountErrorReason, AccountRecord, AccountStatus, AccountSummary,
+        AccountUsage,
+    },
 };
 
 /// Provider-owned JSON；公共层只搬运且 Debug 不输出值。
@@ -688,6 +691,8 @@ impl fmt::Debug for ProviderExport {
 pub struct AccountDirectoryItem {
     pub account: AccountRecord,
     pub status: AccountStatus,
+    /// `status == Error` 时的具体原因；其余状态为 `None`。
+    pub error_reason: Option<AccountErrorReason>,
     pub usage: Option<super::accounts::AccountUsage>,
     pub quota: ProviderQuota,
 }

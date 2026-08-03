@@ -14,10 +14,11 @@ export function useAccountsQuery() {
   const sort = shallowRef<BaseTableSort>()
   const accountSummary = shallowRef({
     total: 0,
-    active: 0,
+    normal: 0,
     quotaExhausted: 0,
     rateLimited: 0,
-    unavailable: 0,
+    disabled: 0,
+    error: 0,
   })
 
   const query = usePagedQuery({

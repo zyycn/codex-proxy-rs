@@ -2,6 +2,8 @@
 
 use super::*;
 
+use gateway_admin::model::accounts::AccountStatusSignals;
+
 pub(crate) struct AdminAccountListItem {
     pub(crate) account: ProviderAccountSummary,
     pub(crate) status: AdminAccountStatus,
@@ -59,27 +61,16 @@ pub(crate) fn admin_account_status(
     account: &ProviderAccountSummary,
     now: DateTime<Utc>,
 ) -> AdminAccountStatus {
-    if !account.enabled {
-        AdminAccountStatus::Disabled
-    } else if account.availability == AccountAvailability::Banned {
-        AdminAccountStatus::Banned
-    } else if account.availability == AccountAvailability::QuotaExhausted {
-        AdminAccountStatus::QuotaExhausted
-    } else if account.availability == AccountAvailability::Invalid {
-        AdminAccountStatus::Invalid
-    } else if account.availability == AccountAvailability::Expired
-        || account
+    // 派生规则唯一归属 gateway-admin 域层，此处只做类型适配。
+    AccountStatusSignals {
+        enabled: account.enabled,
+        availability: account.availability,
+        access_token_expired: account
             .access_token_expires_at
-            .is_some_and(|expires_at| expires_at <= now)
-    {
-        AdminAccountStatus::Expired
-    } else if account.quota_limit_reached {
-        AdminAccountStatus::RateLimited
-    } else if account.availability == AccountAvailability::Unknown {
-        AdminAccountStatus::Invalid
-    } else {
-        AdminAccountStatus::Active
+            .is_some_and(|expires_at| expires_at <= now),
+        quota_limit_reached: account.quota_limit_reached,
     }
+    .derive()
 }
 
 pub(crate) fn admin_account_summary(
@@ -88,26 +79,25 @@ pub(crate) fn admin_account_summary(
 ) -> AccountSummary {
     let mut summary = AccountSummary {
         total: u64::try_from(accounts.len()).unwrap_or(u64::MAX),
-        active: 0,
+        normal: 0,
         quota_exhausted: 0,
         rate_limited: 0,
-        unavailable: 0,
+        disabled: 0,
+        error: 0,
     };
     for account in accounts {
         match admin_account_status(account, now) {
-            AdminAccountStatus::Active => summary.active = summary.active.saturating_add(1),
+            AdminAccountStatus::Normal => summary.normal = summary.normal.saturating_add(1),
             AdminAccountStatus::QuotaExhausted => {
                 summary.quota_exhausted = summary.quota_exhausted.saturating_add(1);
             }
             AdminAccountStatus::RateLimited => {
                 summary.rate_limited = summary.rate_limited.saturating_add(1);
             }
-            AdminAccountStatus::Expired
-            | AdminAccountStatus::Invalid
-            | AdminAccountStatus::Disabled
-            | AdminAccountStatus::Banned => {
-                summary.unavailable = summary.unavailable.saturating_add(1);
+            AdminAccountStatus::Disabled => {
+                summary.disabled = summary.disabled.saturating_add(1);
             }
+            AdminAccountStatus::Error => summary.error = summary.error.saturating_add(1),
         }
     }
     summary
@@ -124,9 +114,7 @@ pub(crate) fn sort_admin_account_items(
     items.sort_by(|left, right| {
         let ordering = match sort.field {
             AdminAccountSortField::Email => left.account.email.cmp(&right.account.email),
-            AdminAccountSortField::Status => {
-                admin_account_status_name(left.status).cmp(admin_account_status_name(right.status))
-            }
+            AdminAccountSortField::Status => left.status.as_str().cmp(right.status.as_str()),
             AdminAccountSortField::PlanType => left.account.plan_type.cmp(&right.account.plan_type),
             AdminAccountSortField::Usage => left
                 .usage
@@ -156,18 +144,6 @@ pub(crate) fn sort_admin_account_items(
     });
 }
 
-pub(crate) const fn admin_account_status_name(status: AdminAccountStatus) -> &'static str {
-    match status {
-        AdminAccountStatus::Active => "active",
-        AdminAccountStatus::RateLimited => "rate_limited",
-        AdminAccountStatus::Expired => "expired",
-        AdminAccountStatus::Invalid => "invalid",
-        AdminAccountStatus::QuotaExhausted => "quota_exhausted",
-        AdminAccountStatus::Disabled => "disabled",
-        AdminAccountStatus::Banned => "banned",
-    }
-}
-
 pub(crate) fn admin_account_record(
     summary: ProviderAccountSummary,
 ) -> AdminStoreResult<AccountRecord> {
@@ -193,6 +169,7 @@ pub(crate) fn admin_account_record(
         enabled: summary.enabled,
         availability: summary.availability,
         availability_observed_at: summary.availability_observed_at,
+        last_error_message: summary.last_error_message,
         quota_observed_at: summary.quota_observed_at,
         created_at: summary.created_at,
         updated_at: summary.updated_at,

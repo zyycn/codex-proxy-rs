@@ -18,7 +18,8 @@ use crate::{
         AdminError, MutationContext,
         accounts::{
             AccountConnectionTestEvent, AccountConnectionTestEventStream, AccountListQuery,
-            AccountRecord, AccountStatus, AccountUsageWindowQuery,
+            AccountRecord, AccountStatus, AccountStatusSignals, AccountUsageWindowQuery,
+            derive_error_reason,
         },
         observability::TimeRange,
         provider_credentials::{
@@ -216,8 +217,10 @@ impl DefaultAccountsService {
             std::slice::from_mut(&mut quota),
         )
         .await?;
+        let signals = account_signals(&account, quota.limit_reached, now);
         Ok(AccountDirectoryItem {
-            status: account_status(&account, quota.limit_reached, now),
+            status: signals.derive(),
+            error_reason: derive_error_reason(signals),
             usage: usage.into_iter().next(),
             account,
             quota,
@@ -301,11 +304,15 @@ impl AccountsService for DefaultAccountsService {
             .items
             .into_iter()
             .zip(quotas)
-            .map(|(account, quota)| AccountDirectoryItem {
-                status: account_status(&account, quota.limit_reached, now),
-                usage: usage.get(&account.id).cloned(),
-                account,
-                quota,
+            .map(|(account, quota)| {
+                let signals = account_signals(&account, quota.limit_reached, now);
+                AccountDirectoryItem {
+                    status: signals.derive(),
+                    error_reason: derive_error_reason(signals),
+                    usage: usage.get(&account.id).cloned(),
+                    account,
+                    quota,
+                }
             })
             .collect();
         Ok(AccountDirectoryPage {
@@ -516,39 +523,29 @@ fn empty_quota() -> ProviderQuota {
     }
 }
 
-/// 互斥页面状态：availability 终态优先，quota 快照级 `limit_reached` 派生
-/// `rate_limited`，`Unknown` 保守映射 `invalid`（不可调度，不显示为 active）。
+/// 构造状态派生所需的信号快照。
+fn account_signals(
+    account: &AccountRecord,
+    quota_limit_reached: bool,
+    now: chrono::DateTime<Utc>,
+) -> AccountStatusSignals {
+    AccountStatusSignals {
+        enabled: account.enabled,
+        availability: account.availability,
+        access_token_expired: account
+            .access_token_expires_at
+            .is_some_and(|expires_at| expires_at <= now),
+        quota_limit_reached,
+    }
+}
+
+/// 账号运营分类（互斥展示状态）。
 fn account_status(
     account: &AccountRecord,
     quota_limit_reached: bool,
     now: chrono::DateTime<Utc>,
 ) -> AccountStatus {
-    if !account.enabled {
-        AccountStatus::Disabled
-    } else if account.availability == crate::model::accounts::AccountAvailability::Banned {
-        AccountStatus::Banned
-    } else if account.availability == crate::model::accounts::AccountAvailability::QuotaExhausted {
-        AccountStatus::QuotaExhausted
-    } else if matches!(
-        account.availability,
-        crate::model::accounts::AccountAvailability::Invalid
-    ) {
-        AccountStatus::Invalid
-    } else if matches!(
-        account.availability,
-        crate::model::accounts::AccountAvailability::Expired
-    ) || account
-        .access_token_expires_at
-        .is_some_and(|expires_at| expires_at <= now)
-    {
-        AccountStatus::Expired
-    } else if quota_limit_reached {
-        AccountStatus::RateLimited
-    } else if account.availability == crate::model::accounts::AccountAvailability::Unknown {
-        AccountStatus::Invalid
-    } else {
-        AccountStatus::Active
-    }
+    account_signals(account, quota_limit_reached, now).derive()
 }
 
 fn retained_usage_range(now: chrono::DateTime<Utc>, retention_days: u32) -> TimeRange {

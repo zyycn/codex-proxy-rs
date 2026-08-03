@@ -247,6 +247,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                     .map_err(core_store_error)?,
                 availability: change.availability,
                 availability_observed_at: DateTime::<Utc>::from(change.observed_at),
+                message: change.message,
             })
             .await
             .map_err(core_store_error)?;

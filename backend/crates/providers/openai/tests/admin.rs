@@ -544,6 +544,7 @@ async fn openai_admin_projects_confirmed_quota_exhaustion_as_full_without_mutati
         .expect("persist raw quota");
     store
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             availability: CoreAccountAvailability::QuotaExhausted,
@@ -584,6 +585,7 @@ async fn openai_admin_projects_confirmed_quota_exhaustion_as_full_without_mutati
 
     store
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             availability: CoreAccountAvailability::Ready,
@@ -711,6 +713,7 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
         enabled: account.enabled(),
         availability: AdminAccountAvailability::Ready,
         availability_observed_at: now,
+        last_error_message: None,
         quota_observed_at: None,
         created_at: now,
         updated_at: now,

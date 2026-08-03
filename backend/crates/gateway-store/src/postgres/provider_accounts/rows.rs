@@ -90,6 +90,8 @@ pub struct ProviderAccountSummary {
     pub quota_observed_at: Option<DateTime<Utc>>,
     /// 快照级限流事实（Provider 物化）。
     pub quota_limit_reached: bool,
+    /// 最近一次非 ready 状态变更的原始原因（上游错误原文 / 原因码）；恢复 ready 后清空。
+    pub last_error_message: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -310,6 +312,8 @@ pub struct ProviderAccountStateUpdate {
     pub expected_revision: Revision,
     pub availability: AccountAvailability,
     pub availability_observed_at: DateTime<Utc>,
+    /// 上游原因（错误原文 / 原因码）；`None` 不更新错误信息列，恢复 `Ready` 时清空。
+    pub message: Option<String>,
 }
 
 impl ProviderAccountStateUpdate {
@@ -335,14 +339,14 @@ impl ProviderAccountObservation {
 pub(crate) const ACCOUNT_SELECT: &str = "select id, provider_kind, name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, availability,
-            provider_quota_json, quota_limit_reached,
+            provider_quota_json, quota_limit_reached, last_error_message,
             availability_observed_at, quota_observed_at, created_at, updated_at
      from provider_accounts where id = $1";
 
 pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select id, provider_kind, name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, availability,
-            provider_quota_json, quota_limit_reached,
+            provider_quota_json, quota_limit_reached, last_error_message,
             availability_observed_at, quota_observed_at, created_at, updated_at
      from provider_accounts
      where id = any($1::text[]) and provider_kind = $2
@@ -445,6 +449,7 @@ pub(crate) fn account_summary_from_row(
         availability_observed_at: get(&row, "availability_observed_at")?,
         quota_observed_at: get(&row, "quota_observed_at")?,
         quota_limit_reached: get(&row, "quota_limit_reached")?,
+        last_error_message: get(&row, "last_error_message")?,
         created_at: get(&row, "created_at")?,
         updated_at: get(&row, "updated_at")?,
     })

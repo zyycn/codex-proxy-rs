@@ -10,7 +10,7 @@ mod query {
             "pageSize": 20,
             "provider": "xai",
             "search": "  operator  ",
-            "status": "active",
+            "status": "normal",
             "sortBy": "lastUsedAt",
             "sortDirection": "desc"
         }))
@@ -23,7 +23,7 @@ mod query {
             Some(ref provider) if provider.as_str() == "xai"
         ));
         assert_eq!(query.search.as_deref(), Some("operator"));
-        assert_eq!(query.status, Some(AccountStatus::Active));
+        assert_eq!(query.status, Some(AccountStatus::Normal));
         assert_eq!(
             query.sort.expect("sort").field,
             AccountSortField::LastUsedAt
@@ -344,7 +344,7 @@ mod actions {
                 text: "OK".to_owned(),
             },
             DomainConnectionTestEvent::Completed {
-                account_status: AccountStatus::Active,
+                account_status: AccountStatus::Normal,
             },
             DomainConnectionTestEvent::Failed {
                 message: "upstream unavailable".to_owned(),
@@ -378,7 +378,7 @@ mod actions {
                     }
                 }),
                 json!({ "type": "content", "text": "OK" }),
-                json!({ "type": "test_complete", "success": true, "accountStatus": "active" }),
+                json!({ "type": "test_complete", "success": true, "accountStatus": "normal" }),
                 json!({
                     "type": "error",
                     "error": "upstream unavailable",

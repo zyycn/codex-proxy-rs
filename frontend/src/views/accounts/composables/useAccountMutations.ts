@@ -24,13 +24,11 @@ import { useAccountOnboarding } from './useAccountOnboarding'
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 
 const accountStatusSortRank: Record<string, number> = {
-  active: 0,
+  normal: 0,
   quota_exhausted: 1,
   rate_limited: 2,
-  expired: 3,
-  invalid: 4,
-  disabled: 5,
-  banned: 6,
+  disabled: 3,
+  error: 4,
 }
 
 export function useAccountMutations(options: {
@@ -234,11 +232,11 @@ export function useAccountMutations(options: {
       return
     options.accountSummary.value = {
       ...options.accountSummary.value,
-      active: Math.max(
+      normal: Math.max(
         0,
-        options.accountSummary.value.active
-        + Number(status === 'active')
-        - Number(current.status === 'active'),
+        options.accountSummary.value.normal
+        + Number(status === 'normal')
+        - Number(current.status === 'normal'),
       ),
       quotaExhausted: Math.max(
         0,
@@ -252,20 +250,19 @@ export function useAccountMutations(options: {
         + Number(status === 'rate_limited')
         - Number(current.status === 'rate_limited'),
       ),
-      unavailable: Math.max(
+      disabled: Math.max(
         0,
-        options.accountSummary.value.unavailable
-        + Number(isUnavailableAccountStatus(status))
-        - Number(isUnavailableAccountStatus(current.status)),
+        options.accountSummary.value.disabled
+        + Number(status === 'disabled')
+        - Number(current.status === 'disabled'),
+      ),
+      error: Math.max(
+        0,
+        options.accountSummary.value.error
+        + Number(status === 'error')
+        - Number(current.status === 'error'),
       ),
     }
-  }
-
-  function isUnavailableAccountStatus(status: string) {
-    return status === 'expired'
-      || status === 'invalid'
-      || status === 'disabled'
-      || status === 'banned'
   }
 
   function sortAccountsByStatus(rows: AccountRow[]) {

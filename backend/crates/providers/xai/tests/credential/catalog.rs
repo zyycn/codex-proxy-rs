@@ -204,6 +204,7 @@ async fn set_account_state(
 ) {
     store
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: id.clone(),
             expected_revision: CredentialRevision::new(1).expect("revision"),
             availability,
@@ -485,6 +486,7 @@ async fn quota_exhausted_account_remains_eligible_for_catalog_discovery() {
     let id = account_id("quota-exhausted");
     store
         .apply_state_change(AccountStateChange {
+            message: None,
             account_id: id,
             expected_revision: CredentialRevision::new(1).expect("revision"),
             availability: AccountAvailability::QuotaExhausted,
@@ -755,6 +757,7 @@ async fn quota_refresh_preserves_ready_availability_across_concurrent_state_writ
     let transport = Arc::new(MutatingBillingTransport {
         store: Arc::clone(&store),
         mutation: Mutex::new(Some(BillingMutation::State(AccountStateChange {
+            message: None,
             account_id: id.clone(),
             expected_revision: CredentialRevision::new(1).expect("revision"),
             availability: AccountAvailability::Ready,

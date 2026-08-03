@@ -123,38 +123,41 @@ export const accountColumns = [
 ] satisfies BaseTableColumn<AccountRow>[]
 
 export const statusLabels: Record<string, string> = {
-  active: '正常',
-  expired: '已过期',
-  invalid: '失效',
-  disabled: '已禁用',
-  banned: '已封禁',
+  normal: '正常',
   quota_exhausted: '配额耗尽',
   rate_limited: '限流中',
+  disabled: '已停用',
+  error: '错误',
 }
 
 export const statusTones: Record<string, 'success' | 'danger' | 'warning' | 'info' | 'normal'> = {
-  active: 'success',
-  expired: 'warning',
-  invalid: 'warning',
-  disabled: 'normal',
-  banned: 'danger',
+  normal: 'success',
   quota_exhausted: 'warning',
   rate_limited: 'warning',
+  disabled: 'normal',
+  error: 'danger',
 }
 
 export const accountStatusFilterOptions = [
   { label: '全部状态', value: '' },
-  { label: statusLabels.active, value: 'active' },
+  { label: statusLabels.normal, value: 'normal' },
   { label: statusLabels.quota_exhausted, value: 'quota_exhausted' },
   { label: statusLabels.rate_limited, value: 'rate_limited' },
-  { label: statusLabels.expired, value: 'expired' },
-  { label: statusLabels.invalid, value: 'invalid' },
   { label: statusLabels.disabled, value: 'disabled' },
-  { label: statusLabels.banned, value: 'banned' },
+  { label: statusLabels.error, value: 'error' },
 ]
 
+/** `error` 分类下具体原因的展示文案（对应后端 `errorReason`）。 */
+export const errorReasonLabels: Record<string, string> = {
+  expired: '账号已过期',
+  token_expired: '访问令牌已过期',
+  invalid: '凭据已失效',
+  banned: '账号已封禁',
+  unknown: '状态未知',
+}
+
 /**
- * 后端已派生互斥状态（含 `rate_limited`，由快照级 quota.limitReached 产生）；
+ * 后端已派生互斥状态（正常 / 配额耗尽 / 限流中 / 已停用 / 错误）；
  * 前端只渲染，不再独立派生。
  */
 export function derivedAccountStatus(row: AccountRow): string {

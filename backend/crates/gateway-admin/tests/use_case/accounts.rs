@@ -451,10 +451,11 @@ impl AccountStore for FakeAccountStore {
             total: accounts.len() as u64,
             summary: AccountSummary {
                 total: accounts.len() as u64,
-                active: 1,
+                normal: 1,
                 quota_exhausted: 0,
                 rate_limited: 0,
-                unavailable: 0,
+                disabled: 0,
+                error: 0,
             },
         })
     }
@@ -845,7 +846,7 @@ async fn connection_test_should_probe_unavailable_account() {
 }
 
 #[tokio::test]
-async fn connection_test_rate_limited_probe_preserves_active_account_status() {
+async fn connection_test_rate_limited_probe_preserves_normal_account_status() {
     let events = events();
     let provider = FakeProviderAdmin::new("xai", events.clone());
     let store = FakeAccountStore::new("xai", events);
@@ -868,7 +869,7 @@ async fn connection_test_rate_limited_probe_preserves_active_account_status() {
     assert!(matches!(
         events.last(),
         Some(AccountConnectionTestEvent::Failed {
-            account_status: gateway_admin::model::accounts::AccountStatus::Active,
+            account_status: gateway_admin::model::accounts::AccountStatus::Normal,
             ..
         })
     ));
@@ -949,7 +950,7 @@ async fn accounts_refresh_should_keep_guard_through_store_commit() {
     assert_eq!(result.account.account.provider_kind.as_str(), "openai");
     assert_eq!(
         result.account.status,
-        gateway_admin::model::accounts::AccountStatus::Active
+        gateway_admin::model::accounts::AccountStatus::Normal
     );
 
     assert_eq!(
@@ -985,12 +986,12 @@ async fn accounts_list_should_return_complete_directory_semantics() {
         .expect("complete account directory");
 
     assert_eq!(page.summary.total, 1);
-    assert_eq!(page.summary.active, 1);
+    assert_eq!(page.summary.normal, 1);
     let account = page.items.first().expect("account item");
     assert_eq!(account.account.provider_kind.as_str(), "openai");
     assert_eq!(
         account.status,
-        gateway_admin::model::accounts::AccountStatus::Active
+        gateway_admin::model::accounts::AccountStatus::Normal
     );
 }
 
@@ -1089,8 +1090,8 @@ async fn accounts_list_should_prefer_quota_exhaustion_over_stale_token_expiry() 
 }
 
 #[tokio::test]
-async fn accounts_list_should_map_unknown_availability_to_invalid_not_active() {
-    // Unknown 不可调度，Admin 不得显示为 active。
+async fn accounts_list_should_map_unknown_availability_to_error_not_normal() {
+    // Unknown 不可调度，Admin 不得显示为 normal。
     let provider = FakeProviderAdmin::new("openai", events());
     let mut account = account_record("openai");
     account.availability = AccountAvailability::Unknown;
@@ -1112,7 +1113,7 @@ async fn accounts_list_should_map_unknown_availability_to_invalid_not_active() {
 
     assert_eq!(
         page.items.first().expect("account item").status,
-        gateway_admin::model::accounts::AccountStatus::Invalid,
+        gateway_admin::model::accounts::AccountStatus::Error,
     );
 }
 
@@ -1333,6 +1334,7 @@ pub(super) fn account_record(kind: &str) -> AccountRecord {
         enabled: true,
         availability: AccountAvailability::Ready,
         availability_observed_at: now,
+        last_error_message: None,
         quota_observed_at: None,
         created_at: now,
         updated_at: now,

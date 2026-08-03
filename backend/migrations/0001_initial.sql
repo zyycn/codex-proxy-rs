@@ -133,6 +133,7 @@ create table provider_accounts (
   availability text not null default 'unknown',
   provider_quota_json jsonb,
   quota_limit_reached boolean not null default false,
+  last_error_message text,
   availability_observed_at timestamptz not null,
   quota_observed_at timestamptz,
   created_at timestamptz not null,

@@ -607,6 +607,8 @@ pub struct AccountStateChange {
     pub expected_revision: CredentialRevision,
     pub availability: AccountAvailability,
     pub observed_at: SystemTime,
+    /// 上游原因（错误原文 / 原因码）；`Some` 写入持久化错误信息，`None` 不更新，恢复 `Ready` 时清空。
+    pub message: Option<String>,
 }
 
 /// `provider_accounts` 的数据库中立端口。
