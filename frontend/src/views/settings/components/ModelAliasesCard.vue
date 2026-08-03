@@ -23,11 +23,9 @@ const emit = defineEmits<{
 
 <template>
   <BaseCard
-    :padded="false"
     title="模型映射"
     description="配置请求模型与上游模型的映射关系"
-    header-class="px-5 pt-4"
-    body-class="px-5 py-5"
+    body-class="mt-5"
   >
     <div class="grid gap-4">
       <div class="flex flex-wrap items-center gap-3">

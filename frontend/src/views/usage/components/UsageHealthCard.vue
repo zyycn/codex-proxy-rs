@@ -146,11 +146,9 @@ function formatTooltip(params: unknown) {
 <template>
   <BaseCard
     as="article"
-    :padded="false"
     title="请求健康"
     :description="`按${granularityText}观察请求量、成功率与失败时段`"
-    header-class="px-5 pt-4"
-    body-class="px-5 pt-3 pb-4"
+    body-class="mt-3"
     class="h-full min-h-90"
   >
     <template #body>

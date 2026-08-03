@@ -79,10 +79,8 @@ watch(timeRange, () => {
     />
 
     <BaseCard
-      :padded="false"
       class="mt-5 flex flex-col"
-      header-class="px-5 pt-4"
-      body-class="flex min-h-0 flex-col px-5 pt-3 pb-4"
+      body-class="mt-3 flex min-h-0 flex-col"
     >
       <template #header>
         <div class="flex flex-wrap items-center justify-between gap-3">

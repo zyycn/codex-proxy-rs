@@ -26,11 +26,9 @@ const emit = defineEmits<{
 
 <template>
   <BaseCard
-    :padded="false"
     title="管理员 API Key"
     description="用于外部系统集成，具有管理员权限"
-    header-class="px-5 pt-4"
-    body-class="px-5 py-5"
+    body-class="mt-5"
   >
     <template #actions>
       <div class="flex flex-wrap items-center gap-2">

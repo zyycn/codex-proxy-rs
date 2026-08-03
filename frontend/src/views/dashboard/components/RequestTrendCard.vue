@@ -39,7 +39,7 @@ const {
 </script>
 
 <template>
-  <BaseCard as="article" variant="dashboard" title="使用趋势" class="min-h-95 w-full">
+  <BaseCard as="article" title="使用趋势" class="min-h-95 w-full">
     <template #actions>
       <BaseSegmented
         v-model="activeKind"

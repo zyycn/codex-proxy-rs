@@ -126,10 +126,8 @@ const {
     <AccountOverviewCards :summary="accountSummary" />
 
     <BaseCard
-      :padded="false"
-      class="mt-4 flex h-[calc(100dvh-248px)] min-h-125 flex-col"
-      header-class="px-4 pt-4 pb-2 md:px-5"
-      body-class="flex min-h-0 flex-1 px-4 pb-3 md:px-5"
+      class="mt-4 flex h-[calc(100dvh-250px)] min-h-125 flex-col"
+      body-class="mt-3 flex min-h-0 flex-1"
     >
       <template #header>
         <AccountFilters

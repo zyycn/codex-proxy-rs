@@ -167,12 +167,10 @@ function formatTooltip(params: unknown) {
 <template>
   <BaseCard
     as="article"
-    :padded="false"
     title="响应速度"
     description="总耗时或首字的分位耗时，越低越快"
     header-collapse-at="none"
-    header-class="px-5 pt-4"
-    body-class="px-5 pt-3 pb-4"
+    body-class="mt-3"
     class="h-full min-h-90"
   >
     <template #actions>

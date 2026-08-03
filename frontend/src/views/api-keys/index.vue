@@ -88,10 +88,8 @@ const {
     />
 
     <BaseCard
-      :padded="false"
       class="mt-5 flex h-[calc(100dvh-136px)] min-h-125 flex-col"
-      header-class="px-5 pt-4"
-      body-class="flex min-h-0 flex-1 px-5 py-3"
+      body-class="mt-3 flex min-h-0 flex-1"
     >
       <template #header>
         <ApiKeyFilters

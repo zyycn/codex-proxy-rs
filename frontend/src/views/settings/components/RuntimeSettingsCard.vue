@@ -14,11 +14,9 @@ const requestIntervalMs = defineModel<string>('requestIntervalMs', { required: t
 
 <template>
   <BaseCard
-    :padded="false"
     title="运行参数"
     description="请求节奏、账号并发和 Token 刷新"
-    header-class="px-5 pt-4"
-    body-class="px-5 py-5"
+    body-class="mt-5"
   >
     <BaseForm :columns="2" class="max-w-6xl">
       <BaseFormItem

@@ -35,7 +35,7 @@ const {
 
 <template>
   <div class="w-full">
-    <BasePageHeader title="系统概览">
+    <BasePageHeader title="系统概览" actions-inline>
       <template #description>
         <span>当日统计</span>
         <DashboardHeartbeat :updated-at="lastRefreshedAt" />

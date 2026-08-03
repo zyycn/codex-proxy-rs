@@ -14,11 +14,9 @@ const model = defineModel<RotationStrategy | ''>({ required: true })
 
 <template>
   <BaseCard
-    :padded="false"
     title="调度策略"
     description="决定每次请求如何调度账号池"
-    header-class="px-5 pt-4"
-    body-class="px-5 py-5"
+    body-class="mt-5"
   >
     <div class="grid max-w-6xl gap-3 lg:grid-cols-4">
       <button

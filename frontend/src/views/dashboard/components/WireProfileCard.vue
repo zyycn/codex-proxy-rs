@@ -171,7 +171,6 @@ function providerLabel(provider: string) {
 <template>
   <BaseCard
     as="article"
-    variant="dashboard"
     title="上游请求身份"
     body-class="flex min-h-0 flex-1 flex-col"
     class="flex min-h-95 w-full flex-col"

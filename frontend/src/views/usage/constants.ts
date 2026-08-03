@@ -5,6 +5,7 @@ export const usageRecordColumns = [
     key: 'accountEmail',
     label: '账号',
     width: '280px',
+    fixed: false as const,
     ellipsis: true,
   },
   {

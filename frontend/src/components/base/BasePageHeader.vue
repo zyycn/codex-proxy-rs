@@ -1,12 +1,20 @@
 <script setup lang="ts">
-defineProps<{
+const props = defineProps<{
   title: string
   description?: string
+  actionsInline?: boolean
 }>()
 </script>
 
 <template>
-  <header class="grid min-h-17 shrink-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-3">
+  <header
+    class="grid min-h-17 shrink-0 items-start"
+    :class="
+      props.actionsInline
+        ? 'grid-cols-[minmax(0,1fr)_auto] gap-x-4'
+        : 'grid-cols-1 gap-y-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-x-4'
+    "
+  >
     <div class="min-w-0">
       <h1 class="m-0 text-[34px] leading-[1.15] font-extrabold text-(--cp-text-primary)">
         {{ title }}
@@ -23,6 +31,7 @@ defineProps<{
     <div
       v-if="$slots.actions"
       class="mt-0.5 flex shrink-0 items-center justify-end gap-2"
+      :class="props.actionsInline ? undefined : 'max-sm:w-full'"
     >
       <slot name="actions" />
     </div>

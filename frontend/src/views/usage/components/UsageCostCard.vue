@@ -239,12 +239,10 @@ function formatTooltip(params: unknown) {
 <template>
   <BaseCard
     as="article"
-    :padded="false"
     title="成本效率"
     description="预估费用、Token 与缓存收益"
     header-collapse-at="none"
-    header-class="px-5 pt-4"
-    body-class="px-5 pt-3 pb-4"
+    body-class="mt-3"
     class="h-full min-h-90"
   >
     <template #actions>

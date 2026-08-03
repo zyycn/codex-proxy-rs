@@ -90,7 +90,9 @@ const statusRows = computed(() => {
   }
   const active = p?.active ?? 0
   const refreshing = p?.refreshing ?? 0
-  const quota = p?.quotaExhausted ?? 0
+  const rateLimited = p?.rateLimited ?? 0
+  const quotaExhausted = p?.quotaExhausted ?? 0
+  const quotaLimited = rateLimited + quotaExhausted
   const expired = p?.expired ?? 0
   const invalid = p?.invalid ?? 0
   const disabled = p?.disabled ?? 0
@@ -113,16 +115,9 @@ const statusRows = computed(() => {
       icon: RefreshCw,
     },
     {
-      label: '限流中',
-      description: '任一额度窗口已触顶',
-      value: String(p?.rateLimited ?? 0),
-      tone: 'warning',
-      icon: TriangleAlert,
-    },
-    {
-      label: '配额耗尽',
-      description: '已确认 402 耗尽',
-      value: String(quota),
+      label: '额度受限',
+      description: `限流中 ${rateLimited} · 配额耗尽 ${quotaExhausted}`,
+      value: String(quotaLimited),
       tone: 'warning',
       icon: TriangleAlert,
     },
@@ -149,23 +144,21 @@ const statusBars = computed(() => {
     return []
   const active = (p.active / p.total) * 100
   const refreshing = ((p.refreshing ?? 0) / p.total) * 100
-  const rateLimited = ((p.rateLimited ?? 0) / p.total) * 100
-  const quota = (p.quotaExhausted / p.total) * 100
+  const quotaLimited = (((p.rateLimited ?? 0) + p.quotaExhausted) / p.total) * 100
   const unavailable = ((p.expired + (p.invalid ?? 0) + p.disabled + p.banned) / p.total) * 100
   return [
     { pct: active, cls: 'bg-(--cp-success)' },
     { pct: refreshing, cls: 'bg-(--cp-normal)' },
-    { pct: rateLimited, cls: 'bg-(--cp-warning)' },
-    { pct: quota, cls: 'bg-(--cp-warning)' },
+    { pct: quotaLimited, cls: 'bg-(--cp-warning)' },
     { pct: unavailable, cls: 'bg-(--cp-danger)' },
   ].filter(b => b.pct > 0)
 })
 </script>
 
 <template>
-  <BaseCard as="article" :padded="false" class="w-full xl:h-112.5">
+  <BaseCard as="article" class="w-full xl:h-112.5">
     <div
-      class="grid px-4 pt-5 pb-6 lg:px-7 lg:pt-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.28fr)_minmax(280px,0.9fr)] xl:gap-7 xl:pb-0"
+      class="grid xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.28fr)_minmax(280px,0.9fr)] xl:gap-7"
     >
       <section class="min-w-0 w-full pb-6 xl:h-100.5 xl:pb-0">
         <h2 class="m-0 text-xl leading-[1.15] font-heavy text-(--cp-text-primary)">

@@ -65,16 +65,15 @@ function overviewIconClass(tone: string) {
       v-for="item in overviewItems"
       :key="item.label"
       as="article"
-      :padded="false"
-      class="h-24"
+      padding="compact"
     >
-      <div class="flex h-full items-stretch justify-between gap-3 px-5 py-3">
-        <div class="flex min-w-0 flex-col justify-between">
+      <div class="flex items-stretch justify-between gap-3">
+        <div class="flex min-w-0 flex-col">
           <p class="m-0 text-[12px] leading-none font-heavy text-(--cp-text-secondary)">
             {{ item.label }}
           </p>
           <strong
-            class="block font-mono text-[26px] leading-none font-extrabold text-(--cp-text-primary)"
+            class="my-2 block font-mono text-[26px] leading-none font-extrabold text-(--cp-text-primary)"
           >
             {{ item.value }}
           </strong>

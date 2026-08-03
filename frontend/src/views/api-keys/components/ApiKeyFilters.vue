@@ -19,11 +19,11 @@ const search = defineModel<string>('search', { required: true })
 
 <template>
   <div
-    class="flex w-full flex-col gap-3 md:flex-row md:flex-wrap md:items-center"
+    class="flex w-full flex-wrap items-center gap-3"
     role="group"
     aria-label="API Key 筛选与操作"
   >
-    <div class="min-w-0 w-full md:w-96 md:flex-none">
+    <div class="min-w-0 flex-1 md:w-96 md:flex-none">
       <BaseInput v-model="search" placeholder="搜索名称、标签或 ID" class="w-full">
         <template #prefix>
           <Search class="size-4.5 text-(--cp-text-tertiary)" />
@@ -31,7 +31,7 @@ const search = defineModel<string>('search', { required: true })
       </BaseInput>
     </div>
 
-    <div class="flex shrink-0 self-end items-center justify-end gap-2 md:ml-auto">
+    <div class="flex shrink-0 items-center justify-end gap-2 md:ml-auto">
       <BaseButton
         v-if="selectedCount > 0"
         variant="danger"

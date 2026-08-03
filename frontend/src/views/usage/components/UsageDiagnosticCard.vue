@@ -114,12 +114,10 @@ function diagnosticNameDisplay(name: string) {
 <template>
   <BaseCard
     as="article"
-    :padded="false"
     title="热点诊断"
     :description="`按${selectedDimensionLabel}定位错误、慢请求与费用热点`"
     header-collapse-at="lg"
-    header-class="px-5 pt-4"
-    body-class="min-h-0 min-w-0 px-5 pt-3"
+    body-class="mt-3 min-h-0 min-w-0"
     class="grid h-105 min-h-105 max-h-105 min-w-0 w-full grid-rows-[auto_minmax(0,1fr)] lg:h-90 lg:min-h-90 lg:max-h-90"
   >
     <template #actions>

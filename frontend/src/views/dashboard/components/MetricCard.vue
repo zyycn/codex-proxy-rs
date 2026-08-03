@@ -69,7 +69,7 @@ const sparklineOption = computed<EChartsOption | null>(() => {
 </script>
 
 <template>
-  <BaseCard as="article" :padded="false" class="relative h-38.5 w-full px-6 pt-5">
+  <BaseCard as="article" padding="compact" class="relative h-38.5 w-full">
     <div class="flex items-start gap-3">
       <BaseMotionIcon
         aria-hidden="true"

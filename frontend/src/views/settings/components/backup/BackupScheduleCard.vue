@@ -40,11 +40,9 @@ const TIMEZONE_OPTIONS = [
 
 <template>
   <BaseCard
-    :padded="false"
     title="定时备份"
     description="配置自动定时备份"
-    header-class="px-5 pt-4"
-    body-class="px-5 py-5"
+    body-class="mt-5"
   >
     <template #actions>
       <BaseButton variant="primary" :loading="saving" :disabled="loading" @click="emit('save')">

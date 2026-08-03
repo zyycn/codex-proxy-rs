@@ -51,10 +51,8 @@ function toggleSecretVisible(): void {
 
 <template>
   <BaseCard
-    :padded="false"
     title="S3 存储配置"
-    header-class="px-5 pt-4"
-    body-class="px-5 py-5"
+    body-class="mt-5"
   >
     <template #description>
       <span class="text-(--cp-text-secondary)">

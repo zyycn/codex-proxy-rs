@@ -207,7 +207,6 @@ onBeforeUnmount(() => {
 <template>
   <BaseCard
     as="article"
-    variant="dashboard"
     :title="timeline.title"
     :description="timeline.description"
     header-collapse-at="lg"

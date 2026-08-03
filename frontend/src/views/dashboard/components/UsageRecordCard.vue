@@ -17,7 +17,6 @@ const dashboardUsageRecordColumns = usageRecordColumns.filter(column => column.k
 <template>
   <BaseCard
     as="article"
-    variant="dashboard"
     title="使用记录"
     description="最近 10 条成功请求"
     class="h-117 w-full"

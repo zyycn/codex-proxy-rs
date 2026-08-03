@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
-type CardVariant = 'default' | 'dashboard' | 'elevated'
+type CardPadding = 'default' | 'compact'
+type CardLayout = 'content' | 'flush'
 type HeaderCollapseAt = 'sm' | 'lg' | 'none'
 
 const props = withDefaults(
   defineProps<{
     as?: keyof HTMLElementTagNameMap
-    padded?: boolean
-    variant?: CardVariant
+    padding?: CardPadding
+    layout?: CardLayout
     title?: string
     description?: string
     headerCollapseAt?: HeaderCollapseAt
@@ -17,8 +18,8 @@ const props = withDefaults(
   }>(),
   {
     as: 'section',
-    padded: true,
-    variant: 'default',
+    padding: 'default',
+    layout: 'content',
     title: undefined,
     description: undefined,
     headerCollapseAt: 'sm',
@@ -36,22 +37,21 @@ const slots = defineSlots<{
   default?: () => unknown
 }>()
 
-const paddingClasses: Record<CardVariant, string> = {
-  default: 'px-5 py-3',
-  dashboard: 'px-7 py-5.5',
-  elevated: 'px-5 py-3',
-}
-
-const shadowClasses: Record<CardVariant, string> = {
-  default: 'shadow-(--cp-shadow-card)',
-  dashboard: 'shadow-(--cp-shadow-card)',
-  elevated: 'shadow-(--cp-shadow-popover)',
+const paddingClasses: Record<CardPadding, string> = {
+  default: 'p-5.5',
+  compact: 'p-4',
 }
 
 const hasManagedHeader = computed(
   () =>
     !!props.title || !!props.description || !!slots.actions || !!slots.title || !!slots.description,
 )
+
+const outerPaddingClass = computed(() => {
+  if (props.layout === 'flush')
+    return undefined
+  return paddingClasses[props.padding]
+})
 
 const managedHeaderLayoutClasses = computed(() => {
   if (props.headerCollapseAt === 'none') {
@@ -69,14 +69,17 @@ const managedHeaderLayoutClasses = computed(() => {
 <template>
   <component
     :is="props.as"
-    class="[--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] overflow-hidden bg-(--cp-bg-surface) rounded-(--cp-card-radius)"
+    class="[--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] overflow-hidden rounded-(--cp-card-radius) bg-(--cp-bg-surface) shadow-(--cp-shadow-card)"
     :class="[
-      shadowClasses[props.variant],
-      props.padded ? paddingClasses[props.variant] : undefined,
+      outerPaddingClass,
     ]"
   >
     <template v-if="$slots.header || hasManagedHeader || $slots.body">
-      <header v-if="$slots.header || hasManagedHeader" class="shrink-0" :class="props.headerClass">
+      <header
+        v-if="$slots.header || hasManagedHeader"
+        class="shrink-0"
+        :class="props.headerClass"
+      >
         <slot name="header">
           <div :class="managedHeaderLayoutClasses">
             <div class="min-w-0 pt-0.5">
@@ -105,7 +108,10 @@ const managedHeaderLayoutClasses = computed(() => {
         </slot>
       </header>
 
-      <div v-if="$slots.body || $slots.default" :class="props.bodyClass">
+      <div
+        v-if="$slots.body || $slots.default"
+        :class="props.bodyClass"
+      >
         <slot name="body">
           <slot />
         </slot>

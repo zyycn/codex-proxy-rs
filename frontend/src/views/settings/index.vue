@@ -71,24 +71,9 @@ watch(
 
 <template>
   <div class="w-full">
-    <BasePageHeader title="系统设置" description="管理运行参数、调度策略、模型映射与备份配置">
-      <template #actions>
-        <BaseButton
-          v-if="section === 'runtime'"
-          variant="primary"
-          :loading="saving"
-          :disabled="loading"
-          @click="saveSettings"
-        >
-          <template #icon>
-            <Save class="size-4" />
-          </template>
-          {{ saving ? '保存中...' : '保存' }}
-        </BaseButton>
-      </template>
-    </BasePageHeader>
+    <BasePageHeader title="系统设置" description="管理运行参数、调度策略、模型映射与备份配置" />
 
-    <div class="mt-4">
+    <div class="mt-4 flex flex-wrap items-center justify-between gap-3">
       <BaseSegmented
         :model-value="section"
         class="bg-(--cp-input-soft-bg)!"
@@ -99,6 +84,18 @@ watch(
         aria-label="设置分区"
         @update:model-value="switchSection"
       />
+      <BaseButton
+        v-if="section === 'runtime'"
+        variant="primary"
+        :loading="saving"
+        :disabled="loading"
+        @click="saveSettings"
+      >
+        <template #icon>
+          <Save class="size-4" />
+        </template>
+        {{ saving ? '保存中...' : '保存' }}
+      </BaseButton>
     </div>
 
     <div v-show="section === 'runtime'" class="mt-5 grid w-full gap-5">

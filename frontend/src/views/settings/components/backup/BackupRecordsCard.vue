@@ -90,11 +90,9 @@ function canDelete(record: BackupRecord): boolean {
 
 <template>
   <BaseCard
-    :padded="false"
     title="备份记录"
     description="创建手动备份和管理已有备份记录"
-    header-class="px-5 pt-4"
-    body-class="px-5 py-3"
+    body-class="mt-3"
   >
     <template #actions>
       <div class="flex flex-wrap items-center gap-2">

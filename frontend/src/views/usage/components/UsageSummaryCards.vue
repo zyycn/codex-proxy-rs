@@ -3,6 +3,7 @@ import type { getUsageRecordSummary } from '@/api'
 import { Activity, Database, FileText, Timer } from '@lucide/vue'
 
 import { computed } from 'vue'
+import BaseCard from '@/components/base/BaseCard.vue'
 import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
 
 const props = defineProps<{
@@ -54,10 +55,12 @@ const items = computed(() => [
     class="mt-5 grid shrink-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4"
     aria-label="使用概览"
   >
-    <article
+    <BaseCard
       v-for="item in items"
       :key="item.key"
-      class="grid min-h-23 grid-cols-[36px_minmax(0,1fr)] items-stretch gap-3 rounded-(--cp-card-radius) bg-(--cp-bg-surface) px-4 py-3 shadow-(--cp-shadow-card)"
+      as="article"
+      padding="compact"
+      class="grid min-h-23 grid-cols-[36px_minmax(0,1fr)] items-stretch gap-3"
     >
       <BaseMotionIcon
         aria-hidden="true"
@@ -79,6 +82,6 @@ const items = computed(() => [
           {{ item.detail }}
         </span>
       </div>
-    </article>
+    </BaseCard>
   </section>
 </template>

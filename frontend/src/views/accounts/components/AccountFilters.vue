@@ -54,10 +54,13 @@ const provider = defineModel<string>('provider', { required: true })
       />
     </div>
 
-    <div class="flex shrink-0 self-end items-center justify-end gap-2 md:ml-auto">
+    <div
+      class="grid w-full grid-cols-2 gap-2 md:flex md:w-auto md:shrink-0 md:self-end md:items-center md:justify-end md:ml-auto"
+    >
       <BaseButton
         v-if="selectedCount > 0"
         variant="danger"
+        class="w-full whitespace-nowrap md:w-auto"
         :disabled="batchDeleting"
         @click="emit('deleteSelected')"
       >
@@ -67,13 +70,19 @@ const provider = defineModel<string>('provider', { required: true })
       <BaseButton
         v-if="selectedCount > 0"
         variant="default"
+        class="w-full whitespace-nowrap md:w-auto"
         :loading="exportingAccounts"
         @click="emit('exportSelected')"
       >
         <Download class="size-4" />
         导出选中 ({{ selectedCount }})
       </BaseButton>
-      <BaseButton variant="primary" @click="emit('create')">
+      <BaseButton
+        variant="primary"
+        class="whitespace-nowrap md:w-auto"
+        :class="selectedCount > 0 ? 'col-span-2 w-full' : 'col-span-2 justify-self-end'"
+        @click="emit('create')"
+      >
         <Upload class="size-4" />
         导入账号
       </BaseButton>
