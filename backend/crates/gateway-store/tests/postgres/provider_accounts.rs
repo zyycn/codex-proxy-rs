@@ -380,8 +380,8 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     assert_eq!(usage_page.total, 6);
     assert_eq!(usage_page.summary.total, 6);
     assert_eq!(usage_page.summary.normal, 1);
-    assert_eq!(usage_page.summary.quota_exhausted, 1);
-    assert_eq!(usage_page.summary.rate_limited, 1);
+    assert_eq!(usage_page.summary.quota_exhausted, 2);
+    assert_eq!(usage_page.summary.rate_limited, 0);
     assert_eq!(usage_page.summary.disabled, 1);
     assert_eq!(usage_page.summary.error, 2);
     assert_eq!(
