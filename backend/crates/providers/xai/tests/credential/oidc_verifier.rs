@@ -420,7 +420,7 @@ struct TestKey {
 impl TestKey {
     fn new(seed: u8, kid: &'static str) -> Self {
         let signing_key = SigningKey::from_slice(&[seed; 32]).expect("valid deterministic scalar");
-        let point = signing_key.verifying_key().to_encoded_point(false);
+        let point = signing_key.verifying_key().to_sec1_point(false);
         let x = URL_SAFE_NO_PAD.encode(point.x().expect("P-256 x coordinate"));
         let y = URL_SAFE_NO_PAD.encode(point.y().expect("P-256 y coordinate"));
         Self {
