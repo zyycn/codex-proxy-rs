@@ -108,11 +108,13 @@ const labelClasses = computed(() => [
     :title="title || (iconOnly ? label : undefined)"
     :aria-busy="loading"
   >
-    <LoaderCircle
+    <span
       v-if="loading"
-      class="shrink-0 animate-spin origin-center transform-view will-change-transform"
-      :size="loadingIconSize[size]"
-    />
+      class="inline-flex shrink-0 animate-spin origin-center will-change-transform"
+      aria-hidden="true"
+    >
+      <LoaderCircle :size="loadingIconSize[size]" />
+    </span>
     <span v-if="$slots.icon && !loading" class="inline-flex shrink-0">
       <slot name="icon" />
     </span>
