@@ -130,7 +130,9 @@ fn parse_provider(value: &str) -> Result<Option<ProviderKind>, WireValidationErr
 fn parse_account_status(value: &str) -> Option<DomainAccountStatus> {
     match value.trim().to_ascii_lowercase().as_str() {
         "active" => Some(DomainAccountStatus::Active),
+        "rate_limited" => Some(DomainAccountStatus::RateLimited),
         "expired" => Some(DomainAccountStatus::Expired),
+        "invalid" => Some(DomainAccountStatus::Invalid),
         "quota_exhausted" => Some(DomainAccountStatus::QuotaExhausted),
         "disabled" => Some(DomainAccountStatus::Disabled),
         "banned" => Some(DomainAccountStatus::Banned),
@@ -174,6 +176,7 @@ pub struct AccountSummaryView {
     pub total: u64,
     pub active: u64,
     pub quota_exhausted: u64,
+    pub rate_limited: u64,
     pub unavailable: u64,
 }
 
@@ -1335,6 +1338,7 @@ fn account_page_data(
             total: result.summary.total,
             active: result.summary.active,
             quota_exhausted: result.summary.quota_exhausted,
+            rate_limited: result.summary.rate_limited,
             unavailable: result.summary.unavailable,
         },
     }

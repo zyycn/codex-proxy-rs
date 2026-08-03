@@ -231,6 +231,21 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
             .await
             .expect("insert account list fixture");
     }
+    repository
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: ProviderAccountId::new("acct_charlie").expect("account id"),
+            expected_revision: CredentialRevision::new(1).expect("credential revision"),
+            quota: Some(OpaqueProviderData::new(
+                json!({"rate_limit": {"limit_reached": true}})
+                    .as_object()
+                    .expect("quota object")
+                    .clone(),
+            )),
+            observed_at: Some(SystemTime::now()),
+            limit_reached: Some(true),
+        })
+        .await
+        .expect("seed rate-limited account");
 
     seed_model_request(
         &database.pool,
@@ -307,13 +322,15 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     assert_eq!(usage_page.config_revision.get(), 1);
     assert_eq!(usage_page.total, 6);
     assert_eq!(usage_page.summary.total, 6);
-    assert_eq!(usage_page.summary.active, 2);
+    assert_eq!(usage_page.summary.active, 1);
     assert_eq!(usage_page.summary.quota_exhausted, 1);
+    assert_eq!(usage_page.summary.rate_limited, 1);
     assert_eq!(usage_page.summary.unavailable, 3);
     assert_eq!(
         usage_page.summary.total,
         usage_page.summary.active
             + usage_page.summary.quota_exhausted
+            + usage_page.summary.rate_limited
             + usage_page.summary.unavailable
     );
     assert_eq!(

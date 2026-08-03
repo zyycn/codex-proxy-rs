@@ -129,6 +129,7 @@ export interface AccountSummary {
   total: number
   active: number
   quotaExhausted: number
+  rateLimited: number
   unavailable: number
 }
 

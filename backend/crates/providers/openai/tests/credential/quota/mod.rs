@@ -194,6 +194,40 @@ async fn passive_full_percent_with_explicit_allowance_keeps_account_ready() {
 }
 
 #[tokio::test]
+async fn passive_headers_should_materialize_false_when_quota_is_not_exhausted() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_passive_quota_available").await;
+    let account = store
+        .account("acct_passive_quota_available")
+        .expect("account");
+    let service = quota_service(&store);
+    let headers = vec![
+        ("x-codex-active-limit".to_owned(), "codex".to_owned()),
+        ("x-codex-primary-used-percent".to_owned(), "31".to_owned()),
+        ("x-codex-allowed".to_owned(), "true".to_owned()),
+        ("x-codex-limit-reached".to_owned(), "false".to_owned()),
+    ];
+
+    assert!(
+        service
+            .synchronize_passive_headers(&account, &headers)
+            .await
+            .expect("passive quota")
+    );
+
+    let observations = store
+        .get_quotas(std::slice::from_ref(account.id()))
+        .await
+        .expect("read quota observation");
+    assert_eq!(
+        observations
+            .first()
+            .and_then(|observation| observation.limit_reached),
+        Some(false)
+    );
+}
+
+#[tokio::test]
 async fn manual_quota_refresh_preserves_disabled_account_state() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_disabled_quota_state";

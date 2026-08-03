@@ -16,6 +16,7 @@ export function useAccountsQuery() {
     total: 0,
     active: 0,
     quotaExhausted: 0,
+    rateLimited: 0,
     unavailable: 0,
   })
 

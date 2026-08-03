@@ -35,6 +35,19 @@ mod query {
     }
 
     #[test]
+    fn account_query_should_parse_rate_limited_status() {
+        let query: ListQuery = serde_json::from_value(json!({
+            "status": "rate_limited"
+        }))
+        .expect("deserialize account query");
+
+        assert_eq!(
+            query.validate().expect("validate account query").status,
+            Some(AccountStatus::RateLimited)
+        );
+    }
+
+    #[test]
     fn account_query_should_reject_unbounded_page_size() {
         let query: ListQuery =
             serde_json::from_value(json!({"pageSize": 201})).expect("deserialize account query");

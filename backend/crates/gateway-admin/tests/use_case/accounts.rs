@@ -453,6 +453,7 @@ impl AccountStore for FakeAccountStore {
                 total: accounts.len() as u64,
                 active: 1,
                 quota_exhausted: 0,
+                rate_limited: 0,
                 unavailable: 0,
             },
         })

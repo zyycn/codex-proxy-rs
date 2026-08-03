@@ -627,7 +627,7 @@ impl CodexCredentialQuotaService {
                 expected_revision: account.revision(),
                 quota: Some(OpaqueProviderData::new(quota)),
                 observed_at: Some(observed_at),
-                limit_reached: Some(true),
+                limit_reached: Some(fact.exhausted()),
             })
             .await?;
         if outcome == QuotaWriteOutcome::Conflict {

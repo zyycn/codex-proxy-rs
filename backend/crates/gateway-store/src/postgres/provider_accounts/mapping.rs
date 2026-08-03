@@ -65,8 +65,9 @@ pub(crate) fn admin_account_status(
         AdminAccountStatus::Banned
     } else if account.availability == AccountAvailability::QuotaExhausted {
         AdminAccountStatus::QuotaExhausted
+    } else if account.availability == AccountAvailability::Invalid {
+        AdminAccountStatus::Invalid
     } else if account.availability == AccountAvailability::Expired
-        || account.availability == AccountAvailability::Invalid
         || account
             .access_token_expires_at
             .is_some_and(|expires_at| expires_at <= now)
@@ -89,6 +90,7 @@ pub(crate) fn admin_account_summary(
         total: u64::try_from(accounts.len()).unwrap_or(u64::MAX),
         active: 0,
         quota_exhausted: 0,
+        rate_limited: 0,
         unavailable: 0,
     };
     for account in accounts {
@@ -97,8 +99,10 @@ pub(crate) fn admin_account_summary(
             AdminAccountStatus::QuotaExhausted => {
                 summary.quota_exhausted = summary.quota_exhausted.saturating_add(1);
             }
-            AdminAccountStatus::RateLimited
-            | AdminAccountStatus::Expired
+            AdminAccountStatus::RateLimited => {
+                summary.rate_limited = summary.rate_limited.saturating_add(1);
+            }
+            AdminAccountStatus::Expired
             | AdminAccountStatus::Invalid
             | AdminAccountStatus::Disabled
             | AdminAccountStatus::Banned => {

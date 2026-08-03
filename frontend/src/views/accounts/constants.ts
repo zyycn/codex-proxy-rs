@@ -125,6 +125,7 @@ export const accountColumns = [
 export const statusLabels: Record<string, string> = {
   active: '正常',
   expired: '已过期',
+  invalid: '失效',
   disabled: '已禁用',
   banned: '已封禁',
   quota_exhausted: '配额耗尽',
@@ -134,6 +135,7 @@ export const statusLabels: Record<string, string> = {
 export const statusTones: Record<string, 'success' | 'danger' | 'warning' | 'info' | 'normal'> = {
   active: 'success',
   expired: 'warning',
+  invalid: 'warning',
   disabled: 'normal',
   banned: 'danger',
   quota_exhausted: 'warning',
@@ -144,7 +146,9 @@ export const accountStatusFilterOptions = [
   { label: '全部状态', value: '' },
   { label: statusLabels.active, value: 'active' },
   { label: statusLabels.quota_exhausted, value: 'quota_exhausted' },
+  { label: statusLabels.rate_limited, value: 'rate_limited' },
   { label: statusLabels.expired, value: 'expired' },
+  { label: statusLabels.invalid, value: 'invalid' },
   { label: statusLabels.disabled, value: 'disabled' },
   { label: statusLabels.banned, value: 'banned' },
 ]

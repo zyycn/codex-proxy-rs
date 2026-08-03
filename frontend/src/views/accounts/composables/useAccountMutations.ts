@@ -26,9 +26,11 @@ type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 const accountStatusSortRank: Record<string, number> = {
   active: 0,
   quota_exhausted: 1,
-  expired: 2,
-  disabled: 3,
-  banned: 4,
+  rate_limited: 2,
+  expired: 3,
+  invalid: 4,
+  disabled: 5,
+  banned: 6,
 }
 
 export function useAccountMutations(options: {
@@ -244,6 +246,12 @@ export function useAccountMutations(options: {
         + Number(status === 'quota_exhausted')
         - Number(current.status === 'quota_exhausted'),
       ),
+      rateLimited: Math.max(
+        0,
+        options.accountSummary.value.rateLimited
+        + Number(status === 'rate_limited')
+        - Number(current.status === 'rate_limited'),
+      ),
       unavailable: Math.max(
         0,
         options.accountSummary.value.unavailable
@@ -254,7 +262,10 @@ export function useAccountMutations(options: {
   }
 
   function isUnavailableAccountStatus(status: string) {
-    return status === 'expired' || status === 'disabled' || status === 'banned'
+    return status === 'expired'
+      || status === 'invalid'
+      || status === 'disabled'
+      || status === 'banned'
   }
 
   function sortAccountsByStatus(rows: AccountRow[]) {
@@ -263,7 +274,7 @@ export function useAccountMutations(options: {
     const direction = options.sort.value.direction === 'asc' ? 1 : -1
     return [...rows].sort((left, right) => {
       const rankDifference
-        = (accountStatusSortRank[left.status] ?? 5) - (accountStatusSortRank[right.status] ?? 5)
+        = (accountStatusSortRank[left.status] ?? 7) - (accountStatusSortRank[right.status] ?? 7)
       return rankDifference === 0
         ? left.id.localeCompare(right.id) * direction
         : rankDifference * direction
