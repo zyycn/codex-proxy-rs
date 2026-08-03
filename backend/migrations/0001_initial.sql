@@ -131,9 +131,8 @@ create table provider_accounts (
   next_refresh_at timestamptz,
   enabled boolean not null default true,
   availability text not null default 'unknown',
-  availability_reason text,
-  cooldown_until timestamptz,
   provider_quota_json jsonb,
+  quota_limit_reached boolean not null default false,
   availability_observed_at timestamptz not null,
   quota_observed_at timestamptz,
   created_at timestamptz not null,
@@ -163,21 +162,10 @@ create table provider_accounts (
     availability in (
       'unknown',
       'ready',
-      'cooldown',
       'quota_exhausted',
       'expired',
       'banned',
       'invalid'
-    )
-  ),
-  constraint provider_accounts_cooldown_ck check (
-    (
-      availability != 'cooldown'
-      or cooldown_until is not null
-    )
-    and (
-      cooldown_until is null
-      or availability in ('cooldown', 'quota_exhausted')
     )
   ),
   constraint provider_accounts_time_ck check (
@@ -196,7 +184,7 @@ create unique index provider_accounts_upstream_identity_uq
 create index provider_accounts_runtime_idx
   on provider_accounts (provider_kind, enabled, id);
 create index provider_accounts_availability_idx
-  on provider_accounts (availability, cooldown_until, id);
+  on provider_accounts (availability, id);
 create index provider_accounts_access_expiry_idx
   on provider_accounts (access_token_expires_at, id);
 create index provider_accounts_refresh_due_idx
@@ -235,8 +223,6 @@ create table model_requests (
   outcome text not null default 'running',
   client_status_code integer,
   upstream_status_code integer,
-  -- Provider response IDs are opaque JSON strings. Bytes preserve embedded NUL
-  -- and avoid imposing PostgreSQL text-index limits on protocol handles.
   client_response_id bytea,
   upstream_request_id text,
   upstream_response_id bytea,
@@ -438,6 +424,7 @@ create index model_requests_running_deadline_idx
 create index model_requests_retention_idx
   on model_requests (completed_at)
   where outcome <> 'running';
+
 -- 运行期警告与错误事件。
 create table ops_events (
   id text primary key,
@@ -691,11 +678,9 @@ create unique index backup_records_active_uq
 create unique index backup_records_object_key_uq
   on backup_records (object_key)
   where object_key is not null;
--- 同时服务 retentionDays 与 retentionCount。
 create index backup_records_scheduled_completed_idx
   on backup_records (completed_at desc, id desc)
   where trigger_kind = 'scheduled' and status = 'completed';
--- 可清理记录（expires_at 已到期且非活跃）的扫描索引。
 create index backup_records_retention_idx
   on backup_records (expires_at)
   where expires_at is not null and status in ('completed', 'failed');

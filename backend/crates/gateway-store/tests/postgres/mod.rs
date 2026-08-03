@@ -156,7 +156,7 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
     .expect("drop migration test database");
     admin.close().await;
 
-    assert_eq!((first_table_count, migration_count), (10, 4));
+    assert_eq!((first_table_count, migration_count), (10, 1));
     assert_eq!(response_id_types, ["bytea", "bytea"]);
     assert!(!raw_response_id_index_exists);
 }
