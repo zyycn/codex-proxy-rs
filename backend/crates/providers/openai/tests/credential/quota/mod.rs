@@ -424,14 +424,71 @@ async fn passive_rate_limit_headers_replace_stale_secondary_window() {
         .await
         .expect("read quota")
         .expect("quota snapshot");
+    let raw = store
+        .quota_json("acct_passive_quota_snapshot")
+        .expect("stored passive quota");
     let monthly = snapshot
         .windows()
         .iter()
         .filter(|window| window.kind() == CodexQuotaWindowKind::Monthly)
         .collect::<Vec<_>>();
 
+    assert_eq!(snapshot.windows().len(), 1);
     assert_eq!(monthly.len(), 1);
     assert_eq!(monthly[0].used_percent(), Some(92.0));
+    assert!(
+        raw.pointer("/rate_limit/secondary_window").is_none(),
+        "a normal response without a secondary window must delete stale raw state"
+    );
+}
+
+#[tokio::test]
+async fn manual_quota_refresh_drops_empty_secondary_window() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_manual_secondary_placeholder";
+    create_account(&store, account_id).await;
+    let account = store.account(account_id).expect("created account");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .and(header(
+            "authorization",
+            format!("Bearer token-{account_id}"),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": false,
+                "limit_reached": true,
+                "primary_window": {
+                    "used_percent": 100,
+                    "reset_at": 1_900_000_000,
+                    "limit_window_seconds": 2_592_000
+                },
+                "secondary_window": {
+                    "used_percent": 0,
+                    "limit_reached": false
+                }
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    let snapshot = service
+        .refresh_account(account.id())
+        .await
+        .expect("manual quota refresh");
+
+    assert_eq!(snapshot.windows().len(), 1);
+    assert_eq!(snapshot.windows()[0].used_percent(), Some(100.0));
 }
 
 #[tokio::test]
@@ -717,6 +774,127 @@ async fn periodic_quota_synchronization_does_not_downgrade_exhaustion_on_rate_li
         .account("acct_periodic_exhausted")
         .expect("persisted account");
     assert_eq!(account.availability(), AccountAvailability::QuotaExhausted);
+}
+
+#[tokio::test]
+async fn periodic_quota_refresh_drops_empty_secondary_window() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_periodic_secondary_placeholder";
+    create_account(&store, account_id).await;
+    let account = store.account(account_id).expect("created account");
+    store
+        .apply_state_change(AccountStateChange {
+            message: None,
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            availability: AccountAvailability::QuotaExhausted,
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("mark account exhausted");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {
+                    "used_percent": 99,
+                    "reset_at": 1_900_000_000,
+                    "limit_window_seconds": 2_592_000
+                },
+                "secondary_window": {}
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    let summary = service.synchronize().await.expect("periodic quota refresh");
+    let snapshot = service
+        .read_account(account.id())
+        .await
+        .expect("read quota")
+        .expect("quota snapshot");
+
+    assert_eq!(summary.exhausted, 1);
+    assert_eq!(snapshot.windows().len(), 1);
+    assert_eq!(snapshot.windows()[0].used_percent(), Some(100.0));
+}
+
+#[tokio::test]
+async fn periodic_quota_refresh_keeps_nonempty_secondary_window_during_confirmed_exhaustion() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_periodic_real_secondary";
+    create_account(&store, account_id).await;
+    let account = store.account(account_id).expect("created account");
+    store
+        .apply_state_change(AccountStateChange {
+            message: None,
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            availability: AccountAvailability::QuotaExhausted,
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("mark account exhausted");
+    let secondary_reset_at = 1_900_604_800;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {
+                    "used_percent": 99,
+                    "reset_at": 1_900_000_000,
+                    "limit_window_seconds": 2_592_000
+                },
+                "secondary_window": {
+                    "used_percent": 0,
+                    "reset_at": secondary_reset_at,
+                    "limit_window_seconds": 604_800
+                }
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    let summary = service.synchronize().await.expect("periodic quota refresh");
+    let snapshot = service
+        .read_account(account.id())
+        .await
+        .expect("read quota")
+        .expect("quota snapshot");
+
+    assert_eq!(summary.exhausted, 1);
+    assert_eq!(snapshot.windows().len(), 2);
+    assert!(snapshot.windows().iter().any(|window| {
+        window.window_seconds() == Some(604_800)
+            && window.used_percent() == Some(100.0)
+            && window
+                .reset_at()
+                .is_some_and(|reset_at| reset_at.timestamp() == secondary_reset_at)
+    }));
 }
 
 #[tokio::test]

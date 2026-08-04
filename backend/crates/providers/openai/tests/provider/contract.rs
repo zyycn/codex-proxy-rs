@@ -1437,7 +1437,8 @@ async fn official_usage_limit_failure_projects_100_percent_and_holds_until_reset
                     "rate_limit": {
                         "allowed": true,
                         "limit_reached": false,
-                        "primary_window": {"used_percent": 99, "reset_at": reset_at}
+                        "primary_window": {"used_percent": 99, "reset_at": reset_at},
+                        "secondary_window": {"used_percent": 0}
                     }
                 })
                 .as_object()
@@ -1463,7 +1464,8 @@ async fn official_usage_limit_failure_projects_100_percent_and_holds_until_reset
                     "rate_limit": {
                         "allowed": true,
                         "limit_reached": false,
-                        "primary_window": {"used_percent": 99, "reset_at": reset_at}
+                        "primary_window": {"used_percent": 99, "reset_at": reset_at},
+                        "secondary_window": {"used_percent": 0}
                     }
                 })),
         )
@@ -1512,15 +1514,21 @@ async fn official_usage_limit_failure_projects_100_percent_and_holds_until_reset
         .next()
         .expect("confirmed quota observation");
     let projected_observed_at = projected.observed_at.expect("projection observed at");
-    let projected = projected
-        .quota
-        .map(OpaqueProviderData::into_inner)
-        .expect("confirmed quota projection");
+    let projected = Value::Object(
+        projected
+            .quota
+            .map(OpaqueProviderData::into_inner)
+            .expect("confirmed quota projection"),
+    );
     assert_eq!(
-        Value::Object(projected)
+        projected
             .pointer("/rate_limit/primary_window/used_percent")
             .and_then(Value::as_u64),
         Some(100)
+    );
+    assert!(
+        projected.pointer("/rate_limit/secondary_window").is_none(),
+        "request failure must not manufacture a secondary quota"
     );
     tokio::time::sleep(Duration::from_millis(200)).await;
     let requests = server.received_requests().await.expect("received requests");
@@ -1571,6 +1579,10 @@ async fn official_usage_limit_failure_projects_100_percent_and_holds_until_reset
             .pointer("/rate_limit/primary_window/reset_at")
             .and_then(Value::as_i64),
         Some(reset_at)
+    );
+    assert!(
+        quota.pointer("/rate_limit/secondary_window").is_none(),
+        "background quota refresh must retain the same window projection"
     );
     let requests = server.received_requests().await.expect("received requests");
     assert_eq!(

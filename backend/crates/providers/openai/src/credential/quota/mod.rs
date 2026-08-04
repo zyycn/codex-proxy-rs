@@ -430,7 +430,10 @@ impl CodexCredentialQuotaService {
             .and_then(|observation| observation.quota)
             .map(OpaqueProviderData::into_inner)
             .unwrap_or_default();
-        let quota = confirmed_exhaustion_projection(existing, reset_at);
+        let quota = confirmed_exhaustion_projection(
+            normalize_quota_window_placeholders(existing),
+            reset_at,
+        );
         let observed_at = SystemTime::now();
         let outcome = self
             .store
@@ -594,10 +597,12 @@ impl CodexCredentialQuotaService {
         let refreshed_fact = refreshed_snapshot.fact();
         let previous_reset_at = self.previous_confirmed_reset(account).await;
         let now = SystemTime::now();
-        let object = value
-            .as_object()
-            .cloned()
-            .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
+        let object = normalize_quota_window_placeholders(
+            value
+                .as_object()
+                .cloned()
+                .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?,
+        );
         let object = if account.availability() == AccountAvailability::QuotaExhausted
             && quota_success_state(
                 account.availability(),
@@ -927,10 +932,12 @@ impl CodexCredentialQuotaService {
         let refreshed_fact = refreshed_snapshot.fact();
         let previous_reset_at = self.previous_confirmed_reset(&account).await;
         let now = SystemTime::now();
-        let object = value
-            .as_object()
-            .cloned()
-            .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
+        let object = normalize_quota_window_placeholders(
+            value
+                .as_object()
+                .cloned()
+                .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?,
+        );
         let object = if account.availability() == AccountAvailability::QuotaExhausted
             && quota_success_state(
                 account.availability(),
@@ -1179,6 +1186,40 @@ fn merge_passive_quota(
         Value::Array(additional),
     );
     quota
+}
+
+/// 丢弃 core 限额中上游给出的无事实 `secondary_window` 占位。
+///
+/// 生产响应头可能携带 `used_percent=0`、零时长和空 reset 的占位。正常被动同步
+/// 保留该响应事实，Admin 展示会将其隐藏；但主动 `/usage` 刷新或 402 确认投影若
+/// 遇到这个对象，会把它写成 100%，从而显示并不存在的“次级额度”。因此这些
+/// 非被动写入口在落库前移除无事实对象。带 reset、时长、正用量、触顶、未知或
+/// 非法字段的次级窗口均完全按原有额度逻辑保留。
+fn normalize_quota_window_placeholders(mut quota: Map<String, Value>) -> Map<String, Value> {
+    if let Some(rate_limit) = quota.get_mut("rate_limit").and_then(Value::as_object_mut) {
+        drop_secondary_window_placeholder(rate_limit);
+    }
+    quota
+}
+
+fn drop_secondary_window_placeholder(rate_limit: &mut Map<String, Value>) {
+    let placeholder = rate_limit
+        .get("secondary_window")
+        .and_then(Value::as_object)
+        .is_some_and(secondary_window_is_placeholder);
+    if placeholder {
+        rate_limit.remove("secondary_window");
+    }
+}
+
+fn secondary_window_is_placeholder(window: &Map<String, Value>) -> bool {
+    window.iter().all(|(field, value)| match field.as_str() {
+        "used_percent" => value
+            .as_f64()
+            .is_some_and(|used_percent| used_percent.is_finite() && used_percent == 0.0),
+        "limit_reached" => value.as_bool() == Some(false),
+        _ => false,
+    })
 }
 
 /// 用已确认的上游额度拒绝覆盖 core 限额投影。
