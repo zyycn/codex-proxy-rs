@@ -487,12 +487,35 @@ impl BackupTask {
                     );
                 }
             }
-            Ok(_) => {
+            Ok(Some(remote)) => {
+                let size_matches = remote.size_bytes == size_bytes;
+                let sha256_matches = remote.sha256 == sha256;
+                warn!(
+                    backup_id = %record.id,
+                    expected_size_bytes = size_bytes,
+                    remote_size_bytes = remote.size_bytes,
+                    sha256_matches,
+                    "备份远端对象校验不一致"
+                );
                 let _ = store.delete_object(&config, &record.object_key).await;
                 self.fail_task(
                     record,
                     code::REMOTE_VERIFICATION_FAILED,
-                    "远端对象大小或校验值不一致",
+                    match (size_matches, sha256_matches) {
+                        (false, true) => "远端对象大小不一致",
+                        (true, false) => "远端对象 sha256 校验值不一致",
+                        (false, false) => "远端对象大小和 sha256 校验值均不一致",
+                        (true, true) => "远端对象校验状态异常",
+                    },
+                )
+                .await?;
+            }
+            Ok(None) => {
+                warn!(backup_id = %record.id, "上传完成后未找到远端对象");
+                self.fail_task(
+                    record,
+                    code::REMOTE_VERIFICATION_FAILED,
+                    "上传完成后未找到远端对象",
                 )
                 .await?;
             }
@@ -516,10 +539,17 @@ impl BackupTask {
         error_code: &'static str,
         message: impl Into<String>,
     ) -> Result<(), WorkerTaskError> {
+        let message = message.into();
+        warn!(
+            backup_id = %record.id,
+            error_code,
+            error_message = %message,
+            "备份任务失败"
+        );
         let now = Utc::now();
         let update = StatusTransitionUpdate {
             error_code: Some(error_code.to_string()),
-            error_message: Some(message.into()),
+            error_message: Some(message),
             completed_at: Some(now),
             ..Default::default()
         };

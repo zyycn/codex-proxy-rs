@@ -409,16 +409,17 @@ const tokenDonutOption = computed<EChartsOption>(() => {
             尝试链路
           </h3>
           <span
-            class="rounded-full bg-(--cp-bg-muted) px-2 py-0.5 text-[11px] leading-none font-emphasis text-(--cp-text-secondary)"
+            class="text-[11px] leading-none font-emphasis text-(--cp-text-muted)"
             title="中间尝试可能有缺口，仅展示可观测到的记录"
           >
             尽力观测
           </span>
         </div>
         <BaseTable
-          class="mt-3 min-w-0 font-sans"
+          class="attempt-table mt-2.5 min-w-0 font-mono tabular-nums"
           :columns="attemptColumns"
           :rows="attemptRows"
+          :stripe="false"
           compact
           row-key="id"
           min-width="640px"
@@ -478,3 +479,18 @@ const tokenDonutOption = computed<EChartsOption>(() => {
     </template>
   </BaseModal>
 </template>
+
+<style scoped>
+.attempt-table :deep(thead th) {
+  background-color: transparent;
+  box-shadow: none;
+}
+
+.attempt-table :deep(tbody tr) {
+  background-color: transparent;
+}
+
+.attempt-table :deep(tbody td) {
+  background-color: var(--cp-bg-muted);
+}
+</style>

@@ -37,7 +37,7 @@ uuid = { version = "1.23.3", features = ["v4", "v7"] }
 
 [dev-dependencies]
 tempfile = "3.23"
-tokio = { version = "1.52.3", default-features = false, features = ["macros", "rt-multi-thread", "fs", "io-util", "process", "time"] }
+tokio = { version = "1.52.3", default-features = false, features = ["macros", "rt-multi-thread", "fs", "io-util", "net", "process", "time"] }
 
 [lints]
 workspace = true

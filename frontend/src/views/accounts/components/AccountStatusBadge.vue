@@ -26,31 +26,31 @@ const statusStyles = {
   success: {
     text: 'text-(--cp-success-text)',
     dot: 'bg-(--cp-success)',
-    badge: 'border-(--cp-success-border) bg-(--cp-success-bg) text-(--cp-success-text)',
-    icon: 'bg-(--cp-success-bg) text-(--cp-success-text) shadow-[inset_0_0_0_1px_var(--cp-success-border)]',
+    badge: 'bg-(--cp-success-bg) text-(--cp-success-text)',
+    icon: 'bg-(--cp-success-bg) text-(--cp-success-text)',
   },
   danger: {
     text: 'text-(--cp-danger-text)',
     dot: 'bg-(--cp-danger)',
-    badge: 'border-(--cp-danger-border) bg-(--cp-danger-bg) text-(--cp-danger-text)',
-    icon: 'bg-(--cp-danger-bg) text-(--cp-danger-text) shadow-[inset_0_0_0_1px_var(--cp-danger-border)]',
+    badge: 'bg-(--cp-danger-bg) text-(--cp-danger-text)',
+    icon: 'bg-(--cp-danger-bg) text-(--cp-danger-text)',
   },
   warning: {
     text: 'text-(--cp-warning-text)',
     dot: 'bg-(--cp-warning)',
-    badge: 'border-(--cp-warning-border) bg-(--cp-warning-bg) text-(--cp-warning-text)',
-    icon: 'bg-(--cp-warning-bg) text-(--cp-warning-text) shadow-[inset_0_0_0_1px_var(--cp-warning-border)]',
+    badge: 'bg-(--cp-warning-bg) text-(--cp-warning-text)',
+    icon: 'bg-(--cp-warning-bg) text-(--cp-warning-text)',
   },
   info: {
     text: 'text-(--cp-info-text)',
     dot: 'bg-(--cp-info)',
-    badge: 'border-(--cp-info-border) bg-(--cp-info-bg) text-(--cp-info-text)',
-    icon: 'bg-(--cp-info-bg) text-(--cp-info-text) shadow-[inset_0_0_0_1px_var(--cp-info-border)]',
+    badge: 'bg-(--cp-info-bg) text-(--cp-info-text)',
+    icon: 'bg-(--cp-info-bg) text-(--cp-info-text)',
   },
   normal: {
     text: 'text-(--cp-text-secondary)',
     dot: 'bg-(--cp-text-muted)',
-    badge: 'border-(--cp-divider-subtle) bg-(--cp-bg-subtle) text-(--cp-text-secondary)',
+    badge: 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)',
     icon: 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)',
   },
 } as const
@@ -165,7 +165,7 @@ const cardIcon = computed(() => {
     </template>
 
     <section class="overflow-hidden rounded-(--cp-popover-radius)">
-      <header class="flex items-start gap-3 border-b border-(--cp-divider-subtle) bg-(--cp-bg-subtle) px-4 py-3">
+      <header class="flex items-start gap-3 bg-(--cp-bg-subtle) px-4 py-3">
         <span
           aria-hidden="true"
           class="inline-flex size-9 shrink-0 items-center justify-center rounded-(--cp-icon-button-radius)"
@@ -184,7 +184,7 @@ const cardIcon = computed(() => {
         </div>
 
         <span
-          class="inline-flex h-5 shrink-0 items-center rounded-full border px-2 text-[10px] leading-none font-heavy"
+          class="inline-flex h-5 shrink-0 items-center rounded-full px-2 text-[10px] leading-none font-heavy"
           :class="statusStyle.badge"
         >
           {{ label }}
@@ -206,7 +206,7 @@ const cardIcon = computed(() => {
           </span>
         </div>
 
-        <div class="rounded-(--cp-input-radius-base) border border-(--cp-divider-subtle) bg-(--cp-bg-surface) px-3 py-2.5">
+        <div class="rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2.5">
           <p class="m-0 text-[11px] leading-none font-heavy text-(--cp-text-tertiary)">
             建议操作
           </p>
@@ -217,13 +217,13 @@ const cardIcon = computed(() => {
 
         <div
           v-if="errorText"
-          class="overflow-hidden rounded-(--cp-input-radius-base) border border-(--cp-divider-subtle) bg-(--cp-bg-subtle)"
+          class="overflow-hidden rounded-(--cp-input-radius-base) bg-(--cp-bg-muted)"
         >
-          <div class="flex items-center justify-between gap-3 border-b border-(--cp-divider-subtle) px-3 py-2">
+          <div class="flex items-center justify-between gap-3 px-3 pt-2.5 pb-1.5">
             <span class="text-[11px] leading-none font-heavy text-(--cp-text-tertiary)">上游原始反馈</span>
             <span class="shrink-0 text-[10px] leading-none font-emphasis text-(--cp-text-muted)">仅供排查</span>
           </div>
-          <BaseScrollbar max-height="124px" view-class="px-3 py-2 pr-2">
+          <BaseScrollbar class="bg-(--cp-bg-subtle)" max-height="124px" view-class="px-3 py-2 pr-2">
             <pre class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[11px] leading-[1.55] font-emphasis text-(--cp-text-secondary)">{{ errorText }}</pre>
           </BaseScrollbar>
         </div>

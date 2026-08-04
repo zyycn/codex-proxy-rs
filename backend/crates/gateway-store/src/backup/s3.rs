@@ -385,7 +385,13 @@ async fn upload_parts(
                     BackupError::new(code::S3_UPLOAD_FAILED, "上传并发闸门关闭".to_owned())
                 })?;
                 let offset = (part - 1) * (PART_SIZE as u64);
-                let bytes = read_part(&source, offset, PART_SIZE).await?;
+                let remaining = file_size.checked_sub(offset).ok_or_else(|| {
+                    BackupError::new(code::S3_UPLOAD_FAILED, "分片偏移超出归档大小".to_owned())
+                })?;
+                let part_len = usize::try_from(remaining.min(PART_SIZE as u64)).map_err(|_| {
+                    BackupError::new(code::S3_UPLOAD_FAILED, "分片大小溢出".to_owned())
+                })?;
+                let bytes = read_part(&source, offset, part_len).await?;
                 let part_number = i32::try_from(part).map_err(|_| {
                     BackupError::new(code::S3_UPLOAD_FAILED, "分片号溢出".to_owned())
                 })?;
@@ -450,20 +456,19 @@ async fn upload_parts(
         .map_err(map_s3_error)
 }
 
-/// 从文件中读取一个分片（最多 `PART_SIZE` 字节）。
-async fn read_part(source: &Path, offset: u64, max_len: usize) -> Result<Vec<u8>, BackupError> {
+/// 从文件中读取指定长度的完整分片。
+async fn read_part(source: &Path, offset: u64, len: usize) -> Result<Vec<u8>, BackupError> {
     let mut file = tokio::fs::File::open(source)
         .await
         .map_err(|_| BackupError::new(code::S3_UPLOAD_FAILED, "打开暂存归档失败".to_owned()))?;
     file.seek(SeekFrom::Start(offset))
         .await
         .map_err(|_| BackupError::new(code::S3_UPLOAD_FAILED, "定位暂存归档失败".to_owned()))?;
-    let mut buffer = vec![0_u8; max_len];
-    let n = file
-        .read(&mut buffer)
+    let mut buffer = vec![0_u8; len];
+    // Tokio 默认单次文件读取最多 2 MiB；分片必须读取完整，不能把短读当作末尾分片上传。
+    file.read_exact(&mut buffer)
         .await
         .map_err(|_| BackupError::new(code::S3_UPLOAD_FAILED, "读取暂存归档失败".to_owned()))?;
-    buffer.truncate(n);
     Ok(buffer)
 }
 
