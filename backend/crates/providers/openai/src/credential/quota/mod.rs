@@ -1190,11 +1190,12 @@ fn merge_passive_quota(
 
 /// 丢弃 core 限额中上游给出的无事实 `secondary_window` 占位。
 ///
-/// 生产响应头可能携带 `used_percent=0`、零时长和空 reset 的占位。正常被动同步
-/// 保留该响应事实，Admin 展示会将其隐藏；但主动 `/usage` 刷新或 402 确认投影若
-/// 遇到这个对象，会把它写成 100%，从而显示并不存在的“次级额度”。因此这些
-/// 非被动写入口在落库前移除无事实对象。带 reset、时长、正用量、触顶、未知或
-/// 非法字段的次级窗口均完全按原有额度逻辑保留。
+/// 生产响应头可能携带 `used_percent=0`、零时长和空 reset 的占位，`/usage` 也会
+/// 返回 `secondary_window: null`。正常被动同步保留该响应事实，Admin 展示会将其
+/// 隐藏；但主动 `/usage` 刷新或 402 确认投影会把一个存在但无事实的字段写成
+/// 100%，从而显示并不存在的“次级额度”。因此这些非被动写入口在落库前移除
+/// 无事实值。带 reset、时长、正用量、触顶、未知或非法字段的次级窗口均完全按
+/// 原有额度逻辑保留。
 fn normalize_quota_window_placeholders(mut quota: Map<String, Value>) -> Map<String, Value> {
     if let Some(rate_limit) = quota.get_mut("rate_limit").and_then(Value::as_object_mut) {
         drop_secondary_window_placeholder(rate_limit);
@@ -1203,10 +1204,12 @@ fn normalize_quota_window_placeholders(mut quota: Map<String, Value>) -> Map<Str
 }
 
 fn drop_secondary_window_placeholder(rate_limit: &mut Map<String, Value>) {
-    let placeholder = rate_limit
-        .get("secondary_window")
-        .and_then(Value::as_object)
-        .is_some_and(secondary_window_is_placeholder);
+    let placeholder = rate_limit.get("secondary_window").is_some_and(|window| {
+        window.is_null()
+            || window
+                .as_object()
+                .is_some_and(secondary_window_is_placeholder)
+    });
     if placeholder {
         rate_limit.remove("secondary_window");
     }

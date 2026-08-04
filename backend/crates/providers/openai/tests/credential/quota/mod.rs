@@ -20,7 +20,7 @@ use provider_openai::credential::{
     CodexQuotaWindowKind, ImportCodexOAuthCredential,
 };
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
-use serde_json::json;
+use serde_json::{Value, json};
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -492,6 +492,117 @@ async fn manual_quota_refresh_drops_empty_secondary_window() {
 }
 
 #[tokio::test]
+async fn manual_quota_refresh_drops_null_secondary_window_during_confirmed_exhaustion() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_manual_null_secondary_placeholder";
+    create_account(&store, account_id).await;
+    let account = store.account(account_id).expect("created account");
+    let reset_at = 1_900_000_000;
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: Some(OpaqueProviderData::new(
+                json!({
+                    "rate_limit": {
+                        "allowed": false,
+                        "limit_reached": true,
+                        "primary_window": {
+                            "used_percent": 100,
+                            "reset_at": reset_at,
+                            "limit_window_seconds": 2_592_000
+                        }
+                    }
+                })
+                .as_object()
+                .expect("quota object")
+                .clone(),
+            )),
+            observed_at: Some(SystemTime::now()),
+            limit_reached: None,
+        })
+        .await
+        .expect("seed confirmed exhaustion");
+    store
+        .apply_state_change(AccountStateChange {
+            message: None,
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            availability: AccountAvailability::QuotaExhausted,
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("mark account exhausted");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .and(header(
+            "authorization",
+            format!("Bearer token-{account_id}"),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {
+                    "used_percent": 86,
+                    "reset_at": reset_at,
+                    "reset_after_seconds": 2_133_000,
+                    "limit_window_seconds": 2_592_000
+                },
+                "secondary_window": null
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    let snapshot = service
+        .refresh_account(account.id())
+        .await
+        .expect("manual quota refresh");
+    let persisted = store
+        .get_quotas(&[account.id().clone()])
+        .await
+        .expect("read persisted quota")
+        .into_iter()
+        .next()
+        .and_then(|observation| observation.quota)
+        .map(OpaqueProviderData::into_inner)
+        .map(Value::Object)
+        .expect("persisted quota");
+
+    assert_eq!(snapshot.windows().len(), 1);
+    assert_eq!(snapshot.windows()[0].used_percent(), Some(100.0));
+    assert_eq!(
+        snapshot.windows()[0]
+            .reset_at()
+            .map(|value| value.timestamp()),
+        Some(reset_at)
+    );
+    assert!(snapshot.fact().exhausted());
+    assert_eq!(
+        store
+            .account(account_id)
+            .expect("account after refresh")
+            .availability(),
+        AccountAvailability::QuotaExhausted
+    );
+    assert!(
+        persisted.pointer("/rate_limit/secondary_window").is_none(),
+        "a null secondary window must not be projected as 100%"
+    );
+}
+
+#[tokio::test]
 async fn passive_active_limit_keeps_the_top_level_codex_bucket_canonical() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_passive_active_limit").await;
@@ -805,6 +916,62 @@ async fn periodic_quota_refresh_drops_empty_secondary_window() {
                     "limit_window_seconds": 2_592_000
                 },
                 "secondary_window": {}
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    let summary = service.synchronize().await.expect("periodic quota refresh");
+    let snapshot = service
+        .read_account(account.id())
+        .await
+        .expect("read quota")
+        .expect("quota snapshot");
+
+    assert_eq!(summary.exhausted, 1);
+    assert_eq!(snapshot.windows().len(), 1);
+    assert_eq!(snapshot.windows()[0].used_percent(), Some(100.0));
+}
+
+#[tokio::test]
+async fn periodic_quota_refresh_drops_null_secondary_window() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_periodic_null_secondary_placeholder";
+    create_account(&store, account_id).await;
+    let account = store.account(account_id).expect("created account");
+    store
+        .apply_state_change(AccountStateChange {
+            message: None,
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            availability: AccountAvailability::QuotaExhausted,
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("mark account exhausted");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {
+                    "used_percent": 86,
+                    "reset_at": 1_900_000_000,
+                    "reset_after_seconds": 2_133_000,
+                    "limit_window_seconds": 2_592_000
+                },
+                "secondary_window": null
             }
         })))
         .expect(1)
