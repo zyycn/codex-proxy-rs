@@ -116,6 +116,21 @@ fn provider_with_affinity_and_base_url_and_leases(
     base_url: String,
     leases: Arc<TestLeaseCoordinator>,
 ) -> CodexProvider {
+    provider_and_quota_with_affinity_and_base_url_and_leases(
+        store,
+        session_affinity,
+        base_url,
+        leases,
+    )
+    .0
+}
+
+fn provider_and_quota_with_affinity_and_base_url_and_leases(
+    store: &Arc<MemoryAccountStore>,
+    session_affinity: Arc<MemorySessionAffinity>,
+    base_url: String,
+    leases: Arc<TestLeaseCoordinator>,
+) -> (CodexProvider, Arc<CodexCredentialQuotaService>) {
     let profile = wire_profile();
     let http = reqwest::Client::builder()
         .no_proxy()
@@ -154,10 +169,10 @@ fn provider_with_affinity_and_base_url_and_leases(
         true,
     ));
 
-    CodexProvider::new(
+    let provider = CodexProvider::new(
         selector,
         catalog,
-        quota,
+        Arc::clone(&quota),
         agent_identity,
         account_feedback,
         http,
@@ -165,7 +180,8 @@ fn provider_with_affinity_and_base_url_and_leases(
         base_url,
         websocket_pool,
     )
-    .expect("official OpenAI provider")
+    .expect("official OpenAI provider");
+    (provider, quota)
 }
 
 async fn create_account(store: &Arc<MemoryAccountStore>, id: &str) {
@@ -1849,6 +1865,85 @@ async fn disabled_account_diagnostic_uses_upstream_without_persisting_account_st
     assert_eq!(account.availability(), AccountAvailability::QuotaExhausted);
     assert!(!store.has_quota(account_id));
     assert_eq!(affinity.binding_count(), 0);
+}
+
+#[tokio::test]
+async fn quota_limited_account_diagnostic_uses_upstream() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_quota_limited_diagnostic";
+    create_account(&store, account_id).await;
+    let account = store.account(account_id).expect("test account");
+    let raw_quota = json!({
+        "rate_limit": {
+            "allowed": false,
+            "limit_reached": true,
+            "primary_window": {"used_percent": 100, "reset_at": 1_900_000_000}
+        }
+    });
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: Some(OpaqueProviderData::new(
+                raw_quota
+                    .as_object()
+                    .expect("quota snapshot object")
+                    .clone(),
+            )),
+            observed_at: Some(SystemTime::now()),
+            limit_reached: Some(true),
+        })
+        .await
+        .expect("seed quota-limited snapshot");
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(concat!(
+                    "event: response.created\n",
+                    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_quota_limited_diagnostic\",\"model\":\"gpt-5.4\"}}\n\n",
+                    "event: response.completed\n",
+                    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_quota_limited_diagnostic\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
+                )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (provider, quota) = provider_and_quota_with_affinity_and_base_url_and_leases(
+        &store,
+        Arc::new(MemorySessionAffinity::default()),
+        server.uri(),
+        Arc::new(TestLeaseCoordinator::default()),
+    );
+    quota
+        .prepare_scheduling(std::slice::from_ref(&account))
+        .await;
+
+    let mut stream = provider
+        .execute(
+            planned_request("openai", http_generate_operation()),
+            diagnostic_context("req_quota_limited_diagnostic", account_id),
+        )
+        .await
+        .expect("quota-limited diagnostic should prepare a fixed-account stream");
+    let mut completed = false;
+    while let Some(event) = stream.next().await {
+        let event = event.expect("quota-limited diagnostic upstream response");
+        completed |= event
+            .canonical_facts()
+            .iter()
+            .any(|event| matches!(event, GatewayEvent::Completed(_)));
+    }
+
+    assert!(completed);
+    let requests = server
+        .received_requests()
+        .await
+        .expect("captured quota-limited diagnostic request");
+    assert_eq!(requests.len(), 1);
 }
 
 #[tokio::test]

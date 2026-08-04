@@ -60,6 +60,15 @@ function connectionTestErrorText(event: ConnectionTestEvent) {
   return event.error || '测试连接失败'
 }
 
+function connectionTestFailureLabel(event: ConnectionTestEvent) {
+  const hasUpstreamResponse
+    = (typeof event.upstreamBody === 'string' && event.upstreamBody.length > 0)
+      || Number.isInteger(event.upstreamStatus)
+  return hasUpstreamResponse
+    ? '上游返回错误'
+    : '未能向上游发起请求'
+}
+
 export function useAccountConnectionTest(options: AccountConnectionTestOptions) {
   const showConnectionTestModal = shallowRef(false)
   const testingAccount = shallowRef<Account | null>(null)
@@ -293,7 +302,11 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     if (event.type === 'error') {
       applyAccountStatus(event.accountStatus)
       connectionTestError.value = connectionTestErrorText(event)
-      appendConnectionTestLog('上游返回错误', 'danger', connectionTestError.value)
+      appendConnectionTestLog(
+        connectionTestFailureLabel(event),
+        'danger',
+        connectionTestError.value,
+      )
       finishConnectionTest('error')
       clearConnectionTestRun()
     }

@@ -78,53 +78,66 @@ function toneValueClass(tone: string) {
   return metricToneValueClasses[tone as MetricTone]
 }
 
+const accountStatusCounts = computed(() => {
+  const p = props.pool
+  if (!p)
+    return null
+  const active = p.active ?? 0
+  const refreshing = p.refreshing ?? 0
+  const quotaLimited = (p.rateLimited ?? 0) + (p.quotaExhausted ?? 0)
+  const pending = (p.expired ?? 0) + (p.invalid ?? 0) + (p.disabled ?? 0) + (p.banned ?? 0)
+  return {
+    total: p.total,
+    active,
+    refreshing,
+    quotaLimited,
+    pending,
+    unavailable: quotaLimited + pending,
+  }
+})
+
 const statusRows = computed(() => {
   const p = props.pool
-  if (!p) {
+  const counts = accountStatusCounts.value
+  if (!p || !counts) {
     return [
       { label: '活跃账号', description: '暂无账号池观测', value: '—', tone: 'success', icon: CircleCheck },
       { label: '刷新中', description: '暂无账号池观测', value: '—', tone: 'normal', icon: RefreshCw },
       { label: '额度受限', description: '暂无账号池观测', value: '—', tone: 'warning', icon: TriangleAlert },
-      { label: '不可用', description: '暂无账号池观测', value: '—', tone: 'danger', icon: ShieldAlert },
+      { label: '待处理', description: '暂无账号池观测', value: '—', tone: 'danger', icon: ShieldAlert },
     ]
   }
-  const active = p?.active ?? 0
-  const refreshing = p?.refreshing ?? 0
-  const rateLimited = p?.rateLimited ?? 0
-  const quotaExhausted = p?.quotaExhausted ?? 0
-  const quotaLimited = rateLimited + quotaExhausted
   const expired = p?.expired ?? 0
   const invalid = p?.invalid ?? 0
   const disabled = p?.disabled ?? 0
   const banned = p?.banned ?? 0
-  const unavailable = expired + invalid + disabled + banned
 
   return [
     {
       label: '活跃账号',
       description: '可直接参与调度',
-      value: String(active),
+      value: String(counts.active),
       tone: 'success',
       icon: CircleCheck,
     },
     {
       label: '刷新中',
       description: '令牌自动刷新中',
-      value: String(refreshing),
+      value: String(counts.refreshing),
       tone: 'normal',
       icon: RefreshCw,
     },
     {
       label: '额度受限',
       description: '配额耗尽与限流中',
-      value: String(quotaLimited),
+      value: String(counts.quotaLimited),
       tone: 'warning',
       icon: TriangleAlert,
     },
     {
-      label: '不可用',
+      label: '待处理',
       description: `过期 ${expired} · 失效 ${invalid} · 禁用 ${disabled} · 封禁 ${banned}`,
-      value: String(unavailable),
+      value: String(counts.pending),
       tone: 'danger',
       icon: ShieldAlert,
     },
@@ -139,18 +152,14 @@ const availabilityRate = computed(() => {
 })
 
 const statusBars = computed(() => {
-  const p = props.pool
-  if (!p || p.total === 0)
+  const counts = accountStatusCounts.value
+  if (!counts || counts.total === 0)
     return []
-  const active = (p.active / p.total) * 100
-  const refreshing = ((p.refreshing ?? 0) / p.total) * 100
-  const quotaLimited = (((p.rateLimited ?? 0) + p.quotaExhausted) / p.total) * 100
-  const unavailable = ((p.expired + (p.invalid ?? 0) + p.disabled + p.banned) / p.total) * 100
   return [
-    { pct: active, cls: 'bg-(--cp-success)' },
-    { pct: refreshing, cls: 'bg-(--cp-normal)' },
-    { pct: quotaLimited, cls: 'bg-(--cp-warning)' },
-    { pct: unavailable, cls: 'bg-(--cp-danger)' },
+    { pct: (counts.active / counts.total) * 100, cls: 'bg-(--cp-success)' },
+    { pct: (counts.refreshing / counts.total) * 100, cls: 'bg-(--cp-normal)' },
+    { pct: (counts.quotaLimited / counts.total) * 100, cls: 'bg-(--cp-warning)' },
+    { pct: (counts.pending / counts.total) * 100, cls: 'bg-(--cp-danger)' },
   ].filter(b => b.pct > 0)
 })
 </script>
@@ -304,7 +313,7 @@ const statusBars = computed(() => {
         <div class="mt-5.5 h-10.5 w-full">
           <div class="flex h-4 items-center justify-between">
             <span class="text-xs leading-[1.15] font-emphasis text-(--cp-text-secondary)">状态分布</span>
-            <span class="text-xs leading-[1.15] font-emphasis text-(--cp-danger-text)">不可用 {{ statusRows[3]?.value || '0' }}</span>
+            <span class="text-xs leading-[1.15] font-emphasis text-(--cp-danger-text)">不可用 {{ accountStatusCounts?.unavailable ?? '—' }}</span>
           </div>
           <div class="mt-2.5 flex h-3 w-full overflow-hidden rounded-full bg-(--cp-bg-muted)">
             <i

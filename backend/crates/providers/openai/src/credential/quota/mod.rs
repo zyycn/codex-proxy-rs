@@ -603,6 +603,10 @@ impl CodexCredentialQuotaService {
         let Some(rate_limits) = parse_rate_limit_headers(headers) else {
             return Ok(false);
         };
+        let has_quota_facts = rate_limits
+            .limits
+            .values()
+            .any(|details| passive_rate_limit_snapshot(details).is_some());
         let existing = self
             .store
             .get_quotas(std::slice::from_ref(account.id()))
@@ -611,10 +615,35 @@ impl CodexCredentialQuotaService {
             .find(|observation| {
                 observation.account_id == *account.id()
                     && observation.expected_revision == account.revision()
-            })
+            });
+        let existing_observed_at = existing
+            .as_ref()
+            .and_then(|observation| observation.observed_at);
+        let existing = existing
             .and_then(|observation| observation.quota)
             .map(OpaqueProviderData::into_inner)
             .unwrap_or_default();
+        // 套餐、credits 等元数据可以更新，但没有额度窗口事实时必须保留旧观察时刻，
+        // 也不能借旧快照重新推导 quota state。
+        if !has_quota_facts {
+            let Some(observed_at) = existing_observed_at else {
+                return Ok(false);
+            };
+            let outcome = self
+                .store
+                .compare_and_swap_quota(QuotaObservation {
+                    account_id: account.id().clone(),
+                    expected_revision: account.revision(),
+                    quota: Some(OpaqueProviderData::new(merge_passive_quota(
+                        existing,
+                        &rate_limits,
+                    ))),
+                    observed_at: Some(observed_at),
+                    limit_reached: None,
+                })
+                .await?;
+            return Ok(outcome != QuotaWriteOutcome::Conflict);
+        }
         let quota = merge_passive_quota(existing, &rate_limits);
         let observed_at = SystemTime::now();
         let fact = parse_codex_quota_usage(&Value::Object(quota.clone()))?;
@@ -1024,6 +1053,14 @@ fn merge_passive_quota(
         .remove("additional_rate_limits")
         .and_then(|value| value.as_array().cloned())
         .unwrap_or_default();
+    let replaces_core_limit = active_limit
+        .and_then(|limit_id| rate_limits.limits.get(limit_id))
+        .is_some_and(|details| passive_rate_limit_snapshot(details).is_some());
+    if replaces_core_limit {
+        // `codex` additional 与顶层 `rate_limit` 归为同一个 core 源。保留旧
+        // additional 会在解析时反向覆盖当前 active limit，导致页面显示旧百分比。
+        additional.retain(|item| !is_codex_core_alias(item));
+    }
     for (limit_id, details) in &rate_limits.limits {
         let Some(rate_limit) = passive_rate_limit_snapshot(details) else {
             continue;
@@ -1061,6 +1098,16 @@ fn merge_passive_quota(
         Value::Array(additional),
     );
     quota
+}
+
+fn is_codex_core_alias(value: &Value) -> bool {
+    value
+        .get("metered_feature")
+        .or_else(|| value.get("limit_name"))
+        .and_then(Value::as_str)
+        .is_some_and(|source| {
+            source.trim().to_ascii_lowercase().replace(['-', ' '], "_") == "codex"
+        })
 }
 
 fn passive_rate_limit_snapshot(details: &RateLimitDetails) -> Option<Map<String, Value>> {

@@ -21,9 +21,8 @@ impl PgObservabilityRepository {
         Self { pool, cooldowns }
     }
 
-    /// 账号池指标：SQL 聚合后，用 Redis 429 冷却对每个非终态账号重新归类——
-    /// 冷却中 → `rate_limited`（限流中）；否则按 `quota_limit_reached` 归
-    /// `quota_exhausted`（配额耗尽）或 `active`。冷却不可用时不修正（限流中计入配额耗尽）。
+    /// 账号池指标：SQL 聚合后，仅用 Redis 429 冷却重分类仍可调度的 ready 账号。
+    /// 冷却中从 `active` 或 `quota_exhausted` 移到 `rate_limited`；冷却不可用时保留 SQL 分类。
     async fn provider_account_metrics_with_cooldowns(
         &self,
         observed_at: DateTime<Utc>,
@@ -32,13 +31,16 @@ impl PgObservabilityRepository {
         let Some(cooldowns) = &self.cooldowns else {
             return Ok(base);
         };
-        let candidates = schedulable_metric_candidates(&self.pool).await?;
+        let candidates = schedulable_metric_candidates(&self.pool, observed_at).await?;
         if candidates.is_empty() {
             return Ok(base);
         }
-        let mut active = 0_u64;
-        let mut rate_limited = 0_u64;
-        let mut quota_exhausted = 0_u64;
+        // Redis 只能把 SQL 已归入 active/quota_exhausted 的候选移到冷却桶；
+        // 其余状态不重建，避免 Redis 失败或脏 ID 时丢失持久化计数。
+        let mut active = base.active;
+        let mut rate_limited = base.rate_limited;
+        let mut quota_exhausted = base.quota_exhausted;
+        let now = SystemTime::now();
         for (account_id, revision, quota_reached) in candidates {
             let Ok(account_id) =
                 gateway_core::engine::credential::ProviderAccountId::new(account_id)
@@ -51,17 +53,24 @@ impl PgObservabilityRepository {
                 .ok()
                 .flatten()
                 .filter(|cooldown| cooldown.credential_revision().get() as i64 == revision)
-                .filter(|cooldown| cooldown.until() > SystemTime::now())
+                .filter(|cooldown| cooldown.until() > now)
                 .is_some();
-            if cooling {
-                rate_limited += 1;
-            } else if quota_reached {
-                quota_exhausted += 1;
-            } else {
-                active += 1;
+            if !cooling {
+                continue;
             }
+            if quota_reached {
+                if quota_exhausted == 0 {
+                    continue;
+                }
+                quota_exhausted -= 1;
+            } else {
+                if active == 0 {
+                    continue;
+                }
+                active -= 1;
+            }
+            rate_limited += 1;
         }
-        // 终态计数（expired/invalid/disabled/banned）保持 SQL 原值。
         Ok(ProviderAccountMetrics {
             total: base.total,
             enabled: base.enabled,

@@ -435,6 +435,125 @@ async fn passive_rate_limit_headers_replace_stale_secondary_window() {
 }
 
 #[tokio::test]
+async fn passive_active_limit_replaces_stale_codex_alias() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_passive_active_limit").await;
+    let account = store.account("acct_passive_active_limit").expect("account");
+    let baseline = json!({
+        "additional_rate_limits": [{
+            "metered_feature": "codex",
+            "rate_limit": {
+                "allowed": true,
+                "primary_window": {
+                    "used_percent": 20,
+                    "reset_at": 1_900_000_000,
+                    "limit_window_seconds": 604_800
+                }
+            }
+        }]
+    });
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: Some(OpaqueProviderData::new(
+                baseline.as_object().expect("quota object").clone(),
+            )),
+            observed_at: Some(SystemTime::now()),
+            limit_reached: None,
+        })
+        .await
+        .expect("persist baseline quota");
+    let service = quota_service(&store);
+    let headers = vec![
+        ("x-codex-active-limit".to_owned(), "premium".to_owned()),
+        ("x-premium-primary-used-percent".to_owned(), "55".to_owned()),
+        (
+            "x-premium-primary-window-minutes".to_owned(),
+            "10080".to_owned(),
+        ),
+        (
+            "x-premium-primary-reset-at".to_owned(),
+            "1900000000".to_owned(),
+        ),
+    ];
+
+    assert!(
+        service
+            .synchronize_passive_headers(&account, &headers)
+            .await
+            .expect("passive quota")
+    );
+    let snapshot = service
+        .read_account(account.id())
+        .await
+        .expect("read quota")
+        .expect("quota snapshot");
+
+    assert_eq!(snapshot.windows().len(), 1);
+    assert_eq!(snapshot.windows()[0].used_percent(), Some(55.0));
+}
+
+#[tokio::test]
+async fn passive_metadata_headers_preserve_quota_observation_time() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_passive_metadata").await;
+    let account = store.account("acct_passive_metadata").expect("account");
+    let baseline = json!({
+        "rate_limit": {
+            "allowed": true,
+            "primary_window": {
+                "used_percent": 20,
+                "reset_at": 1_900_000_000,
+                "limit_window_seconds": 604_800
+            }
+        }
+    });
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: Some(OpaqueProviderData::new(
+                baseline.as_object().expect("quota object").clone(),
+            )),
+            observed_at: Some(SystemTime::now()),
+            limit_reached: None,
+        })
+        .await
+        .expect("persist baseline quota");
+    let before = store
+        .get_quotas(std::slice::from_ref(account.id()))
+        .await
+        .expect("read baseline quota");
+    let service = quota_service(&store);
+    let headers = vec![
+        ("x-codex-plan-type".to_owned(), "free".to_owned()),
+        ("x-codex-credits-has-credits".to_owned(), "true".to_owned()),
+        ("x-codex-credits-unlimited".to_owned(), "false".to_owned()),
+    ];
+
+    assert!(
+        service
+            .synchronize_passive_headers(&account, &headers)
+            .await
+            .expect("metadata-only passive response")
+    );
+    let after = store
+        .get_quotas(std::slice::from_ref(account.id()))
+        .await
+        .expect("read updated quota metadata");
+
+    assert_eq!(after[0].observed_at, before[0].observed_at);
+    assert_eq!(after[0].limit_reached, before[0].limit_reached);
+    assert_eq!(
+        store
+            .quota_json("acct_passive_metadata")
+            .and_then(|quota| quota.get("plan_type").cloned()),
+        Some(json!("free"))
+    );
+}
+
+#[tokio::test]
 async fn synchronize_without_accounts_is_a_noop_before_network_io() {
     let store = Arc::new(MemoryAccountStore::default());
 

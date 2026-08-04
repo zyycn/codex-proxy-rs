@@ -348,7 +348,10 @@ impl CodexCredentialSelector {
         // skip_exhausted 语义：true 时排除任一窗口触顶（limit_reached）的账号，
         // 仅由上游 429 兜底；false 时保留全部候选（含 QuotaExhausted 的放宽投影）。
         // 保留原始账号供 revision-fenced 凭据加载，用影子候选承载资格放宽。
-        let scheduling_candidates = if self.skip_exhausted {
+        let scheduling_candidates = if diagnostic {
+            // 连接测试必须实际探测指定账号；额度快照只影响常规调度。
+            candidates.clone()
+        } else if self.skip_exhausted {
             candidates
                 .iter()
                 .filter(|candidate| !candidate.signals.quota_limit_reached)

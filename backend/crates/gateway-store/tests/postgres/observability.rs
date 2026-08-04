@@ -1,9 +1,22 @@
-use std::num::NonZeroU32;
+use std::{
+    collections::BTreeMap,
+    num::NonZeroU32,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use chrono::{TimeDelta, Utc};
+use futures::future::BoxFuture;
 use gateway_admin::{
     model::{PageSize, observability as admin_observability},
     ports::store::ObservabilityStore as AdminObservabilityStore,
+};
+use gateway_core::{
+    engine::credential::{CredentialRevision, ProviderAccountId},
+    provider_ports::{
+        ProviderCooldown, ProviderCooldownPort, ProviderCooldownScope, ProviderScopedCooldown,
+        ProviderStoreError,
+    },
 };
 use gateway_store::postgres::{
     DiagnosticDimension, ObservabilityPageNumber, ObservabilityPageSize, ObservabilityRange,
@@ -177,6 +190,184 @@ async fn dashboard_account_metrics_should_partition_account_statuses() {
     );
     assert_eq!(metrics.total, metrics.active + metrics.unavailable);
     database.close().await;
+}
+
+#[tokio::test]
+async fn dashboard_account_metrics_with_cooldowns_should_only_reclassify_eligible_accounts() {
+    let Some(database) = TestDatabase::create("dashboard_account_metrics_cooldowns").await else {
+        return;
+    };
+    let now = Utc::now();
+    sqlx::query(
+        "insert into provider_accounts (
+           id, provider_kind, name, upstream_user_id, authentication_kind,
+           provider_credentials_json, credential_revision, has_refresh_token,
+           access_token_expires_at, enabled, availability, quota_limit_reached,
+           availability_observed_at, created_at, updated_at
+         ) values
+           ('acct_metrics_active', 'openai', 'active', 'user-active', 'oauth',
+            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'ready', false,
+            $1, $1, $1),
+           ('acct_metrics_active_cooling', 'openai', 'active-cooling', 'user-active-cooling', 'oauth',
+            '{}'::jsonb, 2, false, $1 + interval '1 day', true, 'ready', false,
+            $1, $1, $1),
+           ('acct_metrics_ready_quota', 'openai', 'ready-quota', 'user-ready-quota', 'oauth',
+            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'ready', true,
+            $1, $1, $1),
+           ('acct_metrics_cooling', 'openai', 'cooling', 'user-cooling', 'oauth',
+            '{}'::jsonb, 3, false, $1 + interval '1 day', true, 'ready', true,
+            $1, $1, $1),
+           ('acct_metrics_stale_cooldown', 'openai', 'stale-cooldown', 'user-stale-cooldown', 'oauth',
+            '{}'::jsonb, 4, false, $1 + interval '1 day', true, 'ready', true,
+            $1, $1, $1),
+           ('acct_metrics_persistent_quota', 'openai', 'persistent-quota', 'user-persistent-quota', 'oauth',
+            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'quota_exhausted', true,
+            $1, $1, $1),
+           ('acct_metrics_expired', 'openai', 'expired', 'user-expired', 'oauth',
+            '{}'::jsonb, 5, false, $1 - interval '1 second', true, 'ready', true,
+            $1, $1, $1),
+           ('acct_metrics_unknown', 'openai', 'unknown', 'user-unknown', 'oauth',
+            '{}'::jsonb, 6, false, $1 + interval '1 day', true, 'unknown', false,
+            $1, $1, $1),
+           ('acct_metrics_disabled', 'openai', 'disabled', 'user-disabled', 'oauth',
+            '{}'::jsonb, 1, false, $1 + interval '1 day', false, 'ready', false,
+            $1, $1, $1)",
+    )
+    .bind(now)
+    .execute(&database.pool)
+    .await
+    .expect("seed cooldown account metric states");
+    let cooldowns = StaticCooldowns::new([
+        test_cooldown("acct_metrics_active_cooling", 2),
+        test_cooldown("acct_metrics_cooling", 3),
+        test_cooldown("acct_metrics_expired", 5),
+        test_cooldown("acct_metrics_unknown", 6),
+        test_cooldown("acct_metrics_stale_cooldown", 3),
+    ]);
+    let repository =
+        PgObservabilityRepository::new(database.pool.clone(), Some(Arc::new(cooldowns)));
+    let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
+        .expect("dashboard range");
+
+    let metrics = repository
+        .dashboard_summary(range)
+        .await
+        .expect("dashboard summary")
+        .provider_accounts;
+
+    assert_eq!(
+        (
+            metrics.total,
+            metrics.enabled,
+            metrics.active,
+            metrics.rate_limited,
+            metrics.quota_exhausted,
+            metrics.expired,
+            metrics.invalid,
+            metrics.disabled,
+            metrics.banned,
+            metrics.unavailable,
+        ),
+        (9, 8, 1, 2, 3, 1, 1, 1, 0, 8),
+    );
+    assert_eq!(
+        metrics.total,
+        metrics.active
+            + metrics.rate_limited
+            + metrics.quota_exhausted
+            + metrics.expired
+            + metrics.invalid
+            + metrics.disabled
+            + metrics.banned
+    );
+    assert_eq!(
+        metrics.unavailable,
+        metrics.rate_limited
+            + metrics.quota_exhausted
+            + metrics.expired
+            + metrics.invalid
+            + metrics.disabled
+            + metrics.banned
+    );
+    database.close().await;
+}
+
+struct StaticCooldowns {
+    cooldowns: BTreeMap<ProviderAccountId, ProviderCooldown>,
+}
+
+impl StaticCooldowns {
+    fn new(cooldowns: impl IntoIterator<Item = ProviderCooldown>) -> Self {
+        Self {
+            cooldowns: cooldowns
+                .into_iter()
+                .map(|cooldown| (cooldown.account_id().clone(), cooldown))
+                .collect(),
+        }
+    }
+}
+
+impl ProviderCooldownPort for StaticCooldowns {
+    fn put_if_later(
+        &self,
+        _cooldown: ProviderCooldown,
+    ) -> BoxFuture<'_, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn read<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<Option<ProviderCooldown>, ProviderStoreError>> {
+        Box::pin(async move { Ok(self.cooldowns.get(account_id).cloned()) })
+    }
+
+    fn clear<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _through_revision: CredentialRevision,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn put_scoped_if_later(
+        &self,
+        _cooldown: ProviderScopedCooldown,
+    ) -> BoxFuture<'_, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn read_scoped<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _scope: &'a ProviderCooldownScope,
+    ) -> BoxFuture<'a, Result<Option<ProviderScopedCooldown>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn clear_scoped<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _scope: &'a ProviderCooldownScope,
+        _through_revision: CredentialRevision,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn clear_all<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+}
+
+fn test_cooldown(account_id: &str, revision: u64) -> ProviderCooldown {
+    ProviderCooldown::new(
+        ProviderAccountId::new(account_id).expect("test account ID"),
+        CredentialRevision::new(revision).expect("test revision"),
+        SystemTime::now() + Duration::from_secs(60),
+    )
 }
 
 #[tokio::test]

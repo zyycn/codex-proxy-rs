@@ -357,8 +357,8 @@ pub(crate) async fn provider_account_metrics(
                     when availability = 'expired'
                       or (access_token_expires_at is not null and access_token_expires_at <= $1)
                       then 'expired'
-                    when quota_limit_reached then 'rate_limited'
                     when availability = 'unknown' then 'invalid'
+                    when quota_limit_reached then 'quota_exhausted'
                     else 'active'
                   end as status
              from provider_accounts
@@ -425,19 +425,21 @@ pub(crate) async fn active_provider_account_ids(
     .collect()
 }
 
-/// 查询非终态候选账号：id + credential revision + 是否 quota 触顶。
-/// 仅含 ready/unknown 等可被 Redis 冷却影响的账号，终态（禁用/封禁/过期/无效）由
-/// [`provider_account_metrics`] 直接计数。
+/// 查询可被 Redis 冷却重新归类的 ready 账号：id、credential revision 与 quota 标记。
+/// 已过期或非 ready 的账号由 [`provider_account_metrics`] 直接计数。
 pub(crate) async fn schedulable_metric_candidates(
     pool: &PgPool,
+    observed_at: DateTime<Utc>,
 ) -> StoreResult<Vec<(String, i64, bool)>> {
     sqlx::query(
         "select id, credential_revision, quota_limit_reached
            from provider_accounts
           where enabled
-            and availability in ('ready', 'unknown')
+            and availability = 'ready'
+            and (access_token_expires_at is null or access_token_expires_at > $1)
           order by id",
     )
+    .bind(observed_at)
     .fetch_all(pool)
     .await
     .map_err(|_| postgres_unavailable("load schedulable metric candidates"))?
