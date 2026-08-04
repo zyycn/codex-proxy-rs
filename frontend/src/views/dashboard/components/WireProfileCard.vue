@@ -124,8 +124,7 @@ const clientIdentity = computed(() => {
   const current = profile.value
   if (!current)
     return '—'
-  const label = current.provider === 'openai' ? 'Codex Core' : '客户端标识'
-  const value = current.attributes.find(attribute => attribute.label === label)?.value ?? '—'
+  const value = current.attributes.find(attribute => attribute.label === '客户端标识')?.value ?? '—'
   return current.provider === 'xai' ? toPascalCase(value) : value
 })
 
@@ -144,7 +143,6 @@ const runtimeEnvironment = computed(() => {
   const present = (value: string) => value !== '—' && value.toLowerCase() !== 'unknown'
   const primary = [target.osType, target.osVersion]
     .filter(present)
-    .map(value => value.toLowerCase() === 'linux' ? 'Linux' : value)
     .join(' ')
   const details = [target.arch, target.terminal].filter(present)
   return {
@@ -286,7 +284,7 @@ function providerLabel(provider: string) {
                 class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-(--cp-text-muted)"
               >
                 <Terminal aria-hidden="true" class="size-3.25 text-(--cp-info)" />
-                {{ profile.provider === 'openai' ? 'Codex Core' : 'Grok Client' }}
+                客户端标识
               </dt>
               <dd
                 class="mt-2 mb-0 truncate font-mono text-[16px] leading-none font-heavy tabular-nums text-(--cp-text-primary)"

@@ -13,7 +13,7 @@ fn openai_config_builds_the_audited_wire_profile() {
 
     assert_eq!(
         profile.user_agent(),
-        "Codex Desktop/0.102.0 (macOS 15.5.0; arm64) xterm-256color"
+        "Codex Desktop/1.2026.190 (Mac OS; arm64)"
     );
     assert_eq!(profile.desktop_build, "19012345678");
 }
@@ -42,6 +42,20 @@ fn openai_config_rejects_noncanonical_versions_and_empty_fields() {
         config
             .resolve_and_validate(Path::new("/srv/gateway"))
             .is_err()
+    );
+}
+
+#[test]
+fn openai_config_normalizes_the_legacy_macos_wire_label() {
+    let mut config = valid_config();
+    config.wire_profile.os_type = "macOS".to_owned();
+    config
+        .resolve_and_validate(Path::new("/srv/gateway"))
+        .expect("legacy macOS label remains supported");
+
+    assert_eq!(
+        config.wire_profile_state().snapshot().user_agent(),
+        "Codex Desktop/1.2026.190 (Mac OS; arm64)"
     );
 }
 
@@ -124,6 +138,10 @@ fn openai_config_defaults_to_the_provider_owned_operating_values() {
             "https://auth.openai.com/oauth/token",
         )
     );
+    assert_eq!(
+        config.wire_profile_state().snapshot().user_agent(),
+        "Codex Desktop/26.727.51351 (Mac OS; arm64)"
+    );
 }
 
 fn valid_config() -> OpenAiConfig {
@@ -133,7 +151,7 @@ fn valid_config() -> OpenAiConfig {
         codex_version: "0.102.0".to_owned(),
         desktop_version: "1.2026.190".to_owned(),
         desktop_build: "19012345678".to_owned(),
-        os_type: "macOS".to_owned(),
+        os_type: "Mac OS".to_owned(),
         os_version: "15.5.0".to_owned(),
         arch: "arm64".to_owned(),
         terminal: "xterm-256color".to_owned(),

@@ -117,9 +117,7 @@ fn test_wire_profile() -> CodexWireProfileState {
         desktop_version: "1.2.3".to_owned(),
         desktop_build: "123".to_owned(),
         os_type: "linux".to_owned(),
-        os_version: "6.8".to_owned(),
         arch: "x86_64".to_owned(),
-        terminal: "transport-test".to_owned(),
         verified_at: Utc::now(),
     })
 }

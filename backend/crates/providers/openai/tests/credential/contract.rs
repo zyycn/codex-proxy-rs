@@ -124,9 +124,7 @@ fn selector_with_runtime(
         desktop_version: "1.0.0".to_owned(),
         desktop_build: "1".to_owned(),
         os_type: "linux".to_owned(),
-        os_version: "6.8".to_owned(),
         arch: "x86_64".to_owned(),
-        terminal: "selector-contract".to_owned(),
         verified_at: chrono::Utc::now(),
     });
     let http = reqwest::Client::builder().build().expect("HTTP client");

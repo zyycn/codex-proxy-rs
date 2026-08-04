@@ -278,12 +278,17 @@ impl CodexAuthSettings {
 #[serde(deny_unknown_fields)]
 pub struct CodexWireProfileConfig {
     pub originator: String,
+    /// bundled Core 的模型目录版本；不参与 Desktop HTTP User-Agent。
     pub codex_version: String,
     pub desktop_version: String,
     pub desktop_build: String,
     pub os_type: String,
+    /// 兼容旧配置：Desktop HTTP 不再使用系统小版本。
+    #[serde(default)]
     pub os_version: String,
     pub arch: String,
+    /// 兼容旧配置：Desktop HTTP 不再使用终端标记。
+    #[serde(default)]
     pub terminal: String,
     pub verified_at: DateTime<Utc>,
 }
@@ -292,13 +297,13 @@ impl Default for CodexWireProfileConfig {
     fn default() -> Self {
         Self {
             originator: "Codex Desktop".to_owned(),
-            codex_version: "0.145.0".to_owned(),
-            desktop_version: "26.721.31836".to_owned(),
-            desktop_build: "5828".to_owned(),
-            os_type: "macOS".to_owned(),
-            os_version: "15.7.1".to_owned(),
+            codex_version: "0.146.0".to_owned(),
+            desktop_version: "26.727.51351".to_owned(),
+            desktop_build: "6119".to_owned(),
+            os_type: "Mac OS".to_owned(),
+            os_version: String::new(),
             arch: "arm64".to_owned(),
-            terminal: "unknown".to_owned(),
+            terminal: String::new(),
             verified_at: Utc::now(),
         }
     }
@@ -321,9 +326,7 @@ impl CodexWireProfileConfig {
                 self.desktop_build.as_str(),
             ),
             ("openai.wire_profile.os_type", self.os_type.as_str()),
-            ("openai.wire_profile.os_version", self.os_version.as_str()),
             ("openai.wire_profile.arch", self.arch.as_str()),
-            ("openai.wire_profile.terminal", self.terminal.as_str()),
         ] {
             if value.trim().is_empty() {
                 return Err(OpenAiConfigError::InvalidField(field));
@@ -355,12 +358,17 @@ impl From<CodexWireProfileConfig> for CodexWireProfile {
             codex_version: value.codex_version,
             desktop_version: value.desktop_version,
             desktop_build: value.desktop_build,
-            os_type: value.os_type,
-            os_version: value.os_version,
+            os_type: canonical_desktop_os_type(value.os_type),
             arch: value.arch,
-            terminal: value.terminal,
             verified_at: value.verified_at,
         }
+    }
+}
+
+fn canonical_desktop_os_type(os_type: String) -> String {
+    match os_type.as_str() {
+        "macOS" => "Mac OS".to_owned(),
+        _ => os_type,
     }
 }
 

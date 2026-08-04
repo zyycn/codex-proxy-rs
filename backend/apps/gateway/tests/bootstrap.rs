@@ -134,7 +134,7 @@ fn config_loader_should_reject_removed_fingerprint_section() {
 }
 
 #[test]
-fn config_loader_should_reject_invalid_codex_core_version() {
+fn config_loader_should_reject_invalid_model_catalog_version() {
     assert_rejected(valid_config().replace("codex_version: '0.146.0'", "codex_version: 'latest'"));
 }
 

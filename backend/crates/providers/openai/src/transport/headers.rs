@@ -3,7 +3,7 @@ use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AG
 
 use super::client::CodexClientResult;
 
-/// 构造 Codex Core 为模型请求设置的稳定身份请求头。
+/// 构造 Codex Desktop HTTP 为模型请求设置的稳定身份请求头。
 pub fn build_codex_base_headers(
     profile: &CodexWireProfile,
     authorization: &str,

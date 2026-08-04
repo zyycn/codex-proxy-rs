@@ -55,7 +55,7 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
     assert_eq!(bundle.core_provider().name(), "openai");
     assert_eq!(bundle.admin_provider().provider_kind().as_str(), "openai");
     let contributions = bundle.take_worker_contributions();
-    assert_eq!(contributions.len(), 5);
+    assert_eq!(contributions.len(), 4);
     assert!(
         contributions
             .iter()
@@ -105,10 +105,17 @@ async fn openai_admin_provider_exposes_live_wire_profile_and_validated_billing()
         profile
             .attributes
             .iter()
-            .find(|attribute| attribute.label == "Codex Core")
+            .find(|attribute| attribute.label == "客户端标识")
             .map(|attribute| attribute.value.as_str()),
-        Some("0.102.0")
+        Some("Desktop")
     );
+    assert_eq!(
+        profile.user_agent,
+        "Codex Desktop/1.2026.190 (Mac OS; arm64)"
+    );
+    assert_eq!(profile.target.os_type, "macOS");
+    assert_eq!(profile.target.os_version, "—");
+    assert_eq!(profile.target.terminal, "—");
     assert_eq!(
         profile.release.as_ref().map(|release| release.status),
         Some(DesktopReleaseStatus::Unchecked)
@@ -771,7 +778,7 @@ fn valid_config() -> TestOpenAiConfig {
         codex_version: "0.102.0".to_owned(),
         desktop_version: "1.2026.190".to_owned(),
         desktop_build: "19012345678".to_owned(),
-        os_type: "macOS".to_owned(),
+        os_type: "Mac OS".to_owned(),
         os_version: "15.5.0".to_owned(),
         arch: "arm64".to_owned(),
         terminal: "xterm-256color".to_owned(),
