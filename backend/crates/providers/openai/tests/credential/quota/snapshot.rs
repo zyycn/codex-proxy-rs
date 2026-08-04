@@ -305,7 +305,7 @@ async fn scheduling_signal_survives_limit_reached_without_percent_or_reset() {
 }
 
 #[tokio::test]
-async fn persisted_codex_additional_limit_replaces_the_top_level_rate_limit() {
+async fn persisted_codex_alias_keeps_the_top_level_rate_limit_canonical() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_canonical_codex_limit").await;
     let account = store
@@ -323,7 +323,7 @@ async fn persisted_codex_additional_limit_replaces_the_top_level_rate_limit() {
             "metered_feature": "codex",
             "rate_limit": {
                 "primary_window": {
-                    "used_percent": 2,
+                    "used_percent": 98,
                     "reset_at": 1_900_000_000,
                     "limit_window_seconds": 2_592_000
                 }
@@ -355,10 +355,13 @@ async fn persisted_codex_additional_limit_replaces_the_top_level_rate_limit() {
         .filter(|window| window.kind() == CodexQuotaWindowKind::Monthly)
         .collect::<Vec<_>>();
 
-    assert_eq!(snapshot.fact().remaining_percent(), Some(98));
+    assert_eq!(snapshot.fact().remaining_percent(), Some(9));
     assert_eq!(monthly.len(), 1);
-    assert_eq!(monthly[0].source(), "core");
-    assert_eq!(monthly[0].used_percent(), Some(2.0));
+    assert!(
+        monthly
+            .iter()
+            .any(|window| { window.source() == "codex" && window.used_percent() == Some(91.0) })
+    );
 }
 
 #[tokio::test]
@@ -419,16 +422,21 @@ async fn code_review_limit_projects_as_independent_window_with_limit_name() {
         .expect("read quota")
         .expect("quota snapshot");
 
-    // spend_control 不再生成窗口（只作 exhaustion 信号），
-    // 顶层 code_review_rate_limit 与 additional 的 code_review 桶同源替换后保留一个。
+    // spend_control 不再生成窗口（只作 exhaustion 信号）；顶层和 additional
+    // 的 code_review 桶分别保留，避免一个快照覆盖另一个。
     let review = snapshot
         .windows()
         .iter()
         .filter(|window| window.source() == "code_review")
         .collect::<Vec<_>>();
-    assert_eq!(review.len(), 1);
-    assert_eq!(review[0].limit_name(), Some("code review"));
-    assert_eq!(review[0].used_percent(), Some(55.0));
-    assert_eq!(snapshot.windows().len(), 2);
+    assert_eq!(review.len(), 2);
+    assert!(review.iter().any(|window| {
+        window.limit_name() == Some("code_review") && window.used_percent() == Some(80.0)
+    }));
+    assert!(review.iter().any(|window| {
+        window.limit_name() == Some("code review") && window.used_percent() == Some(55.0)
+    }));
+    assert_ne!(review[0].key(), review[1].key());
+    assert_eq!(snapshot.windows().len(), 3);
     assert!(!snapshot.fact().exhausted());
 }

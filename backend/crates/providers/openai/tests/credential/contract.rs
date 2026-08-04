@@ -4,9 +4,13 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use futures::executor::block_on;
+use gateway_core::engine::continuation::{
+    ContinuationBinding, NativeContinuationPin, PreviousResponseId,
+};
 use gateway_core::engine::credential::{
     AccountAttemptFeedback, AccountAvailability, AccountFeedbackStats, AccountSelectionPolicy,
-    AccountStateChange, ProviderAccountId, ProviderAccountStore as _, RotationStrategy,
+    AccountStateChange, OpaqueProviderData, ProviderAccountId, ProviderAccountStore as _,
+    QuotaObservation, QuotaWriteOutcome, RotationStrategy,
 };
 use gateway_core::engine::{
     AccountAttemptContext, AttemptContext, CancellationToken, ModelRequestId, RequestAttemptContext,
@@ -24,6 +28,7 @@ use provider_openai::credential::{
 };
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use secrecy::ExposeSecret;
+use serde_json::json;
 use url::Url;
 
 use crate::support::{
@@ -983,6 +988,131 @@ fn selector_keeps_a_quota_exhausted_account_eligible_when_configured_not_to_skip
             .availability(),
         AccountAvailability::QuotaExhausted
     );
+}
+
+#[test]
+fn native_continuation_surfaces_the_original_accounts_quota_status_to_the_coordinator() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_original", "at-original");
+    create_account(&store, "acct_fallback", "at-fallback");
+    let strict_selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
+    let original = store.account("acct_original").expect("original account");
+    block_on(strict_selector.record_failure(&original, CodexAccountFailure::QuotaExhausted, None))
+        .expect("mark original account exhausted");
+
+    let selector = selector_with_runtime(
+        &store,
+        Arc::new(TestLeaseCoordinator::default()),
+        Arc::new(MemorySessionAffinity::default()),
+        Arc::new(AccountFeedbackStats::default()),
+        false,
+        Arc::new(MemoryCooldownPort::new()),
+    );
+    let continuation = NativeContinuationPin::new(
+        PreviousResponseId::new("previous-response"),
+        PreviousResponseId::new("upstream-response"),
+        ProviderKind::new("openai").expect("provider"),
+        original.id().clone(),
+    );
+    let attempt = AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new("req_native_continuation").expect("request id"),
+            ClientApiKeyId::new("key_codex_contract").expect("client key id"),
+        ),
+        NonZeroU32::new(1).expect("attempt"),
+        SystemTime::now() + Duration::from_secs(30),
+        account_policy(),
+        AccountAttemptContext::new(BTreeSet::new(), None, None),
+        Some(ContinuationBinding::Pinned(continuation)),
+        CancellationToken::new(),
+    );
+    let error =
+        block_on(
+            selector.select(&SelectCodexCredential {
+                upstream_model: "gpt-5.4",
+                request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
+                    .expect("request URL"),
+                attempt: &attempt,
+                session_affinity_key: None,
+            }),
+        )
+        .expect_err("the selector must surface the unavailable native account");
+
+    assert!(matches!(
+        error,
+        CredentialSelectionError::NoEligibleCredential
+    ));
+}
+
+#[test]
+fn native_continuation_surfaces_the_original_accounts_quota_signal_to_the_coordinator() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_original_signal", "at-original-signal");
+    create_account(&store, "acct_fallback_signal", "at-fallback-signal");
+    let original = store
+        .account("acct_original_signal")
+        .expect("original account");
+    let quota = json!({
+        "rate_limit": {
+            "allowed": false,
+            "limit_reached": true,
+            "primary_window": {"used_percent": 98}
+        }
+    });
+    let outcome = block_on(store.compare_and_swap_quota(QuotaObservation {
+        account_id: original.id().clone(),
+        expected_revision: original.revision(),
+        quota: Some(OpaqueProviderData::new(
+            quota.as_object().expect("quota object").clone(),
+        )),
+        observed_at: Some(SystemTime::now()),
+        limit_reached: None,
+    }))
+    .expect("persist quota signal");
+    assert!(matches!(outcome, QuotaWriteOutcome::Updated));
+
+    let selector = selector_with_runtime(
+        &store,
+        Arc::new(TestLeaseCoordinator::default()),
+        Arc::new(MemorySessionAffinity::default()),
+        Arc::new(AccountFeedbackStats::default()),
+        false,
+        Arc::new(MemoryCooldownPort::new()),
+    );
+    let continuation = NativeContinuationPin::new(
+        PreviousResponseId::new("previous-response"),
+        PreviousResponseId::new("upstream-response"),
+        ProviderKind::new("openai").expect("provider"),
+        original.id().clone(),
+    );
+    let attempt = AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new("req_native_continuation_signal").expect("request id"),
+            ClientApiKeyId::new("key_codex_contract").expect("client key id"),
+        ),
+        NonZeroU32::new(1).expect("attempt"),
+        SystemTime::now() + Duration::from_secs(30),
+        account_policy(),
+        AccountAttemptContext::new(BTreeSet::new(), None, None),
+        Some(ContinuationBinding::Pinned(continuation)),
+        CancellationToken::new(),
+    );
+    let error =
+        block_on(
+            selector.select(&SelectCodexCredential {
+                upstream_model: "gpt-5.4",
+                request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
+                    .expect("request URL"),
+                attempt: &attempt,
+                session_affinity_key: None,
+            }),
+        )
+        .expect_err("the selector must surface the quota-limited native account");
+
+    assert!(matches!(
+        error,
+        CredentialSelectionError::NoEligibleCredential
+    ));
 }
 
 #[test]

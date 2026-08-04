@@ -790,6 +790,70 @@ async fn backend_http_should_zstd_compress_codex_responses_request_body() {
 }
 
 #[tokio::test]
+async fn backend_http_should_force_upstream_sse_for_non_streaming_client_request() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind non-streaming HTTP server");
+    let address = listener
+        .local_addr()
+        .expect("non-streaming HTTP server address");
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept HTTP client");
+        let request = read_http_request_with_body(&mut stream).await;
+        write_completed_sse_response(&mut stream).await;
+        request
+    });
+    let mut request = CodexResponsesRequest::from_body(
+        json!({
+            "model": "gpt-test",
+            "instructions": "collect this response",
+            "input": [],
+            "stream": false
+        })
+        .as_object()
+        .expect("request body")
+        .clone(),
+    );
+    request.force_http_sse = true;
+    assert!(
+        !request.stream(),
+        "client-facing preference remains non-streaming"
+    );
+    let client = CodexBackendClient::new(
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("HTTP client"),
+        format!("http://{address}"),
+        test_wire_profile(),
+    );
+
+    client
+        .create_response(
+            &request,
+            request_context("req_non_streaming_client", Some("acct-non-streaming")),
+        )
+        .await
+        .expect("upstream SSE response");
+
+    let raw = server.await.expect("non-streaming HTTP server task");
+    let separator = raw
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("HTTP head/body separator");
+    let compressed_body = &raw[separator + 4..];
+    let decompressed = zstd::stream::decode_all(std::io::Cursor::new(compressed_body))
+        .expect("zstd body should decode");
+    let json: serde_json::Value =
+        serde_json::from_slice(&decompressed).expect("decompressed body should be valid JSON");
+    assert_eq!(json["stream"], true);
+    assert!(
+        !request.stream(),
+        "upstream normalization must not mutate local metadata"
+    );
+}
+
+#[tokio::test]
 async fn websocket_should_keep_an_exact_chain_while_new_connections_adopt_the_latest_codex_core_wire_profile()
  {
     let listener = TcpListener::bind("127.0.0.1:0")

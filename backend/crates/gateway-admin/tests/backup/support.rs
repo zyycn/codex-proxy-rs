@@ -13,9 +13,10 @@ use gateway_admin::{
         MutationActor, MutationContext, Revision,
         auth::AdminAuditEvent,
         backup::{
-            BackupObjectMetadata, BackupRecord, BackupRecordListQuery, BackupRecordPage,
-            BackupRecordSeed, BackupSettings, BackupStatus, BackupStorageConfig, BackupTriggerKind,
-            ConnectionTestResult, UpdateBackupScheduleCommand, UpdateBackupStorageCommand,
+            BackupError, BackupObjectMetadata, BackupRecord, BackupRecordListQuery,
+            BackupRecordPage, BackupRecordSeed, BackupSettings, BackupStatus, BackupStorageConfig,
+            BackupTriggerKind, ConnectionTestResult, UpdateBackupScheduleCommand,
+            UpdateBackupStorageCommand,
         },
     },
     ports::{
@@ -497,13 +498,21 @@ impl DatabaseDumpPort for FakeDumpPort {
 /// 内存版对象存储：把上传内容按 key 保存并支持 Head/Delete/预签名。
 pub(crate) struct FakeObjectStore {
     pub(crate) objects: Mutex<std::collections::HashMap<String, Vec<u8>>>,
+    upload_error: Option<BackupError>,
 }
 
 impl FakeObjectStore {
     pub(crate) fn new() -> Self {
         Self {
             objects: Mutex::new(std::collections::HashMap::new()),
+            upload_error: None,
         }
+    }
+
+    /// 让上传返回指定的脱敏 S3 错误。
+    pub(crate) fn fail_upload(mut self, code: &'static str, message: impl Into<String>) -> Self {
+        self.upload_error = Some(BackupError::new(code, message.into()));
+        self
     }
 
     pub(crate) fn object(&self, key: &str) -> Option<Vec<u8>> {
@@ -530,6 +539,9 @@ impl BackupObjectStorePort for FakeObjectStore {
         _config: &BackupStorageConfig,
         request: UploadObjectRequest,
     ) -> Result<(), gateway_admin::model::backup::BackupError> {
+        if let Some(error) = &self.upload_error {
+            return Err(error.clone());
+        }
         let content = std::fs::read(&request.source).map_err(|_| {
             gateway_admin::model::backup::BackupError::new(
                 gateway_admin::model::backup::code::S3_UPLOAD_FAILED,

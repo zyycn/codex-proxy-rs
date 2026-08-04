@@ -428,7 +428,8 @@ async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export
 }
 
 #[tokio::test]
-async fn openai_admin_provider_projects_codex_additional_limit_as_the_primary_quota() {
+async fn openai_admin_provider_projects_official_codex_quota_and_independent_buckets_with_chinese_labels()
+ {
     let store = Arc::new(MemoryAccountStore::default());
     store
         .seed_oauth_credential(ImportCodexOAuthCredential {
@@ -444,11 +445,15 @@ async fn openai_admin_provider_projects_codex_additional_limit_as_the_primary_qu
         .account("acct_admin_canonical_quota")
         .expect("stored account");
     let raw = json!({
+        "active_limit": "premium",
         "rate_limit": {
             "primary_window": {
                 "used_percent": 91,
                 "reset_at": 1_900_000_000,
                 "limit_window_seconds": 2_592_000
+            },
+            "secondary_window": {
+                "used_percent": 88
             }
         },
         "additional_rate_limits": [{
@@ -459,6 +464,19 @@ async fn openai_admin_provider_projects_codex_additional_limit_as_the_primary_qu
                     "used_percent": 2,
                     "reset_at": 1_900_000_000,
                     "limit_window_seconds": 2_592_000
+                },
+                "secondary_window": {
+                    "used_percent": 0
+                }
+            }
+        }, {
+            "limit_name": "code_review",
+            "metered_feature": "code_review",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 12,
+                    "reset_at": 1_900_000_000,
+                    "limit_window_seconds": 604_800
                 }
             }
         }]
@@ -499,10 +517,31 @@ async fn openai_admin_provider_projects_codex_additional_limit_as_the_primary_qu
         .collect::<Vec<_>>();
 
     assert_eq!(monthly.len(), 1);
-    // limit_name 优先显示，不再猜成「月限额」。
-    assert_eq!(monthly[0].label, "custom codex label");
-    assert_eq!(monthly[0].source.as_deref(), Some("core"));
-    assert_eq!(monthly[0].used_percent, Some(2.0));
+    assert!(monthly.iter().any(|window| {
+        window.label == "月额度"
+            && window.source.as_deref() == Some("codex")
+            && window.used_percent == Some(91.0)
+    }));
+    assert!(
+        !quota
+            .windows
+            .iter()
+            .any(|window| window.key.starts_with("additional-0-codex")),
+        "the additional codex alias should not become a second display bucket"
+    );
+    let secondary = quota
+        .windows
+        .iter()
+        .find(|window| window.key == "core-secondary")
+        .expect("core secondary quota");
+    assert_eq!(secondary.label, "次级额度");
+    assert_eq!(secondary.used_percent, Some(88.0));
+    let review = quota
+        .windows
+        .iter()
+        .find(|window| window.source.as_deref() == Some("code_review"))
+        .expect("code review quota");
+    assert_eq!(review.label, "代码审查 · 周额度");
 }
 
 #[tokio::test]

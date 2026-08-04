@@ -1,7 +1,7 @@
-//! 402 恢复证据与 availability 转换。
+//! 确认额度耗尽后的恢复证据与 availability 转换。
 //!
-//! `QuotaExhausted -> Ready` 只接受同一 credential revision 的真实成功响应、
-//! 新鲜快照显式 `allowed=true` 且无 exhaustion、或已到期旧 reset 配合未耗尽新快照。
+//! `QuotaExhausted -> Ready` 只能由同一 credential revision 的权威 usage 快照证明：
+//! 已确认的旧窗口 reset 已到期，且新快照的 reset 已推进到下一窗口。
 
 use std::time::SystemTime;
 
@@ -12,47 +12,24 @@ use serde_json::Value;
 use super::snapshot::CodexQuotaFact;
 use crate::transport::CodexClientError;
 
-/// 402 恢复可接受的证据强度。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum QuotaRecoveryEvidence {
-    /// 一次真实成功推理响应（最强证据）。
-    SuccessfulResponse,
-    /// 周期 worker 刷新出的新快照（需旧 reset 已到期佐证）。
-    RefreshedSnapshot,
-}
-
-/// 只处理 `QuotaExhausted` 的恢复——429/触顶不再进入该状态，由 quota 数据
-/// 驱动调度排除（限流不改变账号可用性）。`Invalid/Expired/Banned` 等终态由 selector 的
-/// 成功响应恢复路径处理。
+/// 只处理 `QuotaExhausted` 的恢复。`allowed=true`、成功响应和百分比回落都不能单独
+/// 覆盖一次已确认的额度拒绝；它们在 reset 未推进时可能只是上游滞后的观测。
 ///
-/// `previous_reset_at` 是写入新快照前读取的旧确认 reset；`RefreshedSnapshot`
-/// 恢复要求它已到期（窗口真实滚动后新快照的 reset 指向下一个未来周期，
-/// 不能用它判定旧耗尽窗口是否已结束）。
+/// `previous_reset_at` 是写入新快照前读取的已确认耗尽窗口。恢复必须同时满足：
+/// 旧窗口已经到期，且权威快照的 reset 指向比旧窗口更晚的新周期。
 pub(crate) fn quota_success_state(
     current: AccountAvailability,
     fact: CodexQuotaFact,
     previous_reset_at: Option<SystemTime>,
     now: SystemTime,
-    recovery_evidence: QuotaRecoveryEvidence,
 ) -> Option<AccountAvailability> {
     if current != AccountAvailability::QuotaExhausted || fact.exhausted() {
         return None;
     }
-    // 新鲜快照显式 `allowed=true` 且无 exhaustion，直接恢复。
-    if fact.explicit_allowed() {
-        return Some(AccountAvailability::Ready);
-    }
-    // 一次真实成功响应是最强证据；周期刷新需要旧确认 reset 已到期
-    // （used_percent 是可滞后、会取整的观测值，其回落不能覆盖仍未到期的旧 reset）。
-    match recovery_evidence {
-        QuotaRecoveryEvidence::SuccessfulResponse => Some(AccountAvailability::Ready),
-        QuotaRecoveryEvidence::RefreshedSnapshot
-            if previous_reset_at.is_some_and(|reset_at| reset_at <= now) =>
-        {
-            Some(AccountAvailability::Ready)
-        }
-        QuotaRecoveryEvidence::RefreshedSnapshot => None,
-    }
+    let previous_reset_at = previous_reset_at?;
+    let refreshed_reset_at = fact.resets_at().map(SystemTime::from)?;
+    (previous_reset_at <= now && refreshed_reset_at > previous_reset_at)
+        .then_some(AccountAvailability::Ready)
 }
 
 pub(crate) fn quota_state_transition(error: &CodexClientError) -> Option<AccountAvailability> {

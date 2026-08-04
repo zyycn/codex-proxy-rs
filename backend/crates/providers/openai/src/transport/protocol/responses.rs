@@ -606,6 +606,26 @@ impl CodexResponsesRequest {
         )
     }
 
+    /// 返回会话亲和所用的子代理区分值。
+    ///
+    /// Codex 原生请求在 turn metadata 中声明 `subagent_kind`；网关的
+    /// `/responses/review` 等入口则通过 `client_metadata.x-openai-subagent`
+    /// 传递给上游。该可选值仅参与会话亲和键派生。
+    pub fn subagent_kind(&self) -> Option<String> {
+        self.semantics()
+            .subagent_kind
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                self.client_metadata()
+                    .and_then(Value::as_object)
+                    .and_then(|metadata| metadata.get("x-openai-subagent"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+            })
+    }
+
     /// 设置 / 合并 client metadata。
     pub fn set_client_metadata(&mut self, client_metadata: Option<Value>) {
         match client_metadata {

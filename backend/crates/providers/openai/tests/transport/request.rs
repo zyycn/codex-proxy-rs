@@ -402,6 +402,41 @@ fn observability_semantics_should_reuse_codex_turn_metadata() {
 }
 
 #[test]
+fn encoder_should_extract_subagent_kind_from_wire_or_turn_metadata() {
+    let metadata_request = request(Map::from_iter([
+        ("model".to_owned(), json!("client-model")),
+        ("input".to_owned(), json!("prompt")),
+        (
+            "client_metadata".to_owned(),
+            json!({"x-openai-subagent": "review"}),
+        ),
+    ]));
+    let metadata_encoded =
+        encode_generate_request(&metadata_request, "gpt-test").expect("encode metadata request");
+    assert_eq!(metadata_encoded.subagent_kind().as_deref(), Some("review"));
+
+    let turn_metadata_payload = ProtocolPayload::json_object(
+        "openai",
+        Map::from_iter([
+            ("model".to_owned(), json!("client-model")),
+            ("input".to_owned(), json!("prompt")),
+        ]),
+    )
+    .expect("OpenAI payload")
+    .with_context(Map::from_iter([(
+        "turn_metadata".to_owned(),
+        Value::String(r#"{"subagent_kind":"worker"}"#.to_owned()),
+    )]));
+    let turn_metadata_request = GenerateRequest::from_protocol_payload(turn_metadata_payload);
+    let turn_metadata_encoded = encode_generate_request(&turn_metadata_request, "gpt-test")
+        .expect("encode turn metadata request");
+    assert_eq!(
+        turn_metadata_encoded.subagent_kind().as_deref(),
+        Some("worker")
+    );
+}
+
+#[test]
 fn observability_semantics_should_use_the_transparent_openai_payload() {
     let payload = ProtocolPayload::json_object(
         "openai",

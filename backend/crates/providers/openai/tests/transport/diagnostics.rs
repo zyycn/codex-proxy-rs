@@ -146,13 +146,13 @@ fn structured_expiry_code_classifies_without_an_auth_status() {
 }
 
 #[test]
-fn structured_quota_signal_takes_precedence_over_http_429() {
+fn http_429_without_usage_limit_type_remains_a_temporary_rate_limit() {
     assert_eq!(
         classify(
             429,
             r#"{"error":{"code":"insufficient_quota","message":"rate limit reached"}}"#
         ),
-        CodexFailureCategory::QuotaExhausted
+        CodexFailureCategory::RateLimited
     );
 }
 
@@ -168,13 +168,24 @@ fn structured_usage_limit_type_is_resettable_quota_exhaustion() {
 }
 
 #[test]
-fn usage_limit_message_without_a_type_is_resettable_quota_exhaustion() {
+fn http_429_usage_limit_message_without_a_type_remains_a_temporary_rate_limit() {
     assert_eq!(
         classify(
             429,
             r#"{"error":{"message":"The usage limit has been reached"}}"#
         ),
-        CodexFailureCategory::UsageLimitExhausted
+        CodexFailureCategory::RateLimited
+    );
+}
+
+#[test]
+fn http_429_usage_limit_code_without_a_type_remains_a_temporary_rate_limit() {
+    assert_eq!(
+        classify(
+            429,
+            r#"{"error":{"code":"usage_limit_reached","message":"The usage limit has been reached"}}"#
+        ),
+        CodexFailureCategory::RateLimited
     );
 }
 

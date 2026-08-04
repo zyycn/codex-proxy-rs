@@ -6,7 +6,7 @@ import { computed, nextTick, onBeforeUnmount, ref, shallowRef, useAttrs, watch }
 
 type PopoverPlacement
   = 'top' | 'top-start' | 'top-end' | 'right' | 'bottom' | 'bottom-start' | 'bottom-end' | 'left'
-type PopoverTrigger = 'click' | 'hover'
+type PopoverTrigger = 'click' | 'hover' | 'hover-click'
 
 interface PopoverPoint {
   left: number
@@ -29,7 +29,7 @@ const props = withDefaults(
     offset?: number
     width?: number | string
     disabled?: boolean
-    /** hover 触发时打开弹窗的延迟（毫秒）；click 触发不生效。 */
+    /** 包含 hover 的触发方式打开弹窗的延迟（毫秒）；click 触发不生效。 */
     hoverDelay?: number
     panelClass?: string
     triggerClass?: string
@@ -277,7 +277,7 @@ function closePopover() {
 }
 
 function togglePopover() {
-  if (props.trigger !== 'click') {
+  if (!supportsClickTrigger()) {
     return
   }
 
@@ -287,6 +287,14 @@ function togglePopover() {
   }
 
   void openPopover()
+}
+
+function supportsClickTrigger() {
+  return props.trigger === 'click' || props.trigger === 'hover-click'
+}
+
+function supportsHoverTrigger() {
+  return props.trigger === 'hover' || props.trigger === 'hover-click'
 }
 
 function clearHoverCloseTimer() {
@@ -308,7 +316,7 @@ function clearHoverOpenTimer() {
 }
 
 function handleHoverEnter() {
-  if (props.trigger !== 'hover') {
+  if (!supportsHoverTrigger()) {
     return
   }
 
@@ -323,7 +331,7 @@ function handleHoverEnter() {
 }
 
 function handleHoverLeave() {
-  if (props.trigger !== 'hover') {
+  if (!supportsHoverTrigger()) {
     return
   }
 

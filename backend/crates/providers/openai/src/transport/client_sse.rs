@@ -87,8 +87,13 @@ impl CodexBackendClient {
         let headers = self.request_headers_for_http_response(upstream_request, context)?;
         let headers_started_at = Instant::now();
         // 与官方 Codex app-server 一致：/v1/responses 请求体默认 zstd 压缩。
+        // Codex 上游只交付 SSE；即使下游请求 `stream: false`，也要上游流式执行，
+        // 再由 API 层收集 canonical events 并返回完整 JSON。不能把下游的传输偏好
+        // 直接透传给 Codex，否则上游会以 400 拒绝非流式请求。
+        let mut upstream_body = upstream_request.body().clone();
+        upstream_body.insert("stream".to_owned(), serde_json::Value::Bool(true));
         let body =
-            serde_json::to_vec(&upstream_request).map_err(CodexClientError::RequestBodyEncode)?;
+            serde_json::to_vec(&upstream_body).map_err(CodexClientError::RequestBodyEncode)?;
         let body = zstd::stream::encode_all(std::io::Cursor::new(body), 3)
             .map_err(CodexClientError::RequestCompression)?;
         let response = self

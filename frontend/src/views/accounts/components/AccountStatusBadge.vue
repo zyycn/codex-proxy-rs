@@ -3,16 +3,14 @@ import { AlertTriangle, CircleCheck, Gauge, Power, Timer } from '@lucide/vue'
 import { computed } from 'vue'
 
 import BasePopover from '@/components/base/BasePopover.vue'
+import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import { errorReasonLabels, statusLabels, statusTones } from '../constants'
 
 const props = withDefaults(
   defineProps<{
     status: string
-    /** `status === 'error'` 时的具体原因（对应后端 `errorReason`）。 */
     errorReason?: string | null
-    /** 最近一次失败的上游错误原文（对应后端 `errorMessage`），作为辅助证据展示。 */
     errorMessage?: string | null
-    // 429 临时限流到期时间（对应后端 `quota.rateLimitedUntil`）；`status === 'rate_limited'` 时有值。
     rateLimitedUntil?: string | null
     variant?: 'inline' | 'pill'
   }>(),
@@ -24,25 +22,58 @@ const props = withDefaults(
   },
 )
 
-const tone = computed(() => statusTones[props.status])
+const statusStyles = {
+  success: {
+    text: 'text-(--cp-success-text)',
+    dot: 'bg-(--cp-success)',
+    badge: 'border-(--cp-success-border) bg-(--cp-success-bg) text-(--cp-success-text)',
+    icon: 'bg-(--cp-success-bg) text-(--cp-success-text) shadow-[inset_0_0_0_1px_var(--cp-success-border)]',
+  },
+  danger: {
+    text: 'text-(--cp-danger-text)',
+    dot: 'bg-(--cp-danger)',
+    badge: 'border-(--cp-danger-border) bg-(--cp-danger-bg) text-(--cp-danger-text)',
+    icon: 'bg-(--cp-danger-bg) text-(--cp-danger-text) shadow-[inset_0_0_0_1px_var(--cp-danger-border)]',
+  },
+  warning: {
+    text: 'text-(--cp-warning-text)',
+    dot: 'bg-(--cp-warning)',
+    badge: 'border-(--cp-warning-border) bg-(--cp-warning-bg) text-(--cp-warning-text)',
+    icon: 'bg-(--cp-warning-bg) text-(--cp-warning-text) shadow-[inset_0_0_0_1px_var(--cp-warning-border)]',
+  },
+  info: {
+    text: 'text-(--cp-info-text)',
+    dot: 'bg-(--cp-info)',
+    badge: 'border-(--cp-info-border) bg-(--cp-info-bg) text-(--cp-info-text)',
+    icon: 'bg-(--cp-info-bg) text-(--cp-info-text) shadow-[inset_0_0_0_1px_var(--cp-info-border)]',
+  },
+  normal: {
+    text: 'text-(--cp-text-secondary)',
+    dot: 'bg-(--cp-text-muted)',
+    badge: 'border-(--cp-divider-subtle) bg-(--cp-bg-subtle) text-(--cp-text-secondary)',
+    icon: 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)',
+  },
+} as const
+
+const tone = computed(() => statusTones[props.status] || 'normal')
+const statusStyle = computed(() => statusStyles[tone.value])
 const label = computed(() => statusLabels[props.status] || props.status)
-/** 分类原因（受控枚举映射文案）；`status === 'error'` 时有值。 */
-const reasonLabel = computed(() => {
-  if (props.errorReason)
-    return errorReasonLabels[props.errorReason] || props.errorReason
-  return null
-})
-/** 上游错误原文（辅助证据）；有则显、无则隐。 */
+const reasonLabel = computed(() =>
+  props.errorReason
+    ? errorReasonLabels[props.errorReason] || props.errorReason
+    : null,
+)
 const errorText = computed(() => props.errorMessage || null)
-// 429 临时限流中且带到期时间。
-const hasRateLimit = computed(() =>
+const detailTitle = computed(() => reasonLabel.value || label.value)
+const isRateLimited = computed(() =>
   props.status === 'rate_limited' && Boolean(props.rateLimitedUntil),
 )
-/** 限流到期相对时间：如「剩余 12 分钟」。到点返回 null。 */
 const rateLimitedRelative = computed(() => {
-  if (!hasRateLimit.value)
+  const rateLimitedUntil = props.rateLimitedUntil
+  if (!rateLimitedUntil)
     return null
-  const until = new Date(props.rateLimitedUntil!.replace(' ', 'T')).getTime()
+
+  const until = new Date(rateLimitedUntil.replace(' ', 'T')).getTime()
   const diffMinutes = Math.round((until - Date.now()) / 60_000)
   if (Number.isNaN(diffMinutes) || diffMinutes < 1)
     return null
@@ -54,49 +85,39 @@ const rateLimitedRelative = computed(() => {
     return `剩余 ${hours} 小时`
   return `剩余 ${hours} 小时 ${mins} 分`
 })
-// `error` 状态始终显示弹窗（即使 reason/message 为空也展示状态卡片），
-// `rate_limited` 需要带到期时间才显示；其余状态不弹窗。
 const hasDetail = computed(() =>
-  props.status === 'error' || hasRateLimit.value,
-)
-/** 弹窗明细区是否渲染（错误原因 / 限流到期 / 错误反馈至少一项）。 */
-const hasDetailRows = computed(() =>
-  hasRateLimit.value || Boolean(reasonLabel.value) || Boolean(errorText.value),
+  props.status === 'error' || isRateLimited.value,
 )
 
-const textClass = computed(() => {
-  if (tone.value === 'success') {
-    return 'text-(--cp-success-text)'
-  }
-  if (tone.value === 'danger') {
-    return 'text-(--cp-danger-text)'
-  }
-  if (tone.value === 'warning') {
-    return 'text-(--cp-warning-text)'
-  }
-  if (tone.value === 'info') {
-    return 'text-(--cp-info-text)'
-  }
-  return 'text-(--cp-text-secondary)'
+const detailDescription = computed(() => {
+  if (props.status === 'rate_limited')
+    return '上游暂时限制了请求频率，系统正在冷却该账号。'
+  if (props.status === 'error')
+    return '该账号暂不参与调度，处理凭据后可重新测试连接。'
+  return '该账号当前状态需要关注。'
 })
 
-const dotClass = computed(() => {
-  if (tone.value === 'success') {
-    return 'bg-(--cp-success)'
+const recoveryHint = computed(() => {
+  if (props.status === 'rate_limited')
+    return '冷却结束后，系统会自动恢复调度。'
+
+  switch (props.errorReason) {
+    case 'expired':
+    case 'token_expired':
+      return '重新授权后，账号会重新参与调度。'
+    case 'invalid':
+      return '请更新或重新导入凭据，再次测试连接。'
+    case 'banned':
+      return '请确认上游账号状态，解除限制后再启用。'
+    default:
+      return '重新测试连接以获取最新状态。'
   }
-  if (tone.value === 'danger') {
-    return 'bg-(--cp-danger)'
-  }
-  if (tone.value === 'warning') {
-    return 'bg-(--cp-warning)'
-  }
-  if (tone.value === 'info') {
-    return 'bg-(--cp-info)'
-  }
-  return 'bg-(--cp-text-muted)'
 })
 
-/** 状态卡片左侧图标块：状态色 soft-bg + 语义图标。 */
+const triggerLabel = computed(() =>
+  `${detailTitle.value}。${detailDescription.value} 点击或聚焦查看详情。`,
+)
+
 const cardIcon = computed(() => {
   switch (props.status) {
     case 'error': return AlertTriangle
@@ -106,88 +127,107 @@ const cardIcon = computed(() => {
     default: return CircleCheck
   }
 })
-const iconBlockClass = computed(() => {
-  if (tone.value === 'success') {
-    return 'bg-(--cp-success-bg) text-(--cp-success-text)'
-  }
-  if (tone.value === 'danger') {
-    return 'bg-(--cp-danger-bg) text-(--cp-danger-text)'
-  }
-  if (tone.value === 'warning') {
-    return 'bg-(--cp-warning-bg) text-(--cp-warning-text)'
-  }
-  if (tone.value === 'info') {
-    return 'bg-(--cp-info-bg) text-(--cp-info-text)'
-  }
-  return 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)'
-})
 </script>
 
 <template>
   <BasePopover
     :disabled="!hasDetail"
-    trigger="hover"
+    trigger="hover-click"
     placement="top-start"
-    :width="240"
-    panel-class="!p-3"
+    width="352px"
+    panel-class="!p-0 text-(--cp-text-primary)"
   >
-    <template #trigger>
-      <span
-        v-if="variant === 'pill'"
-        class="inline-flex h-7 shrink-0 items-center rounded-full px-2.5 text-[12px] font-heavy"
-        :class="textClass"
+    <template #trigger="{ open }">
+      <component
+        :is="hasDetail ? 'button' : 'span'"
+        :type="hasDetail ? 'button' : undefined"
+        :aria-label="hasDetail ? triggerLabel : undefined"
+        :aria-expanded="hasDetail ? open : undefined"
+        :aria-haspopup="hasDetail ? 'dialog' : undefined"
+        class="group inline-flex min-w-0 cursor-default border-0 bg-transparent p-0 text-left outline-none"
       >
-        {{ label }}
-      </span>
-      <span
-        v-else
-        class="inline-flex min-w-16 items-center gap-1.5 text-[12px] leading-none font-emphasis"
-        :class="textClass"
-      >
-        <span class="size-1.5 rounded-full" :class="dotClass" />
-        <span>{{ label }}</span>
-      </span>
+        <span
+          v-if="variant === 'pill'"
+          class="inline-flex h-7 shrink-0 items-center rounded-full px-2.5 text-[12px] leading-none font-heavy transition-colors duration-150 motion-reduce:transition-none"
+          :class="statusStyle.text"
+        >
+          {{ label }}
+        </span>
+        <span
+          v-else
+          class="inline-flex min-w-16 items-center gap-1.5 rounded-md px-1.5 py-1 text-[12px] leading-none font-emphasis transition-colors duration-150 motion-reduce:transition-none"
+          :class="statusStyle.text"
+        >
+          <span aria-hidden="true" class="size-1.5 rounded-full" :class="statusStyle.dot" />
+          <span>{{ label }}</span>
+        </span>
+      </component>
     </template>
 
-    <div
-      class="flex gap-3 text-[12px] leading-none"
-      :class="hasDetailRows ? 'items-start' : 'items-center'"
-    >
-      <!-- 状态图标块：soft 状态色背景圆角块 -->
-      <span
-        class="inline-flex size-8 shrink-0 items-center justify-center rounded-(--cp-icon-button-radius)"
-        :class="iconBlockClass"
-      >
-        <component :is="cardIcon" class="size-4" />
-      </span>
+    <section class="overflow-hidden rounded-(--cp-popover-radius)">
+      <header class="flex items-start gap-3 border-b border-(--cp-divider-subtle) bg-(--cp-bg-subtle) px-4 py-3">
+        <span
+          aria-hidden="true"
+          class="inline-flex size-9 shrink-0 items-center justify-center rounded-(--cp-icon-button-radius)"
+          :class="statusStyle.icon"
+        >
+          <component :is="cardIcon" class="size-4.5" />
+        </span>
 
-      <div class="min-w-0 flex-1">
-        <!-- 状态标题行：只显示状态名 -->
-        <div class="font-heavy text-(--cp-text-primary)">
-          {{ label }}
+        <div class="min-w-0 flex-1">
+          <p class="m-0 text-[11px] leading-none font-heavy tracking-[0.08em] text-(--cp-text-tertiary)">
+            账号状态
+          </p>
+          <h3 class="mt-1.5 mb-0 text-[14px] leading-5 font-heavy text-(--cp-text-primary) text-balance">
+            {{ detailTitle }}
+          </h3>
         </div>
 
-        <div v-if="hasDetailRows" class="mt-2 border-t border-(--cp-divider-subtle) pt-2">
-          <!-- 错误：具体原因独立成行 -->
-          <div v-if="reasonLabel" class="leading-4 text-(--cp-text-secondary)">
-            {{ reasonLabel }}
+        <span
+          class="inline-flex h-5 shrink-0 items-center rounded-full border px-2 text-[10px] leading-none font-heavy"
+          :class="statusStyle.badge"
+        >
+          {{ label }}
+        </span>
+      </header>
+
+      <div class="grid gap-3 px-4 py-3 text-[12px] leading-5">
+        <p class="m-0 text-pretty font-emphasis text-(--cp-text-secondary)">
+          {{ detailDescription }}
+        </p>
+
+        <div
+          v-if="isRateLimited"
+          class="flex items-center justify-between gap-3 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2"
+        >
+          <span class="font-heavy text-(--cp-text-tertiary)">预计恢复</span>
+          <span class="font-mono font-emphasis tabular-nums text-(--cp-text-primary)">
+            {{ rateLimitedRelative ?? props.rateLimitedUntil }}
+          </span>
+        </div>
+
+        <div class="rounded-(--cp-input-radius-base) border border-(--cp-divider-subtle) bg-(--cp-bg-surface) px-3 py-2.5">
+          <p class="m-0 text-[11px] leading-none font-heavy text-(--cp-text-tertiary)">
+            建议操作
+          </p>
+          <p class="mt-1.5 mb-0 text-pretty font-emphasis text-(--cp-text-primary)">
+            {{ recoveryHint }}
+          </p>
+        </div>
+
+        <div
+          v-if="errorText"
+          class="overflow-hidden rounded-(--cp-input-radius-base) border border-(--cp-divider-subtle) bg-(--cp-bg-subtle)"
+        >
+          <div class="flex items-center justify-between gap-3 border-b border-(--cp-divider-subtle) px-3 py-2">
+            <span class="text-[11px] leading-none font-heavy text-(--cp-text-tertiary)">上游原始反馈</span>
+            <span class="shrink-0 text-[10px] leading-none font-emphasis text-(--cp-text-muted)">仅供排查</span>
           </div>
-          <!-- 限流中：显示相对到期时间 -->
-          <div v-if="hasRateLimit" class="flex items-baseline gap-2">
-            <span class="w-20 shrink-0 font-semibold text-(--cp-text-tertiary)">限流到期</span>
-            <span class="font-medium text-(--cp-text-primary)">
-              {{ rateLimitedRelative ?? props.rateLimitedUntil }}
-            </span>
-          </div>
-          <!-- 错误：显示上游反馈原文 -->
-          <div v-if="errorText" class="mt-1 flex items-start gap-2">
-            <span class="w-14 shrink-0 pt-px font-semibold leading-3.5 text-(--cp-text-tertiary)">上游反馈</span>
-            <span class="min-w-0 flex-1 wrap-break-word leading-3.5 text-(--cp-text-secondary)">
-              {{ errorText }}
-            </span>
-          </div>
+          <BaseScrollbar max-height="124px" view-class="px-3 py-2 pr-2">
+            <pre class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[11px] leading-[1.55] font-emphasis text-(--cp-text-secondary)">{{ errorText }}</pre>
+          </BaseScrollbar>
         </div>
       </div>
-    </div>
+    </section>
   </BasePopover>
 </template>

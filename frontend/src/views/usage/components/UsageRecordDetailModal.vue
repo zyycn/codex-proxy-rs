@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts'
 import type { UsageViewModel } from '@/api'
+import type { BaseTableColumn } from '@/components/base/BaseTable/columns'
 
 import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -114,6 +115,7 @@ const attemptColumns = [
     label: '序号',
     width: '56px',
     align: 'center' as const,
+    fixed: false as const,
   },
   { key: 'outcome', label: '结果', width: '76px' },
   { key: 'provider', label: '平台', width: '72px' },
@@ -127,7 +129,7 @@ const attemptColumns = [
     width: '84px',
     align: 'right' as const,
   },
-]
+] satisfies BaseTableColumn[]
 
 const attemptRows = computed(() =>
   (props.record?.attempts ?? []).map(attempt => ({
@@ -414,7 +416,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
           </span>
         </div>
         <BaseTable
-          class="mt-3 min-w-0"
+          class="mt-3 min-w-0 font-sans"
           :columns="attemptColumns"
           :rows="attemptRows"
           compact

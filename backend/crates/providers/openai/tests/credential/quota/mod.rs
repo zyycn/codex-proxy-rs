@@ -435,7 +435,7 @@ async fn passive_rate_limit_headers_replace_stale_secondary_window() {
 }
 
 #[tokio::test]
-async fn passive_active_limit_replaces_stale_codex_alias() {
+async fn passive_active_limit_keeps_the_top_level_codex_bucket_canonical() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_passive_active_limit").await;
     let account = store.account("acct_passive_active_limit").expect("account");
@@ -491,7 +491,12 @@ async fn passive_active_limit_replaces_stale_codex_alias() {
         .expect("quota snapshot");
 
     assert_eq!(snapshot.windows().len(), 1);
-    assert_eq!(snapshot.windows()[0].used_percent(), Some(55.0));
+    assert!(
+        snapshot
+            .windows()
+            .iter()
+            .any(|window| { window.source() == "codex" && window.used_percent() == Some(55.0) })
+    );
 }
 
 #[tokio::test]
@@ -961,7 +966,7 @@ async fn periodic_quota_synchronization_does_not_recover_from_percent_drop_befor
         .await
         .expect("lower percent quota recheck");
 
-    assert_eq!(lower_percent.updated, 1);
+    assert_eq!(lower_percent.exhausted, 1);
     assert_eq!(
         store
             .account(account_id)
@@ -970,6 +975,12 @@ async fn periodic_quota_synchronization_does_not_recover_from_percent_drop_befor
         AccountAvailability::QuotaExhausted,
         "a provider percentage change is not sufficient to release a confirmed exhaustion"
     );
+    let snapshot = next_cycle
+        .read_account(account.id())
+        .await
+        .expect("read held exhaustion projection")
+        .expect("held exhaustion projection");
+    assert_eq!(snapshot.fact().remaining_percent(), Some(0));
 }
 
 #[tokio::test]
@@ -978,6 +989,28 @@ async fn periodic_quota_synchronization_recovers_after_recorded_reset() {
     let account_id = "acct_periodic_reset_elapsed";
     create_account(&store, account_id).await;
     let account = store.account(account_id).expect("created account");
+    let elapsed_reset = Utc::now().timestamp() - 60;
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: Some(OpaqueProviderData::new(
+                json!({
+                    "rate_limit": {
+                        "allowed": false,
+                        "limit_reached": true,
+                        "primary_window": {"used_percent": 100, "reset_at": elapsed_reset}
+                    }
+                })
+                .as_object()
+                .expect("recorded exhausted quota")
+                .clone(),
+            )),
+            observed_at: Some(SystemTime::now()),
+            limit_reached: Some(true),
+        })
+        .await
+        .expect("record elapsed exhausted reset");
     store
         .apply_state_change(AccountStateChange {
             message: None,
@@ -989,14 +1022,14 @@ async fn periodic_quota_synchronization_recovers_after_recorded_reset() {
         .await
         .expect("mark account exhausted with an elapsed reset");
     let server = MockServer::start().await;
-    let elapsed_reset = Utc::now().timestamp() - 1;
+    let next_reset = Utc::now().timestamp() + 3600;
     Mock::given(method("GET"))
         .and(path("/api/codex/usage"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "rate_limit": {
                 "allowed": true,
                 "limit_reached": false,
-                "primary_window": {"used_percent": 1, "reset_at": elapsed_reset}
+                "primary_window": {"used_percent": 1, "reset_at": next_reset}
             }
         })))
         .expect(1)
@@ -1118,7 +1151,33 @@ async fn invalid_quota_json_for_one_account_does_not_abort_the_batch() {
             .await
             .expect("mark account exhausted");
     }
+    let good = store
+        .account("acct_quota_batch_good")
+        .expect("good account");
+    let elapsed_reset = Utc::now().timestamp() - 60;
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: good.id().clone(),
+            expected_revision: good.revision(),
+            quota: Some(OpaqueProviderData::new(
+                json!({
+                    "rate_limit": {
+                        "allowed": false,
+                        "limit_reached": true,
+                        "primary_window": {"used_percent": 100, "reset_at": elapsed_reset}
+                    }
+                })
+                .as_object()
+                .expect("recorded exhausted quota")
+                .clone(),
+            )),
+            observed_at: Some(SystemTime::now()),
+            limit_reached: Some(true),
+        })
+        .await
+        .expect("seed good account old reset");
     let server = MockServer::start().await;
+    let next_reset = Utc::now().timestamp() + 3600;
     Mock::given(method("GET"))
         .and(path("/api/codex/usage"))
         .and(header("authorization", "Bearer token-acct_quota_batch_bad"))
@@ -1137,7 +1196,7 @@ async fn invalid_quota_json_for_one_account_does_not_abort_the_batch() {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "rate_limit": {
                 "allowed": true,
-                "primary_window": {"used_percent": 25.0, "reset_at": 1_900_000_000}
+                "primary_window": {"used_percent": 25.0, "reset_at": next_reset}
             }
         })))
         .mount(&server)

@@ -220,7 +220,8 @@ impl BackupTask {
                     sha256: Some(artifact.sha256.clone()),
                     ..Default::default()
                 };
-                self.repository
+                let Some(uploading_record) = self
+                    .repository
                     .transition_status(
                         &record.id,
                         BackupStatus::Dumping,
@@ -229,9 +230,12 @@ impl BackupTask {
                         now,
                     )
                     .await
-                    .map_err(repo_error)?;
+                    .map_err(repo_error)?
+                else {
+                    return Ok(());
+                };
                 self.upload_and_verify(
-                    record,
+                    &uploading_record,
                     &artifact.path,
                     artifact.size_bytes,
                     &artifact.sha256,
@@ -394,7 +398,8 @@ impl BackupTask {
             sha256: Some(artifact.sha256.clone()),
             ..Default::default()
         };
-        self.repository
+        let Some(uploading_record) = self
+            .repository
             .transition_status(
                 &record.id,
                 BackupStatus::Dumping,
@@ -403,10 +408,13 @@ impl BackupTask {
                 now,
             )
             .await
-            .map_err(repo_error)?;
+            .map_err(repo_error)?
+        else {
+            return Ok(());
+        };
 
         self.upload_and_verify(
-            record,
+            &uploading_record,
             &artifact.path,
             artifact.size_bytes,
             &artifact.sha256,
@@ -448,8 +456,12 @@ impl BackupTask {
             .await
         {
             let _ = store.delete_object(&config, &record.object_key).await;
-            self.fail_task(record, error.code(), "上传到对象存储失败")
-                .await?;
+            self.fail_task(
+                record,
+                error.code(),
+                format!("上传到对象存储失败：{}", error.message()),
+            )
+            .await?;
             return Ok(());
         }
 
@@ -486,8 +498,12 @@ impl BackupTask {
             }
             Err(error) => {
                 let _ = store.delete_object(&config, &record.object_key).await;
-                self.fail_task(record, error.code(), "远端对象校验失败")
-                    .await?;
+                self.fail_task(
+                    record,
+                    error.code(),
+                    format!("远端对象校验失败：{}", error.message()),
+                )
+                .await?;
             }
         }
         Ok(())

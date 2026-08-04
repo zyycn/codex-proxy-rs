@@ -1702,6 +1702,8 @@ struct MappedProviderFailure {
     cyber_policy_failure: bool,
     set_cookie_headers: Vec<String>,
     rate_limit_headers: Vec<(String, String)>,
+    /// 结构化 usage-limit 错误给出的窗口 reset（Unix 秒）。
+    confirmed_exhaustion_reset_at: Option<i64>,
     observation: Option<ProviderResponseObservation>,
     capture_response_cookies: bool,
 }
@@ -1715,6 +1717,7 @@ impl MappedProviderFailure {
             cyber_policy_failure: false,
             set_cookie_headers: Vec::new(),
             rate_limit_headers: Vec::new(),
+            confirmed_exhaustion_reset_at: None,
             observation: None,
             capture_response_cookies: false,
         }
@@ -1872,6 +1875,18 @@ async fn apply_failure(
         failure.account_failure,
         Some(CodexAccountFailure::QuotaExhausted | CodexAccountFailure::UsageLimitExhausted { .. })
     );
+    if needs_authoritative_quota_refresh
+        && let Err(error) = context
+            .quota
+            .record_confirmed_exhaustion(account, failure.confirmed_exhaustion_reset_at)
+            .await
+    {
+        tracing::warn!(
+            account_id = %account.id(),
+            error = %error,
+            "Failed to project confirmed OpenAI quota exhaustion"
+        );
+    }
     if failure.cyber_policy_failure {
         context
             .selector
@@ -2169,6 +2184,7 @@ fn map_upstream_failure(
         cyber_policy_failure,
         set_cookie_headers: failure.set_cookie_headers,
         rate_limit_headers: failure.rate_limit_headers,
+        confirmed_exhaustion_reset_at: failure.usage_limit_resets_at,
         observation,
         capture_response_cookies: !matches!(
             category,

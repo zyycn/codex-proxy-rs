@@ -3,6 +3,7 @@
 use super::client::CodexClientVisibleUpstreamResponse;
 use super::protocol::responses::ResponsesSseFailure;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use chrono::{DateTime, Utc};
 use reqwest::{StatusCode, header::HeaderMap};
 use serde_json::Value;
 
@@ -113,6 +114,8 @@ pub struct CodexUpstreamFailure {
     pub(crate) client_error_type: Option<String>,
     pub(crate) client_response: Option<Box<CodexClientVisibleUpstreamResponse>>,
     pub(crate) identity_error_code: Option<String>,
+    /// 官方 `usage_limit_reached` 错误体携带的窗口重置时间（Unix 秒）。
+    pub(crate) usage_limit_resets_at: Option<i64>,
     pub(crate) retry_after_seconds: Option<u64>,
     pub(crate) request_id: Option<String>,
     pub(crate) set_cookie_headers: Vec<String>,
@@ -139,6 +142,7 @@ impl CodexUpstreamFailure {
     ) -> Self {
         let fields = ParsedUpstreamError::from_body(body);
         let category = classify_upstream_failure(
+            UpstreamFailureSource::HttpResponse,
             Some(status),
             body,
             &fields,
@@ -153,6 +157,9 @@ impl CodexUpstreamFailure {
             client_error_type: fields.error_type,
             client_response: client_response.cloned().map(Box::new),
             identity_error_code: diagnostics.identity_error_code.clone(),
+            usage_limit_resets_at: (category == CodexFailureCategory::UsageLimitExhausted)
+                .then_some(fields.resets_at)
+                .flatten(),
             retry_after_seconds,
             request_id: diagnostics.request_id.clone(),
             set_cookie_headers: set_cookie_headers.to_vec(),
@@ -174,11 +181,13 @@ impl CodexUpstreamFailure {
             error_type: failure.upstream_type.clone(),
             message: failure.message.clone(),
             client_message: Some(failure.message.clone()),
+            resets_at: None,
         };
         let status = failure
             .explicit_status_code
             .and_then(|code| StatusCode::from_u16(code).ok());
         let category = classify_upstream_failure(
+            UpstreamFailureSource::SseFailure,
             status,
             "",
             &fields,
@@ -193,6 +202,7 @@ impl CodexUpstreamFailure {
             client_error_type: fields.error_type,
             client_response: None,
             identity_error_code: diagnostics.identity_error_code.clone(),
+            usage_limit_resets_at: None,
             retry_after_seconds: failure.retry_after_seconds,
             request_id: diagnostics.request_id.clone(),
             set_cookie_headers: set_cookie_headers.to_vec(),
@@ -246,6 +256,7 @@ struct ParsedUpstreamError {
     error_type: Option<String>,
     message: String,
     client_message: Option<String>,
+    resets_at: Option<i64>,
 }
 
 impl ParsedUpstreamError {
@@ -256,6 +267,7 @@ impl ParsedUpstreamError {
                 error_type: None,
                 message: body.to_owned(),
                 client_message: None,
+                resets_at: None,
             };
         };
         let error = value
@@ -282,13 +294,24 @@ impl ParsedUpstreamError {
             .clone()
             .or_else(|| error.as_str().and_then(non_empty_owned))
             .unwrap_or_else(|| body.to_owned());
+        let resets_at = error
+            .get("resets_at")
+            .and_then(Value::as_i64)
+            .filter(|seconds| DateTime::<Utc>::from_timestamp(*seconds, 0).is_some());
         Self {
             code,
             error_type,
             message,
             client_message,
+            resets_at,
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum UpstreamFailureSource {
+    HttpResponse,
+    SseFailure,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -363,6 +386,7 @@ fn decode_identity_error_code(encoded: &str) -> Option<String> {
 }
 
 fn classify_upstream_failure(
+    source: UpstreamFailureSource,
     status: Option<StatusCode>,
     body: &str,
     fields: &ParsedUpstreamError,
@@ -375,6 +399,19 @@ fn classify_upstream_failure(
     let identity_authorization = normalized(identity_authorization_error);
     let message = fields.message.to_ascii_lowercase();
     let body = body.to_ascii_lowercase();
+
+    // 与官方 Codex HTTP/WS 路径一致：429 只有结构化
+    // `error.type=usage_limit_reached` 才能确认额度窗口耗尽；其余 429 都是临时限流。
+    // SSE `response.failed` 的结构化字段形态不同，保留其 code/type 语义单独分类。
+    if matches!(source, UpstreamFailureSource::HttpResponse)
+        && status == Some(StatusCode::TOO_MANY_REQUESTS)
+    {
+        return if error_type == "usage_limit_reached" {
+            CodexFailureCategory::UsageLimitExhausted
+        } else {
+            CodexFailureCategory::RateLimited
+        };
+    }
 
     if [code.as_str(), message.as_str(), body.as_str()]
         .into_iter()

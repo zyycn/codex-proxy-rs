@@ -1072,6 +1072,66 @@ async fn prompt_cache_key_should_become_an_opaque_session_affinity_lookup_key() 
 }
 
 #[tokio::test]
+async fn subagent_requests_should_use_an_affinity_key_isolated_from_the_root_session() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_subagent").await;
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(CAPTURE_COMPLETED_SSE),
+        )
+        .mount(&server)
+        .await;
+    let provider = provider_with_affinity_and_base_url(&store, Arc::clone(&affinity), server.uri());
+
+    for (request_id, subagent_kind) in [
+        ("req_root_affinity", None),
+        ("req_subagent_affinity_first", Some("review")),
+        ("req_subagent_affinity_second", Some("review")),
+    ] {
+        let mut body = Map::from_iter([
+            ("model".to_owned(), json!("gpt-5.4")),
+            ("input".to_owned(), json!("new task")),
+            ("prompt_cache_key".to_owned(), json!("root-session-key")),
+        ]);
+        if let Some(subagent_kind) = subagent_kind {
+            body.insert(
+                "client_metadata".to_owned(),
+                json!({"x-openai-subagent": subagent_kind}),
+            );
+        }
+        let generation = GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("openai", body)
+                .expect("OpenAI payload")
+                .with_context(Map::from_iter([("use_websocket".to_owned(), json!(false))])),
+        );
+        let mut stream = provider
+            .execute(
+                planned_request("openai", Operation::Generate(generation)),
+                context(request_id, CancellationToken::new()),
+            )
+            .await
+            .expect("prepare subagent provider stream");
+        while let Some(event) = stream.next().await {
+            event.expect("subagent response");
+        }
+        drop(stream);
+    }
+
+    let keys = affinity.lookup_keys();
+    assert_eq!(keys.len(), 3);
+    assert_ne!(keys[0], keys[1], "subagent must not inherit the root key");
+    assert_eq!(
+        keys[1], keys[2],
+        "the same subagent should retain its own key"
+    );
+}
+
+#[tokio::test]
 async fn explicit_session_id_should_override_turn_specific_prompt_cache_keys_for_affinity() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_session_affinity").await;
@@ -1289,9 +1349,10 @@ async fn response_failed_before_semantic_output_is_atomic_and_persists_quota_loc
 }
 
 #[tokio::test]
-async fn usage_limit_failure_returns_promptly_and_refreshes_the_authoritative_quota_snapshot() {
+async fn official_usage_limit_failure_projects_100_percent_and_holds_until_reset_advances() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_usage_limit_request_path";
+    let reset_at = 1_900_000_000;
     create_account(&store, account_id).await;
     let account = store.account(account_id).expect("created account");
     store
@@ -1303,7 +1364,7 @@ async fn usage_limit_failure_returns_promptly_and_refreshes_the_authoritative_qu
                     "rate_limit": {
                         "allowed": true,
                         "limit_reached": false,
-                        "primary_window": {"used_percent": 99, "reset_at": 1_900_000_000}
+                        "primary_window": {"used_percent": 99, "reset_at": reset_at}
                     }
                 })
                 .as_object()
@@ -1319,8 +1380,8 @@ async fn usage_limit_failure_returns_promptly_and_refreshes_the_authoritative_qu
     Mock::given(method("GET"))
         .and(path("/api/codex/usage"))
         .and(header("authorization", format!("Bearer at-{account_id}")))
-        // 生产环境会短暂返回互相矛盾的快照：数字已到 100%，但布尔位仍声称可用。
-        // 后台同步应覆盖展示数据，不能据此撤销真实请求已经确认的额度耗尽。
+        // 生产环境会短暂返回互相矛盾的快照：98/99% 且布尔位仍声称可用。
+        // 后台同步不能覆盖真实请求已确认的额度耗尽。
         .respond_with(
             ResponseTemplate::new(200)
                 // 验证后台 usage 同步不能把原始的额度错误响应拖到查询完成之后。
@@ -1329,7 +1390,7 @@ async fn usage_limit_failure_returns_promptly_and_refreshes_the_authoritative_qu
                     "rate_limit": {
                         "allowed": true,
                         "limit_reached": false,
-                        "primary_window": {"used_percent": 100, "reset_at": 1_900_000_000}
+                        "primary_window": {"used_percent": 99, "reset_at": reset_at}
                     }
                 })),
         )
@@ -1338,16 +1399,13 @@ async fn usage_limit_failure_returns_promptly_and_refreshes_the_authoritative_qu
         .await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_string(concat!(
-                    "event: response.created\n",
-                    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_usage_limit_confirm\",\"model\":\"gpt-5.4\",\"status\":\"in_progress\"}}\n\n",
-                    "event: response.failed\n",
-                    "data: {\"type\":\"response.failed\",\"status_code\":429,\"retry_after_seconds\":86400,\"response\":{\"id\":\"resp_usage_limit_confirm\",\"status\":\"failed\",\"error\":{\"code\":\"usage_limit_reached\",\"message\":\"usage limit reached\"}}}\n\n"
-                )),
-        )
+        .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+            "error": {
+                "type": "usage_limit_reached",
+                "message": "usage limit reached",
+                "resets_at": reset_at
+            }
+        })))
         .mount(&server)
         .await;
 
@@ -1373,6 +1431,24 @@ async fn usage_limit_failure_returns_promptly_and_refreshes_the_authoritative_qu
     assert_eq!(failure.kind(), ProviderErrorKind::QuotaExhausted);
     let account = store.account(account_id).expect("usage-limit account");
     assert_eq!(account.availability(), AccountAvailability::QuotaExhausted);
+    let projected = store
+        .get_quotas(&[account.id().clone()])
+        .await
+        .expect("read immediate quota projection")
+        .into_iter()
+        .next()
+        .expect("confirmed quota observation");
+    let projected_observed_at = projected.observed_at.expect("projection observed at");
+    let projected = projected
+        .quota
+        .map(OpaqueProviderData::into_inner)
+        .expect("confirmed quota projection");
+    assert_eq!(
+        Value::Object(projected)
+            .pointer("/rate_limit/primary_window/used_percent")
+            .and_then(Value::as_u64),
+        Some(100)
+    );
     tokio::time::sleep(Duration::from_millis(200)).await;
     let requests = server.received_requests().await.expect("received requests");
     assert_eq!(
@@ -1384,34 +1460,44 @@ async fn usage_limit_failure_returns_promptly_and_refreshes_the_authoritative_qu
         "usage refresh must wait for the upstream quota settlement delay"
     );
 
-    let quota = timeout(Duration::from_secs(5), async {
+    timeout(Duration::from_secs(5), async {
         loop {
-            let quota = store
+            let observed_at = store
                 .get_quotas(&[account.id().clone()])
                 .await
-                .expect("read refreshed quota")
+                .expect("read refreshed quota observation")
                 .into_iter()
                 .next()
-                .and_then(|observation| observation.quota)
-                .expect("authoritative quota snapshot");
-            let quota = Value::Object(quota.into_inner());
-            if quota
-                .pointer("/rate_limit/primary_window/used_percent")
-                .and_then(Value::as_u64)
-                == Some(100)
-            {
-                break quota;
+                .and_then(|observation| observation.observed_at);
+            if observed_at.is_some_and(|observed_at| observed_at > projected_observed_at) {
+                break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .expect("background usage refresh must replace the stale quota snapshot");
+    .expect("background usage refresh must run");
+    let quota = store
+        .get_quotas(&[account.id().clone()])
+        .await
+        .expect("read refreshed quota")
+        .into_iter()
+        .next()
+        .and_then(|observation| observation.quota)
+        .map(OpaqueProviderData::into_inner)
+        .map(Value::Object)
+        .expect("authoritative quota projection");
     assert_eq!(
         quota
             .pointer("/rate_limit/primary_window/used_percent")
             .and_then(Value::as_u64),
         Some(100)
+    );
+    assert_eq!(
+        quota
+            .pointer("/rate_limit/primary_window/reset_at")
+            .and_then(Value::as_i64),
+        Some(reset_at)
     );
     let requests = server.received_requests().await.expect("received requests");
     assert_eq!(

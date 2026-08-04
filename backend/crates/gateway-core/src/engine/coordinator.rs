@@ -660,6 +660,9 @@ where
             ProviderBoundary::Result(result) => match *result {
                 Ok(stream) => stream,
                 Err(error) => {
+                    if self.prepare_unavailable_native_continuation_replay(&error) {
+                        return Ok(Some(PullOutcome::AttemptDiscarded));
+                    }
                     if matches!(
                         error.kind(),
                         ProviderErrorKind::AccountCapacityUnavailable
@@ -1093,6 +1096,41 @@ where
             }
             ContinuationAttempt::None => return false,
         }
+        true
+    }
+
+    /// 原生续写的原账号在本地调度阶段已不可用时，改用完整输入重放。
+    ///
+    /// 这不是强制 Smart：下一次 attempt 仍使用请求配置的调度策略。只有网关持有
+    /// 对应 Provider 的可携带会话状态时，才可安全移除 native handle 并换号。
+    fn prepare_unavailable_native_continuation_replay(&mut self, error: &ProviderError) -> bool {
+        if self.account_selection.required_account().is_some()
+            || self.continuation_attempt != ContinuationAttempt::Native
+            || !matches!(
+                error.kind(),
+                ProviderErrorKind::NoEligibleAccount
+                    | ProviderErrorKind::AccountCapacityUnavailable
+            )
+        {
+            return false;
+        }
+        let Some(pin) = self
+            .continuation
+            .as_ref()
+            .and_then(ContinuationBinding::pinned)
+        else {
+            return false;
+        };
+        if self
+            .operation
+            .provider_session_state(pin.provider().as_str())
+            .is_none()
+        {
+            return false;
+        }
+
+        self.continuation_attempt = ContinuationAttempt::ReplayAny;
+        self.excluded_accounts.insert(pin.account().clone());
         true
     }
 

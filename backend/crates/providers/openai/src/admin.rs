@@ -50,7 +50,7 @@ use crate::credential::{
     CodexCredentialAdminService, CodexCredentialCatalogError, CodexCredentialCatalogService,
     CodexCredentialQuotaError, CodexCredentialQuotaService, CodexOAuthAdmin, CodexOAuthAdminError,
     CodexOAuthPendingClaimOutcome, CodexOAuthPendingStore, CodexOAuthPendingStoreError,
-    CodexPendingAuthorization, CodexQuotaWindowKind, CodexQuotaWindowRole,
+    CodexPendingAuthorization, CodexQuotaWindow, CodexQuotaWindowKind, CodexQuotaWindowRole,
     CompleteCodexOAuthAuthorization, CompletedCodexOAuthCredential, ExportManagedCodexCredential,
     RotateManagedCodexCredential, StartCodexOAuthAuthorization, StoredCodexPendingAuthorization,
     refresh_time,
@@ -782,6 +782,7 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
     let windows: Vec<ProviderQuotaWindow> = snapshot
         .windows()
         .iter()
+        .filter(|window| should_project_quota_window(window))
         .map(|window| {
             let mut data = Map::new();
             data.insert(
@@ -798,6 +799,7 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
                 label: codex_quota_window_label(
                     window.limit_name(),
                     window.kind(),
+                    window.role(),
                     window.source(),
                     window.window_seconds(),
                 ),
@@ -824,6 +826,17 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
             provider_data,
         ))),
     }
+}
+
+/// `secondary_window` 有时只是上游的空占位：没有时长、重置时间，也没有用量。
+/// 它不能被可靠翻译成 5 小时或周额度，因此不应占用账号面板；带有实际事实的
+/// 次级窗口（时长、重置、非零用量或触顶）仍完整保留。
+fn should_project_quota_window(window: &CodexQuotaWindow) -> bool {
+    window.role() != CodexQuotaWindowRole::Secondary
+        || window.window_seconds().is_some()
+        || window.reset_at().is_some()
+        || window.used_percent().is_some_and(|used| used > 0.0)
+        || window.limit_reached()
 }
 
 fn quota_windows_limit_reached(windows: &[ProviderQuotaWindow]) -> bool {
@@ -891,45 +904,66 @@ const fn quota_role(role: CodexQuotaWindowRole) -> &'static str {
     }
 }
 
-/// 窗口展示名，优先使用上游 `limit_name`（原文，`_` 转空格）；
-/// 无 limit_name 时按窗口时长猜（±5% 容差，汉化输出），猜不中兜底「额度」。
+/// 按窗口时长显示汉化额度名；非核心桶补上上游桶名称作为前缀。
 fn codex_quota_window_label(
     limit_name: Option<&str>,
     kind: CodexQuotaWindowKind,
+    role: CodexQuotaWindowRole,
     source: &str,
     window_seconds: Option<u64>,
 ) -> String {
-    if let Some(limit_name) = limit_name {
-        return limit_name.replace('_', " ");
-    }
     let base = match kind {
-        CodexQuotaWindowKind::Monthly => "月限额".to_owned(),
-        CodexQuotaWindowKind::Weekly => "周限额".to_owned(),
+        CodexQuotaWindowKind::Monthly => "月额度".to_owned(),
+        CodexQuotaWindowKind::Weekly => "周额度".to_owned(),
         CodexQuotaWindowKind::ShortTerm => {
             if window_seconds.is_some_and(|seconds| seconds > 86_400) {
-                "周限额".to_owned()
+                "周额度".to_owned()
             } else {
-                "5小时限额".to_owned()
+                "5小时额度".to_owned()
             }
         }
-        CodexQuotaWindowKind::Other => custom_quota_window_label(window_seconds),
+        CodexQuotaWindowKind::Other => custom_quota_window_label(window_seconds, role),
     };
-    if matches!(source, "core" | "codex" | "code_review" | "spend_control") {
-        return base;
+    if let Some(prefix) = codex_quota_window_prefix(limit_name, source) {
+        return format!("{prefix} · {base}");
     }
-    format!("{source} · {base}")
+    base
 }
 
-fn custom_quota_window_label(window_seconds: Option<u64>) -> String {
+fn codex_quota_window_prefix(limit_name: Option<&str>, source: &str) -> Option<String> {
+    let source_identifier = quota_identifier(source);
+    if matches!(source_identifier.as_str(), "core" | "codex") {
+        return None;
+    }
+    let label = limit_name.unwrap_or(source);
+    match quota_identifier(label).as_str() {
+        "premium" => Some("Premium".to_owned()),
+        "code_review" => Some("代码审查".to_owned()),
+        "spend_control" => Some("消费控制".to_owned()),
+        _ => Some(label.replace('_', " ")),
+    }
+}
+
+fn quota_identifier(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace(['-', ' '], "_")
+}
+
+fn custom_quota_window_label(window_seconds: Option<u64>, role: CodexQuotaWindowRole) -> String {
     let Some(seconds) = window_seconds.filter(|seconds| *seconds > 0) else {
-        return "额度".to_owned();
+        // 与官方客户端一致：没有时长时不臆测为 5 小时或周额度；保留
+        // primary/secondary 语义，让用户知道这是上游未标明时长的独立窗口。
+        return match role {
+            CodexQuotaWindowRole::Primary => "主额度".to_owned(),
+            CodexQuotaWindowRole::Secondary => "次级额度".to_owned(),
+            CodexQuotaWindowRole::Monthly => "月额度".to_owned(),
+        };
     };
     if seconds % 86_400 == 0 {
-        format!("{}日限额", seconds / 86_400)
+        format!("{}日额度", seconds / 86_400)
     } else if seconds % 3_600 == 0 {
-        format!("{}小时限额", seconds / 3_600)
+        format!("{}小时额度", seconds / 3_600)
     } else {
-        format!("{}分钟限额", seconds.div_ceil(60))
+        format!("{}分钟额度", seconds.div_ceil(60))
     }
 }
 

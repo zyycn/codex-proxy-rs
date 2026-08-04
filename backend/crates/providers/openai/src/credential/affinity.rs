@@ -10,19 +10,33 @@ use crate::transport::request::derive_conversation_anchor;
 pub(crate) fn derive_codex_session_affinity_key(
     request: &CodexResponsesRequest,
 ) -> Option<ProviderSessionAffinityKey> {
-    if let Some(conversation_id) = request
+    let session_key = if let Some(conversation_id) = request
         .local_conversation_id
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
         if let Ok(key) = ProviderSessionAffinityKey::try_new(conversation_id.to_owned()) {
-            return Some(key);
+            Some(key)
+        } else {
+            opaque_affinity_key("local-conversation", conversation_id)
         }
-        return opaque_affinity_key("local-conversation", conversation_id);
-    }
-    let (domain, value) = derive_conversation_anchor(request)?;
-    opaque_affinity_key(domain, &value)
+    } else {
+        let (domain, value) = derive_conversation_anchor(request)?;
+        opaque_affinity_key(domain, &value)
+    };
+
+    let session_discriminator = request.subagent_kind();
+    session_key.and_then(|session_key| match session_discriminator.as_deref() {
+        None => Some(session_key),
+        Some(discriminator) => {
+            // 仅扩展原会话锚点的键空间；后续查找、绑定和调度仍使用同一套亲和逻辑。
+            opaque_affinity_key(
+                "subagent-session",
+                &format!("{discriminator}\0{}", session_key.expose_to_store()),
+            )
+        }
+    })
 }
 
 fn opaque_affinity_key(domain: &str, value: &str) -> Option<ProviderSessionAffinityKey> {

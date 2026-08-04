@@ -513,17 +513,27 @@ fn image_stream(image_output_tokens: Option<u64>) -> Vec<Result<GatewayEvent, Pr
 }
 
 fn plan(operation: &Operation) -> RoutingPlan {
+    plan_with_policy(
+        operation,
+        AccountSelectionPolicy::new(
+            RotationStrategy::Smart,
+            NonZeroU32::new(2).expect("account concurrency"),
+            Duration::from_millis(50),
+        ),
+    )
+}
+
+fn plan_with_policy(
+    operation: &Operation,
+    account_selection_policy: AccountSelectionPolicy,
+) -> RoutingPlan {
     let provider = ProviderKind::new("openai").expect("provider");
     let public_model = PublicModelId::new("gpt-5").expect("public model");
     let capabilities = ModelCapabilities::new(BTreeSet::from([operation.kind()]), Some(32_000))
         .with_upstream_feature_validation();
     RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("config revision"),
-        AccountSelectionPolicy::new(
-            RotationStrategy::Smart,
-            NonZeroU32::new(2).expect("account concurrency"),
-            Duration::from_millis(50),
-        ),
+        account_selection_policy,
         vec![provider.clone()],
         vec![ProviderModel::new(
             provider.clone(),
@@ -1512,6 +1522,70 @@ fn native_continuation_replays_owner_before_safely_switching_account() {
             .excluded_accounts()
             .contains(&ProviderAccountId::new("acct_one").expect("account"))
     );
+}
+
+#[test]
+fn unavailable_native_continuation_replays_with_the_configured_account_policy() {
+    let Operation::Generate(generate) = generate_operation() else {
+        panic!("generate operation");
+    };
+    let operation = Operation::Generate(generate.with_provider_session_state(
+        ProviderSessionState::new("openai", Map::new()).expect("provider session state"),
+    ));
+    let policy = AccountSelectionPolicy::new(
+        RotationStrategy::RoundRobin,
+        NonZeroU32::new(2).expect("account concurrency"),
+        Duration::from_millis(50),
+    );
+    let route_plan = plan_with_policy(&operation, policy);
+    let (coordinator, store, provider) = coordinator(vec![
+        Script::Error(ProviderError::new(
+            ProviderErrorKind::NoEligibleAccount,
+            UpstreamSendState::NotSent,
+        )),
+        Script::Stream {
+            account_id: "acct_two",
+            items: complete_stream(None),
+        },
+    ]);
+    let original = ProviderAccountId::new("acct_one").expect("account");
+    let continuation = NativeContinuationPin::new(
+        PreviousResponseId::new("previous-response"),
+        PreviousResponseId::new("upstream-response"),
+        ProviderKind::new("openai").expect("provider"),
+        original.clone(),
+    );
+
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        Some(ContinuationBinding::Pinned(continuation)),
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+    block_on(session.collect_uncommitted()).expect("portable replay succeeds");
+    block_on(session.commit_downstream(Some(200))).expect("commit response");
+
+    let contexts = provider.contexts.lock().expect("contexts lock");
+    assert_eq!(contexts.len(), 2);
+    assert_eq!(
+        contexts[0].continuation_attempt(),
+        ContinuationAttempt::Native
+    );
+    assert_eq!(
+        contexts[1].continuation_attempt(),
+        ContinuationAttempt::ReplayAny
+    );
+    assert_eq!(
+        contexts[1].account_selection_policy().strategy(),
+        RotationStrategy::RoundRobin
+    );
+    assert!(contexts[1].excluded_accounts().contains(&original));
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.attempts.len(), 1);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
 }
 
 #[test]

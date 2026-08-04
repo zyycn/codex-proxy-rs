@@ -19,14 +19,9 @@ export interface AccountLocalUsage {
   requestBuckets?: AccountRequestBucket[]
 }
 
-const summaryGroupOrder = new Map([
+const quotaGroupOrder = new Map([
   ['shortTerm', 0],
   ['monthly', 1],
-])
-
-const panelGroupOrder = new Map([
-  ['monthly', 0],
-  ['shortTerm', 1],
   ['other', 2],
 ])
 
@@ -166,15 +161,13 @@ export function derivedAccountStatus(row: AccountRow): string {
 
 export function visibleSummaryQuotaWindows(windows: AccountQuotaWindow[]) {
   const known = [...windows]
-    .filter(window => summaryGroupOrder.has(window.group))
-    .sort((left, right) => groupOrder(left, summaryGroupOrder) - groupOrder(right, summaryGroupOrder))
-  return known.length > 0 ? known : windows
+    .filter(window => window.group !== 'other')
+    .sort(compareQuotaWindows)
+  return known.length > 0 ? known : [...windows].sort(compareQuotaWindows)
 }
 
 export function orderedPanelQuotaWindows(windows: AccountQuotaWindow[]) {
-  return [...windows].sort(
-    (left, right) => groupOrder(left, panelGroupOrder) - groupOrder(right, panelGroupOrder),
-  )
+  return [...windows].sort(compareQuotaWindows)
 }
 
 function quotaWindowPercent(window: AccountQuotaWindow) {
@@ -209,8 +202,21 @@ export function quotaWindowPercentTextClass(window: AccountQuotaWindow) {
   return 'text-(--cp-success-text)'
 }
 
-function groupOrder(window: AccountQuotaWindow, order: Map<string, number>) {
-  return order.get(window.group) ?? order.size
+function compareQuotaWindows(left: AccountQuotaWindow, right: AccountQuotaWindow) {
+  const groupDifference = groupOrder(left) - groupOrder(right)
+  if (groupDifference !== 0)
+    return groupDifference
+
+  const secondsDifference = (left.windowSeconds ?? Number.MAX_SAFE_INTEGER)
+    - (right.windowSeconds ?? Number.MAX_SAFE_INTEGER)
+  if (secondsDifference !== 0)
+    return secondsDifference
+
+  return left.key.localeCompare(right.key)
+}
+
+function groupOrder(window: AccountQuotaWindow) {
+  return quotaGroupOrder.get(window.group) ?? quotaGroupOrder.size
 }
 
 function accountProviderLabel(value?: string | null) {

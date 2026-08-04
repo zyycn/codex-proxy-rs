@@ -18,8 +18,6 @@ pub struct CodexQuotaFact {
     remaining_percent: Option<u8>,
     resets_at: Option<DateTime<Utc>>,
     exhausted: bool,
-    /// 上游显式 `allowed=true`（恢复证据：新鲜快照明确放行）。
-    explicit_allowed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,7 +39,7 @@ pub enum CodexQuotaWindowRole {
 pub struct CodexQuotaWindow {
     key: String,
     source: String,
-    /// 上游提供的限流名称（`metered_feature`/`limit_name`/`limitId`）；显示优先用它。
+    /// 上游提供的限流桶名称（`metered_feature`/`limit_name`/`limitId`）；用于非核心桶的展示前缀。
     limit_name: Option<String>,
     kind: CodexQuotaWindowKind,
     role: CodexQuotaWindowRole,
@@ -189,12 +187,6 @@ impl CodexQuotaFact {
     pub const fn exhausted(&self) -> bool {
         self.exhausted
     }
-
-    /// 上游是否显式 `allowed=true`（新鲜快照的恢复证据）。
-    #[must_use]
-    pub const fn explicit_allowed(&self) -> bool {
-        self.explicit_allowed
-    }
 }
 
 pub fn parse_codex_quota_usage(usage: &Value) -> Result<CodexQuotaFact, CodexCredentialQuotaError> {
@@ -220,7 +212,6 @@ pub fn parse_codex_quota_usage(usage: &Value) -> Result<CodexQuotaFact, CodexCre
         remaining_percent: aggregate.remaining_percent,
         resets_at: aggregate.resets_at,
         exhausted: aggregate.exhausted,
-        explicit_allowed: aggregate.explicit_allowed,
     })
 }
 
@@ -319,6 +310,7 @@ pub(crate) fn parse_account_quota_snapshot(
     let mut windows = Vec::new();
     for limit in canonical_rate_limits(object)? {
         parse_rate_limit_windows(
+            &limit.key,
             &limit.source,
             limit.limit_name.as_deref(),
             limit.rate_limit,
@@ -335,8 +327,9 @@ pub(crate) fn parse_account_quota_snapshot(
     })
 }
 
-/// 一个规范化后的限流桶：source 是调度/展示分组键，limit_name 是上游显示名。
+/// 一个规范化后的限流桶：`key` 用于稳定区分窗口，`source` 用于展示分组。
 struct CanonicalRateLimit<'a> {
+    key: String,
     source: String,
     limit_name: Option<String>,
     rate_limit: &'a Value,
@@ -346,9 +339,15 @@ fn canonical_rate_limits(
     object: &Map<String, Value>,
 ) -> Result<Vec<CanonicalRateLimit<'_>>, CodexCredentialQuotaError> {
     let mut limits = Vec::new();
+    let has_primary_codex_rate_limit = object
+        .get("rate_limit")
+        .is_some_and(|value| !value.is_null());
     if let Some(rate_limit) = object.get("rate_limit") {
+        // 官方 Codex 将顶层 `rate_limit` 固定识别为 `codex`，而不把
+        // `active_limit` 投影成另一个展示桶。后者只是当前活动套餐的元数据。
         limits.push(CanonicalRateLimit {
-            source: "core".to_owned(),
+            key: "core".to_owned(),
+            source: "codex".to_owned(),
             limit_name: None,
             rate_limit,
         });
@@ -358,6 +357,7 @@ fn canonical_rate_limits(
         .filter(|value| !value.is_null())
     {
         limits.push(CanonicalRateLimit {
+            key: "code-review".to_owned(),
             source: "code_review".to_owned(),
             limit_name: Some("code_review".to_owned()),
             rate_limit,
@@ -379,21 +379,27 @@ fn canonical_rate_limits(
             .as_object()
             .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
         let (source, limit_name) = canonical_rate_limit_source(item, index);
+        // 部分上游响应会在 `additional_rate_limits` 中重复默认的 `codex`
+        // 桶。它没有独立的 limit id，不能在账号面板再次展示。
+        if has_primary_codex_rate_limit && is_codex_limit_id(&source) {
+            continue;
+        }
         if let Some(rate_limit) = item.get("rate_limit") {
-            // additional 里的 codex 桶覆盖顶层 rate_limit（同源替换）。
-            if let Some(existing) = limits.iter_mut().find(|existing| existing.source == source) {
-                existing.rate_limit = rate_limit;
-                existing.limit_name = limit_name;
-            } else {
-                limits.push(CanonicalRateLimit {
-                    source,
-                    limit_name,
-                    rate_limit,
-                });
-            }
+            // 非 Codex additional 桶保留为独立快照；额外用索引生成窗口键，
+            // 避免同名 additional 产生重复前端 key。
+            limits.push(CanonicalRateLimit {
+                key: format!("additional-{index}-{source}"),
+                source,
+                limit_name,
+                rate_limit,
+            });
         }
     }
     Ok(limits)
+}
+
+fn is_codex_limit_id(value: &str) -> bool {
+    value.trim().eq_ignore_ascii_case("codex")
 }
 
 fn canonical_rate_limit_source(
@@ -417,14 +423,11 @@ fn canonical_rate_limit_source(
             !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
         })
         .map(str::to_owned);
-    if source.trim().to_ascii_lowercase().replace(['-', ' '], "_") == "codex" {
-        ("core".to_owned(), limit_name)
-    } else {
-        (source, limit_name)
-    }
+    (source, limit_name)
 }
 
 fn parse_rate_limit_windows(
+    key_source: &str,
     source: &str,
     limit_name: Option<&str>,
     value: &Value,
@@ -482,7 +485,7 @@ fn parse_rate_limit_windows(
             || used_percent.is_some_and(|used| used >= 100.0);
         let kind = quota_window_kind(window_seconds);
         output.push(CodexQuotaWindow {
-            key: format!("{}-{}", quota_key(source), quota_role_name(role, kind)),
+            key: format!("{}-{}", quota_key(key_source), quota_role_name(role, kind)),
             source: source.to_owned(),
             limit_name: limit_name.map(str::to_owned),
             kind,
@@ -559,7 +562,6 @@ const fn quota_role_name(role: CodexQuotaWindowRole, kind: CodexQuotaWindowKind)
 struct QuotaAggregate {
     recognized: bool,
     exhausted: bool,
-    explicit_allowed: bool,
     remaining_percent: Option<u8>,
     resets_at: Option<DateTime<Utc>>,
 }
@@ -572,7 +574,6 @@ impl QuotaAggregate {
         self.recognized = true;
         self.exhausted |= optional_bool(object, "limit_reached")?.unwrap_or(false);
         self.exhausted |= optional_bool(object, "allowed")?.is_some_and(|allowed| !allowed);
-        self.explicit_allowed |= optional_bool(object, "allowed")?.is_some_and(|allowed| allowed);
         for key in ["primary_window", "secondary_window"] {
             if let Some(window) = object.get(key) {
                 self.observe_window(window)?;

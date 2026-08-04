@@ -345,49 +345,6 @@ impl CodexCredentialSelector {
                 AccountCandidate { account, signals }
             })
             .collect::<Vec<_>>();
-        // skip_exhausted 语义：true 时排除任一窗口触顶（limit_reached）的账号，
-        // 仅由上游 429 兜底；false 时保留全部候选（含 QuotaExhausted 的放宽投影）。
-        // 保留原始账号供 revision-fenced 凭据加载，用影子候选承载资格放宽。
-        let scheduling_candidates = if diagnostic {
-            // 连接测试必须实际探测指定账号；额度快照只影响常规调度。
-            candidates.clone()
-        } else if self.skip_exhausted {
-            candidates
-                .iter()
-                .filter(|candidate| !candidate.signals.quota_limit_reached)
-                .cloned()
-                .collect::<Vec<_>>()
-        } else {
-            candidates
-                .iter()
-                .cloned()
-                .map(|mut candidate| {
-                    candidate.account = quota_exhausted_scheduling_projection(&candidate.account);
-                    candidate
-                })
-                .collect::<Vec<_>>()
-        };
-        let scheduling_candidates = scheduling_candidates.as_slice();
-        let mut affinity = if diagnostic {
-            AffinitySelection::default()
-        } else {
-            self.resolve_session_affinity(
-                request.session_affinity_key,
-                &candidates,
-                SystemTime::now(),
-            )
-            .await
-        };
-        let cyber_policy_scope = self
-            .prepare_cyber_policy_scope(cyber_policy_session_key)
-            .await;
-        let mut excluded = request.attempt.excluded_accounts().clone();
-        if let Some(state) = cyber_policy_scope
-            .as_ref()
-            .and_then(|scope| scope.state.as_ref())
-        {
-            excluded.extend(state.excluded_accounts().iter().cloned());
-        }
         let continuation_account = match request.attempt.continuation_attempt() {
             ContinuationAttempt::Native => request
                 .attempt
@@ -409,7 +366,74 @@ impl CodexCredentialSelector {
         {
             return Err(CredentialSelectionError::NoEligibleCredential);
         }
-        let pinned_account = required_account.or(continuation_account);
+        let pinned_account = required_account.or_else(|| continuation_account.clone());
+        let preserve_native_continuation_state = matches!(
+            request.attempt.continuation_attempt(),
+            ContinuationAttempt::Native
+        ) && continuation_account.is_some();
+        // skip_exhausted 语义：true 时排除任一窗口触顶（limit_reached）的账号，
+        // 仅由上游 429 兜底；false 时保留全部候选（含 QuotaExhausted 的放宽投影）。
+        // 保留原始账号供 revision-fenced 凭据加载，用影子候选承载资格放宽。
+        let scheduling_candidates = if diagnostic {
+            // 连接测试必须实际探测指定账号；额度快照只影响常规调度。
+            candidates.clone()
+        } else if self.skip_exhausted {
+            candidates
+                .iter()
+                .filter(|candidate| !candidate.signals.quota_limit_reached)
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            candidates
+                .iter()
+                .cloned()
+                .map(|mut candidate| {
+                    // 已命中 previous_response_id 的 native continuation 先检查原账号。
+                    // 即使常规调度允许探测额度耗尽账号，也必须保留原账号真实状态，
+                    // 由 Coordinator 据此切换到可携带重放，而非伪装为 Ready。
+                    if !preserve_native_continuation_state
+                        || pinned_account.as_ref() != Some(candidate.account.id())
+                    {
+                        candidate.account =
+                            quota_exhausted_scheduling_projection(&candidate.account);
+                    }
+                    candidate
+                })
+                .collect::<Vec<_>>()
+        };
+        let scheduling_candidates = scheduling_candidates.as_slice();
+        let mut affinity = if diagnostic {
+            AffinitySelection::default()
+        } else {
+            self.resolve_session_affinity(
+                request.session_affinity_key,
+                &candidates,
+                SystemTime::now(),
+            )
+            .await
+        };
+        let cyber_policy_scope = self
+            .prepare_cyber_policy_scope(cyber_policy_session_key)
+            .await;
+        let mut excluded = request.attempt.excluded_accounts().clone();
+        if !diagnostic
+            && preserve_native_continuation_state
+            && let Some(pinned) = pinned_account.as_ref()
+            && candidates.iter().any(|candidate| {
+                candidate.account.id() == pinned && candidate.signals.quota_limit_reached
+            })
+        {
+            // `skip_exhausted = false` 只允许普通新请求探测可疑账号；已绑定的
+            // native response handle 先将真实触顶状态交给 Coordinator，随后才可
+            // 通过 ReplayAny 按当前调度策略换号。
+            excluded.insert(pinned.clone());
+        }
+        if let Some(state) = cyber_policy_scope
+            .as_ref()
+            .and_then(|scope| scope.state.as_ref())
+        {
+            excluded.extend(state.excluded_accounts().iter().cloned());
+        }
         if let Some(required) = pinned_account.as_ref() {
             for candidate in &candidates {
                 if candidate.account.id() != required {
