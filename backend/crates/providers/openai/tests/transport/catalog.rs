@@ -219,7 +219,10 @@ async fn fetch_should_send_official_catalog_headers_and_query() {
         .and(header("authorization", "Bearer oauth-access"))
         .and(header("chatgpt-account-id", "acct_123"))
         .and(header("originator", "codex_cli_rs"))
-        .and(header("user-agent", "codex_cli_rs/1.0.0 (linux; x86_64)"))
+        .and(header(
+            "user-agent",
+            "codex_cli_rs/0.144.0 (linux 6.8; x86_64) xterm (codex_cli_rs; 1.0.0)",
+        ))
         .and(header("accept", "application/json"))
         .and(header("x-codex-installation-id", "installation-123"))
         .respond_with(
@@ -300,7 +303,9 @@ fn profile() -> CodexWireProfileState {
         desktop_version: "1.0.0".to_owned(),
         desktop_build: "1".to_owned(),
         os_type: "linux".to_owned(),
+        os_version: "6.8".to_owned(),
         arch: "x86_64".to_owned(),
+        terminal: "xterm".to_owned(),
         verified_at: Utc
             .with_ymd_and_hms(2026, 7, 18, 0, 0, 0)
             .single()

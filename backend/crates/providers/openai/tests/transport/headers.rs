@@ -854,7 +854,7 @@ async fn backend_http_should_force_upstream_sse_for_non_streaming_client_request
 }
 
 #[tokio::test]
-async fn websocket_should_keep_an_exact_chain_while_new_connections_adopt_the_latest_desktop_wire_profile()
+async fn websocket_should_keep_an_exact_chain_while_new_connections_adopt_the_latest_codex_core_wire_profile()
  {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -947,7 +947,7 @@ async fn websocket_should_keep_an_exact_chain_while_new_connections_adopt_the_la
         )
         .await
         .expect("first response");
-    profile.update_desktop_release("1.2.4", "124");
+    profile.update_cli_release("1.2.4");
 
     let mut continuation = request.clone();
     continuation.set_previous_response_id(Some("resp_profile_first".to_owned()));

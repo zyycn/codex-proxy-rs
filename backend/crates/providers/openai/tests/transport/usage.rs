@@ -167,7 +167,7 @@ async fn fetch_should_use_wham_usage_headers_only() {
         headers
             .get("user-agent")
             .and_then(|value| value.to_str().ok()),
-        Some("codex_cli_rs/1.0.0 (linux; x86_64)")
+        Some("codex_cli_rs/0.144.0 (linux 6.8; x86_64) xterm (codex_cli_rs; 1.0.0)")
     );
     let quota_header_names = headers
         .keys()
@@ -420,7 +420,9 @@ fn profile() -> CodexWireProfileState {
         desktop_version: "1.0.0".to_owned(),
         desktop_build: "1".to_owned(),
         os_type: "linux".to_owned(),
+        os_version: "6.8".to_owned(),
         arch: "x86_64".to_owned(),
+        terminal: "xterm".to_owned(),
         verified_at: Utc
             .with_ymd_and_hms(2026, 7, 18, 0, 0, 0)
             .single()

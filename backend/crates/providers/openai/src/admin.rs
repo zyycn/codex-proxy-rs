@@ -194,22 +194,23 @@ impl ProviderAdmin for OpenAiAdminProvider {
         let profile = self.profile.snapshot();
         let release = self.desktop_release.snapshot();
         let user_agent = profile.user_agent();
+        let client_identity = format!("{}; {}", profile.originator, profile.desktop_version);
         let release = dashboard_desktop_release(&profile, release);
         Some(DashboardWireProfile {
             provider: self.provider_kind.as_str().to_owned(),
             product: profile.originator,
-            version: profile.desktop_version,
-            build: Some(profile.desktop_build),
+            version: profile.codex_version,
+            build: None,
             target: DashboardWireTarget {
                 os_type: dashboard_os_type(&profile.os_type),
-                os_version: "—".to_owned(),
+                os_version: profile.os_version,
                 arch: profile.arch,
-                terminal: "—".to_owned(),
+                terminal: profile.terminal,
             },
             user_agent,
             attributes: vec![DashboardWireAttribute {
                 label: "客户端标识".to_owned(),
-                value: "Desktop".to_owned(),
+                value: client_identity,
             }],
             verified_at: Some(profile.verified_at),
             release: Some(release),

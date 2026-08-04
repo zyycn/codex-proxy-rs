@@ -33,7 +33,9 @@ fn wire_profile() -> CodexWireProfileState {
         desktop_version: "1.0.0".to_owned(),
         desktop_build: "1".to_owned(),
         os_type: "linux".to_owned(),
+        os_version: "6.8".to_owned(),
         arch: "x86_64".to_owned(),
+        terminal: "quota-contract".to_owned(),
         verified_at: Utc
             .with_ymd_and_hms(2026, 7, 18, 0, 0, 0)
             .single()

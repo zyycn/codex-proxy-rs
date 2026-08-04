@@ -4,8 +4,9 @@ use std::sync::{Arc, Mutex};
 use chrono::{TimeZone, Utc};
 use futures::future::BoxFuture;
 use provider_openai::transport::profile::{
-    CodexDesktopRelease, CodexDesktopReleaseError, CodexDesktopReleaseService,
-    CodexDesktopReleaseTransport, CodexWireProfile, CodexWireProfileState, parse_desktop_release,
+    CodexCliReleaseError, CodexCliReleaseService, CodexCliReleaseTransport, CodexDesktopRelease,
+    CodexDesktopReleaseError, CodexDesktopReleaseService, CodexDesktopReleaseTransport,
+    CodexWireProfile, CodexWireProfileState, parse_desktop_release,
 };
 
 struct ReleaseTransport {
@@ -34,15 +35,41 @@ impl CodexDesktopReleaseTransport for ReleaseTransport {
     }
 }
 
+struct CliReleaseTransport {
+    outcomes: Mutex<VecDeque<Result<String, CodexCliReleaseError>>>,
+}
+
+impl CliReleaseTransport {
+    fn new(outcomes: impl IntoIterator<Item = Result<String, CodexCliReleaseError>>) -> Self {
+        Self {
+            outcomes: Mutex::new(outcomes.into_iter().collect()),
+        }
+    }
+}
+
+impl CodexCliReleaseTransport for CliReleaseTransport {
+    fn fetch(&self) -> BoxFuture<'_, Result<String, CodexCliReleaseError>> {
+        Box::pin(async move {
+            self.outcomes
+                .lock()
+                .expect("CLI release outcomes")
+                .pop_front()
+                .expect("CLI release outcome")
+        })
+    }
+}
+
 #[test]
-fn wire_profile_should_generate_codex_desktop_http_user_agent() {
+fn wire_profile_should_generate_bundled_core_app_server_user_agent() {
     let profile = CodexWireProfile {
         originator: "Codex Desktop".to_owned(),
         codex_version: "0.144.2".to_owned(),
         desktop_version: "26.707.72221".to_owned(),
         desktop_build: "72221".to_owned(),
         os_type: "Mac OS".to_owned(),
+        os_version: "15.7.1".to_owned(),
         arch: "arm64".to_owned(),
+        terminal: "unknown".to_owned(),
         verified_at: Utc
             .with_ymd_and_hms(2026, 7, 18, 0, 0, 0)
             .single()
@@ -51,11 +78,8 @@ fn wire_profile_should_generate_codex_desktop_http_user_agent() {
 
     assert_eq!(
         profile.user_agent(),
-        "Codex Desktop/26.707.72221 (Mac OS; arm64)"
+        "Codex Desktop/0.144.2 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.707.72221)"
     );
-    let mut catalog_version_only = profile.clone();
-    catalog_version_only.codex_version = "0.145.0".to_owned();
-    assert_eq!(catalog_version_only.user_agent(), profile.user_agent());
 }
 
 #[test]
@@ -128,17 +152,48 @@ async fn wire_profile_release_update_should_change_only_desktop_identity() {
     assert_eq!(updated.codex_version, original.codex_version);
     assert_eq!(updated.originator, original.originator);
     assert_eq!(updated.os_type, original.os_type);
+    assert_eq!(updated.os_version, original.os_version);
     assert_eq!(updated.arch, original.arch);
+    assert_eq!(updated.terminal, original.terminal);
     assert_eq!(updated.verified_at, original.verified_at);
     assert_ne!(updated.user_agent(), original_user_agent);
     assert_eq!(
         updated.user_agent(),
-        "Codex Desktop/26.720.1 (Mac OS; arm64)"
+        "Codex Desktop/0.144.2 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.720.1)"
     );
     let status = service.status().snapshot();
     assert_eq!(status.latest, Some(release("26.720.1", "72001")));
     assert!(status.checked_at.is_some());
     assert!(status.last_error.is_none());
+}
+
+#[tokio::test]
+async fn cli_release_update_should_change_only_codex_core_identity() {
+    let original = wire_profile();
+    let original_user_agent = original.user_agent();
+    let state = CodexWireProfileState::new(original.clone());
+    let service = CodexCliReleaseService::new(
+        state.clone(),
+        Arc::new(CliReleaseTransport::new([Ok("0.145.0".to_owned())])),
+    );
+
+    service.refresh().await.expect("CLI release refresh");
+
+    let updated = state.snapshot();
+    assert_eq!(updated.codex_version, "0.145.0");
+    assert_eq!(updated.desktop_version, original.desktop_version);
+    assert_eq!(updated.desktop_build, original.desktop_build);
+    assert_eq!(updated.originator, original.originator);
+    assert_eq!(updated.os_type, original.os_type);
+    assert_eq!(updated.os_version, original.os_version);
+    assert_eq!(updated.arch, original.arch);
+    assert_eq!(updated.terminal, original.terminal);
+    assert_eq!(updated.verified_at, original.verified_at);
+    assert_ne!(updated.user_agent(), original_user_agent);
+    assert_eq!(
+        updated.user_agent(),
+        "Codex Desktop/0.145.0 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.707.72221)"
+    );
 }
 
 #[tokio::test]
@@ -177,7 +232,9 @@ fn wire_profile() -> CodexWireProfile {
         desktop_version: "26.707.72221".to_owned(),
         desktop_build: "72221".to_owned(),
         os_type: "Mac OS".to_owned(),
+        os_version: "15.7.1".to_owned(),
         arch: "arm64".to_owned(),
+        terminal: "unknown".to_owned(),
         verified_at: Utc
             .with_ymd_and_hms(2026, 7, 18, 0, 0, 0)
             .single()

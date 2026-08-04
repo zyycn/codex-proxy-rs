@@ -24,7 +24,10 @@ use crate::credential::{
     OfficialCodexAgentIdentityTaskRegistrar, ReqwestCodexAuthenticatedAccountSource,
     ReqwestOpenAiJwksSource,
 };
-use crate::transport::profile::{CodexDesktopReleaseService, OfficialCodexDesktopReleaseTransport};
+use crate::transport::profile::{
+    CodexCliReleaseService, CodexDesktopReleaseService, OfficialCodexCliReleaseTransport,
+    OfficialCodexDesktopReleaseTransport,
+};
 use crate::transport::{CodexWebSocketPool, build_reqwest_client};
 
 pub use config::{CodexWireProfileConfig, OpenAiConfig, OpenAiConfigError};
@@ -75,6 +78,13 @@ pub async fn initialize(
         ),
     ));
     let desktop_release_status = desktop_release.status();
+    let cli_release = Arc::new(CodexCliReleaseService::new(
+        profile.clone(),
+        Arc::new(
+            OfficialCodexCliReleaseTransport::new()
+                .map_err(|_| OpenAiInitializeError::CliRelease)?,
+        ),
+    ));
     let repository = CodexCredentialRepository::new(Arc::clone(&accounts));
     let websocket_pool = Arc::new(CodexWebSocketPool::with_config(
         config.websocket_pool_config(),
@@ -200,6 +210,7 @@ pub async fn initialize(
         catalog,
         config.quota_refresh_policy(),
         config.oauth_refresh_enabled(),
+        cli_release,
         desktop_release,
     )
     .map_err(|_| OpenAiInitializeError::Worker)?;
@@ -257,6 +268,8 @@ pub enum OpenAiInitializeError {
     Refresh,
     #[error("OpenAI Desktop release service could not initialize")]
     DesktopRelease,
+    #[error("OpenAI CLI release service could not initialize")]
+    CliRelease,
     #[error("OpenAI worker plan is invalid")]
     Worker,
 }

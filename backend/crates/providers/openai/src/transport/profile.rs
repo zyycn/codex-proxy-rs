@@ -13,42 +13,53 @@ use url::Url;
 /// Codex Desktop 官方 appcast 地址。
 pub const CODEX_DESKTOP_APPCAST_URL: &str =
     "https://persistent.oaistatic.com/codex-app-prod/appcast.xml";
-/// 官方制品画像检查周期。
+pub const CODEX_CLI_RELEASE_URL: &str = "https://registry.npmjs.org/@openai%2Fcodex/latest";
+/// 官方发布元数据检查周期。
 pub const APPCAST_POLL_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 const APPCAST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_APPCAST_BYTES: usize = 1024 * 1024;
+const MAX_CLI_RELEASE_BYTES: usize = 64 * 1024;
 
 /// Codex Desktop 上游请求身份。
 ///
-/// 启动配置提供经制品审计的 Desktop HTTP 身份与模型目录版本。官方 appcast
-/// 检查成功后，仅同步 Desktop 版本和构建号。
+/// 启动配置提供经源码审计的 Core、运行环境和 Desktop 启动版本。npm CLI metadata
+/// 与官方 appcast 检查成功后，分别同步 Core 版本和 Desktop 版本及构建号。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexWireProfile {
     /// `originator` 请求头及 User-Agent 产品名。
     pub originator: String,
-    /// 已审计的 bundled Codex Core 模型目录版本，仅用于 `/codex/models?client_version=`。
-    ///
-    /// 它不属于 Desktop HTTP User-Agent，且不能由 npm 的独立 CLI 发布版本推导。
+    /// npm `@openai/codex` 启动版本；用于 `/codex/models?client_version=` 与 UA。
     pub codex_version: String,
-    /// Desktop 应用版本，直接构成 Desktop HTTP User-Agent。
+    /// Desktop 应用版本，用于 app-server `clientInfo.version` 对应的 UA 后缀。
     pub desktop_version: String,
     /// Desktop 制品构建号，仅用于发布对齐诊断。
     pub desktop_build: String,
-    /// Desktop HTTP User-Agent 中的官方操作系统标记，例如 `Mac OS`。
+    /// Codex Core UA 中的目标操作系统类型。
     pub os_type: String,
-    /// Desktop HTTP User-Agent 中的目标架构。
+    /// Codex Core UA 中的目标操作系统版本。
+    pub os_version: String,
+    /// Codex Core UA 中的目标架构。
     pub arch: String,
+    /// Codex Core UA 中的终端标记。
+    pub terminal: String,
     /// 此画像最后一次经制品与源码核验的时间。
     pub verified_at: DateTime<Utc>,
 }
 
 impl CodexWireProfile {
-    /// 按官方 Codex Desktop HTTP 格式生成最终 User-Agent。
+    /// 按 bundled Core app-server 的官方格式生成最终 User-Agent。
     pub fn user_agent(&self) -> String {
         format!(
-            "{}/{} ({}; {})",
-            self.originator, self.desktop_version, self.os_type, self.arch,
+            "{}/{} ({} {}; {}) {} ({}; {})",
+            self.originator,
+            self.codex_version,
+            self.os_type,
+            self.os_version,
+            self.arch,
+            self.terminal,
+            self.originator,
+            self.desktop_version,
         )
     }
 }
@@ -87,6 +98,112 @@ impl CodexWireProfileState {
         profile.desktop_version = desktop_version.to_owned();
         profile.desktop_build = desktop_build.to_owned();
     }
+
+    /// 使用官方 npm metadata 发布的 Codex CLI 版本更新运行时请求画像。
+    pub fn update_cli_release(&self, codex_version: &str) {
+        let mut profile = self
+            .profile
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if profile.codex_version != codex_version {
+            profile.codex_version = codex_version.to_owned();
+        }
+    }
+}
+
+pub trait CodexCliReleaseTransport: Send + Sync {
+    fn fetch(&self) -> BoxFuture<'_, Result<String, CodexCliReleaseError>>;
+}
+
+#[derive(Clone)]
+pub struct OfficialCodexCliReleaseTransport {
+    client: Client,
+    endpoint: Url,
+}
+
+impl OfficialCodexCliReleaseTransport {
+    pub fn new() -> Result<Self, CodexCliReleaseError> {
+        let endpoint =
+            Url::parse(CODEX_CLI_RELEASE_URL).map_err(|_| CodexCliReleaseError::InvalidEndpoint)?;
+        let client = Client::builder()
+            .https_only(true)
+            .no_proxy()
+            .redirect(Policy::none())
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(APPCAST_TIMEOUT)
+            .build()
+            .map_err(|_| CodexCliReleaseError::ClientInitialization)?;
+        Ok(Self { client, endpoint })
+    }
+}
+
+impl CodexCliReleaseTransport for OfficialCodexCliReleaseTransport {
+    fn fetch(&self) -> BoxFuture<'_, Result<String, CodexCliReleaseError>> {
+        Box::pin(async move {
+            let response = self.client.get(self.endpoint.clone()).send().await?;
+            if !response.status().is_success() {
+                return Err(CodexCliReleaseError::HttpStatus(response.status().as_u16()));
+            }
+            if response
+                .content_length()
+                .is_some_and(|size| size > MAX_CLI_RELEASE_BYTES as u64)
+            {
+                return Err(CodexCliReleaseError::ResponseTooLarge);
+            }
+            let bytes = response.bytes().await?;
+            if bytes.len() > MAX_CLI_RELEASE_BYTES {
+                return Err(CodexCliReleaseError::ResponseTooLarge);
+            }
+            let document: serde_json::Value = serde_json::from_slice(&bytes)
+                .map_err(|_| CodexCliReleaseError::InvalidDocument)?;
+            let version = document
+                .get("version")
+                .and_then(serde_json::Value::as_str)
+                .ok_or(CodexCliReleaseError::InvalidDocument)?;
+            semver::Version::parse(version).map_err(|_| CodexCliReleaseError::InvalidVersion)?;
+            Ok(version.to_owned())
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct CodexCliReleaseService {
+    transport: Arc<dyn CodexCliReleaseTransport>,
+    profile: CodexWireProfileState,
+}
+
+impl CodexCliReleaseService {
+    #[must_use]
+    pub fn new(
+        profile: CodexWireProfileState,
+        transport: Arc<dyn CodexCliReleaseTransport>,
+    ) -> Self {
+        Self { transport, profile }
+    }
+
+    pub async fn refresh(&self) -> Result<String, CodexCliReleaseError> {
+        let version = self.transport.fetch().await?;
+        self.profile.update_cli_release(&version);
+        Ok(version)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CodexCliReleaseError {
+    #[error("Codex CLI release client initialization failed")]
+    ClientInitialization,
+    #[error("Codex CLI release endpoint is invalid")]
+    InvalidEndpoint,
+    #[error("Codex CLI release request failed")]
+    Request(#[from] reqwest::Error),
+    #[error("Codex CLI release endpoint returned HTTP {0}")]
+    HttpStatus(u16),
+    #[error("Codex CLI release response exceeded the size limit")]
+    ResponseTooLarge,
+    #[error("Codex CLI release document is invalid")]
+    InvalidDocument,
+    #[error("Codex CLI release version is invalid")]
+    InvalidVersion,
 }
 
 /// 官方 appcast 中按顺序出现的首个完整 Desktop 制品。
