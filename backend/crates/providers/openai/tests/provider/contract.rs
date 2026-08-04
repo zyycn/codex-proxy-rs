@@ -212,6 +212,27 @@ fn generate_operation() -> Operation {
     ))
 }
 
+fn generate_with_session_context(
+    session_id: &str,
+    thread_id: Option<&str>,
+    turn_metadata: Option<&str>,
+) -> GenerateRequest {
+    let mut body = Map::from_iter([
+        ("model".to_owned(), json!("gpt-5.4")),
+        ("input".to_owned(), json!("hello")),
+        ("session_id".to_owned(), json!(session_id)),
+    ]);
+    if let Some(thread_id) = thread_id {
+        body.insert("thread_id".to_owned(), json!(thread_id));
+    }
+    if let Some(turn_metadata) = turn_metadata {
+        body.insert("turnMetadata".to_owned(), json!(turn_metadata));
+    }
+    GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", body).expect("OpenAI payload"),
+    )
+}
+
 fn http_generate_operation() -> Operation {
     let payload = ProtocolPayload::json_object(
         "openai",
@@ -1169,6 +1190,58 @@ async fn explicit_session_id_should_override_turn_specific_prompt_cache_keys_for
     let keys = affinity.lookup_keys();
     assert_eq!(keys.len(), 2);
     assert_eq!(keys[0], keys[1]);
+}
+
+#[tokio::test]
+async fn thread_spawn_children_should_have_independent_session_affinity_keys() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_thread_spawn_affinity").await;
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let provider = provider_with_affinity(&store, Arc::clone(&affinity));
+    let thread_spawn = r#"{"subagent_kind":"thread_spawn"}"#;
+
+    for (request_id, thread_id, turn_metadata) in [
+        (
+            "req_thread_spawn_first",
+            Some("child-one"),
+            Some(thread_spawn),
+        ),
+        (
+            "req_thread_spawn_second",
+            Some("child-two"),
+            Some(thread_spawn),
+        ),
+        (
+            "req_thread_spawn_repeat",
+            Some("child-one"),
+            Some(thread_spawn),
+        ),
+        ("req_thread_spawn_fallback", None, Some(thread_spawn)),
+        ("req_thread_spawn_parent", None, None),
+    ] {
+        let stream = provider
+            .execute(
+                planned_request(
+                    "openai",
+                    Operation::Generate(generate_with_session_context(
+                        "parent-session",
+                        thread_id,
+                        turn_metadata,
+                    )),
+                ),
+                context(request_id, CancellationToken::new()),
+            )
+            .await
+            .expect("prepare provider stream");
+        drop(stream);
+    }
+
+    let keys = affinity.lookup_keys();
+    assert_eq!(keys.len(), 5);
+    assert_ne!(keys[0], keys[1]);
+    assert_eq!(keys[0], keys[2]);
+    assert_ne!(keys[3], keys[4]);
+    assert_ne!(keys[0], keys[3]);
 }
 
 #[tokio::test]

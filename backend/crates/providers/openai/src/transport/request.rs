@@ -10,6 +10,8 @@ use sha2::{Digest, Sha256};
 use crate::transport::protocol::responses::CodexResponsesRequest;
 
 const PASSTHROUGH_HEADERS_CONTEXT_KEY: &str = "opaque_request_headers";
+const THREAD_SPAWN_SUBAGENT_KIND: &str = "thread_spawn";
+const THREAD_SPAWN_CONVERSATION_PREFIX: &str = "thread-spawn:";
 
 const CROSS_ACCOUNT_IDENTITY_KEYS: &[&str] = &[
     "authorization",
@@ -160,28 +162,52 @@ fn string_value(value: Option<&Value>) -> Option<String> {
 pub(crate) fn derive_conversation_anchor(
     request: &CodexResponsesRequest,
 ) -> Option<(&'static str, String)> {
+    thread_spawn_conversation_anchor(request).or_else(|| {
+        request
+            .client_session_id
+            .as_deref()
+            .map(|value| ("session", value.to_owned()))
+            .or_else(|| {
+                request
+                    .client_conversation_id
+                    .as_deref()
+                    .map(|value| ("conversation", value.to_owned()))
+            })
+            .or_else(|| {
+                request
+                    .client_thread_id
+                    .as_deref()
+                    .map(|value| ("thread", value.to_owned()))
+            })
+            .or_else(|| {
+                request
+                    .prompt_cache_key()
+                    .map(|value| ("prompt-cache", value.to_owned()))
+            })
+            .or_else(|| derive_stable_conversation_key(request).map(|value| ("request", value)))
+    })
+}
+
+/// A `thread_spawn` shares its parent session but is a separate child execution.
+/// Its child thread must therefore own the affinity and WebSocket pool identity.
+fn thread_spawn_conversation_anchor(
+    request: &CodexResponsesRequest,
+) -> Option<(&'static str, String)> {
+    if request.subagent_kind().as_deref() != Some(THREAD_SPAWN_SUBAGENT_KIND) {
+        return None;
+    }
+
     request
-        .client_session_id
+        .client_thread_id
         .as_deref()
-        .map(|value| ("session", value.to_owned()))
-        .or_else(|| {
-            request
-                .client_conversation_id
-                .as_deref()
-                .map(|value| ("conversation", value.to_owned()))
+        .map(str::trim)
+        .filter(|thread_id| !thread_id.is_empty())
+        .map(|thread_id| {
+            (
+                "subagent-thread",
+                format!("{THREAD_SPAWN_CONVERSATION_PREFIX}{thread_id}"),
+            )
         })
-        .or_else(|| {
-            request
-                .client_thread_id
-                .as_deref()
-                .map(|value| ("thread", value.to_owned()))
-        })
-        .or_else(|| {
-            request
-                .prompt_cache_key()
-                .map(|value| ("prompt-cache", value.to_owned()))
-        })
-        .or_else(|| derive_stable_conversation_key(request).map(|value| ("request", value)))
 }
 
 const LEADING_SYSTEM_REMINDER_OPEN: &str = "<system-reminder>";
