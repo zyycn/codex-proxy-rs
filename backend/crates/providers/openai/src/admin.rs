@@ -202,7 +202,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
             version: profile.codex_version,
             build: None,
             target: DashboardWireTarget {
-                os_type: dashboard_os_type(&profile.os_type),
+                os_type: profile.os_type,
                 os_version: profile.os_version,
                 arch: profile.arch,
                 terminal: profile.terminal,
@@ -693,13 +693,6 @@ fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, Provi
         account.has_refresh_token,
         account.next_refresh_at.map(SystemTime::from),
     ))
-}
-
-fn dashboard_os_type(os_type: &str) -> String {
-    match os_type {
-        "Mac OS" => "macOS".to_owned(),
-        _ => os_type.to_owned(),
-    }
 }
 
 fn dashboard_desktop_release(

@@ -119,7 +119,7 @@ async fn openai_admin_provider_exposes_live_wire_profile_and_validated_billing()
     let profile = admin.dashboard_wire_profile().expect("wire profile");
     assert_eq!(profile.version, "0.102.0");
     assert_eq!(profile.build, None);
-    assert_eq!(profile.target.os_type, "macOS");
+    assert_eq!(profile.target.os_type, "Mac OS");
     assert_eq!(profile.target.os_version, "15.5.0");
     assert_eq!(
         profile.user_agent,
@@ -795,7 +795,7 @@ fn valid_config() -> TestOpenAiConfig {
         codex_version: "0.102.0".to_owned(),
         desktop_version: "1.2026.190".to_owned(),
         desktop_build: "19012345678".to_owned(),
-        os_type: "macOS".to_owned(),
+        os_type: "Mac OS".to_owned(),
         os_version: "15.5.0".to_owned(),
         arch: "arm64".to_owned(),
         terminal: "xterm-256color".to_owned(),

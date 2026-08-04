@@ -137,7 +137,7 @@ fn valid_config() -> OpenAiConfig {
         codex_version: "0.102.0".to_owned(),
         desktop_version: "1.2026.190".to_owned(),
         desktop_build: "19012345678".to_owned(),
-        os_type: "macOS".to_owned(),
+        os_type: "Mac OS".to_owned(),
         os_version: "15.5.0".to_owned(),
         arch: "arm64".to_owned(),
         terminal: "xterm-256color".to_owned(),

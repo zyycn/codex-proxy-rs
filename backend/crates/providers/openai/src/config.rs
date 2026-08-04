@@ -356,19 +356,12 @@ impl From<CodexWireProfileConfig> for CodexWireProfile {
             codex_version: value.codex_version,
             desktop_version: value.desktop_version,
             desktop_build: value.desktop_build,
-            os_type: canonical_codex_os_type(value.os_type),
+            os_type: value.os_type,
             os_version: value.os_version,
             arch: value.arch,
             terminal: value.terminal,
             verified_at: value.verified_at,
         }
-    }
-}
-
-fn canonical_codex_os_type(os_type: String) -> String {
-    match os_type.as_str() {
-        "macOS" => "Mac OS".to_owned(),
-        _ => os_type,
     }
 }
 
