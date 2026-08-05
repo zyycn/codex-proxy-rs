@@ -83,6 +83,7 @@ pub(super) struct AdminTestFixture {
     pub diagnostics: Arc<Mutex<Vec<DiagnosticObservation>>>,
     pub ops_errors: Arc<Mutex<Vec<OpsError>>>,
     pub dashboard_observation: Arc<Mutex<Option<DashboardObservation>>>,
+    pub dashboard_summary_range: Arc<Mutex<Option<TimeRange>>>,
 }
 
 impl AdminTestFixture {
@@ -100,12 +101,14 @@ impl AdminTestFixture {
         let diagnostics = Arc::new(Mutex::new(Vec::new()));
         let ops_errors = Arc::new(Mutex::new(Vec::new()));
         let dashboard_observation = Arc::new(Mutex::new(None));
+        let dashboard_summary_range = Arc::new(Mutex::new(None));
         let unused = Arc::new(UnusedStore {
             usage_records: Arc::clone(&usage_records),
             usage_detail: Arc::clone(&usage_detail),
             diagnostics: Arc::clone(&diagnostics),
             ops_errors: Arc::clone(&ops_errors),
             dashboard_observation: Arc::clone(&dashboard_observation),
+            dashboard_summary_range: Arc::clone(&dashboard_summary_range),
         });
         let stores = AdminStorePorts::new(
             unused.clone(),
@@ -142,6 +145,7 @@ impl AdminTestFixture {
             diagnostics,
             ops_errors,
             dashboard_observation,
+            dashboard_summary_range,
         }
     }
 
@@ -413,6 +417,7 @@ struct UnusedStore {
     diagnostics: Arc<Mutex<Vec<DiagnosticObservation>>>,
     ops_errors: Arc<Mutex<Vec<OpsError>>>,
     dashboard_observation: Arc<Mutex<Option<DashboardObservation>>>,
+    dashboard_summary_range: Arc<Mutex<Option<TimeRange>>>,
 }
 
 #[async_trait]
@@ -523,7 +528,11 @@ impl AccountStore for UnusedStore {
 
 #[async_trait]
 impl ObservabilityStore for UnusedStore {
-    async fn dashboard_summary(&self, _: TimeRange) -> AdminStoreResult<DashboardObservation> {
+    async fn dashboard_summary(&self, range: TimeRange) -> AdminStoreResult<DashboardObservation> {
+        *self
+            .dashboard_summary_range
+            .lock()
+            .expect("dashboard summary range") = Some(range);
         self.dashboard_observation
             .lock()
             .expect("dashboard observation")

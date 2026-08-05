@@ -310,16 +310,6 @@ pub(crate) fn usage_range(
     domain::TimeRange::new(start, end).map_err(|_| WireValidationError::new("timeRange"))
 }
 
-pub(crate) fn dashboard_range(
-    start: Option<&str>,
-    end: Option<&str>,
-) -> Result<domain::TimeRange, WireValidationError> {
-    let end = parse_datetime(end)?.unwrap_or_else(Utc::now);
-    let start =
-        parse_datetime(start)?.unwrap_or_else(|| domain::china_day_start(end) - Duration::days(1));
-    domain::TimeRange::new(start, end).map_err(|_| WireValidationError::new("timeRange"))
-}
-
 pub(crate) fn dashboard_today_range(
     start: Option<&str>,
     end: Option<&str>,

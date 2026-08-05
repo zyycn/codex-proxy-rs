@@ -271,6 +271,61 @@ async fn dashboard_summary_should_include_quota_exhaustion_in_unavailable_headli
 }
 
 #[tokio::test]
+async fn dashboard_summary_should_default_to_current_china_day() {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode, header},
+    };
+    use chrono::{Duration, Utc};
+    use gateway_admin::model::observability::{
+        AccountPoolMetrics, AttemptMetrics, DashboardObservation, RequestMetrics, TimeRange,
+        china_day_start,
+    };
+    use gateway_api::admin::observability;
+    use tower::ServiceExt as _;
+
+    use crate::admin::{AdminTestFixture, AdminTestState};
+
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let now = Utc::now();
+    *fixture
+        .dashboard_observation
+        .lock()
+        .expect("dashboard observation") = Some(DashboardObservation {
+        range: TimeRange::new(now - Duration::hours(1), now).expect("dashboard range"),
+        requests: RequestMetrics::default(),
+        attempts: AttemptMetrics::default(),
+        provider_accounts: AccountPoolMetrics::default(),
+        trend: Vec::new(),
+        account_usage: Vec::new(),
+        recent_requests: Vec::new(),
+    });
+
+    let response = observability::router::<AdminTestState>()
+        .with_state(fixture.state())
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/dashboard/summary")
+                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header("x-request-id", "req_dashboard_today_range")
+                .body(Body::empty())
+                .expect("dashboard request"),
+        )
+        .await
+        .expect("dashboard response");
+    let range = fixture
+        .dashboard_summary_range
+        .lock()
+        .expect("dashboard summary range")
+        .take()
+        .expect("recorded dashboard summary range");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(range.start, china_day_start(range.end));
+}
+
+#[tokio::test]
 async fn usage_detail_should_keep_attempt_snapshot_contract() {
     use axum::{
         body::{Body, to_bytes},

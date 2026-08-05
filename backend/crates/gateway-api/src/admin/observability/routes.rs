@@ -38,7 +38,8 @@ where
     S: AdminSessionState + Send + Sync,
 {
     let kind = query.trend_kind().map_err(map_wire_error)?;
-    let range = dashboard_range(query.start_time.as_deref(), query.end_time.as_deref())
+    // 概览默认按中国时区当日统计，与单独趋势接口保持同一口径。
+    let range = dashboard_today_range(query.start_time.as_deref(), query.end_time.as_deref())
         .map_err(map_wire_error)?;
     let result = state
         .admin_services()
