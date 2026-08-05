@@ -211,3 +211,47 @@ async fn expired_old_reset_with_fresh_allowed_snapshot_recovers_ready() {
         "old reset elapsed + fresh allowed snapshot must recover QuotaExhausted"
     );
 }
+
+#[tokio::test]
+async fn deactivated_workspace_quota_response_persists_the_upstream_reason() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_deactivated_workspace";
+    create_account(&store, account_id).await;
+    let account = store.account(account_id).expect("created account");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .and(header(
+            "authorization",
+            format!("Bearer token-{account_id}"),
+        ))
+        .respond_with(ResponseTemplate::new(402).set_body_json(json!({
+            "detail": {
+                "code": "deactivated_workspace",
+                "message": "workspace disabled"
+            }
+        })))
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    assert!(service.refresh_account(account.id()).await.is_err());
+    assert_eq!(
+        store
+            .account(account_id)
+            .expect("account after deactivation")
+            .availability(),
+        AccountAvailability::Banned
+    );
+    assert_eq!(
+        store.last_error_message(account_id).as_deref(),
+        Some("deactivated_workspace")
+    );
+}

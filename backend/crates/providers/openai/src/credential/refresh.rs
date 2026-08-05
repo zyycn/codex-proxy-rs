@@ -11,6 +11,7 @@ use gateway_core::provider_ports::{
     ProviderCredentialStatePort, ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
     ProviderRefreshCapacityRequest, ProviderRefreshLeaseRequest, ProviderRefreshPolicy,
     ProviderRuntimePolicyPort, ProviderStoreError, provider_refresh_backoff_at,
+    provider_refresh_retry_at,
 };
 use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
@@ -27,13 +28,88 @@ const PROVIDER_NAME: &str = "openai";
 const MAX_REFRESH_BATCH: u32 = 1_000;
 /// 连续失败计数窗口；每次瞬态失败刷新该 TTL，静默满窗后计数过期归零。
 const REFRESH_BACKOFF_WINDOW: Duration = Duration::from_secs(30 * 60);
+/// 窗口内先执行五次指数退避，再进入固定恢复周期。
+const REFRESH_BACKOFF_MAX_ATTEMPTS: u32 = 5;
+/// 耗尽指数退避后的 OAuth 恢复周期。
+const REFRESH_RECOVERY_DELAY: Duration = Duration::from_secs(10 * 60);
+/// 过期 AT 仍允许 RT 恢复的最长窗口。
+const REFRESH_RECOVERY_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
+
+pub(crate) fn refresh_recovery_deadline(
+    access_token_expires_at: Option<SystemTime>,
+) -> Option<SystemTime> {
+    access_token_expires_at.and_then(|expires_at| expires_at.checked_add(REFRESH_RECOVERY_WINDOW))
+}
+
+fn refresh_recovery_window_exhausted(
+    access_token_expires_at: Option<SystemTime>,
+    now: SystemTime,
+) -> bool {
+    refresh_recovery_deadline(access_token_expires_at).is_some_and(|deadline| deadline <= now)
+}
+
+fn bounded_refresh_retry_at(
+    retry_at: SystemTime,
+    access_token_expires_at: Option<SystemTime>,
+    observed_at: SystemTime,
+) -> SystemTime {
+    let mut bounded = retry_at;
+    if let Some(expires_at) = access_token_expires_at
+        && expires_at > observed_at
+        && bounded > expires_at
+    {
+        bounded = expires_at;
+    }
+    if let Some(deadline) = refresh_recovery_deadline(access_token_expires_at)
+        && bounded > deadline
+    {
+        bounded = deadline;
+    }
+    bounded
+}
+
+fn oauth_refresh_retry_at(
+    account_id: &ProviderAccountId,
+    access_token_expires_at: Option<SystemTime>,
+    observed_at: SystemTime,
+    attempt: u32,
+    reason: &'static str,
+) -> Result<SystemTime, ProviderStoreError> {
+    let retry_at = if attempt <= REFRESH_BACKOFF_MAX_ATTEMPTS {
+        provider_refresh_backoff_at(account_id, observed_at, attempt, reason)?
+    } else {
+        provider_refresh_retry_at(account_id, observed_at, REFRESH_RECOVERY_DELAY, reason)?
+    };
+    Ok(bounded_refresh_retry_at(
+        retry_at,
+        access_token_expires_at,
+        observed_at,
+    ))
+}
+
+fn log_refresh_deferred(
+    account_id: &ProviderAccountId,
+    access_token_expires_at: Option<SystemTime>,
+    attempt: u32,
+    reason: &'static str,
+    retry_at: SystemTime,
+) {
+    tracing::warn!(
+        account_id = %account_id,
+        attempt,
+        reason,
+        retry_at = %DateTime::<Utc>::from(retry_at),
+        access_token_expires_at = ?access_token_expires_at.map(DateTime::<Utc>::from),
+        recovery_deadline = ?refresh_recovery_deadline(access_token_expires_at)
+            .map(DateTime::<Utc>::from),
+        "OpenAI OAuth refresh deferred"
+    );
+}
 
 fn refresh_due_at(account: &ProviderAccount, now: SystemTime) -> Option<SystemTime> {
-    if let Some(expires_at) = account.access_token_expires_at()
-        && expires_at <= now
-    {
-        // AT 已过期时不能继续等待持久退避；后续额度/请求探测都必须先用 RT 续出可用 AT。
-        return Some(expires_at);
+    if refresh_recovery_window_exhausted(account.access_token_expires_at(), now) {
+        // 即使旧 next_refresh_at 异常地落在 deadline 之后，也必须进入终态化路径。
+        return refresh_recovery_deadline(account.access_token_expires_at());
     }
     account.next_refresh_at().filter(|next| *next <= now)
 }
@@ -145,7 +221,14 @@ impl CodexCredentialRefreshService {
         for (account_id, result) in refreshed {
             match result {
                 Ok(outcome) => outcomes.push(outcome),
-                Err(_) => outcomes.push(CodexCredentialRefreshOutcome::Failed { account_id }),
+                Err(error) => {
+                    tracing::warn!(
+                        account_id = %account_id,
+                        error = %error,
+                        "OpenAI OAuth refresh attempt failed"
+                    );
+                    outcomes.push(CodexCredentialRefreshOutcome::Failed { account_id });
+                }
             }
         }
         Ok(outcomes)
@@ -157,6 +240,19 @@ impl CodexCredentialRefreshService {
         policy: ProviderRefreshPolicy,
     ) -> Result<CodexCredentialRefreshOutcome, CodexCredentialRefreshError> {
         let account_id = due.account.id().to_string();
+        if refresh_recovery_window_exhausted(
+            due.account.access_token_expires_at(),
+            SystemTime::now(),
+        ) {
+            return self
+                .persist_terminal(
+                    &due.account,
+                    AccountAvailability::Expired,
+                    "refresh_recovery_window_exhausted",
+                    CodexCredentialRefreshOutcome::Invalidated { account_id },
+                )
+                .await;
+        }
         let capacity = self
             .leases
             .try_acquire(ProviderLeaseRequest::RefreshCapacity(
@@ -192,6 +288,7 @@ impl CodexCredentialRefreshService {
                 self.persist_terminal(
                     &due.account,
                     AccountAvailability::Expired,
+                    "refresh_invalid_grant",
                     CodexCredentialRefreshOutcome::Invalidated { account_id },
                 )
                 .await
@@ -200,6 +297,7 @@ impl CodexCredentialRefreshService {
                 self.persist_terminal(
                     &due.account,
                     AccountAvailability::Banned,
+                    "account_banned",
                     CodexCredentialRefreshOutcome::Banned { account_id },
                 )
                 .await
@@ -328,6 +426,7 @@ impl CodexCredentialRefreshService {
                     .persist_terminal(
                         &due.account,
                         AccountAvailability::Invalid,
+                        "identity_rejected",
                         CodexCredentialRefreshOutcome::Invalidated {
                             account_id: due.account.id().to_string(),
                         },
@@ -359,8 +458,11 @@ impl CodexCredentialRefreshService {
                     .record_refresh_backoff(due.account.id(), REFRESH_BACKOFF_WINDOW)
                     .await
                     .unwrap_or(1);
-                let retry_at = provider_refresh_backoff_at(
+                let access_token_expires_at =
+                    Some(SystemTime::from(signed.access_token_expires_at()));
+                let retry_at = oauth_refresh_retry_at(
                     due.account.id(),
+                    access_token_expires_at,
                     SystemTime::now(),
                     attempt,
                     "identity-completion",
@@ -371,6 +473,13 @@ impl CodexCredentialRefreshService {
                     .await
                 {
                     Ok(_) => {
+                        log_refresh_deferred(
+                            due.account.id(),
+                            access_token_expires_at,
+                            attempt,
+                            "identity-completion",
+                            retry_at,
+                        );
                         return Ok(CodexCredentialRefreshOutcome::Transient {
                             account_id: due.account.id().to_string(),
                         });
@@ -384,6 +493,7 @@ impl CodexCredentialRefreshService {
                 }
             }
         };
+        let access_token_expires_at = profile.access_token_expires_at.map(SystemTime::from);
         let next_refresh_at = policy
             .next_attempt_at(
                 due.account.id(),
@@ -412,6 +522,13 @@ impl CodexCredentialRefreshService {
                     .credential_state
                     .clear_refresh_backoff(due.account.id())
                     .await;
+                tracing::info!(
+                    account_id = %due.account.id(),
+                    credential_revision = revision.get(),
+                    access_token_expires_at = ?access_token_expires_at.map(DateTime::<Utc>::from),
+                    next_refresh_at = %next_refresh_at,
+                    "OpenAI OAuth refresh succeeded"
+                );
                 Ok(CodexCredentialRefreshOutcome::Refreshed {
                     account_id: due.account.id().to_string(),
                     credential_revision: revision.get(),
@@ -430,6 +547,7 @@ impl CodexCredentialRefreshService {
         &self,
         account: &ProviderAccount,
         availability: AccountAvailability,
+        reason: &'static str,
         outcome: CodexCredentialRefreshOutcome,
     ) -> Result<CodexCredentialRefreshOutcome, CodexCredentialRefreshError> {
         match self.repository.load_runtime_credential(account).await {
@@ -443,10 +561,27 @@ impl CodexCredentialRefreshService {
         }
         match self
             .repository
-            .apply_state(account, availability, SystemTime::now())
+            .apply_state_with_message(
+                account,
+                availability,
+                SystemTime::now(),
+                Some(reason.to_owned()),
+            )
             .await
         {
-            Ok(()) => Ok(outcome),
+            Ok(()) => {
+                tracing::warn!(
+                    account_id = %account.id(),
+                    ?availability,
+                    reason,
+                    access_token_expires_at = ?account.access_token_expires_at()
+                        .map(DateTime::<Utc>::from),
+                    recovery_deadline = ?refresh_recovery_deadline(account.access_token_expires_at())
+                        .map(DateTime::<Utc>::from),
+                    "OpenAI OAuth refresh marked account terminal"
+                );
+                Ok(outcome)
+            }
             Err(CredentialRepositoryError::RevisionConflict) => {
                 Ok(CodexCredentialRefreshOutcome::Stale {
                     account_id: account.id().to_string(),
@@ -466,10 +601,24 @@ impl CodexCredentialRefreshService {
             .record_refresh_backoff(account.id(), REFRESH_BACKOFF_WINDOW)
             .await
             .unwrap_or(1);
-        let retry_at =
-            provider_refresh_backoff_at(account.id(), SystemTime::now(), attempt, reason)?;
+        let retry_at = oauth_refresh_retry_at(
+            account.id(),
+            account.access_token_expires_at(),
+            SystemTime::now(),
+            attempt,
+            reason,
+        )?;
         match self.repository.defer_refresh(account, retry_at).await {
-            Ok(_) => Ok(true),
+            Ok(_) => {
+                log_refresh_deferred(
+                    account.id(),
+                    account.access_token_expires_at(),
+                    attempt,
+                    reason,
+                    retry_at,
+                );
+                Ok(true)
+            }
             Err(CredentialRepositoryError::RevisionConflict) => Ok(false),
             Err(error) => Err(error.into()),
         }

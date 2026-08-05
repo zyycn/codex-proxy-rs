@@ -6,10 +6,10 @@ use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use gateway_core::engine::credential::{
-    AccountStateChange, CredentialCasOutcome, CredentialCasUpdate, CredentialRevision,
-    LoadedCredential, NewProviderAccount, OpaqueProviderData, PlaintextCredential, ProviderAccount,
-    ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate, QuotaObservation,
-    QuotaWriteOutcome,
+    AccountAvailability, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
+    CredentialRevision, LoadedCredential, NewProviderAccount, OpaqueProviderData,
+    PlaintextCredential, ProviderAccount, ProviderAccountId, ProviderAccountStore,
+    ProviderAccountUpdate, QuotaObservation, QuotaWriteOutcome,
 };
 use gateway_core::error::StoreErrorKind;
 use gateway_core::provider_ports::ProviderRefreshPolicy;
@@ -428,15 +428,21 @@ impl GrokCredentialRepository {
         &self,
         input: &UpdateGrokCredentialState,
     ) -> Result<(), GrokCredentialRepositoryError> {
-        validate_reason(input.availability_reason.as_deref())?;
+        let availability = AccountAvailability::from(input.availability);
+        let availability_reason = input
+            .availability_reason
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| availability.fallback_error_reason().map(str::to_owned));
+        validate_reason(availability_reason.as_deref())?;
         self.ensure_xai_account(&input.account_id).await?;
         self.store
             .apply_state_change(AccountStateChange {
                 account_id: input.account_id.clone(),
                 expected_revision: input.expected_revision,
-                availability: input.availability.into(),
+                availability,
                 observed_at: to_system_time(input.observed_at),
-                message: input.availability_reason.clone(),
+                message: availability_reason,
             })
             .await
             .map_err(map_store_error)

@@ -12,10 +12,10 @@ use gateway_core::engine::credential::{
     AccountAvailability, CredentialRevision, LoadedCredential, ProviderAccountId,
 };
 use gateway_core::provider_ports::{
-    ProviderCooldown, ProviderCooldownPort, ProviderCredentialStatePort, ProviderLeaseAcquisition,
-    ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshCapacityRequest,
-    ProviderRefreshLeaseRequest, ProviderRefreshPolicy, ProviderRuntimePolicyPort,
-    ProviderStoreError, provider_refresh_backoff_at,
+    ProviderCredentialStatePort, ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
+    ProviderRefreshCapacityRequest, ProviderRefreshLeaseRequest, ProviderRefreshPolicy,
+    ProviderRuntimePolicyPort, ProviderStoreError, provider_refresh_backoff_at,
+    provider_refresh_retry_at,
 };
 
 use super::catalog::GrokCredentialCatalogService;
@@ -38,12 +38,49 @@ const MAX_SECRET_BYTES: usize = 64 * 1_024;
 const DISCOVERY_NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(5);
 /// 连续失败计数窗口；静默满窗后计数过期归零。
 const REFRESH_BACKOFF_WINDOW: Duration = Duration::from_secs(30 * 60);
-const REFRESH_AMBIGUITY_COOLDOWN: Duration = Duration::from_secs(24 * 60 * 60);
+/// 窗口内先执行五次指数退避，再进入固定恢复周期。
+const REFRESH_BACKOFF_MAX_ATTEMPTS: u32 = 5;
+/// 耗尽指数退避后的 OAuth 恢复周期。
+const REFRESH_RECOVERY_DELAY: Duration = Duration::from_secs(10 * 60);
+/// 过期 AT 仍允许 RT 恢复的最长窗口。
+const REFRESH_RECOVERY_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
+
+fn refresh_recovery_deadline(access_token_expires_at: Option<SystemTime>) -> Option<SystemTime> {
+    access_token_expires_at.and_then(|expires_at| expires_at.checked_add(REFRESH_RECOVERY_WINDOW))
+}
+
+fn refresh_recovery_window_exhausted(
+    access_token_expires_at: Option<SystemTime>,
+    now: SystemTime,
+) -> bool {
+    refresh_recovery_deadline(access_token_expires_at).is_some_and(|deadline| deadline <= now)
+}
+
+fn bounded_refresh_retry_at(
+    retry_at: SystemTime,
+    access_token_expires_at: Option<SystemTime>,
+    observed_at: SystemTime,
+) -> SystemTime {
+    let mut bounded = retry_at;
+    if let Some(expires_at) = access_token_expires_at
+        && expires_at > observed_at
+        && bounded > expires_at
+    {
+        bounded = expires_at;
+    }
+    if let Some(deadline) = refresh_recovery_deadline(access_token_expires_at)
+        && bounded > deadline
+    {
+        bounded = deadline;
+    }
+    bounded
+}
 
 /// 一个到期且已按 revision 读取明文 RT 的 xAI account。
 pub struct DueGrokCredential {
     account_id: ProviderAccountId,
     credential_revision: CredentialRevision,
+    access_token_expires_at: Option<SystemTime>,
     refresh_token: SecretValue,
     id_token: Option<SecretValue>,
     scope: String,
@@ -77,6 +114,7 @@ impl fmt::Debug for DueGrokCredential {
             .debug_struct("DueGrokCredential")
             .field("account_id", &self.account_id)
             .field("credential_revision", &self.credential_revision)
+            .field("access_token_expires_at", &self.access_token_expires_at)
             .field("refresh_token", &"[REDACTED]")
             .field("id_token", &self.id_token.as_ref().map(|_| "[REDACTED]"))
             .field("scope", &"[REDACTED]")
@@ -277,7 +315,6 @@ pub struct GrokCredentialRefreshService {
     refresher: Arc<dyn GrokCredentialRefresher>,
     catalog: Arc<GrokCredentialCatalogService>,
     leases: Arc<dyn ProviderLeasePort>,
-    cooldowns: Arc<dyn ProviderCooldownPort>,
     credential_state: Arc<dyn ProviderCredentialStatePort>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
 }
@@ -288,7 +325,6 @@ impl GrokCredentialRefreshService {
         refresher: Arc<dyn GrokCredentialRefresher>,
         catalog: Arc<GrokCredentialCatalogService>,
         leases: Arc<dyn ProviderLeasePort>,
-        cooldowns: Arc<dyn ProviderCooldownPort>,
         credential_state: Arc<dyn ProviderCredentialStatePort>,
         runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     ) -> Self {
@@ -297,7 +333,6 @@ impl GrokCredentialRefreshService {
             refresher,
             catalog,
             leases,
-            cooldowns,
             credential_state,
             runtime_policy,
         }
@@ -331,6 +366,7 @@ impl GrokCredentialRefreshService {
         let credential = DueGrokCredential {
             account_id: account_id.clone(),
             credential_revision,
+            access_token_expires_at: loaded.account.access_token_expires_at(),
             refresh_token: loaded.refresh_token,
             id_token: loaded.id_token,
             scope: loaded.scope,
@@ -447,12 +483,7 @@ impl GrokCredentialRefreshService {
             .into_iter()
             .map(|account_id| GrokCredentialRefreshOutcome::Failed { account_id })
             .collect::<Vec<_>>();
-        let mut credentials = Vec::with_capacity(batch.credentials.len());
-        for credential in batch.credentials {
-            if !self.runtime_cooldown_active(&credential).await {
-                credentials.push(credential);
-            }
-        }
+        let credentials = batch.credentials;
         if credentials.is_empty() {
             return Ok(outcomes);
         }
@@ -474,7 +505,14 @@ impl GrokCredentialRefreshService {
         for (account_id, result) in refreshed {
             match result {
                 Ok(outcome) => outcomes.push(outcome),
-                Err(_) => outcomes.push(GrokCredentialRefreshOutcome::Failed { account_id }),
+                Err(error) => {
+                    tracing::warn!(
+                        account_id = %account_id,
+                        error = %error,
+                        "xAI OAuth refresh attempt failed"
+                    );
+                    outcomes.push(GrokCredentialRefreshOutcome::Failed { account_id });
+                }
             }
         }
         Ok(outcomes)
@@ -486,15 +524,25 @@ impl GrokCredentialRefreshService {
         policy: ProviderRefreshPolicy,
     ) -> Result<GrokCredentialRefreshOutcome, GrokCredentialRefreshError> {
         let account_id = credential.account_id.clone();
+        let observed_at = SystemTime::now();
         if credential
             .refresh_token_expires_at
-            .is_some_and(|expires_at| expires_at <= Utc::now())
+            .is_some_and(|expires_at| expires_at <= DateTime::<Utc>::from(observed_at))
         {
             return self
                 .persist_terminal_failure(
                     credential,
                     GrokCredentialAvailability::Expired,
                     "refresh_token_expired",
+                )
+                .await;
+        }
+        if refresh_recovery_window_exhausted(credential.access_token_expires_at, observed_at) {
+            return self
+                .persist_terminal_failure(
+                    credential,
+                    GrokCredentialAvailability::Expired,
+                    "refresh_recovery_window_exhausted",
                 )
                 .await;
         }
@@ -545,9 +593,14 @@ impl GrokCredentialRefreshService {
                 .await
             }
             Err(GrokRefreshFailure::Ambiguous) => {
-                self.record_runtime_cooldown(&credential, REFRESH_AMBIGUITY_COOLDOWN)
-                    .await;
-                Ok(GrokCredentialRefreshOutcome::Ambiguous { account_id })
+                if self
+                    .persist_backoff(&credential, "refresh-ambiguous")
+                    .await?
+                {
+                    Ok(GrokCredentialRefreshOutcome::Ambiguous { account_id })
+                } else {
+                    Ok(GrokCredentialRefreshOutcome::Stale { account_id })
+                }
             }
             Err(GrokRefreshFailure::Transient) => {
                 if self
@@ -644,33 +697,17 @@ impl GrokCredentialRefreshService {
             .credential_state
             .clear_refresh_backoff(&account_id)
             .await;
+        tracing::info!(
+            account_id = %account_id,
+            credential_revision = record.credential_revision.get(),
+            access_token_expires_at = %access_expires_at,
+            next_refresh_at = %next_refresh_at,
+            "xAI OAuth refresh succeeded"
+        );
         Ok(GrokCredentialRefreshOutcome::Refreshed {
             account_id,
             credential_revision: record.credential_revision,
         })
-    }
-
-    async fn runtime_cooldown_active(&self, credential: &DueGrokCredential) -> bool {
-        // runtime cooldown 是账号/model 级生命周期，与 credential revision 无关：
-        // 轮换不清除、不因 revision 变化判失效（与 selector 的读取语义一致）。
-        let Ok(Some(cooldown)) = self.cooldowns.read(credential.account_id()).await else {
-            return false;
-        };
-        cooldown.until() > SystemTime::now()
-    }
-
-    async fn record_runtime_cooldown(&self, credential: &DueGrokCredential, duration: Duration) {
-        let cooldown_until = SystemTime::now()
-            .checked_add(duration)
-            .unwrap_or_else(SystemTime::now);
-        let _ = self
-            .cooldowns
-            .put_if_later(ProviderCooldown::new(
-                credential.account_id.clone(),
-                credential.credential_revision,
-                cooldown_until,
-            ))
-            .await;
     }
 
     async fn persist_terminal_failure(
@@ -702,7 +739,19 @@ impl GrokCredentialRefreshService {
             })
             .await
         {
-            Ok(()) => Ok(GrokCredentialRefreshOutcome::Invalidated { account_id }),
+            Ok(()) => {
+                tracing::warn!(
+                    account_id = %account_id,
+                    ?availability,
+                    reason,
+                    access_token_expires_at = ?credential.access_token_expires_at
+                        .map(DateTime::<Utc>::from),
+                    recovery_deadline = ?refresh_recovery_deadline(credential.access_token_expires_at)
+                        .map(DateTime::<Utc>::from),
+                    "xAI OAuth refresh marked account terminal"
+                );
+                Ok(GrokCredentialRefreshOutcome::Invalidated { account_id })
+            }
             Err(error) if stale_repository_error(&error) => {
                 Ok(GrokCredentialRefreshOutcome::Stale { account_id })
             }
@@ -720,12 +769,19 @@ impl GrokCredentialRefreshService {
             .record_refresh_backoff(&credential.account_id, REFRESH_BACKOFF_WINDOW)
             .await
             .unwrap_or(1);
-        let retry_at = provider_refresh_backoff_at(
-            &credential.account_id,
-            SystemTime::now(),
-            attempt,
-            reason,
-        )?;
+        let observed_at = SystemTime::now();
+        let retry_at = if attempt <= REFRESH_BACKOFF_MAX_ATTEMPTS {
+            provider_refresh_backoff_at(&credential.account_id, observed_at, attempt, reason)?
+        } else {
+            provider_refresh_retry_at(
+                &credential.account_id,
+                observed_at,
+                REFRESH_RECOVERY_DELAY,
+                reason,
+            )?
+        };
+        let retry_at =
+            bounded_refresh_retry_at(retry_at, credential.access_token_expires_at, observed_at);
         match self
             .repository
             .defer_refresh(
@@ -735,7 +791,20 @@ impl GrokCredentialRefreshService {
             )
             .await
         {
-            Ok(()) => Ok(true),
+            Ok(()) => {
+                tracing::warn!(
+                    account_id = %credential.account_id,
+                    attempt,
+                    reason,
+                    retry_at = %DateTime::<Utc>::from(retry_at),
+                    access_token_expires_at = ?credential.access_token_expires_at
+                        .map(DateTime::<Utc>::from),
+                    recovery_deadline = ?refresh_recovery_deadline(credential.access_token_expires_at)
+                        .map(DateTime::<Utc>::from),
+                    "xAI OAuth refresh deferred"
+                );
+                Ok(true)
+            }
             Err(error) if stale_repository_error(&error) => Ok(false),
             Err(error) => Err(error.into()),
         }
@@ -814,6 +883,7 @@ impl GrokCredentialRepository {
             due.push(DueGrokCredential {
                 account_id: account.id().clone(),
                 credential_revision: account.revision(),
+                access_token_expires_at: account.access_token_expires_at(),
                 refresh_token: loaded.refresh_token,
                 id_token: loaded.id_token,
                 scope: loaded.scope,
@@ -844,7 +914,8 @@ fn account_due(
                 | AccountAvailability::Banned
                 | AccountAvailability::Invalid
         )
-        && account.next_refresh_at().is_some_and(|next| next <= now)
+        && (refresh_recovery_window_exhausted(account.access_token_expires_at(), now)
+            || account.next_refresh_at().is_some_and(|next| next <= now))
 }
 
 fn refreshed_tokens(tokens: RefreshedTokenSet) -> Result<GrokRefreshTokens, GrokRefreshFailure> {

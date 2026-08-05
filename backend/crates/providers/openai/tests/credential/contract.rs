@@ -688,6 +688,43 @@ fn credential_expired_failure_marks_unified_account_expired() {
             .availability(),
         AccountAvailability::Expired
     );
+    assert_eq!(
+        store.last_error_message("acct_primary").as_deref(),
+        Some("upstream_credential_expired")
+    );
+}
+
+#[test]
+fn credential_expired_failure_keeps_expired_oauth_for_bounded_refresh_recovery() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let mut expired_profile = profile("chatgpt-acct_primary");
+    expired_profile.access_token_expires_at =
+        Some(chrono::Utc::now() - chrono::Duration::minutes(1));
+    block_on(store.seed_oauth_credential(ImportCodexOAuthCredential {
+        account_id: "acct_primary".to_owned(),
+        name: "acct_primary".to_owned(),
+        secret: secret("at-primary"),
+        verified_account: expired_profile,
+        next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(10)),
+        enabled: true,
+    }));
+    let account = store.account("acct_primary").expect("account");
+    let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
+
+    block_on(selector.record_failure(
+        &account,
+        CodexAccountFailure::CredentialExpired,
+        Some("token_expired".to_owned()),
+    ))
+    .expect("record credential expiry");
+
+    assert_eq!(
+        store
+            .account("acct_primary")
+            .expect("account retained for refresh")
+            .availability(),
+        AccountAvailability::Ready
+    );
 }
 
 #[test]

@@ -2435,11 +2435,10 @@ impl ScheduledTask for OpenAiOAuthRefreshTask {
             if context.cancellation().is_cancelled() {
                 return Ok(());
             }
-            let outcomes = self
-                .service
-                .refresh_due()
-                .await
-                .map_err(|_| WorkerTaskError::safe("OpenAI OAuth refresh failed"))?;
+            let outcomes = self.service.refresh_due().await.map_err(|error| {
+                tracing::error!(error = %error, "OpenAI OAuth refresh cycle failed");
+                WorkerTaskError::safe("OpenAI OAuth refresh failed")
+            })?;
             let mut refreshed = 0_u64;
             let mut invalidated = 0_u64;
             let mut banned = 0_u64;
@@ -2467,6 +2466,18 @@ impl ScheduledTask for OpenAiOAuthRefreshTask {
                         failed_accounts.push(account_id);
                     }
                 }
+            }
+            if !outcomes.is_empty() {
+                tracing::info!(
+                    refreshed,
+                    invalidated,
+                    banned,
+                    transient,
+                    lease_unavailable,
+                    stale,
+                    failed,
+                    "OpenAI OAuth refresh cycle completed"
+                );
             }
             if transient > 0 || failed > 0 {
                 tracing::warn!(

@@ -194,6 +194,7 @@ struct StoredAccount {
     account: ProviderAccount,
     credential: PlaintextCredential,
     quota: Option<QuotaObservation>,
+    last_error_message: Option<String>,
 }
 
 #[derive(Default)]
@@ -212,6 +213,12 @@ impl MemoryProviderAccountStore {
         lock(&self.accounts)
             .get(id)
             .map(|stored| stored.account.clone())
+    }
+
+    pub fn last_error_message(&self, id: &ProviderAccountId) -> Option<String> {
+        lock(&self.accounts)
+            .get(id)
+            .and_then(|stored| stored.last_error_message.clone())
     }
 
     pub fn credential(&self, id: &ProviderAccountId) -> Option<PlaintextCredential> {
@@ -246,6 +253,7 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
                 account: account.account,
                 credential: account.credential,
                 quota: None,
+                last_error_message: None,
             },
         );
         Ok(())
@@ -388,6 +396,11 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
                 plan_type: stored.account.plan_type().map(str::to_owned),
             },
         );
+        if change.availability == AccountAvailability::Ready {
+            stored.last_error_message = None;
+        } else if let Some(message) = change.message {
+            stored.last_error_message = Some(message);
+        }
         Ok(())
     }
 

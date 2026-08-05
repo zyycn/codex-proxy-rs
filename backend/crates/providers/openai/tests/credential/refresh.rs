@@ -19,6 +19,8 @@ use secrecy::{ExposeSecret, SecretString};
 
 use crate::support::{MemoryAccountStore, profile, runtime_policy, secret};
 
+const OAUTH_BACKOFF_ATTEMPTS: u32 = 5;
+
 struct Refresher {
     outcomes: Mutex<VecDeque<Result<TokenPair, RefreshFailure>>>,
     seen: Mutex<Vec<String>>,
@@ -553,6 +555,10 @@ async fn upstream_ban_marks_unified_account_banned() {
             .availability(),
         AccountAvailability::Banned
     );
+    assert_eq!(
+        store.last_error_message("acct_refresh").as_deref(),
+        Some("account_banned")
+    );
 }
 
 #[tokio::test]
@@ -597,7 +603,7 @@ async fn transient_refresh_defers_without_invalidating_account() {
 }
 
 #[tokio::test]
-async fn expired_access_token_refreshes_even_when_next_refresh_is_deferred() {
+async fn expired_access_token_respects_persisted_refresh_backoff() {
     let store = Arc::new(MemoryAccountStore::default());
     seed_due_account(&store).await;
     let original = store.account("acct_refresh").expect("seeded account");
@@ -615,16 +621,6 @@ async fn expired_access_token_refreshes_even_when_next_refresh_is_deferred() {
         })
         .await
         .expect("seed expired access token with deferred refresh");
-    let deferred = store.account("acct_refresh").expect("deferred account");
-    store
-        .repository()
-        .apply_state(
-            &deferred,
-            AccountAvailability::QuotaExhausted,
-            SystemTime::now(),
-        )
-        .await
-        .expect("mark account quota exhausted");
     let refresher = Arc::new(Refresher::new(Ok(success_tokens())));
     let service = CodexCredentialRefreshService::new(
         store.repository(),
@@ -640,31 +636,19 @@ async fn expired_access_token_refreshes_even_when_next_refresh_is_deferred() {
 
     let outcomes = service.refresh_due().await.expect("refresh due");
 
-    assert!(matches!(
-        outcomes.as_slice(),
-        [CodexCredentialRefreshOutcome::Refreshed {
-            account_id,
-            credential_revision: 3,
-        }] if account_id == "acct_refresh"
-    ));
-    assert_eq!(
-        refresher.seen.lock().expect("seen tokens lock").as_slice(),
-        ["rt-old-access"]
-    );
-    let refreshed = store.account("acct_refresh").expect("refreshed account");
-    assert_eq!(
-        refreshed.availability(),
-        AccountAvailability::QuotaExhausted
-    );
+    assert!(outcomes.is_empty());
+    assert!(refresher.seen.lock().expect("seen tokens lock").is_empty());
     assert!(
-        refreshed
-            .access_token_expires_at()
-            .is_some_and(|expires_at| expires_at > SystemTime::now())
+        store
+            .account("acct_refresh")
+            .expect("deferred account")
+            .next_refresh_at()
+            .is_some_and(|next_refresh_at| next_refresh_at > SystemTime::now())
     );
 }
 
 #[tokio::test]
-async fn expired_access_token_refreshes_during_active_cooldown() {
+async fn expired_access_token_refreshes_when_persisted_refresh_is_due() {
     let store = Arc::new(MemoryAccountStore::default());
     seed_due_account(&store).await;
     let original = store.account("acct_refresh").expect("seeded account");
@@ -678,7 +662,7 @@ async fn expired_access_token_refreshes_during_active_cooldown() {
             expected_credential_revision: original.revision().get(),
             secret: secret("old-access"),
             verified_account: expired_profile,
-            next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::hours(12)),
+            next_refresh_at: Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
         })
         .await
         .expect("seed expired access token with deferred refresh");
@@ -825,6 +809,15 @@ async fn seed_due_account(store: &MemoryAccountStore) {
         .await;
 }
 
+async fn force_due_account(store: &Arc<MemoryAccountStore>) {
+    let account = store.account("acct_refresh").expect("account to reset");
+    store
+        .repository()
+        .defer_refresh(&account, SystemTime::now() - Duration::from_secs(1))
+        .await
+        .expect("reset next_refresh_at to the past");
+}
+
 #[tokio::test]
 async fn refresh_backoff_grows_exponentially_across_attempts() {
     let store = Arc::new(MemoryAccountStore::default());
@@ -888,6 +881,175 @@ async fn refresh_backoff_grows_exponentially_across_attempts() {
     assert!(
         second_delay > first_delay * 2,
         "second backoff {second_delay:?} should grow well beyond first {first_delay:?}"
+    );
+}
+
+#[tokio::test]
+async fn exhausted_oauth_backoff_continues_after_access_token_expiry() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let mut expired_profile = profile("chatgpt-acct_refresh");
+    expired_profile.access_token_expires_at =
+        Some(chrono::Utc::now() - chrono::Duration::minutes(1));
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_refresh".to_owned(),
+            name: "refresh".to_owned(),
+            secret: secret("old-access"),
+            verified_account: expired_profile,
+            next_refresh_at: Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
+            enabled: true,
+        })
+        .await;
+    let credential_state = Arc::new(CountingCredentialState::default());
+    let state_port: Arc<dyn ProviderCredentialStatePort> = credential_state.clone();
+    let refresher = Arc::new(Refresher::scripted([
+        Err(RefreshFailure::Transport),
+        Err(RefreshFailure::Transport),
+        Err(RefreshFailure::Transport),
+        Err(RefreshFailure::Transport),
+        Err(RefreshFailure::Transport),
+        Err(RefreshFailure::Transport),
+    ]));
+    let service = CodexCredentialRefreshService::new(
+        store.repository(),
+        refresher.clone(),
+        Arc::new(VerifiedIdentity),
+        Arc::new(RefreshLeases {
+            available: true,
+            requests: Mutex::new(Vec::new()),
+        }),
+        state_port,
+        runtime_policy(),
+    );
+
+    for _ in 0..OAUTH_BACKOFF_ATTEMPTS {
+        service.refresh_due().await.expect("backoff attempt");
+        force_due_account(&store).await;
+    }
+
+    let observed_at = SystemTime::now();
+    service.refresh_due().await.expect("recovery attempt");
+    let recovery_delay = store
+        .account("acct_refresh")
+        .expect("account after recovery defer")
+        .next_refresh_at()
+        .expect("recovery scheduled")
+        .duration_since(observed_at)
+        .expect("recovery is in the future");
+    assert!(
+        (Duration::from_secs(8 * 60)..=Duration::from_secs(12 * 60 + 1)).contains(&recovery_delay),
+        "recovery delay should be about ten minutes, got {recovery_delay:?}"
+    );
+    assert_eq!(
+        credential_state.count("acct_refresh"),
+        OAUTH_BACKOFF_ATTEMPTS + 1
+    );
+    assert_eq!(refresher.seen.lock().expect("seen tokens lock").len(), 6);
+}
+
+#[tokio::test]
+async fn oauth_backoff_never_passes_an_unexpired_access_token_expiry() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let mut account_profile = profile("chatgpt-acct_refresh");
+    account_profile.access_token_expires_at =
+        Some(chrono::Utc::now() + chrono::Duration::seconds(30));
+    let access_token_expires_at: SystemTime = account_profile
+        .access_token_expires_at
+        .expect("access expiry")
+        .into();
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_refresh".to_owned(),
+            name: "refresh".to_owned(),
+            secret: secret("old-access"),
+            verified_account: account_profile,
+            next_refresh_at: Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
+            enabled: true,
+        })
+        .await;
+    let credential_state = Arc::new(CountingCredentialState::default());
+    let state_port: Arc<dyn ProviderCredentialStatePort> = credential_state.clone();
+    let service = CodexCredentialRefreshService::new(
+        store.repository(),
+        Arc::new(Refresher::scripted([
+            Err(RefreshFailure::Transport),
+            Err(RefreshFailure::Transport),
+            Err(RefreshFailure::Transport),
+            Err(RefreshFailure::Transport),
+            Err(RefreshFailure::Transport),
+            Err(RefreshFailure::Transport),
+        ])),
+        Arc::new(VerifiedIdentity),
+        Arc::new(RefreshLeases {
+            available: true,
+            requests: Mutex::new(Vec::new()),
+        }),
+        state_port,
+        runtime_policy(),
+    );
+
+    for attempt in 0..=OAUTH_BACKOFF_ATTEMPTS {
+        service.refresh_due().await.expect("backoff attempt");
+        if attempt < OAUTH_BACKOFF_ATTEMPTS {
+            force_due_account(&store).await;
+        }
+    }
+
+    assert_eq!(
+        store
+            .account("acct_refresh")
+            .expect("account after capped retry")
+            .next_refresh_at(),
+        Some(access_token_expires_at)
+    );
+    assert_eq!(
+        credential_state.count("acct_refresh"),
+        OAUTH_BACKOFF_ATTEMPTS + 1
+    );
+}
+
+#[tokio::test]
+async fn recovery_window_exhaustion_marks_account_expired_without_token_exchange() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let mut expired_profile = profile("chatgpt-acct_refresh");
+    expired_profile.access_token_expires_at =
+        Some(chrono::Utc::now() - chrono::Duration::hours(25));
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_refresh".to_owned(),
+            name: "refresh".to_owned(),
+            secret: secret("old-access"),
+            verified_account: expired_profile,
+            next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::hours(12)),
+            enabled: true,
+        })
+        .await;
+    let refresher = Arc::new(Refresher::new(Ok(success_tokens())));
+    let service = CodexCredentialRefreshService::new(
+        store.repository(),
+        refresher.clone(),
+        Arc::new(VerifiedIdentity),
+        Arc::new(RefreshLeases {
+            available: true,
+            requests: Mutex::new(Vec::new()),
+        }),
+        Arc::new(CountingCredentialState::default()),
+        runtime_policy(),
+    );
+
+    let outcomes = service.refresh_due().await.expect("refresh due");
+
+    assert!(matches!(
+        outcomes.as_slice(),
+        [CodexCredentialRefreshOutcome::Invalidated { account_id }] if account_id == "acct_refresh"
+    ));
+    assert!(refresher.seen.lock().expect("seen tokens lock").is_empty());
+    assert_eq!(
+        store
+            .account("acct_refresh")
+            .expect("expired account")
+            .availability(),
+        AccountAvailability::Expired
     );
 }
 

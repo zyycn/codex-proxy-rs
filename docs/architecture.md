@@ -116,7 +116,7 @@ Provider 独占以下职责：
 - OpenAI 是逐字节透明代理：请求 body 的未知字段和字段顺序保持不变（受控模型映射除外），上游 wire 是客户端可见的事实来源，HTTP SSE 帧以原始字节原样下发，WebSocket 上游 JSON 文本原样下发；response ID 以 opaque bytes 存储，不假设 UUID 或固定长度。canonical facts 只从同一帧旁路解析，用于观测、亲和与计费。仅网关内部帧（rate limits、metadata）被就地消费，不向客户端转发。
 - xAI 是翻译层：把 Grok wire 解码后重新合成 Responses wire 事件，不承诺字节透明；上游错误按结构化 message/code/type 透出，message 中的 UUID 账号指纹替换为占位符。
 
-credential 更新使用 `credential_revision` CAS。认证永久失败、封禁、额度耗尽和带截止时间的 cooldown 是账号运行时事实。cooldown 到期后，Core 的有效调度谓词会自然允许账号重新参与选择；Redis cooldown 只是热缓存。成功调用或成功额度观测才可把账号状态重新观测为 `ready`。自动 refresh 的瞬态失败（限流、5xx、超时、畸形响应）保留现有凭据并按指数退避推迟下一次刷新，不把账号标记为失效；只有上游明确的永久错误（`invalid_grant`、封禁）才写入终态失效。
+credential 更新使用 `credential_revision` CAS。认证永久失败、封禁、额度耗尽和带截止时间的 cooldown 是账号运行时事实。cooldown 到期后，Core 的有效调度谓词会自然允许账号重新参与选择；Redis cooldown 只是热缓存。成功调用或成功额度观测才可把账号状态重新观测为 `ready`。推理请求的账号/model cooldown 只约束数据面调度，不参与 OAuth refresh；OpenAI 与 xAI 的 OAuth refresh 请求状态不明确时只按 OAuth 自身的有界退避推进该 credential 的 `next_refresh_at`：前五次约为 5/15/45/135/300 秒，之后约每 10 分钟恢复；仍有效 AT 时不晚于其到期时刻，AT 到期后仍按该节奏恢复，至 `AT 到期 + 24h` 才终态化。自动 refresh 的瞬态失败（限流、5xx、超时、畸形响应）保留现有凭据并按指数退避推迟下一次刷新，不把账号标记为失效；上游明确的永久错误（`invalid_grant`、封禁）仍立即写入终态失效。
 
 `refresh_token_expires_at` 不是公共 SQL 列或 Core 权威状态。xAI 可在 `provider_credentials_json` 内保存它作为 Provider 私有提示；真正失效以 refresh endpoint 返回的永久错误为准。
 

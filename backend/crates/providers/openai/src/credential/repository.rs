@@ -239,7 +239,8 @@ impl CodexCredentialRepository {
             .await
     }
 
-    /// 带上游错误描述的状态写入；`message` 为 `Some` 时持久化最近错误，恢复 `Ready` 时清空。
+    /// 带上游错误描述的状态写入；上游 message 优先，终态缺失 message 时写稳定兜底，
+    /// 恢复 `Ready` 时清空。
     pub async fn apply_state_with_message(
         &self,
         account: &ProviderAccount,
@@ -250,6 +251,9 @@ impl CodexCredentialRepository {
         if !account.enabled() {
             return Ok(());
         }
+        let message = message
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| availability.fallback_error_reason().map(str::to_owned));
         self.store
             .apply_state_change(AccountStateChange {
                 account_id: account.id().clone(),

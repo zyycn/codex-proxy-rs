@@ -36,7 +36,7 @@ use crate::transport::{CodexBackendClient, CodexClientError, CodexRequestContext
 
 use super::agent_identity::{CodexAgentIdentityTaskService, PreparedCodexRuntimeCredential};
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
-use recovery::{quota_state_transition, quota_success_state};
+use recovery::{quota_state_reason, quota_state_transition, quota_success_state};
 use snapshot::{
     parse_account_quota_snapshot, quota_projection_ttl, quota_snapshot_from_observation,
     scheduling_signals_from_snapshot,
@@ -548,21 +548,23 @@ impl CodexCredentialQuotaService {
                         // 402：真额度耗尽，写入 QuotaExhausted（worker 按 reset_at 自动恢复）。
                         Some(AccountAvailability::QuotaExhausted) => {
                             summary.exhausted += 1;
-                            let _ = self
-                                .repository
-                                .apply_state(
-                                    &account,
-                                    AccountAvailability::QuotaExhausted,
-                                    observed_at,
-                                )
-                                .await;
+                            self.persist_upstream_state(
+                                &account,
+                                AccountAvailability::QuotaExhausted,
+                                &error,
+                                observed_at,
+                            )
+                            .await;
                         }
                         Some(AccountAvailability::Banned) => {
                             summary.banned += 1;
-                            let _ = self
-                                .repository
-                                .apply_state(&account, AccountAvailability::Banned, observed_at)
-                                .await;
+                            self.persist_upstream_state(
+                                &account,
+                                AccountAvailability::Banned,
+                                &error,
+                                observed_at,
+                            )
+                            .await;
                         }
                         // 429/503 等临时拒绝：不写 availability（限流不改变账号可用性），仅记失败待重试。
                         None | Some(_) => {
@@ -913,9 +915,7 @@ impl CodexCredentialQuotaService {
                 Err(CodexQuotaFetchError::Upstream { account, error }) => {
                     // 402/deactivated → 写终态；429/503 等临时拒绝不写 availability（限流不改变账号可用性）。
                     if let Some(availability) = quota_state_transition(&error) {
-                        let _ = self
-                            .repository
-                            .apply_state(&account, availability, observed_at)
+                        self.persist_upstream_state(&account, availability, &error, observed_at)
                             .await;
                     }
                     return Err(CodexCredentialQuotaError::Upstream {
@@ -994,6 +994,29 @@ impl CodexCredentialQuotaService {
                 .await?;
         }
         Ok(snapshot)
+    }
+
+    async fn persist_upstream_state(
+        &self,
+        account: &ProviderAccount,
+        availability: AccountAvailability,
+        upstream_error: &CodexClientError,
+        observed_at: SystemTime,
+    ) {
+        let reason = quota_state_reason(upstream_error).map(str::to_owned);
+        if let Err(error) = self
+            .repository
+            .apply_state_with_message(account, availability, observed_at, reason.clone())
+            .await
+        {
+            tracing::warn!(
+                account_id = %account.id(),
+                ?availability,
+                reason = reason.as_deref().unwrap_or_default(),
+                error = %error,
+                "OpenAI quota upstream state write failed"
+            );
+        }
     }
 
     async fn fetch_usage_with_recovery(

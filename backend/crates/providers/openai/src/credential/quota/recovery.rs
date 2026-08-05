@@ -50,6 +50,18 @@ pub(crate) fn quota_state_transition(error: &CodexClientError) -> Option<Account
     }
 }
 
+/// 配额接口将账号变为非 ready 状态时可安全持久化的上游原因码。
+pub(crate) fn quota_state_reason(error: &CodexClientError) -> Option<&'static str> {
+    match quota_state_transition(error)? {
+        AccountAvailability::Banned => Some("deactivated_workspace"),
+        AccountAvailability::QuotaExhausted => Some("payment_required"),
+        AccountAvailability::Unknown
+        | AccountAvailability::Ready
+        | AccountAvailability::Expired
+        | AccountAvailability::Invalid => None,
+    }
+}
+
 fn is_deactivated_workspace(body: &str) -> bool {
     serde_json::from_str::<Value>(body)
         .ok()

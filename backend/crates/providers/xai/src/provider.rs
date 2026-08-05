@@ -2040,11 +2040,10 @@ impl ScheduledTask for XaiOAuthRefreshTask {
             if context.cancellation().is_cancelled() {
                 return Ok(());
             }
-            let outcomes = self
-                .service
-                .refresh_due()
-                .await
-                .map_err(|_| WorkerTaskError::safe("xAI OAuth refresh failed"))?;
+            let outcomes = self.service.refresh_due().await.map_err(|error| {
+                tracing::error!(error = %error, "xAI OAuth refresh cycle failed");
+                WorkerTaskError::safe("xAI OAuth refresh failed")
+            })?;
             let failures = outcomes
                 .iter()
                 .filter(|outcome| {
@@ -2056,6 +2055,13 @@ impl ScheduledTask for XaiOAuthRefreshTask {
                     )
                 })
                 .count();
+            if !outcomes.is_empty() {
+                tracing::info!(
+                    accounts = outcomes.len(),
+                    failures,
+                    "xAI OAuth refresh cycle completed"
+                );
+            }
             if failures > 0 {
                 tracing::warn!(failures, "xAI OAuth refresh cycle contained failures");
             }

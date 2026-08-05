@@ -215,6 +215,20 @@ impl AccountAvailability {
         }
     }
 
+    /// 返回账号进入不可恢复错误态、但 Provider 未给出更具体上游原因时的稳定兜底。
+    ///
+    /// Provider 应优先持久化已脱敏的上游 message 或原因码；该值只避免错误态沿用
+    /// 上一次无关的错误信息。
+    #[must_use]
+    pub const fn fallback_error_reason(self) -> Option<&'static str> {
+        match self {
+            Self::Expired => Some("credential_expired"),
+            Self::Banned => Some("account_banned"),
+            Self::Invalid => Some("credential_invalid"),
+            Self::Unknown | Self::Ready | Self::QuotaExhausted => None,
+        }
+    }
+
     /// 解析数据库稳定值。
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {

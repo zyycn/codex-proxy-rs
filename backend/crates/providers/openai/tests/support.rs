@@ -38,6 +38,7 @@ struct StoredAccount {
     credential: gateway_core::engine::credential::PlaintextCredential,
     quota: Option<QuotaObservation>,
     state_observed_at: Option<SystemTime>,
+    last_error_message: Option<String>,
 }
 
 #[derive(Default)]
@@ -68,6 +69,15 @@ impl MemoryAccountStore {
             .expect("account store lock")
             .get(&id)
             .map(|stored| stored.account.clone())
+    }
+
+    pub(crate) fn last_error_message(&self, id: &str) -> Option<String> {
+        let id = ProviderAccountId::new(id).ok()?;
+        self.accounts
+            .lock()
+            .expect("account store lock")
+            .get(&id)
+            .and_then(|stored| stored.last_error_message.clone())
     }
 
     pub(crate) async fn advance_credential_revision(&self, id: &str) -> CredentialRevision {
@@ -148,6 +158,7 @@ impl ProviderAccountStore for MemoryAccountStore {
                 credential: input.credential,
                 quota: None,
                 state_observed_at: None,
+                last_error_message: None,
             },
         );
         Ok(())
@@ -321,6 +332,11 @@ impl ProviderAccountStore for MemoryAccountStore {
             },
         );
         stored.state_observed_at = Some(change.observed_at);
+        if change.availability == AccountAvailability::Ready {
+            stored.last_error_message = None;
+        } else if let Some(message) = change.message {
+            stored.last_error_message = Some(message);
+        }
         Ok(())
     }
 

@@ -25,11 +25,12 @@ use super::agent_identity::CodexAgentIdentityTaskService;
 use super::catalog::CodexCredentialCatalogService;
 use super::cookie::CodexCookiePolicy;
 use super::quota::CodexCredentialQuotaService;
+use super::refresh::refresh_recovery_deadline;
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
 use super::security::CodexRuntimeAuthentication;
 use super::types::{
-    CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY, CodexCookie, CodexCookieCaptureOutcome,
-    RuntimeCodexCookie,
+    CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY, CODEX_AUTHENTICATION_KIND_OAUTH, CodexCookie,
+    CodexCookieCaptureOutcome, RuntimeCodexCookie,
 };
 
 const CLOUDFLARE_RECOVERY_STALE_AFTER: Duration = Duration::from_secs(60 * 60);
@@ -71,6 +72,21 @@ pub enum CodexAccountFailure {
     },
     /// Cloudflare 对当前上游路径返回空 404。
     CloudflarePathBlocked,
+}
+
+impl CodexAccountFailure {
+    /// 上游未提供可展示错误文本时，保留已分类的稳定原因。
+    const fn fallback_error_reason(self) -> Option<&'static str> {
+        match self {
+            Self::CredentialExpired => Some("upstream_credential_expired"),
+            Self::IdentityVerificationRequired => Some("upstream_identity_verification_required"),
+            Self::Banned => Some("upstream_account_banned"),
+            Self::QuotaExhausted => Some("upstream_quota_exhausted"),
+            Self::UsageLimitExhausted { .. } => Some("upstream_usage_limit_exhausted"),
+            Self::CloudflarePathBlocked => Some("upstream_cloudflare_path_blocked"),
+            Self::RateLimited { .. } | Self::CloudflareChallenge { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -733,8 +749,29 @@ impl CodexCredentialSelector {
         message: Option<String>,
     ) -> Result<(), CredentialSelectionError> {
         let now = SystemTime::now();
+        let message = message
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| failure.fallback_error_reason().map(str::to_owned));
         match failure {
             CodexAccountFailure::CredentialExpired => {
+                if account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH
+                    && account.has_refresh_token()
+                    && account
+                        .access_token_expires_at()
+                        .is_some_and(|expires_at| expires_at <= now)
+                    && refresh_recovery_deadline(account.access_token_expires_at())
+                        .is_some_and(|deadline| deadline > now)
+                {
+                    tracing::info!(
+                        account_id = %account.id(),
+                        access_token_expires_at = ?account.access_token_expires_at()
+                            .map(chrono::DateTime::<chrono::Utc>::from),
+                        recovery_deadline = ?refresh_recovery_deadline(account.access_token_expires_at())
+                            .map(chrono::DateTime::<chrono::Utc>::from),
+                        "OpenAI access token expired; retaining account for bounded OAuth refresh recovery"
+                    );
+                    return Ok(());
+                }
                 self.apply_state_with_message(account, AccountAvailability::Expired, now, message)
                     .await
             }

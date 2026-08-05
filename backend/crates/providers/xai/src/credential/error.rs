@@ -37,7 +37,7 @@ pub enum OAuthErrorCode {
 pub enum FailureClass {
     /// 瞬时失败，允许后续独立协调的重试。
     Transient,
-    /// 发送状态不确定，一次性凭据不得重放。
+    /// 发送状态不确定，不应在同一 exchange 内重放一次性凭据。
     Ambiguous,
     /// 当前 revision 的凭据被永久拒绝。
     CredentialPermanent,

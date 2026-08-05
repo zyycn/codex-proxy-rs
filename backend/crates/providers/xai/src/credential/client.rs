@@ -221,7 +221,7 @@ impl GrokOAuthClient {
     /// # Errors
     ///
     /// 返回已分类的 OAuth 错误。refresh token 可能已轮换，Ambiguous 类
-    /// transport 失败不得自动重试。
+    /// transport 失败不在本次 exchange 内重试，后续交由 refresh scheduler 退避协调。
     pub async fn refresh(
         &self,
         discovery: &DiscoveryDocument,

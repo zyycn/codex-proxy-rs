@@ -10,8 +10,8 @@ use gateway_core::engine::credential::{
     ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
 };
 use gateway_core::provider_ports::{
-    ProviderCooldown, ProviderCooldownPort, ProviderCredentialState, ProviderCredentialStatePort,
-    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderStoreError,
+    ProviderCredentialState, ProviderCredentialStatePort, ProviderLeaseAcquisition,
+    ProviderLeasePort, ProviderLeaseRequest, ProviderStoreError,
 };
 use provider_xai::{
     GrokCredentialCatalogCache, GrokCredentialRecovery, GrokCredentialRecoveryOutcome,
@@ -22,12 +22,13 @@ use provider_xai::{
 };
 
 use crate::support::{
-    MemoryCooldownPort, MemoryGrokCatalogCache, MemoryProviderAccountStore, create_input,
-    credential_object, runtime_policy, seed_input,
+    MemoryGrokCatalogCache, MemoryProviderAccountStore, create_input, credential_object,
+    runtime_policy, seed_input,
 };
 
 const OFFICIAL_FIXTURE: &[u8] =
     include_bytes!("../transport/catalog/fixtures/official_grok_models_snapshot.json");
+const OAUTH_BACKOFF_ATTEMPTS: u32 = 5;
 
 struct StaticCatalogTransport;
 
@@ -141,48 +142,6 @@ async fn fixture(
     GrokCredentialRefreshService,
 ) {
     fixture_many([input], responses, lease_available).await
-}
-
-/// 带外部注入 cooldown 端口的 fixture（AUD-05 组合测试用）。
-#[allow(clippy::type_complexity)]
-async fn fixture_with_cooldowns(
-    input: provider_xai::CreateGrokCredential,
-    responses: impl IntoIterator<Item = Result<GrokRefreshTokens, GrokRefreshFailure>>,
-    lease_available: bool,
-    cooldowns: Arc<MemoryCooldownPort>,
-) -> (
-    Arc<MemoryProviderAccountStore>,
-    GrokCredentialRepository,
-    Arc<QueueRefresher>,
-    GrokCredentialRefreshService,
-    Arc<MemoryCooldownPort>,
-) {
-    let store = MemoryProviderAccountStore::shared();
-    let account_store: Arc<dyn ProviderAccountStore> = store.clone();
-    let repository = GrokCredentialRepository::new(account_store);
-    seed_input(&store, &input).await.expect("create account");
-    let refresher = QueueRefresher::new(responses);
-    let refresher_port: Arc<dyn GrokCredentialRefresher> = refresher.clone();
-    let cache: Arc<dyn GrokCredentialCatalogCache> = MemoryGrokCatalogCache::shared();
-    let catalog = Arc::new(crate::support::grok_catalog_service(
-        repository.clone(),
-        Arc::new(StaticCatalogTransport),
-        cache,
-    ));
-    let leases = Arc::new(TestRefreshLeases {
-        available: lease_available,
-        calls: AtomicUsize::new(0),
-    });
-    let service = GrokCredentialRefreshService::new(
-        repository.clone(),
-        refresher_port,
-        catalog,
-        leases,
-        cooldowns.clone(),
-        Arc::new(CountingCredentialState::default()),
-        runtime_policy(),
-    );
-    (store, repository, refresher, service, cooldowns)
 }
 
 /// 真实累加连续失败计数的测试 double，用于断言退避的指数增长与成功清零。
@@ -313,13 +272,11 @@ async fn fixture_many_with_state(
         available: lease_available,
         calls: AtomicUsize::new(0),
     });
-    let cooldowns = Arc::new(MemoryCooldownPort::default());
     let service = GrokCredentialRefreshService::new(
         repository.clone(),
         refresher_port,
         catalog,
         leases,
-        cooldowns,
         credential_state,
         runtime_policy(),
     );
@@ -350,6 +307,38 @@ async fn force_due(store: &MemoryProviderAccountStore, id: &ProviderAccountId) {
             .compare_and_swap_credential(update)
             .await
             .expect("reset next_refresh_at to the past"),
+        CredentialCasOutcome::Updated(_)
+    ));
+}
+
+async fn set_token_deadlines(
+    store: &MemoryProviderAccountStore,
+    id: &ProviderAccountId,
+    access_token_expires_at: SystemTime,
+    next_refresh_at: SystemTime,
+) {
+    let account = store.account(id).expect("account to update");
+    let credential = store.credential(id).expect("credential to update");
+    let update = CredentialCasUpdate::new(
+        id.clone(),
+        account.revision(),
+        ProviderAccountUpdate {
+            account_id: id.clone(),
+            name: account.name().to_owned(),
+            email: account.email().map(str::to_owned),
+            plan_type: account.plan_type().map(str::to_owned),
+        },
+        credential,
+        true,
+        Some(access_token_expires_at),
+        Some(next_refresh_at),
+    )
+    .expect("valid token deadline update");
+    assert!(matches!(
+        store
+            .compare_and_swap_credential(update)
+            .await
+            .expect("update token deadlines"),
         CredentialCasOutcome::Updated(_)
     ));
 }
@@ -414,6 +403,10 @@ async fn unauthorized_recovery_marks_a_permanently_rejected_refresh_expired() {
     assert_eq!(
         store.account(&id).expect("account").availability(),
         AccountAvailability::Expired
+    );
+    assert_eq!(
+        store.last_error_message(&id).as_deref(),
+        Some("refresh_invalid_grant")
     );
 }
 
@@ -573,14 +566,25 @@ async fn banned_failure_marks_account_banned() {
         store.account(&id).expect("account").availability(),
         AccountAvailability::Banned
     );
+    assert_eq!(
+        store.last_error_message(&id).as_deref(),
+        Some("account_banned")
+    );
 }
 
 #[tokio::test]
-async fn ambiguous_refresh_uses_runtime_cooldown_without_persisting_account_state() {
+async fn ambiguous_refresh_applies_bounded_oauth_backoff() {
     let input = due_input("ambiguous");
     let id = input.account_id.clone();
-    let (store, _, refresher, service) =
-        fixture(input, [Err(GrokRefreshFailure::Ambiguous)], true).await;
+    let counting = Arc::new(CountingCredentialState::default());
+    let (store, _, refresher, service) = fixture_many_with_state(
+        [input],
+        [Err(GrokRefreshFailure::Ambiguous)],
+        true,
+        counting.clone(),
+    )
+    .await;
+    let started_at = SystemTime::now();
     let outcomes = service.refresh_due().await.expect("refresh");
     assert!(matches!(
         outcomes.as_slice(),
@@ -590,7 +594,18 @@ async fn ambiguous_refresh_uses_runtime_cooldown_without_persisting_account_stat
         store.account(&id).expect("account").availability(),
         AccountAvailability::Unknown
     );
-    assert_eq!(store.account(&id).expect("account").revision().get(), 1);
+    let account = store.account(&id).expect("account");
+    assert_eq!(account.revision().get(), 2);
+    let retry_delay = account
+        .next_refresh_at()
+        .expect("OAuth retry scheduled")
+        .duration_since(started_at)
+        .expect("OAuth retry is in the future");
+    assert!(
+        retry_delay <= Duration::from_secs(7),
+        "first retry must use bounded OAuth backoff, got {retry_delay:?}"
+    );
+    assert_eq!(counting.count(&id), 1);
     assert!(
         service
             .refresh_due()
@@ -602,7 +617,7 @@ async fn ambiguous_refresh_uses_runtime_cooldown_without_persisting_account_stat
 }
 
 #[tokio::test]
-async fn pre_send_transient_failure_applies_bounded_cooldown() {
+async fn pre_send_transient_failure_applies_bounded_oauth_backoff() {
     let input = due_input("transient");
     let id = input.account_id.clone();
     let (store, _, _, service) = fixture(input, [Err(GrokRefreshFailure::Transient)], true).await;
@@ -670,6 +685,121 @@ async fn refresh_backoff_grows_exponentially_across_attempts() {
         second_delay > first_delay * 2,
         "second backoff {second_delay:?} should grow well beyond first {first_delay:?}"
     );
+}
+
+#[tokio::test]
+async fn exhausted_oauth_backoff_continues_after_access_token_expiry() {
+    let input = due_input("backoff-recovery");
+    let id = input.account_id.clone();
+    let counting = Arc::new(CountingCredentialState::default());
+    let (store, _, refresher, service) = fixture_many_with_state(
+        [input],
+        [
+            Err(GrokRefreshFailure::Transient),
+            Err(GrokRefreshFailure::Transient),
+            Err(GrokRefreshFailure::Transient),
+            Err(GrokRefreshFailure::Transient),
+            Err(GrokRefreshFailure::Transient),
+            Err(GrokRefreshFailure::Transient),
+        ],
+        true,
+        counting.clone(),
+    )
+    .await;
+    set_token_deadlines(
+        &store,
+        &id,
+        (Utc::now() - chrono::Duration::minutes(1)).into(),
+        SystemTime::now() - Duration::from_secs(1),
+    )
+    .await;
+
+    for _ in 0..OAUTH_BACKOFF_ATTEMPTS {
+        service.refresh_due().await.expect("backoff attempt");
+        force_due(&store, &id).await;
+    }
+
+    let observed_at = SystemTime::now();
+    service.refresh_due().await.expect("recovery attempt");
+    let recovery_delay = store
+        .account(&id)
+        .expect("account after recovery defer")
+        .next_refresh_at()
+        .expect("recovery scheduled")
+        .duration_since(observed_at)
+        .expect("recovery is in the future");
+    assert!(
+        (Duration::from_secs(8 * 60)..=Duration::from_secs(12 * 60 + 1)).contains(&recovery_delay),
+        "recovery delay should be about ten minutes, got {recovery_delay:?}"
+    );
+    assert_eq!(counting.count(&id), OAUTH_BACKOFF_ATTEMPTS + 1);
+    assert_eq!(refresher.prepare_calls.load(Ordering::SeqCst), 6);
+}
+
+#[tokio::test]
+async fn oauth_backoff_never_passes_an_unexpired_access_token_expiry() {
+    let mut input = due_input("backoff-expiry-cap");
+    input.account.access_token_expires_at = Utc::now() + chrono::Duration::seconds(30);
+    let access_expires_at: SystemTime = input.account.access_token_expires_at.into();
+    let id = input.account_id.clone();
+    let counting = Arc::new(CountingCredentialState::default());
+    let (store, _, _, service) = fixture_many_with_state(
+        [input],
+        [
+            Err(GrokRefreshFailure::Transient),
+            Err(GrokRefreshFailure::Transient),
+            Err(GrokRefreshFailure::Transient),
+            Err(GrokRefreshFailure::Transient),
+            Err(GrokRefreshFailure::Transient),
+            Err(GrokRefreshFailure::Transient),
+        ],
+        true,
+        counting.clone(),
+    )
+    .await;
+
+    for attempt in 0..=OAUTH_BACKOFF_ATTEMPTS {
+        service.refresh_due().await.expect("backoff attempt");
+        if attempt < OAUTH_BACKOFF_ATTEMPTS {
+            force_due(&store, &id).await;
+        }
+    }
+
+    assert_eq!(
+        store
+            .account(&id)
+            .expect("account after capped retry")
+            .next_refresh_at(),
+        Some(access_expires_at)
+    );
+    assert_eq!(counting.count(&id), OAUTH_BACKOFF_ATTEMPTS + 1);
+}
+
+#[tokio::test]
+async fn recovery_window_exhaustion_marks_account_expired_without_token_exchange() {
+    let input = due_input("recovery-window-exhausted");
+    let id = input.account_id.clone();
+    let (store, _, refresher, service) = fixture(input, [Ok(success_tokens(None))], true).await;
+    set_token_deadlines(
+        &store,
+        &id,
+        (Utc::now() - chrono::Duration::hours(25)).into(),
+        (Utc::now() + chrono::Duration::hours(12)).into(),
+    )
+    .await;
+
+    let outcomes = service.refresh_due().await.expect("refresh due");
+
+    assert!(matches!(
+        outcomes.as_slice(),
+        [GrokCredentialRefreshOutcome::Invalidated { account_id }] if account_id == &id
+    ));
+    assert_eq!(
+        store.account(&id).expect("expired account").availability(),
+        AccountAvailability::Expired
+    );
+    assert_eq!(refresher.prepare_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(refresher.responses.lock().expect("queue").len(), 1);
 }
 
 #[tokio::test]
@@ -776,52 +906,33 @@ async fn malformed_account_refresh_does_not_stop_later_accounts() {
 }
 
 #[tokio::test]
-async fn runtime_cooldown_survives_credential_rotation_and_blocks_refresh() {
-    // cooldown 写于 revision N，轮换到 N+1 后 refresh worker 不得清除
-    // 或失效它；cooldown 活跃期间账号被跳过刷新。
-    let input = create_input(
-        "cooldown-survives-rotation",
-        "subject-cooldown-survives-rotation",
-    );
+async fn scheduled_oauth_refresh_runs_after_credential_rotation() {
+    let input = due_input("refresh-after-rotation");
     let id = input.account_id.clone();
-    let cooldowns = Arc::new(MemoryCooldownPort::default());
-    let (store, _, _, service, cooldowns) = fixture_with_cooldowns(
+    let (store, _, refresher, service) = fixture(
         input,
-        [Ok(success_tokens(Some("rotated-refresh")))],
+        [
+            Ok(success_tokens(Some("recovered-refresh"))),
+            Ok(success_tokens(Some("scheduled-refresh"))),
+        ],
         true,
-        cooldowns,
     )
     .await;
-    // 先写 account cooldown（revision 1，未来到期）。
-    let until = SystemTime::now() + Duration::from_secs(3600);
-    cooldowns
-        .put_if_later(ProviderCooldown::new(
-            id.clone(),
-            CredentialRevision::new(1).expect("revision"),
-            until,
-        ))
-        .await
-        .expect("write cooldown");
 
-    // 轮换到 revision 2。
     let outcome = service
         .recover_unauthorized(&id, CredentialRevision::new(1).expect("revision"))
         .await;
     assert_eq!(outcome, GrokCredentialRecoveryOutcome::Recovered);
     assert_eq!(store.account(&id).expect("account").revision().get(), 2);
 
-    // cooldown 仍有效（轮换不清除）。
-    assert!(
-        cooldowns
-            .cooldown(&id)
-            .is_some_and(|cooldown| cooldown.until() > SystemTime::now()),
-        "rotation must not clear account runtime cooldown"
-    );
-    // cooldown 活跃期间 refresh worker 跳过该账号（不清除、不刷新）。
+    force_due(&store, &id).await;
     let outcomes = service.refresh_due().await.expect("refresh due");
-    assert!(
-        outcomes.is_empty(),
-        "cooldown-active account must be skipped by refresh worker"
-    );
-    assert_eq!(store.account(&id).expect("account").revision().get(), 2);
+    assert!(matches!(
+        outcomes.as_slice(),
+        [GrokCredentialRefreshOutcome::Refreshed {
+            account_id,
+            credential_revision,
+        }] if account_id == &id && credential_revision.get() == 4
+    ));
+    assert_eq!(refresher.prepare_calls.load(Ordering::SeqCst), 2);
 }

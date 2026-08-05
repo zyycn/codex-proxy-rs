@@ -234,6 +234,29 @@ async fn state_update_uses_credential_revision_fence() {
 }
 
 #[tokio::test]
+async fn terminal_state_without_upstream_message_uses_stable_error_reason() {
+    let (store, repository) = repository();
+    let input = create_input("state-fallback", "subject-state-fallback");
+    seed_input(&store, &input).await.expect("create");
+
+    repository
+        .update_state(&UpdateGrokCredentialState {
+            account_id: input.account_id.clone(),
+            expected_revision: CredentialRevision::new(1).expect("revision"),
+            availability: GrokCredentialAvailability::Banned,
+            availability_reason: None,
+            observed_at: Utc::now(),
+        })
+        .await
+        .expect("state update");
+
+    assert_eq!(
+        store.last_error_message(&input.account_id).as_deref(),
+        Some("account_banned")
+    );
+}
+
+#[tokio::test]
 async fn admin_prepare_does_not_mutate_provider_account_store() {
     let (store, _) = repository();
     let input = create_input("admin", "subject-admin");
