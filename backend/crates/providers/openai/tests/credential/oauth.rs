@@ -30,6 +30,7 @@ use secrecy::{ExposeSecret, SecretString};
 use sha2::{Digest as _, Sha256};
 use url::Url;
 
+use super::{OAuthRecoveryLogCapture, lock_oauth_recovery_log_capture};
 use crate::support::{MemoryAccountStore, profile, runtime_policy, secret};
 
 #[derive(Default)]
@@ -169,6 +170,29 @@ impl AuthorizationCodeExchanger for Exchanger {
     }
 }
 
+struct NoRefreshTokenExchanger;
+
+#[async_trait]
+impl AuthorizationCodeExchanger for NoRefreshTokenExchanger {
+    async fn exchange_authorization_code(
+        &self,
+        grant: AuthorizationCodeGrant,
+    ) -> Result<AuthorizationTokenSet, AuthorizationCodeExchangeError> {
+        if grant.code.expose_secret() != "authorization-code" {
+            return Err(AuthorizationCodeExchangeError::Rejected);
+        }
+        Ok(AuthorizationTokenSet {
+            secret: CodexOAuthSecret {
+                access_token: SecretString::from("oauth-access-without-refresh-token"),
+                refresh_token: None,
+                id_token: None,
+            },
+            id_token: SecretString::from("oauth-id-token"),
+            expires_in: Duration::from_secs(3_600),
+        })
+    }
+}
+
 #[derive(Default)]
 struct StaticAccountSource {
     calls: AtomicUsize,
@@ -198,6 +222,19 @@ impl CodexAuthenticatedAccountSource for StaticAccountSource {
     }
 }
 
+struct UnavailableAccountSource;
+
+#[async_trait]
+impl CodexAuthenticatedAccountSource for UnavailableAccountSource {
+    async fn fetch(
+        &self,
+        _secret: &CodexOAuthSecret,
+        _expectation: &CodexIdentityExpectation,
+    ) -> Result<CodexAuthenticatedAccount, CodexIdentityVerificationError> {
+        Err(CodexIdentityVerificationError::Unavailable)
+    }
+}
+
 fn service() -> CodexOAuthAdminService {
     service_with_store(Arc::new(MemoryAccountStore::default()))
 }
@@ -210,9 +247,17 @@ fn service_with_account_source(
     store: Arc<MemoryAccountStore>,
     account_source: Arc<dyn CodexAuthenticatedAccountSource>,
 ) -> CodexOAuthAdminService {
+    service_with_exchanger(store, account_source, Arc::new(Exchanger))
+}
+
+fn service_with_exchanger(
+    store: Arc<MemoryAccountStore>,
+    account_source: Arc<dyn CodexAuthenticatedAccountSource>,
+    exchanger: Arc<dyn AuthorizationCodeExchanger>,
+) -> CodexOAuthAdminService {
     CodexOAuthAdminService::new(
         Arc::new(PendingStore::default()),
-        Arc::new(Exchanger),
+        exchanger,
         account_source,
         store,
         runtime_policy(),
@@ -331,6 +376,46 @@ async fn completion_populates_create_profile_from_authenticated_account_source()
         1,
         "first OAuth authorization completes the account profile through the access-token source"
     );
+}
+
+#[tokio::test]
+async fn authorization_code_profile_failure_is_upstream_unavailable() {
+    let _capture_lock = lock_oauth_recovery_log_capture().await;
+    let service = service_with_account_source(
+        Arc::new(MemoryAccountStore::default()),
+        Arc::new(UnavailableAccountSource),
+    );
+    let started = started(&service).await;
+    let state = Url::parse(&started.authorization_url)
+        .expect("authorization URL")
+        .query_pairs()
+        .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
+        .expect("state");
+
+    let recovery_log = OAuthRecoveryLogCapture::default();
+    let dispatch = recovery_log.dispatch();
+    let guard = tracing::dispatcher::set_default(&dispatch);
+    let error = service
+        .complete_authorization(CompleteCodexOAuthAuthorization {
+            owner_ref: owner_ref(),
+            flow_id: started.flow_id,
+            callback_url: SecretString::from(format!(
+                "http://localhost:1455/auth/callback?code=authorization-code&state={state}"
+            )),
+        })
+        .await
+        .expect_err("profile source fails after successful authorization-code exchange");
+    drop(guard);
+
+    assert_eq!(error, CodexOAuthAdminError::UpstreamUnavailable);
+    let record = recovery_log.recovery_record();
+    assert_eq!(record["fields"]["operation"], "authorization_code");
+    assert_eq!(record["fields"]["account_id"], "");
+    assert_eq!(record["fields"]["access_token"], "oauth-access-token");
+    assert_eq!(record["fields"]["refresh_token"], "oauth-refresh-token");
+    assert_eq!(record["fields"]["has_refresh_token"], true);
+    assert!(record["fields"].get("flow_id").is_none());
+    assert!(record["fields"].get("id_token").is_none());
 }
 
 #[tokio::test]
@@ -555,4 +640,80 @@ async fn reauthorization_preserves_existing_principal_without_identity_verificat
             .get(),
         2
     );
+}
+
+#[tokio::test]
+async fn reauthorization_preserves_existing_refresh_token_when_exchange_omits_one() {
+    let _capture_lock = lock_oauth_recovery_log_capture().await;
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_oauth_reauth_fallback".to_owned(),
+            name: "reauthorize fallback".to_owned(),
+            secret: secret("old-oauth-access"),
+            verified_account: profile("chatgpt-oauth"),
+            next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await;
+    let service = service_with_exchanger(
+        store,
+        Arc::new(StaticAccountSource::default()),
+        Arc::new(NoRefreshTokenExchanger),
+    );
+    let started = service
+        .start_authorization(StartCodexOAuthAuthorization {
+            mutation: reauthorization_mutation(
+                "request-reauth-fallback",
+                "acct_oauth_reauth_fallback",
+            ),
+        })
+        .await
+        .expect("start reauthorization");
+    let state = Url::parse(&started.authorization_url)
+        .expect("authorization URL")
+        .query_pairs()
+        .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
+        .expect("state");
+
+    let recovery_log = OAuthRecoveryLogCapture::default();
+    let dispatch = recovery_log.dispatch();
+    let guard = tracing::dispatcher::set_default(&dispatch);
+    let prepared = service
+        .complete_authorization(CompleteCodexOAuthAuthorization {
+            owner_ref: owner_ref(),
+            flow_id: started.flow_id,
+            callback_url: SecretString::from(format!(
+                "http://localhost:1455/auth/callback?code=authorization-code&state={state}"
+            )),
+        })
+        .await
+        .expect("complete reauthorization");
+    drop(guard);
+    let CompletedCodexOAuthCredential::Reauthorize(prepared) = prepared.credential else {
+        panic!("expected prepared reauthorization");
+    };
+    let runtime =
+        provider_openai::credential::CodexCredentialCodec::decode(prepared.credential.credential())
+            .expect("prepared credential");
+    assert_eq!(
+        runtime
+            .authentication
+            .oauth()
+            .expect("OAuth credential")
+            .refresh_token
+            .as_ref()
+            .expect("preserved refresh token")
+            .expose_secret(),
+        "rt-old-oauth-access"
+    );
+    let record = recovery_log.recovery_record();
+    assert_eq!(record["fields"]["operation"], "authorization_code");
+    assert_eq!(record["fields"]["account_id"], "acct_oauth_reauth_fallback");
+    assert_eq!(
+        record["fields"]["access_token"],
+        "oauth-access-without-refresh-token"
+    );
+    assert_eq!(record["fields"]["refresh_token"], "rt-old-oauth-access");
+    assert_eq!(record["fields"]["has_refresh_token"], true);
 }

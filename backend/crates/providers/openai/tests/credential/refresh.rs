@@ -17,6 +17,7 @@ use provider_openai::credential::{
 };
 use secrecy::{ExposeSecret, SecretString};
 
+use super::{OAuthRecoveryLogCapture, lock_oauth_recovery_log_capture};
 use crate::support::{MemoryAccountStore, profile, runtime_policy, secret};
 
 const OAUTH_BACKOFF_ATTEMPTS: u32 = 5;
@@ -376,6 +377,87 @@ async fn successful_refresh_uses_redis_lease_and_cas_rotates_plaintext_tokens() 
         refresher.seen.lock().expect("seen tokens lock").as_slice(),
         ["rt-old-access"]
     );
+}
+
+#[tokio::test]
+async fn scheduled_refresh_preserves_existing_refresh_token_when_exchange_omits_one() {
+    let (store, _, service) = setup(
+        Ok(TokenPair {
+            access_token: "scheduled-access-without-rotated-refresh".to_owned(),
+            refresh_token: None,
+            expires_in: Duration::from_secs(3_600),
+        }),
+        true,
+    )
+    .await;
+
+    let outcomes = service.refresh_due().await.expect("scheduled refresh");
+
+    assert!(matches!(
+        outcomes.as_slice(),
+        [CodexCredentialRefreshOutcome::Refreshed { account_id, .. }] if account_id == "acct_refresh"
+    ));
+    let account = store.account("acct_refresh").expect("rotated account");
+    assert_eq!(account.revision().get(), 2);
+    let runtime = store
+        .repository()
+        .load_runtime_credential(&account)
+        .await
+        .expect("rotated credential");
+    assert_eq!(
+        runtime
+            .authentication
+            .oauth()
+            .expect("OAuth credential")
+            .access_token
+            .expose_secret(),
+        "scheduled-access-without-rotated-refresh"
+    );
+    assert_eq!(
+        runtime
+            .authentication
+            .oauth()
+            .expect("OAuth credential")
+            .refresh_token
+            .as_ref()
+            .expect("preserved refresh token")
+            .expose_secret(),
+        "rt-old-access"
+    );
+}
+
+#[tokio::test]
+async fn invalid_refresh_response_is_logged_before_local_rejection() {
+    let _capture_lock = lock_oauth_recovery_log_capture().await;
+    let (_, _, service) = setup(
+        Ok(TokenPair {
+            access_token: "rejected-access".to_owned(),
+            refresh_token: None,
+            expires_in: Duration::ZERO,
+        }),
+        true,
+    )
+    .await;
+    let recovery_log = OAuthRecoveryLogCapture::default();
+    let dispatch = recovery_log.dispatch();
+    let guard = tracing::dispatcher::set_default(&dispatch);
+
+    let outcomes = service
+        .refresh_due()
+        .await
+        .expect("refresh cycle completes");
+    drop(guard);
+
+    assert!(matches!(
+        outcomes.as_slice(),
+        [CodexCredentialRefreshOutcome::Failed { account_id }] if account_id == "acct_refresh"
+    ));
+    let record = recovery_log.recovery_record();
+    assert_eq!(record["fields"]["operation"], "scheduled_refresh");
+    assert_eq!(record["fields"]["account_id"], "acct_refresh");
+    assert_eq!(record["fields"]["access_token"], "rejected-access");
+    assert_eq!(record["fields"]["refresh_token"], "rt-old-access");
+    assert_eq!(record["fields"]["has_refresh_token"], true);
 }
 
 #[tokio::test]

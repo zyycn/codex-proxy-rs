@@ -29,6 +29,7 @@ use provider_openai::credential::{
 };
 use secrecy::ExposeSecret;
 
+use super::{OAuthRecoveryLogCapture, lock_oauth_recovery_log_capture};
 use crate::support::{MemoryAccountStore, codex_account, profile, runtime_policy, secret};
 
 fn import(id: &str, token: &str) -> ImportCodexOAuthCredential {
@@ -522,6 +523,7 @@ fn refreshed_tokens() -> TokenPair {
 
 #[tokio::test]
 async fn manual_refresh_prepares_rotation_without_identity_verification() {
+    let _capture_lock = lock_oauth_recovery_log_capture().await;
     let (store, refresher, leases, service) =
         manual_refresh_fixture(Ok(refreshed_tokens()), true).await;
     let account_id = ProviderAccountId::new("acct_manual_refresh").expect("account id");
@@ -529,10 +531,14 @@ async fn manual_refresh_prepares_rotation_without_identity_verification() {
         .load_current_credential(&account_id)
         .await
         .expect("current credential");
+    let recovery_log = OAuthRecoveryLogCapture::default();
+    let dispatch = recovery_log.dispatch();
+    let guard = tracing::dispatcher::set_default(&dispatch);
     let prepared = service
         .manual_refresh(current)
         .await
         .expect("manual refresh");
+    drop(guard);
 
     assert_eq!(prepared.credential.account_id(), &account_id);
     assert_eq!(prepared.credential.expected_revision().get(), 1);
@@ -571,6 +577,12 @@ async fn manual_refresh_prepares_rotation_without_identity_verification() {
         ["rt-old-access"]
     );
     assert_eq!(leases.drops.load(Ordering::SeqCst), 0);
+    let record = recovery_log.recovery_record();
+    assert_eq!(record["fields"]["operation"], "manual_refresh");
+    assert_eq!(record["fields"]["account_id"], "acct_manual_refresh");
+    assert_eq!(record["fields"]["access_token"], "refreshed-access");
+    assert_eq!(record["fields"]["refresh_token"], "rotated-refresh");
+    assert_eq!(record["fields"]["has_refresh_token"], true);
     drop(prepared);
     assert_eq!(leases.drops.load(Ordering::SeqCst), 2);
 }
@@ -698,6 +710,37 @@ async fn oauth_import_accepts_opaque_access_token_and_completes_profile_from_acc
 }
 
 #[tokio::test]
+async fn direct_import_logs_raw_tokens_before_account_profile_failure() {
+    let _capture_lock = lock_oauth_recovery_log_capture().await;
+    let recovery_log = OAuthRecoveryLogCapture::default();
+    let dispatch = recovery_log.dispatch();
+    let guard = tracing::dispatcher::set_default(&dispatch);
+    let error = import_service_with_source(unused_import_refresher(), account_source([]))
+        .prepare_import_document(serde_json::json!({
+            "sourceFormat": "cpr",
+            "accounts": [{
+                "token": "logged-direct-access",
+                "refreshToken": "logged-direct-refresh"
+            }]
+        }))
+        .await
+        .expect_err("profile source fails after direct import logging");
+    drop(guard);
+
+    assert_eq!(error, CodexCredentialAdminError::AccountProfileUnavailable);
+    let record = recovery_log.recovery_record();
+    assert_eq!(record["fields"]["operation"], "import_direct");
+    assert!(
+        record["fields"]["account_id"]
+            .as_str()
+            .is_some_and(|account_id| account_id.starts_with("acct_"))
+    );
+    assert_eq!(record["fields"]["access_token"], "logged-direct-access");
+    assert_eq!(record["fields"]["refresh_token"], "logged-direct-refresh");
+    assert_eq!(record["fields"]["has_refresh_token"], true);
+}
+
+#[tokio::test]
 async fn refresh_token_only_import_persists_exchanged_tokens_and_completes_profile() {
     let refreshed_access = "opaque-refreshed-import";
     let refresher = Arc::new(ManualRefresher {
@@ -766,6 +809,39 @@ async fn refresh_token_only_import_persists_exchanged_tokens_and_completes_profi
             .as_slice(),
         [CodexIdentityExpectation::default()]
     );
+}
+
+#[tokio::test]
+async fn refresh_token_only_import_logs_fallback_refresh_token_before_account_profile_failure() {
+    let _capture_lock = lock_oauth_recovery_log_capture().await;
+    let recovery_log = OAuthRecoveryLogCapture::default();
+    let refresher = Arc::new(ManualRefresher {
+        outcome: Mutex::new(Some(Ok(TokenPair {
+            access_token: "logged-import-access".to_owned(),
+            refresh_token: None,
+            expires_in: Duration::from_secs(3_600),
+        }))),
+        seen: Mutex::new(Vec::new()),
+    });
+    let dispatch = recovery_log.dispatch();
+    let guard = tracing::dispatcher::set_default(&dispatch);
+    let error = import_service_with_source(refresher, account_source([]))
+        .prepare_import_document(serde_json::json!({
+            "refreshToken": "logged-import-original-refresh"
+        }))
+        .await
+        .expect_err("profile source fails after refresh-token import logging");
+    drop(guard);
+
+    assert_eq!(error, CodexCredentialAdminError::AccountProfileUnavailable);
+    let record = recovery_log.recovery_record();
+    assert_eq!(record["fields"]["operation"], "import_refresh_token");
+    assert_eq!(record["fields"]["access_token"], "logged-import-access");
+    assert_eq!(
+        record["fields"]["refresh_token"],
+        "logged-import-original-refresh"
+    );
+    assert_eq!(record["fields"]["has_refresh_token"], true);
 }
 
 #[tokio::test]

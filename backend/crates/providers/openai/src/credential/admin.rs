@@ -28,6 +28,7 @@ use thiserror::Error;
 use super::identity::{
     CodexAuthenticatedAccountSource, CodexIdentityExpectation, CodexIdentityVerificationError,
 };
+use super::recovery_log::{CodexOAuthRecoveryOperation, record_oauth_recovery};
 use super::security::CodexCredentialCodec;
 use super::token_client::{RefreshFailure, TokenRefresher};
 use super::types::{
@@ -729,13 +730,6 @@ impl CodexCredentialAdminService {
             .refresh(refresh_token.expose_secret())
             .await
             .map_err(map_refresh_failure)?;
-        if tokens.access_token.trim().is_empty() || tokens.expires_in.is_zero() {
-            return Err(CodexCredentialAdminError::InvalidCredential);
-        }
-        let access_token_expires_at = SystemTime::now()
-            .checked_add(tokens.expires_in)
-            .map(DateTime::<Utc>::from)
-            .ok_or(CodexCredentialAdminError::InvalidCredential)?;
         let secret = CodexOAuthSecret {
             access_token: SecretString::from(tokens.access_token),
             refresh_token: tokens
@@ -744,6 +738,18 @@ impl CodexCredentialAdminService {
                 .or_else(|| oauth.refresh_token.clone()),
             id_token: oauth.id_token.clone(),
         };
+        Self::record_recovery_log(
+            CodexOAuthRecoveryOperation::ManualRefresh,
+            Some(account_id.as_str()),
+            &secret,
+        );
+        if secret.access_token.expose_secret().trim().is_empty() || tokens.expires_in.is_zero() {
+            return Err(CodexCredentialAdminError::InvalidCredential);
+        }
+        let access_token_expires_at = SystemTime::now()
+            .checked_add(tokens.expires_in)
+            .map(DateTime::<Utc>::from)
+            .ok_or(CodexCredentialAdminError::InvalidCredential)?;
         let next_refresh_at = refresh_time(
             policy,
             &account_id,
@@ -793,8 +799,14 @@ impl CodexCredentialAdminService {
                     if !account_ids.insert(account_id.clone()) {
                         return Err(CodexCredentialAdminError::InvalidInput);
                     }
+                    let typed_account_id = ProviderAccountId::new(account_id.clone())
+                        .map_err(|_| CodexCredentialAdminError::InvalidInput)?;
                     let (secret, access_token_expires_at) = self
-                        .resolve_import_tokens(access_token.clone(), refresh_token.clone())
+                        .resolve_import_tokens(
+                            &typed_account_id,
+                            access_token.clone(),
+                            refresh_token.clone(),
+                        )
                         .await?;
                     let mut verified_account = complete_oauth_account_profile(
                         self.account_source.as_ref(),
@@ -823,8 +835,7 @@ impl CodexCredentialAdminService {
                     };
                     let next_refresh_at = refresh_time(
                         refresh_policy,
-                        &ProviderAccountId::new(account_id.clone())
-                            .map_err(|_| CodexCredentialAdminError::InvalidInput)?,
+                        &typed_account_id,
                         verified_account.access_token_expires_at,
                         secret.refresh_token.is_some(),
                     )?;
@@ -877,6 +888,7 @@ impl CodexCredentialAdminService {
 
     async fn resolve_import_tokens(
         &self,
+        account_id: &ProviderAccountId,
         access_token: Option<String>,
         refresh_token: Option<String>,
     ) -> Result<(CodexOAuthSecret, Option<DateTime<Utc>>), CodexCredentialAdminError> {
@@ -894,6 +906,11 @@ impl CodexCredentialAdminService {
                 refresh_token: refresh_token.map(SecretString::from),
                 id_token: None,
             };
+            Self::record_recovery_log(
+                CodexOAuthRecoveryOperation::ImportDirect,
+                Some(account_id.as_str()),
+                &secret,
+            );
             return Ok((secret, None));
         }
         let refresh_token = refresh_token.ok_or(CodexCredentialAdminError::InvalidCredential)?;
@@ -902,9 +919,6 @@ impl CodexCredentialAdminService {
             .refresh(&refresh_token)
             .await
             .map_err(map_refresh_failure)?;
-        if tokens.access_token.trim().is_empty() || tokens.expires_in.is_zero() {
-            return Err(CodexCredentialAdminError::InvalidCredential);
-        }
         let secret = CodexOAuthSecret {
             access_token: SecretString::from(tokens.access_token),
             // RT 未轮换时仍保留导入提供的 RT，保证本次补全不会丢失后续刷新能力。
@@ -914,11 +928,35 @@ impl CodexCredentialAdminService {
                 .or_else(|| Some(SecretString::from(refresh_token))),
             id_token: None,
         };
+        Self::record_recovery_log(
+            CodexOAuthRecoveryOperation::ImportRefreshToken,
+            Some(account_id.as_str()),
+            &secret,
+        );
+        if secret.access_token.expose_secret().trim().is_empty() || tokens.expires_in.is_zero() {
+            return Err(CodexCredentialAdminError::InvalidCredential);
+        }
         let access_token_expires_at = SystemTime::now()
             .checked_add(tokens.expires_in)
             .map(DateTime::<Utc>::from)
             .ok_or(CodexCredentialAdminError::InvalidCredential)?;
         Ok((secret, Some(access_token_expires_at)))
+    }
+
+    fn record_recovery_log(
+        operation: CodexOAuthRecoveryOperation,
+        account_id: Option<&str>,
+        secret: &CodexOAuthSecret,
+    ) {
+        record_oauth_recovery(
+            operation,
+            account_id,
+            secret.access_token.expose_secret(),
+            secret
+                .refresh_token
+                .as_ref()
+                .map(ExposeSecret::expose_secret),
+        );
     }
 
     fn prepare_agent_identity_import(

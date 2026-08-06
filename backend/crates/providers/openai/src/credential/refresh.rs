@@ -17,6 +17,7 @@ use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
 
 use super::identity::CodexAccountIdentityVerifier;
+use super::recovery_log::{CodexOAuthRecoveryOperation, record_oauth_recovery};
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
 use super::token_client::{RefreshFailure, TokenPair, TokenRefresher};
 use super::types::CodexOAuthSecret;
@@ -387,13 +388,6 @@ impl CodexCredentialRefreshService {
             refresh_token: rotated_refresh_token,
             expires_in,
         } = tokens;
-        if access_token.is_empty() || expires_in.is_zero() {
-            return Err(CodexCredentialRefreshError::InvalidRefreshResponse);
-        }
-        let observed_at = SystemTime::now();
-        let access_token_expires_at = observed_at
-            .checked_add(expires_in)
-            .ok_or(CodexCredentialRefreshError::InvalidRefreshResponse)?;
         let refresh_token = rotated_refresh_token
             .map(SecretString::from)
             .or(due.secret.refresh_token);
@@ -402,6 +396,22 @@ impl CodexCredentialRefreshService {
             refresh_token,
             id_token: due.secret.id_token,
         };
+        record_oauth_recovery(
+            CodexOAuthRecoveryOperation::ScheduledRefresh,
+            Some(due.account.id().as_str()),
+            secret.access_token.expose_secret(),
+            secret
+                .refresh_token
+                .as_ref()
+                .map(ExposeSecret::expose_secret),
+        );
+        if secret.access_token.expose_secret().is_empty() || expires_in.is_zero() {
+            return Err(CodexCredentialRefreshError::InvalidRefreshResponse);
+        }
+        let observed_at = SystemTime::now();
+        let access_token_expires_at = observed_at
+            .checked_add(expires_in)
+            .ok_or(CodexCredentialRefreshError::InvalidRefreshResponse)?;
         let next_refresh_at = policy
             .next_attempt_at(due.account.id(), access_token_expires_at, observed_at)
             .map(DateTime::<Utc>::from)

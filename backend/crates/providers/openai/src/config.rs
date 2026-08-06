@@ -43,10 +43,8 @@ impl OpenAiConfig {
         self.quota.validate()?;
         self.auth.validate()?;
         self.wire_profile.validate()?;
-        self.identity_secret_path = source_dir
-            .parent()
-            .unwrap_or(source_dir)
-            .join(".runtime/data/identity_hmac_secret");
+        let project_root = source_dir.parent().unwrap_or(source_dir);
+        self.identity_secret_path = project_root.join(".runtime/data/identity_hmac_secret");
         Ok(())
     }
 

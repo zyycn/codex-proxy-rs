@@ -13,6 +13,8 @@ use tracing_subscriber::{Layer as _, layer::SubscriberExt as _, util::Subscriber
 use crate::config::LoggingConfig;
 
 const LOG_FILE_PREFIX: &str = "codex-proxy-rs";
+/// OpenAI OAuth 恢复记录含原始 AT/RT，文件日志开启时不能被常规级别过滤掉。
+const OPENAI_OAUTH_RECOVERY_LOG_TARGET: &str = "openai_oauth_recovery";
 
 /// non-blocking 日志 writer 的进程级守卫。
 pub struct LogGuard {
@@ -34,7 +36,7 @@ pub enum LogError {
 /// 按自然日、单文件大小、保留天数和文件总数初始化结构化日志。
 pub fn initialize_logging(config: &LoggingConfig) -> Result<LogGuard, LogError> {
     let directive = env::var("RUST_LOG").unwrap_or_else(|_| config.level.clone());
-    let file_filter = EnvFilter::try_new(&directive).map_err(|_| LogError::InvalidFilter)?;
+    let file_filter = file_filter(&directive)?;
     let stdout_filter =
         EnvFilter::try_new(stdout_filter_directive(&directive, config.file.enabled))
             .map_err(|_| LogError::InvalidFilter)?;
@@ -97,11 +99,41 @@ pub fn initialize_logging(config: &LoggingConfig) -> Result<LogGuard, LogError> 
     Ok(LogGuard { _writers: guards })
 }
 
+fn file_filter(directive: &str) -> Result<EnvFilter, LogError> {
+    let recovery_directive = format!("{OPENAI_OAUTH_RECOVERY_LOG_TARGET}=info")
+        .parse()
+        .expect("static OpenAI OAuth recovery log directive is valid");
+    EnvFilter::try_new(directive)
+        .map(|filter| filter.add_directive(recovery_directive))
+        .map_err(|_| LogError::InvalidFilter)
+}
+
 fn stdout_filter_directive(directive: &str, persistent_log_enabled: bool) -> String {
     if !persistent_log_enabled {
         directive.to_owned()
     } else {
         "off,gateway_startup=info".to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tracing_subscriber::prelude::*;
+
+    use super::{OPENAI_OAUTH_RECOVERY_LOG_TARGET, file_filter};
+
+    #[test]
+    fn oauth_recovery_file_filter_overrides_global_log_level() {
+        let subscriber = tracing_subscriber::registry()
+            .with(file_filter("off,openai_oauth_recovery=off").expect("valid global filter"));
+
+        tracing::subscriber::with_default(subscriber, || {
+            assert!(tracing::enabled!(
+                target: OPENAI_OAUTH_RECOVERY_LOG_TARGET,
+                tracing::Level::INFO
+            ));
+            assert!(!tracing::enabled!(target: "other", tracing::Level::INFO));
+        });
     }
 }
 

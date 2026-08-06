@@ -8,6 +8,7 @@ mod cookie;
 mod identity;
 mod oauth;
 mod quota;
+mod recovery_log;
 mod refresh;
 mod repository;
 mod security;

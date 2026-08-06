@@ -258,7 +258,7 @@ impl AuthorizationCodeExchanger for OpenAiTokenClient {
             || tokens
                 .refresh_token
                 .as_deref()
-                .is_some_and(|token| token.is_empty())
+                .is_some_and(|token| token.trim().is_empty())
         {
             return Err(AuthorizationCodeExchangeError::Rejected);
         }
@@ -305,7 +305,11 @@ fn parse_token_pair(body: &[u8]) -> Result<TokenPair, ()> {
     }
     Ok(TokenPair {
         access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token,
+        // OAuth 刷新响应可能省略未变更的 RT。将空字段同样视为省略，调用方
+        // 才能保留当前仍可使用的 token。
+        refresh_token: tokens
+            .refresh_token
+            .filter(|refresh_token| !refresh_token.trim().is_empty()),
         expires_in: Duration::from_secs(tokens.expires_in),
     })
 }

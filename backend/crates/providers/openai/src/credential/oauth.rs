@@ -17,7 +17,7 @@ use gateway_admin::model::{
     },
 };
 use gateway_core::engine::credential::{
-    NewProviderAccount, ProviderAccountId, ProviderAccountStore,
+    LoadedCredential, NewProviderAccount, ProviderAccountId, ProviderAccountStore,
 };
 use gateway_core::provider_ports::ProviderRuntimePolicyPort;
 use secrecy::{ExposeSecret, SecretString};
@@ -31,6 +31,8 @@ use super::admin::{
     PreparedCodexCredentialRotation, complete_oauth_account_profile, refresh_time,
 };
 use super::identity::{CodexAuthenticatedAccountSource, CodexIdentityVerificationError};
+use super::recovery_log::{CodexOAuthRecoveryOperation, record_oauth_recovery};
+use super::security::CodexCredentialCodec;
 use super::token_client::{
     AuthorizationCodeExchangeError, AuthorizationCodeExchanger, AuthorizationCodeGrant,
     OFFICIAL_CODEX_OAUTH_CLIENT_ID, OFFICIAL_CODEX_REDIRECT_URI,
@@ -489,9 +491,6 @@ impl CodexOAuthAdminService {
         callback_url: &str,
     ) -> Result<(PendingAuthorizationMutation, CompletedCodexOAuthCredential), CodexOAuthAdminError>
     {
-        let (mut secret, id_token, expires_in) =
-            self.exchange_pending(&pending, callback_url).await?;
-        let mutation = pending.mutation.clone();
         let current = if let Some(target) = pending.reauthorization() {
             let current = self
                 .store
@@ -502,6 +501,15 @@ impl CodexOAuthAdminService {
         } else {
             None
         };
+        let fallback_refresh_token = current
+            .as_ref()
+            .map(current_oauth_refresh_token)
+            .transpose()?
+            .flatten();
+        let (mut secret, id_token, expires_in) = self
+            .exchange_pending(&pending, callback_url, fallback_refresh_token)
+            .await?;
+        let mutation = pending.mutation.clone();
         let access_token_expires_at = SystemTime::now()
             .checked_add(expires_in)
             .map(DateTime::<Utc>::from)
@@ -661,6 +669,7 @@ impl CodexOAuthAdminService {
         &self,
         pending: &CodexPendingAuthorization,
         callback_url: &str,
+        fallback_refresh_token: Option<SecretString>,
     ) -> Result<(super::types::CodexOAuthSecret, SecretString, Duration), CodexOAuthAdminError>
     {
         let (code, callback_state) = callback_parts(callback_url)?;
@@ -678,8 +687,34 @@ impl CodexOAuthAdminService {
             })
             .await
             .map_err(map_exchange_error)?;
-        Ok((tokens.secret, tokens.id_token, tokens.expires_in))
+        let mut secret = tokens.secret;
+        if secret.refresh_token.is_none() {
+            secret.refresh_token = fallback_refresh_token;
+        }
+        record_oauth_recovery(
+            CodexOAuthRecoveryOperation::AuthorizationCode,
+            pending
+                .reauthorization()
+                .map(|account_id| account_id.as_str()),
+            secret.access_token.expose_secret(),
+            secret
+                .refresh_token
+                .as_ref()
+                .map(ExposeSecret::expose_secret),
+        );
+        Ok((secret, tokens.id_token, tokens.expires_in))
     }
+}
+
+fn current_oauth_refresh_token(
+    current: &LoadedCredential,
+) -> Result<Option<SecretString>, CodexOAuthAdminError> {
+    let runtime = CodexCredentialCodec::decode(&current.credential)
+        .map_err(|_| CodexOAuthAdminError::Credential)?;
+    Ok(runtime
+        .authentication
+        .oauth()
+        .and_then(|oauth| oauth.refresh_token.clone()))
 }
 
 fn authorization_url(

@@ -76,6 +76,28 @@ async fn bounded_oauth_response_should_parse_lifetime_and_rotated_token() {
 }
 
 #[tokio::test]
+async fn refresh_response_with_blank_rotated_token_keeps_the_existing_token_eligible() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "access-rotated",
+            "refresh_token": " ",
+            "expires_in": 3600
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let tokens = client(&server)
+        .refresh("refresh-initial")
+        .await
+        .expect("blank rotation field is treated as absent");
+
+    assert_eq!(tokens.refresh_token, None);
+}
+
+#[tokio::test]
 async fn refresh_should_exchange_the_official_form_fields() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
