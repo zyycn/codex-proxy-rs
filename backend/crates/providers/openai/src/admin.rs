@@ -1381,14 +1381,15 @@ fn map_credential_admin_error(error: CodexCredentialAdminError) -> ProviderAdmin
         | Error::MissingRefreshToken
         | Error::RefreshRejected
         | Error::AccountBanned
+        | Error::AccountProfileRejected
         | Error::IdentityRejected => ProviderAdminErrorKind::Invalid,
         Error::NotFound => ProviderAdminErrorKind::NotFound,
         Error::RefreshLeaseUnavailable | Error::RefreshAmbiguous => {
             ProviderAdminErrorKind::Conflict
         }
-        Error::RefreshUnavailable | Error::IdentityUnavailable => {
-            ProviderAdminErrorKind::Unavailable
-        }
+        Error::RefreshUnavailable
+        | Error::AccountProfileUnavailable
+        | Error::IdentityUnavailable => ProviderAdminErrorKind::Unavailable,
     })
 }
 
@@ -1402,6 +1403,8 @@ const fn credential_admin_error_code(error: CodexCredentialAdminError) -> &'stat
         CodexCredentialAdminError::RefreshLeaseUnavailable => "refresh_lease_unavailable",
         CodexCredentialAdminError::RefreshRejected => "refresh_rejected",
         CodexCredentialAdminError::AccountBanned => "account_banned",
+        CodexCredentialAdminError::AccountProfileRejected => "account_profile_rejected",
+        CodexCredentialAdminError::AccountProfileUnavailable => "account_profile_unavailable",
         CodexCredentialAdminError::RefreshUnavailable => "refresh_unavailable",
         CodexCredentialAdminError::RefreshAmbiguous => "refresh_ambiguous",
         CodexCredentialAdminError::IdentityRejected => "identity_rejected",

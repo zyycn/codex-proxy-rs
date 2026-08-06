@@ -156,13 +156,14 @@ pub async fn initialize(
         ReqwestCodexAuthenticatedAccountSource::new(profile.clone(), config.base_url().to_owned())
             .map_err(|_| OpenAiInitializeError::Identity)?,
     );
-    let identity: Arc<dyn CodexAccountIdentityVerifier> =
-        Arc::new(CodexAccountIdentityService::new(signed, account_source));
+    let identity: Arc<dyn CodexAccountIdentityVerifier> = Arc::new(
+        CodexAccountIdentityService::new(signed, Arc::clone(&account_source)),
+    );
     let refresher: Arc<dyn TokenRefresher> = token_client.clone();
     let exchanger: Arc<dyn AuthorizationCodeExchanger> = token_client;
     let credential_admin = Arc::new(CodexCredentialAdminService::new(
         Arc::clone(&refresher),
-        Arc::clone(&identity),
+        Arc::clone(&account_source),
         Arc::clone(&leases),
         Arc::clone(&runtime_policy),
     ));
@@ -182,7 +183,7 @@ pub async fn initialize(
         CodexOAuthAdminService::new(
             pending,
             exchanger,
-            Arc::clone(&identity),
+            account_source,
             Arc::clone(&accounts),
             Arc::clone(&runtime_policy),
             CodexCredentialAdmin,

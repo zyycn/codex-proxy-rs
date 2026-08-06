@@ -122,7 +122,7 @@ OpenAI 路径保留客户端 Responses wire 语义：请求 body 的未知字段
 - xAI 从单账号 object 或 `accounts` 数组中提取 OAuth token；包装中的代理、并发、优先级等字段不参与认证；
 - xAI 批量导入逐条独立校验：失败条目跳过并记录日志，不中断其余条目，仅当没有任何条目成功时整个导入才报错；
 - xAI API Key 不是受支持的账号 credential；
-- 导入仍会通过 Provider 的身份或刷新链路校验，不能只凭文件外形写入账号。
+- 导入不会只凭文件外形写入账号；目标 Provider 使用认证材料完成必要的 token exchange 或已认证账号资料补全。
 
 OpenAI 的 CPR 导出保持 OAuth 账号的既有字段；Agent Identity 账号则输出
 `authMode: "agentIdentity"`、`agentRuntimeId`、`agentPrivateKey` 和可选的
@@ -171,20 +171,22 @@ OAuth start 使用：
 
 ### OpenAI 身份、额度与状态
 
-- 文件导入只轻量解析 access token 的未验签 JWT payload：要求 `exp` 未过期且存在
-  `chatgpt_account_id`；不调用 JWKS 或 `/wham/usage`，也不做账号身份一致性比对。
-- 首次 OAuth 和重新授权保留回调 `state`、PKCE 与官方 token exchange。回调地址只承载 `code`/`state`，
+- OAuth 文件导入使用可用的 access token 调用 OpenAI 已认证账号接口，补全实际使用的账号 ID、用户 ID、
+  邮箱和套餐；仅有 refresh token 时，先换取 access token 后执行同一补全。导入不要求 JWT payload 含有
+  特定字段，不执行 JWKS 验签，也不将文件中的身份字段与上游资料比对。
+- 首次 OAuth 保留回调 `state`、PKCE 与官方 token exchange；换得 access token 后调用同一已认证账号接口
+  补全账号资料。重新授权也保留这些回调保护，但只轮换目标账号的 token。回调地址只承载 `code`/`state`，
   不以 host/path 形式作为拒绝条件。
 - 账号文件导入和首次 OAuth 创建在 credential 提交后立即尝试一次额度观测。观测失败只记录告警，
-  不回滚已提交的账号；重新授权只轮换目标账号 credential，不隐式等同于手工额度刷新，也不更新既有
-  upstream account/user 或 OAuth principal。
+  不回滚已提交的账号；重新授权和手工或后台 RT 刷新只更新 token，不隐式等同于手工额度刷新，也不更新
+  既有账号资料或 OAuth principal。
 - OAuth pending flow 先取得带过期时间的独占 claim，只有账号事务提交成功后才消费。失败会释放 claim，
   但上游 authorization code 本身通常只能交换一次；已完成过 token exchange 时应重新创建 OAuth flow。
 - `GET /accounts/quota` 只读取最后一次落库快照；`POST /accounts/quota/refresh` 才访问上游。access token
   已过期时，额度刷新要求先走 credential 刷新或重新授权，不会拿过期 token 探测额度。
 - 成功额度观测会 revision-fenced 写入 quota，并在 `active` 与 `quota_exhausted` 等额度所属状态间同步；
   不会清除 `expired`、`banned` 等 credential/封禁终态。额度接口的 401/403 也不足以判定 refresh token
-  永久失效，credential 终态只由 OAuth refresh 或身份校验链路写入。
+  永久失效，credential 终态只由 OAuth refresh 的明确永久错误写入。
 - 正常 Responses 请求会解析上游响应的 rate-limit headers，合并进同一 quota 快照并同步状态。Free、
   K12 等套餐共用该状态机；套餐只参与账号展示和按套餐隔离的模型目录 cache，不存在 K12 专属额度路径。
 - 账号页没有定时静默轮询。手工额度刷新完成后页面会重新读取该账号；请求驱动或后台任务产生的状态

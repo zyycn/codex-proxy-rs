@@ -28,9 +28,9 @@ use uuid::Uuid;
 
 use super::admin::{
     CodexCredentialAdmin, CodexCredentialAdminError, ImportCodexOAuthCredential,
-    PreparedCodexCredentialRotation, refresh_time, unverified_oauth_profile,
+    PreparedCodexCredentialRotation, complete_oauth_account_profile, refresh_time,
 };
-use super::identity::CodexAccountIdentityVerifier;
+use super::identity::{CodexAuthenticatedAccountSource, CodexIdentityVerificationError};
 use super::token_client::{
     AuthorizationCodeExchangeError, AuthorizationCodeExchanger, AuthorizationCodeGrant,
     OFFICIAL_CODEX_OAUTH_CLIENT_ID, OFFICIAL_CODEX_REDIRECT_URI,
@@ -346,6 +346,7 @@ pub trait CodexOAuthAdmin: Send + Sync {
 pub struct CodexOAuthAdminService {
     pending: Arc<dyn CodexOAuthPendingStore>,
     exchanger: Arc<dyn AuthorizationCodeExchanger>,
+    account_source: Arc<dyn CodexAuthenticatedAccountSource>,
     store: Arc<dyn ProviderAccountStore>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     credentials: CodexCredentialAdmin,
@@ -397,7 +398,7 @@ impl CodexOAuthAdminService {
     pub fn new(
         pending: Arc<dyn CodexOAuthPendingStore>,
         exchanger: Arc<dyn AuthorizationCodeExchanger>,
-        _verifier: Arc<dyn CodexAccountIdentityVerifier>,
+        account_source: Arc<dyn CodexAuthenticatedAccountSource>,
         store: Arc<dyn ProviderAccountStore>,
         runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
         credentials: CodexCredentialAdmin,
@@ -405,6 +406,7 @@ impl CodexOAuthAdminService {
         Self {
             pending,
             exchanger,
+            account_source,
             store,
             runtime_policy,
             credentials,
@@ -532,11 +534,13 @@ impl CodexOAuthAdminService {
             let account_id = format!("acct_{}", Uuid::now_v7().simple());
             let typed_account_id = ProviderAccountId::new(account_id.clone())
                 .map_err(|_| CodexOAuthAdminError::Credential)?;
-            let profile = unverified_oauth_profile(
+            let profile = complete_oauth_account_profile(
+                self.account_source.as_ref(),
                 &secret,
-                typed_account_id.as_str(),
                 Some(access_token_expires_at),
-            );
+            )
+            .await
+            .map_err(map_account_profile_error)?;
             let next_refresh_at = refresh_time(
                 policy,
                 &typed_account_id,
@@ -806,6 +810,13 @@ fn map_exchange_error(error: AuthorizationCodeExchangeError) -> CodexOAuthAdminE
         AuthorizationCodeExchangeError::Rejected => CodexOAuthAdminError::TokenRejected,
         AuthorizationCodeExchangeError::Unavailable => CodexOAuthAdminError::UpstreamUnavailable,
         AuthorizationCodeExchangeError::Ambiguous => CodexOAuthAdminError::Ambiguous,
+    }
+}
+
+const fn map_account_profile_error(error: CodexIdentityVerificationError) -> CodexOAuthAdminError {
+    match error {
+        CodexIdentityVerificationError::Rejected => CodexOAuthAdminError::TokenRejected,
+        CodexIdentityVerificationError::Unavailable => CodexOAuthAdminError::UpstreamUnavailable,
     }
 }
 

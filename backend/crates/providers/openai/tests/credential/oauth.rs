@@ -19,8 +19,8 @@ use provider_openai::credential::token_client::{
     AuthorizationTokenSet,
 };
 use provider_openai::credential::{
-    CodexAccountIdentityVerifier, CodexCredentialAdmin, CodexIdentityExpectation,
-    CodexIdentityVerification, CodexIdentityVerificationError, CodexOAuthAdmin,
+    CodexAuthenticatedAccount, CodexAuthenticatedAccountSource, CodexCredentialAdmin,
+    CodexIdentityExpectation, CodexIdentityVerificationError, CodexOAuthAdmin,
     CodexOAuthAdminError, CodexOAuthAdminService, CodexOAuthPendingClaimOutcome,
     CodexOAuthPendingStore, CodexOAuthPendingStoreError, CodexOAuthSecret,
     CodexPendingAuthorization, CompleteCodexOAuthAuthorization, CompletedCodexOAuthCredential,
@@ -170,55 +170,50 @@ impl AuthorizationCodeExchanger for Exchanger {
 }
 
 #[derive(Default)]
-struct RejectingVerifier {
+struct StaticAccountSource {
     calls: AtomicUsize,
 }
 
-impl RejectingVerifier {
+impl StaticAccountSource {
     fn call_count(&self) -> usize {
         self.calls.load(Ordering::Relaxed)
     }
 }
 
 #[async_trait]
-impl CodexAccountIdentityVerifier for RejectingVerifier {
-    async fn verify(
+impl CodexAuthenticatedAccountSource for StaticAccountSource {
+    async fn fetch(
         &self,
         _secret: &CodexOAuthSecret,
-        _expectation: &CodexIdentityExpectation,
-    ) -> Result<CodexIdentityVerification, CodexIdentityVerificationError> {
+        expectation: &CodexIdentityExpectation,
+    ) -> Result<CodexAuthenticatedAccount, CodexIdentityVerificationError> {
         self.calls.fetch_add(1, Ordering::Relaxed);
-        Err(CodexIdentityVerificationError::Rejected)
-    }
-
-    async fn verify_authorization(
-        &self,
-        _secret: &CodexOAuthSecret,
-        id_token: &SecretString,
-        expected_nonce: &SecretString,
-        _expectation: &CodexIdentityExpectation,
-    ) -> Result<CodexIdentityVerification, CodexIdentityVerificationError> {
-        let _ = (id_token, expected_nonce);
-        self.calls.fetch_add(1, Ordering::Relaxed);
-        Err(CodexIdentityVerificationError::Rejected)
+        assert_eq!(expectation, &CodexIdentityExpectation::default());
+        Ok(CodexAuthenticatedAccount {
+            chatgpt_account_id: "chatgpt-oauth".to_owned(),
+            chatgpt_user_id: "user-chatgpt-oauth".to_owned(),
+            email: Some("oauth@example.com".to_owned()),
+            plan_type: Some("plus".to_owned()),
+        })
     }
 }
 
 fn service() -> CodexOAuthAdminService {
-    service_with_store(
-        Arc::new(MemoryAccountStore::default()),
-        Arc::new(RejectingVerifier::default()),
-    )
+    service_with_store(Arc::new(MemoryAccountStore::default()))
 }
 
-fn service_with_store(
+fn service_with_store(store: Arc<MemoryAccountStore>) -> CodexOAuthAdminService {
+    service_with_account_source(store, Arc::new(StaticAccountSource::default()))
+}
+
+fn service_with_account_source(
     store: Arc<MemoryAccountStore>,
-    verifier: Arc<dyn CodexAccountIdentityVerifier>,
+    account_source: Arc<dyn CodexAuthenticatedAccountSource>,
 ) -> CodexOAuthAdminService {
     CodexOAuthAdminService::new(
         Arc::new(PendingStore::default()),
         Arc::new(Exchanger),
-        verifier,
+        account_source,
         store,
         runtime_policy(),
         CodexCredentialAdmin,
@@ -299,10 +294,10 @@ async fn start_authorization_uses_pkce_nonce_and_fixed_official_redirect() {
 }
 
 #[tokio::test]
-async fn completion_prepares_core_account_without_identity_verification() {
+async fn completion_populates_create_profile_from_authenticated_account_source() {
     let store = Arc::new(MemoryAccountStore::default());
-    let verifier = Arc::new(RejectingVerifier::default());
-    let service = service_with_store(store, verifier.clone());
+    let account_source = Arc::new(StaticAccountSource::default());
+    let service = service_with_account_source(store, account_source.clone());
     let started = started(&service).await;
     let url = Url::parse(&started.authorization_url).expect("authorization URL");
     let state = url
@@ -325,22 +320,17 @@ async fn completion_prepares_core_account_without_identity_verification() {
     assert_eq!(prepared.account.provider().as_str(), "openai");
     assert!(prepared.account.id().as_str().starts_with("acct_"));
     assert_eq!(
-        prepared
-            .credential
-            .expose_to_provider()
-            .get("access_token")
-            .and_then(serde_json::Value::as_str),
-        Some("oauth-access-token")
+        prepared.account.upstream_account_id(),
+        Some("chatgpt-oauth")
     );
+    assert_eq!(prepared.account.upstream_user_id(), "user-chatgpt-oauth");
+    assert_eq!(prepared.account.email(), Some("oauth@example.com"));
+    assert_eq!(prepared.account.plan_type(), Some("plus"));
     assert_eq!(
-        prepared
-            .credential
-            .expose_to_provider()
-            .get("id_token")
-            .and_then(serde_json::Value::as_str),
-        Some("oauth-id-token")
+        account_source.call_count(),
+        1,
+        "first OAuth authorization completes the account profile through the access-token source"
     );
-    assert_eq!(verifier.call_count(), 0);
 }
 
 #[tokio::test]
@@ -416,70 +406,6 @@ async fn completion_rejects_repeated_state_callback_parameter() {
         .expect_err("repeated state");
 
     assert_eq!(error, CodexOAuthAdminError::CallbackRejected);
-}
-
-#[derive(Default)]
-struct UnavailableVerifier {
-    calls: AtomicUsize,
-}
-
-impl UnavailableVerifier {
-    fn call_count(&self) -> usize {
-        self.calls.load(Ordering::Relaxed)
-    }
-}
-
-#[async_trait]
-impl CodexAccountIdentityVerifier for UnavailableVerifier {
-    async fn verify(
-        &self,
-        _: &CodexOAuthSecret,
-        _: &CodexIdentityExpectation,
-    ) -> Result<CodexIdentityVerification, CodexIdentityVerificationError> {
-        self.calls.fetch_add(1, Ordering::Relaxed);
-        Err(CodexIdentityVerificationError::Unavailable)
-    }
-
-    async fn verify_authorization(
-        &self,
-        _: &CodexOAuthSecret,
-        _: &SecretString,
-        _: &SecretString,
-        _: &CodexIdentityExpectation,
-    ) -> Result<CodexIdentityVerification, CodexIdentityVerificationError> {
-        self.calls.fetch_add(1, Ordering::Relaxed);
-        Err(CodexIdentityVerificationError::Unavailable)
-    }
-}
-
-#[tokio::test]
-async fn completion_ignores_unavailable_identity_verifier() {
-    let store = Arc::new(MemoryAccountStore::default());
-    let verifier = Arc::new(UnavailableVerifier::default());
-    let service = service_with_store(store, verifier.clone());
-    let started = started(&service).await;
-    let state = Url::parse(&started.authorization_url)
-        .expect("authorization URL")
-        .query_pairs()
-        .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
-        .expect("state");
-
-    let prepared = service
-        .complete_authorization(CompleteCodexOAuthAuthorization {
-            owner_ref: owner_ref(),
-            flow_id: started.flow_id,
-            callback_url: SecretString::from(format!(
-                "http://localhost:1455/auth/callback?code=authorization-code&state={state}"
-            )),
-        })
-        .await
-        .expect("complete OAuth without identity verification");
-
-    assert!(matches!(
-        prepared.credential,
-        CompletedCodexOAuthCredential::Create(_)
-    ));
-    assert_eq!(verifier.call_count(), 0);
 }
 
 #[tokio::test]
@@ -580,8 +506,8 @@ async fn reauthorization_preserves_existing_principal_without_identity_verificat
         .expect("original credential");
     let original_installation_id = original_runtime.installation_id;
     let original_principal = original_runtime.principal;
-    let verifier = Arc::new(RejectingVerifier::default());
-    let service = service_with_store(store.clone(), verifier.clone());
+    let account_source = Arc::new(StaticAccountSource::default());
+    let service = service_with_account_source(store.clone(), account_source.clone());
     let started = service
         .start_authorization(StartCodexOAuthAuthorization {
             mutation: reauthorization_mutation("request-reauth", "acct_oauth_reauth"),
@@ -617,19 +543,10 @@ async fn reauthorization_preserves_existing_principal_without_identity_verificat
     let runtime =
         provider_openai::credential::CodexCredentialCodec::decode(prepared.credential.credential())
             .expect("prepared credential");
-    assert_eq!(
-        runtime
-            .authentication
-            .oauth()
-            .expect("OAuth credential")
-            .access_token
-            .expose_secret(),
-        "oauth-access-token"
-    );
     assert_eq!(runtime.installation_id, original_installation_id);
     assert_eq!(runtime.principal, original_principal);
     assert!(prepared.replacement_identity.is_none());
-    assert_eq!(verifier.call_count(), 0);
+    assert_eq!(account_source.call_count(), 0);
     assert_eq!(
         store
             .account("acct_oauth_reauth")

@@ -120,11 +120,12 @@ credential 更新使用 `credential_revision` CAS。认证永久失败、封禁�
 
 `refresh_token_expires_at` 不是公共 SQL 列或 Core 权威状态。xAI 可在 `provider_credentials_json` 内保存它作为 Provider 私有提示；真正失效以 refresh endpoint 返回的永久错误为准。
 
-OpenAI 导入只对 access token 做轻量、未验签的 JWT payload 检查：payload 可解析、`exp` 未过期且
-带有 `chatgpt_account_id`。首次 OAuth 和重新授权保留服务端 `state`、PKCE 与官方 token exchange；
-它们不再调用 JWKS、usage 或账号身份一致性校验。重新授权的目标绑定只保存目标账号 ID，不接受或
-冻结客户端提供的 credential revision；complete 阶段重新读取目标账号及其当前 revision，并以当前
-revision 做最终 CAS。重新授权只轮换目标账号的 token，保留既有 upstream account/user 与 principal。
+OpenAI OAuth 导入先取得可用 access token（仅有 refresh token 时先交换），再调用 OpenAI 已认证账号
+接口补全实际使用的账号 ID、用户 ID、邮箱和套餐。首次 OAuth 在服务端 `state`、PKCE 与官方 token
+exchange 成功后执行同一补全。两条路径不执行 JWKS 验签，不要求 JWT payload 具备指定字段，也不将导入
+材料中的身份与上游资料做一致性比对。重新授权的目标绑定只保存目标账号 ID，不接受或冻结客户端提供的
+credential revision；complete 阶段重新读取目标账号及其当前 revision，并以当前 revision 做最终 CAS。
+重新授权和手工或后台 RT refresh 只轮换目标账号的 token，保留既有账号资料与 OAuth principal。
 
 credential 与 quota 是两套状态机。主动 quota refresh 会拒绝过期 access token；quota 探测的
 401/403 不具备判定 refresh token 永久失效的证据。成功主动观测和正常推理响应中的 rate-limit header
@@ -241,8 +242,8 @@ worker 不得通过导入 Admin use case 绕过边界，也不得维护第二份
 - FK、CAS、revision、recovery 使用真实 PostgreSQL 测试。
 - admission、lease、cooldown、OAuth pending 使用真实 Redis 测试。
 - 自动化测试不得发送真实对话或轮换生产 refresh token；仓库不提供破坏性 live fixture。
-- OpenAI identity 仅保留可选的外部 `CODEX_REAL_ACCOUNT_FILE` 官方 JWKS 签名检查，环境变量未设置时
-  直接跳过；它不经过 selector/transport，也不是数据面验收。
+- 可选的外部 `CODEX_REAL_ACCOUNT_FILE` 官方 JWKS 签名检查仅用于显式测试，环境变量未设置时直接跳过；
+  它不属于 OpenAI OAuth 导入、首次授权、重新授权或 RT refresh 流程，也不经过 selector/transport。
 
 终态门禁：
 
