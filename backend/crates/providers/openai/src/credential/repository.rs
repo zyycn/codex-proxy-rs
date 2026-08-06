@@ -13,7 +13,6 @@ use gateway_core::routing::ProviderKind;
 use secrecy::ExposeSecret;
 use thiserror::Error;
 
-use super::identity::CodexSignedIdentity;
 use super::security::{CodexCredentialCodec, CodexCredentialDataError, CodexRuntimeCredential};
 use super::types::{
     CodexAccountProfile, CodexCredentialData, CodexOAuthSecret, RotateCodexCredential,
@@ -83,12 +82,15 @@ impl CodexCredentialRepository {
         cas_revision(self.store.compare_and_swap_credential(update).await?)
     }
 
-    /// usage 暂时不可用时，只在签名 principal 与现有绑定完全一致后保存已轮换 token。
-    pub async fn rotate_signed_secret(
+    /// 持久化成功 RT exchange 的 token，同时保留既有账号身份投影。
+    ///
+    /// Refresh endpoint 已经是这次 AT/RT 轮换的授权边界；这里仅以 revision
+    /// CAS 保护并发写入，不重新验证新 access token 的身份声明。
+    pub async fn rotate_refreshed_oauth_secret(
         &self,
         account: &ProviderAccount,
         secret: CodexOAuthSecret,
-        signed: &CodexSignedIdentity,
+        access_token_expires_at: SystemTime,
         next_refresh_at: SystemTime,
     ) -> Result<CredentialRevision, CredentialRepositoryError> {
         let current = self
@@ -102,17 +104,6 @@ impl CodexCredentialRepository {
         let oauth = data
             .oauth_mut()
             .ok_or(CredentialRepositoryError::InvalidCredentialData)?;
-        if oauth.principal.oauth_subject != signed.oauth_subject()
-            || oauth.principal.poid.as_deref() != signed.poid()
-            || signed
-                .claimed_account_id()
-                .is_some_and(|value| account.upstream_account_id() != Some(value))
-            || signed
-                .claimed_user_id()
-                .is_some_and(|value| account.upstream_user_id() != value)
-        {
-            return Err(CredentialRepositoryError::IdentityMismatch);
-        }
         oauth.access_token = secret.access_token.expose_secret().to_owned();
         oauth.refresh_token = secret
             .refresh_token
@@ -129,7 +120,7 @@ impl CodexCredentialRepository {
             unchanged_profile(account),
             credential,
             secret.refresh_token.is_some(),
-            Some(SystemTime::from(signed.access_token_expires_at())),
+            Some(access_token_expires_at),
             Some(next_refresh_at),
         )
         .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;

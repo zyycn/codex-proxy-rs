@@ -360,21 +360,16 @@ impl TokenRefresher for ManualRefresher {
     }
 }
 
-struct ManualVerifier;
+struct RejectingManualVerifier;
 
 #[async_trait]
-impl CodexAccountIdentityVerifier for ManualVerifier {
+impl CodexAccountIdentityVerifier for RejectingManualVerifier {
     async fn verify(
         &self,
-        secret: &provider_openai::credential::CodexOAuthSecret,
+        _secret: &provider_openai::credential::CodexOAuthSecret,
         _expectation: &CodexIdentityExpectation,
     ) -> Result<CodexIdentityVerification, CodexIdentityVerificationError> {
-        if secret.access_token.expose_secret() != "refreshed-access" {
-            return Err(CodexIdentityVerificationError::Rejected);
-        }
-        Ok(CodexIdentityVerification::Complete(profile(
-            "chatgpt-acct_manual_refresh",
-        )))
+        Err(CodexIdentityVerificationError::Rejected)
     }
 
     async fn verify_authorization(
@@ -473,7 +468,7 @@ async fn manual_refresh_fixture(
     });
     let service = CodexCredentialAdminService::new(
         refresher.clone(),
-        Arc::new(ManualVerifier),
+        Arc::new(RejectingManualVerifier),
         leases.clone(),
         runtime_policy(),
     );
@@ -489,7 +484,7 @@ fn refreshed_tokens() -> TokenPair {
 }
 
 #[tokio::test]
-async fn manual_refresh_prepares_revision_fenced_rotation_without_store_mutation() {
+async fn manual_refresh_prepares_rotation_without_identity_verification() {
     let (store, refresher, leases, service) =
         manual_refresh_fixture(Ok(refreshed_tokens()), true).await;
     let account_id = ProviderAccountId::new("acct_manual_refresh").expect("account id");

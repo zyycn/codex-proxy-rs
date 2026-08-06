@@ -16,13 +16,10 @@ use gateway_core::provider_ports::{
 use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
 
-use super::identity::{
-    CodexAccountIdentityVerifier, CodexIdentityExpectation, CodexIdentityVerification,
-    CodexIdentityVerificationError,
-};
+use super::identity::CodexAccountIdentityVerifier;
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
 use super::token_client::{RefreshFailure, TokenPair, TokenRefresher};
-use super::types::{CodexCredentialPrincipal, CodexOAuthSecret, RotateCodexCredential};
+use super::types::CodexOAuthSecret;
 
 const PROVIDER_NAME: &str = "openai";
 const MAX_REFRESH_BATCH: u32 = 1_000;
@@ -117,8 +114,6 @@ fn refresh_due_at(account: &ProviderAccount, now: SystemTime) -> Option<SystemTi
 pub struct DueCodexCredential {
     pub account: ProviderAccount,
     pub secret: CodexOAuthSecret,
-    principal: CodexCredentialPrincipal,
-    installation_id: String,
 }
 
 impl std::fmt::Debug for DueCodexCredential {
@@ -170,7 +165,6 @@ pub enum CodexCredentialRefreshError {
 pub struct CodexCredentialRefreshService {
     repository: CodexCredentialRepository,
     refresher: Arc<dyn TokenRefresher>,
-    identity: Arc<dyn CodexAccountIdentityVerifier>,
     leases: Arc<dyn ProviderLeasePort>,
     credential_state: Arc<dyn ProviderCredentialStatePort>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
@@ -180,7 +174,7 @@ impl CodexCredentialRefreshService {
     pub fn new(
         repository: CodexCredentialRepository,
         refresher: Arc<dyn TokenRefresher>,
-        identity: Arc<dyn CodexAccountIdentityVerifier>,
+        _identity: Arc<dyn CodexAccountIdentityVerifier>,
         leases: Arc<dyn ProviderLeasePort>,
         credential_state: Arc<dyn ProviderCredentialStatePort>,
         runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
@@ -188,7 +182,6 @@ impl CodexCredentialRefreshService {
         Self {
             repository,
             refresher,
-            identity,
             leases,
             credential_state,
             runtime_policy,
@@ -370,15 +363,9 @@ impl CodexCredentialRefreshService {
                     let Some(secret) = runtime.authentication.oauth() else {
                         unreachable!("OAuth runtime authentication was checked above")
                     };
-                    let Some(principal) = runtime.principal else {
-                        failures.push(CodexCredentialRefreshOutcome::Failed { account_id });
-                        continue;
-                    };
                     due.push(DueCodexCredential {
                         account,
                         secret: secret.clone(),
-                        principal,
-                        installation_id: runtime.installation_id,
                     });
                 }
                 Ok(_) | Err(_) => {
@@ -395,125 +382,38 @@ impl CodexCredentialRefreshService {
         tokens: TokenPair,
         policy: ProviderRefreshPolicy,
     ) -> Result<CodexCredentialRefreshOutcome, CodexCredentialRefreshError> {
-        if tokens.access_token.is_empty() || tokens.expires_in.is_zero() {
+        let TokenPair {
+            access_token,
+            refresh_token: rotated_refresh_token,
+            expires_in,
+        } = tokens;
+        if access_token.is_empty() || expires_in.is_zero() {
             return Err(CodexCredentialRefreshError::InvalidRefreshResponse);
         }
-        let refresh_token = tokens
-            .refresh_token
+        let observed_at = SystemTime::now();
+        let access_token_expires_at = observed_at
+            .checked_add(expires_in)
+            .ok_or(CodexCredentialRefreshError::InvalidRefreshResponse)?;
+        let refresh_token = rotated_refresh_token
             .map(SecretString::from)
             .or(due.secret.refresh_token);
-        let account_id = due
-            .account
-            .upstream_account_id()
-            .ok_or(CodexCredentialRefreshError::InvalidRefreshResponse)?;
-        let expectation = CodexIdentityExpectation::current(
-            due.principal.oauth_subject,
-            due.principal.poid,
-            account_id.to_owned(),
-            due.account.upstream_user_id().to_owned(),
-            due.installation_id,
-        )
-        .map_err(|_| CodexCredentialRefreshError::InvalidRefreshResponse)?;
         let secret = CodexOAuthSecret {
-            access_token: SecretString::from(tokens.access_token),
+            access_token: SecretString::from(access_token),
             refresh_token,
             id_token: due.secret.id_token,
         };
-        let verification = match self.identity.verify(&secret, &expectation).await {
-            Ok(verification) => verification,
-            Err(CodexIdentityVerificationError::Rejected) => {
-                return self
-                    .persist_terminal(
-                        &due.account,
-                        AccountAvailability::Invalid,
-                        "identity_rejected",
-                        CodexCredentialRefreshOutcome::Invalidated {
-                            account_id: due.account.id().to_string(),
-                        },
-                    )
-                    .await;
-            }
-            Err(CodexIdentityVerificationError::Unavailable) => {
-                // JWKS/签名边界短暂不可用属瞬态：保留现有凭据、推进退避重试，
-                // 不终态失效账号。
-                return if self
-                    .defer_refresh(&due.account, "identity-unavailable")
-                    .await?
-                {
-                    Ok(CodexCredentialRefreshOutcome::Transient {
-                        account_id: due.account.id().to_string(),
-                    })
-                } else {
-                    Ok(CodexCredentialRefreshOutcome::Stale {
-                        account_id: due.account.id().to_string(),
-                    })
-                };
-            }
-        };
-        let profile = match verification {
-            CodexIdentityVerification::Complete(profile) => profile,
-            CodexIdentityVerification::SignedOnly(signed) => {
-                let attempt = self
-                    .credential_state
-                    .record_refresh_backoff(due.account.id(), REFRESH_BACKOFF_WINDOW)
-                    .await
-                    .unwrap_or(1);
-                let access_token_expires_at =
-                    Some(SystemTime::from(signed.access_token_expires_at()));
-                let retry_at = oauth_refresh_retry_at(
-                    due.account.id(),
-                    access_token_expires_at,
-                    SystemTime::now(),
-                    attempt,
-                    "identity-completion",
-                )?;
-                match self
-                    .repository
-                    .rotate_signed_secret(&due.account, secret, &signed, retry_at)
-                    .await
-                {
-                    Ok(_) => {
-                        log_refresh_deferred(
-                            due.account.id(),
-                            access_token_expires_at,
-                            attempt,
-                            "identity-completion",
-                            retry_at,
-                        );
-                        return Ok(CodexCredentialRefreshOutcome::Transient {
-                            account_id: due.account.id().to_string(),
-                        });
-                    }
-                    Err(CredentialRepositoryError::RevisionConflict) => {
-                        return Ok(CodexCredentialRefreshOutcome::Stale {
-                            account_id: due.account.id().to_string(),
-                        });
-                    }
-                    Err(error) => return Err(error.into()),
-                }
-            }
-        };
-        let access_token_expires_at = profile.access_token_expires_at.map(SystemTime::from);
         let next_refresh_at = policy
-            .next_attempt_at(
-                due.account.id(),
-                profile
-                    .access_token_expires_at
-                    .map(SystemTime::from)
-                    .ok_or(CodexCredentialRefreshError::InvalidRefreshResponse)?,
-                SystemTime::now(),
-            )
+            .next_attempt_at(due.account.id(), access_token_expires_at, observed_at)
             .map(DateTime::<Utc>::from)
             .map_err(CodexCredentialRefreshError::from)?;
         let result = self
             .repository
-            .rotate_oauth_secret(RotateCodexCredential {
-                account_id: due.account.id().to_string(),
-                expected_credential_revision: due.account.revision().get(),
+            .rotate_refreshed_oauth_secret(
+                &due.account,
                 secret,
-                verified_account: profile,
-                next_refresh_at: Some(next_refresh_at),
-            })
+                access_token_expires_at,
+                SystemTime::from(next_refresh_at),
+            )
             .await;
         match result {
             Ok(revision) => {
@@ -525,7 +425,7 @@ impl CodexCredentialRefreshService {
                 tracing::info!(
                     account_id = %due.account.id(),
                     credential_revision = revision.get(),
-                    access_token_expires_at = ?access_token_expires_at.map(DateTime::<Utc>::from),
+                    access_token_expires_at = %DateTime::<Utc>::from(access_token_expires_at),
                     next_refresh_at = %next_refresh_at,
                     "OpenAI OAuth refresh succeeded"
                 );

@@ -25,9 +25,7 @@ use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
 
-use super::identity::{
-    CodexAccountIdentityVerifier, CodexIdentityExpectation, CodexIdentityVerificationError,
-};
+use super::identity::{CodexAccountIdentityVerifier, CodexIdentityVerificationError};
 use super::security::CodexCredentialCodec;
 use super::token_client::{RefreshFailure, TokenRefresher};
 use super::types::{
@@ -499,6 +497,62 @@ impl CodexCredentialAdmin {
         self.prepare_oauth_rotation(input, false)
     }
 
+    /// 构建一次成功 RT exchange 的 CAS 写入，保留已存账号身份资料。
+    ///
+    /// Refresh endpoint 已经完成本次 token 交换的授权；这里不对新 access
+    /// token 重新执行身份验证。
+    pub(crate) fn prepare_refreshed_oauth_rotation(
+        &self,
+        current: LoadedCredential,
+        secret: CodexOAuthSecret,
+        access_token_expires_at: DateTime<Utc>,
+        next_refresh_at: Option<DateTime<Utc>>,
+    ) -> Result<PreparedCodexCredentialRotation, CodexCredentialAdminError> {
+        if current.account.provider().as_str() != PROVIDER_NAME
+            || current.account.authentication_kind() != CODEX_AUTHENTICATION_KIND_OAUTH
+        {
+            return Err(CodexCredentialAdminError::IdentityMismatch);
+        }
+        let mut data = CodexCredentialCodec::decode_complete(&current.credential)
+            .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
+        let oauth = data
+            .oauth_mut()
+            .ok_or(CodexCredentialAdminError::IdentityMismatch)?;
+        oauth.access_token = secret.access_token.expose_secret().to_owned();
+        oauth.refresh_token = secret
+            .refresh_token
+            .as_ref()
+            .map(|value| value.expose_secret().to_owned());
+        oauth.id_token = secret
+            .id_token
+            .as_ref()
+            .map(|value| value.expose_secret().to_owned());
+        let credential = CodexCredentialCodec::encode_complete(data)
+            .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
+        let profile = ProviderAccountUpdate {
+            account_id: current.account.id().clone(),
+            name: current.account.name().to_owned(),
+            email: current.account.email().map(str::to_owned),
+            plan_type: current.account.plan_type().map(str::to_owned),
+        };
+        let credential = CredentialCasUpdate::new(
+            current.account.id().clone(),
+            current.account.revision(),
+            profile.clone(),
+            credential,
+            secret.refresh_token.is_some(),
+            Some(SystemTime::from(access_token_expires_at)),
+            optional_time(next_refresh_at),
+        )
+        .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
+        Ok(PreparedCodexCredentialRotation {
+            profile,
+            credential,
+            replacement_identity: None,
+            refresh_guards: None,
+        })
+    }
+
     /// 完整 OAuth 授权按目标数据 ID 替换凭据与上游账号身份。
     pub(crate) fn prepare_reauthorization(
         &self,
@@ -620,7 +674,7 @@ impl CodexCredentialAdminService {
         }
     }
 
-    /// 官方 RT exchange + AT 身份验证；结果由 App 在同一 revision/audit 事务中提交。
+    /// 官方 RT exchange；结果由 App 在同一 revision/audit 事务中提交。
     pub async fn manual_refresh(
         &self,
         current: LoadedCredential,
@@ -632,7 +686,6 @@ impl CodexCredentialAdminService {
         }
         let runtime = CodexCredentialCodec::decode(&current.credential)
             .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
-        let expectation = current_identity_expectation(&current.account, &runtime)?;
         let oauth = runtime
             .authentication
             .oauth()
@@ -680,6 +733,10 @@ impl CodexCredentialAdminService {
         if tokens.access_token.trim().is_empty() || tokens.expires_in.is_zero() {
             return Err(CodexCredentialAdminError::InvalidCredential);
         }
+        let access_token_expires_at = SystemTime::now()
+            .checked_add(tokens.expires_in)
+            .map(DateTime::<Utc>::from)
+            .ok_or(CodexCredentialAdminError::InvalidCredential)?;
         let secret = CodexOAuthSecret {
             access_token: SecretString::from(tokens.access_token),
             refresh_token: tokens
@@ -688,24 +745,18 @@ impl CodexCredentialAdminService {
                 .or_else(|| oauth.refresh_token.clone()),
             id_token: oauth.id_token.clone(),
         };
-        let verified_account = self
-            .verifier
-            .verify(&secret, &expectation)
-            .await
-            .and_then(super::identity::CodexIdentityVerification::into_complete)
-            .map_err(map_identity_error)?;
         let next_refresh_at = refresh_time(
             policy,
             &account_id,
-            verified_account.access_token_expires_at,
+            Some(access_token_expires_at),
             secret.refresh_token.is_some(),
         )?;
-        let mut prepared = CodexCredentialAdmin.prepare_rotation(RotateManagedCodexCredential {
+        let mut prepared = CodexCredentialAdmin.prepare_refreshed_oauth_rotation(
             current,
             secret,
-            verified_account,
+            access_token_expires_at,
             next_refresh_at,
-        })?;
+        )?;
         prepared.refresh_guards = Some(ProviderRefreshGuards {
             _capacity: capacity_guard,
             _account: account_guard,
@@ -937,27 +988,6 @@ impl CodexCredentialAdminService {
             credential,
         })
     }
-}
-
-fn current_identity_expectation(
-    account: &ProviderAccount,
-    credential: &super::security::CodexRuntimeCredential,
-) -> Result<CodexIdentityExpectation, CodexCredentialAdminError> {
-    let account_id = account
-        .upstream_account_id()
-        .ok_or(CodexCredentialAdminError::InvalidCredential)?;
-    let principal = credential
-        .principal
-        .as_ref()
-        .ok_or(CodexCredentialAdminError::InvalidCredential)?;
-    CodexIdentityExpectation::current(
-        principal.oauth_subject.clone(),
-        principal.poid.clone(),
-        account_id.to_owned(),
-        account.upstream_user_id().to_owned(),
-        credential.installation_id.clone(),
-    )
-    .map_err(|_| CodexCredentialAdminError::InvalidCredential)
 }
 
 fn required_time(

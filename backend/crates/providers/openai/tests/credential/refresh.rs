@@ -379,7 +379,7 @@ async fn successful_refresh_uses_redis_lease_and_cas_rotates_plaintext_tokens() 
 }
 
 #[tokio::test]
-async fn refreshed_identity_rejection_revision_fences_account_as_invalid() {
+async fn refreshed_tokens_persist_when_identity_verification_rejects() {
     let (store, _, _) = setup(Ok(success_tokens()), true).await;
     let service = CodexCredentialRefreshService::new(
         store.repository(),
@@ -397,19 +397,31 @@ async fn refreshed_identity_rejection_revision_fences_account_as_invalid() {
 
     assert!(matches!(
         outcomes.as_slice(),
-        [CodexCredentialRefreshOutcome::Invalidated { .. }]
+        [CodexCredentialRefreshOutcome::Refreshed {
+            account_id,
+            credential_revision: 2
+        }] if account_id == "acct_refresh"
     ));
+    let account = store.account("acct_refresh").expect("refreshed account");
+    assert_eq!(account.availability(), AccountAvailability::Ready);
+    let runtime = store
+        .repository()
+        .load_runtime_credential(&account)
+        .await
+        .expect("refreshed credential");
     assert_eq!(
-        store
-            .account("acct_refresh")
-            .expect("invalid account")
-            .availability(),
-        AccountAvailability::Invalid
+        runtime
+            .authentication
+            .oauth()
+            .expect("OAuth credential")
+            .access_token
+            .expose_secret(),
+        "new-access"
     );
 }
 
 #[tokio::test]
-async fn unavailable_signature_verification_persists_refresh_backoff() {
+async fn refreshed_tokens_persist_when_identity_verification_is_unavailable() {
     let (store, _, _) = setup(Ok(success_tokens()), true).await;
     let service = CodexCredentialRefreshService::new(
         store.repository(),
@@ -428,11 +440,10 @@ async fn unavailable_signature_verification_persists_refresh_backoff() {
 
     assert!(matches!(
         outcomes.as_slice(),
-        [CodexCredentialRefreshOutcome::Transient { .. }]
+        [CodexCredentialRefreshOutcome::Refreshed { .. }]
     ));
-    let account = store.account("acct_refresh").expect("deferred account");
+    let account = store.account("acct_refresh").expect("refreshed account");
     assert_eq!(account.revision().get(), 2);
-    // JWKS/签名边界短暂不可用是瞬态：账号保持可用、不被永久失效，仅推进退避重试。
     assert_eq!(account.availability(), AccountAvailability::Ready);
     assert!(
         account
@@ -442,7 +453,7 @@ async fn unavailable_signature_verification_persists_refresh_backoff() {
 }
 
 #[tokio::test]
-async fn unavailable_usage_preserves_rotated_tokens_and_persists_backoff() {
+async fn refreshed_tokens_do_not_require_identity_completion() {
     let store = Arc::new(MemoryAccountStore::default());
     let signed = super::identity::signed_identity_fixture().await;
     let mut account_profile = profile("account-signed");
@@ -476,7 +487,7 @@ async fn unavailable_usage_preserves_rotated_tokens_and_persists_backoff() {
 
     assert!(matches!(
         outcomes.as_slice(),
-        [CodexCredentialRefreshOutcome::Transient { .. }]
+        [CodexCredentialRefreshOutcome::Refreshed { .. }]
     ));
     let account = store.account("acct_signed_only").expect("rotated account");
     assert_eq!(account.revision().get(), 2);
