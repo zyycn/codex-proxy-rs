@@ -70,7 +70,7 @@ const loadingIconSize: Record<ButtonSize, number> = {
 }
 
 const classes = computed(() => [
-  'relative inline-flex items-center justify-center border-0 font-bold leading-[1.15] transition-[background-color,box-shadow,color,opacity,transform] duration-150 cursor-pointer outline-none motion-safe:active:translate-y-px motion-safe:active:scale-[0.985]',
+  'inline-flex items-center justify-center border-0 font-bold leading-[1.15] transition-[background-color,box-shadow,color,opacity,transform] duration-150 cursor-pointer outline-none motion-safe:active:translate-y-px motion-safe:active:scale-[0.985]',
   props.iconOnly ? iconOnlySizeClasses[props.size] : sizeClasses[props.size],
   props.iconOnly ? '' : 'rounded-(--cp-button-radius-base)',
   'focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)',
@@ -110,7 +110,7 @@ const labelClasses = computed(() => [
   >
     <span
       v-if="loading"
-      class="pointer-events-none absolute inset-0 inline-flex items-center justify-center leading-none"
+      class="inline-flex shrink-0 items-center justify-center leading-none"
       aria-hidden="true"
     >
       <LoaderCircle
@@ -118,24 +118,15 @@ const labelClasses = computed(() => [
         class="block animate-spin origin-center [transform-box:view-box] will-change-transform"
       />
     </span>
-    <span
-      v-if="$slots.icon"
-      class="inline-flex shrink-0 transition-opacity duration-150"
-      :class="loading ? 'opacity-0' : undefined"
-    >
+    <span v-if="$slots.icon && !loading" class="inline-flex shrink-0">
       <slot name="icon" />
     </span>
-    <span
-      v-if="!iconOnly && $slots.default"
-      class="transition-opacity duration-150"
-      :class="[labelClasses, loading ? 'opacity-0' : undefined]"
-    >
+    <span v-if="!iconOnly && $slots.default" :class="labelClasses">
       <slot />
     </span>
     <span
-      v-if="iconOnly && !$slots.icon"
-      class="inline-flex items-center justify-center transition-opacity duration-150"
-      :class="loading ? 'opacity-0' : undefined"
+      v-if="iconOnly && !$slots.icon && !loading"
+      class="inline-flex items-center justify-center"
     >
       <slot />
     </span>
