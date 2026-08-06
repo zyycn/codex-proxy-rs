@@ -116,27 +116,6 @@ fn stdout_filter_directive(directive: &str, persistent_log_enabled: bool) -> Str
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use tracing_subscriber::prelude::*;
-
-    use super::{OPENAI_OAUTH_RECOVERY_LOG_TARGET, file_filter};
-
-    #[test]
-    fn oauth_recovery_file_filter_overrides_global_log_level() {
-        let subscriber = tracing_subscriber::registry()
-            .with(file_filter("off,openai_oauth_recovery=off").expect("valid global filter"));
-
-        tracing::subscriber::with_default(subscriber, || {
-            assert!(tracing::enabled!(
-                target: OPENAI_OAUTH_RECOVERY_LOG_TARGET,
-                tracing::Level::INFO
-            ));
-            assert!(!tracing::enabled!(target: "other", tracing::Level::INFO));
-        });
-    }
-}
-
 struct RotatingLogWriter {
     directory: PathBuf,
     maximum_bytes: u64,

@@ -1,7 +1,15 @@
-use std::path::PathBuf;
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use gateway_host::config::{FileLoggingConfig, HostConfig, ListenConfig, LoggingConfig};
 use gateway_host::system_update::SystemUpdateConfig;
+
+const LOG_DIRECTORY_ENV: &str = "CPR_LOGGING_TEST_DIRECTORY";
+const CHILD_PROCESS_ENV: &str = "CPR_LOGGING_TEST_CHILD";
+const OAUTH_RECOVERY_LOG_TARGET: &str = "openai_oauth_recovery";
+const OAUTH_RECOVERY_LOG_MARKER: &str = "oauth-recovery-file-filter-test";
 
 #[test]
 fn logging_requires_at_least_one_sink() {
@@ -31,4 +39,88 @@ fn logging_requires_at_least_one_sink() {
             .resolve_and_validate(std::path::Path::new("/tmp"))
             .is_err()
     );
+}
+
+#[test]
+fn oauth_recovery_file_logging_overrides_global_log_level() {
+    if env::var_os(CHILD_PROCESS_ENV).is_some() {
+        write_oauth_recovery_log(PathBuf::from(
+            env::var_os(LOG_DIRECTORY_ENV).expect("child log directory"),
+        ));
+        return;
+    }
+
+    let directory = tempfile::tempdir().expect("create log directory");
+    let output = Command::new(env::current_exe().expect("current test executable"))
+        .args([
+            "--exact",
+            "logging::oauth_recovery_file_logging_overrides_global_log_level",
+            "--nocapture",
+        ])
+        .env(CHILD_PROCESS_ENV, "1")
+        .env(LOG_DIRECTORY_ENV, directory.path())
+        .env("RUST_LOG", "off,openai_oauth_recovery=off")
+        .output()
+        .expect("run logging child process");
+
+    assert!(
+        output.status.success(),
+        "logging child process failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let log = read_log_directory(directory.path());
+    assert!(log.contains(OAUTH_RECOVERY_LOG_TARGET));
+    assert!(log.contains(OAUTH_RECOVERY_LOG_MARKER));
+}
+
+fn write_oauth_recovery_log(directory: PathBuf) {
+    let config = HostConfig {
+        listen: ListenConfig {
+            host: "127.0.0.1".to_owned(),
+            port: 8080,
+        },
+        logging: LoggingConfig {
+            level: "off".to_owned(),
+            stdout: false,
+            file: FileLoggingConfig {
+                enabled: true,
+                directory,
+                retention_days: 1,
+                max_file_size_mb: 1,
+                max_files: 1,
+            },
+        },
+        system_update: SystemUpdateConfig::default(),
+        drain_timeout_seconds: 30,
+        worker_shutdown_timeout_seconds: 30,
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("create logging runtime");
+    let bundle = runtime
+        .block_on(gateway_host::initialize(config))
+        .expect("initialize logging");
+
+    tracing::info!(
+        target: OAUTH_RECOVERY_LOG_TARGET,
+        marker = OAUTH_RECOVERY_LOG_MARKER,
+        "OpenAI OAuth recovery test record"
+    );
+    drop(bundle);
+}
+
+fn read_log_directory(directory: &Path) -> String {
+    let mut files = fs::read_dir(directory)
+        .expect("read log directory")
+        .map(|entry| entry.expect("read log entry").path())
+        .collect::<Vec<_>>();
+    files.sort();
+
+    files
+        .into_iter()
+        .map(|path| fs::read_to_string(path).expect("read log file"))
+        .collect()
 }
