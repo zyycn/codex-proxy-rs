@@ -1,11 +1,11 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chrono::{TimeZone, Utc};
 use ed25519_dalek::SigningKey;
 use ed25519_dalek::pkcs8::EncodePrivateKey as _;
@@ -635,6 +635,15 @@ fn import_service_with_source(
     )
 }
 
+fn access_token_with_expiry(expires_at: chrono::DateTime<Utc>) -> String {
+    let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
+    let payload = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&serde_json::json!({ "exp": expires_at.timestamp() }))
+            .expect("serialize access-token payload"),
+    );
+    format!("{header}.{payload}.signature")
+}
+
 pub(super) fn unused_import_refresher() -> Arc<ManualRefresher> {
     Arc::new(ManualRefresher {
         outcome: Mutex::new(Some(Err(RefreshFailure::InvalidGrant))),
@@ -680,6 +689,7 @@ async fn oauth_import_accepts_opaque_access_token_and_completes_profile_from_acc
     assert_eq!(account.account.email(), Some("remote-cpr@example.com"));
     assert_eq!(account.account.plan_type(), Some("team"));
     assert_eq!(account.account.access_token_expires_at(), None);
+    assert_eq!(account.account.next_refresh_at(), None);
     let runtime = CodexCredentialCodec::decode(&account.credential).expect("credential");
     assert_eq!(
         runtime
@@ -707,6 +717,35 @@ async fn oauth_import_accepts_opaque_access_token_and_completes_profile_from_acc
             .as_slice(),
         [CodexIdentityExpectation::default()]
     );
+}
+
+#[tokio::test]
+async fn oauth_import_uses_access_token_expiry_for_refresh_schedule_without_identity_validation() {
+    let expires_at = Utc::now() + chrono::Duration::hours(3);
+    let access_token = access_token_with_expiry(expires_at);
+    let source = account_source([authenticated_account(
+        "chatgpt-expiry",
+        "user-expiry",
+        Some("expiry@example.com"),
+        Some("team"),
+    )]);
+    let prepared = import_service_with_source(unused_import_refresher(), source)
+        .prepare_import_document(serde_json::json!({
+            "access_token": access_token,
+            "refresh_token": "refresh-expiry"
+        }))
+        .await
+        .expect("OAuth import with JWT expiry");
+
+    let account = &prepared.accounts()[0].account;
+    let stored_expiry = account
+        .access_token_expires_at()
+        .map(chrono::DateTime::<Utc>::from)
+        .expect("persisted access-token expiry");
+    let next_refresh_at = account.next_refresh_at().expect("scheduled token refresh");
+    assert_eq!(stored_expiry.timestamp(), expires_at.timestamp());
+    assert!(next_refresh_at > SystemTime::now());
+    assert!(next_refresh_at < account.access_token_expires_at().expect("access expiry"));
 }
 
 #[tokio::test]

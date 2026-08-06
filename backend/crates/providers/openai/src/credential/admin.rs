@@ -8,6 +8,10 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use base64::{
+    Engine as _,
+    engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
+};
 use chrono::{DateTime, FixedOffset, Utc};
 use gateway_core::engine::credential::{
     AccountAvailability, CredentialCasUpdate, CredentialRevision, LoadedCredential,
@@ -902,7 +906,7 @@ impl CodexCredentialAdminService {
             .filter(|token| !token.is_empty());
         if let Some(access_token) = access_token {
             let secret = CodexOAuthSecret {
-                access_token: SecretString::from(access_token),
+                access_token: SecretString::from(access_token.clone()),
                 refresh_token: refresh_token.map(SecretString::from),
                 id_token: None,
             };
@@ -911,7 +915,8 @@ impl CodexCredentialAdminService {
                 Some(account_id.as_str()),
                 &secret,
             );
-            return Ok((secret, None));
+            // 仅用 AT 的 exp 安排刷新，不作为身份校验依据。
+            return Ok((secret, unverified_access_token_expiry(&access_token)));
         }
         let refresh_token = refresh_token.ok_or(CodexCredentialAdminError::InvalidCredential)?;
         let tokens = self
@@ -1048,10 +1053,10 @@ pub(crate) fn refresh_time(
     if !has_refresh_token {
         return Ok(None);
     }
+    let Some(expires_at) = access_token_expires_at.map(SystemTime::from) else {
+        return Ok(None);
+    };
     let observed_at = SystemTime::now();
-    let expires_at = access_token_expires_at
-        .map(SystemTime::from)
-        .unwrap_or(observed_at);
     policy
         .next_attempt_at(account_id, expires_at, observed_at)
         .map(DateTime::<Utc>::from)
@@ -1279,6 +1284,19 @@ fn normalize_bearer(value: &str) -> String {
         .unwrap_or(value)
         .trim()
         .to_owned()
+}
+
+fn unverified_access_token_expiry(token: &str) -> Option<DateTime<Utc>> {
+    let payload = token.split('.').nth(1)?;
+    let decoded = URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| URL_SAFE.decode(payload))
+        .ok()?;
+    let claims = serde_json::from_slice::<Value>(&decoded).ok()?;
+    claims
+        .get("exp")
+        .and_then(Value::as_i64)
+        .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
 }
 
 pub(crate) async fn complete_oauth_account_profile(
