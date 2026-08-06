@@ -29,7 +29,7 @@ impl fmt::Debug for CodexOAuthSecret {
     }
 }
 
-/// 已由官方 JWT/OIDC 与认证 usage 响应共同确认的完整账号投影。
+/// OAuth credential 持久化时使用的账号投影。
 #[derive(Clone)]
 pub struct CodexAccountProfile {
     pub email: Option<String>,

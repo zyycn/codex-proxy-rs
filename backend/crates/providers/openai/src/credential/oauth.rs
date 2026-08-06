@@ -1,6 +1,10 @@
 //! Codex Authorization Code + PKCE/OIDC 管理流。
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -24,11 +28,9 @@ use uuid::Uuid;
 
 use super::admin::{
     CodexCredentialAdmin, CodexCredentialAdminError, ImportCodexOAuthCredential,
-    PreparedCodexCredentialRotation, RotateManagedCodexCredential, refresh_time,
+    PreparedCodexCredentialRotation, refresh_time, unverified_oauth_profile,
 };
-use super::identity::{
-    CodexAccountIdentityVerifier, CodexIdentityExpectation, CodexIdentityVerificationError,
-};
+use super::identity::CodexAccountIdentityVerifier;
 use super::token_client::{
     AuthorizationCodeExchangeError, AuthorizationCodeExchanger, AuthorizationCodeGrant,
     OFFICIAL_CODEX_OAUTH_CLIENT_ID, OFFICIAL_CODEX_REDIRECT_URI,
@@ -344,7 +346,6 @@ pub trait CodexOAuthAdmin: Send + Sync {
 pub struct CodexOAuthAdminService {
     pending: Arc<dyn CodexOAuthPendingStore>,
     exchanger: Arc<dyn AuthorizationCodeExchanger>,
-    verifier: Arc<dyn CodexAccountIdentityVerifier>,
     store: Arc<dyn ProviderAccountStore>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     credentials: CodexCredentialAdmin,
@@ -396,7 +397,7 @@ impl CodexOAuthAdminService {
     pub fn new(
         pending: Arc<dyn CodexOAuthPendingStore>,
         exchanger: Arc<dyn AuthorizationCodeExchanger>,
-        verifier: Arc<dyn CodexAccountIdentityVerifier>,
+        _verifier: Arc<dyn CodexAccountIdentityVerifier>,
         store: Arc<dyn ProviderAccountStore>,
         runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
         credentials: CodexCredentialAdmin,
@@ -404,7 +405,6 @@ impl CodexOAuthAdminService {
         Self {
             pending,
             exchanger,
-            verifier,
             store,
             runtime_policy,
             credentials,
@@ -487,7 +487,8 @@ impl CodexOAuthAdminService {
         callback_url: &str,
     ) -> Result<(PendingAuthorizationMutation, CompletedCodexOAuthCredential), CodexOAuthAdminError>
     {
-        let (mut secret, id_token) = self.exchange_pending(&pending, callback_url).await?;
+        let (mut secret, id_token, expires_in) =
+            self.exchange_pending(&pending, callback_url).await?;
         let mutation = pending.mutation.clone();
         let current = if let Some(target) = pending.reauthorization() {
             let current = self
@@ -499,13 +500,10 @@ impl CodexOAuthAdminService {
         } else {
             None
         };
-        let expectation = CodexIdentityExpectation::default();
-        let profile = self
-            .verifier
-            .verify_authorization(&secret, &id_token, &pending.nonce, &expectation)
-            .await
-            .and_then(super::identity::CodexIdentityVerification::into_complete)
-            .map_err(map_identity_error)?;
+        let access_token_expires_at = SystemTime::now()
+            .checked_add(expires_in)
+            .map(DateTime::<Utc>::from)
+            .ok_or(CodexOAuthAdminError::Credential)?;
         secret.id_token = Some(id_token);
         let policy = self
             .runtime_policy
@@ -516,28 +514,33 @@ impl CodexOAuthAdminService {
             let next_refresh_at = refresh_time(
                 policy,
                 current.account.id(),
-                profile.access_token_expires_at,
+                Some(access_token_expires_at),
                 secret.refresh_token.is_some(),
             )
             .map_err(map_admin_error)?;
             CompletedCodexOAuthCredential::Reauthorize(
                 self.credentials
-                    .prepare_reauthorization(RotateManagedCodexCredential {
+                    .prepare_refreshed_oauth_rotation(
                         current,
                         secret,
-                        verified_account: profile,
+                        access_token_expires_at,
                         next_refresh_at,
-                    })
+                    )
                     .map_err(map_admin_error)?,
             )
         } else {
             let account_id = format!("acct_{}", Uuid::now_v7().simple());
             let typed_account_id = ProviderAccountId::new(account_id.clone())
                 .map_err(|_| CodexOAuthAdminError::Credential)?;
+            let profile = unverified_oauth_profile(
+                &secret,
+                typed_account_id.as_str(),
+                Some(access_token_expires_at),
+            );
             let next_refresh_at = refresh_time(
                 policy,
                 &typed_account_id,
-                profile.access_token_expires_at,
+                Some(access_token_expires_at),
                 secret.refresh_token.is_some(),
             )
             .map_err(map_admin_error)?;
@@ -654,7 +657,8 @@ impl CodexOAuthAdminService {
         &self,
         pending: &CodexPendingAuthorization,
         callback_url: &str,
-    ) -> Result<(super::types::CodexOAuthSecret, SecretString), CodexOAuthAdminError> {
+    ) -> Result<(super::types::CodexOAuthSecret, SecretString, Duration), CodexOAuthAdminError>
+    {
         let (code, callback_state) = callback_parts(callback_url)?;
         if !constant_time_equal(
             pending.state.expose_secret().as_bytes(),
@@ -670,7 +674,7 @@ impl CodexOAuthAdminService {
             })
             .await
             .map_err(map_exchange_error)?;
-        Ok((tokens.secret, tokens.id_token))
+        Ok((tokens.secret, tokens.id_token, tokens.expires_in))
     }
 }
 
@@ -699,27 +703,19 @@ fn authorization_url(
 
 fn callback_parts(value: &str) -> Result<(SecretString, SecretString), CodexOAuthAdminError> {
     let url = Url::parse(value).map_err(|_| CodexOAuthAdminError::CallbackRejected)?;
-    if url.scheme() != "http"
-        || url.host_str() != Some("localhost")
-        || url.port() != Some(1455)
-        || url.path() != "/auth/callback"
-        || url.fragment().is_some()
-    {
-        return Err(CodexOAuthAdminError::CallbackRejected);
-    }
     let mut code = None;
     let mut state = None;
     for (key, value) in url.query_pairs() {
         match key.as_ref() {
             "code" => set_unique_callback_parameter(&mut code, value.into_owned())?,
             "state" => set_unique_callback_parameter(&mut state, value.into_owned())?,
-            // OAuth 服务可能附加 `scope`、`iss` 等标准参数。
-            // 固定回调地址与唯一的 `code`/`state` 才是安全边界，无关参数不参与校验。
+            // 回调地址只承载 query 参数；安全绑定由唯一的 code/state、
+            // 服务端保存的 state 和 PKCE token exchange 共同完成。
             _ => {}
         }
     }
-    let code = code.filter(|value| valid_secret(value));
-    let state = state.filter(|value| valid_secret(value));
+    let code = code.filter(|value| !value.is_empty());
+    let state = state.filter(|value| !value.is_empty());
     match (code, state) {
         (Some(code), Some(state)) => Ok((SecretString::from(code), SecretString::from(state))),
         _ => Err(CodexOAuthAdminError::CallbackRejected),
@@ -810,13 +806,6 @@ fn map_exchange_error(error: AuthorizationCodeExchangeError) -> CodexOAuthAdminE
         AuthorizationCodeExchangeError::Rejected => CodexOAuthAdminError::TokenRejected,
         AuthorizationCodeExchangeError::Unavailable => CodexOAuthAdminError::UpstreamUnavailable,
         AuthorizationCodeExchangeError::Ambiguous => CodexOAuthAdminError::Ambiguous,
-    }
-}
-
-fn map_identity_error(error: CodexIdentityVerificationError) -> CodexOAuthAdminError {
-    match error {
-        CodexIdentityVerificationError::Rejected => CodexOAuthAdminError::IdentityRejected,
-        CodexIdentityVerificationError::Unavailable => CodexOAuthAdminError::UpstreamUnavailable,
     }
 }
 

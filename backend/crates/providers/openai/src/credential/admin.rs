@@ -8,6 +8,10 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use base64::{
+    Engine as _,
+    engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
+};
 use chrono::{DateTime, FixedOffset, Utc};
 use gateway_core::engine::credential::{
     AccountAvailability, CredentialCasUpdate, CredentialRevision, LoadedCredential,
@@ -25,7 +29,7 @@ use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
 
-use super::identity::{CodexAccountIdentityVerifier, CodexIdentityVerificationError};
+use super::identity::CodexAccountIdentityVerifier;
 use super::security::CodexCredentialCodec;
 use super::token_client::{RefreshFailure, TokenRefresher};
 use super::types::{
@@ -38,6 +42,9 @@ const PROVIDER_NAME: &str = "openai";
 const CODEX_CREDENTIAL_SCHEMA_VERSION: u32 = 1;
 const MAX_BATCH: usize = 200;
 const MAX_IMPORT_DOCUMENT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_IMPORT_IDENTITY_BYTES: usize = 2_048;
+const MAX_IMPORT_EMAIL_BYTES: usize = 512;
+const MAX_IMPORT_PLAN_BYTES: usize = 128;
 
 pub struct ImportCodexOAuthCredential {
     pub account_id: String,
@@ -110,6 +117,15 @@ enum ParsedCodexAuthentication {
         private_key: String,
         task_id: Option<String>,
     },
+}
+
+#[derive(Default)]
+struct UnverifiedOAuthClaims {
+    expires_at: Option<DateTime<Utc>>,
+    chatgpt_account_id: Option<String>,
+    chatgpt_user_id: Option<String>,
+    email: Option<String>,
+    plan_type: Option<String>,
 }
 
 impl fmt::Debug for ParsedCodexAuthentication {
@@ -553,14 +569,6 @@ impl CodexCredentialAdmin {
         })
     }
 
-    /// 完整 OAuth 授权按目标数据 ID 替换凭据与上游账号身份。
-    pub(crate) fn prepare_reauthorization(
-        &self,
-        input: RotateManagedCodexCredential,
-    ) -> Result<PreparedCodexCredentialRotation, CodexCredentialAdminError> {
-        self.prepare_oauth_rotation(input, true)
-    }
-
     fn prepare_oauth_rotation(
         &self,
         input: RotateManagedCodexCredential,
@@ -642,7 +650,6 @@ impl CodexCredentialAdmin {
 /// 有状态的 Codex 手工刷新边界；消费调用方刚读取的当前 credential 并准备 CAS。
 pub struct CodexCredentialAdminService {
     refresher: Arc<dyn TokenRefresher>,
-    verifier: Arc<dyn CodexAccountIdentityVerifier>,
     leases: Arc<dyn ProviderLeasePort>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
 }
@@ -652,7 +659,6 @@ impl fmt::Debug for CodexCredentialAdminService {
         formatter
             .debug_struct("CodexCredentialAdminService")
             .field("refresher", &"TokenRefresher")
-            .field("verifier", &"CodexAccountIdentityVerifier")
             .field("leases", &"ProviderLeasePort")
             .field("runtime_policy", &"ProviderRuntimePolicyPort")
             .finish()
@@ -662,13 +668,12 @@ impl fmt::Debug for CodexCredentialAdminService {
 impl CodexCredentialAdminService {
     pub fn new(
         refresher: Arc<dyn TokenRefresher>,
-        verifier: Arc<dyn CodexAccountIdentityVerifier>,
+        _verifier: Arc<dyn CodexAccountIdentityVerifier>,
         leases: Arc<dyn ProviderLeasePort>,
         runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     ) -> Self {
         Self {
             refresher,
-            verifier,
             leases,
             runtime_policy,
         }
@@ -764,7 +769,7 @@ impl CodexCredentialAdminService {
         Ok(prepared)
     }
 
-    /// 从 OAuth token 对补全账号事实，并归一到唯一 `NewProviderAccount` 写入路径。
+    /// 对导入 token 做轻量 payload 检查，并归一到唯一 `NewProviderAccount` 写入路径。
     pub async fn prepare_import_document(
         &self,
         payload: Value,
@@ -794,9 +799,12 @@ impl CodexCredentialAdminService {
                     if !account_ids.insert(account_id.clone()) {
                         return Err(CodexCredentialAdminError::InvalidInput);
                     }
-                    let (secret, verified_account) = self
-                        .verify_import_tokens(access_token.clone(), refresh_token.clone())
+                    let (secret, access_token_expires_at) = self
+                        .resolve_import_tokens(access_token.clone(), refresh_token.clone())
                         .await?;
+                    let mut verified_account =
+                        unverified_oauth_profile(&secret, &account_id, access_token_expires_at);
+                    apply_import_metadata(&mut verified_account, &candidate);
                     if !upstream_identities.insert((
                         verified_account.chatgpt_user_id.clone(),
                         verified_account.chatgpt_account_id.clone(),
@@ -823,9 +831,11 @@ impl CodexCredentialAdminService {
                     )?;
                     CodexCredentialAdmin.prepare_import(ImportCodexOAuthCredential {
                         account_id,
-                        name: verified_account
-                            .email
+                        name: candidate
+                            .name
                             .clone()
+                            .or_else(|| candidate.email.clone())
+                            .or_else(|| verified_account.email.clone())
                             .filter(|name| !name.trim().is_empty())
                             .unwrap_or_else(|| "Codex OAuth".to_owned()),
                         secret,
@@ -866,11 +876,11 @@ impl CodexCredentialAdminService {
         Ok(PreparedCodexAccountImport { accounts })
     }
 
-    async fn verify_import_tokens(
+    async fn resolve_import_tokens(
         &self,
         access_token: Option<String>,
         refresh_token: Option<String>,
-    ) -> Result<(CodexOAuthSecret, CodexAccountProfile), CodexCredentialAdminError> {
+    ) -> Result<(CodexOAuthSecret, Option<DateTime<Utc>>), CodexCredentialAdminError> {
         let access_token = access_token
             .as_deref()
             .map(normalize_bearer)
@@ -880,21 +890,13 @@ impl CodexCredentialAdminService {
             .map(normalize_bearer)
             .filter(|token| !token.is_empty());
         if let Some(access_token) = access_token {
+            validate_unverified_import_access_token(&access_token)?;
             let secret = CodexOAuthSecret {
-                access_token: SecretString::from(access_token),
-                refresh_token: refresh_token.clone().map(SecretString::from),
+                access_token: SecretString::from(access_token.clone()),
+                refresh_token: refresh_token.map(SecretString::from),
                 id_token: None,
             };
-            match self.verifier.verify_import(&secret).await {
-                Ok(profile) => return Ok((secret, profile)),
-                Err(CodexIdentityVerificationError::Unavailable) => {
-                    return Err(CodexCredentialAdminError::IdentityUnavailable);
-                }
-                Err(CodexIdentityVerificationError::Rejected) if refresh_token.is_none() => {
-                    return Err(CodexCredentialAdminError::IdentityRejected);
-                }
-                Err(CodexIdentityVerificationError::Rejected) => {}
-            }
+            return Ok((secret, unverified_access_token_expiry(&access_token)));
         }
         let refresh_token = refresh_token.ok_or(CodexCredentialAdminError::InvalidCredential)?;
         let tokens = self
@@ -905,6 +907,7 @@ impl CodexCredentialAdminService {
         if tokens.access_token.trim().is_empty() || tokens.expires_in.is_zero() {
             return Err(CodexCredentialAdminError::InvalidCredential);
         }
+        validate_unverified_import_access_token(&tokens.access_token)?;
         let secret = CodexOAuthSecret {
             access_token: SecretString::from(tokens.access_token),
             // RT 未轮换时仍保留导入提供的 RT，保证本次补全不会丢失后续刷新能力。
@@ -914,12 +917,11 @@ impl CodexCredentialAdminService {
                 .or_else(|| Some(SecretString::from(refresh_token))),
             id_token: None,
         };
-        let profile = self
-            .verifier
-            .verify_import(&secret)
-            .await
-            .map_err(map_identity_error)?;
-        Ok((secret, profile))
+        let access_token_expires_at = SystemTime::now()
+            .checked_add(tokens.expires_in)
+            .map(DateTime::<Utc>::from)
+            .ok_or(CodexCredentialAdminError::InvalidCredential)?;
+        Ok((secret, Some(access_token_expires_at)))
     }
 
     fn prepare_agent_identity_import(
@@ -1046,15 +1048,6 @@ const fn map_refresh_failure(error: RefreshFailure) -> CodexCredentialAdminError
     }
 }
 
-const fn map_identity_error(error: CodexIdentityVerificationError) -> CodexCredentialAdminError {
-    match error {
-        CodexIdentityVerificationError::Rejected => CodexCredentialAdminError::IdentityRejected,
-        CodexIdentityVerificationError::Unavailable => {
-            CodexCredentialAdminError::IdentityUnavailable
-        }
-    }
-}
-
 fn parse_import_document(
     payload: &Value,
 ) -> Result<Vec<ParsedCodexImportAccount>, CodexCredentialAdminError> {
@@ -1067,18 +1060,54 @@ fn parse_import_document(
         if !is_openai_oauth_candidate(value) {
             continue;
         }
-        accounts.push(ParsedCodexImportAccount {
-            id: None,
-            name: None,
-            email: None,
-            plan_type: None,
-            chatgpt_account_id: None,
-            chatgpt_user_id: None,
-            authentication: parse_oauth_import_tokens(value)?,
-            status: None,
-        });
+        accounts.push(parse_oauth_import_account(value)?);
     }
     Ok(accounts)
+}
+
+fn parse_oauth_import_account(
+    value: &Value,
+) -> Result<ParsedCodexImportAccount, CodexCredentialAdminError> {
+    let credentials = value.get("credentials").unwrap_or(value);
+    Ok(ParsedCodexImportAccount {
+        id: first_string(value, &["id"]),
+        name: first_string(value, &["name", "label"]),
+        email: first_string(value, &["email"]).or_else(|| first_string(credentials, &["email"])),
+        plan_type: first_string(value, &["plan_type", "planType"])
+            .or_else(|| first_string(credentials, &["plan_type", "planType"])),
+        chatgpt_account_id: first_string(
+            value,
+            &[
+                "chatgpt_account_id",
+                "chatgptAccountId",
+                "account_id",
+                "accountId",
+            ],
+        )
+        .or_else(|| {
+            first_string(
+                credentials,
+                &[
+                    "chatgpt_account_id",
+                    "chatgptAccountId",
+                    "account_id",
+                    "accountId",
+                ],
+            )
+        }),
+        chatgpt_user_id: first_string(
+            value,
+            &["chatgpt_user_id", "chatgptUserId", "user_id", "userId"],
+        )
+        .or_else(|| {
+            first_string(
+                credentials,
+                &["chatgpt_user_id", "chatgptUserId", "user_id", "userId"],
+            )
+        }),
+        authentication: parse_oauth_import_tokens(value)?,
+        status: first_string(value, &["status"]),
+    })
 }
 
 fn parse_agent_identity_account(
@@ -1240,6 +1269,122 @@ fn normalize_bearer(value: &str) -> String {
         .unwrap_or(value)
         .trim()
         .to_owned()
+}
+
+pub(crate) fn unverified_oauth_profile(
+    secret: &CodexOAuthSecret,
+    fallback_account_id: &str,
+    access_token_expires_at: Option<DateTime<Utc>>,
+) -> CodexAccountProfile {
+    let claims =
+        unverified_access_token_claims(secret.access_token.expose_secret()).unwrap_or_default();
+    let fallback_identity = imported_identity(fallback_account_id);
+    let chatgpt_account_id = claims
+        .chatgpt_account_id
+        .as_deref()
+        .and_then(normalize_import_identity)
+        .unwrap_or_else(|| fallback_identity.clone());
+    let chatgpt_user_id = claims
+        .chatgpt_user_id
+        .as_deref()
+        .and_then(normalize_import_identity)
+        .unwrap_or_else(|| chatgpt_account_id.clone());
+    CodexAccountProfile {
+        email: claims
+            .email
+            .as_deref()
+            .and_then(|value| normalize_import_text(value, MAX_IMPORT_EMAIL_BYTES)),
+        oauth_subject: chatgpt_user_id.clone(),
+        poid: None,
+        chatgpt_account_id,
+        chatgpt_user_id,
+        plan_type: claims
+            .plan_type
+            .as_deref()
+            .and_then(|value| normalize_import_text(value, MAX_IMPORT_PLAN_BYTES)),
+        access_token_expires_at: access_token_expires_at.or(claims.expires_at),
+    }
+}
+
+fn apply_import_metadata(profile: &mut CodexAccountProfile, candidate: &ParsedCodexImportAccount) {
+    if profile.email.is_none() {
+        profile.email = candidate
+            .email
+            .as_deref()
+            .and_then(|value| normalize_import_text(value, MAX_IMPORT_EMAIL_BYTES));
+    }
+    if profile.plan_type.is_none() {
+        profile.plan_type = candidate
+            .plan_type
+            .as_deref()
+            .and_then(|value| normalize_import_text(value, MAX_IMPORT_PLAN_BYTES));
+    }
+}
+
+fn validate_unverified_import_access_token(token: &str) -> Result<(), CodexCredentialAdminError> {
+    let claims = unverified_access_token_claims(token)
+        .ok_or(CodexCredentialAdminError::InvalidCredential)?;
+    if claims
+        .expires_at
+        .is_none_or(|expires_at| expires_at <= Utc::now())
+        || claims
+            .chatgpt_account_id
+            .as_deref()
+            .is_none_or(|account_id| account_id.trim().is_empty())
+    {
+        return Err(CodexCredentialAdminError::InvalidCredential);
+    }
+    Ok(())
+}
+
+fn unverified_access_token_expiry(token: &str) -> Option<DateTime<Utc>> {
+    unverified_access_token_claims(token).and_then(|claims| claims.expires_at)
+}
+
+fn unverified_access_token_claims(token: &str) -> Option<UnverifiedOAuthClaims> {
+    let payload = token.split('.').nth(1)?;
+    let decoded = URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| URL_SAFE.decode(payload))
+        .ok()?;
+    let claims = serde_json::from_slice::<Value>(&decoded).ok()?;
+    let claims = claims.as_object()?;
+    let auth = claims
+        .get("https://api.openai.com/auth")
+        .and_then(Value::as_object);
+    let profile = claims
+        .get("https://api.openai.com/profile")
+        .and_then(Value::as_object);
+    let text = |object: Option<&serde_json::Map<String, Value>>, key| {
+        object
+            .and_then(|object| object.get(key))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    };
+    Some(UnverifiedOAuthClaims {
+        expires_at: claims
+            .get("exp")
+            .and_then(Value::as_i64)
+            .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0)),
+        chatgpt_account_id: text(auth, "chatgpt_account_id"),
+        chatgpt_user_id: text(auth, "chatgpt_user_id").or_else(|| text(profile, "chatgpt_user_id")),
+        email: text(profile, "email"),
+        plan_type: text(auth, "chatgpt_plan_type").or_else(|| text(profile, "chatgpt_plan_type")),
+    })
+}
+
+fn imported_identity(account_id: &str) -> String {
+    format!("imported_{}", account_id.trim_start_matches("acct_"))
+}
+
+fn normalize_import_identity(value: &str) -> Option<String> {
+    normalize_import_text(value, MAX_IMPORT_IDENTITY_BYTES)
+}
+
+fn normalize_import_text(value: &str, max_bytes: usize) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty() && value.len() <= max_bytes && !value.chars().any(char::is_control))
+        .then(|| value.to_owned())
 }
 
 fn import_runtime_state(

@@ -171,13 +171,13 @@ OAuth start 使用：
 
 ### OpenAI 身份、额度与状态
 
-- 导入会校验签名 access token 和稳定账号身份；`/wham/usage` 用于补全账号/套餐事实和额度，
-  不是判断 token 是否有效的唯一依据。
+- 文件导入只轻量解析 access token 的未验签 JWT payload：要求 `exp` 未过期且存在
+  `chatgpt_account_id`；不调用 JWKS 或 `/wham/usage`，也不做账号身份一致性比对。
+- 首次 OAuth 和重新授权保留回调 `state`、PKCE 与官方 token exchange。回调地址只承载 `code`/`state`，
+  不以 host/path 形式作为拒绝条件。
 - 账号文件导入和首次 OAuth 创建在 credential 提交后立即尝试一次额度观测。观测失败只记录告警，
-  不回滚已提交的账号；重新授权只轮换目标账号 credential，不隐式等同于手工额度刷新。
-- 重新授权在 start 时绑定目标账号，complete 时重新读取目标的当前 credential revision，并验证上游
-  account/user 身份没有换绑。Free token 缺少 `chatgpt_account_id` 时，后端使用目标账号 header 调用
-  `/wham/usage` 交叉确认，而不是把该账号推断成 K12。
+  不回滚已提交的账号；重新授权只轮换目标账号 credential，不隐式等同于手工额度刷新，也不更新既有
+  upstream account/user 或 OAuth principal。
 - OAuth pending flow 先取得带过期时间的独占 claim，只有账号事务提交成功后才消费。失败会释放 claim，
   但上游 authorization code 本身通常只能交换一次；已完成过 token exchange 时应重新创建 OAuth flow。
 - `GET /accounts/quota` 只读取最后一次落库快照；`POST /accounts/quota/refresh` 才访问上游。access token

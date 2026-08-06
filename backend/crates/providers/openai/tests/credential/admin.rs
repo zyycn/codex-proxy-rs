@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chrono::{TimeZone, Utc};
 use ed25519_dalek::SigningKey;
 use ed25519_dalek::pkcs8::EncodePrivateKey as _;
@@ -44,6 +44,22 @@ fn import(id: &str, token: &str) -> ImportCodexOAuthCredential {
 fn encoded_credential(account_id: &str, token: &str) -> PlaintextCredential {
     CodexCredentialCodec::encode_new(&secret(token), &profile(account_id), Vec::new())
         .expect("encode current credential")
+}
+
+fn unverified_import_access_token(account_id: &str, user_id: &str) -> String {
+    let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#);
+    let payload = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&serde_json::json!({
+            "sub": format!("subject-{user_id}"),
+            "exp": Utc::now().timestamp() + 3_600,
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": account_id,
+                "chatgpt_user_id": user_id,
+            },
+        }))
+        .expect("serialize unsigned import JWT"),
+    );
+    format!("{header}.{payload}.")
 }
 
 #[test]
@@ -315,11 +331,10 @@ fn cpr_export_preserves_agent_identity_material_without_oauth_fields() {
 #[tokio::test]
 async fn cpr_export_and_import_support_mixed_oauth_and_agent_identity_accounts() {
     let (agent, _) = agent_export_item("acct_mixed_agent");
+    let access_token =
+        unverified_import_access_token("chatgpt-acct_mixed_oauth", "user-acct_mixed_oauth");
     let value = CodexCredentialAdmin
-        .format_cpr_export(vec![
-            export_item("acct_mixed_oauth", "token-acct_mixed_oauth"),
-            agent,
-        ])
+        .format_cpr_export(vec![export_item("acct_mixed_oauth", &access_token), agent])
         .expect("mixed export")
         .into_json()
         .expect("serialize mixed export");
@@ -564,35 +579,16 @@ async fn manual_refresh_missing_lease_fails_before_exchange() {
     );
 }
 
-struct ImportVerifier;
+struct RejectingImportVerifier;
 
 #[async_trait]
-impl CodexAccountIdentityVerifier for ImportVerifier {
+impl CodexAccountIdentityVerifier for RejectingImportVerifier {
     async fn verify(
         &self,
-        secret: &provider_openai::credential::CodexOAuthSecret,
-        expectation: &CodexIdentityExpectation,
+        _secret: &provider_openai::credential::CodexOAuthSecret,
+        _expectation: &CodexIdentityExpectation,
     ) -> Result<CodexIdentityVerification, CodexIdentityVerificationError> {
-        let suffix = secret
-            .access_token
-            .expose_secret()
-            .strip_prefix("token-")
-            .ok_or(CodexIdentityVerificationError::Rejected)?;
-        let mut profile = profile(&format!("chatgpt-{suffix}"));
-        if let Some(user) = suffix.strip_prefix("shared-") {
-            profile.chatgpt_account_id = "chatgpt-shared".to_owned();
-            profile.chatgpt_user_id = format!("user-{user}");
-        }
-        if expectation
-            .chatgpt_account_id()
-            .is_some_and(|expected| expected != profile.chatgpt_account_id)
-            || expectation
-                .chatgpt_user_id()
-                .is_some_and(|expected| expected != profile.chatgpt_user_id)
-        {
-            return Err(CodexIdentityVerificationError::Rejected);
-        }
-        Ok(CodexIdentityVerification::Complete(profile))
+        Err(CodexIdentityVerificationError::Rejected)
     }
 
     async fn verify_authorization(
@@ -611,7 +607,7 @@ pub(super) fn import_service(
 ) -> provider_openai::credential::CodexCredentialAdminService {
     CodexCredentialAdminService::new(
         refresher,
-        Arc::new(ImportVerifier),
+        Arc::new(RejectingImportVerifier),
         Arc::new(ManualLeases {
             requests: Mutex::new(Vec::new()),
             drops: Arc::new(AtomicUsize::new(0)),
@@ -629,19 +625,20 @@ pub(super) fn unused_import_refresher() -> Arc<ManualRefresher> {
 }
 
 #[tokio::test]
-async fn oauth_import_uses_only_tokens_and_verified_identity() {
+async fn oauth_import_uses_token_identity_and_source_display_metadata() {
     let refresher = unused_import_refresher();
+    let access_token = unverified_import_access_token("chatgpt-cpr", "user-token-cpr");
     let prepared = import_service(refresher.clone())
         .prepare_import_document(serde_json::json!({
             "sourceFormat": "cpr",
             "accounts": [{
                 "id": "acct_cpr_import",
                 "email": "cpr@example.com",
-                "accountId": "chatgpt-cpr",
-                "userId": "user-chatgpt-cpr",
+                "accountId": "source-account-cpr",
+                "userId": "source-user-cpr",
                 "label": "CPR account",
                 "planType": "pro",
-                "token": "Bearer token-cpr",
+                "token": format!("Bearer {access_token}"),
                 "refreshToken": "refresh-cpr",
                 "accessTokenExpiresAt": "2100-01-01T00:00:00+00:00",
                 "status": "disabled",
@@ -657,6 +654,10 @@ async fn oauth_import_uses_only_tokens_and_verified_identity() {
     assert!(account.account.id().as_str().starts_with("acct_"));
     assert!(account.account.enabled());
     assert_eq!(account.account.upstream_account_id(), Some("chatgpt-cpr"));
+    assert_eq!(account.account.upstream_user_id(), "user-token-cpr");
+    assert_eq!(account.account.name(), "CPR account");
+    assert_eq!(account.account.email(), Some("cpr@example.com"));
+    assert_eq!(account.account.plan_type(), Some("pro"));
     let runtime = CodexCredentialCodec::decode(&account.credential).expect("credential");
     assert_eq!(
         runtime
@@ -665,13 +666,64 @@ async fn oauth_import_uses_only_tokens_and_verified_identity() {
             .expect("OAuth credential")
             .access_token
             .expose_secret(),
-        "token-cpr"
+        access_token
     );
     assert!(refresher.seen.lock().expect("seen tokens").is_empty());
 }
 
 #[tokio::test]
+async fn refresh_token_only_import_persists_exchanged_tokens_without_identity_verification() {
+    let refreshed_access =
+        unverified_import_access_token("chatgpt-refreshed-import", "user-refreshed-import");
+    let expected_access = refreshed_access.clone();
+    let refresher = Arc::new(ManualRefresher {
+        outcome: Mutex::new(Some(Ok(TokenPair {
+            access_token: refreshed_access,
+            refresh_token: Some("rotated-import-refresh".to_owned()),
+            expires_in: Duration::from_secs(3_600),
+        }))),
+        seen: Mutex::new(Vec::new()),
+    });
+
+    let prepared = import_service(Arc::clone(&refresher))
+        .prepare_import_document(serde_json::json!({
+            "refreshToken": "refresh-only"
+        }))
+        .await
+        .expect("refresh-token-only import");
+
+    assert_eq!(prepared.accounts().len(), 1);
+    let account = &prepared.accounts()[0];
+    assert_eq!(
+        account.account.upstream_account_id(),
+        Some("chatgpt-refreshed-import")
+    );
+    assert_eq!(account.account.upstream_user_id(), "user-refreshed-import");
+    let runtime = CodexCredentialCodec::decode(&account.credential).expect("credential");
+    let oauth = runtime.authentication.oauth().expect("OAuth credential");
+    assert_eq!(oauth.access_token.expose_secret(), expected_access);
+    assert_eq!(
+        oauth
+            .refresh_token
+            .as_ref()
+            .expect("rotated RT")
+            .expose_secret(),
+        "rotated-import-refresh"
+    );
+    assert_eq!(
+        refresher
+            .seen
+            .lock()
+            .expect("seen refresh tokens")
+            .as_slice(),
+        ["refresh-only"]
+    );
+}
+
+#[tokio::test]
 async fn cpr_batch_allows_distinct_users_in_the_same_workspace() {
+    let shared_a = unverified_import_access_token("chatgpt-shared", "user-a");
+    let shared_b = unverified_import_access_token("chatgpt-shared", "user-b");
     let prepared = import_service(unused_import_refresher())
         .prepare_import_document(serde_json::json!({
             "sourceFormat": "cpr",
@@ -679,12 +731,12 @@ async fn cpr_batch_allows_distinct_users_in_the_same_workspace() {
                 "id": "acct_shared_a",
                 "accountId": "chatgpt-shared",
                 "userId": "user-a",
-                "token": "token-shared-a"
+                "token": shared_a
             }, {
                 "id": "acct_shared_b",
                 "accountId": "chatgpt-shared",
                 "userId": "user-b",
-                "token": "token-shared-b"
+                "token": shared_b
             }]
         }))
         .await
@@ -698,6 +750,7 @@ async fn cpr_batch_allows_distinct_users_in_the_same_workspace() {
             .all(|account| { account.account.upstream_account_id() == Some("chatgpt-shared") })
     );
 
+    let duplicate_token = unverified_import_access_token("chatgpt-shared", "user-a");
     let duplicate = import_service(unused_import_refresher())
         .prepare_import_document(serde_json::json!({
             "sourceFormat": "cpr",
@@ -705,12 +758,12 @@ async fn cpr_batch_allows_distinct_users_in_the_same_workspace() {
                 "id": "acct_duplicate_a",
                 "accountId": "chatgpt-shared",
                 "userId": "user-a",
-                "token": "token-shared-a"
+                "token": duplicate_token.clone()
             }, {
                 "id": "acct_duplicate_b",
                 "accountId": "chatgpt-shared",
                 "userId": "user-a",
-                "token": "token-shared-a"
+                "token": duplicate_token
             }]
         }))
         .await
@@ -719,7 +772,8 @@ async fn cpr_batch_allows_distinct_users_in_the_same_workspace() {
 }
 
 #[tokio::test]
-async fn oauth_import_extracts_tokens_without_parsing_source_projections() {
+async fn oauth_import_extracts_tokens_and_preserves_source_display_metadata() {
+    let bundle_token = unverified_import_access_token("chatgpt-token-bundle", "user-token-bundle");
     let bundle = import_service(unused_import_refresher())
         .prepare_import_document(serde_json::json!({
             "exported_at": "2026-07-03T15:46:38.717Z",
@@ -729,10 +783,12 @@ async fn oauth_import_extracts_tokens_without_parsing_source_projections() {
                 "platform": "openai",
                 "type": "oauth",
                 "credentials": {
-                    "access_token": "token-bundle",
+                    "access_token": bundle_token,
                     "refresh_token": "refresh-bundle",
-                    "chatgpt_account_id": "chatgpt-bundle",
-                    "chatgpt_user_id": "user-chatgpt-bundle"
+                    "chatgpt_account_id": "source-bundle",
+                    "chatgpt_user_id": "source-user-bundle",
+                    "email": "bundle-source@example.com",
+                    "plan_type": "team"
                 },
                 "concurrency": 3,
                 "priority": 50
@@ -740,48 +796,62 @@ async fn oauth_import_extracts_tokens_without_parsing_source_projections() {
         }))
         .await
         .expect("credential bundle import");
+    let auth_document_token =
+        unverified_import_access_token("chatgpt-token-auth-document", "user-token-auth-document");
     let auth_document = import_service(unused_import_refresher())
         .prepare_import_document(serde_json::json!({
             "accounts": [{
                 "type": "openai",
-                "access_token": "token-auth-document",
+                "access_token": auth_document_token,
                 "refresh_token": "refresh-auth-document",
-                "chatgpt_account_id": "chatgpt-auth-document",
-                "chatgpt_user_id": "user-chatgpt-auth-document",
+                "chatgpt_account_id": "source-auth-document",
+                "chatgpt_user_id": "source-user-auth-document",
                 "email": "auth-document@example.com",
-                "label": "Auth document"
+                "label": "Auth document",
+                "planType": "plus"
             }]
         }))
         .await
         .expect("auth document import");
 
-    for (prepared, expected) in [
-        (&bundle, "chatgpt-bundle"),
-        (&auth_document, "chatgpt-auth-document"),
-    ] {
-        assert_eq!(prepared.accounts().len(), 1);
-        assert_eq!(
-            prepared.accounts()[0].account.upstream_account_id(),
-            Some(expected)
-        );
-        assert!(
-            prepared.accounts()[0]
-                .account
-                .id()
-                .as_str()
-                .starts_with("acct_")
-        );
-    }
+    let bundle_account = &bundle.accounts()[0].account;
+    assert_eq!(bundle.accounts().len(), 1);
+    assert_eq!(
+        bundle_account.upstream_account_id(),
+        Some("chatgpt-token-bundle")
+    );
+    assert_eq!(bundle_account.upstream_user_id(), "user-token-bundle");
+    assert_eq!(bundle_account.name(), "bundle@example.com");
+    assert_eq!(bundle_account.email(), Some("bundle-source@example.com"));
+    assert_eq!(bundle_account.plan_type(), Some("team"));
+
+    let auth_document_account = &auth_document.accounts()[0].account;
+    assert_eq!(auth_document.accounts().len(), 1);
+    assert_eq!(
+        auth_document_account.upstream_account_id(),
+        Some("chatgpt-token-auth-document")
+    );
+    assert_eq!(
+        auth_document_account.upstream_user_id(),
+        "user-token-auth-document"
+    );
+    assert_eq!(auth_document_account.name(), "Auth document");
+    assert_eq!(
+        auth_document_account.email(),
+        Some("auth-document@example.com")
+    );
+    assert_eq!(auth_document_account.plan_type(), Some("plus"));
     assert!(!format!("{bundle:?} {auth_document:?}").contains("refresh-bundle"));
     assert!(!format!("{bundle:?} {auth_document:?}").contains("refresh-auth-document"));
 }
 
 #[tokio::test]
 async fn cliproxyapi_codex_auth_file_is_recognized_as_an_openai_auth_document() {
+    let access_token = unverified_import_access_token("chatgpt-token-cpa", "user-token-cpa");
     let prepared = import_service(unused_import_refresher())
         .prepare_import_document(serde_json::json!({
             "type": "codex",
-            "access_token": "token-cpa",
+            "access_token": access_token,
             "refresh_token": "refresh-cpa",
             "id_token": "id-cpa",
             "account_id": "chatgpt-cpa",
@@ -793,7 +863,8 @@ async fn cliproxyapi_codex_auth_file_is_recognized_as_an_openai_auth_document() 
 
     assert_eq!(prepared.accounts().len(), 1);
     let account = &prepared.accounts()[0].account;
-    assert_eq!(account.upstream_account_id(), Some("chatgpt-cpa"));
-    assert_eq!(account.email(), Some("chatgpt-cpa@example.com"));
+    assert_eq!(account.upstream_account_id(), Some("chatgpt-token-cpa"));
+    assert_eq!(account.upstream_user_id(), "user-token-cpa");
+    assert_eq!(account.email(), Some("cpa@example.com"));
     assert_eq!(account.authentication_kind(), "oauth");
 }

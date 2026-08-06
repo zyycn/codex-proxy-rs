@@ -76,10 +76,11 @@ impl fmt::Debug for AuthorizationCodeGrant {
     }
 }
 
-/// 官方 token endpoint 返回、尚待 OIDC/JWKS 绑定校验的 token set。
+/// 官方 token endpoint 完成协议校验后返回的 token set。
 pub struct AuthorizationTokenSet {
     pub secret: crate::credential::CodexOAuthSecret,
     pub id_token: SecretString,
+    pub expires_in: Duration,
 }
 
 impl fmt::Debug for AuthorizationTokenSet {
@@ -88,6 +89,7 @@ impl fmt::Debug for AuthorizationTokenSet {
             .debug_struct("AuthorizationTokenSet")
             .field("secret", &"[REDACTED]")
             .field("id_token", &"[REDACTED]")
+            .field("expires_in", &self.expires_in)
             .finish()
     }
 }
@@ -267,6 +269,7 @@ impl AuthorizationCodeExchanger for OpenAiTokenClient {
                 id_token: None,
             },
             id_token: SecretString::from(tokens.id_token),
+            expires_in: Duration::from_secs(tokens.expires_in),
         })
     }
 }
