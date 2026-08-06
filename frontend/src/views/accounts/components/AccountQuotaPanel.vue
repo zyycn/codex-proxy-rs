@@ -45,10 +45,11 @@ const quotaWindows = computed(() => orderedPanelQuotaWindows(props.account.quota
         variant="ghost"
         size="sm"
         title="刷新额度"
+        :loading="refreshing"
         :disabled="refreshing"
         @click="emit('refreshQuota', account.id)"
       >
-        <RefreshCw class="size-3.5" :class="refreshing ? 'animate-spin' : undefined" />
+        <RefreshCw class="size-3.5" />
       </BaseButton>
     </div>
 

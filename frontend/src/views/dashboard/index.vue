@@ -46,10 +46,11 @@ const {
           class="text-(--cp-normal)"
           size="md"
           label="刷新概览"
+          :loading="loading || refreshing"
           :disabled="loading || refreshing"
           @click="refresh"
         >
-          <RefreshCw :size="19" :class="loading || refreshing ? 'animate-spin' : undefined" />
+          <RefreshCw :size="19" />
         </BaseButton>
       </template>
     </BasePageHeader>

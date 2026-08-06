@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
-import { KeyRound, LoaderCircle, MoreHorizontal, Power, RefreshCw, Trash2, Wifi } from '@lucide/vue'
+import { KeyRound, MoreHorizontal, Power, RefreshCw, Trash2, Wifi } from '@lucide/vue'
 
 import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -52,51 +52,51 @@ const canReauthorize = computed(() => props.account.provider === 'openai')
       </template>
 
       <template #default="{ close }">
-        <button
-          type="button"
-          class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-emphasis text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
+        <BaseButton
+          variant="ghost"
+          size="sm"
+          class="h-8.5! w-full justify-start! gap-2! rounded-(--cp-input-radius-small)! px-3! text-left text-[13px] leading-none! font-emphasis! text-(--cp-text-primary)!"
+          :loading="testing"
           :disabled="testing"
           @click.stop="(close(), emit('test', account))"
         >
-          <LoaderCircle v-if="testing" class="size-3.5 animate-spin text-(--cp-text-muted)" />
-          <Wifi v-else class="size-3.5 text-(--cp-text-muted)" />
+          <Wifi class="size-3.5 text-(--cp-text-muted)" />
           测试连接
-        </button>
-        <button
+        </BaseButton>
+        <BaseButton
           v-if="canRefreshToken"
-          type="button"
-          class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-emphasis text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
+          variant="ghost"
+          size="sm"
+          class="h-8.5! w-full justify-start! gap-2! rounded-(--cp-input-radius-small)! px-3! text-left text-[13px] leading-none! font-emphasis! text-(--cp-text-primary)!"
+          :loading="refreshing"
           :disabled="refreshing"
           @click.stop="(close(), emit('refresh', account.id))"
         >
-          <RefreshCw
-            class="size-3.5 text-(--cp-text-muted)"
-            :class="refreshing ? 'animate-spin' : undefined"
-          />
+          <RefreshCw class="size-3.5 text-(--cp-text-muted)" />
           刷新 token
-        </button>
-        <button
+        </BaseButton>
+        <BaseButton
           v-if="canReauthorize"
-          type="button"
-          class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-emphasis text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover)"
+          variant="ghost"
+          size="sm"
+          class="h-8.5! w-full justify-start! gap-2! rounded-(--cp-input-radius-small)! px-3! text-left text-[13px] leading-none! font-emphasis! text-(--cp-text-primary)!"
           @click.stop="(close(), emit('reauthorize', account))"
         >
           <KeyRound class="size-3.5 text-(--cp-text-muted)" />
           重新授权
-        </button>
-        <button
+        </BaseButton>
+        <BaseButton
+          variant="ghost"
+          size="sm"
+          class="h-8.5! w-full justify-start! gap-2! rounded-(--cp-input-radius-small)! px-3! text-left text-[13px] leading-none! font-emphasis! text-(--cp-text-primary)!"
+          :loading="updatingStatus"
           type="button"
-          class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-emphasis text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
           :disabled="updatingStatus"
           @click.stop="(close(), emit('toggleSchedule', account))"
         >
-          <LoaderCircle
-            v-if="updatingStatus"
-            class="size-3.5 animate-spin text-(--cp-text-muted)"
-          />
-          <Power v-else class="size-3.5 text-(--cp-text-muted)" />
+          <Power class="size-3.5 text-(--cp-text-muted)" />
           {{ scheduleLabel }}
-        </button>
+        </BaseButton>
       </template>
     </BasePopover>
   </div>

@@ -32,10 +32,11 @@ const search = defineModel<string>('search', { required: true })
         variant="ghost"
         size="md"
         label="刷新使用记录"
+        :loading="refreshing"
         :disabled="loading || refreshing"
         @click="emit('refresh')"
       >
-        <RefreshCw class="size-4.5" :class="refreshing ? 'animate-spin' : undefined" />
+        <RefreshCw class="size-4.5" />
       </BaseButton>
     </div>
   </div>

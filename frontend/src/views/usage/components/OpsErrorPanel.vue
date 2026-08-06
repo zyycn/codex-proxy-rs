@@ -69,10 +69,11 @@ function showDetail(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][nu
           variant="ghost"
           size="md"
           label="刷新错误明细"
+          :loading="refreshing"
           :disabled="loading || refreshing"
           @click="refresh"
         >
-          <RefreshCw class="size-4.5" :class="refreshing ? 'animate-spin' : undefined" />
+          <RefreshCw class="size-4.5" />
         </BaseButton>
       </div>
     </div>
