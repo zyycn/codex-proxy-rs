@@ -142,6 +142,7 @@ pub struct GrokCanonicalDecoder {
     content: BTreeMap<u32, ContentKind>,
     tool_arguments_seen: BTreeSet<u32>,
     usage_emitted: bool,
+    output_start_seen: bool,
 }
 
 impl GrokCanonicalDecoder {
@@ -156,6 +157,7 @@ impl GrokCanonicalDecoder {
             content: BTreeMap::new(),
             tool_arguments_seen: BTreeSet::new(),
             usage_emitted: false,
+            output_start_seen: false,
         }
     }
 
@@ -186,6 +188,11 @@ impl GrokCanonicalDecoder {
     pub(crate) fn finish_without_terminal(&mut self) -> Result<Vec<ProviderEvent>, ProviderError> {
         let events = self.decoder.finish().map_err(protocol_error)?;
         self.decode(events)
+    }
+
+    /// 取走本批解码帧里是否已出现首个非前导输出事件（结构帧也算），用于首字计时。
+    pub fn take_output_start(&mut self) -> bool {
+        std::mem::take(&mut self.output_start_seen)
     }
 
     fn decode(&mut self, events: Vec<SseEvent>) -> Result<Vec<ProviderEvent>, ProviderError> {
@@ -226,6 +233,11 @@ impl GrokCanonicalDecoder {
                 if !client_visible_event(&transformed_type) {
                     continue;
                 }
+                // 首个非前导、非失败事件（结构帧也算）开启首字计时。
+                self.output_start_seen |= !matches!(
+                    transformed_type.as_str(),
+                    "response.created" | "response.in_progress" | "response.failed" | "error"
+                );
                 let value = transformed.into_value();
                 let mut canonical = Vec::new();
                 // 终态事件（completed/incomplete）fail-closed：用量/计费校验失败即断流。

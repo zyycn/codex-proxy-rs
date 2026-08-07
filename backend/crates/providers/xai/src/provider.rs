@@ -214,6 +214,8 @@ impl GrokBuildProvider {
             upstream_request.affinity().cloned(),
         )
         .await?;
+        // 首字计时的起点：账号选择完成之后、上游建立之前。
+        let output_started_at = Instant::now();
         apply_continuation(
             &mut upstream_request,
             previous_session.as_ref(),
@@ -279,6 +281,7 @@ impl GrokBuildProvider {
                 upstream_model: candidate.upstream_model().clone(),
                 context,
                 session: Arc::clone(&selected),
+                output_started_at,
                 session_capture,
                 reasoning_replay_capture,
             },
@@ -912,6 +915,7 @@ struct GrokStreamAttempt {
     upstream_model: UpstreamModelId,
     context: AttemptContext,
     session: Arc<SelectedGrokSession>,
+    output_started_at: Instant,
     session_capture: Option<GrokSessionCapture>,
     reasoning_replay_capture: Option<GrokReasoningReplayCapture>,
 }
@@ -1286,6 +1290,7 @@ fn cold_http_sse_stream(
         upstream_model,
         context,
         session,
+        output_started_at,
         mut session_capture,
         mut reasoning_replay_capture,
     } = attempt;
@@ -1357,7 +1362,9 @@ fn cold_http_sse_stream(
         };
 
         let observation = xai_response_observation(&response)?;
-        yield ProviderEvent::observation(observation);
+        let base_timings = observation.timings();
+        let mut first_token_ms: Option<u64> = None;
+        yield ProviderEvent::observation(observation.clone());
 
         let mut body = response.into_body();
         let mut decoder = GrokCanonicalDecoder::for_request(upstream_model.as_str(), &request);
@@ -1408,6 +1415,21 @@ fn cold_http_sse_stream(
                     return;
                 }
             };
+            // 首个非前导输出事件（结构帧也算）即上报携带 first_token_ms 的观测，
+            // 供 Core 覆盖会话级兜底值。
+            if decoder.take_output_start() && first_token_ms.is_none() {
+                first_token_ms = Some(
+                    u64::try_from(output_started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+                );
+                yield ProviderEvent::observation(
+                    observation
+                        .clone()
+                        .with_timings(ProviderResponseTimings {
+                            first_token_ms,
+                            ..base_timings
+                        }),
+                );
+            }
             let completed = events
                 .iter()
                 .flat_map(ProviderEvent::canonical_facts)
@@ -1446,6 +1468,20 @@ fn cold_http_sse_stream(
             .iter()
             .flat_map(ProviderEvent::canonical_facts)
             .any(|event| matches!(event, GatewayEvent::Completed(_)));
+        // 尾部 finish 补全缓冲中的首个输出帧时，同样上报首字。
+        if decoder.take_output_start() && first_token_ms.is_none() {
+            first_token_ms = Some(
+                u64::try_from(output_started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+            );
+            yield ProviderEvent::observation(
+                observation
+                    .clone()
+                    .with_timings(ProviderResponseTimings {
+                        first_token_ms,
+                        ..base_timings
+                    }),
+            );
+        }
         attach_xai_session_update(&mut final_events, &mut session_capture)?;
         if let Some(capture) = reasoning_replay_capture.as_mut() {
             capture.observe(&final_events);

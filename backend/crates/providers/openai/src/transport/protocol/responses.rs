@@ -182,11 +182,13 @@ pub fn transport_requirement(request: &CodexResponsesRequest) -> TransportRequir
 
 /// 单个 Responses 事件对计时系统提供的稳定语义信号。
 ///
-/// `protocol_progress` 只说明上游仍在工作，不能替代首字；其余字段分别标记
-/// 客户端可消费的输出、reasoning 输出与正文输出。
+/// `protocol_progress` 只说明上游仍在工作，不能替代首字；`output_start` 标记首个会
+/// 开启客户端输出的非前导事件（结构帧也算）；其余字段分别标记客户端可消费的
+/// 输出、reasoning 输出与正文输出。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ResponseEventSignals {
     pub protocol_progress: bool,
+    pub output_start: bool,
     pub semantic_output: bool,
     pub reasoning_output: bool,
     pub text_output: bool,
@@ -194,13 +196,22 @@ pub struct ResponseEventSignals {
 
 /// 从已解析的 Responses 事件提取计时语义。
 ///
-/// 生命周期帧和结构帧不会被当作输出。`response.output_item.done` 与终态帧只有
-/// 实际携带文本、工具参数、推理或图片结果时才算语义输出。
+/// `output_start` 在任意非前导、非失败事件上置位（含结构帧
+/// `response.output_item.added`/`content_part.added`），用于开启首字计时；前导帧
+/// （`response.created`/`response.in_progress`）与失败帧不置位。语义输出仍要求
+/// 实际携带文本、工具参数、推理或图片结果，`response.output_item.done` 与终态帧
+/// 只有携带语义内容才算。
 pub fn response_event_signals(event_type: Option<&str>, value: &Value) -> ResponseEventSignals {
     let mut signals = ResponseEventSignals {
         protocol_progress: !matches!(event_type, Some("response.failed" | "error")),
         ..ResponseEventSignals::default()
     };
+    signals.output_start = event_type.is_some_and(|event_type| {
+        !matches!(
+            event_type,
+            "response.created" | "response.in_progress" | "response.failed" | "error"
+        )
+    });
     match event_type {
         Some("response.output_text.delta") => {
             signals.text_output = non_empty_string(value.get("delta"));

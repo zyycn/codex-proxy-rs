@@ -31,6 +31,30 @@ fn response_body_has_semantic_output(body_bytes: &[u8]) -> bool {
     })
 }
 
+fn response_body_has_output_start(body_bytes: &[u8]) -> bool {
+    let body = String::from_utf8_lossy(body_bytes);
+    let lf_end = body.rfind("\n\n").map(|index| index + 2);
+    let crlf_end = body.rfind("\r\n\r\n").map(|index| index + 4);
+    let Some(end) = lf_end.into_iter().chain(crlf_end).max() else {
+        return false;
+    };
+    let Ok(events) = parse_sse_events(&body[..end]) else {
+        return false;
+    };
+    events.iter().any(|event| {
+        let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
+            return false;
+        };
+        let event_type = event.event.as_deref().or_else(|| {
+            value
+                .get("type")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+        });
+        response_event_signals(event_type, &value).output_start
+    })
+}
+
 #[test]
 fn semantic_output_should_detect_a_text_delta() {
     let body = b"event: response.output_text.delta\ndata: {\"delta\":\"hello\"}\n\n";
@@ -66,6 +90,37 @@ fn semantic_output_should_ignore_response_created() {
         b"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{}}\n\n";
 
     assert!(!response_body_has_semantic_output(body));
+}
+
+#[test]
+fn output_start_should_ignore_preamble_and_failure_frames() {
+    for body in [
+        b"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{}}\n\n".as_slice(),
+        b"event: response.in_progress\ndata: {\"type\":\"response.in_progress\",\"response\":{}}\n\n",
+        b"event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\"}}\n\n",
+        b"data: {\"type\":\"error\"}\n\n",
+    ] {
+        assert!(
+            !response_body_has_output_start(body),
+            "frame must not start output: {body:?}"
+        );
+    }
+}
+
+#[test]
+fn output_start_should_count_structural_and_semantic_frames() {
+    for body in [
+        // 结构帧无内容也算。
+        b"event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\"}}\n\n".as_slice(),
+        b"event: response.content_part.added\ndata: {\"type\":\"response.content_part.added\",\"part\":{\"type\":\"output_text\"}}\n\n",
+        b"event: response.output_text.delta\ndata: {\"delta\":\"hello\"}\n\n",
+        b"event: response.reasoning_text.delta\ndata: {\"delta\":\"thinking\"}\n\n",
+    ] {
+        assert!(
+            response_body_has_output_start(body),
+            "frame must start output: {body:?}"
+        );
+    }
 }
 
 #[test]

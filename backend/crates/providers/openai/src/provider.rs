@@ -273,6 +273,8 @@ impl Provider for CodexProvider {
             .await
             .map_err(map_selection_error)?;
         let lease = Arc::new(lease);
+        // 首字计时的起点：账号选择完成之后、上游建立之前。
+        let output_started_at = Instant::now();
         let provider_kind = ProviderKind::new(PROVIDER_NAME)
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
         let cross_account = context
@@ -373,6 +375,7 @@ impl Provider for CodexProvider {
             catalog: Arc::clone(&self.catalog),
             agent_identity: Arc::clone(&self.agent_identity),
             lease: Arc::clone(&lease),
+            output_started_at,
             session_affinity_key,
             session_capture,
         });
@@ -397,6 +400,7 @@ struct ColdResponse {
     catalog: Arc<CodexCredentialCatalogService>,
     agent_identity: Arc<CodexAgentIdentityTaskService>,
     lease: Arc<CodexCredentialLease>,
+    output_started_at: Instant,
     session_affinity_key: Option<ProviderSessionAffinityKey>,
     session_capture: Option<OpenAiSessionCapture>,
 }
@@ -555,6 +559,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         catalog,
         agent_identity,
         lease,
+        output_started_at,
         session_affinity_key,
         mut session_capture,
     } = response;
@@ -800,7 +805,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 capture.turn_state = Some(turn_state);
             }
             let first_event_changed =
-                observation_state.observe_stream_chunk(&chunk, context.timing_started_at());
+                observation_state.observe_stream_chunk(&chunk, output_started_at);
             let chunk_len = chunk.len();
             let (mut events, canonical_failure) = match decoder.push(&chunk) {
                 CodexCanonicalOutcome::Events(events) => (events, None),
@@ -830,7 +835,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             let timing_signals = decoder.take_timing_signals();
             let timing_changed = first_event_changed
                 || observation_state
-                    .observe_timing_signals(timing_signals, context.timing_started_at());
+                    .observe_timing_signals(timing_signals, output_started_at);
             let completed = events
                 .iter()
                 .flat_map(ProviderEvent::canonical_facts)
@@ -909,7 +914,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         let service_tier_changed = observation_state
             .observe_upstream_service_tier(decoder.response_service_tier());
         let timing_changed = observation_state
-            .observe_timing_signals(timing_signals, context.timing_started_at());
+            .observe_timing_signals(timing_signals, output_started_at);
         let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
         let rate_limits_changed = if updates.is_empty() {
             false
@@ -1063,7 +1068,9 @@ impl OpenAiResponseObservationState {
         started_at: Instant,
     ) -> bool {
         let mut changed = false;
-        if signals.semantic_output {
+        // 首个非前导输出事件（结构帧也算）开启首字计时；
+        // 真实语义首字由 first_reasoning_ms / first_text_ms 单独观测。
+        if signals.output_start {
             changed |= insert_first_timing(&mut self.timings.first_token_ms, started_at);
         }
         if signals.reasoning_output {

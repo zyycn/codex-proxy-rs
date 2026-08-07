@@ -115,6 +115,32 @@ fn decoder_should_normalize_text_usage_and_completion() {
 }
 
 #[test]
+fn decoder_output_start_should_ignore_preamble_frames() {
+    let mut decoder = GrokCanonicalDecoder::new("fallback");
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_os\",\"model\":\"grok-test\"}}\n\n",
+        "event: response.in_progress\n",
+        "data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_os\"}}\n\n",
+    );
+    let _ = decoder.push(body.as_bytes()).expect("preamble frames");
+    assert!(!decoder.take_output_start());
+}
+
+#[test]
+fn decoder_output_start_should_count_structural_output_item_added() {
+    let mut decoder = GrokCanonicalDecoder::new("fallback");
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_os\",\"model\":\"grok-test\"}}\n\n",
+        "event: response.output_item.added\n",
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\"}}\n\n",
+    );
+    let _ = decoder.push(body.as_bytes()).expect("output start frame");
+    assert!(decoder.take_output_start());
+}
+
+#[test]
 fn decoder_should_emit_each_complete_text_event_without_waiting_for_the_stream_end() {
     let mut decoder = GrokCanonicalDecoder::new("grok-4.5");
     let created = decoder

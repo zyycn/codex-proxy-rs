@@ -310,6 +310,7 @@ impl CodexCanonicalDecoder {
 
     fn merge_timing_signals(&mut self, signals: ResponseEventSignals) {
         self.timing_signals.protocol_progress |= signals.protocol_progress;
+        self.timing_signals.output_start |= signals.output_start;
         self.timing_signals.semantic_output |= signals.semantic_output;
         self.timing_signals.reasoning_output |= signals.reasoning_output;
         self.timing_signals.text_output |= signals.text_output;
