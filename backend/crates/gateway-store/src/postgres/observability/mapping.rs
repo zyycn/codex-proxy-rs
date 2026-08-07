@@ -103,6 +103,7 @@ pub(crate) fn admin_dashboard_observation(
         range,
         requests,
         attempts,
+        totals,
         provider_accounts,
         trend,
         account_usage,
@@ -112,6 +113,7 @@ pub(crate) fn admin_dashboard_observation(
         range: admin_range(range),
         requests: admin_request_metrics(requests)?,
         attempts: admin_attempt_metrics(attempts)?,
+        totals: admin_dashboard_totals(totals)?,
         provider_accounts: admin_account_pool_metrics(provider_accounts),
         trend: trend
             .into_iter()
@@ -125,6 +127,18 @@ pub(crate) fn admin_dashboard_observation(
             .into_iter()
             .map(admin_usage_record)
             .collect::<AdminStoreResult<_>>()?,
+    })
+}
+
+pub(crate) fn admin_dashboard_totals(
+    totals: DashboardTotals,
+) -> AdminStoreResult<admin_observability::DashboardTotals> {
+    Ok(admin_observability::DashboardTotals {
+        request_count: totals.request_count,
+        input_tokens: totals.input_tokens,
+        cached_tokens: totals.cached_tokens,
+        total_tokens: totals.total_tokens,
+        billing_usd: admin_optional_decimal_amount(totals.billing_usd)?,
     })
 }
 

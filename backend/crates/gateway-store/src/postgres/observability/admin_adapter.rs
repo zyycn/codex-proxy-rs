@@ -139,11 +139,11 @@ impl ObservabilityRepository for PgObservabilityRepository {
             page: ObservabilityPageNumber::new(1)?,
             page_size: ObservabilityPageSize::new(10)?,
         };
-        // 分两批并发：页面延迟从六路之和降为两批各自最慢者之和，同时单次
-        // 渲染最多占用 3 个池连接，不与数据面写路径争抢整个连接池。
-        let (requests, attempts) = futures::try_join!(
+        // 每批最多三路并发，既缩短概览渲染路径，也不与数据面写路径争抢整个连接池。
+        let (requests, attempts, totals) = futures::try_join!(
             request_metrics(&self.pool, range, &filter),
             attempt_metrics(&self.pool, range, &filter),
+            dashboard_totals(&self.pool),
         )?;
         let provider_accounts = self
             .provider_account_metrics_with_cooldowns(range.end)
@@ -157,6 +157,7 @@ impl ObservabilityRepository for PgObservabilityRepository {
             range,
             requests,
             attempts,
+            totals,
             provider_accounts,
             trend,
             account_usage,

@@ -65,6 +65,33 @@ pub(crate) async fn request_metrics(
     request_metrics_from_row(&row)
 }
 
+pub(crate) async fn dashboard_totals(pool: &PgPool) -> StoreResult<DashboardTotals> {
+    // 卡片脚注的“总计”覆盖全部历史；只聚合页面实际展示的字段，避免重复计算
+    // 当前区间指标所需的延迟分位数。
+    let fact = completed_usage_fact_predicate("mr");
+    let mut query = QueryBuilder::<Postgres>::new(format!(
+        "select count(*)::bigint as request_count,
+                coalesce(sum(input_tokens) filter (where {fact}), 0)::bigint as input_tokens,
+                coalesce(sum(cached_tokens) filter (where {fact}), 0)::bigint as cached_tokens,
+                coalesce(sum(total_tokens) filter (where {fact}), 0)::bigint as total_tokens,
+                sum(cost_amount) filter (where {fact} and cost_currency = 'USD')::text
+                  as billing_usd
+           from model_requests mr"
+    ));
+    let row = query
+        .build()
+        .fetch_one(pool)
+        .await
+        .map_err(|_| postgres_unavailable("load dashboard totals"))?;
+    Ok(DashboardTotals {
+        request_count: unsigned(&row, "request_count")?,
+        input_tokens: unsigned(&row, "input_tokens")?,
+        cached_tokens: unsigned(&row, "cached_tokens")?,
+        total_tokens: unsigned(&row, "total_tokens")?,
+        billing_usd: optional_decimal(&row, "billing_usd")?,
+    })
+}
+
 pub(crate) async fn request_metric_series(
     pool: &PgPool,
     range: ObservabilityRange,

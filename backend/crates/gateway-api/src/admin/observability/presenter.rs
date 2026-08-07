@@ -709,7 +709,7 @@ pub(crate) fn dashboard_view(
     } = result;
     let domain::DashboardObservation {
         range,
-        requests,
+        totals,
         provider_accounts,
         account_usage,
         recent_requests,
@@ -756,13 +756,13 @@ pub(crate) fn dashboard_view(
                 today_requests: format_compact_number(today.request_count),
                 today_requests_value: today.request_count,
                 yesterday_requests_value: yesterday.request_count,
-                total_requests: format_compact_number(requests.request_count),
+                total_requests: format_compact_number(totals.request_count),
             },
             tokens: DashboardTokensCardView {
                 today_tokens: format_compact_number(today.total_tokens),
                 today_tokens_value: today.total_tokens,
                 yesterday_tokens_value: yesterday.total_tokens,
-                total_tokens: format_compact_number(requests.total_tokens),
+                total_tokens: format_compact_number(totals.total_tokens),
                 total_billing_amount_usd: total_billing_usd
                     .as_ref()
                     .map_or_else(|| "—".to_owned(), |amount| format!("${}", amount.as_str())),
@@ -772,7 +772,7 @@ pub(crate) fn dashboard_view(
                 today_hit_rate_value: today.observed_cached_token_rate,
                 yesterday_hit_rate_value: yesterday.observed_cached_token_rate,
                 total_hit_rate: display_rate(total_cached_token_rate),
-                total_cached_tokens: format_compact_number(requests.cached_tokens),
+                total_cached_tokens: format_compact_number(totals.cached_tokens),
                 average_first_token_latency_ms: display_duration(average_first_token_latency_ms),
             },
         },

@@ -112,15 +112,10 @@ impl ObservabilityService for DefaultObservabilityService {
         let today =
             dashboard_period_metrics(&observation.trend, today_start, observation.range.end);
         let yesterday = dashboard_period_metrics(&observation.trend, yesterday_start, today_start);
-        let total_billing_usd = observation
-            .attempts
-            .costs
-            .iter()
-            .find(|cost| cost.currency == "USD")
-            .map(|cost| cost.amount.clone());
+        let total_billing_usd = observation.totals.billing_usd.clone();
         let total_cached_token_rate = rate_or_zero(
-            observation.requests.cached_tokens,
-            observation.requests.input_tokens,
+            observation.totals.cached_tokens,
+            observation.totals.input_tokens,
         );
         let average_first_token_latency_ms = average(
             observation.requests.first_token_latency_sum_ms,

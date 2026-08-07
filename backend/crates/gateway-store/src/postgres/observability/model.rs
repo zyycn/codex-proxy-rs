@@ -477,11 +477,21 @@ impl ProviderAccountUsageQuery {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DashboardTotals {
+    pub request_count: u64,
+    pub input_tokens: u64,
+    pub cached_tokens: u64,
+    pub total_tokens: u64,
+    pub billing_usd: Option<DecimalAmount>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DashboardObservation {
     pub range: ObservabilityRange,
     pub requests: RequestMetrics,
     pub attempts: AttemptMetrics,
+    pub totals: DashboardTotals,
     pub provider_accounts: ProviderAccountMetrics,
     pub trend: Vec<RequestMetricPoint>,
     pub account_usage: Vec<ProviderAccountUsageObservation>,

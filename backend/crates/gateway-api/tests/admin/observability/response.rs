@@ -219,6 +219,7 @@ async fn dashboard_summary_should_include_quota_exhaustion_in_unavailable_headli
         range: TimeRange::new(now - Duration::hours(1), now).expect("dashboard range"),
         requests: RequestMetrics::default(),
         attempts: AttemptMetrics::default(),
+        totals: Default::default(),
         provider_accounts: AccountPoolMetrics {
             total: 807,
             enabled: 804,
@@ -271,6 +272,87 @@ async fn dashboard_summary_should_include_quota_exhaustion_in_unavailable_headli
 }
 
 #[tokio::test]
+async fn dashboard_summary_should_use_lifetime_totals_for_card_footers() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode, header},
+    };
+    use chrono::{Duration, Utc};
+    use gateway_admin::model::observability::{
+        AccountPoolMetrics, AttemptMetrics, DashboardObservation, DashboardTotals, RequestMetrics,
+        TimeRange,
+    };
+    use gateway_api::admin::observability;
+    use tower::ServiceExt as _;
+
+    use crate::admin::{AdminTestFixture, AdminTestState};
+
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let now = Utc::now();
+    let range_requests = RequestMetrics {
+        request_count: 2,
+        input_tokens: 8,
+        cached_tokens: 2,
+        total_tokens: 12,
+        ..RequestMetrics::default()
+    };
+    *fixture
+        .dashboard_observation
+        .lock()
+        .expect("dashboard observation") = Some(DashboardObservation {
+        range: TimeRange::new(now - Duration::hours(1), now).expect("dashboard range"),
+        requests: range_requests,
+        attempts: AttemptMetrics::default(),
+        totals: DashboardTotals {
+            request_count: 42,
+            input_tokens: 800,
+            cached_tokens: 200,
+            total_tokens: 840,
+            billing_usd: None,
+        },
+        provider_accounts: AccountPoolMetrics::default(),
+        trend: Vec::new(),
+        account_usage: Vec::new(),
+        recent_requests: Vec::new(),
+    });
+
+    let response = observability::router::<AdminTestState>()
+        .with_state(fixture.state())
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/dashboard/summary")
+                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header("x-request-id", "req_dashboard_lifetime_totals")
+                .body(Body::empty())
+                .expect("dashboard request"),
+        )
+        .await
+        .expect("dashboard response");
+    let status = response.status();
+    let body = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("dashboard response body");
+    let value: serde_json::Value = serde_json::from_slice(&body).expect("dashboard response JSON");
+    assert_eq!(status, StatusCode::OK, "{value}");
+
+    assert_eq!(
+        (
+            &value["data"]["cards"]["traffic"]["totalRequests"],
+            &value["data"]["cards"]["tokens"]["totalTokens"],
+            &value["data"]["cards"]["cache"]["totalHitRate"],
+            &value["data"]["cards"]["cache"]["totalCachedTokens"],
+        ),
+        (
+            &serde_json::json!("42"),
+            &serde_json::json!("840"),
+            &serde_json::json!("25.0%"),
+            &serde_json::json!("200"),
+        ),
+    );
+}
+
+#[tokio::test]
 async fn dashboard_summary_should_default_to_current_china_day() {
     use axum::{
         body::Body,
@@ -296,6 +378,7 @@ async fn dashboard_summary_should_default_to_current_china_day() {
         range: TimeRange::new(now - Duration::hours(1), now).expect("dashboard range"),
         requests: RequestMetrics::default(),
         attempts: AttemptMetrics::default(),
+        totals: Default::default(),
         provider_accounts: AccountPoolMetrics::default(),
         trend: Vec::new(),
         account_usage: Vec::new(),

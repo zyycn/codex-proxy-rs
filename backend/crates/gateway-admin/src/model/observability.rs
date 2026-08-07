@@ -531,12 +531,23 @@ pub struct DashboardRuntimeSlots {
     pub used_slots: Option<u64>,
 }
 
-/// 仪表盘所需的公共观测事实。
+/// 仪表盘卡片脚注展示的全历史累计。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DashboardTotals {
+    pub request_count: u64,
+    pub input_tokens: u64,
+    pub cached_tokens: u64,
+    pub total_tokens: u64,
+    pub billing_usd: Option<DecimalAmount>,
+}
+
+/// 仪表盘所需的当前区间事实及全历史累计。
 #[derive(Debug, Clone, PartialEq)]
 pub struct DashboardObservation {
     pub range: TimeRange,
     pub requests: RequestMetrics,
     pub attempts: AttemptMetrics,
+    pub totals: DashboardTotals,
     pub provider_accounts: AccountPoolMetrics,
     pub trend: Vec<RequestMetricPoint>,
     pub account_usage: Vec<DashboardAccountUsage>,

@@ -705,6 +705,54 @@ fn admin_page(value: u32) -> admin_observability::PageNumber {
 }
 
 #[tokio::test]
+async fn dashboard_summary_totals_include_history_outside_selected_range() {
+    let Some(database) = TestDatabase::create("observability_dashboard_totals").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_observability_facts(&database.pool, now)
+        .await
+        .expect("seed observability facts");
+    sqlx::query(
+        "update model_requests
+         set started_at = $1 - interval '2 days'
+         where id = 'req_observe_success'",
+    )
+    .bind(now)
+    .execute(&database.pool)
+    .await
+    .expect("move historical request outside selected range");
+    let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
+        .expect("observability range");
+    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
+
+    let dashboard = repository
+        .dashboard_summary(range)
+        .await
+        .expect("dashboard summary");
+    assert_eq!(dashboard.requests.request_count, 2);
+    assert_eq!(
+        (
+            dashboard.totals.request_count,
+            dashboard.totals.input_tokens,
+            dashboard.totals.cached_tokens,
+            dashboard.totals.total_tokens,
+        ),
+        (3, 100, 40, 120),
+    );
+    assert_eq!(
+        dashboard
+            .totals
+            .billing_usd
+            .as_ref()
+            .map(|amount| amount.as_str()),
+        Some("1.25"),
+    );
+
+    database.close().await;
+}
+
+#[tokio::test]
 async fn observability_queries_preserve_request_account_cost_and_diagnostic_facts() {
     let Some(database) = TestDatabase::create("observability").await else {
         return;

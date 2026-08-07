@@ -449,6 +449,7 @@ impl ObservabilityStore for FixtureObservabilityStore {
             range,
             requests: RequestMetrics::default(),
             attempts: AttemptMetrics::default(),
+            totals: Default::default(),
             provider_accounts: AccountPoolMetrics::default(),
             trend: self.trend.lock().expect("trend").clone(),
             account_usage: Vec::new(),
