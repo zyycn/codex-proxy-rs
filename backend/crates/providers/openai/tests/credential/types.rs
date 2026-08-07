@@ -40,10 +40,10 @@ fn account_profile_debug_redacts_identity_fields() {
 fn plaintext_provider_schema_round_trips_dynamic_cookie_data() {
     let data = CodexCredentialData::OAuth(CodexOAuthCredentialData {
         schema_version: 1,
-        principal: CodexCredentialPrincipal {
+        principal: Some(CodexCredentialPrincipal {
             oauth_subject: "subject-private".to_owned(),
             poid: Some("poid-private".to_owned()),
-        },
+        }),
         installation_id: "00000000-0000-4000-8000-000000000001".to_owned(),
         access_token: "at".to_owned(),
         refresh_token: Some("rt".to_owned()),

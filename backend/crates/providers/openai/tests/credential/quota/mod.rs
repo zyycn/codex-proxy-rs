@@ -1106,7 +1106,7 @@ async fn periodic_quota_synchronization_respects_retry_after_on_service_unavaila
 }
 
 #[tokio::test]
-async fn periodic_quota_synchronization_skips_ready_accounts_without_quota_reached() {
+async fn initial_quota_synchronization_retries_ready_accounts_without_observation() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_periodic_temporary_cooldown").await;
     let account = store
@@ -1126,9 +1126,9 @@ async fn periodic_quota_synchronization_skips_ready_accounts_without_quota_reach
     let summary = blocked_network_quota_service(&store)
         .synchronize()
         .await
-        .expect("ordinary cooldown must not query upstream");
+        .expect("initial quota sync must not fail the worker");
 
-    assert_eq!(summary, CodexQuotaSyncSummary::default());
+    assert_eq!(summary.transient, 1);
     assert_eq!(
         store
             .account("acct_periodic_temporary_cooldown")

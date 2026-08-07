@@ -47,7 +47,7 @@ pub(crate) fn account_matches_admin_query(
             Some(account.name.as_str()),
             account.email.as_deref(),
             account.upstream_account_id.as_deref(),
-            Some(account.upstream_user_id.as_str()),
+            account.upstream_user_id.as_deref(),
         ]
         .into_iter()
         .flatten()

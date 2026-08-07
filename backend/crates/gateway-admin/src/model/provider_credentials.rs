@@ -146,7 +146,7 @@ pub struct PreparedCredentialCreate {
     pub provider_kind: ProviderKind,
     pub name: String,
     pub email: Option<String>,
-    pub upstream_user_id: String,
+    pub upstream_user_id: Option<String>,
     pub upstream_account_id: Option<String>,
     pub plan_type: Option<String>,
     pub authentication_kind: String,

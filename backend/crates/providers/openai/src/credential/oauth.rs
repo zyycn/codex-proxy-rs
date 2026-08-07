@@ -27,16 +27,17 @@ use url::Url;
 use uuid::Uuid;
 
 use super::admin::{
-    CodexCredentialAdmin, CodexCredentialAdminError, ImportCodexOAuthCredential,
-    PreparedCodexCredentialRotation, complete_oauth_account_profile, refresh_time,
+    CodexCredentialAdmin, CodexCredentialAdminError, PreparedCodexCredentialRotation,
+    UnresolvedCodexOAuthCredential, refresh_time,
 };
-use super::identity::{CodexAuthenticatedAccountSource, CodexIdentityVerificationError};
 use super::recovery_log::{CodexOAuthRecoveryOperation, record_oauth_recovery};
+use super::refresh::initial_oauth_refresh_at;
 use super::security::CodexCredentialCodec;
 use super::token_client::{
     AuthorizationCodeExchangeError, AuthorizationCodeExchanger, AuthorizationCodeGrant,
     OFFICIAL_CODEX_OAUTH_CLIENT_ID, OFFICIAL_CODEX_REDIRECT_URI,
 };
+use super::types::parse_id_token_metadata;
 
 const AUTHORIZATION_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
 const AUTHORIZATION_SCOPE: &str = "openid profile email offline_access";
@@ -320,8 +321,6 @@ pub enum CodexOAuthAdminError {
     CallbackRejected,
     #[error("Codex OAuth token exchange was rejected")]
     TokenRejected,
-    #[error("Codex OAuth identity verification was rejected")]
-    IdentityRejected,
     #[error("Codex OAuth upstream is unavailable")]
     UpstreamUnavailable,
     #[error("Codex OAuth exchange send state is ambiguous")]
@@ -348,7 +347,6 @@ pub trait CodexOAuthAdmin: Send + Sync {
 pub struct CodexOAuthAdminService {
     pending: Arc<dyn CodexOAuthPendingStore>,
     exchanger: Arc<dyn AuthorizationCodeExchanger>,
-    account_source: Arc<dyn CodexAuthenticatedAccountSource>,
     store: Arc<dyn ProviderAccountStore>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     credentials: CodexCredentialAdmin,
@@ -400,7 +398,6 @@ impl CodexOAuthAdminService {
     pub fn new(
         pending: Arc<dyn CodexOAuthPendingStore>,
         exchanger: Arc<dyn AuthorizationCodeExchanger>,
-        account_source: Arc<dyn CodexAuthenticatedAccountSource>,
         store: Arc<dyn ProviderAccountStore>,
         runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
         credentials: CodexCredentialAdmin,
@@ -408,7 +405,6 @@ impl CodexOAuthAdminService {
         Self {
             pending,
             exchanger,
-            account_source,
             store,
             runtime_policy,
             credentials,
@@ -510,24 +506,20 @@ impl CodexOAuthAdminService {
             .exchange_pending(&pending, callback_url, fallback_refresh_token)
             .await?;
         let mutation = pending.mutation.clone();
-        let access_token_expires_at = SystemTime::now()
-            .checked_add(expires_in)
-            .map(DateTime::<Utc>::from)
-            .ok_or(CodexOAuthAdminError::Credential)?;
+        let access_token_expires_at = expires_in
+            .and_then(|expires_in| SystemTime::now().checked_add(expires_in))
+            .map(DateTime::<Utc>::from);
+        let metadata = parse_id_token_metadata(id_token.expose_secret())
+            .map_err(|_| CodexOAuthAdminError::TokenRejected)?;
         secret.id_token = Some(id_token);
-        let policy = self
-            .runtime_policy
-            .load_refresh_policy()
-            .await
-            .map_err(|_| CodexOAuthAdminError::StorageUnavailable)?;
         let credential = if let Some(current) = current {
-            let next_refresh_at = refresh_time(
-                policy,
-                current.account.id(),
-                Some(access_token_expires_at),
-                secret.refresh_token.is_some(),
-            )
-            .map_err(map_admin_error)?;
+            let next_refresh_at = self
+                .best_effort_refresh_time(
+                    current.account.id(),
+                    access_token_expires_at,
+                    secret.refresh_token.is_some(),
+                )
+                .await;
             CompletedCodexOAuthCredential::Reauthorize(
                 self.credentials
                     .prepare_refreshed_oauth_rotation(
@@ -540,29 +532,20 @@ impl CodexOAuthAdminService {
             )
         } else {
             let account_id = format!("acct_{}", Uuid::now_v7().simple());
-            let typed_account_id = ProviderAccountId::new(account_id.clone())
-                .map_err(|_| CodexOAuthAdminError::Credential)?;
-            let profile = complete_oauth_account_profile(
-                self.account_source.as_ref(),
-                &secret,
-                Some(access_token_expires_at),
-            )
-            .await
-            .map_err(map_account_profile_error)?;
-            let next_refresh_at = refresh_time(
-                policy,
-                &typed_account_id,
-                Some(access_token_expires_at),
-                secret.refresh_token.is_some(),
-            )
-            .map_err(map_admin_error)?;
+            let next_refresh_at = self
+                .best_effort_initial_refresh_time(
+                    access_token_expires_at,
+                    secret.refresh_token.is_some(),
+                )
+                .await;
             CompletedCodexOAuthCredential::Create(
                 self.credentials
-                    .prepare_import(ImportCodexOAuthCredential {
+                    .prepare_unresolved_oauth(UnresolvedCodexOAuthCredential {
                         account_id,
                         name: pending.name,
                         secret,
-                        verified_account: profile,
+                        metadata,
+                        access_token_expires_at,
                         next_refresh_at,
                         enabled: true,
                     })
@@ -570,6 +553,38 @@ impl CodexOAuthAdminService {
             )
         };
         Ok((mutation, credential))
+    }
+
+    async fn best_effort_refresh_time(
+        &self,
+        account_id: &ProviderAccountId,
+        access_token_expires_at: Option<DateTime<Utc>>,
+        has_refresh_token: bool,
+    ) -> Option<DateTime<Utc>> {
+        let policy = self.runtime_policy.load_refresh_policy().await.ok()?;
+        refresh_time(
+            policy,
+            account_id,
+            access_token_expires_at,
+            has_refresh_token,
+        )
+        .ok()
+        .flatten()
+    }
+
+    async fn best_effort_initial_refresh_time(
+        &self,
+        access_token_expires_at: Option<DateTime<Utc>>,
+        has_refresh_token: bool,
+    ) -> Option<DateTime<Utc>> {
+        let policy = self.runtime_policy.load_refresh_policy().await.ok()?;
+        initial_oauth_refresh_at(
+            policy,
+            access_token_expires_at.map(SystemTime::from),
+            SystemTime::now(),
+            has_refresh_token,
+        )
+        .map(DateTime::<Utc>::from)
     }
 }
 
@@ -670,8 +685,14 @@ impl CodexOAuthAdminService {
         pending: &CodexPendingAuthorization,
         callback_url: &str,
         fallback_refresh_token: Option<SecretString>,
-    ) -> Result<(super::types::CodexOAuthSecret, SecretString, Duration), CodexOAuthAdminError>
-    {
+    ) -> Result<
+        (
+            super::types::CodexOAuthSecret,
+            SecretString,
+            Option<Duration>,
+        ),
+        CodexOAuthAdminError,
+    > {
         let (code, callback_state) = callback_parts(callback_url)?;
         if !constant_time_equal(
             pending.state.expose_secret().as_bytes(),
@@ -845,13 +866,6 @@ fn map_exchange_error(error: AuthorizationCodeExchangeError) -> CodexOAuthAdminE
         AuthorizationCodeExchangeError::Rejected => CodexOAuthAdminError::TokenRejected,
         AuthorizationCodeExchangeError::Unavailable => CodexOAuthAdminError::UpstreamUnavailable,
         AuthorizationCodeExchangeError::Ambiguous => CodexOAuthAdminError::Ambiguous,
-    }
-}
-
-const fn map_account_profile_error(error: CodexIdentityVerificationError) -> CodexOAuthAdminError {
-    match error {
-        CodexIdentityVerificationError::Rejected => CodexOAuthAdminError::TokenRejected,
-        CodexIdentityVerificationError::Unavailable => CodexOAuthAdminError::UpstreamUnavailable,
     }
 }
 

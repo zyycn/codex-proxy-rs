@@ -80,39 +80,6 @@ impl MemoryAccountStore {
             .and_then(|stored| stored.last_error_message.clone())
     }
 
-    pub(crate) async fn advance_credential_revision(&self, id: &str) -> CredentialRevision {
-        let account_id = ProviderAccountId::new(id).expect("test account id");
-        let current = self
-            .load_current_credential(&account_id)
-            .await
-            .expect("current test credential");
-        let account = current.account;
-        let expected_revision = account.revision();
-        let update = CredentialCasUpdate::new(
-            account_id.clone(),
-            expected_revision,
-            ProviderAccountUpdate {
-                account_id,
-                name: account.name().to_owned(),
-                email: account.email().map(str::to_owned),
-                plan_type: account.plan_type().map(str::to_owned),
-            },
-            current.credential,
-            account.has_refresh_token(),
-            account.access_token_expires_at(),
-            account.next_refresh_at(),
-        )
-        .expect("valid test credential update");
-        match self
-            .compare_and_swap_credential(update)
-            .await
-            .expect("advance test credential revision")
-        {
-            CredentialCasOutcome::Updated(revision) => revision,
-            CredentialCasOutcome::Conflict => panic!("test credential revision conflicted"),
-        }
-    }
-
     pub(crate) fn quota_reads(&self) -> usize {
         self.quota_reads.load(Ordering::SeqCst)
     }
@@ -420,7 +387,7 @@ fn rebuild_account(current: &ProviderAccount, rebuild: AccountRebuild) -> Provid
         current.id().clone(),
         current.provider().clone(),
         name,
-        current.upstream_user_id().to_owned(),
+        current.upstream_user_id().map(str::to_owned),
         current.authentication_kind().to_owned(),
         rebuild.revision,
         rebuild.access_token_expires_at,
@@ -768,25 +735,6 @@ pub(crate) fn account_policy() -> gateway_core::engine::credential::AccountSelec
         NonZeroU32::new(2).expect("nonzero concurrency"),
         Duration::from_millis(10),
     )
-}
-
-pub(crate) fn codex_account(id: &str) -> ProviderAccount {
-    ProviderAccount::new(
-        ProviderAccountId::new(id).expect("account id"),
-        ProviderKind::new("openai").expect("provider"),
-        id.to_owned(),
-        format!("user-chatgpt-{id}"),
-        "oauth".to_owned(),
-        CredentialRevision::new(1).expect("revision"),
-        Some(SystemTime::now() + Duration::from_secs(3_600)),
-    )
-    .with_profile(
-        Some(format!("{id}@example.com")),
-        Some(format!("chatgpt-{id}")),
-        Some("pro".to_owned()),
-    )
-    .with_runtime_state(true, AccountAvailability::Ready)
-    .with_refresh_schedule(true, Some(SystemTime::now() + Duration::from_secs(2_700)))
 }
 
 /// 内存 `ProviderCooldownPort`：只实现 `read`/`put_if_later`（openai selector

@@ -84,25 +84,29 @@ impl DefaultOpenAiService {
         }
     }
 
-    async fn observe_initial_quotas(&self, account_ids: &[ProviderAccountId], request_id: &str) {
-        for account_id in account_ids {
-            if let Err(error) = self
-                .provider
-                .quota(ProviderQuotaRequest {
-                    account_id: account_id.clone(),
-                    refresh: true,
-                    rolling_usage: None,
-                })
-                .await
-            {
-                tracing::warn!(
-                    request_id,
-                    account_id = %account_id.as_str(),
-                    quota_error = ?error.kind(),
-                    "OpenAI initial quota observation failed"
-                );
+    fn observe_initial_quotas(&self, account_ids: &[ProviderAccountId], request_id: &str) {
+        let provider = Arc::clone(&self.provider);
+        let account_ids = account_ids.to_vec();
+        let request_id = request_id.to_owned();
+        tokio::spawn(async move {
+            for account_id in account_ids {
+                if let Err(error) = provider
+                    .quota(ProviderQuotaRequest {
+                        account_id: account_id.clone(),
+                        refresh: true,
+                        rolling_usage: None,
+                    })
+                    .await
+                {
+                    tracing::warn!(
+                        request_id,
+                        account_id = %account_id.as_str(),
+                        quota_error = ?error.kind(),
+                        "OpenAI initial quota observation failed"
+                    );
+                }
             }
-        }
+        });
     }
 }
 
@@ -155,8 +159,7 @@ impl OpenAiService for DefaultOpenAiService {
             .await;
         publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
         // 导入完成后立即做一次观察；失败不回滚已经提交的 credential。
-        self.observe_initial_quotas(&result.credential_ids, &context.request_id)
-            .await;
+        self.observe_initial_quotas(&result.credential_ids, &context.request_id);
         Ok(result)
     }
 
@@ -208,8 +211,7 @@ impl OpenAiService for DefaultOpenAiService {
         self.observe_initial_quotas(
             std::slice::from_ref(&result.account_id),
             &context.request_id,
-        )
-        .await;
+        );
         Ok(result)
     }
 

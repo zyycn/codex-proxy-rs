@@ -6,7 +6,7 @@ use std::time::SystemTime;
 use chrono::{DateTime, Utc};
 use gateway_core::engine::credential::{
     AccountAvailability, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
-    CredentialRevision, LoadedCredential, ProviderAccount, ProviderAccountId, ProviderAccountStore,
+    CredentialRevision, ProviderAccount, ProviderAccountId, ProviderAccountStore,
     ProviderAccountUpdate,
 };
 use gateway_core::routing::ProviderKind;
@@ -14,9 +14,7 @@ use secrecy::ExposeSecret;
 use thiserror::Error;
 
 use super::security::{CodexCredentialCodec, CodexCredentialDataError, CodexRuntimeCredential};
-use super::types::{
-    CodexAccountProfile, CodexCredentialData, CodexOAuthSecret, RotateCodexCredential,
-};
+use super::types::{CodexCredentialData, CodexOAuthSecret, RotateCodexCredential};
 
 const PROVIDER_NAME: &str = "openai";
 
@@ -46,7 +44,6 @@ impl CodexCredentialRepository {
             .map_err(|_| CredentialRepositoryError::InvalidInput("credential_revision"))?;
         let current = self.store.load_credential(&account_id, expected).await?;
         let mut data = CodexCredentialCodec::decode_complete(&current.credential)?;
-        verify_identity(&current, &data, &input.verified_account)?;
         let oauth = data
             .oauth_mut()
             .ok_or(CredentialRepositoryError::InvalidCredentialData)?;
@@ -90,8 +87,8 @@ impl CodexCredentialRepository {
         &self,
         account: &ProviderAccount,
         secret: CodexOAuthSecret,
-        access_token_expires_at: SystemTime,
-        next_refresh_at: SystemTime,
+        access_token_expires_at: Option<SystemTime>,
+        next_refresh_at: Option<SystemTime>,
     ) -> Result<CredentialRevision, CredentialRepositoryError> {
         let current = self
             .store
@@ -120,8 +117,8 @@ impl CodexCredentialRepository {
             unchanged_profile(account),
             credential,
             secret.refresh_token.is_some(),
-            Some(access_token_expires_at),
-            Some(next_refresh_at),
+            access_token_expires_at,
+            next_refresh_at,
         )
         .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
         cas_revision(self.store.compare_and_swap_credential(update).await?)
@@ -276,24 +273,6 @@ fn cas_revision(
     }
 }
 
-fn verify_identity(
-    current: &LoadedCredential,
-    credential: &CodexCredentialData,
-    verified: &CodexAccountProfile,
-) -> Result<(), CredentialRepositoryError> {
-    if current.account.provider().as_str() != PROVIDER_NAME
-        || current.account.upstream_account_id() != Some(verified.chatgpt_account_id.as_str())
-        || verified.chatgpt_user_id != current.account.upstream_user_id()
-        || credential.oauth().is_none_or(|credential| {
-            verified.oauth_subject != credential.principal.oauth_subject
-                || verified.poid != credential.principal.poid
-        })
-    {
-        return Err(CredentialRepositoryError::IdentityMismatch);
-    }
-    Ok(())
-}
-
 fn required_time(value: Option<DateTime<Utc>>) -> Result<SystemTime, CredentialRepositoryError> {
     value
         .map(SystemTime::from)
@@ -310,8 +289,6 @@ pub enum CredentialRepositoryError {
     InvalidInput(&'static str),
     #[error("Codex credential data is invalid")]
     InvalidCredentialData,
-    #[error("Codex credential identity does not match")]
-    IdentityMismatch,
     #[error("Codex credential revision conflict")]
     RevisionConflict,
     #[error("provider account store is unavailable")]

@@ -110,6 +110,11 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
 
     async fn insert_provider_account(&self, account: NewProviderAccount) -> StoreResult<()> {
         account.validate()?;
+        let availability = if account.upstream_user_id.is_some() {
+            account.availability
+        } else {
+            AccountAvailability::Unknown
+        };
         sqlx::query(
             "insert into provider_accounts (
                id, provider_kind, name, email, upstream_user_id,
@@ -135,7 +140,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         .bind(account.access_token_expires_at)
         .bind(account.next_refresh_at)
         .bind(account.enabled)
-        .bind(account.availability.as_str())
+        .bind(availability.as_str())
         .bind(account.availability_observed_at)
         .execute(&self.pool)
         .await
@@ -209,13 +214,16 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         update.validate()?;
         let result = sqlx::query(
             "update provider_accounts
-             set availability = case when enabled then $3 else availability end,
+             set availability = case
+                     when enabled and upstream_user_id is not null then $3
+                     else availability
+                 end,
                  availability_observed_at = case
-                     when enabled then $4
+                     when enabled and upstream_user_id is not null then $4
                      else availability_observed_at
                  end,
                  last_error_message = case
-                     when enabled then
+                     when enabled and upstream_user_id is not null then
                          case when $3 = 'ready' then null else coalesce($5, last_error_message) end
                      else last_error_message
                  end,
@@ -466,6 +474,11 @@ pub(crate) async fn upsert_provider_account_in_transaction(
     account: &NewProviderAccount,
 ) -> StoreResult<String> {
     account.validate()?;
+    let availability = if account.upstream_user_id.is_some() {
+        account.availability
+    } else {
+        AccountAvailability::Unknown
+    };
     let imported_id = sqlx::query_scalar::<_, String>(
         "insert into provider_accounts (
            id, provider_kind, name, email, upstream_user_id,
@@ -512,7 +525,7 @@ pub(crate) async fn upsert_provider_account_in_transaction(
     .bind(account.access_token_expires_at)
     .bind(account.next_refresh_at)
     .bind(account.enabled)
-    .bind(account.availability.as_str())
+    .bind(availability.as_str())
     .bind(account.availability_observed_at)
     .fetch_optional(&mut **transaction)
     .await
@@ -563,8 +576,9 @@ pub(crate) async fn rotate_provider_account_in_transaction(
              upstream_account_id = case when $11::boolean then $13::text else upstream_account_id end,
              availability = case
                  when not enabled then availability
-                 when availability <> 'quota_exhausted' then 'ready'
-                 else availability
+                 when availability = 'quota_exhausted' then availability
+                 when coalesce($12::text, upstream_user_id) is not null then 'ready'
+                 else 'unknown'
              end,
              availability_observed_at = case
                  when not enabled then availability_observed_at

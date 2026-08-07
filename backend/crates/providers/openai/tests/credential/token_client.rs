@@ -72,11 +72,11 @@ async fn bounded_oauth_response_should_parse_lifetime_and_rotated_token() {
 
     assert_eq!(tokens.access_token, "access-rotated");
     assert_eq!(tokens.refresh_token.as_deref(), Some("refresh-rotated"));
-    assert_eq!(tokens.expires_in, Duration::from_secs(3600));
+    assert_eq!(tokens.expires_in, Some(Duration::from_secs(3600)));
 }
 
 #[tokio::test]
-async fn refresh_response_with_blank_rotated_token_keeps_the_existing_token_eligible() {
+async fn refresh_response_keeps_the_upstream_rotated_token_verbatim() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
@@ -92,9 +92,9 @@ async fn refresh_response_with_blank_rotated_token_keeps_the_existing_token_elig
     let tokens = client(&server)
         .refresh("refresh-initial")
         .await
-        .expect("blank rotation field is treated as absent");
+        .expect("upstream response is accepted");
 
-    assert_eq!(tokens.refresh_token, None);
+    assert_eq!(tokens.refresh_token.as_deref(), Some(" "));
 }
 
 #[tokio::test]
@@ -162,7 +162,41 @@ async fn authorization_code_exchange_should_require_bounded_oidc_token_set_and_p
 }
 
 #[tokio::test]
-async fn authorization_code_exchange_should_reject_missing_nonce_carrier_or_non_json_success() {
+async fn authorization_code_exchange_keeps_upstream_access_and_refresh_tokens_verbatim() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": " ",
+            "refresh_token": "",
+            "id_token": "header.payload.signature"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let tokens = client(&server)
+        .exchange_authorization_code(AuthorizationCodeGrant {
+            code: SecretString::from("authorization-code"),
+            code_verifier: SecretString::from("pkce-verifier"),
+        })
+        .await
+        .expect("token endpoint response is trusted structurally");
+
+    assert_eq!(tokens.secret.access_token.expose_secret(), " ");
+    assert_eq!(
+        tokens
+            .secret
+            .refresh_token
+            .as_ref()
+            .expect("required response field")
+            .expose_secret(),
+        ""
+    );
+}
+
+#[tokio::test]
+async fn authorization_code_exchange_requires_id_token_and_json_response() {
     let missing_id = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))

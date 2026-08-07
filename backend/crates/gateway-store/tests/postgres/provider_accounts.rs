@@ -50,6 +50,35 @@ fn postgres_provider_account_adapter_implements_core_port() {
 }
 
 #[tokio::test]
+async fn provider_account_should_allow_missing_upstream_user_id() {
+    let Some(database) = TestDatabase::create("provider_account_missing_upstream_identity").await
+    else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let mut pending = account("acct_pending_identity", "unused");
+    pending.upstream_user_id = None;
+    pending.email = None;
+    pending.availability = AccountAvailability::Ready;
+    repository
+        .insert_provider_account(pending)
+        .await
+        .expect("insert account without upstream identity");
+
+    let stored = repository
+        .load_provider_account("acct_pending_identity")
+        .await
+        .expect("load account")
+        .expect("stored account");
+    assert_eq!(
+        (stored.summary.upstream_user_id, stored.summary.availability,),
+        (None, AccountAvailability::Unknown)
+    );
+
+    database.close().await;
+}
+
+#[tokio::test]
 async fn core_quota_batch_reads_only_observed_accounts_in_one_contract_call() {
     let Some(database) = TestDatabase::create("provider_account_quota_batch").await else {
         return;
@@ -882,7 +911,7 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
             provider_kind: "xai".to_owned(),
             name: "before refresh".to_owned(),
             email: Some("before@example.invalid".to_owned()),
-            upstream_user_id: "upstream-core-refresh".to_owned(),
+            upstream_user_id: Some("upstream-core-refresh".to_owned()),
             upstream_account_id: None,
             plan_type: Some("free".to_owned()),
             authentication_kind: "oauth".to_owned(),
@@ -1405,7 +1434,7 @@ fn account(id: &str, upstream_user_id: &str) -> NewProviderAccount {
         provider_kind: "openai".to_owned(),
         name: id.to_owned(),
         email: Some(format!("{id}@example.invalid")),
-        upstream_user_id: upstream_user_id.to_owned(),
+        upstream_user_id: Some(upstream_user_id.to_owned()),
         upstream_account_id: None,
         plan_type: Some("pro".to_owned()),
         authentication_kind: "oauth".to_owned(),

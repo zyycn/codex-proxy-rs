@@ -251,7 +251,7 @@ pub struct ProviderAccount {
     provider: ProviderKind,
     name: String,
     email: Option<String>,
-    upstream_user_id: String,
+    upstream_user_id: Option<String>,
     upstream_account_id: Option<String>,
     plan_type: Option<String>,
     authentication_kind: String,
@@ -270,7 +270,7 @@ impl ProviderAccount {
         id: ProviderAccountId,
         provider: ProviderKind,
         name: String,
-        upstream_user_id: String,
+        upstream_user_id: Option<String>,
         authentication_kind: String,
         revision: CredentialRevision,
         access_token_expires_at: Option<SystemTime>,
@@ -313,7 +313,11 @@ impl ProviderAccount {
         availability: AccountAvailability,
     ) -> Self {
         self.enabled = enabled;
-        self.availability = availability;
+        self.availability = if self.upstream_user_id.is_some() {
+            availability
+        } else {
+            AccountAvailability::Unknown
+        };
         self
     }
 
@@ -354,8 +358,8 @@ impl ProviderAccount {
     }
 
     #[must_use]
-    pub fn upstream_user_id(&self) -> &str {
-        &self.upstream_user_id
+    pub fn upstream_user_id(&self) -> Option<&str> {
+        self.upstream_user_id.as_deref()
     }
 
     #[must_use]
@@ -409,7 +413,8 @@ impl ProviderAccount {
             | AccountAvailability::Banned
             | AccountAvailability::Invalid => false,
         };
-        self.enabled
+        self.upstream_user_id.is_some()
+            && self.enabled
             && available
             && self
                 .access_token_expires_at

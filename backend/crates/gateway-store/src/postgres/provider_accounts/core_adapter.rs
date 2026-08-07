@@ -19,7 +19,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             provider_kind: account.account.provider().as_str().to_owned(),
             name: account.account.name().to_owned(),
             email: account.account.email().map(str::to_owned),
-            upstream_user_id: account.account.upstream_user_id().to_owned(),
+            upstream_user_id: account.account.upstream_user_id().map(str::to_owned),
             upstream_account_id: account.account.upstream_account_id().map(str::to_owned),
             plan_type: account.account.plan_type().map(str::to_owned),
             authentication_kind: account.account.authentication_kind().to_owned(),

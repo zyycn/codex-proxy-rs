@@ -19,7 +19,7 @@ fn account(id: &str) -> ProviderAccount {
         ProviderAccountId::new(id).expect("valid account"),
         ProviderKind::new("openai").expect("valid provider"),
         id.to_owned(),
-        format!("user-{id}"),
+        Some(format!("user-{id}")),
         "oauth".to_owned(),
         CredentialRevision::new(1).expect("valid revision"),
         Some(SystemTime::now() + Duration::from_secs(3600)),
@@ -158,6 +158,28 @@ fn disabled_account_should_not_be_schedulable() {
     let account = account("acct_disabled").with_runtime_state(false, AccountAvailability::Ready);
 
     assert!(!account.is_schedulable(SystemTime::now()));
+}
+
+#[test]
+fn account_without_upstream_identity_should_stay_unknown_and_not_schedulable() {
+    let account = ProviderAccount::new(
+        ProviderAccountId::new("acct_pending_identity").expect("valid account"),
+        ProviderKind::new("openai").expect("valid provider"),
+        "pending identity".to_owned(),
+        None,
+        "oauth".to_owned(),
+        CredentialRevision::new(1).expect("valid revision"),
+        Some(SystemTime::now() + Duration::from_secs(3600)),
+    )
+    .with_runtime_state(true, AccountAvailability::Ready);
+
+    assert_eq!(
+        (
+            account.availability(),
+            account.is_schedulable(SystemTime::now())
+        ),
+        (AccountAvailability::Unknown, false)
+    );
 }
 
 #[test]

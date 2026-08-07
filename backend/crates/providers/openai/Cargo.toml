@@ -27,7 +27,6 @@ hex = "0.4.3"
 # reqwest 0.12.28 + ring）。rustls 0.23.37 起 ClientHello 扩展顺序变化，JA3
 # 会偏离官方指纹；升级前必须重新抓握手对比扩展顺序。
 hyper-rustls = "=0.27.7"
-jsonwebtoken = { version = "=11.0.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 # 与官方 Codex Desktop 一致：reqwest 不启用压缩特性，上游请求不带 accept-encoding。
 reqwest = { version = "=0.12.28", default-features = false, features = ["json", "stream", "cookies", "rustls-tls-native-roots", "http2"] }
 roxmltree = "0.21.1"

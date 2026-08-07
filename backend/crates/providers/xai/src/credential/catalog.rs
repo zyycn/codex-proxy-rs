@@ -1166,9 +1166,13 @@ async fn fetch_candidate_catalog(
     candidate: LoadedGrokCredential,
     wire_profile: XaiWireProfileState,
 ) -> Result<FetchedCredentialCatalog, GrokCredentialCatalogError> {
+    let upstream_user_id = candidate
+        .account
+        .upstream_user_id()
+        .ok_or(GrokCredentialCatalogError::InvalidCredentialData)?;
     let session = GrokModelCatalogSession::new(
         candidate.access_token,
-        SecretValue::new(candidate.account.upstream_user_id().to_owned()),
+        SecretValue::new(upstream_user_id),
         candidate
             .account
             .email()
@@ -1214,9 +1218,13 @@ fn billing_session(
     loaded: &LoadedGrokCredential,
     wire_profile: &XaiWireProfileState,
 ) -> Result<GrokModelCatalogSession, GrokQuotaError> {
+    let upstream_user_id = loaded
+        .account
+        .upstream_user_id()
+        .ok_or(GrokQuotaError::InvalidData)?;
     GrokModelCatalogSession::new(
         loaded.access_token.clone(),
-        SecretValue::new(loaded.account.upstream_user_id().to_owned()),
+        SecretValue::new(upstream_user_id),
         loaded
             .account
             .email()

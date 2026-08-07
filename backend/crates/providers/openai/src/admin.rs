@@ -33,8 +33,8 @@ use gateway_core::error::StoreErrorKind;
 use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
 use gateway_core::provider_ports::{
     NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingClaimOutcome, OAuthPendingConsumeOutcome,
-    OAuthPendingFlowPort, OAuthPendingPutOutcome, OAuthPendingReleaseOutcome,
-    ProviderRuntimePolicyPort, ProviderStoreError, ProviderStoreErrorKind,
+    OAuthPendingFlowPort, OAuthPendingPutOutcome, OAuthPendingReleaseOutcome, ProviderStoreError,
+    ProviderStoreErrorKind,
 };
 use gateway_core::routing::{ProviderKind, UpstreamModelId};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -42,19 +42,15 @@ use serde::Deserialize;
 use serde_json::{Map, Number, Value};
 
 use crate::credential::{
-    CodexAccountIdentityVerifier, CodexCredentialCodec, CodexIdentityExpectation, CodexOAuthSecret,
-    oauth_owner_ref,
-};
-use crate::credential::{
     CodexAccountQuotaSnapshot, CodexCredentialAdmin, CodexCredentialAdminError,
     CodexCredentialAdminService, CodexCredentialCatalogError, CodexCredentialCatalogService,
     CodexCredentialQuotaError, CodexCredentialQuotaService, CodexOAuthAdmin, CodexOAuthAdminError,
     CodexOAuthPendingClaimOutcome, CodexOAuthPendingStore, CodexOAuthPendingStoreError,
     CodexPendingAuthorization, CodexQuotaWindow, CodexQuotaWindowKind, CodexQuotaWindowRole,
     CompleteCodexOAuthAuthorization, CompletedCodexOAuthCredential, ExportManagedCodexCredential,
-    RotateManagedCodexCredential, StartCodexOAuthAuthorization, StoredCodexPendingAuthorization,
-    refresh_time,
+    StartCodexOAuthAuthorization, StoredCodexPendingAuthorization,
 };
+use crate::credential::{CodexCredentialCodec, CodexOAuthSecret, oauth_owner_ref};
 use crate::transport::CodexWebSocketPool;
 use crate::transport::openai_billing_breakdown;
 use crate::transport::profile::{
@@ -63,8 +59,6 @@ use crate::transport::profile::{
 
 const PROVIDER_NAME: &str = "openai";
 const PENDING_DOCUMENT_SCHEMA_VERSION: u64 = 3;
-const MAX_ACCESS_TOKEN_BYTES: usize = 16 * 1024;
-const MAX_REFRESH_TOKEN_BYTES: usize = 64 * 1024;
 
 /// OpenAI 对终态 Admin port 的唯一实现。
 pub(crate) struct OpenAiAdminProvider {
@@ -72,22 +66,18 @@ pub(crate) struct OpenAiAdminProvider {
     profile: CodexWireProfileState,
     accounts: Arc<dyn ProviderAccountStore>,
     credentials: Arc<CodexCredentialAdminService>,
-    verifier: Arc<dyn CodexAccountIdentityVerifier>,
     oauth: Arc<dyn CodexOAuthAdmin>,
     quota: Arc<CodexCredentialQuotaService>,
     catalog: Arc<CodexCredentialCatalogService>,
-    runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     websocket_pool: Arc<CodexWebSocketPool>,
     desktop_release: CodexDesktopReleaseStatus,
 }
 
 pub(crate) struct OpenAiAdminServices {
     pub(crate) credentials: Arc<CodexCredentialAdminService>,
-    pub(crate) verifier: Arc<dyn CodexAccountIdentityVerifier>,
     pub(crate) oauth: Arc<dyn CodexOAuthAdmin>,
     pub(crate) quota: Arc<CodexCredentialQuotaService>,
     pub(crate) catalog: Arc<CodexCredentialCatalogService>,
-    pub(crate) runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
 }
 
 impl OpenAiAdminProvider {
@@ -105,11 +95,9 @@ impl OpenAiAdminProvider {
             profile,
             accounts,
             credentials: services.credentials,
-            verifier: services.verifier,
             oauth: services.oauth,
             quota: services.quota,
             catalog: services.catalog,
-            runtime_policy: services.runtime_policy,
             websocket_pool,
             desktop_release,
         }
@@ -381,49 +369,9 @@ impl ProviderAdmin for OpenAiAdminProvider {
         if !account_matches_record(&current.account, &command.account) {
             return Err(provider_admin_error(ProviderAdminErrorKind::Conflict));
         }
-        let runtime = CodexCredentialCodec::decode(&current.credential)
-            .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
-        let account_id = current
-            .account
-            .upstream_account_id()
-            .ok_or_else(|| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
-        let principal = runtime
-            .principal
-            .ok_or_else(|| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
-        let expectation = CodexIdentityExpectation::current(
-            principal.oauth_subject,
-            principal.poid,
-            account_id.to_owned(),
-            current.account.upstream_user_id().to_owned(),
-            runtime.installation_id,
-        )
-        .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
         let secret = rotation_secret(command.provider_material)?;
-        let verified_account = self
-            .verifier
-            .verify(&secret, &expectation)
-            .await
-            .and_then(crate::credential::CodexIdentityVerification::into_complete)
-            .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
-        let policy = self
-            .runtime_policy
-            .load_refresh_policy()
-            .await
-            .map_err(map_provider_store_error)?;
-        let next_refresh_at = refresh_time(
-            policy,
-            current.account.id(),
-            verified_account.access_token_expires_at,
-            secret.refresh_token.is_some(),
-        )
-        .map_err(map_credential_admin_error)?;
         let prepared = CodexCredentialAdmin
-            .prepare_rotation(RotateManagedCodexCredential {
-                current,
-                secret,
-                verified_account,
-                next_refresh_at,
-            })
+            .prepare_refreshed_oauth_rotation(current, secret, None, None)
             .map_err(map_credential_admin_error)?;
         prepared_rotation(prepared, command.account.provider_kind)
     }
@@ -577,7 +525,7 @@ fn prepared_create(
         provider_kind: account.provider().clone(),
         name: account.name().to_owned(),
         email: account.email().map(str::to_owned),
-        upstream_user_id: account.upstream_user_id().to_owned(),
+        upstream_user_id: account.upstream_user_id().map(str::to_owned),
         upstream_account_id: account.upstream_account_id().map(str::to_owned),
         plan_type: account.plan_type().map(str::to_owned),
         authentication_kind: account.authentication_kind().to_owned(),
@@ -641,15 +589,6 @@ fn rotation_secret(document: ProviderDocument) -> Result<CodexOAuthSecret, Provi
     let document: RotationDocument =
         serde_json::from_value(Value::Object(document.into_provider_data().into_inner()))
             .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
-    if document.access_token.is_empty()
-        || document.access_token.len() > MAX_ACCESS_TOKEN_BYTES
-        || document
-            .refresh_token
-            .as_deref()
-            .is_some_and(|token| token.is_empty() || token.len() > MAX_REFRESH_TOKEN_BYTES)
-    {
-        return Err(provider_admin_error(ProviderAdminErrorKind::Invalid));
-    }
     Ok(CodexOAuthSecret {
         access_token: SecretString::from(document.access_token),
         refresh_token: document.refresh_token.map(SecretString::from),
@@ -737,7 +676,7 @@ fn dashboard_desktop_release(
 fn account_matches_record(account: &ProviderAccount, record: &AccountRecord) -> bool {
     account.id().as_str() == record.id
         && account.provider() == &record.provider_kind
-        && account.upstream_user_id() == record.upstream_user_id
+        && account.upstream_user_id() == record.upstream_user_id.as_deref()
         && account.upstream_account_id() == record.upstream_account_id.as_deref()
         && account.authentication_kind() == record.authentication_kind
 }
@@ -1353,14 +1292,6 @@ fn map_pending_store_error(error: ProviderStoreError) -> CodexOAuthPendingStoreE
     }
 }
 
-fn map_provider_store_error(error: ProviderStoreError) -> ProviderAdminError {
-    provider_admin_error(match error.kind() {
-        ProviderStoreErrorKind::InvalidData => ProviderAdminErrorKind::Invalid,
-        ProviderStoreErrorKind::Conflict => ProviderAdminErrorKind::Conflict,
-        ProviderStoreErrorKind::Unavailable => ProviderAdminErrorKind::Unavailable,
-    })
-}
-
 fn map_store_error(error: gateway_core::error::StoreError) -> ProviderAdminError {
     provider_admin_error(match error.kind() {
         StoreErrorKind::Conflict => ProviderAdminErrorKind::Conflict,
@@ -1377,38 +1308,28 @@ fn map_credential_admin_error(error: CodexCredentialAdminError) -> ProviderAdmin
     provider_admin_error(match error {
         Error::InvalidInput
         | Error::InvalidCredential
-        | Error::IdentityMismatch
         | Error::MissingRefreshToken
         | Error::RefreshRejected
-        | Error::AccountBanned
-        | Error::AccountProfileRejected
-        | Error::IdentityRejected => ProviderAdminErrorKind::Invalid,
+        | Error::AccountBanned => ProviderAdminErrorKind::Invalid,
         Error::NotFound => ProviderAdminErrorKind::NotFound,
         Error::RefreshLeaseUnavailable | Error::RefreshAmbiguous => {
             ProviderAdminErrorKind::Conflict
         }
-        Error::RefreshUnavailable
-        | Error::AccountProfileUnavailable
-        | Error::IdentityUnavailable => ProviderAdminErrorKind::Unavailable,
+        Error::RefreshUnavailable => ProviderAdminErrorKind::Unavailable,
     })
 }
 
 const fn credential_admin_error_code(error: CodexCredentialAdminError) -> &'static str {
     match error {
         CodexCredentialAdminError::InvalidInput => "invalid_input",
-        CodexCredentialAdminError::IdentityMismatch => "identity_mismatch",
         CodexCredentialAdminError::InvalidCredential => "invalid_credential",
         CodexCredentialAdminError::NotFound => "not_found",
         CodexCredentialAdminError::MissingRefreshToken => "missing_refresh_token",
         CodexCredentialAdminError::RefreshLeaseUnavailable => "refresh_lease_unavailable",
         CodexCredentialAdminError::RefreshRejected => "refresh_rejected",
         CodexCredentialAdminError::AccountBanned => "account_banned",
-        CodexCredentialAdminError::AccountProfileRejected => "account_profile_rejected",
-        CodexCredentialAdminError::AccountProfileUnavailable => "account_profile_unavailable",
         CodexCredentialAdminError::RefreshUnavailable => "refresh_unavailable",
         CodexCredentialAdminError::RefreshAmbiguous => "refresh_ambiguous",
-        CodexCredentialAdminError::IdentityRejected => "identity_rejected",
-        CodexCredentialAdminError::IdentityUnavailable => "identity_unavailable",
     }
 }
 
@@ -1437,7 +1358,6 @@ fn map_oauth_error(error: CodexOAuthAdminError) -> ProviderAdminError {
         Error::InvalidInput
         | Error::CallbackRejected
         | Error::TokenRejected
-        | Error::IdentityRejected
         | Error::Credential => ProviderAdminErrorKind::Invalid,
         Error::NotFound | Error::FlowExpired => ProviderAdminErrorKind::NotFound,
         Error::Conflict | Error::Ambiguous => ProviderAdminErrorKind::Conflict,
@@ -1455,7 +1375,6 @@ const fn oauth_error_code(error: &CodexOAuthAdminError) -> &'static str {
         CodexOAuthAdminError::FlowExpired => "flow_expired",
         CodexOAuthAdminError::CallbackRejected => "callback_rejected",
         CodexOAuthAdminError::TokenRejected => "token_rejected",
-        CodexOAuthAdminError::IdentityRejected => "identity_rejected",
         CodexOAuthAdminError::UpstreamUnavailable => "upstream_unavailable",
         CodexOAuthAdminError::Ambiguous => "ambiguous",
         CodexOAuthAdminError::StorageUnavailable => "storage_unavailable",

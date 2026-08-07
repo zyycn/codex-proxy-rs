@@ -16,7 +16,6 @@ use gateway_core::provider_ports::{
 use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
 
-use super::identity::CodexAccountIdentityVerifier;
 use super::recovery_log::{CodexOAuthRecoveryOperation, record_oauth_recovery};
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
 use super::token_client::{RefreshFailure, TokenPair, TokenRefresher};
@@ -32,6 +31,32 @@ const REFRESH_BACKOFF_MAX_ATTEMPTS: u32 = 5;
 const REFRESH_RECOVERY_DELAY: Duration = Duration::from_secs(10 * 60);
 /// 过期 AT 仍允许 RT 恢复的最长窗口。
 const REFRESH_RECOVERY_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
+/// 首次 OAuth 入库最多提前五分钟刷新，避免一小时 token 配合一小时安全边际立刻消耗 RT。
+const INITIAL_OAUTH_REFRESH_MAX_MARGIN: Duration = Duration::from_secs(5 * 60);
+
+/// 计算首次 OAuth account 写入时的刷新时间。
+///
+/// 首次 code exchange 已经拿到一组新的 AT/RT；即使全局安全边际大于等于 AT
+/// 生命周期，也不能让它立刻进入 RT 刷新队列。后续刷新仍使用
+/// [`ProviderRefreshPolicy::next_attempt_at`] 的原有语义。
+#[must_use]
+pub(crate) fn initial_oauth_refresh_at(
+    policy: ProviderRefreshPolicy,
+    access_token_expires_at: Option<SystemTime>,
+    observed_at: SystemTime,
+    has_refresh_token: bool,
+) -> Option<SystemTime> {
+    if !has_refresh_token {
+        return None;
+    }
+    let expires_at = access_token_expires_at?;
+    let remaining = expires_at.duration_since(observed_at).ok()?;
+    let initial_margin = policy
+        .margin()
+        .min(INITIAL_OAUTH_REFRESH_MAX_MARGIN)
+        .min(remaining / 2);
+    expires_at.checked_sub(initial_margin)
+}
 
 pub(crate) fn refresh_recovery_deadline(
     access_token_expires_at: Option<SystemTime>,
@@ -175,7 +200,6 @@ impl CodexCredentialRefreshService {
     pub fn new(
         repository: CodexCredentialRepository,
         refresher: Arc<dyn TokenRefresher>,
-        _identity: Arc<dyn CodexAccountIdentityVerifier>,
         leases: Arc<dyn ProviderLeasePort>,
         credential_state: Arc<dyn ProviderCredentialStatePort>,
         runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
@@ -405,24 +429,23 @@ impl CodexCredentialRefreshService {
                 .as_ref()
                 .map(ExposeSecret::expose_secret),
         );
-        if secret.access_token.expose_secret().is_empty() || expires_in.is_zero() {
-            return Err(CodexCredentialRefreshError::InvalidRefreshResponse);
-        }
         let observed_at = SystemTime::now();
-        let access_token_expires_at = observed_at
-            .checked_add(expires_in)
-            .ok_or(CodexCredentialRefreshError::InvalidRefreshResponse)?;
-        let next_refresh_at = policy
-            .next_attempt_at(due.account.id(), access_token_expires_at, observed_at)
-            .map(DateTime::<Utc>::from)
-            .map_err(CodexCredentialRefreshError::from)?;
+        let access_token_expires_at = expires_in.and_then(|value| observed_at.checked_add(value));
+        let next_refresh_at = match access_token_expires_at {
+            Some(expires_at) => Some(DateTime::<Utc>::from(
+                policy
+                    .next_attempt_at(due.account.id(), expires_at, observed_at)
+                    .map_err(CodexCredentialRefreshError::from)?,
+            )),
+            None => None,
+        };
         let result = self
             .repository
             .rotate_refreshed_oauth_secret(
                 &due.account,
                 secret,
                 access_token_expires_at,
-                SystemTime::from(next_refresh_at),
+                next_refresh_at.map(SystemTime::from),
             )
             .await;
         match result {
@@ -435,8 +458,8 @@ impl CodexCredentialRefreshService {
                 tracing::info!(
                     account_id = %due.account.id(),
                     credential_revision = revision.get(),
-                    access_token_expires_at = %DateTime::<Utc>::from(access_token_expires_at),
-                    next_refresh_at = %next_refresh_at,
+                    access_token_expires_at = ?access_token_expires_at.map(DateTime::<Utc>::from),
+                    next_refresh_at = ?next_refresh_at,
                     "OpenAI OAuth refresh succeeded"
                 );
                 Ok(CodexCredentialRefreshOutcome::Refreshed {

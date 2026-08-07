@@ -234,7 +234,7 @@ fn codec_reimport_preserves_existing_installation_id_for_the_same_principal() {
 }
 
 #[test]
-fn codec_reimport_rejects_installation_reuse_across_principals() {
+fn codec_reimport_preserves_installation_id_without_principal_validation() {
     let existing = CodexCredentialCodec::encode_new(
         &secret("existing-access-token"),
         &profile("chatgpt-existing-principal"),
@@ -248,7 +248,19 @@ fn codec_reimport_rejects_installation_reuse_across_principals() {
     )
     .expect("incoming credential");
 
-    assert!(CodexCredentialCodec::preserve_installation_id(&incoming, &existing).is_err());
+    let existing_id = CodexCredentialCodec::decode_complete(&existing)
+        .expect("existing data")
+        .installation_id()
+        .to_owned();
+    let preserved = CodexCredentialCodec::preserve_installation_id(&incoming, &existing)
+        .expect("preserve installation ID");
+    let preserved = CodexCredentialCodec::decode_complete(&preserved).expect("preserved data");
+
+    assert_eq!(preserved.installation_id(), existing_id);
+    assert_eq!(
+        preserved.oauth().expect("OAuth data").access_token,
+        "incoming-access-token"
+    );
 }
 
 #[test]

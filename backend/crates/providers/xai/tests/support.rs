@@ -471,7 +471,7 @@ fn rebuild_account(previous: &ProviderAccount, replacement: AccountReplacement) 
         previous.id().clone(),
         previous.provider().clone(),
         replacement.name,
-        previous.upstream_user_id().to_owned(),
+        previous.upstream_user_id().map(str::to_owned),
         previous.authentication_kind().to_owned(),
         replacement.revision,
         replacement.access_token_expires_at,

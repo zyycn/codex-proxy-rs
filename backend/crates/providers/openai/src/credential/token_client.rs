@@ -7,7 +7,6 @@ use serde::Deserialize;
 use std::fmt;
 use std::time::Duration;
 
-const MAX_TOKEN_LIFETIME_SECONDS: u64 = 366 * 24 * 60 * 60;
 const MAX_OAUTH_RESPONSE_BYTES: usize = 64 * 1024;
 const TOKEN_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const TOKEN_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -24,7 +23,9 @@ pub const OFFICIAL_CODEX_REDIRECT_URI: &str = "http://localhost:1455/auth/callba
 pub struct TokenPair {
     pub access_token: String,
     pub refresh_token: Option<String>,
-    pub expires_in: Duration,
+    /// OAuth endpoint 可以省略或返回零 expiry；这不影响已经成功的 token
+    /// exchange，只意味着调用方不能据此安排下一次刷新。
+    pub expires_in: Option<Duration>,
 }
 
 impl fmt::Debug for TokenPair {
@@ -76,11 +77,14 @@ impl fmt::Debug for AuthorizationCodeGrant {
     }
 }
 
-/// 官方 token endpoint 完成协议校验后返回的 token set。
+/// 官方 token endpoint 返回的 token set。
+///
+/// 与官方首次 authorization-code exchange 一致：`id_token`、`access_token` 与
+/// `refresh_token` 都是响应的必填字段。这里不检查 token 内容、签名或 claims。
 pub struct AuthorizationTokenSet {
     pub secret: crate::credential::CodexOAuthSecret,
     pub id_token: SecretString,
-    pub expires_in: Duration,
+    pub expires_in: Option<Duration>,
 }
 
 impl fmt::Debug for AuthorizationTokenSet {
@@ -170,16 +174,15 @@ pub fn official_openai_token_client() -> Result<OpenAiTokenClient, TokenClientBu
 struct RefreshTokenResponse {
     access_token: String,
     refresh_token: Option<String>,
-    expires_in: u64,
+    expires_in: Option<u64>,
 }
 
 #[derive(Deserialize)]
 struct AuthorizationCodeResponse {
     access_token: String,
-    refresh_token: Option<String>,
+    refresh_token: String,
     id_token: String,
-    token_type: String,
-    expires_in: u64,
+    expires_in: Option<u64>,
 }
 
 #[async_trait]
@@ -229,13 +232,6 @@ impl AuthorizationCodeExchanger for OpenAiTokenClient {
                     AuthorizationCodeExchangeError::Ambiguous
                 }
             })?;
-        let success_is_json = response.status().is_success()
-            && response
-                .headers()
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.split(';').next())
-                .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"));
         let (status, body) = read_bounded_response(response)
             .await
             .map_err(|_| AuthorizationCodeExchangeError::Ambiguous)?;
@@ -245,31 +241,17 @@ impl AuthorizationCodeExchanger for OpenAiTokenClient {
                 _ => AuthorizationCodeExchangeError::Rejected,
             });
         }
-        if !success_is_json {
-            return Err(AuthorizationCodeExchangeError::Rejected);
-        }
         let tokens = serde_json::from_slice::<AuthorizationCodeResponse>(&body)
             .map_err(|_| AuthorizationCodeExchangeError::Rejected)?;
-        if tokens.access_token.is_empty()
-            || tokens.id_token.is_empty()
-            || !tokens.token_type.eq_ignore_ascii_case("bearer")
-            || tokens.expires_in == 0
-            || tokens.expires_in > MAX_TOKEN_LIFETIME_SECONDS
-            || tokens
-                .refresh_token
-                .as_deref()
-                .is_some_and(|token| token.trim().is_empty())
-        {
-            return Err(AuthorizationCodeExchangeError::Rejected);
-        }
+        let id_token = SecretString::from(tokens.id_token);
         Ok(AuthorizationTokenSet {
             secret: crate::credential::CodexOAuthSecret {
                 access_token: SecretString::from(tokens.access_token),
-                refresh_token: tokens.refresh_token.map(SecretString::from),
+                refresh_token: Some(SecretString::from(tokens.refresh_token)),
                 id_token: None,
             },
-            id_token: SecretString::from(tokens.id_token),
-            expires_in: Duration::from_secs(tokens.expires_in),
+            id_token,
+            expires_in: optional_expiry(tokens.expires_in),
         })
     }
 }
@@ -297,21 +279,18 @@ async fn read_bounded_response(
 
 fn parse_token_pair(body: &[u8]) -> Result<TokenPair, ()> {
     let tokens = serde_json::from_slice::<RefreshTokenResponse>(body).map_err(|_| ())?;
-    if tokens.access_token.trim().is_empty() {
-        return Err(());
-    }
-    if tokens.expires_in == 0 || tokens.expires_in > MAX_TOKEN_LIFETIME_SECONDS {
-        return Err(());
-    }
     Ok(TokenPair {
         access_token: tokens.access_token,
-        // OAuth 刷新响应可能省略未变更的 RT。将空字段同样视为省略，调用方
-        // 才能保留当前仍可使用的 token。
-        refresh_token: tokens
-            .refresh_token
-            .filter(|refresh_token| !refresh_token.trim().is_empty()),
-        expires_in: Duration::from_secs(tokens.expires_in),
+        // OAuth 刷新响应可能省略未变更的 RT；缺失时由调用方保留当前值。
+        refresh_token: tokens.refresh_token,
+        expires_in: optional_expiry(tokens.expires_in),
     })
+}
+
+fn optional_expiry(value: Option<u64>) -> Option<Duration> {
+    value
+        .filter(|seconds| *seconds > 0)
+        .map(Duration::from_secs)
 }
 
 fn classify_refresh_failure(status: StatusCode, body: &[u8]) -> RefreshFailure {

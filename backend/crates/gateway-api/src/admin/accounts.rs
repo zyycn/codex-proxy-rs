@@ -1382,7 +1382,7 @@ fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
         resource_ref: account.id,
         email: account.email,
         account_id: account.upstream_account_id,
-        user_id: Some(account.upstream_user_id),
+        user_id: account.upstream_user_id,
         label: None,
         plan_type: account.plan_type,
         authentication_kind: account.authentication_kind,

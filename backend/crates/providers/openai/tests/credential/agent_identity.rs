@@ -24,7 +24,6 @@ use reqwest::StatusCode;
 use secrecy::ExposeSecret as _;
 use serde_json::Value;
 
-use super::admin::{import_service, unused_import_refresher};
 use crate::support::MemoryAccountStore;
 
 fn signing_fixture(seed: u8) -> (SigningKey, String) {
@@ -56,7 +55,7 @@ fn agent_account(
         account_id,
         provider,
         "Agent Identity test".to_owned(),
-        "agent-user".to_owned(),
+        Some("agent-user".to_owned()),
         CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY.to_owned(),
         CredentialRevision::new(1).expect("revision"),
         None,
@@ -231,30 +230,4 @@ async fn task_registration_and_recovery_are_revision_fenced() {
         .expect("stale task recovery must keep the newer task");
     assert_eq!(fenced.account.revision().get(), 3);
     assert_eq!(registrar.calls.load(Ordering::SeqCst), 2);
-}
-
-#[tokio::test]
-async fn agent_identity_import_accepts_the_minimal_document_shape() {
-    let prepared = import_service(unused_import_refresher())
-        .prepare_import_document(serde_json::json!({
-            "auth_mode": "agentIdentity",
-            "agent_identity": {
-                "agent_runtime_id": "runtime-minimal",
-                "agent_private_key": signing_fixture(9).1,
-                "account_id": "chatgpt-minimal",
-                "chatgpt_user_id": "user-minimal",
-                "email": "minimal@example.com",
-                "plan_type": "pro"
-            }
-        }))
-        .await
-        .expect("minimal Agent Identity import");
-    assert_eq!(prepared.accounts().len(), 1);
-    let account = &prepared.accounts()[0].account;
-    assert_eq!(
-        account.authentication_kind(),
-        CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY
-    );
-    assert_eq!(account.access_token_expires_at(), None);
-    assert!(!format!("{prepared:?}").contains("agent_private_key"));
 }

@@ -16,13 +16,10 @@ use gateway_core::task::WorkerContribution;
 use crate::admin::{OpenAiAdminProvider, OpenAiAdminServices, OpenAiOAuthPendingStore};
 use crate::credential::token_client::{AuthorizationCodeExchanger, TokenRefresher};
 use crate::credential::{
-    CodexAccountIdentityService, CodexAccountIdentityVerifier, CodexAgentIdentityTaskService,
-    CodexAuthenticatedAccountSource, CodexCookiePolicy, CodexCredentialAdmin,
+    CodexAgentIdentityTaskService, CodexCookiePolicy, CodexCredentialAdmin,
     CodexCredentialAdminService, CodexCredentialCatalogService, CodexCredentialQuotaService,
     CodexCredentialRefreshService, CodexCredentialRepository, CodexCredentialSelector,
-    CodexJwtIdentityVerifier, CodexOAuthAdmin, CodexOAuthAdminService, CodexSignedIdentityVerifier,
-    OfficialCodexAgentIdentityTaskRegistrar, ReqwestCodexAuthenticatedAccountSource,
-    ReqwestOpenAiJwksSource,
+    CodexOAuthAdmin, CodexOAuthAdminService, OfficialCodexAgentIdentityTaskRegistrar,
 };
 use crate::transport::profile::{
     CodexCliReleaseService, CodexDesktopReleaseService, OfficialCodexCliReleaseTransport,
@@ -148,30 +145,16 @@ pub async fn initialize(
         credential::token_client::openai_token_client(config.token_client_config())
             .map_err(|_| OpenAiInitializeError::TokenClient)?,
     );
-    let jwks = ReqwestOpenAiJwksSource::new().map_err(|_| OpenAiInitializeError::Identity)?;
-    let signed: Arc<dyn CodexSignedIdentityVerifier> = Arc::new(
-        CodexJwtIdentityVerifier::new(Box::new(jwks))
-            .with_oauth_client_id(config.oauth_client_id()),
-    );
-    let account_source: Arc<dyn CodexAuthenticatedAccountSource> = Arc::new(
-        ReqwestCodexAuthenticatedAccountSource::new(profile.clone(), config.base_url().to_owned())
-            .map_err(|_| OpenAiInitializeError::Identity)?,
-    );
-    let identity: Arc<dyn CodexAccountIdentityVerifier> = Arc::new(
-        CodexAccountIdentityService::new(signed, Arc::clone(&account_source)),
-    );
     let refresher: Arc<dyn TokenRefresher> = token_client.clone();
     let exchanger: Arc<dyn AuthorizationCodeExchanger> = token_client;
     let credential_admin = Arc::new(CodexCredentialAdminService::new(
         Arc::clone(&refresher),
-        Arc::clone(&account_source),
         Arc::clone(&leases),
         Arc::clone(&runtime_policy),
     ));
     let refresh = Arc::new(CodexCredentialRefreshService::new(
         repository,
         refresher,
-        Arc::clone(&identity),
         Arc::clone(&leases),
         credential_state,
         Arc::clone(&runtime_policy),
@@ -184,7 +167,6 @@ pub async fn initialize(
         CodexOAuthAdminService::new(
             pending,
             exchanger,
-            account_source,
             Arc::clone(&accounts),
             Arc::clone(&runtime_policy),
             CodexCredentialAdmin,
@@ -197,11 +179,9 @@ pub async fn initialize(
         accounts,
         OpenAiAdminServices {
             credentials: credential_admin,
-            verifier: identity,
             oauth: oauth_admin,
             quota: Arc::clone(&quota),
             catalog: Arc::clone(&catalog),
-            runtime_policy,
         },
         websocket_pool,
         desktop_release_status,
@@ -260,8 +240,6 @@ pub enum OpenAiInitializeError {
     CookiePolicy,
     #[error("OpenAI token client could not initialize")]
     TokenClient,
-    #[error("OpenAI identity verifier could not initialize")]
-    Identity,
     #[error("OpenAI Agent Identity service could not initialize")]
     AgentIdentity,
     #[error("OpenAI credential administration could not initialize")]

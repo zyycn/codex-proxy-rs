@@ -363,6 +363,11 @@ impl GrokCredentialRefreshService {
             .await
             .map_err(|_| GrokCredentialRefreshError::Preparation)?;
         let policy = self.runtime_policy.load_refresh_policy().await?;
+        let subject = loaded
+            .account
+            .upstream_user_id()
+            .ok_or(GrokCredentialRepositoryError::InvalidCredentialData)?
+            .to_owned();
         let credential = DueGrokCredential {
             account_id: account_id.clone(),
             credential_revision,
@@ -370,7 +375,7 @@ impl GrokCredentialRefreshService {
             refresh_token: loaded.refresh_token,
             id_token: loaded.id_token,
             scope: loaded.scope,
-            subject: loaded.account.upstream_user_id().to_owned(),
+            subject,
             email: loaded.account.email().map(str::to_owned),
             upstream_account_id: loaded.account.upstream_account_id().map(str::to_owned),
             plan_type: loaded.account.plan_type().map(str::to_owned),
@@ -442,6 +447,11 @@ impl GrokCredentialRefreshService {
         let (access_token_expires_at, next_refresh_at) =
             refreshed_deadlines(&account_id, tokens.expires_in, policy)
                 .ok_or(GrokCredentialRefreshError::InvalidRefreshResponse)?;
+        let subject = loaded
+            .account
+            .upstream_user_id()
+            .ok_or(GrokCredentialRepositoryError::InvalidCredentialData)?
+            .to_owned();
         let prepared = GrokCredentialAdmin
             .prepare_rotation(&RotateManagedGrokCredential {
                 current,
@@ -452,7 +462,7 @@ impl GrokCredentialRefreshService {
                     scope: loaded.scope,
                 },
                 verified_account: GrokAccountProfile {
-                    subject: loaded.account.upstream_user_id().to_owned(),
+                    subject,
                     email: loaded.account.email().map(str::to_owned),
                     upstream_account_id: loaded.account.upstream_account_id().map(str::to_owned),
                     plan_type: loaded.account.plan_type().map(str::to_owned),
@@ -880,6 +890,10 @@ impl GrokCredentialRepository {
                     continue;
                 }
             };
+            let Some(subject) = account.upstream_user_id() else {
+                failed_account_ids.push(account.id().clone());
+                continue;
+            };
             due.push(DueGrokCredential {
                 account_id: account.id().clone(),
                 credential_revision: account.revision(),
@@ -887,7 +901,7 @@ impl GrokCredentialRepository {
                 refresh_token: loaded.refresh_token,
                 id_token: loaded.id_token,
                 scope: loaded.scope,
-                subject: account.upstream_user_id().to_owned(),
+                subject: subject.to_owned(),
                 email: account.email().map(str::to_owned),
                 upstream_account_id: account.upstream_account_id().map(str::to_owned),
                 plan_type: account.plan_type().map(str::to_owned),

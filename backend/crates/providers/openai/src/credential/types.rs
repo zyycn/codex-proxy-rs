@@ -2,9 +2,10 @@
 
 use std::fmt;
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
 use secrecy::SecretString;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use url::Url;
 
 /// OAuth AT/RT/ID Token；`Debug` 永不输出明文。
@@ -39,6 +40,99 @@ pub struct CodexAccountProfile {
     pub chatgpt_user_id: String,
     pub plan_type: Option<String>,
     pub access_token_expires_at: Option<DateTime<Utc>>,
+}
+
+/// 从 OAuth ID token payload 尽力提取的展示资料。
+///
+/// 这只是与官方客户端一致的 base64 JSON 读取，不校验 JWT 签名或 claims。
+#[derive(Clone, Default)]
+pub(crate) struct CodexOAuthMetadata {
+    pub(crate) email: Option<String>,
+    pub(crate) chatgpt_plan_type: Option<String>,
+    pub(crate) chatgpt_user_id: Option<String>,
+    pub(crate) chatgpt_account_id: Option<String>,
+}
+
+impl fmt::Debug for CodexOAuthMetadata {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CodexOAuthMetadata")
+            .field("email", &self.email.as_ref().map(|_| "<redacted>"))
+            .field(
+                "chatgpt_user_id",
+                &self.chatgpt_user_id.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "chatgpt_account_id",
+                &self.chatgpt_account_id.as_ref().map(|_| "<redacted>"),
+            )
+            .field("chatgpt_plan_type", &self.chatgpt_plan_type)
+            .finish()
+    }
+}
+
+/// 按官方 `token_data.rs` 的字段优先级读取 ID token payload。
+///
+/// 与官方一致，`id_token` 的 JWT 外形、payload base64 或 JSON 无法解析时返回错误；
+/// 这不是签名或 claims 验证。各身份字段本身仍全部可缺失。
+pub(crate) fn parse_id_token_metadata(jwt: &str) -> Result<CodexOAuthMetadata, ()> {
+    let claims = decode_jwt_payload::<IdTokenClaims>(jwt)?;
+    let email = claims
+        .email
+        .or_else(|| claims.profile.and_then(|profile| profile.email));
+    let Some(auth) = claims.auth else {
+        return Ok(CodexOAuthMetadata {
+            email,
+            ..CodexOAuthMetadata::default()
+        });
+    };
+    Ok(CodexOAuthMetadata {
+        email,
+        chatgpt_plan_type: auth.chatgpt_plan_type,
+        chatgpt_user_id: auth.chatgpt_user_id.or(auth.user_id),
+        chatgpt_account_id: auth.chatgpt_account_id,
+    })
+}
+
+#[derive(Deserialize)]
+struct IdTokenClaims {
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(rename = "https://api.openai.com/profile", default)]
+    profile: Option<ProfileClaims>,
+    #[serde(rename = "https://api.openai.com/auth", default)]
+    auth: Option<AuthClaims>,
+}
+
+#[derive(Deserialize)]
+struct ProfileClaims {
+    #[serde(default)]
+    email: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AuthClaims {
+    #[serde(default)]
+    chatgpt_plan_type: Option<String>,
+    #[serde(default)]
+    chatgpt_user_id: Option<String>,
+    #[serde(default)]
+    user_id: Option<String>,
+    #[serde(default)]
+    chatgpt_account_id: Option<String>,
+}
+
+fn decode_jwt_payload<T: DeserializeOwned>(jwt: &str) -> Result<T, ()> {
+    let mut parts = jwt.split('.');
+    let (Some(header), Some(payload), Some(signature)) = (parts.next(), parts.next(), parts.next())
+    else {
+        return Err(());
+    };
+    if header.is_empty() || payload.is_empty() || signature.is_empty() {
+        return Err(());
+    }
+    let payload = URL_SAFE_NO_PAD.decode(payload).map_err(|_| ())?;
+    serde_json::from_slice(&payload).map_err(|_| ())
 }
 
 impl fmt::Debug for CodexAccountProfile {
@@ -109,7 +203,8 @@ pub const CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY: &str = "agent_identity";
 #[serde(deny_unknown_fields)]
 pub struct CodexOAuthCredentialData {
     pub schema_version: u32,
-    pub principal: CodexCredentialPrincipal,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<CodexCredentialPrincipal>,
     pub installation_id: String,
     pub access_token: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

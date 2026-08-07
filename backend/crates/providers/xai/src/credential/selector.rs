@@ -228,11 +228,15 @@ impl GrokAccountSessionSelector {
             }
             let binding = GrokSessionBinding::new(selected_id.as_str())
                 .map_err(|_| GrokSessionSelectorError::InvalidSession)?;
+            let upstream_user_id = loaded
+                .account
+                .upstream_user_id()
+                .ok_or(GrokSessionSelectorError::InvalidSession)?;
             let session = SelectedGrokSession::new(
                 selected_id,
                 selected_revision,
                 loaded.access_token,
-                SecretValue::new(loaded.account.upstream_user_id().to_owned()),
+                SecretValue::new(upstream_user_id),
                 loaded
                     .account
                     .email()

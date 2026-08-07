@@ -909,7 +909,7 @@ fn prepared_create(
         provider_kind: account.provider().clone(),
         name: account.name().to_owned(),
         email: account.email().map(str::to_owned),
-        upstream_user_id: account.upstream_user_id().to_owned(),
+        upstream_user_id: account.upstream_user_id().map(str::to_owned),
         upstream_account_id: account.upstream_account_id().map(str::to_owned),
         plan_type: account.plan_type().map(str::to_owned),
         authentication_kind: account.authentication_kind().to_owned(),
@@ -1032,7 +1032,7 @@ fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, Provi
 fn account_matches_record(account: &ProviderAccount, record: &AccountRecord) -> bool {
     account.id().as_str() == record.id
         && account.provider() == &record.provider_kind
-        && account.upstream_user_id() == record.upstream_user_id
+        && account.upstream_user_id() == record.upstream_user_id.as_deref()
         && account.upstream_account_id() == record.upstream_account_id.as_deref()
         && account.authentication_kind() == record.authentication_kind
 }

@@ -76,7 +76,7 @@ pub struct ProviderAccountSummary {
     pub provider_kind: String,
     pub name: String,
     pub email: Option<String>,
-    pub upstream_user_id: String,
+    pub upstream_user_id: Option<String>,
     pub upstream_account_id: Option<String>,
     pub plan_type: Option<String>,
     pub authentication_kind: String,
@@ -123,7 +123,7 @@ pub struct NewProviderAccount {
     pub provider_kind: String,
     pub name: String,
     pub email: Option<String>,
-    pub upstream_user_id: String,
+    pub upstream_user_id: Option<String>,
     pub upstream_account_id: Option<String>,
     pub plan_type: Option<String>,
     pub authentication_kind: String,
@@ -163,7 +163,9 @@ impl NewProviderAccount {
         require_nonempty(ENTITY, "id", &self.id)?;
         require_nonempty(ENTITY, "provider_kind", &self.provider_kind)?;
         require_nonempty(ENTITY, "name", &self.name)?;
-        require_nonempty(ENTITY, "upstream_user_id", &self.upstream_user_id)?;
+        if let Some(upstream_user_id) = &self.upstream_user_id {
+            require_nonempty(ENTITY, "upstream_user_id", upstream_user_id)?;
+        }
         require_nonempty(ENTITY, "authentication_kind", &self.authentication_kind)?;
         if !self.has_refresh_token && self.next_refresh_at.is_some() {
             return Err(invalid("next_refresh_at requires a refresh token"));

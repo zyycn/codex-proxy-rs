@@ -8,10 +8,6 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use base64::{
-    Engine as _,
-    engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
-};
 use chrono::{DateTime, FixedOffset, Utc};
 use gateway_core::engine::credential::{
     AccountAvailability, CredentialCasUpdate, CredentialRevision, LoadedCredential,
@@ -29,16 +25,13 @@ use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
 
-use super::identity::{
-    CodexAuthenticatedAccountSource, CodexIdentityExpectation, CodexIdentityVerificationError,
-};
 use super::recovery_log::{CodexOAuthRecoveryOperation, record_oauth_recovery};
 use super::security::CodexCredentialCodec;
 use super::token_client::{RefreshFailure, TokenRefresher};
 use super::types::{
     CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY, CODEX_AUTHENTICATION_KIND_OAUTH, CodexAccountProfile,
     CodexAgentIdentityAuthMode, CodexAgentIdentityCredentialData, CodexCredentialData,
-    CodexOAuthSecret,
+    CodexCredentialPrincipal, CodexOAuthMetadata, CodexOAuthSecret,
 };
 
 const PROVIDER_NAME: &str = "openai";
@@ -55,6 +48,35 @@ pub struct ImportCodexOAuthCredential {
     pub verified_account: CodexAccountProfile,
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
+}
+
+/// OAuth credential 的最小创建输入。
+///
+/// metadata 来自 ID token 的本地 payload 解码，或导入文档的展示字段；不包含
+/// 签名、issuer、audience、nonce 或 access/refresh token 验证。
+pub(crate) struct UnresolvedCodexOAuthCredential {
+    pub(crate) account_id: String,
+    pub(crate) name: String,
+    pub(crate) secret: CodexOAuthSecret,
+    pub(crate) metadata: CodexOAuthMetadata,
+    pub(crate) access_token_expires_at: Option<DateTime<Utc>>,
+    pub(crate) next_refresh_at: Option<DateTime<Utc>>,
+    pub(crate) enabled: bool,
+}
+
+impl fmt::Debug for UnresolvedCodexOAuthCredential {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("UnresolvedCodexOAuthCredential")
+            .field("account_id", &self.account_id)
+            .field("name", &self.name)
+            .field("secret", &"<redacted>")
+            .field("metadata", &self.metadata)
+            .field("access_token_expires_at", &self.access_token_expires_at)
+            .field("next_refresh_at", &self.next_refresh_at)
+            .field("enabled", &self.enabled)
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for ImportCodexOAuthCredential {
@@ -113,6 +135,7 @@ enum ParsedCodexAuthentication {
     OAuth {
         access_token: Option<String>,
         refresh_token: Option<String>,
+        id_token: Option<String>,
     },
     AgentIdentity {
         runtime_id: String,
@@ -127,6 +150,7 @@ impl fmt::Debug for ParsedCodexAuthentication {
             Self::OAuth {
                 access_token,
                 refresh_token,
+                id_token,
             } => formatter
                 .debug_struct("OAuth")
                 .field("access_token", &access_token.as_ref().map(|_| "<redacted>"))
@@ -134,6 +158,7 @@ impl fmt::Debug for ParsedCodexAuthentication {
                     "refresh_token",
                     &refresh_token.as_ref().map(|_| "<redacted>"),
                 )
+                .field("id_token", &id_token.as_ref().map(|_| "<redacted>"))
                 .finish(),
             Self::AgentIdentity {
                 runtime_id: _,
@@ -354,8 +379,6 @@ impl fmt::Debug for PreparedCodexCredentialRotationGuard {
 pub enum CodexCredentialAdminError {
     #[error("Codex account input is invalid")]
     InvalidInput,
-    #[error("Codex account identity does not match the existing account")]
-    IdentityMismatch,
     #[error("Codex credential JSON is invalid")]
     InvalidCredential,
     #[error("Codex account was not found")]
@@ -372,14 +395,6 @@ pub enum CodexCredentialAdminError {
     RefreshUnavailable,
     #[error("Codex refresh send state is ambiguous")]
     RefreshAmbiguous,
-    #[error("Codex account profile request was rejected")]
-    AccountProfileRejected,
-    #[error("Codex account profile request is unavailable")]
-    AccountProfileUnavailable,
-    #[error("Codex refreshed identity was rejected")]
-    IdentityRejected,
-    #[error("Codex identity verification is unavailable")]
-    IdentityUnavailable,
 }
 
 /// 无状态的 Codex Admin command preparer。
@@ -409,7 +424,7 @@ impl CodexCredentialAdmin {
             account_id,
             provider,
             input.name,
-            upstream_user_id,
+            Some(upstream_user_id),
             CODEX_AUTHENTICATION_KIND_OAUTH.to_owned(),
             revision,
             access_token_expires_at,
@@ -420,6 +435,59 @@ impl CodexCredentialAdmin {
             input.verified_account.plan_type,
         )
         .with_runtime_state(input.enabled, AccountAvailability::Ready)
+        .with_refresh_schedule(
+            input.secret.refresh_token.is_some(),
+            optional_time(input.next_refresh_at),
+        );
+        Ok(NewProviderAccount {
+            account,
+            credential,
+        })
+    }
+
+    /// 为已取得 OAuth access token、但资料尚未补全的账号创建最小记录。
+    ///
+    /// ID token payload 只用于本地字段投影；创建路径绝不发起 usage/profile 请求。
+    pub(crate) fn prepare_unresolved_oauth(
+        &self,
+        input: UnresolvedCodexOAuthCredential,
+    ) -> Result<NewProviderAccount, CodexCredentialAdminError> {
+        let account_id = ProviderAccountId::new(input.account_id)
+            .map_err(|_| CodexCredentialAdminError::InvalidInput)?;
+        let provider = ProviderKind::new(PROVIDER_NAME)
+            .map_err(|_| CodexCredentialAdminError::InvalidInput)?;
+        if input.name.trim().is_empty() {
+            return Err(CodexCredentialAdminError::InvalidInput);
+        }
+        let revision =
+            CredentialRevision::new(1).map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
+        let CodexOAuthMetadata {
+            email,
+            chatgpt_plan_type: plan_type,
+            chatgpt_user_id: upstream_user_id,
+            chatgpt_account_id: upstream_account_id,
+        } = input.metadata;
+        let has_upstream_user_id = upstream_user_id.is_some();
+        let credential = CodexCredentialCodec::encode_unresolved(&input.secret, Vec::new())
+            .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
+        let account = ProviderAccount::new(
+            account_id,
+            provider,
+            input.name,
+            upstream_user_id,
+            CODEX_AUTHENTICATION_KIND_OAUTH.to_owned(),
+            revision,
+            optional_time(input.access_token_expires_at),
+        )
+        .with_profile(email, upstream_account_id, plan_type)
+        .with_runtime_state(
+            input.enabled,
+            if has_upstream_user_id {
+                AccountAvailability::Ready
+            } else {
+                AccountAvailability::Unknown
+            },
+        )
         .with_refresh_schedule(
             input.secret.refresh_token.is_some(),
             optional_time(input.next_refresh_at),
@@ -454,7 +522,7 @@ impl CodexCredentialAdmin {
                 id: account.id().as_str().to_owned(),
                 email: account.email().map(str::to_owned),
                 account_id: account.upstream_account_id().map(str::to_owned),
-                user_id: Some(account.upstream_user_id().to_owned()),
+                user_id: account.upstream_user_id().map(str::to_owned),
                 label: Some(account.name().to_owned()),
                 plan_type: account.plan_type().map(str::to_owned),
                 status: cpr_status(&account),
@@ -517,19 +585,19 @@ impl CodexCredentialAdmin {
         &self,
         current: LoadedCredential,
         secret: CodexOAuthSecret,
-        access_token_expires_at: DateTime<Utc>,
+        access_token_expires_at: Option<DateTime<Utc>>,
         next_refresh_at: Option<DateTime<Utc>>,
     ) -> Result<PreparedCodexCredentialRotation, CodexCredentialAdminError> {
         if current.account.provider().as_str() != PROVIDER_NAME
             || current.account.authentication_kind() != CODEX_AUTHENTICATION_KIND_OAUTH
         {
-            return Err(CodexCredentialAdminError::IdentityMismatch);
+            return Err(CodexCredentialAdminError::InvalidCredential);
         }
         let mut data = CodexCredentialCodec::decode_complete(&current.credential)
             .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
         let oauth = data
             .oauth_mut()
-            .ok_or(CodexCredentialAdminError::IdentityMismatch)?;
+            .ok_or(CodexCredentialAdminError::InvalidCredential)?;
         oauth.access_token = secret.access_token.expose_secret().to_owned();
         oauth.refresh_token = secret
             .refresh_token
@@ -553,7 +621,7 @@ impl CodexCredentialAdmin {
             profile.clone(),
             credential,
             secret.refresh_token.is_some(),
-            Some(SystemTime::from(access_token_expires_at)),
+            optional_time(access_token_expires_at),
             optional_time(next_refresh_at),
         )
         .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
@@ -570,24 +638,16 @@ impl CodexCredentialAdmin {
         input: RotateManagedCodexCredential,
         replace_identity: bool,
     ) -> Result<PreparedCodexCredentialRotation, CodexCredentialAdminError> {
-        let access_token_expires_at =
-            required_time(input.verified_account.access_token_expires_at)?;
+        let access_token_expires_at = input.verified_account.access_token_expires_at;
         let mut data = CodexCredentialCodec::decode_complete(&input.current.credential)
             .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
         let oauth = data
             .oauth_mut()
-            .ok_or(CodexCredentialAdminError::IdentityMismatch)?;
+            .ok_or(CodexCredentialAdminError::InvalidCredential)?;
         if input.current.account.provider().as_str() != PROVIDER_NAME
             || input.current.account.authentication_kind() != CODEX_AUTHENTICATION_KIND_OAUTH
-            || (!replace_identity
-                && (input.current.account.upstream_account_id()
-                    != Some(input.verified_account.chatgpt_account_id.as_str())
-                    || input.current.account.upstream_user_id()
-                        != input.verified_account.chatgpt_user_id
-                    || oauth.principal.oauth_subject != input.verified_account.oauth_subject
-                    || oauth.principal.poid != input.verified_account.poid))
         {
-            return Err(CodexCredentialAdminError::IdentityMismatch);
+            return Err(CodexCredentialAdminError::InvalidCredential);
         }
         let replacement_identity = replace_identity.then(|| {
             ProviderAccountIdentity::new(
@@ -596,14 +656,10 @@ impl CodexCredentialAdmin {
             )
         });
         if replace_identity {
-            oauth
-                .principal
-                .oauth_subject
-                .clone_from(&input.verified_account.oauth_subject);
-            oauth
-                .principal
-                .poid
-                .clone_from(&input.verified_account.poid);
+            oauth.principal = Some(CodexCredentialPrincipal {
+                oauth_subject: input.verified_account.oauth_subject.clone(),
+                poid: input.verified_account.poid.clone(),
+            });
         }
         oauth.access_token = input.secret.access_token.expose_secret().to_owned();
         oauth.refresh_token = input
@@ -630,7 +686,7 @@ impl CodexCredentialAdmin {
             profile.clone(),
             credential,
             input.secret.refresh_token.is_some(),
-            Some(access_token_expires_at),
+            optional_time(access_token_expires_at),
             optional_time(input.next_refresh_at),
         )
         .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
@@ -646,7 +702,6 @@ impl CodexCredentialAdmin {
 /// 有状态的 Codex 手工刷新边界；消费调用方刚读取的当前 credential 并准备 CAS。
 pub struct CodexCredentialAdminService {
     refresher: Arc<dyn TokenRefresher>,
-    account_source: Arc<dyn CodexAuthenticatedAccountSource>,
     leases: Arc<dyn ProviderLeasePort>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
 }
@@ -656,7 +711,6 @@ impl fmt::Debug for CodexCredentialAdminService {
         formatter
             .debug_struct("CodexCredentialAdminService")
             .field("refresher", &"TokenRefresher")
-            .field("account_source", &"CodexAuthenticatedAccountSource")
             .field("leases", &"ProviderLeasePort")
             .field("runtime_policy", &"ProviderRuntimePolicyPort")
             .finish()
@@ -666,13 +720,11 @@ impl fmt::Debug for CodexCredentialAdminService {
 impl CodexCredentialAdminService {
     pub fn new(
         refresher: Arc<dyn TokenRefresher>,
-        account_source: Arc<dyn CodexAuthenticatedAccountSource>,
         leases: Arc<dyn ProviderLeasePort>,
         runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     ) -> Self {
         Self {
             refresher,
-            account_source,
             leases,
             runtime_policy,
         }
@@ -747,17 +799,14 @@ impl CodexCredentialAdminService {
             Some(account_id.as_str()),
             &secret,
         );
-        if secret.access_token.expose_secret().trim().is_empty() || tokens.expires_in.is_zero() {
-            return Err(CodexCredentialAdminError::InvalidCredential);
-        }
-        let access_token_expires_at = SystemTime::now()
-            .checked_add(tokens.expires_in)
-            .map(DateTime::<Utc>::from)
-            .ok_or(CodexCredentialAdminError::InvalidCredential)?;
+        let access_token_expires_at = tokens
+            .expires_in
+            .and_then(|expires_in| SystemTime::now().checked_add(expires_in))
+            .map(DateTime::<Utc>::from);
         let next_refresh_at = refresh_time(
             policy,
             &account_id,
-            Some(access_token_expires_at),
+            access_token_expires_at,
             secret.refresh_token.is_some(),
         )?;
         let mut prepared = CodexCredentialAdmin.prepare_refreshed_oauth_rotation(
@@ -773,7 +822,10 @@ impl CodexCredentialAdminService {
         Ok(prepared)
     }
 
-    /// 用 access token 补全账号事实，并归一到唯一 `NewProviderAccount` 写入路径。
+    /// 归一导入 OAuth/agent-identity 凭据到唯一 `NewProviderAccount` 写入路径。
+    ///
+    /// OAuth 导入只要取得 access token（直接提供或 RT exchange）即创建 Unknown
+    /// 账号；资格资料由后续 worker 异步补齐。
     pub async fn prepare_import_document(
         &self,
         payload: Value,
@@ -792,12 +844,12 @@ impl CodexCredentialAdminService {
         let mut account_ids = BTreeSet::new();
         let mut upstream_identities = BTreeSet::new();
         let mut accounts = Vec::with_capacity(candidates.len());
-        let mut policy = None;
         for candidate in candidates {
             let prepared = match &candidate.authentication {
                 ParsedCodexAuthentication::OAuth {
                     access_token,
                     refresh_token,
+                    id_token,
                 } => {
                     let account_id = format!("acct_{}", uuid::Uuid::now_v7().simple());
                     if !account_ids.insert(account_id.clone()) {
@@ -810,53 +862,43 @@ impl CodexCredentialAdminService {
                             &typed_account_id,
                             access_token.clone(),
                             refresh_token.clone(),
+                            id_token.clone(),
                         )
                         .await?;
-                    let mut verified_account = complete_oauth_account_profile(
-                        self.account_source.as_ref(),
-                        &secret,
-                        access_token_expires_at,
-                    )
-                    .await
-                    .map_err(map_account_profile_error)?;
-                    apply_import_metadata(&mut verified_account, &candidate);
-                    if !upstream_identities.insert((
-                        verified_account.chatgpt_user_id.clone(),
-                        verified_account.chatgpt_account_id.clone(),
-                    )) {
-                        return Err(CodexCredentialAdminError::InvalidInput);
-                    }
-                    let refresh_policy = if let Some(policy) = policy {
-                        policy
-                    } else {
-                        let loaded = self
-                            .runtime_policy
-                            .load_refresh_policy()
-                            .await
-                            .map_err(|_| CodexCredentialAdminError::RefreshUnavailable)?;
-                        policy = Some(loaded);
-                        loaded
-                    };
-                    let next_refresh_at = refresh_time(
-                        refresh_policy,
-                        &typed_account_id,
-                        verified_account.access_token_expires_at,
-                        secret.refresh_token.is_some(),
-                    )?;
-                    CodexCredentialAdmin.prepare_import(ImportCodexOAuthCredential {
-                        account_id,
-                        name: candidate
-                            .name
-                            .clone()
-                            .or_else(|| candidate.email.clone())
-                            .or_else(|| verified_account.email.clone())
-                            .filter(|name| !name.trim().is_empty())
-                            .unwrap_or_else(|| "Codex OAuth".to_owned()),
-                        secret,
-                        verified_account,
-                        next_refresh_at,
-                        enabled: true,
-                    })?
+                    // 导入材料按管理员输入原样保存；ID token 仅尽力补展示字段，
+                    // 解析失败不阻塞 AT/RT 入库。
+                    let mut metadata = secret
+                        .id_token
+                        .as_ref()
+                        .and_then(|token| {
+                            super::types::parse_id_token_metadata(token.expose_secret()).ok()
+                        })
+                        .unwrap_or_default();
+                    apply_import_metadata(&mut metadata, &candidate);
+                    let next_refresh_at = self
+                        .best_effort_import_refresh_time(
+                            &typed_account_id,
+                            access_token_expires_at,
+                            secret.refresh_token.is_some(),
+                        )
+                        .await;
+                    CodexCredentialAdmin.prepare_unresolved_oauth(
+                        UnresolvedCodexOAuthCredential {
+                            account_id,
+                            name: candidate
+                                .name
+                                .clone()
+                                .or_else(|| candidate.email.clone())
+                                .or_else(|| metadata.email.clone())
+                                .filter(|name| !name.trim().is_empty())
+                                .unwrap_or_else(|| "Codex OAuth".to_owned()),
+                            secret,
+                            metadata,
+                            access_token_expires_at,
+                            next_refresh_at,
+                            enabled: true,
+                        },
+                    )?
                 }
                 ParsedCodexAuthentication::AgentIdentity { .. } => {
                     let account_id = candidate
@@ -871,14 +913,17 @@ impl CodexCredentialAdminService {
                         import_runtime_state(candidate.status.as_deref())?;
                     let mut account =
                         self.prepare_agent_identity_import(&candidate, account_id, enabled)?;
-                    if !upstream_identities.insert((
-                        account.account.upstream_user_id().to_owned(),
-                        account
-                            .account
-                            .upstream_account_id()
-                            .ok_or(CodexCredentialAdminError::InvalidInput)?
-                            .to_owned(),
-                    )) {
+                    let upstream_user_id = account
+                        .account
+                        .upstream_user_id()
+                        .ok_or(CodexCredentialAdminError::InvalidInput)?
+                        .to_owned();
+                    let upstream_account_id = account
+                        .account
+                        .upstream_account_id()
+                        .ok_or(CodexCredentialAdminError::InvalidInput)?
+                        .to_owned();
+                    if !upstream_identities.insert((upstream_user_id, upstream_account_id)) {
                         return Err(CodexCredentialAdminError::InvalidInput);
                     }
                     account.account = account.account.with_runtime_state(enabled, availability);
@@ -895,28 +940,21 @@ impl CodexCredentialAdminService {
         account_id: &ProviderAccountId,
         access_token: Option<String>,
         refresh_token: Option<String>,
+        id_token: Option<String>,
     ) -> Result<(CodexOAuthSecret, Option<DateTime<Utc>>), CodexCredentialAdminError> {
-        let access_token = access_token
-            .as_deref()
-            .map(normalize_bearer)
-            .filter(|token| !token.is_empty());
-        let refresh_token = refresh_token
-            .as_deref()
-            .map(normalize_bearer)
-            .filter(|token| !token.is_empty());
+        let id_token = id_token.map(SecretString::from);
         if let Some(access_token) = access_token {
             let secret = CodexOAuthSecret {
-                access_token: SecretString::from(access_token.clone()),
+                access_token: SecretString::from(access_token),
                 refresh_token: refresh_token.map(SecretString::from),
-                id_token: None,
+                id_token,
             };
             Self::record_recovery_log(
                 CodexOAuthRecoveryOperation::ImportDirect,
                 Some(account_id.as_str()),
                 &secret,
             );
-            // 仅用 AT 的 exp 安排刷新，不作为身份校验依据。
-            return Ok((secret, unverified_access_token_expiry(&access_token)));
+            return Ok((secret, None));
         }
         let refresh_token = refresh_token.ok_or(CodexCredentialAdminError::InvalidCredential)?;
         let tokens = self
@@ -931,21 +969,35 @@ impl CodexCredentialAdminService {
                 .refresh_token
                 .map(SecretString::from)
                 .or_else(|| Some(SecretString::from(refresh_token))),
-            id_token: None,
+            id_token,
         };
         Self::record_recovery_log(
             CodexOAuthRecoveryOperation::ImportRefreshToken,
             Some(account_id.as_str()),
             &secret,
         );
-        if secret.access_token.expose_secret().trim().is_empty() || tokens.expires_in.is_zero() {
-            return Err(CodexCredentialAdminError::InvalidCredential);
-        }
-        let access_token_expires_at = SystemTime::now()
-            .checked_add(tokens.expires_in)
-            .map(DateTime::<Utc>::from)
-            .ok_or(CodexCredentialAdminError::InvalidCredential)?;
-        Ok((secret, Some(access_token_expires_at)))
+        let access_token_expires_at = tokens
+            .expires_in
+            .and_then(|expires_in| SystemTime::now().checked_add(expires_in))
+            .map(DateTime::<Utc>::from);
+        Ok((secret, access_token_expires_at))
+    }
+
+    async fn best_effort_import_refresh_time(
+        &self,
+        account_id: &ProviderAccountId,
+        access_token_expires_at: Option<DateTime<Utc>>,
+        has_refresh_token: bool,
+    ) -> Option<DateTime<Utc>> {
+        let policy = self.runtime_policy.load_refresh_policy().await.ok()?;
+        refresh_time(
+            policy,
+            account_id,
+            access_token_expires_at,
+            has_refresh_token,
+        )
+        .ok()
+        .flatten()
     }
 
     fn record_recovery_log(
@@ -1013,7 +1065,7 @@ impl CodexCredentialAdminService {
             account_id,
             provider,
             name,
-            upstream_user_id,
+            Some(upstream_user_id),
             CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY.to_owned(),
             revision,
             None,
@@ -1030,14 +1082,6 @@ impl CodexCredentialAdminService {
             credential,
         })
     }
-}
-
-fn required_time(
-    value: Option<chrono::DateTime<chrono::Utc>>,
-) -> Result<SystemTime, CodexCredentialAdminError> {
-    value
-        .map(SystemTime::from)
-        .ok_or(CodexCredentialAdminError::InvalidCredential)
 }
 
 fn optional_time(value: Option<chrono::DateTime<chrono::Utc>>) -> Option<SystemTime> {
@@ -1200,6 +1244,7 @@ fn parse_oauth_import_tokens(
 ) -> Result<ParsedCodexAuthentication, CodexCredentialAdminError> {
     let mut access_token = None;
     let mut refresh_token = None;
+    let mut id_token = None;
     let mut pending = vec![value];
     while let Some(current) = pending.pop() {
         match current {
@@ -1208,18 +1253,14 @@ fn parse_oauth_import_tokens(
                     let token = match key.as_str() {
                         "access_token" | "accessToken" | "at" | "token" => &mut access_token,
                         "refresh_token" | "refreshToken" | "rt" => &mut refresh_token,
+                        "id_token" | "idToken" => &mut id_token,
                         _ => {
                             pending.push(value);
                             continue;
                         }
                     };
-                    let value = value
-                        .as_str()
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .ok_or(CodexCredentialAdminError::InvalidCredential)?;
-                    if token.replace(value.to_owned()).is_some() {
-                        return Err(CodexCredentialAdminError::InvalidInput);
+                    if let Some(value) = value.as_str() {
+                        *token = Some(value.to_owned());
                     }
                 }
             }
@@ -1233,6 +1274,7 @@ fn parse_oauth_import_tokens(
     Ok(ParsedCodexAuthentication::OAuth {
         access_token,
         refresh_token,
+        id_token,
     })
 }
 
@@ -1276,73 +1318,18 @@ fn first_string(value: &Value, keys: &[&str]) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn normalize_bearer(value: &str) -> String {
-    let value = value.trim();
-    value
-        .strip_prefix("Bearer ")
-        .or_else(|| value.strip_prefix("bearer "))
-        .unwrap_or(value)
-        .trim()
-        .to_owned()
-}
-
-fn unverified_access_token_expiry(token: &str) -> Option<DateTime<Utc>> {
-    let payload = token.split('.').nth(1)?;
-    let decoded = URL_SAFE_NO_PAD
-        .decode(payload)
-        .or_else(|_| URL_SAFE.decode(payload))
-        .ok()?;
-    let claims = serde_json::from_slice::<Value>(&decoded).ok()?;
-    claims
-        .get("exp")
-        .and_then(Value::as_i64)
-        .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
-}
-
-pub(crate) async fn complete_oauth_account_profile(
-    account_source: &dyn CodexAuthenticatedAccountSource,
-    secret: &CodexOAuthSecret,
-    access_token_expires_at: Option<DateTime<Utc>>,
-) -> Result<CodexAccountProfile, CodexIdentityVerificationError> {
-    let account = account_source
-        .fetch(secret, &CodexIdentityExpectation::default())
-        .await?;
-    Ok(CodexAccountProfile {
-        email: account.email,
-        oauth_subject: account.chatgpt_user_id.clone(),
-        poid: None,
-        chatgpt_account_id: account.chatgpt_account_id,
-        chatgpt_user_id: account.chatgpt_user_id,
-        plan_type: account.plan_type,
-        access_token_expires_at,
-    })
-}
-
-fn apply_import_metadata(profile: &mut CodexAccountProfile, candidate: &ParsedCodexImportAccount) {
-    if profile.email.is_none() {
-        profile.email = candidate
+fn apply_import_metadata(metadata: &mut CodexOAuthMetadata, candidate: &ParsedCodexImportAccount) {
+    if metadata.email.is_none() {
+        metadata.email = candidate
             .email
             .as_deref()
             .and_then(|value| normalize_import_text(value, MAX_IMPORT_EMAIL_BYTES));
     }
-    if profile.plan_type.is_none() {
-        profile.plan_type = candidate
+    if metadata.chatgpt_plan_type.is_none() {
+        metadata.chatgpt_plan_type = candidate
             .plan_type
             .as_deref()
             .and_then(|value| normalize_import_text(value, MAX_IMPORT_PLAN_BYTES));
-    }
-}
-
-const fn map_account_profile_error(
-    error: CodexIdentityVerificationError,
-) -> CodexCredentialAdminError {
-    match error {
-        CodexIdentityVerificationError::Rejected => {
-            CodexCredentialAdminError::AccountProfileRejected
-        }
-        CodexIdentityVerificationError::Unavailable => {
-            CodexCredentialAdminError::AccountProfileUnavailable
-        }
     }
 }
 

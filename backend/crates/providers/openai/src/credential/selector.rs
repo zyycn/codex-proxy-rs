@@ -1202,8 +1202,7 @@ impl From<CredentialRepositoryError> for CredentialSelectionError {
     fn from(error: CredentialRepositoryError) -> Self {
         match error {
             CredentialRepositoryError::InvalidInput(_)
-            | CredentialRepositoryError::InvalidCredentialData
-            | CredentialRepositoryError::IdentityMismatch => Self::InvalidCredential,
+            | CredentialRepositoryError::InvalidCredentialData => Self::InvalidCredential,
             CredentialRepositoryError::RevisionConflict | CredentialRepositoryError::Store => {
                 Self::Store
             }

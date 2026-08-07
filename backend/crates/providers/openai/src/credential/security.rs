@@ -102,12 +102,32 @@ impl CodexCredentialCodec {
         account: &CodexAccountProfile,
         cookies: Vec<CodexCookie>,
     ) -> Result<PlaintextCredential, CodexCredentialDataError> {
-        Self::encode_complete(CodexCredentialData::OAuth(CodexOAuthCredentialData {
-            schema_version: CODEX_CREDENTIAL_SCHEMA_VERSION,
-            principal: CodexCredentialPrincipal {
+        Self::encode_oauth(
+            secret,
+            Some(CodexCredentialPrincipal {
                 oauth_subject: account.oauth_subject.clone(),
                 poid: account.poid.clone(),
-            },
+            }),
+            cookies,
+        )
+    }
+
+    /// 为尚未解析资料的 OAuth 账号编码凭据。
+    pub(crate) fn encode_unresolved(
+        secret: &CodexOAuthSecret,
+        cookies: Vec<CodexCookie>,
+    ) -> Result<PlaintextCredential, CodexCredentialDataError> {
+        Self::encode_oauth(secret, None, cookies)
+    }
+
+    fn encode_oauth(
+        secret: &CodexOAuthSecret,
+        principal: Option<CodexCredentialPrincipal>,
+        cookies: Vec<CodexCookie>,
+    ) -> Result<PlaintextCredential, CodexCredentialDataError> {
+        Self::encode_complete(CodexCredentialData::OAuth(CodexOAuthCredentialData {
+            schema_version: CODEX_CREDENTIAL_SCHEMA_VERSION,
+            principal,
             installation_id: uuid::Uuid::new_v4().to_string(),
             access_token: secret.access_token.expose_secret().to_owned(),
             refresh_token: secret
@@ -171,7 +191,7 @@ impl CodexCredentialCodec {
                         refresh_token: data.refresh_token.map(SecretString::from),
                         id_token: data.id_token.map(SecretString::from),
                     }),
-                    Some(data.principal),
+                    data.principal,
                     data.installation_id,
                     data.cookies,
                     data.oauth_client_id,
@@ -232,9 +252,6 @@ impl CodexCredentialCodec {
         let existing = Self::decode_complete(existing)?;
         match (&mut incoming, existing) {
             (CodexCredentialData::OAuth(incoming), CodexCredentialData::OAuth(existing)) => {
-                if incoming.principal != existing.principal {
-                    return Err(CodexCredentialDataError::Invalid);
-                }
                 incoming.installation_id = existing.installation_id;
             }
             (
@@ -260,23 +277,7 @@ impl CodexCredentialCodec {
 fn validate(data: &CodexCredentialData) -> Result<(), CodexCredentialDataError> {
     let (installation_id, cookies) = match data {
         CodexCredentialData::OAuth(data) => {
-            if data.schema_version != CODEX_CREDENTIAL_SCHEMA_VERSION
-                || !valid_identity(&data.principal.oauth_subject)
-                || data
-                    .principal
-                    .poid
-                    .as_deref()
-                    .is_some_and(|value| !valid_identity(value))
-                || !valid_secret(&data.access_token)
-                || data
-                    .refresh_token
-                    .as_deref()
-                    .is_some_and(|value| !valid_secret(value))
-                || data
-                    .id_token
-                    .as_deref()
-                    .is_some_and(|value| !valid_secret(value))
-            {
+            if data.schema_version != CODEX_CREDENTIAL_SCHEMA_VERSION {
                 return Err(CodexCredentialDataError::Invalid);
             }
             (&data.installation_id, &data.cookies)

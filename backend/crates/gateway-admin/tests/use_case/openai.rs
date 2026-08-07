@@ -125,6 +125,8 @@ async fn openai_import_should_prepare_before_atomic_store_commit() {
         .await
         .expect("import credential");
 
+    await_quota_requests(&provider, 1).await;
+
     assert_eq!(
         recorded(&events),
         [
@@ -161,6 +163,8 @@ async fn openai_import_should_refresh_quota_for_every_imported_account() {
         })
         .await
         .expect("import credentials");
+
+    await_quota_requests(&provider, 2).await;
 
     assert_eq!(
         result.credential_ids,
@@ -203,6 +207,8 @@ async fn openai_import_should_remain_successful_when_quota_refresh_fails() {
         .await
         .expect("committed import remains successful");
 
+    await_quota_requests(&provider, 1).await;
+
     assert_eq!(
         result.credential_ids,
         [ProviderAccountId::new("acct_prepared").expect("account ID")]
@@ -235,6 +241,8 @@ async fn openai_authorization_create_should_observe_initial_quota() {
         })
         .await
         .expect("complete authorization");
+
+    await_quota_requests(&provider, 1).await;
 
     assert_eq!(
         recorded(&events),
@@ -284,6 +292,8 @@ async fn openai_authorization_create_should_remain_successful_when_initial_quota
         .await
         .expect("quota observation must not fail authorization");
 
+    await_quota_requests(&provider, 1).await;
+
     assert_eq!(result.account_id.as_str(), "acct_prepared");
     assert_eq!(provider.quota_requests().len(), 1);
 }
@@ -321,6 +331,8 @@ async fn openai_authorization_store_failure_should_release_claim_for_retry() {
         .complete_authorization(command())
         .await
         .expect("released claim must permit retry");
+
+    await_quota_requests(&provider, 1).await;
 
     assert_eq!(
         recorded(&events),
@@ -400,6 +412,8 @@ async fn openai_reauthorization_should_commit_after_credential_revision_advances
         .await
         .expect("complete reauthorization");
 
+    await_quota_requests(&provider, 1).await;
+
     assert_eq!(result.credential_revision, Some(revision(3)));
 
     assert_eq!(
@@ -424,6 +438,16 @@ async fn service(provider: Arc<FakeProviderAdmin>, store: Arc<FakeAccountStore>)
         .accounts(store)
         .build()
         .await
+}
+
+async fn await_quota_requests(provider: &FakeProviderAdmin, expected: usize) {
+    for _ in 0..100 {
+        if provider.quota_requests().len() == expected {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(provider.quota_requests().len(), expected);
 }
 
 fn mutation(account_id: &str) -> CredentialMutation {

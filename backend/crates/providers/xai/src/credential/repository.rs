@@ -158,7 +158,7 @@ impl GrokCredentialAdmin {
             input.account_id.clone(),
             provider,
             input.name.clone(),
-            input.account.subject.clone(),
+            Some(input.account.subject.clone()),
             XAI_AUTHENTICATION_KIND_OAUTH.to_owned(),
             revision,
             Some(to_system_time(input.account.access_token_expires_at)),
@@ -653,7 +653,7 @@ fn prepare_rotation(
     if current.revision() != expected_revision {
         return Err(GrokCredentialRepositoryError::StaleCredentialRevision);
     }
-    if current.upstream_user_id() != verified_account.subject
+    if current.upstream_user_id() != Some(verified_account.subject.as_str())
         || current.upstream_account_id() != verified_account.upstream_account_id.as_deref()
     {
         return Err(GrokCredentialRepositoryError::IdentityRebind);
@@ -819,6 +819,7 @@ fn validate_reason(reason: Option<&str>) -> Result<(), GrokCredentialRepositoryE
 fn ensure_xai(account: &ProviderAccount) -> Result<(), GrokCredentialRepositoryError> {
     if account.provider().as_str() == XAI_PROVIDER_KIND
         && account.authentication_kind() == XAI_AUTHENTICATION_KIND_OAUTH
+        && account.upstream_user_id().is_some()
         && account.access_token_expires_at().is_some()
     {
         Ok(())

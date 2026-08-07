@@ -462,7 +462,7 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
         provider_kind: account.provider().clone(),
         name: account.name().to_owned(),
         email: account.email().map(str::to_owned),
-        upstream_user_id: account.upstream_user_id().to_owned(),
+        upstream_user_id: account.upstream_user_id().map(str::to_owned),
         upstream_account_id: account.upstream_account_id().map(str::to_owned),
         plan_type: account.plan_type().map(str::to_owned),
         authentication_kind: account.authentication_kind().to_owned(),

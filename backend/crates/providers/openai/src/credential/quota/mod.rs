@@ -46,6 +46,8 @@ const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 pub(crate) const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);
 const QUOTA_HYDRATION_FAILURE_TTL: Duration = Duration::from_secs(5);
 const QUOTA_PERIODIC_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(30 * 60);
+/// 首次 OAuth 异步观察失败时，由既有 quota worker 兜底重试的单轮上限。
+const INITIAL_QUOTA_SYNC_BATCH: usize = 100;
 // 5xx 上游拒绝的短退避重试预算；指数退避 1s/2s，吞掉瞬时抖动。
 const QUOTA_FETCH_5XX_MAX_RETRIES: u32 = 2;
 const QUOTA_FETCH_5XX_BASE_DELAY: Duration = Duration::from_secs(1);
@@ -507,7 +509,17 @@ impl CodexCredentialQuotaService {
         let accounts = self.repository.list_for_provider().await?;
         let mut summary = CodexQuotaSyncSummary::default();
         let now = SystemTime::now();
-        let accounts = self.scheduling.reserve_periodic_refreshes(accounts, now);
+        let initial = self.initial_quota_sync_accounts(&accounts, now).await?;
+        let periodic = self.scheduling.reserve_periodic_refreshes(accounts, now);
+        let accounts = initial
+            .into_iter()
+            .chain(periodic)
+            .fold(BTreeMap::new(), |mut unique, account| {
+                unique.insert(account.id().clone(), account);
+                unique
+            })
+            .into_values()
+            .collect::<Vec<_>>();
         if accounts.is_empty() {
             return Ok(summary);
         }
@@ -580,6 +592,31 @@ impl CodexCredentialQuotaService {
             }
         }
         Ok(summary)
+    }
+
+    /// `quota_observed_at` 为空代表首次异步观察尚未成功；不另建同步状态表。
+    async fn initial_quota_sync_accounts(
+        &self,
+        accounts: &[ProviderAccount],
+        now: SystemTime,
+    ) -> Result<Vec<ProviderAccount>, CodexCredentialQuotaError> {
+        let account_ids = accounts
+            .iter()
+            .map(|account| account.id().clone())
+            .collect::<Vec<_>>();
+        let observed = self.store.get_quotas(&account_ids).await?;
+        let observed_ids = observed
+            .into_iter()
+            .filter_map(|observation| observation.observed_at.map(|_| observation.account_id))
+            .collect::<BTreeSet<_>>();
+        Ok(accounts
+            .iter()
+            .filter(|account| {
+                !observed_ids.contains(account.id()) && eligible_initial_quota_sync(account, now)
+            })
+            .take(INITIAL_QUOTA_SYNC_BATCH)
+            .cloned()
+            .collect())
     }
 
     /// 解析并 revision-fenced 落库单账号的 Provider quota JSON。
@@ -1118,6 +1155,15 @@ async fn fetch_usage_with_5xx_retry(
 
 fn eligible_periodic_quota_refresh(account: &ProviderAccount, now: SystemTime) -> bool {
     account.enabled() && access_token_is_current(account, now)
+}
+
+fn eligible_initial_quota_sync(account: &ProviderAccount, now: SystemTime) -> bool {
+    // 首次观察只兜底刚入库、尚无 quota 快照的账号。已耗尽等运行时状态必须由
+    // periodic 路径处理，才能保留同一账号的最小复核间隔。
+    matches!(
+        account.availability(),
+        AccountAvailability::Ready | AccountAvailability::Unknown
+    ) && eligible_periodic_quota_refresh(account, now)
 }
 
 fn access_token_is_current(account: &ProviderAccount, now: SystemTime) -> bool {

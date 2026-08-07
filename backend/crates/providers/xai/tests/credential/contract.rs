@@ -63,7 +63,7 @@ async fn create_projects_identity_and_revision_to_common_columns() {
         .expect("create account");
     let account = store.account(&input.account_id).expect("account");
 
-    assert_eq!(account.upstream_user_id(), "subject-projection");
+    assert_eq!(account.upstream_user_id(), Some("subject-projection"));
     assert_eq!(account.email(), Some("subject-projection@example.com"));
     assert!(account.has_refresh_token());
 }
@@ -276,7 +276,7 @@ async fn repository_rejects_account_owned_by_another_provider() {
         id.clone(),
         ProviderKind::new("openai").expect("provider"),
         "other".to_owned(),
-        "subject".to_owned(),
+        Some("subject".to_owned()),
         "oauth".to_owned(),
         revision,
         Some(std::time::SystemTime::now() + std::time::Duration::from_secs(3600)),
