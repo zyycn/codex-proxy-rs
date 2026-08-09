@@ -15,7 +15,7 @@ use provider_xai::{
     VerifiedGrokAccount,
 };
 
-use crate::support::{account_id, refresh_policy};
+use crate::support::account_id;
 
 const DISCOVERY: &[u8] = include_bytes!("fixtures/discovery.json");
 const TOKEN_SUCCESS: &[u8] = include_bytes!("fixtures/token_success.json");
@@ -118,21 +118,18 @@ async fn credential_import_should_require_exact_metadata_and_official_userinfo()
 
     assert_eq!(verified.evidence().method(), VerificationMethod::UserInfo);
     let prepared = GrokCredentialAdmin
-        .prepare_verified_account(
-            &VerifiedGrokAccount {
-                account_id: account_id("verified-import"),
-                name: "verified import".to_owned(),
-                email: Some("verified@example.com".to_owned()),
-                upstream_account_id: None,
-                plan_type: None,
-                tokens: verified,
-                enabled: true,
-            },
-            refresh_policy(),
-        )
+        .prepare_verified_account(&VerifiedGrokAccount {
+            account_id: account_id("verified-import"),
+            name: "verified import".to_owned(),
+            email: Some("verified@example.com".to_owned()),
+            upstream_account_id: None,
+            plan_type: None,
+            tokens: verified,
+            enabled: true,
+        })
         .expect("Provider projects verified token lifetime");
     assert_eq!(prepared.account.availability(), AccountAvailability::Ready);
-    assert!(prepared.account.next_refresh_at().is_some());
+    assert!(prepared.account.next_refresh_at().is_none());
     assert!(
         prepared
             .credential

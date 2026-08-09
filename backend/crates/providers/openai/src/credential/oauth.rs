@@ -19,7 +19,6 @@ use gateway_admin::model::{
 use gateway_core::engine::credential::{
     LoadedCredential, NewProviderAccount, ProviderAccountId, ProviderAccountStore,
 };
-use gateway_core::provider_ports::ProviderRuntimePolicyPort;
 use secrecy::{ExposeSecret, SecretString};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq as _;
@@ -28,10 +27,9 @@ use uuid::Uuid;
 
 use super::admin::{
     CodexCredentialAdmin, CodexCredentialAdminError, PreparedCodexCredentialRotation,
-    UnresolvedCodexOAuthCredential, refresh_time,
+    UnresolvedCodexOAuthCredential,
 };
 use super::recovery_log::{CodexOAuthRecoveryOperation, record_oauth_recovery};
-use super::refresh::initial_oauth_refresh_at;
 use super::security::CodexCredentialCodec;
 use super::token_client::{
     AuthorizationCodeExchangeError, AuthorizationCodeExchanger, AuthorizationCodeGrant,
@@ -348,7 +346,6 @@ pub struct CodexOAuthAdminService {
     pending: Arc<dyn CodexOAuthPendingStore>,
     exchanger: Arc<dyn AuthorizationCodeExchanger>,
     store: Arc<dyn ProviderAccountStore>,
-    runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     credentials: CodexCredentialAdmin,
     oauth_client_id: String,
 }
@@ -399,14 +396,12 @@ impl CodexOAuthAdminService {
         pending: Arc<dyn CodexOAuthPendingStore>,
         exchanger: Arc<dyn AuthorizationCodeExchanger>,
         store: Arc<dyn ProviderAccountStore>,
-        runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
         credentials: CodexCredentialAdmin,
     ) -> Self {
         Self {
             pending,
             exchanger,
             store,
-            runtime_policy,
             credentials,
             oauth_client_id: OFFICIAL_CODEX_OAUTH_CLIENT_ID.to_owned(),
         }
@@ -513,31 +508,18 @@ impl CodexOAuthAdminService {
             .map_err(|_| CodexOAuthAdminError::TokenRejected)?;
         secret.id_token = Some(id_token);
         let credential = if let Some(current) = current {
-            let next_refresh_at = self
-                .best_effort_refresh_time(
-                    current.account.id(),
-                    access_token_expires_at,
-                    secret.refresh_token.is_some(),
-                )
-                .await;
             CompletedCodexOAuthCredential::Reauthorize(
                 self.credentials
                     .prepare_refreshed_oauth_rotation(
                         current,
                         secret,
                         access_token_expires_at,
-                        next_refresh_at,
+                        None,
                     )
                     .map_err(map_admin_error)?,
             )
         } else {
             let account_id = format!("acct_{}", Uuid::now_v7().simple());
-            let next_refresh_at = self
-                .best_effort_initial_refresh_time(
-                    access_token_expires_at,
-                    secret.refresh_token.is_some(),
-                )
-                .await;
             CompletedCodexOAuthCredential::Create(
                 self.credentials
                     .prepare_unresolved_oauth(UnresolvedCodexOAuthCredential {
@@ -546,45 +528,13 @@ impl CodexOAuthAdminService {
                         secret,
                         metadata,
                         access_token_expires_at,
-                        next_refresh_at,
+                        next_refresh_at: None,
                         enabled: true,
                     })
                     .map_err(map_admin_error)?,
             )
         };
         Ok((mutation, credential))
-    }
-
-    async fn best_effort_refresh_time(
-        &self,
-        account_id: &ProviderAccountId,
-        access_token_expires_at: Option<DateTime<Utc>>,
-        has_refresh_token: bool,
-    ) -> Option<DateTime<Utc>> {
-        let policy = self.runtime_policy.load_refresh_policy().await.ok()?;
-        refresh_time(
-            policy,
-            account_id,
-            access_token_expires_at,
-            has_refresh_token,
-        )
-        .ok()
-        .flatten()
-    }
-
-    async fn best_effort_initial_refresh_time(
-        &self,
-        access_token_expires_at: Option<DateTime<Utc>>,
-        has_refresh_token: bool,
-    ) -> Option<DateTime<Utc>> {
-        let policy = self.runtime_policy.load_refresh_policy().await.ok()?;
-        initial_oauth_refresh_at(
-            policy,
-            access_token_expires_at.map(SystemTime::from),
-            SystemTime::now(),
-            has_refresh_token,
-        )
-        .map(DateTime::<Utc>::from)
     }
 }
 

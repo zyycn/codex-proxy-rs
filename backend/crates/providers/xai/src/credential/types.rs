@@ -97,7 +97,6 @@ pub struct CreateGrokCredential {
     pub name: String,
     pub secret: GrokOAuthSecret,
     pub account: GrokAccountProfile,
-    pub next_refresh_at: DateTime<Utc>,
     pub enabled: bool,
     pub initial_availability: GrokCredentialAvailability,
     pub initial_availability_reason: Option<String>,
@@ -111,7 +110,6 @@ impl fmt::Debug for CreateGrokCredential {
             .field("name", &self.name)
             .field("secret", &"[REDACTED]")
             .field("account", &self.account)
-            .field("next_refresh_at", &self.next_refresh_at)
             .field("enabled", &self.enabled)
             .field("initial_availability", &self.initial_availability)
             .finish_non_exhaustive()
@@ -124,7 +122,6 @@ pub struct RotateGrokCredential {
     pub expected_revision: CredentialRevision,
     pub secret: GrokOAuthSecret,
     pub verified_account: GrokAccountProfile,
-    pub next_refresh_at: DateTime<Utc>,
 }
 
 /// App 已读取的当前账号与 xAI 已验证的新 OAuth 身份材料。
@@ -132,7 +129,6 @@ pub struct RotateManagedGrokCredential {
     pub current: LoadedCredential,
     pub secret: GrokOAuthSecret,
     pub verified_account: GrokAccountProfile,
-    pub next_refresh_at: DateTime<Utc>,
 }
 
 impl fmt::Debug for RotateManagedGrokCredential {
@@ -142,7 +138,6 @@ impl fmt::Debug for RotateManagedGrokCredential {
             .field("current", &self.current)
             .field("secret", &"[REDACTED]")
             .field("verified_account", &self.verified_account)
-            .field("next_refresh_at", &self.next_refresh_at)
             .finish()
     }
 }
@@ -231,7 +226,6 @@ impl fmt::Debug for RotateGrokCredential {
             .field("expected_revision", &self.expected_revision)
             .field("secret", &"[REDACTED]")
             .field("verified_account", &self.verified_account)
-            .field("next_refresh_at", &self.next_refresh_at)
             .finish()
     }
 }

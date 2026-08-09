@@ -538,7 +538,6 @@ pub fn profile(subject: &str) -> GrokAccountProfile {
 }
 
 pub fn create_input(suffix: &str, subject: &str) -> CreateGrokCredential {
-    let now = Utc::now();
     CreateGrokCredential {
         account_id: account_id(suffix),
         name: format!("xAI {suffix}"),
@@ -549,7 +548,6 @@ pub fn create_input(suffix: &str, subject: &str) -> CreateGrokCredential {
             scope: provider_xai::OFFICIAL_SCOPES.join(" "),
         },
         account: profile(subject),
-        next_refresh_at: now + chrono::Duration::minutes(30),
         enabled: true,
         initial_availability: GrokCredentialAvailability::Unknown,
         initial_availability_reason: None,

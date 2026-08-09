@@ -358,7 +358,6 @@ async fn account_scoped_cooldown_survives_credential_rotation() {
                 scope: provider_xai::OFFICIAL_SCOPES.join(" "),
             },
             verified_account: crate::support::profile("subject-revision-fence"),
-            next_refresh_at: chrono::Utc::now() + chrono::Duration::minutes(30),
         })
         .expect("rotate");
     assert!(matches!(
@@ -660,7 +659,6 @@ async fn quota_feedback_should_follow_the_account_across_a_credential_rotation()
                 scope: provider_xai::OFFICIAL_SCOPES.join(" "),
             },
             verified_account: crate::support::profile("subject-quota-rotation"),
-            next_refresh_at: chrono::Utc::now() + chrono::Duration::minutes(30),
         })
         .expect("rotate");
     fixture
@@ -773,7 +771,6 @@ async fn stale_catalog_revision_does_not_block_transparent_request() {
                 scope: provider_xai::OFFICIAL_SCOPES.join(" "),
             },
             verified_account: crate::support::profile("subject-catalog-stale"),
-            next_refresh_at: chrono::Utc::now() + chrono::Duration::minutes(30),
         })
         .expect("rotate");
     assert!(matches!(
@@ -930,7 +927,6 @@ async fn smart_strategy_never_reuses_quota_projection_after_credential_rotation(
                 scope: provider_xai::OFFICIAL_SCOPES.join(" "),
             },
             verified_account: crate::support::profile("subject-aaa-stale-high"),
-            next_refresh_at: chrono::Utc::now() + chrono::Duration::minutes(30),
         })
         .expect("rotate");
     let outcome = fixture

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, VecDeque};
+use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -11,7 +12,8 @@ use gateway_core::engine::credential::{
 };
 use gateway_core::provider_ports::{
     ProviderCredentialState, ProviderCredentialStatePort, ProviderLeaseAcquisition,
-    ProviderLeasePort, ProviderLeaseRequest, ProviderStoreError,
+    ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshPolicy, ProviderRuntimePolicyPort,
+    ProviderStoreError,
 };
 use provider_xai::{
     GrokCredentialCatalogCache, GrokCredentialRecovery, GrokCredentialRecoveryOutcome,
@@ -80,6 +82,31 @@ struct TestRefreshLeases {
     calls: AtomicUsize,
 }
 
+struct MutableRuntimePolicy {
+    policy: Mutex<ProviderRefreshPolicy>,
+}
+
+impl MutableRuntimePolicy {
+    fn new(policy: ProviderRefreshPolicy) -> Self {
+        Self {
+            policy: Mutex::new(policy),
+        }
+    }
+
+    fn set(&self, policy: ProviderRefreshPolicy) {
+        *self.policy.lock().expect("runtime policy lock") = policy;
+    }
+}
+
+impl ProviderRuntimePolicyPort for MutableRuntimePolicy {
+    fn load_refresh_policy(
+        &self,
+    ) -> futures::future::BoxFuture<'_, Result<ProviderRefreshPolicy, ProviderStoreError>> {
+        let policy = *self.policy.lock().expect("runtime policy lock");
+        Box::pin(async move { Ok(policy) })
+    }
+}
+
 impl ProviderLeasePort for TestRefreshLeases {
     fn load_state<'a>(
         &'a self,
@@ -116,6 +143,11 @@ impl ProviderLeasePort for TestRefreshLeases {
     }
 }
 
+fn refresh_policy_with_margin(margin: Duration) -> ProviderRefreshPolicy {
+    ProviderRefreshPolicy::try_new(margin, NonZeroU32::new(2).expect("positive concurrency"))
+        .expect("valid refresh policy")
+}
+
 fn success_tokens(rotated: Option<&str>) -> GrokRefreshTokens {
     GrokRefreshTokens {
         access_token: SecretValue::new("new-access"),
@@ -127,7 +159,6 @@ fn success_tokens(rotated: Option<&str>) -> GrokRefreshTokens {
 fn due_input(suffix: &str) -> provider_xai::CreateGrokCredential {
     let mut input = create_input(suffix, &format!("subject-{suffix}"));
     input.account.access_token_expires_at = Utc::now() + chrono::Duration::minutes(2);
-    input.next_refresh_at = Utc::now() - chrono::Duration::seconds(1);
     input
 }
 
@@ -254,6 +285,28 @@ async fn fixture_many_with_state(
     Arc<QueueRefresher>,
     GrokCredentialRefreshService,
 ) {
+    fixture_many_with_state_and_runtime_policy(
+        inputs,
+        responses,
+        lease_available,
+        credential_state,
+        runtime_policy(),
+    )
+    .await
+}
+
+async fn fixture_many_with_state_and_runtime_policy(
+    inputs: impl IntoIterator<Item = provider_xai::CreateGrokCredential>,
+    responses: impl IntoIterator<Item = Result<GrokRefreshTokens, GrokRefreshFailure>>,
+    lease_available: bool,
+    credential_state: Arc<dyn ProviderCredentialStatePort>,
+    runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
+) -> (
+    Arc<MemoryProviderAccountStore>,
+    GrokCredentialRepository,
+    Arc<QueueRefresher>,
+    GrokCredentialRefreshService,
+) {
     let store = MemoryProviderAccountStore::shared();
     let account_store: Arc<dyn ProviderAccountStore> = store.clone();
     let repository = GrokCredentialRepository::new(account_store);
@@ -278,7 +331,7 @@ async fn fixture_many_with_state(
         catalog,
         leases,
         credential_state,
-        runtime_policy(),
+        runtime_policy,
     );
     (store, repository, refresher, service)
 }
@@ -369,6 +422,66 @@ async fn successful_refresh_rotates_plaintext_tokens_once() {
     assert!(
         !credential_object(&credential).contains_key("refresh_token_expires_at"),
         "rotated RT has no authoritative expiry in the refresh response"
+    );
+    assert!(
+        store
+            .account(&id)
+            .expect("account after refresh")
+            .next_refresh_at()
+            .is_none(),
+        "successful refresh must not persist a policy-derived schedule"
+    );
+}
+
+#[tokio::test]
+async fn refresh_due_uses_the_current_margin_without_persisting_a_normal_schedule() {
+    let mut input = create_input("runtime-margin", "subject-runtime-margin");
+    input.account.access_token_expires_at = Utc::now() + chrono::Duration::minutes(2);
+    let access_token_expires_at: SystemTime = input.account.access_token_expires_at.into();
+    let id = input.account_id.clone();
+    let policy = Arc::new(MutableRuntimePolicy::new(refresh_policy_with_margin(
+        Duration::from_secs(60),
+    )));
+    let (store, _, refresher, service) = fixture_many_with_state_and_runtime_policy(
+        [input],
+        [Ok(success_tokens(None))],
+        true,
+        Arc::new(CountingCredentialState::default()),
+        policy.clone(),
+    )
+    .await;
+
+    assert!(
+        service
+            .refresh_due()
+            .await
+            .expect("refresh cycle before margin change")
+            .is_empty()
+    );
+    let account = store.account(&id).expect("account before margin change");
+    assert_eq!(
+        account.access_token_expires_at(),
+        Some(access_token_expires_at)
+    );
+    assert!(account.next_refresh_at().is_none());
+    assert_eq!(refresher.prepare_calls.load(Ordering::SeqCst), 0);
+
+    policy.set(refresh_policy_with_margin(Duration::from_secs(5 * 60)));
+    assert!(matches!(
+        service
+            .refresh_due()
+            .await
+            .expect("refresh cycle after margin change")
+            .as_slice(),
+        [GrokCredentialRefreshOutcome::Refreshed { account_id, .. }] if account_id == &id
+    ));
+    assert!(
+        store
+            .account(&id)
+            .expect("account after refresh")
+            .next_refresh_at()
+            .is_none(),
+        "the runtime policy must not be persisted as a normal schedule"
     );
 }
 
@@ -859,14 +972,11 @@ async fn invalid_refresh_lifetime_is_rejected_without_cas_write() {
 
 #[tokio::test]
 async fn malformed_account_refresh_does_not_stop_later_accounts() {
-    let due_at = Utc::now() - chrono::Duration::seconds(1);
     let access_expires_at = Utc::now() + chrono::Duration::minutes(2);
     let mut bad = due_input("bad");
-    bad.next_refresh_at = due_at;
     bad.account.access_token_expires_at = access_expires_at;
     let bad_id = bad.account_id.clone();
     let mut good = due_input("good");
-    good.next_refresh_at = due_at;
     good.account.access_token_expires_at = access_expires_at;
     let good_id = good.account_id.clone();
     let (store, _, _, service) = fixture_many(
@@ -925,7 +1035,13 @@ async fn scheduled_oauth_refresh_runs_after_credential_rotation() {
     assert_eq!(outcome, GrokCredentialRecoveryOutcome::Recovered);
     assert_eq!(store.account(&id).expect("account").revision().get(), 2);
 
-    force_due(&store, &id).await;
+    set_token_deadlines(
+        &store,
+        &id,
+        (Utc::now() + chrono::Duration::minutes(2)).into(),
+        SystemTime::now() - Duration::from_secs(1),
+    )
+    .await;
     let outcomes = service.refresh_due().await.expect("refresh due");
     assert!(matches!(
         outcomes.as_slice(),

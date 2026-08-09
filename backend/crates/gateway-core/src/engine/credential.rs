@@ -321,6 +321,10 @@ impl ProviderAccount {
         self
     }
 
+    /// 设置 RT 存在性与失败后的最早重试时刻。
+    ///
+    /// 正常 OAuth 预刷新由 worker 使用 AT 原始过期时间与当前运行时策略动态判断，
+    /// 不应把提前量物化到 `next_refresh_at`。
     #[must_use]
     pub const fn with_refresh_schedule(
         mut self,
@@ -392,6 +396,7 @@ impl ProviderAccount {
         self.access_token_expires_at
     }
 
+    /// 返回瞬态 OAuth 刷新失败后的最早重试时刻；正常账号为 `None`。
     #[must_use]
     pub const fn next_refresh_at(&self) -> Option<SystemTime> {
         self.next_refresh_at

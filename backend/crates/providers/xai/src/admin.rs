@@ -35,7 +35,7 @@ use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
 use gateway_core::provider_ports::{
     NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingClaimOutcome, OAuthPendingConsumeOutcome,
     OAuthPendingFlowPort, OAuthPendingPutOutcome, OAuthPendingReleaseOutcome, ProviderCooldownPort,
-    ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError, ProviderStoreErrorKind,
+    ProviderStoreError, ProviderStoreErrorKind,
 };
 use gateway_core::routing::{ProviderKind, UpstreamModelId};
 use serde::Deserialize;
@@ -142,7 +142,6 @@ pub(crate) struct XaiAdminProvider {
     refresh: Arc<GrokCredentialRefreshService>,
     quota: Arc<GrokCredentialQuotaService>,
     catalog: Arc<GrokCredentialCatalogService>,
-    runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     cooldowns: Arc<dyn ProviderCooldownPort>,
 }
 
@@ -154,7 +153,6 @@ pub(crate) struct XaiAdminServices {
     pub(crate) refresh: Arc<GrokCredentialRefreshService>,
     pub(crate) quota: Arc<GrokCredentialQuotaService>,
     pub(crate) catalog: Arc<GrokCredentialCatalogService>,
-    pub(crate) runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     pub(crate) cooldowns: Arc<dyn ProviderCooldownPort>,
 }
 
@@ -179,7 +177,6 @@ impl XaiAdminProvider {
             refresh: services.refresh,
             quota: services.quota,
             catalog: services.catalog,
-            runtime_policy: services.runtime_policy,
             cooldowns: services.cooldowns,
         }
     }
@@ -430,11 +427,6 @@ impl ProviderAdmin for XaiAdminProvider {
         let document = GrokOAuthImportDocument::parse_json(&document)
             .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
         let discovery = self.oauth.discover().await.map_err(map_oauth_error)?;
-        let policy = self
-            .runtime_policy
-            .load_refresh_policy()
-            .await
-            .map_err(map_provider_store_error)?;
         let mut subjects = BTreeSet::new();
         let mut credentials = Vec::new();
         // 逐条目独立成败：verify 会真实轮换 RT，后续条目的任何失败都不得
@@ -484,7 +476,7 @@ impl ProviderAdmin for XaiAdminProvider {
                 tokens,
                 enabled: true,
             };
-            let prepared = match GrokCredentialAdmin.prepare_verified_account(&account, policy) {
+            let prepared = match GrokCredentialAdmin.prepare_verified_account(&account) {
                 Ok(prepared) => prepared,
                 Err(error) => {
                     tracing::warn!(
@@ -632,12 +624,7 @@ impl ProviderAdmin for XaiAdminProvider {
             .verify_imported_credential(&discovery, candidate)
             .await
             .map_err(|error| map_failure_class(error.class()))?;
-        let policy = self
-            .runtime_policy
-            .load_refresh_policy()
-            .await
-            .map_err(map_provider_store_error)?;
-        let prepared = verified_rotation(current, tokens, policy)?;
+        let prepared = verified_rotation(current, tokens)?;
         prepared_rotation(prepared, command.account.provider_kind)
     }
 
@@ -787,30 +774,22 @@ impl XaiAdminProvider {
             .exchange_authorization_code(&discovery, grant)
             .await
             .map_err(map_oauth_error)?;
-        let policy = self
-            .runtime_policy
-            .load_refresh_policy()
-            .await
-            .map_err(map_provider_store_error)?;
         let credential = match stored.mutation.target() {
             AuthorizationMutationTarget::Create { name } => {
                 let prepared = GrokCredentialAdmin
-                    .prepare_verified_account(
-                        &VerifiedGrokAccount {
-                            account_id: ProviderAccountId::new(format!(
-                                "acct_{}",
-                                Uuid::now_v7().simple()
-                            ))
-                            .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?,
-                            name: name.clone(),
-                            email: None,
-                            upstream_account_id: None,
-                            plan_type: None,
-                            tokens,
-                            enabled: true,
-                        },
-                        policy,
-                    )
+                    .prepare_verified_account(&VerifiedGrokAccount {
+                        account_id: ProviderAccountId::new(format!(
+                            "acct_{}",
+                            Uuid::now_v7().simple()
+                        ))
+                        .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?,
+                        name: name.clone(),
+                        email: None,
+                        upstream_account_id: None,
+                        plan_type: None,
+                        tokens,
+                        enabled: true,
+                    })
                     .map_err(map_repository_error)?;
                 PreparedAuthorizationCredential::Create(prepared_create(prepared, Utc::now())?)
             }
@@ -823,7 +802,7 @@ impl XaiAdminProvider {
                 if current.account.provider() != &self.provider_kind {
                     return Err(provider_error(ProviderAdminErrorKind::NotFound));
                 }
-                let prepared = verified_rotation(current, tokens, policy)?;
+                let prepared = verified_rotation(current, tokens)?;
                 PreparedAuthorizationCredential::Reauthorize(prepared_rotation(
                     prepared,
                     self.provider_kind.clone(),
@@ -858,7 +837,6 @@ impl CredentialCommitGuard for XaiCredentialCommitGuard {
 fn verified_rotation(
     current: LoadedCredential,
     tokens: VerifiedTokenSet,
-    policy: ProviderRefreshPolicy,
 ) -> Result<PreparedGrokCredentialRotation, ProviderAdminError> {
     let expires_in = tokens
         .expires_in()
@@ -867,13 +845,9 @@ fn verified_rotation(
         .refresh_token()
         .cloned()
         .ok_or_else(|| provider_error(ProviderAdminErrorKind::Invalid))?;
-    let now = SystemTime::now();
-    let access_token_expires_at = now
+    let access_token_expires_at = SystemTime::now()
         .checked_add(expires_in)
         .ok_or_else(|| provider_error(ProviderAdminErrorKind::Invalid))?;
-    let next_refresh_at = policy
-        .next_attempt_at(current.account.id(), access_token_expires_at, now)
-        .map_err(map_provider_store_error)?;
     GrokCredentialAdmin
         .prepare_rotation(&RotateManagedGrokCredential {
             secret: GrokOAuthSecret {
@@ -891,7 +865,6 @@ fn verified_rotation(
                 refresh_token_expires_at: None,
             },
             current,
-            next_refresh_at: next_refresh_at.into(),
         })
         .map_err(map_repository_error)
 }

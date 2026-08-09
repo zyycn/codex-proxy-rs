@@ -94,6 +94,17 @@ pub(crate) fn parse_id_token_metadata(jwt: &str) -> Result<CodexOAuthMetadata, (
     })
 }
 
+/// 按官方 Codex 的方式，从 access token JWT payload 读取调度所需的过期时刻。
+///
+/// 此处只投影未验证的 `exp`，不把它当作身份或签名验证结果。无法解析或缺少
+/// `exp` 的直接导入仍可保留为没有已知过期时刻的 OAuth 凭据。
+pub(crate) fn parse_access_token_expiration(jwt: &str) -> Option<DateTime<Utc>> {
+    let claims = decode_jwt_payload::<StandardJwtClaims>(jwt).ok()?;
+    claims
+        .exp
+        .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
+}
+
 #[derive(Deserialize)]
 struct IdTokenClaims {
     #[serde(default)]
@@ -102,6 +113,12 @@ struct IdTokenClaims {
     profile: Option<ProfileClaims>,
     #[serde(rename = "https://api.openai.com/auth", default)]
     auth: Option<AuthClaims>,
+}
+
+#[derive(Deserialize)]
+struct StandardJwtClaims {
+    #[serde(default)]
+    exp: Option<i64>,
 }
 
 #[derive(Deserialize)]

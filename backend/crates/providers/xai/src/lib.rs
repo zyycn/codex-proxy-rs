@@ -198,7 +198,6 @@ pub async fn initialize(
             refresh: Arc::clone(&refresh),
             quota: Arc::clone(&quota),
             catalog: Arc::clone(&catalog),
-            runtime_policy,
             cooldowns: Arc::clone(&cooldowns),
         },
         cli_release_status,

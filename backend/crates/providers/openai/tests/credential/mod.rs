@@ -5,5 +5,6 @@ mod contract;
 mod cookie;
 mod oauth;
 mod quota;
+mod refresh;
 mod token_client;
 mod types;

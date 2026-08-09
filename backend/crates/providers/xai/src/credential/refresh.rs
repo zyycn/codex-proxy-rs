@@ -444,9 +444,8 @@ impl GrokCredentialRefreshService {
         if refresh_token.is_empty() || refresh_token.len() > MAX_SECRET_BYTES {
             return Err(GrokCredentialRefreshError::InvalidRefreshResponse);
         }
-        let (access_token_expires_at, next_refresh_at) =
-            refreshed_deadlines(&account_id, tokens.expires_in, policy)
-                .ok_or(GrokCredentialRefreshError::InvalidRefreshResponse)?;
+        let access_token_expires_at = refreshed_access_token_expiry(tokens.expires_in)
+            .ok_or(GrokCredentialRefreshError::InvalidRefreshResponse)?;
         let subject = loaded
             .account
             .upstream_user_id()
@@ -473,7 +472,6 @@ impl GrokCredentialRefreshService {
                         loaded.refresh_token_expires_at
                     },
                 },
-                next_refresh_at,
             })
             .map_err(GrokCredentialRefreshError::from)?;
         Ok(prepared.with_refresh_guards(capacity_guard, account_guard))
@@ -486,7 +484,7 @@ impl GrokCredentialRefreshService {
         let policy = self.runtime_policy.load_refresh_policy().await?;
         let batch = self
             .repository
-            .list_due_refresh_batch_excluding(excluded_account_ids)
+            .list_due_refresh_batch_excluding(excluded_account_ids, policy)
             .await?;
         let mut outcomes = batch
             .failed_account_ids
@@ -585,7 +583,7 @@ impl GrokCredentialRefreshService {
         };
 
         match self.refresher.refresh(&credential.refresh_token).await {
-            Ok(tokens) => self.persist_success(credential, tokens, policy).await,
+            Ok(tokens) => self.persist_success(credential, tokens).await,
             Err(GrokRefreshFailure::InvalidGrant) => {
                 self.persist_terminal_failure(
                     credential,
@@ -639,7 +637,6 @@ impl GrokCredentialRefreshService {
         &self,
         credential: DueGrokCredential,
         tokens: GrokRefreshTokens,
-        policy: ProviderRefreshPolicy,
     ) -> Result<GrokCredentialRefreshOutcome, GrokCredentialRefreshError> {
         if tokens.access_token.is_empty() || tokens.access_token.len() > MAX_SECRET_BYTES {
             return Err(GrokCredentialRefreshError::InvalidRefreshResponse);
@@ -652,9 +649,8 @@ impl GrokCredentialRefreshService {
             return Err(GrokCredentialRefreshError::InvalidRefreshResponse);
         }
         let account_id = credential.account_id.clone();
-        let (access_expires_at, next_refresh_at) =
-            refreshed_deadlines(&account_id, tokens.expires_in, policy)
-                .ok_or(GrokCredentialRefreshError::InvalidRefreshResponse)?;
+        let access_expires_at = refreshed_access_token_expiry(tokens.expires_in)
+            .ok_or(GrokCredentialRefreshError::InvalidRefreshResponse)?;
         let access_token = tokens.access_token.clone();
         let subject = credential.subject.clone();
         let email = credential.email.clone();
@@ -681,7 +677,6 @@ impl GrokCredentialRefreshService {
                         credential.refresh_token_expires_at
                     },
                 },
-                next_refresh_at,
             })
             .await
         {
@@ -711,7 +706,6 @@ impl GrokCredentialRefreshService {
             account_id = %account_id,
             credential_revision = record.credential_revision.get(),
             access_token_expires_at = %access_expires_at,
-            next_refresh_at = %next_refresh_at,
             "xAI OAuth refresh succeeded"
         );
         Ok(GrokCredentialRefreshOutcome::Refreshed {
@@ -854,6 +848,7 @@ impl GrokCredentialRepository {
     async fn list_due_refresh_batch_excluding(
         &self,
         excluded_account_ids: &[ProviderAccountId],
+        policy: ProviderRefreshPolicy,
     ) -> Result<DueGrokRefreshBatch, GrokCredentialRepositoryError> {
         if excluded_account_ids.len() > MAX_REFRESH_EXCLUSIONS {
             return Err(GrokCredentialRepositoryError::InvalidInput(
@@ -869,12 +864,12 @@ impl GrokCredentialRepository {
             .list_all_accounts()
             .await?
             .into_iter()
-            .filter(|account| !excluded.contains(account.id()) && account_due(account, now))
+            .filter(|account| !excluded.contains(account.id()) && account_due(account, policy, now))
             .collect::<Vec<_>>();
         accounts.sort_by_key(|account| {
             (
-                account.next_refresh_at(),
                 account.access_token_expires_at(),
+                account.next_refresh_at(),
                 account.id().clone(),
             )
         });
@@ -917,6 +912,7 @@ impl GrokCredentialRepository {
 
 fn account_due(
     account: &gateway_core::engine::credential::ProviderAccount,
+    policy: ProviderRefreshPolicy,
     now: SystemTime,
 ) -> bool {
     let availability = account.availability();
@@ -929,7 +925,18 @@ fn account_due(
                 | AccountAvailability::Invalid
         )
         && (refresh_recovery_window_exhausted(account.access_token_expires_at(), now)
-            || account.next_refresh_at().is_some_and(|next| next <= now))
+            || (access_token_refresh_due(account.access_token_expires_at(), policy, now)
+                && account
+                    .next_refresh_at()
+                    .is_none_or(|retry_at| retry_at <= now)))
+}
+
+fn access_token_refresh_due(
+    access_token_expires_at: Option<SystemTime>,
+    policy: ProviderRefreshPolicy,
+    now: SystemTime,
+) -> bool {
+    access_token_expires_at.is_some_and(|expires_at| policy.is_refresh_due(expires_at, now))
 }
 
 fn refreshed_tokens(tokens: RefreshedTokenSet) -> Result<GrokRefreshTokens, GrokRefreshFailure> {
@@ -963,22 +970,13 @@ fn classify_oauth_refresh_error(error: OAuthError) -> GrokRefreshFailure {
     }
 }
 
-fn refreshed_deadlines(
-    account_id: &ProviderAccountId,
-    expires_in: Duration,
-    policy: ProviderRefreshPolicy,
-) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+fn refreshed_access_token_expiry(expires_in: Duration) -> Option<DateTime<Utc>> {
     if expires_in.is_zero() {
         return None;
     }
     let expires = chrono::Duration::from_std(expires_in).ok()?;
     let observed_at = SystemTime::now();
-    let access_expires_at = DateTime::<Utc>::from(observed_at).checked_add_signed(expires)?;
-    let next_refresh_at = policy
-        .next_attempt_at(account_id, access_expires_at.into(), observed_at)
-        .ok()
-        .map(DateTime::<Utc>::from)?;
-    Some((access_expires_at, next_refresh_at))
+    DateTime::<Utc>::from(observed_at).checked_add_signed(expires)
 }
 
 fn stale_repository_error(error: &GrokCredentialRepositoryError) -> bool {

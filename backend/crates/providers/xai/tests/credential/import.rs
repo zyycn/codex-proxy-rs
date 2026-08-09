@@ -1,7 +1,6 @@
 use std::future::ready;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::SystemTime;
 
 use chrono::{Duration, Utc};
 use provider_xai::{
@@ -117,7 +116,7 @@ async fn missing_required_scope_should_fail_closed() {
 }
 
 #[tokio::test]
-async fn verified_import_inside_refresh_margin_should_schedule_immediate_refresh() {
+async fn verified_import_inside_refresh_margin_should_not_persist_a_refresh_schedule() {
     let now = Utc::now();
     let client = GrokOAuthClient::new(
         GrokOAuthConfig::official().expect("official config"),
@@ -138,32 +137,19 @@ async fn verified_import_inside_refresh_margin_should_schedule_immediate_refresh
         )
         .await
         .expect("still-valid imported credential");
-    let before = SystemTime::now();
     let prepared = GrokCredentialAdmin
-        .prepare_verified_account(
-            &VerifiedGrokAccount {
-                account_id: account_id("refresh-window-import"),
-                name: "refresh-window-import".to_owned(),
-                email: None,
-                upstream_account_id: None,
-                plan_type: None,
-                tokens,
-                enabled: true,
-            },
-            gateway_core::provider_ports::ProviderRefreshPolicy::try_new(
-                std::time::Duration::from_secs(60 * 60),
-                std::num::NonZeroU32::new(2).expect("positive concurrency"),
-            )
-            .expect("valid refresh policy"),
-        )
+        .prepare_verified_account(&VerifiedGrokAccount {
+            account_id: account_id("refresh-window-import"),
+            name: "refresh-window-import".to_owned(),
+            email: None,
+            upstream_account_id: None,
+            plan_type: None,
+            tokens,
+            enabled: true,
+        })
         .expect("valid credential inside refresh window must be imported");
-    let after = SystemTime::now();
-    let next_refresh_at = prepared
-        .account
-        .next_refresh_at()
-        .expect("refreshable credential must be scheduled");
 
-    assert!((before..=after).contains(&next_refresh_at));
+    assert!(prepared.account.next_refresh_at().is_none());
 }
 
 #[test]

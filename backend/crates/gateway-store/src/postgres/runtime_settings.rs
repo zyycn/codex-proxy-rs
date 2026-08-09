@@ -225,19 +225,6 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     update.validate()?;
     let refresh_margin_seconds =
         i64::try_from(update.refresh_margin_seconds).map_err(|_| invalid_numeric())?;
-    let previous_refresh_margin_seconds = sqlx::query_scalar::<_, i64>(
-        "select refresh_margin_seconds
-         from runtime_settings
-         where id = 1
-         for update",
-    )
-    .fetch_optional(&mut **transaction)
-    .await
-    .map_err(|_| postgres_unavailable("lock runtime settings for update"))?
-    .ok_or_else(|| StoreError::NotFound {
-        entity: "runtime settings",
-        id: "1".to_owned(),
-    })?;
     let next = sqlx::query_scalar::<_, i64>(
         "update runtime_settings
              set config_revision = config_revision + 1,
@@ -272,33 +259,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
         entity: "runtime settings",
         id: "1".to_owned(),
     })?;
-    if previous_refresh_margin_seconds != refresh_margin_seconds {
-        reschedule_provider_refreshes_in_transaction(transaction, refresh_margin_seconds).await?;
-    }
     Revision::new(u64::try_from(next).map_err(|_| invalid_numeric())?)
-}
-
-async fn reschedule_provider_refreshes_in_transaction(
-    transaction: &mut Transaction<'_, Postgres>,
-    refresh_margin_seconds: i64,
-) -> StoreResult<()> {
-    sqlx::query(
-        "update provider_accounts
-         set next_refresh_at = case
-               when access_token_expires_at <= now()
-                 or extract(epoch from (access_token_expires_at - now())) <= $1
-               then now()
-               else access_token_expires_at - ($1::double precision * interval '1 second')
-             end,
-             updated_at = now()
-         where has_refresh_token
-           and access_token_expires_at is not null",
-    )
-    .bind(refresh_margin_seconds)
-    .execute(&mut **transaction)
-    .await
-    .map_err(|_| postgres_unavailable("reschedule provider credential refreshes"))?;
-    Ok(())
 }
 
 pub(crate) async fn bump_config_revision_in_transaction(

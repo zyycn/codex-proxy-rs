@@ -674,22 +674,20 @@ impl ProviderRefreshPolicy {
         self.concurrency
     }
 
-    /// 按配置的精确提前量计算刷新时刻。
-    pub fn next_attempt_at(
+    /// 判断 AT 是否已经进入当前配置的提前刷新窗口。
+    ///
+    /// `margin` 是运行时策略，不投影为账号的持久化时间字段；已过期 AT 也需要
+    /// 尝试用 RT 恢复，因此视为到期。
+    #[must_use]
+    pub fn is_refresh_due(
         self,
-        _account_id: &ProviderAccountId,
         access_token_expires_at: SystemTime,
         observed_at: SystemTime,
-    ) -> Result<SystemTime, ProviderStoreError> {
-        let remaining = access_token_expires_at
-            .duration_since(observed_at)
-            .map_err(|_| invalid_refresh_policy("schedule expired access token"))?;
-        if self.margin >= remaining {
-            return Ok(observed_at);
+    ) -> bool {
+        match access_token_expires_at.duration_since(observed_at) {
+            Ok(remaining) => remaining <= self.margin,
+            Err(_) => true,
         }
-        access_token_expires_at
-            .checked_sub(self.margin)
-            .ok_or_else(|| invalid_refresh_policy("schedule access token refresh"))
     }
 }
 

@@ -57,8 +57,7 @@ fn refresh_policy_requires_a_positive_margin() {
 }
 
 #[test]
-fn refresh_schedule_should_use_the_exact_configured_margin() {
-    let account = ProviderAccountId::new("acct_stable").expect("valid account");
+fn refresh_policy_should_mark_tokens_due_at_the_exact_configured_margin() {
     let policy = ProviderRefreshPolicy::try_new(
         Duration::from_secs(3_600),
         NonZeroU32::new(2).expect("positive concurrency"),
@@ -67,15 +66,12 @@ fn refresh_schedule_should_use_the_exact_configured_margin() {
     let observed_at = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
     let expires_at = observed_at + Duration::from_secs(7_200);
 
-    let first = policy
-        .next_attempt_at(&account, expires_at, observed_at)
-        .expect("schedule refresh");
-    assert_eq!(first, expires_at - Duration::from_secs(3_600));
+    assert!(!policy.is_refresh_due(expires_at, observed_at));
+    assert!(policy.is_refresh_due(observed_at + Duration::from_secs(3_600), observed_at));
 }
 
 #[test]
-fn refresh_schedule_uses_observed_time_when_token_is_inside_safe_window() {
-    let account = ProviderAccountId::new("acct_boundary").expect("valid account");
+fn refresh_policy_should_mark_expired_tokens_due() {
     let policy = ProviderRefreshPolicy::try_new(
         Duration::from_secs(3_600),
         NonZeroU32::new(1).expect("positive concurrency"),
@@ -83,12 +79,7 @@ fn refresh_schedule_uses_observed_time_when_token_is_inside_safe_window() {
     .expect("valid policy");
     let observed_at = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
 
-    assert_eq!(
-        policy
-            .next_attempt_at(&account, observed_at + Duration::from_secs(1), observed_at,)
-            .expect("schedule immediate refresh"),
-        observed_at
-    );
+    assert!(policy.is_refresh_due(observed_at - Duration::from_secs(1), observed_at));
 }
 
 #[test]

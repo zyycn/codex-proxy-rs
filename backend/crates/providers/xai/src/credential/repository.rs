@@ -12,7 +12,6 @@ use gateway_core::engine::credential::{
     ProviderAccountUpdate, QuotaObservation, QuotaWriteOutcome,
 };
 use gateway_core::error::StoreErrorKind;
-use gateway_core::provider_ports::ProviderRefreshPolicy;
 use gateway_core::routing::ProviderKind;
 use serde_json::Value;
 use thiserror::Error;
@@ -169,7 +168,7 @@ impl GrokCredentialAdmin {
             input.account.plan_type.clone(),
         )
         .with_runtime_state(input.enabled, input.initial_availability.into())
-        .with_refresh_schedule(true, Some(to_system_time(input.next_refresh_at)));
+        .with_refresh_schedule(true, None);
         Ok(NewProviderAccount {
             account,
             credential: encode_secret(&input.secret, &input.account)?,
@@ -180,7 +179,6 @@ impl GrokCredentialAdmin {
     pub fn prepare_verified_account(
         &self,
         input: &VerifiedGrokAccount,
-        policy: ProviderRefreshPolicy,
     ) -> Result<NewProviderAccount, GrokCredentialRepositoryError> {
         let expires_in = input
             .tokens
@@ -194,9 +192,6 @@ impl GrokCredentialAdmin {
         let access_token_expires_at = now
             .checked_add(expires_in)
             .ok_or(GrokCredentialRepositoryError::InvalidInput("expires_in"))?;
-        let next_refresh_at = policy
-            .next_attempt_at(&input.account_id, access_token_expires_at, now)
-            .map_err(|_| GrokCredentialRepositoryError::InvalidInput("next_refresh_at"))?;
         self.prepare_import(&CreateGrokCredential {
             account_id: input.account_id.clone(),
             name: input.name.clone(),
@@ -214,7 +209,6 @@ impl GrokCredentialAdmin {
                 access_token_expires_at: access_token_expires_at.into(),
                 refresh_token_expires_at: None,
             },
-            next_refresh_at: next_refresh_at.into(),
             enabled: input.enabled,
             initial_availability: GrokCredentialAvailability::Ready,
             initial_availability_reason: None,
@@ -308,7 +302,6 @@ impl GrokCredentialAdmin {
             account.revision(),
             &input.secret,
             &input.verified_account,
-            input.next_refresh_at,
         )
     }
 }
@@ -364,7 +357,6 @@ impl GrokCredentialRepository {
             input.expected_revision,
             &input.secret,
             &input.verified_account,
-            input.next_refresh_at,
         )?;
         let outcome = self
             .store
@@ -644,10 +636,8 @@ fn prepare_rotation(
     expected_revision: CredentialRevision,
     secret: &GrokOAuthSecret,
     verified_account: &GrokAccountProfile,
-    next_refresh_at: DateTime<Utc>,
 ) -> Result<PreparedGrokCredentialRotation, GrokCredentialRepositoryError> {
     validate_profile(verified_account)?;
-    validate_refresh_schedule(next_refresh_at, verified_account.access_token_expires_at)?;
     validate_secret(secret)?;
     ensure_xai(current)?;
     if current.revision() != expected_revision {
@@ -681,7 +671,7 @@ fn prepare_rotation(
         encode_secret(&merged_secret, verified_account)?,
         true,
         Some(to_system_time(verified_account.access_token_expires_at)),
-        Some(to_system_time(next_refresh_at)),
+        None,
     )
     .map_err(|_| GrokCredentialRepositoryError::InvalidCredentialData)?;
     Ok(PreparedGrokCredentialRotation::new(profile, credential))
@@ -707,7 +697,6 @@ fn decode_secret(
 fn validate_create(input: &CreateGrokCredential) -> Result<(), GrokCredentialRepositoryError> {
     validate_name(&input.name)?;
     validate_profile(&input.account)?;
-    validate_refresh_schedule(input.next_refresh_at, input.account.access_token_expires_at)?;
     validate_secret(&input.secret)?;
     validate_reason(input.initial_availability_reason.as_deref())
 }
@@ -728,18 +717,6 @@ fn validate_profile(profile: &GrokAccountProfile) -> Result<(), GrokCredentialRe
     {
         return Err(GrokCredentialRepositoryError::InvalidInput(
             "token_lifetime",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_refresh_schedule(
-    next_refresh_at: DateTime<Utc>,
-    access_token_expires_at: DateTime<Utc>,
-) -> Result<(), GrokCredentialRepositoryError> {
-    if next_refresh_at >= access_token_expires_at {
-        return Err(GrokCredentialRepositoryError::InvalidInput(
-            "next_refresh_at",
         ));
     }
     Ok(())

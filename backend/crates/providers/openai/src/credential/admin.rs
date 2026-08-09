@@ -16,8 +16,7 @@ use gateway_core::engine::credential::{
 };
 use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeaseGuard, ProviderLeasePort, ProviderLeaseRequest,
-    ProviderRefreshCapacityRequest, ProviderRefreshLeaseRequest, ProviderRefreshPolicy,
-    ProviderRuntimePolicyPort,
+    ProviderRefreshCapacityRequest, ProviderRefreshLeaseRequest, ProviderRuntimePolicyPort,
 };
 use gateway_core::routing::ProviderKind;
 use secrecy::{ExposeSecret, SecretString};
@@ -31,7 +30,7 @@ use super::token_client::{RefreshFailure, TokenRefresher};
 use super::types::{
     CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY, CODEX_AUTHENTICATION_KIND_OAUTH, CodexAccountProfile,
     CodexAgentIdentityAuthMode, CodexAgentIdentityCredentialData, CodexCredentialData,
-    CodexCredentialPrincipal, CodexOAuthMetadata, CodexOAuthSecret,
+    CodexCredentialPrincipal, CodexOAuthMetadata, CodexOAuthSecret, parse_access_token_expiration,
 };
 
 const PROVIDER_NAME: &str = "openai";
@@ -803,12 +802,9 @@ impl CodexCredentialAdminService {
             .expires_in
             .and_then(|expires_in| SystemTime::now().checked_add(expires_in))
             .map(DateTime::<Utc>::from);
-        let next_refresh_at = refresh_time(
-            policy,
-            &account_id,
-            access_token_expires_at,
-            secret.refresh_token.is_some(),
-        )?;
+        // 正常预刷新由 worker 读取当时的 runtime policy 动态判断；这里仅清除
+        // 之前瞬态失败留下的 retry-not-before。
+        let next_refresh_at = None;
         let mut prepared = CodexCredentialAdmin.prepare_refreshed_oauth_rotation(
             current,
             secret,
@@ -875,13 +871,6 @@ impl CodexCredentialAdminService {
                         })
                         .unwrap_or_default();
                     apply_import_metadata(&mut metadata, &candidate);
-                    let next_refresh_at = self
-                        .best_effort_import_refresh_time(
-                            &typed_account_id,
-                            access_token_expires_at,
-                            secret.refresh_token.is_some(),
-                        )
-                        .await;
                     CodexCredentialAdmin.prepare_unresolved_oauth(
                         UnresolvedCodexOAuthCredential {
                             account_id,
@@ -895,7 +884,7 @@ impl CodexCredentialAdminService {
                             secret,
                             metadata,
                             access_token_expires_at,
-                            next_refresh_at,
+                            next_refresh_at: None,
                             enabled: true,
                         },
                     )?
@@ -944,6 +933,7 @@ impl CodexCredentialAdminService {
     ) -> Result<(CodexOAuthSecret, Option<DateTime<Utc>>), CodexCredentialAdminError> {
         let id_token = id_token.map(SecretString::from);
         if let Some(access_token) = access_token {
+            let access_token_expires_at = parse_access_token_expiration(&access_token);
             let secret = CodexOAuthSecret {
                 access_token: SecretString::from(access_token),
                 refresh_token: refresh_token.map(SecretString::from),
@@ -954,7 +944,7 @@ impl CodexCredentialAdminService {
                 Some(account_id.as_str()),
                 &secret,
             );
-            return Ok((secret, None));
+            return Ok((secret, access_token_expires_at));
         }
         let refresh_token = refresh_token.ok_or(CodexCredentialAdminError::InvalidCredential)?;
         let tokens = self
@@ -981,23 +971,6 @@ impl CodexCredentialAdminService {
             .and_then(|expires_in| SystemTime::now().checked_add(expires_in))
             .map(DateTime::<Utc>::from);
         Ok((secret, access_token_expires_at))
-    }
-
-    async fn best_effort_import_refresh_time(
-        &self,
-        account_id: &ProviderAccountId,
-        access_token_expires_at: Option<DateTime<Utc>>,
-        has_refresh_token: bool,
-    ) -> Option<DateTime<Utc>> {
-        let policy = self.runtime_policy.load_refresh_policy().await.ok()?;
-        refresh_time(
-            policy,
-            account_id,
-            access_token_expires_at,
-            has_refresh_token,
-        )
-        .ok()
-        .flatten()
     }
 
     fn record_recovery_log(
@@ -1086,26 +1059,6 @@ impl CodexCredentialAdminService {
 
 fn optional_time(value: Option<chrono::DateTime<chrono::Utc>>) -> Option<SystemTime> {
     value.map(SystemTime::from)
-}
-
-pub(crate) fn refresh_time(
-    policy: ProviderRefreshPolicy,
-    account_id: &ProviderAccountId,
-    access_token_expires_at: Option<DateTime<Utc>>,
-    has_refresh_token: bool,
-) -> Result<Option<DateTime<Utc>>, CodexCredentialAdminError> {
-    if !has_refresh_token {
-        return Ok(None);
-    }
-    let Some(expires_at) = access_token_expires_at.map(SystemTime::from) else {
-        return Ok(None);
-    };
-    let observed_at = SystemTime::now();
-    policy
-        .next_attempt_at(account_id, expires_at, observed_at)
-        .map(DateTime::<Utc>::from)
-        .map(Some)
-        .map_err(|_| CodexCredentialAdminError::InvalidCredential)
 }
 
 fn cpr_status(account: &ProviderAccount) -> &'static str {

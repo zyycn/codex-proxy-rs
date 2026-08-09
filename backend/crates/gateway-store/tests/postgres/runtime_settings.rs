@@ -42,7 +42,7 @@ fn runtime_settings_reject_invalid_model_mapping() {
 }
 
 #[tokio::test]
-async fn refresh_margin_change_should_reschedule_existing_refreshable_accounts() {
+async fn refresh_margin_change_should_preserve_existing_account_refresh_facts() {
     let Some(database) = TestDatabase::create("refresh_margin_reschedule").await else {
         return;
     };
@@ -55,6 +55,7 @@ async fn refresh_margin_change_should_reschedule_existing_refreshable_accounts()
     )
     .await;
     let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let before = account_refresh_facts(&database.pool, "acct_refresh_margin_changed").await;
 
     repository
         .update_runtime_settings(settings_with_margin(1_800))
@@ -62,14 +63,14 @@ async fn refresh_margin_change_should_reschedule_existing_refreshable_accounts()
         .expect("update refresh margin");
 
     assert_eq!(
-        account_next_refresh_at(&database.pool, "acct_refresh_margin_changed").await,
-        expires_at - TimeDelta::seconds(1_800)
+        account_refresh_facts(&database.pool, "acct_refresh_margin_changed").await,
+        before
     );
     database.close().await;
 }
 
 #[tokio::test]
-async fn unchanged_refresh_margin_should_preserve_existing_retry_schedule() {
+async fn unchanged_refresh_margin_should_preserve_existing_account_refresh_facts() {
     let Some(database) = TestDatabase::create("refresh_margin_unchanged").await else {
         return;
     };
@@ -83,6 +84,7 @@ async fn unchanged_refresh_margin_should_preserve_existing_retry_schedule() {
     )
     .await;
     let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let before = account_refresh_facts(&database.pool, "acct_refresh_margin_unchanged").await;
 
     repository
         .update_runtime_settings(settings_with_margin(3_600))
@@ -90,8 +92,8 @@ async fn unchanged_refresh_margin_should_preserve_existing_retry_schedule() {
         .expect("update unrelated runtime settings");
 
     assert_eq!(
-        account_next_refresh_at(&database.pool, "acct_refresh_margin_unchanged").await,
-        retry_at
+        account_refresh_facts(&database.pool, "acct_refresh_margin_unchanged").await,
+        before
     );
     database.close().await;
 }
@@ -118,12 +120,31 @@ async fn insert_refreshable_account(
     .expect("insert refreshable account");
 }
 
-async fn account_next_refresh_at(pool: &sqlx::PgPool, account_id: &str) -> DateTime<Utc> {
-    sqlx::query_scalar("select next_refresh_at from provider_accounts where id = $1")
+#[derive(Debug, PartialEq, Eq)]
+struct AccountRefreshFacts {
+    access_token_expires_at: DateTime<Utc>,
+    next_refresh_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    credential_revision: i64,
+}
+
+async fn account_refresh_facts(pool: &sqlx::PgPool, account_id: &str) -> AccountRefreshFacts {
+    let (access_token_expires_at, next_refresh_at, updated_at, credential_revision) =
+        sqlx::query_as(
+            "select access_token_expires_at, next_refresh_at, updated_at, credential_revision
+         from provider_accounts
+         where id = $1",
+        )
         .bind(account_id)
         .fetch_one(pool)
         .await
-        .expect("load next refresh time")
+        .expect("load account refresh facts");
+    AccountRefreshFacts {
+        access_token_expires_at,
+        next_refresh_at,
+        updated_at,
+        credential_revision,
+    }
 }
 
 fn timestamp_micros(value: DateTime<Utc>) -> DateTime<Utc> {

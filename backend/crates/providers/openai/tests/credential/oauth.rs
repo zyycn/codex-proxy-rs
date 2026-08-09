@@ -21,7 +21,7 @@ use provider_openai::credential::{
 use secrecy::SecretString;
 use url::Url;
 
-use crate::support::{MemoryAccountStore, runtime_policy};
+use crate::support::MemoryAccountStore;
 
 #[derive(Default)]
 struct PendingStore {
@@ -135,7 +135,6 @@ async fn complete(id_token: String) -> Result<CompletedCodexOAuthCredential, Cod
         Arc::new(PendingStore::default()),
         Arc::new(Exchanger { id_token }),
         Arc::new(MemoryAccountStore::default()),
-        runtime_policy(),
         CodexCredentialAdmin,
     );
     let started = service
@@ -185,8 +184,8 @@ async fn first_exchange_uses_official_id_token_claim_mapping_without_signature_v
     assert_eq!(account.account.plan_type(), Some("pro"));
     assert!(account.account.is_schedulable(SystemTime::now()));
     assert!(
-        account.account.next_refresh_at() > Some(SystemTime::now() + Duration::from_secs(30 * 60)),
-        "a one-hour first AT must not immediately trigger RT refresh"
+        account.account.next_refresh_at().is_none(),
+        "normal OAuth creation must not persist a margin-derived refresh time"
     );
 }
 
