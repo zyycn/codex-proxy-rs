@@ -1,6 +1,6 @@
 //! 402 恢复回归。
 //!
-//! 覆盖 `QuotaExhausted -> Ready` 的证据规则：新 reset 后移 + 新快照未耗尽。
+//! 覆盖 `QuotaExhausted -> Ready` 的证据规则：新 core primary reset 后移 + 新快照用量低于 10%。
 
 use super::*;
 
@@ -127,8 +127,8 @@ async fn manual_quota_refresh_keeps_confirmed_exhaustion_until_the_recorded_rese
 }
 
 #[tokio::test]
-async fn advanced_reset_recovers_ready_before_the_recorded_reset_time() {
-    // 旧 reset 仍在未来；只要新窗口 reset 后移且额度正常，仍必须恢复 Ready。
+async fn advanced_reset_with_primary_usage_below_ten_percent_recovers_ready() {
+    // 旧 reset 仍在未来；同一主窗口 reset 后移且用量低于 10% 时才恢复 Ready。
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_cross_window_recovery";
     create_account(&store, account_id).await;
@@ -181,7 +181,7 @@ async fn advanced_reset_recovers_ready_before_the_recorded_reset_time() {
             "rate_limit": {
                 "allowed": true,
                 "limit_reached": false,
-                "primary_window": {"used_percent": 5, "reset_at": future_reset}
+                "primary_window": {"used_percent": 9.9, "reset_at": future_reset}
             }
         })))
         .mount(&server)
@@ -207,7 +207,91 @@ async fn advanced_reset_recovers_ready_before_the_recorded_reset_time() {
             .expect("account after cross-window recovery")
             .availability(),
         AccountAvailability::Ready,
-        "an advanced reset must recover QuotaExhausted before the recorded reset time"
+        "an advanced reset with a nearly unused primary window must recover QuotaExhausted"
+    );
+}
+
+#[tokio::test]
+async fn advanced_reset_with_primary_usage_at_ten_percent_keeps_confirmed_exhaustion() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_cross_window_ten_percent";
+    create_account(&store, account_id).await;
+    let account = store.account(account_id).expect("created account");
+    let old_reset = Utc::now().timestamp() + 3_600;
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: Some(OpaqueProviderData::new(
+                json!({
+                    "rate_limit": {
+                        "allowed": false,
+                        "limit_reached": true,
+                        "primary_window": {
+                            "used_percent": 100,
+                            "reset_at": old_reset,
+                            "limit_window_seconds": 3600
+                        }
+                    }
+                })
+                .as_object()
+                .expect("quota object")
+                .clone(),
+            )),
+            observed_at: Some(SystemTime::now()),
+            limit_reached: None,
+        })
+        .await
+        .expect("seed old exhausted snapshot");
+    store
+        .apply_state_change(AccountStateChange {
+            message: None,
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            availability: AccountAvailability::QuotaExhausted,
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("mark account exhausted");
+    let server = MockServer::start().await;
+    let future_reset = old_reset + 3_600;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .and(header(
+            "authorization",
+            format!("Bearer token-{account_id}"),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {"used_percent": 10.0, "reset_at": future_reset}
+            }
+        })))
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    let held = service
+        .refresh_account(account.id())
+        .await
+        .expect("refresh non-empty new window quota");
+
+    assert!(held.fact().exhausted());
+    assert_eq!(
+        store
+            .account(account_id)
+            .expect("account after ten-percent snapshot")
+            .availability(),
+        AccountAvailability::QuotaExhausted,
+        "a reset advance at exactly 10% must not release confirmed exhaustion"
     );
 }
 

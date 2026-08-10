@@ -397,7 +397,7 @@ impl CodexCredentialQuotaService {
         }
     }
 
-    /// 写入新快照前读取已确认耗尽窗口的 reset，用于判断窗口是否真的推进。
+    /// 写入新快照前读取 core primary 已确认耗尽窗口的 reset，用于判断该窗口是否真的推进。
     async fn previous_confirmed_reset(&self, account: &ProviderAccount) -> Option<SystemTime> {
         let observations = self
             .store
@@ -409,7 +409,10 @@ impl CodexCredentialQuotaService {
                 && observation.expected_revision == account.revision()
         })?;
         let snapshot = quota_snapshot_from_observation(&observation)?;
-        snapshot.fact().resets_at().map(SystemTime::from)
+        snapshot
+            .core_primary_window()
+            .and_then(|window| window.reset_at())
+            .map(SystemTime::from)
     }
 
     /// 将已确认的额度拒绝投影为 100%，使展示、调度和恢复共用同一窗口事实。
@@ -633,7 +636,6 @@ impl CodexCredentialQuotaService {
             observed_at,
             value,
         )?;
-        let refreshed_fact = refreshed_snapshot.fact();
         let previous_reset_at = self.previous_confirmed_reset(account).await;
         let object = normalize_quota_window_placeholders(
             value
@@ -642,12 +644,16 @@ impl CodexCredentialQuotaService {
                 .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?,
         );
         let object = if account.availability() == AccountAvailability::QuotaExhausted
-            && quota_success_state(account.availability(), refreshed_fact, previous_reset_at)
-                .is_none()
+            && quota_success_state(
+                account.availability(),
+                &refreshed_snapshot,
+                previous_reset_at,
+            )
+            .is_none()
         {
             confirmed_exhaustion_projection(
                 object,
-                confirmed_exhaustion_reset_at(previous_reset_at, refreshed_fact),
+                confirmed_exhaustion_reset_at(previous_reset_at, &refreshed_snapshot),
             )
         } else {
             object
@@ -687,9 +693,11 @@ impl CodexCredentialQuotaService {
         } else {
             summary.updated += 1;
         }
-        if let Some(availability) =
-            quota_success_state(current.availability(), refreshed_fact, previous_reset_at)
-        {
+        if let Some(availability) = quota_success_state(
+            current.availability(),
+            &refreshed_snapshot,
+            previous_reset_at,
+        ) {
             let _ = self
                 .repository
                 .apply_state(&current, availability, observed_at)
@@ -755,13 +763,18 @@ impl CodexCredentialQuotaService {
         }
         let quota = merge_passive_quota(existing, &rate_limits);
         let observed_at = SystemTime::now();
-        let refreshed_fact = parse_codex_quota_usage(&Value::Object(quota.clone()))?;
+        let refreshed_snapshot = parse_account_quota_snapshot(
+            account.id().clone(),
+            account.revision(),
+            observed_at,
+            &Value::Object(quota.clone()),
+        )?;
         let quota = if account.availability() == AccountAvailability::QuotaExhausted {
             // 被动成功响应不能解除确认额度耗尽；继续展示 100%，直到权威 usage 快照
             // 证明旧 reset 已跨过且新窗口已经推进。
             confirmed_exhaustion_projection(
                 quota,
-                confirmed_exhaustion_reset_at(previous_reset_at, refreshed_fact),
+                confirmed_exhaustion_reset_at(previous_reset_at, &refreshed_snapshot),
             )
         } else {
             quota
@@ -957,7 +970,6 @@ impl CodexCredentialQuotaService {
             observed_at,
             &value,
         )?;
-        let refreshed_fact = refreshed_snapshot.fact();
         let previous_reset_at = self.previous_confirmed_reset(&account).await;
         let object = normalize_quota_window_placeholders(
             value
@@ -966,12 +978,16 @@ impl CodexCredentialQuotaService {
                 .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?,
         );
         let object = if account.availability() == AccountAvailability::QuotaExhausted
-            && quota_success_state(account.availability(), refreshed_fact, previous_reset_at)
-                .is_none()
+            && quota_success_state(
+                account.availability(),
+                &refreshed_snapshot,
+                previous_reset_at,
+            )
+            .is_none()
         {
             confirmed_exhaustion_projection(
                 object,
-                confirmed_exhaustion_reset_at(previous_reset_at, refreshed_fact),
+                confirmed_exhaustion_reset_at(previous_reset_at, &refreshed_snapshot),
             )
         } else {
             object
@@ -1005,9 +1021,11 @@ impl CodexCredentialQuotaService {
             return Err(CodexCredentialQuotaError::RevisionConflict);
         }
         self.scheduling.observe(&snapshot);
-        if let Some(availability) =
-            quota_success_state(current.availability(), refreshed_fact, previous_reset_at)
-        {
+        if let Some(availability) = quota_success_state(
+            current.availability(),
+            &refreshed_snapshot,
+            previous_reset_at,
+        ) {
             self.repository
                 .apply_state(&current, availability, observed_at)
                 .await?;
@@ -1314,11 +1332,16 @@ fn confirmed_exhaustion_projection(
 /// 否则保留已确认失败的旧窗口，避免 98/99% 快照反向解锁。
 fn confirmed_exhaustion_reset_at(
     previous_reset_at: Option<SystemTime>,
-    refreshed_fact: CodexQuotaFact,
+    refreshed_snapshot: &CodexAccountQuotaSnapshot,
 ) -> Option<i64> {
-    let refreshed_reset_at = refreshed_fact.resets_at().map(SystemTime::from);
+    let refreshed_reset_at = refreshed_snapshot
+        .core_primary_window()
+        .and_then(|window| window.reset_at())
+        .map(SystemTime::from);
     let reset_at = match (previous_reset_at, refreshed_reset_at) {
-        (Some(previous), Some(refreshed)) if refreshed_fact.exhausted() && refreshed > previous => {
+        (Some(previous), Some(refreshed))
+            if refreshed_snapshot.fact().exhausted() && refreshed > previous =>
+        {
             refreshed
         }
         (Some(previous), _) => previous,

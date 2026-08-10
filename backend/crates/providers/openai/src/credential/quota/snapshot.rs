@@ -13,6 +13,8 @@ use serde_json::{Map, Value};
 
 use super::{CodexCredentialQuotaError, QUOTA_SCHEDULING_TTL};
 
+const CORE_PRIMARY_WINDOW_KEY: &str = "core-primary";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CodexQuotaFact {
     remaining_percent: Option<u8>,
@@ -130,6 +132,13 @@ impl CodexAccountQuotaSnapshot {
     #[must_use]
     pub fn windows(&self) -> &[CodexQuotaWindow] {
         &self.windows
+    }
+
+    #[must_use]
+    pub(crate) fn core_primary_window(&self) -> Option<&CodexQuotaWindow> {
+        self.windows
+            .iter()
+            .find(|window| window.key() == CORE_PRIMARY_WINDOW_KEY)
     }
 
     /// 投影滚动已过期窗口：`reset_at` 已过的窗口 `used_percent=0`、
