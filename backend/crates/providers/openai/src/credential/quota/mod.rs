@@ -337,7 +337,7 @@ fn quota_refresh_candidate(
     now: SystemTime,
     limit_reached: bool,
 ) -> Option<ProviderAccount> {
-    // 定时器只兜底「已耗尽（402）」或「任一窗口触顶（limit_reached 死锁）」账号，
+    // 定时器只兜底已耗尽或任一窗口触顶的账号；
     // 正常账号由真实请求的响应头被动同步。
     (eligible_periodic_quota_refresh(&account, now)
         && (account.availability() == AccountAvailability::QuotaExhausted || limit_reached))
@@ -578,7 +578,7 @@ impl CodexCredentialQuotaService {
                             )
                             .await;
                         }
-                        // 429/503 等临时拒绝：不写 availability（限流不改变账号可用性），仅记失败待重试。
+                        // usage 401/403 与 429/503 都不写 availability；前者等待 OAuth 或真实请求确认。
                         None | Some(_) => {
                             summary.transient += 1;
                             tracing::warn!(
@@ -635,7 +635,6 @@ impl CodexCredentialQuotaService {
         )?;
         let refreshed_fact = refreshed_snapshot.fact();
         let previous_reset_at = self.previous_confirmed_reset(account).await;
-        let now = SystemTime::now();
         let object = normalize_quota_window_placeholders(
             value
                 .as_object()
@@ -643,13 +642,8 @@ impl CodexCredentialQuotaService {
                 .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?,
         );
         let object = if account.availability() == AccountAvailability::QuotaExhausted
-            && quota_success_state(
-                account.availability(),
-                refreshed_fact,
-                previous_reset_at,
-                now,
-            )
-            .is_none()
+            && quota_success_state(account.availability(), refreshed_fact, previous_reset_at)
+                .is_none()
         {
             confirmed_exhaustion_projection(
                 object,
@@ -693,12 +687,9 @@ impl CodexCredentialQuotaService {
         } else {
             summary.updated += 1;
         }
-        if let Some(availability) = quota_success_state(
-            current.availability(),
-            refreshed_fact,
-            previous_reset_at,
-            now,
-        ) {
+        if let Some(availability) =
+            quota_success_state(current.availability(), refreshed_fact, previous_reset_at)
+        {
             let _ = self
                 .repository
                 .apply_state(&current, availability, observed_at)
@@ -950,7 +941,7 @@ impl CodexCredentialQuotaService {
                     });
                 }
                 Err(CodexQuotaFetchError::Upstream { account, error }) => {
-                    // 402/deactivated → 写终态；429/503 等临时拒绝不写 availability（限流不改变账号可用性）。
+                    // 402 与明确的停用错误写对应状态；usage 401/403 不写 availability。
                     if let Some(availability) = quota_state_transition(&error) {
                         self.persist_upstream_state(&account, availability, &error, observed_at)
                             .await;
@@ -968,7 +959,6 @@ impl CodexCredentialQuotaService {
         )?;
         let refreshed_fact = refreshed_snapshot.fact();
         let previous_reset_at = self.previous_confirmed_reset(&account).await;
-        let now = SystemTime::now();
         let object = normalize_quota_window_placeholders(
             value
                 .as_object()
@@ -976,13 +966,8 @@ impl CodexCredentialQuotaService {
                 .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?,
         );
         let object = if account.availability() == AccountAvailability::QuotaExhausted
-            && quota_success_state(
-                account.availability(),
-                refreshed_fact,
-                previous_reset_at,
-                now,
-            )
-            .is_none()
+            && quota_success_state(account.availability(), refreshed_fact, previous_reset_at)
+                .is_none()
         {
             confirmed_exhaustion_projection(
                 object,
@@ -1020,12 +1005,9 @@ impl CodexCredentialQuotaService {
             return Err(CodexCredentialQuotaError::RevisionConflict);
         }
         self.scheduling.observe(&snapshot);
-        if let Some(availability) = quota_success_state(
-            current.availability(),
-            refreshed_fact,
-            previous_reset_at,
-            now,
-        ) {
+        if let Some(availability) =
+            quota_success_state(current.availability(), refreshed_fact, previous_reset_at)
+        {
             self.repository
                 .apply_state(&current, availability, observed_at)
                 .await?;
