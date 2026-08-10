@@ -21,6 +21,11 @@ updates:
       day: monday
       time: '09:10'
       timezone: Asia/Shanghai
+    # 固定官方 Codex Desktop 的 TLS 指纹；升级前必须抓取握手并比对扩展顺序。
+    ignore:
+      - dependency-name: hyper-rustls
+      - dependency-name: reqwest
+      - dependency-name: rustls
     groups:
       minor-and-patch:
         update-types:
