@@ -110,13 +110,10 @@ const labelClasses = computed(() => [
   >
     <span
       v-if="loading"
-      class="inline-flex shrink-0 items-center justify-center leading-none"
+      class="inline-flex shrink-0 animate-spin items-center justify-center origin-center leading-none will-change-transform"
       aria-hidden="true"
     >
-      <LoaderCircle
-        :size="loadingIconSize[size]"
-        class="block animate-spin origin-center [transform-box:view-box] will-change-transform"
-      />
+      <LoaderCircle :size="loadingIconSize[size]" class="block" />
     </span>
     <span v-if="$slots.icon && !loading" class="inline-flex shrink-0">
       <slot name="icon" />
