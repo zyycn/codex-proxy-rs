@@ -283,7 +283,7 @@ async fn manual_quota_refresh_preserves_disabled_account_state() {
 }
 
 #[tokio::test]
-async fn manual_quota_auth_rejection_does_not_invalidate_refreshable_credential() {
+async fn manual_quota_unauthorized_rejection_preserves_current_availability() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_manual_quota_auth_rejected";
     create_account(&store, account_id).await;
@@ -320,7 +320,51 @@ async fn manual_quota_auth_rejection_does_not_invalidate_refreshable_credential(
     assert_eq!(
         store
             .account(account_id)
-            .expect("preserved account")
+            .expect("account after rejection")
+            .availability(),
+        AccountAvailability::QuotaExhausted
+    );
+}
+
+#[tokio::test]
+async fn manual_quota_forbidden_rejection_preserves_current_availability() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_manual_quota_forbidden";
+    create_account(&store, account_id).await;
+    let account = store.account(account_id).expect("created account");
+    store
+        .apply_state_change(AccountStateChange {
+            message: None,
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            availability: AccountAvailability::QuotaExhausted,
+            observed_at: SystemTime::now(),
+        })
+        .await
+        .expect("mark account exhausted");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    assert!(matches!(
+        service.refresh_account(account.id()).await,
+        Err(CodexCredentialQuotaError::Upstream { .. })
+    ));
+    assert_eq!(
+        store
+            .account(account_id)
+            .expect("account after rejection")
             .availability(),
         AccountAvailability::QuotaExhausted
     );

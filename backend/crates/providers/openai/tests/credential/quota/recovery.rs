@@ -1,6 +1,6 @@
 //! 402 恢复回归。
 //!
-//! 覆盖 `QuotaExhausted -> Ready` 的证据规则：旧 reset 已到期 + 新快照未耗尽。
+//! 覆盖 `QuotaExhausted -> Ready` 的证据规则：新 reset 后移 + 新快照未耗尽。
 
 use super::*;
 
@@ -127,14 +127,13 @@ async fn manual_quota_refresh_keeps_confirmed_exhaustion_until_the_recorded_rese
 }
 
 #[tokio::test]
-async fn expired_old_reset_with_fresh_allowed_snapshot_recovers_ready() {
-    // 旧快照 reset_at < now，新快照 allowed=true、
-    // limit_reached=false、reset_at > now；最终必须恢复 Ready。
+async fn advanced_reset_recovers_ready_before_the_recorded_reset_time() {
+    // 旧 reset 仍在未来；只要新窗口 reset 后移且额度正常，仍必须恢复 Ready。
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_cross_window_recovery";
     create_account(&store, account_id).await;
     let account = store.account(account_id).expect("created account");
-    let old_reset = Utc::now().timestamp() - 60;
+    let old_reset = Utc::now().timestamp() + 3_600;
     store
         .compare_and_swap_quota(QuotaObservation {
             account_id: account.id().clone(),
@@ -171,7 +170,7 @@ async fn expired_old_reset_with_fresh_allowed_snapshot_recovers_ready() {
         .await
         .expect("mark account exhausted");
     let server = MockServer::start().await;
-    let future_reset = Utc::now().timestamp() + 3600;
+    let future_reset = old_reset + 3_600;
     Mock::given(method("GET"))
         .and(path("/api/codex/usage"))
         .and(header(
@@ -208,7 +207,7 @@ async fn expired_old_reset_with_fresh_allowed_snapshot_recovers_ready() {
             .expect("account after cross-window recovery")
             .availability(),
         AccountAvailability::Ready,
-        "old reset elapsed + fresh allowed snapshot must recover QuotaExhausted"
+        "an advanced reset must recover QuotaExhausted before the recorded reset time"
     );
 }
 
