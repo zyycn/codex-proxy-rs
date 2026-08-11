@@ -36,7 +36,10 @@ use crate::transport::{CodexBackendClient, CodexClientError, CodexRequestContext
 
 use super::agent_identity::{CodexAgentIdentityTaskService, PreparedCodexRuntimeCredential};
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
-use recovery::{quota_state_reason, quota_state_transition, quota_success_state};
+use recovery::{
+    authoritative_quota_snapshot_state, quota_state_reason, quota_state_transition,
+    quota_success_state,
+};
 use snapshot::{
     parse_account_quota_snapshot, quota_projection_ttl, quota_snapshot_from_observation,
     scheduling_signals_from_snapshot,
@@ -693,7 +696,7 @@ impl CodexCredentialQuotaService {
         } else {
             summary.updated += 1;
         }
-        if let Some(availability) = quota_success_state(
+        if let Some(availability) = authoritative_quota_snapshot_state(
             current.availability(),
             &refreshed_snapshot,
             previous_reset_at,
@@ -1021,7 +1024,7 @@ impl CodexCredentialQuotaService {
             return Err(CodexCredentialQuotaError::RevisionConflict);
         }
         self.scheduling.observe(&snapshot);
-        if let Some(availability) = quota_success_state(
+        if let Some(availability) = authoritative_quota_snapshot_state(
             current.availability(),
             &refreshed_snapshot,
             previous_reset_at,

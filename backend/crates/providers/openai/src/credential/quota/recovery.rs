@@ -1,6 +1,7 @@
-//! 确认额度耗尽后的恢复证据与 availability 转换。
+//! 权威额度快照的 availability 转换。
 //!
-//! `QuotaExhausted -> Ready` 只能由同一 credential revision 的权威 usage 快照证明：
+//! 已触顶的 core primary 会立即把可调度账号标为 `QuotaExhausted`；
+//! `QuotaExhausted -> Ready` 则只能由同一 credential revision 的权威 usage 快照证明：
 //! 新快照未耗尽、core primary reset 已推进到下一窗口，且该窗口用量低于 10%。
 
 use std::time::SystemTime;
@@ -13,6 +14,31 @@ use super::snapshot::CodexAccountQuotaSnapshot;
 use crate::transport::CodexClientError;
 
 const RESET_RECOVERY_MAX_USED_PERCENT: f64 = 10.0;
+
+/// 基于成功的权威 usage 快照收敛可调度账号的额度状态。
+///
+/// 只接受上游明确拒绝使用且 core primary 触顶的证据；secondary、附加桶、
+/// credits 与 spend control 都不能单独把整个账号标成额度耗尽。
+pub(crate) fn authoritative_quota_snapshot_state(
+    current: AccountAvailability,
+    snapshot: &CodexAccountQuotaSnapshot,
+    previous_reset_at: Option<SystemTime>,
+) -> Option<AccountAvailability> {
+    match current {
+        AccountAvailability::Ready | AccountAvailability::Unknown
+            if snapshot.authoritative_core_primary_exhausted() =>
+        {
+            Some(AccountAvailability::QuotaExhausted)
+        }
+        AccountAvailability::QuotaExhausted => {
+            quota_success_state(current, snapshot, previous_reset_at)
+        }
+        AccountAvailability::Ready | AccountAvailability::Unknown => None,
+        AccountAvailability::Expired
+        | AccountAvailability::Banned
+        | AccountAvailability::Invalid => None,
+    }
+}
 
 /// 只处理 `QuotaExhausted` 的恢复。`allowed=true`、成功响应和百分比回落都不能单独覆盖
 /// 一次已确认的额度拒绝；它们在 reset 未推进时可能只是上游滞后的观测。

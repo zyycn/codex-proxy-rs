@@ -105,6 +105,7 @@ pub struct CodexAccountQuotaSnapshot {
     credential_revision: CredentialRevision,
     observed_at: SystemTime,
     fact: CodexQuotaFact,
+    authoritative_core_primary_exhausted: bool,
     windows: Vec<CodexQuotaWindow>,
 }
 
@@ -139,6 +140,12 @@ impl CodexAccountQuotaSnapshot {
         self.windows
             .iter()
             .find(|window| window.key() == CORE_PRIMARY_WINDOW_KEY)
+    }
+
+    /// 上游成功 usage 明确拒绝请求，且 canonical core primary 已确认触顶。
+    #[must_use]
+    pub(crate) const fn authoritative_core_primary_exhausted(&self) -> bool {
+        self.authoritative_core_primary_exhausted
     }
 
     /// 投影滚动已过期窗口：`reset_at` 已过的窗口 `used_percent=0`、
@@ -316,6 +323,7 @@ pub(crate) fn parse_account_quota_snapshot(
     let object = usage
         .as_object()
         .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
+    let authoritative_core_primary_exhausted = authoritative_core_primary_exhausted(object)?;
     let mut windows = Vec::new();
     for limit in canonical_rate_limits(object)? {
         parse_rate_limit_windows(
@@ -332,8 +340,53 @@ pub(crate) fn parse_account_quota_snapshot(
         credential_revision,
         observed_at,
         fact,
+        authoritative_core_primary_exhausted,
         windows,
     })
+}
+
+/// 账号状态只能由顶层 canonical Codex 额度桶的明确拒绝来改变。
+///
+/// `fact.exhausted()` 和窗口 `limit_reached` 都会聚合或继承 secondary、附加桶等事实，
+/// 因此不能单独用来将整个账号标为 `QuotaExhausted`。
+fn authoritative_core_primary_exhausted(
+    usage: &Map<String, Value>,
+) -> Result<bool, CodexCredentialQuotaError> {
+    let Some(rate_limit) = usage.get("rate_limit") else {
+        return Ok(false);
+    };
+    if rate_limit.is_null() {
+        return Ok(false);
+    }
+    let rate_limit = rate_limit
+        .as_object()
+        .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
+    if optional_bool(rate_limit, "allowed")? != Some(false) {
+        return Ok(false);
+    }
+    let Some(primary_window) = rate_limit.get("primary_window") else {
+        return Ok(false);
+    };
+    if primary_window.is_null() {
+        return Ok(false);
+    }
+    let primary_window = primary_window
+        .as_object()
+        .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
+    let primary_window_reached = optional_bool(rate_limit, "limit_reached")?.unwrap_or(false)
+        || optional_bool(primary_window, "limit_reached")?.unwrap_or(false)
+        || primary_window
+            .get("used_percent")
+            .map(|value| {
+                value
+                    .as_f64()
+                    .filter(|value| value.is_finite() && *value >= 0.0)
+                    .map(|value| value >= 100.0)
+                    .ok_or(CodexCredentialQuotaError::InvalidCredentialData)
+            })
+            .transpose()?
+            .unwrap_or(false);
+    Ok(primary_window_reached)
 }
 
 /// 一个规范化后的限流桶：`key` 用于稳定区分窗口，`source` 用于展示分组。

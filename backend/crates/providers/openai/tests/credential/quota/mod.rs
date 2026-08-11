@@ -487,7 +487,7 @@ async fn passive_rate_limit_headers_replace_stale_secondary_window() {
 }
 
 #[tokio::test]
-async fn manual_quota_refresh_drops_empty_secondary_window() {
+async fn manual_quota_refresh_marks_ready_account_exhausted_and_drops_empty_secondary_window() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_manual_secondary_placeholder";
     create_account(&store, account_id).await;
@@ -533,6 +533,13 @@ async fn manual_quota_refresh_drops_empty_secondary_window() {
 
     assert_eq!(snapshot.windows().len(), 1);
     assert_eq!(snapshot.windows()[0].used_percent(), Some(100.0));
+    assert_eq!(
+        store
+            .account(account_id)
+            .expect("account after refresh")
+            .availability(),
+        AccountAvailability::QuotaExhausted
+    );
 }
 
 #[tokio::test]
@@ -824,7 +831,7 @@ async fn periodic_quota_synchronization_does_not_scan_stale_ready_accounts() {
 }
 
 #[tokio::test]
-async fn periodic_quota_synchronization_preserves_availability_when_usage_peaks() {
+async fn periodic_quota_synchronization_marks_ready_account_exhausted_when_primary_is_exhausted() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_periodic_stuck_cooldown").await;
     let account = store
@@ -871,6 +878,50 @@ async fn periodic_quota_synchronization_preserves_availability_when_usage_peaks(
                 "primary_window": {"used_percent": 100, "reset_at": reset_at}
             }
         })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+    service
+        .prepare_scheduling(std::slice::from_ref(&account))
+        .await;
+
+    let summary = service.synchronize().await.expect("quota synchronization");
+
+    assert_eq!(summary.exhausted, 1);
+    let reconciled = store
+        .account("acct_periodic_stuck_cooldown")
+        .expect("reconciled account");
+    assert_eq!(
+        reconciled.availability(),
+        AccountAvailability::QuotaExhausted
+    );
+}
+
+#[tokio::test]
+async fn periodic_quota_synchronization_keeps_ready_when_only_secondary_window_is_exhausted() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_periodic_secondary_only").await;
+    let reset_at = Utc::now().timestamp() + 24 * 60 * 60;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {"used_percent": 5, "reset_at": reset_at},
+                "secondary_window": {"used_percent": 100, "reset_at": reset_at}
+            }
+        })))
+        .expect(1)
         .mount(&server)
         .await;
     let service = quota_service_with_base_url(
@@ -882,13 +933,99 @@ async fn periodic_quota_synchronization_preserves_availability_when_usage_peaks(
         server.uri(),
     );
 
-    service.synchronize().await.expect("quota synchronization");
+    let summary = service.synchronize().await.expect("quota synchronization");
 
-    // 429/触顶不再写入 availability（限流不改变账号可用性），worker 只更新 quota 数据。
-    let reconciled = store
-        .account("acct_periodic_stuck_cooldown")
-        .expect("reconciled account");
-    assert_eq!(reconciled.availability(), AccountAvailability::Ready);
+    assert_eq!(summary.exhausted, 1);
+    assert_eq!(
+        store
+            .account("acct_periodic_secondary_only")
+            .expect("reconciled account")
+            .availability(),
+        AccountAvailability::Ready
+    );
+}
+
+#[tokio::test]
+async fn periodic_quota_synchronization_keeps_ready_when_primary_is_full_but_requests_are_allowed()
+{
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_periodic_primary_full_but_allowed").await;
+    let reset_at = Utc::now().timestamp() + 24 * 60 * 60;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {"used_percent": 100, "reset_at": reset_at}
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    let summary = service.synchronize().await.expect("quota synchronization");
+
+    assert_eq!(summary.exhausted, 1);
+    assert_eq!(
+        store
+            .account("acct_periodic_primary_full_but_allowed")
+            .expect("reconciled account")
+            .availability(),
+        AccountAvailability::Ready
+    );
+}
+
+#[tokio::test]
+async fn periodic_quota_synchronization_keeps_ready_without_primary_exhaustion_evidence() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(
+        &store,
+        "acct_periodic_disallowed_without_primary_exhaustion",
+    )
+    .await;
+    let reset_at = Utc::now().timestamp() + 24 * 60 * 60;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": false,
+                "limit_reached": false,
+                "primary_window": {"used_percent": 5, "reset_at": reset_at}
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    let summary = service.synchronize().await.expect("quota synchronization");
+
+    assert_eq!(summary.exhausted, 1);
+    assert_eq!(
+        store
+            .account("acct_periodic_disallowed_without_primary_exhaustion")
+            .expect("reconciled account")
+            .availability(),
+        AccountAvailability::Ready
+    );
 }
 
 #[tokio::test]
