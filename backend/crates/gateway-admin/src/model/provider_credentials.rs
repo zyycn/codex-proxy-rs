@@ -564,6 +564,15 @@ impl fmt::Debug for RotateCredential {
     }
 }
 
+/// 通用账号用量能否可靠归属到一个 Provider quota 窗口。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuotaLocalUsageAttribution {
+    /// 窗口覆盖账号的全部请求，可按账号与时间范围聚合。
+    AccountWide,
+    /// 窗口需要 Provider / 模型级归属，通用账号聚合不可用。
+    Unavailable,
+}
+
 /// 一个 Provider quota 窗口的公共投影。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderQuotaWindow {
@@ -571,6 +580,7 @@ pub struct ProviderQuotaWindow {
     pub group: String,
     pub label: String,
     pub source: Option<String>,
+    pub local_usage_attribution: QuotaLocalUsageAttribution,
     pub window_seconds: Option<u64>,
     pub used_percent: Option<f64>,
     pub reset_at: Option<DateTime<Utc>>,

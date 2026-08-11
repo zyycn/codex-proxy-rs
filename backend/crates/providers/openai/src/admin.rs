@@ -19,7 +19,7 @@ use gateway_admin::model::provider_credentials::{
     PreparedCredentialCreate, PreparedCredentialImport, PreparedCredentialRotation,
     PreparedCredentialRotationFacts, ProviderDocument, ProviderExport,
     ProviderExportCredentialInput, ProviderModel, ProviderModels, ProviderQuota,
-    ProviderQuotaRequest, ProviderQuotaWindow,
+    ProviderQuotaRequest, ProviderQuotaWindow, QuotaLocalUsageAttribution,
 };
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind};
@@ -744,6 +744,11 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
                     window.window_seconds(),
                 ),
                 source: Some(window.source().to_owned()),
+                local_usage_attribution: if window.is_account_wide() {
+                    QuotaLocalUsageAttribution::AccountWide
+                } else {
+                    QuotaLocalUsageAttribution::Unavailable
+                },
                 window_seconds: window.window_seconds(),
                 used_percent: window.used_percent(),
                 reset_at: window.reset_at(),
@@ -802,6 +807,7 @@ fn force_confirmed_exhaustion_projection(quota: &mut ProviderQuota) {
             group: "other".to_owned(),
             label: "额度".to_owned(),
             source: None,
+            local_usage_attribution: QuotaLocalUsageAttribution::Unavailable,
             window_seconds: None,
             used_percent: Some(100.0),
             reset_at: None,

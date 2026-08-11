@@ -33,7 +33,7 @@ use gateway_admin::{
             PreparedAuthorizationCredential, PreparedCredentialCreate, PreparedCredentialImport,
             PreparedCredentialRotation, PreparedCredentialRotationFacts, ProviderDocument,
             ProviderExport, ProviderExportCredentialInput, ProviderModels, ProviderQuota,
-            ProviderQuotaRequest, ProviderQuotaWindow,
+            ProviderQuotaRequest, ProviderQuotaWindow, QuotaLocalUsageAttribution,
         },
         settings::{
             AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RotationStrategy,
@@ -1007,6 +1007,7 @@ async fn accounts_list_should_degrade_quota_failure_to_empty_window_without_drop
             group: "shortTerm".to_owned(),
             label: "5小时限额".to_owned(),
             source: None,
+            local_usage_attribution: QuotaLocalUsageAttribution::AccountWide,
             window_seconds: Some(5 * 60 * 60),
             used_percent: Some(97.0),
             reset_at: Some(Utc::now() + TimeDelta::hours(1)),
@@ -1131,6 +1132,7 @@ async fn accounts_list_should_map_rate_limited_from_quota_limit_reached() {
             group: "shortTerm".to_owned(),
             label: "5小时限额".to_owned(),
             source: None,
+            local_usage_attribution: QuotaLocalUsageAttribution::AccountWide,
             window_seconds: Some(5 * 60 * 60),
             used_percent: Some(100.0),
             reset_at: Some(Utc::now() + TimeDelta::hours(1)),
@@ -1176,6 +1178,7 @@ async fn accounts_list_should_map_quota_exhausted_when_only_limit_reached() {
             group: "shortTerm".to_owned(),
             label: "5小时限额".to_owned(),
             source: None,
+            local_usage_attribution: QuotaLocalUsageAttribution::AccountWide,
             window_seconds: Some(5 * 60 * 60),
             used_percent: Some(100.0),
             reset_at: Some(Utc::now() + TimeDelta::hours(1)),
@@ -1221,6 +1224,7 @@ async fn accounts_list_should_attach_local_usage_to_quota_windows() {
             group: "shortTerm".to_owned(),
             label: "5小时限额".to_owned(),
             source: None,
+            local_usage_attribution: QuotaLocalUsageAttribution::AccountWide,
             window_seconds: Some(5 * 60 * 60),
             used_percent: Some(97.0),
             reset_at: Some(reset_at),
@@ -1258,6 +1262,96 @@ async fn accounts_list_should_attach_local_usage_to_quota_windows() {
         .as_ref()
         .expect("quota window local usage");
     assert_eq!(usage.total_tokens, Some(4_330_000));
+}
+
+#[tokio::test]
+async fn accounts_list_should_not_attach_account_usage_to_model_specific_quota_windows() {
+    let provider = FakeProviderAdmin::new("openai", events());
+    let reset_at = Utc::now() + TimeDelta::days(7);
+    provider.set_quota(ProviderQuota {
+        observed_at: Some(Utc::now()),
+        refresh_token_expires_at: None,
+        windows: vec![
+            ProviderQuotaWindow {
+                key: "core-primary".to_owned(),
+                group: "weekly".to_owned(),
+                label: "周额度".to_owned(),
+                source: Some("codex".to_owned()),
+                local_usage_attribution: QuotaLocalUsageAttribution::AccountWide,
+                window_seconds: Some(7 * 24 * 60 * 60),
+                used_percent: Some(1.0),
+                reset_at: Some(reset_at),
+                limit_reached: false,
+                local_usage: None,
+                provider_data: None,
+            },
+            ProviderQuotaWindow {
+                key: "codex-bengalfox-primary".to_owned(),
+                group: "weekly".to_owned(),
+                label: "GPT-5.3-Codex-Spark · 周额度".to_owned(),
+                source: Some("codex_bengalfox".to_owned()),
+                local_usage_attribution: QuotaLocalUsageAttribution::Unavailable,
+                window_seconds: Some(7 * 24 * 60 * 60),
+                used_percent: Some(0.0),
+                reset_at: Some(reset_at),
+                limit_reached: false,
+                local_usage: None,
+                provider_data: None,
+            },
+        ],
+        limit_reached: false,
+        rate_limited_until: None,
+        provider_data: None,
+    });
+    let store = FakeAccountStore::new("openai", events());
+    store.set_quota_window_usage(vec![
+        AccountUsageWindowResult {
+            account_id: "acct_test".to_owned(),
+            key: "core-primary".to_owned(),
+            usage: quota_local_usage("acct_test", 12_818_806),
+        },
+        AccountUsageWindowResult {
+            account_id: "acct_test".to_owned(),
+            key: "codex-bengalfox-primary".to_owned(),
+            usage: quota_local_usage("acct_test", 127_926),
+        },
+    ]);
+
+    let page = accounts_service(provider, store)
+        .await
+        .accounts()
+        .list(AccountListQuery {
+            page: 1,
+            page_size: gateway_admin::model::PageSize::new(20).expect("page size"),
+            provider_kind: None,
+            search: None,
+            status: None,
+            sort: None,
+        })
+        .await
+        .expect("quota window usage");
+
+    let local_tokens = page.items[0]
+        .quota
+        .windows
+        .iter()
+        .map(|window| {
+            (
+                window.key.as_str(),
+                window
+                    .local_usage
+                    .as_ref()
+                    .and_then(|usage| usage.total_tokens),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        local_tokens,
+        [
+            ("core-primary", Some(12_818_806)),
+            ("codex-bengalfox-primary", None),
+        ],
+    );
 }
 
 #[tokio::test]

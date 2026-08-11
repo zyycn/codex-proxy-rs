@@ -41,6 +41,7 @@ pub enum CodexQuotaWindowRole {
 pub struct CodexQuotaWindow {
     key: String,
     source: String,
+    account_wide: bool,
     /// 上游提供的限流桶名称（`metered_feature`/`limit_name`/`limitId`）；用于非核心桶的展示前缀。
     limit_name: Option<String>,
     kind: CodexQuotaWindowKind,
@@ -60,6 +61,12 @@ impl CodexQuotaWindow {
     #[must_use]
     pub fn source(&self) -> &str {
         &self.source
+    }
+
+    /// 该窗口是否覆盖账号全部 Codex 请求，可使用账号级本地用量聚合。
+    #[must_use]
+    pub const fn is_account_wide(&self) -> bool {
+        self.account_wide
     }
 
     #[must_use]
@@ -329,6 +336,7 @@ pub(crate) fn parse_account_quota_snapshot(
         parse_rate_limit_windows(
             &limit.key,
             &limit.source,
+            limit.account_wide,
             limit.limit_name.as_deref(),
             limit.rate_limit,
             &mut windows,
@@ -405,6 +413,7 @@ fn authoritative_core_primary_exhausted(
 struct CanonicalRateLimit<'a> {
     key: String,
     source: String,
+    account_wide: bool,
     limit_name: Option<String>,
     rate_limit: &'a Value,
 }
@@ -422,6 +431,7 @@ fn canonical_rate_limits(
         limits.push(CanonicalRateLimit {
             key: "core".to_owned(),
             source: "codex".to_owned(),
+            account_wide: true,
             limit_name: None,
             rate_limit,
         });
@@ -433,6 +443,7 @@ fn canonical_rate_limits(
         limits.push(CanonicalRateLimit {
             key: "code-review".to_owned(),
             source: "code_review".to_owned(),
+            account_wide: false,
             limit_name: Some("code_review".to_owned()),
             rate_limit,
         });
@@ -463,6 +474,7 @@ fn canonical_rate_limits(
             // 避免同名 additional 产生重复前端 key。
             limits.push(CanonicalRateLimit {
                 key: format!("additional-{index}-{source}"),
+                account_wide: is_codex_limit_id(&source),
                 source,
                 limit_name,
                 rate_limit,
@@ -503,6 +515,7 @@ fn canonical_rate_limit_source(
 fn parse_rate_limit_windows(
     key_source: &str,
     source: &str,
+    account_wide: bool,
     limit_name: Option<&str>,
     value: &Value,
     output: &mut Vec<CodexQuotaWindow>,
@@ -561,6 +574,7 @@ fn parse_rate_limit_windows(
         output.push(CodexQuotaWindow {
             key: format!("{}-{}", quota_key(key_source), quota_role_name(role, kind)),
             source: source.to_owned(),
+            account_wide,
             limit_name: limit_name.map(str::to_owned),
             kind,
             role,

@@ -1438,6 +1438,7 @@ fn quota_window_view(window: ProviderQuotaWindow) -> AccountQuotaWindowView {
         group,
         label,
         source: _,
+        local_usage_attribution: _,
         window_seconds,
         used_percent,
         reset_at,

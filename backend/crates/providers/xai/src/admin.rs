@@ -21,7 +21,7 @@ use gateway_admin::model::provider_credentials::{
     PreparedCredentialCreate, PreparedCredentialImport, PreparedCredentialRotation,
     PreparedCredentialRotationFacts, ProviderDocument, ProviderExport,
     ProviderExportCredentialInput, ProviderModel, ProviderModels, ProviderQuota,
-    ProviderQuotaRequest, ProviderQuotaWindow,
+    ProviderQuotaRequest, ProviderQuotaWindow, QuotaLocalUsageAttribution,
 };
 use gateway_admin::model::{AdminError, MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind};
@@ -1059,6 +1059,7 @@ fn project_quota(
             group: quota_group(period_kind).to_owned(),
             label: xai_quota_window_label(period_kind, window_seconds),
             source: None,
+            local_usage_attribution: QuotaLocalUsageAttribution::AccountWide,
             window_seconds,
             used_percent: billing.used_percent(),
             reset_at: billing.period_end().and_then(parse_utc),
@@ -1074,6 +1075,7 @@ fn project_quota(
             group: "shortTerm".to_owned(),
             label: "日限额".to_owned(),
             source: None,
+            local_usage_attribution: QuotaLocalUsageAttribution::AccountWide,
             window_seconds: Some(crate::GROK_FREE_ROLLING_WINDOW_SECONDS),
             used_percent: None,
             reset_at: None,

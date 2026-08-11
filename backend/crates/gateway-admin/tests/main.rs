@@ -11,6 +11,7 @@ use gateway_admin::{
         observability::{DecimalAmount, RequestOutcome, TimeRange},
         provider_credentials::{
             CredentialCommitGuard, ProviderDocument, ProviderQuota, ProviderQuotaWindow,
+            QuotaLocalUsageAttribution,
         },
         settings::AdminApiKey,
     },
@@ -145,6 +146,7 @@ fn quota_window(
         group: group.to_owned(),
         label: group.to_owned(),
         source: None,
+        local_usage_attribution: QuotaLocalUsageAttribution::AccountWide,
         window_seconds,
         used_percent,
         reset_at: None,

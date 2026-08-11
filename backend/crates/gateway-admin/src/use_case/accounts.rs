@@ -25,7 +25,7 @@ use crate::{
         provider_credentials::{
             AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountRefreshResult,
             PrepareCredentialRefresh, ProviderModels, ProviderQuota, ProviderQuotaRequest,
-            ProviderQuotaWindow,
+            ProviderQuotaWindow, QuotaLocalUsageAttribution,
         },
     },
     ports::{
@@ -160,7 +160,9 @@ impl DefaultAccountsService {
             .collect::<BTreeMap<_, _>>();
         for (account, quota) in accounts.iter().zip(quotas) {
             for window in &mut quota.windows {
-                if window.local_usage.is_none() {
+                if window.local_usage.is_none()
+                    && window.local_usage_attribution == QuotaLocalUsageAttribution::AccountWide
+                {
                     let key = (account.id.clone(), window.key.clone());
                     if let Some(usage) = usage_by_window.get(&key) {
                         window.local_usage = Some(usage.clone());
@@ -568,7 +570,9 @@ fn quota_usage_window(
     account_id: &str,
     window: &ProviderQuotaWindow,
 ) -> Option<AccountUsageWindowQuery> {
-    if window.local_usage.is_some() {
+    if window.local_usage.is_some()
+        || window.local_usage_attribution != QuotaLocalUsageAttribution::AccountWide
+    {
         return None;
     }
     let reset_at = window.reset_at?;

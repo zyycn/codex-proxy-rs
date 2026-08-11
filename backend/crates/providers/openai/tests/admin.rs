@@ -15,7 +15,7 @@ use gateway_admin::model::provider_credentials::{
     AuthorizationMutationTarget, AuthorizationOwnerBinding, CompleteAuthorization,
     PendingAuthorizationMutation, PrepareCredentialImport, PrepareCredentialRefresh,
     PrepareCredentialRotation, ProviderDocument, ProviderExportCredentialInput,
-    ProviderQuotaRequest,
+    ProviderQuotaRequest, QuotaLocalUsageAttribution,
 };
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::ProviderAdminErrorKind;
@@ -503,6 +503,16 @@ async fn openai_admin_provider_projects_official_codex_quota_and_independent_buc
                     "limit_window_seconds": 604_800
                 }
             }
+        }, {
+            "limit_name": "GPT-5.3-Codex-Spark",
+            "metered_feature": "codex_bengalfox",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 0,
+                    "reset_at": 1_900_000_000,
+                    "limit_window_seconds": 604_800
+                }
+            }
         }]
     });
     store
@@ -566,6 +576,23 @@ async fn openai_admin_provider_projects_official_codex_quota_and_independent_buc
         .find(|window| window.source.as_deref() == Some("code_review"))
         .expect("code review quota");
     assert_eq!(review.label, "代码审查 · 周额度");
+    let spark = quota
+        .windows
+        .iter()
+        .find(|window| window.source.as_deref() == Some("codex_bengalfox"))
+        .expect("Spark quota");
+    assert_eq!(
+        (
+            monthly[0].local_usage_attribution,
+            review.local_usage_attribution,
+            spark.local_usage_attribution,
+        ),
+        (
+            QuotaLocalUsageAttribution::AccountWide,
+            QuotaLocalUsageAttribution::Unavailable,
+            QuotaLocalUsageAttribution::Unavailable,
+        ),
+    );
 }
 
 #[tokio::test]
