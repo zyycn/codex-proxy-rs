@@ -60,7 +60,7 @@ function togglePasswordVisible(): void {
           <img
             src="/favicon.svg"
             alt=""
-            class="block size-[38px] select-none"
+            class="block size-9.5 select-none"
             draggable="false"
           >
         </BaseMotionIcon>
@@ -116,7 +116,7 @@ function togglePasswordVisible(): void {
           v-model="username"
           name="username"
           aria-label="管理员账号"
-          placeholder="admin@example.com"
+          placeholder="输入会话账号"
           autocomplete="username"
         >
           <template #prefix>
