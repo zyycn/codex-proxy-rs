@@ -111,7 +111,7 @@ PostgreSQL 是账号、Client Key、运行设置、请求记录与审计的权�
 Provider schema 以明文 JSON 保存于 PostgreSQL。Redis 只保存可重建、可过期的协调状态，例如
 会话亲和、lease、cooldown、OAuth pending flow 与套餐模型目录 cache。
 
-备份必须包含 `.runtime/postgres`。要保留 OpenAI OAuth 的 AT/RT 恢复能力，必须保持
+备份必须包含 `.runtime/postgres`。要保留 OAuth 的 AT/RT 恢复能力，必须保持
 `host.logging.file.enabled: true` 并备份 `.runtime/logs`；恢复记录位于独立文件集，仍按普通日志的
 `retention_days` 和 `max_files` 分别约束。若希望保留短期 Redis 状态和会话锚点，也同时备份 `.runtime/redis` 与
 `.runtime/data`。
@@ -203,10 +203,10 @@ Release 必须提供当前 OS/架构的 `codex-proxy-rs_<version>_<os>_<arch>.ta
   Debian 官方源补 `libpq5` 依赖，不引入第三方 APT 源，也不依赖运行时动态安装。
 - 备份暂存目录为 `/app/.runtime/data/backup-staging`，由 `.runtime/data` 卷持久化，权限
   `0700`（仅 `cpr` 用户可读写）。部署卷至少预留一个最大数据库归档的空间。
-- OpenAI OAuth 每次成功取得 AT/RT 后，都会在账号资料补全、过期时间计算和数据库写入前，以
-  `openai_oauth_recovery` 结构化日志事件写入独立的
-  `codex-proxy-rs-openai-oauth-recovery.YYYY-MM-DD[.N].log` 文件集。事件含原始 AT/RT，与
-  普通 `.runtime/logs` 完全相同地按日、按大小分割，并分别按相同 `retention_days` 与 `max_files`
+- OAuth 恢复记录通道使用 `oauth_recovery` 结构化日志事件；当前 OpenAI provider 每次成功取得
+  AT/RT 后，都会在账号资料补全、过期时间计算和数据库写入前写入独立的
+  `oauth.YYYY-MM-DD[.N].log` 文件集。事件含原始 AT/RT，并以 `provider`
+  字段标记来源，且与普通 `.runtime/logs` 完全相同地按日、按大小分割，并分别按相同 `retention_days` 与 `max_files`
   清理；文件日志开启时不会被普通日志级别筛掉。它遵循普通日志现有的非阻塞写入机制，不会阻断
   导入、授权或刷新。
   `.runtime/logs` 因此属于敏感数据，必须按现有普通日志的访问控制和加密备份策略处理。

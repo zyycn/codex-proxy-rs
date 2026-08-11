@@ -139,8 +139,6 @@ pub async fn initialize(
         .map_err(OpenAiInitializeError::Provider)?
         .with_session_identity(session_identity),
     );
-
-    tracing::info!("OpenAI OAuth recovery records use dedicated recovery logs");
     let token_client = Arc::new(
         credential::token_client::openai_token_client(config.token_client_config())
             .map_err(|_| OpenAiInitializeError::TokenClient)?,

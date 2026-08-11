@@ -9,11 +9,12 @@ use gateway_host::system_update::SystemUpdateConfig;
 const LOG_DIRECTORY_ENV: &str = "CPR_LOGGING_TEST_DIRECTORY";
 const CHILD_PROCESS_ENV: &str = "CPR_LOGGING_TEST_CHILD";
 const APPLICATION_LOG_FILE_PREFIX: &str = "codex-proxy-rs.";
-const OAUTH_RECOVERY_LOG_FILE_PREFIX: &str = "codex-proxy-rs-openai-oauth-recovery.";
+const OAUTH_RECOVERY_LOG_FILE_PREFIX: &str = "oauth.";
 const APPLICATION_LOG_TARGET: &str = "logging_test_application";
 const APPLICATION_LOG_MARKER: &str = "application-file-filter-test";
-const OAUTH_RECOVERY_LOG_TARGET: &str = "openai_oauth_recovery";
+const OAUTH_RECOVERY_LOG_TARGET: &str = "oauth_recovery";
 const OAUTH_RECOVERY_LOG_MARKER: &str = "oauth-recovery-file-filter-test";
+const OAUTH_RECOVERY_PROVIDER: &str = "openai";
 
 #[test]
 fn logging_requires_at_least_one_sink() {
@@ -65,7 +66,7 @@ fn oauth_recovery_file_logging_is_separate_and_overrides_global_log_level() {
         .env(LOG_DIRECTORY_ENV, directory.path())
         .env(
             "RUST_LOG",
-            "off,logging_test_application=info,openai_oauth_recovery=off",
+            "off,logging_test_application=info,oauth_recovery=off",
         )
         .output()
         .expect("run logging child process");
@@ -78,16 +79,17 @@ fn oauth_recovery_file_logging_is_separate_and_overrides_global_log_level() {
     );
 
     let application_log = read_log_file_set(directory.path(), APPLICATION_LOG_FILE_PREFIX);
-    assert!(application_log.contains(APPLICATION_LOG_TARGET));
+    assert!(application_log.contains(&json_target_field(APPLICATION_LOG_TARGET)));
     assert!(application_log.contains(APPLICATION_LOG_MARKER));
-    assert!(!application_log.contains(OAUTH_RECOVERY_LOG_TARGET));
+    assert!(!application_log.contains(&json_target_field(OAUTH_RECOVERY_LOG_TARGET)));
     assert!(!application_log.contains(OAUTH_RECOVERY_LOG_MARKER));
 
     let recovery_log = read_log_file_set(directory.path(), OAUTH_RECOVERY_LOG_FILE_PREFIX);
-    assert!(recovery_log.contains(OAUTH_RECOVERY_LOG_TARGET));
+    assert!(recovery_log.contains(&json_target_field(OAUTH_RECOVERY_LOG_TARGET)));
     assert!(recovery_log.contains(OAUTH_RECOVERY_LOG_MARKER));
-    assert!(!recovery_log.contains(APPLICATION_LOG_TARGET));
+    assert!(!recovery_log.contains(&json_target_field(APPLICATION_LOG_TARGET)));
     assert!(!recovery_log.contains(APPLICATION_LOG_MARKER));
+    assert!(recovery_log.contains(&format!(r#""provider":"{OAUTH_RECOVERY_PROVIDER}""#)));
 }
 
 fn write_oauth_recovery_log(directory: PathBuf) {
@@ -126,8 +128,9 @@ fn write_oauth_recovery_log(directory: PathBuf) {
     );
     tracing::info!(
         target: OAUTH_RECOVERY_LOG_TARGET,
+        provider = OAUTH_RECOVERY_PROVIDER,
         marker = OAUTH_RECOVERY_LOG_MARKER,
-        "OpenAI OAuth recovery test record"
+        "OAuth recovery test record"
     );
     drop(bundle);
 }
@@ -149,4 +152,8 @@ fn read_log_file_set(directory: &Path, file_prefix: &str) -> String {
         .into_iter()
         .map(|path| fs::read_to_string(path).expect("read log file"))
         .collect()
+}
+
+fn json_target_field(target: &str) -> String {
+    format!(r#""target":"{target}""#)
 }

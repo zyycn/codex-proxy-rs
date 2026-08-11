@@ -13,9 +13,9 @@ use tracing_subscriber::{Layer as _, layer::SubscriberExt as _, util::Subscriber
 use crate::config::LoggingConfig;
 
 const LOG_FILE_PREFIX: &str = "codex-proxy-rs";
-const OPENAI_OAUTH_RECOVERY_LOG_FILE_PREFIX: &str = "codex-proxy-rs-openai-oauth-recovery";
-/// OpenAI OAuth 恢复记录含原始 AT/RT，文件日志开启时必须落到独立文件。
-const OPENAI_OAUTH_RECOVERY_LOG_TARGET: &str = "openai_oauth_recovery";
+const OAUTH_RECOVERY_LOG_FILE_PREFIX: &str = "oauth";
+/// OAuth 恢复记录含原始 AT/RT，文件日志开启时必须落到独立文件。
+const OAUTH_RECOVERY_LOG_TARGET: &str = "oauth_recovery";
 
 /// non-blocking 日志 writer 的进程级守卫。
 pub struct LogGuard {
@@ -66,7 +66,7 @@ pub fn initialize_logging(config: &LoggingConfig) -> Result<LogGuard, LogError> 
         )?;
         let recovery_file_writer = RotatingLogWriter::open(
             config.file.directory.clone(),
-            OPENAI_OAUTH_RECOVERY_LOG_FILE_PREFIX,
+            OAUTH_RECOVERY_LOG_FILE_PREFIX,
             maximum_bytes,
             config.file.retention_days,
             config.file.max_files,
@@ -128,18 +128,18 @@ pub fn initialize_logging(config: &LoggingConfig) -> Result<LogGuard, LogError> 
 }
 
 fn application_file_filter(directive: &str) -> Result<EnvFilter, LogError> {
-    let recovery_directive = format!("{OPENAI_OAUTH_RECOVERY_LOG_TARGET}=off")
+    let recovery_directive = format!("{OAUTH_RECOVERY_LOG_TARGET}=off")
         .parse()
-        .expect("static OpenAI OAuth recovery log directive is valid");
+        .expect("static OAuth recovery log directive is valid");
     EnvFilter::try_new(directive)
         .map(|filter| filter.add_directive(recovery_directive))
         .map_err(|_| LogError::InvalidFilter)
 }
 
 fn oauth_recovery_file_filter() -> EnvFilter {
-    format!("off,{OPENAI_OAUTH_RECOVERY_LOG_TARGET}=info")
+    format!("off,{OAUTH_RECOVERY_LOG_TARGET}=info")
         .parse()
-        .expect("static OpenAI OAuth recovery log filter is valid")
+        .expect("static OAuth recovery log filter is valid")
 }
 
 fn stdout_filter_directive(directive: &str, persistent_log_enabled: bool) -> String {

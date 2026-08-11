@@ -1,9 +1,10 @@
-//! 成功取得 OpenAI OAuth token 后写入独立恢复日志的记录。
+//! 成功取得 OAuth token 后写入独立恢复日志的记录。
 //!
 //! 此日志会刻意保存原始 AT/RT，避免后续数据库写入或校验失败时，已成功
 //! 交换的账号无法恢复。记录独立落盘，但沿用普通结构化日志的滚动和清理策略。
 
-const RECOVERY_LOG_TARGET: &str = "openai_oauth_recovery";
+const OAUTH_RECOVERY_LOG_TARGET: &str = "oauth_recovery";
+const OAUTH_RECOVERY_PROVIDER: &str = "openai";
 
 /// 产生可恢复 token 组的 OAuth 操作。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,13 +47,14 @@ pub(crate) fn record_oauth_recovery(
     let has_refresh_token = refresh_token.is_some();
     let refresh_token = refresh_token.unwrap_or_default();
     tracing::info!(
-        target: RECOVERY_LOG_TARGET,
-        event = "openai_oauth_recovery",
+        target: OAUTH_RECOVERY_LOG_TARGET,
+        event = "oauth_recovery",
+        provider = OAUTH_RECOVERY_PROVIDER,
         operation = operation.as_str(),
         account_id = account_id.unwrap_or_default(),
         access_token,
         refresh_token,
         has_refresh_token,
-        "OpenAI OAuth recovery token record"
+        "OAuth recovery token record"
     );
 }
