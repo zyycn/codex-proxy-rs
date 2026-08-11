@@ -66,25 +66,29 @@ function variantValue(metric: string, compact: string, detail: string) {
 
 const rootClass = computed(() =>
   variantValue(
-    'grid min-w-0 grid-rows-[11px_14px] gap-1',
+    'grid min-w-0 grid-rows-[14px_14px] gap-1',
     'flex min-w-0 flex-col',
     'rounded-lg bg-(--cp-bg-subtle) p-2',
   ),
 )
 const headerClass = computed(() =>
   variantValue(
-    'flex items-center justify-between gap-2 text-[11px] leading-none font-bold',
-    'mb-1 flex items-center justify-between gap-2 text-[11px] leading-none font-bold',
+    'flex items-center justify-between gap-2 text-[11px] leading-[14px] font-bold',
+    'mb-1 flex items-baseline justify-between gap-2 text-[11px] leading-[14px] font-bold',
     'flex items-center justify-between gap-3 text-[12px] font-bold',
   ),
 )
-const labelClass = computed(() =>
-  isCompact.value || isMetric.value ? 'text-(--cp-text-muted)' : 'text-(--cp-text-secondary)',
-)
+const labelClass = computed(() => {
+  if (isMetric.value)
+    return 'truncate text-(--cp-text-muted)'
+  if (isCompact.value)
+    return 'truncate text-(--cp-text-muted)'
+  return 'text-(--cp-text-secondary)'
+})
 const valueClass = computed(() =>
   variantValue(
     'text-[11px] leading-none font-bold',
-    'text-[10px] leading-none font-heavy',
+    'text-[10px] leading-[14px] font-heavy',
     'text-[12px] font-heavy',
   ),
 )
@@ -94,7 +98,7 @@ const trackOffsetClass = computed(() =>
 const trackShapeClass = computed(() =>
   variantValue(
     'h-1.5 w-full overflow-hidden rounded-full',
-    'h-1 w-full overflow-hidden rounded-full',
+    'h-[3px] w-full overflow-hidden rounded-full',
     'h-2 overflow-hidden rounded-full',
   ),
 )
@@ -104,7 +108,7 @@ const barStyle = computed(() => {
     return undefined
   return quotaWindowBarStyle(
     props.window,
-    variantValue('6px', '4px', '8px'),
+    variantValue('6px', '3px', '8px'),
   )
 })
 const barClass = computed(() => props.window ? quotaWindowBarClass(props.window) : undefined)
@@ -167,10 +171,38 @@ const requestBars = computed(() => {
   <div :class="rootClass">
     <template v-if="mode === 'quota' && window">
       <div :class="headerClass">
-        <span class="min-w-0" :class="labelClass">
+        <span
+          class="min-w-0"
+          :class="labelClass"
+          :title="isCompact || isMetric ? window.labelDisplay : undefined"
+        >
           {{ window.labelDisplay }}
         </span>
-        <span class="flex shrink-0 items-baseline justify-end gap-1.5 font-mono tabular-nums">
+        <span
+          v-if="isCompact"
+          class="flex shrink-0 items-baseline justify-end gap-1.5 font-mono tabular-nums"
+        >
+          <span
+            v-if="quotaLocalUsageVisible"
+            class="text-right text-(--cp-text-muted)"
+            :class="valueClass"
+            :title="`本地 Token 用量：${quotaLocalUsageDisplay}`"
+          >
+            {{ quotaLocalUsageDisplay }}
+          </span>
+          <span
+            v-if="quotaValueVisible"
+            class="text-right"
+            :class="[valueClass, percentTextClass]"
+            :title="`额度已使用：${window.usedPercentDisplay}`"
+          >
+            {{ window.usedPercentDisplay }}
+          </span>
+        </span>
+        <span
+          v-else
+          class="flex shrink-0 items-baseline justify-end gap-1.5 font-mono tabular-nums"
+        >
           <span
             v-if="quotaLocalUsageVisible"
             class="text-(--cp-text-muted)"

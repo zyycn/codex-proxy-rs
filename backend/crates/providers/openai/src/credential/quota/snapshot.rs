@@ -334,7 +334,11 @@ pub(crate) fn parse_account_quota_snapshot(
             &mut windows,
         )?;
     }
-    windows.sort_by(|left, right| left.key.cmp(&right.key));
+    windows.sort_by(|left, right| {
+        quota_source_order(left.source())
+            .cmp(&quota_source_order(right.source()))
+            .then_with(|| left.key.cmp(&right.key))
+    });
     Ok(CodexAccountQuotaSnapshot {
         account_id,
         credential_revision,
@@ -343,6 +347,14 @@ pub(crate) fn parse_account_quota_snapshot(
         authoritative_core_primary_exhausted,
         windows,
     })
+}
+
+fn quota_source_order(source: &str) -> u8 {
+    match source {
+        "codex" => 0,
+        "code_review" => 1,
+        _ => 2,
+    }
 }
 
 /// 账号状态只能由顶层 canonical Codex 额度桶的明确拒绝来改变。

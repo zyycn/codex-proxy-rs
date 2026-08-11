@@ -25,7 +25,7 @@ const quotaGroupOrder = new Map([
   ['other', 2],
 ])
 
-const relaxedCellClass = 'py-3 align-middle'
+const relaxedCellClass = 'py-2 align-middle'
 
 export const accountColumns = [
   {
@@ -76,8 +76,8 @@ export const accountColumns = [
     key: 'planType',
     label: '套餐',
     sortable: true,
-    flex: 0.8,
-    minWidth: '112px',
+    flex: 0.5,
+    minWidth: '90px',
     cellClass: relaxedCellClass,
   },
   {
@@ -96,7 +96,8 @@ export const accountColumns = [
     minWidth: '160px',
     format: (_value: unknown, row: AccountRow) => optionalAccountCell(row.usage.lastUsedAtDisplay),
     emptyText: '',
-    cellClass: `${relaxedCellClass} text-(--cp-text-secondary)`,
+    headerClass: '!pl-8',
+    cellClass: `${relaxedCellClass} !pl-8 text-(--cp-text-secondary)`,
   },
   {
     key: 'accessTokenExpiresAtDisplay',
@@ -212,7 +213,8 @@ function compareQuotaWindows(left: AccountQuotaWindow, right: AccountQuotaWindow
   if (secondsDifference !== 0)
     return secondsDifference
 
-  return left.key.localeCompare(right.key)
+  // 同组同周期保留 Provider 的投影顺序，避免内部 key 把 additional 排到 core 前面。
+  return 0
 }
 
 function groupOrder(window: AccountQuotaWindow) {

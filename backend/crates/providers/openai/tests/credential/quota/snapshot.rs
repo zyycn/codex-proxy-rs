@@ -365,6 +365,58 @@ async fn persisted_codex_alias_keeps_the_top_level_rate_limit_canonical() {
 }
 
 #[tokio::test]
+async fn persisted_quota_orders_core_window_before_additional_limit() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_quota_order").await;
+    let account = store.account("acct_quota_order").expect("account");
+    let raw = json!({
+        "rate_limit": {
+            "secondary_window": {
+                "used_percent": 42,
+                "reset_at": 1_900_604_800,
+                "limit_window_seconds": 604_800
+            }
+        },
+        "additional_rate_limits": [{
+            "limit_name": "GPT-5.3-Codex-Spark",
+            "metered_feature": "gpt-5.3-codex-spark",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 17,
+                    "reset_at": 1_900_604_800,
+                    "limit_window_seconds": 604_800
+                }
+            }
+        }]
+    });
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: Some(OpaqueProviderData::new(
+                raw.as_object().expect("quota object").clone(),
+            )),
+            observed_at: Some(SystemTime::now()),
+            limit_reached: None,
+        })
+        .await
+        .expect("persist quota");
+
+    let snapshot = quota_service(&store)
+        .read_account(account.id())
+        .await
+        .expect("read quota")
+        .expect("quota snapshot");
+    let sources = snapshot
+        .windows()
+        .iter()
+        .map(|window| window.source())
+        .collect::<Vec<_>>();
+
+    assert_eq!(sources, ["codex", "gpt-5.3-codex-spark"]);
+}
+
+#[tokio::test]
 async fn code_review_limit_projects_as_independent_window_with_limit_name() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_code_review").await;

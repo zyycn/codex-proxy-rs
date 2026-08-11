@@ -13,7 +13,7 @@ const quotaWindows = computed(() => props.account.quota.windows)
 const visibleQuotaWindows = computed(() => visibleSummaryQuotaWindows(quotaWindows.value))
 const summaryClass = computed(
   () =>
-    `grid w-full max-w-40 min-w-0 gap-2 whitespace-normal py-0.5 ${
+    `grid w-full min-w-0 gap-1.5 py-0.5 ${
       visibleQuotaWindows.value.length <= 1 ? 'min-h-13 content-center' : ''
     }`,
 )
