@@ -13,7 +13,7 @@ use tracing_subscriber::{Layer as _, layer::SubscriberExt as _, util::Subscriber
 use crate::config::LoggingConfig;
 
 const LOG_FILE_PREFIX: &str = "codex-proxy-rs";
-const OAUTH_RECOVERY_LOG_FILE_PREFIX: &str = "oauth";
+const OAUTH_RECOVERY_LOG_FILE_PREFIX: &str = "codex-proxy-rs-oath";
 /// OAuth 恢复记录含原始 AT/RT，文件日志开启时必须落到独立文件。
 const OAUTH_RECOVERY_LOG_TARGET: &str = "oauth_recovery";
 

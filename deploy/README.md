@@ -205,7 +205,7 @@ Release 必须提供当前 OS/架构的 `codex-proxy-rs_<version>_<os>_<arch>.ta
   `0700`（仅 `cpr` 用户可读写）。部署卷至少预留一个最大数据库归档的空间。
 - OAuth 恢复记录通道使用 `oauth_recovery` 结构化日志事件；当前 OpenAI provider 每次成功取得
   AT/RT 后，都会在账号资料补全、过期时间计算和数据库写入前写入独立的
-  `oauth.YYYY-MM-DD[.N].log` 文件集。事件含原始 AT/RT，并以 `provider`
+  `codex-proxy-rs-oath.YYYY-MM-DD[.N].log` 文件集。事件含原始 AT/RT，并以 `provider`
   字段标记来源，且与普通 `.runtime/logs` 完全相同地按日、按大小分割，并分别按相同 `retention_days` 与 `max_files`
   清理；文件日志开启时不会被普通日志级别筛掉。它遵循普通日志现有的非阻塞写入机制，不会阻断
   导入、授权或刷新。

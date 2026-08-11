@@ -9,7 +9,7 @@ use gateway_host::system_update::SystemUpdateConfig;
 const LOG_DIRECTORY_ENV: &str = "CPR_LOGGING_TEST_DIRECTORY";
 const CHILD_PROCESS_ENV: &str = "CPR_LOGGING_TEST_CHILD";
 const APPLICATION_LOG_FILE_PREFIX: &str = "codex-proxy-rs.";
-const OAUTH_RECOVERY_LOG_FILE_PREFIX: &str = "oauth.";
+const OAUTH_RECOVERY_LOG_FILE_PREFIX: &str = "codex-proxy-rs-oath.";
 const APPLICATION_LOG_TARGET: &str = "logging_test_application";
 const APPLICATION_LOG_MARKER: &str = "application-file-filter-test";
 const OAUTH_RECOVERY_LOG_TARGET: &str = "oauth_recovery";
