@@ -69,6 +69,14 @@ const loadingIconSize: Record<ButtonSize, number> = {
   lg: 17,
 }
 
+const loadingIndicatorStyle = computed(() => {
+  const iconSize = loadingIconSize[props.size]
+  return {
+    width: `${iconSize}px`,
+    height: `${iconSize}px`,
+  }
+})
+
 const classes = computed(() => [
   'inline-flex items-center justify-center border-0 font-bold leading-[1.15] transition-[background-color,box-shadow,color,opacity,transform] duration-150 cursor-pointer outline-none motion-safe:active:translate-y-px motion-safe:active:scale-[0.985]',
   props.iconOnly ? iconOnlySizeClasses[props.size] : sizeClasses[props.size],
@@ -110,10 +118,26 @@ const labelClasses = computed(() => [
   >
     <span
       v-if="loading"
-      class="inline-flex shrink-0 animate-spin items-center justify-center origin-center leading-none will-change-transform"
+      class="relative inline-flex shrink-0"
+      :style="loadingIndicatorStyle"
       aria-hidden="true"
     >
-      <LoaderCircle :size="loadingIconSize[size]" class="block" />
+      <svg
+        :width="loadingIconSize[size]"
+        :height="loadingIconSize[size]"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        class="absolute left-0 top-0 opacity-50"
+      >
+        <circle cx="12" cy="12" r="9" />
+      </svg>
+      <LoaderCircle
+        :size="loadingIconSize[size]"
+        class="absolute left-0 top-0 animate-spin origin-center transform-view will-change-transform"
+      />
     </span>
     <span v-if="$slots.icon && !loading" class="inline-flex shrink-0">
       <slot name="icon" />
