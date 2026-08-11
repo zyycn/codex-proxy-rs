@@ -10,8 +10,9 @@ const METADATA_PREFIX_FIXTURE: &str = include_str!(
 );
 
 #[test]
-fn decoder_should_preserve_existing_metadata_fixture_as_openai_wire() {
+fn decoder_should_not_forward_codex_rate_limit_metadata_fixture_as_openai_wire() {
     let events = CodexCanonicalDecoder::new("fallback")
+        .with_raw_sse_passthrough()
         .push(METADATA_PREFIX_FIXTURE.as_bytes())
         .expect("metadata fixture should remain open-world");
     let wire_types = events
@@ -20,14 +21,30 @@ fn decoder_should_preserve_existing_metadata_fixture_as_openai_wire() {
         .filter_map(|wire| wire.event_type())
         .collect::<Vec<_>>();
 
-    assert_eq!(
-        wire_types,
-        vec!["response.created", "codex.rate_limits", "response.metadata"]
-    );
+    assert_eq!(wire_types, vec!["response.created", "response.metadata"]);
     assert!(matches!(
         canonical_facts(&events).as_slice(),
         [GatewayEvent::Started(_)]
     ));
+}
+
+#[test]
+fn raw_sse_passthrough_should_drop_rate_limit_control_without_timing_side_effects() {
+    let frame = concat!(
+        "event: codex.rate_limits\n",
+        "data: {\"type\":\"codex.rate_limits\",\"rate_limits\":{\"primary\":{\"used_percent\":90}}}\n\n",
+    );
+    let mut decoder = CodexCanonicalDecoder::new("fallback").with_raw_sse_passthrough();
+
+    let events = decoder
+        .push(frame.as_bytes())
+        .expect("quota control frame should be accepted");
+    let signals = decoder.take_timing_signals();
+
+    assert!(events.is_empty());
+    assert!(!signals.protocol_progress);
+    assert!(!signals.output_start);
+    assert!(!signals.semantic_output);
 }
 
 #[test]
@@ -407,7 +424,7 @@ fn decoder_should_preserve_image_tool_tokens_in_canonical_usage() {
 }
 
 #[test]
-fn decoder_should_accept_official_codex_metadata_lifecycle_events() {
+fn decoder_should_drop_rate_limit_control_and_preserve_metadata_lifecycle_events() {
     let body = concat!(
         "event: codex.rate_limits\n",
         "data: {\"type\":\"codex.rate_limits\",\"rate_limits\":{\"primary\":{\"used_percent\":42.0}}}\n\n",
@@ -422,10 +439,25 @@ fn decoder_should_accept_official_codex_metadata_lifecycle_events() {
     );
 
     let events = CodexCanonicalDecoder::new("fallback")
+        .with_raw_sse_passthrough()
         .push(body.as_bytes())
         .expect("official Codex metadata lifecycle events");
     let canonical = canonical_facts(&events);
+    let wire_types = events
+        .iter()
+        .filter_map(ProviderEvent::wire_event)
+        .filter_map(|wire| wire.event_type())
+        .collect::<Vec<_>>();
 
+    assert_eq!(
+        wire_types,
+        vec![
+            "response.metadata",
+            "response.in_progress",
+            "response.output_text.delta",
+            "response.completed"
+        ]
+    );
     assert!(matches!(
         canonical.as_slice(),
         [

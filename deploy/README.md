@@ -112,8 +112,8 @@ Provider schema 以明文 JSON 保存于 PostgreSQL。Redis 只保存可重建�
 会话亲和、lease、cooldown、OAuth pending flow 与套餐模型目录 cache。
 
 备份必须包含 `.runtime/postgres`。要保留 OpenAI OAuth 的 AT/RT 恢复能力，必须保持
-`host.logging.file.enabled: true` 并备份 `.runtime/logs`；该记录受普通日志的 `retention_days` 和
-`max_files` 约束。若希望保留短期 Redis 状态和会话锚点，也同时备份 `.runtime/redis` 与
+`host.logging.file.enabled: true` 并备份 `.runtime/logs`；恢复记录位于独立文件集，仍按普通日志的
+`retention_days` 和 `max_files` 分别约束。若希望保留短期 Redis 状态和会话锚点，也同时备份 `.runtime/redis` 与
 `.runtime/data`。
 
 完整运行时、Provider、revision 与恢复边界见 [架构文档](../docs/architecture.md)。
@@ -204,9 +204,11 @@ Release 必须提供当前 OS/架构的 `codex-proxy-rs_<version>_<os>_<arch>.ta
 - 备份暂存目录为 `/app/.runtime/data/backup-staging`，由 `.runtime/data` 卷持久化，权限
   `0700`（仅 `cpr` 用户可读写）。部署卷至少预留一个最大数据库归档的空间。
 - OpenAI OAuth 每次成功取得 AT/RT 后，都会在账号资料补全、过期时间计算和数据库写入前，以
-  `openai_oauth_recovery` 结构化日志事件写入普通应用日志。事件含原始 AT/RT，完全沿用
-  `.runtime/logs` 的按日、按大小分割和保留清理策略；文件日志开启时不会被普通日志级别筛掉。
-  它遵循普通日志现有的非阻塞写入机制，不会阻断导入、授权或刷新。
+  `openai_oauth_recovery` 结构化日志事件写入独立的
+  `codex-proxy-rs-openai-oauth-recovery.YYYY-MM-DD[.N].log` 文件集。事件含原始 AT/RT，与
+  普通 `.runtime/logs` 完全相同地按日、按大小分割，并分别按相同 `retention_days` 与 `max_files`
+  清理；文件日志开启时不会被普通日志级别筛掉。它遵循普通日志现有的非阻塞写入机制，不会阻断
+  导入、授权或刷新。
   `.runtime/logs` 因此属于敏感数据，必须按现有普通日志的访问控制和加密备份策略处理。
 - S3/R2 存储、Cron 计划、保留策略与备份记录都保存在 PostgreSQL（`backup_settings` /
   `backup_records`），备份记录行在删除成功后硬删除，操作历史进入 `admin_audit_events`。

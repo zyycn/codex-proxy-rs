@@ -270,6 +270,11 @@ impl CodexCanonicalDecoder {
             .event
             .as_deref()
             .or_else(|| value.get("type").and_then(Value::as_str));
+        if event_type == Some("codex.rate_limits") {
+            // HTTP transport has already projected this control frame into local quota facts.
+            // It must not become client output or start first-output timing.
+            return Ok(());
+        }
         self.observe_response_service_tier(&value);
         let signals = response_event_signals(event_type, &value);
         self.merge_timing_signals(signals);
@@ -411,7 +416,7 @@ impl CodexCanonicalDecoder {
                 self.complete(event_type, value, output)
             }
             "response.failed" | "error" => Err(protocol_error_marker()),
-            "response.rate_limits.updated" | "codex.rate_limits" | "response.metadata" => Ok(()),
+            "response.rate_limits.updated" | "response.metadata" => Ok(()),
             _ => Ok(()),
         }
     }

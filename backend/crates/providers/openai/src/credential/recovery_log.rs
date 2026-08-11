@@ -1,7 +1,7 @@
-//! 成功取得 OpenAI OAuth token 后写入普通应用日志的恢复记录。
+//! 成功取得 OpenAI OAuth token 后写入独立恢复日志的记录。
 //!
 //! 此日志会刻意保存原始 AT/RT，避免后续数据库写入或校验失败时，已成功
-//! 交换的账号无法恢复。记录直接进入现有结构化日志，沿用其滚动和清理策略。
+//! 交换的账号无法恢复。记录独立落盘，但沿用普通结构化日志的滚动和清理策略。
 
 const RECOVERY_LOG_TARGET: &str = "openai_oauth_recovery";
 
@@ -32,10 +32,10 @@ impl CodexOAuthRecoveryOperation {
     }
 }
 
-/// 将已取得的 AT/RT 写入普通结构化日志。
+/// 将已取得的 AT/RT 写入独立恢复结构化日志。
 ///
 /// 调用方必须在任何可能拒绝响应的本地校验、画像补全或数据库写入之前调用。
-/// 该调用不执行额外 I/O，也不返回业务错误。Host 负责普通日志文件的分割、清理和
+/// 该调用不执行额外 I/O，也不返回业务错误。Host 负责恢复日志文件的分割、清理和
 /// 输出；日志系统不可用时按其既有策略处理，不能阻断 OAuth 业务流程。
 pub(crate) fn record_oauth_recovery(
     operation: CodexOAuthRecoveryOperation,

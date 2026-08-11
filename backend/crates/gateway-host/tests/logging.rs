@@ -8,6 +8,10 @@ use gateway_host::system_update::SystemUpdateConfig;
 
 const LOG_DIRECTORY_ENV: &str = "CPR_LOGGING_TEST_DIRECTORY";
 const CHILD_PROCESS_ENV: &str = "CPR_LOGGING_TEST_CHILD";
+const APPLICATION_LOG_FILE_PREFIX: &str = "codex-proxy-rs.";
+const OAUTH_RECOVERY_LOG_FILE_PREFIX: &str = "codex-proxy-rs-openai-oauth-recovery.";
+const APPLICATION_LOG_TARGET: &str = "logging_test_application";
+const APPLICATION_LOG_MARKER: &str = "application-file-filter-test";
 const OAUTH_RECOVERY_LOG_TARGET: &str = "openai_oauth_recovery";
 const OAUTH_RECOVERY_LOG_MARKER: &str = "oauth-recovery-file-filter-test";
 
@@ -42,7 +46,7 @@ fn logging_requires_at_least_one_sink() {
 }
 
 #[test]
-fn oauth_recovery_file_logging_overrides_global_log_level() {
+fn oauth_recovery_file_logging_is_separate_and_overrides_global_log_level() {
     if env::var_os(CHILD_PROCESS_ENV).is_some() {
         write_oauth_recovery_log(PathBuf::from(
             env::var_os(LOG_DIRECTORY_ENV).expect("child log directory"),
@@ -54,12 +58,15 @@ fn oauth_recovery_file_logging_overrides_global_log_level() {
     let output = Command::new(env::current_exe().expect("current test executable"))
         .args([
             "--exact",
-            "logging::oauth_recovery_file_logging_overrides_global_log_level",
+            "logging::oauth_recovery_file_logging_is_separate_and_overrides_global_log_level",
             "--nocapture",
         ])
         .env(CHILD_PROCESS_ENV, "1")
         .env(LOG_DIRECTORY_ENV, directory.path())
-        .env("RUST_LOG", "off,openai_oauth_recovery=off")
+        .env(
+            "RUST_LOG",
+            "off,logging_test_application=info,openai_oauth_recovery=off",
+        )
         .output()
         .expect("run logging child process");
 
@@ -70,9 +77,17 @@ fn oauth_recovery_file_logging_overrides_global_log_level() {
         String::from_utf8_lossy(&output.stderr),
     );
 
-    let log = read_log_directory(directory.path());
-    assert!(log.contains(OAUTH_RECOVERY_LOG_TARGET));
-    assert!(log.contains(OAUTH_RECOVERY_LOG_MARKER));
+    let application_log = read_log_file_set(directory.path(), APPLICATION_LOG_FILE_PREFIX);
+    assert!(application_log.contains(APPLICATION_LOG_TARGET));
+    assert!(application_log.contains(APPLICATION_LOG_MARKER));
+    assert!(!application_log.contains(OAUTH_RECOVERY_LOG_TARGET));
+    assert!(!application_log.contains(OAUTH_RECOVERY_LOG_MARKER));
+
+    let recovery_log = read_log_file_set(directory.path(), OAUTH_RECOVERY_LOG_FILE_PREFIX);
+    assert!(recovery_log.contains(OAUTH_RECOVERY_LOG_TARGET));
+    assert!(recovery_log.contains(OAUTH_RECOVERY_LOG_MARKER));
+    assert!(!recovery_log.contains(APPLICATION_LOG_TARGET));
+    assert!(!recovery_log.contains(APPLICATION_LOG_MARKER));
 }
 
 fn write_oauth_recovery_log(directory: PathBuf) {
@@ -105,6 +120,11 @@ fn write_oauth_recovery_log(directory: PathBuf) {
         .expect("initialize logging");
 
     tracing::info!(
+        target: APPLICATION_LOG_TARGET,
+        marker = APPLICATION_LOG_MARKER,
+        "application file test record"
+    );
+    tracing::info!(
         target: OAUTH_RECOVERY_LOG_TARGET,
         marker = OAUTH_RECOVERY_LOG_MARKER,
         "OpenAI OAuth recovery test record"
@@ -112,13 +132,19 @@ fn write_oauth_recovery_log(directory: PathBuf) {
     drop(bundle);
 }
 
-fn read_log_directory(directory: &Path) -> String {
+fn read_log_file_set(directory: &Path, file_prefix: &str) -> String {
     let mut files = fs::read_dir(directory)
         .expect("read log directory")
         .map(|entry| entry.expect("read log entry").path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(file_prefix))
+        })
         .collect::<Vec<_>>();
     files.sort();
 
+    assert!(!files.is_empty(), "expected log file set {file_prefix}");
     files
         .into_iter()
         .map(|path| fs::read_to_string(path).expect("read log file"))

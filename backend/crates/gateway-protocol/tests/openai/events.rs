@@ -1,7 +1,7 @@
 use gateway_protocol::openai::events::{
-    RateLimitWindow, TokenUsage, extract_sse_usage, extract_usage, is_rate_limit_header_name,
-    parse_rate_limit_headers, parse_rate_limits_event, rate_limits_to_header_pairs,
-    retry_after_seconds_from_body,
+    RateLimitWindow, TokenUsage, extract_sse_usage, extract_usage, is_codex_quota_header_name,
+    is_rate_limit_header_name, parse_rate_limit_headers, parse_rate_limits_event,
+    rate_limits_to_header_pairs, retry_after_seconds_from_body,
 };
 use serde_json::json;
 
@@ -535,5 +535,23 @@ fn rate_limit_header_filter_should_accept_only_supported_domain_headers() {
         ]
         .map(is_rate_limit_header_name),
         [true, true, true, false, false]
+    );
+}
+
+#[test]
+fn codex_quota_header_filter_should_only_match_client_quota_signals() {
+    assert_eq!(
+        [
+            "X-CoDeX-Primary-Used-Percent",
+            "x-codex-code-review-primary-reset-at",
+            "x-codex-credits-balance",
+            "x-codex-primary-over-secondary-limit-percent",
+            "retry-after",
+            "x-ratelimit-remaining",
+            "x-codex-safety-buffering-enabled",
+            "x-codex-turn-state",
+        ]
+        .map(is_codex_quota_header_name),
+        [true, true, true, true, false, false, false, false]
     );
 }

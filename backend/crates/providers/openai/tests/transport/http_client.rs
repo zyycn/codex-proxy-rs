@@ -385,6 +385,11 @@ async fn codex_backend_client_should_capture_forwardable_response_metadata() {
                 .insert_header("connection", "x-hop-secret")
                 .insert_header("x-hop-secret", "hop-secret")
                 .insert_header("x-codex-primary-used-percent", "15")
+                .insert_header("x-codex-code-review-primary-used-percent", "20")
+                .insert_header("x-codex-promo-message", "internal quota notice")
+                .insert_header("x-codex-safety-buffering-enabled", "true")
+                .insert_header("retry-after", "17")
+                .insert_header("x-ratelimit-remaining", "23")
                 .set_body_string(body),
         )
         .mount(&server)
@@ -445,11 +450,13 @@ async fn codex_backend_client_should_capture_forwardable_response_metadata() {
             "date",
             "openai-model",
             "openai-processing-ms",
-            "x-codex-primary-used-percent",
+            "retry-after",
+            "x-codex-safety-buffering-enabled",
             "x-future-bytes",
             "x-future-multi",
             "x-future-multi",
             "x-models-etag",
+            "x-ratelimit-remaining",
             "x-reasoning-included",
             "x-request-id"
         ]
@@ -486,10 +493,22 @@ async fn codex_backend_client_should_capture_forwardable_response_metadata() {
         );
     }
     assert_eq!(response.set_cookie_headers, vec!["secret=value"]);
-    assert_eq!(
-        response.rate_limit_headers,
-        vec![("x-codex-primary-used-percent".to_string(), "15".to_string())]
-    );
+    for expected in [
+        ("x-codex-primary-used-percent", "15"),
+        ("x-codex-code-review-primary-used-percent", "20"),
+        ("x-codex-promo-message", "internal quota notice"),
+        ("retry-after", "17"),
+        ("x-ratelimit-remaining", "23"),
+    ] {
+        assert!(
+            response
+                .rate_limit_headers
+                .iter()
+                .any(|(name, value)| name == expected.0 && value == expected.1),
+            "missing locally observed rate-limit header {}",
+            expected.0
+        );
+    }
 }
 
 #[tokio::test]

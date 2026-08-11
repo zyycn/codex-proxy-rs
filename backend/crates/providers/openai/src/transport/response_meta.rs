@@ -3,7 +3,7 @@
 use std::fmt;
 
 use bytes::Bytes;
-use gateway_protocol::openai::events::is_rate_limit_header_name;
+use gateway_protocol::openai::events::{is_codex_quota_header_name, is_rate_limit_header_name};
 use reqwest::header::{HeaderMap, SET_COOKIE};
 
 use super::diagnostics::CodexUpstreamDiagnostics;
@@ -153,6 +153,9 @@ fn client_response_header_is_forwardable(name: &str, connection_options: &[Strin
         .any(|option| option.eq_ignore_ascii_case(&name))
         || name.starts_with("sec-websocket-")
     {
+        return false;
+    }
+    if is_codex_quota_header_name(&name) {
         return false;
     }
 

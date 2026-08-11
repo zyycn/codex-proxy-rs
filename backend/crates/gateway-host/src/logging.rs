@@ -13,7 +13,8 @@ use tracing_subscriber::{Layer as _, layer::SubscriberExt as _, util::Subscriber
 use crate::config::LoggingConfig;
 
 const LOG_FILE_PREFIX: &str = "codex-proxy-rs";
-/// OpenAI OAuth 恢复记录含原始 AT/RT，文件日志开启时不能被常规级别过滤掉。
+const OPENAI_OAUTH_RECOVERY_LOG_FILE_PREFIX: &str = "codex-proxy-rs-openai-oauth-recovery";
+/// OpenAI OAuth 恢复记录含原始 AT/RT，文件日志开启时必须落到独立文件。
 const OPENAI_OAUTH_RECOVERY_LOG_TARGET: &str = "openai_oauth_recovery";
 
 /// non-blocking 日志 writer 的进程级守卫。
@@ -36,7 +37,8 @@ pub enum LogError {
 /// 按自然日、单文件大小、保留天数和文件总数初始化结构化日志。
 pub fn initialize_logging(config: &LoggingConfig) -> Result<LogGuard, LogError> {
     let directive = env::var("RUST_LOG").unwrap_or_else(|_| config.level.clone());
-    let file_filter = file_filter(&directive)?;
+    let file_filter = application_file_filter(&directive)?;
+    let recovery_file_filter = oauth_recovery_file_filter();
     let stdout_filter =
         EnvFilter::try_new(stdout_filter_directive(&directive, config.file.enabled))
             .map_err(|_| LogError::InvalidFilter)?;
@@ -49,25 +51,37 @@ pub fn initialize_logging(config: &LoggingConfig) -> Result<LogGuard, LogError> 
         guards.push(guard);
         writer
     });
-    let file_writer = if config.file.enabled {
+    let (file_writer, recovery_file_writer) = if config.file.enabled {
         let maximum_bytes = config
             .file
             .max_file_size_mb
             .checked_mul(1024 * 1024)
             .ok_or(LogError::SizeOverflow)?;
-        let writer = RotatingLogWriter::open(
+        let file_writer = RotatingLogWriter::open(
             config.file.directory.clone(),
+            LOG_FILE_PREFIX,
             maximum_bytes,
             config.file.retention_days,
             config.file.max_files,
         )?;
-        let (writer, guard) = NonBlockingBuilder::default()
+        let recovery_file_writer = RotatingLogWriter::open(
+            config.file.directory.clone(),
+            OPENAI_OAUTH_RECOVERY_LOG_FILE_PREFIX,
+            maximum_bytes,
+            config.file.retention_days,
+            config.file.max_files,
+        )?;
+        let (file_writer, file_guard) = NonBlockingBuilder::default()
             .thread_name("gateway-log-file")
-            .finish(writer);
-        guards.push(guard);
-        Some(writer)
+            .finish(file_writer);
+        let (recovery_file_writer, recovery_file_guard) = NonBlockingBuilder::default()
+            .thread_name("gateway-log-oauth-recovery-file")
+            .finish(recovery_file_writer);
+        guards.push(file_guard);
+        guards.push(recovery_file_guard);
+        (Some(file_writer), Some(recovery_file_writer))
     } else {
-        None
+        (None, None)
     };
 
     let stdout_layer = stdout_writer.map(|writer| {
@@ -91,21 +105,41 @@ pub fn initialize_logging(config: &LoggingConfig) -> Result<LogGuard, LogError> 
             .with_span_list(true)
             .with_filter(file_filter)
     });
+    let recovery_file_layer = recovery_file_writer.map(|writer| {
+        tracing_subscriber::fmt::layer()
+            .json()
+            .with_writer(writer)
+            .with_target(true)
+            .with_file(true)
+            .with_line_number(true)
+            .with_thread_ids(true)
+            .with_thread_names(true)
+            .with_current_span(true)
+            .with_span_list(true)
+            .with_filter(recovery_file_filter)
+    });
     tracing_subscriber::registry()
         .with(stdout_layer)
         .with(file_layer)
+        .with(recovery_file_layer)
         .try_init()
         .map_err(|_| LogError::AlreadyInitialized)?;
     Ok(LogGuard { _writers: guards })
 }
 
-fn file_filter(directive: &str) -> Result<EnvFilter, LogError> {
-    let recovery_directive = format!("{OPENAI_OAUTH_RECOVERY_LOG_TARGET}=info")
+fn application_file_filter(directive: &str) -> Result<EnvFilter, LogError> {
+    let recovery_directive = format!("{OPENAI_OAUTH_RECOVERY_LOG_TARGET}=off")
         .parse()
         .expect("static OpenAI OAuth recovery log directive is valid");
     EnvFilter::try_new(directive)
         .map(|filter| filter.add_directive(recovery_directive))
         .map_err(|_| LogError::InvalidFilter)
+}
+
+fn oauth_recovery_file_filter() -> EnvFilter {
+    format!("off,{OPENAI_OAUTH_RECOVERY_LOG_TARGET}=info")
+        .parse()
+        .expect("static OpenAI OAuth recovery log filter is valid")
 }
 
 fn stdout_filter_directive(directive: &str, persistent_log_enabled: bool) -> String {
@@ -118,6 +152,7 @@ fn stdout_filter_directive(directive: &str, persistent_log_enabled: bool) -> Str
 
 struct RotatingLogWriter {
     directory: PathBuf,
+    file_prefix: &'static str,
     maximum_bytes: u64,
     retention_days: usize,
     maximum_files: usize,
@@ -130,17 +165,20 @@ struct RotatingLogWriter {
 impl RotatingLogWriter {
     fn open(
         directory: PathBuf,
+        file_prefix: &'static str,
         maximum_bytes: u64,
         retention_days: usize,
         maximum_files: usize,
     ) -> io::Result<Self> {
         fs::create_dir_all(&directory)?;
         let date = Utc::now().date_naive();
-        cleanup_log_files(&directory, date, retention_days, maximum_files)?;
-        let (segment, bytes_written) = writable_log_segment(&directory, date, maximum_bytes)?;
-        let file = open_log_segment(&directory, date, segment)?;
+        cleanup_log_files(&directory, file_prefix, date, retention_days, maximum_files)?;
+        let (segment, bytes_written) =
+            writable_log_segment(&directory, file_prefix, date, maximum_bytes)?;
+        let file = open_log_segment(&directory, file_prefix, date, segment)?;
         Ok(Self {
             directory,
+            file_prefix,
             maximum_bytes,
             retention_days,
             maximum_files,
@@ -168,10 +206,11 @@ impl RotatingLogWriter {
         } else {
             self.segment = self.segment.saturating_add(1);
         }
-        self.file = open_log_segment(&self.directory, self.date, self.segment)?;
+        self.file = open_log_segment(&self.directory, self.file_prefix, self.date, self.segment)?;
         self.bytes_written = self.file.metadata()?.len();
         cleanup_log_files(
             &self.directory,
+            self.file_prefix,
             self.date,
             self.retention_days,
             self.maximum_files,
@@ -203,10 +242,11 @@ struct ManagedLogFile {
 
 fn writable_log_segment(
     directory: &Path,
+    file_prefix: &str,
     date: chrono::NaiveDate,
     maximum_bytes: u64,
 ) -> io::Result<(usize, u64)> {
-    let latest = managed_log_files(directory)?
+    let latest = managed_log_files(directory, file_prefix)?
         .into_iter()
         .filter(|entry| entry.date == date)
         .max_by_key(|entry| entry.segment);
@@ -221,26 +261,31 @@ fn writable_log_segment(
     }
 }
 
-fn open_log_segment(directory: &Path, date: chrono::NaiveDate, segment: usize) -> io::Result<File> {
+fn open_log_segment(
+    directory: &Path,
+    file_prefix: &str,
+    date: chrono::NaiveDate,
+    segment: usize,
+) -> io::Result<File> {
     OpenOptions::new()
         .create(true)
         .append(true)
-        .open(directory.join(log_file_name(date, segment)))
+        .open(directory.join(log_file_name(file_prefix, date, segment)))
 }
 
-fn log_file_name(date: chrono::NaiveDate, segment: usize) -> String {
+fn log_file_name(file_prefix: &str, date: chrono::NaiveDate, segment: usize) -> String {
     if segment == 0 {
-        format!("{LOG_FILE_PREFIX}.{date}.log")
+        format!("{file_prefix}.{date}.log")
     } else {
-        format!("{LOG_FILE_PREFIX}.{date}.{segment}.log")
+        format!("{file_prefix}.{date}.{segment}.log")
     }
 }
 
-fn managed_log_files(directory: &Path) -> io::Result<Vec<ManagedLogFile>> {
+fn managed_log_files(directory: &Path, file_prefix: &str) -> io::Result<Vec<ManagedLogFile>> {
     Ok(fs::read_dir(directory)?
         .filter_map(Result::ok)
         .filter_map(|entry| {
-            parse_log_file_name(entry.file_name().to_string_lossy().as_ref()).map(
+            parse_log_file_name(entry.file_name().to_string_lossy().as_ref(), file_prefix).map(
                 |(date, segment)| ManagedLogFile {
                     date,
                     segment,
@@ -251,9 +296,9 @@ fn managed_log_files(directory: &Path) -> io::Result<Vec<ManagedLogFile>> {
         .collect())
 }
 
-fn parse_log_file_name(name: &str) -> Option<(chrono::NaiveDate, usize)> {
+fn parse_log_file_name(name: &str, file_prefix: &str) -> Option<(chrono::NaiveDate, usize)> {
     let body = name
-        .strip_prefix(&format!("{LOG_FILE_PREFIX}."))?
+        .strip_prefix(&format!("{file_prefix}."))?
         .strip_suffix(".log")?;
     let (date, segment) = body.split_once('.').map_or((body, 0), |(date, segment)| {
         (date, segment.parse().ok().unwrap_or(usize::MAX))
@@ -268,6 +313,7 @@ fn parse_log_file_name(name: &str) -> Option<(chrono::NaiveDate, usize)> {
 
 fn cleanup_log_files(
     directory: &Path,
+    file_prefix: &str,
     today: chrono::NaiveDate,
     retention_days: usize,
     maximum_files: usize,
@@ -277,7 +323,7 @@ fn cleanup_log_files(
         .checked_sub_signed(chrono::Duration::days(retention_offset))
         .unwrap_or(chrono::NaiveDate::MIN);
     let mut retained = Vec::new();
-    for entry in managed_log_files(directory)? {
+    for entry in managed_log_files(directory, file_prefix)? {
         if entry.date < cutoff {
             fs::remove_file(entry.path)?;
         } else {

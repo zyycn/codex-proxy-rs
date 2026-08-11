@@ -315,6 +315,26 @@ pub fn is_rate_limit_header_name(name: &str) -> bool {
         || rate_limit_id_from_header_name(&normalized).is_some()
 }
 
+/// 判断响应头是否为仅供代理本地观测的 Codex 额度信号。
+///
+/// 这类头会让下游官方 Codex 客户端显示账户额度提示，因此不能穿过账号隔离边界。
+/// 通用限流头（例如 `retry-after`）和非额度的 Codex 头仍允许下发。
+pub fn is_codex_quota_header_name(name: &str) -> bool {
+    let normalized = name.trim().to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "x-codex-credits-has-credits"
+            | "x-codex-credits-unlimited"
+            | "x-codex-credits-balance"
+            | "x-codex-active-limit"
+            | "x-codex-plan-type"
+            | "x-codex-promo-message"
+            | "x-codex-rate-limit-reached-type"
+            | "x-codex-primary-over-secondary-limit-percent"
+    ) || rate_limit_id_from_header_name(&normalized)
+        .is_some_and(|limit_id| limit_id == "codex" || limit_id.starts_with("codex_"))
+}
+
 /// 从内部 `codex.rate_limits` 事件中解析限流信息。
 pub fn parse_rate_limits_event(value: &Value) -> Option<ParsedRateLimits> {
     if value.get("type").and_then(Value::as_str) != Some("codex.rate_limits") {
