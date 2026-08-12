@@ -27,7 +27,6 @@ import { accountColumns, derivedAccountStatus } from './constants'
 
 const selectedIds = ref<Set<string>>(new Set())
 const {
-  totalAccounts,
   loading,
   accounts,
   loadAccounts,
@@ -37,6 +36,7 @@ const {
   sort,
   accountSummary,
   accountPagination,
+  replaceAccount,
   handlePageChange,
   handlePageSizeChange,
   handleSortChange,
@@ -67,17 +67,13 @@ const {
   handleExportAccounts,
   handleRefresh,
   handleRefreshQuota,
-  patchAccountStatus,
   handleToggleSchedule,
   scheduleActionLabel,
 } = useAccountMutations({
   accounts,
-  accountSummary,
-  statusQuery,
-  sort,
   selectedIds,
-  totalAccounts,
   reload: loadAccounts,
+  replaceAccount,
 })
 
 const {
@@ -99,9 +95,7 @@ const {
   openConnectionTest,
   handleRefreshConnectionTestModels,
   handleTestConnection,
-} = useAccountConnectionTest({
-  onAccountStatus: patchAccountStatus,
-})
+} = useAccountConnectionTest({ reload: loadAccounts })
 
 const {
   expandedAccountIds,

@@ -83,14 +83,6 @@ fn openai_config_restricts_upstream_base_url_to_https_or_loopback_http() {
 }
 
 #[test]
-fn openai_config_keeps_the_quota_exhaustion_scheduling_switch() {
-    let mut config = valid_config();
-    config.quota.skip_exhausted = false;
-
-    assert!(!config.quota_skip_exhausted());
-}
-
-#[test]
 fn openai_config_defaults_to_the_provider_owned_operating_values() {
     let config = OpenAiConfig::default();
 
@@ -104,7 +96,6 @@ fn openai_config_defaults_to_the_provider_owned_operating_values() {
             config.ws_pool.max_connecting,
             config.ws_pool.initial_event_timeout_ms,
             config.quota.refresh_interval_minutes,
-            config.quota.skip_exhausted,
             config.auth.refresh_enabled,
             config.auth.oauth_client_id.as_str(),
             config.auth.oauth_token_endpoint.as_str(),
@@ -118,7 +109,6 @@ fn openai_config_defaults_to_the_provider_owned_operating_values() {
             8,
             20_000,
             15,
-            true,
             true,
             "app_EMoamEEZ73f0CkXaXp7hrann",
             "https://auth.openai.com/oauth/token",

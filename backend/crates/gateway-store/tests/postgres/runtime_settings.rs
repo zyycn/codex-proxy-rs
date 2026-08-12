@@ -108,7 +108,7 @@ async fn insert_refreshable_account(
         "insert into provider_accounts (
            id, provider_kind, name, upstream_user_id, authentication_kind,
            provider_credentials_json, has_refresh_token, access_token_expires_at,
-           next_refresh_at, availability, availability_observed_at, created_at, updated_at
+           next_refresh_at, credential_state, credential_observed_at, created_at, updated_at
          ) values ($1, 'openai', $1, $1, 'oauth', '{}'::jsonb, true, $2, $3,
                    'ready', now(), now(), now())",
     )

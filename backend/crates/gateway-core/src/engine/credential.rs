@@ -187,45 +187,41 @@ impl fmt::Debug for OpaqueProviderData {
     }
 }
 
-/// 数据库中固定的账号运行状态。
+/// 已持久化的凭据/账号身份状态。
 ///
-/// 只承载终态或需要外部干预的状态；临时限流（429）不进入此状态，由
-/// Provider quota 数据驱动（`AccountQuotaSignals::limit_reached`）。
+/// 这里只保存凭据与账号身份事实。额度耗尽属于 [`QuotaState`]，临时 429 属于
+/// 运行时冷却；二者都不得写入此枚举。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum AccountAvailability {
+pub enum CredentialState {
     Unknown,
     Ready,
-    QuotaExhausted,
     Expired,
     Banned,
     Invalid,
 }
 
-impl AccountAvailability {
+impl CredentialState {
     /// 返回数据库稳定值。
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Unknown => "unknown",
             Self::Ready => "ready",
-            Self::QuotaExhausted => "quota_exhausted",
             Self::Expired => "expired",
             Self::Banned => "banned",
             Self::Invalid => "invalid",
         }
     }
 
-    /// 返回账号进入不可恢复错误态、但 Provider 未给出更具体上游原因时的稳定兜底。
-    ///
-    /// Provider 应优先持久化已脱敏的上游 message 或原因码；该值只避免错误态沿用
-    /// 上一次无关的错误信息。
+    /// 返回该凭据状态对应的稳定错误原因。
     #[must_use]
-    pub const fn fallback_error_reason(self) -> Option<&'static str> {
+    pub const fn error_reason(self) -> Option<AccountErrorReason> {
         match self {
-            Self::Expired => Some("credential_expired"),
-            Self::Banned => Some("account_banned"),
-            Self::Invalid => Some("credential_invalid"),
-            Self::Unknown | Self::Ready | Self::QuotaExhausted => None,
+            Self::Unknown => Some(AccountErrorReason::AccountUnverified),
+            Self::Expired => Some(AccountErrorReason::CredentialExpired),
+            Self::Banned => Some(AccountErrorReason::AccountBanned),
+            Self::Invalid => Some(AccountErrorReason::CredentialInvalid),
+            Self::Ready => None,
         }
     }
 
@@ -235,12 +231,378 @@ impl AccountAvailability {
         match value {
             "unknown" => Some(Self::Unknown),
             "ready" => Some(Self::Ready),
-            "quota_exhausted" => Some(Self::QuotaExhausted),
             "expired" => Some(Self::Expired),
             "banned" => Some(Self::Banned),
             "invalid" => Some(Self::Invalid),
             _ => None,
         }
+    }
+}
+
+/// 额度访问结论；百分比和余额等展示值不进入此枚举。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum QuotaAccessState {
+    Unknown,
+    Allowed,
+    Exhausted,
+}
+
+impl QuotaAccessState {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Allowed => "allowed",
+            Self::Exhausted => "exhausted",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "unknown" => Some(Self::Unknown),
+            "allowed" => Some(Self::Allowed),
+            "exhausted" => Some(Self::Exhausted),
+            _ => None,
+        }
+    }
+}
+
+/// 权威额度耗尽证据。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum QuotaEvidence {
+    ProviderDenied,
+    AccountLimitReached,
+    UsageLimitReached,
+    PaymentRequired,
+}
+
+impl QuotaEvidence {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ProviderDenied => "provider_denied",
+            Self::AccountLimitReached => "account_limit_reached",
+            Self::UsageLimitReached => "usage_limit_reached",
+            Self::PaymentRequired => "payment_required",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "provider_denied" => Some(Self::ProviderDenied),
+            "account_limit_reached" => Some(Self::AccountLimitReached),
+            "usage_limit_reached" => Some(Self::UsageLimitReached),
+            "payment_required" => Some(Self::PaymentRequired),
+            _ => None,
+        }
+    }
+}
+
+/// 可审计的额度访问事实。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuotaState {
+    access: QuotaAccessState,
+    evidence: Option<QuotaEvidence>,
+    observed_at: Option<SystemTime>,
+    reset_at: Option<SystemTime>,
+}
+
+impl Default for QuotaState {
+    fn default() -> Self {
+        Self::unknown()
+    }
+}
+
+impl QuotaState {
+    #[must_use]
+    pub const fn unknown() -> Self {
+        Self {
+            access: QuotaAccessState::Unknown,
+            evidence: None,
+            observed_at: None,
+            reset_at: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn observed_unknown(observed_at: SystemTime) -> Self {
+        Self {
+            access: QuotaAccessState::Unknown,
+            evidence: None,
+            observed_at: Some(observed_at),
+            reset_at: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn allowed(observed_at: SystemTime) -> Self {
+        Self {
+            access: QuotaAccessState::Allowed,
+            evidence: None,
+            observed_at: Some(observed_at),
+            reset_at: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn exhausted(
+        evidence: QuotaEvidence,
+        observed_at: SystemTime,
+        reset_at: Option<SystemTime>,
+    ) -> Self {
+        Self {
+            access: QuotaAccessState::Exhausted,
+            evidence: Some(evidence),
+            observed_at: Some(observed_at),
+            reset_at,
+        }
+    }
+
+    /// 从持久化列恢复额度状态；非法组合返回 `None`。
+    #[must_use]
+    pub const fn from_persisted(
+        access: QuotaAccessState,
+        evidence: Option<QuotaEvidence>,
+        observed_at: Option<SystemTime>,
+        reset_at: Option<SystemTime>,
+    ) -> Option<Self> {
+        match access {
+            QuotaAccessState::Unknown if evidence.is_none() && reset_at.is_none() => Some(Self {
+                access,
+                evidence,
+                observed_at,
+                reset_at,
+            }),
+            QuotaAccessState::Allowed
+                if evidence.is_none() && observed_at.is_some() && reset_at.is_none() =>
+            {
+                Some(Self {
+                    access,
+                    evidence,
+                    observed_at,
+                    reset_at,
+                })
+            }
+            QuotaAccessState::Exhausted if evidence.is_some() && observed_at.is_some() => {
+                Some(Self {
+                    access,
+                    evidence,
+                    observed_at,
+                    reset_at,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn access(self) -> QuotaAccessState {
+        self.access
+    }
+
+    #[must_use]
+    pub const fn evidence(self) -> Option<QuotaEvidence> {
+        self.evidence
+    }
+
+    #[must_use]
+    pub const fn observed_at(self) -> Option<SystemTime> {
+        self.observed_at
+    }
+
+    #[must_use]
+    pub const fn reset_at(self) -> Option<SystemTime> {
+        self.reset_at
+    }
+
+    /// 返回当前已确认的额度耗尽结论。
+    ///
+    /// `reset_at` 只表示何时应重新向 Provider 求证；时间到期本身不是额度恢复证据。
+    #[must_use]
+    pub fn is_exhausted(self) -> bool {
+        self.access == QuotaAccessState::Exhausted
+    }
+
+    /// 判断已耗尽额度是否到达 Provider 的下一次复核时间。
+    ///
+    /// 有明确 `reset_at` 时严格等待该时刻；没有时由 Provider 传入自己的保守复核周期。
+    #[must_use]
+    pub fn exhaustion_refresh_due(self, now: SystemTime, fallback_interval: Duration) -> bool {
+        if !self.is_exhausted() {
+            return false;
+        }
+        let due_at = self.reset_at.or_else(|| {
+            self.observed_at
+                .and_then(|observed_at| observed_at.checked_add(fallback_interval))
+        });
+        due_at.is_none_or(|due_at| due_at <= now)
+    }
+
+    /// 合并一次额度访问观察；`Unknown` 不能擦除已经确认的访问结论。
+    #[must_use]
+    pub fn merge_observation(self, observation: Self) -> Self {
+        if observation.access == QuotaAccessState::Unknown
+            && self.access != QuotaAccessState::Unknown
+        {
+            self
+        } else {
+            observation
+        }
+    }
+}
+
+/// 对外唯一的五态账号状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AccountStatus {
+    Normal,
+    QuotaExhausted,
+    RateLimited,
+    Disabled,
+    Error,
+}
+
+impl AccountStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::QuotaExhausted => "quota_exhausted",
+            Self::RateLimited => "rate_limited",
+            Self::Disabled => "disabled",
+            Self::Error => "error",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "normal" => Some(Self::Normal),
+            "quota_exhausted" => Some(Self::QuotaExhausted),
+            "rate_limited" => Some(Self::RateLimited),
+            "disabled" => Some(Self::Disabled),
+            "error" => Some(Self::Error),
+            _ => None,
+        }
+    }
+
+    /// 管理页稳定业务排序：正常、限流、耗尽、错误、停用。
+    #[must_use]
+    pub const fn sort_rank(self) -> u8 {
+        match self {
+            Self::Normal => 0,
+            Self::RateLimited => 1,
+            Self::QuotaExhausted => 2,
+            Self::Error => 3,
+            Self::Disabled => 4,
+        }
+    }
+}
+
+/// `error` 状态下的稳定原因码。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AccountErrorReason {
+    AccountUnverified,
+    AccessTokenExpired,
+    CredentialExpired,
+    CredentialInvalid,
+    AccountBanned,
+}
+
+impl AccountErrorReason {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AccountUnverified => "account_unverified",
+            Self::AccessTokenExpired => "access_token_expired",
+            Self::CredentialExpired => "credential_expired",
+            Self::CredentialInvalid => "credential_invalid",
+            Self::AccountBanned => "account_banned",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "account_unverified" => Some(Self::AccountUnverified),
+            "access_token_expired" => Some(Self::AccessTokenExpired),
+            "credential_expired" => Some(Self::CredentialExpired),
+            "credential_invalid" => Some(Self::CredentialInvalid),
+            "account_banned" => Some(Self::AccountBanned),
+            _ => None,
+        }
+    }
+}
+
+/// 唯一状态解析器的完整输入事实。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountStatusFacts {
+    pub enabled: bool,
+    pub credential_state: CredentialState,
+    pub access_token_expires_at: Option<SystemTime>,
+    pub quota: QuotaState,
+    pub rate_limited_until: Option<SystemTime>,
+    pub last_error_reason: Option<AccountErrorReason>,
+    pub last_error_message: Option<String>,
+}
+
+/// 唯一状态解析器的输出。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountStatusProjection {
+    pub status: AccountStatus,
+    pub error_reason: Option<AccountErrorReason>,
+    pub error_message: Option<String>,
+    /// 仅 `rate_limited` 状态携带仍有效的运行时冷却截止时间。
+    pub rate_limited_until: Option<SystemTime>,
+}
+
+/// 从独立事实派生唯一、互斥的对外状态。
+#[must_use]
+pub fn resolve_account_status(
+    facts: &AccountStatusFacts,
+    now: SystemTime,
+) -> AccountStatusProjection {
+    if !facts.enabled {
+        return status_projection(AccountStatus::Disabled);
+    }
+    let credential_error = facts.credential_state.error_reason().or_else(|| {
+        facts
+            .access_token_expires_at
+            .is_some_and(|expires_at| expires_at <= now)
+            .then_some(AccountErrorReason::AccessTokenExpired)
+    });
+    if let Some(default_reason) = credential_error {
+        return AccountStatusProjection {
+            status: AccountStatus::Error,
+            error_reason: Some(facts.last_error_reason.unwrap_or(default_reason)),
+            error_message: facts.last_error_message.clone(),
+            rate_limited_until: None,
+        };
+    }
+    if facts.quota.is_exhausted() {
+        return status_projection(AccountStatus::QuotaExhausted);
+    }
+    if facts
+        .rate_limited_until
+        .is_some_and(|rate_limited_until| rate_limited_until > now)
+    {
+        return AccountStatusProjection {
+            status: AccountStatus::RateLimited,
+            error_reason: None,
+            error_message: None,
+            rate_limited_until: facts.rate_limited_until,
+        };
+    }
+    status_projection(AccountStatus::Normal)
+}
+
+const fn status_projection(status: AccountStatus) -> AccountStatusProjection {
+    AccountStatusProjection {
+        status,
+        error_reason: None,
+        error_message: None,
+        rate_limited_until: None,
     }
 }
 
@@ -257,7 +619,10 @@ pub struct ProviderAccount {
     authentication_kind: String,
     revision: CredentialRevision,
     enabled: bool,
-    availability: AccountAvailability,
+    credential_state: CredentialState,
+    quota: QuotaState,
+    last_error_reason: Option<AccountErrorReason>,
+    last_error_message: Option<String>,
     access_token_expires_at: Option<SystemTime>,
     next_refresh_at: Option<SystemTime>,
     has_refresh_token: bool,
@@ -286,7 +651,10 @@ impl ProviderAccount {
             authentication_kind,
             revision,
             enabled: true,
-            availability: AccountAvailability::Unknown,
+            credential_state: CredentialState::Unknown,
+            quota: QuotaState::unknown(),
+            last_error_reason: None,
+            last_error_message: None,
             access_token_expires_at,
             next_refresh_at: None,
             has_refresh_token: false,
@@ -307,17 +675,23 @@ impl ProviderAccount {
     }
 
     #[must_use]
-    pub const fn with_runtime_state(
+    pub fn with_account_facts(
         mut self,
         enabled: bool,
-        availability: AccountAvailability,
+        credential_state: CredentialState,
+        quota: QuotaState,
+        last_error_reason: Option<AccountErrorReason>,
+        last_error_message: Option<String>,
     ) -> Self {
         self.enabled = enabled;
-        self.availability = if self.upstream_user_id.is_some() {
-            availability
+        self.credential_state = if self.upstream_user_id.is_some() {
+            credential_state
         } else {
-            AccountAvailability::Unknown
+            CredentialState::Unknown
         };
+        self.quota = quota;
+        self.last_error_reason = last_error_reason;
+        self.last_error_message = last_error_message;
         self
     }
 
@@ -382,8 +756,23 @@ impl ProviderAccount {
     }
 
     #[must_use]
-    pub const fn availability(&self) -> AccountAvailability {
-        self.availability
+    pub const fn credential_state(&self) -> CredentialState {
+        self.credential_state
+    }
+
+    #[must_use]
+    pub const fn quota(&self) -> QuotaState {
+        self.quota
+    }
+
+    #[must_use]
+    pub const fn last_error_reason(&self) -> Option<AccountErrorReason> {
+        self.last_error_reason
+    }
+
+    #[must_use]
+    pub fn last_error_message(&self) -> Option<&str> {
+        self.last_error_message.as_deref()
     }
 
     #[must_use]
@@ -407,23 +796,25 @@ impl ProviderAccount {
         self.has_refresh_token
     }
 
-    /// 判断账号当前能否进入同 target 的候选池。
+    /// 组合持久事实与请求级冷却，交给唯一解析器派生状态。
     #[must_use]
-    pub fn is_schedulable(&self, now: SystemTime) -> bool {
-        let available = match self.availability {
-            AccountAvailability::Ready => true,
-            AccountAvailability::Unknown
-            | AccountAvailability::QuotaExhausted
-            | AccountAvailability::Expired
-            | AccountAvailability::Banned
-            | AccountAvailability::Invalid => false,
-        };
-        self.upstream_user_id.is_some()
-            && self.enabled
-            && available
-            && self
-                .access_token_expires_at
-                .is_none_or(|expires_at| expires_at > now)
+    pub fn status_projection(
+        &self,
+        now: SystemTime,
+        rate_limited_until: Option<SystemTime>,
+    ) -> AccountStatusProjection {
+        resolve_account_status(
+            &AccountStatusFacts {
+                enabled: self.enabled,
+                credential_state: self.credential_state,
+                access_token_expires_at: self.access_token_expires_at,
+                quota: self.quota,
+                rate_limited_until,
+                last_error_reason: self.last_error_reason,
+                last_error_message: self.last_error_message.clone(),
+            },
+            now,
+        )
     }
 }
 
@@ -600,10 +991,11 @@ pub enum CredentialCasOutcome {
 pub struct QuotaObservation {
     pub account_id: ProviderAccountId,
     pub expected_revision: CredentialRevision,
-    pub quota: Option<OpaqueProviderData>,
-    pub observed_at: Option<SystemTime>,
-    /// 快照级限流事实（Provider 解析后物化）；None 表示不更新物化列。
-    pub limit_reached: Option<bool>,
+    pub quota: OpaqueProviderData,
+    /// Provider 原始 quota document 的观察时间；不代表访问结论发生变化。
+    pub observed_at: SystemTime,
+    /// Provider 已从私有 JSON 归一化出的额度访问事实。
+    pub state: QuotaState,
 }
 
 impl fmt::Debug for QuotaObservation {
@@ -614,6 +1006,7 @@ impl fmt::Debug for QuotaObservation {
             .field("expected_revision", &self.expected_revision)
             .field("quota", &self.quota)
             .field("observed_at", &self.observed_at)
+            .field("state", &self.state)
             .finish()
     }
 }
@@ -624,14 +1017,24 @@ pub enum QuotaWriteOutcome {
     Conflict,
 }
 
+/// 不改 Provider 原始 quota JSON 的额度访问事实写入。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotaAccessChange {
+    pub account_id: ProviderAccountId,
+    pub expected_revision: CredentialRevision,
+    pub state: QuotaState,
+}
+
 /// 账号状态的 revision-fenced 写入。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountStateChange {
     pub account_id: ProviderAccountId,
     pub expected_revision: CredentialRevision,
-    pub availability: AccountAvailability,
+    pub credential_state: CredentialState,
     pub observed_at: SystemTime,
-    /// 上游原因（错误原文 / 原因码）；`Some` 写入持久化错误信息，`None` 不更新，恢复 `Ready` 时清空。
+    /// 受控错误原因；恢复 Ready 时必须清空。
+    pub error_reason: Option<AccountErrorReason>,
+    /// 已脱敏的上游诊断信息；恢复 Ready 时必须清空。
     pub message: Option<String>,
 }
 
@@ -680,6 +1083,11 @@ pub trait ProviderAccountStore: Send + Sync {
     async fn compare_and_swap_quota(
         &self,
         observation: QuotaObservation,
+    ) -> Result<QuotaWriteOutcome, StoreError>;
+
+    async fn apply_quota_access(
+        &self,
+        change: QuotaAccessChange,
     ) -> Result<QuotaWriteOutcome, StoreError>;
 
     async fn apply_state_change(&self, change: AccountStateChange) -> Result<(), StoreError>;
@@ -772,7 +1180,7 @@ pub struct AccountRuntimeSignals {
     pub last_started_at: Option<SystemTime>,
     pub quota_reset_at: Option<SystemTime>,
     pub quota_remaining_rank: Option<u64>,
-    pub quota_limit_reached: bool,
+    pub rate_limited_until: Option<SystemTime>,
     pub failure_rate_basis_points: Option<u16>,
     pub first_output_latency_ms: Option<u64>,
 }
@@ -920,8 +1328,13 @@ impl AccountRuntimeSignals {
         if let Some(quota) = quota {
             self.quota_reset_at = quota.reset_at;
             self.quota_remaining_rank = quota.remaining_rank;
-            self.quota_limit_reached = quota.limit_reached;
         }
+        self
+    }
+
+    #[must_use]
+    pub const fn with_rate_limit(mut self, rate_limited_until: Option<SystemTime>) -> Self {
+        self.rate_limited_until = rate_limited_until;
         self
     }
 
@@ -942,20 +1355,14 @@ impl AccountRuntimeSignals {
 pub struct AccountQuotaSignals {
     reset_at: Option<SystemTime>,
     remaining_rank: Option<u64>,
-    limit_reached: bool,
 }
 
 impl AccountQuotaSignals {
     #[must_use]
-    pub const fn new(
-        reset_at: Option<SystemTime>,
-        remaining_rank: Option<u64>,
-        limit_reached: bool,
-    ) -> Self {
+    pub const fn new(reset_at: Option<SystemTime>, remaining_rank: Option<u64>) -> Self {
         Self {
             reset_at,
             remaining_rank,
-            limit_reached,
         }
     }
 
@@ -967,12 +1374,6 @@ impl AccountQuotaSignals {
     #[must_use]
     pub const fn remaining_rank(self) -> Option<u64> {
         self.remaining_rank
-    }
-
-    /// 任一计量窗口已触顶（`limit_reached`/`used_percent >= 100`）；调度据此排除候选。
-    #[must_use]
-    pub const fn limit_reached(self) -> bool {
-        self.limit_reached
     }
 }
 
@@ -991,24 +1392,24 @@ pub struct AccountSelectionContext {
     pub excluded_accounts: BTreeSet<ProviderAccountId>,
     pub preferred_account: Option<ProviderAccountId>,
     pub round_robin_cursor: u64,
-    pub availability: AccountAvailabilityPolicy,
+    pub eligibility: AccountEligibilityPolicy,
 }
 
-/// 选择账号时是否信任本地可用性投影。
+/// 选择账号时是否执行本地调度资格投影。
 ///
 /// 管理端对指定账号执行诊断时，会直接向上游确认实际状态；该模式跳过
 /// `enabled`、可用性、冷却和 token 到期等本地投影，仍保留租约、并发和
 /// 请求间隔约束，且只能与固定账号约束组合使用。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum AccountAvailabilityPolicy {
+pub enum AccountEligibilityPolicy {
     #[default]
     Enforce,
     BypassForDiagnostic,
 }
 
-impl AccountAvailabilityPolicy {
+impl AccountEligibilityPolicy {
     #[must_use]
-    pub const fn bypasses_local_availability(self) -> bool {
+    pub const fn bypasses_local_eligibility(self) -> bool {
         matches!(self, Self::BypassForDiagnostic)
     }
 }
@@ -1132,10 +1533,14 @@ impl AccountSelector {
         candidate: &AccountCandidate,
         context: &AccountSelectionContext,
     ) -> Option<AccountSchedulingBlocker> {
-        if !context.availability.bypasses_local_availability()
-            && !candidate.account.is_schedulable(context.now)
-        {
-            return Some(AccountSchedulingBlocker::LocalAvailability);
+        if !context.eligibility.bypasses_local_eligibility() {
+            let status = candidate
+                .account
+                .status_projection(context.now, candidate.signals.rate_limited_until)
+                .status;
+            if status != AccountStatus::Normal {
+                return Some(AccountSchedulingBlocker::LocalAvailability);
+            }
         }
         if context.excluded_accounts.contains(candidate.account.id()) {
             return Some(AccountSchedulingBlocker::Excluded);

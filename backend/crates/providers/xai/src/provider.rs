@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use futures::{StreamExt, future::BoxFuture};
 use gateway_core::engine::continuation::ContinuationBinding;
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountAvailabilityPolicy, AccountFeedbackStats, ProviderAccount,
-    ProviderAccountId, ProviderAccountStore,
+    AccountEligibilityPolicy, AccountFeedbackStats, ProviderAccount, ProviderAccountId,
+    ProviderAccountStore,
 };
 use gateway_core::engine::provider::{
     EventStream, Provider, ProviderCallMetadata, ProviderCatalogGeneration,
@@ -392,10 +392,10 @@ async fn select_grok_session(
         context.account_selection_policy(),
         context.deadline(),
     )
-    .with_availability_policy(if context.is_diagnostic_required_account() {
-        AccountAvailabilityPolicy::BypassForDiagnostic
+    .with_eligibility_policy(if context.is_diagnostic_required_account() {
+        AccountEligibilityPolicy::BypassForDiagnostic
     } else {
-        AccountAvailabilityPolicy::Enforce
+        AccountEligibilityPolicy::Enforce
     })
     .with_affinity(affinity);
     let selection_deadline = remaining(context.deadline())
@@ -1981,7 +1981,8 @@ const OAUTH_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const QUOTA_CATALOG_INTERVAL: Duration = Duration::from_secs(5 * 60);
 // grok2api 对 Free/未知额度耗尽采用 24 小时恢复探测；当前公共账号状态没有
 // 独立的 paid period-end 字段，因此 Build 账号统一使用同一保守下限。
-const QUOTA_PERIODIC_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+const EXHAUSTED_QUOTA_FALLBACK_RECHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+const EXHAUSTED_QUOTA_REFRESH_RETRY_INTERVAL: Duration = QUOTA_CATALOG_INTERVAL;
 const CLI_RELEASE_WORKER_OWNER: &str = "xai-cli-release";
 
 pub(crate) fn worker_contributions(
@@ -2175,7 +2176,8 @@ impl XaiQuotaCatalogTask {
                 let due = last_periodic_refresh_at
                     .get(account.id())
                     .is_none_or(|last| {
-                        now.saturating_duration_since(*last) >= QUOTA_PERIODIC_REFRESH_MIN_INTERVAL
+                        now.saturating_duration_since(*last)
+                            >= EXHAUSTED_QUOTA_REFRESH_RETRY_INTERVAL
                     });
                 if due {
                     last_periodic_refresh_at.insert(account.id().clone(), now);
@@ -2191,5 +2193,7 @@ fn eligible_quota_worker_account(account: &ProviderAccount, now: SystemTime) -> 
         && account
             .access_token_expires_at()
             .is_some_and(|expires_at| expires_at > now)
-        && account.availability() == AccountAvailability::QuotaExhausted
+        && account
+            .quota()
+            .exhaustion_refresh_due(now, EXHAUSTED_QUOTA_FALLBACK_RECHECK_INTERVAL)
 }

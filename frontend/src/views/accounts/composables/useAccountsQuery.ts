@@ -7,6 +7,18 @@ import { toast } from '@/components/base/BaseToast'
 import { usePagedQuery } from '@/composables/usePagedQuery'
 import { errorMessage } from '@/utils/async'
 
+type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
+type AccountSummary = Awaited<ReturnType<typeof getAccounts>>['summary']
+type AccountSummaryStatusKey = Exclude<keyof AccountSummary, 'total'>
+
+const summaryKeyByStatus = {
+  normal: 'normal',
+  quota_exhausted: 'quotaExhausted',
+  rate_limited: 'rateLimited',
+  disabled: 'disabled',
+  error: 'error',
+} as const satisfies Record<AccountRow['status'], AccountSummaryStatusKey>
+
 export function useAccountsQuery() {
   const searchQuery = shallowRef('')
   const providerQuery = shallowRef('')
@@ -64,6 +76,44 @@ export function useAccountsQuery() {
     void query.execute()
   }
 
+  function replaceAccount(updated: AccountRow) {
+    const index = query.items.value.findIndex(account => account.id === updated.id)
+    if (index < 0)
+      return false
+
+    const current = query.items.value[index]
+    if (!current)
+      return false
+
+    updateAccountSummary(current.status, updated.status)
+
+    if (statusQuery.value && statusQuery.value !== updated.status) {
+      query.items.value = query.items.value.filter(account => account.id !== updated.id)
+      query.total.value = Math.max(0, query.total.value - 1)
+      return false
+    }
+
+    const accounts = [...query.items.value]
+    accounts[index] = updated
+    query.items.value = accounts
+    return true
+  }
+
+  function updateAccountSummary(
+    previousStatus: AccountRow['status'],
+    nextStatus: AccountRow['status'],
+  ) {
+    if (previousStatus === nextStatus)
+      return
+
+    const previousKey = summaryKeyByStatus[previousStatus]
+    const nextKey = summaryKeyByStatus[nextStatus]
+    const summary = { ...accountSummary.value }
+    summary[previousKey] = Math.max(0, summary[previousKey] - 1)
+    summary[nextKey] += 1
+    accountSummary.value = summary
+  }
+
   watchDebounced(
     searchQuery,
     () => {
@@ -95,6 +145,7 @@ export function useAccountsQuery() {
     sort,
     accountSummary,
     accountPagination,
+    replaceAccount,
     handlePageChange,
     handlePageSizeChange,
     handleSortChange,

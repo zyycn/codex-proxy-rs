@@ -7,6 +7,7 @@ use gateway_admin::model::provider_credentials::{
     AuthorizationMutationTarget, AuthorizationOwnerBinding, PendingAuthorizationMutation,
 };
 use gateway_admin::model::{MutationActor, MutationContext};
+use gateway_core::engine::credential::AccountStatus;
 use gateway_core::routing::ProviderKind;
 use provider_openai::credential::token_client::{
     AuthorizationCodeExchangeError, AuthorizationCodeExchanger, AuthorizationCodeGrant,
@@ -182,7 +183,13 @@ async fn first_exchange_uses_official_id_token_claim_mapping_without_signature_v
     assert_eq!(account.account.upstream_user_id(), Some("chatgpt-user"));
     assert_eq!(account.account.upstream_account_id(), Some("workspace-id"));
     assert_eq!(account.account.plan_type(), Some("pro"));
-    assert!(account.account.is_schedulable(SystemTime::now()));
+    assert_eq!(
+        account
+            .account
+            .status_projection(SystemTime::now(), None)
+            .status,
+        AccountStatus::Normal
+    );
     assert!(
         account.account.next_refresh_at().is_none(),
         "normal OAuth creation must not persist a margin-derived refresh time"
@@ -201,7 +208,13 @@ async fn first_exchange_permits_missing_identity_claims_but_requires_a_parseable
     };
     assert_eq!(account.account.email(), Some("profile@example.com"));
     assert_eq!(account.account.upstream_user_id(), None);
-    assert!(!account.account.is_schedulable(SystemTime::now()));
+    assert_eq!(
+        account
+            .account
+            .status_projection(SystemTime::now(), None)
+            .status,
+        AccountStatus::Error
+    );
 
     let error = complete("header.not-base64.signature".to_owned())
         .await

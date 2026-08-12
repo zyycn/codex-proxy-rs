@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 
 use gateway_core::engine::credential::{
-    AccountAvailabilityPolicy, AccountSelectionPolicy, CredentialRevision, ProviderAccountId,
+    AccountEligibilityPolicy, AccountSelectionPolicy, CredentialRevision, ProviderAccountId,
 };
 use gateway_core::engine::provider::ProviderResource;
 use gateway_core::routing::UpstreamModelId;
@@ -210,7 +210,7 @@ pub struct GrokSessionSelection {
     excluded_accounts: BTreeSet<ProviderAccountId>,
     required_account: Option<ProviderAccountId>,
     account_selection_policy: AccountSelectionPolicy,
-    availability: AccountAvailabilityPolicy,
+    eligibility: AccountEligibilityPolicy,
     affinity: Option<GrokSessionAffinityKey>,
     deadline: SystemTime,
 }
@@ -230,7 +230,7 @@ impl GrokSessionSelection {
             excluded_accounts,
             required_account,
             account_selection_policy,
-            availability: AccountAvailabilityPolicy::Enforce,
+            eligibility: AccountEligibilityPolicy::Enforce,
             affinity: None,
             deadline,
         }
@@ -245,11 +245,11 @@ impl GrokSessionSelection {
 
     /// 为固定账号的管理端诊断指定本地可用性判定策略。
     #[must_use]
-    pub(crate) const fn with_availability_policy(
+    pub(crate) const fn with_eligibility_policy(
         mut self,
-        availability: AccountAvailabilityPolicy,
+        eligibility: AccountEligibilityPolicy,
     ) -> Self {
-        self.availability = availability;
+        self.eligibility = eligibility;
         self
     }
 
@@ -278,8 +278,8 @@ impl GrokSessionSelection {
     }
 
     #[must_use]
-    pub const fn availability(&self) -> AccountAvailabilityPolicy {
-        self.availability
+    pub const fn eligibility(&self) -> AccountEligibilityPolicy {
+        self.eligibility
     }
 
     /// 返回不含原始客户端会话值的账号亲和键。

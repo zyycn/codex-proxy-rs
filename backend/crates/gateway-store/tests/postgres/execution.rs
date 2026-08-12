@@ -55,8 +55,8 @@ async fn merged_first_attempt_insert_should_match_sequential_semantics() {
            id, provider_kind, name, email, upstream_user_id,
            upstream_account_id, plan_type, authentication_kind,
            provider_credentials_json, credential_revision,
-           has_refresh_token, access_token_expires_at, enabled, availability,
-           availability_observed_at, created_at, updated_at
+           has_refresh_token, access_token_expires_at, enabled, credential_state,
+           credential_observed_at, created_at, updated_at
          ) values (
            'acct_merged', 'openai', 'merged', null, 'user-merged', null, null, 'oauth',
            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'ready', $1, $1, $1

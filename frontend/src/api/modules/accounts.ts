@@ -1,5 +1,15 @@
 import request from '../request'
 
+export type AccountStatus
+  = 'normal' | 'quota_exhausted' | 'rate_limited' | 'disabled' | 'error'
+
+export type AccountErrorReason
+  = 'account_unverified'
+    | 'access_token_expired'
+    | 'credential_expired'
+    | 'credential_invalid'
+    | 'account_banned'
+
 export interface AccountQuotaWindow {
   key: string
   group: string
@@ -104,11 +114,9 @@ export interface Account {
   planType: string | null
   authenticationKind: string
   hasRefreshToken: boolean
-  status: string
-  displayStatus: string
-  errorReason: string | null
+  status: AccountStatus
+  errorReason: AccountErrorReason | null
   errorMessage: string | null
-  availability: string
   enabled: boolean
   accessTokenExpiresAt: string | null
   accessTokenExpiresAtDisplay: string | null

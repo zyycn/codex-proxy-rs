@@ -6,9 +6,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountAvailabilityPolicy, AccountCandidate, AccountFeedbackStats,
+    AccountCandidate, AccountEligibilityPolicy, AccountErrorReason, AccountFeedbackStats,
     AccountRuntimeSignals, AccountSchedulingBlocker, AccountSelectionContext, AccountSelector,
-    PreferredAccountSelection, ProviderAccount, ProviderAccountId,
+    AccountStatus, CredentialState, PreferredAccountSelection, ProviderAccount, ProviderAccountId,
+    QuotaEvidence,
 };
 use gateway_core::engine::{AttemptContext, ContinuationAttempt};
 use gateway_core::provider_ports::{
@@ -57,8 +58,8 @@ pub enum CodexAccountFailure {
     QuotaExhausted,
     /// 当前用量窗口已耗尽；到重置时间后可自动恢复。
     UsageLimitExhausted {
-        /// 上游返回的窗口重置时长。
-        retry_after: Option<Duration>,
+        /// 上游返回的窗口绝对重置时刻。
+        reset_at: Option<SystemTime>,
     },
     /// 账号触发临时用量限制。
     RateLimited {
@@ -72,21 +73,6 @@ pub enum CodexAccountFailure {
     },
     /// Cloudflare 对当前上游路径返回空 404。
     CloudflarePathBlocked,
-}
-
-impl CodexAccountFailure {
-    /// 上游未提供可展示错误文本时，保留已分类的稳定原因。
-    const fn fallback_error_reason(self) -> Option<&'static str> {
-        match self {
-            Self::CredentialExpired => Some("upstream_credential_expired"),
-            Self::IdentityVerificationRequired => Some("upstream_identity_verification_required"),
-            Self::Banned => Some("upstream_account_banned"),
-            Self::QuotaExhausted => Some("upstream_quota_exhausted"),
-            Self::UsageLimitExhausted { .. } => Some("upstream_usage_limit_exhausted"),
-            Self::CloudflarePathBlocked => Some("upstream_cloudflare_path_blocked"),
-            Self::RateLimited { .. } | Self::CloudflareChallenge { .. } => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -127,7 +113,6 @@ pub struct CodexCredentialSelector {
     cookie_policy: CodexCookiePolicy,
     risk_recovery: Mutex<HashMap<String, RiskRecoveryState>>,
     account_feedback: Arc<AccountFeedbackStats>,
-    skip_exhausted: bool,
 }
 
 enum SessionAffinityLookup {
@@ -263,7 +248,6 @@ impl CodexCredentialSelector {
         agent_identity: Arc<CodexAgentIdentityTaskService>,
         account_feedback: Arc<AccountFeedbackStats>,
         cookie_policy: CodexCookiePolicy,
-        skip_exhausted: bool,
     ) -> Self {
         Self {
             provider_kind,
@@ -277,7 +261,6 @@ impl CodexCredentialSelector {
             cookie_policy,
             risk_recovery: Mutex::new(HashMap::new()),
             account_feedback,
-            skip_exhausted,
         }
     }
 
@@ -310,24 +293,17 @@ impl CodexCredentialSelector {
         if !diagnostic {
             self.quota.prepare_scheduling(&accounts).await;
         }
-        // 429 临时限流（Redis 冷却）中的账号即使额度正常也不参与调度，
-        // 到期后冷却过期自动恢复。诊断请求（连接测试）绕过冷却，需要真实探测。
-        let accounts = if diagnostic {
-            accounts
-        } else {
-            let mut retained = Vec::with_capacity(accounts.len());
-            for account in accounts {
-                let cooling = self
+        let mut rate_limits = HashMap::with_capacity(accounts.len());
+        if !diagnostic {
+            for account in &accounts {
+                let until = self
                     .quota
-                    .rate_limited_until(account.id(), account.revision())
+                    .rate_limited_until(account.id())
                     .await
                     .unwrap_or(None);
-                if cooling.is_none() {
-                    retained.push(account);
-                }
+                rate_limits.insert(account.id().clone(), until);
             }
-            retained
-        };
+        }
         let account_ids = accounts
             .iter()
             .map(|account| account.id().clone())
@@ -352,11 +328,12 @@ impl CodexCredentialSelector {
                         last_started_at: None,
                         quota_reset_at: None,
                         quota_remaining_rank: None,
-                        quota_limit_reached: false,
+                        rate_limited_until: None,
                         failure_rate_basis_points: None,
                         first_output_latency_ms: None,
                     })
                     .with_provider_quota(self.quota.scheduling_signals(&account))
+                    .with_rate_limit(rate_limits.get(account.id()).copied().flatten())
                     .with_runtime_health(health.0, health.1);
                 AccountCandidate { account, signals }
             })
@@ -383,41 +360,6 @@ impl CodexCredentialSelector {
             return Err(CredentialSelectionError::NoEligibleCredential);
         }
         let pinned_account = required_account.or_else(|| continuation_account.clone());
-        let preserve_native_continuation_state = matches!(
-            request.attempt.continuation_attempt(),
-            ContinuationAttempt::Native
-        ) && continuation_account.is_some();
-        // skip_exhausted 语义：true 时排除任一窗口触顶（limit_reached）的账号，
-        // 仅由上游 429 兜底；false 时保留全部候选（含 QuotaExhausted 的放宽投影）。
-        // 保留原始账号供 revision-fenced 凭据加载，用影子候选承载资格放宽。
-        let scheduling_candidates = if diagnostic {
-            // 连接测试必须实际探测指定账号；额度快照只影响常规调度。
-            candidates.clone()
-        } else if self.skip_exhausted {
-            candidates
-                .iter()
-                .filter(|candidate| !candidate.signals.quota_limit_reached)
-                .cloned()
-                .collect::<Vec<_>>()
-        } else {
-            candidates
-                .iter()
-                .cloned()
-                .map(|mut candidate| {
-                    // 已命中 previous_response_id 的 native continuation 先检查原账号。
-                    // 即使常规调度允许探测额度耗尽账号，也必须保留原账号真实状态，
-                    // 由 Coordinator 据此切换到可携带重放，而非伪装为 Ready。
-                    if !preserve_native_continuation_state
-                        || pinned_account.as_ref() != Some(candidate.account.id())
-                    {
-                        candidate.account =
-                            quota_exhausted_scheduling_projection(&candidate.account);
-                    }
-                    candidate
-                })
-                .collect::<Vec<_>>()
-        };
-        let scheduling_candidates = scheduling_candidates.as_slice();
         let mut affinity = if diagnostic {
             AffinitySelection::default()
         } else {
@@ -432,18 +374,6 @@ impl CodexCredentialSelector {
             .prepare_cyber_policy_scope(cyber_policy_session_key)
             .await;
         let mut excluded = request.attempt.excluded_accounts().clone();
-        if !diagnostic
-            && preserve_native_continuation_state
-            && let Some(pinned) = pinned_account.as_ref()
-            && candidates.iter().any(|candidate| {
-                candidate.account.id() == pinned && candidate.signals.quota_limit_reached
-            })
-        {
-            // `skip_exhausted = false` 只允许普通新请求探测可疑账号；已绑定的
-            // native response handle 先将真实触顶状态交给 Coordinator，随后才可
-            // 通过 ReplayAny 按当前调度策略换号。
-            excluded.insert(pinned.clone());
-        }
         if let Some(state) = cyber_policy_scope
             .as_ref()
             .and_then(|scope| scope.state.as_ref())
@@ -476,13 +406,13 @@ impl CodexCredentialSelector {
                 excluded_accounts: excluded.clone(),
                 preferred_account: preferred.clone(),
                 round_robin_cursor,
-                availability: if diagnostic {
-                    AccountAvailabilityPolicy::BypassForDiagnostic
+                eligibility: if diagnostic {
+                    AccountEligibilityPolicy::BypassForDiagnostic
                 } else {
-                    AccountAvailabilityPolicy::Enforce
+                    AccountEligibilityPolicy::Enforce
                 },
             };
-            let Some(selection) = AccountSelector.select(scheduling_candidates, &context) else {
+            let Some(selection) = AccountSelector.select(&candidates, &context) else {
                 return match shortest_retry {
                     Some(retry_after) => Err(CredentialSelectionError::CapacityUnavailable {
                         retry_after: Some(retry_after),
@@ -597,10 +527,15 @@ impl CodexCredentialSelector {
             self.clear_session_affinity(key).await;
             return AffinitySelection::escaped(account_id, AffinityEscapeReason::HardUnavailable);
         };
-        if candidate.account.is_schedulable(now) {
+        if candidate
+            .account
+            .status_projection(now, candidate.signals.rate_limited_until)
+            .status
+            == AccountStatus::Normal
+        {
             return AffinitySelection::preferred(account_id);
         }
-        let reason = affinity_unavailable_reason(&candidate.account, now);
+        let reason = affinity_unavailable_reason(candidate, now);
         self.clear_session_affinity(key).await;
         AffinitySelection::escaped(account_id, reason)
     }
@@ -749,9 +684,7 @@ impl CodexCredentialSelector {
         message: Option<String>,
     ) -> Result<(), CredentialSelectionError> {
         let now = SystemTime::now();
-        let message = message
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| failure.fallback_error_reason().map(str::to_owned));
+        let message = message.filter(|value| !value.trim().is_empty());
         match failure {
             CodexAccountFailure::CredentialExpired => {
                 if account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH
@@ -772,29 +705,51 @@ impl CodexCredentialSelector {
                     );
                     return Ok(());
                 }
-                self.apply_state_with_message(account, AccountAvailability::Expired, now, message)
-                    .await
-            }
-            CodexAccountFailure::IdentityVerificationRequired => {
-                self.apply_state_with_message(account, AccountAvailability::Invalid, now, message)
-                    .await
-            }
-            CodexAccountFailure::Banned => {
-                self.apply_state_with_message(account, AccountAvailability::Banned, now, message)
-                    .await
-            }
-            // 402：真额度耗尽，由 quota worker 按窗口 reset 自动恢复。
-            CodexAccountFailure::QuotaExhausted
-            | CodexAccountFailure::UsageLimitExhausted { .. } => {
-                self.apply_state_with_message(
+                self.apply_credential_state(
                     account,
-                    AccountAvailability::QuotaExhausted,
+                    CredentialState::Expired,
+                    AccountErrorReason::AccessTokenExpired,
                     now,
                     message,
                 )
                 .await
             }
-            // 429：临时限流只写 quota，availability 不改变。
+            CodexAccountFailure::IdentityVerificationRequired => {
+                self.apply_credential_state(
+                    account,
+                    CredentialState::Invalid,
+                    AccountErrorReason::AccountUnverified,
+                    now,
+                    message,
+                )
+                .await
+            }
+            CodexAccountFailure::Banned => {
+                self.apply_credential_state(
+                    account,
+                    CredentialState::Banned,
+                    AccountErrorReason::AccountBanned,
+                    now,
+                    message,
+                )
+                .await
+            }
+            CodexAccountFailure::QuotaExhausted => self
+                .quota
+                .record_confirmed_exhaustion(account, QuotaEvidence::PaymentRequired, None, now)
+                .await
+                .map_err(|_| CredentialSelectionError::Store),
+            CodexAccountFailure::UsageLimitExhausted { reset_at } => self
+                .quota
+                .record_confirmed_exhaustion(
+                    account,
+                    QuotaEvidence::UsageLimitReached,
+                    reset_at,
+                    now,
+                )
+                .await
+                .map_err(|_| CredentialSelectionError::Store),
+            // 429：临时限流只写运行时冷却，不改变凭据或额度事实。
             CodexAccountFailure::RateLimited { retry_after } => {
                 self.quota
                     .apply_rate_limit_429(account, retry_after, now)
@@ -802,7 +757,7 @@ impl CodexCredentialSelector {
                     .map_err(|_| CredentialSelectionError::Store)?;
                 Ok(())
             }
-            // Cloudflare 挑战：内存退避表（记录风险计数），不写 availability。
+            // Cloudflare 挑战：内存退避表（记录风险计数），不写账号事实。
             CodexAccountFailure::CloudflareChallenge { retry_after } => {
                 let delay = self.cloudflare_challenge_delay(account.id(), now, retry_after);
                 let recovery = now
@@ -815,9 +770,10 @@ impl CodexCredentialSelector {
             CodexAccountFailure::CloudflarePathBlocked => {
                 let blocked = self.record_cloudflare_path_block(account.id(), now);
                 if blocked >= CLOUDFLARE_PATH_BLOCK_THRESHOLD {
-                    self.apply_state_with_message(
+                    self.apply_credential_state(
                         account,
-                        AccountAvailability::Invalid,
+                        CredentialState::Invalid,
+                        AccountErrorReason::CredentialInvalid,
                         now,
                         message,
                     )
@@ -830,15 +786,22 @@ impl CodexCredentialSelector {
         }
     }
 
-    async fn apply_state_with_message(
+    async fn apply_credential_state(
         &self,
         account: &ProviderAccount,
-        availability: AccountAvailability,
+        credential_state: CredentialState,
+        error_reason: AccountErrorReason,
         observed_at: SystemTime,
         message: Option<String>,
     ) -> Result<(), CredentialSelectionError> {
         self.repository
-            .apply_state_with_message(account, availability, observed_at, message)
+            .apply_state_with_reason(
+                account,
+                credential_state,
+                observed_at,
+                Some(error_reason),
+                message,
+            )
             .await?;
         Ok(())
     }
@@ -895,29 +858,34 @@ impl CodexCredentialSelector {
         let Ok(current) = self.current_account(account.id()).await else {
             return;
         };
-        // QuotaExhausted 只能由结构化额度事实解除；一次成功响应本身不能证明额度已经恢复。
         if current.provider() != &self.provider_kind
             || current.revision() != account.revision()
             || !current.enabled()
-            || !matches!(
-                current.availability(),
-                AccountAvailability::Unknown
-                    | AccountAvailability::Expired
-                    | AccountAvailability::Invalid
-                    | AccountAvailability::Banned
-            )
         {
             return;
         }
+        let observed_at = SystemTime::now();
+        if current.credential_state() != CredentialState::Ready
+            && let Err(error) = self
+                .repository
+                .apply_state(&current, CredentialState::Ready, observed_at)
+                .await
+        {
+            tracing::warn!(
+                account_id = %account.id(),
+                error = %error,
+                "OpenAI credential recovery after successful upstream response failed"
+            );
+        }
         if let Err(error) = self
-            .repository
-            .apply_state(&current, AccountAvailability::Ready, SystemTime::now())
+            .quota
+            .record_successful_inference(&current, observed_at)
             .await
         {
             tracing::warn!(
                 account_id = %account.id(),
                 error = %error,
-                "OpenAI account state recovery after successful upstream response failed"
+                "OpenAI quota recovery after successful upstream response failed"
             );
         }
     }
@@ -1045,30 +1013,19 @@ impl CodexCredentialSelector {
     }
 }
 
-fn quota_exhausted_scheduling_projection(account: &ProviderAccount) -> ProviderAccount {
-    if account.availability() == AccountAvailability::QuotaExhausted {
-        return account
-            .clone()
-            .with_runtime_state(account.enabled(), AccountAvailability::Ready);
-    }
-    account.clone()
-}
-
-fn affinity_unavailable_reason(account: &ProviderAccount, now: SystemTime) -> AffinityEscapeReason {
-    if !account.enabled()
-        || account
-            .access_token_expires_at()
-            .is_some_and(|expires_at| expires_at <= now)
+fn affinity_unavailable_reason(
+    candidate: &AccountCandidate,
+    now: SystemTime,
+) -> AffinityEscapeReason {
+    match candidate
+        .account
+        .status_projection(now, candidate.signals.rate_limited_until)
+        .status
     {
-        return AffinityEscapeReason::HardUnavailable;
-    }
-    match account.availability() {
-        AccountAvailability::QuotaExhausted => AffinityEscapeReason::QuotaExhausted,
-        AccountAvailability::Unknown
-        | AccountAvailability::Ready
-        | AccountAvailability::Expired
-        | AccountAvailability::Banned
-        | AccountAvailability::Invalid => AffinityEscapeReason::HardUnavailable,
+        AccountStatus::QuotaExhausted => AffinityEscapeReason::QuotaExhausted,
+        AccountStatus::RateLimited => AffinityEscapeReason::Cooldown,
+        AccountStatus::Normal => AffinityEscapeReason::SelectionInvariant,
+        AccountStatus::Disabled | AccountStatus::Error => AffinityEscapeReason::HardUnavailable,
     }
 }
 

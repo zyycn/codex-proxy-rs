@@ -1,6 +1,6 @@
 //! 统一账号目录与跨 Provider 动态分派。
 
-use std::{collections::BTreeMap, sync::Arc, time::SystemTime};
+use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
@@ -18,8 +18,7 @@ use crate::{
         AdminError, MutationContext,
         accounts::{
             AccountConnectionTestEvent, AccountConnectionTestEventStream, AccountListQuery,
-            AccountRecord, AccountStatus, AccountStatusSignals, AccountUsageWindowQuery,
-            derive_error_reason,
+            AccountPageItem, AccountUsageWindowQuery,
         },
         observability::TimeRange,
         provider_credentials::{
@@ -28,10 +27,7 @@ use crate::{
             ProviderQuotaWindow, QuotaLocalUsageAttribution,
         },
     },
-    ports::{
-        provider::ProviderAdminRegistry,
-        store::{AccountStore, SettingsStore},
-    },
+    ports::{provider::ProviderAdminRegistry, store::AccountStore},
 };
 
 use super::{
@@ -79,7 +75,6 @@ pub trait AccountsService: Send + Sync {
 
 pub(crate) struct DefaultAccountsService {
     accounts: Arc<dyn AccountStore>,
-    settings: Arc<dyn SettingsStore>,
     providers: ProviderAdminRegistry,
     snapshot: Arc<dyn SnapshotControl>,
     probe: Arc<dyn AccountProbe>,
@@ -89,14 +84,12 @@ impl DefaultAccountsService {
     #[must_use]
     pub(crate) const fn new(
         accounts: Arc<dyn AccountStore>,
-        settings: Arc<dyn SettingsStore>,
         providers: ProviderAdminRegistry,
         snapshot: Arc<dyn SnapshotControl>,
         probe: Arc<dyn AccountProbe>,
     ) -> Self {
         Self {
             accounts,
-            settings,
             providers,
             snapshot,
             probe,
@@ -106,7 +99,7 @@ impl DefaultAccountsService {
     async fn load_account(
         &self,
         account_id: &ProviderAccountId,
-    ) -> Result<AccountRecord, AdminError> {
+    ) -> Result<AccountPageItem, AdminError> {
         self.accounts
             .load_account(account_id.as_str())
             .await
@@ -119,32 +112,32 @@ impl DefaultAccountsService {
         account_id: &ProviderAccountId,
     ) -> Result<
         (
-            AccountRecord,
+            AccountPageItem,
             Arc<dyn crate::ports::provider::ProviderAdmin>,
         ),
         AdminError,
     > {
-        let account = self.load_account(account_id).await?;
+        let item = self.load_account(account_id).await?;
         let provider = self
             .providers
-            .require(&account.provider_kind)
+            .require(&item.account.provider_kind)
             .map_err(|error| map_provider_error(error, "provider account"))?;
-        Ok((account, provider))
+        Ok((item, provider))
     }
 
     async fn attach_quota_local_usage(
         &self,
-        accounts: &[AccountRecord],
+        accounts: &[AccountPageItem],
         quotas: &mut [ProviderQuota],
     ) -> Result<(), AdminError> {
         let windows = accounts
             .iter()
             .zip(quotas.iter())
-            .flat_map(|(account, quota)| {
+            .flat_map(|(item, quota)| {
                 quota
                     .windows
                     .iter()
-                    .filter_map(|window| quota_usage_window(&account.id, window))
+                    .filter_map(|window| quota_usage_window(&item.account.id, window))
             })
             .collect::<Vec<_>>();
         if windows.is_empty() {
@@ -158,12 +151,12 @@ impl DefaultAccountsService {
             .into_iter()
             .map(|result| ((result.account_id, result.key), result.usage))
             .collect::<BTreeMap<_, _>>();
-        for (account, quota) in accounts.iter().zip(quotas) {
+        for (item, quota) in accounts.iter().zip(quotas) {
             for window in &mut quota.windows {
                 if window.local_usage.is_none()
                     && window.local_usage_attribution == QuotaLocalUsageAttribution::AccountWide
                 {
-                    let key = (account.id.clone(), window.key.clone());
+                    let key = (item.account.id.clone(), window.key.clone());
                     if let Some(usage) = usage_by_window.get(&key) {
                         window.local_usage = Some(usage.clone());
                     }
@@ -178,33 +171,19 @@ impl DefaultAccountsService {
         account_id: &ProviderAccountId,
         refresh_quota: bool,
     ) -> Result<AccountDirectoryItem, AdminError> {
-        let (account, provider) = self.provider_for_account(account_id).await?;
-        let settings = self
-            .settings
-            .load_runtime_settings()
-            .await
-            .map_err(|error| map_store_error(error, "runtime settings"))?;
+        let (stored, provider) = self.provider_for_account(account_id).await?;
+        let account = &stored.account;
         let now = Utc::now();
-        let retained_range = retained_usage_range(now, settings.usage_retention_days);
         let rolling_range = TimeRange {
             start: now - Duration::hours(24),
             end: now,
         };
         let ids = vec![account.id.clone()];
-        let (usage, rolling_usage) = futures::try_join!(
-            async {
-                self.accounts
-                    .load_account_usage(retained_range, &ids)
-                    .await
-                    .map_err(|error| map_store_error(error, "account usage"))
-            },
-            async {
-                self.accounts
-                    .load_account_usage(rolling_range, &ids)
-                    .await
-                    .map_err(|error| map_store_error(error, "rolling account usage"))
-            },
-        )?;
+        let rolling_usage = self
+            .accounts
+            .load_account_usage(rolling_range, &ids)
+            .await
+            .map_err(|error| map_store_error(error, "rolling account usage"))?;
         let rolling_usage = rolling_usage.into_iter().next();
         let mut quota = provider
             .quota(ProviderQuotaRequest {
@@ -215,17 +194,15 @@ impl DefaultAccountsService {
             .await
             .map_err(|error| map_provider_error(error, "provider quota"))?;
         self.attach_quota_local_usage(
-            std::slice::from_ref(&account),
+            std::slice::from_ref(&stored),
             std::slice::from_mut(&mut quota),
         )
         .await?;
-        let signals = account_signals(&account, &quota, now);
-        let error_reason = derive_error_reason(&signals);
+        let usage = quota.representative_window_usage().cloned();
         Ok(AccountDirectoryItem {
-            status: signals.derive(),
-            error_reason,
-            usage: usage.into_iter().next(),
-            account,
+            projection: stored.projection,
+            usage,
+            account: stored.account,
             quota,
         })
     }
@@ -234,13 +211,12 @@ impl DefaultAccountsService {
 #[async_trait]
 impl AccountsService for DefaultAccountsService {
     async fn list(&self, query: AccountListQuery) -> Result<AccountDirectoryPage, AdminError> {
-        let (page, settings) = futures::try_join!(
-            self.accounts.list_accounts(query),
-            self.settings.load_runtime_settings(),
-        )
-        .map_err(|error| map_store_error(error, "account directory"))?;
+        let page = self
+            .accounts
+            .list_accounts(query)
+            .await
+            .map_err(|error| map_store_error(error, "account directory"))?;
         let now = Utc::now();
-        let retained_range = retained_usage_range(now, settings.usage_retention_days);
         let rolling_range = TimeRange {
             start: now - Duration::hours(24),
             end: now,
@@ -248,22 +224,19 @@ impl AccountsService for DefaultAccountsService {
         let ids = page
             .items
             .iter()
-            .map(|account| account.id.clone())
+            .map(|item| item.account.id.clone())
             .collect::<Vec<_>>();
-        let (usage, rolling_usage) = futures::try_join!(
-            self.accounts.load_account_usage(retained_range, &ids),
-            self.accounts.load_account_usage(rolling_range, &ids),
-        )
-        .map_err(|error| map_store_error(error, "account usage"))?;
-        let usage = usage
-            .into_iter()
-            .map(|usage| (usage.account_id.clone(), usage))
-            .collect::<BTreeMap<_, _>>();
+        let rolling_usage = self
+            .accounts
+            .load_account_usage(rolling_range, &ids)
+            .await
+            .map_err(|error| map_store_error(error, "rolling account usage"))?;
         let rolling_usage = rolling_usage
             .into_iter()
             .map(|usage| (usage.account_id.clone(), usage))
             .collect::<BTreeMap<_, _>>();
-        let mut quotas = futures::future::join_all(page.items.iter().map(|account| async {
+        let mut quotas = futures::future::join_all(page.items.iter().map(|item| async {
+            let account = &item.account;
             let account_id = ProviderAccountId::new(account.id.clone())
                 .map_err(|_| AdminError::invalid("Invalid provider account ID"))?;
             // 单个账号的 quota 投影失败（Provider 未注册或 quota 读取失败）不拖垮整页：
@@ -307,14 +280,12 @@ impl AccountsService for DefaultAccountsService {
             .items
             .into_iter()
             .zip(quotas)
-            .map(|(account, quota)| {
-                let signals = account_signals(&account, &quota, now);
-                let error_reason = derive_error_reason(&signals);
+            .map(|(item, quota)| {
+                let usage = quota.representative_window_usage().cloned();
                 AccountDirectoryItem {
-                    status: signals.derive(),
-                    error_reason,
-                    usage: usage.get(&account.id).cloned(),
-                    account,
+                    usage,
+                    account: item.account,
+                    projection: item.projection,
                     quota,
                 }
             })
@@ -342,7 +313,7 @@ impl AccountsService for DefaultAccountsService {
         for account_id in account_ids {
             let account = self.load_account(&account_id).await?;
             grouped
-                .entry(account.provider_kind)
+                .entry(account.account.provider_kind)
                 .or_default()
                 .push(account_id);
         }
@@ -385,7 +356,8 @@ impl AccountsService for DefaultAccountsService {
         context: &MutationContext,
         account_id: ProviderAccountId,
     ) -> Result<AccountRefreshResult, AdminError> {
-        let (account, provider) = self.provider_for_account(&account_id).await?;
+        let (stored, provider) = self.provider_for_account(&account_id).await?;
+        let account = stored.account;
         let prepared = provider
             .prepare_refresh(PrepareCredentialRefresh {
                 account: account.clone(),
@@ -436,8 +408,8 @@ impl AccountsService for DefaultAccountsService {
         account_id: ProviderAccountId,
         upstream_model: UpstreamModelId,
     ) -> Result<AccountConnectionTestEventStream, AdminError> {
-        let (account, provider) = self.provider_for_account(&account_id).await?;
-        let initial_status = account_status(&account, false, Utc::now());
+        let (stored, provider) = self.provider_for_account(&account_id).await?;
+        let account = stored.account;
         let model = upstream_model.as_str().to_owned();
         let operation = provider
             .connection_test_operation(&upstream_model, CONNECTION_TEST_INPUT)
@@ -454,8 +426,6 @@ impl AccountsService for DefaultAccountsService {
             },
         ];
         let probe = Arc::clone(&self.probe);
-        let accounts = Arc::clone(&self.accounts);
-        let stored_account_id = account.id.clone();
         let terminal = futures::stream::once(async move {
             let result = probe
                 .probe(AccountProbeRequest {
@@ -465,22 +435,12 @@ impl AccountsService for DefaultAccountsService {
                     operation,
                 })
                 .await;
-            let status = accounts
-                .load_account(&stored_account_id)
-                .await
-                .ok()
-                .flatten()
-                .map_or(initial_status, |account| {
-                    account_status(&account, false, Utc::now())
-                });
             match result {
                 Ok(result) => result
                     .text
                     .into_iter()
                     .map(|text| AccountConnectionTestEvent::Content { text })
-                    .chain(std::iter::once(AccountConnectionTestEvent::Completed {
-                        account_status: status,
-                    }))
+                    .chain(std::iter::once(AccountConnectionTestEvent::Completed))
                     .collect(),
                 Err(error) => {
                     let upstream_status = error
@@ -506,7 +466,6 @@ impl AccountsService for DefaultAccountsService {
                         upstream_status,
                         upstream_content_type,
                         upstream_body,
-                        account_status: status,
                     }]
                 }
             }
@@ -523,46 +482,7 @@ fn empty_quota() -> ProviderQuota {
         refresh_token_expires_at: None,
         windows: Vec::new(),
         limit_reached: false,
-        rate_limited_until: None,
         provider_data: None,
-    }
-}
-
-/// 构造状态派生所需的信号快照。
-fn account_signals(
-    account: &AccountRecord,
-    quota: &ProviderQuota,
-    now: chrono::DateTime<Utc>,
-) -> AccountStatusSignals {
-    AccountStatusSignals {
-        enabled: account.enabled,
-        availability: account.availability,
-        access_token_expired: account
-            .access_token_expires_at
-            .is_some_and(|expires_at| expires_at <= now),
-        quota_limit_reached: quota.limit_reached,
-        rate_limited_until: quota.rate_limited_until.map(SystemTime::from),
-    }
-}
-
-/// 账号运营分类（互斥展示状态）。
-fn account_status(
-    account: &AccountRecord,
-    quota_limit_reached: bool,
-    now: chrono::DateTime<Utc>,
-) -> AccountStatus {
-    let quota = ProviderQuota {
-        limit_reached: quota_limit_reached,
-        ..empty_quota()
-    };
-    account_signals(account, &quota, now).derive()
-}
-
-fn retained_usage_range(now: chrono::DateTime<Utc>, retention_days: u32) -> TimeRange {
-    // 账号留存投影是内部查询，不受外部观测接口 366 天上限约束。
-    TimeRange {
-        start: now - Duration::days(i64::from(retention_days)),
-        end: now,
     }
 }
 

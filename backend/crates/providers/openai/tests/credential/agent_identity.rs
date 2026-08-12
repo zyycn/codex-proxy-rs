@@ -9,8 +9,8 @@ use chrono::{TimeZone, Utc};
 use ed25519_dalek::pkcs8::EncodePrivateKey as _;
 use ed25519_dalek::{Signature, SigningKey, Verifier as _};
 use gateway_core::engine::credential::{
-    AccountAvailability, CredentialRevision, NewProviderAccount, ProviderAccount,
-    ProviderAccountId, ProviderAccountStore,
+    CredentialRevision, CredentialState, NewProviderAccount, ProviderAccount, ProviderAccountId,
+    ProviderAccountStore, QuotaState,
 };
 use gateway_core::routing::ProviderKind;
 use provider_openai::credential::{
@@ -65,7 +65,13 @@ fn agent_account(
         Some("agent-account".to_owned()),
         Some("pro".to_owned()),
     )
-    .with_runtime_state(true, AccountAvailability::Ready)
+    .with_account_facts(
+        true,
+        CredentialState::Ready,
+        QuotaState::unknown(),
+        None,
+        None,
+    )
     .with_refresh_schedule(false, None);
     NewProviderAccount {
         account,

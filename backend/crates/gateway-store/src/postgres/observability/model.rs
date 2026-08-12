@@ -363,15 +363,11 @@ pub struct CalculatedUsageBillingFact {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProviderAccountMetrics {
     pub total: u64,
-    pub enabled: u64,
-    pub unavailable: u64,
-    pub active: u64,
-    pub rate_limited: u64,
-    pub expired: u64,
-    pub invalid: u64,
+    pub normal: u64,
     pub quota_exhausted: u64,
+    pub rate_limited: u64,
     pub disabled: u64,
-    pub banned: u64,
+    pub error: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -388,8 +384,6 @@ pub struct ProviderAccountUsageObservation {
     pub name: String,
     pub email: Option<String>,
     pub plan_type: Option<String>,
-    pub enabled: bool,
-    pub availability: String,
     pub request_count: u64,
     pub success_count: u64,
     pub input_tokens: Option<u64>,

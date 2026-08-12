@@ -5,12 +5,12 @@ use std::time::{Duration, SystemTime};
 use serde_json::{Map, Value};
 
 use gateway_core::engine::credential::{
-    AccountAttemptFeedback, AccountAvailability, AccountAvailabilityPolicy, AccountCandidate,
-    AccountFeedbackStats, AccountQuotaSignals, AccountRuntimeSignals, AccountSchedulingBlocker,
-    AccountSelectionContext, AccountSelectionPolicy, AccountSelector, CredentialCasUpdate,
-    CredentialRevision, OpaqueProviderData, PlaintextCredential, PreferredAccountSelection,
-    ProviderAccount, ProviderAccountId, ProviderAccountIdentity, ProviderAccountUpdate,
-    RotationStrategy,
+    AccountAttemptFeedback, AccountCandidate, AccountEligibilityPolicy, AccountFeedbackStats,
+    AccountQuotaSignals, AccountRuntimeSignals, AccountSchedulingBlocker, AccountSelectionContext,
+    AccountSelectionPolicy, AccountSelector, AccountStatus, CredentialCasUpdate,
+    CredentialRevision, CredentialState, OpaqueProviderData, PlaintextCredential,
+    PreferredAccountSelection, ProviderAccount, ProviderAccountId, ProviderAccountIdentity,
+    ProviderAccountUpdate, QuotaEvidence, QuotaState, RotationStrategy,
 };
 use gateway_core::routing::ProviderKind;
 
@@ -24,7 +24,13 @@ fn account(id: &str) -> ProviderAccount {
         CredentialRevision::new(1).expect("valid revision"),
         Some(SystemTime::now() + Duration::from_secs(3600)),
     )
-    .with_runtime_state(true, AccountAvailability::Ready)
+    .with_account_facts(
+        true,
+        CredentialState::Ready,
+        QuotaState::unknown(),
+        None,
+        None,
+    )
 }
 
 fn candidate(id: &str, in_flight: u32, remaining: Option<u64>) -> AccountCandidate {
@@ -35,7 +41,7 @@ fn candidate(id: &str, in_flight: u32, remaining: Option<u64>) -> AccountCandida
             last_started_at: None,
             quota_reset_at: None,
             quota_remaining_rank: remaining,
-            quota_limit_reached: false,
+            rate_limited_until: None,
             failure_rate_basis_points: None,
             first_output_latency_ms: None,
         },
@@ -53,7 +59,7 @@ fn context(strategy: RotationStrategy) -> AccountSelectionContext {
         excluded_accounts: BTreeSet::new(),
         preferred_account: None,
         round_robin_cursor: 0,
-        availability: AccountAvailabilityPolicy::Enforce,
+        eligibility: AccountEligibilityPolicy::Enforce,
     }
 }
 
@@ -101,43 +107,99 @@ fn provider_account_identity_debug_should_redact_upstream_ids() {
 }
 
 #[test]
-fn availability_should_round_trip_all_database_values() {
+fn account_fact_values_should_round_trip() {
     assert_eq!(
-        AccountAvailability::parse(AccountAvailability::QuotaExhausted.as_str()),
-        Some(AccountAvailability::QuotaExhausted)
+        CredentialState::parse(CredentialState::Banned.as_str()),
+        Some(CredentialState::Banned)
+    );
+    assert_eq!(
+        QuotaEvidence::parse("provider_denied"),
+        Some(QuotaEvidence::ProviderDenied)
     );
 }
 
 #[test]
-fn diagnostic_selection_bypasses_all_local_account_availability() {
+fn exhausted_quota_refresh_is_due_at_reset_or_provider_fallback() {
+    let now = SystemTime::now();
+    let observed_at = now - Duration::from_secs(60);
+    let before_reset = QuotaState::exhausted(
+        QuotaEvidence::ProviderDenied,
+        observed_at,
+        Some(now + Duration::from_secs(1)),
+    );
+    let after_reset = QuotaState::exhausted(
+        QuotaEvidence::ProviderDenied,
+        observed_at,
+        Some(now - Duration::from_secs(1)),
+    );
+    let without_reset = QuotaState::exhausted(QuotaEvidence::ProviderDenied, observed_at, None);
+
+    assert!(!before_reset.exhaustion_refresh_due(now, Duration::from_secs(30)));
+    assert!(after_reset.exhaustion_refresh_due(now, Duration::from_secs(30)));
+    assert!(without_reset.exhaustion_refresh_due(now, Duration::from_secs(30)));
+    assert!(!without_reset.exhaustion_refresh_due(now, Duration::from_secs(120)));
+}
+
+#[test]
+fn inconclusive_quota_observation_cannot_erase_confirmed_access() {
+    let now = SystemTime::now();
+    let exhausted = QuotaState::exhausted(QuotaEvidence::ProviderDenied, now, None);
+
+    assert_eq!(
+        exhausted
+            .merge_observation(QuotaState::observed_unknown(now + Duration::from_secs(1)))
+            .access(),
+        gateway_core::engine::credential::QuotaAccessState::Exhausted
+    );
+    assert_eq!(
+        exhausted
+            .merge_observation(QuotaState::allowed(now + Duration::from_secs(1)))
+            .access(),
+        gateway_core::engine::credential::QuotaAccessState::Allowed
+    );
+}
+
+#[test]
+fn diagnostic_selection_bypasses_all_local_account_eligibility() {
+    let observed_at = SystemTime::now();
     let exhausted = AccountCandidate {
-        account: account("acct_exhausted")
-            .with_runtime_state(true, AccountAvailability::QuotaExhausted),
+        account: account("acct_exhausted").with_account_facts(
+            true,
+            CredentialState::Ready,
+            QuotaState::exhausted(QuotaEvidence::ProviderDenied, observed_at, None),
+            None,
+            None,
+        ),
         signals: AccountRuntimeSignals {
             in_flight: 0,
             last_started_at: None,
             quota_reset_at: None,
             quota_remaining_rank: None,
-            quota_limit_reached: false,
+            rate_limited_until: None,
             failure_rate_basis_points: None,
             first_output_latency_ms: None,
         },
     };
     let disabled = AccountCandidate {
-        account: account("acct_disabled")
-            .with_runtime_state(false, AccountAvailability::QuotaExhausted),
+        account: account("acct_disabled").with_account_facts(
+            false,
+            CredentialState::Ready,
+            QuotaState::exhausted(QuotaEvidence::ProviderDenied, observed_at, None),
+            None,
+            None,
+        ),
         signals: AccountRuntimeSignals {
             in_flight: 0,
             last_started_at: None,
             quota_reset_at: None,
             quota_remaining_rank: None,
-            quota_limit_reached: false,
+            rate_limited_until: None,
             failure_rate_basis_points: None,
             first_output_latency_ms: None,
         },
     };
     let mut context = context(RotationStrategy::Sticky);
-    context.availability = AccountAvailabilityPolicy::BypassForDiagnostic;
+    context.eligibility = AccountEligibilityPolicy::BypassForDiagnostic;
 
     assert_eq!(
         AccountSelector
@@ -155,9 +217,33 @@ fn diagnostic_selection_bypasses_all_local_account_availability() {
 
 #[test]
 fn disabled_account_should_not_be_schedulable() {
-    let account = account("acct_disabled").with_runtime_state(false, AccountAvailability::Ready);
+    let account = account("acct_disabled").with_account_facts(
+        false,
+        CredentialState::Ready,
+        QuotaState::unknown(),
+        None,
+        None,
+    );
 
-    assert!(!account.is_schedulable(SystemTime::now()));
+    assert_eq!(
+        account.status_projection(SystemTime::now(), None).status,
+        AccountStatus::Disabled
+    );
+}
+
+#[test]
+fn rate_limited_projection_carries_only_the_active_cooldown_deadline() {
+    let now = SystemTime::now();
+    let active_until = now + Duration::from_secs(60);
+    let account = account("acct_rate_limited");
+
+    let active = account.status_projection(now, Some(active_until));
+    assert_eq!(active.status, AccountStatus::RateLimited);
+    assert_eq!(active.rate_limited_until, Some(active_until));
+
+    let elapsed = account.status_projection(now, Some(now - Duration::from_secs(1)));
+    assert_eq!(elapsed.status, AccountStatus::Normal);
+    assert_eq!(elapsed.rate_limited_until, None);
 }
 
 #[test]
@@ -171,14 +257,20 @@ fn account_without_upstream_identity_should_stay_unknown_and_not_schedulable() {
         CredentialRevision::new(1).expect("valid revision"),
         Some(SystemTime::now() + Duration::from_secs(3600)),
     )
-    .with_runtime_state(true, AccountAvailability::Ready);
+    .with_account_facts(
+        true,
+        CredentialState::Ready,
+        QuotaState::unknown(),
+        None,
+        None,
+    );
 
     assert_eq!(
         (
-            account.availability(),
-            account.is_schedulable(SystemTime::now())
+            account.credential_state(),
+            account.status_projection(SystemTime::now(), None).status
         ),
-        (AccountAvailability::Unknown, false)
+        (CredentialState::Unknown, AccountStatus::Error)
     );
 }
 
@@ -308,15 +400,11 @@ fn provider_quota_overlay_should_preserve_store_concurrency_facts() {
         last_started_at: Some(last_started_at),
         quota_reset_at: None,
         quota_remaining_rank: None,
-        quota_limit_reached: false,
+        rate_limited_until: None,
         failure_rate_basis_points: None,
         first_output_latency_ms: None,
     }
-    .with_provider_quota(Some(AccountQuotaSignals::new(
-        Some(reset_at),
-        Some(75),
-        false,
-    )));
+    .with_provider_quota(Some(AccountQuotaSignals::new(Some(reset_at), Some(75))));
 
     assert_eq!(
         (
@@ -633,21 +721,31 @@ fn credential_cas_should_reject_refresh_schedule_without_refresh_token() {
 }
 
 #[test]
-fn enforced_availability_excludes_terminal_states_despite_quota_signals() {
-    // availability 终态（Banned/Expired/Invalid）始终排除，
-    // 不受 quota 信号或 skip_exhausted 放宽影响。
+fn enforced_eligibility_excludes_credential_errors_despite_quota_signals() {
     let mut banned = candidate("acct_banned", 0, Some(100));
-    banned.account = banned
-        .account
-        .with_runtime_state(true, AccountAvailability::Banned);
+    banned.account = banned.account.with_account_facts(
+        true,
+        CredentialState::Banned,
+        QuotaState::unknown(),
+        None,
+        None,
+    );
     let mut expired = candidate("acct_expired", 0, Some(100));
-    expired.account = expired
-        .account
-        .with_runtime_state(true, AccountAvailability::Expired);
+    expired.account = expired.account.with_account_facts(
+        true,
+        CredentialState::Expired,
+        QuotaState::unknown(),
+        None,
+        None,
+    );
     let mut invalid = candidate("acct_invalid", 0, Some(100));
-    invalid.account = invalid
-        .account
-        .with_runtime_state(true, AccountAvailability::Invalid);
+    invalid.account = invalid.account.with_account_facts(
+        true,
+        CredentialState::Invalid,
+        QuotaState::unknown(),
+        None,
+        None,
+    );
     let healthy = candidate("acct_healthy", 0, Some(100));
     let candidates = vec![banned, expired, invalid, healthy];
 
@@ -659,14 +757,15 @@ fn enforced_availability_excludes_terminal_states_despite_quota_signals() {
 }
 
 #[test]
-fn enforced_availability_allows_quota_exhausted_with_skip_exhausted_projection() {
-    // QuotaExhausted 是可恢复额度耗尽，skip_exhausted=false 的
-    // 放宽投影（provider 层）允许其参与调度；core 的 Enforce 策略本身
-    // 只排除终态。这里验证 Enforce 下 QuotaExhausted 仍被排除（严格模式）。
+fn enforced_eligibility_excludes_authoritative_quota_exhaustion() {
     let mut exhausted = candidate("acct_exhausted", 0, Some(100));
-    exhausted.account = exhausted
-        .account
-        .with_runtime_state(true, AccountAvailability::QuotaExhausted);
+    exhausted.account = exhausted.account.with_account_facts(
+        true,
+        CredentialState::Ready,
+        QuotaState::exhausted(QuotaEvidence::ProviderDenied, SystemTime::now(), None),
+        None,
+        None,
+    );
     let healthy = candidate("acct_healthy", 0, Some(100));
     let candidates = vec![exhausted, healthy];
 
@@ -674,5 +773,33 @@ fn enforced_availability_allows_quota_exhausted_with_skip_exhausted_projection()
         .select(&candidates, &context(RotationStrategy::Smart))
         .expect("healthy candidate available");
 
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_healthy");
+}
+
+#[test]
+fn elapsed_quota_reset_does_not_fabricate_recovery() {
+    let now = SystemTime::now();
+    let mut exhausted = candidate("acct_exhausted", 0, Some(100));
+    exhausted.account = exhausted.account.with_account_facts(
+        true,
+        CredentialState::Ready,
+        QuotaState::exhausted(
+            QuotaEvidence::ProviderDenied,
+            now - Duration::from_secs(2),
+            Some(now - Duration::from_secs(1)),
+        ),
+        None,
+        None,
+    );
+    let healthy = candidate("acct_healthy", 0, Some(100));
+
+    assert_eq!(
+        exhausted.account.status_projection(now, None).status,
+        AccountStatus::QuotaExhausted
+    );
+    let candidates = [exhausted, healthy];
+    let selected = AccountSelector
+        .select(&candidates, &context(RotationStrategy::Smart))
+        .expect("healthy candidate available");
     assert_eq!(selected.candidate().account.id().as_str(), "acct_healthy");
 }

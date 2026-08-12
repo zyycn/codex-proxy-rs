@@ -5,8 +5,8 @@ use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
-    CredentialRevision, ProviderAccount, ProviderAccountId, ProviderAccountStore,
+    AccountErrorReason, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
+    CredentialRevision, CredentialState, ProviderAccount, ProviderAccountId, ProviderAccountStore,
     ProviderAccountUpdate,
 };
 use gateway_core::routing::ProviderKind;
@@ -220,34 +220,46 @@ impl CodexCredentialRepository {
     pub async fn apply_state(
         &self,
         account: &ProviderAccount,
-        availability: AccountAvailability,
+        credential_state: CredentialState,
         observed_at: SystemTime,
     ) -> Result<(), CredentialRepositoryError> {
-        self.apply_state_with_message(account, availability, observed_at, None)
-            .await
+        self.apply_state_with_reason(
+            account,
+            credential_state,
+            observed_at,
+            credential_state.error_reason(),
+            None,
+        )
+        .await
     }
 
-    /// 带上游错误描述的状态写入；上游 message 优先，终态缺失 message 时写稳定兜底，
-    /// 恢复 `Ready` 时清空。
-    pub async fn apply_state_with_message(
+    /// 写入凭据事实及其稳定错误原因；额度事实不经过此入口。
+    pub async fn apply_state_with_reason(
         &self,
         account: &ProviderAccount,
-        availability: AccountAvailability,
+        credential_state: CredentialState,
         observed_at: SystemTime,
+        error_reason: Option<AccountErrorReason>,
         message: Option<String>,
     ) -> Result<(), CredentialRepositoryError> {
         if !account.enabled() {
             return Ok(());
         }
-        let message = message
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| availability.fallback_error_reason().map(str::to_owned));
+        let (error_reason, message) = if credential_state == CredentialState::Ready {
+            (None, None)
+        } else {
+            (
+                error_reason.or_else(|| credential_state.error_reason()),
+                message.filter(|value| !value.trim().is_empty()),
+            )
+        };
         self.store
             .apply_state_change(AccountStateChange {
                 account_id: account.id().clone(),
                 expected_revision: account.revision(),
-                availability,
+                credential_state,
                 observed_at,
+                error_reason,
                 message,
             })
             .await?;

@@ -660,19 +660,21 @@ impl ProviderAdmin for XaiAdminProvider {
             refresh,
             rolling_usage,
         } = request;
-        self.account(&account_id).await?;
+        let mut account = self.account(&account_id).await?;
         let lifecycle = self
             .repository
             .read_lifecycle(&account_id)
             .await
             .map_err(map_repository_error)?;
         let snapshot = if refresh {
-            Some(
+            let snapshot = Some(
                 self.quota
                     .refresh_account(&account_id)
                     .await
                     .map_err(map_quota_error)?,
-            )
+            );
+            account = self.account(&account_id).await?;
+            snapshot
         } else {
             self.quota
                 .read_account(&account_id)
@@ -681,6 +683,7 @@ impl ProviderAdmin for XaiAdminProvider {
         };
         Ok(project_quota(
             snapshot,
+            account.quota().is_exhausted(),
             lifecycle.refresh_token_expires_at().copied(),
             rolling_usage,
         ))
@@ -891,8 +894,8 @@ fn prepared_create(
         access_token_expires_at: account.access_token_expires_at().map(DateTime::<Utc>::from),
         next_refresh_at: account.next_refresh_at().map(Into::into),
         enabled: account.enabled(),
-        availability: account.availability(),
-        availability_observed_at: observed_at,
+        credential_state: account.credential_state(),
+        credential_observed_at: observed_at,
     })
 }
 
@@ -995,7 +998,13 @@ fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, Provi
         account.upstream_account_id.clone(),
         account.plan_type.clone(),
     )
-    .with_runtime_state(account.enabled, account.availability)
+    .with_account_facts(
+        account.enabled,
+        account.credential_state,
+        account.quota,
+        account.last_error_reason,
+        account.last_error_message.clone(),
+    )
     .with_refresh_schedule(
         account.has_refresh_token,
         account.next_refresh_at.map(Into::into),
@@ -1012,6 +1021,7 @@ fn account_matches_record(account: &ProviderAccount, record: &AccountRecord) -> 
 
 fn project_quota(
     snapshot: Option<GrokQuotaSnapshot>,
+    quota_exhausted: bool,
     refresh_token_expires_at: Option<DateTime<Utc>>,
     rolling_usage: Option<gateway_admin::model::accounts::AccountUsage>,
 ) -> ProviderQuota {
@@ -1020,8 +1030,7 @@ fn project_quota(
             observed_at: None,
             refresh_token_expires_at,
             windows: Vec::new(),
-            limit_reached: false,
-            rate_limited_until: None,
+            limit_reached: quota_exhausted,
             provider_data: None,
         };
     };
@@ -1088,10 +1097,7 @@ fn project_quota(
         observed_at: Some(snapshot.observed_at()),
         refresh_token_expires_at,
         windows: vec![window],
-        limit_reached: billing
-            .used_percent()
-            .is_some_and(|used| used.is_finite() && used >= 100.0),
-        rate_limited_until: None,
+        limit_reached: quota_exhausted,
         provider_data: None,
     }
 }

@@ -2,15 +2,14 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use gateway_core::engine::credential::{
-    AccountAvailability, CredentialCasOutcome, CredentialRevision, NewProviderAccount,
-    PlaintextCredential, ProviderAccount, ProviderAccountStore,
+    AccountErrorReason, CredentialCasOutcome, CredentialRevision, CredentialState,
+    NewProviderAccount, PlaintextCredential, ProviderAccount, ProviderAccountStore,
 };
 use gateway_core::error::StoreErrorKind;
 use gateway_core::routing::ProviderKind;
 use provider_xai::{
-    GrokCredentialAdmin, GrokCredentialAvailability, GrokCredentialRepository,
-    GrokCredentialRepositoryError, GrokOAuthSecret, RotateManagedGrokCredential, SecretValue,
-    UpdateGrokCredentialState,
+    GrokCredentialAdmin, GrokCredentialRepository, GrokCredentialRepositoryError, GrokOAuthSecret,
+    RotateManagedGrokCredential, SecretValue, UpdateGrokCredentialState,
 };
 
 use crate::support::{
@@ -219,14 +218,15 @@ async fn state_update_uses_credential_revision_fence() {
         .update_state(&UpdateGrokCredentialState {
             account_id: input.account_id.clone(),
             expected_revision: CredentialRevision::new(1).expect("revision"),
-            availability: GrokCredentialAvailability::Ready,
-            availability_reason: Some("upstream_rate_limited".to_owned()),
+            credential_state: CredentialState::Ready,
+            error_reason: None,
+            error_message: Some("upstream_rate_limited".to_owned()),
             observed_at: Utc::now(),
         })
         .await
         .expect("state update");
     let account = store.account(&input.account_id).expect("account");
-    assert_eq!(account.availability(), AccountAvailability::Ready);
+    assert_eq!(account.credential_state(), CredentialState::Ready);
 }
 
 #[tokio::test]
@@ -239,16 +239,20 @@ async fn terminal_state_without_upstream_message_uses_stable_error_reason() {
         .update_state(&UpdateGrokCredentialState {
             account_id: input.account_id.clone(),
             expected_revision: CredentialRevision::new(1).expect("revision"),
-            availability: GrokCredentialAvailability::Banned,
-            availability_reason: None,
+            credential_state: CredentialState::Banned,
+            error_reason: Some(AccountErrorReason::AccountBanned),
+            error_message: None,
             observed_at: Utc::now(),
         })
         .await
         .expect("state update");
 
     assert_eq!(
-        store.last_error_message(&input.account_id).as_deref(),
-        Some("account_banned")
+        store
+            .account(&input.account_id)
+            .expect("account")
+            .last_error_reason(),
+        Some(AccountErrorReason::AccountBanned)
     );
 }
 

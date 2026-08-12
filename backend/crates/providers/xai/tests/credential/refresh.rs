@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 use async_trait::async_trait;
 use chrono::Utc;
 use gateway_core::engine::credential::{
-    AccountAvailability, CredentialCasOutcome, CredentialCasUpdate, CredentialRevision,
+    CredentialCasOutcome, CredentialCasUpdate, CredentialRevision, CredentialState,
     ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
 };
 use gateway_core::provider_ports::{
@@ -514,8 +514,8 @@ async fn unauthorized_recovery_marks_a_permanently_rejected_refresh_expired() {
 
     assert_eq!(outcome, GrokCredentialRecoveryOutcome::Rejected);
     assert_eq!(
-        store.account(&id).expect("account").availability(),
-        AccountAvailability::Expired
+        store.account(&id).expect("account").credential_state(),
+        CredentialState::Expired
     );
     assert_eq!(
         store.last_error_message(&id).as_deref(),
@@ -664,8 +664,8 @@ async fn invalid_grant_marks_account_expired() {
         fixture(input, [Err(GrokRefreshFailure::InvalidGrant)], true).await;
     service.refresh_due().await.expect("refresh");
     assert_eq!(
-        store.account(&id).expect("account").availability(),
-        AccountAvailability::Expired
+        store.account(&id).expect("account").credential_state(),
+        CredentialState::Expired
     );
 }
 
@@ -676,8 +676,8 @@ async fn banned_failure_marks_account_banned() {
     let (store, _, _, service) = fixture(input, [Err(GrokRefreshFailure::Banned)], true).await;
     service.refresh_due().await.expect("refresh");
     assert_eq!(
-        store.account(&id).expect("account").availability(),
-        AccountAvailability::Banned
+        store.account(&id).expect("account").credential_state(),
+        CredentialState::Banned
     );
     assert_eq!(
         store.last_error_message(&id).as_deref(),
@@ -704,8 +704,8 @@ async fn ambiguous_refresh_applies_bounded_oauth_backoff() {
         [GrokCredentialRefreshOutcome::Ambiguous { account_id }] if account_id == &id
     ));
     assert_eq!(
-        store.account(&id).expect("account").availability(),
-        AccountAvailability::Unknown
+        store.account(&id).expect("account").credential_state(),
+        CredentialState::Unknown
     );
     let account = store.account(&id).expect("account");
     assert_eq!(account.revision().get(), 2);
@@ -736,7 +736,7 @@ async fn pre_send_transient_failure_applies_bounded_oauth_backoff() {
     let (store, _, _, service) = fixture(input, [Err(GrokRefreshFailure::Transient)], true).await;
     service.refresh_due().await.expect("refresh");
     let account = store.account(&id).expect("account");
-    assert_eq!(account.availability(), AccountAvailability::Unknown);
+    assert_eq!(account.credential_state(), CredentialState::Unknown);
     assert_eq!(account.revision().get(), 2);
     assert!(
         account
@@ -908,8 +908,11 @@ async fn recovery_window_exhaustion_marks_account_expired_without_token_exchange
         [GrokCredentialRefreshOutcome::Invalidated { account_id }] if account_id == &id
     ));
     assert_eq!(
-        store.account(&id).expect("expired account").availability(),
-        AccountAvailability::Expired
+        store
+            .account(&id)
+            .expect("expired account")
+            .credential_state(),
+        CredentialState::Expired
     );
     assert_eq!(refresher.prepare_calls.load(Ordering::SeqCst), 1);
     assert_eq!(refresher.responses.lock().expect("queue").len(), 1);

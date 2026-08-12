@@ -69,11 +69,6 @@ impl OpenAiConfig {
     }
 
     #[must_use]
-    pub const fn quota_skip_exhausted(&self) -> bool {
-        self.quota.skip_exhausted
-    }
-
-    #[must_use]
     pub fn token_client_config(&self) -> TokenClientConfig {
         TokenClientConfig {
             client_id: self.auth.oauth_client_id.clone(),
@@ -209,14 +204,12 @@ impl CodexWebSocketPoolSettings {
 #[serde(deny_unknown_fields)]
 pub struct CodexQuotaSettings {
     pub refresh_interval_minutes: u64,
-    pub skip_exhausted: bool,
 }
 
 impl Default for CodexQuotaSettings {
     fn default() -> Self {
         Self {
             refresh_interval_minutes: 15,
-            skip_exhausted: true,
         }
     }
 }

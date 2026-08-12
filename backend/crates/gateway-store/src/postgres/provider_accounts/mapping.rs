@@ -1,12 +1,12 @@
 //! Admin 账号列表、用量与成本的领域映射。
 
-use super::*;
+use std::time::SystemTime;
 
-use gateway_admin::model::accounts::AccountStatusSignals;
+use super::*;
 
 pub(crate) struct AdminAccountListItem {
     pub(crate) account: ProviderAccountSummary,
-    pub(crate) status: AdminAccountStatus,
+    pub(crate) projection: gateway_core::engine::credential::AccountStatusProjection,
     pub(crate) usage: Option<ProviderAccountUsageObservation>,
 }
 
@@ -57,24 +57,6 @@ pub(crate) fn account_matches_admin_query(
     provider_matches && search_matches && status_matches
 }
 
-pub(crate) fn admin_account_status(
-    account: &ProviderAccountSummary,
-    now: DateTime<Utc>,
-    rate_limited_until: Option<SystemTime>,
-) -> AdminAccountStatus {
-    // 派生规则唯一归属 gateway-admin 域层，此处只做类型适配。
-    AccountStatusSignals {
-        enabled: account.enabled,
-        availability: account.availability,
-        access_token_expired: account
-            .access_token_expires_at
-            .is_some_and(|expires_at| expires_at <= now),
-        quota_limit_reached: account.quota_limit_reached,
-        rate_limited_until,
-    }
-    .derive()
-}
-
 pub(crate) fn admin_account_summary(
     accounts: &[ProviderAccountSummary],
     now: DateTime<Utc>,
@@ -90,7 +72,7 @@ pub(crate) fn admin_account_summary(
     };
     for account in accounts {
         let until = rate_limited_until.get(&account.id).copied();
-        match admin_account_status(account, now, until) {
+        match account_status_projection(account, now.into(), until).status {
             AdminAccountStatus::Normal => summary.normal = summary.normal.saturating_add(1),
             AdminAccountStatus::QuotaExhausted => {
                 summary.quota_exhausted = summary.quota_exhausted.saturating_add(1);
@@ -118,7 +100,11 @@ pub(crate) fn sort_admin_account_items(
     items.sort_by(|left, right| {
         let ordering = match sort.field {
             AdminAccountSortField::Email => left.account.email.cmp(&right.account.email),
-            AdminAccountSortField::Status => left.status.as_str().cmp(right.status.as_str()),
+            AdminAccountSortField::Status => left
+                .projection
+                .status
+                .sort_rank()
+                .cmp(&right.projection.status.sort_rank()),
             AdminAccountSortField::PlanType => left.account.plan_type.cmp(&right.account.plan_type),
             AdminAccountSortField::Usage => left
                 .usage
@@ -171,10 +157,11 @@ pub(crate) fn admin_account_record(
         access_token_expires_at: summary.access_token_expires_at,
         next_refresh_at: summary.next_refresh_at,
         enabled: summary.enabled,
-        availability: summary.availability,
-        availability_observed_at: summary.availability_observed_at,
+        credential_state: summary.credential_state,
+        credential_observed_at: summary.credential_observed_at,
+        quota: summary.quota,
+        last_error_reason: summary.last_error_reason,
         last_error_message: summary.last_error_message,
-        quota_observed_at: summary.quota_observed_at,
         created_at: summary.created_at,
         updated_at: summary.updated_at,
     })
@@ -197,8 +184,8 @@ pub(crate) fn prepared_account(
         access_token_expires_at: credential.access_token_expires_at,
         next_refresh_at: credential.next_refresh_at,
         enabled: credential.enabled,
-        availability: credential.availability,
-        availability_observed_at: credential.availability_observed_at,
+        credential_state: credential.credential_state,
+        credential_observed_at: credential.credential_observed_at,
     })
 }
 

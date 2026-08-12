@@ -4,7 +4,7 @@ use std::fmt;
 
 use chrono::{DateTime, Utc};
 use gateway_core::engine::credential::{
-    AccountAvailability, CredentialCasUpdate, CredentialRevision, LoadedCredential,
+    AccountErrorReason, CredentialCasUpdate, CredentialRevision, CredentialState, LoadedCredential,
     ProviderAccountId, ProviderAccountUpdate,
 };
 use gateway_core::provider_ports::ProviderLeaseGuard;
@@ -63,34 +63,6 @@ impl fmt::Debug for GrokAccountProfile {
     }
 }
 
-/// 与 `provider_accounts.availability` 一一对应的 xAI 状态。
-///
-/// 限流（429/滚动窗口）不进入持久化状态：由 `ProviderCooldownPort`（Redis 跨重启
-/// 保留）驱动调度排除，账号状态保持 `Ready`。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GrokCredentialAvailability {
-    Unknown,
-    Ready,
-    QuotaExhausted,
-    Expired,
-    Banned,
-    Invalid,
-}
-
-/// Grok 可用性语义翻入内核标准态的唯一汇入点。
-impl From<GrokCredentialAvailability> for AccountAvailability {
-    fn from(value: GrokCredentialAvailability) -> Self {
-        match value {
-            GrokCredentialAvailability::Unknown => Self::Unknown,
-            GrokCredentialAvailability::Ready => Self::Ready,
-            GrokCredentialAvailability::QuotaExhausted => Self::QuotaExhausted,
-            GrokCredentialAvailability::Expired => Self::Expired,
-            GrokCredentialAvailability::Banned => Self::Banned,
-            GrokCredentialAvailability::Invalid => Self::Invalid,
-        }
-    }
-}
-
 /// 创建一个明文 OAuth Provider account。
 pub struct CreateGrokCredential {
     pub account_id: ProviderAccountId,
@@ -98,8 +70,9 @@ pub struct CreateGrokCredential {
     pub secret: GrokOAuthSecret,
     pub account: GrokAccountProfile,
     pub enabled: bool,
-    pub initial_availability: GrokCredentialAvailability,
-    pub initial_availability_reason: Option<String>,
+    pub initial_credential_state: CredentialState,
+    pub initial_error_reason: Option<AccountErrorReason>,
+    pub initial_error_message: Option<String>,
 }
 
 impl fmt::Debug for CreateGrokCredential {
@@ -111,7 +84,7 @@ impl fmt::Debug for CreateGrokCredential {
             .field("secret", &"[REDACTED]")
             .field("account", &self.account)
             .field("enabled", &self.enabled)
-            .field("initial_availability", &self.initial_availability)
+            .field("initial_credential_state", &self.initial_credential_state)
             .finish_non_exhaustive()
     }
 }
@@ -235,8 +208,9 @@ impl fmt::Debug for RotateGrokCredential {
 pub struct UpdateGrokCredentialState {
     pub account_id: ProviderAccountId,
     pub expected_revision: CredentialRevision,
-    pub availability: GrokCredentialAvailability,
-    pub availability_reason: Option<String>,
+    pub credential_state: CredentialState,
+    pub error_reason: Option<AccountErrorReason>,
+    pub error_message: Option<String>,
     pub observed_at: DateTime<Utc>,
 }
 

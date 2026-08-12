@@ -1704,13 +1704,11 @@ fn map_selection_error(error: CredentialSelectionError) -> ProviderError {
 struct MappedProviderFailure {
     error: ProviderError,
     account_failure: Option<CodexAccountFailure>,
-    /// 原始上游错误描述，随 availability 状态一并持久化。
+    /// 原始上游错误描述，仅在凭据错误状态下持久化。
     error_message: Option<String>,
     cyber_policy_failure: bool,
     set_cookie_headers: Vec<String>,
     rate_limit_headers: Vec<(String, String)>,
-    /// 结构化 usage-limit 错误给出的窗口 reset（Unix 秒）。
-    confirmed_exhaustion_reset_at: Option<i64>,
     observation: Option<ProviderResponseObservation>,
     capture_response_cookies: bool,
 }
@@ -1724,7 +1722,6 @@ impl MappedProviderFailure {
             cyber_policy_failure: false,
             set_cookie_headers: Vec::new(),
             rate_limit_headers: Vec::new(),
-            confirmed_exhaustion_reset_at: None,
             observation: None,
             capture_response_cookies: false,
         }
@@ -1882,18 +1879,6 @@ async fn apply_failure(
         failure.account_failure,
         Some(CodexAccountFailure::QuotaExhausted | CodexAccountFailure::UsageLimitExhausted { .. })
     );
-    if needs_authoritative_quota_refresh
-        && let Err(error) = context
-            .quota
-            .record_confirmed_exhaustion(account, failure.confirmed_exhaustion_reset_at)
-            .await
-    {
-        tracing::warn!(
-            account_id = %account.id(),
-            error = %error,
-            "Failed to project confirmed OpenAI quota exhaustion"
-        );
-    }
     if failure.cyber_policy_failure {
         context
             .selector
@@ -2186,12 +2171,15 @@ fn map_upstream_failure(
     }
     MappedProviderFailure {
         error,
-        account_failure: account_failure(category, failure.retry_after_seconds),
+        account_failure: account_failure(
+            category,
+            failure.retry_after_seconds,
+            failure.usage_limit_resets_at,
+        ),
         error_message: failure.client_message,
         cyber_policy_failure,
         set_cookie_headers: failure.set_cookie_headers,
         rate_limit_headers: failure.rate_limit_headers,
-        confirmed_exhaustion_reset_at: failure.usage_limit_resets_at,
         observation,
         capture_response_cookies: !matches!(
             category,
@@ -2245,6 +2233,7 @@ const fn upstream_send_state(phase: CodexUpstreamSendPhase) -> UpstreamSendState
 fn account_failure(
     category: CodexFailureCategory,
     retry_after_seconds: Option<u64>,
+    usage_limit_resets_at: Option<i64>,
 ) -> Option<CodexAccountFailure> {
     match category {
         CodexFailureCategory::CredentialExpired => Some(CodexAccountFailure::CredentialExpired),
@@ -2254,7 +2243,11 @@ fn account_failure(
         CodexFailureCategory::Banned => Some(CodexAccountFailure::Banned),
         CodexFailureCategory::UsageLimitExhausted => {
             Some(CodexAccountFailure::UsageLimitExhausted {
-                retry_after: retry_after_seconds.map(Duration::from_secs),
+                reset_at: usage_limit_resets_at
+                    .and_then(|seconds| u64::try_from(seconds).ok())
+                    .and_then(|seconds| {
+                        SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(seconds))
+                    }),
             })
         }
         CodexFailureCategory::RateLimited => Some(CodexAccountFailure::RateLimited {

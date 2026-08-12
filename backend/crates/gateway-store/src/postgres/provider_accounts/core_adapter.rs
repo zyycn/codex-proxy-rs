@@ -31,8 +31,8 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                 .map(DateTime::<Utc>::from),
             next_refresh_at: account.account.next_refresh_at().map(DateTime::<Utc>::from),
             enabled: account.account.enabled(),
-            availability: account.account.availability(),
-            availability_observed_at: Utc::now(),
+            credential_state: account.account.credential_state(),
+            credential_observed_at: Utc::now(),
         })
         .await
         .map_err(core_store_error)
@@ -164,9 +164,9 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             .collect::<Vec<_>>();
         let rows = sqlx::query(
             "select id, credential_revision, provider_quota_json, quota_observed_at, \
-                    quota_limit_reached \
+                    quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at \
              from provider_accounts \
-             where id = any($1) and provider_quota_json is not null",
+             where id = any($1) and quota_observed_at is not null",
         )
         .bind(account_ids)
         .fetch_all(&self.pool)
@@ -184,24 +184,49 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                     .and_then(|value| CoreCredentialRevision::new(value).ok())
                     .ok_or_else(|| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
                 let quota = row
-                    .try_get::<serde_json::Value, _>("provider_quota_json")
-                    .ok()
+                    .try_get::<Option<serde_json::Value>, _>("provider_quota_json")
+                    .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?
                     .and_then(|value| value.as_object().cloned())
                     .map(OpaqueProviderData::new)
-                    .ok_or_else(|| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
+                    .unwrap_or_else(|| OpaqueProviderData::new(serde_json::Map::new()));
                 let observed_at = row
                     .try_get::<DateTime<Utc>, _>("quota_observed_at")
                     .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
-                let limit_reached = row
-                    .try_get::<bool, _>("quota_limit_reached")
+                let access = row
+                    .try_get::<String, _>("quota_access_state")
+                    .ok()
+                    .and_then(|value| QuotaAccessState::parse(&value))
+                    .ok_or_else(|| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
+                let evidence = row
+                    .try_get::<Option<String>, _>("quota_evidence")
                     .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
+                let evidence = match evidence {
+                    Some(value) => Some(
+                        QuotaEvidence::parse(&value)
+                            .ok_or_else(|| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?,
+                    ),
+                    None => None,
+                };
+                let reset_at = row
+                    .try_get::<Option<DateTime<Utc>>, _>("quota_reset_at")
+                    .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
+                let access_observed_at = row
+                    .try_get::<Option<DateTime<Utc>>, _>("quota_access_observed_at")
+                    .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
+                let state = QuotaState::from_persisted(
+                    access,
+                    evidence,
+                    access_observed_at.map(Into::into),
+                    reset_at.map(Into::into),
+                )
+                .ok_or_else(|| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
                 Ok(QuotaObservation {
                     account_id: CoreProviderAccountId::new(account_id)
                         .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?,
                     expected_revision: revision,
-                    quota: Some(quota),
-                    observed_at: Some(observed_at.into()),
-                    limit_reached: Some(limit_reached),
+                    quota,
+                    observed_at: observed_at.into(),
+                    state,
                 })
             })
             .collect()
@@ -211,24 +236,38 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         &self,
         observation: QuotaObservation,
     ) -> Result<QuotaWriteOutcome, CoreStoreError> {
-        let quota = observation
-            .quota
-            .map(|value| {
-                JsonObject::try_from_value(
-                    "provider_quota_json",
-                    serde_json::Value::Object(value.into_inner()),
-                    QUOTA_MAX_BYTES,
-                )
-            })
-            .transpose()
-            .map_err(core_store_error)?;
+        let quota = JsonObject::try_from_value(
+            "provider_quota_json",
+            serde_json::Value::Object(observation.quota.into_inner()),
+            QUOTA_MAX_BYTES,
+        )
+        .map_err(core_store_error)?;
         let updated = self
             .compare_and_swap_provider_quota(
                 observation.account_id.as_str(),
                 Revision::new(observation.expected_revision.get()).map_err(core_store_error)?,
                 quota,
-                observation.observed_at.map(DateTime::<Utc>::from),
-                observation.limit_reached,
+                DateTime::<Utc>::from(observation.observed_at),
+                observation.state,
+            )
+            .await
+            .map_err(core_store_error)?;
+        Ok(if updated {
+            QuotaWriteOutcome::Updated
+        } else {
+            QuotaWriteOutcome::Conflict
+        })
+    }
+
+    async fn apply_quota_access(
+        &self,
+        change: QuotaAccessChange,
+    ) -> Result<QuotaWriteOutcome, CoreStoreError> {
+        let updated = self
+            .apply_provider_quota_access(
+                change.account_id.as_str(),
+                Revision::new(change.expected_revision.get()).map_err(core_store_error)?,
+                change.state,
             )
             .await
             .map_err(core_store_error)?;
@@ -245,8 +284,9 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                 account_id: change.account_id.as_str().to_owned(),
                 expected_revision: Revision::new(change.expected_revision.get())
                     .map_err(core_store_error)?,
-                availability: change.availability,
-                availability_observed_at: DateTime::<Utc>::from(change.observed_at),
+                credential_state: change.credential_state,
+                credential_observed_at: DateTime::<Utc>::from(change.observed_at),
+                error_reason: change.error_reason,
                 message: change.message,
             })
             .await

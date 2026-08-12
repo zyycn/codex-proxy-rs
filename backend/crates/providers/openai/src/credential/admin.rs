@@ -10,9 +10,9 @@ use std::time::SystemTime;
 
 use chrono::{DateTime, FixedOffset, Utc};
 use gateway_core::engine::credential::{
-    AccountAvailability, CredentialCasUpdate, CredentialRevision, LoadedCredential,
+    AccountErrorReason, CredentialCasUpdate, CredentialRevision, CredentialState, LoadedCredential,
     NewProviderAccount, ProviderAccount, ProviderAccountId, ProviderAccountIdentity,
-    ProviderAccountUpdate,
+    ProviderAccountUpdate, QuotaEvidence, QuotaState,
 };
 use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeaseGuard, ProviderLeasePort, ProviderLeaseRequest,
@@ -433,7 +433,13 @@ impl CodexCredentialAdmin {
             Some(input.verified_account.chatgpt_account_id),
             input.verified_account.plan_type,
         )
-        .with_runtime_state(input.enabled, AccountAvailability::Ready)
+        .with_account_facts(
+            input.enabled,
+            CredentialState::Ready,
+            QuotaState::unknown(),
+            None,
+            None,
+        )
         .with_refresh_schedule(
             input.secret.refresh_token.is_some(),
             optional_time(input.next_refresh_at),
@@ -479,13 +485,16 @@ impl CodexCredentialAdmin {
             optional_time(input.access_token_expires_at),
         )
         .with_profile(email, upstream_account_id, plan_type)
-        .with_runtime_state(
+        .with_account_facts(
             input.enabled,
             if has_upstream_user_id {
-                AccountAvailability::Ready
+                CredentialState::Ready
             } else {
-                AccountAvailability::Unknown
+                CredentialState::Unknown
             },
+            QuotaState::unknown(),
+            (!has_upstream_user_id).then_some(AccountErrorReason::AccountUnverified),
+            None,
         )
         .with_refresh_schedule(
             input.secret.refresh_token.is_some(),
@@ -898,10 +907,10 @@ impl CodexCredentialAdminService {
                     if !account_ids.insert(account_id.clone()) {
                         return Err(CodexCredentialAdminError::InvalidInput);
                     }
-                    let (enabled, availability) =
-                        import_runtime_state(candidate.status.as_deref())?;
+                    let facts =
+                        parse_cpr_account_facts(candidate.status.as_deref(), SystemTime::now())?;
                     let mut account =
-                        self.prepare_agent_identity_import(&candidate, account_id, enabled)?;
+                        self.prepare_agent_identity_import(&candidate, account_id, facts.enabled)?;
                     let upstream_user_id = account
                         .account
                         .upstream_user_id()
@@ -915,7 +924,7 @@ impl CodexCredentialAdminService {
                     if !upstream_identities.insert((upstream_user_id, upstream_account_id)) {
                         return Err(CodexCredentialAdminError::InvalidInput);
                     }
-                    account.account = account.account.with_runtime_state(enabled, availability);
+                    account.account = facts.apply(account.account);
                     account
                 }
             };
@@ -1048,7 +1057,13 @@ impl CodexCredentialAdminService {
             Some(upstream_account_id),
             candidate.plan_type.clone(),
         )
-        .with_runtime_state(enabled, AccountAvailability::Ready)
+        .with_account_facts(
+            enabled,
+            CredentialState::Ready,
+            QuotaState::unknown(),
+            None,
+            None,
+        )
         .with_refresh_schedule(false, None);
         Ok(NewProviderAccount {
             account,
@@ -1065,11 +1080,13 @@ fn cpr_status(account: &ProviderAccount) -> &'static str {
     if !account.enabled() {
         return "disabled";
     }
-    match account.availability() {
-        AccountAvailability::QuotaExhausted => "quota_exhausted",
-        AccountAvailability::Expired | AccountAvailability::Invalid => "expired",
-        AccountAvailability::Banned => "banned",
-        AccountAvailability::Unknown | AccountAvailability::Ready => "active",
+    if account.quota().is_exhausted() {
+        return "quota_exhausted";
+    }
+    match account.credential_state() {
+        CredentialState::Expired | CredentialState::Invalid => "expired",
+        CredentialState::Banned => "banned",
+        CredentialState::Unknown | CredentialState::Ready => "active",
     }
 }
 
@@ -1292,20 +1309,65 @@ fn normalize_import_text(value: &str, max_bytes: usize) -> Option<String> {
         .then(|| value.to_owned())
 }
 
-fn import_runtime_state(
+struct ImportedCprAccountFacts {
+    enabled: bool,
+    credential_state: CredentialState,
+    quota: QuotaState,
+    error_reason: Option<AccountErrorReason>,
+}
+
+impl ImportedCprAccountFacts {
+    fn apply(self, account: ProviderAccount) -> ProviderAccount {
+        account.with_account_facts(
+            self.enabled,
+            self.credential_state,
+            self.quota,
+            self.error_reason,
+            None,
+        )
+    }
+}
+
+fn parse_cpr_account_facts(
     status: Option<&str>,
-) -> Result<(bool, AccountAvailability), CodexCredentialAdminError> {
+    observed_at: SystemTime,
+) -> Result<ImportedCprAccountFacts, CodexCredentialAdminError> {
     match status
         .map(str::trim)
         .unwrap_or("active")
         .to_ascii_lowercase()
         .as_str()
     {
-        "active" => Ok((true, AccountAvailability::Ready)),
-        "disabled" => Ok((false, AccountAvailability::Ready)),
-        "expired" => Ok((true, AccountAvailability::Expired)),
-        "quota_exhausted" => Ok((true, AccountAvailability::QuotaExhausted)),
-        "banned" => Ok((true, AccountAvailability::Banned)),
+        "active" => Ok(ImportedCprAccountFacts {
+            enabled: true,
+            credential_state: CredentialState::Ready,
+            quota: QuotaState::unknown(),
+            error_reason: None,
+        }),
+        "disabled" => Ok(ImportedCprAccountFacts {
+            enabled: false,
+            credential_state: CredentialState::Ready,
+            quota: QuotaState::unknown(),
+            error_reason: None,
+        }),
+        "expired" => Ok(ImportedCprAccountFacts {
+            enabled: true,
+            credential_state: CredentialState::Expired,
+            quota: QuotaState::unknown(),
+            error_reason: Some(AccountErrorReason::CredentialExpired),
+        }),
+        "quota_exhausted" => Ok(ImportedCprAccountFacts {
+            enabled: true,
+            credential_state: CredentialState::Ready,
+            quota: QuotaState::exhausted(QuotaEvidence::ProviderDenied, observed_at, None),
+            error_reason: None,
+        }),
+        "banned" => Ok(ImportedCprAccountFacts {
+            enabled: true,
+            credential_state: CredentialState::Banned,
+            quota: QuotaState::unknown(),
+            error_reason: Some(AccountErrorReason::AccountBanned),
+        }),
         _ => Err(CodexCredentialAdminError::InvalidInput),
     }
 }

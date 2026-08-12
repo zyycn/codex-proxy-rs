@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::future::ready;
 use std::sync::{Arc, Mutex};
 
-use gateway_core::engine::credential::AccountAvailability;
+use gateway_core::engine::credential::CredentialState;
 use provider_xai::{
     AuthorizationCallback, FailClosedTokenVerifier, FailureClass, FormValue, GrokCredentialAdmin,
     GrokOAuthClient, GrokOAuthConfig, GrokOAuthImportCandidate, GrokOAuthImportMetadata,
@@ -128,7 +128,7 @@ async fn credential_import_should_require_exact_metadata_and_official_userinfo()
             enabled: true,
         })
         .expect("Provider projects verified token lifetime");
-    assert_eq!(prepared.account.availability(), AccountAvailability::Ready);
+    assert_eq!(prepared.account.credential_state(), CredentialState::Ready);
     assert!(prepared.account.next_refresh_at().is_none());
     assert!(
         prepared

@@ -15,7 +15,7 @@ use gateway_admin::model::{PageSize as DomainPageSize, observability as domain};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::presenter::{format_compact_number, format_number};
+use super::presenter::{format_compact_number, format_decimal_currency, format_number};
 use super::{
     AdminAuth, AdminEnvelope, AdminError, AdminResponse, AdminSessionState, PageMeta,
     WireValidationError, wire::map_admin_service_error,

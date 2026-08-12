@@ -127,20 +127,6 @@ pub(crate) fn token_details(record: &domain::UsageRecord) -> TokenDetailsView {
     }
 }
 
-pub(crate) fn format_decimal_currency(amount: &str, currency: &str) -> String {
-    if currency == "USD" {
-        let value = amount.parse::<f64>().map_or(0.0, |value| value);
-        let precision = if value != 0.0 && value.abs() < 0.01 {
-            4
-        } else {
-            2
-        };
-        format!("${value:.precision$}")
-    } else {
-        format!("{currency} {amount}")
-    }
-}
-
 pub(crate) fn format_money(cost: &domain::CurrencyCost) -> String {
     format_decimal_currency(cost.amount.as_str(), &cost.currency)
 }
@@ -747,10 +733,16 @@ pub(crate) fn dashboard_view(
             credentials: DashboardCredentialsCardView {
                 total: format_compact_number(provider_accounts.total),
                 total_value: provider_accounts.total,
-                available: format_compact_number(provider_accounts.active),
-                available_value: provider_accounts.active,
-                unavailable: format_compact_number(provider_accounts.unavailable),
-                unavailable_value: provider_accounts.unavailable,
+                available: format_compact_number(provider_accounts.normal),
+                available_value: provider_accounts.normal,
+                unavailable: format_compact_number(
+                    provider_accounts
+                        .total
+                        .saturating_sub(provider_accounts.normal),
+                ),
+                unavailable_value: provider_accounts
+                    .total
+                    .saturating_sub(provider_accounts.normal),
             },
             traffic: DashboardTrafficCardView {
                 today_requests: format_compact_number(today.request_count),
@@ -783,14 +775,11 @@ pub(crate) fn dashboard_view(
         usage_records: recent_requests.into_iter().map(usage_record_view).collect(),
         pool_summary: DashboardPoolSummaryView {
             total: provider_accounts.total,
-            active: provider_accounts.active,
-            rate_limited: provider_accounts.rate_limited,
-            expired: provider_accounts.expired,
-            invalid: provider_accounts.invalid,
+            normal: provider_accounts.normal,
             quota_exhausted: provider_accounts.quota_exhausted,
-            refreshing: provider_accounts.refreshing,
+            rate_limited: provider_accounts.rate_limited,
             disabled: provider_accounts.disabled,
-            banned: provider_accounts.banned,
+            error: provider_accounts.error,
         },
         capacity_info: DashboardCapacityInfoView {
             max_concurrent_per_account: capacity.max_concurrent_per_account,

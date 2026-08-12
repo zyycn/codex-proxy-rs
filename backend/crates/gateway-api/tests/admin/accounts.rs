@@ -72,6 +72,7 @@ mod query {
 
 mod response {
     use gateway_api::admin::accounts::AccountUsageView;
+    use gateway_api::admin::presenter::format_decimal_currency;
 
     #[test]
     fn account_usage_view_should_keep_unobserved_numbers_null() {
@@ -112,12 +113,21 @@ mod response {
         assert!(value["totalTokens"].is_null());
         assert_eq!(value["createdTokensDisplay"], "-");
     }
+
+    #[test]
+    fn account_usage_currency_should_limit_usd_to_four_fraction_digits() {
+        assert_eq!(format_decimal_currency("0.1204956", "USD"), "$0.1205");
+        assert_eq!(format_decimal_currency("0.99996", "USD"), "$1.00");
+        assert_eq!(format_decimal_currency("0.0300", "USD"), "$0.03");
+        assert_eq!(format_decimal_currency("12.3456", "USD"), "$12.35");
+        assert_eq!(format_decimal_currency("0.1204956", "CNY"), "CNY 0.1204956");
+    }
 }
 
 mod actions {
     use gateway_admin::model::{
         Revision,
-        accounts::{AccountConnectionTestEvent as DomainConnectionTestEvent, AccountStatus},
+        accounts::AccountConnectionTestEvent as DomainConnectionTestEvent,
         provider_credentials::{
             CredentialDeletionResult, CredentialImportResult, CredentialMutationResult,
         },
@@ -343,9 +353,7 @@ mod actions {
             DomainConnectionTestEvent::Content {
                 text: "OK".to_owned(),
             },
-            DomainConnectionTestEvent::Completed {
-                account_status: AccountStatus::Normal,
-            },
+            DomainConnectionTestEvent::Completed {},
             DomainConnectionTestEvent::Failed {
                 message: "upstream unavailable".to_owned(),
                 provider_error_code: Some("usage_exhausted".to_owned()),
@@ -353,7 +361,6 @@ mod actions {
                 upstream_status: Some(429),
                 upstream_content_type: Some("application/json".to_owned()),
                 upstream_body: Some(r#"{"error":{"type":"usage_limit_reached"}}"#.to_owned()),
-                account_status: AccountStatus::QuotaExhausted,
             },
         ]
         .map(|event| AccountConnectionTestEvent::from(event).data);
@@ -378,7 +385,7 @@ mod actions {
                     }
                 }),
                 json!({ "type": "content", "text": "OK" }),
-                json!({ "type": "test_complete", "success": true, "accountStatus": "normal" }),
+                json!({ "type": "test_complete", "success": true }),
                 json!({
                     "type": "error",
                     "error": "upstream unavailable",
@@ -386,8 +393,7 @@ mod actions {
                     "providerErrorType": "invalid_request_error",
                     "upstreamStatus": 429,
                     "upstreamContentType": "application/json",
-                    "upstreamBody": r#"{"error":{"type":"usage_limit_reached"}}"#,
-                    "accountStatus": "quota_exhausted"
+                    "upstreamBody": r#"{"error":{"type":"usage_limit_reached"}}"#
                 }),
             ]
         );

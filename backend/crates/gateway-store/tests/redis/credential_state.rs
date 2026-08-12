@@ -19,7 +19,7 @@ fn credential_state_rejects_provider_specific_status() {
         provider_account_id: "account-1".to_owned(),
         revision: Revision::new(1).expect("positive revision"),
         enabled: true,
-        availability: "codex_special".to_owned(),
+        credential_state: "codex_special".to_owned(),
         observed_at: Utc::now(),
     };
     assert!(state.validate().is_err());

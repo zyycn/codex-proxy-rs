@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
 use gateway_core::engine::credential::{
-    AccountAvailability, OpaqueProviderData, ProviderAccount, ProviderAccountId,
+    CredentialState, OpaqueProviderData, ProviderAccount, ProviderAccountId,
 };
 use gateway_core::engine::provider::ProviderCatalogGeneration;
 use gateway_core::provider_ports::{
@@ -780,12 +780,8 @@ fn eligible_catalog_account(account: &ProviderAccount, now: SystemTime) -> bool 
         && account
             .access_token_expires_at()
             .is_none_or(|expires_at| expires_at > now)
-        && match account.availability() {
-            AccountAvailability::Unknown
-            | AccountAvailability::Ready
-            | AccountAvailability::QuotaExhausted => true,
-            AccountAvailability::Expired
-            | AccountAvailability::Banned
-            | AccountAvailability::Invalid => false,
-        }
+        && matches!(
+            account.credential_state(),
+            CredentialState::Unknown | CredentialState::Ready
+        )
 }

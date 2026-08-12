@@ -11,7 +11,7 @@ use super::backup::BackupStorePorts;
 use crate::model::{
     MutationContext, Revision,
     accounts::{
-        AccountListQuery, AccountPage, AccountRecord, AccountUsage, AccountUsageWindowQuery,
+        AccountListQuery, AccountPage, AccountPageItem, AccountUsage, AccountUsageWindowQuery,
         AccountUsageWindowResult, DeleteAccounts, SetAccountEnabled,
     },
     auth::{AdminAuditEvent, AdminSession},
@@ -83,7 +83,7 @@ pub type AdminStoreResult<T> = Result<T, AdminStoreError>;
 pub trait AccountStore: Send + Sync {
     async fn list_accounts(&self, query: AccountListQuery) -> AdminStoreResult<AccountPage>;
 
-    async fn load_account(&self, account_id: &str) -> AdminStoreResult<Option<AccountRecord>>;
+    async fn load_account(&self, account_id: &str) -> AdminStoreResult<Option<AccountPageItem>>;
 
     async fn load_account_usage(
         &self,

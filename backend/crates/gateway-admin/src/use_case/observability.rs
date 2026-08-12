@@ -127,7 +127,7 @@ impl ObservabilityService for DefaultObservabilityService {
         let max_concurrent_per_account = u64::from(settings.max_concurrent_per_account);
         let active_accounts = runtime_slots
             .as_ref()
-            .map_or(observation.provider_accounts.active, |slots| {
+            .map_or(observation.provider_accounts.normal, |slots| {
                 slots.active_accounts
             });
         let total_slots = active_accounts.saturating_mul(max_concurrent_per_account);
@@ -484,8 +484,7 @@ impl DefaultObservabilityService {
         });
         let quota_used = futures::future::join_all(quota_reads).await;
         for (account, used_percent) in accounts.iter_mut().zip(quota_used) {
-            account.quota_used_percent = used_percent
-                .or_else(|| (account.availability == "quota_exhausted").then_some(100.0));
+            account.quota_used_percent = used_percent;
         }
     }
 

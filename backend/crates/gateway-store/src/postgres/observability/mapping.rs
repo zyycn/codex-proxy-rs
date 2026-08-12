@@ -274,16 +274,11 @@ pub(crate) const fn admin_account_pool_metrics(
 ) -> admin_observability::AccountPoolMetrics {
     admin_observability::AccountPoolMetrics {
         total: metrics.total,
-        enabled: metrics.enabled,
-        unavailable: metrics.unavailable,
-        active: metrics.active,
-        rate_limited: metrics.rate_limited,
-        expired: metrics.expired,
-        invalid: metrics.invalid,
+        normal: metrics.normal,
         quota_exhausted: metrics.quota_exhausted,
-        refreshing: None,
+        rate_limited: metrics.rate_limited,
         disabled: metrics.disabled,
-        banned: metrics.banned,
+        error: metrics.error,
     }
 }
 
@@ -297,8 +292,6 @@ pub(crate) fn admin_dashboard_account_usage(
         name: usage.name,
         email: usage.email,
         plan_type: usage.plan_type,
-        enabled: usage.enabled,
-        availability: usage.availability,
         request_count: usage.request_count,
         success_count: usage.success_count,
         input_tokens: usage.input_tokens,

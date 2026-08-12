@@ -4,10 +4,10 @@ use std::time::{Duration, SystemTime};
 
 use chrono::Utc;
 use gateway_core::engine::credential::{
-    AccountAttemptFeedback, AccountAvailability, AccountFeedbackStats, AccountRuntimeSignals,
-    AccountSelectionPolicy, CredentialCasOutcome, CredentialRevision, OpaqueProviderData,
-    ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate, QuotaObservation,
-    QuotaWriteOutcome, RotationStrategy,
+    AccountAttemptFeedback, AccountFeedbackStats, AccountRuntimeSignals, AccountSelectionPolicy,
+    CredentialCasOutcome, CredentialRevision, CredentialState, OpaqueProviderData,
+    ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate, QuotaAccessState,
+    QuotaObservation, QuotaState, QuotaWriteOutcome, RotationStrategy,
 };
 use gateway_core::provider_ports::{
     ProviderCooldownPort, ProviderCooldownScope, ProviderLeaseAcquisition, ProviderLeasePort,
@@ -17,10 +17,10 @@ use gateway_core::routing::UpstreamModelId;
 use provider_xai::{
     GrokAccountSessionSelector, GrokBillingRequest, GrokBillingTransport,
     GrokBillingTransportError, GrokBillingTransportErrorKind, GrokBillingTransportFuture,
-    GrokCatalogScope, GrokCredentialAdmin, GrokCredentialAvailability, GrokCredentialCatalogCache,
-    GrokCredentialCatalogSeed, GrokCredentialFailure, GrokCredentialRepository, GrokPlanCatalog,
-    GrokSessionSelection, GrokSessionSelector, GrokSessionSelectorError,
-    RotateManagedGrokCredential, UpdateGrokCredentialState,
+    GrokCatalogScope, GrokCredentialAdmin, GrokCredentialCatalogCache, GrokCredentialCatalogSeed,
+    GrokCredentialFailure, GrokCredentialRepository, GrokPlanCatalog, GrokSessionSelection,
+    GrokSessionSelector, GrokSessionSelectorError, RotateManagedGrokCredential,
+    UpdateGrokCredentialState,
 };
 
 use crate::support::{
@@ -108,8 +108,9 @@ impl SelectorFixture {
                 .update_state(&UpdateGrokCredentialState {
                     account_id: input.account_id.clone(),
                     expected_revision: CredentialRevision::new(1).expect("revision"),
-                    availability: GrokCredentialAvailability::Ready,
-                    availability_reason: None,
+                    credential_state: CredentialState::Ready,
+                    error_reason: None,
+                    error_message: None,
                     observed_at: Utc::now(),
                 })
                 .await
@@ -131,7 +132,7 @@ impl SelectorFixture {
                     last_started_at: None,
                     quota_reset_at: None,
                     quota_remaining_rank: None,
-                    quota_limit_reached: false,
+                    rate_limited_until: None,
                     failure_rate_basis_points: None,
                     first_output_latency_ms: None,
                 },
@@ -241,11 +242,9 @@ impl SelectorFixture {
             .compare_and_swap_quota(QuotaObservation {
                 account_id: id.clone(),
                 expected_revision: CredentialRevision::new(1).expect("revision"),
-                quota: Some(OpaqueProviderData::new(
-                    document.as_object().expect("quota object").clone(),
-                )),
-                observed_at: Some(SystemTime::now()),
-                limit_reached: None,
+                quota: OpaqueProviderData::new(document.as_object().expect("quota object").clone()),
+                observed_at: SystemTime::now(),
+                state: QuotaState::unknown(),
             })
             .await
             .expect("persist quota");
@@ -305,16 +304,20 @@ async fn unauthorized_feedback_records_runtime_cooldown_without_persisting_accou
             .store
             .account(&selected)
             .expect("selected")
-            .availability(),
-        AccountAvailability::Ready
+            .credential_state(),
+        CredentialState::Ready
     );
     let other = [account_id("feedback-a"), account_id("feedback-b")]
         .into_iter()
         .find(|id| id != &selected)
         .expect("other account");
     assert_eq!(
-        fixture.store.account(&other).expect("other").availability(),
-        AccountAvailability::Ready
+        fixture
+            .store
+            .account(&other)
+            .expect("other")
+            .credential_state(),
+        CredentialState::Ready
     );
     assert!(
         fixture
@@ -379,7 +382,7 @@ async fn account_scoped_cooldown_survives_credential_rotation() {
     ));
     let account = fixture.store.account(&id).expect("rotated account");
     assert_eq!(account.revision().get(), 2);
-    assert_eq!(account.availability(), AccountAvailability::Ready);
+    assert_eq!(account.credential_state(), CredentialState::Ready);
 }
 
 #[tokio::test]
@@ -401,7 +404,7 @@ async fn rate_limit_feedback_persists_the_grok2api_cooldown_state() {
         )
         .await;
     let account = fixture.store.account(&selected).expect("account");
-    assert_eq!(account.availability(), AccountAvailability::Ready);
+    assert_eq!(account.credential_state(), CredentialState::Ready);
     assert!(
         fixture
             .cooldowns
@@ -440,7 +443,7 @@ async fn successful_request_clears_the_persisted_cooldown_state() {
         .store
         .account(session.account_id())
         .expect("account");
-    assert_eq!(account.availability(), AccountAvailability::Ready);
+    assert_eq!(account.credential_state(), CredentialState::Ready);
 }
 
 #[tokio::test]
@@ -469,8 +472,8 @@ async fn payment_required_feedback_writes_short_account_cooldown_without_persist
             .store
             .account(&selected)
             .expect("selected account")
-            .availability(),
-        AccountAvailability::Ready
+            .credential_state(),
+        CredentialState::Ready
     );
     assert!(
         fixture
@@ -508,7 +511,7 @@ async fn model_quota_feedback_writes_model_scoped_cooldown_without_blocking_othe
         .await;
 
     let account = fixture.store.account(&selected).expect("selected account");
-    assert_eq!(account.availability(), AccountAvailability::Ready);
+    assert_eq!(account.credential_state(), CredentialState::Ready);
     let minimum_until = SystemTime::now() + Duration::from_secs(23 * 60 * 60);
     let scope = ProviderCooldownScope::upstream_model(failed_model);
     // model-scoped cooldown：目标模型被排除，账号级无 cooldown。
@@ -563,8 +566,8 @@ async fn model_access_feedback_reports_model_cooldown_without_blocking_the_accou
             .store
             .account(session.account_id())
             .expect("account")
-            .availability(),
-        AccountAvailability::Ready
+            .credential_state(),
+        CredentialState::Ready
     );
     assert!(matches!(
         fixture
@@ -594,7 +597,7 @@ async fn interrupted_stream_feedback_persists_the_grok2api_cooldown_state() {
         .store
         .account(session.account_id())
         .expect("account");
-    assert_eq!(account.availability(), AccountAvailability::Ready);
+    assert_eq!(account.credential_state(), CredentialState::Ready);
     assert!(
         fixture
             .cooldowns
@@ -630,8 +633,9 @@ async fn quota_feedback_uses_common_quota_exhausted_state() {
             .store
             .account(session.account_id())
             .expect("account")
-            .availability(),
-        AccountAvailability::QuotaExhausted
+            .quota()
+            .access(),
+        QuotaAccessState::Exhausted
     );
 }
 
@@ -673,13 +677,18 @@ async fn quota_feedback_should_follow_the_account_across_a_credential_rotation()
         .await;
 
     assert_eq!(
-        fixture.store.account(&id).expect("account").availability(),
-        AccountAvailability::QuotaExhausted
+        fixture
+            .store
+            .account(&id)
+            .expect("account")
+            .quota()
+            .access(),
+        QuotaAccessState::Exhausted
     );
 }
 
 #[tokio::test]
-async fn ordinary_success_should_not_clear_a_confirmed_quota_exhaustion() {
+async fn ordinary_success_clears_confirmed_exhaustion() {
     let fixture = SelectorFixture::new(&["quota-success"]).await;
     let session = fixture
         .selector
@@ -690,7 +699,6 @@ async fn ordinary_success_should_not_clear_a_confirmed_quota_exhaustion() {
         .selector
         .record_failure(&session, GrokCredentialFailure::FreeQuotaExhausted)
         .await;
-
     fixture.selector.record_success(&session).await;
 
     assert_eq!(
@@ -698,8 +706,9 @@ async fn ordinary_success_should_not_clear_a_confirmed_quota_exhaustion() {
             .store
             .account(session.account_id())
             .expect("account")
-            .availability(),
-        AccountAvailability::QuotaExhausted
+            .quota()
+            .access(),
+        QuotaAccessState::Allowed
     );
 }
 
@@ -1061,8 +1070,8 @@ async fn bare_402_cooldown_expires_and_account_recovers_without_persisted_exhaus
             .store
             .account(&selected)
             .expect("account")
-            .availability(),
-        AccountAvailability::Ready,
+            .credential_state(),
+        CredentialState::Ready,
         "bare 402 must not persist QuotaExhausted"
     );
     let next = fixture

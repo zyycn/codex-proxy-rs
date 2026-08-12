@@ -11,10 +11,7 @@ use gateway_core::{
 
 use super::{
     AdminError, MutationActor, MutationContext, PageSize, Revision,
-    accounts::{
-        AccountAvailability, AccountErrorReason, AccountRecord, AccountStatus, AccountSummary,
-        AccountUsage,
-    },
+    accounts::{AccountRecord, AccountSummary, AccountUsage, CredentialState},
 };
 
 /// Provider-owned JSON；公共层只搬运且 Debug 不输出值。
@@ -55,24 +52,24 @@ pub struct CredentialCursor {
 /// Provider credential 列表查询。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialListQuery {
-    pub availability: Option<CredentialAvailabilityFilter>,
+    pub credential_state: Option<CredentialStateFilter>,
     pub enabled: Option<bool>,
     pub window: CredentialListWindow,
 }
 
-/// Credential 可用性筛选；支持一个 wire 值对应多个持久状态。
+/// Credential 状态筛选。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CredentialAvailabilityFilter {
-    Exact(AccountAvailability),
-    AnyOf(Vec<AccountAvailability>),
+pub enum CredentialStateFilter {
+    Exact(CredentialState),
+    AnyOf(Vec<CredentialState>),
 }
 
-impl CredentialAvailabilityFilter {
+impl CredentialStateFilter {
     #[must_use]
-    pub fn matches(&self, availability: AccountAvailability) -> bool {
+    pub fn matches(&self, credential_state: CredentialState) -> bool {
         match self {
-            Self::Exact(expected) => *expected == availability,
-            Self::AnyOf(expected) => expected.contains(&availability),
+            Self::Exact(expected) => *expected == credential_state,
+            Self::AnyOf(expected) => expected.contains(&credential_state),
         }
     }
 }
@@ -155,8 +152,8 @@ pub struct PreparedCredentialCreate {
     pub access_token_expires_at: Option<DateTime<Utc>>,
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
-    pub availability: AccountAvailability,
-    pub availability_observed_at: DateTime<Utc>,
+    pub credential_state: CredentialState,
+    pub credential_observed_at: DateTime<Utc>,
 }
 
 /// Provider 对一份导入文档的完整验证结果。
@@ -603,15 +600,31 @@ pub struct ProviderQuota {
     pub observed_at: Option<DateTime<Utc>>,
     pub refresh_token_expires_at: Option<DateTime<Utc>>,
     pub windows: Vec<ProviderQuotaWindow>,
-    /// 快照级限流事实（顶层或任一窗口触顶）；Admin 状态派生用，前端不再遍历窗口猜测。
+    /// 展示用快照级触顶事实（顶层或任一窗口触顶）；不参与账号五态派生。
     pub limit_reached: bool,
-    /// 429 临时限流（Redis 冷却）到期时间；`Some` 时账号处于临时限流，到期自动恢复。
-    /// 与 `limit_reached`（配额耗尽）是独立维度，不污染额度窗口。
-    pub rate_limited_until: Option<DateTime<Utc>>,
     pub provider_data: Option<ProviderDocument>,
 }
 
 impl ProviderQuota {
+    /// 返回账号展开面板使用的当前额度窗口用量。
+    ///
+    /// 只选择具备完整时间边界且可按账号归属的窗口；优先级与 Dashboard
+    /// 代表性额度窗口一致，同一优先级保持 Provider 投影顺序。
+    #[must_use]
+    pub fn representative_window_usage(&self) -> Option<&AccountUsage> {
+        self.windows
+            .iter()
+            .enumerate()
+            .filter(|(_, window)| {
+                window.local_usage_attribution == QuotaLocalUsageAttribution::AccountWide
+                    && window.window_seconds.is_some()
+                    && window.reset_at.is_some()
+                    && window.local_usage.is_some()
+            })
+            .min_by_key(|(index, window)| (quota_usage_priority(window), *index))
+            .and_then(|(_, window)| window.local_usage.as_ref())
+    }
+
     /// 返回 Dashboard 使用的代表性额度比例。
     ///
     /// 优先使用短周期窗口，再依次使用周、月和其它窗口；同一优先级取较高的已用比例。
@@ -703,9 +716,7 @@ impl fmt::Debug for ProviderExport {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountDirectoryItem {
     pub account: AccountRecord,
-    pub status: AccountStatus,
-    /// `status == Error` 时的具体原因；其余状态为 `None`。
-    pub error_reason: Option<AccountErrorReason>,
+    pub projection: gateway_core::engine::credential::AccountStatusProjection,
     pub usage: Option<super::accounts::AccountUsage>,
     pub quota: ProviderQuota,
 }

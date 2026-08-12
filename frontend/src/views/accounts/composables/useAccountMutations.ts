@@ -1,7 +1,5 @@
 import type { Ref } from 'vue'
 import type { getAccounts } from '@/api'
-import type { BaseTableSort } from '@/components/base/BaseTable/columns'
-
 import dayjs from 'dayjs'
 import { ref, watch } from 'vue'
 import {
@@ -9,7 +7,6 @@ import {
   disableAccount,
   enableAccount,
   exportAccounts,
-  getAccountQuota,
   refreshAccount,
   refreshAccountQuota,
 } from '@/api'
@@ -23,22 +20,11 @@ import { useAccountOnboarding } from './useAccountOnboarding'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 
-const accountStatusSortRank: Record<string, number> = {
-  normal: 0,
-  quota_exhausted: 1,
-  rate_limited: 2,
-  disabled: 3,
-  error: 4,
-}
-
 export function useAccountMutations(options: {
   accounts: Ref<AccountRow[]>
-  accountSummary: Ref<Awaited<ReturnType<typeof getAccounts>>['summary']>
-  statusQuery: Ref<string>
-  sort: Ref<BaseTableSort | undefined>
   selectedIds: Ref<Set<string>>
-  totalAccounts: Ref<number>
   reload: () => Promise<unknown>
+  replaceAccount: (account: AccountRow) => boolean
 }) {
   const loadAccounts = options.reload
   const { downloadJson } = useDownload()
@@ -188,93 +174,18 @@ export function useAccountMutations(options: {
   async function handleRefreshQuota(accountId: string) {
     await refreshingQuotaAccounts.run(accountId, async () => {
       try {
-        await withMinimumDuration(async () => {
-          await refreshAccountQuota({ accountId })
-          const result = await getAccountQuota({ accountId })
-          options.accounts.value = options.accounts.value.map(account =>
-            account.id === accountId ? { ...account, ...result.account } : account,
-          )
-        })
+        const result = await withMinimumDuration(() => refreshAccountQuota({ accountId }))
+        const remainsVisible = options.replaceAccount(result.account)
+        if (!remainsVisible) {
+          const selectedIds = new Set(options.selectedIds.value)
+          selectedIds.delete(accountId)
+          options.selectedIds.value = selectedIds
+        }
         toast.success('额度已刷新')
       }
       catch (error: unknown) {
         toast.error(errorMessage(error, '额度刷新失败'))
       }
-    })
-  }
-
-  function patchAccountStatus(accountId: string, status: string) {
-    const current = options.accounts.value.find(account => account.id === accountId)
-    if (!current)
-      return
-
-    if (options.statusQuery.value && options.statusQuery.value !== status) {
-      options.accounts.value = options.accounts.value.filter(account => account.id !== accountId)
-      options.totalAccounts.value = Math.max(0, options.totalAccounts.value - 1)
-      options.selectedIds.value = new Set(
-        [...options.selectedIds.value].filter(id => id !== accountId),
-      )
-    }
-    else {
-      const rows = options.accounts.value.map(account =>
-        account.id === accountId
-          ? {
-              ...account,
-              status,
-              displayStatus: status,
-            }
-          : account,
-      )
-      options.accounts.value = sortAccountsByStatus(rows)
-    }
-
-    if (current.status === status)
-      return
-    options.accountSummary.value = {
-      ...options.accountSummary.value,
-      normal: Math.max(
-        0,
-        options.accountSummary.value.normal
-        + Number(status === 'normal')
-        - Number(current.status === 'normal'),
-      ),
-      quotaExhausted: Math.max(
-        0,
-        options.accountSummary.value.quotaExhausted
-        + Number(status === 'quota_exhausted')
-        - Number(current.status === 'quota_exhausted'),
-      ),
-      rateLimited: Math.max(
-        0,
-        options.accountSummary.value.rateLimited
-        + Number(status === 'rate_limited')
-        - Number(current.status === 'rate_limited'),
-      ),
-      disabled: Math.max(
-        0,
-        options.accountSummary.value.disabled
-        + Number(status === 'disabled')
-        - Number(current.status === 'disabled'),
-      ),
-      error: Math.max(
-        0,
-        options.accountSummary.value.error
-        + Number(status === 'error')
-        - Number(current.status === 'error'),
-      ),
-    }
-  }
-
-  function sortAccountsByStatus(rows: AccountRow[]) {
-    if (options.sort.value?.key !== 'status')
-      return rows
-    const direction = options.sort.value.direction === 'asc' ? 1 : -1
-    return [...rows].sort((left, right) => {
-      const rankDifference
-        = (accountStatusSortRank[left.status] ?? 7) - (accountStatusSortRank[right.status] ?? 7)
-      return rankDifference === 0
-        ? left.id.localeCompare(right.id) * direction
-        : rankDifference * direction
     })
   }
 
@@ -362,7 +273,6 @@ export function useAccountMutations(options: {
     handleExportAccounts,
     handleRefresh,
     handleRefreshQuota,
-    patchAccountStatus,
     handleToggleSchedule,
     scheduleActionLabel,
   }

@@ -110,7 +110,6 @@ pub async fn initialize(
         Arc::clone(&agent_identity),
         ports.cooldowns(),
     ));
-    let quota_skip_exhausted = config.quota_skip_exhausted();
     let selector = Arc::new(CodexCredentialSelector::new(
         provider_kind.clone(),
         repository.clone(),
@@ -122,7 +121,6 @@ pub async fn initialize(
         Arc::clone(&agent_identity),
         Arc::clone(&account_feedback),
         CodexCookiePolicy::official().map_err(|_| OpenAiInitializeError::CookiePolicy)?,
-        quota_skip_exhausted,
     ));
     let core_provider: Arc<dyn Provider> = Arc::new(
         CodexProvider::new(

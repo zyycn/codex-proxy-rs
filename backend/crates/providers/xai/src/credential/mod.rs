@@ -63,10 +63,9 @@ pub use token::{
     parse_refresh_success,
 };
 pub use types::{
-    CreateGrokCredential, GrokAccountProfile, GrokCredentialAvailability, GrokCredentialRecord,
-    GrokOAuthSecret, PreparedGrokCredentialRotation, PreparedGrokCredentialRotationGuard,
-    RotateGrokCredential, RotateManagedGrokCredential, UpdateGrokCredentialState,
-    XAI_AUTHENTICATION_KIND_OAUTH,
+    CreateGrokCredential, GrokAccountProfile, GrokCredentialRecord, GrokOAuthSecret,
+    PreparedGrokCredentialRotation, PreparedGrokCredentialRotationGuard, RotateGrokCredential,
+    RotateManagedGrokCredential, UpdateGrokCredentialState, XAI_AUTHENTICATION_KIND_OAUTH,
 };
 pub use verification::{
     FailClosedTokenVerifier, TokenCandidate, TokenVerificationContext, TokenVerifier,

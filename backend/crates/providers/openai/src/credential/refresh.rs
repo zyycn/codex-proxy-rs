@@ -6,7 +6,9 @@ use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
 use futures::{StreamExt as _, stream};
-use gateway_core::engine::credential::{AccountAvailability, ProviderAccount, ProviderAccountId};
+use gateway_core::engine::credential::{
+    AccountErrorReason, CredentialState, ProviderAccount, ProviderAccountId,
+};
 use gateway_core::provider_ports::{
     ProviderCredentialStatePort, ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
     ProviderRefreshCapacityRequest, ProviderRefreshLeaseRequest, ProviderRefreshPolicy,
@@ -253,7 +255,8 @@ impl CodexCredentialRefreshService {
             return self
                 .persist_terminal(
                     &due.account,
-                    AccountAvailability::Expired,
+                    CredentialState::Expired,
+                    AccountErrorReason::CredentialExpired,
                     "refresh_recovery_window_exhausted",
                     CodexCredentialRefreshOutcome::Invalidated { account_id },
                 )
@@ -293,7 +296,8 @@ impl CodexCredentialRefreshService {
             Err(RefreshFailure::InvalidGrant) => {
                 self.persist_terminal(
                     &due.account,
-                    AccountAvailability::Expired,
+                    CredentialState::Expired,
+                    AccountErrorReason::CredentialExpired,
                     "refresh_invalid_grant",
                     CodexCredentialRefreshOutcome::Invalidated { account_id },
                 )
@@ -302,7 +306,8 @@ impl CodexCredentialRefreshService {
             Err(RefreshFailure::Banned) => {
                 self.persist_terminal(
                     &due.account,
-                    AccountAvailability::Banned,
+                    CredentialState::Banned,
+                    AccountErrorReason::AccountBanned,
                     "account_banned",
                     CodexCredentialRefreshOutcome::Banned { account_id },
                 )
@@ -353,11 +358,9 @@ impl CodexCredentialRefreshService {
                 && account.enabled()
                 && account.has_refresh_token()
                 && !excluded.contains(account.id())
-                && !matches!(
-                    account.availability(),
-                    AccountAvailability::Expired
-                        | AccountAvailability::Banned
-                        | AccountAvailability::Invalid
+                && matches!(
+                    account.credential_state(),
+                    CredentialState::Unknown | CredentialState::Ready
                 )
                 && refresh_due_at(account, policy, now).is_some()
         });
@@ -463,7 +466,8 @@ impl CodexCredentialRefreshService {
     async fn persist_terminal(
         &self,
         account: &ProviderAccount,
-        availability: AccountAvailability,
+        credential_state: CredentialState,
+        error_reason: AccountErrorReason,
         reason: &'static str,
         outcome: CodexCredentialRefreshOutcome,
     ) -> Result<CodexCredentialRefreshOutcome, CodexCredentialRefreshError> {
@@ -478,10 +482,11 @@ impl CodexCredentialRefreshService {
         }
         match self
             .repository
-            .apply_state_with_message(
+            .apply_state_with_reason(
                 account,
-                availability,
+                credential_state,
                 SystemTime::now(),
+                Some(error_reason),
                 Some(reason.to_owned()),
             )
             .await
@@ -489,7 +494,7 @@ impl CodexCredentialRefreshService {
             Ok(()) => {
                 tracing::warn!(
                     account_id = %account.id(),
-                    ?availability,
+                    ?credential_state,
                     reason,
                     access_token_expires_at = ?account.access_token_expires_at()
                         .map(DateTime::<Utc>::from),

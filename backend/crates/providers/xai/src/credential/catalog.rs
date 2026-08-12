@@ -8,8 +8,8 @@ use std::time::{Duration, Instant, SystemTime};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountQuotaSignals, CredentialRevision, OpaqueProviderData,
-    ProviderAccount, ProviderAccountId, QuotaObservation,
+    AccountQuotaSignals, CredentialRevision, CredentialState, OpaqueProviderData, ProviderAccount,
+    ProviderAccountId, QuotaObservation, QuotaState,
 };
 use gateway_core::engine::provider::ProviderCatalogGeneration;
 use gateway_core::provider_ports::{
@@ -19,7 +19,6 @@ use gateway_core::routing::ProviderKind;
 use tokio::sync::Mutex;
 
 use super::repository::{GrokCredentialRepository, LoadedGrokCredential};
-use super::types::{GrokCredentialAvailability, UpdateGrokCredentialState};
 use crate::XaiWireProfileState;
 use crate::transport::catalog::{MAX_CATALOG_MODELS, valid_model_slug, validate_etag};
 use crate::{
@@ -445,15 +444,17 @@ impl GrokCredentialQuotaService {
         let observed_at = Utc::now();
         let document = billing.into_document();
         let presentation = billing_presentation(&document)?;
+        let quota = loaded
+            .account
+            .quota()
+            .merge_observation(quota_access_observation(&presentation, observed_at.into()));
         self.repository
             .replace_quota(
                 loaded.account.id().clone(),
                 loaded.account.revision(),
                 document,
                 observed_at.into(),
-                presentation
-                    .used_percent()
-                    .is_some_and(|used| used.is_finite() && used >= 100.0),
+                quota,
             )
             .await
             .map_err(map_quota_repository_error)?;
@@ -464,32 +465,6 @@ impl GrokCredentialQuotaService {
             billing: presentation,
         };
         self.scheduling.observe(&snapshot);
-        let current = self
-            .repository
-            .load_current(account_id)
-            .await
-            .map_err(map_quota_repository_error)?;
-        if quota_refresh_may_update_state(&loaded.account, &current.account)
-            && let Some(availability) = quota_refresh_availability(
-                current.account.availability(),
-                authoritative_quota_exhaustion(snapshot.billing()),
-            )
-        {
-            self.repository
-                .update_state(&UpdateGrokCredentialState {
-                    account_id: current.account.id().clone(),
-                    expected_revision: current.account.revision(),
-                    availability,
-                    availability_reason: matches!(
-                        availability,
-                        GrokCredentialAvailability::QuotaExhausted
-                    )
-                    .then_some("quota_exhausted".to_owned()),
-                    observed_at,
-                })
-                .await
-                .map_err(map_quota_repository_error)?;
-        }
         Ok(snapshot)
     }
 
@@ -506,10 +481,8 @@ impl GrokCredentialQuotaService {
         else {
             return Ok(None);
         };
-        let (Some(quota), Some(observed_at)) = (observation.quota, observation.observed_at) else {
-            return Err(GrokQuotaError::InvalidData);
-        };
-        let document = quota.into_inner();
+        let observed_at = observation.observed_at;
+        let document = observation.quota.into_inner();
         let snapshot = GrokQuotaSnapshot {
             account_id: observation.account_id,
             credential_revision: observation.expected_revision,
@@ -1150,14 +1123,10 @@ fn eligible_catalog_candidate(candidate: &LoadedGrokCredential) -> bool {
         && candidate
             .refresh_token_expires_at
             .is_none_or(|expires_at| expires_at > Utc::now())
-        && match account.availability() {
-            AccountAvailability::Unknown
-            | AccountAvailability::Ready
-            | AccountAvailability::QuotaExhausted => true,
-            AccountAvailability::Expired
-            | AccountAvailability::Banned
-            | AccountAvailability::Invalid => false,
-        }
+        && matches!(
+            account.credential_state(),
+            CredentialState::Unknown | CredentialState::Ready
+        )
 }
 
 async fn fetch_candidate_catalog(
@@ -1273,8 +1242,8 @@ fn billing_presentation(
 }
 
 fn quota_snapshot_from_observation(observation: &QuotaObservation) -> Option<GrokQuotaSnapshot> {
-    let observed_at = DateTime::<Utc>::from(observation.observed_at?);
-    let document = observation.quota.as_ref()?.expose_to_provider();
+    let observed_at = DateTime::<Utc>::from(observation.observed_at);
+    let document = observation.quota.expose_to_provider();
     Some(GrokQuotaSnapshot {
         account_id: observation.account_id.clone(),
         credential_revision: observation.expected_revision,
@@ -1293,29 +1262,54 @@ fn quota_projection_ttl(observed_at: DateTime<Utc>) -> Option<Duration> {
 }
 
 fn quota_scheduling_signals(billing: &GrokBillingPresentation) -> Option<AccountQuotaSignals> {
-    let remaining_rank = billing
-        .used_percent()
-        .filter(|used| used.is_finite() && (0.0..=100.0).contains(used))
-        .map(|used| ((100.0 - used) * 100.0).round() as u64);
     let now = SystemTime::now();
-    let reset_at = billing
+    let period_end = billing
+        .period_end()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| SystemTime::from(value.to_utc()));
+    let observation_expired = period_end.is_some_and(|period_end| period_end <= now);
+    let remaining_rank = (!observation_expired)
+        .then(|| {
+            billing
+                .used_percent()
+                .filter(|used| used.is_finite() && (0.0..=100.0).contains(used))
+                .map(|used| ((100.0 - used) * 100.0).round() as u64)
+        })
+        .flatten();
+    let reset_at = period_end.filter(|reset_at| *reset_at > now);
+    (remaining_rank.is_some() || reset_at.is_some())
+        .then(|| AccountQuotaSignals::new(reset_at, remaining_rank))
+}
+
+/// 把 xAI billing 文档归一化为访问结论。缺少正反证据时返回 Unknown，
+/// 由 `QuotaState::merge_observation` 保留既有已确认结论。
+fn quota_access_observation(
+    billing: &GrokBillingPresentation,
+    observed_at: SystemTime,
+) -> QuotaState {
+    if !billing.has_authoritative_quota() {
+        return QuotaState::observed_unknown(observed_at);
+    }
+    if billing_proves_access_allowed(billing, observed_at) {
+        QuotaState::allowed(observed_at)
+    } else {
+        QuotaState::observed_unknown(observed_at)
+    }
+}
+
+fn billing_proves_access_allowed(
+    billing: &GrokBillingPresentation,
+    observed_at: SystemTime,
+) -> bool {
+    if billing
         .period_end()
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
         .map(|value| SystemTime::from(value.to_utc()))
-        .filter(|reset_at| *reset_at > now);
-    (remaining_rank.is_some() || reset_at.is_some()).then(|| {
-        AccountQuotaSignals::new(
-            reset_at,
-            remaining_rank,
-            billing
-                .used_percent()
-                .is_some_and(|used| used.is_finite() && used >= 100.0),
-        )
-    })
-}
-
-fn quota_is_exhausted(billing: &GrokBillingPresentation) -> bool {
-    if billing
+        .is_some_and(|period_end| period_end <= observed_at)
+    {
+        return false;
+    }
+    billing
         .prepaid_balance_cents()
         .is_some_and(|balance| balance > 0)
         || billing
@@ -1329,60 +1323,6 @@ fn quota_is_exhausted(billing: &GrokBillingPresentation) -> bool {
             (billing.included_used_cents(), billing.monthly_limit_cents()),
             (Some(used), Some(limit)) if limit > 0 && used < limit
         )
-    {
-        return false;
-    }
-    billing
-        .used_percent()
-        .is_some_and(|used| used.is_finite() && used >= 100.0)
-        || matches!(
-            (billing.included_used_cents(), billing.monthly_limit_cents()),
-            (Some(used), Some(limit)) if limit > 0 && used >= limit
-        )
-        || matches!(
-            (billing.on_demand_used_cents(), billing.on_demand_cap_cents()),
-            (Some(used), Some(cap)) if cap > 0 && used >= cap
-        )
-}
-
-/// `None` means the billing document cannot prove either quota state.
-fn authoritative_quota_exhaustion(billing: &GrokBillingPresentation) -> Option<bool> {
-    billing
-        .has_authoritative_quota()
-        .then(|| quota_is_exhausted(billing))
-}
-
-fn quota_refresh_may_update_state(before: &ProviderAccount, current: &ProviderAccount) -> bool {
-    current.enabled()
-        && current
-            .access_token_expires_at()
-            .is_some_and(|expires_at| expires_at > SystemTime::now())
-        && current.revision() == before.revision()
-        && current.availability() == before.availability()
-}
-
-fn quota_refresh_availability(
-    current: AccountAvailability,
-    exhausted: Option<bool>,
-) -> Option<GrokCredentialAvailability> {
-    match current {
-        AccountAvailability::Invalid
-        | AccountAvailability::Expired
-        | AccountAvailability::Banned => None,
-        AccountAvailability::QuotaExhausted => {
-            matches!(exhausted, Some(false)).then_some(GrokCredentialAvailability::Ready)
-        }
-        AccountAvailability::Unknown => exhausted.map(|exhausted| {
-            if exhausted {
-                GrokCredentialAvailability::QuotaExhausted
-            } else {
-                GrokCredentialAvailability::Ready
-            }
-        }),
-        AccountAvailability::Ready => {
-            matches!(exhausted, Some(true)).then_some(GrokCredentialAvailability::QuotaExhausted)
-        }
-    }
 }
 
 fn dynamic_string(

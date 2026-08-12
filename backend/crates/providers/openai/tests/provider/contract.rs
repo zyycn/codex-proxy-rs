@@ -7,8 +7,9 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::Utc;
 use futures::{SinkExt, StreamExt};
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountFeedbackStats, OpaqueProviderData, ProviderAccountId,
-    ProviderAccountStore as _, QuotaObservation,
+    AccountFeedbackStats, CredentialState, OpaqueProviderData, ProviderAccountId,
+    ProviderAccountStore as _, QuotaAccessChange, QuotaAccessState, QuotaEvidence,
+    QuotaObservation, QuotaState,
 };
 use gateway_core::engine::provider::{Provider as _, ProviderRequest};
 use gateway_core::engine::{
@@ -166,7 +167,6 @@ fn provider_and_quota_with_affinity_and_base_url_and_leases(
         Arc::clone(&agent_identity),
         Arc::clone(&account_feedback),
         CodexCookiePolicy::official().expect("cookie policy"),
-        true,
     ));
 
     let provider = CodexProvider::new(
@@ -1414,25 +1414,26 @@ async fn response_failed_before_semantic_output_is_atomic_and_persists_quota_loc
         vec!["response.created", "response.failed"]
     );
     let account = store.account(account_id).expect("rate-limited account");
-    // 429 只记录限流窗口，不改变 availability（限流不改变账号可用性）。
-    assert_eq!(account.availability(), AccountAvailability::Ready);
+    assert_eq!(account.credential_state(), CredentialState::Ready);
+    assert_eq!(account.quota().access(), QuotaAccessState::Unknown);
     let _ = release.send(());
     server.abort();
     let _ = server.await;
 }
 
 #[tokio::test]
-async fn official_usage_limit_failure_projects_100_percent_and_holds_until_reset_advances() {
+async fn official_usage_limit_failure_persists_fact_without_fabricating_usage() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_usage_limit_request_path";
     let reset_at = 1_900_000_000;
     create_account(&store, account_id).await;
     let account = store.account(account_id).expect("created account");
+    let observed_at = SystemTime::now();
     store
         .compare_and_swap_quota(QuotaObservation {
             account_id: account.id().clone(),
             expected_revision: account.revision(),
-            quota: Some(OpaqueProviderData::new(
+            quota: OpaqueProviderData::new(
                 json!({
                     "rate_limit": {
                         "allowed": true,
@@ -1444,9 +1445,9 @@ async fn official_usage_limit_failure_projects_100_percent_and_holds_until_reset
                 .as_object()
                 .expect("stale quota object")
                 .clone(),
-            )),
-            observed_at: Some(SystemTime::now()),
-            limit_reached: None,
+            ),
+            observed_at,
+            state: QuotaState::allowed(observed_at),
         })
         .await
         .expect("seed stale passive quota");
@@ -1505,7 +1506,11 @@ async fn official_usage_limit_failure_projects_100_percent_and_holds_until_reset
 
     assert_eq!(failure.kind(), ProviderErrorKind::QuotaExhausted);
     let account = store.account(account_id).expect("usage-limit account");
-    assert_eq!(account.availability(), AccountAvailability::QuotaExhausted);
+    assert_eq!(account.quota().access(), QuotaAccessState::Exhausted);
+    assert_eq!(
+        account.quota().evidence(),
+        Some(QuotaEvidence::UsageLimitReached)
+    );
     let projected = store
         .get_quotas(&[account.id().clone()])
         .await
@@ -1513,22 +1518,20 @@ async fn official_usage_limit_failure_projects_100_percent_and_holds_until_reset
         .into_iter()
         .next()
         .expect("confirmed quota observation");
-    let projected_observed_at = projected.observed_at.expect("projection observed at");
-    let projected = Value::Object(
-        projected
-            .quota
-            .map(OpaqueProviderData::into_inner)
-            .expect("confirmed quota projection"),
-    );
+    let projected_observed_at = projected.observed_at;
+    let projected = Value::Object(projected.quota.into_inner());
     assert_eq!(
         projected
             .pointer("/rate_limit/primary_window/used_percent")
             .and_then(Value::as_u64),
-        Some(100)
+        Some(99)
     );
-    assert!(
-        projected.pointer("/rate_limit/secondary_window").is_none(),
-        "request failure must not manufacture a secondary quota"
+    assert_eq!(
+        projected
+            .pointer("/rate_limit/secondary_window/used_percent")
+            .and_then(Value::as_u64),
+        Some(0),
+        "request failure must not rewrite the raw display document"
     );
     tokio::time::sleep(Duration::from_millis(200)).await;
     let requests = server.received_requests().await.expect("received requests");
@@ -1549,7 +1552,7 @@ async fn official_usage_limit_failure_projects_100_percent_and_holds_until_reset
                 .expect("read refreshed quota observation")
                 .into_iter()
                 .next()
-                .and_then(|observation| observation.observed_at);
+                .map(|observation| observation.observed_at);
             if observed_at.is_some_and(|observed_at| observed_at > projected_observed_at) {
                 break;
             }
@@ -1564,15 +1567,14 @@ async fn official_usage_limit_failure_projects_100_percent_and_holds_until_reset
         .expect("read refreshed quota")
         .into_iter()
         .next()
-        .and_then(|observation| observation.quota)
-        .map(OpaqueProviderData::into_inner)
+        .map(|observation| observation.quota.into_inner())
         .map(Value::Object)
         .expect("authoritative quota projection");
     assert_eq!(
         quota
             .pointer("/rate_limit/primary_window/used_percent")
             .and_then(Value::as_u64),
-        Some(100)
+        Some(99)
     );
     assert_eq!(
         quota
@@ -1582,7 +1584,7 @@ async fn official_usage_limit_failure_projects_100_percent_and_holds_until_reset
     );
     assert!(
         quota.pointer("/rate_limit/secondary_window").is_none(),
-        "background quota refresh must retain the same window projection"
+        "background refresh may normalize empty display windows"
     );
     let requests = server.received_requests().await.expect("received requests");
     assert_eq!(
@@ -1596,8 +1598,9 @@ async fn official_usage_limit_failure_projects_100_percent_and_holds_until_reset
         store
             .account(account_id)
             .expect("account after stale full usage refresh")
-            .availability(),
-        AccountAvailability::QuotaExhausted,
+            .quota()
+            .access(),
+        QuotaAccessState::Exhausted,
         "a contradictory full usage snapshot must not unlock a confirmed exhausted account"
     );
 }
@@ -1976,12 +1979,11 @@ async fn disabled_account_diagnostic_uses_upstream_without_persisting_account_st
     create_account(&store, account_id).await;
     let account = store.account(account_id).expect("test account");
     store
-        .repository()
-        .apply_state(
-            &account,
-            AccountAvailability::QuotaExhausted,
-            SystemTime::now(),
-        )
+        .apply_quota_access(QuotaAccessChange {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            state: QuotaState::exhausted(QuotaEvidence::UsageLimitReached, SystemTime::now(), None),
+        })
         .await
         .expect("seed quota-exhausted state");
     store
@@ -2033,7 +2035,7 @@ async fn disabled_account_diagnostic_uses_upstream_without_persisting_account_st
         .account(account_id)
         .expect("disabled test account after test");
     assert!(!account.enabled());
-    assert_eq!(account.availability(), AccountAvailability::QuotaExhausted);
+    assert_eq!(account.quota().access(), QuotaAccessState::Exhausted);
     assert!(!store.has_quota(account_id));
     assert_eq!(affinity.binding_count(), 0);
 }
@@ -2051,18 +2053,19 @@ async fn quota_limited_account_diagnostic_uses_upstream() {
             "primary_window": {"used_percent": 100, "reset_at": 1_900_000_000}
         }
     });
+    let observed_at = SystemTime::now();
     store
         .compare_and_swap_quota(QuotaObservation {
             account_id: account.id().clone(),
             expected_revision: account.revision(),
-            quota: Some(OpaqueProviderData::new(
+            quota: OpaqueProviderData::new(
                 raw_quota
                     .as_object()
                     .expect("quota snapshot object")
                     .clone(),
-            )),
-            observed_at: Some(SystemTime::now()),
-            limit_reached: Some(true),
+            ),
+            observed_at,
+            state: QuotaState::exhausted(QuotaEvidence::ProviderDenied, observed_at, None),
         })
         .await
         .expect("seed quota-limited snapshot");
@@ -2118,7 +2121,7 @@ async fn quota_limited_account_diagnostic_uses_upstream() {
 }
 
 #[tokio::test]
-async fn successful_response_preserves_quota_exhaustion_from_rate_limit_headers() {
+async fn successful_response_treats_inference_success_as_authoritative_allowance() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_success_exhausted";
     create_account(&store, account_id).await;
@@ -2164,8 +2167,9 @@ async fn successful_response_preserves_quota_exhaustion_from_rate_limit_headers(
         store
             .account(account_id)
             .expect("account after successful response")
-            .availability(),
-        AccountAvailability::Ready
+            .quota()
+            .access(),
+        QuotaAccessState::Allowed
     );
     assert!(store.has_quota(account_id));
 }
@@ -2226,10 +2230,9 @@ async fn successful_http_sse_rate_limit_event_persists_structured_exhaustion() {
     let account = store
         .account(account_id)
         .expect("account after HTTP SSE response");
-    assert_eq!(
-        (account.availability(), store.has_quota(account_id),),
-        (AccountAvailability::Ready, true,)
-    );
+    assert_eq!(account.credential_state(), CredentialState::Ready);
+    assert_eq!(account.quota().access(), QuotaAccessState::Allowed);
+    assert!(store.has_quota(account_id));
 }
 
 #[test]

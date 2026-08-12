@@ -6,10 +6,10 @@ use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
-    CredentialRevision, LoadedCredential, NewProviderAccount, OpaqueProviderData,
-    PlaintextCredential, ProviderAccount, ProviderAccountId, ProviderAccountStore,
-    ProviderAccountUpdate, QuotaObservation, QuotaWriteOutcome,
+    AccountStateChange, CredentialCasOutcome, CredentialCasUpdate, CredentialRevision,
+    CredentialState, LoadedCredential, NewProviderAccount, OpaqueProviderData, PlaintextCredential,
+    ProviderAccount, ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
+    QuotaAccessChange, QuotaObservation, QuotaState, QuotaWriteOutcome,
 };
 use gateway_core::error::StoreErrorKind;
 use gateway_core::routing::ProviderKind;
@@ -17,8 +17,8 @@ use serde_json::Value;
 use thiserror::Error;
 
 use super::types::{
-    CreateGrokCredential, GrokAccountProfile, GrokCredentialAvailability, GrokCredentialRecord,
-    GrokOAuthSecret, GrokOAuthSecretWire, OwnedGrokOAuthSecretWire, PreparedGrokCredentialRotation,
+    CreateGrokCredential, GrokAccountProfile, GrokCredentialRecord, GrokOAuthSecret,
+    GrokOAuthSecretWire, OwnedGrokOAuthSecretWire, PreparedGrokCredentialRotation,
     RotateGrokCredential, RotateManagedGrokCredential, UpdateGrokCredentialState,
     XAI_AUTHENTICATION_KIND_OAUTH,
 };
@@ -167,7 +167,13 @@ impl GrokCredentialAdmin {
             input.account.upstream_account_id.clone(),
             input.account.plan_type.clone(),
         )
-        .with_runtime_state(input.enabled, input.initial_availability.into())
+        .with_account_facts(
+            input.enabled,
+            input.initial_credential_state,
+            QuotaState::unknown(),
+            input.initial_error_reason,
+            input.initial_error_message.clone(),
+        )
         .with_refresh_schedule(true, None);
         Ok(NewProviderAccount {
             account,
@@ -210,8 +216,9 @@ impl GrokCredentialAdmin {
                 refresh_token_expires_at: None,
             },
             enabled: input.enabled,
-            initial_availability: GrokCredentialAvailability::Ready,
-            initial_availability_reason: None,
+            initial_credential_state: CredentialState::Ready,
+            initial_error_reason: None,
+            initial_error_message: None,
         })
     }
 
@@ -420,21 +427,30 @@ impl GrokCredentialRepository {
         &self,
         input: &UpdateGrokCredentialState,
     ) -> Result<(), GrokCredentialRepositoryError> {
-        let availability = AccountAvailability::from(input.availability);
-        let availability_reason = input
-            .availability_reason
+        let error_message = input
+            .error_message
             .clone()
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| availability.fallback_error_reason().map(str::to_owned));
-        validate_reason(availability_reason.as_deref())?;
+            .filter(|value| !value.trim().is_empty());
+        validate_reason(error_message.as_deref())?;
+        let (error_reason, error_message) = if input.credential_state == CredentialState::Ready {
+            (None, None)
+        } else {
+            (
+                input
+                    .error_reason
+                    .or_else(|| input.credential_state.error_reason()),
+                error_message,
+            )
+        };
         self.ensure_xai_account(&input.account_id).await?;
         self.store
             .apply_state_change(AccountStateChange {
                 account_id: input.account_id.clone(),
                 expected_revision: input.expected_revision,
-                availability,
+                credential_state: input.credential_state,
                 observed_at: to_system_time(input.observed_at),
-                message: availability_reason,
+                error_reason,
+                message: error_message,
             })
             .await
             .map_err(map_store_error)
@@ -518,16 +534,39 @@ impl GrokCredentialRepository {
         expected_revision: CredentialRevision,
         document: serde_json::Map<String, Value>,
         observed_at: SystemTime,
-        limit_reached: bool,
+        state: QuotaState,
     ) -> Result<(), GrokCredentialRepositoryError> {
         let outcome = self
             .store
             .compare_and_swap_quota(QuotaObservation {
                 account_id,
                 expected_revision,
-                quota: Some(OpaqueProviderData::new(document)),
-                observed_at: Some(observed_at),
-                limit_reached: Some(limit_reached),
+                quota: OpaqueProviderData::new(document),
+                observed_at,
+                state,
+            })
+            .await
+            .map_err(map_store_error)?;
+        match outcome {
+            QuotaWriteOutcome::Updated => Ok(()),
+            QuotaWriteOutcome::Conflict => {
+                Err(GrokCredentialRepositoryError::StaleCredentialRevision)
+            }
+        }
+    }
+
+    pub(crate) async fn update_quota_access(
+        &self,
+        account_id: ProviderAccountId,
+        expected_revision: CredentialRevision,
+        state: QuotaState,
+    ) -> Result<(), GrokCredentialRepositoryError> {
+        let outcome = self
+            .store
+            .apply_quota_access(QuotaAccessChange {
+                account_id,
+                expected_revision,
+                state,
             })
             .await
             .map_err(map_store_error)?;
@@ -698,7 +737,7 @@ fn validate_create(input: &CreateGrokCredential) -> Result<(), GrokCredentialRep
     validate_name(&input.name)?;
     validate_profile(&input.account)?;
     validate_secret(&input.secret)?;
-    validate_reason(input.initial_availability_reason.as_deref())
+    validate_reason(input.initial_error_message.as_deref())
 }
 
 fn validate_profile(profile: &GrokAccountProfile) -> Result<(), GrokCredentialRepositoryError> {
@@ -786,9 +825,7 @@ fn validate_reason(reason: Option<&str>) -> Result<(), GrokCredentialRepositoryE
     if reason
         .is_some_and(|value| value.len() > MAX_REASON_BYTES || value.chars().any(char::is_control))
     {
-        return Err(GrokCredentialRepositoryError::InvalidInput(
-            "availability_reason",
-        ));
+        return Err(GrokCredentialRepositoryError::InvalidInput("error_message"));
     }
     Ok(())
 }

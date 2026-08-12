@@ -7,7 +7,8 @@ use std::time::{Duration, SystemTime};
 
 use futures::future::join_all;
 use gateway_core::engine::credential::{
-    OpaqueProviderData, ProviderAccountStore as _, QuotaObservation, QuotaWriteOutcome,
+    OpaqueProviderData, ProviderAccountStore as _, QuotaAccessState, QuotaObservation, QuotaState,
+    QuotaWriteOutcome,
 };
 use provider_openai::credential::{CodexQuotaWindowKind, parse_codex_quota_usage};
 use serde_json::json;
@@ -34,11 +35,11 @@ fn parser_extracts_dynamic_windows_without_a_fixed_database_shape() {
         fact.resets_at().map(|value| value.timestamp()),
         Some(1_800_000_100)
     );
-    assert!(!fact.exhausted());
+    assert_eq!(fact.remaining_percent(), Some(20));
 }
 
 #[test]
-fn parser_treats_any_confirmed_provider_limit_as_exhausted() {
+fn parser_keeps_additional_limit_as_display_data() {
     let fact = parse_codex_quota_usage(&json!({
         "rate_limit": {"primary_window": {"used_percent": 10}},
         "additional_rate_limits": [{
@@ -47,7 +48,7 @@ fn parser_treats_any_confirmed_provider_limit_as_exhausted() {
     }))
     .expect("valid quota");
 
-    assert!(fact.exhausted());
+    assert_eq!(fact.remaining_percent(), Some(0));
 }
 
 #[test]
@@ -61,14 +62,12 @@ fn parser_keeps_full_percent_as_display_without_provider_exhaustion_signal() {
     }))
     .expect("valid full-percent quota");
 
-    // 任一子窗口 used>=100 是快照级 exhaustion 事实，
-    // 即使顶层 allowed=true。
+    // 百分比只负责展示；额度访问结论由规范化 QuotaState 承载。
     assert_eq!(fact.remaining_percent(), Some(0));
-    assert!(fact.exhausted());
 }
 
 #[test]
-fn parser_treats_confirmed_limit_reached_as_exhausted_even_below_full_percent() {
+fn parser_projects_percent_when_access_is_denied() {
     let fact = parse_codex_quota_usage(&json!({
         "rate_limit": {
             "allowed": false,
@@ -79,7 +78,6 @@ fn parser_treats_confirmed_limit_reached_as_exhausted_even_below_full_percent() 
     .expect("valid provider-confirmed quota");
 
     assert_eq!(fact.remaining_percent(), Some(2));
-    assert!(fact.exhausted());
 }
 
 #[test]
@@ -94,7 +92,7 @@ fn parser_does_not_infer_exhaustion_from_unknown_credit_fields() {
     }))
     .expect("recognized credits object");
 
-    assert!(!fact.exhausted());
+    assert_eq!(fact.remaining_percent(), None);
 }
 
 #[test]
@@ -129,7 +127,6 @@ fn parser_accepts_official_null_additional_rate_limits() {
     .expect("official null additional quota");
 
     assert_eq!(fact.remaining_percent(), Some(70));
-    assert!(!fact.exhausted());
 }
 
 #[test]
@@ -192,11 +189,9 @@ async fn persisted_provider_quota_projects_dynamic_windows_without_network_io() 
         .compare_and_swap_quota(QuotaObservation {
             account_id: account.id().clone(),
             expected_revision: account.revision(),
-            quota: Some(OpaqueProviderData::new(
-                raw.as_object().expect("quota object").clone(),
-            )),
-            observed_at: Some(SystemTime::now()),
-            limit_reached: None,
+            quota: OpaqueProviderData::new(raw.as_object().expect("quota object").clone()),
+            observed_at: SystemTime::now(),
+            state: QuotaState::allowed(SystemTime::now()),
         })
         .await
         .expect("persist quota");
@@ -218,8 +213,7 @@ async fn persisted_provider_quota_projects_dynamic_windows_without_network_io() 
 }
 
 #[tokio::test]
-async fn roll_expired_windows_is_o1_for_extremely_old_reset() {
-    // 过去数年的 1 秒窗口：O(1) 完成，不能线性循环。
+async fn expired_window_remains_the_last_observation_until_refresh() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_o1_roll").await;
     let account = store.account("acct_o1_roll").expect("account");
@@ -240,11 +234,9 @@ async fn roll_expired_windows_is_o1_for_extremely_old_reset() {
         .compare_and_swap_quota(QuotaObservation {
             account_id: account.id().clone(),
             expected_revision: account.revision(),
-            quota: Some(OpaqueProviderData::new(
-                raw.as_object().expect("quota object").clone(),
-            )),
-            observed_at: Some(SystemTime::now()),
-            limit_reached: None,
+            quota: OpaqueProviderData::new(raw.as_object().expect("quota object").clone()),
+            observed_at: SystemTime::now(),
+            state: QuotaState::observed_unknown(SystemTime::now()),
         })
         .await
         .expect("persist quota");
@@ -254,20 +246,18 @@ async fn roll_expired_windows_is_o1_for_extremely_old_reset() {
         .await
         .expect("read quota")
         .expect("quota snapshot");
-    let rolled = snapshot.roll_expired_windows(SystemTime::now());
-    let window = &rolled.windows()[0];
-    assert_eq!(window.used_percent(), Some(0.0));
-    assert!(!window.limit_reached());
-    // 下一 reset 必须落在 now 之后（O(1) 公式而非线性累加）。
+    let window = &snapshot.windows()[0];
+    assert_eq!(window.used_percent(), Some(100.0));
     assert!(
         window
             .reset_at()
-            .is_some_and(|reset| SystemTime::from(reset) > SystemTime::now())
+            .is_some_and(|reset| { SystemTime::from(reset) < SystemTime::now() })
     );
+    assert_eq!(service.scheduling_signals(&account), None);
 }
 
 #[tokio::test]
-async fn scheduling_signal_survives_limit_reached_without_percent_or_reset() {
+async fn persisted_access_fact_survives_limit_without_percent_or_reset() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_signal_only_limit").await;
     let account = store.account("acct_signal_only_limit").expect("account");
@@ -282,11 +272,13 @@ async fn scheduling_signal_survives_limit_reached_without_percent_or_reset() {
         .compare_and_swap_quota(QuotaObservation {
             account_id: account.id().clone(),
             expected_revision: account.revision(),
-            quota: Some(OpaqueProviderData::new(
-                raw.as_object().expect("quota object").clone(),
-            )),
-            observed_at: Some(SystemTime::now()),
-            limit_reached: None,
+            quota: OpaqueProviderData::new(raw.as_object().expect("quota object").clone()),
+            observed_at: SystemTime::now(),
+            state: QuotaState::exhausted(
+                gateway_core::engine::credential::QuotaEvidence::ProviderDenied,
+                SystemTime::now(),
+                None,
+            ),
         })
         .await
         .expect("persist quota");
@@ -296,12 +288,7 @@ async fn scheduling_signal_survives_limit_reached_without_percent_or_reset() {
         .await
         .expect("read quota")
         .expect("quota snapshot");
-    assert!(snapshot.fact().exhausted());
-    let signals = service.scheduling_signals(&account);
-    assert!(
-        signals.is_some_and(|signals| signals.limit_reached()),
-        "limit_reached without percent/reset must still produce scheduling exclusion"
-    );
+    assert_eq!(snapshot.quota().access(), QuotaAccessState::Exhausted);
 }
 
 #[tokio::test]
@@ -334,11 +321,9 @@ async fn persisted_codex_alias_keeps_the_top_level_rate_limit_canonical() {
         .compare_and_swap_quota(QuotaObservation {
             account_id: account.id().clone(),
             expected_revision: account.revision(),
-            quota: Some(OpaqueProviderData::new(
-                raw.as_object().expect("quota object").clone(),
-            )),
-            observed_at: Some(SystemTime::now()),
-            limit_reached: None,
+            quota: OpaqueProviderData::new(raw.as_object().expect("quota object").clone()),
+            observed_at: SystemTime::now(),
+            state: QuotaState::observed_unknown(SystemTime::now()),
         })
         .await
         .expect("persist quota");
@@ -393,11 +378,9 @@ async fn persisted_quota_orders_core_window_before_additional_limit() {
         .compare_and_swap_quota(QuotaObservation {
             account_id: account.id().clone(),
             expected_revision: account.revision(),
-            quota: Some(OpaqueProviderData::new(
-                raw.as_object().expect("quota object").clone(),
-            )),
-            observed_at: Some(SystemTime::now()),
-            limit_reached: None,
+            quota: OpaqueProviderData::new(raw.as_object().expect("quota object").clone()),
+            observed_at: SystemTime::now(),
+            state: QuotaState::observed_unknown(SystemTime::now()),
         })
         .await
         .expect("persist quota");
@@ -459,11 +442,9 @@ async fn code_review_limit_projects_as_independent_window_with_limit_name() {
         .compare_and_swap_quota(QuotaObservation {
             account_id: account.id().clone(),
             expected_revision: account.revision(),
-            quota: Some(OpaqueProviderData::new(
-                raw.as_object().expect("quota object").clone(),
-            )),
-            observed_at: Some(SystemTime::now()),
-            limit_reached: None,
+            quota: OpaqueProviderData::new(raw.as_object().expect("quota object").clone()),
+            observed_at: SystemTime::now(),
+            state: QuotaState::observed_unknown(SystemTime::now()),
         })
         .await
         .expect("persist quota");
@@ -490,5 +471,5 @@ async fn code_review_limit_projects_as_independent_window_with_limit_name() {
     }));
     assert_ne!(review[0].key(), review[1].key());
     assert_eq!(snapshot.windows().len(), 3);
-    assert!(!snapshot.fact().exhausted());
+    assert_eq!(snapshot.quota().access(), QuotaAccessState::Unknown);
 }

@@ -129,7 +129,6 @@ fn representative_quota_should_prefer_short_window_and_highest_usage() {
             quota_window("shortTerm", Some(14_400), Some(45.0)),
         ],
         limit_reached: false,
-        rate_limited_until: None,
         provider_data: None,
     };
 

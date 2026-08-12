@@ -5,9 +5,9 @@ use std::time::{Duration, SystemTime};
 
 use futures::future::{BoxFuture, join_all};
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountStateChange, CredentialCasUpdate, CredentialRevision,
+    AccountStateChange, CredentialCasUpdate, CredentialRevision, CredentialState,
     OpaqueProviderData, ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
-    QuotaObservation,
+    QuotaAccessChange, QuotaEvidence, QuotaObservation, QuotaState,
 };
 use gateway_core::provider_ports::{
     ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderStoreError,
@@ -200,14 +200,15 @@ async fn repository_with_accounts(
 async fn set_account_state(
     store: &MemoryProviderAccountStore,
     id: &ProviderAccountId,
-    availability: AccountAvailability,
+    credential_state: CredentialState,
 ) {
     store
         .apply_state_change(AccountStateChange {
             message: None,
             account_id: id.clone(),
             expected_revision: CredentialRevision::new(1).expect("revision"),
-            availability,
+            credential_state,
+            error_reason: credential_state.error_reason(),
             observed_at: SystemTime::now(),
         })
         .await
@@ -485,12 +486,10 @@ async fn quota_exhausted_account_remains_eligible_for_catalog_discovery() {
         repository_with_accounts(&[("quota-exhausted", "subject-quota-exhausted")]).await;
     let id = account_id("quota-exhausted");
     store
-        .apply_state_change(AccountStateChange {
-            message: None,
+        .apply_quota_access(QuotaAccessChange {
             account_id: id,
             expected_revision: CredentialRevision::new(1).expect("revision"),
-            availability: AccountAvailability::QuotaExhausted,
-            observed_at: SystemTime::now(),
+            state: QuotaState::exhausted(QuotaEvidence::ProviderDenied, SystemTime::now(), None),
         })
         .await
         .expect("mark quota exhausted");
@@ -662,7 +661,7 @@ async fn quota_refresh_persists_dynamic_provider_document_and_projects_known_fie
         .expect("read persisted quota")
         .pop()
         .expect("quota exists");
-    let document = persisted.quota.expect("provider quota");
+    let document = persisted.quota;
 
     assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
     assert_eq!(snapshot.billing().used_percent(), Some(37.5));
@@ -683,33 +682,18 @@ async fn quota_refresh_persists_dynamic_provider_document_and_projects_known_fie
 }
 
 #[tokio::test]
-async fn recovered_quota_refresh_releases_existing_quota_isolation() {
-    for (suffix, availability) in [
-        ("recover-quota", AccountAvailability::QuotaExhausted),
-        ("recover-ready", AccountAvailability::Ready),
-    ] {
-        let (store, repository) = repository_with_accounts(&[(suffix, suffix)]).await;
-        let id = account_id(suffix);
-        set_account_state(&store, &id, availability).await;
-        crate::support::grok_quota_service(
-            repository,
-            QueueBillingTransport::success(br#"{"config":{"creditUsagePercent":25}}"#),
-        )
-        .refresh_account(&id)
-        .await
-        .expect("refresh recovered quota");
-
-        let account = store.account(&id).expect("account");
-        assert_eq!(account.availability(), AccountAvailability::Ready);
-    }
-}
-
-#[tokio::test]
-async fn authoritative_exhaustion_preserves_quota_exhausted_state() {
+async fn billing_percent_does_not_rewrite_quota_access_fact() {
     let (store, repository) =
         repository_with_accounts(&[("still-exhausted", "still-exhausted")]).await;
     let id = account_id("still-exhausted");
-    set_account_state(&store, &id, AccountAvailability::QuotaExhausted).await;
+    store
+        .apply_quota_access(QuotaAccessChange {
+            account_id: id.clone(),
+            expected_revision: CredentialRevision::new(1).expect("revision"),
+            state: QuotaState::exhausted(QuotaEvidence::ProviderDenied, SystemTime::now(), None),
+        })
+        .await
+        .expect("mark quota exhausted");
 
     crate::support::grok_quota_service(
         repository,
@@ -720,21 +704,75 @@ async fn authoritative_exhaustion_preserves_quota_exhausted_state() {
     .expect("refresh exhausted quota");
 
     assert_eq!(
-        store.account(&id).expect("account").availability(),
-        AccountAvailability::QuotaExhausted
+        store.account(&id).expect("account").quota().access(),
+        gateway_core::engine::credential::QuotaAccessState::Exhausted
     );
 }
 
 #[tokio::test]
+async fn authoritative_billing_refresh_clears_existing_quota_exhaustion() {
+    let (store, repository) =
+        repository_with_accounts(&[("recovered-quota", "recovered-quota")]).await;
+    let id = account_id("recovered-quota");
+    store
+        .apply_quota_access(QuotaAccessChange {
+            account_id: id.clone(),
+            expected_revision: CredentialRevision::new(1).expect("revision"),
+            state: QuotaState::exhausted(QuotaEvidence::ProviderDenied, SystemTime::now(), None),
+        })
+        .await
+        .expect("mark quota exhausted");
+
+    crate::support::grok_quota_service(
+        repository,
+        QueueBillingTransport::success(
+            br#"{"config":{"creditUsagePercent":12.5,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-07-15T00:00:00Z","end":"2099-07-22T00:00:00Z"}}}"#,
+        ),
+    )
+    .refresh_account(&id)
+    .await
+    .expect("refresh recovered quota");
+
+    assert_eq!(
+        store.account(&id).expect("account").quota().access(),
+        gateway_core::engine::credential::QuotaAccessState::Allowed
+    );
+}
+
+#[tokio::test]
+async fn full_usage_display_does_not_invent_quota_exhaustion() {
+    let (store, repository) =
+        repository_with_accounts(&[("exhausted-quota", "exhausted-quota")]).await;
+    let id = account_id("exhausted-quota");
+
+    crate::support::grok_quota_service(
+        repository,
+        QueueBillingTransport::success(
+            br#"{"config":{"creditUsagePercent":100,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-07-15T00:00:00Z","end":"2099-07-22T00:00:00Z"}}}"#,
+        ),
+    )
+    .refresh_account(&id)
+    .await
+    .expect("refresh exhausted quota");
+
+    let quota = store.account(&id).expect("account").quota();
+    assert_eq!(
+        quota.access(),
+        gateway_core::engine::credential::QuotaAccessState::Unknown
+    );
+    assert!(quota.reset_at().is_none());
+}
+
+#[tokio::test]
 async fn recovered_quota_does_not_clear_terminal_account_states() {
-    for (suffix, availability) in [
-        ("keep-banned", AccountAvailability::Banned),
-        ("keep-expired", AccountAvailability::Expired),
-        ("keep-invalid", AccountAvailability::Invalid),
+    for (suffix, credential_state) in [
+        ("keep-banned", CredentialState::Banned),
+        ("keep-expired", CredentialState::Expired),
+        ("keep-invalid", CredentialState::Invalid),
     ] {
         let (store, repository) = repository_with_accounts(&[(suffix, suffix)]).await;
         let id = account_id(suffix);
-        set_account_state(&store, &id, availability).await;
+        set_account_state(&store, &id, credential_state).await;
         crate::support::grok_quota_service(
             repository,
             QueueBillingTransport::success(br#"{"config":{"creditUsagePercent":10}}"#),
@@ -744,14 +782,14 @@ async fn recovered_quota_does_not_clear_terminal_account_states() {
         .expect("refresh terminal account quota");
 
         assert_eq!(
-            store.account(&id).expect("account").availability(),
-            availability
+            store.account(&id).expect("account").credential_state(),
+            credential_state
         );
     }
 }
 
 #[tokio::test]
-async fn quota_refresh_preserves_ready_availability_across_concurrent_state_write() {
+async fn quota_refresh_preserves_ready_credential_state_across_concurrent_write() {
     let (store, repository) = repository_with_accounts(&[("new-cooldown", "new-cooldown")]).await;
     let id = account_id("new-cooldown");
     let transport = Arc::new(MutatingBillingTransport {
@@ -760,7 +798,8 @@ async fn quota_refresh_preserves_ready_availability_across_concurrent_state_writ
             message: None,
             account_id: id.clone(),
             expected_revision: CredentialRevision::new(1).expect("revision"),
-            availability: AccountAvailability::Ready,
+            credential_state: CredentialState::Ready,
+            error_reason: None,
             observed_at: SystemTime::now(),
         }))),
         body: br#"{"config":{"creditUsagePercent":10}}"#.to_vec(),
@@ -772,7 +811,7 @@ async fn quota_refresh_preserves_ready_availability_across_concurrent_state_writ
         .expect("refresh around concurrent state write");
 
     let account = store.account(&id).expect("account");
-    assert_eq!(account.availability(), AccountAvailability::Ready);
+    assert_eq!(account.credential_state(), CredentialState::Ready);
 }
 
 #[tokio::test]
@@ -861,11 +900,47 @@ async fn quota_projection_preserves_unknown_period_for_dynamic_duration_fallback
 }
 
 #[tokio::test]
+async fn expired_billing_window_does_not_participate_in_scheduling_rank() {
+    let (store, repository) =
+        repository_with_accounts(&[("expired-billing", "expired-billing")]).await;
+    let id = account_id("expired-billing");
+    let account = store.account(&id).expect("account");
+    let service = crate::support::grok_quota_service(
+        repository,
+        QueueBillingTransport::success(
+            br#"{"config":{"creditUsagePercent":25,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2000-01-01T00:00:00Z","end":"2000-01-08T00:00:00Z"}}}"#,
+        ),
+    );
+
+    service
+        .refresh_account(&id)
+        .await
+        .expect("refresh expired billing window");
+
+    assert_eq!(service.scheduling_signals(&account), None);
+    assert_eq!(
+        store
+            .account(&id)
+            .expect("refreshed account")
+            .quota()
+            .access(),
+        gateway_core::engine::credential::QuotaAccessState::Unknown
+    );
+}
+
+#[tokio::test]
 async fn non_authoritative_quota_refresh_does_not_clear_existing_quota_exhaustion() {
     let (store, repository) =
         repository_with_accounts(&[("free-quota", "subject-free-quota")]).await;
     let id = account_id("free-quota");
-    set_account_state(&store, &id, AccountAvailability::QuotaExhausted).await;
+    store
+        .apply_quota_access(QuotaAccessChange {
+            account_id: id.clone(),
+            expected_revision: CredentialRevision::new(1).expect("revision"),
+            state: QuotaState::exhausted(QuotaEvidence::ProviderDenied, SystemTime::now(), None),
+        })
+        .await
+        .expect("mark quota exhausted");
     let transport = QueueBillingTransport::success(
         br#"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-07-15T00:00:00Z","end":"2026-07-22T00:00:00Z"},"onDemandCap":{"val":0},"onDemandUsed":{"val":0},"prepaidBalance":{"val":0}}}"#,
     );
@@ -876,8 +951,8 @@ async fn non_authoritative_quota_refresh_does_not_clear_existing_quota_exhaustio
 
     assert!(!snapshot.billing().has_authoritative_quota());
     assert_eq!(
-        store.account(&id).expect("account").availability(),
-        AccountAvailability::QuotaExhausted
+        store.account(&id).expect("account").quota().access(),
+        gateway_core::engine::credential::QuotaAccessState::Exhausted
     );
 }
 
@@ -920,9 +995,9 @@ async fn quota_read_rejects_corrupt_provider_document() {
         .compare_and_swap_quota(QuotaObservation {
             account_id: account_id("corrupt"),
             expected_revision: CredentialRevision::new(1).expect("revision"),
-            quota: Some(OpaqueProviderData::new(document)),
-            observed_at: Some(SystemTime::now()),
-            limit_reached: None,
+            quota: OpaqueProviderData::new(document),
+            observed_at: SystemTime::now(),
+            state: QuotaState::unknown(),
         })
         .await
         .expect("seed corrupt quota");
@@ -975,8 +1050,7 @@ async fn failed_quota_refresh_does_not_replace_last_good_observation() {
         .expect("read quota")
         .pop()
         .expect("quota remains")
-        .quota
-        .expect("provider document");
+        .quota;
     assert_eq!(
         persisted.expose_to_provider()["config"]["creditUsagePercent"].as_f64(),
         Some(10.0),

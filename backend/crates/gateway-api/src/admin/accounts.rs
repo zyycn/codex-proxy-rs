@@ -37,7 +37,7 @@ use gateway_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::presenter::{format_compact_number, format_number};
+use super::presenter::{format_compact_number, format_decimal_currency, format_number};
 use super::{
     AdminAuth, AdminEnvelope, AdminError, AdminResponse, AdminSessionState, PageMeta,
     WireValidationError,
@@ -185,12 +185,10 @@ pub struct AccountView {
     pub authentication_kind: String,
     pub has_refresh_token: bool,
     pub status: String,
-    pub display_status: String,
     /// `status == "error"` 时的具体原因；其余状态为 `null`。
     pub error_reason: Option<String>,
     /// 最近一次失败的上游错误描述；仅错误状态存在。
     pub error_message: Option<String>,
-    pub availability: String,
     pub enabled: bool,
     pub access_token_expires_at: Option<String>,
     pub access_token_expires_at_display: Option<String>,
@@ -522,10 +520,9 @@ impl From<DomainConnectionTestEvent> for AccountConnectionTestEvent {
             DomainConnectionTestEvent::Content { text } => {
                 serde_json::json!({ "type": "content", "text": text })
             }
-            DomainConnectionTestEvent::Completed { account_status } => serde_json::json!({
+            DomainConnectionTestEvent::Completed => serde_json::json!({
                 "type": "test_complete",
-                "success": true,
-                "accountStatus": account_status.as_str()
+                "success": true
             }),
             DomainConnectionTestEvent::Failed {
                 message,
@@ -534,7 +531,6 @@ impl From<DomainConnectionTestEvent> for AccountConnectionTestEvent {
                 upstream_status,
                 upstream_content_type,
                 upstream_body,
-                account_status,
             } => serde_json::json!({
                 "type": "error",
                 "error": message,
@@ -542,8 +538,7 @@ impl From<DomainConnectionTestEvent> for AccountConnectionTestEvent {
                 "providerErrorType": provider_error_type,
                 "upstreamStatus": upstream_status,
                 "upstreamContentType": upstream_content_type,
-                "upstreamBody": upstream_body,
-                "accountStatus": account_status.as_str()
+                "upstreamBody": upstream_body
             }),
         };
         Self { data }
@@ -1365,16 +1360,16 @@ fn account_models_data(result: ProviderModels) -> AccountModelsData {
 fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
     let AccountDirectoryItem {
         account,
-        status,
-        error_reason,
+        projection,
         usage,
         quota,
     } = item;
-    let status = status.as_str().to_owned();
+    let status = projection.status.as_str().to_owned();
+    let rate_limited_until = projection.rate_limited_until.map(DateTime::<Utc>::from);
     let expires_at = account.access_token_expires_at.as_ref().map(china_rfc3339);
     let added_at = china_rfc3339(&account.created_at);
     let updated_at = china_rfc3339(&account.updated_at);
-    let (quota, refresh_token_expires_at) = account_quota_view(quota, now);
+    let (quota, refresh_token_expires_at) = account_quota_view(quota, rate_limited_until, now);
     AccountView {
         id: account.id.clone(),
         name: account.name,
@@ -1387,11 +1382,11 @@ fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
         plan_type: account.plan_type,
         authentication_kind: account.authentication_kind,
         has_refresh_token: account.has_refresh_token,
-        status: status.clone(),
-        display_status: status,
-        error_reason: error_reason.map(|reason| reason.as_str().to_owned()),
-        error_message: account.last_error_message,
-        availability: account.availability.as_str().to_owned(),
+        status,
+        error_reason: projection
+            .error_reason
+            .map(|reason| reason.as_str().to_owned()),
+        error_message: projection.error_message,
         enabled: account.enabled,
         access_token_expires_at: expires_at,
         access_token_expires_at_display: account
@@ -1411,6 +1406,7 @@ fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
 
 fn account_quota_view(
     quota: ProviderQuota,
+    rate_limited_until: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
 ) -> (AccountQuotaView, Option<String>) {
     let refresh_token_expires_at = quota
@@ -1420,7 +1416,7 @@ fn account_quota_view(
         .observed_at
         .map_or_else(|| "—".to_owned(), |value| relative_time(value, now));
     let windows = quota.windows.into_iter().map(quota_window_view).collect();
-    let rate_limited_until = quota.rate_limited_until.map(|until| china_datetime(&until));
+    let rate_limited_until = rate_limited_until.map(|until| china_datetime(&until));
     (
         AccountQuotaView {
             refreshed_at_display,
@@ -1590,7 +1586,7 @@ fn account_model_usage_view(usage: AccountModelUsage, now: DateTime<Utc>) -> Mod
         billing_amount_usd: usd.map(|cost| cost.amount.as_str().to_owned()),
         billing_amount_usd_display: usd.map_or_else(
             || "—".to_owned(),
-            |cost| format!("${}", cost.amount.as_str()),
+            |cost| format_decimal_currency(cost.amount.as_str(), "USD"),
         ),
         cost_estimate_status: cost_estimate_status.to_owned(),
         known_cost_count: known_count,

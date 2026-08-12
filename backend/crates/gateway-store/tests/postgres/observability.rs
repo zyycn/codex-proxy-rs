@@ -134,26 +134,27 @@ async fn dashboard_account_metrics_should_partition_account_statuses() {
         "insert into provider_accounts (
            id, provider_kind, name, upstream_user_id, authentication_kind,
            provider_credentials_json, credential_revision, has_refresh_token,
-           access_token_expires_at, enabled, availability,
-           availability_observed_at, created_at, updated_at
+           access_token_expires_at, enabled, credential_state,
+           quota_access_state, quota_evidence, quota_access_observed_at,
+           credential_observed_at, created_at, updated_at
          ) values
            ('acct_available', 'openai', 'available', 'user-available', 'oauth',
-            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'ready',
+            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'ready', 'allowed', null, $1,
             $1, $1, $1),
            ('acct_expired', 'openai', 'expired', 'user-expired', 'oauth',
-            '{}'::jsonb, 1, false, $1 - interval '1 day', true, 'ready',
+            '{}'::jsonb, 1, false, $1 - interval '1 day', true, 'ready', 'allowed', null, $1,
             $1, $1, $1),
            ('acct_rate_cooldown', 'openai', 'rate-cooldown', 'user-rate-cooldown', 'oauth',
-            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'ready',
+            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'ready', 'allowed', null, $1,
             $1, $1, $1),
            ('acct_usage_limit', 'xai', 'usage-limit', 'user-usage-limit', 'oauth',
-            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'quota_exhausted',
+            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'ready', 'exhausted', 'usage_limit_reached', $1,
             $1, $1, $1),
            ('acct_banned', 'xai', 'banned', 'user-banned', 'oauth',
-            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'banned',
+            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'banned', 'allowed', null, $1,
             $1, $1, $1),
            ('acct_disabled', 'xai', 'disabled', 'user-disabled', 'oauth',
-            '{}'::jsonb, 1, false, $1 + interval '1 day', false, 'ready',
+            '{}'::jsonb, 1, false, $1 + interval '1 day', false, 'ready', 'allowed', null, $1,
             $1, $1, $1)",
     )
     .bind(now)
@@ -173,22 +174,22 @@ async fn dashboard_account_metrics_should_partition_account_statuses() {
     assert_eq!(
         (
             metrics.total,
-            metrics.enabled,
-            metrics.active,
-            metrics.unavailable,
-            metrics.expired,
+            metrics.normal,
             metrics.quota_exhausted,
+            metrics.rate_limited,
             metrics.disabled,
-            metrics.banned,
+            metrics.error,
         ),
-        (6, 5, 2, 4, 1, 1, 1, 1),
+        (6, 2, 1, 0, 1, 2),
     );
-    // 首页按调度可用性聚合：配额耗尽也属于不可用。
     assert_eq!(
-        metrics.unavailable,
-        metrics.quota_exhausted + metrics.expired + metrics.disabled + metrics.banned
+        metrics.total,
+        metrics.normal
+            + metrics.quota_exhausted
+            + metrics.rate_limited
+            + metrics.disabled
+            + metrics.error
     );
-    assert_eq!(metrics.total, metrics.active + metrics.unavailable);
     database.close().await;
 }
 
@@ -202,35 +203,36 @@ async fn dashboard_account_metrics_with_cooldowns_should_only_reclassify_eligibl
         "insert into provider_accounts (
            id, provider_kind, name, upstream_user_id, authentication_kind,
            provider_credentials_json, credential_revision, has_refresh_token,
-           access_token_expires_at, enabled, availability, quota_limit_reached,
-           availability_observed_at, created_at, updated_at
+           access_token_expires_at, enabled, credential_state,
+           quota_access_state, quota_evidence, quota_access_observed_at,
+           credential_observed_at, created_at, updated_at
          ) values
            ('acct_metrics_active', 'openai', 'active', 'user-active', 'oauth',
-            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'ready', false,
+            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'ready', 'allowed', null, $1,
             $1, $1, $1),
            ('acct_metrics_active_cooling', 'openai', 'active-cooling', 'user-active-cooling', 'oauth',
-            '{}'::jsonb, 2, false, $1 + interval '1 day', true, 'ready', false,
+            '{}'::jsonb, 2, false, $1 + interval '1 day', true, 'ready', 'allowed', null, $1,
             $1, $1, $1),
            ('acct_metrics_ready_quota', 'openai', 'ready-quota', 'user-ready-quota', 'oauth',
-            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'ready', true,
+            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'ready', 'exhausted', 'provider_denied', $1,
             $1, $1, $1),
            ('acct_metrics_cooling', 'openai', 'cooling', 'user-cooling', 'oauth',
-            '{}'::jsonb, 3, false, $1 + interval '1 day', true, 'ready', true,
+            '{}'::jsonb, 3, false, $1 + interval '1 day', true, 'ready', 'exhausted', 'provider_denied', $1,
             $1, $1, $1),
            ('acct_metrics_stale_cooldown', 'openai', 'stale-cooldown', 'user-stale-cooldown', 'oauth',
-            '{}'::jsonb, 4, false, $1 + interval '1 day', true, 'ready', true,
+            '{}'::jsonb, 4, false, $1 + interval '1 day', true, 'ready', 'allowed', null, $1,
             $1, $1, $1),
            ('acct_metrics_persistent_quota', 'openai', 'persistent-quota', 'user-persistent-quota', 'oauth',
-            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'quota_exhausted', true,
+            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'ready', 'exhausted', 'provider_denied', $1,
             $1, $1, $1),
            ('acct_metrics_expired', 'openai', 'expired', 'user-expired', 'oauth',
-            '{}'::jsonb, 5, false, $1 - interval '1 second', true, 'ready', true,
+            '{}'::jsonb, 5, false, $1 - interval '1 second', true, 'ready', 'exhausted', 'provider_denied', $1,
             $1, $1, $1),
            ('acct_metrics_unknown', 'openai', 'unknown', 'user-unknown', 'oauth',
-            '{}'::jsonb, 6, false, $1 + interval '1 day', true, 'unknown', false,
+            '{}'::jsonb, 6, false, $1 + interval '1 day', true, 'unknown', 'unknown', null, null,
             $1, $1, $1),
            ('acct_metrics_disabled', 'openai', 'disabled', 'user-disabled', 'oauth',
-            '{}'::jsonb, 1, false, $1 + interval '1 day', false, 'ready', false,
+            '{}'::jsonb, 1, false, $1 + interval '1 day', false, 'ready', 'allowed', null, $1,
             $1, $1, $1)",
     )
     .bind(now)
@@ -258,36 +260,21 @@ async fn dashboard_account_metrics_with_cooldowns_should_only_reclassify_eligibl
     assert_eq!(
         (
             metrics.total,
-            metrics.enabled,
-            metrics.active,
+            metrics.normal,
             metrics.rate_limited,
             metrics.quota_exhausted,
-            metrics.expired,
-            metrics.invalid,
             metrics.disabled,
-            metrics.banned,
-            metrics.unavailable,
+            metrics.error,
         ),
-        (9, 8, 1, 2, 3, 1, 1, 1, 0, 8),
+        (9, 1, 2, 3, 1, 2),
     );
     assert_eq!(
         metrics.total,
-        metrics.active
+        metrics.normal
             + metrics.rate_limited
             + metrics.quota_exhausted
-            + metrics.expired
-            + metrics.invalid
             + metrics.disabled
-            + metrics.banned
-    );
-    assert_eq!(
-        metrics.unavailable,
-        metrics.rate_limited
-            + metrics.quota_exhausted
-            + metrics.expired
-            + metrics.invalid
-            + metrics.disabled
-            + metrics.banned
+            + metrics.error
     );
     database.close().await;
 }
@@ -1013,8 +1000,8 @@ async fn seed_observability_facts(
            id, provider_kind, name, email, upstream_user_id,
            upstream_account_id, plan_type, authentication_kind,
            provider_credentials_json, credential_revision,
-           has_refresh_token, access_token_expires_at, enabled, availability,
-           availability_observed_at, created_at, updated_at
+           has_refresh_token, access_token_expires_at, enabled, credential_state,
+           credential_observed_at, created_at, updated_at
          ) values (
            'acct_observe', 'openai', 'primary', 'account@example.invalid',
            'user-observe', null, 'pro', 'oauth', '{}'::jsonb, 1, false, $1 + interval '1 day',

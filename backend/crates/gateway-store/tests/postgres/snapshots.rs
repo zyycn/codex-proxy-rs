@@ -722,8 +722,8 @@ async fn seed_account(
            id, provider_kind, name, email, upstream_user_id,
            upstream_account_id, plan_type, authentication_kind,
            provider_credentials_json, credential_revision,
-           has_refresh_token, access_token_expires_at, enabled, availability,
-           availability_observed_at, created_at, updated_at
+           has_refresh_token, access_token_expires_at, enabled, credential_state,
+           credential_observed_at, created_at, updated_at
          ) values (
            $1, 'openai', $2, $3, 'user-' || $1, null, null, $4,
            '{}'::jsonb, 1, false, $5 + interval '1 day', true, 'ready',

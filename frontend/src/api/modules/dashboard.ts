@@ -143,14 +143,11 @@ export interface DashboardAccountUsage {
 
 export interface DashboardPoolSummary {
   total: number
-  active: number
-  rateLimited: number
-  expired: number
-  invalid: number
+  normal: number
   quotaExhausted: number
-  refreshing: number | null
+  rateLimited: number
   disabled: number
-  banned: number
+  error: number
 }
 
 export interface DashboardCapacityInfo {

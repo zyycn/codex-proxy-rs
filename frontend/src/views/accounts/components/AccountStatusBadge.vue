@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { AccountErrorReason, AccountStatus } from '@/api'
 import { AlertTriangle, CircleCheck, Gauge, Power, Timer } from '@lucide/vue'
 import { computed } from 'vue'
 
@@ -8,8 +9,8 @@ import { errorReasonLabels, statusLabels, statusTones } from '../constants'
 
 const props = withDefaults(
   defineProps<{
-    status: string
-    errorReason?: string | null
+    status: AccountStatus
+    errorReason?: AccountErrorReason | null
     errorMessage?: string | null
     rateLimitedUntil?: string | null
     variant?: 'inline' | 'pill'
@@ -55,12 +56,12 @@ const statusStyles = {
   },
 } as const
 
-const tone = computed(() => statusTones[props.status] || 'normal')
+const tone = computed(() => statusTones[props.status])
 const statusStyle = computed(() => statusStyles[tone.value])
-const label = computed(() => statusLabels[props.status] || props.status)
+const label = computed(() => statusLabels[props.status])
 const reasonLabel = computed(() =>
   props.errorReason
-    ? errorReasonLabels[props.errorReason] || props.errorReason
+    ? errorReasonLabels[props.errorReason]
     : null,
 )
 const errorText = computed(() => props.errorMessage || null)
@@ -102,16 +103,16 @@ const recoveryHint = computed(() => {
     return '冷却结束后，系统会自动恢复调度。'
 
   switch (props.errorReason) {
-    case 'expired':
-    case 'token_expired':
+    case 'account_unverified':
+    case 'access_token_expired':
+    case 'credential_expired':
       return '重新授权后，账号会重新参与调度。'
-    case 'invalid':
+    case 'credential_invalid':
       return '请更新或重新导入凭据，再次测试连接。'
-    case 'banned':
+    case 'account_banned':
       return '请确认上游账号状态，解除限制后再启用。'
-    default:
-      return '重新测试连接以获取最新状态。'
   }
+  return '重新测试连接以获取最新状态。'
 })
 
 const triggerLabel = computed(() =>

@@ -116,7 +116,17 @@ Provider 独占以下职责：
 - OpenAI 是逐字节透明代理：请求 body 的未知字段和字段顺序保持不变（受控模型映射除外），上游 wire 是客户端可见的事实来源，HTTP SSE 帧以原始字节原样下发，WebSocket 上游 JSON 文本原样下发；response ID 以 opaque bytes 存储，不假设 UUID 或固定长度。canonical facts 只从同一帧旁路解析，用于观测、亲和与计费。仅网关内部帧（rate limits、metadata）被就地消费，不向客户端转发。
 - xAI 是翻译层：把 Grok wire 解码后重新合成 Responses wire 事件，不承诺字节透明；上游错误按结构化 message/code/type 透出，message 中的 UUID 账号指纹替换为占位符。
 
-credential 更新使用 `credential_revision` CAS。认证永久失败、封禁、额度耗尽和带截止时间的 cooldown 是账号运行时事实。cooldown 到期后，Core 的有效调度谓词会自然允许账号重新参与选择；Redis cooldown 只是热缓存。成功调用或成功额度观测才可把账号状态重新观测为 `ready`。推理请求的账号/model cooldown 只约束数据面调度，不参与 OAuth refresh；OpenAI 与 xAI 的 OAuth refresh 请求状态不明确时只按 OAuth 自身的有界退避推进该 credential 的 `next_refresh_at`：前五次约为 5/15/45/135/300 秒，之后约每 10 分钟恢复；仍有效 AT 时不晚于其到期时刻，AT 到期后仍按该节奏恢复，至 `AT 到期 + 24h` 才终态化。自动 refresh 的瞬态失败（限流、5xx、超时、畸形响应）保留现有凭据并按指数退避推迟下一次刷新，不把账号标记为失效；上游明确的永久错误（`invalid_grant`、封禁）仍立即写入终态失效。
+credential 更新使用 `credential_revision` CAS。PostgreSQL 分别保存凭据事实与额度访问事实；带截止时间的
+429 cooldown 只保存在 Redis，是唯一的临时冷却运行时事实，不进入 Provider quota 展示模型。Store 把三类
+事实交给 Core 的唯一解析器，投影为 `normal`、`quota_exhausted`、`rate_limited`、`disabled` 或 `error`；
+投影为 `rate_limited` 时同时携带有效的 `rate_limited_until`，到期重算后该时间和状态一起消失。若没有其它
+阻塞事实，账号才恢复为 `normal`。成功推理或明确的成功额度观测可以写入 `Allowed`；本地时钟与不确定响应
+不能伪造恢复。推理请求的账号/model cooldown 只约束数据面调度，不参与 OAuth refresh；OpenAI 与 xAI 的
+OAuth refresh 请求状态不明确时只按 OAuth 自身的有界退避推进该 credential 的 `next_refresh_at`：前五次
+约为 5/15/45/135/300 秒，之后约每 10 分钟恢复；仍有效 Access Token 时不晚于其到期时刻，Access Token
+到期后仍按该节奏恢复，至“到期 + 24 小时”才终态化。自动 refresh 的瞬态失败（限流、5xx、超时、畸形
+响应）保留现有凭据并按指数退避推迟下一次刷新，不把账号标记为失效；上游明确的永久错误
+（`invalid_grant`、封禁）仍立即写入终态失效。
 
 `refresh_token_expires_at` 不是公共 SQL 列或 Core 权威状态。xAI 可在 `provider_credentials_json` 内保存它作为 Provider 私有提示；真正失效以 refresh endpoint 返回的永久错误为准。
 
@@ -127,12 +137,15 @@ exchange 成功后执行同一补全。两条路径不执行 JWKS 验签，不�
 credential revision；complete 阶段重新读取目标账号及其当前 revision，并以当前 revision 做最终 CAS。
 重新授权和手工或后台 RT refresh 只轮换目标账号的 token，保留既有账号资料与 OAuth principal。
 
-credential 与 quota 是两套状态机。主动 quota refresh 会拒绝过期 access token；quota 探测的
-401/403 不具备判定 refresh token 永久失效的证据。成功主动观测和正常推理响应中的 rate-limit header
-观测都 revision-fenced 写入同一 quota，并转换 readiness、`QuotaExhausted` 或 `Cooldown` 等额度事实；
-只有明确的 deactivated workspace 才能由额度链路写入 `Banned`，且额度观测不能清除 `Invalid`、
-`Expired`、`Banned`。Free、K12 等套餐复用该逻辑；`plan_type` 在此不参与额度分支，只作为 Provider
-事实并用于隔离不同套餐的 catalog cache。
+credential 与 quota 是两组独立事实，不是两套对外状态。主动 quota refresh 会拒绝过期 Access Token；
+quota 探测的 401/403 不具备判定 Refresh Token 永久失效的证据。成功主动观测和正常推理响应中的
+rate-limit header 观测都 revision-fenced 写入同一 quota；只有明确的访问证据才写 `Allowed` 或
+`Exhausted`。只有明确的 deactivated workspace 才能由额度链路写入 `Banned` 凭据事实，且额度观测不能
+清除 `Invalid`、`Expired`、`Banned`。这些凭据事实对外统一投影为 `error` 并携带稳定原因。Free、K12 等
+套餐复用该逻辑；`plan_type` 在此不参与额度分支，只作为 Provider 事实并用于隔离不同套餐的 catalog cache。
+账号展开用量不读取 retention 范围累计值，而是选择带完整边界且可归属到账号的代表性额度窗口，并按
+`[reset_at - window_seconds, reset_at)` 聚合请求、Token、模型和成本；额度重置边界变化后，同一查询随刷新
+结果重算。模型专属窗口不会错误复用账号总用量，边界不完整时也不伪造“当前窗口”统计。
 
 ## 7. 控制面与内部 revision
 
@@ -156,7 +169,7 @@ Admin API 不要求客户端提交配置 revision，也不向客户端暴露配�
 | `admin_audit_events` | 管理 mutation 审计 |
 | `client_api_keys` | 客户端鉴权、限额与授权范围 |
 | `runtime_settings` | 全局配置与 `config_revision` |
-| `provider_accounts` | 账号资料、Provider-owned 明文 credential JSON、revision、quota、cooldown |
+| `provider_accounts` | 账号资料、Provider-owned 明文 credential JSON、revision、凭据事实与规范化 quota 事实 |
 | `model_requests` | 请求、attempt、计费、交付与恢复事实 |
 | `ops_events` | 脱敏运行事件 |
 | `backup_settings` | S3/R2 存储、Cron 计划与保留策略单例配置 |
@@ -184,13 +197,14 @@ heartbeat；计划时间点冲突只记录日志/指标并推进游标，不产�
 
 业务 schema 由 `backend/migrations/0001_initial.sql` 直接定义当前大版本的完整新库基线，其中
 response ID 使用无格式假设的 UTF-8 bytes，`model_requests.service_tier` 保存响应观测到的服务档位，
-且额度耗尽账号可以携带冷却截止时间。同一大版本内已合入的迁移永久冻结——
+账号对外五态由 PostgreSQL 凭据/额度事实与 Redis 429 冷却通过 Core 唯一解析器动态派生，
+不保存重复的 `status` 列。同一大版本内已合入的迁移永久冻结——
 `.frozen-sha256` 是冻结清单，CI 校验清单相对 PR base 只增不改，启动时 sqlx 重校验已应用
 迁移的 checksum，不一致直接拒绝启动。规则见 `backend/migrations/README.md`。
 
 ## 9. Redis 终态
 
-Redis 保存的协调状态恰好是：客户端 admission 热状态、credential lease/fencing 与调度信号、账号 cooldown 与 availability 热缓存、catalog 缓存、Provider circuit、会话亲和与会话级账号排除、continuation pin、OAuth pending flow、worker leader lease 以及 runtime change 通知。Redis 丢失后必须从 PostgreSQL 或 Provider 事实恢复；恢复完成前需要保护的 acquire 路径 fail closed。
+Redis 保存的协调状态恰好是：客户端 admission 热状态、credential lease/fencing 与调度信号、账号 429 cooldown 与 credential state 可重建缓存、catalog 缓存、Provider circuit、会话亲和与会话级账号排除、continuation pin、OAuth pending flow、worker leader lease以及 runtime change 通知。Redis 丢失后必须从 PostgreSQL 或 Provider 事实恢复；恢复完成前需要保护的 acquire 路径 fail closed。
 
 多副本部署时，跨副本协调面只有上述 Redis 状态与 PostgreSQL 事实；WebSocket 连接池、请求画像与 RuntimeSnapshot 副本都是进程内状态，其中 RuntimeSnapshot 依靠周期对账收敛，请求画像依靠各自的官方版本检查收敛。
 

@@ -25,9 +25,8 @@ use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind};
 use gateway_core::accounting::Money;
 use gateway_core::engine::credential::{
-    AccountAvailability, CredentialRevision, LoadedCredential, NewProviderAccount,
-    OpaqueProviderData, PlaintextCredential, ProviderAccount, ProviderAccountId,
-    ProviderAccountStore,
+    CredentialRevision, LoadedCredential, NewProviderAccount, OpaqueProviderData,
+    PlaintextCredential, ProviderAccount, ProviderAccountId, ProviderAccountStore,
 };
 use gateway_core::error::StoreErrorKind;
 use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
@@ -424,14 +423,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 .await
                 .map_err(map_quota_error)?
         };
-        let mut quota = project_quota(snapshot, &account);
-        quota.rate_limited_until = self
-            .quota
-            .rate_limited_until(account.id(), account.revision())
-            .await
-            .map_err(map_quota_error)?
-            .map(DateTime::<Utc>::from);
-        Ok(quota)
+        Ok(project_quota(snapshot, &account))
     }
 
     async fn models(
@@ -519,7 +511,6 @@ fn prepared_create(
         account,
         credential,
     } = prepared;
-    let availability = account.availability();
     Ok(PreparedCredentialCreate {
         account_id: account.id().clone(),
         provider_kind: account.provider().clone(),
@@ -534,8 +525,8 @@ fn prepared_create(
         access_token_expires_at: account.access_token_expires_at().map(DateTime::<Utc>::from),
         next_refresh_at: account.next_refresh_at().map(DateTime::<Utc>::from),
         enabled: account.enabled(),
-        availability,
-        availability_observed_at: observed_at,
+        credential_state: account.credential_state(),
+        credential_observed_at: observed_at,
     })
 }
 
@@ -627,7 +618,13 @@ fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, Provi
         account.upstream_account_id.clone(),
         account.plan_type.clone(),
     )
-    .with_runtime_state(account.enabled, account.availability)
+    .with_account_facts(
+        account.enabled,
+        account.credential_state,
+        account.quota,
+        account.last_error_reason,
+        account.last_error_message.clone(),
+    )
     .with_refresh_schedule(
         account.has_refresh_token,
         account.next_refresh_at.map(SystemTime::from),
@@ -687,7 +684,6 @@ fn empty_quota() -> ProviderQuota {
         refresh_token_expires_at: None,
         windows: Vec::new(),
         limit_reached: false,
-        rate_limited_until: None,
         provider_data: None,
     }
 }
@@ -696,13 +692,10 @@ fn project_quota(
     snapshot: Option<CodexAccountQuotaSnapshot>,
     account: &ProviderAccount,
 ) -> ProviderQuota {
-    // 展示前先滚动已过期窗口，避免 reset 后的旧窗口值悬挂。
     let mut quota = snapshot
-        .map(|snapshot| project_quota_snapshot(snapshot.roll_expired_windows(SystemTime::now())))
+        .map(project_quota_snapshot)
         .unwrap_or_else(empty_quota);
-    if account.availability() == AccountAvailability::QuotaExhausted {
-        force_confirmed_exhaustion_projection(&mut quota);
-    }
+    quota.limit_reached = account.quota().is_exhausted();
     quota
 }
 
@@ -717,7 +710,7 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
     );
     provider_data.insert(
         "exhausted".to_owned(),
-        Value::Bool(snapshot.fact().exhausted()),
+        Value::Bool(snapshot.quota().is_exhausted()),
     );
     let windows: Vec<ProviderQuotaWindow> = snapshot
         .windows()
@@ -766,7 +759,6 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
         refresh_token_expires_at: None,
         windows,
         limit_reached,
-        rate_limited_until: None,
         provider_data: Some(ProviderDocument::new(OpaqueProviderData::new(
             provider_data,
         ))),
@@ -786,52 +778,6 @@ fn should_project_quota_window(window: &CodexQuotaWindow) -> bool {
 
 fn quota_windows_limit_reached(windows: &[ProviderQuotaWindow]) -> bool {
     windows.iter().any(|window| window.limit_reached)
-}
-
-fn force_confirmed_exhaustion_projection(quota: &mut ProviderQuota) {
-    // 402 已确认耗尽：只覆盖 Admin 展示投影，原始 Provider JSON 仍作为
-    // 后续判断窗口是否真正恢复的基线。
-    quota.limit_reached = true;
-    quota.provider_data = Some(ProviderDocument::new(OpaqueProviderData::new(
-        Map::from_iter([
-            (
-                "remaining_percent".to_owned(),
-                Value::Number(Number::from(0)),
-            ),
-            ("exhausted".to_owned(), Value::Bool(true)),
-        ]),
-    )));
-    if quota.windows.is_empty() {
-        quota.windows.push(ProviderQuotaWindow {
-            key: "confirmed-quota-exhaustion".to_owned(),
-            group: "other".to_owned(),
-            label: "额度".to_owned(),
-            source: None,
-            local_usage_attribution: QuotaLocalUsageAttribution::Unavailable,
-            window_seconds: None,
-            used_percent: Some(100.0),
-            reset_at: None,
-            limit_reached: true,
-            local_usage: None,
-            provider_data: None,
-        });
-        return;
-    }
-
-    // 选已用比例最高的窗口强制 100%，保留其自身 reset_at。
-    let index = quota
-        .windows
-        .iter()
-        .enumerate()
-        .max_by(|(_, left), (_, right)| {
-            left.used_percent
-                .unwrap_or(-1.0)
-                .total_cmp(&right.used_percent.unwrap_or(-1.0))
-        })
-        .map(|(index, _)| index)
-        .unwrap_or(0);
-    quota.windows[index].used_percent = Some(100.0);
-    quota.windows[index].limit_reached = true;
 }
 
 const fn quota_group(kind: CodexQuotaWindowKind) -> &'static str {

@@ -31,7 +31,7 @@ pub struct SnapshotRuntimeSettings {
 pub struct CredentialRevisionVectorEntry {
     pub provider_account_id: String,
     pub credential_revision: Revision,
-    pub availability_observed_at: DateTime<Utc>,
+    pub credential_observed_at: DateTime<Utc>,
     pub quota_observed_at: Option<DateTime<Utc>>,
 }
 
@@ -108,7 +108,7 @@ impl RuntimeSnapshotRepository for PgRuntimeSnapshotRepository {
 
     async fn credential_revision_vector(&self) -> StoreResult<Vec<CredentialRevisionVectorEntry>> {
         let rows = sqlx::query_as::<_, (String, i64, DateTime<Utc>, Option<DateTime<Utc>>)>(
-            "select id, credential_revision, availability_observed_at, quota_observed_at
+            "select id, credential_revision, credential_observed_at, quota_observed_at
              from provider_accounts order by id",
         )
         .fetch_all(&self.pool)
@@ -119,7 +119,7 @@ impl RuntimeSnapshotRepository for PgRuntimeSnapshotRepository {
                 Ok(CredentialRevisionVectorEntry {
                     provider_account_id: row.0,
                     credential_revision: revision_from_i64(row.1)?,
-                    availability_observed_at: row.2,
+                    credential_observed_at: row.2,
                     quota_observed_at: row.3,
                 })
             })

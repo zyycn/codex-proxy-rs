@@ -5,9 +5,7 @@ use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, TimeZone as _, Utc};
 use futures::future::BoxFuture;
-use gateway_admin::model::accounts::{
-    AccountAvailability as AdminAccountAvailability, AccountRecord,
-};
+use gateway_admin::model::accounts::AccountRecord;
 use gateway_admin::model::observability::{
     CurrencyCost, DesktopReleaseStatus, ProviderBillingInput,
 };
@@ -20,8 +18,8 @@ use gateway_admin::model::provider_credentials::{
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::ProviderAdminErrorKind;
 use gateway_core::engine::credential::{
-    AccountAvailability as CoreAccountAvailability, AccountStateChange, CredentialRevision,
-    OpaqueProviderData, ProviderAccount, ProviderAccountId, ProviderAccountStore, QuotaObservation,
+    CredentialRevision, CredentialState, OpaqueProviderData, ProviderAccount, ProviderAccountId,
+    ProviderAccountStore, QuotaAccessChange, QuotaEvidence, QuotaObservation, QuotaState,
 };
 use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
 use gateway_core::provider_ports::{
@@ -515,15 +513,14 @@ async fn openai_admin_provider_projects_official_codex_quota_and_independent_buc
             }
         }]
     });
+    let observed_at = SystemTime::now();
     store
         .compare_and_swap_quota(QuotaObservation {
             account_id: account.id().clone(),
             expected_revision: account.revision(),
-            quota: Some(OpaqueProviderData::new(
-                raw.as_object().expect("quota object").clone(),
-            )),
-            observed_at: Some(SystemTime::now()),
-            limit_reached: None,
+            quota: OpaqueProviderData::new(raw.as_object().expect("quota object").clone()),
+            observed_at,
+            state: QuotaState::observed_unknown(observed_at),
         })
         .await
         .expect("persist quota");
@@ -596,7 +593,7 @@ async fn openai_admin_provider_projects_official_codex_quota_and_independent_buc
 }
 
 #[tokio::test]
-async fn openai_admin_projects_confirmed_quota_exhaustion_as_full_without_mutating_raw_usage() {
+async fn openai_admin_keeps_confirmed_exhaustion_separate_from_raw_usage_display() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_admin_confirmed_exhaustion";
     store
@@ -611,11 +608,12 @@ async fn openai_admin_projects_confirmed_quota_exhaustion_as_full_without_mutati
         .await;
     let account = store.account(account_id).expect("stored account");
     let reset_at = 1_900_000_000_u64;
+    let observed_at = SystemTime::now();
     store
         .compare_and_swap_quota(QuotaObservation {
             account_id: account.id().clone(),
             expected_revision: account.revision(),
-            quota: Some(OpaqueProviderData::new(
+            quota: OpaqueProviderData::new(
                 json!({
                     "rate_limit": {
                         "allowed": true,
@@ -626,19 +624,17 @@ async fn openai_admin_projects_confirmed_quota_exhaustion_as_full_without_mutati
                 .as_object()
                 .expect("quota object")
                 .clone(),
-            )),
-            observed_at: Some(SystemTime::now()),
-            limit_reached: None,
+            ),
+            observed_at,
+            state: QuotaState::allowed(observed_at),
         })
         .await
         .expect("persist raw quota");
     store
-        .apply_state_change(AccountStateChange {
-            message: None,
+        .apply_quota_access(QuotaAccessChange {
             account_id: account.id().clone(),
             expected_revision: account.revision(),
-            availability: CoreAccountAvailability::QuotaExhausted,
-            observed_at: SystemTime::now(),
+            state: QuotaState::exhausted(QuotaEvidence::UsageLimitReached, SystemTime::now(), None),
         })
         .await
         .expect("mark account exhausted");
@@ -661,7 +657,7 @@ async fn openai_admin_projects_confirmed_quota_exhaustion_as_full_without_mutati
         .expect("project exhausted quota");
 
     assert_eq!(exhausted.windows.len(), 1);
-    assert_eq!(exhausted.windows[0].used_percent, Some(100.0));
+    assert_eq!(exhausted.windows[0].used_percent, Some(86.0));
     let raw = store
         .get_quotas(std::slice::from_ref(account.id()))
         .await
@@ -669,17 +665,15 @@ async fn openai_admin_projects_confirmed_quota_exhaustion_as_full_without_mutati
         .pop()
         .expect("raw quota");
     assert_eq!(
-        raw.quota.expect("raw document").expose_to_provider()["rate_limit"]["primary_window"]["used_percent"],
+        raw.quota.expose_to_provider()["rate_limit"]["primary_window"]["used_percent"],
         86
     );
 
     store
-        .apply_state_change(AccountStateChange {
-            message: None,
+        .apply_quota_access(QuotaAccessChange {
             account_id: account.id().clone(),
             expected_revision: account.revision(),
-            availability: CoreAccountAvailability::Ready,
-            observed_at: SystemTime::now(),
+            state: QuotaState::allowed(SystemTime::now()),
         })
         .await
         .expect("recover account");
@@ -735,7 +729,7 @@ async fn openai_admin_provider_rejects_unprepared_mutations_before_store_commit(
     stale_record.access_token_expires_at = None;
     stale_record.next_refresh_at = None;
     stale_record.enabled = false;
-    stale_record.availability = AdminAccountAvailability::Banned;
+    stale_record.credential_state = CredentialState::Banned;
     let rotation_error = admin
         .prepare_rotation(PrepareCredentialRotation {
             account: stale_record,
@@ -801,10 +795,11 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
         access_token_expires_at: account.access_token_expires_at().map(DateTime::<Utc>::from),
         next_refresh_at: account.next_refresh_at().map(DateTime::<Utc>::from),
         enabled: account.enabled(),
-        availability: AdminAccountAvailability::Ready,
-        availability_observed_at: now,
+        credential_state: account.credential_state(),
+        credential_observed_at: now,
+        quota: account.quota(),
+        last_error_reason: account.last_error_reason(),
         last_error_message: None,
-        quota_observed_at: None,
         created_at: now,
         updated_at: now,
     }

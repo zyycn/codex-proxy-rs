@@ -10,16 +10,15 @@ use gateway_admin::{
             SortDirection,
         },
         observability::TimeRange,
-        provider_credentials::{
-            CredentialAvailabilityFilter, CredentialListQuery, CredentialListWindow,
-        },
+        provider_credentials::{CredentialListQuery, CredentialListWindow, CredentialStateFilter},
     },
     ports::store::AccountStore,
 };
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
-    CredentialRevision, OpaqueProviderData, PlaintextCredential, ProviderAccountId,
-    ProviderAccountIdentity, ProviderAccountStore, ProviderAccountUpdate, QuotaObservation,
+    AccountErrorReason, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
+    CredentialRevision, CredentialState, OpaqueProviderData, PlaintextCredential,
+    ProviderAccountId, ProviderAccountIdentity, ProviderAccountStore, ProviderAccountUpdate,
+    QuotaAccessChange, QuotaAccessState, QuotaEvidence, QuotaObservation, QuotaState,
     QuotaWriteOutcome,
 };
 use gateway_core::routing::ProviderKind;
@@ -59,7 +58,7 @@ async fn provider_account_should_allow_missing_upstream_user_id() {
     let mut pending = account("acct_pending_identity", "unused");
     pending.upstream_user_id = None;
     pending.email = None;
-    pending.availability = AccountAvailability::Ready;
+    pending.credential_state = CredentialState::Ready;
     repository
         .insert_provider_account(pending)
         .await
@@ -71,8 +70,11 @@ async fn provider_account_should_allow_missing_upstream_user_id() {
         .expect("load account")
         .expect("stored account");
     assert_eq!(
-        (stored.summary.upstream_user_id, stored.summary.availability,),
-        (None, AccountAvailability::Unknown)
+        (
+            stored.summary.upstream_user_id,
+            stored.summary.credential_state,
+        ),
+        (None, CredentialState::Unknown)
     );
 
     database.close().await;
@@ -92,18 +94,19 @@ async fn core_quota_batch_reads_only_observed_accounts_in_one_contract_call() {
     }
     let revision = CredentialRevision::new(1).expect("revision");
     for (id, remaining) in [("acct_quota_a", 20), ("acct_quota_b", 80)] {
+        let observed_at = SystemTime::now();
         let outcome = repository
             .compare_and_swap_quota(QuotaObservation {
                 account_id: ProviderAccountId::new(id).expect("account id"),
                 expected_revision: revision,
-                quota: Some(OpaqueProviderData::new(
+                quota: OpaqueProviderData::new(
                     json!({"remaining": remaining})
                         .as_object()
                         .expect("quota object")
                         .clone(),
-                )),
-                observed_at: Some(SystemTime::now()),
-                limit_reached: None,
+                ),
+                observed_at,
+                state: QuotaState::allowed(observed_at),
             })
             .await
             .expect("persist quota");
@@ -123,15 +126,12 @@ async fn core_quota_batch_reads_only_observed_accounts_in_one_contract_call() {
     assert_eq!(observations.len(), 2);
     assert_eq!(observations[0].account_id.as_str(), "acct_quota_a");
     assert_eq!(observations[0].expected_revision, revision);
-    assert_eq!(
-        observations[0]
-            .quota
-            .as_ref()
-            .expect("quota")
-            .expose_to_provider()["remaining"],
-        20
+    assert_eq!(observations[0].quota.expose_to_provider()["remaining"], 20);
+    assert!(
+        observations
+            .iter()
+            .all(|value| value.state.access() == QuotaAccessState::Allowed)
     );
-    assert!(observations.iter().all(|value| value.observed_at.is_some()));
     assert_eq!(
         current_revision(&database.pool).await,
         1,
@@ -163,14 +163,14 @@ async fn delayed_provider_observations_cannot_overwrite_newer_state_or_quota() {
     let quota = |marker: &str, observed_at| QuotaObservation {
         account_id: account_id.clone(),
         expected_revision: revision,
-        quota: Some(OpaqueProviderData::new(
+        quota: OpaqueProviderData::new(
             json!({"marker": marker})
                 .as_object()
                 .expect("quota object")
                 .clone(),
-        )),
-        observed_at: Some(observed_at),
-        limit_reached: None,
+        ),
+        observed_at,
+        state: QuotaState::allowed(observed_at),
     };
     assert_eq!(
         repository
@@ -192,8 +192,9 @@ async fn delayed_provider_observations_cannot_overwrite_newer_state_or_quota() {
             message: None,
             account_id: account_id.clone(),
             expected_revision: revision,
-            availability: AccountAvailability::QuotaExhausted,
+            credential_state: CredentialState::Invalid,
             observed_at: newer,
+            error_reason: Some(AccountErrorReason::CredentialInvalid),
         })
         .await
         .expect("persist newer account state");
@@ -203,8 +204,9 @@ async fn delayed_provider_observations_cannot_overwrite_newer_state_or_quota() {
                 message: None,
                 account_id: account_id.clone(),
                 expected_revision: revision,
-                availability: AccountAvailability::Ready,
+                credential_state: CredentialState::Ready,
                 observed_at: older,
+                error_reason: None,
             })
             .await
             .is_err(),
@@ -216,23 +218,20 @@ async fn delayed_provider_observations_cannot_overwrite_newer_state_or_quota() {
         .await
         .expect("load fenced account")
         .expect("fenced account");
-    assert_eq!(current.availability(), AccountAvailability::QuotaExhausted);
+    assert_eq!(current.credential_state(), CredentialState::Invalid);
     let observed = repository
         .get_quotas(std::slice::from_ref(&account_id))
         .await
         .expect("load fenced quota")
         .pop()
         .expect("fenced quota");
-    assert_eq!(
-        observed.quota.expect("quota document").expose_to_provider()["marker"],
-        "newer"
-    );
+    assert_eq!(observed.quota.expose_to_provider()["marker"], "newer");
 
     database.close().await;
 }
 
 #[tokio::test]
-async fn account_state_message_is_persisted_and_cleared_on_recovery() {
+async fn credential_error_message_is_persisted_and_cleared_on_recovery() {
     let Some(database) = TestDatabase::create("provider_account_state_message").await else {
         return;
     };
@@ -249,8 +248,9 @@ async fn account_state_message_is_persisted_and_cleared_on_recovery() {
             message: Some("upstream returned 402 payment required".to_owned()),
             account_id: account_id.clone(),
             expected_revision: revision,
-            availability: AccountAvailability::QuotaExhausted,
+            credential_state: CredentialState::Invalid,
             observed_at: SystemTime::now(),
+            error_reason: Some(AccountErrorReason::CredentialInvalid),
         })
         .await
         .expect("persist error message");
@@ -270,8 +270,9 @@ async fn account_state_message_is_persisted_and_cleared_on_recovery() {
             message: None,
             account_id: account_id.clone(),
             expected_revision: revision,
-            availability: AccountAvailability::Ready,
+            credential_state: CredentialState::Ready,
             observed_at: SystemTime::now(),
+            error_reason: None,
         })
         .await
         .expect("recover account");
@@ -299,39 +300,34 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     let mut beta = account("acct_beta", "user-beta");
     beta.provider_kind = "xai".to_owned();
     beta.email = Some("beta@example.invalid".to_owned());
-    beta.availability = AccountAvailability::Banned;
+    beta.credential_state = CredentialState::Banned;
     let mut charlie = account("acct_charlie", "user-charlie");
     charlie.email = Some("charlie@example.invalid".to_owned());
     let mut invalid = account("acct_invalid", "user-invalid");
     invalid.email = Some("invalid@example.invalid".to_owned());
-    invalid.availability = AccountAvailability::Invalid;
+    invalid.credential_state = CredentialState::Invalid;
     let mut disabled = account("acct_disabled", "user-disabled");
     disabled.email = Some("disabled@example.invalid".to_owned());
     disabled.enabled = false;
     let mut quota_exhausted = account("acct_quota_exhausted", "user-quota-exhausted");
     quota_exhausted.email = Some("quota-exhausted@example.invalid".to_owned());
-    quota_exhausted.availability = AccountAvailability::QuotaExhausted;
     for account in [alpha, beta, charlie, invalid, disabled, quota_exhausted] {
         repository
             .insert_provider_account(account)
             .await
             .expect("insert account list fixture");
     }
-    repository
-        .compare_and_swap_quota(QuotaObservation {
-            account_id: ProviderAccountId::new("acct_charlie").expect("account id"),
-            expected_revision: CredentialRevision::new(1).expect("credential revision"),
-            quota: Some(OpaqueProviderData::new(
-                json!({"rate_limit": {"limit_reached": true}})
-                    .as_object()
-                    .expect("quota object")
-                    .clone(),
-            )),
-            observed_at: Some(SystemTime::now()),
-            limit_reached: Some(true),
-        })
-        .await
-        .expect("seed rate-limited account");
+    for account_id in ["acct_charlie", "acct_quota_exhausted"] {
+        let observed_at = SystemTime::now();
+        repository
+            .apply_quota_access(QuotaAccessChange {
+                account_id: ProviderAccountId::new(account_id).expect("account id"),
+                expected_revision: CredentialRevision::new(1).expect("credential revision"),
+                state: QuotaState::exhausted(QuotaEvidence::ProviderDenied, observed_at, None),
+            })
+            .await
+            .expect("seed exhausted account");
+    }
 
     seed_model_request(
         &database.pool,
@@ -425,7 +421,7 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
         usage_page
             .items
             .iter()
-            .map(|account| account.id.as_str())
+            .map(|item| item.account.id.as_str())
             .collect::<Vec<_>>(),
         ["acct_charlie", "acct_beta"]
     );
@@ -448,7 +444,7 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
         last_used_page
             .items
             .iter()
-            .map(|account| account.id.as_str())
+            .map(|item| item.account.id.as_str())
             .collect::<Vec<_>>(),
         ["acct_beta", "acct_charlie"]
     );
@@ -466,8 +462,8 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
         .expect("filter account directory");
     assert_eq!(filtered.total, 1);
     assert_eq!(filtered.summary, usage_page.summary);
-    assert_eq!(filtered.items[0].id, "acct_alpha");
-    assert_eq!(filtered.items[0].provider_kind.as_str(), "openai");
+    assert_eq!(filtered.items[0].account.id, "acct_alpha");
+    assert_eq!(filtered.items[0].account.provider_kind.as_str(), "openai");
 
     let error_accounts = store
         .list_accounts(AccountListQuery {
@@ -481,8 +477,8 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
         .await
         .expect("filter error accounts");
     assert_eq!(error_accounts.items.len(), 2);
-    assert_eq!(error_accounts.items[0].id, "acct_beta");
-    assert_eq!(error_accounts.items[1].id, "acct_invalid");
+    assert_eq!(error_accounts.items[0].account.id, "acct_beta");
+    assert_eq!(error_accounts.items[1].account.id, "acct_invalid");
     database.close().await;
 }
 
@@ -498,11 +494,11 @@ async fn terminal_credential_list_preserves_grouped_filters_and_unpaged_collecti
             &format!("user-xai-{index:03}"),
         );
         credential.provider_kind = "xai".to_owned();
-        credential.availability = match index {
-            0 => AccountAvailability::Expired,
-            1 => AccountAvailability::Banned,
-            2 => AccountAvailability::Invalid,
-            _ => AccountAvailability::Ready,
+        credential.credential_state = match index {
+            0 => CredentialState::Expired,
+            1 => CredentialState::Banned,
+            2 => CredentialState::Invalid,
+            _ => CredentialState::Ready,
         };
         repository
             .insert_provider_account(credential)
@@ -516,7 +512,7 @@ async fn terminal_credential_list_preserves_grouped_filters_and_unpaged_collecti
         .list_credentials(
             &provider,
             CredentialListQuery {
-                availability: None,
+                credential_state: None,
                 enabled: None,
                 window: CredentialListWindow::All,
             },
@@ -530,7 +526,7 @@ async fn terminal_credential_list_preserves_grouped_filters_and_unpaged_collecti
         .list_credentials(
             &provider,
             CredentialListQuery {
-                availability: None,
+                credential_state: None,
                 enabled: None,
                 window: CredentialListWindow::Page {
                     cursor: None,
@@ -547,10 +543,10 @@ async fn terminal_credential_list_preserves_grouped_filters_and_unpaged_collecti
         .list_credentials(
             &provider,
             CredentialListQuery {
-                availability: Some(CredentialAvailabilityFilter::AnyOf(vec![
-                    gateway_admin::model::accounts::AccountAvailability::Expired,
-                    gateway_admin::model::accounts::AccountAvailability::Banned,
-                    gateway_admin::model::accounts::AccountAvailability::Invalid,
+                credential_state: Some(CredentialStateFilter::AnyOf(vec![
+                    CredentialState::Expired,
+                    CredentialState::Banned,
+                    CredentialState::Invalid,
                 ])),
                 enabled: None,
                 window: CredentialListWindow::All,
@@ -851,7 +847,7 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
     let mut updated = account("acct_admin_reimport", "user-admin-upsert");
     updated.name = "updated import".to_owned();
     updated.provider_credentials_json = credential_json("updated-import-secret");
-    updated.availability = AccountAvailability::Banned;
+    updated.credential_state = CredentialState::Banned;
     let imported = repository
         .import_provider_accounts(ImportProviderAccounts {
             scope: scope.clone(),
@@ -871,7 +867,7 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
         String,
     ) = sqlx::query_as(
         "select name, provider_credentials_json, credential_revision, provider_quota_json,
-                availability
+                credential_state
          from provider_accounts where id = 'acct_admin_upsert'",
     )
     .fetch_one(&database.pool)
@@ -920,8 +916,8 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
             access_token_expires_at: Some(Utc::now() + TimeDelta::minutes(5)),
             next_refresh_at: None,
             enabled: true,
-            availability: AccountAvailability::Ready,
-            availability_observed_at: Utc::now(),
+            credential_state: CredentialState::Ready,
+            credential_observed_at: Utc::now(),
         })
         .await
         .expect("seed provider account");
@@ -1041,32 +1037,32 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
         provider_kind: "openai".to_owned(),
     };
 
-    let mut cooldown_account = account("acct_admin_b", "user-admin-b");
-    cooldown_account.availability = AccountAvailability::Ready;
     let imported = repository
         .import_provider_accounts(ImportProviderAccounts {
             scope: scope.clone(),
-            accounts: vec![account("acct_admin_a", "user-admin-a"), cooldown_account],
+            accounts: vec![
+                account("acct_admin_a", "user-admin-a"),
+                account("acct_admin_b", "user-admin-b"),
+            ],
             audit: audit("audit_account_batch", "import_batch", "provider_accounts"),
         })
         .await
         .expect("import provider accounts");
     assert_eq!(imported.config_revision.get(), 2);
     let ready: (bool, String) =
-        sqlx::query_as("select enabled, availability from provider_accounts where id = $1")
+        sqlx::query_as("select enabled, credential_state from provider_accounts where id = $1")
             .bind("acct_admin_a")
             .fetch_one(&database.pool)
             .await
             .expect("load ready imported account");
     assert_eq!(ready, (true, "ready".to_owned()));
-    let cooldown: (bool, String) =
-        sqlx::query_as("select enabled, availability from provider_accounts where id = $1")
+    let second: (bool, String) =
+        sqlx::query_as("select enabled, credential_state from provider_accounts where id = $1")
             .bind("acct_admin_b")
             .fetch_one(&database.pool)
             .await
             .expect("load cooldown imported account");
-    assert!(cooldown.0);
-    assert_eq!(cooldown.1, "ready");
+    assert_eq!(second, (true, "ready".to_owned()));
 
     repository
         .import_provider_accounts(ImportProviderAccounts {
@@ -1113,7 +1109,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 
     sqlx::query(
         "update provider_accounts
-         set availability = 'expired'
+         set credential_state = 'expired'
          where id = $1",
     )
     .bind("acct_admin_a")
@@ -1137,7 +1133,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
     assert_eq!(rotation.config_revision.get(), 3);
     assert_eq!(rotation.credential_revision.get(), 2);
     let restored: (String, String, Option<String>) = sqlx::query_as(
-        "select availability, upstream_user_id, upstream_account_id
+        "select credential_state, upstream_user_id, upstream_account_id
          from provider_accounts where id = $1",
     )
     .bind("acct_admin_a")
@@ -1243,12 +1239,10 @@ async fn verified_credential_rotation_preserves_quota_exhaustion() {
     let scope = ProviderAccountAdminScope {
         provider_kind: "openai".to_owned(),
     };
-    let mut exhausted = account("acct_rotation_quota", "user-rotation-quota");
-    exhausted.availability = AccountAvailability::QuotaExhausted;
     repository
         .import_provider_accounts(ImportProviderAccounts {
             scope: scope.clone(),
-            accounts: vec![exhausted],
+            accounts: vec![account("acct_rotation_quota", "user-rotation-quota")],
             audit: audit(
                 "audit_rotation_quota_import",
                 "import",
@@ -1257,6 +1251,15 @@ async fn verified_credential_rotation_preserves_quota_exhaustion() {
         })
         .await
         .expect("import exhausted account");
+    let observed_at = SystemTime::now();
+    repository
+        .apply_quota_access(QuotaAccessChange {
+            account_id: ProviderAccountId::new("acct_rotation_quota").expect("account ID"),
+            expected_revision: CredentialRevision::new(1).expect("credential revision"),
+            state: QuotaState::exhausted(QuotaEvidence::ProviderDenied, observed_at, None),
+        })
+        .await
+        .expect("persist quota exhaustion");
 
     repository
         .rotate_provider_account(RotateProviderAccount {
@@ -1273,13 +1276,13 @@ async fn verified_credential_rotation_preserves_quota_exhaustion() {
         .await
         .expect("rotate exhausted account credential");
 
-    let availability: String =
-        sqlx::query_scalar("select availability from provider_accounts where id = $1")
+    let quota_access_state: String =
+        sqlx::query_scalar("select quota_access_state from provider_accounts where id = $1")
             .bind("acct_rotation_quota")
             .fetch_one(&database.pool)
             .await
             .expect("load exhausted account after credential rotation");
-    assert_eq!(availability, "quota_exhausted".to_owned());
+    assert_eq!(quota_access_state, "exhausted".to_owned());
 
     database.close().await;
 }
@@ -1298,26 +1301,25 @@ async fn xai_free_quota_exhaustion_state_is_persisted() {
         .await
         .expect("insert xAI account");
 
+    let observed_at = SystemTime::now();
     repository
-        .apply_state_change(AccountStateChange {
-            message: None,
+        .apply_quota_access(QuotaAccessChange {
             account_id: account_id.clone(),
             expected_revision: CredentialRevision::new(1).expect("credential revision"),
-            availability: AccountAvailability::QuotaExhausted,
-            observed_at: SystemTime::now(),
+            state: QuotaState::exhausted(QuotaEvidence::AccountLimitReached, observed_at, None),
         })
         .await
         .expect("persist xAI free quota exhaustion");
 
     let current: (String, String) = sqlx::query_as(
-        "select provider_kind, availability
+        "select provider_kind, quota_access_state
          from provider_accounts where id = $1",
     )
     .bind(account_id.as_str())
     .fetch_one(&database.pool)
     .await
     .expect("load persisted xAI quota state");
-    assert_eq!(current, ("xai".to_owned(), "quota_exhausted".to_owned()),);
+    assert_eq!(current, ("xai".to_owned(), "exhausted".to_owned()),);
 
     database.close().await;
 }
@@ -1338,25 +1340,29 @@ async fn xai_resettable_usage_limit_state_is_persisted() {
 
     let observed_at = SystemTime::now();
     repository
-        .apply_state_change(AccountStateChange {
-            message: None,
+        .apply_quota_access(QuotaAccessChange {
             account_id: account_id.clone(),
             expected_revision: CredentialRevision::new(1).expect("credential revision"),
-            availability: AccountAvailability::Ready,
-            observed_at,
+            state: QuotaState::exhausted(
+                QuotaEvidence::UsageLimitReached,
+                observed_at,
+                Some(observed_at + Duration::from_secs(60)),
+            ),
         })
         .await
         .expect("persist xAI resettable usage limit");
 
-    let current: (String, String) = sqlx::query_as(
-        "select provider_kind, availability
+    let current: (String, String, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
+        "select provider_kind, quota_access_state, quota_reset_at
          from provider_accounts where id = $1",
     )
     .bind(account_id.as_str())
     .fetch_one(&database.pool)
     .await
     .expect("load persisted xAI usage limit state");
-    assert_eq!(current, ("xai".to_owned(), "ready".to_owned()));
+    assert_eq!(current.0, "xai");
+    assert_eq!(current.1, "exhausted");
+    assert!(current.2.is_some());
 
     database.close().await;
 }
@@ -1373,7 +1379,7 @@ async fn disabled_account_preserves_user_state_during_refresh_writes() {
     let account_id = ProviderAccountId::new("acct_disabled_refresh").expect("account ID");
     let mut disabled = account(account_id.as_str(), "user-disabled-refresh");
     disabled.enabled = false;
-    disabled.availability = AccountAvailability::Expired;
+    disabled.credential_state = CredentialState::Expired;
     repository
         .import_provider_accounts(ImportProviderAccounts {
             scope: scope.clone(),
@@ -1392,8 +1398,9 @@ async fn disabled_account_preserves_user_state_during_refresh_writes() {
             message: None,
             account_id: account_id.clone(),
             expected_revision: CredentialRevision::new(1).expect("credential revision"),
-            availability: AccountAvailability::Ready,
+            credential_state: CredentialState::Ready,
             observed_at: SystemTime::now(),
+            error_reason: None,
         })
         .await
         .expect("disabled state write is a no-op");
@@ -1413,7 +1420,7 @@ async fn disabled_account_preserves_user_state_during_refresh_writes() {
         .expect("refresh disabled account credential");
 
     let current: (bool, String, serde_json::Value, i64) = sqlx::query_as(
-        "select enabled, availability, provider_credentials_json, credential_revision
+        "select enabled, credential_state, provider_credentials_json, credential_revision
          from provider_accounts where id = $1",
     )
     .bind(account_id.as_str())
@@ -1443,8 +1450,8 @@ fn account(id: &str, upstream_user_id: &str) -> NewProviderAccount {
         access_token_expires_at: Some(Utc::now() + TimeDelta::hours(1)),
         next_refresh_at: None,
         enabled: true,
-        availability: AccountAvailability::Ready,
-        availability_observed_at: Utc::now(),
+        credential_state: CredentialState::Ready,
+        credential_observed_at: Utc::now(),
     }
 }
 
@@ -1568,13 +1575,6 @@ fn provider_credentials_are_redacted_from_debug() {
         JsonObject::try_from_value("credentials", json!({ "access_token": secret }), 256 * 1024)
             .expect("object is valid");
     assert!(!format!("{object:?}").contains(secret));
-}
-
-#[test]
-fn quota_exhausted_account_accepts_cooldown_runtime_facts() {
-    let mut imported = account("acct_quota_cooldown", "user-quota-cooldown");
-    imported.availability = AccountAvailability::QuotaExhausted;
-    assert!(imported.validate().is_ok());
 }
 
 #[test]

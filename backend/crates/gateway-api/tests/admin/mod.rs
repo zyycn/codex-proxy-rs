@@ -14,7 +14,7 @@ use gateway_admin::{
     model::{
         MutationContext, Revision,
         accounts::{
-            AccountListQuery, AccountPage, AccountRecord, AccountUsage, AccountUsageWindowQuery,
+            AccountListQuery, AccountPage, AccountPageItem, AccountUsage, AccountUsageWindowQuery,
             AccountUsageWindowResult, DeleteAccounts, SetAccountEnabled,
         },
         auth::{AdminAuditEvent, AdminSession},
@@ -426,7 +426,7 @@ impl AccountStore for UnusedStore {
         Err(unavailable("account list"))
     }
 
-    async fn load_account(&self, _: &str) -> AdminStoreResult<Option<AccountRecord>> {
+    async fn load_account(&self, _: &str) -> AdminStoreResult<Option<AccountPageItem>> {
         Err(unavailable("account"))
     }
 

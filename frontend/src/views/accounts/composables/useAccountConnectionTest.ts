@@ -42,14 +42,9 @@ interface ConnectionTestEvent {
   model?: string
   payload?: ConnectionTestRequestPayload
   success?: boolean
-  accountStatus?: string
   upstreamBody?: string
   upstreamStatus?: number
   error?: string
-}
-
-interface AccountConnectionTestOptions {
-  onAccountStatus: (accountId: string, status: string) => void
 }
 
 function connectionTestErrorText(event: ConnectionTestEvent) {
@@ -69,7 +64,7 @@ function connectionTestFailureLabel(event: ConnectionTestEvent) {
     : '未能向上游发起请求'
 }
 
-export function useAccountConnectionTest(options: AccountConnectionTestOptions) {
+export function useAccountConnectionTest(options: { reload: () => Promise<unknown> }) {
   const showConnectionTestModal = shallowRef(false)
   const testingAccount = shallowRef<Account | null>(null)
   const connectionTestStatus = shallowRef<ConnectionTestStatus>('idle')
@@ -232,18 +227,6 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
     )
   }
 
-  function applyAccountStatus(status?: string) {
-    const account = testingAccount.value
-    if (!account || !status)
-      return
-    testingAccount.value = {
-      ...account,
-      status,
-      displayStatus: status,
-    }
-    options.onAccountStatus(account.id, status)
-  }
-
   function clearConnectionTestRun() {
     const run = connectionTestRun
     connectionTestRun = undefined
@@ -283,7 +266,6 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
       return
     }
     if (event.type === 'test_complete') {
-      applyAccountStatus(event.accountStatus)
       if (event.success) {
         if (!connectionTestContent.value) {
           setConnectionTestLog('response', '响应完成', 'success', '上游已完成，没有返回文本内容')
@@ -297,10 +279,10 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
         finishConnectionTest('error')
       }
       clearConnectionTestRun()
+      void options.reload()
       return
     }
     if (event.type === 'error') {
-      applyAccountStatus(event.accountStatus)
       connectionTestError.value = connectionTestErrorText(event)
       appendConnectionTestLog(
         connectionTestFailureLabel(event),
@@ -309,6 +291,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions) 
       )
       finishConnectionTest('error')
       clearConnectionTestRun()
+      void options.reload()
     }
   }
 

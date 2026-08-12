@@ -25,9 +25,15 @@ pub trait ProviderAccountRepository: Send + Sync {
         &self,
         account_id: &str,
         expected_revision: Revision,
-        quota: Option<JsonObject>,
-        observed_at: Option<DateTime<Utc>>,
-        limit_reached: Option<bool>,
+        quota: JsonObject,
+        observed_at: DateTime<Utc>,
+        state: QuotaState,
+    ) -> StoreResult<bool>;
+    async fn apply_provider_quota_access(
+        &self,
+        account_id: &str,
+        expected_revision: Revision,
+        state: QuotaState,
     ) -> StoreResult<bool>;
     async fn delete_provider_account(&self, id: &str) -> StoreResult<bool>;
 }
@@ -93,9 +99,10 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         let rows = sqlx::query(
             "select id, provider_kind, name, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
-                    access_token_expires_at, next_refresh_at, enabled, availability,
-                    availability_observed_at,
-                    quota_observed_at, quota_limit_reached, last_error_message, created_at, updated_at
+                    access_token_expires_at, next_refresh_at, enabled, credential_state,
+                    credential_observed_at, quota_access_state, quota_evidence,
+                    quota_access_observed_at, quota_reset_at,
+                    quota_observed_at, last_error_reason, last_error_message, created_at, updated_at
              from provider_accounts
              where ($1::text is null or provider_kind = $1) and ($2 or enabled)
              order by provider_kind, name, id",
@@ -110,21 +117,21 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
 
     async fn insert_provider_account(&self, account: NewProviderAccount) -> StoreResult<()> {
         account.validate()?;
-        let availability = if account.upstream_user_id.is_some() {
-            account.availability
+        let credential_state = if account.upstream_user_id.is_some() {
+            account.credential_state
         } else {
-            AccountAvailability::Unknown
+            CredentialState::Unknown
         };
         sqlx::query(
             "insert into provider_accounts (
                id, provider_kind, name, email, upstream_user_id,
                upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
                has_refresh_token, access_token_expires_at, next_refresh_at, enabled,
-               availability, provider_quota_json,
-               availability_observed_at, quota_observed_at, created_at, updated_at
+               credential_state, provider_quota_json,
+               credential_observed_at, quota_access_observed_at, quota_observed_at, created_at, updated_at
              ) values (
                $1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12, $13,
-               $14, null, $15, null, now(), greatest(now(), $15)
+               $14, null, $15, null, null, now(), greatest(now(), $15)
              )",
         )
         .bind(account.id)
@@ -140,8 +147,8 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         .bind(account.access_token_expires_at)
         .bind(account.next_refresh_at)
         .bind(account.enabled)
-        .bind(availability.as_str())
-        .bind(account.availability_observed_at)
+        .bind(credential_state.as_str())
+        .bind(account.credential_observed_at)
         .execute(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("insert provider account"))?;
@@ -214,27 +221,33 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         update.validate()?;
         let result = sqlx::query(
             "update provider_accounts
-             set availability = case
+             set credential_state = case
                      when enabled and upstream_user_id is not null then $3
-                     else availability
+                     else credential_state
                  end,
-                 availability_observed_at = case
+                 credential_observed_at = case
                      when enabled and upstream_user_id is not null then $4
-                     else availability_observed_at
+                     else credential_observed_at
+                 end,
+                 last_error_reason = case
+                     when enabled and upstream_user_id is not null then
+                         case when $3 = 'ready' then null else $5 end
+                     else last_error_reason
                  end,
                  last_error_message = case
                      when enabled and upstream_user_id is not null then
-                         case when $3 = 'ready' then null else coalesce($5, last_error_message) end
+                         case when $3 = 'ready' then null else $6 end
                      else last_error_message
                  end,
                  updated_at = case when enabled then greatest(now(), $4) else updated_at end
              where id = $1 and credential_revision = $2
-               and (availability_observed_at is null or availability_observed_at <= $4)",
+               and (credential_observed_at is null or credential_observed_at <= $4)",
         )
         .bind(update.account_id)
         .bind(to_i64(update.expected_revision.get())?)
-        .bind(update.availability.as_str())
-        .bind(update.availability_observed_at)
+        .bind(update.credential_state.as_str())
+        .bind(update.credential_observed_at)
+        .bind(update.error_reason.map(AccountErrorReason::as_str))
         .bind(update.message.as_deref())
         .execute(&self.pool)
         .await
@@ -259,33 +272,78 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         &self,
         account_id: &str,
         expected_revision: Revision,
-        quota: Option<JsonObject>,
-        observed_at: Option<DateTime<Utc>>,
-        limit_reached: Option<bool>,
+        quota: JsonObject,
+        observed_at: DateTime<Utc>,
+        state: QuotaState,
     ) -> StoreResult<bool> {
         require_nonempty(ENTITY, "account_id", account_id)?;
-        if quota.is_some() != observed_at.is_some() {
-            return Err(invalid("quota JSON and observed_at must agree"));
-        }
-        if let Some(quota) = quota.as_ref() {
-            validate_object_size("provider_quota_json", quota, QUOTA_MAX_BYTES)?;
-        }
+        validate_object_size("provider_quota_json", &quota, QUOTA_MAX_BYTES)?;
+        let access_observed_at = state.observed_at().map(DateTime::<Utc>::from);
         let result = sqlx::query(
             "update provider_accounts
              set provider_quota_json = $3, quota_observed_at = $4,
-                 quota_limit_reached = coalesce($5, quota_limit_reached),
-                 updated_at = greatest(now(), coalesce($4, now()))
+                 quota_access_state = case
+                   when $7::timestamptz is not null
+                     and (quota_access_observed_at is null or quota_access_observed_at <= $7)
+                   then $5 else quota_access_state end,
+                 quota_evidence = case
+                   when $7::timestamptz is not null
+                     and (quota_access_observed_at is null or quota_access_observed_at <= $7)
+                   then $6 else quota_evidence end,
+                 quota_access_observed_at = case
+                   when $7::timestamptz is not null
+                     and (quota_access_observed_at is null or quota_access_observed_at <= $7)
+                   then $7 else quota_access_observed_at end,
+                 quota_reset_at = case
+                   when $7::timestamptz is not null
+                     and (quota_access_observed_at is null or quota_access_observed_at <= $7)
+                   then $8 else quota_reset_at end,
+                 updated_at = greatest(now(), $4)
              where id = $1 and credential_revision = $2
-               and ($4 is null or quota_observed_at is null or quota_observed_at <= $4)",
+               and (quota_observed_at is null or quota_observed_at <= $4)",
         )
         .bind(account_id)
         .bind(to_i64(expected_revision.get())?)
-        .bind(quota.map(|value| value.as_value()))
+        .bind(quota.as_value())
         .bind(observed_at)
-        .bind(limit_reached)
+        .bind(state.access().as_str())
+        .bind(state.evidence().map(QuotaEvidence::as_str))
+        .bind(access_observed_at)
+        .bind(state.reset_at().map(DateTime::<Utc>::from))
         .execute(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("compare and swap provider quota"))?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn apply_provider_quota_access(
+        &self,
+        account_id: &str,
+        expected_revision: Revision,
+        state: QuotaState,
+    ) -> StoreResult<bool> {
+        require_nonempty(ENTITY, "account_id", account_id)?;
+        let observed_at = state
+            .observed_at()
+            .map(DateTime::<Utc>::from)
+            .ok_or_else(|| invalid("quota access change requires observed_at"))?;
+        let result = sqlx::query(
+            "update provider_accounts
+             set quota_access_observed_at = $3, quota_access_state = $4,
+                 quota_evidence = $5, quota_reset_at = $6,
+                 updated_at = greatest(now(), $3)
+             where id = $1 and credential_revision = $2
+               and (quota_access_observed_at is null or quota_access_observed_at <= $3)",
+        )
+        .bind(account_id)
+        .bind(to_i64(expected_revision.get())?)
+        .bind(observed_at)
+        .bind(state.access().as_str())
+        .bind(state.evidence().map(QuotaEvidence::as_str))
+        .bind(state.reset_at().map(DateTime::<Utc>::from))
+        .execute(&self.pool)
+        .await
+        .map_err(|_| postgres_unavailable("apply provider quota access"))?;
         Ok(result.rows_affected() == 1)
     }
 
@@ -474,21 +532,21 @@ pub(crate) async fn upsert_provider_account_in_transaction(
     account: &NewProviderAccount,
 ) -> StoreResult<String> {
     account.validate()?;
-    let availability = if account.upstream_user_id.is_some() {
-        account.availability
+    let credential_state = if account.upstream_user_id.is_some() {
+        account.credential_state
     } else {
-        AccountAvailability::Unknown
+        CredentialState::Unknown
     };
     let imported_id = sqlx::query_scalar::<_, String>(
         "insert into provider_accounts (
            id, provider_kind, name, email, upstream_user_id,
            upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
            has_refresh_token, access_token_expires_at, next_refresh_at, enabled,
-           availability, provider_quota_json,
-           availability_observed_at, quota_observed_at, created_at, updated_at
+           credential_state, provider_quota_json,
+           credential_observed_at, quota_access_observed_at, quota_observed_at, created_at, updated_at
          ) values (
            $1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12, $13,
-           $14, null, $15, null, now(), greatest(now(), $15)
+           $14, null, $15, null, null, now(), greatest(now(), $15)
          )
          on conflict (
            provider_kind,
@@ -505,11 +563,17 @@ pub(crate) async fn upsert_provider_account_in_transaction(
            access_token_expires_at = excluded.access_token_expires_at,
            next_refresh_at = excluded.next_refresh_at,
            enabled = excluded.enabled,
-           availability = excluded.availability,
+           credential_state = excluded.credential_state,
            provider_quota_json = null,
-           availability_observed_at = excluded.availability_observed_at,
+           quota_access_state = 'unknown',
+           quota_evidence = null,
+           quota_access_observed_at = null,
+           quota_reset_at = null,
+           credential_observed_at = excluded.credential_observed_at,
            quota_observed_at = null,
-           updated_at = greatest(now(), excluded.availability_observed_at)
+           last_error_reason = null,
+           last_error_message = null,
+           updated_at = greatest(now(), excluded.credential_observed_at)
          returning id",
     )
     .bind(&account.id)
@@ -525,8 +589,8 @@ pub(crate) async fn upsert_provider_account_in_transaction(
     .bind(account.access_token_expires_at)
     .bind(account.next_refresh_at)
     .bind(account.enabled)
-    .bind(availability.as_str())
-    .bind(account.availability_observed_at)
+    .bind(credential_state.as_str())
+    .bind(account.credential_observed_at)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|error| {
@@ -574,17 +638,17 @@ pub(crate) async fn rotate_provider_account_in_transaction(
              next_refresh_at = $10,
              upstream_user_id = case when $11::boolean then $12::text else upstream_user_id end,
              upstream_account_id = case when $11::boolean then $13::text else upstream_account_id end,
-             availability = case
-                 when not enabled then availability
-                 when availability = 'quota_exhausted' then availability
+             credential_state = case
+                 when not enabled then credential_state
                  when coalesce($12::text, upstream_user_id) is not null then 'ready'
                  else 'unknown'
              end,
-             availability_observed_at = case
-                 when not enabled then availability_observed_at
-                 when availability <> 'quota_exhausted' then now()
-                 else availability_observed_at
+             credential_observed_at = case
+                 when not enabled then credential_observed_at
+                 else now()
              end,
+             last_error_reason = case when enabled then null else last_error_reason end,
+             last_error_message = case when enabled then null else last_error_message end,
              updated_at = now()
          where id = $1 and provider_kind = $2
            and credential_revision = $3

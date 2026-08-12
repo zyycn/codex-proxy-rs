@@ -2,7 +2,6 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::SystemTime;
 
 use gateway_core::provider_ports::ProviderCooldownPort;
 
@@ -30,34 +29,6 @@ impl PgAdminAccountStore {
             control_plane: PgControlPlaneRepository::new(pool),
             cooldowns,
         }
-    }
-
-    /// 批量读取 Redis 429 冷却，返回 `account_id → rate_limited_until` 映射。
-    /// 冷却不可用（Redis 挂/无 cooldown 端口）时返回空映射，账号归入配额耗尽（近似）。
-    async fn load_rate_limited_until(
-        &self,
-        accounts: &[ProviderAccountSummary],
-    ) -> AdminStoreResult<BTreeMap<String, SystemTime>> {
-        let Some(cooldowns) = &self.cooldowns else {
-            return Ok(BTreeMap::new());
-        };
-        let mut map = BTreeMap::new();
-        for account in accounts {
-            let Ok(account_id) = CoreProviderAccountId::new(account.id.clone()) else {
-                continue;
-            };
-            let Some(cooldown) = cooldowns.read(&account_id).await.ok().flatten() else {
-                continue;
-            };
-            if cooldown.credential_revision().get() != account.credential_revision.get() {
-                continue;
-            }
-            let until = cooldown.until();
-            if until > SystemTime::now() {
-                map.insert(account.id.clone(), until);
-            }
-        }
-        Ok(map)
     }
 
     async fn usage_observations(
@@ -278,21 +249,18 @@ impl AccountStore for PgAdminAccountStore {
         )
         .map_err(|error| admin_store_error(ENTITY, error))?;
         let now = Utc::now();
-        // 批量读取 Redis 429 冷却，供列表状态派生与筛选使用。
-        let rate_limited_until = self
-            .load_rate_limited_until(&accounts)
-            .await
-            .unwrap_or_default();
+        let rate_limited_until =
+            load_rate_limited_until(self.cooldowns.as_deref(), &accounts, now.into()).await;
         let summary = admin_account_summary(&accounts, now, &rate_limited_until);
         let mut items = accounts
             .into_iter()
             .filter_map(|account| {
                 let until = rate_limited_until.get(&account.id).copied();
-                let status = admin_account_status(&account, now, until);
-                account_matches_admin_query(&account, status, &query).then_some(
+                let projection = account_status_projection(&account, now.into(), until);
+                account_matches_admin_query(&account, projection.status, &query).then_some(
                     AdminAccountListItem {
                         account,
-                        status,
+                        projection,
                         usage: None,
                     },
                 )
@@ -330,7 +298,12 @@ impl AccountStore for PgAdminAccountStore {
             .into_iter()
             .skip(offset)
             .take(page_size)
-            .map(|item| admin_account_record(item.account))
+            .map(|item| {
+                Ok(AccountPageItem {
+                    account: admin_account_record(item.account)?,
+                    projection: item.projection,
+                })
+            })
             .collect::<AdminStoreResult<Vec<_>>>()?;
         Ok(AccountPage {
             config_revision: admin_revision(control_plane.settings.config_revision)?,
@@ -340,13 +313,29 @@ impl AccountStore for PgAdminAccountStore {
         })
     }
 
-    async fn load_account(&self, account_id: &str) -> AdminStoreResult<Option<AccountRecord>> {
-        self.accounts
+    async fn load_account(&self, account_id: &str) -> AdminStoreResult<Option<AccountPageItem>> {
+        let record = self
+            .accounts
             .load_provider_account(account_id)
             .await
-            .map_err(|error| admin_store_error(ENTITY, error))?
-            .map(|record| admin_account_record(record.summary))
-            .transpose()
+            .map_err(|error| admin_store_error(ENTITY, error))?;
+        let Some(record) = record else {
+            return Ok(None);
+        };
+        let now = Utc::now();
+        let rate_limited_until = load_rate_limited_until(
+            self.cooldowns.as_deref(),
+            std::slice::from_ref(&record.summary),
+            now.into(),
+        )
+        .await
+        .get(account_id)
+        .copied();
+        let projection = account_status_projection(&record.summary, now.into(), rate_limited_until);
+        Ok(Some(AccountPageItem {
+            account: admin_account_record(record.summary)?,
+            projection,
+        }))
     }
 
     async fn load_account_usage(
@@ -386,9 +375,9 @@ impl AccountStore for PgAdminAccountStore {
             .filter(|account| account.provider_kind == provider_kind.as_str())
             .filter(|account| {
                 query
-                    .availability
+                    .credential_state
                     .as_ref()
-                    .is_none_or(|expected| expected.matches(account.availability))
+                    .is_none_or(|expected| expected.matches(account.credential_state))
             })
             .filter(|account| {
                 query

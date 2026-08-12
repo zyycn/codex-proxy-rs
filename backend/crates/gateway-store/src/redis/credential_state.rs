@@ -1,4 +1,4 @@
-//! Provider account availability 的可重建 Redis cache fence。
+//! Provider credential state 的可重建 Redis cache fence。
 
 use std::time::Duration;
 
@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use redis::{Script, aio::ConnectionManager};
 
 use gateway_core::engine::credential::{
-    AccountAvailability, CredentialRevision, OpaqueProviderData, ProviderAccountId,
+    CredentialRevision, CredentialState, OpaqueProviderData, ProviderAccountId,
 };
 use gateway_core::provider_ports::{
     ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCredentialState,
@@ -24,7 +24,7 @@ if current >= tonumber(ARGV[1]) then return 0 end
 redis.call('HSET', KEYS[1],
   'revision', ARGV[1],
   'enabled', ARGV[2],
-  'availability', ARGV[3],
+  'credential_state', ARGV[3],
   'observed_at_ms', ARGV[4])
 redis.call('PEXPIRE', KEYS[1], ARGV[5])
 return 1
@@ -44,7 +44,7 @@ pub struct CredentialStateCache {
     pub provider_account_id: String,
     pub revision: Revision,
     pub enabled: bool,
-    pub availability: String,
+    pub credential_state: String,
     pub observed_at: DateTime<Utc>,
 }
 
@@ -55,8 +55,8 @@ impl CredentialStateCache {
             "provider_account_id",
             &self.provider_account_id,
         )?;
-        if AccountAvailability::parse(&self.availability).is_none() {
-            return Err(invalid("availability is not registered"));
+        if CredentialState::parse(&self.credential_state).is_none() {
+            return Err(invalid("credential_state is not registered"));
         }
         Ok(())
     }
@@ -172,7 +172,7 @@ impl CredentialStateRepository for RedisCredentialStateRepository {
             .key(self.key(&state.provider_account_id)?)
             .arg(state.revision.get())
             .arg(u8::from(state.enabled))
-            .arg(&state.availability)
+            .arg(&state.credential_state)
             .arg(state.observed_at.timestamp_millis())
             .arg(ttl_ms)
             .invoke_async::<i64>(&mut connection)
@@ -195,12 +195,12 @@ impl CredentialStateRepository for RedisCredentialStateRepository {
             .arg(self.key(provider_account_id)?)
             .arg("revision")
             .arg("enabled")
-            .arg("availability")
+            .arg("credential_state")
             .arg("observed_at_ms")
             .query_async(&mut connection)
             .await
             .map_err(|_| redis_unavailable("read credential state"))?;
-        let (Some(revision), Some(enabled), Some(availability), Some(observed_at_ms)) = values
+        let (Some(revision), Some(enabled), Some(credential_state), Some(observed_at_ms)) = values
         else {
             return Ok(None);
         };
@@ -208,7 +208,7 @@ impl CredentialStateRepository for RedisCredentialStateRepository {
             provider_account_id: provider_account_id.to_owned(),
             revision: Revision::new(revision)?,
             enabled: enabled == 1,
-            availability,
+            credential_state,
             observed_at: DateTime::from_timestamp_millis(observed_at_ms)
                 .ok_or_else(|| invalid("observed_at is invalid"))?,
         };
@@ -299,7 +299,7 @@ impl ProviderCredentialStatePort for RedisCredentialStateRepository {
                 revision: Revision::new(state.credential_revision().get())
                     .map_err(|_| provider_invalid("encode credential state"))?,
                 enabled: state.enabled(),
-                availability: state.availability().as_str().to_owned(),
+                credential_state: state.credential_state().as_str().to_owned(),
                 observed_at,
             };
             CredentialStateRepository::cache_credential_state(
@@ -329,13 +329,13 @@ impl ProviderCredentialStatePort for RedisCredentialStateRepository {
                         .map_err(|_| provider_invalid("decode credential state"))?;
                     let revision = CredentialRevision::new(state.revision.get())
                         .map_err(|_| provider_invalid("decode credential state"))?;
-                    let availability = AccountAvailability::parse(&state.availability)
+                    let credential_state = CredentialState::parse(&state.credential_state)
                         .ok_or_else(|| provider_invalid("decode credential state"))?;
                     Ok(ProviderCredentialState::new(
                         account_id,
                         revision,
                         state.enabled,
-                        availability,
+                        credential_state,
                         state.observed_at.into(),
                     ))
                 })

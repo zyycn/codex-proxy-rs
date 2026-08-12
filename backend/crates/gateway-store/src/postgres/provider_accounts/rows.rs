@@ -65,9 +65,29 @@ impl ProviderAccountAdminScope {
     }
 }
 
-/// 解析数据库 availability 列；字符串映射本体唯一归属 gateway-core。
-pub(crate) fn parse_availability(value: &str) -> StoreResult<AccountAvailability> {
-    AccountAvailability::parse(value).ok_or_else(|| invalid("unknown availability value"))
+pub(crate) fn parse_credential_state(value: &str) -> StoreResult<CredentialState> {
+    CredentialState::parse(value).ok_or_else(|| invalid("unknown credential_state value"))
+}
+
+pub(crate) fn parse_quota_access_state(value: &str) -> StoreResult<QuotaAccessState> {
+    QuotaAccessState::parse(value).ok_or_else(|| invalid("unknown quota_access_state value"))
+}
+
+pub(crate) fn parse_quota_evidence(value: Option<String>) -> StoreResult<Option<QuotaEvidence>> {
+    value
+        .map(|value| {
+            QuotaEvidence::parse(&value).ok_or_else(|| invalid("unknown quota_evidence value"))
+        })
+        .transpose()
+}
+
+pub(crate) fn parse_error_reason(value: Option<String>) -> StoreResult<Option<AccountErrorReason>> {
+    value
+        .map(|value| {
+            AccountErrorReason::parse(&value)
+                .ok_or_else(|| invalid("unknown last_error_reason value"))
+        })
+        .transpose()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,12 +105,10 @@ pub struct ProviderAccountSummary {
     pub access_token_expires_at: Option<DateTime<Utc>>,
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
-    pub availability: AccountAvailability,
-    pub availability_observed_at: DateTime<Utc>,
-    pub quota_observed_at: Option<DateTime<Utc>>,
-    /// 快照级限流事实（Provider 物化）。
-    pub quota_limit_reached: bool,
-    /// 最近一次非 ready 状态变更的原始原因（上游错误原文 / 原因码）；恢复 ready 后清空。
+    pub credential_state: CredentialState,
+    pub credential_observed_at: DateTime<Utc>,
+    pub quota: QuotaState,
+    pub last_error_reason: Option<AccountErrorReason>,
     pub last_error_message: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -132,8 +150,8 @@ pub struct NewProviderAccount {
     pub access_token_expires_at: Option<DateTime<Utc>>,
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
-    pub availability: AccountAvailability,
-    pub availability_observed_at: DateTime<Utc>,
+    pub credential_state: CredentialState,
+    pub credential_observed_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,7 +170,7 @@ impl fmt::Debug for NewProviderAccount {
             .field("provider_kind", &self.provider_kind)
             .field("name", &self.name)
             .field("enabled", &self.enabled)
-            .field("availability", &self.availability)
+            .field("credential_state", &self.credential_state)
             .field("provider_credentials_json", &"[REDACTED]")
             .finish_non_exhaustive()
     }
@@ -297,24 +315,13 @@ impl fmt::Debug for ProviderCredentialUpdate {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProviderAccountObservation {
-    pub account_id: String,
-    pub availability: AccountAvailability,
-    pub provider_quota_json: Option<JsonObject>,
-    pub availability_observed_at: DateTime<Utc>,
-    pub quota_observed_at: Option<DateTime<Utc>>,
-    /// 快照级限流事实（Provider 物化）。
-    pub quota_limit_reached: bool,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccountStateUpdate {
     pub account_id: String,
     pub expected_revision: Revision,
-    pub availability: AccountAvailability,
-    pub availability_observed_at: DateTime<Utc>,
-    /// 上游原因（错误原文 / 原因码）；`None` 不更新错误信息列，恢复 `Ready` 时清空。
+    pub credential_state: CredentialState,
+    pub credential_observed_at: DateTime<Utc>,
+    pub error_reason: Option<AccountErrorReason>,
     pub message: Option<String>,
 }
 
@@ -325,31 +332,20 @@ impl ProviderAccountStateUpdate {
     }
 }
 
-impl ProviderAccountObservation {
-    pub fn validate(&self) -> StoreResult<()> {
-        require_nonempty(ENTITY, "account_id", &self.account_id)?;
-        if self.provider_quota_json.is_some() != self.quota_observed_at.is_some() {
-            return Err(invalid("quota JSON and quota_observed_at must agree"));
-        }
-        if let Some(quota) = &self.provider_quota_json {
-            validate_object_size("provider_quota_json", quota, QUOTA_MAX_BYTES)?;
-        }
-        Ok(())
-    }
-}
-
 pub(crate) const ACCOUNT_SELECT: &str = "select id, provider_kind, name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
-            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, availability,
-            provider_quota_json, quota_limit_reached, last_error_message,
-            availability_observed_at, quota_observed_at, created_at, updated_at
+            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, credential_state,
+            provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
+            last_error_reason, last_error_message,
+            credential_observed_at, quota_observed_at, created_at, updated_at
      from provider_accounts where id = $1";
 
 pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select id, provider_kind, name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
-            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, availability,
-            provider_quota_json, quota_limit_reached, last_error_message,
-            availability_observed_at, quota_observed_at, created_at, updated_at
+            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, credential_state,
+            provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
+            last_error_reason, last_error_message,
+            credential_observed_at, quota_observed_at, created_at, updated_at
      from provider_accounts
      where id = any($1::text[]) and provider_kind = $2
      order by id";
@@ -398,7 +394,13 @@ pub(crate) fn core_account_from_summary(
         summary.upstream_account_id,
         summary.plan_type,
     )
-    .with_runtime_state(summary.enabled, summary.availability)
+    .with_account_facts(
+        summary.enabled,
+        summary.credential_state,
+        summary.quota,
+        summary.last_error_reason,
+        summary.last_error_message,
+    )
     .with_refresh_schedule(
         summary.has_refresh_token,
         summary.next_refresh_at.map(Into::into),
@@ -430,9 +432,20 @@ pub(crate) fn account_summary_from_row(
     let revision = row
         .try_get::<i64, _>("credential_revision")
         .map_err(|_| invalid("invalid credential revision"))?;
-    let availability = row
-        .try_get::<String, _>("availability")
-        .map_err(|_| invalid("invalid availability"))?;
+    let credential_state = row
+        .try_get::<String, _>("credential_state")
+        .map_err(|_| invalid("invalid credential_state"))?;
+    let quota_access_state = parse_quota_access_state(&get::<String>(&row, "quota_access_state")?)?;
+    let quota_evidence = parse_quota_evidence(get(&row, "quota_evidence")?)?;
+    let quota_access_observed_at = get::<Option<DateTime<Utc>>>(&row, "quota_access_observed_at")?;
+    let quota_reset_at = get::<Option<DateTime<Utc>>>(&row, "quota_reset_at")?;
+    let quota = QuotaState::from_persisted(
+        quota_access_state,
+        quota_evidence,
+        quota_access_observed_at.map(Into::into),
+        quota_reset_at.map(Into::into),
+    )
+    .ok_or_else(|| invalid("invalid persisted quota fact"))?;
     Ok(ProviderAccountSummary {
         id: get(&row, "id")?,
         provider_kind: get(&row, "provider_kind")?,
@@ -447,10 +460,10 @@ pub(crate) fn account_summary_from_row(
         access_token_expires_at: get(&row, "access_token_expires_at")?,
         next_refresh_at: get(&row, "next_refresh_at")?,
         enabled: get(&row, "enabled")?,
-        availability: parse_availability(&availability)?,
-        availability_observed_at: get(&row, "availability_observed_at")?,
-        quota_observed_at: get(&row, "quota_observed_at")?,
-        quota_limit_reached: get(&row, "quota_limit_reached")?,
+        credential_state: parse_credential_state(&credential_state)?,
+        credential_observed_at: get(&row, "credential_observed_at")?,
+        quota,
+        last_error_reason: parse_error_reason(get(&row, "last_error_reason")?)?,
         last_error_message: get(&row, "last_error_message")?,
         created_at: get(&row, "created_at")?,
         updated_at: get(&row, "updated_at")?,

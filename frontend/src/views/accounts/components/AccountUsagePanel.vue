@@ -11,9 +11,12 @@ defineProps<{
     class="grid gap-4 rounded-lg bg-(--cp-bg-surface) p-4 shadow-(--cp-shadow-control) xl:grid-cols-[0.52fr_1.48fr]"
   >
     <div>
-      <h3 class="m-0 mb-3 text-[14px] font-heavy text-(--cp-text-primary)">
-        Token 结构
-      </h3>
+      <div class="mb-3 flex items-baseline justify-between gap-3">
+        <h3 class="m-0 text-[14px] font-heavy text-(--cp-text-primary)">
+          Token 结构
+        </h3>
+        <span class="text-[11px] font-emphasis text-(--cp-text-muted)">当前额度窗口</span>
+      </div>
       <div class="grid gap-2">
         <div class="flex items-center justify-between rounded-lg bg-(--cp-success-bg) px-3 py-2">
           <span class="text-[12px] font-bold text-(--cp-success-text)">输入 Tokens</span>
@@ -55,10 +58,11 @@ defineProps<{
         <h3 class="m-0 text-[14px] font-heavy text-(--cp-text-primary)">
           模型使用排行
         </h3>
+        <span class="text-[11px] font-emphasis text-(--cp-text-muted)">当前额度窗口</span>
       </div>
 
       <div
-        class="grid grid-cols-[1.2fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pb-2 text-[11px] font-heavy text-(--cp-text-secondary) shadow-[inset_0_-1px_0_var(--cp-divider-subtle)]"
+        class="grid grid-cols-[1.5fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pb-2 text-[11px] font-heavy text-(--cp-text-secondary) shadow-[inset_0_-1px_0_var(--cp-divider-subtle)]"
       >
         <span>模型</span>
         <span>调用</span>
@@ -66,9 +70,9 @@ defineProps<{
         <span>输入</span>
         <span>输出</span>
         <span>缓存</span>
-        <span>总TOKEN</span>
-        <span>计费金额</span>
-        <span>最近请求时间</span>
+        <span>总计</span>
+        <span>计费</span>
+        <span>最近请求</span>
       </div>
       <div
         v-if="account.usage.models.length === 0"
@@ -80,7 +84,7 @@ defineProps<{
         <div
           v-for="model in account.usage.models"
           :key="model.model"
-          class="grid grid-cols-[1.2fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pt-3 text-[12px] font-emphasis text-(--cp-text-primary)"
+          class="grid grid-cols-[1.5fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pt-3 text-[12px] font-emphasis text-(--cp-text-primary)"
         >
           <span class="truncate">{{ model.model }}</span>
           <span>{{ model.requestCountDisplay }}</span>

@@ -5,7 +5,10 @@ use chrono::{TimeDelta, Utc};
 use futures::{StreamExt as _, future::BoxFuture};
 use gateway_core::{
     engine::{
-        credential::{OpaqueProviderData, ProviderAccountId},
+        credential::{
+            AccountStatusFacts, CredentialState, OpaqueProviderData, ProviderAccountId,
+            QuotaEvidence, QuotaState, resolve_account_status,
+        },
         probe::{AccountProbe, AccountProbeError, AccountProbeRequest, AccountProbeResult},
     },
     error::{ClientVisibleUpstreamError, GatewayError, GatewayErrorKind},
@@ -18,7 +21,7 @@ use gateway_admin::{
     model::{
         AdminError, MutationContext, Revision,
         accounts::{
-            AccountAvailability, AccountConnectionTestEvent, AccountListQuery, AccountPage,
+            AccountConnectionTestEvent, AccountListQuery, AccountPage, AccountPageItem,
             AccountRecord, AccountSummary, AccountUsage, AccountUsageWindowQuery,
             AccountUsageWindowResult, DeleteAccounts, SetAccountEnabled,
         },
@@ -378,6 +381,7 @@ pub(super) struct FakeAccountStore {
     fail_commit: Mutex<bool>,
     audit_requests: Mutex<Vec<String>>,
     quota_window_usage: Mutex<Vec<AccountUsageWindowResult>>,
+    quota_window_queries: Mutex<Vec<AccountUsageWindowQuery>>,
 }
 
 impl FakeAccountStore {
@@ -393,6 +397,7 @@ impl FakeAccountStore {
             fail_commit: Mutex::new(false),
             audit_requests: Mutex::new(Vec::new()),
             quota_window_usage: Mutex::new(Vec::new()),
+            quota_window_queries: Mutex::new(Vec::new()),
         })
     }
 
@@ -406,6 +411,13 @@ impl FakeAccountStore {
 
     pub(super) fn set_quota_window_usage(&self, usage: Vec<AccountUsageWindowResult>) {
         *self.quota_window_usage.lock().expect("quota window usage") = usage;
+    }
+
+    fn quota_window_queries(&self) -> Vec<AccountUsageWindowQuery> {
+        self.quota_window_queries
+            .lock()
+            .expect("quota window queries")
+            .clone()
     }
 
     pub(super) fn set_accounts(&self, accounts: Vec<AccountRecord>) {
@@ -438,6 +450,22 @@ impl FakeAccountStore {
             .expect("audit requests")
             .push(context.request_id.clone());
     }
+
+    fn page_item(account: AccountRecord) -> AccountPageItem {
+        let facts = AccountStatusFacts {
+            enabled: account.enabled,
+            credential_state: account.credential_state,
+            access_token_expires_at: account.access_token_expires_at.map(Into::into),
+            quota: account.quota,
+            rate_limited_until: None,
+            last_error_reason: account.last_error_reason,
+            last_error_message: account.last_error_message.clone(),
+        };
+        AccountPageItem {
+            account,
+            projection: resolve_account_status(&facts, std::time::SystemTime::now()),
+        }
+    }
 }
 
 #[async_trait]
@@ -445,12 +473,13 @@ impl AccountStore for FakeAccountStore {
     async fn list_accounts(&self, _: AccountListQuery) -> AdminStoreResult<AccountPage> {
         self.record("store.list_accounts");
         let accounts = self.accounts.lock().expect("accounts").clone();
+        let total = accounts.len() as u64;
         Ok(AccountPage {
             config_revision: revision(1),
-            items: accounts.clone(),
-            total: accounts.len() as u64,
+            items: accounts.into_iter().map(Self::page_item).collect(),
+            total,
             summary: AccountSummary {
-                total: accounts.len() as u64,
+                total,
                 normal: 1,
                 quota_exhausted: 0,
                 rate_limited: 0,
@@ -460,7 +489,7 @@ impl AccountStore for FakeAccountStore {
         })
     }
 
-    async fn load_account(&self, account_id: &str) -> AdminStoreResult<Option<AccountRecord>> {
+    async fn load_account(&self, account_id: &str) -> AdminStoreResult<Option<AccountPageItem>> {
         self.record("store.load_account");
         // probe 后的账号状态覆盖只对同一 id 生效；其余按账号列表查询。
         let account = self
@@ -477,7 +506,7 @@ impl AccountStore for FakeAccountStore {
                     .find(|account| account.id == account_id)
                     .cloned()
             });
-        Ok(account)
+        Ok(account.map(Self::page_item))
     }
 
     async fn load_account_usage(
@@ -490,8 +519,12 @@ impl AccountStore for FakeAccountStore {
 
     async fn load_account_usage_by_windows(
         &self,
-        _: &[AccountUsageWindowQuery],
+        windows: &[AccountUsageWindowQuery],
     ) -> AdminStoreResult<Vec<AccountUsageWindowResult>> {
+        *self
+            .quota_window_queries
+            .lock()
+            .expect("quota window queries") = windows.to_vec();
         Ok(self
             .quota_window_usage
             .lock()
@@ -815,7 +848,11 @@ fn provider_registry_should_reject_duplicate_kind() {
 async fn connection_test_should_probe_unavailable_account() {
     let provider = FakeProviderAdmin::new("xai", events());
     let mut account = account_record("xai");
-    account.availability = AccountAvailability::QuotaExhausted;
+    account.quota = QuotaState::exhausted(
+        QuotaEvidence::UsageLimitReached,
+        std::time::SystemTime::now(),
+        None,
+    );
     let store = FakeAccountStore::with_account(account, events());
     let services =
         accounts_service_with_probe(provider, store, Arc::new(FailingAccountProbe)).await;
@@ -837,7 +874,6 @@ async fn connection_test_should_probe_unavailable_account() {
             message,
             provider_error_code: Some(code),
             provider_error_type: Some(error_type),
-            account_status: gateway_admin::model::accounts::AccountStatus::QuotaExhausted,
             ..
         }) if message == "included usage exhausted"
             && code == "usage_exhausted"
@@ -846,7 +882,7 @@ async fn connection_test_should_probe_unavailable_account() {
 }
 
 #[tokio::test]
-async fn connection_test_rate_limited_probe_preserves_normal_account_status() {
+async fn connection_test_rate_limited_probe_returns_provider_failure() {
     let events = events();
     let provider = FakeProviderAdmin::new("xai", events.clone());
     let store = FakeAccountStore::new("xai", events);
@@ -869,9 +905,10 @@ async fn connection_test_rate_limited_probe_preserves_normal_account_status() {
     assert!(matches!(
         events.last(),
         Some(AccountConnectionTestEvent::Failed {
-            account_status: gateway_admin::model::accounts::AccountStatus::Normal,
+            message,
             ..
         })
+        if message == "xAI free model quota is exhausted"
     ));
 }
 
@@ -897,10 +934,7 @@ async fn connection_test_should_preserve_disabled_account_status() {
 
     assert!(matches!(
         events.last(),
-        Some(AccountConnectionTestEvent::Failed {
-            account_status: gateway_admin::model::accounts::AccountStatus::Disabled,
-            ..
-        })
+        Some(AccountConnectionTestEvent::Failed { .. })
     ));
 }
 
@@ -949,7 +983,7 @@ async fn accounts_refresh_should_keep_guard_through_store_commit() {
     assert_eq!(result.config_revision, revision(2));
     assert_eq!(result.account.account.provider_kind.as_str(), "openai");
     assert_eq!(
-        result.account.status,
+        result.account.projection.status,
         gateway_admin::model::accounts::AccountStatus::Normal
     );
 
@@ -990,7 +1024,7 @@ async fn accounts_list_should_return_complete_directory_semantics() {
     let account = page.items.first().expect("account item");
     assert_eq!(account.account.provider_kind.as_str(), "openai");
     assert_eq!(
-        account.status,
+        account.projection.status,
         gateway_admin::model::accounts::AccountStatus::Normal
     );
 }
@@ -1016,7 +1050,6 @@ async fn accounts_list_should_degrade_quota_failure_to_empty_window_without_drop
             provider_data: None,
         }],
         limit_reached: false,
-        rate_limited_until: None,
         provider_data: None,
     });
     let failing = FakeProviderAdmin::new("xai", events.clone());
@@ -1064,10 +1097,14 @@ async fn accounts_list_should_degrade_quota_failure_to_empty_window_without_drop
 }
 
 #[tokio::test]
-async fn accounts_list_should_prefer_quota_exhaustion_over_stale_token_expiry() {
+async fn accounts_list_should_prefer_credential_error_over_quota_exhaustion() {
     let provider = FakeProviderAdmin::new("openai", events());
     let mut account = account_record("openai");
-    account.availability = AccountAvailability::QuotaExhausted;
+    account.quota = QuotaState::exhausted(
+        QuotaEvidence::ProviderDenied,
+        std::time::SystemTime::now(),
+        None,
+    );
     account.access_token_expires_at = Some(Utc::now() - TimeDelta::minutes(5));
     let store = FakeAccountStore::with_account(account, events());
 
@@ -1086,17 +1123,17 @@ async fn accounts_list_should_prefer_quota_exhaustion_over_stale_token_expiry() 
         .expect("usage-limited account directory");
 
     assert_eq!(
-        page.items.first().expect("account item").status,
-        gateway_admin::model::accounts::AccountStatus::QuotaExhausted,
+        page.items.first().expect("account item").projection.status,
+        gateway_admin::model::accounts::AccountStatus::Error,
     );
 }
 
 #[tokio::test]
-async fn accounts_list_should_map_unknown_availability_to_error_not_normal() {
+async fn accounts_list_should_map_unknown_credential_to_error_not_normal() {
     // Unknown 不可调度，Admin 不得显示为 normal。
     let provider = FakeProviderAdmin::new("openai", events());
     let mut account = account_record("openai");
-    account.availability = AccountAvailability::Unknown;
+    account.credential_state = CredentialState::Unknown;
     let store = FakeAccountStore::with_account(account, events());
 
     let page = accounts_service(provider, store)
@@ -1114,15 +1151,13 @@ async fn accounts_list_should_map_unknown_availability_to_error_not_normal() {
         .expect("unknown account directory");
 
     assert_eq!(
-        page.items.first().expect("account item").status,
+        page.items.first().expect("account item").projection.status,
         gateway_admin::model::accounts::AccountStatus::Error,
     );
 }
 
 #[tokio::test]
-async fn accounts_list_should_map_rate_limited_from_quota_limit_reached() {
-    // ready + 快照级 quota.limitReached → quota_exhausted（配额耗尽）；
-    // rate_limited 只来自 ProviderQuota.rate_limited_until（429 Redis 冷却）。
+async fn accounts_list_should_not_derive_rate_limited_from_provider_quota_view() {
     let provider = FakeProviderAdmin::new("openai", events());
     provider.set_quota(ProviderQuota {
         observed_at: Some(Utc::now()),
@@ -1141,7 +1176,6 @@ async fn accounts_list_should_map_rate_limited_from_quota_limit_reached() {
             provider_data: None,
         }],
         limit_reached: true,
-        rate_limited_until: Some(Utc::now() + TimeDelta::minutes(5)),
         provider_data: None,
     });
     let store = FakeAccountStore::new("openai", events());
@@ -1158,17 +1192,16 @@ async fn accounts_list_should_map_rate_limited_from_quota_limit_reached() {
             sort: None,
         })
         .await
-        .expect("rate limited account directory");
+        .expect("account directory with display quota cooldown");
 
     assert_eq!(
-        page.items.first().expect("account item").status,
-        gateway_admin::model::accounts::AccountStatus::RateLimited,
+        page.items.first().expect("account item").projection.status,
+        gateway_admin::model::accounts::AccountStatus::Normal,
     );
 }
 
 #[tokio::test]
-async fn accounts_list_should_map_quota_exhausted_when_only_limit_reached() {
-    // ready + 快照级 quota.limitReached、无 429 冷却 → quota_exhausted。
+async fn accounts_list_should_not_derive_exhaustion_from_provider_quota_view() {
     let provider = FakeProviderAdmin::new("openai", events());
     provider.set_quota(ProviderQuota {
         observed_at: Some(Utc::now()),
@@ -1187,7 +1220,6 @@ async fn accounts_list_should_map_quota_exhausted_when_only_limit_reached() {
             provider_data: None,
         }],
         limit_reached: true,
-        rate_limited_until: None,
         provider_data: None,
     });
     let store = FakeAccountStore::new("openai", events());
@@ -1204,11 +1236,11 @@ async fn accounts_list_should_map_quota_exhausted_when_only_limit_reached() {
             sort: None,
         })
         .await
-        .expect("quota exhausted account directory");
+        .expect("account directory with display quota limit");
 
     assert_eq!(
-        page.items.first().expect("account item").status,
-        gateway_admin::model::accounts::AccountStatus::QuotaExhausted,
+        page.items.first().expect("account item").projection.status,
+        gateway_admin::model::accounts::AccountStatus::Normal,
     );
 }
 
@@ -1233,7 +1265,6 @@ async fn accounts_list_should_attach_local_usage_to_quota_windows() {
             provider_data: None,
         }],
         limit_reached: false,
-        rate_limited_until: None,
         provider_data: None,
     });
     let store = FakeAccountStore::new("openai", events());
@@ -1243,7 +1274,7 @@ async fn accounts_list_should_attach_local_usage_to_quota_windows() {
         usage: quota_local_usage("acct_test", 4_330_000),
     }]);
 
-    let page = accounts_service(provider, store)
+    let page = accounts_service(provider, store.clone())
         .await
         .accounts()
         .list(AccountListQuery {
@@ -1257,11 +1288,23 @@ async fn accounts_list_should_attach_local_usage_to_quota_windows() {
         .await
         .expect("quota window usage");
 
-    let usage = page.items[0].quota.windows[0]
+    let item = &page.items[0];
+    let usage = item.quota.windows[0]
         .local_usage
         .as_ref()
         .expect("quota window local usage");
     assert_eq!(usage.total_tokens, Some(4_330_000));
+    assert_eq!(
+        item.usage.as_ref().and_then(|usage| usage.total_tokens),
+        Some(4_330_000),
+    );
+
+    let queries = store.quota_window_queries();
+    assert_eq!(queries.len(), 1);
+    assert_eq!(queries[0].account_id, "acct_test");
+    assert_eq!(queries[0].key, "primary");
+    assert_eq!(queries[0].range.start, reset_at - TimeDelta::hours(5));
+    assert_eq!(queries[0].range.end, reset_at);
 }
 
 #[tokio::test]
@@ -1300,7 +1343,6 @@ async fn accounts_list_should_not_attach_account_usage_to_model_specific_quota_w
             },
         ],
         limit_reached: false,
-        rate_limited_until: None,
         provider_data: None,
     });
     let store = FakeAccountStore::new("openai", events());
@@ -1351,6 +1393,13 @@ async fn accounts_list_should_not_attach_account_usage_to_model_specific_quota_w
             ("core-primary", Some(12_818_806)),
             ("codex-bengalfox-primary", None),
         ],
+    );
+    assert_eq!(
+        page.items[0]
+            .usage
+            .as_ref()
+            .and_then(|usage| usage.total_tokens),
+        Some(12_818_806),
     );
 }
 
@@ -1432,7 +1481,6 @@ fn empty_quota() -> ProviderQuota {
         refresh_token_expires_at: None,
         windows: Vec::new(),
         limit_reached: false,
-        rate_limited_until: None,
         provider_data: None,
     }
 }
@@ -1476,10 +1524,11 @@ pub(super) fn account_record(kind: &str) -> AccountRecord {
         access_token_expires_at: Some(now + TimeDelta::hours(1)),
         next_refresh_at: Some(now + TimeDelta::minutes(30)),
         enabled: true,
-        availability: AccountAvailability::Ready,
-        availability_observed_at: now,
+        credential_state: CredentialState::Ready,
+        credential_observed_at: now,
+        quota: QuotaState::allowed(now.into()),
+        last_error_reason: None,
         last_error_message: None,
-        quota_observed_at: None,
         created_at: now,
         updated_at: now,
     }
@@ -1513,8 +1562,8 @@ fn prepared_create_with_id(
         access_token_expires_at: Some(now + TimeDelta::hours(1)),
         next_refresh_at: Some(now + TimeDelta::minutes(30)),
         enabled: true,
-        availability: AccountAvailability::Ready,
-        availability_observed_at: now,
+        credential_state: CredentialState::Ready,
+        credential_observed_at: now,
     }
 }
 
@@ -1597,9 +1646,7 @@ impl AccountProbe for FreeModelQuotaProbe {
         _: AccountProbeRequest,
     ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
         Box::pin(async move {
-            let mut account = account_record("xai");
-            account.availability = AccountAvailability::Ready;
-            self.store.set_account_after_probe(account);
+            self.store.set_account_after_probe(account_record("xai"));
             Err(GatewayError::new(
                 GatewayErrorKind::RateLimited,
                 "xAI free model quota is exhausted",

@@ -15,7 +15,7 @@ pub(crate) async fn provider_account_usage(
 
     let mut statement = QueryBuilder::<Postgres>::new(
         "select pa.id, pa.provider_kind, pa.authentication_kind, pa.name, pa.email,
-                pa.plan_type, pa.enabled, pa.availability,
+                pa.plan_type,
                 count(mr.id)::bigint as request_count,
                 count(mr.id) filter (where mr.outcome = 'succeeded')::bigint as success_count,
                 sum(mr.input_tokens)::bigint as input_tokens,
@@ -52,7 +52,7 @@ pub(crate) async fn provider_account_usage(
     }
     statement.push(
         " group by pa.id, pa.provider_kind, pa.authentication_kind, pa.name, pa.email,
-                   pa.plan_type, pa.enabled, pa.availability
+                   pa.plan_type
           order by max(mr.started_at) desc nulls last, pa.name, pa.id limit ",
     );
     statement.push_bind(i64::from(query.limit));
@@ -313,8 +313,6 @@ pub(crate) fn provider_account_from_row(
         name: get(row, "name")?,
         email: get(row, "email")?,
         plan_type: get(row, "plan_type")?,
-        enabled: get(row, "enabled")?,
-        availability: get(row, "availability")?,
         request_count: unsigned(row, "request_count")?,
         success_count: unsigned(row, "success_count")?,
         input_tokens: optional_unsigned(row, "input_tokens")?,

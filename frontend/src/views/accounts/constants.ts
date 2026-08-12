@@ -1,4 +1,4 @@
-import type { getAccounts } from '@/api'
+import type { AccountErrorReason, AccountStatus, getAccounts } from '@/api'
 import type { BaseTableColumn } from '@/components/base/BaseTable/columns'
 import { clamp } from 'es-toolkit'
 import { providerDisplayName } from '@/utils/providers'
@@ -118,7 +118,7 @@ export const accountColumns = [
   },
 ] satisfies BaseTableColumn<AccountRow>[]
 
-export const statusLabels: Record<string, string> = {
+export const statusLabels: Record<AccountStatus, string> = {
   normal: '正常',
   quota_exhausted: '配额耗尽',
   rate_limited: '限流中',
@@ -126,7 +126,7 @@ export const statusLabels: Record<string, string> = {
   error: '错误',
 }
 
-export const statusTones: Record<string, 'success' | 'danger' | 'warning' | 'info' | 'normal'> = {
+export const statusTones: Record<AccountStatus, 'success' | 'danger' | 'warning' | 'info' | 'normal'> = {
   normal: 'success',
   quota_exhausted: 'warning',
   rate_limited: 'warning',
@@ -144,19 +144,19 @@ export const accountStatusFilterOptions = [
 ]
 
 /** `error` 分类下具体原因的展示文案（对应后端 `errorReason`）。 */
-export const errorReasonLabels: Record<string, string> = {
-  expired: '账号已过期',
-  token_expired: '访问令牌已过期',
-  invalid: '凭据已失效',
-  banned: '账号已封禁',
-  unknown: '状态未知',
+export const errorReasonLabels: Record<AccountErrorReason, string> = {
+  account_unverified: '账号身份尚未确认',
+  access_token_expired: 'Access Token 已过期',
+  credential_expired: '凭据已过期',
+  credential_invalid: '凭据无效',
+  account_banned: '账号不可用或已被封禁',
 }
 
 /**
  * 后端已派生互斥状态（正常 / 配额耗尽 / 限流中 / 已停用 / 错误）；
  * 前端只渲染，不再独立派生。
  */
-export function derivedAccountStatus(row: AccountRow): string {
+export function derivedAccountStatus(row: AccountRow): AccountStatus {
   return row.status
 }
 

@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::{StreamExt as _, stream};
 use gateway_core::engine::credential::{
-    AccountAvailability, CredentialRevision, LoadedCredential, ProviderAccountId,
+    AccountErrorReason, CredentialRevision, CredentialState, LoadedCredential, ProviderAccountId,
 };
 use gateway_core::provider_ports::{
     ProviderCredentialStatePort, ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
@@ -23,9 +23,8 @@ use super::repository::{
     GrokCredentialAdmin, GrokCredentialRepository, GrokCredentialRepositoryError,
 };
 use super::types::{
-    GrokAccountProfile, GrokCredentialAvailability, GrokOAuthSecret,
-    PreparedGrokCredentialRotation, RotateGrokCredential, RotateManagedGrokCredential,
-    UpdateGrokCredentialState,
+    GrokAccountProfile, GrokOAuthSecret, PreparedGrokCredentialRotation, RotateGrokCredential,
+    RotateManagedGrokCredential, UpdateGrokCredentialState,
 };
 use crate::{
     DiscoveryDocument, FailureClass, GrokOAuthClient, OAuthError, RefreshTokenGrant,
@@ -540,7 +539,8 @@ impl GrokCredentialRefreshService {
             return self
                 .persist_terminal_failure(
                     credential,
-                    GrokCredentialAvailability::Expired,
+                    CredentialState::Expired,
+                    AccountErrorReason::CredentialExpired,
                     "refresh_token_expired",
                 )
                 .await;
@@ -549,7 +549,8 @@ impl GrokCredentialRefreshService {
             return self
                 .persist_terminal_failure(
                     credential,
-                    GrokCredentialAvailability::Expired,
+                    CredentialState::Expired,
+                    AccountErrorReason::CredentialExpired,
                     "refresh_recovery_window_exhausted",
                 )
                 .await;
@@ -587,7 +588,8 @@ impl GrokCredentialRefreshService {
             Err(GrokRefreshFailure::InvalidGrant) => {
                 self.persist_terminal_failure(
                     credential,
-                    GrokCredentialAvailability::Expired,
+                    CredentialState::Expired,
+                    AccountErrorReason::CredentialExpired,
                     "refresh_invalid_grant",
                 )
                 .await
@@ -595,7 +597,8 @@ impl GrokCredentialRefreshService {
             Err(GrokRefreshFailure::Banned) => {
                 self.persist_terminal_failure(
                     credential,
-                    GrokCredentialAvailability::Banned,
+                    CredentialState::Banned,
+                    AccountErrorReason::AccountBanned,
                     "account_banned",
                 )
                 .await
@@ -717,7 +720,8 @@ impl GrokCredentialRefreshService {
     async fn persist_terminal_failure(
         &self,
         credential: DueGrokCredential,
-        availability: GrokCredentialAvailability,
+        credential_state: CredentialState,
+        error_reason: AccountErrorReason,
         reason: &str,
     ) -> Result<GrokCredentialRefreshOutcome, GrokCredentialRefreshError> {
         let account_id = credential.account_id.clone();
@@ -737,8 +741,9 @@ impl GrokCredentialRefreshService {
             .update_state(&UpdateGrokCredentialState {
                 account_id: account_id.clone(),
                 expected_revision: credential.credential_revision,
-                availability,
-                availability_reason: Some(reason.to_owned()),
+                credential_state,
+                error_reason: Some(error_reason),
+                error_message: Some(reason.to_owned()),
                 observed_at: Utc::now(),
             })
             .await
@@ -746,7 +751,7 @@ impl GrokCredentialRefreshService {
             Ok(()) => {
                 tracing::warn!(
                     account_id = %account_id,
-                    ?availability,
+                    ?credential_state,
                     reason,
                     access_token_expires_at = ?credential.access_token_expires_at
                         .map(DateTime::<Utc>::from),
@@ -915,14 +920,11 @@ fn account_due(
     policy: ProviderRefreshPolicy,
     now: SystemTime,
 ) -> bool {
-    let availability = account.availability();
     account.enabled()
         && account.has_refresh_token()
         && !matches!(
-            availability,
-            AccountAvailability::Expired
-                | AccountAvailability::Banned
-                | AccountAvailability::Invalid
+            account.credential_state(),
+            CredentialState::Expired | CredentialState::Banned | CredentialState::Invalid
         )
         && (refresh_recovery_window_exhausted(account.access_token_expires_at(), now)
             || (access_token_refresh_due(account.access_token_expires_at(), policy, now)

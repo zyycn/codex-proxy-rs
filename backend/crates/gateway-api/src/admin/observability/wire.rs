@@ -347,14 +347,11 @@ pub struct DashboardAccountRequestBucketView {
 #[serde(rename_all = "camelCase")]
 pub struct DashboardPoolSummaryView {
     pub total: u64,
-    pub active: u64,
-    pub rate_limited: u64,
-    pub expired: u64,
-    pub invalid: u64,
+    pub normal: u64,
     pub quota_exhausted: u64,
-    pub refreshing: Option<u64>,
+    pub rate_limited: u64,
     pub disabled: u64,
-    pub banned: u64,
+    pub error: u64,
 }
 
 /// 同 target 账号调度容量；Redis 未提供聚合事实时运行中槽位保持空值。

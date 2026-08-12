@@ -6,8 +6,9 @@ use std::time::{Duration, SystemTime};
 
 use chrono::Utc;
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountAvailabilityPolicy, AccountCandidate, AccountFeedbackStats,
-    AccountSelectionContext, AccountSelector, ProviderAccount, ProviderAccountId,
+    AccountCandidate, AccountEligibilityPolicy, AccountFeedbackStats, AccountSelectionContext,
+    AccountSelector, CredentialState, ProviderAccount, ProviderAccountId, QuotaAccessState,
+    QuotaEvidence, QuotaState,
 };
 use gateway_core::provider_ports::{
     ProviderCooldown, ProviderCooldownPort, ProviderCooldownScope, ProviderLeaseAcquisition,
@@ -18,7 +19,7 @@ use gateway_core::routing::{ProviderKind, UpstreamModelId};
 
 use super::catalog::{GrokCatalogScope, GrokCredentialCatalogCache, GrokCredentialQuotaService};
 use super::repository::{GrokCredentialRepository, GrokCredentialRepositoryError};
-use super::types::{GrokCredentialAvailability, UpdateGrokCredentialState};
+use super::types::UpdateGrokCredentialState;
 use crate::{
     GrokCredentialFailure, GrokCredentialFeedbackFuture, GrokSessionBinding, GrokSessionSelection,
     GrokSessionSelector, GrokSessionSelectorError, GrokSessionSelectorFuture, SecretValue,
@@ -82,7 +83,7 @@ impl GrokAccountSessionSelector {
         &self,
         request: GrokSessionSelection,
     ) -> Result<SelectedGrokSession, GrokSessionSelectorError> {
-        let diagnostic = request.availability() == AccountAvailabilityPolicy::BypassForDiagnostic;
+        let diagnostic = request.eligibility() == AccountEligibilityPolicy::BypassForDiagnostic;
         let accounts = self
             .repository
             .list_accounts_for_provider()
@@ -177,7 +178,7 @@ impl GrokAccountSessionSelector {
             excluded_accounts: request.excluded_accounts().clone(),
             preferred_account: request.required_account().cloned().or(affinity_account),
             round_robin_cursor: scheduling.round_robin_cursor(),
-            availability: request.availability(),
+            eligibility: request.eligibility(),
         };
         let mut capacity_denied = false;
         let mut retry_after = None;
@@ -363,23 +364,18 @@ impl GrokAccountSessionSelector {
             .await;
     }
 
-    async fn persist_account_failure(
+    async fn persist_quota_failure(
         &self,
         session: &SelectedGrokSession,
-        availability: GrokCredentialAvailability,
-        reason: &'static str,
         observed_at: chrono::DateTime<Utc>,
     ) {
-        let update = |expected_revision| UpdateGrokCredentialState {
-            account_id: session.account_id().clone(),
-            expected_revision,
-            availability,
-            availability_reason: Some(reason.to_owned()),
-            observed_at,
-        };
         match self
             .repository
-            .update_state(&update(session.credential_revision()))
+            .update_quota_access(
+                session.account_id().clone(),
+                session.credential_revision(),
+                QuotaState::exhausted(QuotaEvidence::UsageLimitReached, observed_at.into(), None),
+            )
             .await
         {
             Ok(()) => return,
@@ -410,7 +406,11 @@ impl GrokAccountSessionSelector {
         };
         if let Err(error) = self
             .repository
-            .update_state(&update(current.account.revision()))
+            .update_quota_access(
+                session.account_id().clone(),
+                current.account.revision(),
+                QuotaState::exhausted(QuotaEvidence::UsageLimitReached, observed_at.into(), None),
+            )
             .await
         {
             tracing::warn!(
@@ -450,20 +450,15 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
                 return;
             }
             let observed_at = Utc::now();
-            let persistent = match failure {
+            match failure {
                 GrokCredentialFailure::Unauthorized => {
                     self.record_runtime_cooldown(session, UNAUTHORIZED_COOLDOWN)
                         .await;
-                    return;
                 }
-                GrokCredentialFailure::QuotaExhausted => (
-                    GrokCredentialAvailability::QuotaExhausted,
-                    "upstream_quota_exhausted",
-                ),
-                GrokCredentialFailure::FreeQuotaExhausted => (
-                    GrokCredentialAvailability::QuotaExhausted,
-                    "upstream_free_quota_exhausted",
-                ),
+                GrokCredentialFailure::QuotaExhausted
+                | GrokCredentialFailure::FreeQuotaExhausted => {
+                    self.persist_quota_failure(session, observed_at).await;
+                }
                 // bare 402 没有结构化 quota code，不能证明账号额度耗尽：
                 // 只写短期账号级 runtime cooldown（TransientBackoff），
                 // 不持久化 QuotaExhausted（结构化 QuotaExhausted/FreeQuotaExhausted 走上面）。
@@ -472,7 +467,6 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
                         .unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN)
                         .min(MAX_RATE_LIMIT_COOLDOWN);
                     self.record_runtime_cooldown(session, retry_after).await;
-                    return;
                 }
                 // xAI 免费模型额度按该模型滚动窗口恢复：限流写 model-scoped
                 // runtime cooldown（Redis 跨重启保留），不进入持久化账号状态，
@@ -485,7 +479,6 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
                         bounded_cooldown(retry_after, MODEL_QUOTA_COOLDOWN, MAX_MODEL_COOLDOWN);
                     self.record_model_runtime_cooldown(session, upstream_model, retry_after)
                         .await;
-                    return;
                 }
                 GrokCredentialFailure::ModelAccessDenied {
                     upstream_model,
@@ -498,24 +491,18 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
                     );
                     self.record_model_runtime_cooldown(session, upstream_model, retry_after)
                         .await;
-                    return;
                 }
                 GrokCredentialFailure::RateLimited { retry_after } => {
                     let retry_after = retry_after
                         .unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN)
                         .min(MAX_RATE_LIMIT_COOLDOWN);
                     self.record_runtime_cooldown(session, retry_after).await;
-                    return;
                 }
                 GrokCredentialFailure::StreamInterrupted => {
                     self.record_runtime_cooldown(session, STREAM_INTERRUPTION_COOLDOWN)
                         .await;
-                    return;
                 }
-            };
-            let (availability, reason) = persistent;
-            self.persist_account_failure(session, availability, reason, observed_at)
-                .await;
+            }
         })
     }
 
@@ -531,30 +518,45 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
                 return;
             };
             let account = &current.account;
-            if account.revision() != session.credential_revision()
-                || !account.enabled()
-                || !matches!(
-                    account.availability(),
-                    AccountAvailability::Unknown | AccountAvailability::Expired
-                )
-            {
+            if account.revision() != session.credential_revision() || !account.enabled() {
                 return;
             }
-            if let Err(error) = self
-                .repository
-                .update_state(&UpdateGrokCredentialState {
-                    account_id: account.id().clone(),
-                    expected_revision: account.revision(),
-                    availability: GrokCredentialAvailability::Ready,
-                    availability_reason: None,
-                    observed_at: Utc::now(),
-                })
-                .await
+            let observed_at = Utc::now();
+            if account.credential_state() != CredentialState::Ready
+                && let Err(error) = self
+                    .repository
+                    .update_state(&UpdateGrokCredentialState {
+                        account_id: account.id().clone(),
+                        expected_revision: account.revision(),
+                        credential_state: CredentialState::Ready,
+                        error_reason: None,
+                        error_message: None,
+                        observed_at,
+                    })
+                    .await
             {
                 tracing::warn!(
                     account_id = %account.id(),
                     error = %error,
                     "xAI account state recovery after successful upstream response failed"
+                );
+            }
+            // 已经发出的并发请求可能晚于耗尽事实成功返回；真实成功可以收敛
+            // 该事实，但 selector 不会为恢复探测而放行耗尽账号。
+            if account.quota().access() == QuotaAccessState::Exhausted
+                && let Err(error) = self
+                    .repository
+                    .update_quota_access(
+                        account.id().clone(),
+                        account.revision(),
+                        QuotaState::allowed(observed_at.into()),
+                    )
+                    .await
+            {
+                tracing::warn!(
+                    account_id = %account.id(),
+                    error = %error,
+                    "xAI quota recovery after successful upstream response failed"
                 );
             }
         })

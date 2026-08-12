@@ -8,9 +8,10 @@ use gateway_core::engine::continuation::{
     ContinuationBinding, NativeContinuationPin, PreviousResponseId,
 };
 use gateway_core::engine::credential::{
-    AccountAttemptFeedback, AccountAvailability, AccountFeedbackStats, AccountSelectionPolicy,
-    AccountStateChange, OpaqueProviderData, ProviderAccountId, ProviderAccountStore as _,
-    QuotaObservation, QuotaWriteOutcome, RotationStrategy,
+    AccountAttemptFeedback, AccountErrorReason, AccountFeedbackStats, AccountSelectionPolicy,
+    AccountStateChange, CredentialState, OpaqueProviderData, ProviderAccount, ProviderAccountId,
+    ProviderAccountStore as _, QuotaAccessChange, QuotaAccessState, QuotaEvidence,
+    QuotaObservation, QuotaState, QuotaWriteOutcome, RotationStrategy,
 };
 use gateway_core::engine::{
     AccountAttemptContext, AttemptContext, CancellationToken, ModelRequestId, RequestAttemptContext,
@@ -105,7 +106,6 @@ fn selector_with_affinity(
         leases,
         session_affinity,
         Arc::new(AccountFeedbackStats::default()),
-        true,
         Arc::new(MemoryCooldownPort::new()),
     )
 }
@@ -115,7 +115,6 @@ fn selector_with_runtime(
     leases: Arc<TestLeaseCoordinator>,
     session_affinity: Arc<MemorySessionAffinity>,
     account_feedback: Arc<AccountFeedbackStats>,
-    skip_exhausted: bool,
     cooldowns: Arc<dyn ProviderCooldownPort>,
 ) -> CodexCredentialSelector {
     let profile = CodexWireProfileState::new(CodexWireProfile {
@@ -158,8 +157,40 @@ fn selector_with_runtime(
         agent_identity,
         account_feedback,
         CodexCookiePolicy::official().expect("official cookie policy"),
-        skip_exhausted,
     )
+}
+
+fn persist_credential_state(
+    store: &MemoryAccountStore,
+    account: &ProviderAccount,
+    credential_state: CredentialState,
+) {
+    block_on(store.apply_state_change(AccountStateChange {
+        account_id: account.id().clone(),
+        expected_revision: account.revision(),
+        credential_state,
+        observed_at: SystemTime::now(),
+        error_reason: credential_state.error_reason(),
+        message: None,
+    }))
+    .expect("persist credential state");
+}
+
+fn persist_quota_exhaustion(
+    store: &MemoryAccountStore,
+    account: &ProviderAccount,
+    reset_at: Option<SystemTime>,
+) {
+    block_on(store.apply_quota_access(QuotaAccessChange {
+        account_id: account.id().clone(),
+        expected_revision: account.revision(),
+        state: QuotaState::exhausted(
+            QuotaEvidence::UsageLimitReached,
+            SystemTime::now(),
+            reset_at,
+        ),
+    }))
+    .expect("persist quota exhaustion");
 }
 
 #[test]
@@ -485,7 +516,6 @@ async fn selector_should_keep_a_schedulable_affinity_account_despite_soft_health
         Arc::new(TestLeaseCoordinator::default()),
         affinity,
         Arc::clone(&account_feedback),
-        true,
         Arc::new(MemoryCooldownPort::new()),
     );
     for _ in 0..4 {
@@ -528,16 +558,7 @@ async fn selector_should_escape_a_quota_exhausted_affinity_account() {
     create_account(&store, "acct_first", "at-first");
     create_account(&store, "acct_second", "at-second");
     let first = store.account("acct_first").expect("first account");
-    store
-        .apply_state_change(AccountStateChange {
-            message: None,
-            account_id: first.id().clone(),
-            expected_revision: first.revision(),
-            availability: AccountAvailability::QuotaExhausted,
-            observed_at: SystemTime::now(),
-        })
-        .await
-        .expect("mark first account exhausted");
+    persist_quota_exhaustion(&store, &first, None);
     let affinity = Arc::new(MemorySessionAffinity::default());
     let provider = ProviderKind::new("openai").expect("provider");
     let key = ProviderSessionAffinityKey::try_new("quota-session").expect("affinity key");
@@ -697,13 +718,15 @@ fn credential_expired_failure_marks_unified_account_expired() {
         store
             .account("acct_primary")
             .expect("account")
-            .availability(),
-        AccountAvailability::Expired
+            .credential_state(),
+        CredentialState::Expired
     );
+    let account = store.account("acct_primary").expect("expired account");
     assert_eq!(
-        store.last_error_message("acct_primary").as_deref(),
-        Some("upstream_credential_expired")
+        account.last_error_reason(),
+        Some(AccountErrorReason::AccessTokenExpired)
     );
+    assert_eq!(account.last_error_message(), None);
 }
 
 #[test]
@@ -734,13 +757,13 @@ fn credential_expired_failure_keeps_expired_oauth_for_bounded_refresh_recovery()
         store
             .account("acct_primary")
             .expect("account retained for refresh")
-            .availability(),
-        AccountAvailability::Ready
+            .credential_state(),
+        CredentialState::Ready
     );
 }
 
 #[test]
-fn rate_limited_failure_records_quota_window_without_changing_availability() {
+fn rate_limited_failure_records_runtime_cooldown_without_changing_persisted_facts() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_primary", "at-primary");
     let cooldowns = Arc::new(MemoryCooldownPort::new());
@@ -749,7 +772,6 @@ fn rate_limited_failure_records_quota_window_without_changing_availability() {
         Arc::new(TestLeaseCoordinator::default()),
         Arc::new(MemorySessionAffinity::default()),
         Arc::new(AccountFeedbackStats::default()),
-        true,
         Arc::clone(&cooldowns) as Arc<dyn ProviderCooldownPort>,
     );
     let attempt = attempt(BTreeSet::new());
@@ -774,10 +796,9 @@ fn rate_limited_failure_records_quota_window_without_changing_availability() {
     ))
     .expect("record rate-limit failure");
 
-    // 429 不改变 availability（限流不改变账号可用性），也不污染 quota JSON——
-    // 临时限流写入 Redis 冷却（到期自动解除），额度重置时间保持不变。
     let account = store.account("acct_primary").expect("account");
-    assert_eq!(account.availability(), AccountAvailability::Ready);
+    assert_eq!(account.credential_state(), CredentialState::Ready);
+    assert_eq!(account.quota().access(), QuotaAccessState::Unknown);
     assert!(
         store.quota_json("acct_primary").is_none(),
         "429 must not synthesize quota window"
@@ -800,7 +821,7 @@ async fn usage_limit_exhaustion_marks_quota_exhausted_without_usage_probe() {
         .record_failure(
             &account,
             CodexAccountFailure::UsageLimitExhausted {
-                retry_after: Some(Duration::from_secs(30)),
+                reset_at: Some(SystemTime::now() + Duration::from_secs(30)),
             },
             None,
         )
@@ -808,7 +829,11 @@ async fn usage_limit_exhaustion_marks_quota_exhausted_without_usage_probe() {
         .expect("record usage-limit exhaustion");
 
     let account = store.account("acct_primary").expect("persisted account");
-    assert_eq!(account.availability(), AccountAvailability::QuotaExhausted);
+    assert_eq!(account.quota().access(), QuotaAccessState::Exhausted);
+    assert_eq!(
+        account.quota().evidence(),
+        Some(QuotaEvidence::UsageLimitReached)
+    );
     assert_eq!(store.quota_reads(), 0);
 }
 
@@ -817,14 +842,7 @@ fn rate_limited_failure_does_not_downgrade_persisted_quota_exhaustion() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_primary", "at-primary");
     let account = store.account("acct_primary").expect("account");
-    block_on(store.apply_state_change(AccountStateChange {
-        message: None,
-        account_id: account.id().clone(),
-        expected_revision: account.revision(),
-        availability: AccountAvailability::QuotaExhausted,
-        observed_at: SystemTime::now(),
-    }))
-    .expect("mark exhausted");
+    persist_quota_exhaustion(&store, &account, None);
     let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
 
     block_on(selector.record_failure(
@@ -836,13 +854,13 @@ fn rate_limited_failure_does_not_downgrade_persisted_quota_exhaustion() {
     ))
     .expect("record rate-limit failure");
 
-    // 429 不写 availability，402 的 QuotaExhausted 保持不变。
     assert_eq!(
         store
             .account("acct_primary")
             .expect("persisted account")
-            .availability(),
-        AccountAvailability::QuotaExhausted
+            .quota()
+            .access(),
+        QuotaAccessState::Exhausted
     );
 }
 
@@ -857,7 +875,6 @@ fn rate_limited_failure_does_not_consult_stale_quota_snapshot() {
         Arc::new(TestLeaseCoordinator::default()),
         Arc::new(MemorySessionAffinity::default()),
         Arc::new(AccountFeedbackStats::default()),
-        true,
         Arc::clone(&cooldowns) as Arc<dyn ProviderCooldownPort>,
     );
 
@@ -874,8 +891,8 @@ fn rate_limited_failure_does_not_consult_stale_quota_snapshot() {
         store
             .account("acct_primary")
             .expect("persisted account")
-            .availability(),
-        AccountAvailability::Ready
+            .credential_state(),
+        CredentialState::Ready
     );
     // 429 临时限流写入 Redis 冷却，不读写 quota JSON。
     assert_eq!(store.quota_reads(), 0);
@@ -891,14 +908,7 @@ fn rate_limited_failure_does_not_overwrite_stale_authentication_state() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_primary", "at-primary");
     let account = store.account("acct_primary").expect("account");
-    block_on(store.apply_state_change(AccountStateChange {
-        message: None,
-        account_id: account.id().clone(),
-        expected_revision: account.revision(),
-        availability: AccountAvailability::Invalid,
-        observed_at: SystemTime::now(),
-    }))
-    .expect("mark account invalid");
+    persist_credential_state(&store, &account, CredentialState::Invalid);
     let current = store.account("acct_primary").expect("invalid account");
     let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
 
@@ -911,34 +921,26 @@ fn rate_limited_failure_does_not_overwrite_stale_authentication_state() {
     ))
     .expect("record rate-limit failure");
 
-    // 429 不写 availability（限流不改变账号可用性），认证终态保持不变。
     assert_eq!(
         store
             .account("acct_primary")
             .expect("persisted account")
-            .availability(),
-        AccountAvailability::Invalid
+            .credential_state(),
+        CredentialState::Invalid
     );
 }
 
 #[test]
 fn successful_upstream_response_recovers_non_quota_terminal_states() {
     for stale in [
-        AccountAvailability::Expired,
-        AccountAvailability::Invalid,
-        AccountAvailability::Banned,
+        CredentialState::Expired,
+        CredentialState::Invalid,
+        CredentialState::Banned,
     ] {
         let store = Arc::new(MemoryAccountStore::default());
         create_account(&store, "acct_primary", "at-primary");
         let account = store.account("acct_primary").expect("account");
-        block_on(store.apply_state_change(AccountStateChange {
-            message: None,
-            account_id: account.id().clone(),
-            expected_revision: account.revision(),
-            availability: stale,
-            observed_at: SystemTime::now(),
-        }))
-        .expect("seed stale state");
+        persist_credential_state(&store, &account, stale);
         let current = store.account("acct_primary").expect("stale account");
         let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
 
@@ -948,11 +950,32 @@ fn successful_upstream_response_recovers_non_quota_terminal_states() {
             store
                 .account("acct_primary")
                 .expect("recovered account")
-                .availability(),
-            AccountAvailability::Ready,
+                .credential_state(),
+            CredentialState::Ready,
             "stale state {stale:?}",
         );
     }
+}
+
+#[test]
+fn elapsed_quota_reset_remains_blocked_until_authoritative_recovery() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_primary", "at-primary");
+    let account = store.account("acct_primary").expect("account");
+    persist_quota_exhaustion(
+        &store,
+        &account,
+        Some(SystemTime::now() - Duration::from_secs(1)),
+    );
+    let blocked = store.account("acct_primary").expect("blocked account");
+    assert!(blocked.quota().is_exhausted());
+    assert_eq!(
+        blocked
+            .status_projection(SystemTime::now(), None)
+            .status
+            .as_str(),
+        "quota_exhausted"
+    );
 }
 
 #[test]
@@ -990,52 +1013,13 @@ fn rate_limited_failures_for_distinct_accounts_do_not_conflict() {
             store
                 .account("acct_first")
                 .expect("persisted first account")
-                .availability(),
+                .credential_state(),
             store
                 .account("acct_second")
                 .expect("persisted second account")
-                .availability(),
+                .credential_state(),
         ],
-        [AccountAvailability::Ready; 2]
-    );
-}
-
-#[test]
-fn selector_keeps_a_quota_exhausted_account_eligible_when_configured_not_to_skip_it() {
-    let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_primary", "at-primary");
-    let strict_selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
-    let account = store.account("acct_primary").expect("account");
-    block_on(strict_selector.record_failure(&account, CodexAccountFailure::QuotaExhausted, None))
-        .expect("mark account exhausted");
-
-    let selector = selector_with_runtime(
-        &store,
-        Arc::new(TestLeaseCoordinator::default()),
-        Arc::new(MemorySessionAffinity::default()),
-        Arc::new(AccountFeedbackStats::default()),
-        false,
-        Arc::new(MemoryCooldownPort::new()),
-    );
-    let request_url =
-        Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("request URL");
-    let request_attempt = attempt(BTreeSet::new());
-
-    let lease = block_on(selector.select(&SelectCodexCredential {
-        upstream_model: "gpt-5.4",
-        request_url: &request_url,
-        attempt: &request_attempt,
-        session_affinity_key: None,
-    }))
-    .expect("select quota exhausted account when skipping is disabled");
-
-    assert_eq!(lease.account_id().as_str(), "acct_primary");
-    assert_eq!(
-        store
-            .account("acct_primary")
-            .expect("persisted account")
-            .availability(),
-        AccountAvailability::QuotaExhausted
+        [CredentialState::Ready; 2]
     );
 }
 
@@ -1054,7 +1038,6 @@ fn native_continuation_surfaces_the_original_accounts_quota_status_to_the_coordi
         Arc::new(TestLeaseCoordinator::default()),
         Arc::new(MemorySessionAffinity::default()),
         Arc::new(AccountFeedbackStats::default()),
-        false,
         Arc::new(MemoryCooldownPort::new()),
     );
     let continuation = NativeContinuationPin::new(
@@ -1108,14 +1091,13 @@ fn native_continuation_surfaces_the_original_accounts_quota_signal_to_the_coordi
             "primary_window": {"used_percent": 98}
         }
     });
+    let observed_at = SystemTime::now();
     let outcome = block_on(store.compare_and_swap_quota(QuotaObservation {
         account_id: original.id().clone(),
         expected_revision: original.revision(),
-        quota: Some(OpaqueProviderData::new(
-            quota.as_object().expect("quota object").clone(),
-        )),
-        observed_at: Some(SystemTime::now()),
-        limit_reached: None,
+        quota: OpaqueProviderData::new(quota.as_object().expect("quota object").clone()),
+        observed_at,
+        state: QuotaState::exhausted(QuotaEvidence::ProviderDenied, observed_at, None),
     }))
     .expect("persist quota signal");
     assert!(matches!(outcome, QuotaWriteOutcome::Updated));
@@ -1125,7 +1107,6 @@ fn native_continuation_surfaces_the_original_accounts_quota_signal_to_the_coordi
         Arc::new(TestLeaseCoordinator::default()),
         Arc::new(MemorySessionAffinity::default()),
         Arc::new(AccountFeedbackStats::default()),
-        false,
         Arc::new(MemoryCooldownPort::new()),
     );
     let continuation = NativeContinuationPin::new(
@@ -1194,8 +1175,8 @@ fn identity_verification_failure_isolates_only_selected_account() {
         store
             .account(lease.account_id().as_str())
             .expect("selected account")
-            .availability(),
-        AccountAvailability::Invalid
+            .credential_state(),
+        CredentialState::Invalid
     );
     let other = if lease.account_id().as_str() == "acct_primary" {
         "acct_other"
@@ -1203,13 +1184,16 @@ fn identity_verification_failure_isolates_only_selected_account() {
         "acct_primary"
     };
     assert_eq!(
-        store.account(other).expect("other account").availability(),
-        AccountAvailability::Ready
+        store
+            .account(other)
+            .expect("other account")
+            .credential_state(),
+        CredentialState::Ready
     );
 }
 
 #[test]
-fn cloudflare_challenge_does_not_change_availability() {
+fn cloudflare_challenge_does_not_change_persisted_account_facts() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_primary", "at-primary");
     let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
@@ -1226,7 +1210,6 @@ fn cloudflare_challenge_does_not_change_availability() {
         )
         .expect("select account");
 
-    // Cloudflare 挑战只走内存退避表，不写 availability（限流不改变账号可用性）。
     block_on(selector.record_failure(
         lease.account(),
         CodexAccountFailure::CloudflareChallenge { retry_after: None },
@@ -1238,8 +1221,8 @@ fn cloudflare_challenge_does_not_change_availability() {
         store
             .account("acct_primary")
             .expect("account")
-            .availability(),
-        AccountAvailability::Ready
+            .credential_state(),
+        CredentialState::Ready
     );
     block_on(selector.record_success(lease.account(), None));
 }
@@ -1279,15 +1262,15 @@ fn repeated_cloudflare_path_block_marks_only_the_affected_account_invalid() {
         store
             .account("acct_primary")
             .expect("affected account")
-            .availability(),
-        AccountAvailability::Invalid
+            .credential_state(),
+        CredentialState::Invalid
     );
     assert_eq!(
         store
             .account("acct_other")
             .expect("other account")
-            .availability(),
-        AccountAvailability::Ready
+            .credential_state(),
+        CredentialState::Ready
     );
 }
 
@@ -1416,7 +1399,8 @@ fn response_cookie_rotation_returns_a_current_account_for_later_fenced_writes() 
         store
             .account("acct_primary")
             .expect("updated account")
-            .availability(),
-        AccountAvailability::QuotaExhausted
+            .quota()
+            .access(),
+        QuotaAccessState::Exhausted
     );
 }

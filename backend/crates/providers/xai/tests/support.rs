@@ -8,10 +8,10 @@ use std::time::{Duration, SystemTime};
 use async_trait::async_trait;
 use chrono::Utc;
 use gateway_core::engine::credential::{
-    AccountAvailability, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
-    CredentialRevision, LoadedCredential, NewProviderAccount, PlaintextCredential, ProviderAccount,
-    ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate, QuotaObservation,
-    QuotaWriteOutcome,
+    AccountErrorReason, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
+    CredentialRevision, CredentialState, LoadedCredential, NewProviderAccount, PlaintextCredential,
+    ProviderAccount, ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
+    QuotaAccessChange, QuotaObservation, QuotaState, QuotaWriteOutcome,
 };
 use gateway_core::error::{StoreError, StoreErrorKind};
 use gateway_core::provider_ports::{
@@ -23,11 +23,10 @@ use gateway_core::provider_ports::{
 use gateway_core::routing::ProviderKind;
 use provider_xai::{
     CreateGrokCredential, GROK_BILLING_URL, GrokAccountProfile, GrokBillingTransport,
-    GrokCatalogCacheError, GrokCatalogScope, GrokCredentialAdmin, GrokCredentialAvailability,
-    GrokCredentialCatalogCache, GrokCredentialCatalogService, GrokCredentialQuotaService,
-    GrokCredentialRepository, GrokCredentialRepositoryError, GrokEndpointPolicy,
-    GrokModelCatalogTransport, GrokOAuthSecret, GrokPlanCatalog, GrokReqwestTransportBuildError,
-    SecretValue, XaiConfig, XaiWireProfileState,
+    GrokCatalogCacheError, GrokCatalogScope, GrokCredentialAdmin, GrokCredentialCatalogCache,
+    GrokCredentialCatalogService, GrokCredentialQuotaService, GrokCredentialRepository,
+    GrokCredentialRepositoryError, GrokEndpointPolicy, GrokModelCatalogTransport, GrokOAuthSecret,
+    GrokPlanCatalog, GrokReqwestTransportBuildError, SecretValue, XaiConfig, XaiWireProfileState,
 };
 use reqwest::Client;
 use reqwest::redirect::Policy;
@@ -194,7 +193,6 @@ struct StoredAccount {
     account: ProviderAccount,
     credential: PlaintextCredential,
     quota: Option<QuotaObservation>,
-    last_error_message: Option<String>,
 }
 
 #[derive(Default)]
@@ -218,7 +216,7 @@ impl MemoryProviderAccountStore {
     pub fn last_error_message(&self, id: &ProviderAccountId) -> Option<String> {
         lock(&self.accounts)
             .get(id)
-            .and_then(|stored| stored.last_error_message.clone())
+            .and_then(|stored| stored.account.last_error_message().map(str::to_owned))
     }
 
     pub fn credential(&self, id: &ProviderAccountId) -> Option<PlaintextCredential> {
@@ -253,7 +251,6 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
                 account: account.account,
                 credential: account.credential,
                 quota: None,
-                last_error_message: None,
             },
         );
         Ok(())
@@ -335,7 +332,10 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
             AccountReplacement {
                 revision: next,
                 access_token_expires_at,
-                availability: stored.account.availability(),
+                credential_state: stored.account.credential_state(),
+                quota: stored.account.quota(),
+                last_error_reason: stored.account.last_error_reason(),
+                last_error_message: stored.account.last_error_message().map(str::to_owned),
                 enabled: stored.account.enabled(),
                 has_refresh_token,
                 next_refresh_at,
@@ -372,7 +372,31 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
         if stored.account.revision() != observation.expected_revision {
             return Ok(QuotaWriteOutcome::Conflict);
         }
+        let quota = observation.state;
         stored.quota = Some(observation);
+        stored.account = rebuild_account(
+            &stored.account,
+            AccountReplacement::preserving(&stored.account).with_quota(quota),
+        );
+        Ok(QuotaWriteOutcome::Updated)
+    }
+
+    async fn apply_quota_access(
+        &self,
+        change: QuotaAccessChange,
+    ) -> Result<QuotaWriteOutcome, StoreError> {
+        let mut accounts = lock(&self.accounts);
+        let stored = accounts.get_mut(&change.account_id).ok_or_else(invalid)?;
+        if stored.account.revision() != change.expected_revision {
+            return Ok(QuotaWriteOutcome::Conflict);
+        }
+        stored.account = rebuild_account(
+            &stored.account,
+            AccountReplacement::preserving(&stored.account).with_quota(change.state),
+        );
+        if let Some(observation) = &mut stored.quota {
+            observation.state = change.state;
+        }
         Ok(QuotaWriteOutcome::Updated)
     }
 
@@ -387,7 +411,10 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
             AccountReplacement {
                 revision: stored.account.revision(),
                 access_token_expires_at: stored.account.access_token_expires_at(),
-                availability: change.availability,
+                credential_state: change.credential_state,
+                quota: stored.account.quota(),
+                last_error_reason: change.error_reason,
+                last_error_message: change.message.clone(),
                 enabled: stored.account.enabled(),
                 has_refresh_token: stored.account.has_refresh_token(),
                 next_refresh_at: stored.account.next_refresh_at(),
@@ -396,11 +423,6 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
                 plan_type: stored.account.plan_type().map(str::to_owned),
             },
         );
-        if change.availability == AccountAvailability::Ready {
-            stored.last_error_message = None;
-        } else if let Some(message) = change.message {
-            stored.last_error_message = Some(message);
-        }
         Ok(())
     }
 
@@ -412,7 +434,10 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
             AccountReplacement {
                 revision: stored.account.revision(),
                 access_token_expires_at: stored.account.access_token_expires_at(),
-                availability: stored.account.availability(),
+                credential_state: stored.account.credential_state(),
+                quota: stored.account.quota(),
+                last_error_reason: stored.account.last_error_reason(),
+                last_error_message: stored.account.last_error_message().map(str::to_owned),
                 enabled: stored.account.enabled(),
                 has_refresh_token: stored.account.has_refresh_token(),
                 next_refresh_at: stored.account.next_refresh_at(),
@@ -436,7 +461,10 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
             AccountReplacement {
                 revision: stored.account.revision(),
                 access_token_expires_at: stored.account.access_token_expires_at(),
-                availability: stored.account.availability(),
+                credential_state: stored.account.credential_state(),
+                quota: stored.account.quota(),
+                last_error_reason: stored.account.last_error_reason(),
+                last_error_message: stored.account.last_error_message().map(str::to_owned),
                 enabled,
                 has_refresh_token: stored.account.has_refresh_token(),
                 next_refresh_at: stored.account.next_refresh_at(),
@@ -457,13 +485,40 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
 struct AccountReplacement {
     revision: CredentialRevision,
     access_token_expires_at: Option<SystemTime>,
-    availability: AccountAvailability,
+    credential_state: CredentialState,
+    quota: QuotaState,
+    last_error_reason: Option<AccountErrorReason>,
+    last_error_message: Option<String>,
     enabled: bool,
     has_refresh_token: bool,
     next_refresh_at: Option<SystemTime>,
     name: String,
     email: Option<String>,
     plan_type: Option<String>,
+}
+
+impl AccountReplacement {
+    fn preserving(account: &ProviderAccount) -> Self {
+        Self {
+            revision: account.revision(),
+            access_token_expires_at: account.access_token_expires_at(),
+            credential_state: account.credential_state(),
+            quota: account.quota(),
+            last_error_reason: account.last_error_reason(),
+            last_error_message: account.last_error_message().map(str::to_owned),
+            enabled: account.enabled(),
+            has_refresh_token: account.has_refresh_token(),
+            next_refresh_at: account.next_refresh_at(),
+            name: account.name().to_owned(),
+            email: account.email().map(str::to_owned),
+            plan_type: account.plan_type().map(str::to_owned),
+        }
+    }
+
+    fn with_quota(mut self, quota: QuotaState) -> Self {
+        self.quota = quota;
+        self
+    }
 }
 
 fn rebuild_account(previous: &ProviderAccount, replacement: AccountReplacement) -> ProviderAccount {
@@ -481,7 +536,13 @@ fn rebuild_account(previous: &ProviderAccount, replacement: AccountReplacement) 
         previous.upstream_account_id().map(str::to_owned),
         replacement.plan_type,
     )
-    .with_runtime_state(replacement.enabled, replacement.availability)
+    .with_account_facts(
+        replacement.enabled,
+        replacement.credential_state,
+        replacement.quota,
+        replacement.last_error_reason,
+        replacement.last_error_message,
+    )
     .with_refresh_schedule(replacement.has_refresh_token, replacement.next_refresh_at)
 }
 
@@ -549,8 +610,9 @@ pub fn create_input(suffix: &str, subject: &str) -> CreateGrokCredential {
         },
         account: profile(subject),
         enabled: true,
-        initial_availability: GrokCredentialAvailability::Unknown,
-        initial_availability_reason: None,
+        initial_credential_state: CredentialState::Unknown,
+        initial_error_reason: None,
+        initial_error_message: None,
     }
 }
 

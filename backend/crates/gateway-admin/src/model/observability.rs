@@ -439,25 +439,15 @@ pub struct RequestMetricPoint {
     pub costs: Vec<CurrencyCost>,
 }
 
-/// 账号池容量统计。
-///
-/// 首页概览的 `unavailable` 表示不可参与调度，包含配额耗尽及过期、禁用和封禁账号。
-///
-/// `quota_exhausted`（402 确认耗尽）与 `rate_limited`（429 限流中）单列，
-/// 以便状态详情展示和诊断。
+/// 账号池的统一五态统计。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AccountPoolMetrics {
     pub total: u64,
-    pub enabled: u64,
-    pub unavailable: u64,
-    pub active: u64,
-    pub rate_limited: u64,
-    pub expired: u64,
-    pub invalid: u64,
+    pub normal: u64,
     pub quota_exhausted: u64,
-    pub refreshing: Option<u64>,
+    pub rate_limited: u64,
     pub disabled: u64,
-    pub banned: u64,
+    pub error: u64,
 }
 
 /// Dashboard 中一个账号的模型级用量事实。
@@ -488,7 +478,7 @@ pub struct DashboardAccountRequestBucket {
     pub request_count: u64,
 }
 
-/// Dashboard 中一个账号的完整用量与公共状态事实。
+/// Dashboard 中一个账号的完整用量事实。
 #[derive(Debug, Clone, PartialEq)]
 pub struct DashboardAccountUsage {
     pub account_id: String,
@@ -497,8 +487,6 @@ pub struct DashboardAccountUsage {
     pub name: String,
     pub email: Option<String>,
     pub plan_type: Option<String>,
-    pub enabled: bool,
-    pub availability: String,
     pub request_count: u64,
     pub success_count: u64,
     pub input_tokens: Option<u64>,

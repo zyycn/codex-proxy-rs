@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime};
 use futures::future::BoxFuture;
 
 use crate::engine::credential::{
-    AccountAvailability, AccountFeedbackStats, AccountRuntimeSignals, CredentialRevision,
+    AccountFeedbackStats, AccountRuntimeSignals, CredentialRevision, CredentialState,
     OpaqueProviderData, ProviderAccountId, ProviderAccountStore,
 };
 use crate::error::{IdentifierError, validate_text};
@@ -411,7 +411,7 @@ pub struct ProviderCredentialState {
     account_id: ProviderAccountId,
     credential_revision: CredentialRevision,
     enabled: bool,
-    availability: AccountAvailability,
+    credential_state: CredentialState,
     observed_at: SystemTime,
 }
 
@@ -421,14 +421,14 @@ impl ProviderCredentialState {
         account_id: ProviderAccountId,
         credential_revision: CredentialRevision,
         enabled: bool,
-        availability: AccountAvailability,
+        credential_state: CredentialState,
         observed_at: SystemTime,
     ) -> Self {
         Self {
             account_id,
             credential_revision,
             enabled,
-            availability,
+            credential_state,
             observed_at,
         }
     }
@@ -449,8 +449,8 @@ impl ProviderCredentialState {
     }
 
     #[must_use]
-    pub const fn availability(&self) -> AccountAvailability {
-        self.availability
+    pub const fn credential_state(&self) -> CredentialState {
+        self.credential_state
     }
 
     #[must_use]

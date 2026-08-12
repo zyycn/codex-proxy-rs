@@ -112,7 +112,7 @@ OpenAI 路径保留客户端 Responses wire 语义：请求 body 的未知字段
 账号列表支持以下稳定值：
 
 - `provider`: `all`、`openai`、`xai`；
-- `status`: `active`、`expired`、`quota_exhausted`、`disabled`、`banned`；
+- `status`: `normal`、`quota_exhausted`、`rate_limited`、`disabled`、`error`；
 - `sortBy`: `email`、`status`、`planType`、`usage`、`lastUsedAt`、`expiresAt`；
 - `sortDirection`: `asc`、`desc`。
 
@@ -184,13 +184,19 @@ OAuth start 使用：
   但上游 authorization code 本身通常只能交换一次；已完成过 token exchange 时应重新创建 OAuth flow。
 - `GET /accounts/quota` 只读取最后一次落库快照；`POST /accounts/quota/refresh` 才访问上游。access token
   已过期时，额度刷新要求先走 credential 刷新或重新授权，不会拿过期 token 探测额度。
-- 成功额度观测会 revision-fenced 写入 quota，并在 `active` 与 `quota_exhausted` 等额度所属状态间同步；
-  不会清除 `expired`、`banned` 等 credential/封禁终态。额度接口的 401/403 也不足以判定 refresh token
-  永久失效，credential 终态只由 OAuth refresh 的明确永久错误写入。
+- 成功额度观测会 revision-fenced 写入 quota；明确 `Allowed` 投影为 `normal`，明确耗尽投影为
+  `quota_exhausted`。额度观测不会清除凭据过期、无效或封禁事实；这些事实统一投影为 `error`，并由
+  `errorReason` 区分。额度接口的 401/403 也不足以判定 refresh token 永久失效，credential 终态只由
+  OAuth refresh 的明确永久错误写入。
 - 正常 Responses 请求会解析上游响应的 rate-limit headers，合并进同一 quota 快照并同步状态。Free、
   K12 等套餐共用该状态机；套餐只参与账号展示和按套餐隔离的模型目录 cache，不存在 K12 专属额度路径。
-- 账号页没有定时静默轮询。手工额度刷新完成后页面会重新读取该账号；请求驱动或后台任务产生的状态
-  变化，需要下一次显式查询账号列表后才会显示。
+- 账号展开区的 Token 结构和模型排行使用代表性账号级额度窗口聚合，查询边界严格为
+  `[resetAt - windowSeconds, resetAt)`；额度刷新若返回了更早的重置时间，会按新边界重新聚合。无法取得
+  完整窗口边界或只有模型专属额度时显示无数据，不回退成历史累计。金额原值保持完整精度，USD 展示值
+  小于 1 美元时最多保留四位小数，其余保留两位。
+- 账号页没有定时静默轮询。手工额度刷新只替换响应中的账号行并同步状态汇总，不触发整页 loading；若
+  新状态不符合当前筛选，该行从当前页移除。请求驱动或后台任务产生的状态变化，需要下一次显式查询账号
+  列表后才会显示。
 
 ## 6. Client Key
 

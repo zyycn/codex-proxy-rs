@@ -1,11 +1,14 @@
 //! Pg 观测 adapter：实现 `ObservabilityRepository` 与 `AdminObservabilityStore`。
 
-use std::sync::Arc;
-use std::time::SystemTime;
-
 use gateway_core::provider_ports::ProviderCooldownPort;
+use std::sync::Arc;
 
 use super::*;
+
+use crate::postgres::{
+    PgProviderAccountRepository, ProviderAccountRepository, account_status_projection,
+    load_rate_limited_until,
+};
 
 use crate::redis::{CredentialLeaseRepository as _, RedisCredentialLeaseRepository};
 
@@ -21,73 +24,48 @@ impl PgObservabilityRepository {
         Self { pool, cooldowns }
     }
 
-    /// 账号池指标：SQL 聚合后，仅用 Redis 429 冷却重分类仍可调度的 ready 账号。
-    /// 冷却中从 `active` 或 `quota_exhausted` 移到 `rate_limited`；冷却不可用时保留 SQL 分类。
-    async fn provider_account_metrics_with_cooldowns(
+    /// 从账号事实和当前冷却一次性派生 Dashboard 五态；不在 SQL 中复制状态机。
+    async fn account_status_snapshot(
         &self,
         observed_at: DateTime<Utc>,
-    ) -> StoreResult<ProviderAccountMetrics> {
-        let base = provider_account_metrics(&self.pool, observed_at).await?;
-        let Some(cooldowns) = &self.cooldowns else {
-            return Ok(base);
+    ) -> StoreResult<(ProviderAccountMetrics, Vec<String>)> {
+        let accounts = PgProviderAccountRepository::new(self.pool.clone())
+            .list_provider_accounts(None, true)
+            .await?;
+        let now = observed_at.into();
+        let rate_limited_until =
+            load_rate_limited_until(self.cooldowns.as_deref(), &accounts, now).await;
+        let mut metrics = ProviderAccountMetrics {
+            total: u64::try_from(accounts.len()).unwrap_or(u64::MAX),
+            ..ProviderAccountMetrics::default()
         };
-        let candidates = schedulable_metric_candidates(&self.pool, observed_at).await?;
-        if candidates.is_empty() {
-            return Ok(base);
-        }
-        // Redis 只能把 SQL 已归入 active/quota_exhausted 的候选移到冷却桶；
-        // 其余状态不重建，避免 Redis 失败或脏 ID 时丢失持久化计数。
-        let mut active = base.active;
-        let mut rate_limited = base.rate_limited;
-        let mut quota_exhausted = base.quota_exhausted;
-        let now = SystemTime::now();
-        for (account_id, revision, quota_reached) in candidates {
-            let Ok(account_id) =
-                gateway_core::engine::credential::ProviderAccountId::new(account_id)
-            else {
-                continue;
-            };
-            let cooling = cooldowns
-                .read(&account_id)
-                .await
-                .ok()
-                .flatten()
-                .filter(|cooldown| cooldown.credential_revision().get() as i64 == revision)
-                .filter(|cooldown| cooldown.until() > now)
-                .is_some();
-            if !cooling {
-                continue;
-            }
-            if quota_reached {
-                if quota_exhausted == 0 {
-                    continue;
+        let mut normal_account_ids = Vec::new();
+        for account in &accounts {
+            let projection = account_status_projection(
+                account,
+                now,
+                rate_limited_until.get(&account.id).copied(),
+            );
+            match projection.status {
+                gateway_core::engine::credential::AccountStatus::Normal => {
+                    metrics.normal = metrics.normal.saturating_add(1);
+                    normal_account_ids.push(account.id.clone());
                 }
-                quota_exhausted -= 1;
-            } else {
-                if active == 0 {
-                    continue;
+                gateway_core::engine::credential::AccountStatus::QuotaExhausted => {
+                    metrics.quota_exhausted = metrics.quota_exhausted.saturating_add(1);
                 }
-                active -= 1;
+                gateway_core::engine::credential::AccountStatus::RateLimited => {
+                    metrics.rate_limited = metrics.rate_limited.saturating_add(1);
+                }
+                gateway_core::engine::credential::AccountStatus::Disabled => {
+                    metrics.disabled = metrics.disabled.saturating_add(1);
+                }
+                gateway_core::engine::credential::AccountStatus::Error => {
+                    metrics.error = metrics.error.saturating_add(1);
+                }
             }
-            rate_limited += 1;
         }
-        Ok(ProviderAccountMetrics {
-            total: base.total,
-            enabled: base.enabled,
-            unavailable: rate_limited
-                + quota_exhausted
-                + base.expired
-                + base.invalid
-                + base.disabled
-                + base.banned,
-            active,
-            rate_limited,
-            expired: base.expired,
-            invalid: base.invalid,
-            quota_exhausted,
-            disabled: base.disabled,
-            banned: base.banned,
-        })
+        Ok((metrics, normal_account_ids))
     }
 }
 
@@ -145,9 +123,7 @@ impl ObservabilityRepository for PgObservabilityRepository {
             attempt_metrics(&self.pool, range, &filter),
             dashboard_totals(&self.pool),
         )?;
-        let provider_accounts = self
-            .provider_account_metrics_with_cooldowns(range.end)
-            .await?;
+        let (provider_accounts, _) = self.account_status_snapshot(range.end).await?;
         let (trend, account_usage, recent_requests) = futures::try_join!(
             request_metric_series(&self.pool, range, &filter),
             provider_account_usage(&self.pool, account_usage_query),
@@ -252,12 +228,14 @@ impl AdminObservabilityStore for PgAdminObservabilityStore {
         &self,
         observed_at: DateTime<Utc>,
     ) -> AdminStoreResult<Option<admin_observability::DashboardRuntimeSlots>> {
-        let active_account_ids = active_provider_account_ids(&self.repository.pool, observed_at)
+        let (_, normal_account_ids) = self
+            .repository
+            .account_status_snapshot(observed_at)
             .await
             .map_err(observability_error)?;
-        let active_accounts = u64::try_from(active_account_ids.len())
+        let active_accounts = u64::try_from(normal_account_ids.len())
             .map_err(|_| observability_error(invalid("active account count overflows u64")))?;
-        if active_account_ids.is_empty() {
+        if normal_account_ids.is_empty() {
             return Ok(Some(admin_observability::DashboardRuntimeSlots {
                 active_accounts,
                 used_slots: Some(0),
@@ -267,7 +245,7 @@ impl AdminObservabilityStore for PgAdminObservabilityStore {
             return Ok(None);
         };
         let signals = match runtime_signals
-            .credential_runtime_signals(&active_account_ids)
+            .credential_runtime_signals(&normal_account_ids)
             .await
         {
             Ok(signals) => signals,

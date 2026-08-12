@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { dashboardSnapshotView, MetricTone } from '../composables/presenter'
-import { CircleCheck, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
+import { CircleCheck, CircleOff, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
 import { clamp } from 'es-toolkit'
 
 import { computed } from 'vue'
@@ -82,17 +82,19 @@ const accountStatusCounts = computed(() => {
   const p = props.pool
   if (!p)
     return null
-  const active = p.active ?? 0
-  const refreshing = p.refreshing ?? 0
-  const quotaLimited = (p.rateLimited ?? 0) + (p.quotaExhausted ?? 0)
-  const pending = (p.expired ?? 0) + (p.invalid ?? 0) + (p.disabled ?? 0) + (p.banned ?? 0)
+  const normal = p.normal ?? 0
+  const quotaExhausted = p.quotaExhausted ?? 0
+  const rateLimited = p.rateLimited ?? 0
+  const disabled = p.disabled ?? 0
+  const error = p.error ?? 0
   return {
     total: p.total,
-    active,
-    refreshing,
-    quotaLimited,
-    pending,
-    unavailable: quotaLimited + pending,
+    normal,
+    quotaExhausted,
+    rateLimited,
+    disabled,
+    error,
+    unavailable: quotaExhausted + rateLimited + disabled + error,
   }
 })
 
@@ -101,54 +103,58 @@ const statusRows = computed(() => {
   const counts = accountStatusCounts.value
   if (!p || !counts) {
     return [
-      { label: '活跃账号', description: '暂无账号池观测', value: '—', tone: 'success', icon: CircleCheck },
-      { label: '刷新中', description: '暂无账号池观测', value: '—', tone: 'normal', icon: RefreshCw },
-      { label: '额度受限', description: '暂无账号池观测', value: '—', tone: 'warning', icon: TriangleAlert },
-      { label: '待处理', description: '暂无账号池观测', value: '—', tone: 'danger', icon: ShieldAlert },
+      { label: '正常', description: '暂无账号池观测', value: '—', tone: 'success', icon: CircleCheck },
+      { label: '配额耗尽', description: '暂无账号池观测', value: '—', tone: 'warning', icon: TriangleAlert },
+      { label: '限流中', description: '暂无账号池观测', value: '—', tone: 'normal', icon: RefreshCw },
+      { label: '已停用', description: '暂无账号池观测', value: '—', tone: 'normal', icon: CircleOff },
+      { label: '错误', description: '暂无账号池观测', value: '—', tone: 'danger', icon: ShieldAlert },
     ]
   }
-  const expired = p?.expired ?? 0
-  const invalid = p?.invalid ?? 0
-  const disabled = p?.disabled ?? 0
-  const banned = p?.banned ?? 0
 
   return [
     {
-      label: '活跃账号',
-      description: '可直接参与调度',
-      value: String(counts.active),
+      label: '正常',
+      description: '账号当前可用',
+      value: String(counts.normal),
       tone: 'success',
       icon: CircleCheck,
     },
     {
-      label: '刷新中',
-      description: '令牌自动刷新中',
-      value: String(counts.refreshing),
-      tone: 'normal',
-      icon: RefreshCw,
-    },
-    {
-      label: '额度受限',
-      description: '配额耗尽与限流中',
-      value: String(counts.quotaLimited),
+      label: '配额耗尽',
+      description: '账号额度已耗尽',
+      value: String(counts.quotaExhausted),
       tone: 'warning',
       icon: TriangleAlert,
     },
     {
-      label: '待处理',
-      description: `过期 ${expired} · 失效 ${invalid} · 禁用 ${disabled} · 封禁 ${banned}`,
-      value: String(counts.pending),
+      label: '限流中',
+      description: '账号请求暂时受限',
+      value: String(counts.rateLimited),
+      tone: 'normal',
+      icon: RefreshCw,
+    },
+    {
+      label: '已停用',
+      description: '账号已停用',
+      value: String(counts.disabled),
+      tone: 'normal',
+      icon: CircleOff,
+    },
+    {
+      label: '错误',
+      description: '账号状态异常',
+      value: String(counts.error),
       tone: 'danger',
       icon: ShieldAlert,
     },
   ]
 })
 
-const availabilityRate = computed(() => {
+const normalRate = computed(() => {
   const p = props.pool
   if (!p || p.total === 0)
     return '—'
-  return `${((p.active / p.total) * 100).toFixed(1)}%`
+  return `${((p.normal / p.total) * 100).toFixed(1)}%`
 })
 
 const statusBars = computed(() => {
@@ -156,10 +162,11 @@ const statusBars = computed(() => {
   if (!counts || counts.total === 0)
     return []
   return [
-    { pct: (counts.active / counts.total) * 100, cls: 'bg-(--cp-success)' },
-    { pct: (counts.refreshing / counts.total) * 100, cls: 'bg-(--cp-normal)' },
-    { pct: (counts.quotaLimited / counts.total) * 100, cls: 'bg-(--cp-warning)' },
-    { pct: (counts.pending / counts.total) * 100, cls: 'bg-(--cp-danger)' },
+    { pct: (counts.normal / counts.total) * 100, cls: 'bg-(--cp-success)' },
+    { pct: (counts.quotaExhausted / counts.total) * 100, cls: 'bg-(--cp-warning)' },
+    { pct: (counts.rateLimited / counts.total) * 100, cls: 'bg-(--cp-normal)' },
+    { pct: (counts.disabled / counts.total) * 100, cls: 'bg-(--cp-text-secondary)' },
+    { pct: (counts.error / counts.total) * 100, cls: 'bg-(--cp-danger)' },
   ].filter(b => b.pct > 0)
 })
 </script>
@@ -305,8 +312,8 @@ const statusBars = computed(() => {
           <div class="grid justify-items-end">
             <strong
               class="font-mono text-2xl leading-[1.05] font-heavy tabular-nums text-(--cp-success-text)"
-            >{{ availabilityRate }}</strong>
-            <span class="mt-0.5 text-xs leading-[1.15] font-bold text-(--cp-text-secondary)">可用率</span>
+            >{{ normalRate }}</strong>
+            <span class="mt-0.5 text-xs leading-[1.15] font-bold text-(--cp-text-secondary)">正常率</span>
           </div>
         </header>
 
@@ -326,11 +333,11 @@ const statusBars = computed(() => {
           </div>
         </div>
 
-        <div class="mt-6.5 grid h-65.5 w-full gap-2.5">
+        <div class="mt-5 grid h-67 w-full grid-rows-5 gap-2">
           <div
             v-for="row in statusRows"
             :key="row.label"
-            class="grid h-14.5 grid-cols-[28px_14px_minmax(0,1fr)_76px] items-center rounded-[14px] bg-(--cp-bg-subtle) px-3.5"
+            class="grid min-h-0 grid-cols-[28px_14px_minmax(0,1fr)_76px] items-center rounded-[14px] bg-(--cp-bg-subtle) px-3.5"
           >
             <span
               class="inline-flex size-7 items-center justify-center rounded-[9px]"
