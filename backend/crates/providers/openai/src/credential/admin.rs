@@ -31,14 +31,13 @@ use super::types::{
     CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY, CODEX_AUTHENTICATION_KIND_OAUTH, CodexAccountProfile,
     CodexAgentIdentityAuthMode, CodexAgentIdentityCredentialData, CodexCredentialData,
     CodexCredentialPrincipal, CodexOAuthMetadata, CodexOAuthSecret, parse_access_token_expiration,
+    parse_chatgpt_jwt_claims,
 };
 
 const PROVIDER_NAME: &str = "openai";
 const CODEX_CREDENTIAL_SCHEMA_VERSION: u32 = 1;
 const MAX_BATCH: usize = 200;
 const MAX_IMPORT_DOCUMENT_BYTES: usize = 64 * 1024 * 1024;
-const MAX_IMPORT_EMAIL_BYTES: usize = 512;
-const MAX_IMPORT_PLAN_BYTES: usize = 128;
 
 pub struct ImportCodexOAuthCredential {
     pub account_id: String,
@@ -51,8 +50,8 @@ pub struct ImportCodexOAuthCredential {
 
 /// OAuth credential 的最小创建输入。
 ///
-/// metadata 来自 ID token 的本地 payload 解码，或导入文档的展示字段；不包含
-/// 签名、issuer、audience、nonce 或 access/refresh token 验证。
+/// metadata 来自 ID token/access token 的官方本地 payload 解析；不包含签名、
+/// issuer、audience、nonce 或 token 验证。
 pub(crate) struct UnresolvedCodexOAuthCredential {
     pub(crate) account_id: String,
     pub(crate) name: String,
@@ -270,8 +269,9 @@ struct CodexCprExportCommon {
 struct CodexCprOAuthExportAccount {
     #[serde(flatten)]
     common: CodexCprExportCommon,
-    token: String,
+    access_token: String,
     refresh_token: Option<String>,
+    id_token: Option<String>,
     access_token_expires_at: Option<String>,
 }
 
@@ -546,8 +546,9 @@ impl CodexCredentialAdmin {
                     }
                     CodexCprExportAccount::OAuth(CodexCprOAuthExportAccount {
                         common,
-                        token: data.access_token,
+                        access_token: data.access_token,
                         refresh_token: data.refresh_token,
+                        id_token: data.id_token,
                         access_token_expires_at: account
                             .access_token_expires_at()
                             .map(DateTime::<Utc>::from)
@@ -794,23 +795,37 @@ impl CodexCredentialAdminService {
             .refresh(refresh_token.expose_secret())
             .await
             .map_err(map_refresh_failure)?;
+        let access_token_rotated = tokens.access_token.is_some();
         let secret = CodexOAuthSecret {
-            access_token: SecretString::from(tokens.access_token),
+            access_token: tokens
+                .access_token
+                .map(SecretString::from)
+                .unwrap_or_else(|| oauth.access_token.clone()),
             refresh_token: tokens
                 .refresh_token
                 .map(SecretString::from)
                 .or_else(|| oauth.refresh_token.clone()),
-            id_token: oauth.id_token.clone(),
+            id_token: tokens
+                .id_token
+                .map(SecretString::from)
+                .or_else(|| oauth.id_token.clone()),
         };
         Self::record_recovery_log(
             CodexOAuthRecoveryOperation::ManualRefresh,
             Some(account_id.as_str()),
             &secret,
         );
-        let access_token_expires_at = tokens
-            .expires_in
-            .and_then(|expires_in| SystemTime::now().checked_add(expires_in))
-            .map(DateTime::<Utc>::from);
+        let access_token_expires_at = if access_token_rotated {
+            tokens
+                .expires_in
+                .and_then(|expires_in| SystemTime::now().checked_add(expires_in))
+                .map(DateTime::<Utc>::from)
+        } else {
+            current
+                .account
+                .access_token_expires_at()
+                .map(DateTime::<Utc>::from)
+        };
         // 正常预刷新由 worker 读取当时的 runtime policy 动态判断；这里仅清除
         // 之前瞬态失败留下的 retry-not-before。
         let next_refresh_at = None;
@@ -829,8 +844,8 @@ impl CodexCredentialAdminService {
 
     /// 归一导入 OAuth/agent-identity 凭据到唯一 `NewProviderAccount` 写入路径。
     ///
-    /// OAuth 导入只要取得 access token（直接提供或 RT exchange）即创建 Unknown
-    /// 账号；资格资料由后续 worker 异步补齐。
+    /// OAuth 导入先取得 access token（直接提供或 RT exchange），再按官方
+    /// `parse_chatgpt_jwt_claims` 从 ID token/access token 本地投影账号资料。
     pub async fn prepare_import_document(
         &self,
         payload: Value,
@@ -870,16 +885,28 @@ impl CodexCredentialAdminService {
                             id_token.clone(),
                         )
                         .await?;
-                    // 导入材料按管理员输入原样保存；ID token 仅尽力补展示字段，
-                    // 解析失败不阻塞 AT/RT 入库。
-                    let mut metadata = secret
+                    // 与官方 `parse_chatgpt_jwt_claims` 一致：先读 ID token，缺失字段
+                    // 再由 access token 补齐。解析失败不阻塞 token 入库。
+                    let id_metadata = secret
                         .id_token
                         .as_ref()
-                        .and_then(|token| {
-                            super::types::parse_id_token_metadata(token.expose_secret()).ok()
-                        })
+                        .and_then(|token| parse_chatgpt_jwt_claims(token.expose_secret()).ok())
                         .unwrap_or_default();
-                    apply_import_metadata(&mut metadata, &candidate);
+                    let access_metadata =
+                        parse_chatgpt_jwt_claims(secret.access_token.expose_secret())
+                            .unwrap_or_default();
+                    let metadata = CodexOAuthMetadata {
+                        email: id_metadata.email.or(access_metadata.email),
+                        chatgpt_plan_type: id_metadata
+                            .chatgpt_plan_type
+                            .or(access_metadata.chatgpt_plan_type),
+                        chatgpt_user_id: id_metadata
+                            .chatgpt_user_id
+                            .or(access_metadata.chatgpt_user_id),
+                        chatgpt_account_id: id_metadata
+                            .chatgpt_account_id
+                            .or(access_metadata.chatgpt_account_id),
+                    };
                     CodexCredentialAdmin.prepare_unresolved_oauth(
                         UnresolvedCodexOAuthCredential {
                             account_id,
@@ -961,14 +988,17 @@ impl CodexCredentialAdminService {
             .refresh(&refresh_token)
             .await
             .map_err(map_refresh_failure)?;
+        let access_token = tokens
+            .access_token
+            .ok_or(CodexCredentialAdminError::InvalidCredential)?;
         let secret = CodexOAuthSecret {
-            access_token: SecretString::from(tokens.access_token),
+            access_token: SecretString::from(access_token),
             // RT 未轮换时仍保留导入提供的 RT，保证本次补全不会丢失后续刷新能力。
             refresh_token: tokens
                 .refresh_token
                 .map(SecretString::from)
                 .or_else(|| Some(SecretString::from(refresh_token))),
-            id_token,
+            id_token: tokens.id_token.map(SecretString::from).or(id_token),
         };
         Self::record_recovery_log(
             CodexOAuthRecoveryOperation::ImportRefreshToken,
@@ -1221,9 +1251,9 @@ fn parse_oauth_import_tokens(
             Value::Object(object) => {
                 for (key, value) in object {
                     let token = match key.as_str() {
-                        "access_token" | "accessToken" | "at" | "token" => &mut access_token,
-                        "refresh_token" | "refreshToken" | "rt" => &mut refresh_token,
-                        "id_token" | "idToken" => &mut id_token,
+                        "accessToken" => &mut access_token,
+                        "refreshToken" => &mut refresh_token,
+                        "idToken" => &mut id_token,
                         _ => {
                             pending.push(value);
                             continue;
@@ -1286,27 +1316,6 @@ fn first_string(value: &Value, keys: &[&str]) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
-}
-
-fn apply_import_metadata(metadata: &mut CodexOAuthMetadata, candidate: &ParsedCodexImportAccount) {
-    if metadata.email.is_none() {
-        metadata.email = candidate
-            .email
-            .as_deref()
-            .and_then(|value| normalize_import_text(value, MAX_IMPORT_EMAIL_BYTES));
-    }
-    if metadata.chatgpt_plan_type.is_none() {
-        metadata.chatgpt_plan_type = candidate
-            .plan_type
-            .as_deref()
-            .and_then(|value| normalize_import_text(value, MAX_IMPORT_PLAN_BYTES));
-    }
-}
-
-fn normalize_import_text(value: &str, max_bytes: usize) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty() && value.len() <= max_bytes && !value.chars().any(char::is_control))
-        .then(|| value.to_owned())
 }
 
 struct ImportedCprAccountFacts {

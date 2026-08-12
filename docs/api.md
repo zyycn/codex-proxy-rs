@@ -96,7 +96,7 @@ OpenAI 路径保留客户端 Responses wire 语义：请求 body 的未知字段
 | `GET` | `/api/admin/accounts/detail` | `accountId` | 查询账号详情、额度和本地用量 |
 | `GET` | `/api/admin/accounts/export` | `accountIds`、`confirm=export_sensitive_accounts` | 显式导出最多 200 个账号的敏感 Provider 文档 |
 | `POST` | `/api/admin/accounts/import` | `{ provider, data }` | 导入或按上游身份更新账号 |
-| `POST` | `/api/admin/accounts/refresh` | `{ accountId }` | 手工刷新 OAuth credential（AT/RT），不刷新额度 |
+| `POST` | `/api/admin/accounts/refresh` | `{ accountId }` | 手工刷新 OAuth credential（`idToken` / `accessToken` / `refreshToken`），不刷新额度 |
 | `POST` | `/api/admin/accounts/rotate` | OpenAI rotation 字段 | 手工替换 OpenAI OAuth token |
 | `POST` | `/api/admin/accounts/enable` | `{ provider, accountId }` | 启用账号 |
 | `POST` | `/api/admin/accounts/disable` | `{ provider, accountId }` | 禁用账号 |
@@ -150,6 +150,7 @@ OpenAI rotation 请求字段为：
 {
   "provider": "openai",
   "accountId": "acct_...",
+  "idToken": "...",
   "accessToken": "...",
   "refreshToken": "..."
 }
@@ -171,11 +172,15 @@ OAuth start 使用：
 
 ### OpenAI 身份、额度与状态
 
-- OAuth 文件导入使用可用的 access token 调用 OpenAI 已认证账号接口，补全实际使用的账号 ID、用户 ID、
-  邮箱和套餐；仅有 refresh token 时，先换取 access token 后执行同一补全。导入不要求 JWT payload 含有
-  特定字段，不执行 JWKS 验签，也不将文件中的身份字段与上游资料比对。
-- 首次 OAuth 保留回调 `state`、PKCE 与官方 token exchange；换得 access token 后调用同一已认证账号接口
-  补全账号资料。重新授权也保留这些回调保护，但只轮换目标账号的 token。回调地址只承载 `code`/`state`，
+- OAuth 文件导入的 canonical 凭据字段为 `accessToken`、`refreshToken`、`idToken`，不接受含义模糊的
+  `token`。仅有 refresh token 时先换取 access token。
+- 身份补全复用官方 `token_data.rs::parse_chatgpt_jwt_claims`：优先解析 `idToken`，缺失字段再由
+  `accessToken` 补齐；`email` 优先 JWT 顶层值、其次 `https://api.openai.com/profile.email`，用户 ID
+  优先 `chatgpt_user_id`、其次 `user_id`。该路径不调用 `whoami`，也不信任导入文档顶层的
+  `userId/accountId`。
+- 首次 OAuth 保留回调 `state`、PKCE 与官方 token exchange，并持久化 `idToken`、`accessToken`、
+  `refreshToken`。刷新响应中的三个 token 字段均按官方语义独立轮换：返回新值时替换，省略时分别保留
+  现值。重新授权也保留这些回调保护，但只轮换目标账号的 token。回调地址只承载 `code`/`state`，
   不以 host/path 形式作为拒绝条件。
 - 账号文件导入和首次 OAuth 创建在 credential 提交后立即尝试一次额度观测。观测失败只记录告警，
   不回滚已提交的账号；重新授权和手工或后台 RT 刷新只更新 token，不隐式等同于手工额度刷新，也不更新

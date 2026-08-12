@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
-use gateway_core::engine::credential::ProviderAccountId;
+use gateway_core::engine::credential::{ProviderAccountId, ProviderAccountStore};
 use gateway_core::provider_ports::{
     ProviderCredentialState, ProviderCredentialStatePort, ProviderLeaseAcquisition,
     ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshPolicy, ProviderRuntimePolicyPort,
@@ -15,8 +15,10 @@ use gateway_core::provider_ports::{
 use gateway_core::routing::ProviderKind;
 use provider_openai::credential::token_client::{RefreshFailure, TokenPair, TokenRefresher};
 use provider_openai::credential::{
-    CodexCredentialRefreshOutcome, CodexCredentialRefreshService, ImportCodexOAuthCredential,
+    CodexCredentialCodec, CodexCredentialRefreshOutcome, CodexCredentialRefreshService,
+    ImportCodexOAuthCredential,
 };
+use secrecy::{ExposeSecret as _, SecretString};
 
 use crate::support::{MemoryAccountStore, profile, secret};
 
@@ -30,8 +32,9 @@ impl SingleUseRefresher {
         Arc::new(Self {
             calls: AtomicUsize::new(0),
             response: Mutex::new(Some(TokenPair {
-                access_token: "refreshed-access-token".to_owned(),
+                access_token: Some("refreshed-access-token".to_owned()),
                 refresh_token: None,
+                id_token: None,
                 expires_in: Some(Duration::from_secs(60 * 60)),
             })),
         })
@@ -39,6 +42,30 @@ impl SingleUseRefresher {
 
     fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
+    }
+
+    fn with_id_token(id_token: &str) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            response: Mutex::new(Some(TokenPair {
+                access_token: Some("refreshed-access-token".to_owned()),
+                refresh_token: None,
+                id_token: Some(id_token.to_owned()),
+                expires_in: Some(Duration::from_secs(60 * 60)),
+            })),
+        })
+    }
+
+    fn without_rotated_tokens() -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            response: Mutex::new(Some(TokenPair {
+                access_token: None,
+                refresh_token: None,
+                id_token: None,
+                expires_in: Some(Duration::from_secs(60 * 60)),
+            })),
+        })
     }
 }
 
@@ -235,6 +262,77 @@ async fn scheduled_refresh_uses_the_current_margin_without_persisting_a_normal_s
             .expect("refreshed account")
             .next_refresh_at()
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn scheduled_refresh_persists_a_returned_id_token() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let policy = MutableRuntimePolicy::new(Duration::from_secs(5 * 60));
+    let refresher = SingleUseRefresher::with_id_token("header.rotated-id.signature");
+    let service = refresh_service(&store, refresher, policy);
+    let account_id = "acct_rotated_id_token";
+    seed_refreshable_account(
+        &store,
+        account_id,
+        SystemTime::now()
+            .checked_add(Duration::from_secs(120))
+            .expect("test expiry"),
+        None,
+    )
+    .await;
+
+    service.refresh_due().await.expect("refresh cycle");
+
+    let account = store.account(account_id).expect("refreshed account");
+    let loaded = store
+        .load_credential(account.id(), account.revision())
+        .await
+        .expect("refreshed credential");
+    let runtime = CodexCredentialCodec::decode(&loaded.credential).expect("runtime credential");
+    assert_eq!(
+        runtime
+            .authentication
+            .oauth()
+            .and_then(|oauth| oauth.id_token.as_ref())
+            .map(SecretString::expose_secret),
+        Some("header.rotated-id.signature")
+    );
+}
+
+#[tokio::test]
+async fn scheduled_refresh_preserves_the_stored_token_set_when_rotation_fields_are_omitted() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let policy = MutableRuntimePolicy::new(Duration::from_secs(5 * 60));
+    let refresher = SingleUseRefresher::without_rotated_tokens();
+    let service = refresh_service(&store, refresher, policy);
+    let account_id = "acct_omitted_token_rotation";
+    let expires_at = SystemTime::now()
+        .checked_add(Duration::from_secs(120))
+        .expect("test expiry");
+    seed_refreshable_account(&store, account_id, expires_at, None).await;
+
+    service.refresh_due().await.expect("refresh cycle");
+
+    let account = store.account(account_id).expect("refreshed account");
+    assert_eq!(account.access_token_expires_at(), Some(expires_at));
+    let loaded = store
+        .load_credential(account.id(), account.revision())
+        .await
+        .expect("refreshed credential");
+    let runtime = CodexCredentialCodec::decode(&loaded.credential).expect("runtime credential");
+    let oauth = runtime.authentication.oauth().expect("OAuth credential");
+    assert_eq!(
+        oauth.access_token.expose_secret(),
+        format!("access-{account_id}")
+    );
+    let expected_refresh_token = format!("rt-access-{account_id}");
+    assert_eq!(
+        oauth
+            .refresh_token
+            .as_ref()
+            .map(SecretString::expose_secret),
+        Some(expected_refresh_token.as_str())
     );
 }
 

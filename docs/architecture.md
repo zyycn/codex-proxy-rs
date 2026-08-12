@@ -130,11 +130,13 @@ OAuth refresh 请求状态不明确时只按 OAuth 自身的有界退避推进�
 
 `refresh_token_expires_at` 不是公共 SQL 列或 Core 权威状态。xAI 可在 `provider_credentials_json` 内保存它作为 Provider 私有提示；真正失效以 refresh endpoint 返回的永久错误为准。
 
-OpenAI OAuth 导入先取得可用 access token（仅有 refresh token 时先交换），再调用 OpenAI 已认证账号
-接口补全实际使用的账号 ID、用户 ID、邮箱和套餐。首次 OAuth 在服务端 `state`、PKCE 与官方 token
-exchange 成功后执行同一补全。两条路径不执行 JWKS 验签，不要求 JWT payload 具备指定字段，也不将导入
-材料中的身份与上游资料做一致性比对。重新授权的目标绑定只保存目标账号 ID，不接受或冻结客户端提供的
-credential revision；complete 阶段重新读取目标账号及其当前 revision，并以当前 revision 做最终 CAS。
+OpenAI OAuth 导入先取得 access token（仅有 refresh token 时先交换），再复用官方
+`token_data.rs::parse_chatgpt_jwt_claims` 的本地 JWT payload 解析逻辑：优先读取 `idToken`，字段缺失时
+由 `accessToken` 补齐。解析器只读取 `email`、`https://api.openai.com/profile` 与
+`https://api.openai.com/auth` 中的官方 claims，不调用 `whoami`，也不使用导入文档顶层的
+`userId/accountId` 补身份。两个令牌都没有用户身份 claims 时，账号以未验证错误状态入库。首次 OAuth
+在服务端 `state`、PKCE 与官方 token exchange 成功后解析并保存同一 token set。重新授权的目标绑定
+只保存目标账号 ID，不接受或冻结客户端提供的 credential revision；complete 阶段重新读取目标账号及其当前 revision，并以当前 revision 做最终 CAS。
 重新授权和手工或后台 RT refresh 只轮换目标账号的 token，保留既有账号资料与 OAuth principal。
 
 credential 与 quota 是两组独立事实，不是两套对外状态。主动 quota refresh 会拒绝过期 Access Token；

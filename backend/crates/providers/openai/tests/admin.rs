@@ -35,6 +35,7 @@ use gateway_core::task::{WorkerContribution, WorkerKind, WorkerRunnable};
 use provider_openai::config::{CodexWireProfileConfig, OpenAiConfig};
 use provider_openai::credential::ImportCodexOAuthCredential;
 use provider_openai::transport::profile::APPCAST_POLL_INTERVAL;
+use secrecy::SecretString;
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
 
@@ -360,11 +361,13 @@ async fn openai_reauthorization_pending_payload_contains_only_stable_account_ide
 #[tokio::test]
 async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export() {
     let store = Arc::new(MemoryAccountStore::default());
+    let mut oauth_secret = secret("admin-projection-access");
+    oauth_secret.id_token = Some(SecretString::from("header.id-token.signature"));
     store
         .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: "acct_admin_projection".to_owned(),
             name: "admin projection".to_owned(),
-            secret: secret("admin-projection-access"),
+            secret: oauth_secret,
             verified_account: profile("chatgpt-admin-projection"),
             next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
@@ -438,15 +441,25 @@ async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export
         .await
         .expect("canonical export");
     assert_eq!(exported.account_ids, vec![account_id]);
+    let document = exported.document.expose_to_provider().expose_to_provider();
     assert_eq!(
-        exported
-            .document
-            .expose_to_provider()
-            .expose_to_provider()
-            .get("sourceFormat")
-            .and_then(Value::as_str),
+        document.get("sourceFormat").and_then(Value::as_str),
         Some("cpr")
     );
+    let exported_account = document
+        .get("accounts")
+        .and_then(Value::as_array)
+        .and_then(|accounts| accounts.first())
+        .expect("exported OAuth account");
+    assert_eq!(
+        exported_account.get("accessToken").and_then(Value::as_str),
+        Some("admin-projection-access")
+    );
+    assert_eq!(
+        exported_account.get("idToken").and_then(Value::as_str),
+        Some("header.id-token.signature")
+    );
+    assert!(exported_account.get("token").is_none());
 }
 
 #[tokio::test]

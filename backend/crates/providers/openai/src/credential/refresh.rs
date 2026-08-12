@@ -402,15 +402,26 @@ impl CodexCredentialRefreshService {
         let TokenPair {
             access_token,
             refresh_token: rotated_refresh_token,
+            id_token: rotated_id_token,
             expires_in,
         } = tokens;
+        let access_token_rotated = access_token.is_some();
+        let CodexOAuthSecret {
+            access_token: current_access_token,
+            refresh_token: current_refresh_token,
+            id_token: current_id_token,
+        } = due.secret;
         let refresh_token = rotated_refresh_token
             .map(SecretString::from)
-            .or(due.secret.refresh_token);
+            .or(current_refresh_token);
         let secret = CodexOAuthSecret {
-            access_token: SecretString::from(access_token),
+            access_token: access_token
+                .map(SecretString::from)
+                .unwrap_or(current_access_token),
             refresh_token,
-            id_token: due.secret.id_token,
+            id_token: rotated_id_token
+                .map(SecretString::from)
+                .or(current_id_token),
         };
         record_oauth_recovery(
             CodexOAuthRecoveryOperation::ScheduledRefresh,
@@ -422,7 +433,11 @@ impl CodexCredentialRefreshService {
                 .map(ExposeSecret::expose_secret),
         );
         let observed_at = SystemTime::now();
-        let access_token_expires_at = expires_in.and_then(|value| observed_at.checked_add(value));
+        let access_token_expires_at = if access_token_rotated {
+            expires_in.and_then(|value| observed_at.checked_add(value))
+        } else {
+            due.account.access_token_expires_at()
+        };
         // 成功轮换清掉仅用于失败退避的 retry-not-before；正常预刷新窗口由
         // worker 结合当前 runtime policy 动态判断，不写入账号时间字段。
         let next_refresh_at = None;

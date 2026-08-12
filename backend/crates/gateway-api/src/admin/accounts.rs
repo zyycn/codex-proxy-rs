@@ -51,6 +51,7 @@ const MAX_NAME_BYTES: usize = 512;
 const MAX_IMPORT_DATA_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ACCESS_TOKEN_BYTES: usize = 16 * 1024;
 const MAX_REFRESH_TOKEN_BYTES: usize = 64 * 1024;
+const MAX_ID_TOKEN_BYTES: usize = 16 * 1024;
 const MAX_CALLBACK_URL_BYTES: usize = 64 * 1024;
 const MAX_ACCOUNT_DELETE_BATCH: usize = 200;
 
@@ -760,6 +761,7 @@ pub struct RotateAccountRequest {
     pub account_id: String,
     pub access_token: String,
     pub refresh_token: Option<String>,
+    pub id_token: Option<String>,
 }
 
 impl RotateAccountRequest {
@@ -768,7 +770,11 @@ impl RotateAccountRequest {
             return Err(WireValidationError::new("provider"));
         }
         require_account_id(&self.account_id, "accountId")?;
-        validate_oauth_material(&self.access_token, self.refresh_token.as_deref())
+        validate_oauth_material(
+            &self.access_token,
+            self.refresh_token.as_deref(),
+            self.id_token.as_deref(),
+        )
     }
 
     fn into_command(
@@ -781,6 +787,10 @@ impl RotateAccountRequest {
         material.insert(
             "refresh_token".to_owned(),
             self.refresh_token.map_or(Value::Null, Value::String),
+        );
+        material.insert(
+            "id_token".to_owned(),
+            self.id_token.map_or(Value::Null, Value::String),
         );
         Ok(RotateCredential {
             mutation: CredentialMutation {
@@ -1681,6 +1691,7 @@ fn require_text(
 fn validate_oauth_material(
     access_token: &str,
     refresh_token: Option<&str>,
+    id_token: Option<&str>,
 ) -> Result<(), WireValidationError> {
     if access_token.len() > MAX_ACCESS_TOKEN_BYTES
         || !valid_visible_ascii(access_token)
@@ -1694,6 +1705,13 @@ fn validate_oauth_material(
             || token == access_token
     }) {
         return Err(WireValidationError::new("refreshToken"));
+    }
+    if id_token.is_some_and(|token| {
+        token.len() > MAX_ID_TOKEN_BYTES
+            || !valid_visible_ascii(token)
+            || !valid_compact_jwt_shape(token)
+    }) {
+        return Err(WireValidationError::new("idToken"));
     }
     Ok(())
 }

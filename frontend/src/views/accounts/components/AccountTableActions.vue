@@ -73,7 +73,7 @@ const canReauthorize = computed(() => props.account.provider === 'openai')
           @click.stop="(close(), emit('refresh', account.id))"
         >
           <RefreshCw class="size-3.5 text-(--cp-text-muted)" />
-          刷新 token
+          刷新令牌
         </BaseButton>
         <BaseButton
           v-if="canReauthorize"

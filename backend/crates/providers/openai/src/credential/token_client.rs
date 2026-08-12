@@ -21,8 +21,12 @@ pub const OFFICIAL_CODEX_REDIRECT_URI: &str = "http://localhost:1455/auth/callba
 /// Token 刷新成功后得到的认证材料。
 #[derive(Clone)]
 pub struct TokenPair {
-    pub access_token: String,
+    /// 官方刷新响应省略时由持久化调用方保留当前 access token。
+    pub access_token: Option<String>,
+    /// 官方刷新响应省略时由持久化调用方保留当前 refresh token。
     pub refresh_token: Option<String>,
+    /// 官方刷新响应省略时由持久化调用方保留当前 ID token。
+    pub id_token: Option<String>,
     /// OAuth endpoint 可以省略或返回零 expiry；这不影响已经成功的 token
     /// exchange，只意味着调用方不能据此安排下一次刷新。
     pub expires_in: Option<Duration>,
@@ -32,11 +36,15 @@ impl fmt::Debug for TokenPair {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("TokenPair")
-            .field("access_token", &"[REDACTED]")
+            .field(
+                "access_token",
+                &self.access_token.as_ref().map(|_| "[REDACTED]"),
+            )
             .field(
                 "refresh_token",
                 &self.refresh_token.as_ref().map(|_| "[REDACTED]"),
             )
+            .field("id_token", &self.id_token.as_ref().map(|_| "[REDACTED]"))
             .field("expires_in", &self.expires_in)
             .finish()
     }
@@ -172,8 +180,9 @@ pub fn official_openai_token_client() -> Result<OpenAiTokenClient, TokenClientBu
 
 #[derive(Deserialize)]
 struct RefreshTokenResponse {
-    access_token: String,
+    access_token: Option<String>,
     refresh_token: Option<String>,
+    id_token: Option<String>,
     expires_in: Option<u64>,
 }
 
@@ -279,10 +288,19 @@ async fn read_bounded_response(
 
 fn parse_token_pair(body: &[u8]) -> Result<TokenPair, ()> {
     let tokens = serde_json::from_slice::<RefreshTokenResponse>(body).map_err(|_| ())?;
+    if tokens
+        .id_token
+        .as_deref()
+        .is_some_and(|token| super::types::parse_chatgpt_jwt_claims(token).is_err())
+    {
+        return Err(());
+    }
     Ok(TokenPair {
         access_token: tokens.access_token,
         // OAuth 刷新响应可能省略未变更的 RT；缺失时由调用方保留当前值。
         refresh_token: tokens.refresh_token,
+        // 官方刷新响应允许省略 ID token；缺失时由调用方保留当前值。
+        id_token: tokens.id_token,
         expires_in: optional_expiry(tokens.expires_in),
     })
 }

@@ -35,7 +35,7 @@ use super::token_client::{
     AuthorizationCodeExchangeError, AuthorizationCodeExchanger, AuthorizationCodeGrant,
     OFFICIAL_CODEX_OAUTH_CLIENT_ID, OFFICIAL_CODEX_REDIRECT_URI,
 };
-use super::types::parse_id_token_metadata;
+use super::types::parse_chatgpt_jwt_claims;
 
 const AUTHORIZATION_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
 const AUTHORIZATION_SCOPE: &str = "openid profile email offline_access";
@@ -504,7 +504,7 @@ impl CodexOAuthAdminService {
         let access_token_expires_at = expires_in
             .and_then(|expires_in| SystemTime::now().checked_add(expires_in))
             .map(DateTime::<Utc>::from);
-        let metadata = parse_id_token_metadata(id_token.expose_secret())
+        let metadata = parse_chatgpt_jwt_claims(id_token.expose_secret())
             .map_err(|_| CodexOAuthAdminError::TokenRejected)?;
         secret.id_token = Some(id_token);
         let credential = if let Some(current) = current {

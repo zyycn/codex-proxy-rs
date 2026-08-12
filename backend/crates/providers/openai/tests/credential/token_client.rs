@@ -59,6 +59,7 @@ async fn bounded_oauth_response_should_parse_lifetime_and_rotated_token() {
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "access_token": "access-rotated",
             "refresh_token": "refresh-rotated",
+            "id_token": "header.e30.signature",
             "expires_in": 3600
         })))
         .expect(1)
@@ -70,9 +71,52 @@ async fn bounded_oauth_response_should_parse_lifetime_and_rotated_token() {
         .await
         .expect("bounded response");
 
-    assert_eq!(tokens.access_token, "access-rotated");
+    assert_eq!(tokens.access_token.as_deref(), Some("access-rotated"));
     assert_eq!(tokens.refresh_token.as_deref(), Some("refresh-rotated"));
+    assert_eq!(tokens.id_token.as_deref(), Some("header.e30.signature"));
     assert_eq!(tokens.expires_in, Some(Duration::from_secs(3600)));
+}
+
+#[tokio::test]
+async fn refresh_response_should_reject_a_malformed_rotated_id_token() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "access-rotated",
+            "id_token": "not-a-jwt"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let failure = client(&server)
+        .refresh("refresh-initial")
+        .await
+        .expect_err("malformed ID token must not replace the stored token set");
+
+    assert_eq!(failure, RefreshFailure::Transport);
+}
+
+#[tokio::test]
+async fn refresh_response_should_allow_all_rotated_tokens_to_be_omitted() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let tokens = client(&server)
+        .refresh("refresh-initial")
+        .await
+        .expect("official refresh response fields are optional");
+
+    assert!(tokens.access_token.is_none());
+    assert!(tokens.refresh_token.is_none());
+    assert!(tokens.id_token.is_none());
+    assert!(tokens.expires_in.is_none());
 }
 
 #[tokio::test]

@@ -42,7 +42,7 @@ pub struct CodexAccountProfile {
     pub access_token_expires_at: Option<DateTime<Utc>>,
 }
 
-/// 从 OAuth ID token payload 尽力提取的展示资料。
+/// 从 ChatGPT OAuth JWT payload 尽力提取的账号资料。
 ///
 /// 这只是与官方客户端一致的 base64 JSON 读取，不校验 JWT 签名或 claims。
 #[derive(Clone, Default)]
@@ -71,12 +71,13 @@ impl fmt::Debug for CodexOAuthMetadata {
     }
 }
 
-/// 按官方 `token_data.rs` 的字段优先级读取 ID token payload。
+/// 按官方 `token_data.rs::parse_chatgpt_jwt_claims` 的字段优先级读取 JWT payload。
 ///
-/// 与官方一致，`id_token` 的 JWT 外形、payload base64 或 JSON 无法解析时返回错误；
-/// 这不是签名或 claims 验证。各身份字段本身仍全部可缺失。
-pub(crate) fn parse_id_token_metadata(jwt: &str) -> Result<CodexOAuthMetadata, ()> {
-    let claims = decode_jwt_payload::<IdTokenClaims>(jwt)?;
+/// 官方对 ID token 和外部 ChatGPT access token 复用同一解析逻辑。JWT 外形、
+/// payload base64 或 JSON 无法解析时返回错误；这不是签名或 claims 验证。
+/// 各账号字段本身仍全部可缺失。
+pub(crate) fn parse_chatgpt_jwt_claims(jwt: &str) -> Result<CodexOAuthMetadata, ()> {
+    let claims = decode_jwt_payload::<IdClaims>(jwt)?;
     let email = claims
         .email
         .or_else(|| claims.profile.and_then(|profile| profile.email));
@@ -88,7 +89,7 @@ pub(crate) fn parse_id_token_metadata(jwt: &str) -> Result<CodexOAuthMetadata, (
     };
     Ok(CodexOAuthMetadata {
         email,
-        chatgpt_plan_type: auth.chatgpt_plan_type,
+        chatgpt_plan_type: auth.chatgpt_plan_type.map(ChatgptPlanType::into_raw_value),
         chatgpt_user_id: auth.chatgpt_user_id.or(auth.user_id),
         chatgpt_account_id: auth.chatgpt_account_id,
     })
@@ -106,7 +107,7 @@ pub(crate) fn parse_access_token_expiration(jwt: &str) -> Option<DateTime<Utc>> 
 }
 
 #[derive(Deserialize)]
-struct IdTokenClaims {
+struct IdClaims {
     #[serde(default)]
     email: Option<String>,
     #[serde(rename = "https://api.openai.com/profile", default)]
@@ -130,13 +131,79 @@ struct ProfileClaims {
 #[derive(Deserialize)]
 struct AuthClaims {
     #[serde(default)]
-    chatgpt_plan_type: Option<String>,
+    chatgpt_plan_type: Option<ChatgptPlanType>,
     #[serde(default)]
     chatgpt_user_id: Option<String>,
     #[serde(default)]
     user_id: Option<String>,
     #[serde(default)]
     chatgpt_account_id: Option<String>,
+    #[serde(rename = "chatgpt_account_is_fedramp", default)]
+    _chatgpt_account_is_fedramp: bool,
+}
+
+/// 与官方 `codex_protocol::auth::PlanType` 同构的 claims 反序列化类型。
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ChatgptPlanType {
+    Known(KnownChatgptPlan),
+    Unknown(String),
+}
+
+impl ChatgptPlanType {
+    fn into_raw_value(self) -> String {
+        match self {
+            Self::Known(plan) => plan.raw_value().to_owned(),
+            Self::Unknown(raw) => raw,
+        }
+    }
+}
+
+/// 与官方 `codex_protocol::auth::KnownPlan` 的 wire 名称和 aliases 保持一致。
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum KnownChatgptPlan {
+    Free,
+    Go,
+    Plus,
+    Pro,
+    ProLite,
+    Team,
+    #[serde(rename = "self_serve_business_prolite")]
+    SelfServeBusinessProLite,
+    #[serde(rename = "self_serve_business_usage_based")]
+    SelfServeBusinessUsageBased,
+    Business,
+    Ent26,
+    #[serde(rename = "enterprise_cbp_automation")]
+    EnterpriseCbpAutomation,
+    #[serde(rename = "enterprise_cbp_usage_based")]
+    EnterpriseCbpUsageBased,
+    #[serde(alias = "hc")]
+    Enterprise,
+    #[serde(alias = "education")]
+    Edu,
+}
+
+impl KnownChatgptPlan {
+    const fn raw_value(self) -> &'static str {
+        match self {
+            Self::Free => "free",
+            Self::Go => "go",
+            Self::Plus => "plus",
+            Self::Pro => "pro",
+            Self::ProLite => "prolite",
+            Self::Team => "team",
+            Self::SelfServeBusinessProLite => "self_serve_business_prolite",
+            Self::SelfServeBusinessUsageBased => "self_serve_business_usage_based",
+            Self::Business => "business",
+            Self::Ent26 => "ent26",
+            Self::EnterpriseCbpAutomation => "enterprise_cbp_automation",
+            Self::EnterpriseCbpUsageBased => "enterprise_cbp_usage_based",
+            Self::Enterprise => "enterprise",
+            Self::Edu => "edu",
+        }
+    }
 }
 
 fn decode_jwt_payload<T: DeserializeOwned>(jwt: &str) -> Result<T, ()> {

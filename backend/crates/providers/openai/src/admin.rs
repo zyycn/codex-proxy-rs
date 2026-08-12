@@ -368,7 +368,15 @@ impl ProviderAdmin for OpenAiAdminProvider {
         if !account_matches_record(&current.account, &command.account) {
             return Err(provider_admin_error(ProviderAdminErrorKind::Conflict));
         }
-        let secret = rotation_secret(command.provider_material)?;
+        let mut secret = rotation_secret(command.provider_material)?;
+        if secret.id_token.is_none() {
+            let runtime = CodexCredentialCodec::decode(&current.credential)
+                .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
+            secret.id_token = runtime
+                .authentication
+                .oauth()
+                .and_then(|oauth| oauth.id_token.clone());
+        }
         let prepared = CodexCredentialAdmin
             .prepare_refreshed_oauth_rotation(current, secret, None, None)
             .map_err(map_credential_admin_error)?;
@@ -574,6 +582,7 @@ fn prepared_rotation(
 struct RotationDocument {
     access_token: String,
     refresh_token: Option<String>,
+    id_token: Option<String>,
 }
 
 fn rotation_secret(document: ProviderDocument) -> Result<CodexOAuthSecret, ProviderAdminError> {
@@ -583,7 +592,7 @@ fn rotation_secret(document: ProviderDocument) -> Result<CodexOAuthSecret, Provi
     Ok(CodexOAuthSecret {
         access_token: SecretString::from(document.access_token),
         refresh_token: document.refresh_token.map(SecretString::from),
-        id_token: None,
+        id_token: document.id_token.map(SecretString::from),
     })
 }
 

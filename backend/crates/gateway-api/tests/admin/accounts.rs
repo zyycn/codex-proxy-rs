@@ -217,7 +217,8 @@ mod actions {
             "provider": "openai",
             "accountId": "acct_1",
             "accessToken": "header.payload.signature",
-            "refreshToken": "refresh-token"
+            "refreshToken": "refresh-token",
+            "idToken": "id-header.id-payload.id-signature"
         }))
         .expect("decode rotation");
         assert!(rotation.validate().is_ok());
