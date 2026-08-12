@@ -218,7 +218,12 @@ pub trait ClientKeyStore: Send + Sync {
 /// 用量、趋势、诊断与运维错误的只读能力。
 #[async_trait]
 pub trait ObservabilityStore: Send + Sync {
-    async fn dashboard_summary(&self, range: TimeRange) -> AdminStoreResult<DashboardObservation>;
+    /// 返回历史统计区间和指定观测时刻下的实时账号状态。
+    async fn dashboard_summary(
+        &self,
+        range: TimeRange,
+        observed_at: DateTime<Utc>,
+    ) -> AdminStoreResult<DashboardObservation>;
 
     /// 返回 Dashboard 可选的实时槽位事实。
     ///

@@ -7,7 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use futures::future::BoxFuture;
 use gateway_admin::{
     AdminConfig, AdminServices, InitialAdminPassword,
@@ -528,7 +528,11 @@ impl AccountStore for UnusedStore {
 
 #[async_trait]
 impl ObservabilityStore for UnusedStore {
-    async fn dashboard_summary(&self, range: TimeRange) -> AdminStoreResult<DashboardObservation> {
+    async fn dashboard_summary(
+        &self,
+        range: TimeRange,
+        _: DateTime<Utc>,
+    ) -> AdminStoreResult<DashboardObservation> {
         *self
             .dashboard_summary_range
             .lock()

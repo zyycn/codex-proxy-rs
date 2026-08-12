@@ -166,7 +166,7 @@ async fn dashboard_account_metrics_should_partition_account_statuses() {
         .expect("dashboard range");
 
     let metrics = repository
-        .dashboard_summary(range)
+        .dashboard_summary(range, now)
         .await
         .expect("dashboard summary")
         .provider_accounts;
@@ -252,7 +252,7 @@ async fn dashboard_account_metrics_with_cooldowns_should_only_reclassify_eligibl
         .expect("dashboard range");
 
     let metrics = repository
-        .dashboard_summary(range)
+        .dashboard_summary(range, now)
         .await
         .expect("dashboard summary")
         .provider_accounts;
@@ -416,7 +416,7 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
     let store = PgAdminObservabilityStore::new(database.pool.clone(), None, None);
 
     let dashboard = store
-        .dashboard_summary(range)
+        .dashboard_summary(range, now)
         .await
         .expect("admin dashboard summary");
     assert_eq!(dashboard.range, range);
@@ -714,7 +714,7 @@ async fn dashboard_summary_totals_include_history_outside_selected_range() {
     let repository = PgObservabilityRepository::new(database.pool.clone(), None);
 
     let dashboard = repository
-        .dashboard_summary(range)
+        .dashboard_summary(range, now)
         .await
         .expect("dashboard summary");
     assert_eq!(dashboard.requests.request_count, 2);
@@ -753,7 +753,7 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
     let repository = PgObservabilityRepository::new(database.pool.clone(), None);
 
     let dashboard = repository
-        .dashboard_summary(range)
+        .dashboard_summary(range, now)
         .await
         .expect("dashboard summary");
     assert_eq!(dashboard.requests.request_count, 3);

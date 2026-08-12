@@ -98,6 +98,7 @@ impl ObservabilityRepository for PgObservabilityRepository {
     async fn dashboard_summary(
         &self,
         range: ObservabilityRange,
+        observed_at: DateTime<Utc>,
     ) -> StoreResult<DashboardObservation> {
         let filter = UsageRecordFilter::default();
         let account_usage_range = ObservabilityRange::new(
@@ -123,7 +124,7 @@ impl ObservabilityRepository for PgObservabilityRepository {
             attempt_metrics(&self.pool, range, &filter),
             dashboard_totals(&self.pool),
         )?;
-        let (provider_accounts, _) = self.account_status_snapshot(range.end).await?;
+        let (provider_accounts, _) = self.account_status_snapshot(observed_at).await?;
         let (trend, account_usage, recent_requests) = futures::try_join!(
             request_metric_series(&self.pool, range, &filter),
             provider_account_usage(&self.pool, account_usage_query),
@@ -215,10 +216,11 @@ impl AdminObservabilityStore for PgAdminObservabilityStore {
     async fn dashboard_summary(
         &self,
         range: admin_observability::TimeRange,
+        observed_at: DateTime<Utc>,
     ) -> AdminStoreResult<admin_observability::DashboardObservation> {
         let observation = self
             .repository
-            .dashboard_summary(store_range(range)?)
+            .dashboard_summary(store_range(range)?, observed_at)
             .await
             .map_err(observability_error)?;
         admin_dashboard_observation(observation)

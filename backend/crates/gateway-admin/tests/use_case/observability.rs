@@ -201,6 +201,25 @@ async fn dashboard_summary_should_project_rebuildable_runtime_slots() {
 }
 
 #[tokio::test]
+async fn dashboard_summary_should_share_one_current_observation_time_across_runtime_facts() {
+    let historical_end = Utc::now() - Duration::hours(1);
+    let store = Arc::new(FixtureObservabilityStore::new(observation_range(
+        historical_end,
+    )));
+    let services = observability_services(store.clone()).await;
+
+    services
+        .observability()
+        .dashboard_summary(observation_range(historical_end), TrendKind::Usage)
+        .await
+        .expect("dashboard summary");
+
+    let (summary_observed_at, slots_observed_at) = store.observed_times();
+    assert_eq!(summary_observed_at, slots_observed_at);
+    assert!(summary_observed_at.is_some_and(|value| value > historical_end));
+}
+
+#[tokio::test]
 async fn observability_services_should_calculate_usage_insights_and_diagnostic_shares() {
     let now = Utc::now();
     let range = observation_range(now);
@@ -394,6 +413,8 @@ struct FixtureObservabilityStore {
     calculated_billing_facts: Mutex<Vec<UsageCalculatedBillingFact>>,
     diagnostics: Mutex<Vec<DiagnosticObservation>>,
     runtime_slots: Mutex<Option<DashboardRuntimeSlots>>,
+    summary_observed_at: Mutex<Option<DateTime<Utc>>>,
+    slots_observed_at: Mutex<Option<DateTime<Utc>>>,
     usage_records: Mutex<Vec<UsageRecord>>,
 }
 
@@ -410,6 +431,8 @@ impl FixtureObservabilityStore {
             calculated_billing_facts: Mutex::new(Vec::new()),
             diagnostics: Mutex::new(Vec::new()),
             runtime_slots: Mutex::new(None),
+            summary_observed_at: Mutex::new(None),
+            slots_observed_at: Mutex::new(None),
             usage_records: Mutex::new(Vec::new()),
         }
     }
@@ -437,6 +460,16 @@ impl FixtureObservabilityStore {
         *self.runtime_slots.lock().expect("runtime slots") = runtime_slots;
     }
 
+    fn observed_times(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+        (
+            *self
+                .summary_observed_at
+                .lock()
+                .expect("summary observed at"),
+            *self.slots_observed_at.lock().expect("slots observed at"),
+        )
+    }
+
     fn replace_usage_records(&self, records: Vec<UsageRecord>) {
         *self.usage_records.lock().expect("usage records") = records;
     }
@@ -444,7 +477,15 @@ impl FixtureObservabilityStore {
 
 #[async_trait]
 impl ObservabilityStore for FixtureObservabilityStore {
-    async fn dashboard_summary(&self, range: TimeRange) -> AdminStoreResult<DashboardObservation> {
+    async fn dashboard_summary(
+        &self,
+        range: TimeRange,
+        observed_at: DateTime<Utc>,
+    ) -> AdminStoreResult<DashboardObservation> {
+        *self
+            .summary_observed_at
+            .lock()
+            .expect("summary observed at") = Some(observed_at);
         Ok(DashboardObservation {
             range,
             requests: RequestMetrics::default(),
@@ -459,8 +500,9 @@ impl ObservabilityStore for FixtureObservabilityStore {
 
     async fn dashboard_runtime_slots(
         &self,
-        _: DateTime<Utc>,
+        observed_at: DateTime<Utc>,
     ) -> AdminStoreResult<Option<DashboardRuntimeSlots>> {
+        *self.slots_observed_at.lock().expect("slots observed at") = Some(observed_at);
         Ok(*self.runtime_slots.lock().expect("runtime slots"))
     }
 

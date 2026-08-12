@@ -98,10 +98,11 @@ impl ObservabilityService for DefaultObservabilityService {
         range: TimeRange,
         kind: TrendKind,
     ) -> Result<DashboardResult, AdminError> {
+        let observed_at = Utc::now();
         let (mut observation, settings, runtime_slots) = futures::try_join!(
-            self.store.dashboard_summary(range),
+            self.store.dashboard_summary(range, observed_at),
             self.settings.load_runtime_settings(),
-            self.store.dashboard_runtime_slots(range.end),
+            self.store.dashboard_runtime_slots(observed_at),
         )
         .map_err(|error| map_store_error(error, "dashboard"))?;
         self.enrich_billing(&mut observation.recent_requests);

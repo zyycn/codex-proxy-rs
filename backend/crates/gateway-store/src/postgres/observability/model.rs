@@ -683,6 +683,7 @@ pub trait ObservabilityRepository: Send + Sync {
     async fn dashboard_summary(
         &self,
         range: ObservabilityRange,
+        observed_at: DateTime<Utc>,
     ) -> StoreResult<DashboardObservation>;
     async fn dashboard_trend(
         &self,

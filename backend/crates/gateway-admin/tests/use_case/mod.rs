@@ -14,6 +14,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
 use gateway_admin::{
     AdminConfig, AdminServices, InitialAdminPassword,
@@ -391,7 +392,11 @@ impl ClientKeyStore for UnavailableStore {
 
 #[async_trait]
 impl ObservabilityStore for UnavailableStore {
-    async fn dashboard_summary(&self, _: TimeRange) -> AdminStoreResult<DashboardObservation> {
+    async fn dashboard_summary(
+        &self,
+        _: TimeRange,
+        _: DateTime<Utc>,
+    ) -> AdminStoreResult<DashboardObservation> {
         Err(unavailable("dashboard"))
     }
 
