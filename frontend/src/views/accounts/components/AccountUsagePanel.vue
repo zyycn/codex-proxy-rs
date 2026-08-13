@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
+import { modelSuccessRateTextClass } from '../constants'
 
 defineProps<{
   account: AccountRow
@@ -62,7 +63,7 @@ defineProps<{
       </div>
 
       <div
-        class="grid grid-cols-[1.5fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pb-2 text-[11px] font-heavy text-(--cp-text-secondary) shadow-[inset_0_-1px_0_var(--cp-divider-subtle)]"
+        class="grid grid-cols-[1.5fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.2fr] gap-3 pb-2 text-[11px] font-heavy text-(--cp-text-secondary) shadow-[inset_0_-1px_0_var(--cp-divider-subtle)]"
       >
         <span>模型</span>
         <span>调用</span>
@@ -84,11 +85,13 @@ defineProps<{
         <div
           v-for="model in account.usage.models"
           :key="model.model"
-          class="grid grid-cols-[1.5fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pt-3 text-[12px] font-emphasis text-(--cp-text-primary)"
+          class="grid grid-cols-[1.5fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.2fr] gap-3 pt-3 text-[12px] font-emphasis text-(--cp-text-primary)"
         >
           <span class="truncate">{{ model.model }}</span>
           <span>{{ model.requestCountDisplay }}</span>
-          <span class="text-(--cp-warning-text)">{{ model.successRateDisplay }}</span>
+          <span :class="modelSuccessRateTextClass(model.successRate)">
+            {{ model.successRateDisplay }}
+          </span>
           <span>{{ model.inputTokensDisplay }}</span>
           <span>{{ model.outputTokensDisplay }}</span>
           <span>{{ model.cachedTokensDisplay }}</span>

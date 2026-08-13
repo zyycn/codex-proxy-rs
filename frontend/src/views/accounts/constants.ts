@@ -211,6 +211,18 @@ export function quotaWindowPercentTextClass(window: AccountQuotaWindow) {
   return 'text-(--cp-success-text)'
 }
 
+export function modelSuccessRateTextClass(successRate: number | null) {
+  if (successRate === null)
+    return 'text-(--cp-text-muted)'
+  if (successRate >= 99.5)
+    return 'text-(--cp-success-text)'
+  if (successRate >= 98)
+    return 'text-(--cp-normal-text)'
+  if (successRate >= 95)
+    return 'text-(--cp-warning-text)'
+  return 'text-(--cp-danger-text)'
+}
+
 function compareQuotaWindows(left: AccountQuotaWindow, right: AccountQuotaWindow) {
   const groupDifference = groupOrder(left) - groupOrder(right)
   if (groupDifference !== 0)
