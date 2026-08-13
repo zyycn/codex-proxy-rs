@@ -631,25 +631,74 @@ impl ProviderQuota {
     /// 这里只解释跨 Provider 共享的窗口语义，绝不读取 Provider 私有 JSON。
     #[must_use]
     pub fn representative_used_percent(&self) -> Option<f64> {
+        if self.limit_reached {
+            return Some(100.0);
+        }
+        self.representative_used_window()
+            .map(|(_, used_percent)| used_percent)
+    }
+
+    /// 将已确认的账号级额度耗尽事实投影到展示窗口。
+    ///
+    /// Provider 已指出具体触顶窗口时只归一化这些窗口；否则归一化 Dashboard
+    /// 同样会选择的代表窗口，避免把多个独立额度窗口全部伪造成已用尽。
+    pub fn apply_limit_reached_display(&mut self) {
+        if !self.limit_reached {
+            return;
+        }
+        let reached_windows = self
+            .windows
+            .iter()
+            .enumerate()
+            .filter_map(|(index, window)| window.limit_reached.then_some(index))
+            .collect::<Vec<_>>();
+        if !reached_windows.is_empty() {
+            for index in reached_windows {
+                self.windows[index].used_percent = Some(100.0);
+            }
+            return;
+        }
+        let representative = self
+            .representative_used_window()
+            .map(|(index, _)| index)
+            .or_else(|| {
+                self.windows
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(index, window)| (quota_usage_priority(window), *index))
+                    .map(|(index, _)| index)
+            });
+        if let Some(index) = representative {
+            self.windows[index].used_percent = Some(100.0);
+            self.windows[index].limit_reached = true;
+        }
+    }
+
+    fn representative_used_window(&self) -> Option<(usize, f64)> {
         self.windows
             .iter()
+            .enumerate()
             .filter_map(|window| {
+                let (index, window) = window;
                 let used_percent = window
                     .used_percent
                     .filter(|value| value.is_finite())
                     .map(|value| value.clamp(0.0, 100.0))?;
-                Some((quota_usage_priority(window), used_percent))
+                Some((index, quota_usage_priority(window), used_percent))
             })
-            .fold(None::<(u8, f64)>, |selected, candidate| match selected {
-                Some(current)
-                    if current.0 < candidate.0
-                        || (current.0 == candidate.0 && current.1 >= candidate.1) =>
-                {
+            .fold(
+                None::<(usize, u8, f64)>,
+                |selected, candidate| match selected {
                     Some(current)
-                }
-                _ => Some(candidate),
-            })
-            .map(|(_, used_percent)| used_percent)
+                        if current.1 < candidate.1
+                            || (current.1 == candidate.1 && current.2 >= candidate.2) =>
+                    {
+                        Some(current)
+                    }
+                    _ => Some(candidate),
+                },
+            )
+            .map(|(index, _, used_percent)| (index, used_percent))
     }
 }
 

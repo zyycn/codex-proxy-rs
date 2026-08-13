@@ -135,6 +135,50 @@ fn representative_quota_should_prefer_short_window_and_highest_usage() {
     assert_eq!(quota.representative_used_percent(), Some(45.0));
 }
 
+#[test]
+fn exhausted_quota_should_project_full_usage_to_only_the_representative_window() {
+    let mut quota = ProviderQuota {
+        observed_at: None,
+        refresh_token_expires_at: None,
+        windows: vec![
+            quota_window("monthly", Some(2_592_000), Some(99.0)),
+            quota_window("shortTerm", Some(604_800), Some(80.0)),
+            quota_window("shortTerm", Some(18_000), Some(30.0)),
+            quota_window("shortTerm", Some(14_400), Some(95.0)),
+        ],
+        limit_reached: true,
+        provider_data: None,
+    };
+
+    assert_eq!(quota.representative_used_percent(), Some(100.0));
+    quota.apply_limit_reached_display();
+
+    assert_eq!(quota.windows[0].used_percent, Some(99.0));
+    assert_eq!(quota.windows[1].used_percent, Some(80.0));
+    assert_eq!(quota.windows[2].used_percent, Some(30.0));
+    assert_eq!(quota.windows[3].used_percent, Some(100.0));
+    assert!(quota.windows[3].limit_reached);
+}
+
+#[test]
+fn exhausted_quota_should_preserve_the_provider_identified_reached_window() {
+    let mut reached = quota_window("monthly", Some(2_592_000), Some(98.0));
+    reached.limit_reached = true;
+    let mut quota = ProviderQuota {
+        observed_at: None,
+        refresh_token_expires_at: None,
+        windows: vec![reached, quota_window("shortTerm", Some(18_000), Some(95.0))],
+        limit_reached: true,
+        provider_data: None,
+    };
+
+    quota.apply_limit_reached_display();
+
+    assert_eq!(quota.windows[0].used_percent, Some(100.0));
+    assert_eq!(quota.windows[1].used_percent, Some(95.0));
+    assert!(!quota.windows[1].limit_reached);
+}
+
 fn quota_window(
     group: &str,
     window_seconds: Option<u64>,

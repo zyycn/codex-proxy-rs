@@ -1574,10 +1574,11 @@ fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
 }
 
 fn account_quota_view(
-    quota: ProviderQuota,
+    mut quota: ProviderQuota,
     rate_limited_until: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
 ) -> (AccountQuotaView, Option<String>) {
+    quota.apply_limit_reached_display();
     let refresh_token_expires_at = quota
         .refresh_token_expires_at
         .map(|value| china_rfc3339(&value));
