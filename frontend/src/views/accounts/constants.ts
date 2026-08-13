@@ -94,8 +94,8 @@ export const accountColumns = [
     flex: 1,
     width: '112px',
     minWidth: '112px',
-    headerClass: '!pl-8',
-    cellClass: `${relaxedCellClass} !pl-8`,
+    align: 'center' as const,
+    cellClass: relaxedCellClass,
   },
   {
     key: 'lastUsedAt',
@@ -121,8 +121,8 @@ export const accountColumns = [
   {
     key: 'actions',
     label: '操作',
-    width: '110px',
-    minWidth: '110px',
+    width: '120px',
+    minWidth: '120px',
   },
 ] satisfies BaseTableColumn<AccountRow>[]
 

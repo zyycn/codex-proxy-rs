@@ -348,7 +348,7 @@ function accountUsageItem(item: DashboardSummary['accountUsage'][number]) {
     planType: item.planType,
     tokens: item.tokens,
     lastUsed: item.lastUsed,
-    metricLabel: usesDailyRequests ? '次数' : 'Token',
+    metricLabel: usesDailyRequests ? '次数' : '今日 Token',
     metricValue: usesDailyRequests
       ? requestCount > 0 ? usageWindow.localUsage?.requestCountDisplay : '—'
       : item.tokens,

@@ -123,25 +123,24 @@ const loadingIconClasses = computed(() => [
     :title="title || (iconOnly ? label : undefined)"
     :aria-busy="loading"
   >
-    <span v-if="$slots.icon" :class="loadingIconClasses" aria-hidden="true">
-      <slot name="icon" />
-    </span>
     <span
-      v-else-if="loading && !iconOnly"
-      class="inline-grid shrink-0 place-items-center leading-none"
+      v-if="loading"
+      :class="loadingIconClasses"
       :style="loadingIndicatorStyle"
       aria-hidden="true"
     >
       <LoaderCircle
         :size="loadingIconSize[size]"
-        class="block origin-center animate-spin will-change-transform motion-reduce:animate-none"
       />
+    </span>
+    <span v-else-if="$slots.icon" :class="loadingIconClasses" aria-hidden="true">
+      <slot name="icon" />
     </span>
     <span v-if="!iconOnly && $slots.default" :class="labelClasses">
       <slot />
     </span>
     <span
-      v-if="iconOnly && !$slots.icon"
+      v-if="iconOnly && !$slots.icon && !loading"
       :class="loadingIconClasses"
       aria-hidden="true"
     >

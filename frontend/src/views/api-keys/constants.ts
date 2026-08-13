@@ -19,7 +19,7 @@ export const apiKeyColumns = [
     minWidth: '112px',
     align: 'center' as const,
   },
-  { key: 'scope', label: '分组', width: '112px', minWidth: '112px' },
+  { key: 'scope', label: '分组', width: '112px', minWidth: '112px', align: 'center' as const },
   {
     key: 'createdAtDisplay',
     label: '创建时间',
