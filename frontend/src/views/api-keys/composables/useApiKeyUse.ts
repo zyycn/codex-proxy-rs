@@ -15,7 +15,6 @@ type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number] & { key
 export function useApiKeyUse(options: {
   createdKey: Readonly<Ref<string>>
   createdKeyName: Readonly<Ref<string>>
-  createdKeyProviderKind: Readonly<Ref<string>>
   revealPlaintextKey: (apiKey: ApiKeyRow) => Promise<string>
 }) {
   const showUseKeyModal = shallowRef(false)
@@ -51,7 +50,6 @@ export function useApiKeyUse(options: {
       apiKey: options.createdKey.value,
       baseUrl: openAiBaseUrl.value,
       providerName: options.createdKeyName.value || 'codex-proxy-rs',
-      providerKind: options.createdKeyProviderKind.value,
     })
   }
 
@@ -73,7 +71,6 @@ export function useApiKeyUse(options: {
         apiKey: key,
         baseUrl: openAiBaseUrl.value,
         providerName: apiKey.name || apiKey.prefix || 'codex-proxy-rs',
-        providerKind: apiKey.providerKind,
       })
     }
     catch (error: unknown) {

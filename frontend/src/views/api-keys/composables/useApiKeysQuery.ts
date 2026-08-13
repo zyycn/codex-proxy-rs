@@ -16,7 +16,6 @@ export function useApiKeysQuery() {
   const apiKeys = shallowRef<
     Array<Awaited<ReturnType<typeof getApiKeys>>['items'][number] & {
       createdAtDisplay: string
-      lastUsedAtDisplay: string
     }>
   >([])
   const loading = shallowRef(false)
@@ -56,7 +55,6 @@ export function useApiKeysQuery() {
     apiKeys.value = result.items.map((item: (typeof result.items)[number]) => ({
       ...item,
       createdAtDisplay: formatDateTime(item.createdAt),
-      lastUsedAtDisplay: item.lastUsedAt ? formatDateTime(item.lastUsedAt) : '—',
     }))
     total.value = result.total
     page.value = targetPage

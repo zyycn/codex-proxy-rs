@@ -1,3 +1,4 @@
+import type { AccountGroupRef } from './account-groups'
 import request from '../request'
 
 export type AccountStatus
@@ -118,6 +119,8 @@ export interface Account {
   errorReason: AccountErrorReason | null
   errorMessage: string | null
   enabled: boolean
+  concurrencyLimit: number | null
+  weight: number
   accessTokenExpiresAt: string | null
   accessTokenExpiresAtDisplay: string | null
   refreshTokenExpiresAt: string | null
@@ -128,6 +131,7 @@ export interface Account {
   updatedAtDisplay: string
   quota: AccountQuota
   usage: AccountUsage
+  groups: AccountGroupRef[]
 }
 
 export interface AccountPageMeta {
@@ -171,8 +175,18 @@ export interface AccountImportResponse {
   accountIds: string[]
 }
 
-export interface AccountMutationResponse {
+export interface AccountOAuthCompleteResponse {
   accountId: string
+}
+
+export interface AccountUpdateResponse {
+  accountId: string
+  configRevision: number
+}
+
+export interface AccountBatchUpdateResponse {
+  accountIds: string[]
+  configRevision: number
 }
 
 export interface AccountDeletionResponse {
@@ -193,6 +207,7 @@ interface AccountListParams {
   search?: string
   provider?: string
   status?: string
+  groupId?: string
   sortBy?: string
   sortDirection?: string
 }
@@ -201,9 +216,20 @@ interface AccountIdParam {
   accountId: string
 }
 
-interface AccountProviderIdParam {
-  provider: string
+interface AccountUpdateParam {
   accountId: string
+  enabled: boolean
+  concurrencyLimit: number | null
+  weight: number
+  groupIds: string[]
+}
+
+interface AccountBatchUpdateParam {
+  accountIds: string[]
+  enabled: boolean
+  concurrencyLimit: number | null
+  weight: number
+  groupIds: string[]
 }
 
 interface AccountDeleteParams {
@@ -297,17 +323,17 @@ export function importAccounts(data: AccountImportParam) {
   })
 }
 
-export function enableAccount(data: AccountProviderIdParam) {
-  return request<AccountMutationResponse>({
-    url: '/api/admin/accounts/enable',
+export function updateAccount(data: AccountUpdateParam) {
+  return request<AccountUpdateResponse>({
+    url: '/api/admin/accounts/update',
     method: 'POST',
     data,
   })
 }
 
-export function disableAccount(data: AccountProviderIdParam) {
-  return request<AccountMutationResponse>({
-    url: '/api/admin/accounts/disable',
+export function batchUpdateAccounts(data: AccountBatchUpdateParam) {
+  return request<AccountBatchUpdateResponse>({
+    url: '/api/admin/accounts/batch-update',
     method: 'POST',
     data,
   })
@@ -330,7 +356,7 @@ export function startAccountOAuth(data: AccountOAuthStartParam) {
 }
 
 export function completeAccountOAuth(data: AccountOAuthCompleteParam) {
-  return request<AccountMutationResponse>({
+  return request<AccountOAuthCompleteResponse>({
     url: '/api/admin/accounts/oauth/complete',
     method: 'POST',
     data,

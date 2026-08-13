@@ -2,14 +2,19 @@
 import { ChevronDown } from '@lucide/vue'
 import { ref } from 'vue'
 
+import AccountGroupMarks from '@/components/AccountGroupMarks.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
+import LastUsedAtCell from '@/components/LastUsedAtCell.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
+import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
+import AccountBatchEditModal from './components/AccountBatchEditModal.vue'
 import AccountConnectionTestModal from './components/AccountConnectionTestModal.vue'
 import AccountCreateModal from './components/AccountCreateModal.vue'
+import AccountEditModal from './components/AccountEditModal.vue'
 import AccountFilters from './components/AccountFilters.vue'
 import AccountIdentityCell from './components/AccountIdentityCell.vue'
 import AccountOverviewCards from './components/AccountOverviewCards.vue'
@@ -19,7 +24,9 @@ import AccountQuotaSummaryCell from './components/AccountQuotaSummaryCell.vue'
 import AccountStatusBadge from './components/AccountStatusBadge.vue'
 import AccountTableActions from './components/AccountTableActions.vue'
 import AccountUsagePanel from './components/AccountUsagePanel.vue'
+import { useAccountBatchEditor } from './composables/useAccountBatchEditor'
 import { useAccountConnectionTest } from './composables/useAccountConnectionTest'
+import { useAccountEditor } from './composables/useAccountEditor'
 import { useAccountMutations } from './composables/useAccountMutations'
 import { useAccountsQuery } from './composables/useAccountsQuery'
 import { useAccountsTable } from './composables/useAccountsTable'
@@ -33,6 +40,7 @@ const {
   searchQuery,
   providerQuery,
   statusQuery,
+  groupQuery,
   sort,
   accountSummary,
   accountPagination,
@@ -43,13 +51,18 @@ const {
 } = useAccountsQuery()
 
 const {
+  groups,
+  loading: groupsLoading,
+  loadGroups,
+} = useAccountGroupCatalog()
+
+const {
   showCreateModal,
   showDeleteModal,
   showSingleDeleteModal,
   pendingDeleteAccount,
   refreshingAccountIds,
   refreshingQuotaAccountIds,
-  updatingStatusAccountIds,
   deletingAccount,
   creatingAccount,
   authorizingOAuth,
@@ -67,8 +80,6 @@ const {
   handleExportAccounts,
   handleRefresh,
   handleRefreshQuota,
-  handleToggleSchedule,
-  scheduleActionLabel,
 } = useAccountMutations({
   accounts,
   selectedIds,
@@ -107,6 +118,38 @@ const {
   toggleExpanded,
   toggleAll,
 } = useAccountsTable(accounts, selectedIds)
+
+const {
+  showBatchEditModal,
+  schedulingEnabled: batchSchedulingEnabled,
+  concurrencyLimit: batchConcurrencyLimit,
+  weight: batchWeight,
+  selectedGroupIds: batchGroupIds,
+  saving: savingBatchEdit,
+  open: openBatchEdit,
+  save: saveBatchEdit,
+} = useAccountBatchEditor({
+  accounts,
+  selectedIds,
+  reloadAccounts: loadAccounts,
+  reloadGroups: loadGroups,
+})
+
+const {
+  showEditModal,
+  editingAccount,
+  schedulingEnabled,
+  concurrencyLimit: editingConcurrencyLimit,
+  weight: editingWeight,
+  selectedGroupIds: editingGroupIds,
+  saving: savingAccountEdit,
+  open: openAccountEdit,
+  save: saveAccountEdit,
+} = useAccountEditor({
+  accounts,
+  reloadAccounts: loadAccounts,
+  reloadGroups: loadGroups,
+})
 </script>
 
 <template>
@@ -128,12 +171,16 @@ const {
           v-model:search="searchQuery"
           v-model:status="statusQuery"
           v-model:provider="providerQuery"
+          v-model:group="groupQuery"
+          :groups="groups"
+          :groups-loading="groupsLoading"
           :selected-count="selectedIds.size"
           :batch-deleting="batchDeleting"
           :exporting-accounts="exportingAccounts"
           @delete-selected="showDeleteModal = true"
           @export-selected="handleExportAccounts"
           @create="openCreateAccount"
+          @edit-selected="openBatchEdit"
         />
       </template>
 
@@ -212,19 +259,27 @@ const {
             <AccountQuotaSummaryCell :account="row" />
           </template>
 
+          <template #groups="{ row }">
+            <AccountGroupMarks
+              :groups="row.groups"
+            />
+          </template>
+
+          <template #lastUsedAt="{ row }">
+            <LastUsedAtCell :value="row.usage.lastUsedAt" />
+          </template>
+
           <template #actions="{ row }">
             <AccountTableActions
               :account="row"
               :deleting="deletingAccount"
               :refreshing="refreshingAccountIds.has(row.id)"
-              :schedule-label="scheduleActionLabel(row)"
               :testing="testingConnectionIds.has(row.id)"
-              :updating-status="updatingStatusAccountIds.has(row.id)"
+              @edit="openAccountEdit"
               @delete="requestDeleteAccount"
               @refresh="handleRefresh"
               @reauthorize="openReauthorizeAccount"
               @test="openConnectionTest"
-              @toggle-schedule="handleToggleSchedule"
             />
           </template>
 
@@ -270,6 +325,32 @@ const {
       :saving="creatingAccount"
       @create="handleCreate"
       @generate-oauth="handleAuthorizeOAuth"
+    />
+
+    <AccountEditModal
+      v-model="showEditModal"
+      v-model:enabled="schedulingEnabled"
+      v-model:concurrency-limit="editingConcurrencyLimit"
+      v-model:weight="editingWeight"
+      v-model:selected-group-ids="editingGroupIds"
+      :account="editingAccount"
+      :groups="groups"
+      :groups-loading="groupsLoading"
+      :saving="savingAccountEdit"
+      @save="saveAccountEdit"
+    />
+
+    <AccountBatchEditModal
+      v-model="showBatchEditModal"
+      v-model:enabled="batchSchedulingEnabled"
+      v-model:concurrency-limit="batchConcurrencyLimit"
+      v-model:weight="batchWeight"
+      v-model:selected-group-ids="batchGroupIds"
+      :selected-count="selectedIds.size"
+      :groups="groups"
+      :groups-loading="groupsLoading"
+      :saving="savingBatchEdit"
+      @save="saveBatchEdit"
     />
 
     <BaseConfirmModal

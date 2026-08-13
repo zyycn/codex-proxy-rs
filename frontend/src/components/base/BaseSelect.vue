@@ -262,7 +262,7 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
 <template>
   <div
     ref="rootRef"
-    class="relative inline-block box-content overflow-visible p-0.75 text-left"
+    class="relative inline-block text-left"
     v-bind="attrs"
   >
     <button

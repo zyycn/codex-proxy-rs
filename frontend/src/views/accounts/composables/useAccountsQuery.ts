@@ -23,6 +23,7 @@ export function useAccountsQuery() {
   const searchQuery = shallowRef('')
   const providerQuery = shallowRef('')
   const statusQuery = shallowRef('')
+  const groupQuery = shallowRef('')
   const sort = shallowRef<BaseTableSort>()
   const accountSummary = shallowRef({
     total: 0,
@@ -42,6 +43,7 @@ export function useAccountsQuery() {
         search: searchQuery.value,
         provider: providerQuery.value || undefined,
         status: statusQuery.value || undefined,
+        groupId: groupQuery.value || undefined,
         sortBy: sort.value?.key,
         sortDirection: sort.value?.direction,
       }),
@@ -123,7 +125,7 @@ export function useAccountsQuery() {
     { debounce: 250 },
   )
 
-  watch([providerQuery, statusQuery], () => {
+  watch([providerQuery, statusQuery, groupQuery], () => {
     query.page.value = 1
     void query.execute()
   })
@@ -142,6 +144,7 @@ export function useAccountsQuery() {
     searchQuery,
     providerQuery,
     statusQuery,
+    groupQuery,
     sort,
     accountSummary,
     accountPagination,

@@ -1,85 +1,93 @@
 <script setup lang="ts">
-import type { useApiKeyMutations } from '../composables/useApiKeyMutations'
-import { Openai, Xai } from '@boxicons/vue'
+import type { ApiKeyFormValue } from '../composables/useApiKeyMutations'
+import type { AccountGroup } from '@/api'
 import { Copy, Upload } from '@lucide/vue'
-
 import { computed } from 'vue'
+
+import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
-import BaseSegmented from '@/components/base/BaseSegmented.vue'
 
-type CreateForm = ReturnType<typeof useApiKeyMutations>['createForm']['value']
-
-defineProps<{
+const props = defineProps<{
+  groups: AccountGroup[]
+  groupLoading: boolean
+  editing: boolean
   createdKey: string
   saving: boolean
 }>()
-
 const emit = defineEmits<{
-  create: []
+  save: []
   copy: [text: string]
   importCcs: []
 }>()
 const open = defineModel<boolean>({ default: false })
 const createdOpen = defineModel<boolean>('createdOpen', { default: false })
-const form = defineModel<CreateForm>('form', { required: true })
-
-function formField(key: keyof CreateForm) {
-  return computed({
-    get: () => form.value[key] ?? '',
-    set: (value: string) => {
-      form.value = { ...form.value, [key]: value }
-    },
-  })
-}
-
-const name = formField('name')
-const label = formField('label')
-const providerKind = formField('providerKind')
-const providerOptions = [
-  { label: 'OpenAI', value: 'openai', icon: Openai },
-  { label: 'xAI', value: 'xai', icon: Xai },
-]
+const form = defineModel<ApiKeyFormValue>('form', { required: true })
+const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key')
+const description = computed(() => props.editing
+  ? '调整访问范围与调度限制，分组替换原子生效。'
+  : '为调用方选择一个或多个账号分组。')
 </script>
 
 <template>
   <BaseModal
     v-model="open"
-    title="创建 API Key"
-    description="创建后可在密钥列表中随时复制或导入 CCSwitch"
+    :title="title"
+    :description="description"
     variant="info"
-    width="540px"
+    width="680px"
+    body-max-height="min(680px, calc(100dvh - 190px))"
     :close-disabled="saving"
   >
-    <BaseForm>
-      <BaseFormItem label="平台" required>
-        <BaseSegmented
-          v-model="providerKind"
-          :options="providerOptions"
-          icon-only
-          aria-label="平台"
-          class="w-21"
-        />
-      </BaseFormItem>
-
+    <BaseForm class="grid gap-5">
       <BaseFormItem label="名称" required>
         <BaseInput
-          v-model="name"
+          v-model="form.name"
           aria-label="名称"
-          placeholder="例如：生产环境、测试账号..."
+          placeholder="例如：生产环境、测试调用方..."
+          :disabled="saving"
         />
       </BaseFormItem>
 
       <BaseFormItem label="标签（可选）">
         <BaseInput
-          v-model="label"
+          v-model="form.label"
           aria-label="标签（可选）"
           placeholder="备注信息..."
+          :disabled="saving"
         />
       </BaseFormItem>
+
+      <BaseFormItem label="分组">
+        <AccountGroupCheckboxGrid
+          v-model="form.groupIds"
+          :groups="groups"
+          :loading="groupLoading"
+          :disabled="saving"
+        />
+      </BaseFormItem>
+
+      <div class="grid gap-4 sm:grid-cols-2">
+        <BaseFormItem label="最大并发" description="0 表示不限制">
+          <BaseInput
+            v-model="form.maxConcurrency"
+            type="number"
+            aria-label="最大并发"
+            :disabled="saving"
+          />
+        </BaseFormItem>
+        <BaseFormItem label="每分钟请求数" description="0 表示不限制">
+          <BaseInput
+            v-model="form.requestsPerMinute"
+            type="number"
+            aria-label="每分钟请求数"
+            :disabled="saving"
+          />
+        </BaseFormItem>
+      </div>
     </BaseForm>
 
     <template #footer>
@@ -89,10 +97,10 @@ const providerOptions = [
       <BaseButton
         variant="primary"
         :loading="saving"
-        :disabled="!name.trim()"
-        @click="emit('create')"
+        :disabled="!form.name.trim()"
+        @click="emit('save')"
       >
-        创建
+        {{ editing ? '保存更改' : '创建' }}
       </BaseButton>
     </template>
   </BaseModal>
@@ -105,22 +113,17 @@ const providerOptions = [
     width="540px"
   >
     <div class="flex flex-col gap-4">
-      <div
-        class="rounded-(--cp-input-radius-base) border border-(--cp-warning-border) bg-(--cp-warning-bg) px-4 py-3"
-      >
+      <div class="rounded-(--cp-input-radius-base) border border-(--cp-warning-border) bg-(--cp-warning-bg) px-4 py-3">
         <p class="m-0 text-[13px] font-semibold text-(--cp-warning-text)">
           该密钥具有网关访问权限，请仅发送给可信调用方
         </p>
       </div>
-
       <div>
         <p class="mb-2 text-[13px] font-medium text-(--cp-text-secondary)">
           API Key
         </p>
         <div class="flex items-center gap-2">
-          <code
-            class="flex-1 px-3 py-2.5 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) text-[13px] font-mono text-(--cp-text-primary) break-all"
-          >
+          <code class="flex-1 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2.5 font-mono text-[13px] break-all text-(--cp-text-primary)">
             {{ createdKey }}
           </code>
           <BaseButton icon-only size="md" title="复制" @click="emit('copy', createdKey)">

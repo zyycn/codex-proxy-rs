@@ -5,6 +5,7 @@
   "packageManager": "pnpm@11.7.0",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "typecheck": "vue-tsc -b --pretty false",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint .",

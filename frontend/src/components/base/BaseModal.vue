@@ -44,11 +44,11 @@ const modalStyle = computed(() => {
   }
 })
 const bodyClass = computed(() => [
-  'min-h-0 overflow-hidden p-4 sm:p-7',
+  'min-h-0 overflow-hidden py-4 pr-4 pl-3.25 sm:py-7 sm:pr-7 sm:pl-6.25',
   props.description || variant.value !== 'default' ? 'pt-4 sm:pt-5' : 'pt-4 sm:pt-6',
 ])
 const scrollViewClass = computed(() =>
-  ['pr-3 sm:pr-4', props.bodyViewClass].filter(Boolean).join(' '),
+  ['pb-0.75 pl-0.75 pr-3 sm:pr-4', props.bodyViewClass].filter(Boolean).join(' '),
 )
 
 const iconMap = {

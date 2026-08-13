@@ -37,8 +37,8 @@
   --cp-input-soft-bg: #eef2f7;
   --cp-input-soft-bg-hover: #f2f6fa;
   --cp-input-soft-bg-focus: #f8fafc;
-  --cp-input-context-bg: #ffffff;
-  --cp-input-context-bg-hover: #fbfdff;
+  --cp-input-context-bg: #eef2f7;
+  --cp-input-context-bg-hover: #f2f6fa;
   --cp-input-error-soft-bg: #fff1f1;
 
   --cp-disabled-bg: #f1f5f9;
@@ -141,8 +141,8 @@ html[data-theme='dark'] {
   --cp-input-soft-bg: #182437;
   --cp-input-soft-bg-hover: #1d2d43;
   --cp-input-soft-bg-focus: #111d2d;
-  --cp-input-context-bg: #121b2a;
-  --cp-input-context-bg-hover: #162133;
+  --cp-input-context-bg: #182437;
+  --cp-input-context-bg-hover: #1d2d43;
   --cp-input-error-soft-bg: #311b24;
 
   --cp-disabled-bg: #182231;

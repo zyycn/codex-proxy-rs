@@ -1,10 +1,12 @@
+import type { AccountGroupRef } from './account-groups'
 import request from '../request'
+
+export type ApiKeyRoutingScope = 'all' | 'groups'
 
 export interface ApiKey {
   id: string
   name: string
   label: string | null
-  providerKind: string
   prefix: string
   enabled: boolean
   maxConcurrency: number
@@ -12,6 +14,9 @@ export interface ApiKey {
   createdAt: string
   updatedAt: string
   lastUsedAt: string | null
+  routingScope: ApiKeyRoutingScope
+  groups: AccountGroupRef[]
+  providerKinds: string[]
 }
 
 export interface ApiKeyListResponse {
@@ -44,12 +49,16 @@ interface ApiKeyListParams {
   sortDirection?: string
 }
 
-interface ApiKeyCreateParam {
+export interface ApiKeyWriteParam {
   name: string
-  label?: string
-  providerKind: string
+  label: string | null
+  groupIds: string[]
   maxConcurrency: number
   requestsPerMinute: number
+}
+
+interface ApiKeyUpdateParam extends ApiKeyWriteParam {
+  id: string
 }
 
 interface ApiKeyIdParam {
@@ -64,9 +73,17 @@ export function getApiKeys(data: ApiKeyListParams) {
   })
 }
 
-export function createApiKey(data: ApiKeyCreateParam) {
+export function createApiKey(data: ApiKeyWriteParam) {
   return request<ApiKeyCreateResponse>({
     url: '/api/admin/client-keys/create',
+    method: 'POST',
+    data,
+  })
+}
+
+export function updateApiKey(data: ApiKeyUpdateParam) {
+  return request<ApiKeyMutationResponse>({
+    url: '/api/admin/client-keys/update',
     method: 'POST',
     data,
   })

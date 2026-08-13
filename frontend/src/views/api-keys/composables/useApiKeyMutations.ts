@@ -1,7 +1,14 @@
 import type { Ref } from 'vue'
 import type { getApiKeys } from '@/api'
 import { ref, shallowRef, watch } from 'vue'
-import { createApiKey, deleteApiKey, disableApiKey, enableApiKey, revealApiKey } from '@/api'
+import {
+  createApiKey,
+  deleteApiKey,
+  disableApiKey,
+  enableApiKey,
+  revealApiKey,
+  updateApiKey,
+} from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useCopyText } from '@/composables/useCopyText'
@@ -10,77 +17,128 @@ import { errorMessage } from '@/utils/async'
 
 type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number]
 
+export interface ApiKeyFormValue {
+  name: string
+  label: string
+  groupIds: string[]
+  maxConcurrency: string
+  requestsPerMinute: string
+}
+
 export function useApiKeyMutations(options: {
   selectedIds: Ref<Set<string>>
   reload: () => Promise<unknown>
 }) {
   const copyText = useCopyText()
-  const loadApiKeys = options.reload
-  const showCreateModal = shallowRef(false)
+  const showFormModal = shallowRef(false)
   const showDeleteModal = shallowRef(false)
   const showSingleDeleteModal = shallowRef(false)
   const showKeyModal = shallowRef(false)
+  const showAllAccountsConfirm = shallowRef(false)
   const createdKey = shallowRef('')
   const createdKeyName = shallowRef('')
-  const createdKeyProviderKind = shallowRef('')
+  const editingKey = shallowRef<ApiKeyRow | null>(null)
   const pendingDeleteKey = shallowRef<ApiKeyRow | null>(null)
-  const creatingKeyAction = useAsyncAction()
+  const savingKeyAction = useAsyncAction()
   const deletingKeyAction = useAsyncAction()
   const batchDeletingAction = useAsyncAction()
   const updatingStatusKeys = useIdSet<string>()
   const revealingKeys = useIdSet<string>()
-  const creatingKey = creatingKeyAction.loading
+  const savingKey = savingKeyAction.loading
   const deletingKey = deletingKeyAction.loading
   const batchDeleting = batchDeletingAction.loading
   const updatingStatusKeyIds = updatingStatusKeys.ids
   const revealingKeyIds = revealingKeys.ids
+  const form = ref<ApiKeyFormValue>(emptyForm())
 
-  const createForm = ref({
-    name: '',
-    label: '',
-    providerKind: 'openai',
-  })
+  function openCreate() {
+    editingKey.value = null
+    form.value = emptyForm()
+    showFormModal.value = true
+  }
 
-  watch(showKeyModal, (open) => {
-    if (!open) {
-      createdKey.value = ''
-      createdKeyName.value = ''
-      createdKeyProviderKind.value = ''
+  function openEdit(key: ApiKeyRow) {
+    editingKey.value = key
+    form.value = {
+      name: key.name,
+      label: key.label ?? '',
+      groupIds: key.groups.map(group => group.id),
+      maxConcurrency: String(key.maxConcurrency),
+      requestsPerMinute: String(key.requestsPerMinute),
     }
-  })
+    showFormModal.value = true
+  }
 
-  async function handleCreate() {
-    if (creatingKey.value)
+  function requestSave() {
+    if (!validateForm() || savingKey.value)
       return
-    if (!createForm.value.name.trim()) {
-      toast.warning('请输入 API Key 名称')
+    if (form.value.groupIds.length === 0) {
+      showAllAccountsConfirm.value = true
       return
     }
+    void save()
+  }
 
-    await creatingKeyAction.run(
+  async function confirmAllAccountsScope() {
+    showAllAccountsConfirm.value = false
+    await save()
+  }
+
+  async function save() {
+    if (!validateForm() || savingKey.value)
+      return
+
+    await savingKeyAction.run(
       async () => {
-        const name = createForm.value.name.trim()
-        const providerKind = createForm.value.providerKind
-        const result = await createApiKey({
-          name,
-          label: createForm.value.label.trim() || undefined,
-          providerKind,
-          maxConcurrency: 0,
-          requestsPerMinute: 0,
-        })
+        const payload = {
+          name: form.value.name.trim(),
+          label: form.value.label.trim() || null,
+          groupIds: [...new Set(form.value.groupIds)],
+          maxConcurrency: parseLimit(form.value.maxConcurrency),
+          requestsPerMinute: parseLimit(form.value.requestsPerMinute),
+        }
+        const current = editingKey.value
+        if (current) {
+          await updateApiKey({ id: current.id, ...payload })
+        }
+        else {
+          const result = await createApiKey(payload)
+          createdKey.value = result.plaintextKey
+          createdKeyName.value = payload.name
+        }
 
-        createdKey.value = result.plaintextKey
-        createdKeyName.value = name
-        createdKeyProviderKind.value = providerKind
-        showCreateModal.value = false
-        showKeyModal.value = true
-        createForm.value = { name: '', label: '', providerKind: 'openai' }
-
-        await loadApiKeys()
-        toast.success('API Key 创建成功')
+        showFormModal.value = false
+        editingKey.value = null
+        form.value = emptyForm()
+        await options.reload()
+        if (current) {
+          toast.success('API Key 已更新')
+        }
+        else {
+          showKeyModal.value = true
+          toast.success('API Key 创建成功')
+        }
       },
-      { errorText: '创建失败', onError: () => void loadApiKeys() },
+      { errorText: editingKey.value ? '更新失败' : '创建失败', onError: () => void options.reload() },
     )
+  }
+
+  function validateForm() {
+    if (!form.value.name.trim()) {
+      toast.warning('请输入 API Key 名称')
+      return false
+    }
+    for (const [label, value] of [
+      ['最大并发', form.value.maxConcurrency],
+      ['每分钟请求数', form.value.requestsPerMinute],
+    ] as const) {
+      const parsed = Number(value)
+      if (!Number.isSafeInteger(parsed) || parsed < 0) {
+        toast.warning(`${label}必须是非负整数`)
+        return false
+      }
+    }
+    return true
   }
 
   function requestDeleteKey(key: ApiKeyRow) {
@@ -91,67 +149,56 @@ export function useApiKeyMutations(options: {
   async function handleDelete() {
     if (deletingKey.value)
       return
-
     const keyId = pendingDeleteKey.value?.id
     if (!keyId)
       return
 
     await deletingKeyAction.run(
       async () => {
-        await deleteKey(keyId)
+        await deleteApiKey({ id: keyId })
         const remaining = new Set(options.selectedIds.value)
         remaining.delete(keyId)
         options.selectedIds.value = remaining
         showSingleDeleteModal.value = false
         pendingDeleteKey.value = null
-        await loadApiKeys()
+        await options.reload()
         toast.success('删除成功')
       },
-      { errorText: '删除失败', onError: () => void loadApiKeys() },
+      { errorText: '删除失败', onError: () => void options.reload() },
     )
   }
 
   async function handleBatchDelete() {
-    if (batchDeleting.value)
-      return
-    if (options.selectedIds.value.size === 0)
+    if (batchDeleting.value || options.selectedIds.value.size === 0)
       return
 
     await batchDeletingAction.run(
       async () => {
         const deleteCount = options.selectedIds.value.size
         for (const keyId of [...options.selectedIds.value]) {
-          await deleteKey(keyId)
+          await deleteApiKey({ id: keyId })
           const remaining = new Set(options.selectedIds.value)
           remaining.delete(keyId)
           options.selectedIds.value = remaining
         }
         showDeleteModal.value = false
-        await loadApiKeys()
+        await options.reload()
         toast.success(`已删除 ${deleteCount} 个 API Key`)
       },
-      { errorText: '批量删除失败', onError: () => void loadApiKeys() },
+      { errorText: '批量删除失败', onError: () => void options.reload() },
     )
-  }
-
-  async function deleteKey(keyId: string) {
-    await deleteApiKey({
-      id: keyId,
-    })
   }
 
   async function handleToggleStatus(key: ApiKeyRow) {
     await updatingStatusKeys.run(key.id, async () => {
       try {
         const mutation = key.enabled ? disableApiKey : enableApiKey
-        await mutation({
-          id: key.id,
-        })
-        await loadApiKeys()
+        await mutation({ id: key.id })
+        await options.reload()
         toast.success(key.enabled ? '已禁用' : '已启用')
       }
       catch (error: unknown) {
-        void loadApiKeys()
+        void options.reload()
         toast.error(errorMessage(error, '状态更新失败'))
       }
     })
@@ -177,22 +224,39 @@ export function useApiKeyMutations(options: {
     }
   }
 
+  watch(showKeyModal, (open) => {
+    if (!open) {
+      createdKey.value = ''
+      createdKeyName.value = ''
+    }
+  })
+  watch(showFormModal, (open) => {
+    if (!open && !savingKey.value) {
+      editingKey.value = null
+      form.value = emptyForm()
+    }
+  })
+
   return {
-    showCreateModal,
+    showFormModal,
     showDeleteModal,
     showSingleDeleteModal,
     showKeyModal,
+    showAllAccountsConfirm,
     createdKey,
     createdKeyName,
-    createdKeyProviderKind,
+    editingKey,
     pendingDeleteKey,
-    creatingKey,
+    savingKey,
     deletingKey,
     batchDeleting,
     updatingStatusKeyIds,
     revealingKeyIds,
-    createForm,
-    handleCreate,
+    form,
+    openCreate,
+    openEdit,
+    requestSave,
+    confirmAllAccountsScope,
     requestDeleteKey,
     handleDelete,
     handleBatchDelete,
@@ -201,4 +265,18 @@ export function useApiKeyMutations(options: {
     revealPlaintextKey,
     copyApiKey,
   }
+}
+
+function emptyForm(): ApiKeyFormValue {
+  return {
+    name: '',
+    label: '',
+    groupIds: [],
+    maxConcurrency: '0',
+    requestsPerMinute: '0',
+  }
+}
+
+function parseLimit(value: string) {
+  return Number(value)
 }

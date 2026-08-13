@@ -10,6 +10,8 @@ const props = withDefaults(
     autocomplete?: string
     name?: string
     ariaLabel?: string
+    min?: number | string
+    max?: number | string
   }>(),
   {
     placeholder: '',
@@ -19,6 +21,8 @@ const props = withDefaults(
     autocomplete: undefined,
     name: undefined,
     ariaLabel: undefined,
+    min: undefined,
+    max: undefined,
   },
 )
 
@@ -63,7 +67,7 @@ const inputClasses = computed(() => [
 </script>
 
 <template>
-  <div class="grid box-content gap-2 overflow-visible p-0.75">
+  <div class="grid min-w-0 gap-2">
     <span class="base-input__control" :class="containerClasses">
       <span v-if="$slots.prefix" :class="iconClasses">
         <slot name="prefix" />
@@ -77,6 +81,8 @@ const inputClasses = computed(() => [
         :type="type"
         :disabled="disabled"
         :autocomplete="autocomplete"
+        :min="min"
+        :max="max"
         :aria-label="ariaLabel"
         :aria-invalid="error ? 'true' : undefined"
         @input="updateModel"

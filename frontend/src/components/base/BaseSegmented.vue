@@ -38,10 +38,24 @@ const gridStyle = computed(() => ({
   gridTemplateColumns: `repeat(${optionCount.value}, minmax(0, 1fr))`,
 }))
 
+const isInputSize = computed(() => props.size === 'input')
+
 const indicatorStyle = computed(() => ({
-  width: `calc((100% - 8px) / ${optionCount.value})`,
+  width: isInputSize.value
+    ? `calc((100% - 6px) / ${optionCount.value})`
+    : `calc((100% - 8px) / ${optionCount.value})`,
   transform: `translateX(${activeIndex.value * 100}%)`,
 }))
+
+const rootClasses = computed(() => isInputSize.value
+  ? 'h-(--cp-input-height-default) rounded-(--cp-input-radius-base) p-0.75'
+  : 'h-9 rounded-(--cp-icon-button-radius) p-1')
+
+const indicatorClasses = computed(() => isInputSize.value
+  ? 'inset-y-0.75 left-0.75 rounded-(--cp-input-radius-base)'
+  : 'top-1 bottom-1 left-1 rounded-(--cp-input-radius-base)')
+
+const optionHeightClass = computed(() => isInputSize.value ? 'h-8' : 'h-7')
 
 function selectOption(value: string) {
   if (props.disabled || value === model.value)
@@ -52,13 +66,14 @@ function selectOption(value: string) {
 
 <template>
   <div
-    class="relative inline-grid items-center rounded-(--cp-icon-button-radius) bg-(--cp-bg-muted) p-1"
-    :class="size === 'input' ? 'h-(--cp-input-height-default)' : 'h-9'"
+    class="relative inline-grid items-center bg-(--cp-bg-muted)"
+    :class="rootClasses"
     :style="gridStyle"
     role="tablist"
   >
     <span
-      class="pointer-events-none absolute top-1 bottom-1 left-1 rounded-(--cp-input-radius-base) bg-(--cp-bg-surface) shadow-(--cp-shadow-control) transition-transform duration-200 ease-out"
+      class="pointer-events-none absolute bg-(--cp-bg-surface) shadow-(--cp-shadow-control) transition-transform duration-200 ease-out"
+      :class="indicatorClasses"
       :style="indicatorStyle"
     />
     <button
@@ -66,7 +81,7 @@ function selectOption(value: string) {
       :key="option.value"
       class="relative z-10 inline-flex min-w-0 items-center justify-center gap-1.5 rounded-(--cp-input-radius-base) border-0 bg-transparent px-3 text-xs leading-none font-emphasis transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border)"
       :class="[
-        size === 'input' ? 'h-8' : 'h-7',
+        optionHeightClass,
         model === option.value
           ? 'text-(--cp-text-primary)'
           : 'text-(--cp-text-secondary) hover:text-(--cp-text-primary)',

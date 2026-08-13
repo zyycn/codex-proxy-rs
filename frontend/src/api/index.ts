@@ -1,3 +1,6 @@
+// 账号分组
+export * from './modules/account-groups'
+
 // 账号管理
 export * from './modules/accounts'
 

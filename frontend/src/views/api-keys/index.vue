@@ -1,18 +1,20 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
-import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
+import LastUsedAtCell from '@/components/LastUsedAtCell.vue'
+import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
 import { usePageSelection } from '@/composables/usePageSelection'
 import ApiKeyActions from './components/ApiKeyActions.vue'
 import ApiKeyCreateModal from './components/ApiKeyCreateModal.vue'
 import ApiKeyFilters from './components/ApiKeyFilters.vue'
 import ApiKeyIdentityCell from './components/ApiKeyIdentityCell.vue'
 import ApiKeyPrefixCell from './components/ApiKeyPrefixCell.vue'
+import ApiKeyScopeCell from './components/ApiKeyScopeCell.vue'
 import ApiKeyStatusBadge from './components/ApiKeyStatusBadge.vue'
 import ApiKeyUseModal from './components/ApiKeyUseModal.vue'
 import { useApiKeyMutations } from './composables/useApiKeyMutations'
@@ -35,21 +37,31 @@ const {
 } = useApiKeysQuery()
 
 const {
-  showCreateModal,
+  groups,
+  loading: loadingGroups,
+  loadGroups,
+} = useAccountGroupCatalog({ immediate: false })
+
+const {
+  showFormModal,
   showDeleteModal,
   showSingleDeleteModal,
   showKeyModal,
+  showAllAccountsConfirm,
   createdKey,
   createdKeyName,
-  createdKeyProviderKind,
+  editingKey,
   pendingDeleteKey,
-  creatingKey,
+  savingKey,
   deletingKey,
   batchDeleting,
   updatingStatusKeyIds,
   revealingKeyIds,
-  createForm,
-  handleCreate,
+  form,
+  openCreate,
+  openEdit,
+  requestSave,
+  confirmAllAccountsScope,
   requestDeleteKey,
   handleDelete,
   handleBatchDelete,
@@ -74,9 +86,13 @@ const {
 } = useApiKeyUse({
   createdKey,
   createdKeyName,
-  createdKeyProviderKind,
   revealPlaintextKey,
 })
+
+watch(
+  showFormModal,
+  open => open && void loadGroups(),
+)
 </script>
 
 <template>
@@ -84,7 +100,7 @@ const {
     <BasePageHeader
       class="h-17"
       title="API 密钥"
-      description="签发与维护客户端访问凭证，控制网关调用入口"
+      description="创建和管理 API 密钥，并设置每个密钥可以使用的账号"
     />
 
     <BaseCard
@@ -96,7 +112,7 @@ const {
           v-model:search="searchQuery"
           :batch-deleting="batchDeleting"
           :selected-count="selectedIds.size"
-          @create="showCreateModal = true"
+          @create="openCreate"
           @delete-selected="showDeleteModal = true"
         />
       </template>
@@ -111,7 +127,7 @@ const {
           :pagination="apiKeyPagination"
           :sort="sort"
           empty-text="暂无 API Key"
-          min-width="1320px"
+          min-width="1500px"
           @page-change="handlePageChange"
           @page-size-change="handlePageSizeChange"
           @sort-change="handleSortChange"
@@ -124,7 +140,6 @@ const {
               @update:model-value="toggleAll"
             />
           </template>
-
           <template #selection="{ row }">
             <BaseCheckbox
               :model-value="selectedIds.has(row.id)"
@@ -132,11 +147,9 @@ const {
               @update:model-value="toggleSelection(row.id)"
             />
           </template>
-
           <template #identity="{ row }">
             <ApiKeyIdentityCell :api-key="row" />
           </template>
-
           <template #prefix="{ row }">
             <ApiKeyPrefixCell
               :prefix="row.prefix"
@@ -144,21 +157,22 @@ const {
               @copy="copyApiKey(row)"
             />
           </template>
-
-          <template #providerKind="{ row }">
-            <ProviderIconGroup :provider="row.providerKind" />
+          <template #scope="{ row }">
+            <ApiKeyScopeCell :api-key="row" />
           </template>
-
           <template #enabled="{ row }">
             <ApiKeyStatusBadge :api-key="row" />
           </template>
-
+          <template #lastUsedAt="{ row }">
+            <LastUsedAtCell :value="row.lastUsedAt" />
+          </template>
           <template #actions="{ row }">
             <ApiKeyActions
               :api-key="row"
               :deleting="deletingKey"
               :revealing="revealingKeyIds.has(row.id)"
               :updating-status="updatingStatusKeyIds.has(row.id)"
+              @edit="openEdit"
               @delete="requestDeleteKey"
               @import-ccs="importToCcs"
               @toggle="handleToggleStatus"
@@ -170,13 +184,16 @@ const {
     </BaseCard>
 
     <ApiKeyCreateModal
-      v-model="showCreateModal"
+      v-model="showFormModal"
       v-model:created-open="showKeyModal"
-      v-model:form="createForm"
+      v-model:form="form"
+      :groups="groups"
+      :group-loading="loadingGroups"
+      :editing="Boolean(editingKey)"
       :created-key="createdKey"
-      :saving="creatingKey"
+      :saving="savingKey"
       @copy="copyToClipboard"
-      @create="handleCreate"
+      @save="requestSave"
       @import-ccs="importCreatedKeyToCcs"
     />
 
@@ -188,17 +205,30 @@ const {
     />
 
     <BaseConfirmModal
+      v-model="showAllAccountsConfirm"
+      title="授予全部账号权限"
+      description="保存后，该密钥可以使用所有账号。"
+      variant="danger"
+      confirm-text="确认授予全部账号"
+      :loading="savingKey"
+      @confirm="confirmAllAccountsScope"
+    >
+      <p class="m-0">
+        该密钥可以使用所有账号，包括以后新增和未分组的账号。
+      </p>
+    </BaseConfirmModal>
+
+    <BaseConfirmModal
       v-model="showDeleteModal"
       title="确认删除"
       description="删除后这些 API Key 将立即失效，此操作不可撤销"
       variant="danger"
       confirm-text="确认删除"
       :loading="batchDeleting"
-      width="480px"
       @confirm="handleBatchDelete"
     >
       <p class="m-0">
-        确定要删除选中的 {{ selectedIds.size }} 个 API Key 吗？此操作不可撤销
+        确定删除选中的 {{ selectedIds.size }} 个 API Key 吗？
       </p>
     </BaseConfirmModal>
 
@@ -209,11 +239,10 @@ const {
       variant="danger"
       confirm-text="确认删除"
       :loading="deletingKey"
-      width="480px"
       @confirm="handleDelete"
     >
       <p class="m-0">
-        确定要删除 {{ pendingDeleteKey?.name || pendingDeleteKey?.prefix || '该 API Key' }} 吗？
+        确定删除 {{ pendingDeleteKey?.name || pendingDeleteKey?.prefix || '该 API Key' }} 吗？
       </p>
     </BaseConfirmModal>
   </div>

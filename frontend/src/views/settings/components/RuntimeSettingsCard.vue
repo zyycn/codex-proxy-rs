@@ -20,12 +20,12 @@ const requestIntervalMs = defineModel<string>('requestIntervalMs', { required: t
   >
     <BaseForm :columns="2" class="max-w-6xl">
       <BaseFormItem
-        label="单账号最大并发"
-        description="限制单个账号同一时间可承载的请求数"
+        label="单账号默认最大并发"
+        description="账号未单独设置时使用的并发上限"
       >
         <BaseInput
           v-model="maxConcurrentPerAccount"
-          aria-label="单账号最大并发"
+          aria-label="单账号默认最大并发"
           type="number"
         >
           <template #prefix>

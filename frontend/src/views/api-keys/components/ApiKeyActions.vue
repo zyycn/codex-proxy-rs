@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { getApiKeys } from '@/api'
-import { Power, Terminal, Trash2, Upload } from '@lucide/vue'
+import { Pencil, Power, Terminal, Trash2, Upload } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 
@@ -18,11 +18,21 @@ const emit = defineEmits<{
   importCcs: [apiKey: ApiKeyRow]
   toggle: [apiKey: ApiKeyRow]
   delete: [apiKey: ApiKeyRow]
+  edit: [apiKey: ApiKeyRow]
 }>()
 </script>
 
 <template>
   <div class="flex items-center justify-start gap-1">
+    <BaseButton
+      icon-only
+      variant="ghost"
+      size="sm"
+      label="编辑密钥"
+      @click.stop="emit('edit', apiKey)"
+    >
+      <Pencil class="size-3.5 text-(--cp-info)" />
+    </BaseButton>
     <BaseButton
       icon-only
       variant="ghost"

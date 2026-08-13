@@ -126,12 +126,12 @@ export function useAccountOnboarding(options: {
   }
 
   function openReauthorizeAccount(account: AccountRow) {
-    if (account.provider !== 'openai')
+    if (account.provider !== 'openai' && account.provider !== 'xai')
       return
     reauthorizingAccount.value = account
     createForm.value = {
       ...emptyCreateForm(),
-      provider: 'openai',
+      provider: account.provider,
       name: account.name,
       mode: 'oauth',
     }

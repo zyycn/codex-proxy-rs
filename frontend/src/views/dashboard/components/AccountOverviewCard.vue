@@ -26,7 +26,7 @@ const scheduleStats = computed(() => {
     ? '—'
     : String(value)
   return [
-    { label: '单账号并发', value: display(cap?.maxConcurrentPerAccount) },
+    { label: '默认并发', value: display(cap?.maxConcurrentPerAccount) },
     { label: '总槽位', value: display(cap?.totalSlots) },
     { label: '空闲槽位', value: display(cap?.availableSlots) },
   ]

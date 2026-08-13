@@ -4,8 +4,6 @@ import dayjs from 'dayjs'
 import { ref, watch } from 'vue'
 import {
   deleteAccounts,
-  disableAccount,
-  enableAccount,
   exportAccounts,
   refreshAccount,
   refreshAccountQuota,
@@ -35,13 +33,11 @@ export function useAccountMutations(options: {
   const showDeleteModal = ref(false)
   const showSingleDeleteModal = ref(false)
   const pendingDeleteAccount = ref<AccountRow | null>(null)
-  const updatingStatusAccounts = useIdSet<string>()
   const refreshingAccounts = useIdSet<string>()
   const refreshingQuotaAccounts = useIdSet<string>()
   const deletingAccountAction = useAsyncAction()
   const batchDeletingAction = useAsyncAction()
   const exportingAccountsAction = useAsyncAction()
-  const updatingStatusAccountIds = updatingStatusAccounts.ids
   const refreshingAccountIds = refreshingAccounts.ids
   const refreshingQuotaAccountIds = refreshingQuotaAccounts.ids
   const deletingAccount = deletingAccountAction.loading
@@ -189,24 +185,6 @@ export function useAccountMutations(options: {
     })
   }
 
-  async function handleToggleSchedule(account: AccountRow) {
-    const action = account.enabled ? 'disable' : 'enable'
-    await updatingStatusAccounts.run(account.id, async () => {
-      try {
-        await mutateCredential(account, action)
-        await loadAccounts()
-        toast.success(action === 'disable' ? '已禁用调度' : '已启用调度')
-      }
-      catch (error: unknown) {
-        toast.error(errorMessage(error, '状态更新失败'))
-      }
-    })
-  }
-
-  function scheduleActionLabel(account: AccountRow) {
-    return account.enabled ? '禁用调度' : '启用调度'
-  }
-
   function accountsById(ids: string[]) {
     const accounts = []
     for (const id of ids) {
@@ -216,18 +194,6 @@ export function useAccountMutations(options: {
       accounts.push(account)
     }
     return accounts
-  }
-
-  async function mutateCredential(account: AccountRow, action: 'enable' | 'disable') {
-    const payload = {
-      provider: account.provider,
-      accountId: account.id,
-    }
-    const result = action === 'enable'
-      ? await enableAccount(payload)
-      : await disableAccount(payload)
-    if (!result)
-      throw new Error(`不支持的 Provider：${account.provider}`)
   }
 
   async function deleteAccountBatch(accounts: AccountRow[]) {
@@ -261,7 +227,6 @@ export function useAccountMutations(options: {
     showDeleteModal,
     showSingleDeleteModal,
     pendingDeleteAccount,
-    updatingStatusAccountIds,
     refreshingAccountIds,
     refreshingQuotaAccountIds,
     deletingAccount,
@@ -273,7 +238,5 @@ export function useAccountMutations(options: {
     handleExportAccounts,
     handleRefresh,
     handleRefreshQuota,
-    handleToggleSchedule,
-    scheduleActionLabel,
   }
 }

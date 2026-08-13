@@ -21,6 +21,11 @@ export const routes: RouteRecordRaw[] = [
         component: () => import('@/views/accounts/index.vue'),
       },
       {
+        path: 'account-groups',
+        name: 'account-groups',
+        component: () => import('@/views/account-groups/index.vue'),
+      },
+      {
         path: 'api-keys',
         name: 'api-keys',
         component: () => import('@/views/api-keys/index.vue'),

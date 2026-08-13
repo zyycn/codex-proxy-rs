@@ -41,7 +41,7 @@ const textareaClasses = computed(() => [
 </script>
 
 <template>
-  <div class="grid box-content gap-2 overflow-visible p-0.75">
+  <div class="grid min-w-0 gap-2">
     <textarea
       v-model="model"
       :class="textareaClasses"
