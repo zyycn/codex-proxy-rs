@@ -13,7 +13,9 @@
 Authorization: Bearer sk_...
 ```
 
-Client Key 固定绑定一个 Provider：`openai` 或 `xai`。同一次请求不会跨 Provider fallback。
+Client Key 通过账号分组限定路由范围：未绑定分组时可使用全部账号，绑定一个或多个分组时只能使用
+已启用分组成员的并集。分组可以混合 `openai` 与 `xai` 账号；同一请求只会在模型能力明确匹配且满足
+重放安全边界时跨 Provider fallback。
 
 ### 管理接口
 
@@ -62,7 +64,7 @@ Responses HTTP body、WebSocket message 和 frame 不设置网关私有长度上
 | `POST` | `/v1/responses` | OpenAI Responses JSON；`stream=true` 返回 SSE，否则返回完整 JSON |
 | `GET` | `/v1/responses` | 通过 HTTP Upgrade 建立 Responses WebSocket |
 | `POST` | `/v1/responses/review` | 使用同一 Responses 合同发起 review 子代理请求 |
-| `GET` | `/v1/models` | 返回当前 Client Key 所属 Provider 的可用公开模型；有两种响应形态，见下 |
+| `GET` | `/v1/models` | 返回当前 Client Key 账号范围内各 Provider 的可用公开模型并集；有两种响应形态，见下 |
 | `GET` | `/v1/models/catalog` | 返回 Codex 客户端使用的模型目录 |
 | `GET` | `/v1/models/{model_id}/info` | 返回 Codex 客户端使用的单模型信息 |
 | `GET` | `/v1/models/{model_id}` | 返回 OpenAI 兼容的单模型详情 |
@@ -75,7 +77,7 @@ OpenAI 路径保留客户端 Responses wire 语义：请求 body 的未知字段
 假设 UUID 或固定长度；OpenAI 上游错误 envelope 和允许下发的 opaque header 值也不由 canonical
 观测结果重写。xAI 是 Grok wire 与 Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成。
 上游结构化错误的 message/code/type 会透传给客户端，其中内嵌的账号指纹 UUID 已脱敏。模型映射是
-全局精确映射，未命中时模型名原样交给所属 Provider。
+全局精确映射，未命中时模型名原样交给候选 Provider；分组只限定账号集合，不参与模型改名。
 
 ## 4. 管理员认证
 
@@ -92,14 +94,14 @@ OpenAI 路径保留客户端 Responses wire 语义：请求 body 的未知字段
 
 | 方法 | 路由 | 主要 query/body | 说明 |
 | --- | --- | --- | --- |
-| `GET` | `/api/admin/accounts` | `page`、`pageSize`、`provider`、`search`、`status`、排序字段 | 分页查询账号与汇总 |
+| `GET` | `/api/admin/accounts` | `page`、`pageSize`、`provider`、`groupId`、`search`、`status`、排序字段 | 分页查询账号与汇总 |
 | `GET` | `/api/admin/accounts/detail` | `accountId` | 查询账号详情、额度和本地用量 |
 | `GET` | `/api/admin/accounts/export` | `accountIds`、`confirm=export_sensitive_accounts` | 显式导出最多 200 个账号的敏感 Provider 文档 |
-| `POST` | `/api/admin/accounts/import` | `{ provider, data }` | 导入或按上游身份更新账号 |
+| `POST` | `/api/admin/accounts/import` | `{ provider, data }` | 导入或按上游身份更新账号；新账号保持未分组，已有账号保留所属分组 |
 | `POST` | `/api/admin/accounts/refresh` | `{ accountId }` | 手工刷新 OAuth credential（`idToken` / `accessToken` / `refreshToken`），不刷新额度 |
 | `POST` | `/api/admin/accounts/rotate` | OpenAI rotation 字段 | 手工替换 OpenAI OAuth token |
-| `POST` | `/api/admin/accounts/enable` | `{ provider, accountId }` | 启用账号 |
-| `POST` | `/api/admin/accounts/disable` | `{ provider, accountId }` | 禁用账号 |
+| `POST` | `/api/admin/accounts/update` | `{ accountId, enabled, concurrencyLimit, weight, groupIds }` | 一次更新账号调度状态、并发上限（`null` 表示继承运行参数）、权重（1–100）与所属分组 |
+| `POST` | `/api/admin/accounts/batch-update` | `{ accountIds, enabled, concurrencyLimit, weight, groupIds }` | 一次事务统一更新所选账号的全部调度字段与完整分组集合 |
 | `POST` | `/api/admin/accounts/delete` | `{ provider, accountIds }` | 批量删除 1–200 个账号 |
 | `GET` | `/api/admin/accounts/quota` | `accountId` | 读取当前额度，不强制访问上游 |
 | `POST` | `/api/admin/accounts/quota/refresh` | `{ accountId }` | 访问 Provider 并刷新额度，同时同步额度所属状态 |
@@ -107,11 +109,12 @@ OpenAI 路径保留客户端 Responses wire 语义：请求 body 的未知字段
 | `POST` | `/api/admin/accounts/models/refresh` | `{ accountId }` | 强制拉取最新模型并覆盖 cache |
 | `GET` | `/api/admin/accounts/connection-test` | `accountId`、`modelId` | 通过 SSE 返回实时连接测试事件，不作为业务 Responses 用量记录 |
 | `POST` | `/api/admin/accounts/oauth/start` | `{ provider, name, accountId? }` | 创建 OpenAI 或 xAI OAuth flow；`accountId` 表示重新授权 |
-| `POST` | `/api/admin/accounts/oauth/complete` | `{ provider, flowId, callbackUrl }` | 消费 OAuth callback 并写入账号 |
+| `POST` | `/api/admin/accounts/oauth/complete` | `{ provider, flowId, callbackUrl }` | 消费 OAuth callback；新账号保持未分组，重新授权保留所属分组 |
 
 账号列表支持以下稳定值：
 
 - `provider`: `all`、`openai`、`xai`；
+- `groupId`: 分组 ID、`ungrouped`，或省略以不过滤；
 - `status`: `normal`、`quota_exhausted`、`rate_limited`、`disabled`、`error`；
 - `sortBy`: `email`、`status`、`planType`、`usage`、`lastUsedAt`、`expiresAt`；
 - `sortDirection`: `asc`、`desc`。
@@ -123,6 +126,10 @@ OpenAI 路径保留客户端 Responses wire 语义：请求 body 的未知字段
 - xAI 批量导入逐条独立校验：失败条目跳过并记录日志，不中断其余条目，仅当没有任何条目成功时整个导入才报错；
 - xAI API Key 不是受支持的账号 credential；
 - 导入不会只凭文件外形写入账号；目标 Provider 使用认证材料完成必要的 token exchange 或已认证账号资料补全。
+
+账号导入与 OAuth complete 不接收 `groupIds`。首次创建的账号保持未分组；按既有上游身份重新导入、
+重新授权以及普通 credential refresh/rotation 均保留已有分组。分组关系只通过账号编辑维护。
+账号列表的每个 item 返回轻量 `groups: [{ id, name, enabled }]`。
 
 OpenAI 的 CPR 导出保持 OAuth 账号的既有字段；Agent Identity 账号则输出
 `authMode: "agentIdentity"`、`agentRuntimeId`、`agentPrivateKey` 和可选的
@@ -203,21 +210,43 @@ OAuth start 使用：
   新状态不符合当前筛选，该行从当前页移除。请求驱动或后台任务产生的状态变化，需要下一次显式查询账号
   列表后才会显示。
 
-## 6. Client Key
+## 6. 账号分组
+
+分组是 Provider-neutral 的账号集合；一个组可包含任意 Provider 账号，一个账号也可属于多个组。
+
+| 方法 | 路由 | 主要 query/body | 说明 |
+| --- | --- | --- | --- |
+| `GET` | `/api/admin/account-groups` | `page`、`pageSize`、`search`、`enabled` | 分页查询分组；返回账号可用性、并发槽位（Redis 不可用时 `usedSlots=null`）及成功请求 USD 用量 |
+| `POST` | `/api/admin/account-groups/create` | `{ name, description, color }` | 创建空分组；`color` 严格为 `#RRGGBBAA`，返回时统一大写 |
+| `POST` | `/api/admin/account-groups/update` | `{ id, name, description, color }` | 更新名称、描述和颜色 |
+| `POST` | `/api/admin/account-groups/enable` | `{ id }` | 启用 |
+| `POST` | `/api/admin/account-groups/disable` | `{ id }` | 禁用；已绑定 Key 保持受限，不回退到全部账号 |
+| `POST` | `/api/admin/account-groups/delete` | `{ id }` | 删除未被 Client Key 引用的组 |
+| `GET` | `/api/admin/account-groups/members` | `id` | 查询跨 Provider 成员 |
+
+列表数据为 `{ items, page, configRevision }`，其中 item 返回 `memberCount`、按 Provider 聚合的
+`providerCounts` 和 `clientKeyCount`。成员响应为 `{ id, items, total, configRevision }`；成员的
+`providerKind` 描述账号自身 Provider，并不是分组属性。
+
+## 7. Client Key
 
 | 方法 | 路由 | 主要 query/body | 说明 |
 | --- | --- | --- | --- |
 | `GET` | `/api/admin/client-keys` | `cursor`、`limit`、`search`、`sortBy`、`sortDirection` | 游标分页查询 |
-| `POST` | `/api/admin/client-keys/create` | 创建字段 | 创建绑定 Provider 的 Client Key |
+| `POST` | `/api/admin/client-keys/create` | 创建字段 | 创建带账号范围的 Client Key |
 | `GET` | `/api/admin/client-keys/reveal` | `id` | 显式读取完整明文 Key |
-| `POST` | `/api/admin/client-keys/update` | 更新字段 | 原子更新名称、Provider 和限额 |
+| `POST` | `/api/admin/client-keys/update` | 更新字段 | 原子更新名称、分组范围和限额 |
 | `POST` | `/api/admin/client-keys/enable` | `{ id }` | 启用 |
 | `POST` | `/api/admin/client-keys/disable` | `{ id }` | 禁用 |
 | `POST` | `/api/admin/client-keys/delete` | `{ id }` | 删除 |
 
-创建字段为 `name`、可选 `label`、`providerKind`、`maxConcurrency`、`requestsPerMinute`。更新请求再增加 `id`。创建和 reveal 响应会返回完整明文 Key，调用方必须立即安全保存。
+创建字段为 `name`、可选 `label`、`groupIds`、`maxConcurrency`、`requestsPerMinute`，更新请求再增加
+`id`。`groupIds` 必须显式提交：空数组派生 `routingScope: "all"`，非空数组派生
+`routingScope: "groups"`。响应同时返回分组引用 `groups`，以及从当前有效账号池派生、仅供展示的
+`providerKinds`；Client Key 不再保存 `providerKind`。创建和 reveal 响应会返回完整明文 Key，调用方
+必须立即安全保存。
 
-## 7. 运行设置
+## 8. 运行设置
 
 | 方法 | 路由 | 说明 |
 | --- | --- | --- |
@@ -243,7 +272,7 @@ auditRetentionDays
 
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
 
-## 8. 备份
+## 9. 备份
 
 全部备份端点位于 `/api/admin/settings/backups/*`，内部由独立 BackupService 承担，不并入设置用例。响应继续使用 `AdminEnvelope`，wire 字段 camelCase，`Cache-Control: no-store`。
 
@@ -317,7 +346,7 @@ errorCode, errorMessage, startedAt, completedAt, expiresAt, createdAt, updatedAt
 
 审计动作：`backup.s3_config_updated`、`backup.s3_connection_tested`、`backup.schedule_updated`、`backup.created`、`backup.download_url_created`、`backup.delete_requested`。审计详情与记录表均不保存 Secret、数据库连接串或预签名 URL query。
 
-## 9. Dashboard、用量与错误
+## 10. Dashboard、用量与错误
 
 | 方法 | 路由 | 说明 |
 | --- | --- | --- |
@@ -342,7 +371,7 @@ OpenAI 的 `serviceTier` 只接受上游响应生命周期事件确认的实际 
 `flex` 映射为 `Flex`，缺失或 `default` 映射为 `Default`；未知非空值原样展示。Fast 优先使用模型的
 priority 价格，缺少专用价格时回退到标准价格的 `2.00x`；Flex 为 `0.50x`，Default 为 `1.00x`。
 
-## 10. 版本、更新与重启
+## 11. 版本、更新与重启
 
 | 方法 | 路由 | 主要 query/body | 说明 |
 | --- | --- | --- | --- |

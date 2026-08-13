@@ -71,16 +71,26 @@ API decode/auth
    它在实际首字节写出前越过并按序入队。`downstream_committed_at` 是该事实的 PostgreSQL 观测投影，
    不宣称字节已经到达客户端，也不反向决定协议交付。
 5. Provider 每次 `execute` 只能选择一个 credential 并准备一个 cold stream，不得隐藏换号或业务 retry。
-6. 下游 commit 前，Core 可按冻结策略处理同一 Provider 内的账号 fallback；禁止跨 Provider fallback。
+6. 下游 commit 前，Core 先在当前 Provider 内按冻结策略换账号；只有调用仍处于 `not_sent`、错误属于
+   可安全推进的资源/基础设施类别且 operation 允许重放时，才推进到路由计划中的下一个 Provider。
 7. 本架构不通过隐式连接复用承载业务身份。HTTP client 可安全复用 transport 连接，但账号、credential revision、cookie/session binding 必须显式绑定到本次调用。
 
 管理端 Usage 详情中的 attempt 列表是 best-effort 观测（见 adr-002）：中间失败来自 `ops_events`，最终尝试由 `model_requests` 合成，二者都不承诺完整（队列丢弃、写入失败、非失败观测不落库会造成缺口）。API 通过 `attemptsComplete: false` 显式标注这一语义，不再声称「全部尝试」。
 
 ## 4. 路由、fallback 与错误处理
 
-RuntimeSnapshot 冻结 Provider 集合、模型能力、运行时策略和全局 `config_revision`。一次请求始终使用同一快照，不在执行中拼接新旧配置。
+RuntimeSnapshot 冻结 Provider 集合、模型能力、全部账号及 membership 索引、每个 Client Key 的账号
+范围、运行时策略和全局 `config_revision`。Key 零分组关联表示 `AllAccounts`；存在关联时表示
+`Restricted`，只允许已启用绑定组成员的并集。已绑定组全部禁用或为空会得到空池，绝不回退到全部账号。
+一次请求始终使用认证时取得的同一账号范围和快照，不在执行中拼接新旧配置，热路径也不查询 membership。
+账号调度事实包含可空的并发上限覆盖与 1–100 的权重；并发上限为空时继承运行参数，权重默认 1。
+管理员单账号或批量编辑在同一事务中替换启停、并发上限、权重和完整分组集合；credential 导入、
+重新授权与后台刷新不覆盖已有调度事实。
 
-Fallback 只允许在同一 Provider 内更换可用账号，不跨 Provider。
+模型先经过全局精确映射，再按账号范围内实际存在的 Provider 及其明确模型/operation 能力编译有序候选。
+普通请求和 `ReplayAny` 只有在 Provider 尚未发出请求，且返回无可用账号、账号容量不足或 Provider
+基础设施不可用时，才可推进到下一 Provider；已建立流后的重试先在当前 Provider 内换账号。任何发送结果
+不明确或 downstream 已 commit 的请求都不跨目标重放。
 
 明确的上游认证、封禁、额度或 cooldown 错误会更新对应账号状态，使下一次选择排除该账号；满足重放安全条件且尚未 downstream commit 时，可以换号。传输结果不明确时不得假定请求未到达上游。
 
@@ -96,6 +106,9 @@ continuation 或 claim 表。
 - `store=false`：opaque replay state 仅存在于活连接内，不落 PostgreSQL。
 - OpenAI continuation 顺序为 native、replay owner、replay any。
 - xAI 使用客户端提交的完整历史作为已验证 continuation 路径。
+- native continuation pin 同时绑定创建它的 Client Key、冻结账号范围、Provider 和账号；跨 Key 复用、
+  scope 外账号或计划中不存在该 Provider 都 fail closed。`ReplayOwner` 同样固定原 Provider 和账号，
+  不参与跨 Provider fallback。
 - continuation 失败仍受 send barrier、downstream commit 和 Provider kind 边界约束。
 
 ## 6. Provider 与 credential owner
@@ -157,22 +170,29 @@ Admin API 不要求客户端提交配置 revision，也不向客户端暴露配�
 - 推进 `runtime_settings.config_revision`；
 - 写入脱敏 `admin_audit_events`。
 
-推进全局 revision 的 mutation 包括 runtime settings、客户端 Key、账号导入/创建/删除、管理员显式启停和管理员 credential rotation。
+推进全局 revision 的 mutation 包括 runtime settings、账号分组 CRUD、客户端 Key 及其分组
+替换、账号编辑、账号导入/创建/删除、管理员显式启停和管理员 credential rotation。上述分组关系
+写入与业务 mutation、单次 revision 推进、脱敏审计处于同一 PostgreSQL 事务；审计会明确记录
+`routing_scope: groups -> all` 等权限范围变化。
 
 不推进全局 revision 的运行时观测包括 quota、cooldown、catalog generation、请求统计以及自动 credential refresh；自动 refresh 只推进 `credential_revision`。提交后 Redis 通知只负责缩短其他副本的收敛延迟，周期性 PostgreSQL 对账才是正确性基础。
 
 ## 8. PostgreSQL 终态
 
-`backend/migrations/0001_initial.sql` 直接定义当前大版本完整的新库基线，共创建九张业务表：
+当前 schema 由冻结的编号迁移演进：`0001_initial.sql` 创建九张基线业务表，
+`0005_account_groups.sql` 再增加三张 Provider-neutral 分组关系表，合计十二张业务表：
 
 | 表 | 权威事实 |
 | --- | --- |
 | `admin_users` | 管理员身份与密码摘要 |
 | `admin_audit_events` | 管理 mutation 审计 |
 | `client_api_keys` | 客户端鉴权、限额与授权范围 |
+| `account_groups` | Provider-neutral 分组资料与启停事实 |
+| `account_group_accounts` | 分组到账号的多对多 membership |
+| `client_api_key_groups` | Client Key 到分组的多对多授权；零行表示全部账号 |
 | `runtime_settings` | 全局配置与 `config_revision` |
 | `provider_accounts` | 账号资料、Provider-owned 明文 credential JSON、revision、凭据事实与规范化 quota 事实 |
-| `model_requests` | 请求、attempt、计费、交付与恢复事实 |
+| `model_requests` | 请求、attempt、计费、交付、恢复事实及请求开始时冻结的路由范围快照 |
 | `ops_events` | 脱敏运行事件 |
 | `backup_settings` | S3/R2 存储、Cron 计划与保留策略单例配置 |
 | `backup_records` | 备份任务状态与归档事实（`queued/dumping/uploading/completed/failed/deleting`） |
@@ -197,8 +217,10 @@ heartbeat；计划时间点冲突只记录日志/指标并推进游标，不产�
   客户端可见协议结果。队列不是第二份业务权威，也不做无幂等键的盲目重试。
 - retention 只删除已满足保留规则的历史事实，不改变运行中请求。
 
-业务 schema 由 `backend/migrations/0001_initial.sql` 直接定义当前大版本的完整新库基线，其中
+业务 schema 由编号迁移定义；`0001_initial.sql` 是当前大版本基线，后续冻结迁移只向前演进。其中
 response ID 使用无格式假设的 UTF-8 bytes，`model_requests.service_tier` 保存响应观测到的服务档位，
+`routing_scope` 与 group ID/name 快照保存请求开始时的 `all`/`groups` 授权事实，迁移前历史明确标为
+`legacy_provider`，
 账号对外五态由 PostgreSQL 凭据/额度事实与 Redis 429 冷却通过 Core 唯一解析器动态派生，
 不保存重复的 `status` 列。同一大版本内已合入的迁移永久冻结——
 `.frozen-sha256` 是冻结清单，CI 校验清单相对 PR base 只增不改，启动时 sqlx 重校验已应用
@@ -206,7 +228,7 @@ response ID 使用无格式假设的 UTF-8 bytes，`model_requests.service_tier`
 
 ## 9. Redis 终态
 
-Redis 保存的协调状态恰好是：客户端 admission 热状态、credential lease/fencing 与调度信号、账号 429 cooldown 与 credential state 可重建缓存、catalog 缓存、Provider circuit、会话亲和与会话级账号排除、continuation pin、OAuth pending flow、worker leader lease以及 runtime change 通知。Redis 丢失后必须从 PostgreSQL 或 Provider 事实恢复；恢复完成前需要保护的 acquire 路径 fail closed。
+Redis 保存的协调状态恰好是：客户端 admission 热状态、credential lease/fencing 与调度信号、账号 429 cooldown 与 credential state 可重建缓存、catalog 缓存、Provider circuit、会话亲和与会话级账号排除、continuation pin、OAuth pending flow、worker leader lease以及 runtime change 通知。会话亲和和 round-robin 游标按 Client Key + Provider 隔离；continuation payload 带 Client Key 所有权并在读取时校验。账号 lease、quota、cooldown 和请求间隔仍按真实账号全局共享。Redis 丢失后必须从 PostgreSQL 或 Provider 事实恢复；恢复完成前需要保护的 acquire 路径 fail closed。
 
 多副本部署时，跨副本协调面只有上述 Redis 状态与 PostgreSQL 事实；WebSocket 连接池、请求画像与 RuntimeSnapshot 副本都是进程内状态，其中 RuntimeSnapshot 依靠周期对账收敛，请求画像依靠各自的官方版本检查收敛。
 
