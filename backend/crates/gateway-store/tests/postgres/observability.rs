@@ -730,8 +730,18 @@ async fn dashboard_summary_totals_include_history_outside_selected_range() {
         .await
         .expect("dashboard summary");
     assert_eq!(dashboard.requests.request_count, 2);
-    assert_eq!(dashboard.account_usage[0].request_count, 0);
-    assert_eq!(dashboard.account_usage[0].request_buckets.len(), 2);
+    assert!(dashboard.account_usage.is_empty());
+
+    let explicit_account_usage = repository
+        .provider_account_usage(
+            ProviderAccountUsageQuery::for_accounts(range, vec!["acct_observe".to_owned()])
+                .expect("account usage query"),
+        )
+        .await
+        .expect("provider account usage");
+    assert_eq!(explicit_account_usage.len(), 1);
+    assert_eq!(explicit_account_usage[0].request_count, 0);
+
     assert_eq!(
         (
             dashboard.totals.request_count,

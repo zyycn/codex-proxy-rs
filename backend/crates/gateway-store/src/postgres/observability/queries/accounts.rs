@@ -52,9 +52,12 @@ pub(crate) async fn provider_account_usage(
     }
     statement.push(
         " group by pa.id, pa.provider_kind, pa.authentication_kind, pa.name, pa.email,
-                   pa.plan_type
-          order by max(mr.started_at) desc nulls last, pa.name, pa.id limit ",
+                   pa.plan_type",
     );
+    if query.account_ids.is_none() {
+        statement.push(" having count(mr.id) > 0");
+    }
+    statement.push(" order by max(mr.started_at) desc nulls last, pa.name, pa.id limit ");
     statement.push_bind(i64::from(query.limit));
     let rows = statement
         .build()
