@@ -10,6 +10,7 @@ const props = withDefaults(
     variant?: ButtonVariant
     size?: ButtonSize
     loading?: boolean
+    spinIconOnLoading?: boolean
     disabled?: boolean
     active?: boolean
     iconOnly?: boolean
@@ -21,6 +22,7 @@ const props = withDefaults(
     variant: 'primary',
     size: 'default',
     loading: false,
+    spinIconOnLoading: false,
     disabled: false,
     active: false,
     iconOnly: false,
@@ -124,7 +126,7 @@ const loadingIconClasses = computed(() => [
     :aria-busy="loading"
   >
     <span
-      v-if="loading"
+      v-if="loading && !spinIconOnLoading"
       :class="loadingIconClasses"
       :style="loadingIndicatorStyle"
       aria-hidden="true"
@@ -140,7 +142,7 @@ const loadingIconClasses = computed(() => [
       <slot />
     </span>
     <span
-      v-if="iconOnly && !$slots.icon && !loading"
+      v-if="iconOnly && !$slots.icon && (!loading || spinIconOnLoading)"
       :class="loadingIconClasses"
       aria-hidden="true"
     >

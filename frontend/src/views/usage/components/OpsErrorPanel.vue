@@ -69,6 +69,7 @@ function showDetail(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][nu
           variant="ghost"
           size="md"
           label="刷新错误明细"
+          spin-icon-on-loading
           :loading="refreshing"
           :disabled="loading || refreshing"
           @click="refresh"

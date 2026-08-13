@@ -46,6 +46,7 @@ const {
           class="text-(--cp-normal)"
           size="md"
           label="刷新概览"
+          spin-icon-on-loading
           :loading="loading || refreshing"
           :disabled="loading || refreshing"
           @click="refresh"

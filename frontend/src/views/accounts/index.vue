@@ -262,9 +262,9 @@ const {
           </template>
 
           <template #groups="{ row }">
-            <AccountGroupMarks
-              :groups="row.groups"
-            />
+            <div class="flex w-full justify-center">
+              <AccountGroupMarks :groups="row.groups" />
+            </div>
           </template>
 
           <template #lastUsedAt="{ row }">

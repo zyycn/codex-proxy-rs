@@ -32,6 +32,7 @@ const search = defineModel<string>('search', { required: true })
         variant="ghost"
         size="md"
         label="刷新使用记录"
+        spin-icon-on-loading
         :loading="refreshing"
         :disabled="loading || refreshing"
         @click="emit('refresh')"
