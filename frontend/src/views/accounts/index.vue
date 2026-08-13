@@ -37,6 +37,7 @@ const {
   loading,
   accounts,
   loadAccounts,
+  refreshAccountsSilently,
   searchQuery,
   providerQuery,
   statusQuery,
@@ -108,7 +109,7 @@ const {
   openConnectionTest,
   handleRefreshConnectionTestModels,
   handleTestConnection,
-} = useAccountConnectionTest({ reload: loadAccounts })
+} = useAccountConnectionTest({ reload: refreshAccountsSilently })
 
 const {
   expandedAccountIds,

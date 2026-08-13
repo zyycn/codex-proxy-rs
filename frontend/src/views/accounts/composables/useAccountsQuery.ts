@@ -141,6 +141,7 @@ export function useAccountsQuery() {
     loading: query.loading,
     accounts: query.items,
     loadAccounts: query.execute,
+    refreshAccountsSilently: () => query.execute({ silent: true }),
     searchQuery,
     providerQuery,
     statusQuery,

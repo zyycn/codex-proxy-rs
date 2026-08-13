@@ -45,6 +45,7 @@ const quotaWindows = computed(() => orderedPanelQuotaWindows(props.account.quota
         variant="ghost"
         size="sm"
         title="刷新额度"
+        spin-icon-on-loading
         :loading="refreshing"
         :disabled="refreshing"
         @click="emit('refreshQuota', account.id)"

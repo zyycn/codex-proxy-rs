@@ -27,10 +27,12 @@ export function usePagedQuery<Result extends PageResult>(options: {
   const error = shallowRef('')
   let requestSequence = 0
 
-  async function execute() {
+  async function execute(execution: { silent?: boolean } = {}) {
     const requestId = ++requestSequence
-    loading.value = true
-    error.value = ''
+    if (!execution.silent) {
+      loading.value = true
+      error.value = ''
+    }
 
     try {
       const result = await options.load({
@@ -42,7 +44,7 @@ export function usePagedQuery<Result extends PageResult>(options: {
 
       if (result.items.length === 0 && result.page.total > 0 && result.page.page > 1) {
         page.value = clamp(result.page.totalPages, 1, Number.POSITIVE_INFINITY)
-        return execute()
+        return execute(execution)
       }
 
       items.value = result.items
@@ -55,8 +57,10 @@ export function usePagedQuery<Result extends PageResult>(options: {
     catch (cause: unknown) {
       if (requestId !== requestSequence)
         return false
-      error.value = errorMessage(cause, '加载失败')
-      options.onError?.(cause)
+      if (!execution.silent) {
+        error.value = errorMessage(cause, '加载失败')
+        options.onError?.(cause)
+      }
       return false
     }
     finally {
