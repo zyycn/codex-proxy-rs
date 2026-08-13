@@ -656,9 +656,9 @@ async fn terminal_admin_quota_window_usage_prefers_provider_total_and_falls_back
             request_id: "req_quota_window_recent",
             account_id: "acct_quota_window",
             provider_kind: "openai",
-            model: "gpt-window",
+            model: "gpt-window-recent",
             total_tokens: 10,
-            cost_amount: "0",
+            cost_amount: "1.25",
             started_at: now - TimeDelta::minutes(30),
         },
     )
@@ -670,9 +670,9 @@ async fn terminal_admin_quota_window_usage_prefers_provider_total_and_falls_back
             request_id: "req_quota_window_older",
             account_id: "acct_quota_window",
             provider_kind: "openai",
-            model: "gpt-window",
+            model: "gpt-window-older",
             total_tokens: 20,
-            cost_amount: "0",
+            cost_amount: "2.50",
             started_at: now - TimeDelta::hours(6),
         },
     )
@@ -723,8 +723,26 @@ async fn terminal_admin_quota_window_usage_prefers_provider_total_and_falls_back
 
     assert_eq!(usage[0].key, "long");
     assert_eq!(usage[0].usage.total_tokens, Some(720));
+    assert_eq!(usage[0].usage.models.len(), 2);
+    assert_eq!(
+        usage[0]
+            .usage
+            .models
+            .iter()
+            .map(|model| (model.model.as_str(), model.total_tokens))
+            .collect::<Vec<_>>(),
+        [
+            ("gpt-window-older", Some(20)),
+            ("gpt-window-recent", Some(700)),
+        ],
+    );
+    assert_eq!(usage[0].usage.models[0].costs[0].amount.as_str(), "2.5");
+    assert_eq!(usage[0].usage.models[1].costs[0].amount.as_str(), "1.25");
     assert_eq!(usage[1].key, "short");
     assert_eq!(usage[1].usage.total_tokens, Some(700));
+    assert_eq!(usage[1].usage.models.len(), 1);
+    assert_eq!(usage[1].usage.models[0].model, "gpt-window-recent");
+    assert_eq!(usage[1].usage.models[0].total_tokens, Some(700));
 
     database.close().await;
 }

@@ -97,22 +97,59 @@ impl PgAdminAccountStore {
             .iter()
             .map(|window| window.account_id.clone())
             .collect::<Vec<_>>();
-        sqlx::query(ACCOUNT_USAGE_BY_WINDOWS_SQL)
-            .bind(account_ids)
-            .bind(keys)
-            .bind(starts)
-            .bind(ends)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|_| {
-                admin_store_error(
-                    ENTITY,
-                    postgres_unavailable("load provider account quota window usage"),
-                )
-            })?
+        let (usage_rows, model_rows, model_cost_rows) = futures::try_join!(
+            sqlx::query(ACCOUNT_USAGE_BY_WINDOWS_SQL)
+                .bind(account_ids.clone())
+                .bind(keys.clone())
+                .bind(starts.clone())
+                .bind(ends.clone())
+                .fetch_all(&self.pool),
+            sqlx::query(ACCOUNT_USAGE_MODELS_BY_WINDOWS_SQL)
+                .bind(account_ids.clone())
+                .bind(keys.clone())
+                .bind(starts.clone())
+                .bind(ends.clone())
+                .fetch_all(&self.pool),
+            sqlx::query(ACCOUNT_USAGE_MODEL_COSTS_BY_WINDOWS_SQL)
+                .bind(account_ids)
+                .bind(keys)
+                .bind(starts)
+                .bind(ends)
+                .fetch_all(&self.pool),
+        )
+        .map_err(|_| {
+            admin_store_error(
+                ENTITY,
+                postgres_unavailable("load provider account quota window usage"),
+            )
+        })?;
+        let mut model_costs = BTreeMap::<(String, String, String), Vec<AccountCost>>::new();
+        for row in &model_cost_rows {
+            let (key, cost) = admin_account_usage_window_model_cost(row)?;
+            model_costs.entry(key).or_default().push(cost);
+        }
+        let mut models_by_window = BTreeMap::<(String, String), Vec<AccountModelUsage>>::new();
+        for row in &model_rows {
+            let ((account_id, window_key, model), mut usage) =
+                admin_account_usage_window_model(row)?;
+            usage.costs = model_costs
+                .remove(&(account_id.clone(), window_key.clone(), model))
+                .unwrap_or_default();
+            models_by_window
+                .entry((account_id, window_key))
+                .or_default()
+                .push(usage);
+        }
+        let mut results = usage_rows
             .iter()
             .map(admin_account_usage_window)
-            .collect()
+            .collect::<AdminStoreResult<Vec<_>>>()?;
+        for result in &mut results {
+            result.usage.models = models_by_window
+                .remove(&(result.account_id.clone(), result.key.clone()))
+                .unwrap_or_default();
+        }
+        Ok(results)
     }
 
     async fn required_scope(

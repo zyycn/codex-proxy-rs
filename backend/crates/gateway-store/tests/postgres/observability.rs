@@ -433,7 +433,7 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
     assert_eq!(dashboard.attempts.costs[0].amount.as_str(), "1.25");
     assert_eq!(dashboard.provider_accounts.total, 1);
     assert_eq!(dashboard.account_usage[0].request_count, 1);
-    assert_eq!(dashboard.account_usage[0].request_buckets.len(), 24);
+    assert_eq!(dashboard.account_usage[0].request_buckets.len(), 2);
     assert_eq!(
         dashboard.account_usage[0]
             .request_buckets
@@ -714,7 +714,7 @@ async fn dashboard_summary_totals_include_history_outside_selected_range() {
         .expect("seed observability facts");
     sqlx::query(
         "update model_requests
-         set started_at = $1 - interval '2 days'
+         set started_at = $1 - interval '2 hours'
          where id = 'req_observe_success'",
     )
     .bind(now)
@@ -730,6 +730,8 @@ async fn dashboard_summary_totals_include_history_outside_selected_range() {
         .await
         .expect("dashboard summary");
     assert_eq!(dashboard.requests.request_count, 2);
+    assert_eq!(dashboard.account_usage[0].request_count, 0);
+    assert_eq!(dashboard.account_usage[0].request_buckets.len(), 2);
     assert_eq!(
         (
             dashboard.totals.request_count,
@@ -813,7 +815,7 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
     );
     assert_eq!(dashboard.provider_accounts.total, 1);
     assert_eq!(dashboard.account_usage[0].request_count, 1);
-    assert_eq!(dashboard.account_usage[0].request_buckets.len(), 24);
+    assert_eq!(dashboard.account_usage[0].request_buckets.len(), 2);
     assert_eq!(
         dashboard.account_usage[0]
             .request_buckets

@@ -51,6 +51,74 @@ pub(crate) const ACCOUNT_USAGE_BY_WINDOWS_SQL: &str = "with requested_windows as
       group by requested.account_id, requested.window_key
       order by requested.account_id, requested.window_key";
 
+pub(crate) const ACCOUNT_USAGE_MODELS_BY_WINDOWS_SQL: &str = "with requested_windows as (
+         select *
+         from unnest($1::text[], $2::text[], $3::timestamptz[], $4::timestamptz[])
+           as requested(account_id, window_key, window_start, window_end)
+     )
+     select requested.account_id,
+            requested.window_key,
+            coalesce(mr.upstream_model_id, mr.requested_model_id) as model,
+            count(mr.id)::bigint as request_count,
+            count(mr.id) filter (where mr.outcome = 'succeeded')::bigint as success_count,
+            sum(mr.input_tokens)::bigint as input_tokens,
+            sum(mr.output_tokens)::bigint as output_tokens,
+            sum(mr.cached_tokens)::bigint as cached_tokens,
+            sum(mr.cache_write_tokens)::bigint as cache_write_tokens,
+            sum(mr.reasoning_tokens)::bigint as reasoning_tokens,
+            sum(mr.image_input_tokens)::bigint as image_input_tokens,
+            sum(mr.image_output_tokens)::bigint as image_output_tokens,
+            count(mr.id) filter (where mr.image_generation_succeeded is true)::bigint
+              as image_request_count,
+            count(mr.id) filter (where mr.image_generation_succeeded is false)::bigint
+              as image_request_failed_count,
+            coalesce(sum(coalesce(
+              mr.total_tokens,
+              coalesce(mr.input_tokens, 0) + coalesce(mr.output_tokens, 0)
+            )), 0)::bigint as total_tokens,
+            count(mr.id) filter (where mr.cost_source = 'provider_reported')::bigint
+              as provider_reported_count,
+            count(mr.id) filter (where mr.cost_source = 'calculated')::bigint
+              as calculated_count,
+            count(mr.id) filter (where mr.cost_source = 'unavailable')::bigint
+              as unavailable_count,
+            max(mr.started_at) as last_used_at
+       from requested_windows requested
+       join model_requests mr
+         on mr.provider_account_ref = requested.account_id
+        and mr.started_at >= requested.window_start
+        and mr.started_at < requested.window_end
+        and mr.outcome = 'succeeded'
+        and mr.downstream_committed_at is not null
+        and mr.client_status_code between 200 and 399
+      group by requested.account_id, requested.window_key,
+               coalesce(mr.upstream_model_id, mr.requested_model_id)
+      order by requested.account_id, requested.window_key, request_count desc, model";
+
+pub(crate) const ACCOUNT_USAGE_MODEL_COSTS_BY_WINDOWS_SQL: &str = "with requested_windows as (
+         select *
+         from unnest($1::text[], $2::text[], $3::timestamptz[], $4::timestamptz[])
+           as requested(account_id, window_key, window_start, window_end)
+     )
+     select requested.account_id,
+            requested.window_key,
+            coalesce(mr.upstream_model_id, mr.requested_model_id) as model,
+            mr.cost_currency,
+            sum(mr.cost_amount)::text as amount
+       from requested_windows requested
+       join model_requests mr
+         on mr.provider_account_ref = requested.account_id
+        and mr.started_at >= requested.window_start
+        and mr.started_at < requested.window_end
+        and mr.outcome = 'succeeded'
+        and mr.downstream_committed_at is not null
+        and mr.client_status_code between 200 and 399
+        and mr.cost_amount is not null
+        and mr.cost_currency is not null
+      group by requested.account_id, requested.window_key,
+               coalesce(mr.upstream_model_id, mr.requested_model_id), mr.cost_currency
+      order by requested.account_id, requested.window_key, model, mr.cost_currency";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccountAdminScope {
     pub provider_kind: String,

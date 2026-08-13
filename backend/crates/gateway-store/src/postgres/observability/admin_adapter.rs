@@ -101,12 +101,8 @@ impl ObservabilityRepository for PgObservabilityRepository {
         observed_at: DateTime<Utc>,
     ) -> StoreResult<DashboardObservation> {
         let filter = UsageRecordFilter::default();
-        let account_usage_range = ObservabilityRange::new(
-            range.end - TimeDelta::hours(ACCOUNT_USAGE_TIMELINE_HOURS),
-            range.end,
-        )?;
         let account_usage_query =
-            ProviderAccountUsageQuery::recent(account_usage_range, DASHBOARD_ACCOUNT_LIMIT)?
+            ProviderAccountUsageQuery::recent(range, DASHBOARD_ACCOUNT_LIMIT)?
                 .with_hourly_request_buckets()?;
         let recent_query = UsageRecordQuery {
             range,
