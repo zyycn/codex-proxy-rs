@@ -66,8 +66,8 @@ export const accountGroupColumns = [
   {
     key: 'actions',
     label: '操作',
-    width: '100px',
-    minWidth: '100px',
+    width: '136px',
+    minWidth: '136px',
     cellClass,
   },
 ] satisfies BaseTableColumn<AccountGroup>[]

@@ -91,8 +91,16 @@ const statusView = computed(() => {
       iconClass: 'text-(--cp-success)',
     }
   }
+  if (updateInfo.value) {
+    return {
+      label: '已是最新',
+      icon: CheckCircle2,
+      badge: 'bg-(--cp-success-bg) text-(--cp-success-text)',
+      iconClass: 'text-(--cp-success)',
+    }
+  }
   return {
-    label: updateInfo.value ? '已是最新' : '未检查',
+    label: '未检查',
     icon: CheckCircle2,
     badge: 'bg-(--cp-bg-muted) text-(--cp-text-secondary)',
     iconClass: 'text-(--cp-text-muted)',
@@ -318,6 +326,7 @@ watch(
   <BaseModal
     v-model="open"
     title="系统更新"
+    description="检查版本、查看发布说明并执行在线更新"
     variant="success"
     width="820px"
     body-max-height="72dvh"

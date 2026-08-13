@@ -121,8 +121,8 @@ export const accountColumns = [
   {
     key: 'actions',
     label: '操作',
-    width: '120px',
-    minWidth: '120px',
+    width: '136px',
+    minWidth: '136px',
   },
 ] satisfies BaseTableColumn<AccountRow>[]
 

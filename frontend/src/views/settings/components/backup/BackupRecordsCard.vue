@@ -45,7 +45,7 @@ const columns: BaseTableColumn<BackupRecord>[] = [
   { key: 'expiresAt', label: '过期时间', width: 170 },
   { key: 'trigger', label: '触发方式', width: 100 },
   { key: 'startedAt', label: '开始时间', width: 170 },
-  { key: 'actions', label: '操作', width: 96, fixed: 'right' },
+  { key: 'actions', label: '操作', width: 112, minWidth: 112, fixed: 'right' },
 ]
 
 function triggerLabel(value: string): string {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { dashboardSnapshotView, MetricTone } from '../composables/presenter'
-import { CircleCheck, CircleOff, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
+import { CircleCheck, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
 import { clamp } from 'es-toolkit'
 
 import { computed } from 'vue'
@@ -106,8 +106,7 @@ const statusRows = computed(() => {
       { label: '正常', description: '暂无账号池观测', value: '—', tone: 'success', icon: CircleCheck },
       { label: '配额耗尽', description: '暂无账号池观测', value: '—', tone: 'warning', icon: TriangleAlert },
       { label: '限流中', description: '暂无账号池观测', value: '—', tone: 'normal', icon: RefreshCw },
-      { label: '已停用', description: '暂无账号池观测', value: '—', tone: 'normal', icon: CircleOff },
-      { label: '错误', description: '暂无账号池观测', value: '—', tone: 'danger', icon: ShieldAlert },
+      { label: '待处理', description: '停用 — · 错误 —', value: '—', tone: 'danger', icon: ShieldAlert },
     ]
   }
 
@@ -134,16 +133,9 @@ const statusRows = computed(() => {
       icon: RefreshCw,
     },
     {
-      label: '已停用',
-      description: '账号已停用',
-      value: String(counts.disabled),
-      tone: 'normal',
-      icon: CircleOff,
-    },
-    {
-      label: '错误',
-      description: '账号状态异常',
-      value: String(counts.error),
+      label: '待处理',
+      description: `停用 ${counts.disabled} · 错误 ${counts.error}`,
+      value: String(counts.disabled + counts.error),
       tone: 'danger',
       icon: ShieldAlert,
     },
@@ -165,8 +157,7 @@ const statusBars = computed(() => {
     { pct: (counts.normal / counts.total) * 100, cls: 'bg-(--cp-success)' },
     { pct: (counts.quotaExhausted / counts.total) * 100, cls: 'bg-(--cp-warning)' },
     { pct: (counts.rateLimited / counts.total) * 100, cls: 'bg-(--cp-normal)' },
-    { pct: (counts.disabled / counts.total) * 100, cls: 'bg-(--cp-text-secondary)' },
-    { pct: (counts.error / counts.total) * 100, cls: 'bg-(--cp-danger)' },
+    { pct: ((counts.disabled + counts.error) / counts.total) * 100, cls: 'bg-(--cp-danger)' },
   ].filter(b => b.pct > 0)
 })
 </script>
@@ -333,11 +324,11 @@ const statusBars = computed(() => {
           </div>
         </div>
 
-        <div class="mt-5 grid h-67 w-full grid-rows-5 gap-2">
+        <div class="mt-6.5 grid h-65.5 w-full gap-2.5">
           <div
             v-for="row in statusRows"
             :key="row.label"
-            class="grid min-h-0 grid-cols-[28px_14px_minmax(0,1fr)_76px] items-center rounded-[14px] bg-(--cp-bg-subtle) px-3.5"
+            class="grid h-14.5 grid-cols-[28px_14px_minmax(0,1fr)_76px] items-center rounded-[14px] bg-(--cp-bg-subtle) px-3.5"
           >
             <span
               class="inline-flex size-7 items-center justify-center rounded-[9px]"

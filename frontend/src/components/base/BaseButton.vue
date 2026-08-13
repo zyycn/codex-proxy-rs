@@ -82,6 +82,7 @@ const loadingIndicatorStyle = computed(() => {
 const classes = computed(() => [
   'inline-flex items-center justify-center border-0 font-bold leading-[1.15] transition-[background-color,box-shadow,color,opacity,transform] duration-150 cursor-pointer outline-none motion-safe:active:translate-y-px motion-safe:active:scale-[0.985]',
   props.iconOnly ? iconOnlySizeClasses[props.size] : sizeClasses[props.size],
+  props.iconOnly ? 'shrink-0' : undefined,
   props.iconOnly ? '' : 'rounded-(--cp-button-radius-base)',
   'focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)',
   'disabled:cursor-not-allowed disabled:transform-none disabled:bg-(--cp-disabled-bg) disabled:text-(--cp-disabled-text) disabled:shadow-none',

@@ -43,8 +43,8 @@ export const apiKeyColumns = [
   {
     key: 'actions',
     label: '操作',
-    width: '172px',
-    minWidth: '172px',
+    width: '208px',
+    minWidth: '208px',
     headerClass: relaxedActionCellClass,
     cellClass: relaxedActionCellClass,
   },
