@@ -55,6 +55,12 @@ pub trait AccountsService: Send + Sync {
         account_id: ProviderAccountId,
     ) -> Result<AccountRefreshResult, AdminError>;
 
+    async fn recover(
+        &self,
+        context: &MutationContext,
+        account_id: ProviderAccountId,
+    ) -> Result<AccountRefreshResult, AdminError>;
+
     async fn update(
         &self,
         context: &MutationContext,
@@ -390,6 +396,28 @@ impl AccountsService for DefaultAccountsService {
             .await;
         publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
         let account = self.load_directory_item(&result.account_id, false).await?;
+        Ok(AccountRefreshResult {
+            config_revision: result.config_revision,
+            account,
+        })
+    }
+
+    async fn recover(
+        &self,
+        context: &MutationContext,
+        account_id: ProviderAccountId,
+    ) -> Result<AccountRefreshResult, AdminError> {
+        let (_, provider) = self.provider_for_account(&account_id).await?;
+        let result = self
+            .accounts
+            .recover_account(&account_id, context)
+            .await
+            .map_err(|error| map_store_error(error, "provider account recovery"))?;
+        provider
+            .account_facts_changed(std::slice::from_ref(&account_id))
+            .await;
+        publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
+        let account = self.load_directory_item(&account_id, false).await?;
         Ok(AccountRefreshResult {
             config_revision: result.config_revision,
             account,

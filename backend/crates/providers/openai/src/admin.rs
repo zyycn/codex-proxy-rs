@@ -160,6 +160,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
         if account_ids.is_empty() {
             return;
         }
+        self.quota.invalidate_scheduling(account_ids);
         if let Err(error) = self.catalog.invalidate() {
             tracing::warn!(
                 account_count = account_ids.len(),

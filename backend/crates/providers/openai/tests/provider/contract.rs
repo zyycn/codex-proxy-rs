@@ -1611,14 +1611,11 @@ async fn official_usage_limit_failure_persists_fact_without_fabricating_usage() 
 
     timeout(Duration::from_secs(5), async {
         loop {
-            let observed_at = store
-                .get_quotas(&[account.id().clone()])
-                .await
-                .expect("read refreshed quota observation")
-                .into_iter()
-                .next()
-                .map(|observation| observation.observed_at);
-            if observed_at.is_some_and(|observed_at| observed_at > projected_observed_at) {
+            let requests = server.received_requests().await.expect("received requests");
+            if requests
+                .iter()
+                .any(|request| request.url.path() == "/api/codex/usage")
+            {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1626,15 +1623,15 @@ async fn official_usage_limit_failure_persists_fact_without_fabricating_usage() 
     })
     .await
     .expect("background usage refresh must run");
-    let quota = store
+    let observation = store
         .get_quotas(&[account.id().clone()])
         .await
         .expect("read refreshed quota")
         .into_iter()
         .next()
-        .map(|observation| observation.quota.into_inner())
-        .map(Value::Object)
         .expect("authoritative quota projection");
+    assert_eq!(observation.observed_at, projected_observed_at);
+    let quota = Value::Object(observation.quota.into_inner());
     assert_eq!(
         quota
             .pointer("/rate_limit/primary_window/used_percent")
@@ -1647,9 +1644,12 @@ async fn official_usage_limit_failure_persists_fact_without_fabricating_usage() 
             .and_then(Value::as_i64),
         Some(reset_at)
     );
-    assert!(
-        quota.pointer("/rate_limit/secondary_window").is_none(),
-        "background refresh may normalize empty display windows"
+    assert_eq!(
+        quota
+            .pointer("/rate_limit/secondary_window/used_percent")
+            .and_then(Value::as_u64),
+        Some(0),
+        "a blocked refresh must preserve the raw quota document"
     );
     let requests = server.received_requests().await.expect("received requests");
     assert_eq!(

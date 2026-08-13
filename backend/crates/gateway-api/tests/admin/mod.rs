@@ -718,6 +718,14 @@ impl AccountStore for UnusedStore {
         Err(unavailable("account enabled"))
     }
 
+    async fn recover_account(
+        &self,
+        _: &ProviderAccountId,
+        _: &MutationContext,
+    ) -> AdminStoreResult<AccountUpdateResult> {
+        Err(unavailable("account recovery"))
+    }
+
     async fn batch_update_accounts(
         &self,
         _: BatchUpdateAccounts,

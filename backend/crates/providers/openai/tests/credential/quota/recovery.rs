@@ -56,7 +56,7 @@ async fn quota_refresh_updates_access_fact_without_recovering_credential_error()
             "rate_limit": {
                 "allowed": true,
                 "limit_reached": false,
-                "primary_window": {"used_percent": 100, "reset_at": 1_900_000_000}
+                "primary_window": {"used_percent": 9, "reset_at": 1_900_003_600}
             }
         })))
         .mount(&server)
@@ -68,95 +68,63 @@ async fn quota_refresh_updates_access_fact_without_recovering_credential_error()
         .expect("refresh allowed quota");
     let current = store.account(account_id).expect("recovered quota account");
 
-    assert_eq!(snapshot.fact().remaining_percent(), Some(0));
+    assert_eq!(snapshot.fact().remaining_percent(), Some(91));
     assert_eq!(snapshot.quota().access(), QuotaAccessState::Allowed);
     assert_eq!(current.quota().access(), QuotaAccessState::Allowed);
     assert_eq!(current.credential_state(), CredentialState::Expired);
 }
 
 #[tokio::test]
-async fn explicit_allowance_replaces_confirmed_exhaustion_without_usage_heuristics() {
+async fn exhausted_quota_worker_keeps_old_document_when_new_window_usage_is_high() {
     let store = Arc::new(MemoryAccountStore::default());
-    let account_id = "acct_authoritative_quota_recovery";
+    let account_id = "acct_worker_quota_recovery_gate";
     create_account(&store, account_id).await;
     let account = store.account(account_id).expect("created account");
-    persist_quota_state(
-        &store,
-        &account,
-        exhausted_quota(Some(SystemTime::now() + Duration::from_secs(3_600))),
-    )
-    .await;
-
     let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": false,
+                "limit_reached": true,
+                "primary_window": {"used_percent": 100, "reset_at": 1_700_000_000}
+            }
+        })))
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    service
+        .refresh_account(account.id())
+        .await
+        .expect("seed exhausted quota");
+    let old_quota = store.quota_json(account_id).expect("old quota document");
+
+    server.reset().await;
     Mock::given(method("GET"))
         .and(path("/api/codex/usage"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "rate_limit": {
                 "allowed": true,
                 "limit_reached": false,
-                "primary_window": {"used_percent": 100, "reset_at": 1_900_000_000}
+                "primary_window": {"used_percent": 98, "reset_at": 1_900_000_000}
             }
         })))
         .mount(&server)
         .await;
-    let service = quota_service_with_base_url(
-        &store,
-        reqwest::Client::builder()
-            .no_proxy()
-            .build()
-            .expect("client"),
-        server.uri(),
-    );
 
-    let snapshot = service
-        .refresh_account(account.id())
-        .await
-        .expect("refresh authoritative allowance");
+    let summary = service.synchronize().await.expect("worker quota refresh");
 
-    assert_eq!(snapshot.fact().remaining_percent(), Some(0));
-    assert_eq!(snapshot.quota().access(), QuotaAccessState::Allowed);
-    assert_eq!(
-        store
-            .account(account_id)
-            .expect("updated account")
-            .quota()
-            .access(),
-        QuotaAccessState::Allowed
-    );
-}
-
-#[tokio::test]
-async fn inconclusive_quota_refresh_preserves_confirmed_exhaustion() {
-    let store = Arc::new(MemoryAccountStore::default());
-    let account_id = "acct_inconclusive_quota_refresh";
-    create_account(&store, account_id).await;
-    let account = store.account(account_id).expect("created account");
-    persist_quota_state(&store, &account, exhausted_quota(None)).await;
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/api/codex/usage"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "rate_limit": {
-                "primary_window": {"used_percent": 12, "reset_at": 1_900_000_000}
-            }
-        })))
-        .mount(&server)
-        .await;
-    let service = quota_service_with_base_url(
-        &store,
-        reqwest::Client::builder()
-            .no_proxy()
-            .build()
-            .expect("client"),
-        server.uri(),
-    );
-
-    let snapshot = service
-        .refresh_account(account.id())
-        .await
-        .expect("refresh inconclusive quota");
-
-    assert_eq!(snapshot.quota().access(), QuotaAccessState::Exhausted);
+    assert_eq!(summary.exhausted, 1);
+    assert_eq!(summary.updated, 0);
+    assert_eq!(store.quota_json(account_id), Some(old_quota));
     assert_eq!(
         store
             .account(account_id)
@@ -165,6 +133,76 @@ async fn inconclusive_quota_refresh_preserves_confirmed_exhaustion() {
             .access(),
         QuotaAccessState::Exhausted
     );
+}
+
+#[tokio::test]
+async fn manual_quota_refresh_only_recovers_after_reset_advances_below_ten_percent() {
+    for (suffix, reset_at, used_percent, recovered) in [
+        ("same_reset", 1_900_000_000_i64, 0_u64, false),
+        ("exactly_ten", 1_900_003_600_i64, 10_u64, false),
+        ("below_ten", 1_900_003_600_i64, 9_u64, true),
+    ] {
+        let store = Arc::new(MemoryAccountStore::default());
+        let account_id = format!("acct_manual_quota_recovery_{suffix}");
+        create_account(&store, &account_id).await;
+        let account = store.account(&account_id).expect("created account");
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/codex/usage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "rate_limit": {
+                    "allowed": false,
+                    "limit_reached": true,
+                    "primary_window": {"used_percent": 100, "reset_at": 1_900_000_000}
+                }
+            })))
+            .mount(&server)
+            .await;
+        let service = quota_service_with_base_url(
+            &store,
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("client"),
+            server.uri(),
+        );
+        service
+            .refresh_account(account.id())
+            .await
+            .expect("seed exhausted quota");
+        let old_quota = store.quota_json(&account_id).expect("old quota document");
+
+        server.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/api/codex/usage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "rate_limit": {
+                    "allowed": true,
+                    "limit_reached": false,
+                    "primary_window": {"used_percent": used_percent, "reset_at": reset_at}
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let snapshot = service
+            .refresh_account(account.id())
+            .await
+            .expect("refresh exhausted quota");
+        let current = store.account(&account_id).expect("refreshed account");
+
+        if recovered {
+            assert_eq!(snapshot.fact().remaining_percent(), Some(91));
+            assert_eq!(snapshot.quota().access(), QuotaAccessState::Allowed);
+            assert_ne!(store.quota_json(&account_id), Some(old_quota));
+            assert_eq!(current.quota().access(), QuotaAccessState::Allowed);
+        } else {
+            assert_eq!(snapshot.fact().remaining_percent(), Some(0));
+            assert_eq!(snapshot.quota().access(), QuotaAccessState::Exhausted);
+            assert_eq!(store.quota_json(&account_id), Some(old_quota));
+            assert_eq!(current.quota().access(), QuotaAccessState::Exhausted);
+        }
+    }
 }
 
 #[tokio::test]

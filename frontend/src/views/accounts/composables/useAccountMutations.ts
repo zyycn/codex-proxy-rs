@@ -5,6 +5,7 @@ import { ref, watch } from 'vue'
 import {
   deleteAccounts,
   exportAccounts,
+  recoverAccount,
   refreshAccount,
   refreshAccountQuota,
 } from '@/api'
@@ -33,11 +34,13 @@ export function useAccountMutations(options: {
   const showDeleteModal = ref(false)
   const showSingleDeleteModal = ref(false)
   const pendingDeleteAccount = ref<AccountRow | null>(null)
+  const recoveringAccounts = useIdSet<string>()
   const refreshingAccounts = useIdSet<string>()
   const refreshingQuotaAccounts = useIdSet<string>()
   const deletingAccountAction = useAsyncAction()
   const batchDeletingAction = useAsyncAction()
   const exportingAccountsAction = useAsyncAction()
+  const recoveringAccountIds = recoveringAccounts.ids
   const refreshingAccountIds = refreshingAccounts.ids
   const refreshingQuotaAccountIds = refreshingQuotaAccounts.ids
   const deletingAccount = deletingAccountAction.loading
@@ -185,6 +188,24 @@ export function useAccountMutations(options: {
     })
   }
 
+  async function handleRecover(accountId: string) {
+    await recoveringAccounts.run(accountId, async () => {
+      try {
+        const result = await withMinimumDuration(() => recoverAccount({ accountId }))
+        const remainsVisible = options.replaceAccount(result.account)
+        if (!remainsVisible) {
+          const selectedIds = new Set(options.selectedIds.value)
+          selectedIds.delete(accountId)
+          options.selectedIds.value = selectedIds
+        }
+        toast.success('账号状态已恢复')
+      }
+      catch (error: unknown) {
+        toast.error(errorMessage(error, '恢复状态失败'))
+      }
+    })
+  }
+
   function accountsById(ids: string[]) {
     const accounts = []
     for (const id of ids) {
@@ -227,6 +248,7 @@ export function useAccountMutations(options: {
     showDeleteModal,
     showSingleDeleteModal,
     pendingDeleteAccount,
+    recoveringAccountIds,
     refreshingAccountIds,
     refreshingQuotaAccountIds,
     deletingAccount,
@@ -236,6 +258,7 @@ export function useAccountMutations(options: {
     handleDelete,
     handleBatchDelete,
     handleExportAccounts,
+    handleRecover,
     handleRefresh,
     handleRefreshQuota,
   }

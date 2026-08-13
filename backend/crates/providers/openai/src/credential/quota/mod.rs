@@ -49,6 +49,7 @@ pub(crate) const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);
 const QUOTA_HYDRATION_FAILURE_TTL: Duration = Duration::from_secs(5);
 const EXHAUSTED_QUOTA_FALLBACK_RECHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const EXHAUSTED_QUOTA_REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(30 * 60);
+const RESET_RECOVERY_MAX_USED_PERCENT: f64 = 10.0;
 /// 首次 OAuth 异步观察失败时，由既有 quota worker 兜底重试的单轮上限。
 const INITIAL_QUOTA_SYNC_BATCH: usize = 100;
 // 5xx 上游拒绝的短退避重试预算；指数退避 1s/2s，吞掉瞬时抖动。
@@ -183,6 +184,17 @@ enum CodexQuotaFetchError {
 }
 
 impl CodexQuotaSchedulingProjection {
+    fn invalidate(&self, account_ids: &[ProviderAccountId]) {
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for account_id in account_ids {
+            state.entries.remove(account_id);
+            state.last_periodic_refresh_at.remove(account_id);
+        }
+    }
+
     fn hydration_targets(&self, accounts: &[ProviderAccount]) -> Vec<CodexQuotaHydrationTarget> {
         let state = self
             .state
@@ -494,6 +506,10 @@ impl CodexCredentialQuotaService {
         self.scheduling.signals(account)
     }
 
+    pub(crate) fn invalidate_scheduling(&self, account_ids: &[ProviderAccountId]) {
+        self.scheduling.invalidate(account_ids);
+    }
+
     pub async fn synchronize(&self) -> Result<CodexQuotaSyncSummary, CodexCredentialQuotaError> {
         let accounts = self.repository.list_for_provider().await?;
         let mut summary = CodexQuotaSyncSummary::default();
@@ -625,7 +641,20 @@ impl CodexCredentialQuotaService {
             observed_at,
             &Value::Object(object.clone()),
         )?;
-        let state = account.quota().merge_observation(snapshot.quota());
+        let previous = if account.quota().is_exhausted() {
+            self.read_snapshot_for(account).await?
+        } else {
+            None
+        };
+        if !quota_refresh_can_update(account, &snapshot, previous.as_ref()) {
+            summary.exhausted += 1;
+            return Ok(());
+        }
+        let state = if account.quota().is_exhausted() {
+            QuotaState::allowed(observed_at)
+        } else {
+            account.quota().merge_observation(snapshot.quota())
+        };
         let snapshot = snapshot.with_quota_state(state);
         let outcome = self
             .store
@@ -896,11 +925,23 @@ impl CodexCredentialQuotaService {
             observed_at,
             &Value::Object(object.clone()),
         )?;
-        let state = match authority {
-            QuotaRefreshAuthority::ObserveAccess => {
-                account.quota().merge_observation(snapshot.quota())
+        let previous = if account.quota().is_exhausted() {
+            self.read_snapshot_for(&account).await?
+        } else {
+            None
+        };
+        if !quota_refresh_can_update(&account, &snapshot, previous.as_ref()) {
+            return Ok(previous.unwrap_or_else(|| snapshot.with_quota_state(account.quota())));
+        }
+        let state = if account.quota().is_exhausted() {
+            QuotaState::allowed(observed_at)
+        } else {
+            match authority {
+                QuotaRefreshAuthority::ObserveAccess => {
+                    account.quota().merge_observation(snapshot.quota())
+                }
+                QuotaRefreshAuthority::PreserveAccess => account.quota(),
             }
-            QuotaRefreshAuthority::PreserveAccess => account.quota(),
         };
         let snapshot = snapshot.with_quota_state(state);
         if self
@@ -984,6 +1025,44 @@ impl CodexCredentialQuotaService {
             }
         }
     }
+}
+
+fn quota_refresh_can_update(
+    account: &ProviderAccount,
+    refreshed: &CodexAccountQuotaSnapshot,
+    previous: Option<&CodexAccountQuotaSnapshot>,
+) -> bool {
+    if !account.quota().is_exhausted() {
+        return true;
+    }
+    if refreshed.quota().is_exhausted() {
+        return false;
+    }
+    let previous_reset_at = account.quota().reset_at().or_else(|| {
+        previous?
+            .windows()
+            .iter()
+            .find(|window| {
+                window.source() == "codex" && window.role() == CodexQuotaWindowRole::Primary
+            })?
+            .reset_at()
+            .map(SystemTime::from)
+    });
+    let Some(previous_reset_at) = previous_reset_at else {
+        return false;
+    };
+    let Some(primary) = refreshed.windows().iter().find(|window| {
+        window.source() == "codex" && window.role() == CodexQuotaWindowRole::Primary
+    }) else {
+        return false;
+    };
+    let Some(refreshed_reset_at) = primary.reset_at().map(SystemTime::from) else {
+        return false;
+    };
+    let Some(used_percent) = primary.used_percent() else {
+        return false;
+    };
+    refreshed_reset_at > previous_reset_at && used_percent < RESET_RECOVERY_MAX_USED_PERCENT
 }
 
 async fn fetch_usage_once(

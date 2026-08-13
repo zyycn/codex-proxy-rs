@@ -1042,6 +1042,7 @@ where
         .route("/api/admin/accounts/export", get(export_accounts::<S>))
         .route("/api/admin/accounts/import", post(import_accounts::<S>))
         .route("/api/admin/accounts/refresh", post(refresh_account::<S>))
+        .route("/api/admin/accounts/recover", post(recover_account::<S>))
         .route("/api/admin/accounts/rotate", post(rotate_account::<S>))
         .route("/api/admin/accounts/update", post(update_account::<S>))
         .route("/api/admin/accounts/delete", post(delete_accounts::<S>))
@@ -1334,6 +1335,25 @@ where
         .admin_services()
         .accounts()
         .refresh(&auth.context().mutation_context(), account_id)
+        .await
+        .map_err(map_service_error)?;
+    let data = account_refresh_data(result, Utc::now());
+    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
+}
+
+async fn recover_account<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    Json(request): Json<AccountActionRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let account_id = request.into_id().map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .accounts()
+        .recover(&auth.context().mutation_context(), account_id)
         .await
         .map_err(map_service_error)?;
     let data = account_refresh_data(result, Utc::now());

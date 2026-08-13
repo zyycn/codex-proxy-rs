@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
-import { KeyRound, MoreHorizontal, Pencil, RefreshCw, Trash2, Wifi } from '@lucide/vue'
+import { KeyRound, MoreHorizontal, Pencil, RefreshCw, RotateCcw, Trash2, Wifi } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
@@ -8,6 +8,7 @@ import BasePopover from '@/components/base/BasePopover.vue'
 defineProps<{
   account: AccountRow
   deleting: boolean
+  recovering: boolean
   refreshing: boolean
   testing: boolean
 }>()
@@ -15,6 +16,7 @@ defineProps<{
 const emit = defineEmits<{
   edit: [account: AccountRow]
   delete: [account: AccountRow]
+  recover: [accountId: string]
   test: [account: AccountRow]
   refresh: [accountId: string]
   reauthorize: [account: AccountRow]
@@ -60,7 +62,9 @@ const emit = defineEmits<{
           :disabled="testing"
           @click.stop="(close(), emit('test', account))"
         >
-          <Wifi class="size-3.5 text-(--cp-text-muted)" />
+          <template #icon>
+            <Wifi class="size-3.5 text-(--cp-text-muted)" />
+          </template>
           测试连接
         </BaseButton>
         <BaseButton
@@ -71,7 +75,9 @@ const emit = defineEmits<{
           :disabled="refreshing"
           @click.stop="(close(), emit('refresh', account.id))"
         >
-          <RefreshCw class="size-3.5 text-(--cp-text-muted)" />
+          <template #icon>
+            <RefreshCw class="size-3.5 text-(--cp-text-muted)" />
+          </template>
           刷新令牌
         </BaseButton>
         <BaseButton
@@ -82,6 +88,19 @@ const emit = defineEmits<{
         >
           <KeyRound class="size-3.5 text-(--cp-text-muted)" />
           重新授权
+        </BaseButton>
+        <BaseButton
+          variant="ghost"
+          size="sm"
+          class="h-8.5! w-full justify-start! gap-2! rounded-(--cp-input-radius-small)! px-3! text-left text-[13px] leading-none! font-emphasis! text-(--cp-text-primary)!"
+          :loading="recovering"
+          :disabled="recovering"
+          @click.stop="(close(), emit('recover', account.id))"
+        >
+          <template #icon>
+            <RotateCcw class="size-3.5 text-(--cp-text-muted)" />
+          </template>
+          恢复状态
         </BaseButton>
       </template>
     </BasePopover>

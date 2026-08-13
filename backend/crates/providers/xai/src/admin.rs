@@ -330,6 +330,10 @@ impl ProviderAdmin for XaiAdminProvider {
         let _ = self.cooldowns.clear_all(account_id).await;
     }
 
+    async fn account_facts_changed(&self, account_ids: &[ProviderAccountId]) {
+        self.quota.invalidate_scheduling(account_ids);
+    }
+
     fn connection_test_operation(
         &self,
         upstream_model: &UpstreamModelId,

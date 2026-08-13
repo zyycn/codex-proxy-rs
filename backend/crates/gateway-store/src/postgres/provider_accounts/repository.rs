@@ -61,6 +61,11 @@ pub trait ProviderAccountAdminRepository: Send + Sync {
         command: BatchUpdateProviderAccountsAdmin,
     ) -> StoreResult<Revision>;
 
+    async fn recover_provider_account_admin(
+        &self,
+        command: RecoverProviderAccount,
+    ) -> StoreResult<Revision>;
+
     async fn delete_provider_accounts_admin(
         &self,
         command: DeleteProviderAccounts,
@@ -506,6 +511,57 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
         }
         .await;
         finish_admin_transaction(transaction, result, "provider account admin state change").await
+    }
+
+    async fn recover_provider_account_admin(
+        &self,
+        command: RecoverProviderAccount,
+    ) -> StoreResult<Revision> {
+        validate_admin_account_ids(std::slice::from_ref(&command.account_id))?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| postgres_unavailable("begin provider account admin recovery"))?;
+        let result = async {
+            let revision = bump_config_revision_in_transaction(&mut transaction).await?;
+            let recovered = sqlx::query_scalar::<_, String>(
+                "update provider_accounts
+                 set enabled = true,
+                     credential_state = 'ready',
+                     credential_observed_at = now(),
+                     access_token_expires_at = case
+                         when access_token_expires_at <= now() then null
+                         else access_token_expires_at
+                     end,
+                     provider_quota_json = null,
+                     quota_observed_at = null,
+                     quota_access_state = 'allowed',
+                     quota_evidence = null,
+                     quota_access_observed_at = now(),
+                     quota_reset_at = null,
+                     last_error_reason = null,
+                     last_error_message = null,
+                     updated_at = now()
+                 where id = $1
+                 returning id",
+            )
+            .bind(&command.account_id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|_| postgres_unavailable("recover provider account state"))?
+            .ok_or_else(|| StoreError::NotFound {
+                entity: ENTITY,
+                id: command.account_id.clone(),
+            })?;
+            append_admin_audit_event_in_transaction(&mut transaction, command.audit, revision)
+                .await?;
+            Ok((revision, recovered))
+        }
+        .await;
+        finish_admin_transaction(transaction, result, "provider account admin recovery")
+            .await
+            .map(|(revision, _)| revision)
     }
 
     async fn delete_provider_accounts_admin(

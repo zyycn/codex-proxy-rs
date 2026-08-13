@@ -223,6 +223,16 @@ struct GrokQuotaHydrationTarget {
 }
 
 impl GrokQuotaSchedulingProjection {
+    fn invalidate(&self, account_ids: &[ProviderAccountId]) {
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for account_id in account_ids {
+            state.entries.remove(account_id);
+        }
+    }
+
     fn hydration_targets(&self, accounts: &[ProviderAccount]) -> Vec<GrokQuotaHydrationTarget> {
         let state = self
             .state
@@ -415,6 +425,10 @@ impl GrokCredentialQuotaService {
     #[must_use]
     pub fn scheduling_signals(&self, account: &ProviderAccount) -> Option<AccountQuotaSignals> {
         self.scheduling.signals(account)
+    }
+
+    pub(crate) fn invalidate_scheduling(&self, account_ids: &[ProviderAccountId]) {
+        self.scheduling.invalidate(account_ids);
     }
 
     /// 立即刷新一个账号的动态 billing document，并以 credential revision CAS 写回。

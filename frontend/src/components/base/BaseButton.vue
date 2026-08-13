@@ -105,6 +105,13 @@ const labelClasses = computed(() => [
   'inline-flex min-w-0 items-center justify-center gap-2 [&>svg]:shrink-0',
   labelText.value.length === 2 ? 'tracking-[0.12em]' : undefined,
 ])
+
+const loadingIconClasses = computed(() => [
+  'inline-grid shrink-0 place-items-center leading-none [&>svg]:block',
+  props.loading
+    ? '[&>svg]:origin-center [&>svg]:animate-spin [&>svg]:transform-view [&>svg]:will-change-transform motion-reduce:[&>svg]:animate-none'
+    : undefined,
+])
 </script>
 
 <template>
@@ -116,38 +123,27 @@ const labelClasses = computed(() => [
     :title="title || (iconOnly ? label : undefined)"
     :aria-busy="loading"
   >
+    <span v-if="$slots.icon" :class="loadingIconClasses" aria-hidden="true">
+      <slot name="icon" />
+    </span>
     <span
-      v-if="loading"
-      class="relative inline-flex shrink-0"
+      v-else-if="loading && !iconOnly"
+      class="inline-grid shrink-0 place-items-center leading-none"
       :style="loadingIndicatorStyle"
       aria-hidden="true"
     >
-      <svg
-        :width="loadingIconSize[size]"
-        :height="loadingIconSize[size]"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        class="absolute left-0 top-0 opacity-50"
-      >
-        <circle cx="12" cy="12" r="9" />
-      </svg>
       <LoaderCircle
         :size="loadingIconSize[size]"
-        class="absolute left-0 top-0 animate-spin origin-center transform-view will-change-transform"
+        class="block origin-center animate-spin will-change-transform motion-reduce:animate-none"
       />
-    </span>
-    <span v-if="$slots.icon && !loading" class="inline-flex shrink-0">
-      <slot name="icon" />
     </span>
     <span v-if="!iconOnly && $slots.default" :class="labelClasses">
       <slot />
     </span>
     <span
-      v-if="iconOnly && !$slots.icon && !loading"
-      class="inline-flex items-center justify-center"
+      v-if="iconOnly && !$slots.icon"
+      :class="loadingIconClasses"
+      aria-hidden="true"
     >
       <slot />
     </span>

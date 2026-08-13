@@ -105,7 +105,9 @@ const groupOptions = computed(() => [
         :loading="exportingAccounts"
         @click="emit('exportSelected')"
       >
-        <Download class="size-4" />
+        <template #icon>
+          <Download class="size-4" />
+        </template>
         导出选中 ({{ selectedCount }})
       </BaseButton>
       <BaseButton

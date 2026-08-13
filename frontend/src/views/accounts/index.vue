@@ -61,6 +61,7 @@ const {
   showDeleteModal,
   showSingleDeleteModal,
   pendingDeleteAccount,
+  recoveringAccountIds,
   refreshingAccountIds,
   refreshingQuotaAccountIds,
   deletingAccount,
@@ -78,6 +79,7 @@ const {
   handleDelete,
   handleBatchDelete,
   handleExportAccounts,
+  handleRecover,
   handleRefresh,
   handleRefreshQuota,
 } = useAccountMutations({
@@ -273,10 +275,12 @@ const {
             <AccountTableActions
               :account="row"
               :deleting="deletingAccount"
+              :recovering="recoveringAccountIds.has(row.id)"
               :refreshing="refreshingAccountIds.has(row.id)"
               :testing="testingConnectionIds.has(row.id)"
               @edit="openAccountEdit"
               @delete="requestDeleteAccount"
+              @recover="handleRecover"
               @refresh="handleRefresh"
               @reauthorize="openReauthorizeAccount"
               @test="openConnectionTest"

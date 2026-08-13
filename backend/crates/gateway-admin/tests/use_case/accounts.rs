@@ -676,6 +676,31 @@ impl AccountStore for FakeAccountStore {
         })
     }
 
+    async fn recover_account(
+        &self,
+        account_id: &ProviderAccountId,
+        context: &MutationContext,
+    ) -> AdminStoreResult<AccountUpdateResult> {
+        self.record("store.recover_account");
+        self.record_context(context);
+        self.require_commit()?;
+        let mut accounts = self.accounts.lock().expect("accounts");
+        if let Some(account) = accounts
+            .iter_mut()
+            .find(|account| account.id == account_id.as_str())
+        {
+            account.enabled = true;
+            account.credential_state = CredentialState::Ready;
+            account.quota = QuotaState::allowed(std::time::SystemTime::now());
+            account.last_error_reason = None;
+            account.last_error_message = None;
+        }
+        Ok(AccountUpdateResult {
+            config_revision: revision(2),
+            account_id: account_id.clone(),
+        })
+    }
+
     async fn batch_update_accounts(
         &self,
         command: BatchUpdateAccounts,
@@ -1021,6 +1046,59 @@ async fn accounts_refresh_should_keep_guard_through_store_commit() {
         ]
     );
     assert_eq!(store.audit_requests(), ["refresh-request"]);
+}
+
+#[tokio::test]
+async fn accounts_recover_should_commit_facts_then_return_normal_account() {
+    let events = events();
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    let mut account = account_record("openai");
+    account.enabled = false;
+    account.credential_state = CredentialState::Invalid;
+    account.quota = QuotaState::exhausted(
+        QuotaEvidence::UsageLimitReached,
+        std::time::SystemTime::now(),
+        None,
+    );
+    account.last_error_reason =
+        Some(gateway_core::engine::credential::AccountErrorReason::CredentialInvalid);
+    account.last_error_message = Some("invalid credential".to_owned());
+    let store = FakeAccountStore::with_account(account, events.clone());
+    let services = accounts_service(provider, store.clone()).await;
+
+    let result = services
+        .accounts()
+        .recover(
+            &context("recover-request"),
+            ProviderAccountId::new("acct_test").expect("account ID"),
+        )
+        .await
+        .expect("recover account");
+
+    assert_eq!(result.config_revision, revision(2));
+    assert!(result.account.account.enabled);
+    assert_eq!(
+        result.account.account.credential_state,
+        CredentialState::Ready
+    );
+    assert_eq!(
+        result.account.account.quota.access(),
+        gateway_core::engine::credential::QuotaAccessState::Allowed
+    );
+    assert_eq!(
+        result.account.projection.status,
+        gateway_admin::model::accounts::AccountStatus::Normal
+    );
+    assert_eq!(
+        recorded(&events),
+        [
+            "store.load_account",
+            "store.recover_account",
+            "provider.account_facts_changed",
+            "store.load_account",
+        ]
+    );
+    assert_eq!(store.audit_requests(), ["recover-request"]);
 }
 
 #[tokio::test]

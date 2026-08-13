@@ -36,6 +36,21 @@ use serde_json::json;
 
 use super::TestDatabase;
 
+#[derive(sqlx::FromRow)]
+struct RecoveredAccountRow {
+    enabled: bool,
+    credential_state: String,
+    quota_access_state: String,
+    quota_evidence: Option<String>,
+    last_error_message: Option<String>,
+    provider_quota_json: Option<serde_json::Value>,
+    concurrency_limit: Option<i64>,
+    weight: i16,
+    provider_credentials_json: serde_json::Value,
+    credential_revision: i64,
+    access_token_expires_at: Option<chrono::DateTime<Utc>>,
+}
+
 #[test]
 fn postgres_provider_account_adapter_implements_core_port() {
     fn assert_port<T: ProviderAccountStore>() {}
@@ -787,6 +802,130 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
             ),
             ("delete".to_owned(), 3, Vec::new()),
         ]
+    );
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn account_recovery_resets_status_facts_without_changing_credentials_or_scheduling() {
+    const GROUP_ID: &str = "grp_00000000000000000000000000000070";
+    let Some(database) = TestDatabase::create("provider_account_recovery").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let mut seeded = account("acct_recovery", "user-recovery");
+    seeded.enabled = false;
+    seeded.concurrency_limit = gateway_core::engine::credential::AccountConcurrencyLimit::new(7);
+    seeded.weight = gateway_core::engine::credential::AccountWeight::new(25).expect("weight");
+    seeded.credential_state = CredentialState::Invalid;
+    repository
+        .insert_provider_account(seeded)
+        .await
+        .expect("insert recoverable account");
+    let observed_at = SystemTime::now();
+    repository
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: ProviderAccountId::new("acct_recovery").expect("account ID"),
+            expected_revision: CredentialRevision::new(1).expect("credential revision"),
+            quota: OpaqueProviderData::new(
+                json!({
+                    "rate_limit": {
+                        "allowed": false,
+                        "primary_window": {"used_percent": 100, "reset_at": 1_900_000_000}
+                    }
+                })
+                .as_object()
+                .expect("quota object")
+                .clone(),
+            ),
+            observed_at,
+            state: QuotaState::exhausted(
+                QuotaEvidence::UsageLimitReached,
+                observed_at,
+                Some(observed_at + Duration::from_secs(60)),
+            ),
+        })
+        .await
+        .expect("persist exhausted quota");
+    sqlx::query(
+        "update provider_accounts
+         set last_error_reason = 'credential_invalid',
+             last_error_message = 'invalid credential',
+             access_token_expires_at = now() - interval '1 hour'
+         where id = 'acct_recovery'",
+    )
+    .execute(&database.pool)
+    .await
+    .expect("seed account error");
+    sqlx::query(
+        "insert into account_groups (id, name, description, color, enabled, created_at, updated_at)
+         values ($1, 'Recovery group', null, '#2563EBFF', true, now(), now())",
+    )
+    .bind(GROUP_ID)
+    .execute(&database.pool)
+    .await
+    .expect("insert recovery group");
+    sqlx::query(
+        "insert into account_group_accounts (account_group_id, provider_account_id, created_at)
+         values ($1, 'acct_recovery', now())",
+    )
+    .bind(GROUP_ID)
+    .execute(&database.pool)
+    .await
+    .expect("assign recovery group");
+    let before: (serde_json::Value, i64) = sqlx::query_as(
+        "select provider_credentials_json, credential_revision
+         from provider_accounts where id = 'acct_recovery'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("load account before recovery");
+    let store = PgAdminAccountStore::new(database.pool.clone(), None);
+
+    let result = store
+        .recover_account(
+            &ProviderAccountId::new("acct_recovery").expect("account ID"),
+            &MutationContext {
+                actor: MutationActor::System,
+                request_id: "request_account_recovery".to_owned(),
+            },
+        )
+        .await
+        .expect("recover account");
+
+    assert_eq!(result.config_revision.get(), 2);
+    let current = sqlx::query_as::<_, RecoveredAccountRow>(
+        "select enabled, credential_state, quota_access_state, quota_evidence,
+                last_error_message, provider_quota_json, concurrency_limit, weight,
+                provider_credentials_json, credential_revision, access_token_expires_at
+         from provider_accounts where id = 'acct_recovery'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("load recovered account");
+    assert!(current.enabled);
+    assert_eq!(current.credential_state, "ready");
+    assert_eq!(current.quota_access_state, "allowed");
+    assert!(current.quota_evidence.is_none());
+    assert!(current.last_error_message.is_none());
+    assert!(current.provider_quota_json.is_none());
+    assert_eq!((current.concurrency_limit, current.weight), (Some(7), 25));
+    assert_eq!(
+        (
+            current.provider_credentials_json,
+            current.credential_revision,
+        ),
+        before
+    );
+    assert!(current.access_token_expires_at.is_none());
+    assert_eq!(
+        account_group_ids(&database.pool, "acct_recovery").await,
+        [GROUP_ID]
+    );
+    assert_eq!(
+        audit_count(&database.pool, "request_account_recovery").await,
+        1
     );
 
     database.close().await;

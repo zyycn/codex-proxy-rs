@@ -149,6 +149,12 @@ pub trait AccountStore: Send + Sync {
         context: &MutationContext,
     ) -> AdminStoreResult<AccountUpdateResult>;
 
+    async fn recover_account(
+        &self,
+        account_id: &gateway_core::engine::credential::ProviderAccountId,
+        context: &MutationContext,
+    ) -> AdminStoreResult<AccountUpdateResult>;
+
     async fn batch_update_accounts(
         &self,
         command: BatchUpdateAccounts,

@@ -4,7 +4,7 @@ mod recovery;
 mod snapshot;
 
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use chrono::{TimeZone as _, Utc};
 use gateway_core::engine::credential::{

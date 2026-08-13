@@ -741,6 +741,41 @@ impl AccountStore for PgAdminAccountStore {
         })
     }
 
+    async fn recover_account(
+        &self,
+        account_id: &CoreProviderAccountId,
+        context: &MutationContext,
+    ) -> AdminStoreResult<AccountUpdateResult> {
+        if let Some(cooldowns) = self.cooldowns.as_deref() {
+            cooldowns.clear_all(account_id).await.map_err(|_| {
+                AdminStoreError::new(
+                    AdminStoreErrorKind::Unavailable,
+                    ENTITY,
+                    "provider account cooldown cleanup failed",
+                )
+            })?;
+        }
+        let config_revision = self
+            .accounts
+            .recover_provider_account_admin(RecoverProviderAccount {
+                account_id: account_id.as_str().to_owned(),
+                audit: mutation_audit(
+                    context,
+                    "recover",
+                    "provider_account",
+                    account_id.as_str(),
+                    vec!["status".to_owned(), "quota".to_owned()],
+                ),
+            })
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))
+            .and_then(admin_revision)?;
+        Ok(AccountUpdateResult {
+            config_revision,
+            account_id: account_id.clone(),
+        })
+    }
+
     async fn batch_update_accounts(
         &self,
         command: BatchUpdateAccounts,

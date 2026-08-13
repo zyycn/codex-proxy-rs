@@ -283,6 +283,14 @@ export function refreshAccount(data: AccountIdParam) {
   })
 }
 
+export function recoverAccount(data: AccountIdParam) {
+  return request<AccountRefreshResponse>({
+    url: '/api/admin/accounts/recover',
+    method: 'POST',
+    data,
+  })
+}
+
 export function getAccountQuota(data: AccountIdParam) {
   return request<AccountQuotaResponse>({
     url: '/api/admin/accounts/quota',

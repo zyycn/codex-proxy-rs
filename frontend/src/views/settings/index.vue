@@ -73,7 +73,7 @@ watch(
   <div class="w-full">
     <BasePageHeader title="系统设置" description="管理运行参数、调度策略、模型映射与备份配置" />
 
-    <div class="mt-4 flex flex-wrap items-center justify-between gap-3">
+    <div class="mt-4 flex min-h-(--cp-input-height-default) flex-wrap items-center justify-between gap-3">
       <BaseSegmented
         :model-value="section"
         class="bg-(--cp-input-soft-bg)!"

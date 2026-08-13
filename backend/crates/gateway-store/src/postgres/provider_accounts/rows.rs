@@ -289,6 +289,12 @@ pub struct BatchUpdateProviderAccountsAdmin {
 }
 
 #[derive(Debug, Clone)]
+pub struct RecoverProviderAccount {
+    pub account_id: String,
+    pub audit: AdminAuditEvent,
+}
+
+#[derive(Debug, Clone)]
 pub struct DeleteProviderAccounts {
     pub scope: ProviderAccountAdminScope,
     pub account_ids: Vec<String>,
