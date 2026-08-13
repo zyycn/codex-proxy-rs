@@ -11,8 +11,8 @@ use super::backup::BackupStorePorts;
 use crate::model::{
     MutationContext, Revision,
     account_groups::{
-        AccountGroupListQuery, AccountGroupMembers, AccountGroupMutation, AccountGroupPage,
-        DeleteAccountGroup, NewAccountGroup, SetAccountGroupEnabled, UpdateAccountGroup,
+        AccountGroupListQuery, AccountGroupMutation, AccountGroupPage, DeleteAccountGroup,
+        NewAccountGroup, SetAccountGroupEnabled, UpdateAccountGroup,
     },
     accounts::{
         AccountListQuery, AccountPage, AccountPageItem, AccountUpdateResult, AccountUsage,
@@ -226,18 +226,13 @@ pub trait ClientKeyStore: Send + Sync {
     ) -> AdminStoreResult<Revision>;
 }
 
-/// Provider-neutral account group management and membership transactions.
+/// Provider-neutral account group management transactions.
 #[async_trait]
 pub trait AccountGroupStore: Send + Sync {
     async fn list_account_groups(
         &self,
         query: AccountGroupListQuery,
     ) -> AdminStoreResult<AccountGroupPage>;
-
-    async fn account_group_members(
-        &self,
-        id: &gateway_core::routing::AccountGroupId,
-    ) -> AdminStoreResult<AccountGroupMembers>;
 
     async fn create_account_group(
         &self,

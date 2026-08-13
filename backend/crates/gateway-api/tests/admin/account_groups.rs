@@ -45,27 +45,6 @@ async fn list_route_should_keep_camel_case_group_and_page_wire() {
 }
 
 #[tokio::test]
-async fn members_route_should_keep_provider_kind_and_member_wire() {
-    let fixture = authenticated_fixture().await;
-    let response = request(
-        router(&fixture),
-        Method::GET,
-        &format!("/api/admin/account-groups/members?id={PRIMARY_GROUP_ID}"),
-        None,
-        true,
-    )
-    .await;
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let value = response_json(response).await;
-    assert_eq!(value["data"]["id"], PRIMARY_GROUP_ID);
-    assert_eq!(value["data"]["total"], 2);
-    assert_eq!(value["data"]["items"][0]["providerKind"], "openai");
-    assert_eq!(value["data"]["items"][0]["email"], "openai@example.invalid");
-    assert!(value["data"]["items"][0].get("provider_kind").is_none());
-}
-
-#[tokio::test]
 async fn create_route_should_create_an_empty_group() {
     let fixture = authenticated_fixture().await;
     let response = request(

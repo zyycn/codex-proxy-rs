@@ -48,21 +48,6 @@ export interface AccountGroupListResponse {
   configRevision: number
 }
 
-export interface AccountGroupMember {
-  id: string
-  name: string
-  providerKind: string
-  email: string | null
-  enabled: boolean
-}
-
-export interface AccountGroupMembersResponse {
-  id: string
-  items: AccountGroupMember[]
-  total: number
-  configRevision: number
-}
-
 export interface AccountGroupMutationResponse {
   id: string
   record: AccountGroup | null
@@ -138,13 +123,5 @@ export function deleteAccountGroup(data: AccountGroupIdParam) {
     url: '/api/admin/account-groups/delete',
     method: 'POST',
     data,
-  })
-}
-
-export function getAccountGroupMembers(data: AccountGroupIdParam) {
-  return request<AccountGroupMembersResponse>({
-    url: '/api/admin/account-groups/members',
-    method: 'GET',
-    params: data,
   })
 }

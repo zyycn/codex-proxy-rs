@@ -21,8 +21,8 @@ use gateway_admin::{
     model::{
         MutationContext, Revision,
         account_groups::{
-            AccountGroupListQuery, AccountGroupMembers, AccountGroupMutation, AccountGroupPage,
-            DeleteAccountGroup, NewAccountGroup, SetAccountGroupEnabled, UpdateAccountGroup,
+            AccountGroupListQuery, AccountGroupMutation, AccountGroupPage, DeleteAccountGroup,
+            NewAccountGroup, SetAccountGroupEnabled, UpdateAccountGroup,
         },
         accounts::{
             AccountListQuery, AccountPage, AccountUpdateResult, AccountUsage,
@@ -250,13 +250,6 @@ impl AccountGroupStore for UnavailableAccountGroupStore {
         _: AccountGroupListQuery,
     ) -> AdminStoreResult<AccountGroupPage> {
         Err(unavailable("account groups"))
-    }
-
-    async fn account_group_members(
-        &self,
-        _: &gateway_core::routing::AccountGroupId,
-    ) -> AdminStoreResult<AccountGroupMembers> {
-        Err(unavailable("account group members"))
     }
 
     async fn create_account_group(

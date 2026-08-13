@@ -14,9 +14,8 @@ use gateway_admin::model::{
     PageSize,
     account_groups::{
         AccountGroupAccountSummary, AccountGroupCapacity, AccountGroupColor, AccountGroupListQuery,
-        AccountGroupMember, AccountGroupMembers, AccountGroupMutation, AccountGroupPage,
-        AccountGroupRecord, AccountGroupUsage, CreateAccountGroup, DeleteAccountGroup,
-        SetAccountGroupEnabled, UpdateAccountGroup,
+        AccountGroupMutation, AccountGroupPage, AccountGroupRecord, AccountGroupUsage,
+        CreateAccountGroup, DeleteAccountGroup, SetAccountGroupEnabled, UpdateAccountGroup,
     },
 };
 use gateway_core::routing::AccountGroupId;
@@ -88,12 +87,6 @@ struct UpdateAccountGroupRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AccountGroupIdRequest {
-    id: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AccountGroupIdQuery {
     id: String,
 }
 
@@ -209,48 +202,6 @@ impl From<AccountGroupPage> for AccountGroupPageData {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct AccountGroupMemberView {
-    id: String,
-    name: String,
-    provider_kind: String,
-    email: Option<String>,
-    enabled: bool,
-}
-
-impl From<AccountGroupMember> for AccountGroupMemberView {
-    fn from(member: AccountGroupMember) -> Self {
-        Self {
-            id: member.id,
-            name: member.name,
-            provider_kind: member.provider_kind.to_string(),
-            email: member.email,
-            enabled: member.enabled,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AccountGroupMembersData {
-    id: String,
-    items: Vec<AccountGroupMemberView>,
-    total: u64,
-    config_revision: u64,
-}
-
-impl From<AccountGroupMembers> for AccountGroupMembersData {
-    fn from(members: AccountGroupMembers) -> Self {
-        Self {
-            id: members.id.to_string(),
-            items: members.items.into_iter().map(Into::into).collect(),
-            total: members.total,
-            config_revision: members.config_revision.get(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct AccountGroupMutationData {
     id: String,
     record: Option<AccountGroupView>,
@@ -279,7 +230,6 @@ where
         .route("/api/admin/account-groups/enable", post(enable::<S>))
         .route("/api/admin/account-groups/disable", post(disable::<S>))
         .route("/api/admin/account-groups/delete", post(delete::<S>))
-        .route("/api/admin/account-groups/members", get(members::<S>))
 }
 
 async fn list<S>(
@@ -299,27 +249,6 @@ where
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(AccountGroupPageData::from(result)),
-    ))
-}
-
-async fn members<S>(
-    _auth: AdminAuth,
-    State(state): State<S>,
-    Query(query): Query<AccountGroupIdQuery>,
-) -> Result<impl IntoResponse, AdminError>
-where
-    S: AdminSessionState + Send + Sync,
-{
-    let id = group_id(query.id)?;
-    let result = state
-        .admin_services()
-        .account_groups()
-        .members(&id)
-        .await
-        .map_err(map_service_error)?;
-    Ok(AdminResponse::new(
-        StatusCode::OK,
-        AdminEnvelope::ok(AccountGroupMembersData::from(result)),
     ))
 }
 

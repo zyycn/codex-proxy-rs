@@ -10,9 +10,8 @@ use crate::{
     model::{
         AdminError, MutationContext,
         account_groups::{
-            AccountGroupListQuery, AccountGroupMembers, AccountGroupMutation, AccountGroupPage,
-            CreateAccountGroup, DeleteAccountGroup, NewAccountGroup, SetAccountGroupEnabled,
-            UpdateAccountGroup,
+            AccountGroupListQuery, AccountGroupMutation, AccountGroupPage, CreateAccountGroup,
+            DeleteAccountGroup, NewAccountGroup, SetAccountGroupEnabled, UpdateAccountGroup,
         },
     },
     ports::store::AccountGroupStore,
@@ -24,7 +23,6 @@ use super::{map_store_error, publish_committed};
 #[async_trait]
 pub trait AccountGroupService: Send + Sync {
     async fn list(&self, query: AccountGroupListQuery) -> Result<AccountGroupPage, AdminError>;
-    async fn members(&self, id: &AccountGroupId) -> Result<AccountGroupMembers, AdminError>;
     async fn create(
         &self,
         context: &MutationContext,
@@ -76,13 +74,6 @@ impl AccountGroupService for DefaultAccountGroupService {
     async fn list(&self, query: AccountGroupListQuery) -> Result<AccountGroupPage, AdminError> {
         self.store
             .list_account_groups(query)
-            .await
-            .map_err(|error| map_store_error(error, "account group"))
-    }
-
-    async fn members(&self, id: &AccountGroupId) -> Result<AccountGroupMembers, AdminError> {
-        self.store
-            .account_group_members(id)
             .await
             .map_err(|error| map_store_error(error, "account group"))
     }

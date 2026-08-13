@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use gateway_core::routing::{AccountGroupId, ProviderKind};
+use gateway_core::routing::AccountGroupId;
 
 use super::{PageSize, Revision, observability::DecimalAmount};
 
@@ -92,25 +92,6 @@ pub struct AccountGroupPage {
     pub total: u64,
     pub page: u32,
     pub page_size: u16,
-}
-
-/// Lightweight account shown by the membership editor.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AccountGroupMember {
-    pub id: String,
-    pub name: String,
-    pub provider_kind: ProviderKind,
-    pub email: Option<String>,
-    pub enabled: bool,
-}
-
-/// Complete membership projection for one group.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AccountGroupMembers {
-    pub config_revision: Revision,
-    pub id: AccountGroupId,
-    pub items: Vec<AccountGroupMember>,
-    pub total: u64,
 }
 
 /// Create an account group.

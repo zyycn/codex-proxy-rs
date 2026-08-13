@@ -13,18 +13,17 @@ use gateway_admin::{
         MutationContext,
         account_groups::{
             AccountGroupAccountSummary, AccountGroupCapacity, AccountGroupColor,
-            AccountGroupListQuery, AccountGroupMember, AccountGroupMembers, AccountGroupMutation,
-            AccountGroupPage, AccountGroupRecord, AccountGroupUsage, DeleteAccountGroup,
-            NewAccountGroup, SetAccountGroupEnabled, UpdateAccountGroup,
+            AccountGroupListQuery, AccountGroupMutation, AccountGroupPage, AccountGroupRecord,
+            AccountGroupUsage, DeleteAccountGroup, NewAccountGroup, SetAccountGroupEnabled,
+            UpdateAccountGroup,
         },
         observability::DecimalAmount,
     },
     ports::store::{AccountGroupStore, AdminStoreError, AdminStoreResult},
 };
 use gateway_core::{
-    engine::credential::AccountStatus,
-    provider_ports::ProviderCooldownPort,
-    routing::{AccountGroupId, ProviderKind},
+    engine::credential::AccountStatus, provider_ports::ProviderCooldownPort,
+    routing::AccountGroupId,
 };
 use sqlx::{PgPool, Postgres, QueryBuilder, Row as _, Transaction};
 
@@ -175,36 +174,6 @@ impl AccountGroupStore for PgAccountGroupRepository {
             total,
             page: query.page,
             page_size: query.page_size.get(),
-        })
-    }
-
-    async fn account_group_members(
-        &self,
-        id: &AccountGroupId,
-    ) -> AdminStoreResult<AccountGroupMembers> {
-        self.required_record(id).await?;
-        let rows = sqlx::query(
-            "select a.id, a.name, a.provider_kind, a.email, a.enabled
-             from account_group_accounts m
-             join provider_accounts a on a.id = m.provider_account_id
-             where m.account_group_id = $1
-             order by a.provider_kind, lower(a.name), a.id",
-        )
-        .bind(id.as_str())
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|_| admin_store_error(ENTITY, unavailable("load account group members")))?;
-        let items = rows
-            .iter()
-            .map(group_member)
-            .collect::<StoreResult<Vec<_>>>()
-            .map_err(|error| admin_store_error(ENTITY, error))?;
-        Ok(AccountGroupMembers {
-            config_revision: self.current_revision().await?,
-            id: id.clone(),
-            total: u64::try_from(items.len())
-                .map_err(|_| invalid_admin("member count overflow"))?,
-            items,
         })
     }
 
@@ -672,28 +641,6 @@ async fn group_costs(
             ))
         })
         .collect()
-}
-
-fn group_member(row: &sqlx::postgres::PgRow) -> StoreResult<AccountGroupMember> {
-    Ok(AccountGroupMember {
-        id: row
-            .try_get("id")
-            .map_err(|_| invalid("invalid member id"))?,
-        name: row
-            .try_get("name")
-            .map_err(|_| invalid("invalid member name"))?,
-        provider_kind: ProviderKind::new(
-            row.try_get::<String, _>("provider_kind")
-                .map_err(|_| invalid("invalid member provider"))?,
-        )
-        .map_err(|_| invalid("invalid member provider"))?,
-        email: row
-            .try_get("email")
-            .map_err(|_| invalid("invalid member email"))?,
-        enabled: row
-            .try_get("enabled")
-            .map_err(|_| invalid("invalid member enabled"))?,
-    })
 }
 
 fn count_value(row: &sqlx::postgres::PgRow, field: &str) -> StoreResult<u64> {

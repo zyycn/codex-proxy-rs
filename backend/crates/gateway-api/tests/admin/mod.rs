@@ -15,9 +15,9 @@ use gateway_admin::{
         MutationContext, Revision,
         account_groups::{
             AccountGroupAccountSummary, AccountGroupCapacity, AccountGroupColor,
-            AccountGroupListQuery, AccountGroupMember, AccountGroupMembers, AccountGroupMutation,
-            AccountGroupPage, AccountGroupRecord, AccountGroupUsage, DeleteAccountGroup,
-            NewAccountGroup, SetAccountGroupEnabled, UpdateAccountGroup,
+            AccountGroupListQuery, AccountGroupMutation, AccountGroupPage, AccountGroupRecord,
+            AccountGroupUsage, DeleteAccountGroup, NewAccountGroup, SetAccountGroupEnabled,
+            UpdateAccountGroup,
         },
         accounts::{
             AccountListQuery, AccountPage, AccountPageItem, AccountUpdateResult, AccountUsage,
@@ -361,7 +361,6 @@ pub(super) const SECONDARY_GROUP_ID: &str = "grp_2222222222222222222222222222222
 struct MemoryAccountGroupState {
     revision: Revision,
     groups: BTreeMap<gateway_core::routing::AccountGroupId, AccountGroupRecord>,
-    members: BTreeMap<gateway_core::routing::AccountGroupId, Vec<AccountGroupMember>>,
 }
 
 pub(super) struct MemoryAccountGroupStore {
@@ -373,25 +372,11 @@ impl MemoryAccountGroupStore {
         let now = Utc::now();
         let primary_id = group_id(PRIMARY_GROUP_ID);
         let secondary_id = group_id(SECONDARY_GROUP_ID);
-        let openai = AccountGroupMember {
-            id: "acct_openai".to_owned(),
-            name: "OpenAI primary".to_owned(),
-            provider_kind: ProviderKind::new("openai").expect("provider kind"),
-            email: Some("openai@example.invalid".to_owned()),
-            enabled: true,
-        };
-        let xai = AccountGroupMember {
-            id: "acct_xai".to_owned(),
-            name: "xAI primary".to_owned(),
-            provider_kind: ProviderKind::new("xai").expect("provider kind"),
-            email: None,
-            enabled: false,
-        };
         let groups = BTreeMap::from([
             (
                 primary_id.clone(),
                 AccountGroupRecord {
-                    id: primary_id.clone(),
+                    id: primary_id,
                     name: "Alpha routing".to_owned(),
                     description: Some("Primary traffic".to_owned()),
                     color: group_color("#2563ebff"),
@@ -432,7 +417,6 @@ impl MemoryAccountGroupStore {
             state: Mutex::new(MemoryAccountGroupState {
                 revision: Revision::new(7).expect("revision"),
                 groups,
-                members: BTreeMap::from([(primary_id, vec![openai, xai])]),
             }),
         }
     }
@@ -481,23 +465,6 @@ impl AccountGroupStore for MemoryAccountGroupStore {
         })
     }
 
-    async fn account_group_members(
-        &self,
-        id: &gateway_core::routing::AccountGroupId,
-    ) -> AdminStoreResult<AccountGroupMembers> {
-        let state = self.state.lock().expect("account groups");
-        if !state.groups.contains_key(id) {
-            return Err(not_found("account group"));
-        }
-        let items = state.members.get(id).cloned().unwrap_or_default();
-        Ok(AccountGroupMembers {
-            config_revision: state.revision,
-            id: id.clone(),
-            total: items.len() as u64,
-            items,
-        })
-    }
-
     async fn create_account_group(
         &self,
         command: NewAccountGroup,
@@ -521,8 +488,6 @@ impl AccountGroupStore for MemoryAccountGroupStore {
             updated_at: now,
         };
         state.groups.insert(command.id.clone(), record);
-        state.members.insert(command.id.clone(), Vec::new());
-        refresh_group_counts(&mut state, &command.id);
         mutation(&mut state, command.id, true)
     }
 
@@ -567,31 +532,12 @@ impl AccountGroupStore for MemoryAccountGroupStore {
         if state.groups.remove(&command.id).is_none() {
             return Err(not_found("account group"));
         }
-        state.members.remove(&command.id);
         mutation(&mut state, command.id, false)
     }
 }
 
 fn group_id(value: &str) -> gateway_core::routing::AccountGroupId {
     gateway_core::routing::AccountGroupId::new(value).expect("account group ID")
-}
-
-fn refresh_group_counts(
-    state: &mut MemoryAccountGroupState,
-    id: &gateway_core::routing::AccountGroupId,
-) {
-    let members = state.members.get(id).map(Vec::as_slice).unwrap_or_default();
-    let provider_counts = members.iter().fold(BTreeMap::new(), |mut counts, member| {
-        *counts
-            .entry(member.provider_kind.as_str().to_owned())
-            .or_insert(0) += 1;
-        counts
-    });
-    if let Some(record) = state.groups.get_mut(id) {
-        record.member_count = members.len() as u64;
-        record.provider_counts = provider_counts;
-        record.updated_at = Utc::now();
-    }
 }
 
 fn mutation(

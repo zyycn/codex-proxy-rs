@@ -122,20 +122,6 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
     assert!(empty.provider_counts.is_empty());
     assert_eq!(empty.client_key_count, 1);
 
-    let members = groups
-        .account_group_members(&mixed_group)
-        .await
-        .expect("load mixed group members");
-    assert_eq!(members.total, 2);
-    assert_eq!(
-        members
-            .items
-            .iter()
-            .map(|member| member.provider_kind.as_str())
-            .collect::<Vec<_>>(),
-        ["openai", "xai"]
-    );
-
     let all_key = keys
         .reveal_client_key(&client_key_id("key_all_accounts"))
         .await
